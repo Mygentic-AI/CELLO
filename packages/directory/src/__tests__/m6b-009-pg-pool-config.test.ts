@@ -28,9 +28,13 @@
  * is included below as a describeIntegration block requiring CELLO_ENV=local.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterAll } from "vitest";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { execSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { parse as parseYaml } from "yaml";
 import { resolvePoolMax } from "../pg-pool-config.js";
 import { StdoutLogger } from "@cello-protocol/interfaces/stubs";
@@ -39,6 +43,36 @@ import { StdoutLogger } from "@cello-protocol/interfaces/stubs";
 // describeIntegration skips when CELLO_ENV !== 'local'
 const describeIntegration =
   process.env["CELLO_ENV"] === "local" ? describe : describe.skip;
+
+const PKG = resolve(import.meta.dirname, "../..");
+const tsxEsm = createRequire(import.meta.url).resolve("tsx/esm");
+const tempDirs: string[] = [];
+
+afterAll(async () => {
+  for (const dir of tempDirs) {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+function runBin(env: NodeJS.ProcessEnv): { stdout: string; stderr: string; code: number } {
+  const merged: NodeJS.ProcessEnv = { ...process.env, ...env };
+  for (const key of Object.keys(merged)) {
+    if (merged[key] === undefined) delete merged[key];
+  }
+  try {
+    const stdout = execSync(`node --import ${tsxEsm} src/bin/directory.ts`, {
+      cwd: PKG,
+      env: merged,
+      stdio: "pipe",
+      encoding: "utf8",
+      timeout: 5000,
+    });
+    return { stdout, stderr: "", code: 0 };
+  } catch (err: unknown) {
+    const e = err as { stdout?: string; stderr?: string; status?: number };
+    return { stdout: e.stdout ?? "", stderr: e.stderr ?? "", code: e.status ?? 1 };
+  }
+}
 
 // ─── AC-002: Default pool max is 50 ──────────────────────────────────────────
 
@@ -116,6 +150,36 @@ describe("CELLO-M6B-009 AC-003: advisory WARN above soft ceiling", () => {
 
     expect(poolMax).toBe(100);
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ─── AC-002 integration: adapter.initialised logs poolMax: 50 ─────────────────
+
+describeIntegration("CELLO-M6B-009 AC-002 integration: adapter.initialised logs poolMax: 50", () => {
+  it("adapter.initialised for PgDirectoryStore includes poolMax: 50 when DIRECTORY_PG_POOL_MAX is absent", async () => {
+    // AC-002: When the directory process starts with no DIRECTORY_PG_POOL_MAX env var,
+    // adapter.initialised logs poolMax: 50.
+    // The binary exits before fully starting (missing key material), but adapter.initialised
+    // fires before the first connection attempt — matching the persist-001 pattern.
+
+    const dir = await mkdtemp(join(tmpdir(), "cello-m6b009-"));
+    tempDirs.push(dir);
+    const auditPath = join(dir, "audit.jsonl");
+
+    const result = runBin({
+      CELLO_ENV: "local",
+      DATABASE_URL: process.env["DATABASE_URL"] ?? "postgresql://postgres:dev@localhost:5433/cello_dev",
+      DEV_ENVELOPE_KEY: process.env["DEV_ENVELOPE_KEY"] ?? "0".repeat(64),
+      AUDIT_LOG_PATH: auditPath,
+      CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWTest",
+      // Deliberately absent: DIRECTORY_PG_POOL_MAX — should default to 50
+      DIRECTORY_PG_POOL_MAX: undefined,
+    });
+
+    const out = result.stdout + result.stderr;
+    // The adapter.initialised event must contain poolMax:50
+    expect(out).toContain('"poolMax":50');
+    expect(out).toContain('"adapterName":"PgDirectoryStore"');
   });
 });
 

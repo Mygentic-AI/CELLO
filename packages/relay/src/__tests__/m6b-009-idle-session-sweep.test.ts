@@ -7,10 +7,19 @@
  *   AC-008: Already-sealed sessions are not present (destroySession was already called)
  *   AC-009: Each leaf submission updates lastActivityAt
  *   SI-001: Sweep never destroys a session mid-write (mutex-holding sessions have recent lastActivityAt)
+ *
+ * Implementation notes:
+ *   startIdleSweep() runs an initial sweep immediately on startup (before the first
+ *   scheduled interval). On a relay with no sessions this emits relay.session.sweep.complete
+ *   with sweptCount: 0 / remainingCount: 0 immediately. This behavior is documented and
+ *   tested explicitly below.
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { InMemoryRelayStore } from "../relay-store.js";
+import { CelloRelayNode } from "../relay-node.js";
+import { createNode } from "@cello-protocol/transport";
+import { InMemoryKeyProvider } from "@cello-protocol/crypto";
 import type { SessionAssignment } from "../relay-types.js";
 import type { Logger } from "@cello-protocol/interfaces";
 
@@ -98,10 +107,17 @@ describe("CELLO-M6B-009: Idle session sweep", () => {
 
     expect(swept).toBe(1);
     expect(store.getSession(sessionIdHex)).toBeUndefined();
+    // AC-006 specifies idleDurationMs >= 90_000_000 (25 hours in ms).
+    // Capture the actual call to assert the numeric lower bound.
     expect(logger.info).toHaveBeenCalledWith("relay.session.idle.swept", expect.objectContaining({
       sessionId: sessionIdHex,
       idleDurationMs: expect.any(Number),
     }));
+    const sweptCall = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+      (args) => args[0] === "relay.session.idle.swept",
+    );
+    const idleDurationMs = (sweptCall![1] as { idleDurationMs: number }).idleDurationMs;
+    expect(idleDurationMs).toBeGreaterThanOrEqual(90_000_000);
     expect(logger.info).toHaveBeenCalledWith("relay.session.sweep.complete", {
       sweptCount: 1,
       remainingCount: 0,
@@ -225,5 +241,49 @@ describe("CELLO-M6B-009: Idle session sweep", () => {
     // Session should NOT be swept because setSession refreshed lastActivityAt
     expect(swept).toBe(0);
     expect(store.getSession(sessionIdHex)).toBeDefined();
+  });
+});
+
+describe("CELLO-M6B-009: startIdleSweep runs once immediately on startup", () => {
+  it("relay.session.sweep.complete fires immediately when startIdleSweep() is called (before first interval)", async () => {
+    // Implementation note: startIdleSweep() calls sweep() once immediately before
+    // scheduling the recurring interval. On a fresh relay with no sessions this emits
+    // relay.session.sweep.complete with sweptCount: 0 / remainingCount: 0 at startup.
+    // This is documented behaviour — the immediate sweep catches sessions that were
+    // active before the relay process started (e.g. on relay restart after a crash).
+
+    const keyProvider = new InMemoryKeyProvider(Buffer.alloc(32, 0xcc));
+    const node = await createNode({
+      keyProvider,
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+    });
+    await node.start();
+
+    const infoSpy = vi.fn();
+    const testLogger: Logger = {
+      debug: vi.fn(),
+      info: infoSpy,
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    const relay = new CelloRelayNode({
+      node,
+      directoryPubkey: Buffer.alloc(32, 0xdd),
+      logger: testLogger,
+    });
+    await relay.start();
+
+    // startIdleSweep with a very long interval so the interval never fires during the test
+    relay.startIdleSweep(3_600_000, 24 * 60 * 60 * 1000);
+
+    // The immediate sweep must have already fired synchronously
+    expect(infoSpy).toHaveBeenCalledWith("relay.session.sweep.complete", {
+      sweptCount: 0,
+      remainingCount: 0,
+    });
+
+    relay.stopIdleSweep();
+    await node.stop();
   });
 });
