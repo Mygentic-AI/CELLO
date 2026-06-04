@@ -1,6 +1,7 @@
 // CELLO Story Implementation Workflow
 // Usage: pass { storyId: "CELLO-M6B-005", model: "opus" } as args
-// model: "opus" | "sonnet" (default: "opus") — controls sprint coder; reviews always use sonnet
+// model: "opus" | "sonnet" (default: "opus") — controls sprint coder
+// reviewModel: "opus" | "sonnet" (default: "sonnet") — controls code reviewer and sprint reviewer
 // reviewOnly: true — skip setup and implementation; run review rounds only
 //   If a worktree branch exists for the story, diffs against main...STORY_ID
 //   If no worktree exists (implementation landed on main), diffs by story ID in git log
@@ -23,6 +24,7 @@ export const meta = {
 
 // ─── ARGS NORMALIZATION ──────────────────────────────────────────────────────
 const CODER_MODEL = args && args.model ? args.model : 'opus'
+const REVIEW_MODEL = args && args.reviewModel ? args.reviewModel : 'sonnet'
 const REVIEW_ONLY = args && args.reviewOnly === true
 const SKIP_CODE_REVIEW = args && args.skipCodeReview === true
 const SKIP_SPRINT_REVIEW = args && args.skipSprintReview === true
@@ -199,7 +201,7 @@ Report ALL issues with confidence >= 80. Group: Critical → Important → Mediu
 Include file path and line number for every issue.
 Check that every AC and SI in the story YAML has a corresponding implementation and test.
 Do not summarize or truncate.`,
-    { label: `code-reviewer-r${roundNum}`, phase: 'Review', model: 'sonnet', agentType: 'feature-dev:code-reviewer' }
+    { label: `code-reviewer-r${roundNum}`, phase: 'Review', model: REVIEW_MODEL, agentType: 'feature-dev:code-reviewer' }
   )
 
   log(`Round ${roundNum} code review complete.`)
@@ -220,7 +222,7 @@ Run gates after fixing (targeted filter only):
   cd ${CLIENT_WORK_PATH} && pnpm run typecheck
 
 Commit: "fix(${STORY_ID}): address code review findings round ${roundNum}"`,
-    { label: `fix-code-r${roundNum}`, phase: 'Review', model: 'sonnet', agentType: 'cello-sprint-coder' }
+    { label: `fix-code-r${roundNum}`, phase: 'Review', model: REVIEW_MODEL, agentType: 'cello-sprint-coder' }
   )
 
   const gate = await agent(
@@ -257,7 +259,7 @@ ${DIFF_INSTRUCTIONS}
 
 DO NOT summarize or truncate. Report every finding at every severity (blocking → high → medium → low).
 End with APPROVED or BLOCKED.`,
-    { label: `sprint-reviewer-r${roundNum}`, phase: 'Review', model: 'sonnet', agentType: 'cello-sprint-reviewer' }
+    { label: `sprint-reviewer-r${roundNum}`, phase: 'Review', model: REVIEW_MODEL, agentType: 'cello-sprint-reviewer' }
   )
 
   log(`Round ${roundNum} sprint review complete.`)
@@ -278,7 +280,7 @@ Run gates after fixing (targeted filter only):
   cd ${CLIENT_WORK_PATH} && pnpm run typecheck
 
 Commit: "fix(${STORY_ID}): address sprint review findings round ${roundNum}"`,
-    { label: `fix-sprint-r${roundNum}`, phase: 'Review', model: 'sonnet', agentType: 'cello-sprint-coder' }
+    { label: `fix-sprint-r${roundNum}`, phase: 'Review', model: REVIEW_MODEL, agentType: 'cello-sprint-coder' }
   )
 
   const gate = await agent(
