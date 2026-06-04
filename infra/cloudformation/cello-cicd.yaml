@@ -1094,8 +1094,8 @@ Resources:
                 - Name: SourceOutput
               OutputArtifacts:
                 - Name: StagingDeployRelayOutput
-        # Relay smoke test: verifies relay health endpoint at port 4000 behind ALB
-        # Note: relay ALB is not exposed externally in Phase 1; smoke test uses directory endpoint
+        # Relay smoke test: verifies relay health endpoint at port 4000 behind ALB.
+        # M6B-007: relay ALB is now externally reachable on port 4002 (WebSocket).
         # STAGING_DIRECTORY_URL is set at the CodeBuild project level from the StagingDirectoryUrl
         # CloudFormation parameter — no pipeline-level override needed.
         - Name: SmokeTest

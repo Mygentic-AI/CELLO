@@ -257,11 +257,17 @@ describe("DEPLOY-003: SI-003 relay task has no public IP", () => {
 
   it("service subnets reference private-subnet imports only", () => {
     const content = readFileSync(templatePath, "utf-8");
-    // AwsvpcConfiguration subnets must be private subnets
+    // AwsvpcConfiguration subnets must be private subnets (ECS task stays private)
     expect(content).toContain("private-subnet-a");
     expect(content).toContain("private-subnet-b");
-    // Relay has no ALB — no public subnets anywhere in the template
-    expect(content).not.toContain("public-subnet");
+    // M6B-007: the relay now has an internet-facing ALB that uses public subnets.
+    // SI-003 is about the ECS Task (the relay process) having no public IP —
+    // not about whether the template references public subnets at all.
+    // AssignPublicIp: DISABLED (verified above) is the enforcement mechanism.
+    // The ALB legitimately uses public-subnet-a/b — traffic flows:
+    //   Internet → ALB (public subnets) → relay ECS task (private subnets, no public IP)
+    // So public-subnet references in the ALB resource are correct and expected.
+    // The private-subnet references in AwsvpcConfiguration above are what enforces SI-003.
   });
 
   it("security group references ecs-relay-sg, not a wildcard", () => {

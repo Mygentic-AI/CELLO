@@ -86,6 +86,17 @@ case "${REGION}" in
   *)              SUBDOMAIN="directory-${REGION}" ;;
 esac
 
+# ── Relay subdomain per region (M6B-007 AC-003) ──────────────────────────────
+# relay-us1/eu1/ap1 map to the relay ALB A record in cello-route53-relay stack.
+# Deployed as a second invocation of cello-route53.yaml with the relay ALB outputs.
+
+case "${REGION}" in
+  us-east-1)      RELAY_SUBDOMAIN="relay-us1" ;;
+  eu-central-1)   RELAY_SUBDOMAIN="relay-eu1" ;;
+  ap-northeast-1) RELAY_SUBDOMAIN="relay-ap1" ;;
+  *)              RELAY_SUBDOMAIN="relay-${REGION}" ;;
+esac
+
 DOMAIN_NAME="cello.mygentic.ai"
 
 # ── Environment sizing (AC-007) ───────────────────────────────────────────────
@@ -137,10 +148,11 @@ fi
 
 # cello-cicd deploys to us-east-1 only — adjust count per region.
 # +1 for cello-ecs-operations-agent (OPS-AGENT-005A)
+# +1 for cello-route53-relay (M6B-007 AC-003) — relay DNS stack deploys in every region
 if [[ "${REGION}" == "us-east-1" ]]; then
-  STACK_COUNT=15
+  STACK_COUNT=16
 else
-  STACK_COUNT=14
+  STACK_COUNT=15
 fi
 DEPLOY_START=$(date +%s)
 
@@ -258,7 +270,7 @@ read_output() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# DEPLOYMENT SEQUENCE — 14 stacks in dependency order (15 in us-east-1 with cello-cicd)
+# DEPLOYMENT SEQUENCE — 15 stacks in dependency order (16 in us-east-1 with cello-cicd)
 #
 # Step 0:  cello-ecr                    — ECR repos
 # Step 1:  cello-iam                    — IAM roles
@@ -271,13 +283,14 @@ read_output() {
 # Step 6.5: pre-flight image check
 # Step 6.6: SSM parameters
 # Step 7:  cello-ecs-directory          — directory ECS service + ALB
-# Step 8:  read ALB outputs
+# Step 8:  read directory ALB outputs
 # Step 8a: Ops Agent RDS rotation check — first-deploy credential setup
 # Step 9:  cello-ecs-operations-agent   — Operations Agent ECS service
 # Step 10: cello-waf                    — WAF WebACL for directory ALB
-# Step 11: cello-ecs-relay              — relay ECS service
+# Step 11: cello-ecs-relay              — relay ECS service + relay ALB (M6B-007)
 # Step 12: cello-cloudwatch             — CloudWatch alarms + dashboards
-# Step 13: cello-route53                — Route 53 ALIAS records + ACM certs
+# Step 13: cello-route53                — directory Route 53 ALIAS records + ACM certs
+# Step 13b: cello-route53-relay         — relay Route 53 ALIAS records + ACM cert (M6B-007)
 # Step 14: cello-cicd                   — CI/CD pipelines (us-east-1 only)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -522,6 +535,9 @@ deploy_stack "cello-ecs-relay-${ENVIRONMENT}" "cello-ecs-relay.yaml" \
 
 # ── STEP 12: cello-cloudwatch — CloudWatch alarms and dashboards ─────────────
 # depends on: cello-ecs-directory, cello-ecs-relay (alarm dimensions reference ECS services)
+# NOTE: RelayAlb5xxAlarm uses !ImportValue "cello-${Environment}-relay-alb-arn" from Step 11
+# (cello-ecs-relay). Never deploy cello-cloudwatch before cello-ecs-relay in a new region —
+# CloudFormation will fail with "Export not found".
 
 deploy_stack "cello-cloudwatch-${ENVIRONMENT}" "cello-cloudwatch.yaml" \
   "Environment=${ENVIRONMENT}"
@@ -536,6 +552,37 @@ deploy_stack "cello-route53-${ENVIRONMENT}" "cello-route53.yaml" \
   "AlbDnsName=${ALB_DNS_NAME}" \
   "AlbHostedZoneId=${ALB_HOSTED_ZONE_ID}" \
   "Subdomain=${SUBDOMAIN}"
+
+# ── STEP 13b: cello-route53-relay — Route 53 ALIAS record for relay ALB ──────
+# M6B-007 AC-003: deploys cello-route53.yaml a second time per region as
+# cello-route53-relay-${ENVIRONMENT} with the relay ALB outputs.
+# Must deploy AFTER cello-ecs-relay (Step 11) so the relay ALB DNS name is available.
+# Creates an ACM certificate for relay-{region}.cello.mygentic.ai (DNS-validated)
+# and an A record ALIAS to the relay ALB.
+
+echo ""
+echo "── Reading relay ALB outputs from cello-ecs-relay-${ENVIRONMENT} ───────────"
+
+RELAY_ALB_DNS=$(read_output "cello-ecs-relay-${ENVIRONMENT}" "RelayAlbDnsName" || echo "")
+RELAY_ALB_ZONE=$(read_output "cello-ecs-relay-${ENVIRONMENT}" "RelayAlbHostedZoneId" || echo "")
+
+if [[ -z "${RELAY_ALB_DNS}" || "${RELAY_ALB_DNS}" == "None" ]]; then
+  echo "WARNING: RelayAlbDnsName output not found in cello-ecs-relay-${ENVIRONMENT}." >&2
+  echo "         cello-route53-relay stack may fail. Ensure cello-ecs-relay deployed the ALB." >&2
+  RELAY_ALB_DNS="PLACEHOLDER"
+  RELAY_ALB_ZONE="PLACEHOLDER"
+else
+  echo "  RelayAlbDnsName:       ${RELAY_ALB_DNS}"
+  echo "  RelayAlbHostedZoneId:  ${RELAY_ALB_ZONE}"
+fi
+
+deploy_stack "cello-route53-relay-${ENVIRONMENT}" "cello-route53.yaml" \
+  "Environment=${ENVIRONMENT}" \
+  "DomainName=${DOMAIN_NAME}" \
+  "HostedZoneId=${HOSTED_ZONE_ID}" \
+  "AlbDnsName=${RELAY_ALB_DNS}" \
+  "AlbHostedZoneId=${RELAY_ALB_ZONE}" \
+  "Subdomain=${RELAY_SUBDOMAIN}"
 
 # ── STEP 14: cello-cicd — CI/CD infrastructure (us-east-1 only) ─────────────
 # DEPLOY-005 AC-009: STAGING_DIRECTORY_URL is read from cello-ecs-directory stack outputs
@@ -592,7 +639,8 @@ for stack in \
   "cello-waf-${ENVIRONMENT}" \
   "cello-ecs-relay-${ENVIRONMENT}" \
   "cello-cloudwatch-${ENVIRONMENT}" \
-  "cello-route53-${ENVIRONMENT}"; do
+  "cello-route53-${ENVIRONMENT}" \
+  "cello-route53-relay-${ENVIRONMENT}"; do
   echo "  ${stack}"
 done
 if [[ "${REGION}" == "us-east-1" ]]; then
@@ -624,15 +672,18 @@ update_state() {
   local alb_dns
   alb_dns=$(aws cloudformation describe-stacks     --region "${REGION}" --stack-name "cello-ecs-directory-${ENVIRONMENT}"     --query "Stacks[0].Outputs[?OutputKey=='AlbDnsName'].OutputValue"     --output text 2>/dev/null || echo "pending")
 
+  local relay_alb_dns
+  relay_alb_dns=$(aws cloudformation describe-stacks     --region "${REGION}" --stack-name "cello-ecs-relay-${ENVIRONMENT}"     --query "Stacks[0].Outputs[?OutputKey=='RelayAlbDnsName'].OutputValue"     --output text 2>/dev/null || echo "pending")
+
   # Rewrite the state file header and env section
   # Strategy: append a dated deploy record — full rewrite happens via deploy.sh on each full deploy
   local marker="### ${ENVIRONMENT} — ${REGION}"
   if grep -q "${marker}" "${state_file}" 2>/dev/null; then
     # Update last deployed date in-place using Python for reliable multiline edit
-    python3 - "${state_file}" "${ENVIRONMENT}" "${REGION}" "${today}" "${rds_endpoint}" "${alb_dns}" << 'PYEOF_INNER'
+    python3 - "${state_file}" "${ENVIRONMENT}" "${REGION}" "${today}" "${rds_endpoint}" "${alb_dns}" "${relay_alb_dns}" << 'PYEOF_INNER'
 import sys, re
 
-state_file, env, region, today, rds_endpoint, alb_dns = sys.argv[1:]
+state_file, env, region, today, rds_endpoint, alb_dns, relay_alb_dns = sys.argv[1:]
 with open(state_file) as f:
     content = f.read()
 
@@ -652,9 +703,12 @@ for part in parts:
         # Update RDS endpoint if not pending
         if rds_endpoint and rds_endpoint != "pending" and rds_endpoint != "None":
             part = re.sub(r"\| RDS Endpoint \|[^\n]+", f"| RDS Endpoint | {rds_endpoint} |", part)
-        # Update ALB if not pending
+        # Update Directory ALB if not pending
         if alb_dns and alb_dns != "pending" and alb_dns != "None":
             part = re.sub(r"\| Directory ALB \|[^\n]+", f"| Directory ALB | {alb_dns} |", part)
+        # Update Relay ALB if not pending
+        if relay_alb_dns and relay_alb_dns != "pending" and relay_alb_dns != "None":
+            part = re.sub(r"\| Relay ALB \|[^\n]+", f"| Relay ALB | {relay_alb_dns} |", part)
     updated_parts.append(part)
 
 with open(state_file, "w") as f:
