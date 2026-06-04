@@ -1,6 +1,9 @@
 // CELLO Story Implementation Workflow
 // Usage: pass { storyId: "CELLO-M6B-005", model: "opus" } as args
 // model: "opus" | "sonnet" (default: "opus") — controls sprint coder; reviews always use sonnet
+// reviewOnly: true — skip setup and implementation; run review rounds only
+//   If a worktree branch exists for the story, diffs against main...STORY_ID
+//   If no worktree exists (implementation landed on main), diffs by story ID in git log
 
 export const meta = {
   name: 'cello-story-implementation',
@@ -15,6 +18,7 @@ export const meta = {
 
 // ─── ARGS NORMALIZATION ──────────────────────────────────────────────────────
 const CODER_MODEL = args && args.model ? args.model : 'opus'
+const REVIEW_ONLY = args && args.reviewOnly === true
 const RAW_ID = args && args.storyId ? args.storyId : 'CELLO-M6B-005'
 const STORY_ID = RAW_ID.startsWith('CELLO-') ? RAW_ID : `CELLO-${RAW_ID}`
 const REPO = '/Users/andrep/Documents/code/trustless-cello'
@@ -53,7 +57,38 @@ if (!preflight || !preflight.exists) {
 
 log(`Story YAML confirmed. Proceeding with ${STORY_ID}.`)
 
-const WORKTREE_CONTEXT = `
+// ─── WORKTREE DETECTION (review-only mode) ───────────────────────────────────
+// Detect whether a worktree branch exists. In review-only mode this determines
+// whether we diff against a branch or search git log by story ID.
+let worktreeExists = false
+if (REVIEW_ONLY) {
+  const detection = await agent(
+    `Check if this git worktree path exists: ${WORKTREE_PATH}
+Run: ls ${WORKTREE_PATH} 2>/dev/null && echo EXISTS || echo MISSING
+Return: { "exists": true } if it exists, { "exists": false } if not.`,
+    { label: 'worktree-detection', phase: 'Preflight', model: 'haiku', schema: { type: 'object', properties: { exists: { type: 'boolean' } }, required: ['exists'] } }
+  )
+  worktreeExists = detection && detection.exists === true
+  log(worktreeExists
+    ? `Worktree found at ${WORKTREE_PATH}. Diffing against main...${WORKTREE_BRANCH}.`
+    : `No worktree found. Implementation is on main. Diffing by story ID in git log.`)
+}
+
+// Build context and diff instructions based on where the implementation lives
+const CLIENT_WORK_PATH = (!REVIEW_ONLY || worktreeExists) ? CLIENT_WORKTREE : CLIENT_REPO
+
+const DIFF_INSTRUCTIONS = (!REVIEW_ONLY || worktreeExists)
+  ? `Run to see changes:
+  cd ${WORKTREE_PATH} && git diff main...${WORKTREE_BRANCH}
+  cd ${CLIENT_WORKTREE} && git diff main...${WORKTREE_BRANCH}`
+  : `Run to see changes (implementation is on main — find commits by story ID):
+  cd ${REPO} && git log --oneline --grep="${STORY_ID}" | head -10
+  cd ${REPO} && git show <commit-hash> for each relevant commit
+  cd ${CLIENT_REPO} && git log --oneline --grep="${STORY_ID}" | head -10
+  cd ${CLIENT_REPO} && git show <commit-hash> for each relevant commit`
+
+const WORKTREE_CONTEXT = (!REVIEW_ONLY || worktreeExists)
+  ? `
 EXISTING WORKTREES (do NOT recreate):
 - trustless-cello: ${WORKTREE_PATH} (branch: ${WORKTREE_BRANCH})
 - cello-client: ${CLIENT_WORKTREE} (branch: ${WORKTREE_BRANCH})
@@ -64,11 +99,23 @@ CRITICAL CONSTRAINTS:
 - One vitest worker only: --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
 - All work inside worktree paths above, never on main
 `
+  : `
+WORKING DIRECTORIES (implementation landed on main — no worktree):
+- trustless-cello: ${REPO} (main branch)
+- cello-client: ${CLIENT_REPO} (main branch)
 
-// ─── SETUP ───────────────────────────────────────────────────────────────────
-phase('Setup')
-await agent(
-  `Create git worktrees for story ${STORY_ID} — IDEMPOTENT, do not destroy existing work.
+Story YAML: ${STORY_YAML}
+
+CRITICAL CONSTRAINTS:
+- One vitest worker only: --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
+- Work in repo root paths above; commits go on main
+`
+
+if (!REVIEW_ONLY) {
+  // ─── SETUP ─────────────────────────────────────────────────────────────────
+  phase('Setup')
+  await agent(
+    `Create git worktrees for story ${STORY_ID} — IDEMPOTENT, do not destroy existing work.
 
   For each repo, check if the worktree already exists before creating it:
 
@@ -92,13 +139,13 @@ await agent(
 
   Verify both worktrees exist with: git worktree list in each repo.
   Report which were created vs already present.`,
-  { label: 'create-worktrees', phase: 'Setup', model: 'haiku' }
-)
+    { label: 'create-worktrees', phase: 'Setup', model: 'haiku' }
+  )
 
-// ─── INITIAL IMPLEMENTATION ───────────────────────────────────────────────────
-phase('Implement')
-await agent(
-  `You are the CELLO sprint coder. Implement story ${STORY_ID} completely.
+  // ─── INITIAL IMPLEMENTATION ───────────────────────────────────────────────
+  phase('Implement')
+  await agent(
+    `You are the CELLO sprint coder. Implement story ${STORY_ID} completely.
 
 ${WORKTREE_CONTEXT}
 
@@ -118,10 +165,11 @@ All gates must be clean before committing.
 Commit with: "feat(${STORY_ID}): <one-line summary>"
 
 Return: files changed, gate results, commit hash, assumptions made.`,
-  { label: 'sprint-coder-initial', phase: 'Implement', model: CODER_MODEL, agentType: 'cello-sprint-coder' }
-)
+    { label: 'sprint-coder-initial', phase: 'Implement', model: CODER_MODEL, agentType: 'cello-sprint-coder' }
+  )
+}
 
-// ─── REVIEW ROUNDS (exit early on APPROVED) ──────────────────────────────────
+// ─── REVIEW ROUNDS ───────────────────────────────────────────────────────────
 phase('Review')
 
 async function runRound(roundNum) {
@@ -133,9 +181,7 @@ ${WORKTREE_CONTEXT}
 Read the story YAML first to understand required ACs and SIs:
   ${STORY_YAML}
 
-Run to see changes:
-  cd ${WORKTREE_PATH} && git diff main...${WORKTREE_BRANCH}
-  cd ${CLIENT_WORKTREE} && git diff main...${WORKTREE_BRANCH}
+${DIFF_INSTRUCTIONS}
 
 Report ALL issues with confidence >= 80. Group: Critical → Important → Medium → Low.
 Include file path and line number for every issue.
@@ -157,9 +203,9 @@ ${typeof codeReviewResult === 'string' ? codeReviewResult : JSON.stringify(codeR
 Fix every finding — critical, important, medium, AND low. No exceptions.
 
 Run gates after fixing (targeted filter only):
-  cd ${CLIENT_WORKTREE} && pnpm --filter @cello-protocol/client run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
-  cd ${CLIENT_WORKTREE} && pnpm run lint
-  cd ${CLIENT_WORKTREE} && pnpm run typecheck
+  cd ${CLIENT_WORK_PATH} && pnpm --filter @cello-protocol/client run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
+  cd ${CLIENT_WORK_PATH} && pnpm run lint
+  cd ${CLIENT_WORK_PATH} && pnpm run typecheck
 
 Commit: "fix(${STORY_ID}): address code review findings round ${roundNum}"`,
     { label: `fix-code-r${roundNum}`, phase: 'Review', model: 'sonnet', agentType: 'cello-sprint-coder' }
@@ -168,7 +214,7 @@ Commit: "fix(${STORY_ID}): address code review findings round ${roundNum}"`,
   const sprintReviewResult = await agent(
     `You are the CELLO sprint reviewer. Review the implementation of story ${STORY_ID}.
 
-Working directory for gate commands: ${CLIENT_WORKTREE}
+Working directory for gate commands: ${CLIENT_WORK_PATH}
 
 ${WORKTREE_CONTEXT}
 
@@ -177,9 +223,7 @@ ${REPO}/.claude/agents/sparc/cello-review.md
 
 This is IMPLEMENTATION REVIEW MODE. Story YAML: ${STORY_YAML}
 
-To see changes:
-  cd ${WORKTREE_PATH} && git diff main...${WORKTREE_BRANCH}
-  cd ${CLIENT_WORKTREE} && git diff main...${WORKTREE_BRANCH}
+${DIFF_INSTRUCTIONS}
 
 DO NOT summarize or truncate. Report every finding at every severity (blocking → high → medium → low).
 End with APPROVED or BLOCKED.`,
@@ -199,9 +243,9 @@ ${typeof sprintReviewResult === 'string' ? sprintReviewResult : JSON.stringify(s
 Fix every finding — blocking, high, medium, AND low. No exceptions regardless of APPROVED/BLOCKED.
 
 Run gates after fixing (targeted filter only):
-  cd ${CLIENT_WORKTREE} && pnpm --filter @cello-protocol/client run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
-  cd ${CLIENT_WORKTREE} && pnpm run lint
-  cd ${CLIENT_WORKTREE} && pnpm run typecheck
+  cd ${CLIENT_WORK_PATH} && pnpm --filter @cello-protocol/client run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
+  cd ${CLIENT_WORK_PATH} && pnpm run lint
+  cd ${CLIENT_WORK_PATH} && pnpm run typecheck
 
 Commit: "fix(${STORY_ID}): address sprint review findings round ${roundNum}"`,
     { label: `fix-sprint-r${roundNum}`, phase: 'Review', model: 'sonnet', agentType: 'cello-sprint-coder' }
