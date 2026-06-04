@@ -531,11 +531,12 @@ export class RelayPoolManager {
       return;
     }
 
-    // Log immediately and set a sentinel to prevent double-initialization
-    // before setInterval() returns its handle. Fixes TOCTOU bug where rapid
-    // double-calls could both pass the guard above before either finishes.
-    this.#logger.info("relay.manifest.poll.started", { intervalMs });
+    // Set sentinel IMMEDIATELY to block concurrent calls before any operations.
+    // Fixes TOCTOU bug where rapid double-calls could both pass the guard above
+    // before either sets the sentinel.
     this.#pollInterval = true as unknown as NodeJS.Timeout; // sentinel
+
+    this.#logger.info("relay.manifest.poll.started", { intervalMs });
 
     const handle = setInterval(() => {
       // Pass maxAttempts=1, throwRawErrors=true, suppressRetryLogs=true, suppressLoadedLog=true:
