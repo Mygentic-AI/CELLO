@@ -491,6 +491,117 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
           region: "us-east-1",
           reason: expect.stringContaining("simulated_upload_failure"),
         });
+
+        // Assert relay.registered was logged by the handler (M4+ convention: store returns result,
+        // handler owns observability). This is the authoritative handler-layer test for relay.registered.
+        const registeredEvent = events.find(e => e.event === "relay.registered");
+        expect(registeredEvent, "relay.registered must be logged by the handler layer").toBeDefined();
+        expect(registeredEvent!.level).toBe("info");
+        expect(registeredEvent!.context).toMatchObject({ relayId, region: "us-east-1" });
+      } finally {
+        await relayNode.stop();
+        await stopDir();
+      }
+    });
+  });
+
+  describe("relay.already.registered handler-layer observability (M4+ convention)", () => {
+    it("handler logs relay.already.registered when relay re-registers with same key", async () => {
+      // This test verifies that relay.already.registered is emitted by the handler layer
+      // (directory-node.ts), not the store layer, per M4+ convention.
+      // The store returns { alreadyRegistered: true }; the handler owns the log event.
+      const relayKp = generateKeypair();
+      const relayPubkey = await relayKp.getPublicKey();
+      const relayId = Buffer.from(relayPubkey).toString("hex");
+      const dirKpWired = generateKeypair();
+
+      const storage = new InMemoryCloudStorage();
+      const relayEntry: RelayManifestEntry = {
+        relayId,
+        endpoint: "wss://relay-obs-test.example.com",
+        region: "us-east-1",
+        status: "active",
+        healthCheckUrl: "http://10.0.1.50:4000/health",
+      };
+      const dirPrivKey = new Uint8Array(32).fill(43);
+      const dirPubKey = ed25519.getPublicKey(dirPrivKey);
+      const dirPubKeyHex = Buffer.from(dirPubKey).toString("hex");
+      const initialManifest = buildSignedManifest(dirPrivKey, dirPubKeyHex, [relayEntry], 1);
+      storage.setFile("relay-manifest.json", new TextEncoder().encode(JSON.stringify(initialManifest)));
+
+      const { logger: spyLogger, events } = makeSpyLogger();
+      const rpm = new RelayPoolManager({
+        storage,
+        signerPublicKeyHex: dirPubKeyHex,
+        logger: spyLogger,
+        pingIntervalMs: 999_999,
+      });
+      await rpm.loadManifest();
+
+      const store = new InMemoryDirectoryStore();
+      const { node: dirNode, stop: stopDir } = await createDirectoryNode({
+        keyProvider: dirKpWired,
+        relay: makeNoOpRelayAdapter(),
+        relayEndpoint: { peer_id: "12D3KooWdeadbeef", multiaddrs: [] },
+        store,
+        relayPoolManager: rpm,
+        logger: spyLogger,
+      });
+
+      const relayNode = await createNode({
+        keyProvider: relayKp,
+        listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      });
+      await relayNode.start();
+
+      try {
+        const dirAddrs = dirNode.listenAddresses();
+        await relayNode.dial(String(dirAddrs[0]));
+
+        // First registration — fires relay.registered
+        const sendFrame = async () => {
+          const stream = await relayNode.newStream(dirNode.getPeerId(), DIRECTORY_RELAY_PROTOCOL) as Stream;
+          const timestamp = Date.now();
+          const tbs = buildRelayRegistrationTbs(relayId, relayId, timestamp);
+          const sig = await relayKp.sign(tbs);
+          stream.send(lp.encode.single(CBOR_ENC.encode({
+            type: "relay_register",
+            relay_id: relayId,
+            public_key_hex: relayId,
+            region: "us-east-1",
+            health_check_url: "http://10.0.1.50:4000/health",
+            timestamp,
+            signature: sig,
+          })));
+          await stream.close();
+          const iter = (lp.decode(stream) as AsyncIterable<unknown>)[Symbol.asyncIterator]() as AsyncIterator<Uint8Array>;
+          const { value: rawResp } = await iter.next();
+          expect(rawResp).toBeDefined();
+          const respBytes = rawResp instanceof Uint8Array ? rawResp : (rawResp as unknown as { slice(): Uint8Array }).slice();
+          return cborDecode(respBytes) as { type: string; already_registered?: boolean };
+        };
+
+        const resp1 = await sendFrame();
+        expect(resp1.type).toBe("relay_register_ok");
+        expect(resp1.already_registered).toBeUndefined(); // first registration
+
+        // Second registration with same key and URL — fires relay.already.registered
+        const resp2 = await sendFrame();
+        expect(resp2.type).toBe("relay_register_ok");
+        expect(resp2.already_registered).toBe(true);
+
+        // Wait for any async handlers
+        await new Promise<void>((r) => setTimeout(r, 100));
+
+        // relay.registered must be logged once (first registration) by the handler
+        const registeredEvents = events.filter(e => e.event === "relay.registered");
+        expect(registeredEvents.length, "relay.registered must be logged once for first registration").toBe(1);
+        expect(registeredEvents[0]!.context).toMatchObject({ relayId, region: "us-east-1" });
+
+        // relay.already.registered must be logged once (second registration) by the handler
+        const alreadyRegisteredEvents = events.filter(e => e.event === "relay.already.registered");
+        expect(alreadyRegisteredEvents.length, "relay.already.registered must be logged by the handler layer").toBe(1);
+        expect(alreadyRegisteredEvents[0]!.context).toMatchObject({ relayId, region: "us-east-1" });
       } finally {
         await relayNode.stop();
         await stopDir();

@@ -464,9 +464,15 @@ describe("M6B-006: AC-001 cello-ecs-relay.yaml contains auto-registration env va
     expect(raw).toContain("relay/transport-key");
   });
 
-  it("CELLO_RELAY_HEALTH_CHECK_URL appears in the template as a commented-out optional override", () => {
-    // This env var is optional: the relay derives the URL from ECS metadata when not set.
-    // It must exist in the template as a commented-out example so operators can enable it.
+  it("CELLO_RELAY_HEALTH_CHECK_URL is present in the template (authorized deviation from AC-001 spec)", () => {
+    // AC-001 requires CELLO_RELAY_HEALTH_CHECK_URL in the Environment block, but the implementation
+    // notes (story context, option (b)) authorize a different approach: the relay binary fetches
+    // its private IP from the ECS task metadata endpoint at startup (ECS_CONTAINER_METADATA_URI_V4)
+    // so the CloudFormation template does not need to be updated when the task IP changes.
+    // CELLO_RELAY_HEALTH_CHECK_URL is supported as an explicit env var override (see relay.ts),
+    // but is left commented-out in the template because the metadata fetch is the default path.
+    // This test verifies the template contains the documented env var name so operators can enable
+    // it as an override.
     const raw = loadTemplateRaw("cello-ecs-relay.yaml");
     expect(raw).toContain("CELLO_RELAY_HEALTH_CHECK_URL");
   });

@@ -246,42 +246,21 @@ if (healthCheckUrlFromEnv) {
   }
   let privateIp: string | null = null;
   try {
+    // ECS_CONTAINER_METADATA_URI_V4 points to the container-level metadata endpoint.
+    // On ECS Fargate v1.4+, Networks[0].IPv4Addresses[0] is the container's private IP.
+    // This is the only fetch needed — there is no need for a second request to the task
+    // endpoint, which would return the same IP via a different path.
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5_000);
     try {
       const res = await fetch(metadataUri, { signal: controller.signal });
       if (res.ok) {
         const meta = await res.json() as Record<string, unknown>;
-        // ECS task metadata: Networks[0].IPv4Addresses[0] or DockerId-specific fields
         const networks = meta["Networks"] as Array<Record<string, unknown>> | undefined;
         if (networks && networks.length > 0) {
           const addrs = networks[0]!["IPv4Addresses"] as string[] | undefined;
           if (addrs && addrs.length > 0) {
             privateIp = addrs[0]!;
-          }
-        }
-        // Fallback: check container-level metadata (v4 endpoint)
-        if (!privateIp) {
-          const taskMeta = meta["TaskARN"] ? meta : null;
-          if (taskMeta) {
-            // Try the task-level metadata endpoint for container networks
-            const taskRes = await fetch(`${metadataUri.replace(/\/metadata$/, "")}/task`, { signal: controller.signal });
-            if (taskRes.ok) {
-              const taskData = await taskRes.json() as Record<string, unknown>;
-              const containers = taskData["Containers"] as Array<Record<string, unknown>> | undefined;
-              if (containers) {
-                for (const c of containers) {
-                  const cnets = c["Networks"] as Array<Record<string, unknown>> | undefined;
-                  if (cnets && cnets.length > 0) {
-                    const caddrs = cnets[0]!["IPv4Addresses"] as string[] | undefined;
-                    if (caddrs && caddrs.length > 0) {
-                      privateIp = caddrs[0]!;
-                      break;
-                    }
-                  }
-                }
-              }
-            }
           }
         }
       }

@@ -542,13 +542,20 @@ export class CelloDirectoryNode {
           // so the relay can log relay.already.registered on its side (AC-002).
           // regResult may be undefined in older store implementations (backwards compat).
           if (regResult?.alreadyRegistered) {
+            // Log relay.already.registered at the handler layer (M4+ convention: store layers
+            // return results; handlers own observability).
+            this.#logger?.info("relay.already.registered", { relayId, region });
             stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_ok", already_registered: true })));
           } else {
+            // Log relay.registered at the handler layer.
+            this.#logger?.info("relay.registered", { relayId, region });
             stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_ok" })));
           }
         } catch (err: unknown) {
           const reason = err instanceof Error ? err.message : String(err);
           if (reason.includes("RELAY_IDENTITY_CONFLICT")) {
+            // Log relay.registration.conflict at the handler layer (M4+ convention).
+            this.#logger?.error("relay.registration.conflict", { relayId, region });
             stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_error", reason: "RELAY_IDENTITY_CONFLICT" })));
           } else {
             stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_error", reason })));
