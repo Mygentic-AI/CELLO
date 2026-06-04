@@ -72,15 +72,7 @@ function makeTestKeypair(seed: number) {
   };
 }
 
-/** Canonical JSON signing: sorted top-level keys, no whitespace, UTF-8. */
-function canonicalJson(obj: Record<string, unknown>): Uint8Array {
-  const sorted = Object.fromEntries(
-    Object.keys(obj).sort().map(k => [k, (obj as Record<string, unknown>)[k]])
-  );
-  return new TextEncoder().encode(JSON.stringify(sorted));
-}
-
-/** Build and sign a valid relay pool manifest. */
+/** Build and sign a valid relay pool manifest using the production buildCanonicalPayload. */
 function buildSignedManifest(
   privateKey: Uint8Array,
   publicKeyHex: string,
@@ -89,8 +81,16 @@ function buildSignedManifest(
   updatedAt?: string,
 ): RelayPoolManifest {
   const ts = updatedAt ?? new Date().toISOString();
-  const body = { version, updatedAt: ts, relays };
-  const payload = canonicalJson(body as unknown as Record<string, unknown>);
+  // Construct a stub manifest with the signing fields set to empty strings — they are excluded
+  // from the canonical payload by buildCanonicalPayload (only version, updatedAt, relays are signed).
+  const stub: RelayPoolManifest = {
+    version,
+    updatedAt: ts,
+    relays,
+    signedBy: publicKeyHex,
+    signature: "",
+  };
+  const payload = buildCanonicalPayload(stub);
   const signature = ed25519.sign(payload, privateKey);
   return {
     version,
@@ -438,7 +438,14 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
       const relayPubkey = await relayKp.getPublicKey();
       const relayId = Buffer.from(relayPubkey).toString("hex");
 
-      const dirKpWired = generateKeypair();
+      // Use a single deterministic key for both the manifest signer and the directory node.
+      // This eliminates the fragility where a successful upload would silently fail
+      // signature verification due to a key mismatch between the RPM's signerPublicKeyHex
+      // and the directory node's keyProvider.
+      const dirPrivKey = new Uint8Array(32).fill(42);
+      const dirPubKey = ed25519.getPublicKey(dirPrivKey);
+      const dirPubKeyHex = Buffer.from(dirPubKey).toString("hex");
+      const dirKpWired = new InMemoryKeyProvider(dirPrivKey);
 
       // Build an initial signed manifest that includes the relay
       const storage = new InMemoryCloudStorage();
@@ -449,9 +456,6 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
         status: "active",
         healthCheckUrl: "http://10.0.1.50:4000/health",
       };
-      const dirPrivKey = new Uint8Array(32).fill(42);
-      const dirPubKey = ed25519.getPublicKey(dirPrivKey);
-      const dirPubKeyHex = Buffer.from(dirPubKey).toString("hex");
       const initialManifest = buildSignedManifest(dirPrivKey, dirPubKeyHex, [relayEntry], 1);
       storage.setFile("relay-manifest.json", new TextEncoder().encode(JSON.stringify(initialManifest)));
 
@@ -474,7 +478,9 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
       // Store backed by InMemoryDirectoryStore — no DB required
       const store = new InMemoryDirectoryStore();
 
-      // Create real directory node wired with the failing RelayPoolManager
+      // Create real directory node wired with the failing RelayPoolManager.
+      // dirKpWired uses the same key as the manifest signer (dirPrivKey), so if the upload
+      // were to succeed, the re-signed manifest would also verify correctly.
       const { node: dirNode, stop: stopDir } = await createDirectoryNode({
         keyProvider: dirKpWired,
         relay: makeNoOpRelayAdapter(),
