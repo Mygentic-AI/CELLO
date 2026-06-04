@@ -120,6 +120,7 @@ import type {
   RelaySessionAssignment,
   SealFrostSignature,
   SessionFrostSealed,
+  SessionRequestErrorReason,
 } from "./directory-types.js";
 import { WALL_CLOCK } from "./directory-types.js";
 import type { DirectoryStore } from "@cello-protocol/interfaces";
@@ -1984,8 +1985,18 @@ export class CelloDirectoryNode {
         }
       });
       if (!result.ok) {
-        protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: directory_below_threshold`);
-        this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "directory_below_threshold" }));
+        // M6B-002: Map FROST ceremony failure reason to wire reason
+        const wireReason = mapCeremonyFailure(result.error.reason);
+
+        // M6B-002: Structured log event with distinct reason
+        this.#logger?.warn("frost.ceremony.failed", {
+          agentId: initiatorHex.slice(0, 16),
+          reason: wireReason,
+          ceremonyId: ceremonyId.slice(0, 16),
+        });
+
+        protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: ${wireReason}`);
+        this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: wireReason }));
         return;
       }
       const frostedSig = result.signature;
@@ -2771,6 +2782,20 @@ function verifySealLeaves(
   // clients perform this verification locally (AC-001), maintaining the trust guarantee at the
   // client level. See: CELLO-SESSION-003 AC-002 step (f).
   return { ok: true };
+}
+
+// ─── M6B-002: mapCeremonyFailure ─────────────────────────────────────────────
+// Maps ThresholdSignatureError.error.reason to SessionRequestErrorReason.
+// Exhaustive switch ensures new FROST failure reasons produce a compile error.
+
+function mapCeremonyFailure(
+  reason: "DIRECTORY_BELOW_THRESHOLD" | "CEREMONY_TIMEOUT" | "CEREMONY_EXHAUSTED"
+): SessionRequestErrorReason {
+  switch (reason) {
+    case "CEREMONY_TIMEOUT": return "ceremony_timeout";
+    case "CEREMONY_EXHAUSTED": return "ceremony_exhausted";
+    case "DIRECTORY_BELOW_THRESHOLD": return "directory_below_threshold";
+  }
 }
 
 // ─── ClientDelegatedSigner ───────────────────────────────────────────────────

@@ -125,6 +125,8 @@ export type SessionRequestErrorReason =
   | "relay_unavailable"
   | "frost_signer_not_configured"  // SESSION-004: no IThresholdSigner registered for this initiator
   | "directory_below_threshold"    // SESSION-004: FROST ceremony failed — insufficient signers
+  | "ceremony_timeout"             // M6B-002: FROST ceremony timed out waiting for client response
+  | "ceremony_exhausted"           // M6B-002: FROST ceremony ran but returned null (agent not bootstrapped)
   | "ceremony_conflict"            // SESSION-004: concurrent ceremony already in-flight for this agent
   | "peer_not_registered"          // NODE-001 AC-014: client has not sent peer_info_announce yet
   | "not_registered"               // REG-001 AC-009: agent has not completed registration

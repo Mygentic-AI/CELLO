@@ -498,6 +498,59 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # ── 11. cello-frost-ceremony-exhausted — M6B-002 ─────────────────────────
+  # Fires ops-warning when FROST ceremony failures (ceremony_exhausted) exceed 3
+  # occurrences in 5 minutes. Custom metric: derived from frost.ceremony.failed
+  # log events via MetricFilter.
+  #
+  # LIMITATION: CloudWatch Logs MetricFilters cannot group by extracted JSON fields
+  # or create per-dimension metrics. This alarm counts ALL ceremony_exhausted events
+  # from ANY agents, not per-agent occurrences. This is an AWS platform limitation.
+  # The alarm still provides value by detecting sustained FROST failures across the
+  # directory, but it may produce false positives if multiple different agents each
+  # fail once within the same 5-minute window.
+
+  FrostCeremonyExhaustedMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub "/ecs/cello-directory-${Environment}"
+      FilterPattern: '{ $.event = "frost.ceremony.failed" && $.reason = "ceremony_exhausted" }'
+      MetricTransformations:
+        - MetricNamespace: CelloDirectory
+          MetricName: FrostCeremonyExhausted
+          MetricValue: "1"
+          DefaultValue: 0
+
+  FrostCeremonyExhaustedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-frost-ceremony-exhausted-${Environment}"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO FROST ceremonies exhausted 3+ times in 5 minutes (across all agents).
+        Region: ${AWS::Region}. This indicates sustained FROST failures.
+        The ceremony_exhausted reason means the FROST ceremony completed but returned null —
+        typically indicates one or more agents have not completed DKG registration or K_server shares
+        are missing from the directory's share store. Investigate agent bootstrap status and
+        directory share store state. Note: this alarm counts all agents together (AWS MetricFilter
+        limitation — cannot group by agentId).
+      MetricName: FrostCeremonyExhausted
+      Namespace: CelloDirectory
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsWarningTopic
+      OKActions:
+        - !Ref OpsWarningTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
   # ═══════════════════════════════════════════════════════════════════════════
   # DASHBOARD — AC-004
   #
