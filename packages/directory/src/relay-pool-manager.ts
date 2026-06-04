@@ -199,6 +199,8 @@ export class RelayPoolManager {
   #failureState = new Map<string, RelayState>();
   #healthCheckTimer: ReturnType<typeof setInterval> | undefined;
   #pollInterval: ReturnType<typeof setInterval> | undefined;
+  #isStartingPoll = false;
+  #isPolling = false;
 
   constructor(opts: RelayPoolManagerOptions) {
     this.#storage = opts.storage;
@@ -222,20 +224,17 @@ export class RelayPoolManager {
    *   of wrapping it in a generic message. Used by the poll loop to preserve the original
    *   error message for relay.manifest.poll.failed logging. Set false (default) for
    *   startup/manual load paths where wrapped errors with attempt counts are appropriate.
-   * @param suppressRetryLogs - when true, skip relay.manifest.load.failed ERROR logging
-   *   on S3 download failures. Used by the poll loop (which logs relay.manifest.poll.failed
-   *   at WARN instead) to avoid duplicate ERROR+WARN events for the same transient failure.
    * @param suppressLoadedLog - when true, skip relay.manifest.loaded logging.
    *   Used by the poll loop (passed to applyManifest()) so that polling emits only
    *   relay.manifest.refreshed, not both relay.manifest.loaded and relay.manifest.refreshed.
-   * @returns the version number of the loaded manifest, or undefined if manifest was stale.
+   * @returns { version, applied } where version is the manifest version and applied
+   *   indicates whether applyManifest() accepted it (false = stale version rejected).
    */
   async loadManifest(
     maxAttempts?: number,
     throwRawErrors = false,
-    suppressRetryLogs = false,
     suppressLoadedLog = false
-  ): Promise<number | undefined> {
+  ): Promise<{ version: number; applied: boolean }> {
     let raw: Uint8Array | undefined;
     let lastAttempt = 0;
     const effectiveMaxAttempts = maxAttempts ?? this.#maxLoadAttempts;
@@ -248,7 +247,8 @@ export class RelayPoolManager {
         break; // success
       } catch (err: unknown) {
         const reason = err instanceof Error ? err.message : String(err);
-        if (!suppressRetryLogs) {
+        // Log ERROR only if this is NOT a poll loop call (poll loop logs WARN separately)
+        if (!this.#isPolling) {
           this.#logger.error("relay.manifest.load.failed", { reason, attempt });
         }
         if (attempt < effectiveMaxAttempts) {
@@ -268,7 +268,7 @@ export class RelayPoolManager {
 
     if (!raw) {
       const reason = "manifest not found in S3";
-      if (!suppressRetryLogs) {
+      if (!this.#isPolling) {
         this.#logger.error("relay.manifest.load.failed", { reason, attempt: lastAttempt });
       }
       throw new Error(reason);
@@ -280,7 +280,7 @@ export class RelayPoolManager {
       manifest = JSON.parse(new TextDecoder().decode(raw)) as RelayPoolManifest;
     } catch (err: unknown) {
       const reason = err instanceof Error ? err.message : String(err);
-      if (!suppressRetryLogs) {
+      if (!this.#isPolling) {
         this.#logger.error("relay.manifest.load.failed", { reason, attempt: 1 });
       }
       throw new Error(`Manifest JSON parse failed: ${reason}`);
@@ -324,8 +324,8 @@ export class RelayPoolManager {
     // Start health check loop
     this.#startHealthChecks();
 
-    // Return the version that was loaded
-    return manifest.version;
+    // Return the version and applied status
+    return { version: manifest.version, applied: true };
   }
 
   /**
@@ -526,54 +526,49 @@ export class RelayPoolManager {
    * @param intervalMs — poll interval in milliseconds (default: 120_000 = 2 minutes)
    */
   startPolling(intervalMs: number): void {
-    if (this.#pollInterval !== undefined) {
-      // Already polling — no-op
+    if (this.#pollInterval !== undefined || this.#isStartingPoll) {
+      // Already polling or starting — no-op
       return;
     }
 
-    // Set sentinel IMMEDIATELY to block concurrent calls before any operations.
-    // Fixes TOCTOU bug where rapid double-calls could both pass the guard above
-    // before either sets the sentinel.
-    this.#pollInterval = true as unknown as NodeJS.Timeout; // sentinel
+    // Set flag immediately to block concurrent calls
+    this.#isStartingPoll = true;
 
     this.#logger.info("relay.manifest.poll.started", { intervalMs });
 
     const handle = setInterval(() => {
-      // Pass maxAttempts=1, throwRawErrors=true, suppressRetryLogs=true, suppressLoadedLog=true:
+      // Pass maxAttempts=1, throwRawErrors=true, suppressLoadedLog=true:
       // - throwRawErrors: poll loop gets the original S3 error for relay.manifest.poll.failed.reason
-      // - suppressRetryLogs: transient S3 failure emits exactly one WARN event
-      //   (relay.manifest.poll.failed), not ERROR (relay.manifest.load.failed)
       // - suppressLoadedLog: poll emits only relay.manifest.refreshed (the authoritative
       //   "poll picked up new manifest" signal), not both relay.manifest.loaded and
       //   relay.manifest.refreshed for the same occurrence
-      void this.loadManifest(1, true, true, true)
-        .then((loadedVersion) => {
-          // loadManifest() returns the version that was loaded, or undefined if the manifest
-          // was stale. This eliminates the race condition where overlapping polls could read
-          // inconsistent snapshots of #currentVersion.
-          if (loadedVersion !== undefined) {
+      // - #isPolling flag controls ERROR logging internally (no suppressRetryLogs param needed)
+      void this.loadManifest(1, true, true)
+        .then((result) => {
+          if (result.applied) {
             // New version was successfully loaded and applied
             this.#logger.info("relay.manifest.refreshed", {
-              manifestVersion: loadedVersion,
+              manifestVersion: result.version,
               relayCount: this.#currentRelays.length,
             });
           } else {
-            // loadManifest() threw on stale version (version <= currentVersion)
-            // This branch should not be reached because loadManifest() throws on staleness.
-            // Defensive logging in case implementation changes.
+            // Manifest was stale (version <= currentVersion)
             this.#logger.debug("relay.manifest.poll.noop", {
               currentVersion: this.#currentVersion,
-              receivedVersion: this.#currentVersion,
+              receivedVersion: result.version,
             });
           }
         })
         .catch((err: unknown) => {
           const reason = err instanceof Error ? err.message : String(err);
-          // Distinguish stale-version (no-op) from real failure
-          if (reason.startsWith("Manifest rejected: version")) {
+          // Parse the rejected version from the error message if present
+          // Error format: "Manifest rejected: version N is not higher than current M"
+          const versionMatch = reason.match(/Manifest rejected: version (\d+)/);
+          if (versionMatch) {
+            const rejectedVersion = parseInt(versionMatch[1]!, 10);
             this.#logger.debug("relay.manifest.poll.noop", {
               currentVersion: this.#currentVersion,
-              receivedVersion: this.#currentVersion,
+              receivedVersion: rejectedVersion,
             });
           } else {
             // Real failure: S3 unavailable, network error, or signature verification failed.
@@ -591,8 +586,10 @@ export class RelayPoolManager {
         });
     }, intervalMs);
 
-    // Replace sentinel with real handle
+    // Set the real handle and mark polling as active
     this.#pollInterval = handle;
+    this.#isPolling = true;
+    this.#isStartingPoll = false;
 
     // Allow Node.js to exit even if the poll timer is still running
     if (typeof this.#pollInterval === "object" && "unref" in this.#pollInterval) {
@@ -608,6 +605,7 @@ export class RelayPoolManager {
     if (this.#pollInterval !== undefined) {
       clearInterval(this.#pollInterval);
       this.#pollInterval = undefined;
+      this.#isPolling = false;
     }
   }
 

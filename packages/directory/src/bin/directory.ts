@@ -491,11 +491,11 @@ relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
   if (env !== "local") {
     const rawPollInterval = process.env["RELAY_MANIFEST_POLL_INTERVAL_MS"];
     const pollIntervalMs = rawPollInterval ? parseInt(rawPollInterval, 10) : 120_000;
-    if (isNaN(pollIntervalMs) || pollIntervalMs < 1_000) {
+    if (isNaN(pollIntervalMs) || pollIntervalMs < 60_000) {
       logger.error("adapter.config.missing", {
         missingKey: "RELAY_MANIFEST_POLL_INTERVAL_MS",
         value: rawPollInterval,
-        reason: "must be a positive integer >= 1000",
+        reason: "must be a positive integer >= 60000 (1 minute minimum)",
       });
       process.exit(1);
     }

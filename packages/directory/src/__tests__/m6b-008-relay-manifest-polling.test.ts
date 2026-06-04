@@ -212,7 +212,8 @@ describe("CELLO-M6B-008: RelayPoolManager manifest polling", () => {
     const noopEvent = logger.events.find(e => e.name === "relay.manifest.poll.noop");
     expect(noopEvent).toBeDefined();
     expect(noopEvent?.context.currentVersion).toBe(1);
-    // receivedVersion must match the pre-poll snapshot (versionBefore = 1 here)
+    // receivedVersion must show the version from the manifest that was retrieved but rejected
+    // (in this case, version 1 was retrieved when current was already 1)
     expect(noopEvent?.context.receivedVersion).toBe(1);
     expect(mgr.currentVersion).toBe(1);
 
