@@ -412,6 +412,26 @@ def test_ac002_port_4001_from_directory_sg_present():
     )
 
 
+def test_ac002_port_4000_from_directory_sg_unchanged():
+    """AC-002 req-1: EcsRelaySecurityGroup port 4000 from EcsDirectorySecurityGroup is unchanged.
+
+    The directory polls GET /health on port 4000 for relay health checks.
+    This pre-existing rule must survive the M6B-007 SG changes.
+    """
+    tmpl = load_yaml("cello-vpc.yaml")
+    rules = _get_sg_ingress_rules(tmpl, "EcsRelaySecurityGroup")
+    port_4000_dir_rules = [
+        r for r in rules
+        if r.get("FromPort") == 4000
+        and r.get("ToPort") == 4000
+        and _str_contains(r.get("SourceSecurityGroupId", ""), "EcsDirectorySecurityGroup")
+    ]
+    assert port_4000_dir_rules, (
+        "EcsRelaySecurityGroup must retain port 4000 ingress from EcsDirectorySecurityGroup (AC-002 req-1).\n"
+        "The directory health-check path (GET /health on port 4000) must remain unblocked."
+    )
+
+
 def test_ac002_port_4002_from_alb_sg():
     """AC-002: EcsRelaySecurityGroup has port 4002 from AlbSecurityGroup (new — WS forwarding)."""
     tmpl = load_yaml("cello-vpc.yaml")
@@ -475,7 +495,7 @@ def test_si001_port_4002_no_internet_ingress():
 
 
 def test_si001_port_4002_uses_sg_not_cidr():
-    """SI-001: Port 4002 ingress uses SourceSecurityGroupId (not CidrIp)."""
+    """SI-001: Port 4002 ingress uses SourceSecurityGroupId (not CidrIp or CidrIpv6)."""
     tmpl = load_yaml("cello-vpc.yaml")
     rules = _get_sg_ingress_rules(tmpl, "EcsRelaySecurityGroup")
     port_4002_rules = [
@@ -485,6 +505,7 @@ def test_si001_port_4002_uses_sg_not_cidr():
     assert port_4002_rules, "EcsRelaySecurityGroup must have port 4002 ingress rule"
     for rule in port_4002_rules:
         cidr = rule.get("CidrIp")
+        cidr_ipv6 = rule.get("CidrIpv6")
         sg_id = rule.get("SourceSecurityGroupId")
         assert sg_id is not None, (
             "SI-001: port 4002 ingress must use SourceSecurityGroupId, not CidrIp"
@@ -492,6 +513,10 @@ def test_si001_port_4002_uses_sg_not_cidr():
         assert cidr is None or cidr == "", (
             f"SI-001 VIOLATION: port 4002 ingress has CidrIp: {cidr}. "
             "Must use SourceSecurityGroupId only."
+        )
+        assert cidr_ipv6 is None or cidr_ipv6 == "", (
+            f"SI-001 VIOLATION: port 4002 ingress has CidrIpv6: {cidr_ipv6}. "
+            "Must use SourceSecurityGroupId only — IPv6 CIDR also bypasses the ALB restriction."
         )
 
 

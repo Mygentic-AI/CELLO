@@ -75,6 +75,7 @@ NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-
 | RDS Endpoint | cello-dev.c9iokw02w3f8.us-east-1.rds.amazonaws.com |
 | RDS Port | 5432 |
 | Directory ALB | cello-dir-dev-1136016900.us-east-1.elb.amazonaws.com |
+| Relay ALB | pending — deploy cello-ecs-relay-dev to populate |
 | ALB Hosted Zone ID | Z35SXDOTRQ7X7K |
 | Route 53 Record | directory-us1.cello.mygentic.ai |
 | ACM Certificate | arn:aws:acm:us-east-1:257394457473:certificate/900d9dde-abd9-4d05-931b-507a6fdf55f4 |
@@ -162,6 +163,7 @@ NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-
 | RDS Endpoint | cello-dev.clu08oy88g6v.eu-central-1.rds.amazonaws.com |
 | RDS Port | 5432 |
 | Directory ALB | cello-dir-dev-1699677837.eu-central-1.elb.amazonaws.com |
+| Relay ALB | pending — deploy cello-ecs-relay-dev to populate |
 | Route 53 Record | directory-eu1.cello.mygentic.ai |
 | ECS Cluster | arn:aws:ecs:eu-central-1:257394457473:cluster/cello-dev |
 | Directory Node Public Key | 8105b180b753d97b50039a7e94433fd2b419f43d61f9ad7caf2ac15ad5cd1b45 |
@@ -213,6 +215,7 @@ NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-
 | RDS Endpoint | cello-dev.cryg2a8say19.ap-northeast-1.rds.amazonaws.com |
 | RDS Port | 5432 |
 | Directory ALB | cello-dir-dev-1435901052.ap-northeast-1.elb.amazonaws.com |
+| Relay ALB | pending — deploy cello-ecs-relay-dev to populate |
 | Route 53 Record | directory-ap1.cello.mygentic.ai |
 | ECS Cluster | arn:aws:ecs:ap-northeast-1:257394457473:cluster/cello-dev |
 | Directory Node Public Key | 9b4b673a16487ba47363e3eaff844bf68f19736d82967918fb896b813e39b984 |

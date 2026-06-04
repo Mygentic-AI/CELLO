@@ -669,15 +669,18 @@ update_state() {
   local alb_dns
   alb_dns=$(aws cloudformation describe-stacks     --region "${REGION}" --stack-name "cello-ecs-directory-${ENVIRONMENT}"     --query "Stacks[0].Outputs[?OutputKey=='AlbDnsName'].OutputValue"     --output text 2>/dev/null || echo "pending")
 
+  local relay_alb_dns
+  relay_alb_dns=$(aws cloudformation describe-stacks     --region "${REGION}" --stack-name "cello-ecs-relay-${ENVIRONMENT}"     --query "Stacks[0].Outputs[?OutputKey=='RelayAlbDnsName'].OutputValue"     --output text 2>/dev/null || echo "pending")
+
   # Rewrite the state file header and env section
   # Strategy: append a dated deploy record — full rewrite happens via deploy.sh on each full deploy
   local marker="### ${ENVIRONMENT} — ${REGION}"
   if grep -q "${marker}" "${state_file}" 2>/dev/null; then
     # Update last deployed date in-place using Python for reliable multiline edit
-    python3 - "${state_file}" "${ENVIRONMENT}" "${REGION}" "${today}" "${rds_endpoint}" "${alb_dns}" << 'PYEOF_INNER'
+    python3 - "${state_file}" "${ENVIRONMENT}" "${REGION}" "${today}" "${rds_endpoint}" "${alb_dns}" "${relay_alb_dns}" << 'PYEOF_INNER'
 import sys, re
 
-state_file, env, region, today, rds_endpoint, alb_dns = sys.argv[1:]
+state_file, env, region, today, rds_endpoint, alb_dns, relay_alb_dns = sys.argv[1:]
 with open(state_file) as f:
     content = f.read()
 
@@ -697,9 +700,12 @@ for part in parts:
         # Update RDS endpoint if not pending
         if rds_endpoint and rds_endpoint != "pending" and rds_endpoint != "None":
             part = re.sub(r"\| RDS Endpoint \|[^\n]+", f"| RDS Endpoint | {rds_endpoint} |", part)
-        # Update ALB if not pending
+        # Update Directory ALB if not pending
         if alb_dns and alb_dns != "pending" and alb_dns != "None":
             part = re.sub(r"\| Directory ALB \|[^\n]+", f"| Directory ALB | {alb_dns} |", part)
+        # Update Relay ALB if not pending
+        if relay_alb_dns and relay_alb_dns != "pending" and relay_alb_dns != "None":
+            part = re.sub(r"\| Relay ALB \|[^\n]+", f"| Relay ALB | {relay_alb_dns} |", part)
     updated_parts.append(part)
 
 with open(state_file, "w") as f:
