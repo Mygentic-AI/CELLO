@@ -2,7 +2,7 @@
 // Usage: pass { storyId: "CELLO-M6B-005", model: "opus" } as args
 // model: "opus" | "sonnet" (default: "opus") — controls sprint coder
 // reviewModel: "opus" | "sonnet" (default: "sonnet") — controls code reviewer and sprint reviewer
-// reviewOnly: true — skip setup and implementation; run review rounds only
+// reviewAndFixOnly: true — skip setup and initial implementation; run review+fix rounds only
 //   If a worktree branch exists for the story, diffs against main...STORY_ID
 //   If no worktree exists (implementation landed on main), diffs by story ID in git log
 // skipCodeReview: true — run sprint reviewer only (no code reviewer)
@@ -25,7 +25,7 @@ export const meta = {
 // ─── ARGS NORMALIZATION ──────────────────────────────────────────────────────
 const CODER_MODEL = args && args.model ? args.model : 'opus'
 const REVIEW_MODEL = args && args.reviewModel ? args.reviewModel : 'sonnet'
-const REVIEW_ONLY = args && args.reviewOnly === true
+const REVIEW_ONLY = args && (args.reviewAndFixOnly === true || args.reviewOnly === true) // reviewOnly kept for backwards compat
 const SKIP_CODE_REVIEW = args && args.skipCodeReview === true
 const SKIP_SPRINT_REVIEW = args && args.skipSprintReview === true
 const MAX_ROUNDS = args && args.maxRounds ? args.maxRounds : 3
