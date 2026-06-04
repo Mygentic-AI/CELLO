@@ -339,9 +339,6 @@ const shutdown = () => {
   const uptimeMs = Date.now() - startedAt;
   logRelayServiceStopped(logger, { relayId, region: awsRegion, environment: celloEnv, uptimeMs });
 
-  // CELLO-M6B-009: stop idle session sweep
-  relayResult.relay.stopIdleSweep();
-
   healthServer.close();
   relayResult.stop()
     .catch((err: unknown) => {
