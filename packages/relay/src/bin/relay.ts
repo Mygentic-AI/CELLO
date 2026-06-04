@@ -291,6 +291,20 @@ if (healthCheckUrlFromEnv) {
   healthCheckUrl = `http://127.0.0.1:${healthPort}/health`;
 }
 
+// Validate the constructed health check URL before proceeding. If ECS metadata returned
+// malformed data (empty string, IPv6, invalid hostname), the relay would register with
+// an invalid URL causing all health checks to fail.
+try {
+  new URL(healthCheckUrl);
+} catch (err: unknown) {
+  const reason = err instanceof Error ? err.message : String(err);
+  logRelayServiceStartFailed(logger, {
+    reason: `Derived health check URL is invalid: ${healthCheckUrl}. ${reason}`,
+    region: awsRegion,
+  });
+  process.exit(1);
+}
+
 // ─── Directory adapter ─────────────────────────────────────────────────────────
 
 let directoryAdapter: NetworkDirectoryAdapter | undefined;

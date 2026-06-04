@@ -565,12 +565,14 @@ export class RelayPoolManager {
     // two concurrent calls would both read version N, both produce N+1, and the second
     // upload would silently overwrite the first. The lock queues callers and ensures each
     // call sees the result of the previous write before starting its own read.
-    const result = this.#manifestUpdateLock.then(async () => this.#reSignManifestForRelayInner(params));
-    // Extend the lock chain; suppress unhandled rejection on the chain tail
-    this.#manifestUpdateLock = result.then(
-      () => {},
-      () => {},
-    );
+    const result = this.#manifestUpdateLock
+      .then(async () => this.#reSignManifestForRelayInner(params))
+      .catch(err => { throw err; }); // Re-throw to maintain error visibility to caller
+    // Extend the lock chain; suppress unhandled rejection only at the chain tail
+    // to preserve sequencing even when individual operations fail.
+    // Type-cast needed because catch(() => {}) returns Promise<void>, but we need
+    // the lock chain to accept any promise type.
+    this.#manifestUpdateLock = result.catch(() => {}) as Promise<void>;
     return result;
   }
 
@@ -605,7 +607,8 @@ export class RelayPoolManager {
     // 3. Update relay entry
     const relayEntry = manifest.relays.find(r => r.relayId === relayId);
     if (!relayEntry) {
-      throw new Error(`relay_not_in_manifest: ${relayId}`);
+      // Distinct error prefix for config/sync issues vs operational S3 failures
+      throw new Error(`RELAY_NOT_IN_MANIFEST:${relayId}`);
     }
 
     relayEntry.healthCheckUrl = healthCheckUrl;

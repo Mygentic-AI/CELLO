@@ -520,7 +520,8 @@ export class CelloDirectoryNode {
         // CELLO-M6B-006 AC-002: health_check_url is required — directory must validate
         // before calling registerRelay() so any relay implementation (not just CELLO's own
         // relay binary) is forced to provide the field.
-        if (!relayId || !publicKeyHex || !region || typeof timestamp !== "number" || !signatureRaw || !healthCheckUrl) {
+        // Validate that healthCheckUrl is non-empty to prevent downstream health check failures.
+        if (!relayId || !publicKeyHex || !region || typeof timestamp !== "number" || !signatureRaw || !healthCheckUrl || (typeof healthCheckUrl === "string" && healthCheckUrl.trim() === "")) {
           stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_error", reason: "missing_fields" })));
           await stream.close();
           return;
@@ -574,7 +575,13 @@ export class CelloDirectoryNode {
             keyProvider: this.#keyProvider,
           }).catch((err: unknown) => {
             const reason = err instanceof Error ? err.message : String(err);
-            this.#logger?.error("relay.manifest.update.failed", { relayId, region, reason });
+            // Distinguish config/sync issues (relay not in manifest) from operational failures
+            // (S3 access, signing). Operations team needs to know whether to retry or fix config.
+            if (reason.startsWith('RELAY_NOT_IN_MANIFEST:')) {
+              this.#logger?.warn("relay.manifest.relay_missing", { relayId, region, reason });
+            } else {
+              this.#logger?.error("relay.manifest.update.failed", { relayId, region, reason });
+            }
           });
         }
 

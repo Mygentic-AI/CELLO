@@ -186,7 +186,10 @@ RELAYS_JSON=$(cat "${RELAY_DEFS_FILE}")
 CANONICAL_JSON=$(node -e "
 const relays = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
 const body = { version: Number(process.argv[2]), updatedAt: process.argv[3], relays };
-const sorted = Object.fromEntries(Object.keys(body).sort().map(k => [k, body[k]]));
+// Use explicit key ordering matching RelayPoolManager implementation to prevent
+// signature verification failures if additional top-level fields are ever added.
+const sortedKeys = ['relays', 'updatedAt', 'version'].filter(k => k in body);
+const sorted = Object.fromEntries(sortedKeys.map(k => [k, body[k]]));
 process.stdout.write(JSON.stringify(sorted));
 " -- "${RELAY_DEFS_FILE}" "${NEW_VERSION}" "${UPDATED_AT}")
 

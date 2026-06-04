@@ -487,15 +487,20 @@ Resources:
               Value: !Ref Environment
             - Key: Region
               Value: !Ref AWS::Region
+            - Key: RelayId
+              Value: "$.relayId"
 
   RelayManifestUpdateFailedAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub "cello-relay-manifest-update-${Environment}"
       AlarmDescription: !Sub >
-        [${AWS::Region}] CELLO relay manifest re-sign/upload failed > 3 times in 5 minutes.
-        Region: ${AWS::Region}. Relay auto-registration completed but manifest was not updated.
-        Agents may use stale relay health check URLs. Investigate S3 access and directory signing key.
+        [${AWS::Region}] CELLO relay manifest re-sign/upload failed > 3 times in 5 minutes
+        for a single relay. Region: ${AWS::Region}. Relay auto-registration completed but
+        manifest was not updated. Agents may use stale relay health check URLs.
+        The metric is now dimensioned by relayId to prevent false positives when multiple
+        relays fail once simultaneously (e.g., during directory restart with transient S3 issues).
+        Investigate S3 access and directory signing key for the specific relay.
       MetricName: ManifestUpdateErrors
       Namespace: CELLO/Relay
       Dimensions:
