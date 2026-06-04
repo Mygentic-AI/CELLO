@@ -452,13 +452,16 @@ describe("CELLO-M6B-008: RelayPoolManager manifest polling", () => {
 
   // AC-005: CELLO_ENV=local — startPolling() is NOT called; no relay.manifest.poll.* events fire
   it("AC-005: startPolling() is never called in local mode (no S3 in local dev)", async () => {
-    // This test verifies the directory wiring gate at the RelayPoolManager API boundary.
-    // bin/directory.ts (lines 490-510) returns early from the local branch before reaching
-    // the startPolling() call (lines 537-550). This test proves that if startPolling() is
+    // This test verifies the RelayPoolManager API boundary contract: if startPolling() is
     // never invoked, no relay.manifest.poll.* events fire — which is the AC requirement.
-    // A full process-spawn integration test is not necessary because the wiring code is a
-    // simple conditional branch with no external dependencies, and this test validates the
-    // contract that the wiring code depends on: "if you don't call startPolling(), no polls."
+    // The test does NOT verify the bin/directory.ts wiring (lines 490-510 return early from
+    // the local branch before reaching the startPolling() call at lines 537-550). A full
+    // process-spawn integration test would be needed to verify the wiring, but is not included
+    // because the wiring code is a simple conditional branch with no external dependencies.
+    // The wiring is verified during manual smoke tests (local directory startup) and any
+    // incorrect wiring would be immediately visible (S3 errors in local mode). This coverage
+    // gap is acceptable given the simplicity of the wiring code and the cost of maintaining
+    // a full process-spawn test for a single conditional branch.
     const manifest1 = createSignedManifest(1, signingKeyPrivate);
 
     const storage: CloudStorageProvider = {
@@ -505,4 +508,28 @@ describe("CELLO-M6B-008: RelayPoolManager manifest polling", () => {
     mgr.stop();
     vi.useRealTimers();
   });
+
+  // AC-006 integration: RELAY_MANIFEST_POLL_INTERVAL_MS validation in bin/directory.ts
+  // These tests verify that bin/directory.ts validates RELAY_MANIFEST_POLL_INTERVAL_MS early
+  // and exits with code 1 + adapter.config.missing event before expensive operations.
+  // The validation logic (lines 490-502) is a simple parseInt + bounds check that runs
+  // when env !== "local", but these tests would require spawning a full directory process
+  // with all required env vars (DATABASE_URL, AWS credentials, KMS keys, etc.), which is
+  // fragile and slow. The validation logic is straightforward (7 lines) and the AC-006
+  // test above verifies that startPolling() respects the configured interval when valid.
+  // We document the gap: bin/directory.ts wiring for the validation is NOT tested, only
+  // the RelayPoolManager API contract. This is consistent with AC-005 approach (API contract
+  // tested, wiring not tested). The validation will be caught by manual smoke tests and
+  // any incorrect interval will be immediately visible in CloudWatch Logs (relay.manifest.poll.started
+  // event includes intervalMs context field).
+
+  // AC-007: Live smoke test — no automated test
+  // AC-007 verifies the end-to-end auto-recovery chain: relay redeploy → PREP-003 auto-registers
+  // → manifest re-sign (PREP-004) → poll picks up new manifest → directory uses new relay.
+  // This is explicitly scoped as a manual smoke test per the story (lines 181-193) and must
+  // be verified in staging after both PREP-003 and PREP-004 are deployed. The chain is
+  // inherently multi-service (relay + directory + S3) and best verified in a live environment.
+  // Each component has its own automated tests (PREP-003 for auto-registration, PREP-004 for
+  // manifest signing, M6B-008 tests above for polling). The integration point is verified
+  // manually before closing M6B-008.
 });
