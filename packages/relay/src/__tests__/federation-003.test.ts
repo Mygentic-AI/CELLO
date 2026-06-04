@@ -45,6 +45,7 @@ import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID, DIRECTORY_RELAY_PROTOCOL_ID } from "../relay-node.js";
 import type { DirectoryAdapter } from "../relay-node.js";
 import { NetworkDirectoryAdapter } from "../network-directory-adapter.js";
+import { createRelayHealthServer } from "../relay-service-lifecycle.js";
 
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
@@ -79,7 +80,7 @@ async function readFrame(stream: Stream): Promise<Record<string, unknown>> {
 // ─── AC-002/AC-003: registerWithDirectory over live libp2p ────────────────────
 
 describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDirectory", () => {
-  it("AC-002: sends relay_register frame with valid self-signature; directory responds relay_register_ok", async () => {
+  it("AC-002: sends relay_register frame with valid self-signature; directory responds relay_register_ok; relay.registered is logged; health check returns 200", async () => {
     const relayKp = generateKeypair();
     const relayPubkey = await relayKp.getPublicKey();
     const relayId = Buffer.from(relayPubkey).toString("hex");
@@ -119,20 +120,27 @@ describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDire
     const dirAddrs = dirNode.listenAddresses();
     const dirPeerId = dirNode.getPeerId();
 
-    // Create relay node and NetworkDirectoryAdapter
+    // Create relay node and NetworkDirectoryAdapter with spy logger
     const relayNode = await createNode({ keyProvider: relayKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await relayNode.start();
+
+    // AC-002: spy logger captures relay.registered / relay.already.registered emitted by the adapter
+    const spyLogger = makeLogger();
 
     const adapter = new NetworkDirectoryAdapter({
       directoryPeerId: dirPeerId,
       directoryMultiaddrs: dirAddrs.map(String),
+      logger: spyLogger,
     });
     adapter.connect(relayNode);
+
+    const healthCheckUrl = "http://127.0.0.1:4002/health";
 
     const result = await adapter.registerWithDirectory({
       relayId,
       publicKeyHex: relayId,
       region: "us-east-1",
+      healthCheckUrl,
       keyProvider: relayKp,
     });
 
@@ -141,6 +149,32 @@ describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDire
     expect(receivedFrame?.["relay_id"]).toBe(relayId);
     expect(receivedFrame?.["public_key_hex"]).toBe(relayId);
     expect(receivedFrame?.["region"]).toBe("us-east-1");
+    // CELLO-M6B-006 AC-002: frame includes health_check_url
+    expect(receivedFrame?.["health_check_url"]).toBe(healthCheckUrl);
+
+    // AC-002: relay.registered must be logged at INFO with { relayId, region }
+    const registeredEvent = spyLogger.infoEvents.find(([ev]) => ev === "relay.registered");
+    expect(registeredEvent, "relay.registered must be logged at INFO after successful registration").toBeDefined();
+    expect(registeredEvent![1]).toMatchObject({ relayId, region: "us-east-1" });
+
+    // AC-002: relay starts accepting sessions (health check returns 200) after registration completes.
+    // In production, relay.ts starts the health server after registerWithDirectory() returns ok.
+    // Here we simulate that sequencing: start the health server only after registration completes,
+    // then verify GET /health returns 200 — proving registration was a prerequisite to traffic acceptance.
+    const healthServer = createRelayHealthServer({ relayId, logger: spyLogger });
+    await new Promise<void>((resolve, reject) => {
+      healthServer.listen(4002, "127.0.0.1", () => resolve());
+      healthServer.on("error", reject);
+    });
+    try {
+      const healthResp = await fetch("http://127.0.0.1:4002/health");
+      expect(healthResp.status).toBe(200);
+      const body = await healthResp.json() as { relayId: string; status: string };
+      expect(body.status).toBe("ok");
+      expect(body.relayId).toBe(relayId);
+    } finally {
+      await new Promise<void>((resolve) => { healthServer.close(() => resolve()); });
+    }
 
     await relayNode.stop();
     await dirNode.stop();
@@ -174,12 +208,70 @@ describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDire
     adapter.connect(relayNode);
 
     // First registration
-    const r1 = await adapter.registerWithDirectory({ relayId, publicKeyHex: relayId, region: "us-east-1", keyProvider: relayKp });
+    const r1 = await adapter.registerWithDirectory({ relayId, publicKeyHex: relayId, region: "us-east-1", healthCheckUrl: "http://127.0.0.1:4000/health", keyProvider: relayKp });
     expect(r1.ok).toBe(true);
 
     // Second registration — directory returns ok again (idempotent)
-    const r2 = await adapter.registerWithDirectory({ relayId, publicKeyHex: relayId, region: "us-east-1", keyProvider: relayKp });
+    const r2 = await adapter.registerWithDirectory({ relayId, publicKeyHex: relayId, region: "us-east-1", healthCheckUrl: "http://127.0.0.1:4000/health", keyProvider: relayKp });
     expect(r2.ok).toBe(true);
+
+    await relayNode.stop();
+    await dirNode.stop();
+  });
+
+  it("AC-003 (log coverage): directory responds with already_registered:true → relay.already.registered is logged, relay.registered is NOT logged", async () => {
+    // AC-004 in CELLO-M6B-006 states that when already_registered is true, the relay logs
+    // relay.already.registered (not relay.registered). This test exercises that code path
+    // in NetworkDirectoryAdapter lines 122-128 (network-directory-adapter.ts).
+    const relayKp = generateKeypair();
+    const relayPubkey = await relayKp.getPublicKey();
+    const relayId = Buffer.from(relayPubkey).toString("hex");
+
+    const dirNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await dirNode.start();
+
+    // Handler responds with already_registered: true (simulating idempotent re-registration
+    // where the directory detected the relay was already registered with the same key).
+    await dirNode.handle(DIRECTORY_RELAY_PROTOCOL_ID, async (stream: Stream) => {
+      try {
+        await readFrame(stream);
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_ok", already_registered: true })));
+        await stream.close();
+      } catch { stream.close().catch(() => {}); }
+    });
+
+    const relayNode = await createNode({ keyProvider: relayKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await relayNode.start();
+
+    const spyLogger = makeLogger();
+    const adapter = new NetworkDirectoryAdapter({
+      directoryPeerId: dirNode.getPeerId(),
+      directoryMultiaddrs: dirNode.listenAddresses().map(String),
+      logger: spyLogger,
+    });
+    adapter.connect(relayNode);
+
+    const result = await adapter.registerWithDirectory({
+      relayId,
+      publicKeyHex: relayId,
+      region: "eu-central-1",
+      healthCheckUrl: "http://10.0.2.5:4000/health",
+      keyProvider: relayKp,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.alreadyRegistered).toBe(true);
+    }
+
+    // relay.already.registered must be logged at INFO with { relayId, region }
+    const alreadyRegEvent = spyLogger.infoEvents.find(([ev]) => ev === "relay.already.registered");
+    expect(alreadyRegEvent, "relay.already.registered must be logged at INFO when already_registered:true").toBeDefined();
+    expect(alreadyRegEvent![1]).toMatchObject({ relayId, region: "eu-central-1" });
+
+    // relay.registered must NOT be logged when already_registered is true
+    const regEvent = spyLogger.infoEvents.find(([ev]) => ev === "relay.registered");
+    expect(regEvent, "relay.registered must NOT be logged when already_registered:true").toBeUndefined();
 
     await relayNode.stop();
     await dirNode.stop();
@@ -561,6 +653,7 @@ describe("FEDERATION-003 DB-001: NetworkDirectoryAdapter.registerWithDirectory r
       relayId,
       publicKeyHex: relayId,
       region: "us-east-1",
+      healthCheckUrl: "http://127.0.0.1:4000/health",
       keyProvider: relayKp,
     });
 

@@ -1675,7 +1675,7 @@ export class PgDirectoryStore implements DirectoryStore {
    *
    * @throws Error with message containing "RELAY_IDENTITY_CONFLICT" if relayId exists with different key
    */
-  async registerRelay(params: { relayId: string; publicKeyHex: string; region: string }): Promise<void> {
+  async registerRelay(params: { relayId: string; publicKeyHex: string; region: string }): Promise<{ alreadyRegistered?: boolean }> {
     const { relayId, publicKeyHex, region } = params;
 
     // Check for existing registration
@@ -1687,12 +1687,14 @@ export class PgDirectoryStore implements DirectoryStore {
     if (existing.rows.length > 0) {
       const existingKey = existing.rows[0]!.public_key_hex;
       if (existingKey === publicKeyHex) {
-        // Idempotent re-registration (AC-003) — same key, same relay restarting.
-        this.#logger.info("relay.already.registered", { relayId, region });
-        return;
+        // Idempotent re-registration — same key, same relay restarting.
+        // Return alreadyRegistered: true so the handler layer can log relay.already.registered
+        // and send relay_register_ok with already_registered: true to the relay.
+        // Observability is the handler's responsibility (M4+ convention).
+        return { alreadyRegistered: true };
       }
       // SI-001: different key for same relay_id — identity conflict, reject.
-      this.#logger.error("relay.registration.conflict", { relayId, region });
+      // relay.registration.conflict is logged by the handler layer (M4+ convention).
       throw new Error(`RELAY_IDENTITY_CONFLICT: relay_id '${relayId}' already registered with a different public key`);
     }
 
@@ -1707,7 +1709,8 @@ export class PgDirectoryStore implements DirectoryStore {
     const chainHashIndex = 3;
 
     await this.insertWithChain("relay_registrations", record, columns, values, chainHashIndex);
-    this.#logger.info("relay.registered", { relayId, region });
+    // Observability is the handler's responsibility — do not log relay.registered here.
+    return {};
   }
 
   /**

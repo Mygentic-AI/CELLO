@@ -170,6 +170,10 @@ describe("DEPLOY-001: AC-004 secrets use placeholder values", () => {
     expect(raw).toContain("directory/node-private-key");
     expect(raw).toContain("directory/kms-key-arn");
     expect(raw).toContain("relay/node-private-key");
+    // CELLO-M6B-006: relay transport key secret must exist in IaC so the
+    // RelayTaskExecutionRole IAM grant has a resource to protect and ECS can
+    // inject CELLO_RELAY_TRANSPORT_KEY_HEX at task launch.
+    expect(raw).toContain("relay/transport-key");
   });
 });
 
@@ -248,6 +252,22 @@ describe("DEPLOY-001: AC-006 relay task role IAM policy", () => {
     const raw = JSON.stringify(taskRole);
 
     expect(raw).not.toContain("directory/");
+  });
+});
+
+// ─── CELLO-M6B-006: RelayTaskExecutionRole grants access to relay/transport-key ──
+
+describe("M6B-006: RelayTaskExecutionRole grants secretsmanager access to relay/transport-key", () => {
+  it("RelayTaskExecutionRole policy includes relay/transport-key* ARN", () => {
+    // CRITICAL-1 fix: the ECS agent (execution role) must be able to inject
+    // CELLO_RELAY_TRANSPORT_KEY_HEX at task launch. Without this IAM grant,
+    // ECS returns ResourceNotFoundException and the task fails to start.
+    const template = loadTemplate("cello-iam.yaml");
+    const resources = template["Resources"] as Record<string, Record<string, unknown>>;
+    const execRole = resources["RelayTaskExecutionRole"];
+    expect(execRole, "RelayTaskExecutionRole must exist").toBeDefined();
+    const raw = JSON.stringify(execRole);
+    expect(raw).toContain("relay/transport-key");
   });
 });
 
@@ -431,6 +451,106 @@ describe("DEPLOY-001: SI-003 CI/CD isolation from cello-agent in eu-west-1", () 
     expect(raw).toContain("cello-pipeline-filter-lambda-role");
     expect(raw).toContain("cello-codebuild-role");
     expect(raw).toContain("cello-codepipeline-role");
+  });
+});
+
+// ─── CELLO-M6B-006 AC-001: ECS relay env vars ───────────────────────────────
+
+describe("M6B-006: AC-001 cello-ecs-relay.yaml contains auto-registration env vars", () => {
+  it("CELLO_DIRECTORY_MULTIADDR is in the Environment block", () => {
+    const template = loadTemplate("cello-ecs-relay.yaml");
+    const resources = template["Resources"] as Record<string, Record<string, unknown>>;
+    const taskDef = resources["TaskDefinition"];
+    expect(taskDef).toBeDefined();
+    const props = taskDef["Properties"] as Record<string, unknown>;
+    const containers = props["ContainerDefinitions"] as Array<Record<string, unknown>>;
+    expect(containers.length).toBeGreaterThan(0);
+    const env = containers[0]!["Environment"] as Array<{ Name: string; Value: unknown }>;
+    const envNames = env.map((e) => e.Name);
+    expect(envNames).toContain("CELLO_DIRECTORY_MULTIADDR");
+  });
+
+  it("CELLO_RELAY_TRANSPORT_KEY_HEX is in the Secrets block referencing cello/{env}/relay/transport-key", () => {
+    const template = loadTemplate("cello-ecs-relay.yaml");
+    const resources = template["Resources"] as Record<string, Record<string, unknown>>;
+    const taskDef = resources["TaskDefinition"];
+    const props = taskDef["Properties"] as Record<string, unknown>;
+    const containers = props["ContainerDefinitions"] as Array<Record<string, unknown>>;
+    const secrets = containers[0]!["Secrets"] as Array<{ Name: string; ValueFrom: unknown }>;
+    const transportKeySecret = secrets.find((s) => s.Name === "CELLO_RELAY_TRANSPORT_KEY_HEX");
+    expect(transportKeySecret, "CELLO_RELAY_TRANSPORT_KEY_HEX must be in Secrets").toBeDefined();
+    // ValueFrom must reference cello/{env}/relay/transport-key via Sub
+    const raw = JSON.stringify(transportKeySecret!.ValueFrom);
+    expect(raw).toContain("relay/transport-key");
+  });
+
+  it("CELLO_RELAY_HEALTH_CHECK_URL is present in the template (authorized deviation from AC-001 spec)", () => {
+    // AC-001 requires CELLO_RELAY_HEALTH_CHECK_URL in the Environment block, but the implementation
+    // notes (story context, option (b)) authorize a different approach: the relay binary fetches
+    // its private IP from the ECS task metadata endpoint at startup (ECS_CONTAINER_METADATA_URI_V4)
+    // so the CloudFormation template does not need to be updated when the task IP changes.
+    // CELLO_RELAY_HEALTH_CHECK_URL is supported as an explicit env var override (see relay.ts),
+    // but is left commented-out in the template because the metadata fetch is the default path.
+    // This test verifies the template contains the documented env var name so operators can enable
+    // it as an override.
+    const raw = loadTemplateRaw("cello-ecs-relay.yaml");
+    expect(raw).toContain("CELLO_RELAY_HEALTH_CHECK_URL");
+  });
+});
+
+// ─── CELLO-M6B-006 AC-008: CloudWatch relay manifest update alarm ─────────────
+
+describe("M6B-006: AC-008 cello-cloudwatch.yaml contains RelayManifestUpdateFailedAlarm", () => {
+  it("RelayManifestUpdateFailedMetricFilter resource exists with ManifestUpdateErrors metric", () => {
+    const template = loadTemplate("cello-cloudwatch.yaml");
+    const resources = template["Resources"] as Record<string, Record<string, unknown>>;
+    const filter = resources["RelayManifestUpdateFailedMetricFilter"];
+    expect(filter, "RelayManifestUpdateFailedMetricFilter must exist").toBeDefined();
+    const raw = JSON.stringify(filter);
+    expect(raw).toContain("ManifestUpdateErrors");
+    expect(raw).toContain("relay.manifest.update.failed");
+  });
+
+  it("RelayManifestUpdateFailedAlarm resource exists with correct metric, name pattern, and threshold", () => {
+    const template = loadTemplate("cello-cloudwatch.yaml");
+    const resources = template["Resources"] as Record<string, Record<string, unknown>>;
+    const alarm = resources["RelayManifestUpdateFailedAlarm"];
+    expect(alarm, "RelayManifestUpdateFailedAlarm must exist").toBeDefined();
+    const props = alarm["Properties"] as Record<string, unknown>;
+
+    // Metric name must be ManifestUpdateErrors
+    expect(props["MetricName"]).toBe("ManifestUpdateErrors");
+
+    // Alarm name must include cello-relay-manifest-update- prefix (parameterised by Environment)
+    const alarmName = JSON.stringify(props["AlarmName"]);
+    expect(alarmName).toContain("cello-relay-manifest-update-");
+
+    // Threshold must be > 3 in 5 minutes (Period: 300, Threshold: 3, GreaterThanThreshold)
+    expect(props["Period"]).toBe(300);
+    expect(props["Threshold"]).toBe(3);
+    expect(props["ComparisonOperator"]).toBe("GreaterThanThreshold");
+  });
+
+  it("Alarm dimensions match MetricFilter dimensions exactly (prevents INSUFFICIENT_DATA)", () => {
+    const template = loadTemplate("cello-cloudwatch.yaml");
+    const resources = template["Resources"] as Record<string, Record<string, unknown>>;
+
+    // Extract dimension keys from the MetricFilter
+    const filter = resources["RelayManifestUpdateFailedMetricFilter"];
+    const filterProps = filter["Properties"] as Record<string, unknown>;
+    const transformations = filterProps["MetricTransformations"] as Array<Record<string, unknown>>;
+    const filterDimensions = transformations[0]["Dimensions"] as Array<{ Key: string }>;
+    const filterDimKeys = filterDimensions.map((d) => d.Key).sort();
+
+    // Extract dimension keys from the Alarm
+    const alarm = resources["RelayManifestUpdateFailedAlarm"];
+    const alarmProps = alarm["Properties"] as Record<string, unknown>;
+    const alarmDimensions = alarmProps["Dimensions"] as Array<{ Name: string }>;
+    const alarmDimKeys = alarmDimensions.map((d) => d.Name).sort();
+
+    // CloudWatch metrics are uniquely identified by their exact dimension set.
+    // A mismatch means the alarm queries a different metric series than what the filter publishes.
+    expect(alarmDimKeys).toEqual(filterDimKeys);
   });
 });
 

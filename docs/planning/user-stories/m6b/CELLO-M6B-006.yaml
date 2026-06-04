@@ -301,7 +301,7 @@ acceptance_criteria:
       AND cello_initiate_session succeeds from the demo agent within 2 minutes
       of the relay task starting — proving the relay is functional without
       manual sign-manifest.sh intervention"
-    test_type: integration
+    test_type: manual
     component_under_test: relay
     notes: "Run manually after deployment. This is the live smoke test proving
       the full auto-registration chain works end-to-end."

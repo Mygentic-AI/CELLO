@@ -117,6 +117,8 @@ interface RelayState {
   consecutiveSuccesses: number;
   available: boolean;
   unavailableSince: number | undefined;
+  // CELLO-M6B-006: track last known healthCheckUrl for no-op comparison
+  healthCheckUrl?: string;
 }
 
 // ─── Configuration ────────────────────────────────────────────────────────────
@@ -167,9 +169,14 @@ async function defaultPingFn(url: string): Promise<PingResult> {
 
 /**
  * Build canonical JSON of the manifest body (excludes signedBy and signature).
- * Canonical JSON: sorted keys, no whitespace, UTF-8 encoded per RELAY-001 signing rules.
+ * Canonical JSON: sorted keys at the TOP LEVEL ONLY (relays, updatedAt, version).
+ * Relay entry fields are NOT sorted — only the top-level keys are sorted.
+ * UTF-8 encoded per RELAY-001 signing rules.
+ *
+ * Exported so that infra/sign-manifest.sh and tests can use the exact same
+ * construction and verify round-trip compatibility (AC-007b).
  */
-function buildCanonicalPayload(manifest: RelayPoolManifest): Uint8Array {
+export function buildCanonicalPayload(manifest: RelayPoolManifest): Uint8Array {
   const body: Record<string, unknown> = {
     version: manifest.version,
     updatedAt: manifest.updatedAt,
@@ -198,6 +205,13 @@ export class RelayPoolManager {
   #currentRelays: RelayManifestEntry[] = [];
   #failureState = new Map<string, RelayState>();
   #healthCheckTimer: ReturnType<typeof setInterval> | undefined;
+  // CELLO-M6B-006: track healthCheckUrl per relay for no-op detection
+  #relayHealthCheckUrls = new Map<string, string>();
+  // CELLO-M6B-006: serialize concurrent reSignManifestForRelay calls to prevent TOCTOU race.
+  // At directory restart, multiple relays reconnect simultaneously — without serialization,
+  // two concurrent calls would both read version N, both increment to N+1, and the second
+  // upload would silently overwrite the first (losing one relay's healthCheckUrl update).
+  #manifestUpdateLock: Promise<void> = Promise.resolve();
 
   constructor(opts: RelayPoolManagerOptions) {
     this.#storage = opts.storage;
@@ -329,14 +343,22 @@ export class RelayPoolManager {
           consecutiveSuccesses: 0,
           available: true,
           unavailableSince: undefined,
+          healthCheckUrl: relay.healthCheckUrl, // CELLO-M6B-006
         });
       }
+      // NOTE: #relayHealthCheckUrls is intentionally NOT populated here.
+      // Per story requirement: "the first relay_register after a directory restart always
+      // triggers a re-sign, even if the URL hasn't changed." The map is populated only
+      // after a successful reSignManifestForRelayInner (step 8 below), so a fresh directory
+      // instance always has an empty map and therefore treats the first registration as a
+      // URL change, causing a re-sign. A redundant manifest update is safe.
     }
 
     // Remove state for relays no longer in the manifest
     for (const relayId of this.#failureState.keys()) {
       if (!newRelayIds.has(relayId)) {
         this.#failureState.delete(relayId);
+        this.#relayHealthCheckUrls.delete(relayId); // CELLO-M6B-006
       }
     }
 
@@ -494,5 +516,135 @@ export class RelayPoolManager {
   /** Expose current manifest version for testing. */
   get currentVersion(): number {
     return this.#currentVersion;
+  }
+
+  /**
+   * CELLO-M6B-006: Get the last known healthCheckUrl for a relay.
+   * Used by directory to detect no-op registrations.
+   * Returns undefined if relay unknown or never registered.
+   */
+  getRelayHealthCheckUrl(relayId: string): string | undefined {
+    return this.#relayHealthCheckUrls.get(relayId);
+  }
+
+  /**
+   * CELLO-M6B-006: Update the healthCheckUrl for a relay after manifest re-sign.
+   * Used by directory after successful manifest upload.
+   */
+  updateRelayHealthCheckUrl(relayId: string, url: string): void {
+    this.#relayHealthCheckUrls.set(relayId, url);
+  }
+
+  /**
+   * CELLO-M6B-006: Re-sign the relay manifest with updated healthCheckUrl for a relay.
+   *
+   * Pseudocode:
+   *   1. Check if healthCheckUrl changed — if unchanged, return { updated: false, reason: "no_change" }
+   *   2. Load current manifest from S3
+   *   3. Update the relay entry's healthCheckUrl
+   *   4. Increment manifest version
+   *   5. Build canonical payload (sorted keys: relays, updatedAt, version — shallow sort only)
+   *   6. Sign with keyProvider (RFC 8032 Ed25519)
+   *   7. Upload to S3
+   *   8. Update in-memory healthCheckUrl map
+   *   9. Log relay.manifest.updated with required context fields
+   *   10. Return { updated: true, version: newVersion }
+   *
+   * @param params.relayId - relay to update
+   * @param params.healthCheckUrl - new health check URL
+   * @param params.keyProvider - directory node private key for signing
+   * @returns { updated: true, version } on success, { updated: false, reason } if no-op or error
+   */
+  async reSignManifestForRelay(params: {
+    relayId: string;
+    healthCheckUrl: string;
+    keyProvider: import("@cello-protocol/crypto").KeyProvider;
+  }): Promise<{ updated: true; version: number } | { updated: false; reason: string }> {
+    // Serialize concurrent calls: read-increment-write is not atomic on S3.
+    // At directory restart, multiple relays reconnect simultaneously. Without serialization,
+    // two concurrent calls would both read version N, both produce N+1, and the second
+    // upload would silently overwrite the first. The lock queues callers and ensures each
+    // call sees the result of the previous write before starting its own read.
+    const result = this.#manifestUpdateLock
+      .then(async () => this.#reSignManifestForRelayInner(params))
+      .catch(err => { throw err; }); // Re-throw to maintain error visibility to caller
+    // Extend the lock chain; suppress unhandled rejection only at the chain tail
+    // to preserve sequencing even when individual operations fail.
+    // Type-cast needed because catch(() => {}) returns Promise<void>, but we need
+    // the lock chain to accept any promise type.
+    this.#manifestUpdateLock = result.catch(() => {}) as Promise<void>;
+    return result;
+  }
+
+  async #reSignManifestForRelayInner(params: {
+    relayId: string;
+    healthCheckUrl: string;
+    keyProvider: import("@cello-protocol/crypto").KeyProvider;
+  }): Promise<{ updated: true; version: number } | { updated: false; reason: string }> {
+    const { relayId, healthCheckUrl, keyProvider } = params;
+
+    // 1. Check if URL changed
+    const previousUrl = this.#relayHealthCheckUrls.get(relayId);
+    if (previousUrl === healthCheckUrl) {
+      return { updated: false, reason: "no_change" };
+    }
+
+    // 2. Load current manifest
+    let manifestBytes: Uint8Array | undefined;
+    try {
+      manifestBytes = await this.#storage.download("relay-manifest.json");
+    } catch (err: unknown) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(`Failed to load manifest: ${reason}`);
+    }
+
+    if (!manifestBytes) {
+      throw new Error("manifest_not_found");
+    }
+
+    const manifest: RelayPoolManifest = JSON.parse(new TextDecoder().decode(manifestBytes));
+
+    // 3. Update relay entry
+    const relayEntry = manifest.relays.find(r => r.relayId === relayId);
+    if (!relayEntry) {
+      // Distinct error prefix for config/sync issues vs operational S3 failures
+      throw new Error(`RELAY_NOT_IN_MANIFEST:${relayId}`);
+    }
+
+    relayEntry.healthCheckUrl = healthCheckUrl;
+
+    // 4. Increment version
+    manifest.version += 1;
+    manifest.updatedAt = new Date().toISOString();
+
+    // 5. Build canonical payload (sorted keys: relays, updatedAt, version — shallow sort only)
+    const canonicalPayload = buildCanonicalPayload(manifest);
+
+    // 6. Sign with keyProvider (RFC 8032 Ed25519)
+    const signature = await keyProvider.sign(canonicalPayload);
+    manifest.signature = Buffer.from(signature).toString("hex");
+    // signedBy is hex string of the public key
+    const pubkey = await keyProvider.getPublicKey();
+    manifest.signedBy = Buffer.from(pubkey).toString("hex");
+
+    // 7. Upload to S3
+    await this.#storage.upload(
+      "relay-manifest.json",
+      new TextEncoder().encode(JSON.stringify(manifest))
+    );
+
+    // 8. Update in-memory healthCheckUrl map
+    this.#relayHealthCheckUrls.set(relayId, healthCheckUrl);
+
+    // 9. Log relay.manifest.updated with required context fields
+    this.#logger.info("relay.manifest.updated", {
+      relayId,
+      region: relayEntry.region,
+      manifestVersion: manifest.version,
+      healthCheckUrl,
+    });
+
+    // 10. Return success
+    return { updated: true, version: manifest.version };
   }
 }

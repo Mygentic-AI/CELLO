@@ -23,8 +23,12 @@
  *   CELLO_DIRECTORY_PUBKEY            — hex-encoded Ed25519 directory public key (required)
  *                                        The relay authenticates directory admin frames against this key.
  *                                        In NODE_ENV=test, a random ephemeral key is used if absent.
- *   CELLO_DIRECTORY_MULTIADDR         — directory multiaddr for seal_submission callbacks (optional)
+ *   CELLO_DIRECTORY_MULTIADDR         — directory multiaddr for seal_submission callbacks and relay_register (optional)
  *                                        Format: /ip4/<host>/tcp/<port>/p2p/<peer-id>
+ *                                        When set, the relay registers with the directory on startup.
+ *   CELLO_RELAY_HEALTH_CHECK_URL      — VPC-internal health check URL sent in relay_register
+ *                                        (default: http://127.0.0.1:{healthPort}/health)
+ *                                        In ECS, the relay fetches its private IP from task metadata.
  *   AWS_REGION                        — AWS region for observability events (default: us-east-1)
  *   WAL_DIR                           — directory for per-session WAL files (required for CELLO_ENV=dev/production)
  *                                        PERSIST-013: FileSessionWal writes one {sessionId}.wal per active session.
@@ -179,6 +183,12 @@ const transportKeyHex = process.env["CELLO_RELAY_TRANSPORT_KEY_HEX"];
 if (transportKeyHex && transportKeyHex !== "PLACEHOLDER_POPULATE_VIA_CLI") {
   // Production/dev/staging: transport key injected via Secrets Manager at ECS task launch.
   // This ensures the relay peer ID is stable across restarts and redeploys.
+  // Validate hex format before use — a truncated or malformed value produces a short/zeroed
+  // buffer and an unstable peer ID without any diagnostic message.
+  if (!/^[0-9a-fA-F]{64}$/.test(transportKeyHex)) {
+    logRelayServiceStartFailed(logger, { reason: "CELLO_RELAY_TRANSPORT_KEY_HEX must be a 64-char hex string (32-byte Ed25519 seed)", region: awsRegion });
+    process.exit(1);
+  }
   transportPrivateKey = Buffer.from(transportKeyHex, "hex");
   logger.info("adapter.initialised", { adapterName: "TransportKey", implementation: "secrets_manager", env: celloEnv });
 } else if (celloEnv !== "local") {
@@ -198,6 +208,103 @@ if (transportKeyHex && transportKeyHex !== "PLACEHOLDER_POPULATE_VIA_CLI") {
   }
 }
 
+// ─── Health check URL resolution ──────────────────────────────────────────────
+// CELLO-M6B-006: health check URL sent in relay_register frame so the directory can
+// update the manifest with the relay's current private IP.
+//
+// Resolution order:
+//   1. CELLO_RELAY_HEALTH_CHECK_URL env var (explicit override, always used if set)
+//   2. Non-local: fetch private IP from ECS task metadata endpoint
+//      (http://169.254.170.2/v2/metadata via ECS_CONTAINER_METADATA_URI_V4).
+//      The binary fetches its own IP at startup so the manifest always reflects the
+//      actual task IP without requiring the CloudFormation template to be updated
+//      when the task IP changes.
+//   3. Local: default to http://127.0.0.1:{healthPort}/health
+//
+// If non-local and neither the env var nor the metadata endpoint succeeds, the relay
+// fails to start — a relay without a reachable healthCheckUrl cannot be health-checked
+// by the directory's RelayPoolManager and must not proceed.
+
+let healthCheckUrl: string;
+const healthCheckUrlFromEnv = process.env["CELLO_RELAY_HEALTH_CHECK_URL"];
+
+if (healthCheckUrlFromEnv) {
+  healthCheckUrl = healthCheckUrlFromEnv;
+  logger.info("adapter.initialised", { adapterName: "HealthCheckUrl", source: "env", url: healthCheckUrl, env: celloEnv });
+} else if (celloEnv !== "local") {
+  // Non-local: derive health check URL from ECS task metadata endpoint.
+  // ECS_CONTAINER_METADATA_URI_V4 is always injected by ECS Fargate (v1.4.0+).
+  // If absent, we are not running on ECS Fargate — the link-local address
+  // 169.254.170.2 would time out. Fail fast rather than silently hanging.
+  const metadataUri = process.env["ECS_CONTAINER_METADATA_URI_V4"];
+  if (!metadataUri) {
+    logRelayServiceStartFailed(logger, {
+      reason: "ECS_CONTAINER_METADATA_URI_V4 not set — cannot derive health check URL; set CELLO_RELAY_HEALTH_CHECK_URL explicitly",
+      region: awsRegion,
+    });
+    process.exit(1);
+  }
+  let privateIp: string | null = null;
+  try {
+    // ECS_CONTAINER_METADATA_URI_V4 points to the container-level metadata endpoint.
+    // On ECS Fargate v1.4+, Networks[0].IPv4Addresses[0] is the container's private IP.
+    // This is the only fetch needed — there is no need for a second request to the task
+    // endpoint, which would return the same IP via a different path.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const res = await fetch(metadataUri, { signal: controller.signal });
+      if (res.ok) {
+        const meta = await res.json() as Record<string, unknown>;
+        const networks = meta["Networks"] as Array<Record<string, unknown>> | undefined;
+        if (networks && networks.length > 0) {
+          const addrs = networks[0]!["IPv4Addresses"] as string[] | undefined;
+          if (addrs && addrs.length > 0) {
+            privateIp = addrs[0]!;
+          }
+        }
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (err: unknown) {
+    const reason = err instanceof Error ? err.message : String(err);
+    logRelayServiceStartFailed(logger, {
+      reason: `CELLO_RELAY_HEALTH_CHECK_URL is not set and ECS task metadata fetch failed: ${reason}. Set CELLO_RELAY_HEALTH_CHECK_URL or ensure ECS_CONTAINER_METADATA_URI_V4 is available.`,
+      region: awsRegion,
+    });
+    process.exit(1);
+  }
+
+  if (!privateIp) {
+    logRelayServiceStartFailed(logger, {
+      reason: "CELLO_RELAY_HEALTH_CHECK_URL is not set and could not derive private IP from ECS task metadata. Set CELLO_RELAY_HEALTH_CHECK_URL explicitly.",
+      region: awsRegion,
+    });
+    process.exit(1);
+  }
+
+  healthCheckUrl = `http://${privateIp}:${healthPort}/health`;
+  logger.info("adapter.initialised", { adapterName: "HealthCheckUrl", source: "ecs_metadata", url: healthCheckUrl, env: celloEnv });
+} else {
+  // Local: default to loopback
+  healthCheckUrl = `http://127.0.0.1:${healthPort}/health`;
+}
+
+// Validate the constructed health check URL before proceeding. If ECS metadata returned
+// malformed data (empty string, IPv6, invalid hostname), the relay would register with
+// an invalid URL causing all health checks to fail.
+try {
+  new URL(healthCheckUrl);
+} catch (err: unknown) {
+  const reason = err instanceof Error ? err.message : String(err);
+  logRelayServiceStartFailed(logger, {
+    reason: `Derived health check URL is invalid: ${healthCheckUrl}. ${reason}`,
+    region: awsRegion,
+  });
+  process.exit(1);
+}
+
 // ─── Directory adapter ─────────────────────────────────────────────────────────
 
 let directoryAdapter: NetworkDirectoryAdapter | undefined;
@@ -215,6 +322,7 @@ if (directoryMultiaddr) {
   directoryAdapter = new NetworkDirectoryAdapter({
     directoryPeerId: dirPeerId,
     directoryMultiaddrs: [directoryMultiaddr],
+    logger,
   });
   logger.info("adapter.initialised", { adapterName: "NetworkDirectoryAdapter", directoryMultiaddr, env: celloEnv });
 }
@@ -260,15 +368,12 @@ if (directoryAdapter) {
       relayId,
       publicKeyHex: relayId, // relayId = hex(pubkey) by convention
       region: awsRegion,
+      healthCheckUrl,
       keyProvider: kp,
     });
 
     if (regResult.ok) {
-      if (regResult.alreadyRegistered) {
-        logger.info("relay.already.registered", { relayId, region: awsRegion });
-      } else {
-        logger.info("relay.registered", { relayId, region: awsRegion });
-      }
+      // relay.registered / relay.already.registered are logged by the adapter (AC-002).
       registered = true;
       break;
     }

@@ -504,18 +504,25 @@ export class CelloDirectoryNode {
       const req = cborDecode(requestBytes) as Record<string, unknown>;
       const frameType = req["type"] as string | undefined;
 
-      // ─── relay_register: relay identifies itself at startup (FEDERATION-003) ──
-      // The relay sends its relayId, publicKeyHex, region, timestamp, and a self-signature.
+      // ─── relay_register: relay identifies itself at startup (FEDERATION-003 + M6B-006) ──
+      // The relay sends its relayId, publicKeyHex, region, health_check_url, timestamp, and a self-signature.
       // SI-003: we verify the Ed25519 self-signature (relay_id || public_key_hex || timestamp)
       // before writing to relay_registrations. Only the holder of the private key can sign.
+      // CELLO-M6B-006: after successful registration, re-sign the manifest if healthCheckUrl changed.
       if (frameType === "relay_register") {
         const relayId = req["relay_id"] as string | undefined;
         const publicKeyHex = req["public_key_hex"] as string | undefined;
         const region = req["region"] as string | undefined;
         const timestamp = req["timestamp"] as number | undefined;
         const signatureRaw = req["signature"] as Uint8Array | undefined;
+        // CELLO-M6B-006: health_check_url is the relay's VPC-internal health endpoint
+        const healthCheckUrl = req["health_check_url"] as string | undefined;
 
-        if (!relayId || !publicKeyHex || !region || typeof timestamp !== "number" || !signatureRaw) {
+        // CELLO-M6B-006 AC-002: health_check_url is required — directory must validate
+        // before calling registerRelay() so any relay implementation (not just CELLO's own
+        // relay binary) is forced to provide the field.
+        // Validate that healthCheckUrl is non-empty to prevent downstream health check failures.
+        if (!relayId || !publicKeyHex || !region || typeof timestamp !== "number" || !signatureRaw || !healthCheckUrl || (typeof healthCheckUrl === "string" && healthCheckUrl.trim() === "")) {
           stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_error", reason: "missing_fields" })));
           await stream.close();
           return;
@@ -532,16 +539,54 @@ export class CelloDirectoryNode {
         }
 
         try {
-          await this.#store.registerRelay({ relayId, publicKeyHex, region });
-          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_ok" })));
+          const regResult = await this.#store.registerRelay({ relayId, publicKeyHex, region });
+          // CELLO-M6B-006: if relay was already registered with same key, include already_registered: true
+          // so the relay can log relay.already.registered on its side (AC-002).
+          // regResult may be undefined in older store implementations (backwards compat).
+          if (regResult?.alreadyRegistered) {
+            // Log relay.already.registered at the handler layer (M4+ convention: store layers
+            // return results; handlers own observability).
+            this.#logger?.info("relay.already.registered", { relayId, region });
+            stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_ok", already_registered: true })));
+          } else {
+            // Log relay.registered at the handler layer.
+            this.#logger?.info("relay.registered", { relayId, region });
+            stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_ok" })));
+          }
         } catch (err: unknown) {
           const reason = err instanceof Error ? err.message : String(err);
           if (reason.includes("RELAY_IDENTITY_CONFLICT")) {
+            // Log relay.registration.conflict at the handler layer (M4+ convention).
+            this.#logger?.error("relay.registration.conflict", { relayId, region });
             stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_error", reason: "RELAY_IDENTITY_CONFLICT" })));
           } else {
             stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_error", reason })));
           }
+          await stream.close();
+          return;
         }
+
+        // CELLO-M6B-006: After successful registration, re-sign manifest if healthCheckUrl changed.
+        // Fire-and-forget — relay_register_ok is already sent. Manifest update failure is logged
+        // but does not block the relay's operation.
+        if (healthCheckUrl && this.#relayPoolManager) {
+          void this.#relayPoolManager.reSignManifestForRelay({
+            relayId,
+            healthCheckUrl,
+            keyProvider: this.#keyProvider,
+          }).catch((err: unknown) => {
+            const reason = err instanceof Error ? err.message : String(err);
+            // Supplementary diagnostic event (in canonical taxonomy, not a story observability AC).
+            // Distinguishes config/sync issues (relay not in manifest) from operational failures
+            // (S3 access, signing). Operations team needs to know whether to retry or fix config.
+            if (reason.startsWith('RELAY_NOT_IN_MANIFEST:')) {
+              this.#logger?.warn("relay.manifest.relay_missing", { relayId, region, reason });
+            } else {
+              this.#logger?.error("relay.manifest.update.failed", { relayId, region, reason });
+            }
+          });
+        }
+
         await stream.close();
         return;
       }

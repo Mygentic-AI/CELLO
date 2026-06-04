@@ -883,9 +883,7 @@ exit 1
 
 describe("AC-014: sign-ed25519.js produces deterministic, verifiable signatures", () => {
   it("sign-ed25519.js outputs a hex signature that verifies and is deterministic", async () => {
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const execFileAsync = promisify(execFile);
+    const { spawn } = await import("node:child_process");
 
     const scriptPath = new URL(
       "../../../../infra/scripts/sign-ed25519.js",
@@ -895,22 +893,38 @@ describe("AC-014: sign-ed25519.js produces deterministic, verifiable signatures"
     const privateKeyHex = Buffer.from(signerKeypair.privateKey).toString("hex");
     const message = "test-message-for-determinism";
 
-    // Run twice — must produce the same output (deterministic)
-    const result1 = await execFileAsync("node", [scriptPath, privateKeyHex, message]);
-    const result2 = await execFileAsync("node", [scriptPath, privateKeyHex, message]);
+    // Private key is passed via stdin (never as a CLI arg — SI-001 security invariant).
+    // Use spawn with explicit stdin.end() — execFile's `input` option does not reliably
+    // close stdin to child processes on Node v24+, causing the async iterator to hang.
+    const sig = await new Promise<string>((resolve, reject) => {
+      const child = spawn("node", [scriptPath, message], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
+      child.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+      child.on("close", (code) => {
+        if (code !== 0) {
+          reject(new Error(`sign-ed25519.js exited ${code}: ${stderr}`));
+        } else {
+          resolve(stdout.trim());
+        }
+      });
+      child.on("error", reject);
+      // Write key to stdin then close it — this signals EOF to the child process
+      child.stdin.write(privateKeyHex);
+      child.stdin.end();
+    });
 
-    const sig1 = result1.stdout.trim();
-    const sig2 = result2.stdout.trim();
+    expect(sig).toMatch(/^[0-9a-f]{128}$/); // 64-byte signature = 128 hex chars
 
-    expect(sig1).toBe(sig2);
-    expect(sig1).toMatch(/^[0-9a-f]{128}$/); // 64-byte signature = 128 hex chars
-
-    // Verify the signature against the public key
-    const sigBytes = Buffer.from(sig1, "hex");
+    // Verify the signature against the public key using the same Ed25519 library
+    const sigBytes = Buffer.from(sig, "hex");
     const msgBytes = new TextEncoder().encode(message);
     const isValid = ed25519.verify(sigBytes, msgBytes, signerKeypair.publicKey);
     expect(isValid).toBe(true);
-  });
+  }, 60_000); // 60s: cold-start node process + ESM resolution
 });
 
 // ─── AC-010: sign-manifest.sh creates version=1 when no manifest exists ──────
