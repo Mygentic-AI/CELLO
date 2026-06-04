@@ -25,7 +25,7 @@ export const meta = {
 // ─── ARGS NORMALIZATION ──────────────────────────────────────────────────────
 const CODER_MODEL = args && args.model ? args.model : 'opus'
 const REVIEW_MODEL = args && args.reviewModel ? args.reviewModel : 'sonnet'
-const REVIEW_ONLY = args && (args.reviewAndFixOnly === true || args.reviewOnly === true) // reviewOnly kept for backwards compat
+const REVIEW_ONLY = args && args.reviewAndFixOnly === true
 const SKIP_CODE_REVIEW = args && args.skipCodeReview === true
 const SKIP_SPRINT_REVIEW = args && args.skipSprintReview === true
 const MAX_ROUNDS = args && args.maxRounds ? args.maxRounds : 3
