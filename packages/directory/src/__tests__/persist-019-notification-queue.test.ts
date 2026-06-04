@@ -551,6 +551,9 @@ describeIntegration("CELLO-M6B-012 AC-001: session_sealed Uint8Array field integ
       directory_signature: Uint8Array;
     };
 
+    // AC-001 assertion (1): result.type must be 'session_sealed'
+    expect(n.type).toBe('session_sealed');
+
     // Type integrity — must be Uint8Array, not Buffer or plain object
     expect(n.session_id).toBeInstanceOf(Uint8Array);
     expect(n.sealed_root).toBeInstanceOf(Uint8Array);
@@ -603,6 +606,9 @@ describeIntegration("CELLO-M6B-012 AC-002: seal_verified Uint8Array field integr
       session_id: Uint8Array;
       sealed_root: Uint8Array;
     };
+
+    // AC-002 assertion (1): result.type must be 'seal_verified'
+    expect(n.type).toBe('seal_verified');
 
     // Type integrity — must be Uint8Array, not Buffer or plain object
     expect(n.session_id).toBeInstanceOf(Uint8Array);
