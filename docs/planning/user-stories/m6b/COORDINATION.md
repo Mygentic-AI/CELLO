@@ -233,3 +233,10 @@ Wait for directory pipeline ProductionDeploy Succeeded before merging M6B-004.
 cello-client: CELLO-M6B-005 merged. @cello-protocol/client bumped 0.0.18→0.0.19, @cello-protocol/connect bumped 0.0.27→0.0.28 at commit 213489243, tagged v0.0.28. CI will publish to npm beta. WAL mode active. Global install path documented.
 No trustless-cello side for this story.
 M6B-013 implementer: M6B-005 is now merged — you can proceed.
+
+---
+
+### 2026-06-04 — M6B-004 merged
+
+trustless-cello: CELLO-M6B-004 merged at e3b8f71. Port-8081 ALB target group committed to IaC, V28 migration (GRANT UPDATE on agent_profiles to cello_service), VPC SG updated. Directory pipeline triggered — wait for ProductionDeploy Succeeded before merging M6B-006.
+No cello-client side for this story.
