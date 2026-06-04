@@ -70,7 +70,7 @@ import pg from "pg";
 import { randomUUID, randomBytes } from "node:crypto";
 import type { Logger } from "@cello-protocol/interfaces";
 import type { DirectoryNotification } from "@cello-protocol/interfaces";
-import type { PendingConnectionRequest } from "@cello-protocol/protocol-types";
+import type { PendingConnectionRequest, SessionSealed, SessionSealedSingle, SealVerified } from "@cello-protocol/protocol-types";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { PendingConnectionRequestTtlSweep } from "../pending-connection-request-ttl-sweep.js";
 
@@ -545,11 +545,7 @@ describeIntegration("CELLO-M6B-012 AC-001: session_sealed Uint8Array field integ
 
     const drained = await store.drainNotifications(pubkeyHex, correlationId);
     expect(drained).toHaveLength(1);
-    const n = drained[0] as DirectoryNotification & {
-      session_id: Uint8Array;
-      sealed_root: Uint8Array;
-      directory_signature: Uint8Array;
-    };
+    const n = drained[0] as SessionSealedSingle;
 
     // AC-001 assertion (1): result.type must be 'session_sealed'
     expect(n.type).toBe('session_sealed');
@@ -602,10 +598,7 @@ describeIntegration("CELLO-M6B-012 AC-002: seal_verified Uint8Array field integr
 
     const drained = await store.drainNotifications(pubkeyHex, correlationId);
     expect(drained).toHaveLength(1);
-    const n = drained[0] as DirectoryNotification & {
-      session_id: Uint8Array;
-      sealed_root: Uint8Array;
-    };
+    const n = drained[0] as SealVerified;
 
     // AC-002 assertion (1): result.type must be 'seal_verified'
     expect(n.type).toBe('seal_verified');
