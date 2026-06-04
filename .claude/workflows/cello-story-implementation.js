@@ -4,6 +4,11 @@
 // reviewOnly: true — skip setup and implementation; run review rounds only
 //   If a worktree branch exists for the story, diffs against main...STORY_ID
 //   If no worktree exists (implementation landed on main), diffs by story ID in git log
+// skipCodeReview: true — run sprint reviewer only (no code reviewer)
+// skipSprintReview: true — run code reviewer only (no sprint reviewer)
+// maxRounds: N — maximum review rounds before stopping (default: 3)
+//   Each reviewer tracks convergence independently — a converged reviewer is
+//   skipped in subsequent rounds even if the other is still iterating.
 
 export const meta = {
   name: 'cello-story-implementation',
@@ -19,6 +24,9 @@ export const meta = {
 // ─── ARGS NORMALIZATION ──────────────────────────────────────────────────────
 const CODER_MODEL = args && args.model ? args.model : 'opus'
 const REVIEW_ONLY = args && args.reviewOnly === true
+const SKIP_CODE_REVIEW = args && args.skipCodeReview === true
+const SKIP_SPRINT_REVIEW = args && args.skipSprintReview === true
+const MAX_ROUNDS = args && args.maxRounds ? args.maxRounds : 3
 const RAW_ID = args && args.storyId ? args.storyId : 'CELLO-M6B-005'
 const STORY_ID = RAW_ID.startsWith('CELLO-') ? RAW_ID : `CELLO-${RAW_ID}`
 const REPO = '/Users/andrep/Documents/code/trustless-cello'
@@ -172,8 +180,12 @@ Return: files changed, gate results, commit hash, assumptions made.`,
 // ─── REVIEW ROUNDS ───────────────────────────────────────────────────────────
 phase('Review')
 
-async function runRound(roundNum) {
-  const codeReviewResult = await agent(
+// Each reviewer runs independently and tracks its own convergence.
+// A converged reviewer is skipped in all subsequent rounds — it does not
+// re-run just because the other reviewer is still iterating.
+
+async function runCodeReview(roundNum) {
+  const result = await agent(
     `Review the implementation of ${STORY_ID} for bugs, logic errors, security vulnerabilities, code quality, and project conventions.
 
 ${WORKTREE_CONTEXT}
@@ -198,7 +210,7 @@ Do not summarize or truncate.`,
 ${WORKTREE_CONTEXT}
 
 CODE REVIEWER FINDINGS:
-${typeof codeReviewResult === 'string' ? codeReviewResult : JSON.stringify(codeReviewResult)}
+${typeof result === 'string' ? result : JSON.stringify(result)}
 
 Fix every finding — critical, important, medium, AND low. No exceptions.
 
@@ -211,7 +223,25 @@ Commit: "fix(${STORY_ID}): address code review findings round ${roundNum}"`,
     { label: `fix-code-r${roundNum}`, phase: 'Review', model: 'sonnet', agentType: 'cello-sprint-coder' }
   )
 
-  const sprintReviewResult = await agent(
+  const gate = await agent(
+    `You are a severity aggregator. Read the code reviewer output below and answer ONE question:
+Did the reviewer surface any finding at severity ABOVE low (i.e. blocking, high, or medium)?
+
+CODE REVIEWER OUTPUT:
+${typeof result === 'string' ? result : JSON.stringify(result)}
+
+Rules:
+- If there is at least one finding at blocking, high, or medium severity → return { "allLow": false }
+- If ALL findings are low/trivial (or there are zero findings) → return { "allLow": true }
+- When in doubt, return { "allLow": false }`,
+    { label: `gate-code-r${roundNum}`, phase: 'Review', model: 'haiku', schema: { type: 'object', properties: { allLow: { type: 'boolean' } }, required: ['allLow'] } }
+  )
+
+  return { result, converged: gate && gate.allLow === true }
+}
+
+async function runSprintReview(roundNum) {
+  const result = await agent(
     `You are the CELLO sprint reviewer. Review the implementation of story ${STORY_ID}.
 
 Working directory for gate commands: ${CLIENT_WORK_PATH}
@@ -238,7 +268,7 @@ End with APPROVED or BLOCKED.`,
 ${WORKTREE_CONTEXT}
 
 SPRINT REVIEWER FINDINGS:
-${typeof sprintReviewResult === 'string' ? sprintReviewResult : JSON.stringify(sprintReviewResult)}
+${typeof result === 'string' ? result : JSON.stringify(result)}
 
 Fix every finding — blocking, high, medium, AND low. No exceptions regardless of APPROVED/BLOCKED.
 
@@ -251,40 +281,61 @@ Commit: "fix(${STORY_ID}): address sprint review findings round ${roundNum}"`,
     { label: `fix-sprint-r${roundNum}`, phase: 'Review', model: 'sonnet', agentType: 'cello-sprint-coder' }
   )
 
-  // Aggregator: consensus gate — exit only if BOTH reviewers found nothing above low
-  const codeReviewText = typeof codeReviewResult === 'string' ? codeReviewResult : JSON.stringify(codeReviewResult)
-  const sprintReviewText = typeof sprintReviewResult === 'string' ? sprintReviewResult : JSON.stringify(sprintReviewResult)
-
   const gate = await agent(
-    `You are a severity aggregator. Read BOTH review outputs below and answer ONE question:
-Did either reviewer surface any finding at severity ABOVE low (i.e. blocking, high, or medium)?
-
-CODE REVIEWER OUTPUT:
-${codeReviewText}
+    `You are a severity aggregator. Read the sprint reviewer output below and answer ONE question:
+Did the reviewer surface any finding at severity ABOVE low (i.e. blocking, high, or medium)?
 
 SPRINT REVIEWER OUTPUT:
-${sprintReviewText}
+${typeof result === 'string' ? result : JSON.stringify(result)}
 
 Rules:
-- If EITHER reviewer has at least one finding at blocking, high, or medium severity → return { "allLow": false }
-- If ALL findings across BOTH reviewers are low/trivial (or there are zero findings) → return { "allLow": true }
+- If there is at least one finding at blocking, high, or medium severity → return { "allLow": false }
+- If ALL findings are low/trivial (or there are zero findings) → return { "allLow": true }
 - When in doubt, return { "allLow": false }`,
-    { label: `gate-r${roundNum}`, phase: 'Review', model: 'haiku', schema: { type: 'object', properties: { allLow: { type: 'boolean' } }, required: ['allLow'] } }
+    { label: `gate-sprint-r${roundNum}`, phase: 'Review', model: 'haiku', schema: { type: 'object', properties: { allLow: { type: 'boolean' } }, required: ['allLow'] } }
   )
 
-  const canExit = gate && gate.allLow === true
-  return { round: roundNum, canExit, codeReview: codeReviewResult, sprintReview: sprintReviewResult }
+  return { result, converged: gate && gate.allLow === true }
 }
 
+// Independent convergence state — a converged reviewer is never re-run
+let codeConverged = SKIP_CODE_REVIEW
+let sprintConverged = SKIP_SPRINT_REVIEW
 const rounds = []
-for (let i = 1; i <= 3; i++) {
-  const result = await runRound(i)
-  rounds.push(result)
-  if (result.canExit) {
-    log(`All findings low/trivial after round ${i}. Exiting early.`)
+
+for (let i = 1; i <= MAX_ROUNDS; i++) {
+  const roundData = { round: i }
+
+  if (!codeConverged) {
+    const { result, converged } = await runCodeReview(i)
+    roundData.codeReview = result
+    codeConverged = converged
+    if (converged) log(`Round ${i}: code reviewer converged (all findings low). Will not re-run.`)
+  } else {
+    log(`Round ${i}: code reviewer already converged — skipping.`)
+  }
+
+  if (!sprintConverged) {
+    const { result, converged } = await runSprintReview(i)
+    roundData.sprintReview = result
+    sprintConverged = converged
+    if (converged) log(`Round ${i}: sprint reviewer converged (all findings low). Will not re-run.`)
+  } else {
+    log(`Round ${i}: sprint reviewer already converged — skipping.`)
+  }
+
+  rounds.push(roundData)
+
+  if (codeConverged && sprintConverged) {
+    log(`Both reviewers converged after round ${i}. Exiting.`)
     break
   }
-  if (i < 3) log(`Findings above low in round ${i}. Continuing to round ${i + 1}.`)
+
+  if (i < MAX_ROUNDS) log(`Round ${i} complete. Code converged: ${codeConverged}. Sprint converged: ${sprintConverged}. Continuing.`)
+}
+
+if (!codeConverged || !sprintConverged) {
+  log(`Reached max rounds (${MAX_ROUNDS}). Code converged: ${codeConverged}. Sprint converged: ${sprintConverged}.`)
 }
 
 log(`Done — ${rounds.length} round(s) completed.`)
