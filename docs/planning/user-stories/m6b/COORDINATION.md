@@ -209,3 +209,11 @@ This triggered a cascade that consumed the entire session:
 | npx 30s timeout on install | M6B-013 |
 | No error code for stale FROST share | M6B-002 |
 | Manual ECS patching compounding failures | Discipline (CLAUDE.md rule) |
+
+---
+
+### 2026-06-04 — M6B-001 merged
+
+cello-client: CELLO-M6B-001 merged to main at e2412cd. Published @cello-protocol/connect@0.0.26 — tagged v0.0.26, CI will publish to npm beta. PID lock file active — orphan process problem eliminated.
+trustless-cello: CELLO-M6B-001 merged to main at 6885e66. Documentation-only (story YAML status→done, observability events). No pipeline triggered.
+Note: workflow file workarounds for sonnet 4.6 arg-drop bug were lost in a git reset --hard during merge prep. Re-apply manually before next story run.
