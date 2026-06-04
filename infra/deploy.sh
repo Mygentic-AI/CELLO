@@ -111,7 +111,7 @@ RELAY_DIRECTORY_PUBKEY="${CELLO_DIRECTORY_PUBKEY:-167ca6b145bfdd3696af8f4befd883
 
 # Relay libp2p multiaddr — directory needs this to connect to the relay at startup.
 # Override with CELLO_RELAY_MULTIADDR env var when the relay private IP or peer ID changes.
-RELAY_MULTIADDR="${CELLO_RELAY_MULTIADDR:-/ip4/10.0.6.181/tcp/4001/p2p/12D3KooWHA2x2XwnhuP8bMStZ27kzUrjpdz6oxgmmG2WdPCd4WCj}"
+RELAY_MULTIADDR="${CELLO_RELAY_MULTIADDR:-/ip4/10.0.85.235/tcp/4001/p2p/12D3KooWDbUVg6tnvDu1quscr6cmHJ8jke4mZsh85RNqvwT8UPy9}"
 
 # ── GitHub CodeStar Connection ARN ────────────────────────────────────────────
 # Set CELLO_GITHUB_CONNECTION_ID to the UUID of the CodeStar connection in us-east-1.
