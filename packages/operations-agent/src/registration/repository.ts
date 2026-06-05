@@ -191,6 +191,37 @@ export class RegistrationRepository {
   }
 
   /**
+   * Find the most recent completed registration (state = PRE_AUTH_TOKEN_ISSUED) for the
+   * given channel+userId created within the specified age window.
+   *
+   * Used by the re-registration check in the engine: if a recently-completed registration
+   * exists, the engine warns the user before creating a new one (AC-002, CELLO-M6B-011).
+   *
+   * @param channel - Channel type (telegram, whatsapp, cli)
+   * @param channelUserId - Channel user identifier
+   * @param maxAgeMs - Maximum age in milliseconds (e.g. 30 * 24 * 60 * 60 * 1000 for 30 days)
+   * @returns { id, created_at } of the most recent completed registration, or null if none
+   *   within the window.
+   */
+  async findCompletedByChannelUser(
+    channel: string,
+    channelUserId: string,
+    maxAgeMs: number,
+  ): Promise<{ id: string; created_at: Date } | null> {
+    const since = new Date(Date.now() - maxAgeMs);
+    const result = await this.#pool.query<{ id: string; created_at: Date }>(
+      `SELECT id, created_at FROM registrations
+       WHERE channel = $1 AND channel_user_id = $2
+         AND state = 'PRE_AUTH_TOKEN_ISSUED'
+         AND created_at > $3
+       ORDER BY created_at DESC LIMIT 1`,
+      [channel, channelUserId, since],
+    );
+    if (result.rows.length === 0) return null;
+    return result.rows[0];
+  }
+
+  /**
    * Find a registration by its UUID primary key.
    * Returns null if not found.
    */

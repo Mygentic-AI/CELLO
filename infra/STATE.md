@@ -126,6 +126,19 @@ All six secrets imported via CFN resource import changeset `import-transport-key
 
 **M6B-004 commit (2026-06-04): IaC committed for port-8081 internal API. Manual resources remain live until next dev directory deploy. After deploy, these manual resources will be replaced by CloudFormation-managed equivalents. V28 migration (GRANT UPDATE on agent_profiles to cello_service) committed to packages/directory/db/migrations/ — applies automatically on next directory start.**
 
+**M6B-011: SSM parameter for ops-agent expected migration version (CELLO-M6B-011):**
+Stack `cello-ssm-parameters-dev` (new, us-east-1 only — ops-agent is us-east-1 only) manages `/cello/dev/ops-agent/expected-migration-version`. The `deploy.sh` script automatically preserves the operator-set value via a read-before/restore-after guard (deploy.sh Step 2b, lines ~347-358): it reads the current parameter value before deploying the stack, then restores it immediately after if CloudFormation reset it. Manual re-set is only needed if the parameter is set outside of `deploy.sh`. To update the expected migration version after a new migration is applied, simply set the SSM parameter directly and restart the ECS task — no code deploy required:
+```
+aws ssm put-parameter \
+  --name /cello/dev/ops-agent/expected-migration-version \
+  --value "<current_version>" --overwrite --region us-east-1
+aws ecs stop-task \
+  --cluster cello-dev \
+  --task $(aws ecs list-tasks --cluster cello-dev --service-name cello-operations-agent-dev --query 'taskArns[0]' --output text --region us-east-1) \
+  --region us-east-1
+```
+ECS will start a replacement task that reads the updated SSM value. The current migration version as of M6B-011 is 28. Whenever a new migration is applied, update this parameter immediately (no code deploy required — that is the point of using SSM).
+
 **SSM Parameter required for new regions (M6B-004):** CELLO_DIRECTORY_HOSTNAME now fetched from SSM Parameter Store path `/cello/{Environment}/directory/hostname` instead of hardcoded Mappings block. For region expansion, create this parameter before deploying cello-ecs-directory stack. Existing regions (us-east-1, eu-central-1, ap-northeast-1) must have this parameter created manually before next deploy:
 - us-east-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-us1.cello.mygentic.ai --type String --region us-east-1`
 - eu-central-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-eu1.cello.mygentic.ai --type String --region eu-central-1`

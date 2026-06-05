@@ -1,0 +1,54 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO SSM Parameters — AWS SSM Parameter Store values for CELLO services.
+  These are non-secret configuration values that can be updated without a pipeline
+  deploy. Services read these via ECS Secrets ValueFrom (injected at task start).
+
+  Note: This template is separate from cello-secrets.yaml, which manages
+  AWS::SecretsManager::Secret resources for sensitive credentials. SSM parameters
+  are appropriate for non-sensitive configuration (e.g. schema version numbers)
+  that operators update frequently.
+
+  Dependency order: deploy after cello-iam.yaml (no imports from other stacks).
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, production]
+    Description: Deployment environment
+
+Resources:
+
+  # ── Operations Agent: expected migration version ──────────────────────────────
+  # Read by the ops-agent at task startup via ECS Secrets ValueFrom (cello-ecs-operations-agent.yaml).
+  # Update this value after each Flyway migration, then restart the ECS task
+  # (no pipeline deploy required). The ECS execution role (cello-iam.yaml
+  # OpsAgentTaskExecutionRole) has ssm:GetParameters on this path (AC-004, CELLO-M6B-011).
+  #
+  # Initial value: "27" — matches the migration version present at the time this
+  # parameter was introduced. Update to the current migration version after deployment.
+  #
+  # NOTE: CloudFormation would normally reset this value to "27" on every stack update.
+  # deploy.sh (Step 2b) guards against this by reading the current value before deploying
+  # and immediately restoring it if CloudFormation reset it. Operators do not need to
+  # manually re-set the value after running deploy.sh.
+
+  OpsAgentExpectedMigrationVersion:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/cello/${Environment}/ops-agent/expected-migration-version"
+      Type: String
+      Value: "27"
+      Description: !Sub >
+        Expected Flyway migration version for the CELLO ops-agent (${Environment}).
+        Update after each schema migration, then restart the ECS task.
+      Tags:
+        Project: cello
+        Environment: !Ref Environment
+        ManagedBy: cloudformation
+
+Outputs:
+  OpsAgentExpectedMigrationVersionParameterName:
+    Value: !Sub "/cello/${Environment}/ops-agent/expected-migration-version"
+    Export:
+      Name: !Sub "cello-${Environment}-ops-agent-expected-migration-version-param"

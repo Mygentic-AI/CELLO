@@ -259,6 +259,16 @@ Resources:
                   - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/ses-credentials*"
                   - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/directory-api-key*"
                   - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/rds-credentials*"
+              # AC-004 (CELLO-M6B-011): ssm:GetParameters on the ops-agent SSM parameter path.
+              # Required for EXPECTED_MIGRATION_VERSION to be injected via ECS Secrets ValueFrom.
+              # Without this, the ECS task fails to start with AccessDeniedException before
+              # any application code runs. Path wildcard is intentionally scoped to ops-agent only.
+              - Sid: SsmGetParametersOpsAgent
+                Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cello/${Environment}/ops-agent/*"
       Tags:
         - Key: Project
           Value: cello

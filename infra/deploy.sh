@@ -150,10 +150,11 @@ fi
 # cello-cicd deploys to us-east-1 only — adjust count per region.
 # +1 for cello-ecs-operations-agent (OPS-AGENT-005A)
 # +1 for cello-route53-relay (M6B-007 AC-003) — relay DNS stack deploys in every region
+# +1 for cello-ssm-parameters (M6B-011 AC-004) — SSM Parameter Store values
 if [[ "${REGION}" == "us-east-1" ]]; then
-  STACK_COUNT=16
+  STACK_COUNT=17
 else
-  STACK_COUNT=15
+  STACK_COUNT=16
 fi
 DEPLOY_START=$(date +%s)
 
@@ -271,18 +272,19 @@ read_output() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# DEPLOYMENT SEQUENCE — 15 stacks in dependency order (16 in us-east-1 with cello-cicd)
+# DEPLOYMENT SEQUENCE — 16 stacks in dependency order (17 in us-east-1 with cello-cicd)
 #
 # Step 0:  cello-ecr                    — ECR repos
 # Step 1:  cello-iam                    — IAM roles
 # Step 2:  cello-secrets                — Secrets Manager placeholders
+# Step 2b: cello-ssm-parameters         — SSM Parameter Store values (M6B-011)
 # Step 3:  cello-vpc                    — VPC, subnets, security groups
 # Step 4:  cello-kms                    — KMS key
 # Step 5:  cello-s3                     — S3 buckets
 # Step 6:  cello-rds                    — RDS PostgreSQL
 # Step 6a: cello-rotation               — RDS credential rotation Lambda
 # Step 6.5: pre-flight image check
-# Step 6.6: SSM parameters
+# Step 6.6: SSM parameters (imperative put-parameter for manifest-signer-pubkey)
 # Step 7:  cello-ecs-directory          — directory ECS service + ALB
 # Step 8:  read directory ALB outputs
 # Step 8a: Ops Agent RDS rotation check — first-deploy credential setup
@@ -309,6 +311,52 @@ deploy_stack "cello-iam-${ENVIRONMENT}" "cello-iam.yaml" \
 
 deploy_stack "cello-secrets-${ENVIRONMENT}" "cello-secrets.yaml" \
   "Environment=${ENVIRONMENT}"
+
+# ── STEP 2b: cello-ssm-parameters — SSM Parameter Store values (M6B-011) ─────
+# Creates /cello/${Environment}/ops-agent/expected-migration-version used by
+# the Operations Agent ECS task definition (ValueFrom reference). This stack
+# has no dependencies and must exist before cello-ecs-operations-agent deploys.
+#
+# IMPORTANT: The CloudFormation template defines Value: "27" for the SSM parameter.
+# CloudFormation has no equivalent of DeletionPolicy for SSM parameter values —
+# every stack update resets the value to "27". To prevent this, we:
+#   1. Read the current operator-set value BEFORE deploying the stack.
+#   2. Deploy the stack (creates "27" on first deploy, or resets to "27" on re-deploy).
+#   3. If the pre-deploy value differed from "27", restore it immediately after deploy.
+#
+# Result: first deploy creates the parameter at "27" (correct baseline); all
+# subsequent deploys are no-ops with respect to the operator-set value.
+#
+# To update the migration version: run aws ssm put-parameter with --overwrite after
+# applying Flyway migrations. The ECS task reads the value at launch via ValueFrom.
+
+echo ""
+echo "── Reading SSM migration version before stack deploy ────────────────"
+PRE_DEPLOY_MIGRATION_VERSION=$(aws ssm get-parameter \
+  --name "/cello/${ENVIRONMENT}/ops-agent/expected-migration-version" \
+  --region "${REGION}" \
+  --query "Parameter.Value" \
+  --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+echo "  Pre-deploy value: ${PRE_DEPLOY_MIGRATION_VERSION}"
+
+deploy_stack "cello-ssm-parameters-${ENVIRONMENT}" "cello-ssm-parameters.yaml" \
+  "Environment=${ENVIRONMENT}"
+
+# If the parameter existed before the deploy with a value other than "27", the CFN
+# stack just reset it. Restore the operator's value immediately.
+if [[ "${PRE_DEPLOY_MIGRATION_VERSION}" != "DOES_NOT_EXIST" && "${PRE_DEPLOY_MIGRATION_VERSION}" != "27" ]]; then
+  echo ""
+  echo "── Restoring SSM migration version (CFN reset guard) ────────────────"
+  echo "  CFN reset '${PRE_DEPLOY_MIGRATION_VERSION}' → '27'. Restoring to '${PRE_DEPLOY_MIGRATION_VERSION}'..."
+  aws ssm put-parameter \
+    --name "/cello/${ENVIRONMENT}/ops-agent/expected-migration-version" \
+    --value "${PRE_DEPLOY_MIGRATION_VERSION}" \
+    --type String \
+    --overwrite \
+    --region "${REGION}" \
+    --output text --query Version >/dev/null 2>&1
+  echo "  Restored: /cello/${ENVIRONMENT}/ops-agent/expected-migration-version = ${PRE_DEPLOY_MIGRATION_VERSION}"
+fi
 
 # ── STEP 3: cello-vpc — VPC, subnets, security groups, endpoints ─────────────
 
@@ -636,6 +684,7 @@ for stack in \
   "cello-ecr-${ENVIRONMENT}" \
   "cello-iam-${ENVIRONMENT}" \
   "cello-secrets-${ENVIRONMENT}" \
+  "cello-ssm-parameters-${ENVIRONMENT}" \
   "cello-vpc-${ENVIRONMENT}" \
   "cello-kms-${ENVIRONMENT}" \
   "cello-s3-${ENVIRONMENT}" \
