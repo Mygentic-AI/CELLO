@@ -493,6 +493,20 @@ let relayPoolManager: RelayPoolManager | undefined;
 relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
   let storage: CloudStorageProvider;
 
+  // M6B-008: validate poll interval early — fail fast before expensive operations
+  if (env !== "local") {
+    const rawPollInterval = process.env["RELAY_MANIFEST_POLL_INTERVAL_MS"];
+    const pollIntervalMs = rawPollInterval ? parseInt(rawPollInterval, 10) : 120_000;
+    if (isNaN(pollIntervalMs) || pollIntervalMs < 60_000) {
+      logger.error("adapter.config.missing", {
+        missingKey: "RELAY_MANIFEST_POLL_INTERVAL_MS",
+        value: rawPollInterval,
+        reason: "must be a positive integer >= 60000 (1 minute minimum)",
+      });
+      process.exit(1);
+    }
+  }
+
   if (env === "local") {
     const manifestDir = process.env["RELAY_MANIFEST_LOCAL_DIR"] ?? "/tmp/cello-relay-manifest";
     const signerPubkeyHex = process.env["RELAY_MANIFEST_SIGNER_PUBKEY"] ?? "";
@@ -539,6 +553,15 @@ relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
     logger.error("relay.manifest.load.failed", { reason: msg, attempt: 5, env });
     process.exit(1);
   }
+
+  // M6B-008: start manifest poll loop
+  // This code only runs when env !== "local" (checked earlier),
+  // so the poll loop is automatically disabled in local mode.
+  // Poll interval was already validated at function entry.
+  const rawPollInterval = process.env["RELAY_MANIFEST_POLL_INTERVAL_MS"];
+  const pollIntervalMs = rawPollInterval ? parseInt(rawPollInterval, 10) : 120_000;
+  mgr.startPolling(pollIntervalMs);
+
   return mgr;
 })();
 
@@ -820,6 +843,11 @@ const shutdown = () => {
 
   healthServer.close();
   checkpointCoordinator.stop();
+  // M6B-008: stop manifest poll loop and health check timer
+  if (relayPoolManager) {
+    relayPoolManager.stopPolling();
+    relayPoolManager.stop();
+  }
   result.stop()
     .then(() => pgPool?.end())
     .then(() => auditLogShipper.flush())
