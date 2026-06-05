@@ -16,6 +16,12 @@
  * AC-003: When the user replies CONFIRM after receiving the re-registration warning, handleNewUser
  *   is called and registration proceeds normally. callCount = 1.
  *
+ * AC-004: EXPECTED_MIGRATION_VERSION in cello-ecs-operations-agent.yaml must use ValueFrom
+ *   referencing an SSM parameter ARN (not a plain Value). The OpsAgentTaskExecutionRole in
+ *   cello-iam.yaml must grant ssm:GetParameters on /cello/${Environment}/ops-agent/*.
+ *   Verified by parsing both YAML files and asserting the required strings are present.
+ *   component_under_test: infra
+ *
  * SI-001: A CONFIRM message from a user who did NOT receive the warning (not in
  *   #pendingReregistration) must NOT trigger handleNewUser via the CONFIRM shortcut.
  *   The engine must re-send the warning ("already" message) to the user — a positive
@@ -25,6 +31,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { Logger, MessagingChannel, OtpDeliveryProvider, ChannelIdentity, PreAuthorizationClient } from "@cello-protocol/interfaces";
 import { PreAuthRequestError } from "../directory-pre-auth-client.js";
 import { RegistrationEngine } from "../registration/engine.js";
@@ -494,6 +502,61 @@ describe("AC-002 + AC-003 + SI-001: re-registration check", () => {
     } finally {
       engine.stop();
     }
+  });
+
+  // ─── AC-004: IaC — EXPECTED_MIGRATION_VERSION uses SSM ValueFrom; IAM grants ssm:GetParameters ─
+
+  it("AC-004: cello-ecs-operations-agent.yaml uses ValueFrom SSM ARN for EXPECTED_MIGRATION_VERSION; cello-iam.yaml grants ssm:GetParameters on ops-agent path", () => {
+    // Pseudocode:
+    //   1. Resolve the two CloudFormation YAML files relative to the repo root (two levels up
+    //      from packages/operations-agent, into infra/cloudformation/).
+    //   2. Read both files as UTF-8 strings — no YAML parser needed; we assert literal strings
+    //      that must be present for the IaC to be correct. String presence is sufficient because
+    //      the lines are unique and load-bearing: changing them would break ECS task launch.
+    //   3. Assert that cello-ecs-operations-agent.yaml contains:
+    //      a. "EXPECTED_MIGRATION_VERSION" (the env var name exists in the Secrets block)
+    //      b. "ValueFrom" near the EXPECTED_MIGRATION_VERSION entry (ECS Secrets injection)
+    //      c. The SSM parameter path "parameter/cello/" referencing the SSM ARN pattern
+    //      d. "ops-agent/expected-migration-version" — the exact parameter name
+    //   4. Assert that cello-iam.yaml contains:
+    //      a. "ssm:GetParameters" — the required IAM action
+    //      b. "parameter/cello/" with "ops-agent" — the path wildcard scoped to ops-agent
+
+    // Resolve paths from the worktree root (two levels up from packages/operations-agent/src/__tests__)
+    const infraDir = resolve(import.meta.dirname, "../../../../infra/cloudformation");
+    const ecsTemplate = readFileSync(resolve(infraDir, "cello-ecs-operations-agent.yaml"), "utf8");
+    const iamTemplate = readFileSync(resolve(infraDir, "cello-iam.yaml"), "utf8");
+
+    // AC-004 assertion 1: EXPECTED_MIGRATION_VERSION is in the Secrets block (ValueFrom, not plain Value)
+    expect(ecsTemplate).toContain("EXPECTED_MIGRATION_VERSION");
+
+    // AC-004 assertion 2: ValueFrom is used (ECS Secrets injection resolves SSM at task launch)
+    // Find the "Name: EXPECTED_MIGRATION_VERSION" line specifically (not comment lines) and check
+    // that ValueFrom appears within the next 2 lines (YAML: "- Name: X\n  ValueFrom: ...")
+    const ecsLines = ecsTemplate.split("\n");
+    // Match lines where EXPECTED_MIGRATION_VERSION is the value of a Name: key (not a comment)
+    const emvIndex = ecsLines.findIndex((l) => /^\s+-\s+Name:\s+EXPECTED_MIGRATION_VERSION/.test(l));
+    expect(emvIndex, "Name: EXPECTED_MIGRATION_VERSION must exist in ECS Secrets block").toBeGreaterThan(-1);
+    // ValueFrom must appear within 2 lines of the Name entry (standard ECS Secrets YAML shape)
+    const nearbyLines = ecsLines.slice(emvIndex, emvIndex + 3).join("\n");
+    expect(nearbyLines, "ValueFrom must immediately follow EXPECTED_MIGRATION_VERSION Name entry").toContain("ValueFrom");
+
+    // AC-004 assertion 3: the ValueFrom references an SSM parameter ARN (not Secrets Manager)
+    expect(ecsTemplate).toContain("parameter/cello/");
+    expect(ecsTemplate).toContain("ops-agent/expected-migration-version");
+
+    // AC-004 assertion 4 (IAM): ssm:GetParameters action exists in OpsAgentTaskExecutionRole
+    expect(iamTemplate).toContain("ssm:GetParameters");
+
+    // AC-004 assertion 5 (IAM): the ssm:GetParameters resource is scoped to ops-agent path
+    // The Resource ARN must reference parameter/cello/ and ops-agent
+    const iamLines = iamTemplate.split("\n");
+    const ssmActionIndex = iamLines.findIndex((l) => l.includes("ssm:GetParameters"));
+    expect(ssmActionIndex, "ssm:GetParameters must exist in IAM template").toBeGreaterThan(-1);
+    // Find the Resource lines after ssm:GetParameters (within 5 lines: Action block → Resource block)
+    const ssmContext = iamLines.slice(ssmActionIndex, ssmActionIndex + 10).join("\n");
+    expect(ssmContext, "ssm:GetParameters resource must reference ops-agent SSM path").toContain("ops-agent");
+    expect(ssmContext, "ssm:GetParameters resource must reference /cello/ path prefix").toContain("/cello/");
   });
 
   // ─── SI-001: CONFIRM without prior warning → warning re-sent; handleNewUser NOT called ────
