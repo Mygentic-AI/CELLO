@@ -59,11 +59,12 @@ ACCOUNT_ID=$(aws sts get-caller-identity \
   --region "${REGION}")
 
 # ECR repos are created per-region by cello-ecr stack (deployed as Step 0 below).
-# IMAGE_TAG can be overridden: CELLO_IMAGE_TAG=v1.2.3 ./infra/deploy.sh dev us-east-1
+# Image URIs are read from SSM (set by CI/CD pipelines) when available.
+# Fallback: CELLO_IMAGE_TAG env var or "stub" for fresh deployments.
 IMAGE_TAG="${CELLO_IMAGE_TAG:-stub}"
-DIR_IMAGE="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/cello-directory:${IMAGE_TAG}"
-RELAY_IMAGE="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/cello-relay:${IMAGE_TAG}"
-OPS_AGENT_IMAGE="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/cello-operations-agent:${IMAGE_TAG}"
+DIR_IMAGE=$(aws ssm get-parameter --name "/cello/${ENVIRONMENT}/pipeline/directory-image-uri" --region us-east-1 --query 'Parameter.Value' --output text 2>/dev/null | sed "s/\.us-east-1\./.${REGION}./" || echo "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/cello-directory:${IMAGE_TAG}")
+RELAY_IMAGE=$(aws ssm get-parameter --name "/cello/${ENVIRONMENT}/pipeline/relay-image-uri" --region us-east-1 --query 'Parameter.Value' --output text 2>/dev/null | sed "s/\.us-east-1\./.${REGION}./" || echo "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/cello-relay:${IMAGE_TAG}")
+OPS_AGENT_IMAGE=$(aws ssm get-parameter --name "/cello/${ENVIRONMENT}/pipeline/operations-agent-image-uri" --region us-east-1 --query 'Parameter.Value' --output text 2>/dev/null | sed "s/\.us-east-1\./.${REGION}./" || echo "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/cello-operations-agent:${IMAGE_TAG}")
 
 # ── VPC CIDR per region (Decision 1 from m5-infrastructure-decisions) ────────
 
@@ -357,19 +358,25 @@ deploy_stack "cello-rotation-${ENVIRONMENT}" "cello-rotation.yaml" \
 echo ""
 echo "── Pre-flight: verifying container images in ECR ─────────────────────"
 
-image_exists() {
+image_exists_by_uri() {
+  local uri="$1"
+  local repo_name=$(echo "$uri" | sed 's|.*/||' | cut -d: -f1)
+  local tag=$(echo "$uri" | cut -d: -f2)
   aws ecr describe-images \
     --region "${REGION}" \
-    --repository-name "$1" \
-    --image-ids imageTag="${IMAGE_TAG}" \
+    --repository-name "$repo_name" \
+    --image-ids imageTag="$tag" \
     >/dev/null 2>&1
 }
 
-if image_exists "cello-directory" && image_exists "cello-relay" && image_exists "cello-operations-agent"; then
-  echo "  Images exist: cello-directory:${IMAGE_TAG}, cello-relay:${IMAGE_TAG}, cello-operations-agent:${IMAGE_TAG}"
+if image_exists_by_uri "$DIR_IMAGE" && image_exists_by_uri "$RELAY_IMAGE" && image_exists_by_uri "$OPS_AGENT_IMAGE"; then
+  echo "  Images exist: ${DIR_IMAGE##*/}, ${RELAY_IMAGE##*/}, ${OPS_AGENT_IMAGE##*/}"
 else
-  echo "  Images not found for tag '${IMAGE_TAG}' — building and pushing stubs..."
+  echo "  Images not found — building and pushing stubs..."
   "${SCRIPT_DIR}/build-stubs.sh" "${REGION}"
+  DIR_IMAGE="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/cello-directory:stub"
+  RELAY_IMAGE="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/cello-relay:stub"
+  OPS_AGENT_IMAGE="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/cello-operations-agent:stub"
 fi
 
 # ── STEP 6.6: Ensure SSM parameters exist for ECS task definitions ──────────
