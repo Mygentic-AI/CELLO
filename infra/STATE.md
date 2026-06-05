@@ -18,7 +18,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 |---|---|---|---|
 | cello-ecr-dev | UPDATE_COMPLETE | 2026-05-27 | cello-operations-agent ECR repo added (OPS-AGENT-005A) |
 | cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent task/execution roles; directory roles include ops-agent/directory-api-key |
-| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent secrets: telegram-bot-token, ses-credentials, directory-api-key, rds-credentials |
+| cello-secrets-dev | IMPORT_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported via CFN resource import; all secrets now CFN-managed (previously UPDATE_COMPLETE 2026-05-27) |
 | cello-vpc-dev | UPDATE_COMPLETE | 2026-05-27 | Port 8080+9090 for directory SG, port 80+443 for ALB SG; SSM+SSMMessages VPC endpoints; ops-agent SG added |
 | cello-kms-dev | UPDATE_COMPLETE | 2026-05-27 | |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | s3:ListBucket added for relay+directory task roles |
@@ -37,21 +37,16 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-24 | 167ca6...27b5 (directory node pubkey) |
 | Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | Replication user password (alphanumeric, 32-char) |
 
-**Directory transport key secrets (all regions) — created manually 2026-06-01 (IaC in cello-secrets.yaml but secrets stack deploy failed due to conflict):**
-| Secret | Path | Status | ARN suffix |
+**Transport key secrets (all regions) — IMPORTED into cello-secrets-dev stack 2026-06-05:**
+| Secret | Logical ID | ARN | CFN Status |
 |---|---|---|---|
-| Directory transport key (us-east-1) | `cello/dev/directory/transport-key` | POPULATED | `-m146A8` |
-| Directory transport key (eu-central-1) | `cello/dev/directory/transport-key` | POPULATED | `-s5OinO` |
-| Directory transport key (ap-northeast-1) | `cello/dev/directory/transport-key` | POPULATED | `-usvz8z` |
-NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-dev stack does not yet manage them. Run deploy.sh to import them or let CF recreate (it will conflict again). For new region expansion, bootstrap.sh will create them correctly via CF.
-
-**Relay transport key secrets (all regions) — M6B-006 followup (2026-06-04):**
-| Secret | Path | Status | Notes |
-|---|---|---|---|
-| Relay transport key (us-east-1) | `cello/dev/relay/transport-key` | EXISTS | Created 2026-06-03 as part of M6B-006; managed by cello-secrets-dev stack |
-| Relay transport key (eu-central-1) | `cello/dev/relay/transport-key` | EXISTS | Created manually 2026-06-04 to unblock relay crash-loop; IaC gap — cello-secrets stack was last deployed 2026-05-27 before M6B-006 added RelayTransportKey resource; populate with real value after next cello-secrets stack deploy |
-| Relay transport key (ap-northeast-1) | `cello/dev/relay/transport-key` | EXISTS | Created manually 2026-06-04 to unblock relay crash-loop; IaC gap — cello-secrets stack was last deployed 2026-05-27 before M6B-006 added RelayTransportKey resource; populate with real value after next cello-secrets stack deploy |
-NOTE: IaC (cello-secrets.yaml RelayTransportKey resource) is correct and region-parameterized — no code change needed. The gap was that cello-secrets-dev was never redeployed to eu-central-1 and ap-northeast-1 after M6B-006. Next deploy.sh run to those regions will bring the stack under CF management.
+| Directory transport key (us-east-1) | `DirectoryTransportKey` | `arn:aws:secretsmanager:us-east-1:257394457473:secret:cello/dev/directory/transport-key-m146A8` | `UPDATE_COMPLETE` |
+| Directory transport key (eu-central-1) | `DirectoryTransportKey` | `arn:aws:secretsmanager:eu-central-1:257394457473:secret:cello/dev/directory/transport-key-s5OinO` | `UPDATE_COMPLETE` |
+| Directory transport key (ap-northeast-1) | `DirectoryTransportKey` | `arn:aws:secretsmanager:ap-northeast-1:257394457473:secret:cello/dev/directory/transport-key-usvz8z` | `UPDATE_COMPLETE` |
+| Relay transport key (us-east-1) | `RelayTransportKey` | `arn:aws:secretsmanager:us-east-1:257394457473:secret:cello/dev/relay/transport-key-Xs6yZY` | `UPDATE_COMPLETE` |
+| Relay transport key (eu-central-1) | `RelayTransportKey` | `arn:aws:secretsmanager:eu-central-1:257394457473:secret:cello/dev/relay/transport-key-ARIlzc` | `UPDATE_COMPLETE` |
+| Relay transport key (ap-northeast-1) | `RelayTransportKey` | `arn:aws:secretsmanager:ap-northeast-1:257394457473:secret:cello/dev/relay/transport-key-9fQh1D` | `UPDATE_COMPLETE` |
+All six secrets imported via CFN resource import changeset `import-transport-keys` (2026-06-05). Stack reached `IMPORT_COMPLETE` in all three regions. Both resources carry `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`. Secret values (real transport keys) were pre-populated manually — the PLACEHOLDER_POPULATE_VIA_CLI in cello-secrets.yaml only applies on first CREATE; import left existing values untouched.
 
 **Ops-agent secrets (us-east-1):**
 | Secret | Path | Status | Notes |
@@ -143,7 +138,7 @@ NOTE: IaC (cello-secrets.yaml RelayTransportKey resource) is correct and region-
 |---|---|---|---|
 | cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent/directory-api-key added; **STALE: missing transport-key in execution role — fixed manually 2026-06-02, redeploy needed** |
-| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent secrets added; **STALE: RelayTransportKey resource added by M6B-006 not yet deployed here — relay/transport-key created manually 2026-06-04; redeploy needed** |
+| cello-secrets-dev | IMPORT_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported via CFN resource import; all secrets now CFN-managed |
 | cello-vpc-dev | UPDATE_COMPLETE | 2026-05-28 | CIDR 10.1.0.0/16; port 9090 SG rule added for ALB health checks |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | Directory+relay task roles in manifest bucket policy |
@@ -195,7 +190,7 @@ NOTE: IaC (cello-secrets.yaml RelayTransportKey resource) is correct and region-
 |---|---|---|---|
 | cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent/directory-api-key added; **STALE: missing transport-key in execution role — fixed manually 2026-06-02, redeploy needed** |
-| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent secrets added; **STALE: RelayTransportKey resource added by M6B-006 not yet deployed here — relay/transport-key created manually 2026-06-04; redeploy needed** |
+| cello-secrets-dev | IMPORT_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported via CFN resource import; all secrets now CFN-managed |
 | cello-vpc-dev | UPDATE_COMPLETE | 2026-05-28 | CIDR 10.2.0.0/16; port 9090 SG rule added for ALB health checks |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | Directory+relay task roles in manifest bucket policy |
