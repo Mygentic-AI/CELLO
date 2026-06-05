@@ -88,6 +88,12 @@ Resources:
             # CELLO-M6B-009: Idle session sweep configuration.
             - Name: RELAY_SESSION_MAX_IDLE_MS
               Value: "86400000"
+            # CELLO-M6B-006: CELLO_RELAY_HEALTH_CHECK_URL is an optional override.
+            # By default the relay fetches its own health check URL from the ECS task metadata
+            # endpoint (ECS_CONTAINER_METADATA_URI_V4) at startup. Set this env var to override
+            # that discovery for environments where task metadata is not available.
+            # - Name: CELLO_RELAY_HEALTH_CHECK_URL
+            #   Value: http://<task-ip>:4000/health
           Secrets:
             - Name: NODE_PRIVATE_KEY
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/relay/node-private-key"

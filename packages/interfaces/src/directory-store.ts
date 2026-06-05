@@ -209,6 +209,35 @@ export interface DirectoryStore {
    */
   dequeuePendingConnectionRequests(targetPubkey: string, correlationId: string): Promise<PendingConnectionRequest[]>;
 
+  // ─── M6B-010: Active connection request persistence ──────────────────────
+
+  /**
+   * Persist a connection request that has been delivered to the target but not yet
+   * accepted or rejected. Enables restart recovery of "awaiting acceptance" state.
+   *
+   * M6B-010 AC-001: called from directory-node.ts in the live delivery path
+   * (immediately after inserting into #pendingConnectionRequests) and in the
+   * reconnect drain path.
+   *
+   * ON CONFLICT (connection_request_id) DO NOTHING — idempotent.
+   */
+  saveActiveConnectionRequest(params: {
+    connectionRequestId: string;
+    senderPubkeyHex: string;
+    targetPubkeyHex: string;
+    packageCbor: Uint8Array;
+    disclosureRound: number;
+    expiresAt: Date;
+  }): Promise<void>;
+
+  /**
+   * Delete an active connection request by ID.
+   *
+   * M6B-010 AC-001: called when a connection request is accepted, rejected, or
+   * otherwise resolved so it is not reloaded on the next restart.
+   */
+  deleteActiveConnectionRequest(connectionRequestId: string): Promise<void>;
+
   // ─── FEDERATION-001: Session ownership methods ───────────────────────────
 
   /**
@@ -222,6 +251,24 @@ export interface DirectoryStore {
    * Throws if a sessions row for this session_id already exists (unique constraint).
    */
   writeSession(sessionId: string, owningNodeId: string): Promise<void>;
+
+  /**
+   * Write a sessions row AND store the initiator/target participant pubkeys.
+   *
+   * M6B-010 AC-002/AC-003: replaces writeSession() in the session request handler
+   * so that #sessionParticipants survives restart via loadActiveSessionParticipants().
+   *
+   * If a sessions row for this session_id already exists (e.g. from a prior writeSession
+   * call in a federation replication path), the participant columns are updated in place.
+   *
+   * Throws if the session is owned by a different node (ownership violation, SI-001).
+   */
+  writeSessionWithParticipants(
+    sessionId: string,
+    owningNodeId: string,
+    initiatorPubkeyHex: string,
+    targetPubkeyHex: string,
+  ): Promise<void>;
 
   /**
    * Retrieve the owning_node_id for a session_id.

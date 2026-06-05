@@ -415,9 +415,10 @@ describe("M6B-010: CelloDirectoryNode restore methods (AC-004)", () => {
   });
 
   it("AC-002: restoreSessionLastActivity uses genesis timestamp — grace period check is correct after restart", async () => {
-    // Spec: After restart with genesisTimestampMs = T, a unilateral seal attempt at T+60s
-    // with deliveryGraceSeconds=600 is correctly rejected as premature (60s < 600s).
-    // This verifies that lastActivity=genesis (not 0) prevents immediate unilateral seal eligibility.
+    // Spec: After restart with genesisTimestampMs = T (60s ago), a unilateral seal attempt
+    // with deliveryGraceSeconds=600 is correctly REJECTED as premature (60s < 600s).
+    // This verifies that lastActivity=genesis (not 0) prevents immediate unilateral seal
+    // eligibility after a restart. If lastActivity were 0, the seal would incorrectly pass.
     const logger = makeMockLogger();
     const dirKp = generateKeypair();
 
@@ -429,7 +430,7 @@ describe("M6B-010: CelloDirectoryNode restore methods (AC-004)", () => {
       rejectSeal: () => {},
     };
 
-    // Simulated genesis: 60 seconds ago
+    // Simulated genesis: 60 seconds ago — within the 600s grace period
     const genesisTimestampMs = Date.now() - 60_000;
 
     const { directory, stop } = await createDirectoryNode({
@@ -457,6 +458,33 @@ describe("M6B-010: CelloDirectoryNode restore methods (AC-004)", () => {
     // Verify that getRestoredLastActivity returns the genesis time (not 0 or undefined)
     const lastActivity = directory.getRestoredLastActivityForTest(sessionIdHex);
     expect(lastActivity).toBe(genesisTimestampMs);
+
+    // AC-002 core: invoke #processSealUnilateral using the RESTORED state (without pre-seeding
+    // the timestamp to pass the grace period). With genesisTimestampMs = 60s ago and
+    // deliveryGraceSeconds = 600, the grace period check must REJECT the seal attempt.
+    // If lastActivity were 0 (epoch), elapsedMs = ~current_time >> 600s → seal would pass
+    // incorrectly. With the correct genesis timestamp, only 60s have elapsed → rejection.
+    const mockStream = { send: vi.fn() } as unknown as import("@libp2p/interface").Stream;
+    const reportedRoot = randomBytes(32);
+
+    directory.triggerSealUnilateralWithCurrentStateForTest(
+      initiatorHex,
+      sessionId,
+      reportedRoot,
+      mockStream,
+    );
+
+    // The mock stream must have received exactly one frame (the seal_unilateral_too_early response)
+    expect(mockStream.send).toHaveBeenCalledTimes(1);
+
+    // Verify relay.seal.unilateral.rejected was logged (AC-002 observability)
+    const rejectedEvent = logger.infoEvents.find(
+      (e) => e.event === "relay.seal.unilateral.rejected",
+    );
+    expect(rejectedEvent).toBeDefined();
+    expect(rejectedEvent!.context["sessionId"]).toBe(sessionIdHex);
+    expect(typeof rejectedEvent!.context["elapsedMs"]).toBe("number");
+    expect(typeof rejectedEvent!.context["remainingSeconds"]).toBe("number");
 
     await stop();
   });

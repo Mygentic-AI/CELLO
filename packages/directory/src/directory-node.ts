@@ -1219,6 +1219,17 @@ export class CelloDirectoryNode {
                 requestId: pending.connection_request_id,
                 disclosureRound: 1,
               });
+              // M6B-010 AC-001: persist re-delivered request so a subsequent restart can
+              // still find it in active_connection_requests. Fire-and-forget — failure is
+              // non-blocking; the request is already in #pendingConnectionRequests.
+              void this.#store.saveActiveConnectionRequest({
+                connectionRequestId: pending.connection_request_id,
+                senderPubkeyHex: pending.sender_pubkey,
+                targetPubkeyHex: authedPubkeyHex,
+                packageCbor: pending.frame.package_cbor,
+                disclosureRound: 1,
+                expiresAt: new Date(this.#clock.now() + 24 * 60 * 60 * 1000),
+              }).catch(() => {});
             } catch { break; }
           }
           continue;
@@ -1727,6 +1738,17 @@ export class CelloDirectoryNode {
         requestId: connectionRequestId,
         disclosureRound: 1,
       });
+      // M6B-010 AC-001: persist to Postgres so restart recovery can reload this request.
+      // Fire-and-forget — failure does not block delivery; worst case is the request is
+      // not in active_connection_requests after a restart (falls back to no state).
+      void this.#store.saveActiveConnectionRequest({
+        connectionRequestId,
+        senderPubkeyHex: senderHex,
+        targetPubkeyHex: targetHex,
+        packageCbor: frame.package_cbor,
+        disclosureRound: 1,
+        expiresAt: new Date(this.#clock.now() + 24 * 60 * 60 * 1000),
+      }).catch(() => { /* persistence failure does not block in-memory delivery */ });
       // OBS-001 AC-005: relayed to target
       protocolLog("CONN", `Relayed to target ${truncHex(targetHex)}`);
       try {
@@ -1734,6 +1756,7 @@ export class CelloDirectoryNode {
       } catch {
         // Target stream failed — queue the request
         this.#pendingConnectionRequests.delete(connectionRequestId);
+        void this.#store.deleteActiveConnectionRequest(connectionRequestId).catch(() => {});
         const queued = this.#store.queuePendingConnectionRequest(targetHex, {
           connection_request_id: connectionRequestId,
           sender_pubkey: senderHex,
@@ -1776,6 +1799,8 @@ export class CelloDirectoryNode {
     if (pending.targetHex !== responderHex) return; // wrong responder
 
     this.#pendingConnectionRequests.delete(frame.connection_request_id);
+    // M6B-010 AC-001: remove from active_connection_requests so it is not reloaded on restart.
+    void this.#store.deleteActiveConnectionRequest(frame.connection_request_id).catch(() => {});
 
     const senderStream = this.#streams.get(pending.senderHex);
 
@@ -2124,6 +2149,16 @@ export class CelloDirectoryNode {
       this.#sessionParticipants.set(sessionIdHex, { initiatorHex, targetHex });
       // PERSIST-015: record session creation time as initial last_activity_at
       this.#sessionLastActivity.set(sessionIdHex, this.#clock.now());
+      // M6B-010 AC-002/AC-003: persist participants to sessions table so they survive restart.
+      // Uses writeSessionWithParticipants rather than writeSession so both pubkeys are stored.
+      // Fire-and-forget — failure is non-blocking; worst case is participants are not
+      // available after a restart (loadActiveSessionParticipants returns nothing for this session).
+      void this.#store.writeSessionWithParticipants(
+        sessionIdHex,
+        this.#frostHandler.nodeId,
+        initiatorHex,
+        targetHex,
+      ).catch(() => { /* persistence failure does not block session delivery */ });
 
       // OBS-001 AC-008: assignment issued
       protocolLog("SESS", `Assignment issued — session ${truncHex(sessionIdHex)}`);
@@ -2260,6 +2295,12 @@ export class CelloDirectoryNode {
         type: "seal_unilateral_too_early",
         session_id: frame.session_id,
         remaining_seconds: remainingSeconds,
+      });
+      this.#logger?.info("relay.seal.unilateral.rejected", {
+        sessionId: sessionIdHex,
+        lastActivity,
+        elapsedMs,
+        remainingSeconds,
       });
       try { this.#sendFrame(stream, tooEarlyFrame); } catch { /* */ }
       return;
@@ -2732,6 +2773,34 @@ export class CelloDirectoryNode {
     });
   }
 
+  /**
+   * Test hook: invoke #processSealUnilateral using the CURRENT session state (no pre-seeding).
+   *
+   * Unlike triggerSealUnilateralForTest, this method does not override #sessionLastActivity
+   * or #sessionParticipants. The caller must have already seeded the state (e.g. via
+   * restoreSessionLastActivity + restoreSessionParticipants). This allows AC-002 to verify
+   * that the grace period check uses the restored genesis timestamp correctly.
+   *
+   * Returns the raw frame bytes sent to mockStream (the seal_unilateral_too_early frame),
+   * or null if nothing was sent (e.g. if sessionId is unknown).
+   *
+   * Only available in NODE_ENV=test.
+   */
+  triggerSealUnilateralWithCurrentStateForTest(
+    senderHex: string,
+    sessionId: Uint8Array,
+    reportedRoot: Uint8Array,
+    mockStream: Stream,
+  ): void {
+    if (process.env["NODE_ENV"] !== "test") throw new Error("test-only");
+    this.#processSealUnilateral(mockStream, senderHex, {
+      type: "seal_unilateral",
+      session_id: sessionId,
+      reported_root: reportedRoot,
+      reported_seq: 0,
+    });
+  }
+
   // ─── M6B-010: Startup state restoration ──────────────────────────────────────
 
   /**
@@ -2851,6 +2920,7 @@ export class CelloDirectoryNode {
    * Only available in test/local environments.
    */
   getRestoredLastActivityForTest(sessionIdHex: string): number | undefined {
+    if (process.env["NODE_ENV"] !== "test") throw new Error("test-only");
     return this.#sessionLastActivity.get(sessionIdHex);
   }
 

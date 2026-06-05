@@ -718,6 +718,8 @@ if (store instanceof PgDirectoryStore) {
   if (loadedProfiles.length > 0) {
     logger.info("adapter.signers.restored", { count: loadedProfiles.length });
   }
+  // M6B-010 AC-004: log adapter.state.loaded for profile state category (step 1 of startup sequence).
+  logger.info("adapter.state.loaded", { stateType: "agent_profiles", count: loadedProfiles.length });
 }
 
 // M6B-010: Restore in-memory state from Postgres after startup.
