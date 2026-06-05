@@ -1957,7 +1957,11 @@ export class PgDirectoryStore implements DirectoryStore {
     );
 
     return result.rows.map((row) => ({
-      sessionId: row.session_id,
+      // CRIT-001: strip dashes so sessionId matches the 32-char hex format used as the
+      // key in #sessionLastActivity and #sessionParticipants in directory-node.ts.
+      // Postgres returns session_id as a dashed UUID string (e.g. "550e8400-..."), but all
+      // runtime lookups use Buffer.from(session_id).toString("hex") which produces dashless hex.
+      sessionId: row.session_id.replace(/-/g, ""),
       initiatorHex: row.initiator_pubkey_hex,
       targetHex: row.target_pubkey_hex,
       genesisTimestampMs: Math.round(parseFloat(row.genesis_ms)),

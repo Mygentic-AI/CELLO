@@ -163,11 +163,16 @@ describeIntegration("M6B-010: PgDirectoryStore startup state load", () => {
   it("AC-003: loadActiveSessionParticipants returns active sessions with participant pubkeys", async () => {
     // Spec: writeSessionWithParticipants stores initiator + target pubkeys.
     // loadActiveSessionParticipants returns them for sessions not yet in seal_notarizations.
+    //
+    // IMP-001: Use a 32-char dashless hex session ID to match the runtime format produced by
+    // Buffer.from(session_id).toString("hex") in directory-node.ts. This catches the CRIT-001
+    // key format mismatch: Postgres stores UUIDs with dashes but all map lookups use dashless hex.
     const logger = makeMockLogger();
     const store = new PgDirectoryStore(pool, logger, "test", "local");
     await store.loadProfiles();
 
-    const sessionId = randomUUID();
+    // Use dashless hex (32 chars) — the format directory-node.ts uses for map keys.
+    const sessionId = randomBytes(16).toString("hex"); // 32 hex chars, no dashes
     const initiatorHex = randomBytes(32).toString("hex");
     const targetHex = randomBytes(32).toString("hex");
 
@@ -179,6 +184,9 @@ describeIntegration("M6B-010: PgDirectoryStore startup state load", () => {
     expect(found!.initiatorHex).toBe(initiatorHex);
     expect(found!.targetHex).toBe(targetHex);
     expect(found!.genesisTimestampMs).toBeGreaterThan(0);
+    // IMP-001: Verify the key format round-trip — loaded sessionId must not contain dashes.
+    // If it did, map lookups in directory-node.ts would silently miss the restored state.
+    expect(found!.sessionId).not.toContain("-");
 
     // Cleanup
     await pool.query("DELETE FROM sessions WHERE session_id = $1", [sessionId]);
@@ -191,7 +199,8 @@ describeIntegration("M6B-010: PgDirectoryStore startup state load", () => {
     const store = new PgDirectoryStore(pool, logger, "test", "local");
     await store.loadProfiles();
 
-    const sessionId = randomUUID();
+    // Use dashless hex (32 chars) — the format directory-node.ts uses for map keys.
+    const sessionId = randomBytes(16).toString("hex");
     const initiatorHex = randomBytes(32).toString("hex");
     const targetHex = randomBytes(32).toString("hex");
     const beforeWrite = Date.now();
@@ -205,6 +214,8 @@ describeIntegration("M6B-010: PgDirectoryStore startup state load", () => {
     // genesisTimestampMs should be within the window of before/after write
     expect(found!.genesisTimestampMs).toBeGreaterThanOrEqual(beforeWrite);
     expect(found!.genesisTimestampMs).toBeLessThanOrEqual(afterWrite + 1000); // +1s tolerance
+    // IMP-001: Verify the key format round-trip — loaded sessionId must not contain dashes.
+    expect(found!.sessionId).not.toContain("-");
 
     // Cleanup
     await pool.query("DELETE FROM sessions WHERE session_id = $1", [sessionId]);
@@ -217,8 +228,9 @@ describeIntegration("M6B-010: PgDirectoryStore startup state load", () => {
     const store = new PgDirectoryStore(pool, logger, "test", "local");
     await store.loadProfiles();
 
-    const sessionId = randomUUID();
-    const sessionIdBytes = Buffer.from(sessionId.replace(/-/g, ""), "hex");
+    // Use dashless hex (32 chars) — the format directory-node.ts uses for map keys.
+    const sessionId = randomBytes(16).toString("hex");
+    const sessionIdBytes = Buffer.from(sessionId, "hex");
     const initiatorHex = randomBytes(32).toString("hex");
     const targetHex = randomBytes(32).toString("hex");
 

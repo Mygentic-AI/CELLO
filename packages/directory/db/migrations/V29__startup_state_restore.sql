@@ -117,3 +117,20 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_sessions_participants
   ON sessions (initiator_pubkey_hex, target_pubkey_hex)
   WHERE initiator_pubkey_hex <> '' AND target_pubkey_hex <> '';
+
+-- CRIT-002: Grant UPDATE on sessions and add UPDATE RLS policy so that
+-- writeSessionWithParticipants can issue UPDATE sessions SET initiator_pubkey_hex = $1,
+-- target_pubkey_hex = $2 WHERE ... for sessions that already exist (e.g. rows created
+-- by FEDERATION-001 writeSession before M6B-010 participant columns were added).
+GRANT UPDATE ON sessions TO cello_service;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE tablename = 'sessions'
+      AND policyname = 'sessions_update'
+  ) THEN
+    CREATE POLICY sessions_update ON sessions
+      FOR UPDATE TO cello_service USING (true) WITH CHECK (true);
+  END IF;
+END $$;
