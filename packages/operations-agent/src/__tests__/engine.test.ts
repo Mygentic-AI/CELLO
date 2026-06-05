@@ -504,10 +504,10 @@ describeIntegration("RegistrationEngine integration", () => {
       expect(failedEvent?.context?.httpStatus).toBe(503);
       expect(failedEvent?.context?.correlationId).toBeDefined();
 
-      // (3) User received an error message
+      // (3) User received an error message (non-retryable server error, not "try again")
       const errorMsg = failSent.find((m) =>
-        m.message.toLowerCase().includes("try again") ||
-        m.message.toLowerCase().includes("unavailable")
+        m.message.toLowerCase().includes("server error") &&
+        m.message.toLowerCase().includes("support")
       );
       expect(errorMsg).toBeDefined();
     } finally {
