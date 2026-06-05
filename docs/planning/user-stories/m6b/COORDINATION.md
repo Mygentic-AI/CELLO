@@ -264,3 +264,12 @@ trustless-cello: CELLO-M6B-007 merged at 42d36d4. Relay public WebSocket ALB add
 Additional fix commit f28fe89: ALB deregistration delay reduced to 30s on relay target group — fixes eu-central-1 pipeline timeout that was blocking M6B-006 relay deployment.
 Both relay pipeline and directory pipeline triggered.
 No cello-client side.
+
+---
+
+### 2026-06-04 — M6B-013 merged
+
+cello-client: CELLO-M6B-013 merged (no-ff merge). @journeyapps/sqlcipher moved to devDependencies. @signalapp/sqlcipher ^3.3.5 added as production dependency (prebuilt binaries, <5s install, Windows support). sqlcipher-client-store.ts rewritten from callback-based async API to synchronous API (db.prepare().run/get/all, db.transaction). New test file m6b-013-sqlcipher-compat.test.ts verifies cross-library BLOB compatibility (Uint8Array/Buffer round-trip). AC-001 Docker verification pending: `docker run --rm node:22-alpine sh -c "time npm install -g @cello-protocol/connect@0.0.30 && cello-mcp --version"` must complete <30s with no native compilation output.
+@cello-protocol/client bumped 0.0.19→0.0.20, @cello-protocol/connect bumped 0.0.28→0.0.30. (Versioning note: should have been 0.0.29, but sprint coder bumped twice [0.0.28→0.0.30] instead of once [→0.0.29]. Investigation confirmed pure arithmetic error — no missing commits or code drops between v0.0.28 and v0.0.30.) Tagged v0.0.30. CI will publish to npm beta.
+No trustless-cello side.
+All M6B dependencies now resolved — 001-007, 012, 013 merged; M6B-008/009/010/011 ready for merge. No blocking dependencies remain.
