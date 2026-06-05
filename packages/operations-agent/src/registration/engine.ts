@@ -237,18 +237,20 @@ export class RegistrationEngine {
             // re-sending the warning rather than silently executing the CONFIRM.
             const alreadyWarned = this.#pendingReregistration.has(from);
             if (!alreadyWarned) {
-              // First warning: log the event and record the warning timestamp.
-              const existingRegistrationAge = Date.now() - completed.created_at.getTime();
-              this.#logger.info("registration.already_registered.warned", {
-                registrationId: completed.id,
-                channelUserId: from,
-                existingRegistrationAge,
-              });
+              // First warning: record the warning timestamp.
               this.#pendingReregistration.set(from, Date.now());
             }
-            // Re-send the warning message whether this is the first or a subsequent
-            // non-CONFIRM message. Do not refresh the TTL after the first warning —
-            // the 30-minute CONFIRM window is fixed from the initial warning.
+            // Log the event on every re-send (first warning and subsequent non-CONFIRM
+            // messages). This ensures operators can observe every send via metrics on
+            // registration.already_registered.warned, not just the first per session.
+            // Do not refresh the TTL after the first warning — the 30-minute CONFIRM
+            // window is fixed from the initial warning.
+            const existingRegistrationAge = Date.now() - completed.created_at.getTime();
+            this.#logger.info("registration.already_registered.warned", {
+              registrationId: completed.id,
+              channelUserId: from,
+              existingRegistrationAge,
+            });
             await this.#opts.channel.send(
               from,
               "You already have a CELLO pre-authorization token. If you want to re-register " +

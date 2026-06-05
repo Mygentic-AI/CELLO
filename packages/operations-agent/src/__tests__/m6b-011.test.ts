@@ -494,7 +494,15 @@ describe("AC-002 + AC-003 + SI-001: re-registration check", () => {
       // Second message — CONFIRM
       await channelState.injectMessage("user-confirm", "CONFIRM");
 
-      // After CONFIRM, handleNewUser must be called — INSERT was made
+      // After CONFIRM, handleNewUser must be called — INSERT was made.
+      // Story AC-003 specifies "handleNewUser.callCount = 1" as the verification method.
+      // handleNewUser is a method on RegistrationStateMachine (a private field of engine),
+      // so we cannot spy on it directly without exposing internals. INSERT count is used
+      // as the canonical equivalent proxy: handleNewUser always performs exactly one INSERT
+      // as its first action (see state-machine.ts #insertInitialRecord). If INSERT was
+      // called exactly once, handleNewUser was called exactly once. This proxy is valid as
+      // long as (a) handleNewUser always starts with an INSERT and (b) no other code path
+      // in this test emits an INSERT. Both are true in this test setup.
       const insertCallsAfterConfirm = (pool.query as ReturnType<typeof vi.fn>).mock.calls.filter(
         ([sql]: [string]) => typeof sql === "string" && sql.includes("INSERT INTO registrations"),
       );

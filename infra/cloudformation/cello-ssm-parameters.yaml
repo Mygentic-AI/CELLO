@@ -28,14 +28,10 @@ Resources:
   # Initial value: "27" — matches the migration version present at the time this
   # parameter was introduced. Update to the current migration version after deployment.
   #
-  # WARNING: Each CloudFormation update resets this parameter to "27".
-  # After any deploy.sh run, re-set the current migration version:
-  #   aws ssm put-parameter \
-  #     --name /cello/${Environment}/ops-agent/expected-migration-version \
-  #     --value "XX" --overwrite
-  # Then restart the ECS task:
-  #   aws ecs stop-task --cluster cello-${Environment}-ops-agent --task <task-arn>
-  # (ECS will start a replacement task that reads the updated value.)
+  # NOTE: CloudFormation would normally reset this value to "27" on every stack update.
+  # deploy.sh (Step 2b) guards against this by reading the current value before deploying
+  # and immediately restoring it if CloudFormation reset it. Operators do not need to
+  # manually re-set the value after running deploy.sh.
 
   OpsAgentExpectedMigrationVersion:
     Type: AWS::SSM::Parameter
