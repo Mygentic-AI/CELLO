@@ -44,6 +44,17 @@ const EXPIRY_SWEEP_INTERVAL_MS = 60 * 60 * 1_000;
 /** Re-registration check window — 30 days */
 const REREGISTRATION_WINDOW_MS = 30 * 24 * 60 * 60 * 1_000;
 
+/**
+ * How long a #pendingReregistration entry is valid (30 minutes).
+ * After this window, the warning is considered stale and the entry is
+ * removed by the sweep timer. The user must send another message to
+ * receive a fresh warning before they can CONFIRM.
+ */
+const PENDING_REREGISTRATION_TTL_MS = 30 * 60 * 1_000;
+
+/** How often to sweep stale #pendingReregistration entries (30 minutes) */
+const PENDING_REREGISTRATION_SWEEP_INTERVAL_MS = 30 * 60 * 1_000;
+
 export type RegistrationEngineOptions = {
   pool: pg.Pool;
   channel: MessagingChannel;
@@ -63,6 +74,11 @@ export type RegistrationEngineOptions = {
    */
   expirySweepIntervalMs?: number;
   /**
+   * Override the pending-reregistration sweep interval (ms). Default: 30 minutes.
+   * Used in tests to inject a short interval.
+   */
+  pendingReregistrationSweepIntervalMs?: number;
+  /**
    * Optional error callback — receives unhandled errors from message processing.
    * In tests, set this to rethrow so test failures surface the real error.
    */
@@ -79,19 +95,23 @@ export class RegistrationEngine {
   readonly #activeRecords: Map<string, RegistrationRecord> = new Map();
 
   /**
-   * In-memory set of channelUserIds awaiting CONFIRM re-registration.
+   * In-memory map of channelUserId → timestamp (ms) when the re-registration warning was sent.
    * A user is added here when the re-registration warning is sent (AC-002).
-   * A CONFIRM message from a user in this set triggers handleNewUser (AC-003).
-   * A CONFIRM message from a user NOT in this set re-sends the warning (SI-001).
-   * Scoped to the current process instance — a restart clears this set, causing
+   * A CONFIRM message from a user in this map triggers handleNewUser (AC-003).
+   * A CONFIRM message from a user NOT in this map re-sends the warning (SI-001).
+   * Entries are removed after PENDING_REREGISTRATION_TTL_MS (30 minutes) by the sweep timer
+   * to prevent unbounded growth for users who were warned but never replied.
+   * Scoped to the current process instance — a restart clears this map, causing
    * the warning to be re-sent on the next message (safe and expected per AC-003).
    */
-  readonly #pendingReregistration: Set<string> = new Set();
+  readonly #pendingReregistration: Map<string, number> = new Map();
 
   /** Timer: AWAITING_CONTACT re-prompt */
   #contactPromptTimer: NodeJS.Timeout | undefined;
   /** Timer: expiry sweep */
   #expirySweepTimer: NodeJS.Timeout | undefined;
+  /** Timer: stale #pendingReregistration entry sweep */
+  #pendingReregistrationSweepTimer: NodeJS.Timeout | undefined;
 
   constructor(opts: RegistrationEngineOptions) {
     this.#opts = opts;
@@ -129,6 +149,8 @@ export class RegistrationEngine {
     // Start timers
     const contactInterval = this.#opts.contactPromptIntervalMs ?? CONTACT_PROMPT_INTERVAL_MS;
     const expiryInterval = this.#opts.expirySweepIntervalMs ?? EXPIRY_SWEEP_INTERVAL_MS;
+    const pendingReregInterval =
+      this.#opts.pendingReregistrationSweepIntervalMs ?? PENDING_REREGISTRATION_SWEEP_INTERVAL_MS;
 
     this.#contactPromptTimer = setInterval(() => {
       this.#runContactPromptSweep().catch((err) => {
@@ -148,6 +170,9 @@ export class RegistrationEngine {
         });
       });
     }, expiryInterval);
+    this.#pendingReregistrationSweepTimer = setInterval(() => {
+      this.#sweepStalePendingReregistrations();
+    }, pendingReregInterval);
   }
 
   /**
@@ -161,6 +186,10 @@ export class RegistrationEngine {
     if (this.#expirySweepTimer) {
       clearInterval(this.#expirySweepTimer);
       this.#expirySweepTimer = undefined;
+    }
+    if (this.#pendingReregistrationSweepTimer) {
+      clearInterval(this.#pendingReregistrationSweepTimer);
+      this.#pendingReregistrationSweepTimer = undefined;
     }
   }
 
@@ -218,7 +247,7 @@ export class RegistrationEngine {
                 "(you will get a new token and your existing agent registration will remain active " +
                 "until it reconnects), reply CONFIRM. Otherwise, ignore this message.",
             );
-            this.#pendingReregistration.add(from);
+            this.#pendingReregistration.set(from, Date.now());
             return;
           }
         } else {
@@ -286,6 +315,20 @@ export class RegistrationEngine {
       await this.#repository.transition(record.id, "EXPIRED");
       this.#logger.info("registration.expired", { registrationId: record.id });
       this.#activeRecords.delete(record.channelUserId);
+    }
+  }
+
+  /**
+   * Remove stale entries from #pendingReregistration.
+   * An entry is stale if it was added more than PENDING_REREGISTRATION_TTL_MS ago.
+   * This prevents unbounded growth for users who received a warning but never replied.
+   */
+  #sweepStalePendingReregistrations(): void {
+    const now = Date.now();
+    for (const [userId, warnedAt] of this.#pendingReregistration) {
+      if (now - warnedAt > PENDING_REREGISTRATION_TTL_MS) {
+        this.#pendingReregistration.delete(userId);
+      }
     }
   }
 

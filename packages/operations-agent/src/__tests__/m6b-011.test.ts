@@ -490,7 +490,7 @@ describe("AC-002 + AC-003 + SI-001: re-registration check", () => {
       const insertCallsAfterConfirm = (pool.query as ReturnType<typeof vi.fn>).mock.calls.filter(
         ([sql]: [string]) => typeof sql === "string" && sql.includes("INSERT INTO registrations"),
       );
-      expect(insertCallsAfterConfirm.length, "handleNewUser (INSERT) must be called after CONFIRM").toBeGreaterThan(0);
+      expect(insertCallsAfterConfirm.length, "handleNewUser (INSERT) must be called exactly once after CONFIRM").toBe(1);
     } finally {
       engine.stop();
     }

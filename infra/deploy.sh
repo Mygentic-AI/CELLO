@@ -150,10 +150,11 @@ fi
 # cello-cicd deploys to us-east-1 only — adjust count per region.
 # +1 for cello-ecs-operations-agent (OPS-AGENT-005A)
 # +1 for cello-route53-relay (M6B-007 AC-003) — relay DNS stack deploys in every region
+# +1 for cello-ssm-parameters (M6B-011 AC-004) — SSM Parameter Store values
 if [[ "${REGION}" == "us-east-1" ]]; then
-  STACK_COUNT=16
+  STACK_COUNT=17
 else
-  STACK_COUNT=15
+  STACK_COUNT=16
 fi
 DEPLOY_START=$(date +%s)
 
@@ -271,18 +272,19 @@ read_output() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# DEPLOYMENT SEQUENCE — 15 stacks in dependency order (16 in us-east-1 with cello-cicd)
+# DEPLOYMENT SEQUENCE — 16 stacks in dependency order (17 in us-east-1 with cello-cicd)
 #
 # Step 0:  cello-ecr                    — ECR repos
 # Step 1:  cello-iam                    — IAM roles
 # Step 2:  cello-secrets                — Secrets Manager placeholders
+# Step 2b: cello-ssm-parameters         — SSM Parameter Store values (M6B-011)
 # Step 3:  cello-vpc                    — VPC, subnets, security groups
 # Step 4:  cello-kms                    — KMS key
 # Step 5:  cello-s3                     — S3 buckets
 # Step 6:  cello-rds                    — RDS PostgreSQL
 # Step 6a: cello-rotation               — RDS credential rotation Lambda
 # Step 6.5: pre-flight image check
-# Step 6.6: SSM parameters
+# Step 6.6: SSM parameters (imperative put-parameter for manifest-signer-pubkey)
 # Step 7:  cello-ecs-directory          — directory ECS service + ALB
 # Step 8:  read directory ALB outputs
 # Step 8a: Ops Agent RDS rotation check — first-deploy credential setup
@@ -308,6 +310,14 @@ deploy_stack "cello-iam-${ENVIRONMENT}" "cello-iam.yaml" \
 # ── STEP 2: cello-secrets — Secrets Manager placeholders (no dependencies) ───
 
 deploy_stack "cello-secrets-${ENVIRONMENT}" "cello-secrets.yaml" \
+  "Environment=${ENVIRONMENT}"
+
+# ── STEP 2b: cello-ssm-parameters — SSM Parameter Store values (M6B-011) ─────
+# Creates /cello/${Environment}/ops-agent/expected-migration-version used by
+# the Operations Agent ECS task definition (ValueFrom reference). This stack
+# has no dependencies and must exist before cello-ecs-operations-agent deploys.
+
+deploy_stack "cello-ssm-parameters-${ENVIRONMENT}" "cello-ssm-parameters.yaml" \
   "Environment=${ENVIRONMENT}"
 
 # ── STEP 3: cello-vpc — VPC, subnets, security groups, endpoints ─────────────
@@ -636,6 +646,7 @@ for stack in \
   "cello-ecr-${ENVIRONMENT}" \
   "cello-iam-${ENVIRONMENT}" \
   "cello-secrets-${ENVIRONMENT}" \
+  "cello-ssm-parameters-${ENVIRONMENT}" \
   "cello-vpc-${ENVIRONMENT}" \
   "cello-kms-${ENVIRONMENT}" \
   "cello-s3-${ENVIRONMENT}" \
