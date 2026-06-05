@@ -62,6 +62,7 @@ import { RelayPoolManager } from "../relay-pool-manager.js";
 import { CheckpointCoordinator } from "../checkpoint-coordinator.js";
 import { Libp2pCheckpointTransport } from "../adapters/libp2p-checkpoint-transport.js";
 import { InMemoryCheckpointTransport } from "@cello-protocol/interfaces/stubs";
+import { resolvePoolMax } from "../pg-pool-config.js";
 import type { ICheckpointTransport, CloudStorageProvider } from "@cello-protocol/interfaces";
 import { LocalCloudStorageProvider } from "@cello-protocol/interfaces/stubs";
 
@@ -136,13 +137,18 @@ const auditLogShipper: AuditLogShipper = await (async (): Promise<AuditLogShippe
 
 let pgPool: pg.Pool | undefined;
 
+// CELLO-M6B-009 AC-001/AC-002/AC-003: PostgreSQL connection pool configuration.
+// resolvePoolMax parses DIRECTORY_PG_POOL_MAX (default 50) and emits
+// directory.pool.max.high WARN if the value exceeds 100.
+const poolMax = resolvePoolMax(process.env, logger);
+
 const store = await (async () => {
   if (env === "local") {
     const databaseUrl = requireEnv("DATABASE_URL");
-    pgPool = new pg.Pool({ connectionString: databaseUrl });
+    pgPool = new pg.Pool({ connectionString: databaseUrl, max: poolMax });
     const s = new PgDirectoryStore(pgPool, logger, nodeId, awsRegion);
     await s.loadProfiles();
-    logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env });
+    logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env, poolMax });
     return s;
   }
   // dev/staging/production: PgDirectoryStore backed by RDS credentials from Secrets Manager
@@ -168,10 +174,10 @@ const store = await (async () => {
     logSecretsUnavailable(logger, { nodeId, region: awsRegion, reason });
     process.exit(1);
   }
-  pgPool = new pg.Pool({ connectionString: databaseUrl });
+  pgPool = new pg.Pool({ connectionString: databaseUrl, max: poolMax });
   const s = new PgDirectoryStore(pgPool, logger, nodeId, awsRegion);
   await s.loadProfiles();
-  logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env });
+  logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env, poolMax });
   return s;
 })();
 

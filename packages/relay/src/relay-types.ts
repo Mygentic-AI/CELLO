@@ -151,6 +151,12 @@ export interface RelaySessionState {
    * Updated after each leaf append via the incremental stack.
    */
   running_root: Uint8Array;
+  /**
+   * CELLO-M6B-009: Unix ms timestamp when this session was last written.
+   * Set to Date.now() on recordSession() and updated on each setSession() call.
+   * Used by the idle sweep to identify abandoned sessions.
+   */
+  lastActivityAt: number;
 }
 
 // ─── Seal interface ────────────────────────────────────────────────────────────

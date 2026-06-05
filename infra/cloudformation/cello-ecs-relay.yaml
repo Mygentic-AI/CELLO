@@ -82,25 +82,12 @@ Resources:
             # The relay dials the directory and calls relay_register when this is set.
             - Name: CELLO_DIRECTORY_MULTIADDR
               Value: !Ref DirectoryMultiaddr
-            # CELLO-M6B-006: Health check URL resolution (relay binary handles at startup).
-            # Resolution order:
-            #   1. CELLO_RELAY_HEALTH_CHECK_URL env var (explicit override, always preferred)
-            #   2. ECS task metadata endpoint (ECS_CONTAINER_METADATA_URI_V4): relay binary
-            #      fetches its private IP from the metadata service and constructs
-            #      http://{privateIp}:{healthPort}/health automatically.
-            #   3. Non-local with no env var AND metadata unavailable → relay fails to start.
-            # No env var is needed in ECS — the binary derives the URL from metadata.
-            # Set CELLO_RELAY_HEALTH_CHECK_URL explicitly to override (e.g. for testing):
-            # - Name: CELLO_RELAY_HEALTH_CHECK_URL
-            #   Value: "http://10.0.1.50:4000/health"
             # M6B-007: enable the relay WebSocket listener on port 4002.
-            # The relay binary (CELLO_RELAY_WS_LISTEN_ADDR support: commit 9beed74)
-            # calls createRelayNode with [listenAddr, wsListenAddr] when this is set,
-            # binding both TCP (4001) and WebSocket (4002) listeners.
-            # External clients dial ws://relay-{region}.cello.mygentic.ai (ALB port 80)
-            # which forwards to this container port.
             - Name: CELLO_RELAY_WS_LISTEN_ADDR
               Value: /ip4/0.0.0.0/tcp/4002/ws
+            # CELLO-M6B-009: Idle session sweep configuration.
+            - Name: RELAY_SESSION_MAX_IDLE_MS
+              Value: "86400000"
           Secrets:
             - Name: NODE_PRIVATE_KEY
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/relay/node-private-key"

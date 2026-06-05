@@ -213,6 +213,8 @@ export class CelloRelayNode {
   readonly #ackSigningKeyProvider: KeyProvider | null;
   /** PERSIST-012: stable relay identifier included in signed ACKs. */
   readonly #relayId: string | null;
+  /** CELLO-M6B-009: idle session sweep interval timer. */
+  #idleSweepInterval: NodeJS.Timeout | null = null;
 
   // nonce_hex → NonceEntry
   readonly #nonces = new Map<string, NonceEntry>();
@@ -227,26 +229,30 @@ export class CelloRelayNode {
     this.#node = opts.node;
     this.#directoryPubkey = opts.directoryPubkey;
     this.#directory = opts.directory ?? null;
-    this.#store = opts.store ?? new InMemoryRelayStore();
-    this.#sessionWal = opts.sessionWal ?? null;
-    this.#ackSigningKeyProvider = opts.ackSigningKeyProvider ?? null;
-    this.#relayId = opts.relayId ?? null;
     // Logger is optional for backward compatibility; defaults to a no-op for pre-M4 callers.
+    // Initialise before #store so the default InMemoryRelayStore can receive the logger.
     this.#logger = opts.logger ?? {
       debug: () => {},
       info: () => {},
       warn: () => {},
       error: () => {},
     };
+    // Pass the logger to the default store so enqueueDelivery backpressure warnings
+    // are routed through the injected logger instead of console.warn.
+    this.#store = opts.store ?? new InMemoryRelayStore({ logger: this.#logger });
+    this.#sessionWal = opts.sessionWal ?? null;
+    this.#ackSigningKeyProvider = opts.ackSigningKeyProvider ?? null;
+    this.#relayId = opts.relayId ?? null;
   }
 
   async start(): Promise<void> {
+    // CELLO-M6B-009 AC-005: explicit maxInboundStreams caps
     await this.#node.handle(RELAY_PROTOCOL_ID, (stream) => {
       void this.#handleRelayStream(stream);
-    });
+    }, { maxInboundStreams: 2048 });
     await this.#node.handle(DIRECTORY_RELAY_PROTOCOL_ID, (stream) => {
       void this.#handleDirectoryRelayStream(stream);
-    });
+    }, { maxInboundStreams: 128 });
     // OBS-001 AC-001: relay startup log
     const peerId = truncId(this.#node.getPeerId());
     const addrs = this.#node.listenAddresses();
@@ -954,6 +960,44 @@ export class CelloRelayNode {
     }
   }
 
+  // ─── Idle session sweep (CELLO-M6B-009) ──────────────────────────────────────
+
+  /**
+   * Start the idle session sweep.
+   *
+   * Runs immediately, then every `intervalMs` milliseconds.
+   * Sessions with lastActivityAt older than `maxIdleMs` and status 'active' are destroyed.
+   *
+   * @param intervalMs How often to run the sweep (default: 1 hour = 3_600_000ms)
+   * @param maxIdleMs Sessions idle longer than this are swept (default: 24 hours = 86_400_000ms)
+   */
+  startIdleSweep(intervalMs: number, maxIdleMs: number): void {
+    const sweep = () => {
+      this.#store.sweepIdleSessions(maxIdleMs, this.#logger);
+    };
+
+    // Run first sweep immediately to catch sessions that were idle before the relay process started.
+    // This is intentional: on relay restart after a crash, sessions from the previous process instance
+    // may still be in memory (or would be persisted in a future PgRelayStore). The immediate sweep
+    // catches these aged-out sessions without waiting for the first scheduled interval.
+    // On a fresh relay with no sessions, this emits relay.session.sweep.complete with sweptCount: 0.
+    sweep();
+
+    // Schedule recurring sweeps
+    this.#idleSweepInterval = setInterval(sweep, intervalMs);
+  }
+
+  /**
+   * Stop the idle session sweep.
+   * Called during shutdown (SIGTERM handler).
+   */
+  stopIdleSweep(): void {
+    if (this.#idleSweepInterval) {
+      clearInterval(this.#idleSweepInterval);
+      this.#idleSweepInterval = null;
+    }
+  }
+
   // ─── Transport helpers ───────────────────────────────────────────────────────
 
   async #sendFrame(stream: Stream, bytes: Uint8Array): Promise<void> {
@@ -987,6 +1031,18 @@ export interface CreateRelayNodeOptions {
   relayId?: string;
 }
 
+/**
+ * Create and start a relay node.
+ *
+ * **Idle session sweep is NOT started automatically.**
+ * The production binary (relay.ts) calls `relay.startIdleSweep(intervalMs, maxIdleMs)`
+ * after `createRelayNode` returns. Tests should not start the sweep unless they are
+ * specifically testing sweep behaviour — the sweep runs setInterval and must be stopped
+ * via `relay.stopIdleSweep()` or it will keep the Node.js event loop alive.
+ *
+ * `stop()` calls `stopIdleSweep()` unconditionally, so callers that never started the
+ * sweep are safe — `stopIdleSweep()` is a no-op when no interval is running.
+ */
 export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
   relay: CelloRelayNode;
   node: CelloNode;
@@ -1015,6 +1071,12 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
   return {
     relay,
     node,
-    stop: async () => { await node.stop(); },
+    // stopIdleSweep is called first to clear the setInterval handle before the node
+    // shuts down — prevents a leaked interval from keeping Node.js alive after stop().
+    // It is safe to call when startIdleSweep() was never called.
+    stop: async () => {
+      relay.stopIdleSweep();
+      await node.stop();
+    },
   };
 }
