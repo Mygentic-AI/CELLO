@@ -81,6 +81,14 @@ const TABLE_EXTRA_EXCLUDED: Record<string, ReadonlySet<string>> = {
   // If not excluded, verifyChain fails: SELECT returns email_stub_hash: null
   // while chain_hash was computed without it (lesson from M4 bug #7).
   user_accounts: new Set(["email_stub_hash"]),
+  // M6B-010: initiator_pubkey_hex and target_pubkey_hex were added to the sessions table
+  // by V29 with DEFAULT ''. Rows written by writeSession() (called by FEDERATION-001) do not
+  // include these columns — the chain_hash is computed without them. After V29, SELECT returns
+  // these columns as '' for all rows, causing verifyChain to compute a different hash.
+  // Exclude both per the M4 bug #7 pattern. The chain still proves session ownership
+  // (session_id + owning_node_id) which is the security property — participant data is
+  // operational, not the integrity target.
+  sessions: new Set(["initiator_pubkey_hex", "target_pubkey_hex"]),
 };
 
 function isExcluded(tableName: string, column: string): boolean {

@@ -720,6 +720,45 @@ if (store instanceof PgDirectoryStore) {
   }
 }
 
+// M6B-010: Restore in-memory state from Postgres after startup.
+//
+// Option B sequencing (per story YAML): these calls happen after createDirectoryNode()
+// returns. Stream handlers are already registered at this point, so there is a small
+// race window (milliseconds between handler registration and ECS health check passing).
+// This is documented and accepted — the window is far shorter than the time for an agent
+// to reconnect after an ECS task replacement.
+//
+// Three maps are restored:
+//   (1) #pendingConnectionRequests ← active_connection_requests (unexpired rows)
+//       Enables target agents to call cello_accept_connection for requests delivered
+//       before the restart (AC-001 / SI-001).
+//   (2) #sessionParticipants ← sessions table (unsealed sessions with participant data)
+//       Enables PERSIST-015 unilateral seal absent-party lookup after restart (AC-003).
+//   (3) #sessionLastActivity ← sessions.created_at as genesis timestamp
+//       Prevents grace period from resetting to zero on restart (AC-002).
+if (store instanceof PgDirectoryStore) {
+  try {
+    const activeRequests = await store.loadActiveConnectionRequests();
+    result.directory.restorePendingConnectionRequests(activeRequests);
+  } catch (err: unknown) {
+    logger.error("adapter.state.load.failed", {
+      stateType: "pending_connection_requests",
+      reason: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  try {
+    const activeSessions = await store.loadActiveSessionParticipants();
+    result.directory.restoreSessionParticipants(activeSessions);
+    result.directory.restoreSessionLastActivity(activeSessions);
+  } catch (err: unknown) {
+    logger.error("adapter.state.load.failed", {
+      stateType: "session_participants_and_last_activity",
+      reason: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 // FEDERATION-E2E-001: swap InMemoryCheckpointTransport placeholder with
 // Libp2pCheckpointTransport now that the libp2p node is started and has
 // a Peer ID. The transport needs the live node reference for stream dialing.

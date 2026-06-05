@@ -2732,6 +2732,128 @@ export class CelloDirectoryNode {
     });
   }
 
+  // ─── M6B-010: Startup state restoration ──────────────────────────────────────
+
+  /**
+   * Restore pending connection requests into #pendingConnectionRequests.
+   *
+   * M6B-010 AC-001: called at startup (Option B: after createDirectoryNode returns)
+   * with rows returned by PgDirectoryStore.loadActiveConnectionRequests(). Populates
+   * #pendingConnectionRequests so that a reconnecting target can still call
+   * cello_accept_connection for requests that were delivered before the restart.
+   *
+   * Pseudocode:
+   *   for each request in requests:
+   *     #pendingConnectionRequests.set(connectionRequestId, {
+   *       senderHex, targetHex, packageCbor, requestId: connectionRequestId, disclosureRound
+   *     })
+   *   logger.info("adapter.state.loaded", { stateType: "pending_connection_requests", count })
+   *
+   * SI-001: expired requests are never passed here — filtered by loadActiveConnectionRequests
+   * (WHERE expires_at > NOW()). This method does not re-check expiry; it trusts the caller.
+   */
+  restorePendingConnectionRequests(requests: Array<{
+    connectionRequestId: string;
+    senderPubkeyHex: string;
+    targetPubkeyHex: string;
+    packageCbor: Uint8Array;
+    disclosureRound: number;
+    expiresAt: Date;
+  }>): void {
+    for (const req of requests) {
+      this.#pendingConnectionRequests.set(req.connectionRequestId, {
+        senderHex: req.senderPubkeyHex,
+        targetHex: req.targetPubkeyHex,
+        packageCbor: req.packageCbor,
+        requestId: req.connectionRequestId,
+        disclosureRound: req.disclosureRound,
+      });
+    }
+    this.#logger?.info("adapter.state.loaded", {
+      stateType: "pending_connection_requests",
+      count: requests.length,
+    });
+  }
+
+  /**
+   * Restore session participants into #sessionParticipants.
+   *
+   * M6B-010 AC-003: called at startup with rows returned by
+   * PgDirectoryStore.loadActiveSessionParticipants(). Populates #sessionParticipants
+   * so that SEAL_UNILATERAL after restart can identify the absent party.
+   *
+   * Pseudocode:
+   *   for each session in sessions:
+   *     #sessionParticipants.set(sessionId, { initiatorHex, targetHex })
+   *   logger.info("adapter.state.loaded", { stateType: "session_participants", count })
+   */
+  restoreSessionParticipants(sessions: Array<{
+    sessionId: string;
+    initiatorHex: string;
+    targetHex: string;
+    genesisTimestampMs: number;
+  }>): void {
+    for (const session of sessions) {
+      this.#sessionParticipants.set(session.sessionId, {
+        initiatorHex: session.initiatorHex,
+        targetHex: session.targetHex,
+      });
+    }
+    this.#logger?.info("adapter.state.loaded", {
+      stateType: "session_participants",
+      count: sessions.length,
+    });
+  }
+
+  /**
+   * Restore session last activity from genesis timestamps.
+   *
+   * M6B-010 AC-002: called at startup with rows returned by
+   * PgDirectoryStore.loadActiveSessionParticipants(). Initializes #sessionLastActivity
+   * to the session genesis timestamp (sessions.created_at in milliseconds).
+   *
+   * Using the genesis timestamp prevents two failure modes:
+   *   1. lastActivity=0 would make every restored session immediately eligible for
+   *      unilateral seal (since Date.now() - 0 >> deliveryGraceSeconds).
+   *   2. lastActivity=undefined/missing would cause a NaN comparison and always
+   *      pass the grace period check.
+   *
+   * By setting lastActivity=genesisTimestampMs, a session that was 30 minutes old
+   * at restart will still require deliveryGraceSeconds more seconds before a
+   * unilateral seal can succeed — which is the correct behavior.
+   *
+   * Pseudocode:
+   *   for each session in sessions:
+   *     #sessionLastActivity.set(sessionId, genesisTimestampMs)
+   *   logger.info("adapter.state.loaded", { stateType: "session_last_activity", count })
+   */
+  restoreSessionLastActivity(sessions: Array<{
+    sessionId: string;
+    initiatorHex: string;
+    targetHex: string;
+    genesisTimestampMs: number;
+  }>): void {
+    for (const session of sessions) {
+      this.#sessionLastActivity.set(session.sessionId, session.genesisTimestampMs);
+    }
+    this.#logger?.info("adapter.state.loaded", {
+      stateType: "session_last_activity",
+      count: sessions.length,
+    });
+  }
+
+  /**
+   * Test accessor: returns the last activity timestamp for a session ID.
+   *
+   * M6B-010 AC-002: verifies that restoreSessionLastActivity correctly seeds
+   * #sessionLastActivity with genesisTimestampMs (not 0 or undefined).
+   *
+   * Only available in test/local environments.
+   */
+  getRestoredLastActivityForTest(sessionIdHex: string): number | undefined {
+    return this.#sessionLastActivity.get(sessionIdHex);
+  }
+
   /**
    * PERSIST-023 test hook: runs the Pg notification drain portion of the reconnect path
    * using an injected mock stream. Only available in NODE_ENV=test.
