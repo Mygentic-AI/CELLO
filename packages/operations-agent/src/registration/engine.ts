@@ -41,6 +41,9 @@ const CONTACT_PROMPT_INTERVAL_MS = 10 * 60 * 1_000;
 /** How often to sweep for expired registrations (1 hour) */
 const EXPIRY_SWEEP_INTERVAL_MS = 60 * 60 * 1_000;
 
+/** Re-registration check window — 30 days */
+const REREGISTRATION_WINDOW_MS = 30 * 24 * 60 * 60 * 1_000;
+
 export type RegistrationEngineOptions = {
   pool: pg.Pool;
   channel: MessagingChannel;
@@ -74,6 +77,16 @@ export class RegistrationEngine {
 
   /** In-memory map: channelUserId → last known RegistrationRecord */
   readonly #activeRecords: Map<string, RegistrationRecord> = new Map();
+
+  /**
+   * In-memory set of channelUserIds awaiting CONFIRM re-registration.
+   * A user is added here when the re-registration warning is sent (AC-002).
+   * A CONFIRM message from a user in this set triggers handleNewUser (AC-003).
+   * A CONFIRM message from a user NOT in this set re-sends the warning (SI-001).
+   * Scoped to the current process instance — a restart clears this set, causing
+   * the warning to be re-sent on the next message (safe and expected per AC-003).
+   */
+  readonly #pendingReregistration: Set<string> = new Set();
 
   /** Timer: AWAITING_CONTACT re-prompt */
   #contactPromptTimer: NodeJS.Timeout | undefined;
@@ -174,8 +187,44 @@ export class RegistrationEngine {
 
       let record: RegistrationRecord;
       if (!existing) {
-        // New user — no active registration found
-        record = await this.#stateMachine.handleNewUser(from, this.#opts.channelType, phoneStubHash);
+        // No active registration found. Before starting a new one, check whether
+        // the user already has a recently-completed registration (PRE_AUTH_TOKEN_ISSUED
+        // within 30 days). If so, warn them and wait for CONFIRM (AC-002, SI-001).
+        const completed = await this.#repository.findCompletedByChannelUser(
+          this.#opts.channelType,
+          from,
+          REREGISTRATION_WINDOW_MS,
+        );
+
+        if (completed) {
+          if (this.#pendingReregistration.has(from) && message === "CONFIRM") {
+            // User was previously warned and now confirms — proceed with new registration (AC-003).
+            this.#pendingReregistration.delete(from);
+            record = await this.#stateMachine.handleNewUser(from, this.#opts.channelType, phoneStubHash);
+          } else {
+            // User has a recent completed registration. Send re-registration warning (AC-002).
+            // Also covers SI-001: if user sends CONFIRM without prior warning, the
+            // #pendingReregistration.has(from) check is false and we fall into this branch,
+            // re-sending the warning rather than silently executing the CONFIRM.
+            const existingRegistrationAge = Date.now() - completed.created_at.getTime();
+            this.#logger.info("registration.already_registered.warned", {
+              registrationId: completed.id,
+              channelUserId: from,
+              existingRegistrationAge,
+            });
+            await this.#opts.channel.send(
+              from,
+              "You already have a CELLO pre-authorization token. If you want to re-register " +
+                "(you will get a new token and your existing agent registration will remain active " +
+                "until it reconnects), reply CONFIRM. Otherwise, ignore this message.",
+            );
+            this.#pendingReregistration.add(from);
+            return;
+          }
+        } else {
+          // Genuinely new user — no active or recent completed registration.
+          record = await this.#stateMachine.handleNewUser(from, this.#opts.channelType, phoneStubHash);
+        }
       } else {
         // Check expiry first — if expired, start fresh with same message
         const now = new Date();

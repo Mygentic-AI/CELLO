@@ -175,8 +175,6 @@ Resources:
           Environment:
             - Name: CELLO_ENV
               Value: !Ref Environment
-            - Name: EXPECTED_MIGRATION_VERSION
-              Value: "27"
             # DIRECTORY_INTERNAL_URL: stable ALB DNS name — no Cloud Map or task-IP lookup.
             # AC-009d: the Ops Agent uses the ALB on port 80, not direct task:8080.
             # The ALB listener rule protects /internal/* from outside-VPC callers (AC-009d).
@@ -199,6 +197,13 @@ Resources:
             - Name: SES_FROM_ADDRESS
               Value: noreply@cello.mygentic.ai
           Secrets:
+            # EXPECTED_MIGRATION_VERSION is read from SSM at task start. Updating the SSM
+            # parameter and restarting the task (without a pipeline deploy) picks up the
+            # new value — no task definition revision required (AC-004, CELLO-M6B-011).
+            # The execution role (cello-iam.yaml OpsAgentTaskExecutionRole) must have
+            # ssm:GetParameters on this path or the task will fail with AccessDeniedException.
+            - Name: EXPECTED_MIGRATION_VERSION
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cello/${Environment}/ops-agent/expected-migration-version"
             # AC-003: all four Ops Agent secrets are injected from Secrets Manager via
             # ECS Secrets (ValueFrom). ARNs resolve at task launch time. A
             # ResourceNotFoundException means the secret ARN is wrong or the execution

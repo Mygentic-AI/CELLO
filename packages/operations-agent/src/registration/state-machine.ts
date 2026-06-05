@@ -399,7 +399,7 @@ export class RegistrationStateMachine {
       });
       await channel.send(
         from,
-        "Registration is temporarily unavailable. Please try again in a few minutes.",
+        "Registration failed due to a server error. This is not something you can fix by retrying. Please contact support if this persists.",
       );
       // Return the EMAIL_CONFIRMED record unchanged — user can retry by re-entering their OTP
       return emailConfirmed;
@@ -446,7 +446,7 @@ export class RegistrationStateMachine {
       });
       await channel.send(
         from,
-        "Registration is temporarily unavailable. Please try again in a few minutes.",
+        "Registration failed due to a server error. This is not something you can fix by retrying. Please contact support if this persists.",
       );
       return record;
     }
