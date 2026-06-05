@@ -76,6 +76,7 @@ Resources:
   OperationsAgentRepo:
     Type: AWS::ECR::Repository
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       RepositoryName: cello-operations-agent
       ImageScanningConfiguration:
