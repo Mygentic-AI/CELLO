@@ -535,17 +535,18 @@ describe("M6B-006: AC-008 cello-cloudwatch.yaml contains RelayManifestUpdateFail
     const template = loadTemplate("cello-cloudwatch.yaml");
     const resources = template["Resources"] as Record<string, Record<string, unknown>>;
 
-    // Extract dimension keys from the MetricFilter
+    // Extract dimension keys from the MetricFilter (may be absent — DefaultValue and Dimensions
+    // are mutually exclusive in AWS::Logs::MetricFilter; this filter uses DefaultValue: 0)
     const filter = resources["RelayManifestUpdateFailedMetricFilter"];
     const filterProps = filter["Properties"] as Record<string, unknown>;
     const transformations = filterProps["MetricTransformations"] as Array<Record<string, unknown>>;
-    const filterDimensions = transformations[0]["Dimensions"] as Array<{ Key: string }>;
+    const filterDimensions = (transformations[0]["Dimensions"] as Array<{ Key: string }>) ?? [];
     const filterDimKeys = filterDimensions.map((d) => d.Key).sort();
 
-    // Extract dimension keys from the Alarm
+    // Extract dimension keys from the Alarm (may also be absent for dimension-free metrics)
     const alarm = resources["RelayManifestUpdateFailedAlarm"];
     const alarmProps = alarm["Properties"] as Record<string, unknown>;
-    const alarmDimensions = alarmProps["Dimensions"] as Array<{ Name: string }>;
+    const alarmDimensions = (alarmProps["Dimensions"] as Array<{ Name: string }>) ?? [];
     const alarmDimKeys = alarmDimensions.map((d) => d.Name).sort();
 
     // CloudWatch metrics are uniquely identified by their exact dimension set.
