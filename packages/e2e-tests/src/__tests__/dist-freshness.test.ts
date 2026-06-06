@@ -16,12 +16,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "../../../..");
 
 const ADAPTER_DIST = resolve(root, "packages/adapter-claude-code/dist/server.js");
-// Resolve the connect package root via ESM import.meta.resolve (respects the
-// "import" condition in the exports map). The bin is not in exports so we
-// navigate from the resolved "." entry (dist/index.js → package root).
-const connectIndexUrl = import.meta.resolve("@cello-protocol/connect");
-const connectRoot = resolve(dirname(fileURLToPath(connectIndexUrl)), "..");
-const CLIENT_DIST = resolve(connectRoot, "dist/bin/cello-mcp.js");
+// Locate the connect package by searching node_modules from the workspace root.
+// The bin is not in the package exports map so we find the package dir directly.
+const CLIENT_DIST = resolve(root, "packages/e2e-tests/node_modules/@cello-protocol/connect/dist/bin/cello-mcp.js");
 
 describe("dist freshness: @cello-protocol/connect", () => {
   const distContent = readFileSync(ADAPTER_DIST, "utf-8");
