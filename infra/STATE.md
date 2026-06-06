@@ -12,25 +12,27 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 ## Environments
 
 ### dev — us-east-1
-*Last deployed: 2026-06-06 (partial — nuclear reset in progress)
+*Last deployed: 2026-06-06 — all 17 stacks, deploy.sh r12 (`infra.deploy.completed` 11:44:27Z)*
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
 | cello-ecr-dev | UPDATE_COMPLETE | 2026-06-05 | OperationsAgentRepo imported via CFN resource import |
 | cello-iam-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
 | cello-secrets-dev | UPDATE_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported; all secrets CFN-managed |
+| cello-ssm-parameters-dev | UPDATE_COMPLETE | 2026-06-06 | SSM migration version = V29 (dynamic) |
 | cello-vpc-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-27 | No changes |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
-| cello-ecs-directory-dev | CREATE_COMPLETE | 2026-06-05 | **FRESH CREATE from current IaC** — all M6B stories included; image cello-directory:f28fe89 |
-| cello-ecs-operations-agent-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
-| cello-waf-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
-| cello-ecs-relay-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
-| cello-cloudwatch-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
-| cello-route53-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
-| cello-cicd-dev | UPDATE_COMPLETE | 2026-05-27 | Not deleted during nuclear reset (pipeline infra) |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-06 | All M6B stories; image cello-directory:1dea685 |
+| cello-ecs-operations-agent-dev | **CREATE_COMPLETE** | **2026-06-06** | **FRESH CREATE** — tombstone deleted+recreated; image cello-operations-agent:895804c (curl installed); health checks passing; ECS circuit breaker enabled |
+| cello-waf-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
+| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
+| cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
+| cello-route53-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
+| cello-route53-relay-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
+| cello-cicd-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
 | Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-27 | pipeline-mappings.json includes operations-agent path filter |
 | ECR Replication (account-level) | CONFIGURED | 2026-05-24 | us-east-1 → eu-central-1 + ap-northeast-1; filter: prefix "cello-" |
@@ -130,7 +132,7 @@ ECS will start a replacement task that reads the updated SSM value. The current 
 - ap-northeast-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-ap1.cello.mygentic.ai --type String --region ap-northeast-1`
 
 ### dev — eu-central-1
-*Last deployed: 2026-06-06 (partial — nuclear reset in progress)
+*Last deployed: 2026-06-06
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -183,7 +185,7 @@ ECS will start a replacement task that reads the updated SSM value. The current 
 | SNS Topic — ops-warning | arn:aws:sns:eu-central-1:257394457473:cello-ops-warning-dev |
 
 ### dev — ap-northeast-1
-*Last deployed: 2026-06-06 (partial — nuclear reset in progress)
+*Last deployed: 2026-06-06
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -324,7 +326,7 @@ Setup with: `./infra/setup-replication.sh dev`
 | ECR repo — operations-agent (ap-northeast-1) | 257394457473.dkr.ecr.ap-northeast-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; replicated via account-level ECR replication |
 | Current directory image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:33377b0 | Built from commit 33377b0, deployed 2026-05-28 via pipeline; all 3 regions; includes INTERNAL_API_KEY + /internal/* ALB rules + port 9090 health |
 | Current relay image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay:6e0c50b | Built from commit 6e0c50b, deployed 2026-05-22 |
-| Current operations-agent image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-operations-agent:cff37b0 | Real image deployed 2026-05-30 via pipeline; us-east-1 only |
+| Current operations-agent image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-operations-agent:895804c | curl installed for ECS health check; deployed 2026-06-06 via pipeline |
 | Route 53 Hosted Zone | cello.mygentic.ai | Zone ID read at deploy time via aws route53 list-hosted-zones |
 | CodeStar Connection (us-east-1) | arn:aws:codeconnections:us-east-1:257394457473:connection/1a7fba2b-dd1d-4ebe-8372-7122b89f56b5 | AVAILABLE — override via CELLO_GITHUB_CONNECTION_ID |
 
