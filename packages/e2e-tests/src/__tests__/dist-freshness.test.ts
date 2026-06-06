@@ -16,11 +16,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "../../../..");
 
 const ADAPTER_DIST = resolve(root, "packages/adapter-claude-code/dist/server.js");
-// Resolve connect package relative to this package's node_modules, falling back
-// to the workspace root node_modules (pnpm hoisting is non-deterministic).
+// Resolve the connect package root via its exports "." entry, then navigate to
+// the bin file. The bin is not listed in the exports map so subpath import
+// resolution fails — we derive the path from the package root instead.
 import { createRequire } from "node:module";
 const _require = createRequire(import.meta.url);
-const CLIENT_DIST = _require.resolve("@cello-protocol/connect/dist/bin/cello-mcp.js");
+const connectIndexPath = _require.resolve("@cello-protocol/connect");
+const connectRoot = resolve(dirname(connectIndexPath), "../..");
+const CLIENT_DIST = resolve(connectRoot, "dist/bin/cello-mcp.js");
 
 describe("dist freshness: @cello-protocol/connect", () => {
   const distContent = readFileSync(ADAPTER_DIST, "utf-8");
