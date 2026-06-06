@@ -453,7 +453,7 @@ M7 stories will change cello-client APIs (multi-agent, session management, conne
 
 **Root cause:** These tests exercise FROST ceremony timing across multiple in-process libp2p nodes. Under CodeBuild resource constraints the timing is unreliable. The tests pass locally with adequate resources.
 
-**Fix (commit `TBD`):** Added `CELLO_E2E_LIVE=1` guard to both files using `describe.skipIf(!process.env.CELLO_E2E_LIVE)`. All describe blocks in both files are wrapped with `liveOnly`. Without the env var set, all tests in those two files skip cleanly — CI shows skipped, not failed. To run them in a controlled environment, set `CELLO_E2E_LIVE=1`.
+**Fix (commit `c727593`):** Added `CELLO_E2E_LIVE=1` guard to both files using `describe.skipIf(!process.env.CELLO_E2E_LIVE)`. All describe blocks in both files are wrapped with `liveOnly`. Without the env var set, all tests in those two files skip cleanly — CI shows skipped, not failed. To run them in a controlled environment, set `CELLO_E2E_LIVE=1`.
 
 **What needs to happen to fully resolve this:**
 - `cello-e2e-tests-pipeline` CodeBuild environment should set `CELLO_E2E_LIVE=1` once timing reliability is verified (larger CodeBuild instance, or dedicated test environment). Until then, the skip guard prevents false negatives.
