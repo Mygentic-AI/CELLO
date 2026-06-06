@@ -399,7 +399,9 @@ if (directoryAdapter) {
 
     // RELAY_IDENTITY_CONFLICT is unrecoverable — a different key was registered
     // for this relayId. The relay cannot proceed with this key.
-    if (regResult.reason.includes("RELAY_IDENTITY_CONFLICT")) {
+    // Check both the exact protocol error code and the legacy reason string to
+    // guard against future directory refactors changing the message format.
+    if (regResult.reason === "RELAY_IDENTITY_CONFLICT" || regResult.reason.includes("RELAY_IDENTITY_CONFLICT")) {
       logRelayServiceStartFailed(logger, {
         reason: `relay registration rejected: ${regResult.reason}`,
         region: awsRegion,

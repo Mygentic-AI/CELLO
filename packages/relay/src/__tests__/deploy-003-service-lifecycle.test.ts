@@ -175,7 +175,8 @@ describe("DEPLOY-003: relay health server", () => {
     try {
       const before = await fetch(`http://127.0.0.1:${port}/health`);
       expect(before.status).toBe(503);
-      const beforeBody = await before.json() as { status: string; reason: string };
+      const beforeBody = await before.json() as { relayId: string; status: string; reason: string };
+      expect(beforeBody.relayId).toBe(relayId);
       expect(beforeBody.status).toBe("starting");
       expect(beforeBody.reason).toBe("awaiting_directory_registration");
 
@@ -183,7 +184,8 @@ describe("DEPLOY-003: relay health server", () => {
 
       const after = await fetch(`http://127.0.0.1:${port}/health`);
       expect(after.status).toBe(200);
-      const afterBody = await after.json() as { status: string };
+      const afterBody = await after.json() as { relayId: string; status: string };
+      expect(afterBody.relayId).toBe(relayId);
       expect(afterBody.status).toBe("ok");
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));

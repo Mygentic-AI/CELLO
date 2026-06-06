@@ -133,21 +133,30 @@ RELAY_MULTIADDR="${CELLO_RELAY_MULTIADDR:-/ip4/10.0.85.235/tcp/4001/p2p/12D3KooW
 # This value MUST be non-empty — DirectoryMultiaddr has no Default in cello-ecs-relay.yaml.
 # If the SSM parameter is missing, deploy.sh fails here rather than silently deploying
 # a relay that cannot register.
-DIRECTORY_PEER_ID=$(aws ssm get-parameter \
+SSM_OUTPUT=$(aws ssm get-parameter \
   --name "/cello/${ENVIRONMENT}/directory/peer-id" \
   --region "${REGION}" \
   --query 'Parameter.Value' \
-  --output text 2>/dev/null || echo "")
+  --output text 2>&1)
+SSM_EXIT=$?
 
-if [[ -z "${DIRECTORY_PEER_ID}" ]]; then
-  echo "ERROR: /cello/${ENVIRONMENT}/directory/peer-id SSM parameter not found in ${REGION}." >&2
-  echo "       The relay cannot register without a directory peer ID." >&2
-  echo "       Run: aws ssm put-parameter --name /cello/${ENVIRONMENT}/directory/peer-id \\" >&2
-  echo "                --value <peer-id> --type String --region ${REGION}" >&2
-  echo "       The peer ID can be found in the directory's CloudWatch logs:" >&2
-  echo "         aws logs tail /ecs/cello-directory-${ENVIRONMENT} --region ${REGION} | grep BootstrapEndpoint" >&2
+if [[ ${SSM_EXIT} -ne 0 ]]; then
+  if echo "${SSM_OUTPUT}" | grep -q "ParameterNotFound"; then
+    echo "ERROR: /cello/${ENVIRONMENT}/directory/peer-id not found in ${REGION}." >&2
+    echo "       Create it first:" >&2
+    echo "         aws ssm put-parameter --name /cello/${ENVIRONMENT}/directory/peer-id \\" >&2
+    echo "             --value <peer-id> --type String --region ${REGION}" >&2
+    echo "       Find the peer ID in the directory CloudWatch logs:" >&2
+    echo "         aws logs tail /ecs/cello-directory-${ENVIRONMENT} --region ${REGION} | grep BootstrapEndpoint" >&2
+  else
+    echo "ERROR: Failed to read /cello/${ENVIRONMENT}/directory/peer-id from SSM in ${REGION}." >&2
+    echo "       AWS CLI output: ${SSM_OUTPUT}" >&2
+    echo "       Check IAM permissions (ssm:GetParameter) and network connectivity." >&2
+  fi
   exit 1
 fi
+
+DIRECTORY_PEER_ID="${SSM_OUTPUT}"
 
 DIRECTORY_MULTIADDR="/dns4/${SUBDOMAIN}.${DOMAIN_NAME}/tcp/80/ws/p2p/${DIRECTORY_PEER_ID}"
 echo "  DirectoryMultiaddr: ${DIRECTORY_MULTIADDR}"

@@ -21,11 +21,13 @@
  *     logger.error("relay.service.crashed", { relayId, region, reason })
  *
  *   createRelayHealthServer(opts):
- *     // Create HTTP server. GET /health → 200 { relayId, status: 'ok' }
- *     // Any other path → 404.
+ *     // Returns { server, markRegistered() }.
+ *     // If opts.requiresRegistration=true: GET /health → 503 until markRegistered() called,
+ *     //   then → 200 { relayId, status: 'ok' }. Any other path → 404.
+ *     // If opts.requiresRegistration=false: GET /health → 200 immediately.
  *     // Response must complete within 2 seconds (ECS health check timeout).
  *     server = createServer(handler)
- *     return server  // caller calls .listen()
+ *     return { server, markRegistered }
  *
  * Events:
  *   relay.service.started      — INFO  — { relayId, region, environment }
