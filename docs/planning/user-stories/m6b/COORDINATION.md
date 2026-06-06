@@ -444,3 +444,27 @@ M7 stories will change cello-client APIs (multi-agent, session management, conne
 3. The README "Try it" section must be updated to call the lookup tool rather than punting to Telegram.
 
 **Current workaround:** Operators register first, then ask @CelloConnectStagingBot for the demo agent ID. This is acceptable for alpha.
+
+---
+
+### 2026-06-06 — REPOSPLIT-002 CLOSED
+
+All 7 steps from the gap entry above are complete. Committed as `22f55bd` on main, pushed to origin.
+
+**What was done:**
+1. `packages/directory/package.json` — replaced `workspace:*` for crypto (`^0.0.7`), transport (`^0.0.4`), protocol-types (`^0.0.3`), client (`^0.0.20`)
+2. `packages/relay/package.json` — same four packages
+3. `packages/adapter-claude-code/package.json`, `packages/e2e-tests/package.json`, `packages/interfaces/package.json`, `packages/test-fixtures/package.json` — all additional `workspace:*` references to cello-client packages replaced with semver
+4. `pnpm install` — lockfile updated, resolved from npm
+5. `pnpm run typecheck` — clean (all tsconfig project references to deleted packages removed)
+6. Deleted stale source directories: `packages/crypto/`, `packages/transport/`, `packages/client/`, `packages/protocol-types/`
+7. Removed dead pipelines from `infra/cloudformation/cello-cicd.yaml` and `infra/pipeline-mappings.json`; deployed updated Lambda via `./infra/deploy-lambdas.sh dev filter`
+8. `git push` — directory and relay pipelines triggered (both `InProgress` at time of push)
+
+**Pipeline count:** 9 → 5 (`allCelloPipelines`). Dead pipelines removed: cello-crypto-pipeline, cello-protocol-types-pipeline, cello-transport-pipeline, cello-client-pipeline.
+
+**Pre-existing test failures** (mcp-002, mcp-003-e2e): confirmed pre-existing via `git stash` verification — require live Postgres + `CELLO_ENV=local`; not related to this story.
+
+**STATE.md updated:** filter Lambda entry updated to note REPOSPLIT-002 changes.
+
+Directory and relay will deploy the new lockfile via the triggered pipelines (~25-30 min).

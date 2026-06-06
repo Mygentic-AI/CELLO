@@ -34,7 +34,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-route53-relay-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | cello-cicd-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
-| Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-27 | pipeline-mappings.json includes operations-agent path filter |
+| Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-06-06 | REPOSPLIT-002: removed 4 dead pipelines (crypto/protocol-types/transport/client); now 5 pipelines only |
 | ECR Replication (account-level) | CONFIGURED | 2026-05-24 | us-east-1 → eu-central-1 + ap-northeast-1; filter: prefix "cello-" |
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-24 | 167ca6...27b5 (directory node pubkey) |
 | Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | Replication user password (alphanumeric, 32-char) |
