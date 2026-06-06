@@ -271,6 +271,34 @@ read_output() {
     --output text
 }
 
+# purge_stale_dns_record: delete a Route53 record if it exists outside CFN ownership.
+# Route53 records survive stack deletion (the hosted zone is never torn down).
+# CFN can only CREATE a record it doesn't already own — a pre-existing record causes
+# CREATE_FAILED with "record set already exists". We delete it so CFN can own it cleanly.
+purge_stale_dns_record() {
+  local hosted_zone_id="$1"
+  local fqdn="$2."   # Route53 stores names with trailing dot
+  if [[ -z "${hosted_zone_id}" || "${hosted_zone_id}" == "PLACEHOLDER" ]]; then
+    return 0
+  fi
+  local record
+  record=$(aws route53 list-resource-record-sets \
+    --hosted-zone-id "${hosted_zone_id}" \
+    --query "ResourceRecordSets[?Name=='${fqdn}'] | [0]" \
+    --output json 2>/dev/null)
+  if [[ -z "${record}" || "${record}" == "null" ]]; then
+    return 0
+  fi
+  echo "  Pre-flight: stale DNS record ${fqdn} exists — deleting before CFN create..."
+  local change_batch
+  change_batch=$(printf '{"Changes":[{"Action":"DELETE","ResourceRecordSet":%s}]}' "${record}")
+  aws route53 change-resource-record-sets \
+    --hosted-zone-id "${hosted_zone_id}" \
+    --change-batch "${change_batch}" \
+    --output json > /dev/null
+  echo "  Deleted stale DNS record ${fqdn}."
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # DEPLOYMENT SEQUENCE — 16 stacks in dependency order (17 in us-east-1 with cello-cicd)
 #
@@ -612,6 +640,12 @@ deploy_stack "cello-cloudwatch-${ENVIRONMENT}" "cello-cloudwatch.yaml" \
 # ── STEP 13: cello-route53 — Route 53 ALIAS records and ACM certs ────────────
 # depends on: cello-ecs-directory (ALB outputs read in Step 8)
 
+# Pre-flight: delete stale DNS record if it exists outside CFN.
+# Route53 records survive stack deletion (hosted zone is not torn down).
+# CFN can only CREATE a record it doesn't already own — a pre-existing record
+# causes CREATE_FAILED. We delete it so CFN can create it cleanly.
+purge_stale_dns_record "${HOSTED_ZONE_ID}" "${SUBDOMAIN}.${DOMAIN_NAME}"
+
 deploy_stack "cello-route53-${ENVIRONMENT}" "cello-route53.yaml" \
   "Environment=${ENVIRONMENT}" \
   "DomainName=${DOMAIN_NAME}" \
@@ -642,6 +676,9 @@ else
   echo "  RelayAlbDnsName:       ${RELAY_ALB_DNS}"
   echo "  RelayAlbHostedZoneId:  ${RELAY_ALB_ZONE}"
 fi
+
+# Pre-flight: delete stale relay DNS record if it exists outside CFN.
+purge_stale_dns_record "${HOSTED_ZONE_ID}" "${RELAY_SUBDOMAIN}.${DOMAIN_NAME}"
 
 deploy_stack "cello-route53-relay-${ENVIRONMENT}" "cello-route53.yaml" \
   "Environment=${ENVIRONMENT}" \
