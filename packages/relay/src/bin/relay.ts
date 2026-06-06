@@ -355,19 +355,12 @@ if (directoryAdapter) {
 }
 
 // ─── DEPLOY-003: Health check HTTP server (AC-007) ─────────────────────────────
-// GET /health on port 4000 returns { relayId, status: 'ok' } once registered.
-// Returns 503 { status: 'starting', reason: 'awaiting_directory_registration' }
-// until markRegistered() is called after a successful relay_register exchange.
+// GET /health on port 4000 returns { relayId, status: 'ok' }.
 // Port 4000 is VPC-internal only — not exposed via ALB.
 // The directory's relay pool health checks (INFRA-009) use this endpoint.
-// Started before registration so ECS can observe startup progress via health checks.
 
-const healthHandle = createRelayHealthServer({
-  relayId,
-  logger,
-  requiresRegistration: !!directoryMultiaddr,
-});
-healthHandle.server.listen(healthPort, () => {
+const healthServer = createRelayHealthServer({ relayId, logger });
+healthServer.listen(healthPort, () => {
   logger.info("adapter.initialised", { adapterName: "RelayHealthServer", port: healthPort, env: celloEnv });
 });
 
@@ -393,7 +386,6 @@ if (directoryAdapter) {
     if (regResult.ok) {
       // relay.registered / relay.already.registered are logged by the adapter (AC-002).
       registered = true;
-      healthHandle.markRegistered();
       break;
     }
 
@@ -454,7 +446,7 @@ const shutdown = () => {
   const uptimeMs = Date.now() - startedAt;
   logRelayServiceStopped(logger, { relayId, region: awsRegion, environment: celloEnv, uptimeMs });
 
-  healthHandle.server.close();
+  healthServer.close();
   relayResult.stop()
     .catch((err: unknown) => {
       const reason = err instanceof Error ? err.message : String(err);

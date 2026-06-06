@@ -146,7 +146,7 @@ describe("DEPLOY-003: relay health server", () => {
     const relayId = Buffer.from(pubkeyBytes).toString("hex");
 
     const { logger } = makeCaptureLogger();
-    const { server } = createRelayHealthServer({ relayId, logger, requiresRegistration: false });
+    const server = createRelayHealthServer({ relayId, logger });
 
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const address = server.address() as { port: number };
@@ -163,39 +163,10 @@ describe("DEPLOY-003: relay health server", () => {
     }
   });
 
-  it("GET /health returns 503 before registration, 200 after markRegistered()", async () => {
-    const relayId = "a".repeat(64);
-    const { logger } = makeCaptureLogger();
-    const { server, markRegistered } = createRelayHealthServer({ relayId, logger, requiresRegistration: true });
-
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    const address = server.address() as { port: number };
-    const port = address.port;
-
-    try {
-      const before = await fetch(`http://127.0.0.1:${port}/health`);
-      expect(before.status).toBe(503);
-      const beforeBody = await before.json() as { relayId: string; status: string; reason: string };
-      expect(beforeBody.relayId).toBe(relayId);
-      expect(beforeBody.status).toBe("starting");
-      expect(beforeBody.reason).toBe("awaiting_directory_registration");
-
-      markRegistered();
-
-      const after = await fetch(`http://127.0.0.1:${port}/health`);
-      expect(after.status).toBe(200);
-      const afterBody = await after.json() as { relayId: string; status: string };
-      expect(afterBody.relayId).toBe(relayId);
-      expect(afterBody.status).toBe("ok");
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
-  });
-
   it("GET /health responds within 2 seconds", async () => {
     const relayId = "a".repeat(64);
     const { logger } = makeCaptureLogger();
-    const { server } = createRelayHealthServer({ relayId, logger, requiresRegistration: false });
+    const server = createRelayHealthServer({ relayId, logger });
 
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const address = server.address() as { port: number };
@@ -215,7 +186,7 @@ describe("DEPLOY-003: relay health server", () => {
   it("non-/health path returns 404", async () => {
     const relayId = "b".repeat(64);
     const { logger } = makeCaptureLogger();
-    const { server } = createRelayHealthServer({ relayId, logger, requiresRegistration: false });
+    const server = createRelayHealthServer({ relayId, logger });
 
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const address = server.address() as { port: number };

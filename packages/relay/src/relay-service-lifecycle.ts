@@ -21,13 +21,11 @@
  *     logger.error("relay.service.crashed", { relayId, region, reason })
  *
  *   createRelayHealthServer(opts):
- *     // Returns { server, markRegistered() }.
- *     // If opts.requiresRegistration=true: GET /health → 503 until markRegistered() called,
- *     //   then → 200 { relayId, status: 'ok' }. Any other path → 404.
- *     // If opts.requiresRegistration=false: GET /health → 200 immediately.
+ *     // Create HTTP server. GET /health → 200 { relayId, status: 'ok' }
+ *     // Any other path → 404.
  *     // Response must complete within 2 seconds (ECS health check timeout).
  *     server = createServer(handler)
- *     return { server, markRegistered }
+ *     return server  // caller calls .listen()
  *
  * Events:
  *   relay.service.started      — INFO  — { relayId, region, environment }
@@ -102,17 +100,6 @@ export function logRelayServiceCrashed(logger: Logger, ctx: RelayServiceCrashedC
 export interface RelayHealthServerOptions {
   relayId: string;
   logger: Logger;
-  /** When true, /health returns 503 until markRegistered() is called.
-   *  Set to true when CELLO_DIRECTORY_MULTIADDR is configured — a relay that
-   *  hasn't registered cannot participate in session assignment and must not
-   *  be treated as healthy by ECS or the directory's health checks. */
-  requiresRegistration: boolean;
-}
-
-export interface RelayHealthServer {
-  server: Server;
-  /** Call once relay_register succeeds. Unblocks /health from 503 → 200. */
-  markRegistered(): void;
 }
 
 /**
@@ -120,29 +107,17 @@ export interface RelayHealthServer {
  * the /health endpoint for the relay. The caller is responsible for
  * calling .listen().
  *
- * When requiresRegistration is true, /health returns 503 with
- * { relayId, status: 'starting', reason: 'awaiting_directory_registration' }
- * until markRegistered() is called, after which it returns 200 with
- * { relayId, status: 'ok' }.
- *
- * This ensures ECS does not route traffic to a relay that cannot issue
- * verifiable ACKs — an unregistered relay has no place in the manifest
- * and cannot participate in session assignment.
+ * Response format: { relayId: string, status: 'ok' }
  */
-export function createRelayHealthServer(opts: RelayHealthServerOptions): RelayHealthServer {
-  const { relayId, requiresRegistration } = opts;
+export function createRelayHealthServer(opts: RelayHealthServerOptions): Server {
+  const { relayId } = opts;
 
-  let registered = !requiresRegistration;
+  const responseBody = JSON.stringify({ relayId, status: "ok" });
 
   const server = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/health") {
-      if (registered) {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ relayId, status: "ok" }));
-      } else {
-        res.writeHead(503, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ relayId, status: "starting", reason: "awaiting_directory_registration" }));
-      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(responseBody);
       return;
     }
 
@@ -150,10 +125,5 @@ export function createRelayHealthServer(opts: RelayHealthServerOptions): RelayHe
     res.end(JSON.stringify({ error: "not found" }));
   });
 
-  return {
-    server,
-    markRegistered(): void {
-      registered = true;
-    },
-  };
+  return server;
 }
