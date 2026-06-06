@@ -16,13 +16,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "../../../..");
 
 const ADAPTER_DIST = resolve(root, "packages/adapter-claude-code/dist/server.js");
-// Resolve the connect package root via its exports "." entry, then navigate to
-// the bin file. The bin is not listed in the exports map so subpath import
-// resolution fails — we derive the path from the package root instead.
-import { createRequire } from "node:module";
-const _require = createRequire(import.meta.url);
-const connectIndexPath = _require.resolve("@cello-protocol/connect");
-const connectRoot = resolve(dirname(connectIndexPath), "../..");
+// Resolve the connect package root via ESM import.meta.resolve (respects the
+// "import" condition in the exports map). The bin is not in exports so we
+// navigate from the resolved "." entry (dist/index.js → package root).
+const connectIndexUrl = import.meta.resolve("@cello-protocol/connect");
+const connectRoot = resolve(dirname(fileURLToPath(connectIndexUrl)), "..");
 const CLIENT_DIST = resolve(connectRoot, "dist/bin/cello-mcp.js");
 
 describe("dist freshness: @cello-protocol/connect", () => {
