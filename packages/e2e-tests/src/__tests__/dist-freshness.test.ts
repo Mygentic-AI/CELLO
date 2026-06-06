@@ -16,9 +16,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "../../../..");
 
 const ADAPTER_DIST = resolve(root, "packages/adapter-claude-code/dist/server.js");
-// Locate the connect package by searching node_modules from the workspace root.
-// The bin is not in the package exports map so we find the package dir directly.
-const CLIENT_DIST = resolve(root, "packages/e2e-tests/node_modules/@cello-protocol/connect/dist/bin/cello-mcp.js");
+// dist/server.js is the MCP server module in @cello-protocol/connect — this is
+// the file that registers all tool handlers. The bin (cello-mcp.js) is just a
+// thin launcher that imports server.js; tool names live in server.js.
+const CLIENT_DIST = resolve(root, "packages/e2e-tests/node_modules/@cello-protocol/connect/dist/server.js");
 
 describe("dist freshness: @cello-protocol/connect", () => {
   const distContent = readFileSync(ADAPTER_DIST, "utf-8");
