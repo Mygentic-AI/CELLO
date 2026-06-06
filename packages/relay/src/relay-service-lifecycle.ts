@@ -100,6 +100,17 @@ export function logRelayServiceCrashed(logger: Logger, ctx: RelayServiceCrashedC
 export interface RelayHealthServerOptions {
   relayId: string;
   logger: Logger;
+  /** When true, /health returns 503 until markRegistered() is called.
+   *  Set to true when CELLO_DIRECTORY_MULTIADDR is configured — a relay that
+   *  hasn't registered cannot participate in session assignment and must not
+   *  be treated as healthy by ECS or the directory's health checks. */
+  requiresRegistration: boolean;
+}
+
+export interface RelayHealthServer {
+  server: Server;
+  /** Call once relay_register succeeds. Unblocks /health from 503 → 200. */
+  markRegistered(): void;
 }
 
 /**
@@ -107,20 +118,29 @@ export interface RelayHealthServerOptions {
  * the /health endpoint for the relay. The caller is responsible for
  * calling .listen().
  *
- * Response format: { relayId: string, status: 'ok' }
+ * When requiresRegistration is true, /health returns 503 with
+ * { relayId, status: 'starting', reason: 'awaiting_directory_registration' }
+ * until markRegistered() is called, after which it returns 200 with
+ * { relayId, status: 'ok' }.
+ *
+ * This ensures ECS does not route traffic to a relay that cannot issue
+ * verifiable ACKs — an unregistered relay has no place in the manifest
+ * and cannot participate in session assignment.
  */
-export function createRelayHealthServer(opts: RelayHealthServerOptions): Server {
-  const { relayId } = opts;
+export function createRelayHealthServer(opts: RelayHealthServerOptions): RelayHealthServer {
+  const { relayId, requiresRegistration } = opts;
 
-  const responseBody = JSON.stringify({
-    relayId,
-    status: "ok",
-  });
+  let registered = !requiresRegistration;
 
   const server = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/health") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(responseBody);
+      if (registered) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ relayId, status: "ok" }));
+      } else {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ relayId, status: "starting", reason: "awaiting_directory_registration" }));
+      }
       return;
     }
 
@@ -128,5 +148,10 @@ export function createRelayHealthServer(opts: RelayHealthServerOptions): Server 
     res.end(JSON.stringify({ error: "not found" }));
   });
 
-  return server;
+  return {
+    server,
+    markRegistered(): void {
+      registered = true;
+    },
+  };
 }

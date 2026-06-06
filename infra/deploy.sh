@@ -125,6 +125,33 @@ RELAY_DIRECTORY_PUBKEY="${CELLO_DIRECTORY_PUBKEY:-167ca6b145bfdd3696af8f4befd883
 # Override with CELLO_RELAY_MULTIADDR env var when the relay private IP or peer ID changes.
 RELAY_MULTIADDR="${CELLO_RELAY_MULTIADDR:-/ip4/10.0.85.235/tcp/4001/p2p/12D3KooWDbUVg6tnvDu1quscr6cmHJ8jke4mZsh85RNqvwT8UPy9}"
 
+# ── Directory multiaddr for relay auto-registration (M6B-006) ────────────────
+# The relay dials the directory on startup to register. The multiaddr includes
+# the per-region DNS hostname and the directory's libp2p peer ID.
+# Peer ID is stable across restarts (derived from transport key) and stored in SSM.
+# deploy.sh reads it from /cello/{env}/directory/peer-id in the target region.
+# This value MUST be non-empty — DirectoryMultiaddr has no Default in cello-ecs-relay.yaml.
+# If the SSM parameter is missing, deploy.sh fails here rather than silently deploying
+# a relay that cannot register.
+DIRECTORY_PEER_ID=$(aws ssm get-parameter \
+  --name "/cello/${ENVIRONMENT}/directory/peer-id" \
+  --region "${REGION}" \
+  --query 'Parameter.Value' \
+  --output text 2>/dev/null || echo "")
+
+if [[ -z "${DIRECTORY_PEER_ID}" ]]; then
+  echo "ERROR: /cello/${ENVIRONMENT}/directory/peer-id SSM parameter not found in ${REGION}." >&2
+  echo "       The relay cannot register without a directory peer ID." >&2
+  echo "       Run: aws ssm put-parameter --name /cello/${ENVIRONMENT}/directory/peer-id \\" >&2
+  echo "                --value <peer-id> --type String --region ${REGION}" >&2
+  echo "       The peer ID can be found in the directory's CloudWatch logs:" >&2
+  echo "         aws logs tail /ecs/cello-directory-${ENVIRONMENT} --region ${REGION} | grep BootstrapEndpoint" >&2
+  exit 1
+fi
+
+DIRECTORY_MULTIADDR="/dns4/${SUBDOMAIN}.${DOMAIN_NAME}/tcp/80/ws/p2p/${DIRECTORY_PEER_ID}"
+echo "  DirectoryMultiaddr: ${DIRECTORY_MULTIADDR}"
+
 # ── GitHub CodeStar Connection ARN ────────────────────────────────────────────
 # Set CELLO_GITHUB_CONNECTION_ID to the UUID of the CodeStar connection in us-east-1.
 # Find it: aws codestar-connections list-connections --region us-east-1
@@ -688,7 +715,8 @@ deploy_stack "cello-ecs-relay-${ENVIRONMENT}" "cello-ecs-relay.yaml" \
   "Cpu=${RELAY_CPU}" \
   "Memory=${RELAY_MEM}" \
   "ImageUri=${RELAY_IMAGE}" \
-  "DirectoryNodePubkey=${RELAY_DIRECTORY_PUBKEY}"
+  "DirectoryNodePubkey=${RELAY_DIRECTORY_PUBKEY}" \
+  "DirectoryMultiaddr=${DIRECTORY_MULTIADDR}"
 
 # ── STEP 12: cello-cloudwatch — CloudWatch alarms and dashboards ─────────────
 # depends on: cello-ecs-directory, cello-ecs-relay (alarm dimensions reference ECS services)

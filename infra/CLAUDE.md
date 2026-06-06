@@ -4,6 +4,26 @@ These instructions are mandatory for any agent working on files under `infra/`.
 
 ---
 
+## Required Config Anti-Pattern — Non-Negotiable
+
+**Never use `Default: ""` for an environment variable that enables a critical service behavior.** An empty string default silently disables the feature — the service starts, passes health checks, and appears healthy while being operationally broken.
+
+**The pattern that caused this rule (2026-06-06):** `DirectoryMultiaddr` in `cello-ecs-relay.yaml` had `Default: ""`. deploy.sh never passed the parameter. The relay deployed successfully, ECS marked it healthy, but `CELLO_DIRECTORY_MULTIADDR=""` meant the relay never dialed the directory and never registered. The S3 manifest stayed stale. No agents could get a relay assignment. The system was silently broken for the entire post-nuclear-reset period.
+
+**Rules:**
+
+1. **Required parameters have no `Default`.** If a feature cannot work without a parameter, remove `Default` entirely from the CloudFormation parameter. CloudFormation will then error at deploy time if the value is not passed — which is the correct failure mode.
+
+2. **deploy.sh must assert non-empty before deploying.** For every parameter that is required for a service to function, deploy.sh must validate it is non-empty before calling `deploy_stack`. If the value cannot be derived (e.g. SSM parameter missing), deploy.sh must print a diagnostic and exit 1 rather than deploying a broken service.
+
+3. **Application layer: health check must reflect real readiness.** A service that requires registration or connection to a dependency before it can serve traffic must return 503 from `/health` until that dependency is established. `status: 'ok'` means the service can do its job — not just that the process started. See `createRelayHealthServer({ requiresRegistration: true })` as the canonical implementation.
+
+4. **When you add a new required env var to an ECS service:** immediately add it to `deploy.sh` with a non-empty assertion, and store any dynamic value (peer IDs, addresses) in SSM so deploy.sh can read it at deploy time.
+
+*Root cause commit: deploy.sh passed `DirectoryNodePubkey` but never `DirectoryMultiaddr`. Fixed in the same commit that introduced this rule.*
+
+---
+
 ## ECS Debugging — Mandatory Diagnostic Sources
 
 **When an ECS task or service is failing, check ALL of the following before forming any hypothesis. Do not speculate until you have read each source.**

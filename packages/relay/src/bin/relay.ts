@@ -354,6 +354,23 @@ if (directoryAdapter) {
   directoryAdapter.connect(relayResult.node);
 }
 
+// ─── DEPLOY-003: Health check HTTP server (AC-007) ─────────────────────────────
+// GET /health on port 4000 returns { relayId, status: 'ok' } once registered.
+// Returns 503 { status: 'starting', reason: 'awaiting_directory_registration' }
+// until markRegistered() is called after a successful relay_register exchange.
+// Port 4000 is VPC-internal only — not exposed via ALB.
+// The directory's relay pool health checks (INFRA-009) use this endpoint.
+// Started before registration so ECS can observe startup progress via health checks.
+
+const healthHandle = createRelayHealthServer({
+  relayId,
+  logger,
+  requiresRegistration: !!directoryMultiaddr,
+});
+healthHandle.server.listen(healthPort, () => {
+  logger.info("adapter.initialised", { adapterName: "RelayHealthServer", port: healthPort, env: celloEnv });
+});
+
 // ─── FEDERATION-003: Relay registration with directory (AC-002, DB-001) ─────────
 // The relay MUST register before accepting sessions — an unregistered relay cannot
 // issue verifiable ACKs (AC-002). If the directory is unreachable, retry on exponential
@@ -376,6 +393,7 @@ if (directoryAdapter) {
     if (regResult.ok) {
       // relay.registered / relay.already.registered are logged by the adapter (AC-002).
       registered = true;
+      healthHandle.markRegistered();
       break;
     }
 
@@ -410,16 +428,6 @@ for (const addr of relayResult.node.listenAddresses()) {
   logger.info("adapter.initialised", { adapterName: "ListenAddr", implementation: String(addr), env: celloEnv });
 }
 
-// ─── DEPLOY-003: Health check HTTP server (AC-007) ─────────────────────────────
-// GET /health on port 4000 returns { relayId, status: 'ok' }.
-// Port 4000 is VPC-internal only — not exposed via ALB.
-// The directory's relay pool health checks (INFRA-009) use this endpoint.
-
-const healthServer = createRelayHealthServer({ relayId, logger });
-healthServer.listen(healthPort, () => {
-  logger.info("adapter.initialised", { adapterName: "RelayHealthServer", port: healthPort, env: celloEnv });
-});
-
 // ─── DEPLOY-003: relay.service.started (AC-002) ────────────────────────────────
 
 logRelayServiceStarted(logger, {
@@ -444,7 +452,7 @@ const shutdown = () => {
   const uptimeMs = Date.now() - startedAt;
   logRelayServiceStopped(logger, { relayId, region: awsRegion, environment: celloEnv, uptimeMs });
 
-  healthServer.close();
+  healthHandle.server.close();
   relayResult.stop()
     .catch((err: unknown) => {
       const reason = err instanceof Error ? err.message : String(err);

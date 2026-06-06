@@ -161,7 +161,7 @@ describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDire
     // In production, relay.ts starts the health server after registerWithDirectory() returns ok.
     // Here we simulate that sequencing: start the health server only after registration completes,
     // then verify GET /health returns 200 — proving registration was a prerequisite to traffic acceptance.
-    const healthServer = createRelayHealthServer({ relayId, logger: spyLogger });
+    const { server: healthServer } = createRelayHealthServer({ relayId, logger: spyLogger, requiresRegistration: false });
     await new Promise<void>((resolve, reject) => {
       healthServer.listen(4002, "127.0.0.1", () => resolve());
       healthServer.on("error", reject);

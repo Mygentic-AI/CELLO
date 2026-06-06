@@ -37,6 +37,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-06-06 | REPOSPLIT-002: removed 4 dead pipelines (crypto/protocol-types/transport/client); now 5 pipelines only |
 | ECR Replication (account-level) | CONFIGURED | 2026-05-24 | us-east-1 → eu-central-1 + ap-northeast-1; filter: prefix "cello-" |
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-24 | 167ca6...27b5 (directory node pubkey) |
+| SSM: /cello/dev/directory/peer-id (us-east-1) | CREATED | 2026-06-06 | 12D3KooWS46wUj6NYvoAsocxZnxth5EgYD2ZXCm7coMkXUWgS1j3 — relay reads this for auto-registration |
 | Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | Replication user password (alphanumeric, 32-char) |
 
 **Transport key secrets (all regions) — IMPORTED into cello-secrets-dev stack 2026-06-05:**
@@ -155,6 +156,7 @@ ECS will start a replacement task that reads the updated SSM value. The current 
 | cello-cicd-dev | NOT DEPLOYED | — | CICD pipeline is us-east-1 only |
 | Lambda: cello-dev-rds-rotation | DEPLOYED (real code) | 2026-05-25 | |
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-25 | 167ca6...27b5 |
+| SSM: /cello/dev/directory/peer-id (eu-central-1) | CREATED | 2026-06-06 | 12D3KooWEdsKDMBpbQioyAweoMF7s5HKvUhBY7kxHYTwoTuAbdv7 |
 | Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | |
 
 #### Key Resources — dev eu-central-1
@@ -210,6 +212,7 @@ ECS will start a replacement task that reads the updated SSM value. The current 
 | cello-cicd-dev | NOT DEPLOYED | — | CICD pipeline is us-east-1 only |
 | Lambda: cello-dev-rds-rotation | DEPLOYED (real code) | 2026-05-25 | |
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-25 | 167ca6...27b5 |
+| SSM: /cello/dev/directory/peer-id (ap-northeast-1) | CREATED | 2026-06-06 | 12D3KooWRXUbSRCmKBYvk3eAAyEEi7DihCTL4YVebe91ZA4ZzaxA |
 | Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | |
 
 #### Key Resources — dev ap-northeast-1

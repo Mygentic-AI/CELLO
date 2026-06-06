@@ -29,9 +29,8 @@ Parameters:
     Description: "Hex-encoded Ed25519 public key of the directory node (64 chars)"
   DirectoryMultiaddr:
     Type: String
-    Description: "Directory node multiaddr including /p2p/{peer-id} suffix (e.g. /dns4/directory-us1.cello.mygentic.ai/tcp/443/wss/p2p/12D3Koo...). Leave empty to disable auto-registration (relay starts without registering on startup)."
-    Default: ""
-    ConstraintDescription: "Must be a libp2p multiaddr string starting with /dns4/ or /ip4/ and ending with /p2p/{peer-id}, or empty to disable auto-registration."
+    Description: "Directory node multiaddr including /p2p/{peer-id} suffix (e.g. /dns4/directory-us1.cello.mygentic.ai/tcp/80/ws/p2p/12D3Koo...). Required — relay will not register with the directory and cannot participate in session assignment without this."
+    ConstraintDescription: "Must be a libp2p multiaddr string starting with /dns4/ or /ip4/ and ending with /p2p/{peer-id}."
 
 Resources:
   LogGroup:
