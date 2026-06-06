@@ -145,6 +145,71 @@ if [[ -z "${HOSTED_ZONE_ID}" || "${HOSTED_ZONE_ID}" == "None" ]]; then
   HOSTED_ZONE_ID="PLACEHOLDER"
 fi
 
+# ── Pre-flight checks ────────────────────────────────────────────────────────
+# Validate environment state before touching any stacks. Fail fast with a clear
+# error rather than discovering problems mid-deploy after 20 minutes of progress.
+
+echo ""
+echo "── Pre-flight checks ────────────────────────────────────────────────────────"
+
+preflight_errors=0
+
+# 1. Migration version: highest V{N}.sql must match cello-ssm-parameters.yaml default.
+HIGHEST_MIGRATION=$(ls "${SCRIPT_DIR}/../packages/directory/db/migrations"/V*.sql 2>/dev/null \
+  | sed 's/.*\/V\([0-9]*\)__.*/\1/' | sort -n | tail -1)
+SSM_YAML_VERSION=$(grep -A6 'OpsAgentExpectedMigrationVersion:' \
+  "${SCRIPT_DIR}/cloudformation/cello-ssm-parameters.yaml" \
+  | grep 'Value:' | head -1 | tr -d ' "' | cut -d: -f2)
+if [[ -n "${HIGHEST_MIGRATION}" && "${HIGHEST_MIGRATION}" != "${SSM_YAML_VERSION}" ]]; then
+  echo "  ERROR: Highest migration is V${HIGHEST_MIGRATION} but cello-ssm-parameters.yaml" >&2
+  echo "         has OpsAgentExpectedMigrationVersion: ${SSM_YAML_VERSION}." >&2
+  echo "         Update the Value in cello-ssm-parameters.yaml to \"${HIGHEST_MIGRATION}\" before deploying." >&2
+  preflight_errors=$((preflight_errors + 1))
+else
+  echo "  Migration version gate: V${HIGHEST_MIGRATION} matches SSM YAML — OK"
+fi
+
+# 2. Stale Route53 DNS records: warn if directory or relay records exist outside CFN.
+# (We do not delete here — purge_stale_dns_record() handles deletion just before each stack.)
+if [[ -n "${HOSTED_ZONE_ID}" && "${HOSTED_ZONE_ID}" != "PLACEHOLDER" ]]; then
+  for subdomain in "${SUBDOMAIN}" "${RELAY_SUBDOMAIN}"; do
+    fqdn="${subdomain}.${DOMAIN_NAME}."
+    record=$(aws route53 list-resource-record-sets \
+      --hosted-zone-id "${HOSTED_ZONE_ID}" \
+      --query "ResourceRecordSets[?Name=='${fqdn}'] | [0]" \
+      --output json 2>/dev/null)
+    if [[ -n "${record}" && "${record}" != "null" ]]; then
+      echo "  WARNING: Stale DNS record ${fqdn} exists — will be purged before route53 stack deploy."
+    else
+      echo "  DNS record ${fqdn}: clean — OK"
+    fi
+  done
+fi
+
+# 3. Required secrets must exist (not necessarily populated — just present).
+for secret in \
+  "cello/${ENVIRONMENT}/relay/transport-key" \
+  "cello/${ENVIRONMENT}/directory/transport-key" \
+  "cello/${ENVIRONMENT}/directory/node-private-key"; do
+  result=$(aws secretsmanager describe-secret --secret-id "${secret}" --region "${REGION}" \
+    --query 'Name' --output text 2>/dev/null)
+  if [[ -z "${result}" || "${result}" == "None" ]]; then
+    echo "  ERROR: Required secret missing: ${secret}" >&2
+    preflight_errors=$((preflight_errors + 1))
+  else
+    echo "  Secret ${secret}: exists — OK"
+  fi
+done
+
+if [[ ${preflight_errors} -gt 0 ]]; then
+  echo ""
+  echo "ERROR: ${preflight_errors} pre-flight check(s) failed. Fix above errors before deploying." >&2
+  exit 1
+fi
+
+echo "  Pre-flight checks passed."
+echo ""
+
 # ── Observability helpers ─────────────────────────────────────────────────────
 
 # cello-cicd deploys to us-east-1 only — adjust count per region.
