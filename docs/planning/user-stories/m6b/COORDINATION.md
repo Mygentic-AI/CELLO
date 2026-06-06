@@ -468,3 +468,15 @@ All 7 steps from the gap entry above are complete. Committed as `22f55bd` on mai
 **STATE.md updated:** filter Lambda entry updated to note REPOSPLIT-002 changes.
 
 Directory and relay will deploy the new lockfile via the triggered pipelines (~25-30 min).
+
+**Post-push: Dockerfile fix required (commit `74eac59`):**
+
+Both Dockerfiles (`packages/relay/Dockerfile`, `packages/directory/Dockerfile`) still had `COPY packages/crypto/`, `COPY packages/transport/`, `COPY packages/protocol-types/` steps referencing the deleted local directories. The relay pipeline failed immediately with `/packages/transport: not found`. Fixed by stripping all COPY/build steps for the three deleted packages from both Dockerfiles — `interfaces` (still local) was kept. Committed as `74eac59`, pushed to origin, both pipelines retriggered.
+
+**Final pipeline results (both triggered at 16:29 UTC+2):**
+- `cello-relay-pipeline`: Succeeded ~16:56 UTC+2
+- `cello-directory-pipeline`: Succeeded ~17:02 UTC+2 (ap-northeast-1 was last region to complete)
+
+All stages green: Source → Build → StagingDeploy → SmokeTest → ProductionDeploy (us-east-1, eu-central-1, ap-northeast-1).
+
+**REPOSPLIT-002 fully complete.** Directory and relay are live in all 3 regions running against published npm versions of crypto/transport/protocol-types/client.
