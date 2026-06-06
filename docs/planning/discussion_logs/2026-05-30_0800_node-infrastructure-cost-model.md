@@ -333,6 +333,91 @@ Assumptions: db.t3.small RDS single-AZ + 20GB gp3, 2 Fargate tasks (directory + 
 
 ---
 
+---
+
+## Update 2026-06-06 — NAT Gateway as Required Infrastructure Changes the Cost Model
+
+### The Discovery
+
+A day of debugging relay registration failures revealed a fundamental architectural requirement that changes the cost model: **every sovereign CELLO node requires a NAT gateway** (or cloud equivalent). This is not optional infrastructure — it is a definitional requirement for a peer-to-peer network node.
+
+**Why:** Relay nodes need to initiate outbound connections to directory nodes to register at startup. Directory nodes need to initiate outbound connections to relay nodes for health checks and session assignment. Both connections go to public DNS addresses (e.g. `relay-us1.cello.mygentic.ai`, `directory-eu1.cello.mygentic.ai`). Without a NAT gateway, nodes in private subnets cannot reach public internet addresses — their connection attempts are silently dropped.
+
+This is the same requirement as any other sovereign peer-to-peer node: Bitcoin, Ethereum, IPFS. You cannot run a network participant in a private subnet with no outbound internet route.
+
+**Full analysis:** [[2026-06-06_2100_sovereign-node-networking-requirements]]
+
+### What This Means for Interface Endpoints
+
+The original design avoided NAT gateways and used 7 VPC interface endpoints instead. With a NAT gateway, most interface endpoints become redundant — the NAT provides internet routing to AWS APIs just as it does to any other public address.
+
+| Endpoint | Monthly (us-east-1) | Still needed with NAT? | Reason |
+|---|---:|---|---|
+| `ecr.api` | $7.20 | **No** | NAT routes to ECR public endpoints |
+| `ecr.dkr` | $7.20 | **No** | NAT routes to ECR public endpoints |
+| `secretsmanager` | $7.20 | **No** | NAT routes to Secrets Manager |
+| `kms` | $7.20 | **No** | NAT routes to KMS |
+| `logs` | $7.20 | **No** | NAT routes to CloudWatch Logs |
+| `ssm` | $7.20 | **No** | NAT routes to SSM Parameter Store |
+| `ssmmessages` | $7.20 | **Yes** | ECS Exec / SSM Session Manager requires this VPC endpoint specifically — NAT alone is insufficient |
+| `s3` (Gateway) | $0 | **Yes** | Gateway endpoints are free and route S3 within the AWS backbone (better latency, avoids NAT bandwidth charges) |
+
+**6 of 7 interface endpoints can be removed.** Only `ssmmessages` must remain (for ECS Exec access). The S3 gateway endpoint stays because it's free and avoids unnecessary NAT bandwidth charges.
+
+### Revised Cost Per Node — AWS
+
+| Component | Before (no NAT) | After (with NAT) | Change |
+|---|---:|---:|---:|
+| VPC Interface Endpoints (7 → 1) | $50.40 | $7.20 | **−$43.20** |
+| NAT Gateway (new) | $0 | $32.40 | **+$32.40** |
+| **Net change per node per month** | | | **−$10.80** |
+
+Adding NAT gateways and removing 6 interface endpoints **saves ~$10.80/node/month** on us-east-1, more in expensive regions like Tokyo where interface endpoints cost $70.56/month:
+
+| Region | Endpoint savings (6 removed) | NAT cost | Net savings |
+|---|---:|---:|---:|
+| us-east-1 | −$43.20 | +$32.40 | **−$10.80/month** |
+| eu-central-1 | −$51.84 | +$32.40 | **−$19.44/month** |
+| ap-northeast-1 | −$60.48 | +$32.40 | **−$28.08/month** |
+
+The savings are largest in expensive regions — Tokyo saves ~$28/month per node. Across all three current nodes: **~$58/month total savings**.
+
+### Revised Key Cost Observation (supersedes observation 1 above)
+
+~~"Private subnet endpoints are unavoidable for this architecture"~~ — **This was incorrect.** VPC interface endpoints were the workaround for not having NAT gateways. With NAT gateways (which are required for sovereign node participation in a peer-to-peer network), most interface endpoints are unnecessary. The architecture should use NAT gateways as the primary internet routing mechanism and keep only the `ssmmessages` endpoint for operational access.
+
+### Revised Per-Node Cost Breakdown — AWS (Monthly, After Change)
+
+| Component | us-east-1 | eu-central-1 | ap-northeast-1 |
+|---|---:|---:|---:|
+| VPC Endpoint (ssmmessages only) | $7.20 | $8.64 | $10.08 |
+| S3 Gateway Endpoint | $0 | $0 | $0 |
+| NAT Gateway | $32.40 | $32.40 | $32.40 |
+| RDS PostgreSQL | $28.22 | $32.98 | $43.08 |
+| ECS Fargate | $8.70 | $10.43 | $12.93 |
+| ALB (directory) | $16.20 | $19.44 | $17.50 |
+| ALB (relay — M6B-007, already exists) | $16.20 | $19.44 | $17.50 |
+| CloudWatch Metrics | $12.38 | $11.88 | $11.88 |
+| Public IPv4 | $7.92 | $5.60 | $5.60 |
+| WAF WebACL + Rules | $8.00 | $8.00 | $8.00 |
+| Secrets Manager | $4.00 | $4.00 | $4.00 |
+| KMS Key | $1.00 | $1.00 | $1.00 |
+| ECR Storage | $1.25 | $1.25 | $1.25 |
+| **Total per node** | **$143.47** | **$155.06** | **$165.22** |
+
+**New average across three current node regions: ~$155/node/month** — slightly cheaper than before ($156) while correctly enabling multi-cloud sovereign node participation.
+
+### Implementation Story Needed
+
+This change requires a story that:
+1. Adds NAT gateways to `cello-vpc.yaml` (one per region, attached to public subnets, with `0.0.0.0/0` route in private route table)
+2. Removes 6 interface endpoints from `cello-vpc.yaml` (keep `ssmmessages` and `s3` gateway)
+3. Removes `CELLO_RELAY_MULTIADDR` private IP hack from directory task definition — replaces with relay's public ALB hostname
+4. Removes `CELLO_DIRECTORY_MULTIADDR` SSM peer-id lookup from deploy.sh — relay dials public DNS hostname directly
+5. Updates STATE.md and runs deploy.sh in all three regions
+
+This also unblocks the relay registration problem (M6B-006) permanently.
+
 ## Related Documents
 
 - [[2026-05-30_0637_federation-transport-sovereignty-and-mtls]] — federation transport decision; VPC Peering replacement
