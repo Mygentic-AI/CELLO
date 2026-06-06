@@ -25,10 +25,10 @@ Resources:
   # (no pipeline deploy required). The ECS execution role (cello-iam.yaml
   # OpsAgentTaskExecutionRole) has ssm:GetParameters on this path (AC-004, CELLO-M6B-011).
   #
-  # Initial value: "28" — matches V28 (M6B-004: GRANT UPDATE on agent_profiles).
+  # Current value: "29" — matches V29 (startup_state_restore).
   # Update to the current migration version after each new migration.
   #
-  # NOTE: CloudFormation would normally reset this value to "28" on every stack update.
+  # NOTE: CloudFormation would normally reset this value on every stack update.
   # deploy.sh (Step 2b) guards against this by reading the current value before deploying
   # and immediately restoring it if CloudFormation reset it. Operators do not need to
   # manually re-set the value after running deploy.sh.

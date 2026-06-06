@@ -410,18 +410,14 @@ deploy_stack "cello-secrets-${ENVIRONMENT}" "cello-secrets.yaml" \
 # the Operations Agent ECS task definition (ValueFrom reference). This stack
 # has no dependencies and must exist before cello-ecs-operations-agent deploys.
 #
-# IMPORTANT: The CloudFormation template defines Value: "27" for the SSM parameter.
-# CloudFormation has no equivalent of DeletionPolicy for SSM parameter values —
-# every stack update resets the value to "27". To prevent this, we:
-#   1. Read the current operator-set value BEFORE deploying the stack.
-#   2. Deploy the stack (creates "27" on first deploy, or resets to "27" on re-deploy).
-#   3. If the pre-deploy value differed from "27", restore it immediately after deploy.
-#
-# Result: first deploy creates the parameter at "27" (correct baseline); all
-# subsequent deploys are no-ops with respect to the operator-set value.
-#
-# To update the migration version: run aws ssm put-parameter with --overwrite after
-# applying Flyway migrations. The ECS task reads the value at launch via ValueFrom.
+# IMPORTANT: CloudFormation resets the SSM parameter value to the template default
+# on every stack update. To prevent a stale template default from overwriting a
+# newer live value, we:
+#   1. Read the current live value BEFORE deploying.
+#   2. Read the template default from cello-ssm-parameters.yaml.
+#   3. Deploy the stack.
+#   4. Restore whichever value is HIGHER (live vs template) — ensures we never
+#      roll back a migration version that has already been applied to the DB.
 
 echo ""
 echo "── Reading SSM migration version before stack deploy ────────────────"
@@ -432,23 +428,38 @@ PRE_DEPLOY_MIGRATION_VERSION=$(aws ssm get-parameter \
   --output text 2>/dev/null || echo "DOES_NOT_EXIST")
 echo "  Pre-deploy value: ${PRE_DEPLOY_MIGRATION_VERSION}"
 
+YAML_MIGRATION_VERSION=$(grep -A6 'OpsAgentExpectedMigrationVersion:' \
+  "${CFN_DIR}/cello-ssm-parameters.yaml" \
+  | grep 'Value:' | head -1 | tr -d ' "' | cut -d: -f2)
+echo "  YAML default:     ${YAML_MIGRATION_VERSION}"
+
 deploy_stack "cello-ssm-parameters-${ENVIRONMENT}" "cello-ssm-parameters.yaml" \
   "Environment=${ENVIRONMENT}"
 
-# If the parameter existed before the deploy with a value other than "27", the CFN
-# stack just reset it. Restore the operator's value immediately.
-if [[ "${PRE_DEPLOY_MIGRATION_VERSION}" != "DOES_NOT_EXIST" && "${PRE_DEPLOY_MIGRATION_VERSION}" != "27" ]]; then
-  echo ""
-  echo "── Restoring SSM migration version (CFN reset guard) ────────────────"
-  echo "  CFN reset '${PRE_DEPLOY_MIGRATION_VERSION}' → '27'. Restoring to '${PRE_DEPLOY_MIGRATION_VERSION}'..."
-  aws ssm put-parameter \
-    --name "/cello/${ENVIRONMENT}/ops-agent/expected-migration-version" \
-    --value "${PRE_DEPLOY_MIGRATION_VERSION}" \
-    --type String \
-    --overwrite \
-    --region "${REGION}" \
-    --output text --query Version >/dev/null 2>&1
-  echo "  Restored: /cello/${ENVIRONMENT}/ops-agent/expected-migration-version = ${PRE_DEPLOY_MIGRATION_VERSION}"
+# Restore the highest of: pre-deploy live value or YAML default.
+# This ensures a newly committed migration version in the YAML always wins,
+# and a live value that's already ahead of the YAML is never rolled back.
+if [[ "${PRE_DEPLOY_MIGRATION_VERSION}" != "DOES_NOT_EXIST" ]]; then
+  if [[ "${PRE_DEPLOY_MIGRATION_VERSION}" -gt "${YAML_MIGRATION_VERSION}" ]] 2>/dev/null; then
+    RESTORE_VERSION="${PRE_DEPLOY_MIGRATION_VERSION}"
+  else
+    RESTORE_VERSION="${YAML_MIGRATION_VERSION}"
+  fi
+  if [[ "${RESTORE_VERSION}" != "${YAML_MIGRATION_VERSION}" ]]; then
+    echo ""
+    echo "── Restoring SSM migration version (CFN reset guard) ────────────────"
+    echo "  CFN reset → '${YAML_MIGRATION_VERSION}'. Restoring to '${RESTORE_VERSION}'..."
+    aws ssm put-parameter \
+      --name "/cello/${ENVIRONMENT}/ops-agent/expected-migration-version" \
+      --value "${RESTORE_VERSION}" \
+      --type String \
+      --overwrite \
+      --region "${REGION}" \
+      --output text --query Version >/dev/null 2>&1
+    echo "  Restored: /cello/${ENVIRONMENT}/ops-agent/expected-migration-version = ${RESTORE_VERSION}"
+  else
+    echo "  SSM migration version: ${RESTORE_VERSION} (matches YAML default — no restore needed)"
+  fi
 fi
 
 # ── STEP 3: cello-vpc — VPC, subnets, security groups, endpoints ─────────────
