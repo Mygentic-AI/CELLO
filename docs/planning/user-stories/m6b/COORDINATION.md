@@ -520,3 +520,30 @@ Reverted the health check change. `/health` always returns 200 as soon as the pr
 **Rule added to `infra/CLAUDE.md`:** Never use `Default: ""` for a parameter that enables critical service behaviour. The health check must reflect process liveness (is the process up?), not application readiness state (has it completed registration?). ECS health checks and application readiness checks are different concepts — do not conflate them.
 
 **The two good changes survive:** `DirectoryMultiaddr` is now required in CFN and deploy.sh constructs it dynamically from SSM. The relay will register on startup once the new image deploys.
+
+---
+
+### 2026-06-06 — Manual ECS task definition fix for relay registration (temporary)
+
+**Situation:** After multiple failed attempts to get relay auto-registration working via CloudFormation, a manual ECS task definition fix was applied directly in AWS (bypassing IaC).
+
+**What was done:**
+- Registered task definition revision `cello-relay-dev:55` directly via AWS CLI with `CELLO_DIRECTORY_MULTIADDR=/ip4/10.0.10.179/tcp/4000/p2p/12D3KooWS46wUj6NYvoAsocxZnxth5EgYD2ZXCm7coMkXUWgS1j3`
+- Updated the ECS service to use revision :55
+- Added SG rule allowing relay SG (`sg-0cab5bd4ec63f05c7`) → directory SG (`sg-0cc7f8493f3aff8d8`) on port 4000 TCP (also manual, not yet in IaC)
+
+**Why this is temporary (will break):**
+- `10.0.10.179` is the directory task's current private IP — it changes on every directory restart
+- The IaC (`cello-ecs-relay.yaml`) still has the old task definition — the next `deploy.sh` or pipeline run will overwrite revision :55
+- The SG rule is not in `cello-vpc.yaml` — a `deploy.sh` run will reset the SG
+
+**What needs to be done properly (TODO):**
+- The relay cannot reach the directory via WebSocket through the ALB (root cause unknown — error is always `directory_unavailable` which is too generic)
+- The relay CAN reach the directory via TCP on port 4000 directly within the VPC — but this requires the SG rule and a stable address
+- Options being evaluated by subagent analysis:
+  1. Add WebSocket transport to relay's libp2p node and investigate why ALB WebSocket connections fail
+  2. Use AWS Cloud Map / ECS Service Discovery to give the directory a stable internal DNS name
+  3. Use VPC-internal ALB with port 4000 TCP listener (not HTTP/WS)
+  4. Rethink the registration architecture entirely
+
+**IaC state is INCONSISTENT.** The manual SG rule and task definition revision :55 exist in AWS but are NOT in the IaC. This must be fixed before the next deploy.sh run.
