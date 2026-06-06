@@ -158,7 +158,19 @@ fi
 
 DIRECTORY_PEER_ID="${SSM_OUTPUT}"
 
-DIRECTORY_MULTIADDR="/dns4/${SUBDOMAIN}.${DOMAIN_NAME}/tcp/80/ws/p2p/${DIRECTORY_PEER_ID}"
+# Use the internal ALB DNS name — the relay runs in a private subnet with no internet
+# access and cannot reach the public Route53 hostname. The internal ALB DNS is
+# reachable within the VPC. ALB_DNS_NAME is read from the directory stack output
+# in Step 8 and is available here (Step 11 runs after Step 8).
+# Do not use ${SUBDOMAIN}.${DOMAIN_NAME} — that resolves to the public ALB IP
+# which is unreachable from private subnets without a NAT gateway.
+if [[ -n "${ALB_DNS_NAME}" && "${ALB_DNS_NAME}" != "PLACEHOLDER" ]]; then
+  DIRECTORY_MULTIADDR="/dns4/${ALB_DNS_NAME}/tcp/80/ws/p2p/${DIRECTORY_PEER_ID}"
+else
+  echo "WARNING: ALB_DNS_NAME not available — falling back to public hostname for DirectoryMultiaddr." >&2
+  echo "         This will fail if the relay runs in a private subnet without internet access." >&2
+  DIRECTORY_MULTIADDR="/dns4/${SUBDOMAIN}.${DOMAIN_NAME}/tcp/80/ws/p2p/${DIRECTORY_PEER_ID}"
+fi
 echo "  DirectoryMultiaddr: ${DIRECTORY_MULTIADDR}"
 
 # ── GitHub CodeStar Connection ARN ────────────────────────────────────────────
