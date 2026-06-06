@@ -39,17 +39,17 @@ importers:
   packages/adapter-claude-code:
     dependencies:
       '@cello-protocol/client':
-        specifier: workspace:*
-        version: link:../client
+        specifier: ^0.0.20
+        version: 0.0.20
       '@cello-protocol/crypto':
-        specifier: workspace:*
-        version: link:../crypto
+        specifier: ^0.0.7
+        version: 0.0.7
       '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/transport':
-        specifier: workspace:*
-        version: link:../transport
+        specifier: ^0.0.4
+        version: 0.0.4
       '@libp2p/peer-id':
         specifier: ^6.0.8
         version: 6.0.8
@@ -73,79 +73,6 @@ importers:
         specifier: ^10.0.1
         version: 10.0.1
 
-  packages/client:
-    dependencies:
-      '@aws-sdk/client-s3':
-        specifier: 3.1051.0
-        version: 3.1051.0
-      '@cello-protocol/crypto':
-        specifier: workspace:*
-        version: link:../crypto
-      '@cello-protocol/interfaces':
-        specifier: workspace:*
-        version: link:../interfaces
-      '@cello-protocol/protocol-types':
-        specifier: workspace:*
-        version: link:../protocol-types
-      '@cello-protocol/transport':
-        specifier: workspace:*
-        version: link:../transport
-      '@journeyapps/sqlcipher':
-        specifier: ^6.0.0
-        version: 6.0.0
-      '@libp2p/interface':
-        specifier: ^3.2.2
-        version: 3.2.2
-      '@modelcontextprotocol/sdk':
-        specifier: ^1.29.0
-        version: 1.29.0(zod@4.4.2)
-      '@noble/curves':
-        specifier: ^2.2.0
-        version: 2.2.0
-      cbor-x:
-        specifier: ^1.6.0
-        version: 1.6.4
-      it-length-prefixed:
-        specifier: ^10.0.1
-        version: 10.0.1
-      it-pipe:
-        specifier: ^3.0.1
-        version: 3.0.1
-      zod:
-        specifier: ^4.4.2
-        version: 4.4.2
-    devDependencies:
-      '@cello-protocol/directory':
-        specifier: workspace:*
-        version: link:../directory
-      '@cello-protocol/e2e-tests':
-        specifier: workspace:*
-        version: link:../e2e-tests
-      '@cello-protocol/relay':
-        specifier: workspace:*
-        version: link:../relay
-      '@cello-protocol/test-fixtures':
-        specifier: workspace:*
-        version: link:../test-fixtures
-      '@claude-flow/testing':
-        specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
-      '@types/node':
-        specifier: ^25.6.2
-        version: 25.6.2
-
-  packages/crypto:
-    dependencies:
-      '@noble/curves':
-        specifier: 2.2.0
-        version: 2.2.0
-      '@noble/hashes':
-        specifier: 2.2.0
-        version: 2.2.0
-      '@oqs/liboqs-js':
-        specifier: ^0.15.1
-        version: 0.15.1
-
   packages/directory:
     dependencies:
       '@aws-sdk/client-s3':
@@ -155,17 +82,17 @@ importers:
         specifier: 3.1051.0
         version: 3.1051.0
       '@cello-protocol/crypto':
-        specifier: workspace:*
-        version: link:../crypto
+        specifier: ^0.0.7
+        version: 0.0.7
       '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
-        specifier: workspace:*
-        version: link:../protocol-types
+        specifier: ^0.0.3
+        version: 0.0.3
       '@cello-protocol/transport':
-        specifier: workspace:*
-        version: link:../transport
+        specifier: ^0.0.4
+        version: 0.0.4
       '@libp2p/interface':
         specifier: ^3.0.0
         version: 3.2.2
@@ -183,8 +110,8 @@ importers:
         version: 8.18.0
     devDependencies:
       '@cello-protocol/client':
-        specifier: workspace:*
-        version: link:../client
+        specifier: ^0.0.20
+        version: 0.0.20
       '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
@@ -207,14 +134,14 @@ importers:
   packages/e2e-tests:
     dependencies:
       '@cello-protocol/client':
-        specifier: workspace:*
-        version: link:../client
+        specifier: ^0.0.20
+        version: 0.0.20
       '@cello-protocol/connect':
-        specifier: workspace:*
-        version: link:../adapter-claude-code
+        specifier: ^0.0.30
+        version: 0.0.30
       '@cello-protocol/crypto':
-        specifier: workspace:*
-        version: link:../crypto
+        specifier: ^0.0.7
+        version: 0.0.7
       '@cello-protocol/directory':
         specifier: workspace:*
         version: link:../directory
@@ -222,14 +149,14 @@ importers:
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
-        specifier: workspace:*
-        version: link:../protocol-types
+        specifier: ^0.0.3
+        version: 0.0.3
       '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
       '@cello-protocol/transport':
-        specifier: workspace:*
-        version: link:../transport
+        specifier: ^0.0.4
+        version: 0.0.4
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
         version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
@@ -246,8 +173,8 @@ importers:
   packages/interfaces:
     dependencies:
       '@cello-protocol/protocol-types':
-        specifier: workspace:*
-        version: link:../protocol-types
+        specifier: ^0.0.3
+        version: 0.0.3
     devDependencies:
       '@types/node':
         specifier: ^25.6.2
@@ -272,39 +199,20 @@ importers:
         specifier: 8.20.0
         version: 8.20.0
 
-  packages/protocol-types:
-    dependencies:
-      '@cello-protocol/crypto':
-        specifier: workspace:*
-        version: link:../crypto
-      cbor-x:
-        specifier: ^1.6.4
-        version: 1.6.4
-    devDependencies:
-      '@cello-protocol/test-fixtures':
-        specifier: workspace:*
-        version: link:../test-fixtures
-      '@claude-flow/testing':
-        specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
-      '@types/node':
-        specifier: ^25.6.2
-        version: 25.6.2
-
   packages/relay:
     dependencies:
       '@cello-protocol/crypto':
-        specifier: workspace:*
-        version: link:../crypto
+        specifier: ^0.0.7
+        version: 0.0.7
       '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
-        specifier: workspace:*
-        version: link:../protocol-types
+        specifier: ^0.0.3
+        version: 0.0.3
       '@cello-protocol/transport':
-        specifier: workspace:*
-        version: link:../transport
+        specifier: ^0.0.4
+        version: 0.0.4
       '@chainsafe/libp2p-noise':
         specifier: ^17.0.0
         version: 17.0.0
@@ -349,8 +257,8 @@ importers:
   packages/test-fixtures:
     dependencies:
       '@cello-protocol/protocol-types':
-        specifier: workspace:*
-        version: link:../protocol-types
+        specifier: ^0.0.3
+        version: 0.0.3
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
@@ -358,57 +266,6 @@ importers:
       '@types/node':
         specifier: ^25.6.2
         version: 25.6.2
-
-  packages/transport:
-    dependencies:
-      '@cello-protocol/crypto':
-        specifier: workspace:*
-        version: link:../crypto
-      '@chainsafe/libp2p-noise':
-        specifier: ^17.0.0
-        version: 17.0.0
-      '@chainsafe/libp2p-yamux':
-        specifier: ^8.0.1
-        version: 8.0.1
-      '@libp2p/circuit-relay-v2':
-        specifier: ^4.2.3
-        version: 4.2.3
-      '@libp2p/crypto':
-        specifier: ^5.0.0
-        version: 5.1.17
-      '@libp2p/dcutr':
-        specifier: ^3.0.18
-        version: 3.0.18
-      '@libp2p/identify':
-        specifier: ^4.1.3
-        version: 4.1.3
-      '@libp2p/interface':
-        specifier: ^3.0.0
-        version: 3.2.2
-      '@libp2p/peer-id':
-        specifier: ^6.0.0
-        version: 6.0.8
-      '@libp2p/tcp':
-        specifier: ^11.0.18
-        version: 11.0.18
-      '@libp2p/websockets':
-        specifier: ^10.1.11
-        version: 10.1.11
-      '@multiformats/multiaddr':
-        specifier: ^13.0.0
-        version: 13.0.1
-      it-length-prefixed:
-        specifier: ^10.0.1
-        version: 10.0.1
-      it-pipe:
-        specifier: ^3.0.1
-        version: 3.0.1
-      libp2p:
-        specifier: ^3.2.3
-        version: 3.2.3
-      uint8arrays:
-        specifier: ^5.1.1
-        version: 5.1.1
 
 packages:
 
@@ -620,6 +477,43 @@ packages:
     resolution: {integrity: sha512-dI+9P7cfWxkTQ+oE+7Aa6onEn92PHgfWXZivjNheCRmTBDBf2fx6RyTi0cmgpYLnD1KLZK9ZYrMxaPZ4oiXhGA==}
     cpu: [x64]
     os: [win32]
+
+  '@cello-protocol/client@0.0.20':
+    resolution: {integrity: sha512-Q40Zyl4zbSV+g943B7vIEb9gzSdyR8GqEQKKdoW9iV/gaULv1w2uhJuali4SzAV5ZrwZvrh6IlWOj5SvVOI/rg==}
+    engines: {node: '>=24'}
+
+  '@cello-protocol/connect@0.0.30':
+    resolution: {integrity: sha512-CRFuLtvWiJeO+yJH5tW9lgheo9Gvxra39QDNfoc9/ea0iU4qCwE2pBccU4C/t3VKQQuYNa/02UM2Mdd5JOXCZg==}
+    engines: {node: '>=24'}
+    hasBin: true
+
+  '@cello-protocol/crypto@0.0.2':
+    resolution: {integrity: sha512-dl9EC/r6UY/unvbDzyuAgWslJG8DE79EsbH2WuNIWdUwDbmOymqn30VN7Esvz4rXWkBGNuLq7DjcNEF43NAiGg==}
+    engines: {node: '>=24'}
+
+  '@cello-protocol/crypto@0.0.3':
+    resolution: {integrity: sha512-R71ETQbC31ogKEc6OpcaBKyq080+HcHIZposzbu5Dq4N2ES3r57nmVFJu925ADBsQkKXMLtliF4M11ppp8VJRA==}
+    engines: {node: '>=24'}
+
+  '@cello-protocol/crypto@0.0.7':
+    resolution: {integrity: sha512-PkcaSZW3dNwOB8kUt0ayQGoSg2vKwZT8UOmJA3V3PIhQ/etjnODvL+m/L7Fr16QFRNXvpUQrv/KAHjwlSLw1kw==}
+    engines: {node: '>=24'}
+
+  '@cello-protocol/interfaces@0.0.3':
+    resolution: {integrity: sha512-b4MmBEjOlj9E0QU/PIlM0GKznDIl11B03MAxB2V4vW/0bBxEoN/Tb8OLKApktiUJHIv38pm7HM5oZO0zo+ySrg==}
+    engines: {node: '>=24'}
+
+  '@cello-protocol/protocol-types@0.0.2':
+    resolution: {integrity: sha512-miUOSRvc6tbpzrFbz0LD/IrLB+TzchMBZ5/9ce7bXwbjq/FsmsyIf9VcVPelEZFcrp9o4YdWXz9cbNAPiD9Skg==}
+    engines: {node: '>=24'}
+
+  '@cello-protocol/protocol-types@0.0.3':
+    resolution: {integrity: sha512-PM5Zz2lmZKynI/BGaA5IoAu3UqnPuRYidlyUcVpR0/KPlfew4cRx1EMRTQXmS5Rb1HAKYjRgnoJhZ6uglOOIew==}
+    engines: {node: '>=24'}
+
+  '@cello-protocol/transport@0.0.4':
+    resolution: {integrity: sha512-t2oI4ZazBUfZz6LRQYpZQohqUeDQhiQ2b0yXDz9UpwwE6+YXApDRvjnPuB9yJyfigh6hV2WyagEMB4WqZaPFDA==}
+    engines: {node: '>=24'}
 
   '@chainsafe/as-chacha20poly1305@0.1.0':
     resolution: {integrity: sha512-BpNcL8/lji/GM3+vZ/bgRWqJ1q5kwvTFmGPk7pxm/QQZDbaMI98waOHjEymTjq2JmdD/INdNBFOVSyJofXg7ew==}
@@ -1074,10 +968,6 @@ packages:
   '@inquirer/figures@1.0.15':
     resolution: {integrity: sha512-t2IEY+unGHOzAaVM5Xx6DEWKeXlDDcNPeDyUpsRc6CUhBfU3VQOEl+Vssh7VNp1dR8MdUJBWhuObjXCsVpjN5g==}
     engines: {node: '>=18'}
-
-  '@journeyapps/sqlcipher@6.0.0':
-    resolution: {integrity: sha512-YmWSQIR4cnv+5L38lYJoS/dIF/+bEZBaACATbeTyq4XKjMHcxdIlFnElBLiIqa9rwseOIimIYjudgOOCovud3Q==}
-    os: [darwin, linux]
 
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
@@ -1808,6 +1698,9 @@ packages:
   '@ruvector/sona@0.1.6':
     resolution: {integrity: sha512-LW40r28yQxXz3vt1fOLRWVV5nln4rzw6a/Yy11EJJdeEN9q4wZG1Glwf9leTp4SjQjuIJ5hklNW8OVMwgyzd5w==}
     engines: {node: '>= 16'}
+
+  '@signalapp/sqlcipher@3.3.5':
+    resolution: {integrity: sha512-0kkHQixiaFOFYCXP6J8zsvXeq7REf5nucX+BMY8Gy5E6F2BEM2Ap9NsDNaB+wHZ6QqqsItQRvSE4PaYhTtWGIg==}
 
   '@sindresorhus/fnv1a@3.1.0':
     resolution: {integrity: sha512-KV321z5m/0nuAg83W1dPLy85HpHDk7Sdi4fJbwvacWsEhAh+rZUW4ZfGcXmUIvjZg4ss2bcwNlRhJ7GBEUG08w==}
@@ -4072,6 +3965,96 @@ snapshots:
   '@cbor-extract/cbor-extract-win32-x64@2.2.2':
     optional: true
 
+  '@cello-protocol/client@0.0.20':
+    dependencies:
+      '@aws-sdk/client-s3': 3.1051.0
+      '@cello-protocol/crypto': 0.0.7
+      '@cello-protocol/interfaces': 0.0.3
+      '@cello-protocol/protocol-types': 0.0.3
+      '@cello-protocol/transport': 0.0.4
+      '@libp2p/interface': 3.2.2
+      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.2)
+      '@noble/curves': 2.2.0
+      '@signalapp/sqlcipher': 3.3.5
+      cbor-x: 1.6.4
+      it-length-prefixed: 10.0.1
+      it-pipe: 3.0.1
+      zod: 4.4.2
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+
+  '@cello-protocol/connect@0.0.30':
+    dependencies:
+      '@cello-protocol/client': 0.0.20
+      '@cello-protocol/crypto': 0.0.7
+      '@cello-protocol/interfaces': 0.0.3
+      '@cello-protocol/transport': 0.0.4
+      '@libp2p/peer-id': 6.0.8
+      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.2)
+      zod: 4.4.2
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+
+  '@cello-protocol/crypto@0.0.2':
+    dependencies:
+      '@noble/curves': 2.2.0
+      '@noble/hashes': 2.2.0
+      '@oqs/liboqs-js': 0.15.1
+
+  '@cello-protocol/crypto@0.0.3':
+    dependencies:
+      '@noble/curves': 2.2.0
+      '@noble/hashes': 2.2.0
+      '@oqs/liboqs-js': 0.15.1
+
+  '@cello-protocol/crypto@0.0.7':
+    dependencies:
+      '@noble/curves': 2.2.0
+      '@noble/hashes': 2.2.0
+      '@oqs/liboqs-js': 0.15.1
+
+  '@cello-protocol/interfaces@0.0.3':
+    dependencies:
+      '@cello-protocol/protocol-types': 0.0.2
+
+  '@cello-protocol/protocol-types@0.0.2':
+    dependencies:
+      '@cello-protocol/crypto': 0.0.2
+      cbor-x: 1.6.4
+
+  '@cello-protocol/protocol-types@0.0.3':
+    dependencies:
+      '@cello-protocol/crypto': 0.0.3
+      cbor-x: 1.6.4
+
+  '@cello-protocol/transport@0.0.4':
+    dependencies:
+      '@cello-protocol/crypto': 0.0.7
+      '@chainsafe/libp2p-noise': 17.0.0
+      '@chainsafe/libp2p-yamux': 8.0.1
+      '@libp2p/circuit-relay-v2': 4.2.3
+      '@libp2p/crypto': 5.1.17
+      '@libp2p/dcutr': 3.0.18
+      '@libp2p/identify': 4.1.3
+      '@libp2p/interface': 3.2.2
+      '@libp2p/peer-id': 6.0.8
+      '@libp2p/tcp': 11.0.18
+      '@libp2p/websockets': 10.1.11
+      '@multiformats/multiaddr': 13.0.1
+      it-length-prefixed: 10.0.1
+      it-pipe: 3.0.1
+      libp2p: 3.2.3
+      uint8arrays: 5.1.1
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
   '@chainsafe/as-chacha20poly1305@0.1.0': {}
 
   '@chainsafe/as-sha256@1.2.4': {}
@@ -4396,11 +4379,6 @@ snapshots:
 
   '@inquirer/figures@1.0.15':
     optional: true
-
-  '@journeyapps/sqlcipher@6.0.0':
-    dependencies:
-      bindings: 1.5.0
-      node-addon-api: 8.7.0
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
@@ -5213,6 +5191,11 @@ snapshots:
       '@ruvector/sona-win32-arm64-msvc': 0.1.4
       '@ruvector/sona-win32-x64-msvc': 0.1.4
     optional: true
+
+  '@signalapp/sqlcipher@3.3.5':
+    dependencies:
+      node-addon-api: 8.7.0
+      node-gyp-build: 4.8.4
 
   '@sindresorhus/fnv1a@3.1.0': {}
 
@@ -6527,8 +6510,7 @@ snapshots:
       detect-libc: 2.1.2
     optional: true
 
-  node-gyp-build@4.8.4:
-    optional: true
+  node-gyp-build@4.8.4: {}
 
   object-assign@4.1.1: {}
 

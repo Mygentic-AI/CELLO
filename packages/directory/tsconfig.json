@@ -6,10 +6,7 @@
   },
   "include": ["src"],
   "references": [
-    { "path": "../crypto" },
     { "path": "../interfaces" },
-    { "path": "../protocol-types" },
-    { "path": "../transport" },
     { "path": "../relay" }
   ]
 }

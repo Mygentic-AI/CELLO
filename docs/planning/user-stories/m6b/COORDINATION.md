@@ -427,3 +427,20 @@ M7 stories will change cello-client APIs (multi-agent, session management, conne
 - `/cello-review` skill → Step 6b: `workspace:*` references are blocking; npm publish verification; version bump verification.
 
 **Who needs to act:** The agent implementing the first M7 cello-client story must complete steps 1–7 above as a prerequisite (or a dedicated cleanup story should be dispatched before M7 starts).
+
+---
+
+### 2026-06-06 — Demo agent ID discovery gap
+
+**Context:** During the M6B session, the cello-client README was updated to remove a hardcoded demo agent ID (stale) and a fabricated `cello_lookup` tool reference (does not exist). The current README placeholder reads: "ask the CELLO bot on Telegram for the current demo agent ID."
+
+**The gap:** There is no programmatic way for an operator to discover the demo agent's current ID. The demo agent's `agent_id` changes on every re-registration (as happened in this session). Hardcoding it in documentation guarantees it goes stale. The `cello_setup_guidance` tool does not return known contacts.
+
+**Decided approach:** Named agent lookup belongs in the directory-backed agent registry feature planned for a future milestone. The demo agent would be a well-known entry (e.g. `name: "cello-demo"`) and operators would call something like `cello_lookup({ name: "cello-demo" })` to get the current agent ID and pubkey. This feature also covers the planned local whitelist of approved agents.
+
+**What must happen when the directory agent lookup story is written:**
+1. The story must include a named entry for the demo agent as a first-class use case.
+2. `cello_setup_guidance` output or the lookup tool result should return the demo agent's current pubkey and ID.
+3. The README "Try it" section must be updated to call the lookup tool rather than punting to Telegram.
+
+**Current workaround:** Operators register first, then ask @CelloConnectStagingBot for the demo agent ID. This is acceptable for alpha.

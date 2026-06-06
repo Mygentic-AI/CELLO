@@ -1,5 +1,0 @@
-{
-  "description": "CELLO-MERKLE-002 AC-007: M1 scan_result sentinel — canonical CBOR map. RFC 8949 §4.2.1.",
-  "_note": "CBOR map with 3 keys sorted by byte-length (RFC 8949 §4.2.1): score(5) < verdict(7) < model_hash(10). score=null, verdict='unscanned' (9 bytes), model_hash=<32 zero bytes>.",
-  "expected_cbor_hex": "a36573636f7265f6677665726469637469756e7363616e6e65646a6d6f64656c5f6861736858200000000000000000000000000000000000000000000000000000000000000000"
-}

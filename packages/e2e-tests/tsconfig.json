@@ -6,11 +6,7 @@
   },
   "include": ["src"],
   "references": [
-    { "path": "../crypto" },
     { "path": "../interfaces" },
-    { "path": "../protocol-types" },
-    { "path": "../transport" },
-    { "path": "../client" },
     { "path": "../adapter-claude-code" },
     { "path": "../directory" },
     { "path": "../relay" }

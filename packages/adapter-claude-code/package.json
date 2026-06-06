@@ -22,10 +22,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cello-protocol/client": "workspace:*",
-    "@cello-protocol/crypto": "workspace:*",
+    "@cello-protocol/client": "^0.0.20",
+    "@cello-protocol/crypto": "^0.0.7",
     "@cello-protocol/interfaces": "workspace:*",
-    "@cello-protocol/transport": "workspace:*",
+    "@cello-protocol/transport": "^0.0.4",
     "@libp2p/peer-id": "^6.0.8",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.2"

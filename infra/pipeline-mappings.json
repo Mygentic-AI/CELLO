@@ -1,54 +1,6 @@
 {
   "packageMappings": [
     {
-      "prefix": "packages/crypto/",
-      "pipelines": [
-        "cello-crypto-pipeline",
-        "cello-protocol-types-pipeline",
-        "cello-transport-pipeline",
-        "cello-client-pipeline",
-        "cello-connect-pipeline",
-        "cello-directory-pipeline",
-        "cello-relay-pipeline",
-        "cello-e2e-tests-pipeline"
-      ],
-      "description": "crypto is a shared dependency — changing it triggers all downstream pipelines"
-    },
-    {
-      "prefix": "packages/protocol-types/",
-      "pipelines": [
-        "cello-protocol-types-pipeline",
-        "cello-transport-pipeline",
-        "cello-client-pipeline",
-        "cello-connect-pipeline",
-        "cello-directory-pipeline",
-        "cello-relay-pipeline",
-        "cello-e2e-tests-pipeline"
-      ],
-      "description": "protocol-types is consumed by transport, client, adapters, directory, relay, e2e-tests"
-    },
-    {
-      "prefix": "packages/transport/",
-      "pipelines": [
-        "cello-transport-pipeline",
-        "cello-client-pipeline",
-        "cello-connect-pipeline",
-        "cello-directory-pipeline",
-        "cello-relay-pipeline",
-        "cello-e2e-tests-pipeline"
-      ],
-      "description": "transport is consumed by client, adapters, directory, relay, e2e-tests"
-    },
-    {
-      "prefix": "packages/client/",
-      "pipelines": [
-        "cello-client-pipeline",
-        "cello-connect-pipeline",
-        "cello-e2e-tests-pipeline"
-      ],
-      "description": "client is consumed by connect and e2e-tests"
-    },
-    {
       "prefix": "packages/adapter-claude-code/",
       "pipelines": [
         "cello-connect-pipeline"
@@ -90,10 +42,6 @@
     "package.json"
   ],
   "allCelloPipelines": [
-    "cello-crypto-pipeline",
-    "cello-protocol-types-pipeline",
-    "cello-transport-pipeline",
-    "cello-client-pipeline",
     "cello-connect-pipeline",
     "cello-directory-pipeline",
     "cello-relay-pipeline",

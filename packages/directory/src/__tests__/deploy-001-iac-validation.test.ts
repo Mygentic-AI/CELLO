@@ -25,7 +25,7 @@
  *   Manifest bucket has versioning enabled.
  *
  * AC-008: CI/CD template defines webhook Lambda, pipeline-filter Lambda, EventBridge bus,
- *   and 8 CodePipelines.
+ *   and 5 CodePipelines (connect, directory, relay, e2e-tests, operations-agent).
  *
  * AC-009: Resource names are parameterised by Environment — no hardcoded env strings.
  *
@@ -324,14 +324,16 @@ describe("DEPLOY-001: AC-008 CI/CD infrastructure", () => {
     expect(buses.length).toBeGreaterThan(0);
   });
 
-  it("defines 9 CodePipelines (one per package)", () => {
+  it("defines 5 CodePipelines (connect, directory, relay, e2e-tests, operations-agent)", () => {
     const template = loadTemplate("cello-cicd.yaml");
     const resources = template["Resources"] as Record<string, Record<string, unknown>>;
 
     const pipelines = Object.entries(resources).filter(
       ([, v]) => v["Type"] === "AWS::CodePipeline::Pipeline"
     );
-    expect(pipelines.length).toBe(9);
+    // crypto, protocol-types, transport, client pipelines removed post-REPOSPLIT-002 —
+    // those packages now live in cello-client; GitHub Actions handles build/test/publish.
+    expect(pipelines.length).toBe(5);
   });
 
   it("artifacts bucket name uses AWS::Region substitution", () => {

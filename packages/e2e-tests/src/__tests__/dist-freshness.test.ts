@@ -16,7 +16,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "../../../..");
 
 const ADAPTER_DIST = resolve(root, "packages/adapter-claude-code/dist/server.js");
-const CLIENT_DIST = resolve(root, "packages/client/dist/mcp-server.js");
+const CLIENT_DIST = resolve(root, "node_modules/@cello-protocol/client/dist/mcp-server.js");
 
 describe("dist freshness: @cello-protocol/connect", () => {
   const distContent = readFileSync(ADAPTER_DIST, "utf-8");

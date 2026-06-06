@@ -5,7 +5,5 @@
     "outDir": "dist"
   },
   "include": ["src"],
-  "references": [
-    { "path": "../protocol-types" }
-  ]
+  "references": []
 }
