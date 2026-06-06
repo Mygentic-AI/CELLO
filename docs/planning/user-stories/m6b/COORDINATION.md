@@ -332,3 +332,46 @@ Audit conducted against git logs (96h, both repos), infra/STATE.md, and story YA
 - M6B-001 (trustless-cello side): documentation only, no pipeline
 - M6B-005 (trustless-cello): no trustless-cello side
 - M6B-012: test-only change, directory pipeline completed 2026-06-04
+
+---
+
+### 2026-06-06 12:41 UTC — Full database wipe for fresh re-registration
+
+**Context:** After the nuclear reset (2026-06-05/06) all ECS stacks were recreated from current IaC. The RDS instances were NOT recreated — they survived with stale agent data. FROST key shares in the directory no longer matched any live client (local `~/.cello/` and EC2 `client.db` both wiped or on incompatible SQLCipher versions). Database cleaned for a fresh start.
+
+**Databases affected:** all three regions (us-east-1 write origin; replication propagated to eu-central-1 and ap-northeast-1 within 5s).
+
+**What was deleted (via postgres master credentials):**
+- 7 pre_authorization_tokens
+- 10 registrations
+- 4 agent_key_shares: demo agent (`12ccbfd5...`, agent_id `ba493e6e`), test agent (`2fa9fb08...`, agent_id `86ec731c`), and 2 orphaned pre-V27 registrations (`1818eb07...`, `170138f0...`) that had shares but no agent_id
+- 4 agent_profiles: same 4 agents above
+- 2 user_accounts: account `4366768b` (test phone) and `6460a4ed` (demo agent phone)
+- 0 sessions, 0 active_connection_requests (already empty)
+
+**What was kept:** 3 SMOKE_V2_* agent_profiles (federation health check fixtures — no shares, no accounts).
+
+**Post-wipe state (verified in all 3 regions):** profiles=3, shares=0, accounts=0, regs=0, tokens=0.
+
+**Migrations confirmed current:** All three RDS instances at V29 (all M6B migrations applied, success=true).
+
+**Replication confirmed active:** us-east-1 outbound slots both `active=true`; delete propagated to eu-central-1 and ap-northeast-1 within 5 seconds.
+
+**What must happen before any agent can register:** (1) local test agent: delete `~/.cello/`; (2) demo agent EC2: upgrade connect and wipe client.db — see entry below.
+
+---
+
+### 2026-06-06 — Demo agent EC2 upgrade required before re-registration
+
+**Instance:** `i-0ad3e7c22470f266e` (cello-demo-agent, us-east-1a)
+
+**Problem:** EC2 is running `@cello-protocol/connect@0.0.14`. M6B-013 (merged 2026-06-04) replaced `@journeyapps/sqlcipher` with `@signalapp/sqlcipher` starting at v0.0.30. The old binary cannot correctly read/write a DB created by v0.0.30+, and vice versa. The old `client.db` at `/opt/cello-demo/data/client.db` was written by v0.0.14 and is incompatible with the current binary.
+
+**Required steps (via SSM to i-0ad3e7c22470f266e):**
+1. Stop the demo agent process
+2. Delete `/opt/cello-demo/data/client.db`
+3. Upgrade `@cello-protocol/connect` from 0.0.14 → 0.0.30 (beta)
+4. Restart the demo agent process
+5. Re-register via @CelloConnectStagingBot (full Telegram flow — new token, fresh DKG)
+
+**After re-registration:** update STATE.md with new agent_id, new K_local pubkey, and new connect version.
