@@ -58,6 +58,18 @@ behavior:
       with 0o700 directory permissions and 0o600 file permissions; `~/.cello/`
       and `~/.cello/agents/` are also created with 0o700 if they do not exist"
 
+  - trigger: "When the `CELLO_CONFIG_DIR` environment variable is set"
+    action: "the server uses that path as the config root instead of `~/.cello/`;
+      all path resolution rules (agents/ directory, legacy key file, DB paths)
+      apply relative to that root; this is the primary test isolation mechanism —
+      integration ACs set CELLO_CONFIG_DIR to a temp directory to avoid touching
+      the real ~/.cello/ on the test runner's machine"
+
+  - trigger: "When `cello_register` completes successfully and writes a key file"
+    action: "the `agent.storage.created` event is logged at INFO with `agentName`
+      and `keyPath` fields; this event fires after the file is durably written
+      and the permissions are set"
+
   - trigger: "When the MCP server scans subdirectory names under `~/.cello/agents/`"
     action: "each name is validated against the pattern `[a-z0-9][a-z0-9_-]{0,62}`;
       uppercase letters are rejected because macOS HFS+ is case-insensitive by
@@ -86,7 +98,9 @@ acceptance_criteria:
     when: "the MCP server starts"
     then: "an agent named `default` appears in `cello_list_agents` as a registered
       agent; its public key matches the legacy key file; AND `agent.storage.legacy_compat`
-      is logged at INFO with `keyPath` matching the legacy file path"
+      is logged at INFO with `keyPath` matching the legacy file path; AND
+      `<config-root>/agents/default/key` does NOT exist (no automatic file migration
+      occurred — the legacy file is read in place)"
     test_type: integration
     component_under_test: connect
 
@@ -206,6 +220,11 @@ observability:
       trigger: "When falling back to legacy ~/.cello/key at startup"
       context_fields: [keyPath]
       correlationId: false
+    - name: agent.storage.created
+      level: info
+      trigger: "When cello_register durably writes a new agent key file"
+      context_fields: [agentName, keyPath]
+      correlationId: false
   error_events:
     - name: agent.storage.read_error
       level: error
@@ -213,9 +232,9 @@ observability:
       context_fields: [agentName, keyPath, error]
       correlationId: false
   notes: >
-    The four event names (agent.storage.discovered, agent.storage.skipped,
-    agent.storage.legacy_compat, agent.storage.read_error) must be added to
-    the canonical event taxonomy in
+    The five event names (agent.storage.discovered, agent.storage.skipped,
+    agent.storage.legacy_compat, agent.storage.created, agent.storage.read_error)
+    must be added to the canonical event taxonomy in
     docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
     by the implementer of this story.
   alarms: []

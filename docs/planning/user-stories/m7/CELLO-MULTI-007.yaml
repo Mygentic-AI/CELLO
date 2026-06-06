@@ -143,10 +143,13 @@ acceptance_criteria:
     component_under_test: connect
 
   - id: AC-007
-    given: "Connection 1 calls `cello_receive` with NO agent parameter"
-    when: "the tool executes"
-    then: "the receive dequeues from the current agent's receive queue
-      (same behavior as before M7 for backwards compatibility)"
+    given: "Connection 1 has `alice` as current agent; alice has exactly 1
+      pending message in her receive queue; bob is online but has 0 messages"
+    when: "Connection 1 calls `cello_receive` with NO agent parameter"
+    then: "exactly 1 message is returned and it matches what alice received;
+      bob's receive queue is unaffected (still 0 messages); this confirms
+      backwards-compatible behavior — pre-M7 single-agent calls still route
+      via current agent with no change required"
     test_type: integration
     component_under_test: connect
 
@@ -235,6 +238,33 @@ observability:
     Alarm thresholds for notification health are deferred to a post-M7 story
     covering SSE/HTTP transport modes where delivery failure has broader impact.
   alarms: []
+
+# ─── Interface Changes ──────────────────────────────────────
+interface_changes: >
+  Two new MCP notification types (TypeScript discriminated union members):
+    { type: 'cello_peer_offline'; peer: string; agent: string }
+    { type: 'cello_peer_online';  peer: string; agent: string }
+
+  Two existing notification types gain an `agent` field (backwards-compatible
+  addition — existing fields unchanged):
+    { type: 'cello_message';          from: string; agent: string; ... }
+    { type: 'cello_session_request';  from: string; session_id: string; agent: string; ... }
+
+  These types must be updated in `packages/adapter-claude-code/src/notifications.ts`
+  (or wherever the notification type union is defined).
+
+  The optional `agent` parameter on `cello_send` and `cello_receive` is a new
+  optional field on the existing tool input schemas. Adding an optional field
+  is backwards-compatible — existing callers that omit it continue to work.
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes: >
+  CELLO-MULTI-004 is listed in depends_on because cello_stop_agent (MULTI-004)
+  must clear the current-agent state for affected connections (MULTI-003), and
+  MULTI-007's notification emitter must subscribe to newly-online agents
+  immediately when cello_start_agent (also MULTI-004) brings them online. Both
+  paths require MULTI-004's tool implementations to exist before MULTI-007
+  can wire its subscription logic to them. The dependency is real.
 
 # ─── References ─────────────────────────────────────────────
 references:

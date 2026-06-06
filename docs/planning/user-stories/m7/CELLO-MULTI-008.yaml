@@ -41,16 +41,21 @@ behavior:
       with a non-breaking default of undefined; a from-scratch makeFixture()
       function must NOT be written — this is enforced by /cello-review fixture
       discipline check; the two-agent server capability added here becomes
-      available for all future milestone gate tests"
+      available for all future milestone gate tests; the opts.multiAgent extension
+      must expose a `stopAgentTransport(name: string): Promise<void>` helper
+      that calls libp2p.stop() on the named agent's node — required by AC-004
+      and AC-005 to simulate transport disruption for that specific agent"
 
   - trigger: "When infrastructure prerequisites are checked before running MULTI-008"
     action: "two infrastructure gaps from the M7 outline must be resolved before
       this story's ACs can pass: (1) the /agent-lookup ALB routing rule must be
       deployed — without it, agent_id-based session initiation (AC-002) will fail
-      because target resolution falls through to the WebSocket listener; (2) the
-      cello_service PostgreSQL role must have UPDATE grant on agent_profiles —
-      without it, linkAgentToAccount() fails silently in production; both gaps
-      are documented in the M7 outline and COORDINATION.md"
+      because target resolution falls through to the WebSocket listener, returning
+      'Only WebSocket connections are supported'; (2) the cello_service PostgreSQL
+      role must have UPDATE grant on agent_profiles — without it, linkAgentToAccount()
+      fails silently in production; both gaps are documented in the M7 outline and
+      COORDINATION.md; if AC-002 fails with the WebSocket error, stop and deploy
+      the ALB rule before continuing — do not attempt to work around it"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -125,6 +130,13 @@ acceptance_criteria:
       the duplicate was discarded via nonce deduplication"
     test_type: integration
     component_under_test: client
+    notes: "The 'inbound handler' that accepts raw envelope bytes for test
+      injection is `CelloClient.handleInboundEnvelope(bytes: Uint8Array)` (or
+      equivalent — check `packages/client/src/client.ts` for the actual method
+      name). If no public test injection point exists on CelloClient, the
+      implementer must add one (a package-internal method exposed only in test
+      builds, or an accepted-by-convention internal method) before this AC can
+      be written. Identify the method name during the Architecture phase."
 
   - id: AC-007
     given: "The session between alice and bob is active with messages exchanged"

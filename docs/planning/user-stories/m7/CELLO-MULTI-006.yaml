@@ -78,9 +78,18 @@ behavior:
   - trigger: "When MULTI-006 is implemented"
     action: "CONTEXT.md and packages/client/src/types.ts must be updated:
       (1) `queued_for_retry` must be added to the `SendFailureReason` union type;
-      (2) the `SendResult` failure variant must include an optional `nonce` field:
-      `{ delivered: false, reason: 'queued_for_retry', nonce: '<hex>' }`;
+      (2) `queue_full` must be added to the `SendFailureReason` union type (for
+      retry queue depth cap — see queue cap behavior below);
+      (3) the `SendResult` failure variant must include an optional `nonce` field:
+      `{ delivered: false, reason: SendFailureReason, nonce?: string }`;
       downstream stories MULTI-007 and MULTI-008 depend on these type definitions"
+
+  - trigger: "When the retry queue for a session reaches 500 messages"
+    action: "further send attempts to that peer/session return
+      `{ delivered: false, reason: 'queue_full' }` without enqueuing the message;
+      `message.retry.queue_full` is logged at WARN with `sessionId`, `peerPubkeyHex`,
+      and `queueDepth: 500`; the cap prevents unbounded memory growth when a peer
+      is offline for an extended period"
 
   - trigger: "When integration tests for this story configure the test harness"
     action: "AC-001, AC-002, AC-003, AC-006, and AC-009 require two real CelloClient
@@ -259,10 +268,16 @@ observability:
       trigger: "When a retry attempt fails because the peer disconnected again mid-drain"
       context_fields: [sessionId, peerPubkeyHex, nonce, error]
       correlationId: false
+    - name: message.retry.queue_full
+      level: warn
+      trigger: "When a send is rejected because the retry queue depth cap (500) is reached"
+      context_fields: [sessionId, peerPubkeyHex, queueDepth]
+      correlationId: false
   notes: >
-    The five event names (message.retry.queued, message.retry.drained,
+    The six event names (message.retry.queued, message.retry.drained,
     message.dedup.discarded, message.retry.session_sealed_cleared,
-    message.retry.failed) must be added to the canonical event taxonomy in
+    message.retry.failed, message.retry.queue_full) must be added to the
+    canonical event taxonomy in
     docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
     by the implementer of this story.
 
@@ -272,6 +287,37 @@ observability:
     post-M7 signaling stream resilience story should define alarm thresholds
     once production keepalive configuration is established.
   alarms: []
+
+# ─── Interface Changes ──────────────────────────────────────
+interface_changes: >
+  Two new values added to `SendFailureReason` in `packages/client/src/types.ts`:
+    - `'queued_for_retry'` — message enqueued; will be delivered on peer:connect
+    - `'queue_full'` — retry queue depth cap reached; message dropped
+
+  `SendResult` failure variant gains an optional `nonce` field:
+    type SendResult =
+      | { delivered: true; canonicalSeq: number }
+      | { delivered: false; reason: SendFailureReason; nonce?: string };
+  The `nonce` field is populated when `reason === 'queued_for_retry'` and
+  contains the 32-byte nonce as a lowercase hex string (64 chars). It is absent
+  (undefined) for other failure reasons.
+
+  CBOR envelope wire format for nonce placement:
+  The nonce is a sibling field alongside the TBS bytes in the signed envelope
+  wrapper, NOT inside the TBS array. CBOR encoding:
+    - Key: text string "n" (1-byte key for compactness)
+    - Value: byte string (CBOR major type 2), 32 bytes
+    - Placement: top-level field in the outer CBOR map, next to the TBS field
+  On the receiver side, the nonce is extracted from the outer map (not from
+  within the TBS structure) before signature verification. After signature
+  verification, the hex representation of the nonce bytes is looked up in the
+  session's seen-nonces Set<string>. The hex conversion must be consistent:
+  `Buffer.from(nonce).toString('hex')` or equivalent — verified by AC-010.
+
+  New error event added to observability:
+    - name: message.retry.queue_full
+      level: warn
+      context_fields: [sessionId, peerPubkeyHex, queueDepth]
 
 # ─── References ─────────────────────────────────────────────
 references:

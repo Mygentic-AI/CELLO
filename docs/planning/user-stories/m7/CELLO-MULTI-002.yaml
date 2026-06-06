@@ -44,8 +44,8 @@ behavior:
       (2) derive db_key = HKDF(seed, info='cello-db-key') using the same derivation
       as the current cello-mcp.ts composition root; (3) open the agent's SQLCipher
       store at the path resolved by MULTI-001's DB path convention AND apply WAL
-      mode per PREP-002 (PRAGMA journal_mode=WAL after key verification, before
-      migrations — this is a hard requirement, not advisory; see PREP-002 AC-005);
+      mode per M6B-005 (PRAGMA journal_mode=WAL after key verification, before
+      migrations — this is a hard requirement, not advisory; see M6B-005 AC-005);
       (4) construct ClientStatePersistence(store); (5) call client.loadPersistedState(persistence)
       BEFORE any MCP tool call is routed to it; (6) instantiate a new CelloClient
       with its own libp2p node (own Peer ID, own transport key, own listen
@@ -74,7 +74,7 @@ behavior:
       SIGTERM path) — SQLCipher databases are closed cleanly so the next
       process does not open a database left in an inconsistent state; the
       exit code is 1 so Claude Code's MCP process supervisor detects the
-      failure and restarts the binary; on restart, WAL mode (PREP-002) allows
+      failure and restarts the binary; on restart, WAL mode (M6B-005) allows
       the new process to open its SQLCipher databases even briefly while any
       stale file handles are still being closed by the OS"
 
@@ -253,7 +253,7 @@ acceptance_criteria:
   - id: AC-014
     given: "A SQLCipherClientStore opened for agent `alice` via cello_start_agent"
     when: "PRAGMA journal_mode is queried after open() completes"
-    then: "the result is 'wal'; this is the PREP-002 AC-005 carry-forward
+    then: "the result is 'wal'; this is the M6B-005 AC-005 carry-forward
       requirement — WAL mode must be active for every agent opened by the
       AgentRegistry, not only in the single-agent composition root"
     test_type: integration
@@ -345,6 +345,51 @@ observability:
       notes: "Indicates a startup crash loop — SQLCipher corruption, missing
         key file, or port conflict that does not self-resolve."
 
+# ─── Interface Changes ──────────────────────────────────────
+interface_changes: >
+  This story introduces the following TypeScript types, which must live in
+  `packages/interfaces/` so that MULTI-003 and MULTI-004 can import them
+  without creating cross-package import cycles.
+
+  ```typescript
+  // AgentState — three-value union representing lifecycle position
+  type AgentState = 'registered' | 'online' | 'current';
+
+  // AgentEntry — one entry per discovered agent in the registry Map
+  interface AgentEntry {
+    name: string;
+    keyProvider: FileKeyProvider;
+    client: CelloClient | null;
+    state: AgentState;
+  }
+
+  // AgentRegistry — the composition-root object passed to MULTI-003 and MULTI-004
+  interface AgentRegistry {
+    agents: Map<string, AgentEntry>;
+    // Set to the agent name when exactly one agent was auto-started at startup.
+    // MULTI-003 reads this to set the initial current agent on new connections.
+    autoStartedSingleAgent: string | null;
+    startAgent(name: string): Promise<void>;
+    stopAgent(name: string): Promise<void>;
+  }
+  ```
+
+  `client.announceToDirectory()` already exists on `CelloClient` — it is the
+  method used in M6 to open the signaling stream. The AgentRegistry calls it
+  directly on the per-agent CelloClient instance when reconnecting after a
+  signaling stream drop. No new method is needed on CelloClient for this story.
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes: >
+  AC-008 requires a real DKG ceremony as a precondition. Use
+  `createSessionFixture` from `packages/e2e-tests/src/session-fixture.ts`
+  with `opts.withDkg: true` (or equivalent existing DKG-enabling opts field).
+  Do NOT write a from-scratch fixture. If `createSessionFixture` does not yet
+  expose a way to produce a pre-registered alice agent against a named
+  per-agent SQLCipher DB path, add an `opts.agentName` field with a
+  non-breaking default of undefined. The fixture discipline rule applies:
+  extend, never duplicate.
+
 # ─── References ─────────────────────────────────────────────
 references:
   milestone: M7
@@ -353,7 +398,7 @@ references:
     - "2026-06-03_1146_beta-launch-brittleness-analysis"
   depends_on:
     - CELLO-MULTI-001
-    - CELLO-PREP-002
+    - CELLO-M6B-005
   blocks:
     - CELLO-MULTI-003
     - CELLO-MULTI-004

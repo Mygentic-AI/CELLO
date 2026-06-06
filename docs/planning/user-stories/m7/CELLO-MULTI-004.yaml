@@ -98,7 +98,9 @@ acceptance_criteria:
       (sessionsClosedCount = 1); S2 times out after 5 seconds and transitions
       to 'seal_deferred' (sessionsDeferredCount = 1); alice transitions to
       registered; return value is `{ stopped: true, name: 'alice',
-      sessionsClosedCount: 1, sessionsDeferredCount: 1 }`; AND
+      sessionsClosedCount: 1, sessionsDeferredCount: 1 }`; the call returns
+      within 6 seconds total (5s seal timeout + 1s margin — if this regresses
+      toward the 15-second FROST seal timeout, this assertion catches it); AND
       `tool.stop_agent.success` is logged at INFO with `agentName: 'alice'`,
       `sessionsClosedCount: 1`, and `sessionsDeferredCount: 1`"
     test_type: integration
@@ -209,6 +211,23 @@ observability:
     the tool return value. Alarm thresholds for agent lifecycle health are
     deferred to a post-M7 operations story.
   alarms: []
+
+# ─── Interface Changes ──────────────────────────────────────
+interface_changes: >
+  `seal_deferred` must be added to the `SessionStatus` union in
+  `packages/client/src/types.ts` if it is not already present. It represents
+  a session where a SEAL was attempted but the counterparty was unreachable —
+  the session record is retained but the SEAL did not complete. MULTI-006 and
+  MULTI-008 assume this value exists. Verify before implementing:
+    grep -n "seal_deferred" packages/client/src/types.ts
+  If absent, add it to the union before writing any implementation code.
+
+  `cello_stop_agent` initiates session sealing via a new CelloClient method:
+    sealAllSessions(timeoutMs: number): Promise<{ sealed: string[]; deferred: string[] }>
+  This method sends a SEAL control leaf to every open session, waits up to
+  timeoutMs for acknowledgement, and returns lists of session IDs that sealed
+  cleanly vs. timed out. MULTI-004 calls it with timeoutMs = 5000. Add this
+  method to the `CelloClient` interface in `packages/interfaces/`.
 
 # ─── References ─────────────────────────────────────────────
 references:

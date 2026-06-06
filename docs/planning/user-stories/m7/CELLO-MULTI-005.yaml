@@ -203,10 +203,19 @@ implementation_notes: >
   typed events on the CelloClient instance that MULTI-006 (retry queue) and
   MULTI-007 (notifications) consume.
 
+  AC-001 and AC-002 require an extended test timeout. The Yamux keepalive
+  fires after interval + timeout = 1000 + 3000 = 4000ms minimum. Configure
+  the test with at least 10 seconds:
+    test('AC-001: disconnect via Yamux keepalive', { timeout: 10000 }, async () => {...})
+    test('AC-002: reconnect after Yamux timeout', { timeout: 10000 }, async () => {...})
+  Without this, Vitest's default 5-second timeout fires before the keepalive
+  detects the disconnect and the test fails spuriously.
+
   AC-002 is a continuation of AC-001's test harness — not an independent
-  test that sets up the disconnect state from scratch. After AC-001 confirms
-  the disconnect event, the same harness starts Agent B's node again and
-  waits for the peer:connect event.
+  test that sets up the disconnect state from scratch. AC-002 must be declared
+  after AC-001 in the same describe block; the disconnect state from AC-001
+  is a precondition. After AC-001 confirms the disconnect event, the same
+  harness starts Agent B's node again and waits for the peer:connect event.
 
   Session state on disconnect: sessions with the disconnected peer transition
   to `transport_lost` (existing SessionStatus value). On reconnect they

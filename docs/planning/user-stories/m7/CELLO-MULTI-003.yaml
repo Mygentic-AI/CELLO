@@ -124,7 +124,8 @@ acceptance_criteria:
     then: "alice remains online; no state changes to the agent registry;
       other connections with alice as current are unaffected;
       `connection.closed` is logged at INFO with `connectionId` and
-      `currentAgent: 'alice'`"
+      `currentAgent: 'alice'`; AND the per-connection state Map no longer
+      contains an entry keyed to Connection 1's connectionId (no memory leak)"
     test_type: integration
     component_under_test: connect
 
@@ -188,6 +189,42 @@ observability:
     UX event (new connection, user hasn't selected an agent yet). A high rate
     would indicate a UI/UX issue rather than a system failure.
   alarms: []
+
+# ─── Interface Changes ──────────────────────────────────────
+interface_changes: >
+  This story introduces per-connection state management. The following type
+  lives in `packages/interfaces/` alongside the AgentRegistry types from MULTI-002.
+
+  ```typescript
+  // Per-connection state entry — one per active MCP client connection
+  interface ConnectionState {
+    connectionId: string;  // UUID v4, minted at connection-open time
+    currentAgent: string | null;
+  }
+
+  // The connection state store — held in the MCP server composition root
+  interface ConnectionStateStore {
+    get(connectionId: string): ConnectionState | undefined;
+    set(connectionId: string, state: ConnectionState): void;
+    delete(connectionId: string): void;  // called on connection close
+  }
+  ```
+
+  `connectionId` is a UUID v4 string minted once at connection establishment
+  and stored in the ConnectionState entry. It appears in all observability
+  events for this connection (connection.agent.switched, connection.closed,
+  connection.no_current_agent). This is the correlation handle for multi-
+  connection log analysis.
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes: >
+  The autoStartedSingleAgent flag is a read-only property on AgentRegistry
+  (defined in MULTI-002 interface_changes). When a new MCP connection is
+  established, the connection handler checks:
+    if registry.autoStartedSingleAgent !== null: set currentAgent = autoStartedSingleAgent
+  This produces the single-agent backwards-compatible behavior tested by AC-005.
+  The flag value is the agent name string (not a boolean) — it doubles as both
+  the presence signal and the name to use.
 
 # ─── References ─────────────────────────────────────────────
 references:
