@@ -145,6 +145,9 @@ if [[ -z "${HOSTED_ZONE_ID}" || "${HOSTED_ZONE_ID}" == "None" ]]; then
   HOSTED_ZONE_ID="PLACEHOLDER"
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CFN_DIR="${SCRIPT_DIR}/cloudformation"
+
 # ── Pre-flight checks ────────────────────────────────────────────────────────
 # Validate environment state before touching any stacks. Fail fast with a clear
 # error rather than discovering problems mid-deploy after 20 minutes of progress.
@@ -230,9 +233,6 @@ log_event "infra.deploy.started" "{ \"environment\": \"${ENVIRONMENT}\", \"regio
 # deploy_stack STACK_NAME TEMPLATE_FILE [param=value ...]
 # Exits non-zero with a clear error on any failure (AC-009).
 # Handles "No changes to deploy" as success (AC-005).
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CFN_DIR="${SCRIPT_DIR}/cloudformation"
 
 deploy_stack() {
   local stack_name="$1"
