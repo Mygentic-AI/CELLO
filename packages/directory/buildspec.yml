@@ -13,22 +13,9 @@ phases:
       - pnpm install --frozen-lockfile
   build:
     commands:
-      # ── Migration version gate ───────────────────────────────────────────────
-      # Fails fast if a new V{N} migration exists but cello-ssm-parameters.yaml
-      # has not been updated to match. Catches the case where a coder adds a
-      # migration without bumping OpsAgentExpectedMigrationVersion.
-      - |
-        HIGHEST_MIGRATION=$(ls packages/directory/db/migrations/V*.sql \
-          | sed 's/.*\/V\([0-9]*\)__.*/\1/' \
-          | sort -n | tail -1)
-        SSM_YAML_VERSION=$(grep -A6 'OpsAgentExpectedMigrationVersion:' \
-          infra/cloudformation/cello-ssm-parameters.yaml \
-          | grep 'Value:' | head -1 | tr -d ' "' | cut -d: -f2)
-        if [ "$HIGHEST_MIGRATION" != "$SSM_YAML_VERSION" ]; then
-          echo "ERROR: Highest migration is V${HIGHEST_MIGRATION} but cello-ssm-parameters.yaml has OpsAgentExpectedMigrationVersion: ${SSM_YAML_VERSION} — validate that this should be ${HIGHEST_MIGRATION}."
-          exit 1
-        fi
-        echo "Migration version gate passed: V${HIGHEST_MIGRATION}"
+      # Migration version gate removed — deploy.sh now computes the SSM value
+      # dynamically from the highest V*.sql file at deploy time. The YAML default
+      # is intentionally "0" (never used in practice). No static check needed.
       - pnpm --filter @cello-protocol/crypto run typecheck
       - pnpm --filter @cello-protocol/interfaces run typecheck
       - pnpm --filter @cello-protocol/protocol-types run typecheck
