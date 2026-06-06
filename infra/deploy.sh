@@ -263,7 +263,26 @@ deploy_stack() {
   if [[ "${stack_status}" == "ROLLBACK_COMPLETE" ]]; then
     echo "  Stack is in ROLLBACK_COMPLETE — deleting before recreating..."
     aws cloudformation delete-stack --region "${REGION}" --stack-name "${stack_name}"
-    aws cloudformation wait stack-delete-complete --region "${REGION}" --stack-name "${stack_name}"
+    # Use a poll loop — aws cloudformation wait has a hard 10-minute timeout that
+    # ALB deregistration delay (300s) and custom resources can exceed.
+    local delete_attempts=0
+    while [[ ${delete_attempts} -lt 30 ]]; do
+      local del_status
+      del_status=$(aws cloudformation describe-stacks --region "${REGION}" --stack-name "${stack_name}" \
+        --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+      if [[ "${del_status}" == "DOES_NOT_EXIST" ]]; then
+        break
+      elif [[ "${del_status}" == "DELETE_FAILED" ]]; then
+        echo "  ERROR: Stack delete failed for ${stack_name}" >&2
+        exit 1
+      fi
+      delete_attempts=$((delete_attempts + 1))
+      sleep 30
+    done
+    if [[ ${delete_attempts} -ge 30 ]]; then
+      echo "  ERROR: Timed out waiting for stack delete: ${stack_name}" >&2
+      exit 1
+    fi
     echo "  Deleted. Proceeding with fresh create."
   fi
 
@@ -351,7 +370,7 @@ purge_stale_dns_record() {
   fi
   echo "  Pre-flight: stale DNS record ${fqdn} exists — deleting before CFN create..."
   local change_batch
-  change_batch=$(printf '{"Changes":[{"Action":"DELETE","ResourceRecordSet":%s}]}' "${record}")
+  change_batch=$(echo "${record}" | jq -c '{"Changes":[{"Action":"DELETE","ResourceRecordSet":.}]}')
   aws route53 change-resource-record-sets \
     --hosted-zone-id "${hosted_zone_id}" \
     --change-batch "${change_batch}" \
@@ -412,13 +431,8 @@ deploy_stack "cello-secrets-${ENVIRONMENT}" "cello-secrets.yaml" \
 
 echo ""
 echo "── Setting SSM migration version from migration files ────────────────"
-COMPUTED_MIGRATION_VERSION=$(ls "${SCRIPT_DIR}/../packages/directory/db/migrations"/V*.sql 2>/dev/null \
-  | sed 's/.*\/V\([0-9]*\)__.*/\1/' | sort -n | tail -1)
-
-if [[ -z "${COMPUTED_MIGRATION_VERSION}" ]]; then
-  echo "  ERROR: No V*.sql migration files found in packages/directory/db/migrations/" >&2
-  exit 1
-fi
+# HIGHEST_MIGRATION already computed and validated in pre-flight — reuse it.
+COMPUTED_MIGRATION_VERSION="${HIGHEST_MIGRATION}"
 echo "  Highest migration file: V${COMPUTED_MIGRATION_VERSION}"
 
 deploy_stack "cello-ssm-parameters-${ENVIRONMENT}" "cello-ssm-parameters.yaml" \
@@ -431,7 +445,7 @@ aws ssm put-parameter \
   --type String \
   --overwrite \
   --region "${REGION}" \
-  --output text --query Version >/dev/null 2>&1
+  --output text --query Version > /dev/null
 echo "  SSM /cello/${ENVIRONMENT}/ops-agent/expected-migration-version = ${COMPUTED_MIGRATION_VERSION}"
 
 # ── STEP 3: cello-vpc — VPC, subnets, security groups, endpoints ─────────────
@@ -517,8 +531,8 @@ aws ssm put-parameter \
   --type String \
   --overwrite \
   --region "${REGION}" \
-  --output text --query Version >/dev/null 2>&1 \
-  && echo "  /cello/${ENVIRONMENT}/directory/manifest-signer-pubkey: OK"
+  --output text --query Version > /dev/null
+echo "  /cello/${ENVIRONMENT}/directory/manifest-signer-pubkey: OK"
 
 # ── STEP 7: cello-ecs-directory — directory ECS service ──────────────────────
 # depends on: cello-iam, cello-kms, cello-vpc, cello-ecr
