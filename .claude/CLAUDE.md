@@ -107,6 +107,20 @@ A session that changes AWS infrastructure without updating STATE.md is incomplet
 
 ---
 
+## Infrastructure Rules — Non-Negotiable
+
+**Read `infra/CLAUDE.md` before any infrastructure work.** It contains detailed rules for CloudFormation, deploy.sh, SSM parameters, and ECS configuration. The following are the most critical:
+
+**Never create AWS resources manually that CloudFormation should manage.** Manual creation causes `ResourceAlreadyExists` failures on the next deploy.sh run. If emergency creation is necessary, import it into the CFN stack or delete it before the next deploy.
+
+**deploy.sh is the only deployment mechanism for CFN stacks.** CI/CD pipelines only swap Docker images — they do NOT deploy CloudFormation. Any change to `infra/cloudformation/*.yaml` requires running deploy.sh.
+
+**Every migration story must update `cello-ssm-parameters.yaml`.** When adding a new `V{N}` Flyway migration, update the `OpsAgentExpectedMigrationVersion` default value to `{N}`. Failure to do this causes the ops-agent to crash-loop on fresh deployments.
+
+**Transport keys are unique per region.** Never copy a transport key between regions. Generate fresh values with `openssl rand -hex 32`.
+
+---
+
 ## M4+ Development Model
 
 M4 introduces external systems (PostgreSQL, KMS, ECS, relay WAL). The inner loop stays fast only with deliberate discipline. See full decisions in `docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md`.
