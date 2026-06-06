@@ -494,3 +494,29 @@ Both Dockerfiles (`packages/relay/Dockerfile`, `packages/directory/Dockerfile`) 
 All stages green: Source → Build → StagingDeploy → SmokeTest → ProductionDeploy (us-east-1, eu-central-1, ap-northeast-1).
 
 **REPOSPLIT-002 fully complete.** Directory and relay are live in all 3 regions running against published npm versions of crypto/transport/protocol-types/client.
+
+---
+
+### 2026-06-06 — ECS health check deadlock: what happened, root cause, rule
+
+**What happened:**
+
+The relay was not registering with the directory after the nuclear reset because `CELLO_DIRECTORY_MULTIADDR` was empty in the ECS task definition. `cello-ecs-relay.yaml` had `Default: ""` for this parameter and `deploy.sh` was never passing it. Three fixes were committed (commit `557b345`):
+
+1. Removed `Default: ""` from `DirectoryMultiaddr` in `cello-ecs-relay.yaml` — makes the parameter required (correct)
+2. Updated `deploy.sh` to read directory peer ID from SSM `/cello/{env}/directory/peer-id` and construct the multiaddr dynamically (correct)
+3. Added `requiresRegistration` flag to `createRelayHealthServer` — when true, `/health` returned 503 until the relay successfully registered with the directory (WRONG)
+
+Change 3 caused an ECS deadlock: ECS uses the `/health` endpoint to decide whether a task is healthy enough to keep running. The relay returned 503 until it registered; it could not register until it was connected to the directory; ECS killed the task before it could complete registration. 29 tasks failed in a loop across all 3 regions. All three CFN stacks stuck in `UPDATE_IN_PROGRESS` for over an hour.
+
+**Root cause of change 3:**
+
+The idea was sound in isolation (a relay that hasn't registered shouldn't look healthy), but it failed to account for the ECS health check mechanism. ECS uses the same `/health` endpoint the directory uses for relay pool health checks. Making it return 503 at startup broke both. The error was introduced without checking what else depended on the health endpoint returning 200.
+
+**Fix (commit `791f9ce`):**
+
+Reverted the health check change. `/health` always returns 200 as soon as the process starts. Registration happens in the background and is logged. ECS no longer deadlocks.
+
+**Rule added to `infra/CLAUDE.md`:** Never use `Default: ""` for a parameter that enables critical service behaviour. The health check must reflect process liveness (is the process up?), not application readiness state (has it completed registration?). ECS health checks and application readiness checks are different concepts — do not conflate them.
+
+**The two good changes survive:** `DirectoryMultiaddr` is now required in CFN and deploy.sh constructs it dynamically from SSM. The relay will register on startup once the new image deploys.
