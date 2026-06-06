@@ -302,3 +302,33 @@ No cello-client side.
 trustless-cello: CELLO-M6B-010 merged at b397c36. Directory startup state restoration complete: #pendingConnectionRequests restored from new active_connection_requests table (V29 migration); #sessionParticipants and #sessionLastActivity restored from sessions table participant columns (also V29). New PgDirectoryStore methods: saveActiveConnectionRequest, deleteActiveConnectionRequest, loadActiveConnectionRequests, writeSessionWithParticipants, loadActiveSessionParticipants. Startup emits adapter.state.loaded for each restore step. hash-chain.ts updated to exclude new sessions columns from chain hash computation (M4 bug #7 pattern).
 No cello-client side.
 All 13 M6B stories (minus deleted M6B-003) are now merged. M6B milestone complete.
+
+---
+
+### 2026-06-06 — Post-merge deployment audit
+
+Audit conducted against git logs (96h, both repos), infra/STATE.md, and story YAMLs. Summary of outstanding post-merge actions:
+
+**npm publishes — all complete:**
+- M6B-001: @cello-protocol/connect@0.0.26 — published 2026-06-04
+- M6B-002: @cello-protocol/connect@0.0.27 — published 2026-06-04
+- M6B-005: @cello-protocol/connect@0.0.28 — published 2026-06-04
+- M6B-013: @cello-protocol/connect@0.0.30 — published 2026-06-04 (note: skipped 0.0.29 due to double-bump; confirmed no code gap)
+- M6B-013: AC-001 Docker verification still pending — `docker run --rm node:22-alpine sh -c "time npm install -g @cello-protocol/connect@0.0.30 && cello-mcp --version"` must complete <30s with no native compilation output
+
+**AWS — deployed via nuclear reset (directory stacks recreated 2026-06-05/06 from current IaC):**
+- M6B-002: CloudWatch alarms — deployed all 3 regions
+- M6B-004: V28 migration + port-8081 ALB target group — deployed all 3 regions
+- M6B-008: RelayPoolManager poll loop code — active in directory; activates fully once relay re-registers
+- M6B-009: PG pool config, relay stream caps, idle sweep — active in directory; RDS t3.medium upgrade in IaC
+- M6B-010: V29 migration + startup state restore — active in directory all 3 regions
+
+**AWS — pending (relay and ops-agent stacks deleted in nuclear reset, awaiting next deploy.sh run):**
+- M6B-006: relay auto-registration + manifest re-sign — transport key secrets already imported all 3 regions; relay ECS stack awaits redeploy
+- M6B-007: relay WebSocket ALB (port 4002) + SG rules — IaC committed; relay ECS stack awaits redeploy
+- M6B-011: ops-agent UX fixes + cello-ssm-parameters stack + SSM parameter — ops-agent ECS stack awaits redeploy
+
+**No deploy component (test/doc only):**
+- M6B-001 (trustless-cello side): documentation only, no pipeline
+- M6B-005 (trustless-cello): no trustless-cello side
+- M6B-012: test-only change, directory pipeline completed 2026-06-04
