@@ -295,6 +295,15 @@ For each assumption found: locate where CLAUDE.md or the story itself explicitly
 - Did the implementation create orphans (unused imports, variables, functions made unused by this change) and leave them in place? Flag [medium].
 - Did the implementation remove or rewrite pre-existing code that the story did not require touching? Flag [medium] unless it fixes a security issue.
 
+**Error distinctness:**
+- Does any `catch` block map multiple distinct failure causes to the same error code, exception type, or log event? Each distinct cause must produce a distinct observable. A single error that covers timeout, exhaustion, AND unavailability gives the operator nothing to act on. Flag **[blocking]**. *Rationale: M6B-002 — three FROST failure modes all returned `directory_below_threshold`.*
+
+**Unbounded resources:**
+- Does the implementation introduce any resource that grows without a cap — a connection pool with no `max`, an in-memory map keyed on session/agent IDs, a stream concurrency limit, a queue? If yes: is the cap specified in the story and enforced in the code? Missing cap = **[high]**. *Rationale: M6B-009 — default pg pool of 10 exhausted silently under load.*
+
+**In-memory state durability:**
+- Does the implementation hold operationally critical state in memory (connection requests, session participants, relay pool)? If yes: is there a restore path that repopulates it after a process restart? Is externally-mutable data (e.g. a relay manifest) refreshed on a schedule rather than loaded once? Missing restore = **[blocking]**. Stale-forever load = **[high]**. *Rationale: M6B-010 — directory lost in-flight state on ECS replacement. M6B-008 — relay manifest loaded once, went stale after redeploys.*
+
 ---
 
 ## Implementation Review Step 6 — Gate sequence verification
