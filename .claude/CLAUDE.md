@@ -141,7 +141,7 @@ M4 introduces external systems (PostgreSQL, KMS, ECS, relay WAL). The inner loop
 
 **NEVER push Docker images from local.** All image pushes happen exclusively through the CI/CD pipeline (CodeBuild). If images need to exist in other regions, use ECR cross-region replication — never `docker push` from a local machine. No exceptions.
 
-**Directory deploys take ~1 hour.** A single directory deploy = 3 sequential regions (us-east-1 → eu-central-1 → ap-northeast-1), each ~20-25 minutes. Total realistic time: 60-75 minutes from push to all-regions-live. Never trigger a directory deploy without batching ALL pending directory changes into a single commit first. Shipping fixes one at a time multiplies the cost by the number of fixes.
+**Directory deploys take ~25-30 minutes.** All 3 regions (us-east-1, eu-central-1, ap-northeast-1) deploy in parallel. Total wall-clock time: 25-30 minutes from push to all-regions-live (ALB deregistration delay reduced to 30s in M6B-007). Never trigger a directory deploy without batching ALL pending directory changes into a single commit first. Shipping fixes one at a time multiplies the cost by the number of fixes.
 
 ---
 
