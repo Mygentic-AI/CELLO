@@ -12,7 +12,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 ## Environments
 
 ### dev — us-east-1
-*Last deployed: 2026-06-06 — all 17 stacks, deploy.sh r12 (`infra.deploy.completed` 11:44:27Z)*
+*Last deployed: 2026-06-06
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
