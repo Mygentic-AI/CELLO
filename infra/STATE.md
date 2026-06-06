@@ -132,28 +132,30 @@ ECS will start a replacement task that reads the updated SSM value. The current 
 - ap-northeast-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-ap1.cello.mygentic.ai --type String --region ap-northeast-1`
 
 ### dev — eu-central-1
-*Last deployed: 2026-06-06
+*Last deployed: 2026-06-06 — all stacks fully deployed*
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
-| cello-ecr-dev | UPDATE_COMPLETE | 2026-06-05 | OperationsAgentRepo imported via CFN resource import |
-| cello-iam-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
-| cello-secrets-dev | UPDATE_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported; all secrets CFN-managed |
-| cello-vpc-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
-| cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | No changes |
-| cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
-| cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
-| cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
-| cello-ecs-directory-dev | CREATE_COMPLETE | 2026-06-05 | **FRESH CREATE from current IaC** — all M6B stories included; image cello-directory:f28fe89 |
-| cello-ecs-operations-agent-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
-| cello-waf-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
-| cello-ecs-relay-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
-| cello-cloudwatch-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
-| cello-route53-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
+| cello-ecr-dev | UPDATE_COMPLETE | 2026-06-05 | |
+| cello-iam-dev | UPDATE_COMPLETE | 2026-06-05 | |
+| cello-secrets-dev | UPDATE_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported |
+| cello-ssm-parameters-dev | UPDATE_COMPLETE | 2026-06-06 | |
+| cello-vpc-dev | UPDATE_COMPLETE | 2026-06-05 | |
+| cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | |
+| cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | |
+| cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-06 | All M6B stories; image cello-directory:1dea685 |
+| cello-ecs-operations-agent-dev | NOT DEPLOYED | — | eu-central-1 only has PLACEHOLDER secrets; single instance runs in us-east-1 |
+| cello-waf-dev | CREATE_COMPLETE | 2026-06-06 | |
+| cello-ecs-relay-dev | CREATE_COMPLETE | 2026-06-06 | |
+| cello-cloudwatch-dev | CREATE_COMPLETE | 2026-06-06 | |
+| cello-route53-dev | CREATE_COMPLETE | 2026-06-06 | directory-eu1.cello.mygentic.ai |
+| cello-route53-relay-dev | CREATE_COMPLETE | 2026-06-06 | relay-eu1.cello.mygentic.ai |
 | cello-cicd-dev | NOT DEPLOYED | — | CICD pipeline is us-east-1 only |
-| Lambda: cello-dev-rds-rotation | DEPLOYED (real code) | 2026-05-25 | Real handler + psycopg2-binary; uses RDS-managed master secret |
+| Lambda: cello-dev-rds-rotation | DEPLOYED (real code) | 2026-05-25 | |
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-25 | 167ca6...27b5 |
-| Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | Replication user password (alphanumeric, 32-char) |
+| Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | |
 
 #### Key Resources — dev eu-central-1
 
@@ -185,28 +187,30 @@ ECS will start a replacement task that reads the updated SSM value. The current 
 | SNS Topic — ops-warning | arn:aws:sns:eu-central-1:257394457473:cello-ops-warning-dev |
 
 ### dev — ap-northeast-1
-*Last deployed: 2026-06-06
+*Last deployed: 2026-06-06 — all stacks fully deployed*
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
-| cello-ecr-dev | UPDATE_COMPLETE | 2026-06-05 | OperationsAgentRepo imported via CFN resource import |
-| cello-iam-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
-| cello-secrets-dev | UPDATE_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported; all secrets CFN-managed |
-| cello-vpc-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
-| cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | No changes |
-| cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
-| cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
-| cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
-| cello-ecs-directory-dev | CREATE_COMPLETE | 2026-06-05 | **FRESH CREATE from current IaC** — all M6B stories included; image cello-directory:f28fe89 |
-| cello-ecs-operations-agent-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
-| cello-waf-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
-| cello-ecs-relay-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
-| cello-cloudwatch-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
-| cello-route53-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
+| cello-ecr-dev | UPDATE_COMPLETE | 2026-06-05 | |
+| cello-iam-dev | UPDATE_COMPLETE | 2026-06-05 | |
+| cello-secrets-dev | UPDATE_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported |
+| cello-ssm-parameters-dev | UPDATE_COMPLETE | 2026-06-06 | |
+| cello-vpc-dev | UPDATE_COMPLETE | 2026-06-05 | |
+| cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | |
+| cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | |
+| cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-06 | All M6B stories; image cello-directory:1dea685 |
+| cello-ecs-operations-agent-dev | NOT DEPLOYED | — | ap-northeast-1 only has PLACEHOLDER secrets; single instance runs in us-east-1 |
+| cello-waf-dev | CREATE_COMPLETE | 2026-06-06 | |
+| cello-ecs-relay-dev | CREATE_COMPLETE | 2026-06-06 | |
+| cello-cloudwatch-dev | CREATE_COMPLETE | 2026-06-06 | |
+| cello-route53-dev | CREATE_COMPLETE | 2026-06-06 | directory-ap1.cello.mygentic.ai |
+| cello-route53-relay-dev | CREATE_COMPLETE | 2026-06-06 | relay-ap1.cello.mygentic.ai |
 | cello-cicd-dev | NOT DEPLOYED | — | CICD pipeline is us-east-1 only |
-| Lambda: cello-dev-rds-rotation | DEPLOYED (real code) | 2026-05-25 | Real handler + psycopg2-binary; uses RDS-managed master secret |
+| Lambda: cello-dev-rds-rotation | DEPLOYED (real code) | 2026-05-25 | |
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-25 | 167ca6...27b5 |
-| Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | Replication user password (alphanumeric, 32-char) |
+| Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | |
 
 #### Key Resources — dev ap-northeast-1
 
