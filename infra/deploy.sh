@@ -154,19 +154,14 @@ echo "── Pre-flight checks ────────────────�
 
 preflight_errors=0
 
-# 1. Migration version: highest V{N}.sql must match cello-ssm-parameters.yaml default.
+# 1. Migration files exist — deploy.sh computes version dynamically, no hardcoded numbers.
 HIGHEST_MIGRATION=$(ls "${SCRIPT_DIR}/../packages/directory/db/migrations"/V*.sql 2>/dev/null \
   | sed 's/.*\/V\([0-9]*\)__.*/\1/' | sort -n | tail -1)
-SSM_YAML_VERSION=$(grep -A6 'OpsAgentExpectedMigrationVersion:' \
-  "${SCRIPT_DIR}/cloudformation/cello-ssm-parameters.yaml" \
-  | grep 'Value:' | head -1 | tr -d ' "' | cut -d: -f2)
-if [[ -n "${HIGHEST_MIGRATION}" && "${HIGHEST_MIGRATION}" != "${SSM_YAML_VERSION}" ]]; then
-  echo "  ERROR: Highest migration is V${HIGHEST_MIGRATION} but cello-ssm-parameters.yaml" >&2
-  echo "         has OpsAgentExpectedMigrationVersion: ${SSM_YAML_VERSION}." >&2
-  echo "         Update the Value in cello-ssm-parameters.yaml to \"${HIGHEST_MIGRATION}\" before deploying." >&2
+if [[ -z "${HIGHEST_MIGRATION}" ]]; then
+  echo "  ERROR: No V*.sql migration files found in packages/directory/db/migrations/" >&2
   preflight_errors=$((preflight_errors + 1))
 else
-  echo "  Migration version gate: V${HIGHEST_MIGRATION} matches SSM YAML — OK"
+  echo "  Migration files: highest is V${HIGHEST_MIGRATION} — will be written to SSM after deploy"
 fi
 
 # 2. Stale Route53 DNS records: warn if directory or relay records exist outside CFN.
@@ -410,57 +405,34 @@ deploy_stack "cello-secrets-${ENVIRONMENT}" "cello-secrets.yaml" \
 # the Operations Agent ECS task definition (ValueFrom reference). This stack
 # has no dependencies and must exist before cello-ecs-operations-agent deploys.
 #
-# IMPORTANT: CloudFormation resets the SSM parameter value to the template default
-# on every stack update. To prevent a stale template default from overwriting a
-# newer live value, we:
-#   1. Read the current live value BEFORE deploying.
-#   2. Read the template default from cello-ssm-parameters.yaml.
-#   3. Deploy the stack.
-#   4. Restore whichever value is HIGHER (live vs template) — ensures we never
-#      roll back a migration version that has already been applied to the DB.
+# The migration version is computed dynamically from the highest V{N}.sql file
+# in packages/directory/db/migrations/. No hardcoded version numbers anywhere.
+# After every deploy, SSM is set to this computed value — CFN template default
+# is irrelevant and ignored.
 
 echo ""
-echo "── Reading SSM migration version before stack deploy ────────────────"
-PRE_DEPLOY_MIGRATION_VERSION=$(aws ssm get-parameter \
-  --name "/cello/${ENVIRONMENT}/ops-agent/expected-migration-version" \
-  --region "${REGION}" \
-  --query "Parameter.Value" \
-  --output text 2>/dev/null || echo "DOES_NOT_EXIST")
-echo "  Pre-deploy value: ${PRE_DEPLOY_MIGRATION_VERSION}"
+echo "── Setting SSM migration version from migration files ────────────────"
+COMPUTED_MIGRATION_VERSION=$(ls "${SCRIPT_DIR}/../packages/directory/db/migrations"/V*.sql 2>/dev/null \
+  | sed 's/.*\/V\([0-9]*\)__.*/\1/' | sort -n | tail -1)
 
-YAML_MIGRATION_VERSION=$(grep -A6 'OpsAgentExpectedMigrationVersion:' \
-  "${CFN_DIR}/cello-ssm-parameters.yaml" \
-  | grep 'Value:' | head -1 | tr -d ' "' | cut -d: -f2)
-echo "  YAML default:     ${YAML_MIGRATION_VERSION}"
+if [[ -z "${COMPUTED_MIGRATION_VERSION}" ]]; then
+  echo "  ERROR: No V*.sql migration files found in packages/directory/db/migrations/" >&2
+  exit 1
+fi
+echo "  Highest migration file: V${COMPUTED_MIGRATION_VERSION}"
 
 deploy_stack "cello-ssm-parameters-${ENVIRONMENT}" "cello-ssm-parameters.yaml" \
   "Environment=${ENVIRONMENT}"
 
-# Restore the highest of: pre-deploy live value or YAML default.
-# This ensures a newly committed migration version in the YAML always wins,
-# and a live value that's already ahead of the YAML is never rolled back.
-if [[ "${PRE_DEPLOY_MIGRATION_VERSION}" != "DOES_NOT_EXIST" ]]; then
-  if [[ "${PRE_DEPLOY_MIGRATION_VERSION}" -gt "${YAML_MIGRATION_VERSION}" ]] 2>/dev/null; then
-    RESTORE_VERSION="${PRE_DEPLOY_MIGRATION_VERSION}"
-  else
-    RESTORE_VERSION="${YAML_MIGRATION_VERSION}"
-  fi
-  if [[ "${RESTORE_VERSION}" != "${YAML_MIGRATION_VERSION}" ]]; then
-    echo ""
-    echo "── Restoring SSM migration version (CFN reset guard) ────────────────"
-    echo "  CFN reset → '${YAML_MIGRATION_VERSION}'. Restoring to '${RESTORE_VERSION}'..."
-    aws ssm put-parameter \
-      --name "/cello/${ENVIRONMENT}/ops-agent/expected-migration-version" \
-      --value "${RESTORE_VERSION}" \
-      --type String \
-      --overwrite \
-      --region "${REGION}" \
-      --output text --query Version >/dev/null 2>&1
-    echo "  Restored: /cello/${ENVIRONMENT}/ops-agent/expected-migration-version = ${RESTORE_VERSION}"
-  else
-    echo "  SSM migration version: ${RESTORE_VERSION} (matches YAML default — no restore needed)"
-  fi
-fi
+# Always write the computed value — overrides whatever CFN just set.
+aws ssm put-parameter \
+  --name "/cello/${ENVIRONMENT}/ops-agent/expected-migration-version" \
+  --value "${COMPUTED_MIGRATION_VERSION}" \
+  --type String \
+  --overwrite \
+  --region "${REGION}" \
+  --output text --query Version >/dev/null 2>&1
+echo "  SSM /cello/${ENVIRONMENT}/ops-agent/expected-migration-version = ${COMPUTED_MIGRATION_VERSION}"
 
 # ── STEP 3: cello-vpc — VPC, subnets, security groups, endpoints ─────────────
 
