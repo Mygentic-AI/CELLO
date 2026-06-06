@@ -57,6 +57,11 @@ RUN pnpm --filter @cello-protocol/operations-agent run build
 # ─── Stage 2: Production ──────────────────────────────────────────────────────
 FROM public.ecr.aws/docker/library/node:24-slim AS production
 
+# Install curl for ECS container health check (CMD-SHELL: curl -sf http://localhost:8080/health)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
 # AC-006: runs as non-root user cello
 RUN groupadd --gid 1001 cello && \
     useradd --uid 1001 --gid cello --shell /bin/sh --create-home cello
