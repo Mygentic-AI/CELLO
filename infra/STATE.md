@@ -12,25 +12,25 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 ## Environments
 
 ### dev — us-east-1
-*Last deployed: 2026-05-27
+*Last deployed: 2026-06-06 (partial — nuclear reset in progress)
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
-| cello-ecr-dev | UPDATE_COMPLETE | 2026-05-27 | cello-operations-agent ECR repo added (OPS-AGENT-005A) |
-| cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent task/execution roles; directory roles include ops-agent/directory-api-key |
-| cello-secrets-dev | IMPORT_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported via CFN resource import; all secrets now CFN-managed (previously UPDATE_COMPLETE 2026-05-27) |
-| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-27 | Port 8080+9090 for directory SG, port 80+443 for ALB SG; SSM+SSMMessages VPC endpoints; ops-agent SG added |
-| cello-kms-dev | UPDATE_COMPLETE | 2026-05-27 | |
-| cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | s3:ListBucket added for relay+directory task roles |
-| cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
-| cello-rotation-dev | UPDATE_COMPLETE | 2026-05-27 | Rotation Lambda covers ops-agent RDS creds (AC-009e) |
-| cello-ecs-directory-dev | DEPLOYED (manual force-deploy) | 2026-06-03 | Task def rev 116: CELLO_RELAY_MULTIADDR updated to relay's current peer ID (12D3KooWJ39z27EpXUfmUJG2C2XZnQMBFXhhDUsdszyFjDQeHYD3 at 10.0.21.210). Directory stable peer ID: 12D3KooWS46wUj6NYvoAsocxZnxth5EgYD2ZXCm7coMkXUWgS1j3 |
-| cello-ecs-operations-agent-dev | UPDATE_COMPLETE | 2026-05-30 | Real image deployed via pipeline (commit cff37b0+); task def rev 21; Telegram polling @CelloConnectStagingBot |
-| cello-waf-dev | UPDATE_COMPLETE | 2026-05-27 | WAFv2 WebACL: rate-limit 1000/5min, IP reputation (BLOCK), CommonRuleSet (COUNT); logs to aws-waf-logs-cello-dev |
-| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-25 | Real image deployed via pipeline (commit 1af5c16) to all 3 regions |
-| cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-05-27 | Ops-agent ECS alarms added |
-| cello-route53-dev | UPDATE_COMPLETE | 2026-05-27 | |
-| cello-cicd-dev | UPDATE_COMPLETE | 2026-05-27 | cello-operations-agent-pipeline added |
+| cello-ecr-dev | UPDATE_COMPLETE | 2026-06-05 | OperationsAgentRepo imported via CFN resource import |
+| cello-iam-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-secrets-dev | UPDATE_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported; all secrets CFN-managed |
+| cello-vpc-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-kms-dev | CREATE_COMPLETE | 2026-05-27 | No changes |
+| cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-ecs-directory-dev | CREATE_COMPLETE | 2026-06-05 | **FRESH CREATE from current IaC** — all M6B stories included; image cello-directory:f28fe89 |
+| cello-ecs-operations-agent-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
+| cello-waf-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
+| cello-ecs-relay-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
+| cello-cloudwatch-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
+| cello-route53-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
+| cello-cicd-dev | UPDATE_COMPLETE | 2026-05-27 | Not deleted during nuclear reset (pipeline infra) |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
 | Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-27 | pipeline-mappings.json includes operations-agent path filter |
 | ECR Replication (account-level) | CONFIGURED | 2026-05-24 | us-east-1 → eu-central-1 + ap-northeast-1; filter: prefix "cello-" |
@@ -102,29 +102,14 @@ All six secrets imported via CFN resource import changeset `import-transport-key
 | WAF Log Group | aws-waf-logs-cello-dev (90-day retention) |
 | IAM User (SES SMTP) | cello-ses-smtp-dev | Created 2026-05-29; access key stored in ses-credentials secret |
 
-**Manual changes (2026-06-02, IaC updated — deploy needed to apply to CF stacks):**
-- `cello-dev-directory-execution-role` DirectorySecretsAccess policy: changed region from `us-east-1` to `*` for all secret ARNs — IAM role is global but tasks run in eu-central-1/ap-northeast-1 and need their own regional secrets. IaC: `cello-iam.yaml` (both DirectorySecretsAccess and DirectoryPermissions statements).
-- `cello-dev-directory-task-role` DirectoryPermissions policy: same change — added eu-central-1 and ap-northeast-1 ARNs manually; IaC updated to use `*` region.
-- `cello-dev-eu-central-1-directory-execution-role` DirectorySecretsAccess policy: added `transport-key*` (was missing — only had 5 secrets). IaC already correct (cello-iam.yaml line 60); regional IAM stack deploy was missed.
-- `cello-dev-ap-northeast-1-directory-execution-role` DirectorySecretsAccess policy: same fix — added `transport-key*`.
+**Nuclear reset (2026-06-05/06):**
+All ECS service stacks (directory, relay, ops-agent), WAF, CloudWatch, and Route53 stacks were deleted across all three regions to eliminate accumulated CFN drift. The directory stack was recreated fresh from current IaC on 2026-06-05 (CREATE_COMPLETE in all 3 regions). Remaining stacks (ops-agent, relay, WAF, CloudWatch, Route53) await the next deploy.sh run.
 
-**Manual changes (2026-05-29/30, IaC updated but not yet deployed — validation deploy needed):**
-- ALB listener rule priority 5: removed `source-ip: 10.0.0.0/16` condition from `/internal/*` forward rule — API key header provides auth; source-ip restriction broke ops-agent (traffic hairpins via internet gateway, arrives with public IP). IaC: `cello-ecs-directory.yaml`
-- ALB listener rule priority 10 (`/internal/*` → 403 catch-all): deleted — no longer needed without source-ip gating. IaC: `cello-ecs-directory.yaml`
-- Ops-agent SG `sg-07cc257e60bed1e49` egress: changed port 80 from DestinationSecurityGroupId (ALB SG) to `CidrIp 0.0.0.0/0`. IaC: `cello-ecs-operations-agent.yaml`
-- Ops-agent SG `sg-07cc257e60bed1e49` egress: also has `TCP 80 → 10.0.0.0/16` live (redundant, not in IaC — will be removed on next deploy)
-- Ops-agent SG `sg-07cc257e60bed1e49` egress: added `TCP 8081 → directory SG` (internal API port). IaC: `cello-ecs-operations-agent.yaml`
-- Directory SG `sg-0cc7f8493f3aff8d8` ingress: added `TCP 8081 from ops-agent SG` (internal API port). IaC: `cello-ecs-operations-agent.yaml`
-- DIRECTORY_INTERNAL_URL: `http://cello-dir-dev-1136016900.us-east-1.elb.amazonaws.com/internal/pre-authorize` (ALB — stable, does not break on directory redeploy; ops-agent task def rev 27)
-- EXPECTED_MIGRATION_VERSION: env var in ops-agent task def; currently 27; update when schema bumps — no code change required
-- Demo-agent IAM role `cello-agent-ssm-role`: added inline policy `cello-demo-secrets-manager` (not in IaC — role predates CloudFormation stacks, shared with openclaw-agent)
+Root cause of drift: manual AWS changes were made over May 23–June 4 (ALB listener rules, security group rules, task definitions) without subsequent deploy.sh runs. The IaC was updated to match but deploy.sh was never executed in any region after 2026-05-28. This caused CFN resource conflicts (AlreadyExists errors) when deploy.sh was finally run on 2026-06-05.
 
-**Manual changes (2026-06-02, IaC updated by CELLO-M6B-004 on 2026-06-03 — deploy pending):**
-- ALB target group `cello-dir-internal-api-dev` (arn: `...targetgroup/cello-dir-internal-api-dev/9142c22ffdd3283e`): created 2026-06-02, port 8081, target-type ip; current target 10.0.87.93:8081. **NOW IN IAC** (cello-ecs-directory.yaml InternalApiTargetGroup + LoadBalancers block). Deploy needed to apply.
-- ALB listener rule priority 5 (`/internal/*`): updated 2026-06-02 to route to `cello-dir-internal-api-dev` TG (port 8081). **NOW IN IAC** (cello-ecs-directory.yaml InternalApiPathRule routes to InternalApiTargetGroup). Deploy needed to apply.
-- Directory SG `sg-0cc7f8493f3aff8d8` ingress: added `TCP 8081 from ALB SG sg-0b694f5a0dcf0fbbb` (2026-06-02, rule sgr-06b678369e4499441). **NOW IN IAC** (cello-vpc.yaml EcsDirectorySecurityGroup port 8081 ingress from ALB). Deploy needed to apply.
+All prior "Manual changes" entries are now resolved — the nuclear reset eliminated all drift. The fresh directory stacks are created from the current IaC (commit 44dc27c+) which includes all M6B stories: port-8081 internal API target group (M6B-004), relay auto-registration (M6B-006), relay WebSocket ALB (M6B-007), poll loop (M6B-008), pg pool max + idle sweep (M6B-009), SSM migration version (M6B-011).
 
-**M6B-004 commit (2026-06-04): IaC committed for port-8081 internal API. Manual resources remain live until next dev directory deploy. After deploy, these manual resources will be replaced by CloudFormation-managed equivalents. V28 migration (GRANT UPDATE on agent_profiles to cello_service) committed to packages/directory/db/migrations/ — applies automatically on next directory start.**
+Demo-agent IAM role `cello-agent-ssm-role` with inline policy `cello-demo-secrets-manager` remains live (not in IaC — predates CloudFormation, shared with openclaw-agent).
 
 **M6B-011: SSM parameter for ops-agent expected migration version (CELLO-M6B-011):**
 Stack `cello-ssm-parameters-dev` (new, us-east-1 only — ops-agent is us-east-1 only) manages `/cello/dev/ops-agent/expected-migration-version`. The `deploy.sh` script automatically preserves the operator-set value via a read-before/restore-after guard (deploy.sh Step 2b, lines ~347-358): it reads the current parameter value before deploying the stack, then restores it immediately after if CloudFormation reset it. Manual re-set is only needed if the parameter is set outside of `deploy.sh`. To update the expected migration version after a new migration is applied, simply set the SSM parameter directly and restart the ECS task — no code deploy required:
@@ -145,23 +130,24 @@ ECS will start a replacement task that reads the updated SSM value. The current 
 - ap-northeast-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-ap1.cello.mygentic.ai --type String --region ap-northeast-1`
 
 ### dev — eu-central-1
-*Last deployed: 2026-05-28
+*Last deployed: 2026-06-06 (partial — nuclear reset in progress)
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
-| cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent/directory-api-key added; **STALE: missing transport-key in execution role — fixed manually 2026-06-02, redeploy needed** |
-| cello-secrets-dev | IMPORT_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported via CFN resource import; all secrets now CFN-managed |
-| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-28 | CIDR 10.1.0.0/16; port 9090 SG rule added for ALB health checks |
-| cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | Directory+relay task roles in manifest bucket policy |
-| cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
-| cello-rotation-dev | UPDATE_COMPLETE | 2026-05-25 | Now uses RDS-managed master secret (no manual admin creds) |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-28 | INTERNAL_API_KEY injected; port 9090 health check; real image via pipeline |
-| cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL |
-| cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-23 | Real image via pipeline (ECR replication) |
-| cello-cloudwatch-dev | CREATE_COMPLETE | 2026-05-23 | Alarms only — dashboard skipped (us-east-1 only) |
-| cello-route53-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-ecr-dev | UPDATE_COMPLETE | 2026-06-05 | OperationsAgentRepo imported via CFN resource import |
+| cello-iam-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-secrets-dev | UPDATE_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported; all secrets CFN-managed |
+| cello-vpc-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | No changes |
+| cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-ecs-directory-dev | CREATE_COMPLETE | 2026-06-05 | **FRESH CREATE from current IaC** — all M6B stories included; image cello-directory:f28fe89 |
+| cello-ecs-operations-agent-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
+| cello-waf-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
+| cello-ecs-relay-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
+| cello-cloudwatch-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
+| cello-route53-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
 | cello-cicd-dev | NOT DEPLOYED | — | CICD pipeline is us-east-1 only |
 | Lambda: cello-dev-rds-rotation | DEPLOYED (real code) | 2026-05-25 | Real handler + psycopg2-binary; uses RDS-managed master secret |
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-25 | 167ca6...27b5 |
@@ -197,23 +183,24 @@ ECS will start a replacement task that reads the updated SSM value. The current 
 | SNS Topic — ops-warning | arn:aws:sns:eu-central-1:257394457473:cello-ops-warning-dev |
 
 ### dev — ap-northeast-1
-*Last deployed: 2026-05-28
+*Last deployed: 2026-06-06 (partial — nuclear reset in progress)
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
-| cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent/directory-api-key added; **STALE: missing transport-key in execution role — fixed manually 2026-06-02, redeploy needed** |
-| cello-secrets-dev | IMPORT_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported via CFN resource import; all secrets now CFN-managed |
-| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-28 | CIDR 10.2.0.0/16; port 9090 SG rule added for ALB health checks |
-| cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | Directory+relay task roles in manifest bucket policy |
-| cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
-| cello-rotation-dev | UPDATE_COMPLETE | 2026-05-25 | Now uses RDS-managed master secret (no manual admin creds) |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-28 | INTERNAL_API_KEY injected; port 9090 health check; real image via pipeline |
-| cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL |
-| cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-23 | Real image via pipeline (ECR replication) |
-| cello-cloudwatch-dev | CREATE_COMPLETE | 2026-05-23 | Alarms only — dashboard skipped (us-east-1 only) |
-| cello-route53-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-ecr-dev | UPDATE_COMPLETE | 2026-06-05 | OperationsAgentRepo imported via CFN resource import |
+| cello-iam-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-secrets-dev | UPDATE_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported; all secrets CFN-managed |
+| cello-vpc-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | No changes |
+| cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-ecs-directory-dev | CREATE_COMPLETE | 2026-06-05 | **FRESH CREATE from current IaC** — all M6B stories included; image cello-directory:f28fe89 |
+| cello-ecs-operations-agent-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
+| cello-waf-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
+| cello-ecs-relay-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
+| cello-cloudwatch-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
+| cello-route53-dev | **DELETED** | — | Nuclear reset: deleted 2026-06-05. Awaiting redeploy via deploy.sh |
 | cello-cicd-dev | NOT DEPLOYED | — | CICD pipeline is us-east-1 only |
 | Lambda: cello-dev-rds-rotation | DEPLOYED (real code) | 2026-05-25 | Real handler + psycopg2-binary; uses RDS-managed master secret |
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-25 | 167ca6...27b5 |
