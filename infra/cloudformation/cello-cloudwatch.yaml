@@ -474,11 +474,7 @@ Resources:
         - MetricNamespace: CELLO/Relay
           MetricName: ManifestUpdateErrors
           MetricValue: "1"
-          Dimensions:
-            - Key: Environment
-              Value: !Ref Environment
-            - Key: Region
-              Value: !Ref AWS::Region
+          DefaultValue: 0
 
   RelayManifestUpdateFailedAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -491,11 +487,6 @@ Resources:
         Investigate S3 access and directory signing key.
       MetricName: ManifestUpdateErrors
       Namespace: CELLO/Relay
-      Dimensions:
-        - Name: Environment
-          Value: !Ref Environment
-        - Name: Region
-          Value: !Ref AWS::Region
       Statistic: Sum
       Period: 300
       EvaluationPeriods: 1
