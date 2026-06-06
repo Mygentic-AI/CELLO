@@ -369,6 +369,48 @@ docs/planning/user-stories/{m0|m1|m2|...}/CELLO-{DOMAIN}-{number}.yaml
 
 Use the next sequential number within the domain. Check existing files to avoid collisions.
 
+## Cross-Repo Dependency Stories (mandatory from M7)
+
+If the story modifies any code in `cello-client` packages (`core/crypto`, `core/transport`, `core/protocol-types`, `core/client`, `core/adapter-claude-code`), the story **must** include two additional blocking ACs:
+
+**AC-[N]-version-bump:**
+```yaml
+- id: AC-[N]-version-bump
+  given: "All cello-client code changes for this story are implemented and tests pass"
+  when: "the implementer runs the version bump procedure in cello-client CLAUDE.md"
+  then: |
+    - Every modified package has its version incremented in package.json
+    - Every package that depends on a modified package has its dependency version updated
+    - @cello-protocol/connect is bumped to reflect the net change
+    - pnpm install is run and pnpm-lock.yaml is updated
+    - git tag v{connect-version} is pushed to origin
+    - CI publishes the new version to npm beta dist-tag
+    - `npm view @cello-protocol/connect@beta dependencies --json` shows real semver versions (never workspace:*)
+  test_type: integration
+  component_under_test: cello-client CI
+  notes: "This is a hard gate. A story that changes cello-client code without publishing a new version breaks every operator on the stale version."
+```
+
+**AC-[N+1]-trustless-cello-dependency-update:**
+```yaml
+- id: AC-[N+1]-trustless-cello-dependency-update
+  given: "The new @cello-protocol/connect version is live on npm beta"
+  when: "packages/directory/package.json and packages/relay/package.json in trustless-cello are updated"
+  then: |
+    - Both package.json files reference the new semver ranges for all modified packages
+    - No workspace:* references to @cello-protocol/crypto, transport, protocol-types, or client remain
+    - pnpm install is run and pnpm-lock.yaml is updated
+    - pnpm run typecheck passes in trustless-cello
+    - Commit pushed to trustless-cello main
+  test_type: integration
+  component_under_test: directory
+  notes: "workspace:* resolves to stale local copies post-REPOSPLIT-002. This AC ensures directory and relay run against the published version."
+```
+
+**Do not write a cello-client story without both of these ACs.** A story that ships code changes without the version bump and the trustless-cello update creates invisible drift — directory and relay appear to work because they compile against the stale local copy, but they are not running the new code.
+
+---
+
 ## After writing stories
 
 Run `/cello-link` to wire the new story files into the vault graph.

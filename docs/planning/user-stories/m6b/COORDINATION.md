@@ -382,3 +382,48 @@ Audit conducted against git logs (96h, both repos), infra/STATE.md, and story YA
 **Current status:** service `active`, awaiting re-registration via @CelloConnectStagingBot.
 
 **After re-registration:** update STATE.md `Agent ID` field and `Service status` with new agent_id and registration date.
+
+---
+
+### 2026-06-06 — REPOSPLIT-002 completion gap identified and documented
+
+**Status:** Known gap — directory and relay are running against stale local package copies post-REPOSPLIT. Investigation complete (2026-06-06). Rules written. No breaking changes. Blocking M7 cello-client stories until fixed.
+
+**What the gap is:**
+
+After REPOSPLIT-002, `cello-client` was scaffolded and packages published to npm. However, `packages/directory/package.json` and `packages/relay/package.json` in trustless-cello still reference these packages as `workspace:*`:
+
+```
+@cello-protocol/crypto     workspace:*   (published: 0.0.7)
+@cello-protocol/transport  workspace:*   (published: 0.0.4)
+@cello-protocol/protocol-types  workspace:*  (published: 0.0.3)
+@cello-protocol/client     workspace:*   (published: 0.0.20)
+```
+
+`workspace:*` resolves to the stale local copies in `trustless-cello/packages/crypto/`, etc. — which are at version 0.0.1 and have not been updated since REPOSPLIT-002. Directory and relay are running M0-era crypto and transport code, not the M6B-fixed versions.
+
+**Is this a problem right now?**
+
+Investigated 2026-06-06: API surface comparison confirmed no breaking changes between the local (0.0.1) and published (0.0.7/0.0.4/0.0.3/0.0.20) versions for all symbols imported by directory and relay. The directory and relay compile and run correctly against either version. Current production behavior is unaffected.
+
+**Why it must be fixed before M7:**
+
+M7 stories will change cello-client APIs (multi-agent, session management, connection policy). If `workspace:*` remains in place when an M7 story ships a cello-client change, directory and relay will silently continue running the old code. There will be no type error and no test failure — the workspace copy resolves first. This is the exact silent version drift that caused the ops-agent crash-loop in M6 (`client@0.0.5` was never bumped to include DX-001 changes).
+
+**What needs to happen:**
+
+1. Update `packages/directory/package.json`: replace `workspace:*` for all four cello-client packages with pinned semver ranges (`^0.0.7`, `^0.0.4`, `^0.0.3`, `^0.0.20`).
+2. Update `packages/relay/package.json`: same four packages.
+3. Run `pnpm install` in trustless-cello — lockfile update.
+4. Run `pnpm run typecheck` — must pass.
+5. Commit and push — directory pipeline will trigger (package.json changed).
+6. Remove dead pipelines from `cello-cicd.yaml` and `pipeline-mappings.json` (`cello-crypto-pipeline`, `cello-transport-pipeline`, `cello-client-pipeline`, `cello-protocol-types-pipeline`), then run `./infra/deploy-lambdas.sh dev filter`.
+7. Delete stale package source directories: `packages/crypto/`, `packages/transport/`, `packages/client/`, `packages/protocol-types/` from trustless-cello root workspace (these are now npm deps, not local packages).
+
+**Rules added to prevent recurrence:**
+
+- `trustless-cello/.claude/CLAUDE.md` → "Cross-Repo Dependency Management" section: `workspace:*` to cello-client packages is a bug; correct format is `^X.Y.Z`; every story changing cello-client must include version bump + trustless-cello update ACs.
+- `/cello-story` skill → "Cross-Repo Dependency Stories" section: mandatory AC templates for version bump and trustless-cello dependency update.
+- `/cello-review` skill → Step 6b: `workspace:*` references are blocking; npm publish verification; version bump verification.
+
+**Who needs to act:** The agent implementing the first M7 cello-client story must complete steps 1–7 above as a prerequisite (or a dedicated cleanup story should be dispatched before M7 starts).

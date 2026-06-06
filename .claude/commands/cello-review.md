@@ -194,6 +194,26 @@ If any commit in this story's history touches production code outside a story-dr
 
 ---
 
+## Step 6b — Cross-Repo Dependency Check (any story touching cello-client packages)
+
+If the story modified any code in `cello-client` (`core/crypto`, `core/transport`, `core/protocol-types`, `core/client`, `core/adapter-claude-code`):
+
+1. **`workspace:*` references are blocking.** Check `packages/directory/package.json` and `packages/relay/package.json` in trustless-cello. If any of these packages (`@cello-protocol/crypto`, `@cello-protocol/transport`, `@cello-protocol/protocol-types`, `@cello-protocol/client`) still appear as `workspace:*`, that is a **[blocking]** finding. The package.json must reference a pinned semver range (`^X.Y.Z`) pointing to the npm-published version.
+
+2. **npm publish verification.** Run:
+   ```bash
+   npm view @cello-protocol/connect@beta dependencies --json
+   ```
+   If any dependency shows `workspace:*` instead of a real version number, the publish was done with `npm publish` instead of `pnpm publish` — the package is broken. That is a **[blocking]** finding.
+
+3. **Version was actually bumped.** Verify the changed packages have a higher version in `package.json` than the previous `@beta` dist-tag on npm. If the version on npm equals the version in `package.json` and the commit is newer than the last publish, the implementer forgot to bump — **[blocking]**.
+
+4. **pnpm-lock.yaml is updated.** After the `package.json` dependency update in trustless-cello, `pnpm install` must have been run. If `pnpm-lock.yaml` in trustless-cello still references old version hashes for the updated packages, the lockfile is stale — **[medium]**.
+
+**The root cause this check prevents:** After REPOSPLIT-002, trustless-cello still contains `packages/crypto/`, `packages/transport/` etc. as stale local copies. `workspace:*` resolves to these copies. A story that ships new crypto behavior but leaves `workspace:*` in place means directory and relay run against the old code — silently, with no type error, no test failure, no warning.
+
+---
+
 ## Step 7 — M5+ migration and infrastructure checks
 
 **For stories that add or modify database migrations:**

@@ -218,6 +218,40 @@ claude mcp add cello -- npx --yes @cello-protocol/connect@0.0.11
 
 ---
 
+## Cross-Repo Dependency Management — Non-Negotiable
+
+CELLO is split across two repos. `trustless-cello` (server-side) depends on packages published from `cello-client`. The five packages that originate in `cello-client` are:
+
+- `@cello-protocol/crypto`
+- `@cello-protocol/transport`
+- `@cello-protocol/protocol-types`
+- `@cello-protocol/client`
+- `@cello-protocol/connect`
+
+**`workspace:*` references to cello-client packages in trustless-cello are a bug.** `workspace:*` resolves to the local copy in the pnpm workspace. After REPOSPLIT-002, the local copies in `trustless-cello/packages/crypto/`, `packages/transport/`, etc. are stale and no longer maintained. Using `workspace:*` means directory and relay run against old code silently. There is no type error. Tests pass. The bug is invisible until something breaks in production.
+
+**The correct reference format is a pinned semver range:**
+```json
+"@cello-protocol/crypto": "^0.0.7",
+"@cello-protocol/transport": "^0.0.4",
+"@cello-protocol/protocol-types": "^0.0.3",
+"@cello-protocol/client": "^0.0.20"
+```
+
+**Interfaces stays local.** `@cello-protocol/interfaces` is maintained in `trustless-cello` and is the only package that remains as `workspace:*` — it is not a cello-client package.
+
+**Before any story that changes cello-client packages:**
+
+1. Check the current published versions on npm: `npm view @cello-protocol/crypto@beta version` (and transport, protocol-types, client, connect).
+2. The story's ACs must include an explicit version bump AC: "After implementation, `@cello-protocol/connect` is bumped to `X.Y.Z` in cello-client, tagged, and published to beta. `trustless-cello/packages/directory/package.json` and `trustless-cello/packages/relay/package.json` are updated to reference the new versions. `pnpm install` is run to update the lockfile."
+3. Never write a story that changes cello-client behavior without also specifying the version bump and the trustless-cello package.json update as blocking ACs.
+
+**REPOSPLIT-002 completion gap (tracked, not yet fixed):** As of 2026-06-06, `packages/directory/package.json` and `packages/relay/package.json` in trustless-cello still use `workspace:*` for all four cello-client packages. The investigation (2026-06-06) confirmed the published versions (crypto 0.0.7, transport 0.0.4, protocol-types 0.0.3, client 0.0.20) are API-compatible — no breaking changes, pure dependency swap. This must be fixed before any M7 story that changes cello-client APIs begins.
+
+**Dead pipelines (cleanup pending):** `cello-crypto-pipeline`, `cello-transport-pipeline`, `cello-client-pipeline`, `cello-protocol-types-pipeline` in `cello-cicd.yaml` still watch `packages/crypto/`, `packages/transport/` etc. in trustless-cello. These paths are stale post-REPOSPLIT — no code changes will ever land there. These pipelines trigger on ghost changes and waste CI resources. They must be removed from `cello-cicd.yaml` and from `pipeline-mappings.json`, and `deploy-lambdas.sh dev filter` must be run after.
+
+---
+
 ## Slash Commands
 
 - **`/cello-read`** — Use at session start. Loads current project state without reading everything.
