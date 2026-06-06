@@ -264,6 +264,9 @@ Resources:
       DeploymentConfiguration:
         MinimumHealthyPercent: 0
         MaximumPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: false
       NetworkConfiguration:
         AwsvpcConfiguration:
           # AC-001 / AC-004b: PUBLIC subnet required — no NAT Gateway in cello-vpc.yaml.
