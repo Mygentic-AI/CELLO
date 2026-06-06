@@ -89,6 +89,24 @@ aws ecs describe-services --cluster cello-dev --services <service-name> --region
 
 ---
 
+## deploy.sh Must Not Block on Non-Critical Services
+
+**Make non-critical service deployments non-fatal in deploy.sh.** If a service like ops-agent fails to stabilize, deploy.sh should log the failure and continue to the next stack. Critical services (directory, relay) should remain fatal. The ops-agent is not required for CELLO protocol operation — it's a Telegram registration bot. Blocking relay and WAF deployment because of an ops-agent health check failure is unacceptable.
+
+---
+
+## Verify All Prerequisites Before Running deploy.sh
+
+**Before every deploy.sh run, verify that ALL external references in ECS task definitions actually exist in the target region.** This includes:
+- Every SSM parameter referenced via `{{resolve:ssm:...}}` or `ValueFrom`
+- Every Secrets Manager secret referenced via `ValueFrom`
+- Every CloudFormation export referenced via `!ImportValue`
+- Every ECR image referenced by the deploy
+
+A single missing reference causes the ECS task to crash-loop, which blocks the entire deployment pipeline. Do not assume prerequisites exist — check them.
+
+---
+
 ## Ops-Agent Is Single-Region
 
 The operations agent (`cello-ecs-operations-agent`) runs in **us-east-1 only** (single Telegram long-polling instance). The `deploy.sh` script deploys it to all regions for IaC consistency, but eu-central-1 and ap-northeast-1 instances will have PLACEHOLDER values for `telegram-bot-token` and `ses-credentials`. This is acceptable — they exist for IaC parity, not for operation.
