@@ -113,6 +113,16 @@ Document this reasoning in a comment block at the top of the migration file or i
 
 **One authoritative test per AC.** If a test is named for AC-006, it must exercise what AC-006 actually claims. A hollow test named for an AC is worse than no test.
 
+**CELLO_E2E_LIVE guard — mandatory for tests requiring external state.** If any test in the file requires a pre-registered agent identity, an external directory node with persisted FROST shares, or any resource that `createSessionFixture()` cannot provide fully in-process, wrap every top-level `describe` block in that file with `describe.skipIf(!process.env.CELLO_E2E_LIVE)`:
+
+```typescript
+import { describe } from "vitest";
+const liveOnly = describe.skipIf(!process.env.CELLO_E2E_LIVE);
+// use liveOnly(...) instead of describe(...) at the top level
+```
+
+Do NOT add this guard to tests that only use `createSessionFixture()` with in-process nodes — those are self-contained and do not need it. The guard is only for tests that depend on external live state. A test that requires live state and runs without this guard will silently fail in CI and mask real regressions.
+
 ### C — Gate sequence
 
 Run in this exact order. Every gate must be clean before proceeding to the next.

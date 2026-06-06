@@ -327,6 +327,21 @@ If the story touches `PgDirectoryStore`, any Flyway migration, or any `Directory
 
 If any gate was skipped or failed, that is blocking regardless of test results.
 
+**CELLO_E2E_LIVE guard check:**
+
+If the story adds any test that requires a pre-registered agent identity (FROST key shares persisted in the directory), an external directory node, an external relay, or any resource that `createSessionFixture()` cannot provide in-process:
+
+1. **Every `describe` block in that test file must be wrapped with `describe.skipIf(!process.env.CELLO_E2E_LIVE)`.** The canonical pattern:
+   ```typescript
+   import { describe } from "vitest";
+   const liveOnly = describe.skipIf(!process.env.CELLO_E2E_LIVE);
+   // use liveOnly(...) in place of describe(...) at the top level
+   ```
+2. **Absence of this guard is blocking.** A test that requires live infrastructure and runs without the guard will fail in CI with errors that look identical to regressions. The CI failure is silent noise — it masks real failures.
+3. Tests using `createSessionFixture()` with only in-process nodes (relay, directory, agents) do NOT need the guard — those are self-contained and reliable. The guard is only for tests that need state that lives outside the test process (pre-registered identities, external services).
+
+*Rationale: mcp-002 and mcp-003-e2e (commit `c727593`) — both files failed in CI for months because FROST ceremony timing was unreliable under CodeBuild resource constraints. The failures were indistinguishable from real regressions. Any new regression in those files was invisible.*
+
 **Reactive fix check:**
 
 If any commit in this story's history touches production code outside a story-driven change (a hotfix, live-session fix, or quick patch), verify it has a corresponding test. A production code change with no test is a **blocking** finding. See the canonical examples: CONNREQ-002, REG-001, PERSIST-020 wiring fix, encodeConnectionRequestError field inclusion.
