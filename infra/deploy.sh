@@ -564,10 +564,22 @@ fi
 # depends on: cello-iam, cello-ecr, cello-vpc, cello-ecs-directory (cluster ARN, ALB DNS)
 # Position: after directory (provides cluster + ALB DNS name) and before WAF (no dep).
 # AC-001: public subnet, AssignPublicIp: ENABLED; no ALB; MinimumHealthyPercent=0.
+# NON-FATAL: ops-agent is a Telegram bot — not required for CELLO protocol operation.
+# A crash-loop here must not block relay, WAF, CloudWatch, and Route53 from deploying.
 
-deploy_stack "cello-ecs-operations-agent-${ENVIRONMENT}" "cello-ecs-operations-agent.yaml" \
-  "Environment=${ENVIRONMENT}" \
-  "ImageUri=${OPS_AGENT_IMAGE}"
+ops_agent_exit=0
+(
+  deploy_stack "cello-ecs-operations-agent-${ENVIRONMENT}" "cello-ecs-operations-agent.yaml" \
+    "Environment=${ENVIRONMENT}" \
+    "ImageUri=${OPS_AGENT_IMAGE}"
+) || ops_agent_exit=$?
+
+if [[ ${ops_agent_exit} -ne 0 ]]; then
+  echo ""
+  echo "WARNING: cello-ecs-operations-agent-${ENVIRONMENT} failed (exit ${ops_agent_exit})." >&2
+  echo "         Ops-agent health check issue is tracked separately. Continuing deployment." >&2
+  echo ""
+fi
 
 # ── STEP 10: cello-waf — WAF WebACL associated with directory ALB ────────────
 # depends on: cello-ecs-directory (imports cello-${ENVIRONMENT}-alb-arn via
