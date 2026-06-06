@@ -4,6 +4,18 @@ These instructions are mandatory for any agent working on files under `infra/`.
 
 ---
 
+## ECS Health Check — Liveness Only, Never Readiness
+
+**`/health` must return 200 as soon as the process is up. Never make it conditional on a dependency, registration, or connection.**
+
+ECS uses `/health` to decide whether to keep the task alive. If `/health` returns non-200 during startup — waiting for a registration, a downstream service, a connection to complete — ECS will kill the task before it can finish that step. The task restarts, hits the same gate, fails again. Deadlock, indefinitely.
+
+If you need to distinguish "process is alive" from "service is fully ready", use ECS `startPeriod` (grace period before health checks count) or ALB unhealthy threshold counts — not a 503 from the endpoint. The application-level health check and the ECS liveness probe must not be the same concept.
+
+*Root cause: 2026-06-06 — relay `/health` returned 503 until registration with directory completed. ECS killed 29 tasks in a loop across all 3 regions.*
+
+---
+
 ## Required Config Anti-Pattern — Non-Negotiable
 
 **Never use `Default: ""` for an environment variable that enables a critical service behavior.** An empty string default silently disables the feature — the service starts, passes health checks, and appears healthy while being operationally broken.
