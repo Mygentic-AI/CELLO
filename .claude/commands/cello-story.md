@@ -58,6 +58,7 @@ This rule exists because: the test harness is hermetic and perfectly blind to re
 3. Check `docs/planning/user-stories/{milestone}/` — see what stories already exist and what COORDINATION.md says about migration versions and parallel work.
 4. Read `.claude/CLAUDE.md` — the system-wide invariants. Any story you write is subject to every constraint in this file, whether or not the story mentions it.
 5. Read `CONTEXT.md` at the repo root — canonical glossary. Use only terms defined here.
+6. **If the story touches infrastructure in any way** — CloudFormation templates, `deploy.sh`, ECS task definitions, CI/CD pipelines, `pipeline-mappings.json`, AWS secrets/SSM parameters, Flyway migration versions, or any resource under `infra/` — **read `infra/CLAUDE.md` before writing a single AC.** It contains mandatory rules (migration version sync, pipeline mappings deployment, IaC-only resource creation, STATE.md updates) that directly govern what ACs must require and what the implementation must do. Violations of these rules have caused crash-loops and silent pipeline outages in the past.
 6. **Search the discussion logs for anything relevant to the domain you are writing about.** Run:
    ```bash
    grep -rl "<keyword>" docs/planning/discussion_logs/

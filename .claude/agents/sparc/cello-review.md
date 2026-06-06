@@ -146,7 +146,8 @@ Read in this order:
 3. `CONTEXT.md` at the repo root — canonical glossary; any term used differently is a bug
 4. `docs/planning/user-stories/{milestone}/CELLO-{STORY-ID}.yaml` — the story being reviewed
 5. The implementation files named in the story's `components` field
-6. **For M5+ stories that touch infrastructure, IaC, deployment, or AWS:** read `infra/STATE.md` to understand the current real infrastructure state before evaluating the implementation.
+6. **If the story touches infrastructure in any way** — CloudFormation templates, `deploy.sh`, ECS task definitions, CI/CD pipelines, `pipeline-mappings.json`, AWS secrets/SSM parameters, Flyway migration versions, or any resource under `infra/` — **read `infra/CLAUDE.md` before evaluating the implementation.** It contains the mandatory rules the implementation must follow. Use it as your checklist: migration version sync, pipeline mappings redeployment, IaC-only resource creation, STATE.md updates. A story that violates any of these rules is **[blocking]** regardless of whether tests pass.
+7. **For stories that touch infrastructure, IaC, deployment, or AWS:** also read `infra/STATE.md` to understand the current real infrastructure state before evaluating the implementation.
 
 If the story depends on other stories (`depends_on`), note which interfaces/types those stories define — the implementation must use them, not reinvent them.
 
