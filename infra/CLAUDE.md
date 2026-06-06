@@ -22,6 +22,24 @@ These instructions are mandatory for any agent working on files under `infra/`.
 
 ---
 
+## Pipeline Mappings Must Stay in Sync with the Live Lambda
+
+**`infra/pipeline-mappings.json` is bundled into the `cello-pipeline-filter` Lambda at deploy time — it is NOT read from the repo at runtime.** The Lambda reads `/var/task/pipeline-mappings.json`, which is whatever was in the zip when `deploy-lambdas.sh` last ran. A git change to the file has zero effect until the Lambda is redeployed.
+
+**Any time you modify `infra/pipeline-mappings.json` — adding a pipeline, renaming one, or changing prefix mappings — you MUST also redeploy the Lambda:**
+```bash
+./infra/deploy-lambdas.sh dev filter
+```
+
+**If you add a new CodePipeline to `cello-cicd.yaml`, you must do all three:**
+1. Add the pipeline ARN to `PipelineFilterLambdaRole` → `StartPipelines` resource list in `cello-cicd.yaml`
+2. Add the package prefix → pipeline mapping to `infra/pipeline-mappings.json`
+3. Run `./infra/deploy-lambdas.sh dev filter` to bundle the updated mappings into the live Lambda
+
+Skipping step 3 means the new pipeline will never be triggered by GitHub pushes. The filter Lambda will silently log `pipeline.filter.no_match` and do nothing.
+
+---
+
 ## deploy.sh Is the Only Deployment Mechanism
 
 **All CFN stack changes go through `deploy.sh`.** The CI/CD pipelines only swap Docker images — they do NOT deploy CloudFormation templates. Any change to task definitions (env vars, secrets, ports, IAM), ALBs, security groups, or any other CFN-managed resource requires running `deploy.sh`.
