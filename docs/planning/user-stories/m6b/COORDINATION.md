@@ -273,3 +273,32 @@ cello-client: CELLO-M6B-013 merged (no-ff merge). @journeyapps/sqlcipher moved t
 @cello-protocol/client bumped 0.0.19→0.0.20, @cello-protocol/connect bumped 0.0.28→0.0.30. (Versioning note: should have been 0.0.29, but sprint coder bumped twice [0.0.28→0.0.30] instead of once [→0.0.29]. Investigation confirmed pure arithmetic error — no missing commits or code drops between v0.0.28 and v0.0.30.) Tagged v0.0.30. CI will publish to npm beta.
 No trustless-cello side.
 All M6B dependencies now resolved — 001-007, 012, 013 merged; M6B-008/009/010/011 ready for merge. No blocking dependencies remain.
+
+---
+
+### 2026-06-05 — M6B-008 merged
+
+trustless-cello: CELLO-M6B-008 merged at 44dc27c. RelayPoolManager S3 manifest poll loop active — directory picks up manifest changes without restart. Poll interval configurable via CELLO_RELAY_MANIFEST_POLL_MS env var.
+No cello-client side.
+
+---
+
+### 2026-06-05 — M6B-009 merged
+
+trustless-cello: CELLO-M6B-009 merged at ed83932. Capacity hardening complete: pg pool size configurable via env var (CELLO_PG_POOL_MAX), RDS upgraded to t3.medium in IaC, relay stream caps enforced, idle session sweep active.
+No cello-client side.
+
+---
+
+### 2026-06-05 — M6B-011 merged
+
+trustless-cello: CELLO-M6B-011 merged at ab6ea2d. Three ops-agent + IaC gaps fixed: (1) honest permanent-failure message replaces "try again in a few minutes" on PreAuthRequestError; (2) re-registration check with CONFIRM flow — already-registered users see acknowledgement before new token issued; (3) EXPECTED_MIGRATION_VERSION moved from hardcoded task def value to SSM parameter (/cello/${Environment}/ops-agent/expected-migration-version) — schema bumps now require only SSM update + task restart, no pipeline deploy. New cello-ssm-parameters.yaml CloudFormation stack. OpsAgentTaskExecutionRole updated with ssm:GetParameters permission.
+No cello-client side.
+
+---
+
+### 2026-06-06 — M6B-010 merged
+
+trustless-cello: CELLO-M6B-010 merged at b397c36. Directory startup state restoration complete: #pendingConnectionRequests restored from new active_connection_requests table (V29 migration); #sessionParticipants and #sessionLastActivity restored from sessions table participant columns (also V29). New PgDirectoryStore methods: saveActiveConnectionRequest, deleteActiveConnectionRequest, loadActiveConnectionRequests, writeSessionWithParticipants, loadActiveSessionParticipants. Startup emits adapter.state.loaded for each restore step. hash-chain.ts updated to exclude new sessions columns from chain hash computation (M4 bug #7 pattern).
+No cello-client side.
+All 13 M6B stories (minus deleted M6B-003) are now merged. M6B milestone complete.
