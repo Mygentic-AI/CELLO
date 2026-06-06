@@ -4,6 +4,70 @@ These instructions are mandatory for any agent working on files under `infra/`.
 
 ---
 
+## ECS Debugging — Mandatory Diagnostic Sources
+
+**When an ECS task or service is failing, check ALL of the following before forming any hypothesis. Do not speculate until you have read each source.**
+
+### 1. ECS Service Events (always first)
+```bash
+aws ecs describe-services --cluster cello-dev --services <service-name> --region <region> \
+  --query 'services[0].events[0:10]' --output json
+```
+This is the authoritative record of why ECS stopped a task. It will say explicitly: "failed container health checks", "unable to pull image", "ResourceInitializationError", etc. **Read this before anything else.**
+
+### 2. Stopped Task Details
+```bash
+# List stopped tasks
+aws ecs list-tasks --cluster cello-dev --service-name <service-name> \
+  --region <region> --desired-status STOPPED --output json
+
+# Get stop reason and exit code
+aws ecs describe-tasks --cluster cello-dev --tasks <task-arn> --region <region> \
+  --query 'tasks[0].{stopCode:stopCode,stoppedReason:stoppedReason,containers:containers[*].{name:name,exitCode:exitCode,reason:reason}}' \
+  --output json
+```
+
+### 3. Application Logs (CloudWatch)
+```bash
+aws logs describe-log-streams --log-group-name "/ecs/<service>-<env>" \
+  --region <region> --order-by LastEventTime --descending \
+  --query 'logStreams[0].logStreamName' --output text
+
+aws logs get-log-events --log-group-name "/ecs/<service>-<env>" \
+  --log-stream-name <stream> --region <region> \
+  --query 'events[*].message' --output text | tr '\t' '\n'
+```
+
+### 4. CloudFormation Stack Events (for deploy failures)
+```bash
+aws cloudformation describe-stack-events --stack-name <stack-name> --region <region> \
+  --query 'StackEvents[0:10].{Resource:LogicalResourceId,Status:ResourceStatus,Reason:ResourceStatusReason,Time:Timestamp}' \
+  --output json
+```
+
+### 5. Deployment Circuit Breaker State
+```bash
+aws ecs describe-services --cluster cello-dev --services <service-name> --region <region> \
+  --query 'services[0].{rollout:deployments[0].rolloutState,failed:deployments[0].failedTasks,circuit:deploymentConfiguration.deploymentCircuitBreaker}' \
+  --output json
+```
+
+**The ECS service events (source 1) will tell you why SIGTERM was sent.** Application logs alone cannot tell you this — they only show that shutdown happened, not why ECS triggered it. Never diagnose a task stop without reading the service events first.
+
+### 6. CloudTrail (for silent pre-start failures)
+If a task fails before writing any log line, the cause is almost always IAM: the execution role was denied `secretsmanager:GetSecretValue` or `ssm:GetParameters`. Application logs will be empty. CloudTrail will have the denial:
+```bash
+aws cloudtrail lookup-events --region <region> \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=GetSecretValue \
+  --query 'Events[0:5].{time:EventTime,user:Username,resource:Resources[0].ResourceName,result:ErrorCode}' \
+  --output json
+```
+
+### 7. VPC Flow Logs (for network failures)
+If the task starts but can't reach Telegram API, SES, or RDS, the application will hang or error. VPC Flow Logs show whether packets are leaving the subnet and whether responses are returning. Check in CloudWatch Logs under the VPC flow log group.
+
+---
+
 ## CloudFormation Template Limits
 
 **CloudFormation `Description` field limit is 1024 characters.** This applies to the top-level template `Description` AND to each `AWS::CloudWatch::Alarm` `AlarmDescription` field. Both fields accept `!Sub` — the limit applies to the expanded string. Keep descriptions short or they will fail `CreateChangeSet` with `Template format error: 'Description' length is greater than 1024`.
