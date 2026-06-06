@@ -6,6 +6,7 @@
 #
 # Target: linux/amd64 (ECS Fargate requirement)
 # The relay has no Flyway / no Java dependency — leaner than the directory image.
+# crypto/transport/protocol-types resolved from npm (REPOSPLIT-002).
 
 # ─── Stage 1: Build ────────────────────────────────────────────────────────
 FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-slim AS build
@@ -23,26 +24,17 @@ RUN corepack enable && corepack prepare pnpm@10.33.2 --activate
 # Copy workspace root files for pnpm workspace resolution
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json tsconfig.json ./
 COPY packages/interfaces/package.json packages/interfaces/
-COPY packages/protocol-types/package.json packages/protocol-types/
-COPY packages/crypto/package.json packages/crypto/
-COPY packages/transport/package.json packages/transport/
 COPY packages/relay/package.json packages/relay/
 
 # Install all dependencies (workspace mode)
 RUN pnpm install --frozen-lockfile
 
-# Copy source code for all workspace packages needed by relay
+# Copy source code for workspace packages needed by relay
 COPY packages/interfaces/ packages/interfaces/
-COPY packages/protocol-types/ packages/protocol-types/
-COPY packages/crypto/ packages/crypto/
-COPY packages/transport/ packages/transport/
 COPY packages/relay/ packages/relay/
 
-# Build all packages in dependency order
+# Build in dependency order
 RUN pnpm --filter @cello-protocol/interfaces run typecheck && \
-    pnpm --filter @cello-protocol/protocol-types run typecheck && \
-    pnpm --filter @cello-protocol/crypto run typecheck && \
-    pnpm --filter @cello-protocol/transport run typecheck && \
     pnpm --filter @cello-protocol/relay run typecheck
 
 # ─── Stage 2: Production ───────────────────────────────────────────────────
@@ -61,9 +53,6 @@ RUN corepack enable && corepack prepare pnpm@10.33.2 --activate
 # Copy workspace structure for production install
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY packages/interfaces/package.json packages/interfaces/
-COPY packages/protocol-types/package.json packages/protocol-types/
-COPY packages/crypto/package.json packages/crypto/
-COPY packages/transport/package.json packages/transport/
 COPY packages/relay/package.json packages/relay/
 
 # Install production dependencies only
@@ -71,9 +60,6 @@ RUN pnpm install --frozen-lockfile --prod
 
 # Copy compiled dist from build stage
 COPY --from=build /app/packages/interfaces/dist/ packages/interfaces/dist/
-COPY --from=build /app/packages/protocol-types/dist/ packages/protocol-types/dist/
-COPY --from=build /app/packages/crypto/dist/ packages/crypto/dist/
-COPY --from=build /app/packages/transport/dist/ packages/transport/dist/
 COPY --from=build /app/packages/relay/dist/ packages/relay/dist/
 
 # Non-root user for security
