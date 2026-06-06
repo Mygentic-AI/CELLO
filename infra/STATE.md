@@ -262,9 +262,9 @@ ECS will start a replacement task that reads the updated SSM value. The current 
 | Agent ID | ba493e6eca98924f02378ac1a5de81d3 |
 | Agent pubkey (K_local) | 12ccbfd5fa4049177e4c4a81f7462641c1ab4490bfd640ea7e6407a69d06a2f8 |
 | SQLCipher DB path | /opt/cello-demo/data/client.db |
-| @cello-protocol/connect version | 0.0.14 (beta) |
-| Service status | active — fresh identity re-registered 2026-06-02; both agent.key and client.db replaced; demo.started confirmed |
-| Previous Agent IDs | a2c55e2721f45cfa86cb3417a76e3f7b, c684a3d274ad4ecc716d1d6fd420545c (both invalidated — old key file retained; replaced with full fresh identity 2026-06-02) |
+| @cello-protocol/connect version | 0.0.30 (beta) |
+| Service status | active — NOT REGISTERED — client.db wiped 2026-06-06, connect upgraded 0.0.25→0.0.30 (M6B-013 SQLCipher change); needs fresh re-registration via @CelloConnectStagingBot |
+| Previous Agent IDs | a2c55e2721f45cfa86cb3417a76e3f7b, c684a3d274ad4ecc716d1d6fd420545c, ba493e6eca98924f02378ac1a5de81d3 (all invalidated — directory DB wiped 2026-06-06) |
 | Access | SSM Session Manager only - no key pair, no inbound SG rules |
 | Inbound rules | None |
 | Outbound rules | TCP 443 to 0.0.0.0/0 only |

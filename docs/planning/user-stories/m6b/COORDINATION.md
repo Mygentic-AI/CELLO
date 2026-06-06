@@ -361,17 +361,24 @@ Audit conducted against git logs (96h, both repos), infra/STATE.md, and story YA
 
 ---
 
-### 2026-06-06 — Demo agent EC2 upgrade required before re-registration
+### 2026-06-06 13:00 UTC — Demo agent EC2 upgraded to connect 0.0.30
 
 **Instance:** `i-0ad3e7c22470f266e` (cello-demo-agent, us-east-1a)
 
-**Problem:** EC2 is running `@cello-protocol/connect@0.0.14`. M6B-013 (merged 2026-06-04) replaced `@journeyapps/sqlcipher` with `@signalapp/sqlcipher` starting at v0.0.30. The old binary cannot correctly read/write a DB created by v0.0.30+, and vice versa. The old `client.db` at `/opt/cello-demo/data/client.db` was written by v0.0.14 and is incompatible with the current binary.
+**What was done (via SSM):**
+1. Stopped `cello-demo.service` (systemd)
+2. Deleted `/opt/cello-demo/data/client.db`
+3. Updated `/opt/cello-demo/package.json` dependency from `^0.0.25` → `0.0.30`
+4. Ran `npm install` — 0 vulnerabilities, `@cello-protocol/connect@0.0.30` confirmed installed
+5. Started `cello-demo.service`
 
-**Required steps (via SSM to i-0ad3e7c22470f266e):**
-1. Stop the demo agent process
-2. Delete `/opt/cello-demo/data/client.db`
-3. Upgrade `@cello-protocol/connect` from 0.0.14 → 0.0.30 (beta)
-4. Restart the demo agent process
-5. Re-register via @CelloConnectStagingBot (full Telegram flow — new token, fresh DKG)
+**Post-start log confirms:**
+- Fresh DB created with V1+V2 migrations, WAL mode enabled (`journalMode: wal`) — M6B-005/M6B-013 working
+- PID lock acquired — M6B-001 working
+- Identity key preserved: agent pubkey still `12ccbfd5fa4049177e4c4a81f7462641c1ab4490bfd640ea7e6407a69d06a2f8` (from Secrets Manager)
+- Directory connection failed as expected (agent not yet registered)
+- Service reports: "ready (not registered — call cello_setup_guidance for setup)"
 
-**After re-registration:** update STATE.md with new agent_id, new K_local pubkey, and new connect version.
+**Current status:** service `active`, awaiting re-registration via @CelloConnectStagingBot.
+
+**After re-registration:** update STATE.md `Agent ID` field and `Service status` with new agent_id and registration date.
