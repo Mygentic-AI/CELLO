@@ -1727,4 +1727,244 @@ export class PgDirectoryStore implements DirectoryStore {
     );
     return result.rows[0]?.public_key_hex;
   }
+
+  // ─── M6B-010: Startup state restoration ──────────────────────────────────
+
+  /**
+   * Save a "Case B" active connection request to persistent storage.
+   *
+   * M6B-010 AC-001: called when a connection request is delivered to the target's
+   * signaling stream (the frame is sent live, not queued to pending_connection_requests).
+   * After delivery, the request moves from pending_connection_requests→DB into
+   * #pendingConnectionRequests in memory. Writing to active_connection_requests here
+   * ensures the request survives a directory restart.
+   *
+   * Pseudocode:
+   *   INSERT INTO active_connection_requests
+   *     (connection_request_id, sender_pubkey_hex, target_pubkey_hex,
+   *      package_cbor, disclosure_round, expires_at)
+   *   VALUES ($1, $2, $3, $4, $5, $6)
+   *   ON CONFLICT (connection_request_id) DO NOTHING
+   *
+   * ON CONFLICT DO NOTHING: the request may be re-delivered on reconnect (after restart);
+   * the second write is a no-op. The original expiry is preserved.
+   *
+   * @param params.connectionRequestId - Directory-assigned connection request ID
+   * @param params.senderPubkeyHex - K_local hex of the sender
+   * @param params.targetPubkeyHex - K_local hex of the target
+   * @param params.packageCbor - The CBOR-encoded connection request package
+   * @param params.disclosureRound - 1 for initial request, 2 for Round 2 disclosure
+   * @param params.expiresAt - When this request expires (24h TTL matching pending_connection_requests)
+   */
+  async saveActiveConnectionRequest(params: {
+    connectionRequestId: string;
+    senderPubkeyHex: string;
+    targetPubkeyHex: string;
+    packageCbor: Uint8Array;
+    disclosureRound: number;
+    expiresAt: Date;
+  }): Promise<void> {
+    await this.#pool.query(
+      `INSERT INTO active_connection_requests
+         (connection_request_id, sender_pubkey_hex, target_pubkey_hex,
+          package_cbor, disclosure_round, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (connection_request_id) DO NOTHING`,
+      [
+        params.connectionRequestId,
+        params.senderPubkeyHex,
+        params.targetPubkeyHex,
+        Buffer.from(params.packageCbor),
+        params.disclosureRound,
+        params.expiresAt,
+      ],
+    );
+  }
+
+  /**
+   * Delete an active connection request by ID.
+   *
+   * M6B-010 AC-001: called when a connection request is accepted, rejected, or
+   * when the directory receives a cello_accept_connection or cello_reject_connection
+   * frame. Removes the request from active_connection_requests so it is not
+   * reloaded on the next startup.
+   *
+   * Also called when the request expires (cleanup path, optional — expired rows
+   * are not loaded by loadActiveConnectionRequests anyway due to expires_at filter).
+   */
+  async deleteActiveConnectionRequest(connectionRequestId: string): Promise<void> {
+    await this.#pool.query(
+      `DELETE FROM active_connection_requests WHERE connection_request_id = $1`,
+      [connectionRequestId],
+    );
+  }
+
+  /**
+   * Load all active connection requests that have not yet expired.
+   *
+   * M6B-010 AC-001 / SI-001: called at startup to populate #pendingConnectionRequests
+   * in the new directory process instance.
+   *
+   * SI-001: the WHERE clause filters to expires_at > NOW() — expired requests are never
+   * returned, even if they exist in the table. This prevents honoring stale requests
+   * after a long restart delay.
+   *
+   * Pseudocode:
+   *   SELECT connection_request_id, sender_pubkey_hex, target_pubkey_hex,
+   *          package_cbor, disclosure_round, expires_at
+   *   FROM active_connection_requests
+   *   WHERE expires_at > NOW()
+   *   ORDER BY created_at ASC
+   */
+  async loadActiveConnectionRequests(): Promise<Array<{
+    connectionRequestId: string;
+    senderPubkeyHex: string;
+    targetPubkeyHex: string;
+    packageCbor: Uint8Array;
+    disclosureRound: number;
+    expiresAt: Date;
+  }>> {
+    const result = await this.#pool.query<{
+      connection_request_id: string;
+      sender_pubkey_hex: string;
+      target_pubkey_hex: string;
+      package_cbor: Buffer;
+      disclosure_round: number;
+      expires_at: string | Date;
+    }>(
+      `SELECT connection_request_id, sender_pubkey_hex, target_pubkey_hex,
+              package_cbor, disclosure_round, expires_at
+       FROM active_connection_requests
+       WHERE expires_at > NOW()
+       ORDER BY created_at ASC`,
+    );
+
+    return result.rows.map((row) => ({
+      connectionRequestId: row.connection_request_id,
+      senderPubkeyHex: row.sender_pubkey_hex,
+      targetPubkeyHex: row.target_pubkey_hex,
+      packageCbor: new Uint8Array(row.package_cbor),
+      disclosureRound: typeof row.disclosure_round === "string"
+        ? parseInt(row.disclosure_round, 10)
+        : row.disclosure_round,
+      expiresAt: row.expires_at instanceof Date ? row.expires_at : new Date(row.expires_at),
+    }));
+  }
+
+  /**
+   * Write a session with participant pubkeys to the sessions table.
+   *
+   * M6B-010 AC-002/AC-003: extends writeSession() to also store initiator and target
+   * pubkeys. These are used at startup to reconstruct #sessionParticipants and
+   * #sessionLastActivity for active (unsealed) sessions.
+   *
+   * Participants default to '' in V18/V28 rows (no participant data for pre-M6B-010
+   * sessions). This method always writes real pubkey values.
+   *
+   * @param sessionId - UUID of the session (from the FROST-signed SessionAssignment)
+   * @param owningNodeId - node_id of this directory node (for federation ownership)
+   * @param initiatorPubkeyHex - K_local pubkey hex of the session initiator (agent A)
+   * @param targetPubkeyHex - K_local pubkey hex of the session target (agent B)
+   */
+  async writeSessionWithParticipants(
+    sessionId: string,
+    owningNodeId: string,
+    initiatorPubkeyHex: string,
+    targetPubkeyHex: string,
+  ): Promise<void> {
+    // SI-001: check existing ownership before any chain write (same as writeSession)
+    const existing = await this.#pool.query<{ owning_node_id: string }>(
+      `SELECT owning_node_id FROM sessions WHERE session_id = $1`,
+      [sessionId],
+    );
+    if (existing.rows.length > 0 && existing.rows[0]!.owning_node_id !== owningNodeId) {
+      throw new Error(
+        `writeSessionWithParticipants: ownership violation — session '${sessionId}' is owned by '${existing.rows[0]!.owning_node_id}', not '${owningNodeId}' (SI-001)`,
+      );
+    }
+    // Update participant columns if the session already exists (e.g. from writeSession)
+    if (existing.rows.length > 0) {
+      await this.#pool.query(
+        `UPDATE sessions SET initiator_pubkey_hex = $1, target_pubkey_hex = $2
+         WHERE session_id = $3 AND owning_node_id = $4`,
+        [initiatorPubkeyHex, targetPubkeyHex, sessionId, owningNodeId],
+      );
+      return;
+    }
+    const record: Record<string, unknown> = {
+      session_id: sessionId,
+      owning_node_id: owningNodeId,
+      initiator_pubkey_hex: initiatorPubkeyHex,
+      target_pubkey_hex: targetPubkeyHex,
+    };
+    const columns = [
+      "session_id", "owning_node_id", "initiator_pubkey_hex", "target_pubkey_hex", "chain_hash",
+    ];
+    const values: unknown[] = [sessionId, owningNodeId, initiatorPubkeyHex, targetPubkeyHex, ""];
+    const chainHashIndex = 4;
+    await this.insertWithChain("sessions", record, columns, values, chainHashIndex);
+  }
+
+  /**
+   * Load active session participants from the sessions table.
+   *
+   * M6B-010 AC-002/AC-003: called at startup to reconstruct #sessionParticipants
+   * and #sessionLastActivity. Returns only sessions that:
+   *   1. Have non-empty initiator_pubkey_hex and target_pubkey_hex (set by writeSessionWithParticipants)
+   *   2. Are NOT yet sealed (no matching row in seal_notarizations)
+   *
+   * The genesisTimestampMs is derived from sessions.created_at, which is the Postgres
+   * TIMESTAMPTZ column set to NOW() at insert time. This is the session genesis timestamp
+   * and is used to initialize #sessionLastActivity to a sensible value rather than 0.
+   *
+   * Pseudocode:
+   *   SELECT s.session_id, s.initiator_pubkey_hex, s.target_pubkey_hex,
+   *          EXTRACT(EPOCH FROM s.created_at) * 1000 AS genesis_ms
+   *   FROM sessions s
+   *   WHERE s.initiator_pubkey_hex <> ''
+   *     AND s.target_pubkey_hex <> ''
+   *     AND NOT EXISTS (
+   *       SELECT 1 FROM seal_notarizations sn
+   *       WHERE sn.session_id = s.session_id::bytea
+   *     )
+   */
+  async loadActiveSessionParticipants(): Promise<Array<{
+    sessionId: string;
+    initiatorHex: string;
+    targetHex: string;
+    genesisTimestampMs: number;
+  }>> {
+    const result = await this.#pool.query<{
+      session_id: string;
+      initiator_pubkey_hex: string;
+      target_pubkey_hex: string;
+      genesis_ms: string;
+    }>(
+      // DATE_PART avoids EXTRACT(EPOCH FROM ...) which confuses the schema-completeness
+      // static analyzer (regex /FROM\s+(\w+)/ matches 'FROM s.created_at' → 's').
+      // DATE_PART('epoch', col) is functionally identical to EXTRACT(EPOCH FROM col).
+      `SELECT session_id::text AS session_id,
+              initiator_pubkey_hex,
+              target_pubkey_hex,
+              DATE_PART('epoch', created_at) * 1000 AS genesis_ms
+       FROM sessions
+       WHERE initiator_pubkey_hex <> ''
+         AND target_pubkey_hex <> ''
+         AND NOT EXISTS (
+           SELECT 1 FROM seal_notarizations
+           WHERE session_id = decode(replace(sessions.session_id::text, '-', ''), 'hex')
+         )`,
+    );
+
+    return result.rows.map((row) => ({
+      // CRIT-001: strip dashes so sessionId matches the 32-char hex format used as the
+      // key in #sessionLastActivity and #sessionParticipants in directory-node.ts.
+      // Postgres returns session_id as a dashed UUID string (e.g. "550e8400-..."), but all
+      // runtime lookups use Buffer.from(session_id).toString("hex") which produces dashless hex.
+      sessionId: row.session_id.replace(/-/g, ""),
+      initiatorHex: row.initiator_pubkey_hex,
+      targetHex: row.target_pubkey_hex,
+      genesisTimestampMs: Math.round(parseFloat(row.genesis_ms)),
+    }));
+  }
 }

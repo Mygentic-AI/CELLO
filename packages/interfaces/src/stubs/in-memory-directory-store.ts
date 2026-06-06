@@ -175,6 +175,25 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     return Promise.resolve(queue.splice(0));
   }
 
+  // ─── M6B-010: Active connection request persistence ──────────────────────
+
+  // In-memory stub: no-ops. Active connection request persistence is a Pg-only feature;
+  // the in-memory store is used only in unit tests where restart recovery is not relevant.
+  async saveActiveConnectionRequest(_params: {
+    connectionRequestId: string;
+    senderPubkeyHex: string;
+    targetPubkeyHex: string;
+    packageCbor: Uint8Array;
+    disclosureRound: number;
+    expiresAt: Date;
+  }): Promise<void> {
+    // In-memory stub: no-op.
+  }
+
+  async deleteActiveConnectionRequest(_connectionRequestId: string): Promise<void> {
+    // In-memory stub: no-op.
+  }
+
   // ─── FEDERATION-001: Session ownership methods ───────────────────────────
 
   // In-memory store for session ownership (sessionId → owningNodeId)
@@ -182,6 +201,16 @@ export class InMemoryDirectoryStore implements DirectoryStore {
 
   async writeSession(sessionId: string, owningNodeId: string): Promise<void> {
     // In-memory stub: no hash chain; SI-001 ownership guard only applies to PgDirectoryStore.
+    this.#sessionOwners.set(sessionId, owningNodeId);
+  }
+
+  async writeSessionWithParticipants(
+    sessionId: string,
+    owningNodeId: string,
+    _initiatorPubkeyHex: string,
+    _targetPubkeyHex: string,
+  ): Promise<void> {
+    // In-memory stub: store ownership; participant persistence is a Pg-only feature.
     this.#sessionOwners.set(sessionId, owningNodeId);
   }
 
