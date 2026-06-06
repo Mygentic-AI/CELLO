@@ -474,7 +474,6 @@ Resources:
         - MetricNamespace: CELLO/Relay
           MetricName: ManifestUpdateErrors
           MetricValue: "1"
-          DefaultValue: 0
           Dimensions:
             - Key: Environment
               Value: !Ref Environment

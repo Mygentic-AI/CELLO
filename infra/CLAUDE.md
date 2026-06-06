@@ -4,6 +4,14 @@ These instructions are mandatory for any agent working on files under `infra/`.
 
 ---
 
+## CloudFormation Template Limits
+
+**CloudFormation `Description` field limit is 1024 characters.** This applies to the top-level template `Description` AND to each `AWS::CloudWatch::Alarm` `AlarmDescription` field. Both fields accept `!Sub` — the limit applies to the expanded string. Keep descriptions short or they will fail `CreateChangeSet` with `Template format error: 'Description' length is greater than 1024`.
+
+**`AWS::Logs::MetricFilter` `DefaultValue` and `Dimensions` are mutually exclusive.** A `MetricTransformations` entry cannot have both `DefaultValue` and `Dimensions` set — CloudWatchLogs rejects it with `Invalid metric transformation: dimensions and default value are mutually exclusive properties`. Remove `DefaultValue` when using `Dimensions`.
+
+---
+
 ## CloudFormation Resource Management
 
 **Never create AWS resources manually that should be managed by CloudFormation.** If a resource is defined in a CFN template, it must only be created through `deploy.sh`. Manual creation (via CLI or console) causes `ResourceAlreadyExists` failures when CFN later attempts to create it.
