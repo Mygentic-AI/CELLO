@@ -318,7 +318,7 @@ describe("Regression: recordAssignment transport failure exposes exception messa
   beforeEach(() => { scope = createTestScope(); });
   afterEach(() => scope.run(async () => {}));
 
-  it("returns relay_unavailable:<msg> when relay is unreachable after connect", async () => {
+  it("returns relay_unavailable and logs transport error when relay is unreachable after connect", async () => {
     const dirKp = generateKeypair();
     const dirPubkey = await dirKp.getPublicKey();
 
@@ -331,10 +331,19 @@ describe("Regression: recordAssignment transport failure exposes exception messa
     const relayPeerId = relayLibp2p.getPeerId();
     const relayMultiaddrs = relayLibp2p.listenAddresses();
 
+    const loggedEvents: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const mockLogger = {
+      info: () => {},
+      warn: () => {},
+      error: (event: string, fields: Record<string, unknown>) => { loggedEvents.push({ event, fields }); },
+      debug: () => {},
+    };
+
     const networkAdapter = new NetworkRelayAdapter({
       keyProvider: dirKp,
       relayPeerId,
       relayMultiaddrs,
+      logger: mockLogger,
     });
 
     const dirResult = await createDirectoryNode({
@@ -370,10 +379,14 @@ describe("Regression: recordAssignment transport failure exposes exception messa
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      // Must start with relay_unavailable: and include the actual exception message
-      expect(result.reason).toMatch(/^relay_unavailable:/);
-      expect(result.reason.length).toBeGreaterThan("relay_unavailable:".length);
+      // Canonical token — error detail goes to the logger, not embedded in the reason string
+      expect(result.reason).toBe("relay_unavailable");
     }
+    // Logger must have captured the transport error with the actual exception message
+    const transportErr = loggedEvents.find(e => e.event === "relay.record_assignment.transport_error");
+    expect(transportErr).toBeDefined();
+    expect(typeof transportErr?.fields.error).toBe("string");
+    expect((transportErr?.fields.error as string).length).toBeGreaterThan(0);
   }, 20_000);
 });
 

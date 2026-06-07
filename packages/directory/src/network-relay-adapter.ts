@@ -72,6 +72,7 @@ import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import type { KeyProvider } from "@cello-protocol/crypto";
 import type { CelloNode } from "@cello-protocol/transport";
+import type { Logger } from "@cello-protocol/interfaces";
 import type { RelayAdapter } from "./directory-node.js";
 import type { RelaySessionAssignment, RelaySealData } from "./directory-types.js";
 
@@ -85,6 +86,8 @@ export interface NetworkRelayAdapterOptions {
   relayPeerId: string;
   /** Relay's listen addresses */
   relayMultiaddrs: string[];
+  /** Optional structured logger — injected from the directory startup context */
+  logger?: Logger;
 }
 
 /**
@@ -99,12 +102,14 @@ export class NetworkRelayAdapter implements RelayAdapter {
   readonly #keyProvider: KeyProvider;
   readonly #relayPeerId: string;
   readonly #relayMultiaddrs: string[];
+  readonly #logger: Logger | undefined;
   #node: CelloNode | null = null;
 
   constructor(opts: NetworkRelayAdapterOptions) {
     this.#keyProvider = opts.keyProvider;
     this.#relayPeerId = opts.relayPeerId;
     this.#relayMultiaddrs = opts.relayMultiaddrs;
+    this.#logger = opts.logger;
   }
 
   /**
@@ -158,12 +163,12 @@ export class NetworkRelayAdapter implements RelayAdapter {
       const response = await this.#sendAndReceive(frame);
       if (response["type"] === "assignment_ok") return { ok: true };
       const reason = (response["type"] as string) ?? "relay_error";
-      console.error(`[NetworkRelayAdapter] relay rejected assignment: type=${reason}`, response);
+      this.#logger?.error("relay.record_assignment.rejected", { reason });
       return { ok: false, reason };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[NetworkRelayAdapter] recordAssignment failed: ${msg}`);
-      return { ok: false, reason: `relay_unavailable: ${msg}` };
+      this.#logger?.error("relay.record_assignment.transport_error", { error: msg });
+      return { ok: false, reason: "relay_unavailable" };
     }
   }
 

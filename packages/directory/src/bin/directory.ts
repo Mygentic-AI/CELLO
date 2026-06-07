@@ -475,6 +475,7 @@ const networkRelay = new NetworkRelayAdapter({
   keyProvider: kp,
   relayPeerId,
   relayMultiaddrs: [relayAddr],
+  logger,
 });
 
 const dirPubkey = await kp.getPublicKey();
