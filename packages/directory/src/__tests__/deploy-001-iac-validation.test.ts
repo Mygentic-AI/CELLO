@@ -11,7 +11,8 @@
  *   with the correct ports (5432 and 4001 only).
  *
  * AC-003: VPC template defines Interface Endpoints (ECR, Secrets Manager, KMS, Logs)
- *   plus S3 Gateway Endpoint. No NAT Gateway resource exists.
+ *   plus S3 Gateway Endpoint. Exactly one NAT Gateway resource exists (added M6B-014
+ *   to provide outbound internet access for private subnets).
  *
  * AC-004: Secrets template creates secrets with placeholder values only, not real keys.
  *
@@ -118,9 +119,9 @@ describe("DEPLOY-001: AC-002 VPC Peering template", () => {
   });
 });
 
-// ─── AC-003: VPC endpoints, no NAT Gateway ───────────────────────────────────
+// ─── AC-003: VPC endpoints, NAT Gateway ──────────────────────────────────────
 
-describe("DEPLOY-001: AC-003 VPC endpoints and no NAT Gateway", () => {
+describe("DEPLOY-001: AC-003 VPC endpoints and NAT Gateway", () => {
   it("defines required VPC Interface Endpoints", () => {
     const template = loadTemplate("cello-vpc.yaml");
     const resources = template["Resources"] as Record<string, Record<string, unknown>>;
@@ -144,14 +145,14 @@ describe("DEPLOY-001: AC-003 VPC endpoints and no NAT Gateway", () => {
     expect(s3Props["VpcEndpointType"]).toBe("Gateway");
   });
 
-  it("has no NAT Gateway resource", () => {
+  it("has exactly one NAT Gateway resource (M6B-014: outbound internet for private subnets)", () => {
     const template = loadTemplate("cello-vpc.yaml");
     const resources = template["Resources"] as Record<string, Record<string, unknown>>;
 
     const natGateways = Object.entries(resources).filter(
       ([, v]) => v["Type"] === "AWS::EC2::NatGateway"
     );
-    expect(natGateways.length).toBe(0);
+    expect(natGateways.length).toBe(1);
   });
 });
 
