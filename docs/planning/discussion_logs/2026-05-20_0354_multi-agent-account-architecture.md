@@ -86,3 +86,4 @@ To prevent Sybil attacks and reputation farming, trust signals are computed at t
 *   [[server-infrastructure]] — Directory-side aggregation and `agent_profiles` table definition (`agent_registrations` was dropped in V16; `agent_profiles` V9 is authoritative).
 *   [[2026-04-16_1400_companion-device-architecture]] — Companion device vs agent session differentiation.
 *   [[2026-04-08_1600_data-residency-and-compliance]] — Account deletion and tombstoning requirements.
+*   [[2026-06-07_1221_sybil-confirm-shortcut-audit|Sybil Defense Audit — CONFIRM Shortcut and Per-Phone Agent Cap]] — M6 implementation audit confirming the 1:N account-to-agent design is correctly wired via `user_accounts → agent_profiles.account_id`; identifies missing per-account cap as the one gap.

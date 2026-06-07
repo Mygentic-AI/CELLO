@@ -430,8 +430,8 @@ prove a specific cross-boundary property, not to deliver new features.
 
 ## Related Documents
 
-- [[M6-beta-launch]] — full M6 write-up with per-story evidence for every bug mentioned here
-- [[2026-06-03_1200_frost-dkg-single-directory-gap]] — multi-directory FROST scoping
-- [[2026-06-01_1600_m6-dx-issues-and-resolutions]] — DX issue list from E2E-001 session
-- [[2026-05-16_0753_development-pipeline-and-local-iteration]] — adapter pattern decisions; the test isolation choices that made cross-boundary bugs harder to catch
-- [[CONTEXT]] — canonical glossary; sovereign node definition
+- [[milestone-writeups/M6-beta-launch|M6 Beta Launch Writeup]] — full M6 write-up with per-story evidence for every bug mentioned here
+- [[2026-06-03_1200_frost-dkg-single-directory-gap|FROST DKG Single-Directory Gap]] — multi-directory FROST scoping
+- [[2026-06-01_1600_m6-dx-issues-and-resolutions|M6 DX Issues and Resolutions]] — DX issue list from E2E-001 session
+- [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration]] — adapter pattern decisions; the test isolation choices that made cross-boundary bugs harder to catch
+- [[2026-06-06_2100_sovereign-node-networking-requirements|Sovereign Node Networking Requirements]] — the relay registration failure that prompted the networking analysis is one of the brittleness patterns diagnosed here; the NAT gateway fix is the concrete remediation

@@ -420,6 +420,7 @@ This also unblocks the relay registration problem (M6B-006) permanently.
 
 ## Related Documents
 
-- [[2026-05-30_0637_federation-transport-sovereignty-and-mtls]] — federation transport decision; VPC Peering replacement
-- [[2026-04-08_1700_node-architecture-and-replication]] — multi-cloud sovereign node architecture specification
-- [[2026-05-16_0753_development-pipeline-and-local-iteration]] — adapter pattern; same pattern applies to cloud-provider-specific services
+- [[2026-05-30_0637_federation-transport-sovereignty-and-mtls|Federation Transport, Node Sovereignty, and Mutual TLS]] — federation transport decision; VPC Peering replacement
+- [[2026-04-08_1700_node-architecture-and-replication|Node Architecture, Replication, and Client Routing]] — multi-cloud sovereign node architecture specification
+- [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration]] — adapter pattern; same pattern applies to cloud-provider-specific services
+- [[2026-06-06_2100_sovereign-node-networking-requirements|Sovereign Node Networking Requirements]] — engineering analysis that confirmed NAT gateways enable multi-cloud peer-to-peer networking and are cheaper than the current interface endpoint setup; the NAT cost line in this model derives from that analysis

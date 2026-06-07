@@ -208,6 +208,7 @@ M6B closes when:
 
 ## Related Documents
 
-- [[m6b/COORDINATION.md]] — agent coordination log and story table
-- [[milestone-writeups/M6-beta-launch]] — post-mortem that identified all M6B gaps
-- [[discussion_logs/2026-06-03_1146_beta-launch-brittleness-analysis]] — root cause analysis
+- [[user-stories/m6b/COORDINATION]] — agent coordination log and story table
+- [[milestone-writeups/M6-beta-launch|M6 Beta Launch Writeup]] — post-mortem that identified all M6B gaps
+- [[discussion_logs/2026-06-03_1146_beta-launch-brittleness-analysis|Beta Launch Brittleness Analysis]] — root cause analysis for location-based addressing brittleness
+- [[discussion_logs/2026-06-06_2100_sovereign-node-networking-requirements|Sovereign Node Networking Requirements]] — engineering analysis that led to M6B-014; establishes NAT gateways as required primitive for multi-cloud peer-to-peer communication

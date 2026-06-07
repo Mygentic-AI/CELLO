@@ -98,8 +98,9 @@ A certificate management strategy document should be written before any mutual T
 
 ## Related Documents
 
-- [[2026-04-08_1700_node-architecture-and-replication]] — multi-cloud node pool specification; the constraint that makes VPC Peering wrong
-- [[2026-04-11_1700_persistence-layer-design]] — federation replication specification; the document that left transport unspecified
-- [[2026-05-21_0900_m5-schema-before-federation-sequencing]] — sequencing decision for the federation implementation that built the replication ring
-- [[2026-05-16_0753_development-pipeline-and-local-iteration]] — adapter pattern; certificate providers will follow the same interface/stub pattern
-- [[server-infrastructure]] — node architecture and internal API specifications; both sections affected by this decision
+- [[2026-04-08_1700_node-architecture-and-replication|Node Architecture, Replication, and Client Routing]] — multi-cloud node pool specification; the constraint that makes VPC Peering wrong
+- [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — federation replication specification; the document that left transport unspecified
+- [[2026-05-21_0900_m5-schema-before-federation-sequencing|M5 Schema Before Federation Sequencing]] — sequencing decision for the federation implementation that built the replication ring
+- [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration]] — adapter pattern; certificate providers will follow the same interface/stub pattern
+- [[server-infrastructure|CELLO Server Infrastructure Requirements]] — node architecture and internal API specifications; both sections affected by this decision
+- [[2026-06-06_2100_sovereign-node-networking-requirements|Sovereign Node Networking Requirements]] — follow-on: the relay-to-directory networking failure that confirmed VPC-internal addressing is broken; establishes NAT gateways as the concrete infrastructure fix

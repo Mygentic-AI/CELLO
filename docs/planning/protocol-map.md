@@ -51,6 +51,7 @@ Device attestation (TPM, Play Integrity, App Attest) requires a native app and i
 - [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]] — corrects WebAuthn classification; native app required for platform attestation
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — hash-everything model; client as data custodian
 - [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — 8-layer anti-Sybil architecture
+- [[2026-06-07_1221_sybil-confirm-shortcut-audit|Sybil Defense Audit — CONFIRM Shortcut and Per-Phone Agent Cap]] — confirms multi-agent-per-phone is intentional and account-linked; identifies missing per-account cap; minimum story spec
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — four-class trust signal taxonomy
 - [[2026-05-16_0800_trust-signal-verification-architecture|Trust Signal Verification Architecture]] — OAuth proof of account ownership (Passport.js per-provider strategies); browser-based profile extraction; community-driven oracle model for longer-term verification; M7 implementation architecture
 - [[2026-05-30_0655_cello-as-ca-for-agents|CELLO as Certificate Authority for Agents]] — K_local as the structural equivalent of a TLS certificate; why existing CA infrastructure cannot serve agents; FROST threshold issuance vs traditional CA trust model

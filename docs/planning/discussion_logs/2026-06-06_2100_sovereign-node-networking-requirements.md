@@ -140,3 +140,13 @@ While the proper NAT gateway solution is implemented, the relay was manually pat
 - **This is not in IaC** — a deploy.sh run will overwrite it
 
 The temporary fix buys time to implement the NAT gateway solution properly as a story.
+
+---
+
+## Related Documents
+
+- [[2026-04-08_1700_node-architecture-and-replication|Node Architecture, Replication, and Client Routing]] — foundational sovereign multi-cloud node design; the constraint that peer-to-peer communication must cross cloud boundaries is established here
+- [[2026-05-30_0637_federation-transport-sovereignty-and-mtls|Federation Transport, Node Sovereignty, and Mutual TLS]] — companion decision replacing VPC Peering with mutual TLS; both documents together define the full sovereign node networking model
+- [[2026-05-30_0800_node-infrastructure-cost-model|Node Infrastructure Cost Model]] — cost analysis that established NAT gateways are cheaper than the current interface endpoint setup; this document provides the engineering rationale the cost model assumed
+- [[2026-06-03_1146_beta-launch-brittleness-analysis|Beta Launch Brittleness Analysis]] — root cause analysis for relay registration failures; the location-based addressing problem diagnosed there is the direct trigger for this discussion
+- [[user-stories/m6b/outline|M6B — Beta Hardening]] — CELLO-M6B-014 implements the NAT gateway story derived from this discussion
