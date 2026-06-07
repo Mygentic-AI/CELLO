@@ -642,3 +642,29 @@ Written and reviewed. Story only — not yet implemented. Depends on M6B-016 bei
 - Story written 2026-06-07. Two sprint-reviewer rounds — second round BLOCKED.
 - Round-2 findings all fixed in commit `c6076c7`: Phase 1 split into 1a/1b to resolve two-deploy contradiction; `cello-rotation.yaml` ImportValue references correctly identified as needing conversion to `!Sub` ARNs (not rename); `ops-agent-001-pre-auth.test.ts` added to rename scope; `infra/CLAUDE.md` count corrected to four; `allCelloPipelines` array called out explicitly.
 - Story is ready to implement. **Do not implement until M6B-016 is deployed and healthy.**
+
+---
+
+### 2026-06-07 — M6B-016 merged and pushed; pipelines running
+
+**Merge commit:** `bc93a78` — merged `m6b-016-registration-data-integrity` into main and pushed to origin.
+
+**10 commits pushed** (in merge order):
+- `c0d29c7` feat(M6B-016): registration data integrity — email_stub_hash, handleExistingUser, channel_identities
+- `4617c2d` fix(M6B-016): enforce email continuity after expired active registration
+- `4ff57a4` fix(directory): expose actual relay failure reason in logs
+- `632eabf` fix(directory): log relay rejection and transport errors in NetworkRelayAdapter
+- `7efc1a8` fix(M6B-016): address sprint-reviewer medium/low findings
+- `0f524e4` test(directory): regression tests for relay failure reason visibility
+- `8e20e73` docs(m6b): record M6B-015 and M6B-016 story creation, review, and implementation status
+- `529b56e` fix(directory): inject logger into NetworkRelayAdapter, fix canonical reason token
+- `01c51a4` fix(directory): demote relay.manifest.version.stale to debug (bundled — already triggered directory pipeline)
+- `bc93a78` Merge branch 'm6b-016-registration-data-integrity'
+
+**Pipelines triggered:**
+- `cello-directory-pipeline` — packages/directory/ changed (V30 migration + relay logging fixes). ~25-30 min, all 3 regions.
+- `cello-operations-agent-pipeline` — packages/operations-agent/ changed (M6B-016 registration engine). ~12-15 min, us-east-1 only.
+
+**Monitoring:** Cron agent running every 4 min. Will fix obvious failures; will stop and leave non-obvious failures for morning.
+
+**Next action after pipelines complete:** Implement M6B-015 (rename operations-agent → portal-backend). Do not start until both pipelines show Succeeded and staging bot re-registration is confirmed healthy.
