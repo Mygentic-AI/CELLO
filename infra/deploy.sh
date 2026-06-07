@@ -118,8 +118,26 @@ fi
 RELAY_CPU="256"
 RELAY_MEM="512"
 # Directory node pubkey — relay needs this to authenticate directory connections.
-# Override with CELLO_DIRECTORY_PUBKEY env var if deploying a different environment.
-RELAY_DIRECTORY_PUBKEY="${CELLO_DIRECTORY_PUBKEY:-167ca6b145bfdd3696af8f4befd883c3dc610f4a9c8d52a30f6a22f669dc27b5}"
+# Derived dynamically from cello/{env}/directory/node-private-key in the target region.
+# Each region has its own keypair — never hardcode a single-region default here.
+if [[ -n "${CELLO_DIRECTORY_PUBKEY:-}" ]]; then
+  RELAY_DIRECTORY_PUBKEY="${CELLO_DIRECTORY_PUBKEY}"
+  echo "  RELAY_DIRECTORY_PUBKEY: using env override ${RELAY_DIRECTORY_PUBKEY:0:16}..."
+else
+  _DIR_PRIV=$(aws secretsmanager get-secret-value \
+    --secret-id "cello/${ENVIRONMENT}/directory/node-private-key" \
+    --region "${REGION}" --query 'SecretString' --output text 2>/dev/null || echo "")
+  if [[ -z "${_DIR_PRIV}" || "${_DIR_PRIV}" == "PLACEHOLDER_POPULATE_VIA_CLI" ]]; then
+    echo "ERROR: cannot derive RELAY_DIRECTORY_PUBKEY — cello/${ENVIRONMENT}/directory/node-private-key is empty or placeholder in ${REGION}" >&2
+    exit 1
+  fi
+  RELAY_DIRECTORY_PUBKEY=$(printf '%s' "${_DIR_PRIV}" | node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts/derive-pubkey.js" 2>/dev/null)
+  if [[ -z "${RELAY_DIRECTORY_PUBKEY}" ]]; then
+    echo "ERROR: derive-pubkey.js returned empty result for ${REGION}" >&2
+    exit 1
+  fi
+  echo "  RELAY_DIRECTORY_PUBKEY: derived ${RELAY_DIRECTORY_PUBKEY:0:16}... from node-private-key"
+fi
 
 # Relay libp2p multiaddr — directory needs this to connect to the relay at startup.
 # Override with CELLO_RELAY_MULTIADDR env var when the relay private IP or peer ID changes.

@@ -251,7 +251,68 @@ for REGION in "${REGIONS[@]}"; do
     fi
   fi
 
-  # ── 4. Manifest signer pubkey — SSM must match node-private-key ─────────────
+  # ── 4. Task definition baked values — must match SSM sources ────────────────
+  # {{resolve:ssm:...}} values are baked at CFN deploy time. Updating SSM alone
+  # does NOT fix a running task — deploy.sh must be rerun to bake the new value in.
+
+  echo "  [Task definition baked values vs. SSM]"
+
+  DIR_TASK_DEF=$(aws ecs describe-services \
+    --cluster "cello-${ENVIRONMENT}" --services "cello-directory-${ENVIRONMENT}" \
+    --region "${REGION}" \
+    --query 'services[0].taskDefinition' --output text 2>/dev/null || echo "")
+
+  if [[ -n "${DIR_TASK_DEF}" && "${DIR_TASK_DEF}" != "None" ]]; then
+    BAKED_SIGNER=$(aws ecs describe-task-definition \
+      --task-definition "${DIR_TASK_DEF}" --region "${REGION}" \
+      --query 'taskDefinition.containerDefinitions[0].environment[?name==`RELAY_MANIFEST_SIGNER_PUBKEY`].value | [0]' \
+      --output text 2>/dev/null || echo "")
+    SSM_SIGNER=$(aws ssm get-parameter \
+      --name "/cello/${ENVIRONMENT}/directory/manifest-signer-pubkey" \
+      --region "${REGION}" --query 'Parameter.Value' --output text 2>/dev/null || echo "NOT_FOUND")
+
+    if [[ "${BAKED_SIGNER}" == "${SSM_SIGNER}" ]]; then
+      pass "Directory task def RELAY_MANIFEST_SIGNER_PUBKEY matches SSM (${BAKED_SIGNER:0:16}...)"
+    else
+      fail "Directory task def RELAY_MANIFEST_SIGNER_PUBKEY STALE — baked=${BAKED_SIGNER:0:16}... SSM=${SSM_SIGNER:0:16}... — run: ./infra/deploy.sh ${ENVIRONMENT} ${REGION}"
+    fi
+
+    # Also verify the full chain: manifest signedBy == baked signer key
+    MANIFEST_SIGNED_BY=$(aws s3 cp \
+      "s3://cello-relay-manifest-${ENVIRONMENT}-${REGION}/relay-manifest.json" - \
+      --region "${REGION}" 2>/dev/null | \
+      python3 -c "import json,sys; print(json.load(sys.stdin).get('signedBy',''))" 2>/dev/null || echo "")
+    if [[ -n "${MANIFEST_SIGNED_BY}" && -n "${BAKED_SIGNER}" ]]; then
+      if [[ "${MANIFEST_SIGNED_BY}" == "${BAKED_SIGNER}" ]]; then
+        pass "S3 manifest signedBy matches task def RELAY_MANIFEST_SIGNER_PUBKEY — directory will accept manifest"
+      else
+        fail "S3 manifest signedBy=${MANIFEST_SIGNED_BY:0:16}... but task def expects ${BAKED_SIGNER:0:16}... — directory will crash on startup"
+      fi
+    fi
+  fi
+
+  # Check relay task def has the correct per-region directory pubkey
+  RELAY_TASK_DEF=$(aws ecs describe-services \
+    --cluster "cello-${ENVIRONMENT}" --services "cello-relay-${ENVIRONMENT}" \
+    --region "${REGION}" \
+    --query 'services[0].taskDefinition' --output text 2>/dev/null || echo "")
+
+  if [[ -n "${RELAY_TASK_DEF}" && "${RELAY_TASK_DEF}" != "None" ]]; then
+    RELAY_BAKED_DIR_PUBKEY=$(aws ecs describe-task-definition \
+      --task-definition "${RELAY_TASK_DEF}" --region "${REGION}" \
+      --query 'taskDefinition.containerDefinitions[0].environment[?name==`CELLO_DIRECTORY_PUBKEY`].value | [0]' \
+      --output text 2>/dev/null || echo "")
+    DERIVED_PUBKEY=$(derive_pubkey_from_secret "${REGION}")
+    if [[ -n "${RELAY_BAKED_DIR_PUBKEY}" && "${DERIVED_PUBKEY}" != "ERROR" ]]; then
+      if [[ "${RELAY_BAKED_DIR_PUBKEY}" == "${DERIVED_PUBKEY}" ]]; then
+        pass "Relay task def CELLO_DIRECTORY_PUBKEY matches node key (${RELAY_BAKED_DIR_PUBKEY:0:16}...)"
+      else
+        fail "Relay task def CELLO_DIRECTORY_PUBKEY WRONG — baked=${RELAY_BAKED_DIR_PUBKEY:0:16}... expected=${DERIVED_PUBKEY:0:16}... — run: ./infra/deploy.sh ${ENVIRONMENT} ${REGION}"
+      fi
+    fi
+  fi
+
+  # ── 6. Manifest signer pubkey — SSM must match node-private-key ─────────────
 
   echo "  [Manifest signer key alignment]"
   SSM_PUBKEY=$(ssm_manifest_signer_pubkey "${REGION}")

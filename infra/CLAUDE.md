@@ -4,6 +4,37 @@ These instructions are mandatory for any agent working on files under `infra/`.
 
 ---
 
+## Value Resolution Lifecycle — Know Which Stage You Are Fixing
+
+**Every configuration value passes through a resolution pipeline. Updating the source does NOT fix downstream consumers unless you trigger re-resolution at every stage.**
+
+| Stage | Mechanism in template | Resolves when | How to propagate a change |
+|---|---|---|---|
+| **1. CFN deploy-time** | `{{resolve:ssm:/path}}` | When `deploy.sh` runs and CFN creates/updates the stack | Run `deploy.sh` |
+| **2. Task launch-time** | `ValueFrom: arn:aws:ssm:...` or `ValueFrom: arn:aws:secretsmanager:...` | When ECS launches a new task | Update source + force-new-deployment or task restart |
+| **3. Application runtime** | App code calls `GetSecretValue()` / `GetParameter()` | When the application executes that call | Update source — app picks it up on next call |
+
+**`RELAY_MANIFEST_SIGNER_PUBKEY` is stage 1** — `{{resolve:ssm:...}}` in `cello-ecs-directory.yaml`. Updating the SSM parameter alone has zero effect until `deploy.sh` runs.
+
+**`CELLO_DIRECTORY_HOSTNAME` is stage 1** — same template, same caveat.
+
+**Secrets Manager refs (`node-private-key`, `transport-key`, etc.) are stage 2** — `ValueFrom` with an ARN. Updating the secret + restarting the task is sufficient; no `deploy.sh` run needed.
+
+**The verification rule:** After any fix, read the running task definition to confirm. The task definition is the ground truth — not SSM, not STATE.md:
+
+```bash
+TASK_DEF=$(aws ecs describe-services --cluster cello-dev --services cello-directory-dev \
+  --region <region> --query 'services[0].taskDefinition' --output text)
+aws ecs describe-task-definition --task-definition "$TASK_DEF" --region <region> \
+  --query 'taskDefinition.containerDefinitions[0].environment[?name==`RELAY_MANIFEST_SIGNER_PUBKEY`].value'
+```
+
+`audit-state.sh` now checks this automatically (section 4: Task definition baked values vs. SSM).
+
+*Root cause: 2026-06-07 — SSM parameters updated for eu-central-1 and ap-northeast-1 but deploy.sh not run; task definitions retained stale baked values; directory tasks continued crashing.*
+
+---
+
 ## ECS Health Check — Liveness Only, Never Readiness
 
 **`/health` must return 200 as soon as the process is up. Never make it conditional on a dependency, registration, or connection.**
