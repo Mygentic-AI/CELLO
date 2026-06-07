@@ -100,6 +100,32 @@ If the task starts but can't reach Telegram API, SES, or RDS, the application wi
 
 ---
 
+## Manual Step: Re-sign Manifest After Relay Re-registration (Not Yet Automated)
+
+**When a relay restarts and re-registers with a new private IP, the directory updates its in-memory healthCheckUrl but does NOT re-sign and upload a new manifest to S3.** The directory only writes a new manifest on health state transitions (unavailable → available). An `already_registered` call with a changed IP skips manifest re-signing entirely.
+
+**Symptom:** clients fetch the S3 manifest, get a stale `healthCheckUrl` pointing to a dead task IP, and cannot reach the relay.
+
+**Manual fix — run after any relay restart:**
+```bash
+# 1. Get the new task private IP
+TASK_ARN=$(aws ecs list-tasks --cluster cello-dev --service-name cello-relay-dev \
+  --region <region> --query 'taskArns[0]' --output text)
+aws ecs describe-tasks --cluster cello-dev --tasks "${TASK_ARN}" \
+  --region <region> \
+  --query 'tasks[0].containers[0].networkInterfaces[0].privateIpv4Address' \
+  --output text
+
+# 2. Update relay-defs file with new IP, then re-sign
+./infra/sign-manifest.sh dev <region> /path/to/relay-defs.json
+```
+
+Run for all 3 regions. The directory picks up the new manifest on its next 2-minute poll — no restart needed.
+
+**Future automation:** directory should detect that a re-registering relay's `healthCheckUrl` differs from the current manifest and re-sign automatically. Tracked in COORDINATION.md.
+
+---
+
 ## Route53 A Records — CFN Owns Them, Never Purge Manually
 
 **Never delete a Route53 A record that a healthy CFN stack owns.** If you delete it outside CFN, CFN sees no diff on the next deploy and never recreates it — the record stays gone.

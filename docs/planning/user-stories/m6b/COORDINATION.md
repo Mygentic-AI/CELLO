@@ -605,3 +605,6 @@ This handles both cases correctly:
 
 **Remaining cleanup (non-blocking):**
 - Stage 2: remove 6 interface endpoints from cello-vpc.yaml in a separate deploy
+
+**Known automation gap — manifest re-sign on relay re-registration:**
+When a relay restarts and re-registers with a new private IP, the directory processes it as `already_registered` and updates its in-memory `healthCheckUrl` but never re-signs the S3 manifest. The manifest only gets updated on health state transitions (unavailable → available). This means after any relay restart, the S3 manifest is stale and clients cannot reach the relay until `sign-manifest.sh` is run manually. Manual procedure documented in `infra/CLAUDE.md`. The correct fix is a directory code change: when `already_registered` receives a `healthCheckUrl` that differs from the current manifest, treat it as manifest-dirty and re-sign. Deferred — not blocking E2E testing.
