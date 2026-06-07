@@ -258,7 +258,9 @@ Update `RegistrationRecord` type and all `transition()` calls to use
 `emailStubHash` instead of `emailDomain`. Update row mapper to read
 `row.email_stub_hash`.
 
-Update `findCompletedByChannelUser` return type to include `emailStubHash`.
+Update `findCompletedByChannelUser`:
+- SQL must explicitly SELECT `email_stub_hash`: `SELECT id, created_at, email_stub_hash FROM registrations WHERE ...`
+- Return type must include `emailStubHash: string | null` (null for pre-V30 rows)
 
 ### 7. `repository.ts` — add `upsertChannelIdentity()`
 
@@ -283,16 +285,21 @@ to `(phoneStubHash, emailStubHash, registrationId)`.
 
 Update body: `JSON.stringify({ phoneStubHash, emailStubHash, registrationId })`.
 
-### 9. `packages/directory/src/internal-api-server.ts` — accept emailStubHash
+### 9. `packages/directory/src/internal-api-server.ts` and `pre-auth-token-repository.ts` — accept emailStubHash
 
 Update the `/internal/pre-authorize` endpoint to accept `emailStubHash`
 instead of `emailDomain`. Update validation check accordingly.
 
-### 10. `infra/cloudformation/cello-ssm-parameters.yaml` — bump expected migration version
+Also update `packages/directory/src/pre-auth-token-repository.ts` — it has
+`emailDomain` in its interface and SQL (insert, select, and token-issue methods).
+Replace all `emailDomain` references with `emailStubHash` to match the V30 schema.
 
-Update `OpsAgentExpectedMigrationVersion` default value from `29` to `30`.
-This is required per infra/CLAUDE.md — every migration story must update this
-parameter or the ops-agent ECS task will crash-loop on startup after V30 applies.
+### 10. Migration version SSM parameter
+
+`deploy.sh` automatically computes the expected migration version by scanning
+`V*.sql` files for the highest number and writes it to SSM via `aws ssm put-parameter`.
+No manual template edit is needed — adding V30 as a migration file is sufficient.
+The `cello-ssm-parameters.yaml` default (`"0"`) is intentionally ignored by deploy.sh.
 
 ---
 
@@ -366,8 +373,7 @@ parameter or the ops-agent ECS task will crash-loop on startup after V30 applies
     `pre_authorization_tokens.email_domain` column does NOT exist; `pre_authorization_tokens.email_stub_hash TEXT` exists;
     `channel_identities` table exists with UNIQUE index on (phone_stub_hash, channel);
     RLS enabled on `channel_identities`; `cello_ops_agent` has INSERT/SELECT/UPDATE
-    on `channel_identities` and NOT DELETE;
-    `cello-ssm-parameters.yaml` OpsAgentExpectedMigrationVersion default is `30`"
+    on `channel_identities` and NOT DELETE"
   test_type: integration
   component_under_test: directory
 
