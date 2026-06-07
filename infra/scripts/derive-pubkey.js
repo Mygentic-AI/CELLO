@@ -29,7 +29,9 @@ import { dirname, join } from "path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..");
-const require = createRequire(join(repoRoot, "packages", "crypto", "package.json"));
+// packages/crypto no longer has local node_modules (post-REPOSPLIT — it's published to npm).
+// Resolve via demo/ which has a real node_modules with @noble/curves installed.
+const require = createRequire(join(repoRoot, "demo", "node_modules", "@noble", "curves", "package.json"));
 
 const curvesPath = require.resolve("@noble/curves/ed25519.js");
 const { ed25519 } = await import(curvesPath);

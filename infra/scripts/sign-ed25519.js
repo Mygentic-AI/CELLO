@@ -42,9 +42,10 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// Walk up from infra/scripts/ to repo root, then into packages/crypto/node_modules
 const repoRoot = join(__dirname, "..", "..");
-const require = createRequire(join(repoRoot, "packages", "crypto", "package.json"));
+// packages/crypto no longer has local node_modules (post-REPOSPLIT — it's published to npm).
+// Resolve via demo/ which has a real node_modules with @noble/curves installed.
+const require = createRequire(join(repoRoot, "demo", "node_modules", "@noble", "curves", "package.json"));
 
 // Dynamic import using the resolved path so ESM honours it correctly
 const curvesPath = require.resolve("@noble/curves/ed25519.js");
