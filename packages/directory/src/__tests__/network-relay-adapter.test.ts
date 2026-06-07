@@ -311,5 +311,132 @@ describe("AC-005: NetworkRelayAdapter.rejectSeal → relay marks seal_rejected",
   }, 20_000);
 });
 
+// ─── Regression: transport errors and relay rejections surface real reason ─────
+
+describe("Regression: recordAssignment transport failure exposes exception message", () => {
+  let scope = createTestScope();
+  beforeEach(() => { scope = createTestScope(); });
+  afterEach(() => scope.run(async () => {}));
+
+  it("returns relay_unavailable:<msg> when relay is unreachable after connect", async () => {
+    const dirKp = generateKeypair();
+    const dirPubkey = await dirKp.getPublicKey();
+
+    // Start relay, connect, then stop relay so transport throws on the next call
+    const { node: relayLibp2p, stop: stopRelay } = await createRelayNode({
+      directoryPubkey: dirPubkey,
+    });
+    scope.addCleanup(stopRelay);
+
+    const relayPeerId = relayLibp2p.getPeerId();
+    const relayMultiaddrs = relayLibp2p.listenAddresses();
+
+    const networkAdapter = new NetworkRelayAdapter({
+      keyProvider: dirKp,
+      relayPeerId,
+      relayMultiaddrs,
+    });
+
+    const dirResult = await createDirectoryNode({
+      keyProvider: dirKp,
+      relay: networkAdapter,
+      relayEndpoint: { peer_id: relayPeerId, multiaddrs: relayMultiaddrs },
+    });
+    scope.addCleanup(dirResult.stop);
+    await networkAdapter.connect(dirResult.node);
+
+    // Stop the relay so the next sendAndReceive throws
+    await stopRelay();
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sessionTimestamp = Date.now();
+    const clientKpA = generateKeypair();
+    const clientKpB = generateKeypair();
+    const pubA = await clientKpA.getPublicKey();
+    const pubB = await clientKpB.getPublicKey();
+    const tbs = CBOR_ENC.encode([
+      sessionId, pubA, pubB,
+      sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
+    ]) as Uint8Array;
+    const directory_signature = await dirKp.sign(tbs);
+
+    const result = await networkAdapter.recordAssignment({
+      session_id: sessionId,
+      participant_a: pubA,
+      participant_b: pubB,
+      session_timestamp: sessionTimestamp,
+      directory_signature,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // Must start with relay_unavailable: and include the actual exception message
+      expect(result.reason).toMatch(/^relay_unavailable:/);
+      expect(result.reason.length).toBeGreaterThan("relay_unavailable:".length);
+    }
+  }, 20_000);
+});
+
+describe("Regression: recordAssignment relay rejection exposes relay response type", () => {
+  let scope = createTestScope();
+  beforeEach(() => { scope = createTestScope(); });
+  afterEach(() => scope.run(async () => {}));
+
+  it("returns auth_invalid when relay rejects due to wrong directory key", async () => {
+    // Start relay configured with a DIFFERENT directory pubkey than the adapter uses
+    const relayKp = generateKeypair();
+    const wrongPubkey = await relayKp.getPublicKey(); // relay expects this key
+    const dirKp = generateKeypair();                  // adapter signs with this key (wrong)
+
+    const { node: relayLibp2p, stop: stopRelay } = await createRelayNode({
+      directoryPubkey: wrongPubkey,
+    });
+    scope.addCleanup(stopRelay);
+
+    const relayPeerId = relayLibp2p.getPeerId();
+    const relayMultiaddrs = relayLibp2p.listenAddresses();
+
+    const networkAdapter = new NetworkRelayAdapter({
+      keyProvider: dirKp,   // wrong key — relay will reject with auth_invalid
+      relayPeerId,
+      relayMultiaddrs,
+    });
+
+    const dirResult = await createDirectoryNode({
+      keyProvider: dirKp,
+      relay: networkAdapter,
+      relayEndpoint: { peer_id: relayPeerId, multiaddrs: relayMultiaddrs },
+    });
+    scope.addCleanup(dirResult.stop);
+    await networkAdapter.connect(dirResult.node);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sessionTimestamp = Date.now();
+    const clientKpA = generateKeypair();
+    const clientKpB = generateKeypair();
+    const pubA = await clientKpA.getPublicKey();
+    const pubB = await clientKpB.getPublicKey();
+    const tbs = CBOR_ENC.encode([
+      sessionId, pubA, pubB,
+      sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
+    ]) as Uint8Array;
+    const directory_signature = await dirKp.sign(tbs);
+
+    const result = await networkAdapter.recordAssignment({
+      session_id: sessionId,
+      participant_a: pubA,
+      participant_b: pubB,
+      session_timestamp: sessionTimestamp,
+      directory_signature,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // Must be the relay's actual rejection type, not the swallowed generic string
+      expect(result.reason).toBe("auth_invalid");
+    }
+  }, 20_000);
+});
+
 // AC-007 (full end-to-end session flow) lives in:
 // packages/e2e-tests/src/__tests__/node-004-e2e.test.ts

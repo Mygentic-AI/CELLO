@@ -579,6 +579,82 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     expect(rejectingRelay.recorded.length).toBe(0);
   });
 
+  // ─── Regression: relay.record_assignment.failed logs actual reason ────────────
+  //
+  // Before fix: directory-node.ts hardcoded "relay_unavailable" in both the
+  // protocolLog and the structured logger warn event, masking real failures like
+  // auth_invalid, directory_signature_invalid, etc.
+
+  it("Regression: relay.record_assignment.failed warn event contains actual recordAssignment reason", async () => {
+    const logEvents: Array<{ level: string; event: string; context: Record<string, unknown> }> = [];
+    const logger = {
+      debug(_event: string, _ctx: Record<string, unknown>) {},
+      info(_event: string, _ctx: Record<string, unknown>) {},
+      warn(event: string, context: Record<string, unknown>) { logEvents.push({ level: "warn", event, context }); },
+      error(_event: string, _ctx: Record<string, unknown>) {},
+    };
+
+    // Relay that returns a specific non-generic reason
+    const specificReason = "directory_signature_invalid";
+    const rejectingRelay: ReturnType<typeof makeRelay> & { recorded: RelaySessionAssignment[] } = {
+      ...makeRelay(),
+      recordAssignment(_: RelaySessionAssignment) {
+        return { ok: false as const, reason: specificReason };
+      },
+    };
+
+    const rejectDirNode = await createDirectoryNode({
+      keyProvider: dirKey,
+      relay: rejectingRelay,
+      relayEndpoint: { peer_id: "test", multiaddrs: [] },
+      logger,
+    });
+    scope.addCleanup(rejectDirNode.stop);
+
+    const keyA = generateKeypair();
+    const keyB = generateKeypair();
+
+    const authClient = async (key: ReturnType<typeof generateKeypair>) => {
+      const cn = await createNode({ keyProvider: key, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+      await cn.start();
+      scope.addCleanup(() => cn.stop());
+      await cn.dial(rejectDirNode.node.listenAddresses()[0]);
+      const s = await cn.newStream(rejectDirNode.node.getPeerId(), SIGNALING_PROTOCOL_ID);
+      const r = new StreamReader(s);
+      const cb = await r.readDecoded();
+      const ch = decodeOutboundSignalingFrame(cb);
+      if (!ch || ch.type !== "signaling_auth_challenge") throw new Error("no challenge");
+      const { pubkey, signature } = await signAuth(ch.nonce, AUTH_DOMAIN, key);
+      sendFrame(s, encodeAuthResponse(pubkey, signature));
+      const ackCb = await r.readDecoded();
+      const ackFrame = decodeOutboundSignalingFrame(ackCb);
+      if (!ackFrame || ackFrame.type !== "signaling_auth_ok") throw new Error(`expected signaling_auth_ok, got ${ackFrame?.type}`);
+      const hex = Buffer.from(pubkey).toString("hex");
+      rejectDirNode.directory.registerPeerInfo(hex, cn.getPeerId(), cn.listenAddresses());
+      rejectDirNode.directory.registerThresholdSigner(hex, new MockThresholdSigner());
+      return { stream: s, reader: r, pubkeyHex: hex };
+    };
+
+    const { stream: streamA, reader: readerA } = await authClient(keyA);
+    const { pubkeyHex: hexB } = await authClient(keyB);
+
+    sendFrame(streamA, CBOR_ENC.encode({
+      type: "session_request",
+      target_pubkey: Buffer.from(hexB, "hex"),
+    }));
+
+    const responseBytes = await readerA.readDecoded();
+    const response = decodeOutboundSignalingFrame(responseBytes);
+    expect(response?.type).toBe("session_request_error");
+
+    // The structured log event must carry the actual reason, not "relay_unavailable"
+    const failedEvent = logEvents.find((e) => e.event === "relay.record_assignment.failed");
+    expect(failedEvent).toBeDefined();
+    expect(failedEvent?.level).toBe("warn");
+    expect(failedEvent?.context["reason"]).toBe(specificReason);
+    expect(failedEvent?.context["agentShort"]).toBeDefined();
+  });
+
   // ─── AC-008: target offline → target_offline ──────────────────────────────────
 
   it("AC-008: session_request to offline target returns target_offline without allocating session", async () => {
