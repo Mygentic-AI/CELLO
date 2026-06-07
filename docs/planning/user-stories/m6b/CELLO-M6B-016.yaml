@@ -71,23 +71,22 @@ File: `packages/directory/db/migrations/V30__registration_data_integrity.sql`
 ### Changes to `registrations` table
 
 ```sql
--- Replace email_domain with email_stub_hash.
+-- Drop email_domain and replace with email_stub_hash.
 -- email_stub_hash = SHA-256(normalize(full_email)) where normalize lowercases
 -- and strips leading/trailing whitespace.
--- email_domain is kept for now (nullable) to allow backfill if needed;
--- a future migration drops it once confirmed unused.
+-- No backward compatibility shim — alpha, single operator, clean cut.
 ALTER TABLE registrations
+  DROP COLUMN IF EXISTS email_domain,
   ADD COLUMN email_stub_hash TEXT;
 ```
 
 ### Changes to `pre_authorization_tokens` table
 
 ```sql
+-- Drop email_domain and replace with email_stub_hash.
 ALTER TABLE pre_authorization_tokens
+  DROP COLUMN IF EXISTS email_domain,
   ADD COLUMN email_stub_hash TEXT;
-
--- email_domain column kept for backward compatibility during transition;
--- will be dropped in a follow-up migration once confirmed clean.
 ```
 
 ### New `channel_identities` table
@@ -170,18 +169,25 @@ Do NOT store or log the pre-hash email anywhere after this function returns.
 
 ### 2. `state-machine.ts` — email handling in `#handleAwaitingEmail`
 
-Replace `extractEmailDomain(email)` call with `hashEmail(email)`.
+`extractEmailDomain(email)` is retained for the in-memory rate limiter only
+(keyed per-domain, never persisted). For persistence, replace with `hashEmail(email)`.
 
 Store `emailStubHash` (not `emailDomain`) in the `AWAITING_EMAIL_OTP` transition:
 ```typescript
+const emailDomain = extractEmailDomain(email);  // retained for rate limiter only
+const emailStubHash = hashEmail(email);          // stored in DB
+
 const updated = await repository.transition(record.id, "AWAITING_EMAIL_OTP", {
-  emailStubHash,   // replaces emailDomain
+  emailStubHash,
   otpHash,
   otpSalt: salt,
   otpExpiresAt,
   otpAttemptCount: 0,
 });
 ```
+
+Delete `extractEmailDomain` from all other call sites — it must not appear
+in any DB write or API call after this story.
 
 ### 3. `state-machine.ts` — new `handleExistingUser()` method
 
@@ -192,7 +198,7 @@ async handleExistingUser(
   channelUserId: string,
   channel: "telegram" | "whatsapp" | "cli",
   phoneStubHash: string,
-  expectedEmailStubHash: string,   // from the prior completed registration
+  expectedEmailStubHash: string | null,  // null for pre-V30 completed rows
 ): Promise<RegistrationRecord>
 ```
 
@@ -200,14 +206,18 @@ This method:
 1. Creates a new registration record (same as `handleNewUser`)
 2. Stores `expectedEmailStubHash` on the record so it can be enforced when
    the user submits their email in step 3 of the re-registration flow
-3. When the user submits their email OTP and it verifies, compare
-   `hashEmail(submittedEmail)` against `expectedEmailStubHash` — if they
-   differ, reject with: "You must use the same email address as your original
-   registration. Please try again."
+3. When the user submits their email OTP and it verifies:
+   - If `expectedEmailStubHash` is **null** (pre-V30 completed row with no
+     stored hash): skip continuity enforcement, proceed normally. The new
+     completed row will have `email_stub_hash` populated for future re-registrations.
+   - If `expectedEmailStubHash` is **non-null**: compare `hashEmail(submittedEmail)`
+     against it — if they differ, reject with: "You must use the same email
+     address as your original registration. Please try again."
 
 The `expectedEmailStubHash` comes from the `completed` row found in
-`engine.ts` (`findCompletedByChannelUser`). The `registrations` table already
-has the `completed` row's `email_stub_hash` after this story lands.
+`engine.ts` (`findCompletedByChannelUser`). The `registrations` table has
+the `completed` row's `email_stub_hash` after this story lands (NULL for
+rows created before V30 was applied).
 
 ### 4. `engine.ts` — call `handleExistingUser` on CONFIRM
 
@@ -278,6 +288,12 @@ Update body: `JSON.stringify({ phoneStubHash, emailStubHash, registrationId })`.
 Update the `/internal/pre-authorize` endpoint to accept `emailStubHash`
 instead of `emailDomain`. Update validation check accordingly.
 
+### 10. `infra/cloudformation/cello-ssm-parameters.yaml` — bump expected migration version
+
+Update `OpsAgentExpectedMigrationVersion` default value from `29` to `30`.
+This is required per infra/CLAUDE.md — every migration story must update this
+parameter or the ops-agent ECS task will crash-loop on startup after V30 applies.
+
 ---
 
 ## Acceptance Criteria
@@ -286,7 +302,7 @@ instead of `emailDomain`. Update validation check accordingly.
   given: "A user completes a registration ceremony for the first time"
   when: "they submit their email address and the OTP verifies"
   then: "`SHA-256(normalize(email))` is stored in `registrations.email_stub_hash`;
-    `email_domain` is NOT populated (column remains NULL for new rows);
+    the `email_domain` column does not exist on the table (dropped in V30);
     the full email address does not appear in any database column or log line"
   test_type: integration
   component_under_test: operations-agent
@@ -346,10 +362,12 @@ instead of `emailDomain`. Update validation check accordingly.
   given: "The V30 migration SQL"
   when: "applied to a local PostgreSQL instance that already has V1 through V29 applied"
   then: "Flyway reports zero checksum errors on all prior migrations; V30 applies cleanly;
-    `registrations` has `email_stub_hash TEXT` column; `pre_authorization_tokens` has
-    `email_stub_hash TEXT` column; `channel_identities` table exists with UNIQUE index
-    on (phone_stub_hash, channel); RLS enabled on `channel_identities`; `cello_ops_agent`
-    has INSERT/SELECT/UPDATE on `channel_identities` and NOT DELETE"
+    `registrations.email_domain` column does NOT exist; `registrations.email_stub_hash TEXT` exists;
+    `pre_authorization_tokens.email_domain` column does NOT exist; `pre_authorization_tokens.email_stub_hash TEXT` exists;
+    `channel_identities` table exists with UNIQUE index on (phone_stub_hash, channel);
+    RLS enabled on `channel_identities`; `cello_ops_agent` has INSERT/SELECT/UPDATE
+    on `channel_identities` and NOT DELETE;
+    `cello-ssm-parameters.yaml` OpsAgentExpectedMigrationVersion default is `30`"
   test_type: integration
   component_under_test: directory
 
