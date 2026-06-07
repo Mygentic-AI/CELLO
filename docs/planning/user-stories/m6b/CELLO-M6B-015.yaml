@@ -39,9 +39,27 @@ and not confused with an unrelated functional regression.
 
 ## Execution Steps (in order)
 
-### Phase 1 — Code and IaC changes (all in one commit)
+### Phase 1a — DeletionPolicy pre-step (separate commit, deploy first)
 
-These are string replacements that must all land atomically before any deploy.
+Before any other code changes, add `DeletionPolicy: Retain` to all four
+ops-agent secret resources in `cello-secrets.yaml`:
+- `OpsAgentTelegramBotTokenSecret`
+- `OpsAgentSesCredentialsSecret`
+- `OpsAgentDirectoryApiKeySecret`
+- `OpsAgentRdsCredentialsSecret`
+
+Commit only this change. Run `./infra/deploy.sh dev`. This deploy sets the
+retention policy so that when Phase 1b removes these resources from CFN in a
+subsequent deploy, AWS does not delete the physical secrets.
+
+**Do not proceed to Phase 1b until this deploy completes successfully.**
+
+---
+
+### Phase 1b — Code and IaC changes (one commit)
+
+These are string replacements that must all land atomically in a single commit.
+The Phase 1a deploy must have completed before this commit is pushed.
 
 1. **Rename package directory**
    - `packages/operations-agent/` → `packages/portal-backend/`
@@ -69,6 +87,7 @@ These are string replacements that must all land atomically before any deploy.
 
 4. **Rename test files and update directory test references**
    - `packages/directory/src/__tests__/ops-agent-000-rls.test.ts` → `packages/directory/src/__tests__/portal-backend-000-rls.test.ts`
+   - `packages/directory/src/__tests__/ops-agent-001-pre-auth.test.ts` → `packages/directory/src/__tests__/portal-backend-001-pre-auth.test.ts`
    - `packages/directory/src/__tests__/deploy-001-iac-validation.test.ts` — update hardcoded `"operations-agent"` pipeline assertion strings
 
 5. **Update all CloudFormation templates** (10 files in `infra/cloudformation/`)
@@ -91,11 +110,22 @@ These are string replacements that must all land atomically before any deploy.
    - Secrets Manager paths: `cello/${Environment}/ops-agent/*` → `cello/${Environment}/portal-backend/*`
    - ECR export: `cello-${Environment}-ecr-operations-agent-uri` → `cello-${Environment}-ecr-portal-backend-uri`
    - Buildspec path reference in `cello-cicd.yaml`: `infra/buildspecs/staging-deploy-operations-agent.yml` → `infra/buildspecs/staging-deploy-portal-backend.yml`
-   - `cello-rotation.yaml`: update `Fn::ImportValue` of `cello-${Environment}-ops-agent-rds-credentials-arn` → `portal-backend`
+   - `cello-rotation.yaml`: **DO NOT** simply rename the `Fn::ImportValue` references — the export
+     `cello-${Environment}-ops-agent-rds-credentials-arn` disappears when the secret is removed from
+     `cello-secrets.yaml`. There are TWO references in `cello-rotation.yaml` that must each be converted
+     to a direct `!Sub` ARN (no ImportValue):
+     - The `AppCredentialAccess` IAM policy `Resource` (~line 77): change from
+       `!ImportValue cello-${Environment}-ops-agent-rds-credentials-arn` to
+       `!Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/portal-backend/rds-credentials-*"`
+     - The `OpsAgentRdsCredentialsRotationSchedule` `SecretId` (~line 250): change from
+       `!ImportValue cello-${Environment}-ops-agent-rds-credentials-arn` to
+       `!Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/portal-backend/rds-credentials-*"`
+     (Also update the `RotationSchedule` logical resource ID from `OpsAgent*` to `PortalBackend*`.)
 
 6. **Update `pipeline-mappings.json`**
    - Change trigger path `packages/operations-agent/` → `packages/portal-backend/`
    - Change pipeline name key `cello-operations-agent-pipeline` → `cello-portal-backend-pipeline`
+   - Also update the `allCelloPipelines` array entry `"cello-operations-agent-pipeline"` → `"cello-portal-backend-pipeline"` (this array lives in the same JSON file and controls which pipelines the filter Lambda considers CELLO-owned)
    - After this file is committed and pushed, run: `./infra/deploy-lambdas.sh dev filter`
 
 7. **Update shell scripts** (`deploy.sh`, `bootstrap.sh`, `build-stubs.sh`, `audit-state.sh`)
@@ -131,7 +161,7 @@ These are string replacements that must all land atomically before any deploy.
      default in `cello-ssm-parameters.yaml` to `31`
 
 10. **Update documentation and developer instructions**
-    - `infra/CLAUDE.md` — two `ops-agent` references
+    - `infra/CLAUDE.md` — four `ops-agent` references (lines ~271, ~286, ~338, ~356)
     - `infra/STATE.md` — all table headers, ARNs, SSM paths, secret paths, ECR URLs, IAM role names
     - `.claude/CLAUDE.md` — `OpsAgentExpectedMigrationVersion` reference and any `ops-agent` text
     - `docs/planning/milestone-writeups/M6-beta-launch.md`
@@ -290,17 +320,19 @@ Required after `pipeline-mappings.json` path change (as per CLAUDE.md rule).
 Run through these before executing Phase 4:
 
 - [ ] `grep -r "operations-agent\|ops-agent\|OpsAgent\|ops_agent\|OPS_AGENT\|cello_ops_agent" packages/ infra/` returns zero hits in code (V26 and V31 SQL are the only exceptions)
-- [ ] All 4 ops-agent secrets have `DeletionPolicy: Retain` applied (first deploy) and are removed from CFN template (second deploy) before Phase 4
+- [ ] Phase 1a deploy completed: all 4 ops-agent secrets confirmed with `DeletionPolicy: Retain` in AWS
+- [ ] Phase 1b commit: all 4 ops-agent secret resources removed from `cello-secrets.yaml` (including their Outputs/Exports)
 - [ ] All 4 new `portal-backend` Secrets Manager paths exist with correct values
 - [ ] New SSM parameter `/cello/dev/portal-backend/expected-migration-version` exists with correct value
 - [ ] Stub image pushed to `cello-portal-backend` ECR repo
-- [ ] `pipeline-mappings.json` updated to `packages/portal-backend/`
+- [ ] `pipeline-mappings.json` updated to `packages/portal-backend/` — including `allCelloPipelines` array entry
 - [ ] New Flyway migration V31 file exists
 - [ ] `cello-ssm-parameters.yaml` `PortalBackendExpectedMigrationVersion` default is `31`
+- [ ] `ops-agent-001-pre-auth.test.ts` renamed to `portal-backend-001-pre-auth.test.ts`
 - [ ] `deploy-001-iac-validation.test.ts` updated — no `operations-agent` pipeline assertion strings
 - [ ] `smoke-test-portal-backend.yml` filter pattern updated to `portal_backend.started`
 - [ ] All direct `!Sub`-constructed ARNs in `cello-ecs-directory.yaml` and `cello-iam.yaml` updated
-- [ ] `cello-rotation.yaml` `Fn::ImportValue` updated for rds-credentials-arn export
+- [ ] `cello-rotation.yaml` both `!ImportValue` references to `ops-agent-rds-credentials-arn` converted to direct `!Sub` ARNs (NOT renamed `Fn::ImportValue` — that export no longer exists after secrets leave CFN)
 - [ ] `infra/STATE.md` updated with new resource names and paths
 
 ## Post-Deploy Verification
@@ -347,6 +379,14 @@ PostgreSQL authentication error.
 These are `!Sub`-constructed ARNs, not `Fn::ImportValue`. They will not be caught
 by searching for `ImportValue` — grep specifically for `ops-agent` in all CFN
 templates after Phase 1 to confirm zero hits.
+
+**W-8 — cello-rotation.yaml ImportValues become dangling, not renameable.** The
+two `!ImportValue cello-${Environment}-ops-agent-rds-credentials-arn` references
+in `cello-rotation.yaml` cannot be fixed by renaming them to `portal-backend` —
+the export itself is removed when the secret leaves `cello-secrets.yaml`. Both
+references must be converted to `!Sub`-constructed ARNs pointing directly to
+`cello/${Environment}/portal-backend/rds-credentials`. Renaming an ImportValue
+that no longer exists causes a CloudFormation cross-stack dependency error on deploy.
 
 ---
 
