@@ -407,6 +407,37 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
     expect((call as unknown as Record<string, unknown>)["channel_user_id"]).toBeUndefined();
   });
 
+  // ─── SI-002 ─────────────────────────────────────────────────────────────────
+
+  it("SI-002: email continuity is enforced by hash comparison, not by trusting user input", async () => {
+    // An attacker who knows another user's channel ID sends CONFIRM and submits
+    // a different email — the hash comparison rejects, the re-registration does not advance.
+    const originalEmail = "legitimate@example.com";
+    const attackerEmail = "attacker@evil.com";
+
+    // Complete the legitimate user's first registration
+    await driveToCompletion(channelState, otpState, userId, originalEmail);
+
+    // Attacker triggers re-registration and submits a different email
+    await channelState.injectMessage(userId, "hello");
+    await channelState.injectMessage(userId, "CONFIRM");
+    await channelState.injectMessage(userId, `CONTACT:${userId}:+447911123456`);
+    await channelState.injectMessage(userId, attackerEmail);
+    const otpEntry = otpState.captured[otpState.captured.length - 1];
+
+    // OTP verifies correctly for the attacker's email — but hash comparison rejects
+    await channelState.injectMessage(userId, otpEntry.otp);
+
+    // Verify rejection: pre-auth was NOT called a second time
+    expect(preAuthState.calls.length).toBe(1);
+
+    // Verify the continuity rejection event was logged
+    const rejectedEvent = loggerState.events.find(
+      (e) => e.event === "registration.email.continuity_rejected",
+    );
+    expect(rejectedEvent).toBeDefined();
+  });
+
   // ─── SI-003 ─────────────────────────────────────────────────────────────────
 
   it("SI-003: cello_ops_agent role cannot DELETE from channel_identities", async () => {
@@ -417,6 +448,74 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
     await expect(
       pool.query("DELETE FROM channel_identities WHERE channel_user_id = $1", [userId]),
     ).rejects.toThrow(/permission denied/);
+  });
+
+  // ─── AC-008 integration gate ─────────────────────────────────────────────────
+
+  it("AC-008: V30 migration applied cleanly — schema matches spec", async () => {
+    // email_domain must NOT exist on registrations
+    const regEmailDomain = await pool.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'registrations' AND column_name = 'email_domain'`,
+    );
+    expect(regEmailDomain.rows.length).toBe(0);
+
+    // email_stub_hash must exist on registrations
+    const regEmailStubHash = await pool.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'registrations' AND column_name = 'email_stub_hash'`,
+    );
+    expect(regEmailStubHash.rows.length).toBe(1);
+
+    // email_domain must NOT exist on pre_authorization_tokens
+    const patEmailDomain = await pool.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'pre_authorization_tokens' AND column_name = 'email_domain'`,
+    );
+    expect(patEmailDomain.rows.length).toBe(0);
+
+    // email_stub_hash must exist on pre_authorization_tokens
+    const patEmailStubHash = await pool.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'pre_authorization_tokens' AND column_name = 'email_stub_hash'`,
+    );
+    expect(patEmailStubHash.rows.length).toBe(1);
+
+    // channel_identities table must exist
+    const tableExists = await pool.query(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_name = 'channel_identities'`,
+    );
+    expect(tableExists.rows.length).toBe(1);
+
+    // UNIQUE index on (phone_stub_hash, channel) must exist
+    const uniqueIdx = await pool.query(
+      `SELECT indexname FROM pg_indexes
+       WHERE tablename = 'channel_identities'
+         AND indexname = 'idx_channel_identities_phone_channel'`,
+    );
+    expect(uniqueIdx.rows.length).toBe(1);
+
+    // RLS must be enabled on channel_identities
+    const rlsEnabled = await pool.query(
+      `SELECT relrowsecurity FROM pg_class
+       WHERE relname = 'channel_identities'`,
+    );
+    expect(rlsEnabled.rows.length).toBe(1);
+    expect(rlsEnabled.rows[0].relrowsecurity).toBe(true);
+
+    // cello_ops_agent must have INSERT, SELECT, UPDATE but NOT DELETE on channel_identities
+    const privCheck = await pool.query(
+      `SELECT
+         has_table_privilege('cello_ops_agent', 'channel_identities', 'INSERT') AS can_insert,
+         has_table_privilege('cello_ops_agent', 'channel_identities', 'SELECT') AS can_select,
+         has_table_privilege('cello_ops_agent', 'channel_identities', 'UPDATE') AS can_update,
+         has_table_privilege('cello_ops_agent', 'channel_identities', 'DELETE') AS can_delete`,
+    );
+    expect(privCheck.rows[0].can_insert).toBe(true);
+    expect(privCheck.rows[0].can_select).toBe(true);
+    expect(privCheck.rows[0].can_update).toBe(true);
+    expect(privCheck.rows[0].can_delete).toBe(false);
   });
 });
 
