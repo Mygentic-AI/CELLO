@@ -101,6 +101,7 @@ M6B fixes all three patterns systematically.
 | M6B-011 | Ops-agent UX + SSM migration version | P1 | — |
 | M6B-012 | PERSIST-019 Uint8Array round-trip test | P1 | — |
 | M6B-013 | Replace @journeyapps/sqlcipher with pre-built library | P1 | M6B-005 |
+| M6B-014 | NAT gateway + remove interface endpoints (sovereign node networking) | P0 | — |
 
 ---
 
@@ -117,10 +118,11 @@ M6B-009  (independent)
 M6B-010  (independent)
 M6B-011  (independent)
 M6B-012  (independent)
+M6B-014  (independent)
 ```
 
-10 stories are fully independent. 3 stories have a single upstream dependency.
-All 10 independent stories can be dispatched in parallel from day one.
+11 stories are fully independent. 3 stories have a single upstream dependency.
+All 11 independent stories can be dispatched in parallel from day one.
 
 ---
 
@@ -140,6 +142,7 @@ All 10 independent stories can be dispatched in parallel from day one.
 | M6B-010 | trustless-cello | `packages/directory/src/bin/directory.ts`, `packages/directory/src/adapters/` |
 | M6B-011 | trustless-cello | `packages/operations-agent/src/registration/state-machine.ts` |
 | M6B-012 | trustless-cello | `packages/directory/src/__tests__/persist-019-notification-queue.test.ts` |
+| M6B-014 | trustless-cello | `infra/cloudformation/cello-vpc.yaml`, `infra/deploy.sh` |
 
 **Batch 2 — unblocks after batch 1 merges:**
 

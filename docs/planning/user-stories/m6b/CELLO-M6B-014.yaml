@@ -1,0 +1,282 @@
+---
+name: CELLO-M6B-014
+type: user-story
+date: 2026-06-07
+topics: [infrastructure, networking, nat-gateway, vpc, relay, sovereign-nodes, cost-optimization]
+status: draft
+description: >
+  Add a NAT gateway to the VPC so ECS tasks in private subnets can reach the
+  public internet. This unblocks relay auto-registration (relay dials directory
+  via its public ALB hostname) and removes 6 of 7 interface endpoints (net cost
+  savings). Restores the relay→directory path that is currently broken without
+  a manual private-IP hack.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M6B-014
+domain: INFRA
+milestone: M6B
+actor: OPS
+priority: P0
+components:
+  - infra
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO operator,
+  I want ECS tasks in private subnets to have outbound internet access via a
+  NAT gateway, so that the relay can dial the directory's public ALB hostname
+  on startup without relying on unstable private VPC IPs or manual security
+  group rules.
+
+# ─── Context ────────────────────────────────────────────────
+# Root cause (2026-06-06): the relay runs in a private subnet with no NAT
+# gateway. The directory's public hostname (directory-us1.cello.mygentic.ai)
+# resolves to the ALB's public IP, which is unreachable from private subnets.
+# TCP SYN packets are silently dropped at the subnet boundary. The relay
+# cannot register with the directory — breaking M6B-006's auto-registration.
+#
+# Current workaround: manual ECS task def revision :55 with a hardcoded
+# private VPC IP. This breaks on every directory restart, is not in IaC,
+# and will be overwritten by the next deploy.sh run.
+#
+# The correct approach: a NAT gateway gives private subnets outbound internet
+# access. The relay dials the directory via its public Route53 hostname through
+# the internet-facing ALB on port 80/ws. This is cloud-agnostic in concept —
+# every cloud has NAT gateways (AWS NAT Gateway, GCP Cloud NAT, Azure NAT
+# Gateway). The same pattern works regardless of where the sovereign node runs.
+#
+# Cost analysis: adding 1 NAT gateway per region (~$32/month each = ~$96/month
+# for 3 regions) allows removing 6 interface endpoints. Each interface endpoint
+# costs ~$7/month per AZ; current template deploys each into 2 AZs, so 6
+# endpoints × $7 × 2 AZs × 3 regions = ~$252/month removed. Net saving after
+# adding NAT: ~$156/month. Keep ssmmessages (ECS Exec) and S3 gateway (free).
+#
+# DNS: GoDaddy delegates cello.mygentic.ai to Route53 nameservers. All DNS
+# management is in Route53. No GoDaddy changes are needed.
+#
+# AZ decision: for dev, 1 NAT gateway in Public Subnet A is sufficient. Both
+# private subnets share one PrivateRouteTable, so one route covers both. For
+# production sovereign nodes, upgrade to 1 NAT per AZ (separate route tables
+# per AZ) to avoid single-AZ failure killing outbound for the whole region.
+
+# ─── Sovereign Node Constraint ──────────────────────────────
+# A sovereign node must be able to both RECEIVE connections from any node/client
+# on the internet AND INITIATE connections to any other node on the internet.
+# Both are non-negotiable requirements for participation in a P2P network.
+# Without outbound internet access, a node cannot dial other nodes and is not
+# sovereign — it is coupled to the VPC. NAT gateways provide cloud-agnostic
+# outbound access. The same concept exists on every cloud provider.
+
+# ─── Behavior ──────────────────────────────────────────────
+behavior:
+  - trigger: "deploy.sh deploys cello-vpc-{env}"
+    action: >
+      CloudFormation creates an Elastic IP, a NAT gateway in Public Subnet A,
+      and a route in the private route table (0.0.0.0/0 → NAT gateway). Removes
+      interface endpoints for ECR API, ECR DKR, Secrets Manager, KMS, CloudWatch
+      Logs, and SSM. Keeps ssmmessages (ECS Exec) and S3 gateway (free).
+    outcome: >
+      Private subnets have outbound internet access. All AWS API calls that
+      previously went through interface endpoints now go through the NAT gateway.
+      ECS Exec continues to work via the retained ssmmessages endpoint.
+
+  - trigger: "Relay ECS task starts in a private subnet"
+    action: >
+      The relay resolves the directory's public hostname
+      (directory-{region}.cello.mygentic.ai) via Route53. DNS resolves to the
+      internet-facing ALB's public IP. The relay's outbound TCP SYN traverses
+      the NAT gateway to reach the ALB. The ALB routes to the directory
+      container on port 8080/ws. The relay sends relay_register over the
+      WebSocket libp2p connection.
+    outcome: >
+      Relay auto-registration succeeds. No private IP hack. No manual SG rules.
+      Works identically after directory or relay restarts because DNS always
+      resolves to the current healthy target behind the ALB.
+
+  - trigger: "deploy.sh constructs CELLO_DIRECTORY_MULTIADDR for the relay"
+    action: >
+      deploy.sh uses the public Route53 hostname
+      (/dns4/{subdomain}.{domain}/tcp/443/wss/p2p/{peer-id} for production with
+      TLS, or /dns4/{subdomain}.{domain}/tcp/80/ws/p2p/{peer-id} for dev without
+      TLS) instead of the internal ALB DNS name. The internal ALB DNS fallback
+      in deploy.sh is removed.
+    outcome: >
+      The relay's directory multiaddr is cloud-agnostic — it uses a public DNS
+      hostname, not an AWS-internal ALB DNS name. Any node on any cloud can
+      resolve and reach it.
+
+# ─── Acceptance Criteria ───────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "cello-vpc.yaml with the NAT gateway resources"
+    when: "deploy.sh deploys cello-vpc-{env} to us-east-1"
+    then: >
+      The stack creates: (1) an Elastic IP, (2) a NAT Gateway in Public Subnet A
+      attached to the EIP, and (3) a route 0.0.0.0/0 → NAT Gateway in the
+      PrivateRouteTable. Verified by aws ec2 describe-nat-gateways showing state
+      'available' and aws ec2 describe-route-tables showing the 0.0.0.0/0 route
+      pointing to the NAT gateway ID.
+    test_type: integration
+    component_under_test: infra
+
+  - id: AC-002
+    given: "cello-vpc.yaml with interface endpoints removed"
+    when: "deploy.sh deploys cello-vpc-{env} to us-east-1"
+    then: >
+      The following interface endpoints no longer exist in the stack: ecr.api,
+      ecr.dkr, secretsmanager, kms, logs, ssm. Only ssmmessages (interface) and
+      s3 (gateway) remain. Verified by aws ec2 describe-vpc-endpoints filtering
+      by VPC ID showing exactly 2 endpoints.
+    test_type: integration
+    component_under_test: infra
+
+  - id: AC-003
+    given: "NAT gateway is deployed and the relay ECS task starts"
+    when: "the relay resolves directory-us1.cello.mygentic.ai from within the private subnet"
+    then: >
+      DNS resolves to the directory ALB's public IP (not a private IP, not
+      NXDOMAIN). The relay's TCP connection to port 80 succeeds through the NAT
+      gateway. relay_register completes successfully — verified by
+      'relay.registered' or 'relay.already.registered' in relay CloudWatch logs.
+    test_type: integration
+    component_under_test: relay
+    notes: >
+      This is the end-to-end proof that the NAT gateway fixes the broken
+      relay→directory path. If this AC passes, the manual private-IP hack
+      (task def :55 + manual SG rule) can be removed.
+
+  - id: AC-004
+    given: "NAT gateway deployed, interface endpoints removed"
+    when: "the directory ECS task starts (ECR pull, Secrets Manager read, KMS decrypt, CloudWatch Logs write)"
+    then: >
+      The directory task starts successfully — ECR image pull works via NAT,
+      secrets are read from Secrets Manager via NAT, KMS operations succeed,
+      logs appear in CloudWatch. Verified by ECS service events showing
+      'has reached a steady state' and application logs appearing in CloudWatch.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "NAT gateway deployed, ssmmessages endpoint retained"
+    when: "operator runs 'aws ecs execute-command' against a running task"
+    then: >
+      ECS Exec session connects successfully. Verified by running a simple
+      command (e.g. 'echo ok') via execute-command and receiving output.
+    test_type: integration
+    component_under_test: infra
+
+  - id: AC-006
+    given: "deploy.sh with the updated DirectoryMultiaddr construction"
+    when: "deploy.sh runs for the relay stack"
+    then: >
+      CELLO_DIRECTORY_MULTIADDR uses the public Route53 hostname
+      (/dns4/directory-{region}.cello.mygentic.ai/tcp/80/ws/p2p/{peer-id}),
+      not the internal ALB DNS name. The internal ALB DNS fallback code is
+      removed from deploy.sh.
+    test_type: integration
+    component_under_test: infra
+
+  - id: AC-007
+    given: "The cello-route53-dev stack in us-east-1"
+    when: "queried from the public internet"
+    then: >
+      directory-us1.cello.mygentic.ai resolves to the directory ALB's public IP
+      (not NXDOMAIN, not a private IP).
+    test_type: integration
+    component_under_test: infra
+    notes: >
+      As of 2026-06-06, CFN believes the A record exists (CREATE_COMPLETE) but
+      Route53 shows no A record — likely deleted during nuclear reset. Options
+      to fix: (a) delete the stack and let deploy.sh recreate it, or (b) run
+      detect-stack-drift and let CFN remediate.
+
+  - id: AC-008
+    given: "All infrastructure changes from this story are deployed"
+    when: "the implementer finishes deployment"
+    then: "infra/STATE.md is updated to reflect: NAT gateway IDs per region, removed endpoints, updated route table entries"
+    test_type: manual
+    component_under_test: infra
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The NAT gateway provides outbound-only internet access. It does not allow
+      unsolicited inbound connections from the internet to private subnets.
+      Inbound access remains exclusively through the ALB.
+    adversarial_condition: >
+      An attacker scans the NAT gateway's Elastic IP and attempts to initiate
+      TCP connections to private subnet task IPs via the NAT. The NAT gateway
+      drops all inbound-initiated packets — only return traffic for outbound
+      connections is forwarded.
+    test_type: integration
+    component_under_test: infra
+
+  - id: SI-002
+    statement: >
+      Removing interface endpoints does not weaken the security posture. Traffic
+      to AWS APIs now exits the VPC via NAT (TLS-encrypted) instead of staying
+      within the VPC via interface endpoints. Both paths use TLS. The difference
+      is routing, not encryption.
+    adversarial_condition: >
+      An attacker with access to the NAT gateway's subnet attempts to intercept
+      AWS API calls. All calls use TLS (SigV4 authentication) — the attacker
+      sees encrypted packets only, same as they would on any internet path.
+    test_type: integration
+    component_under_test: infra
+
+# ─── Observability ─────────────────────────────────────────
+observability:
+  events: []
+  error_events: []
+  alarms: []
+  notes: >
+    This is a pure infrastructure story. No new application log events are
+    introduced. Relay registration success/failure events already exist from
+    M6B-006 (relay.registered, relay.registration.failed). NAT gateway metrics
+    (BytesOutToDestination, PacketsDropCount) are available in CloudWatch by
+    default — no custom alarms needed for dev.
+
+# ─── Implementation Notes ──────────────────────────────────
+implementation_notes:
+  - >
+    CloudFormation changes to cello-vpc.yaml: add NatEip (AWS::EC2::EIP),
+    NatGateway (AWS::EC2::NatGateway in PublicSubnetA), and PrivateNatRoute
+    (AWS::EC2::Route 0.0.0.0/0 → NatGateway in PrivateRouteTable). Remove
+    EcrApiEndpoint, EcrDkrEndpoint, SecretsManagerEndpoint, KmsEndpoint,
+    LogsEndpoint, SsmEndpoint resources and the EndpointSecurityGroup. Keep
+    SsmMessagesEndpoint and S3GatewayEndpoint.
+  - >
+    deploy.sh change: revert the internal ALB DNS fallback (commit f476f66).
+    Use /dns4/${SUBDOMAIN}.${DOMAIN_NAME}/tcp/80/ws/p2p/${DIRECTORY_PEER_ID}
+    unconditionally. The relay can now reach the public hostname via NAT.
+  - >
+    Route53 drift fix: cello-route53-dev in us-east-1 has CFN drift — the
+    A record was deleted but CFN still believes it exists. Options: (a) delete
+    the stack and let deploy.sh recreate it, or (b) detect-stack-drift and let
+    CFN remediate. Option (a) is simpler. The eu-central-1 and ap-northeast-1
+    records are fine.
+  - >
+    After deploy: remove the manual SG rule (relay→directory port 4000) and
+    the manual task def revision :55 that are currently keeping relay
+    registration alive via the private IP hack.
+  - >
+    Production upgrade path (future story): for production sovereign nodes,
+    split PrivateRouteTable into PrivateRouteTableA and PrivateRouteTableB,
+    add a second NAT gateway in Public Subnet B, and route each private
+    subnet through its own AZ-local NAT. This eliminates the single-AZ
+    failure risk. Not needed for dev.
+
+# ─── Dependencies ──────────────────────────────────────────
+dependencies:
+  blocked_by: []
+  blocks: []
+  related:
+    - CELLO-M6B-006  # relay auto-registration (code complete, blocked by this networking gap)
+    - CELLO-M6B-007  # relay public WebSocket ALB
+
+# ─── References ────────────────────────────────────────────
+references:
+  discussion_logs:
+    - docs/planning/discussion_logs/2026-06-06_2100_sovereign-node-networking-requirements.md
+    - docs/planning/discussion_logs/2026-05-30_0800_node-infrastructure-cost-model.md
