@@ -2142,7 +2142,8 @@ export class CelloDirectoryNode {
         protocolLog("AUTH", `Relay ${truncHex(this.#relayEndpoint.peer_id)} authenticated`);
       }
       if (!recorded.ok) {
-        protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: relay_unavailable`);
+        protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: ${recorded.reason}`);
+        this.#logger?.warn("relay.record_assignment.failed", { agentShort: truncHex(initiatorHex), reason: recorded.reason });
         this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "relay_unavailable" }));
         return;
       }

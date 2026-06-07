@@ -158,8 +158,9 @@ export class NetworkRelayAdapter implements RelayAdapter {
       const response = await this.#sendAndReceive(frame);
       if (response["type"] === "assignment_ok") return { ok: true };
       return { ok: false, reason: (response["type"] as string) ?? "relay_error" };
-    } catch {
-      return { ok: false, reason: "relay_unavailable" };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, reason: `relay_unavailable: ${msg}` };
     }
   }
 
