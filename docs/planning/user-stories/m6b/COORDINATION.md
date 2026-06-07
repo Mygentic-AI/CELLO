@@ -611,3 +611,34 @@ When a relay restarts and re-registers with a new private IP, the directory proc
 
 **Low-priority: `relay.manifest.version.stale` logged at WARN in steady state:**
 The `RelayPoolManager` poll loop emits `relay.manifest.version.stale` at `WARN` every 2 minutes when the S3 manifest version equals the in-memory version (i.e. nothing has changed — the normal steady state). This is misleading: `WARN` implies something unexpected happened, but this fires constantly when the system is healthy. Should be `debug`. Fix is one line in `relay-pool-manager.ts:358`. Deferred because any directory source change triggers a 25-30 min 3-region pipeline deploy — not worth it for a log level tweak. Bundle with the next real directory change.
+
+---
+
+### 2026-06-07 — M6B-015 and M6B-016 stories written and reviewed
+
+Two new stories added to M6B arising from a Sybil defense audit of the registration flow:
+
+**CELLO-M6B-016 — Registration Data Integrity (P0)**
+Written, implemented, and reviewed. Ready to merge.
+
+- Story written 2026-06-07. Two sprint-reviewer rounds — APPROVED after round 2.
+- Implemented by sprint-coder (Opus) in worktree `../trustless-cello-m6b-016` on branch `m6b-016-registration-data-integrity`. Commit `c0d29c7`.
+- Code reviewer found one high finding: email continuity bypass when an expired active registration exists. Fixed in commit `4617c2d` — expired-registration path now runs the same `findCompletedByChannelUser` check as the no-active-record path.
+- Sprint reviewer (second pass) returned APPROVED with medium/low findings only: AC-008 migration gate not in a dedicated test, SI-002 not a named test, duplicated re-registration logic in engine.ts.
+- All three fixed in commit `7efc1a8`: AC-008 integration gate test added, SI-002 named test added, `#handleCompletedOrNew()` private method extracted to eliminate duplication.
+- Branch is clean, lint and typecheck pass. **Ready to merge.**
+
+What M6B-016 delivers:
+- `email_domain` dropped from `registrations` and `pre_authorization_tokens`; replaced with `email_stub_hash` (SHA-256 of normalized full email)
+- `handleExistingUser()` code path with email hash continuity enforcement on re-registration
+- `channel_identities` table (permanent `phone_stub_hash → channel_user_id` mapping) with RLS, populated on every registration completion
+- Bot message copy fix (removed false "until it reconnects" claim)
+- Pre-auth token payload updated: `emailDomain` → `emailStubHash`
+- Flyway V30 migration
+
+**CELLO-M6B-015 — Rename operations-agent → portal-backend (P1)**
+Written and reviewed. Story only — not yet implemented. Depends on M6B-016 being deployed healthy first.
+
+- Story written 2026-06-07. Two sprint-reviewer rounds — second round BLOCKED.
+- Round-2 findings all fixed in commit `c6076c7`: Phase 1 split into 1a/1b to resolve two-deploy contradiction; `cello-rotation.yaml` ImportValue references correctly identified as needing conversion to `!Sub` ARNs (not rename); `ops-agent-001-pre-auth.test.ts` added to rename scope; `infra/CLAUDE.md` count corrected to four; `allCelloPipelines` array called out explicitly.
+- Story is ready to implement. **Do not implement until M6B-016 is deployed and healthy.**
