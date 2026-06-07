@@ -1,0 +1,261 @@
+---
+name: PORTAL-BACKEND-RENAME-001
+type: user-story
+date: 2026-06-07
+topics: [rename, refactor, infra, iac, ops-agent, portal-backend, cloudformation, ci-cd]
+status: ready
+description: >
+  Rename the operations-agent component to portal-backend across the entire
+  codebase. Cosmetic rename only — no behavior changes. Requires careful
+  sequencing to avoid breaking the running ECS task.
+---
+
+# M6B-015 — Rename operations-agent → portal-backend
+
+## Why
+
+The component was named "operations-agent" by an AI coder early in M6 without
+a deliberate design decision. The planning documents (`frontend.md`,
+`end-to-end-flow.md`) consistently describe this component as the "signup portal
+backend" — the single service that holds all owner PII, handles registration
+ceremonies, and routes out-of-band notifications. The name will become actively
+misleading once M7 adds a web portal surface to the same service.
+
+Rename now, before M7 stories are written, so M7 implementation starts with the
+correct name throughout.
+
+## Scope
+
+Pure rename. No behavior changes, no API changes, no protocol changes.
+
+---
+
+## Execution Steps (in order)
+
+### Phase 1 — Code and IaC changes (all in one commit)
+
+These are string replacements that must all land atomically before any deploy.
+
+1. **Rename package directory**
+   - `packages/operations-agent/` → `packages/portal-backend/`
+   - Update `package.json` name field: `@cello-protocol/operations-agent` → `@cello-protocol/portal-backend`
+   - Update `pnpm-workspace.yaml` if it lists the directory explicitly
+   - Run `pnpm install` to update `pnpm-lock.yaml`
+
+2. **Rename CloudFormation template file**
+   - `infra/cloudformation/cello-ecs-operations-agent.yaml` → `infra/cloudformation/cello-ecs-portal-backend.yaml`
+
+3. **Rename buildspec files**
+   - `infra/buildspecs/staging-deploy-operations-agent.yml` → `infra/buildspecs/staging-deploy-portal-backend.yml`
+   - `infra/buildspecs/smoke-test-operations-agent.yml` → `infra/buildspecs/smoke-test-portal-backend.yml`
+   - `packages/portal-backend/buildspec.yml` — update `pnpm filter` reference from `@cello-protocol/operations-agent` to `@cello-protocol/portal-backend`
+
+4. **Rename test files**
+   - `packages/directory/src/__tests__/ops-agent-000-rls.test.ts` → `packages/directory/src/__tests__/portal-backend-000-rls.test.ts`
+
+5. **Update all CloudFormation templates** (10 files in `infra/cloudformation/`)
+   - All CFN logical resource IDs: `OpsAgent*` → `PortalBackend*`
+   - All CFN stack names: `cello-ecs-operations-agent` → `cello-ecs-portal-backend`
+   - All CFN export names: `cello-${Environment}-ops-agent-*` → `cello-${Environment}-portal-backend-*`
+   - All CFN import references (`Fn::ImportValue`) that consume the old export names
+   - Log group names: `cello-operations-agent-${Environment}` → `cello-portal-backend-${Environment}`
+   - Security group names: `cello-ops-agent-sg-${Environment}` → `cello-portal-backend-sg-${Environment}`
+   - IAM role names: `cello-${Environment}-ops-agent-*-role` → `cello-${Environment}-portal-backend-*-role`
+   - ECS service/task definition family: `cello-operations-agent-${Environment}` → `cello-portal-backend-${Environment}`
+   - ECR repository: `cello-operations-agent` → `cello-portal-backend`
+   - CloudWatch alarm: `cello-operations-agent-ecs-task-count-*` → `cello-portal-backend-ecs-task-count-*`
+   - CodePipeline: `cello-operations-agent-pipeline` → `cello-portal-backend-pipeline`
+   - CodeBuild projects: `cello-operations-agent-build`, `cello-staging-deploy-operations-agent-build`, `cello-smoke-test-operations-agent-build` → `portal-backend` equivalents
+   - SSM parameter: `/cello/${Environment}/ops-agent/expected-migration-version` → `/cello/${Environment}/portal-backend/expected-migration-version`
+   - Secrets Manager paths: `cello/${Environment}/ops-agent/*` → `cello/${Environment}/portal-backend/*`
+   - ECR export: `cello-${Environment}-ecr-operations-agent-uri` → `cello-${Environment}-ecr-portal-backend-uri`
+   - Buildspec path reference in `cello-cicd.yaml`: `infra/buildspecs/staging-deploy-operations-agent.yml` → `infra/buildspecs/staging-deploy-portal-backend.yml`
+
+6. **Update `pipeline-mappings.json`**
+   - Change trigger path `packages/operations-agent/` → `packages/portal-backend/`
+   - Change pipeline name key `cello-operations-agent-pipeline` → `cello-portal-backend-pipeline`
+   - After this file is committed and pushed, run: `./infra/deploy-lambdas.sh dev filter`
+
+7. **Update shell scripts** (`deploy.sh`, `bootstrap.sh`, `build-stubs.sh`, `audit-state.sh`)
+   - Shell variables: `OPS_AGENT_IMAGE` → `PORTAL_BACKEND_IMAGE`, `OPS_AGENT_RDS_SECRET_ID` → `PORTAL_BACKEND_RDS_SECRET_ID`, etc.
+   - String literals: `cello-ecs-operations-agent-${ENVIRONMENT}` → `cello-ecs-portal-backend-${ENVIRONMENT}`
+   - Secret path strings: `cello/${ENVIRONMENT}/ops-agent/*` → `cello/${ENVIRONMENT}/portal-backend/*`
+   - Stub image tag: `cello-operations-agent:stub` → `cello-portal-backend:stub`
+   - Comment text: "Ops Agent" → "Portal Backend" throughout
+
+8. **Update TypeScript source files** (in `packages/portal-backend/src/`)
+   - Log event names: `ops_agent.*` → `portal_backend.*` (e.g. `ops_agent.started` → `portal_backend.started`)
+   - DB username constant: `cello_ops_agent` → `cello_portal_backend`
+   - All test files: update `OPS_AGENT_URL` constants and DB connection strings from `cello_ops_agent:cello_ops_agent_dev` to `cello_portal_backend:cello_portal_backend_dev`
+   - `packages/interfaces/src/messaging-channel.ts` — two comment lines referencing `operations-agent`
+
+9. **Add new Flyway migration** (do NOT rename or edit V26)
+   - Next available version (check COORDINATION.md — likely V29 or later)
+   - File: `packages/directory/db/migrations/V{N}__rename_cello_ops_agent_role.sql`
+   - Contents:
+     ```sql
+     ALTER ROLE cello_ops_agent RENAME TO cello_portal_backend;
+     -- Recreate RLS policies under new names
+     -- (see V26 for policy definitions to replicate)
+     ```
+   - Update `docker/postgres/initdb/01-dev-role-passwords.sql` for local dev
+   - Update `OpsAgentExpectedMigrationVersion` → `PortalBackendExpectedMigrationVersion` default in `cello-ssm-parameters.yaml` to the new version number
+
+10. **Update `infra/CLAUDE.md`** — two `ops-agent` references
+    **Update `infra/STATE.md`** — all table headers, ARNs, SSM paths, secret paths, ECR URLs, IAM role names
+
+11. **Update vault docs** — cosmetic text replacements in:
+    - `docs/planning/milestone-writeups/M6-beta-launch.md`
+    - `docs/planning/user-stories/m6/COORDINATION.md` and `m6b/COORDINATION.md`
+    - `docs/planning/user-stories/m6/outline.md` and `m6b/outline.md`
+    - All `CELLO-OPS-AGENT-*.yaml` story files (change `domain:`, `component_under_test:`, file path references)
+    - Discussion log references (text only — do not rename log files themselves)
+
+---
+
+### Phase 2 — AWS secret migration (before deploy)
+
+The running ECS task reads secrets and SSM at launch. Renaming paths in CFN
+without first populating the new paths causes the next task launch to fail.
+
+**CRITICAL: Do this before running deploy.sh.**
+
+```bash
+# For each secret, copy value to new path then delete old path AFTER deploy confirms healthy
+ENVIRONMENT=dev
+
+for secret in telegram-bot-token ses-credentials directory-api-key rds-credentials; do
+  OLD="cello/${ENVIRONMENT}/ops-agent/${secret}"
+  NEW="cello/${ENVIRONMENT}/portal-backend/${secret}"
+  VALUE=$(aws secretsmanager get-secret-value --secret-id "$OLD" --query SecretString --output text)
+  aws secretsmanager create-secret --name "$NEW" --secret-string "$VALUE"
+done
+
+# Copy SSM parameter
+OLD_VAL=$(aws ssm get-parameter --name "/cello/${ENVIRONMENT}/ops-agent/expected-migration-version" --query Parameter.Value --output text)
+aws ssm put-parameter --name "/cello/${ENVIRONMENT}/portal-backend/expected-migration-version" --value "$OLD_VAL" --type String
+```
+
+---
+
+### Phase 3 — ECR stub image (before deploy)
+
+The new ECR repo `cello-portal-backend` will be created by CFN on deploy, but
+ECS needs a valid image to start. Push a stub before deploying.
+
+```bash
+# After deploy.sh creates the new ECR repo (or create it manually first):
+./infra/build-stubs.sh dev
+```
+
+Alternatively: manually tag and push the existing `cello-operations-agent:latest`
+to `cello-portal-backend:stub` before the deploy run.
+
+---
+
+### Phase 4 — Deploy
+
+```bash
+./infra/deploy.sh dev
+```
+
+All CFN stacks deploy in one run. The cross-stack export renames are handled
+atomically by deploy.sh updating all templates together.
+
+**What deploy.sh destroys and recreates:**
+- ECR repo `cello-operations-agent` (images lost — stub covers this)
+- ECS service, task definition family, log group
+- IAM execution and task roles
+- CodePipeline, CodeBuild projects
+- CloudWatch alarm
+- Security group (same rules, new name)
+
+**What deploy.sh updates in-place:**
+- SSM parameters (new path already populated in Phase 2)
+- Secrets Manager (new paths already populated in Phase 2)
+
+---
+
+### Phase 5 — Post-deploy cleanup
+
+After confirming the portal-backend ECS task is healthy:
+
+```bash
+# Delete old secret paths
+for secret in telegram-bot-token ses-credentials directory-api-key rds-credentials; do
+  aws secretsmanager delete-secret \
+    --secret-id "cello/dev/ops-agent/${secret}" \
+    --recovery-window-in-days 7
+done
+
+# Delete old SSM parameter
+aws ssm delete-parameter \
+  --name "/cello/dev/ops-agent/expected-migration-version"
+```
+
+Update `infra/STATE.md` immediately after each step above.
+
+---
+
+### Phase 6 — Lambda filter update
+
+```bash
+./infra/deploy-lambdas.sh dev filter
+```
+
+Required after `pipeline-mappings.json` path change (as per CLAUDE.md rule).
+
+---
+
+## Pre-Deploy Audit Checklist
+
+Run through these before executing Phase 4:
+
+- [ ] `grep -r "operations-agent\|ops-agent\|OpsAgent\|ops_agent\|OPS_AGENT\|cello_ops_agent" packages/ infra/` returns zero hits in code (SQL migration V26 is the only exception — it must NOT be modified)
+- [ ] New SSM parameter `/cello/dev/portal-backend/expected-migration-version` exists and has the correct value
+- [ ] All 4 new Secrets Manager paths exist with correct values
+- [ ] Stub image pushed to `cello-portal-backend` ECR repo (or repo will be created by CFN and stub pushed immediately after)
+- [ ] `pipeline-mappings.json` updated to `packages/portal-backend/`
+- [ ] New Flyway migration file exists with the next sequential version number
+- [ ] `cello-ssm-parameters.yaml` default for expected migration version updated to new version number
+- [ ] `infra/STATE.md` updated with new resource names and paths
+
+## Post-Deploy Verification
+
+- [ ] `aws ecs describe-services --cluster cello-dev --services cello-portal-backend-dev` shows `runningCount: 1` and `desiredCount: 1`
+- [ ] Telegram bot responds to a `/start` message
+- [ ] `aws logs tail /ecs/cello-portal-backend-dev --since 5m` shows `portal_backend.started` event (not `ops_agent.started`)
+- [ ] `aws codepipeline list-pipelines` shows `cello-portal-backend-pipeline` and no `cello-operations-agent-pipeline`
+- [ ] A push to `packages/portal-backend/` triggers the pipeline (verify via a trivial whitespace commit)
+- [ ] `infra/STATE.md` updated with all new resource ARNs and confirmed status
+
+---
+
+## Sequencing Warnings (do not skip)
+
+**W-1 — V26 migration: NEVER modify.** It is applied. Modifying it causes Flyway
+checksum errors on every future `flyway migrate` run. Use a new version number.
+
+**W-2 — SSM and Secrets Manager paths must exist before deploy.sh runs.** The
+CFN templates reference the new paths. If the paths don't exist when ECS launches
+the new task, the task crashes at startup. Phase 2 must complete before Phase 4.
+
+**W-3 — ECR repo loses all images on rename.** The old `cello-operations-agent`
+repo is deleted by CFN. A stub image must be available in the new
+`cello-portal-backend` repo before ECS can start a task. Phase 3 before Phase 4.
+
+**W-4 — Cross-stack CFN exports must all update in one deploy.sh run.** If any
+consumer stack imports an old export name that has been removed from a producer
+stack, the deploy fails mid-way. All 10 CFN templates must be updated before
+running deploy.sh — never deploy partial template updates.
+
+**W-5 — deploy-lambdas.sh after pipeline-mappings.json.** The path-based CI
+filter Lambda reads from `pipeline-mappings.json`. Until `deploy-lambdas.sh dev
+filter` runs, pushes to `packages/portal-backend/` will not trigger the pipeline.
+
+---
+
+## References
+
+- [[user-stories/m6b/outline|M6B Outline]] — this story is listed as M6B-015
+- [[discussion_logs/2026-06-07_1221_sybil-confirm-shortcut-audit|Sybil Audit]] — session where the rename decision was made

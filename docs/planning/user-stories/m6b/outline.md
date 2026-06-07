@@ -102,6 +102,7 @@ M6B fixes all three patterns systematically.
 | M6B-012 | PERSIST-019 Uint8Array round-trip test | P1 | — |
 | M6B-013 | Replace @journeyapps/sqlcipher with pre-built library | P1 | M6B-005 |
 | M6B-014 | NAT gateway + remove interface endpoints (sovereign node networking) | P0 | — |
+| M6B-015 | Rename operations-agent → portal-backend (all repos, IaC, docs) | P1 | M6B-011 merged |
 
 ---
 
@@ -116,13 +117,13 @@ M6B-006  (independent) → M6B-007
                        → M6B-008
 M6B-009  (independent)
 M6B-010  (independent)
-M6B-011  (independent)
+M6B-011  (independent) → M6B-015
 M6B-012  (independent)
 M6B-014  (independent)
 ```
 
 11 stories are fully independent. 3 stories have a single upstream dependency.
-All 11 independent stories can be dispatched in parallel from day one.
+M6B-015 depends on M6B-011 being merged first (both touch the same ops-agent files).
 
 ---
 
@@ -151,6 +152,7 @@ All 11 independent stories can be dispatched in parallel from day one.
 | M6B-007 | M6B-006 merged |
 | M6B-008 | M6B-006 merged |
 | M6B-013 | M6B-005 merged |
+| M6B-015 | M6B-011 merged |
 
 ---
 
@@ -182,7 +184,7 @@ M6B closes when:
    cello-client commit 39a0c6a; verify in E2E test).
 4. Deploying a new relay image does not break session initiation — the directory
    picks up the new manifest within 2 minutes (M6B-006 + M6B-008).
-5. The ops-agent is reachable at `https://directory-us1.cello.mygentic.ai/internal/pre-authorize`
+5. The portal-backend (formerly ops-agent) is reachable at `https://directory-us1.cello.mygentic.ai/internal/pre-authorize`
    (HTTP 401, not 502 or 504) immediately after a directory ECS task replacement,
    without manual target re-registration (M6B-004).
 
@@ -201,7 +203,7 @@ M6B closes when:
 | ECS relay template | `trustless-cello/infra/cloudformation/cello-ecs-relay.yaml` |
 | relay.ts WS listen addr | `trustless-cello/packages/relay/src/bin/relay.ts` lines 59-60, 225-227 |
 | SQLCipher store | `cello-client/core/client/src/sqlcipher-client-store.ts` |
-| ops-agent state machine | `trustless-cello/packages/operations-agent/src/registration/state-machine.ts` |
+| ops-agent state machine | `trustless-cello/packages/operations-agent/src/registration/state-machine.ts` (→ `portal-backend` after M6B-015) |
 | persist-019 test | `trustless-cello/packages/directory/src/__tests__/persist-019-notification-queue.test.ts` |
 
 ---
