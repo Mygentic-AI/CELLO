@@ -298,6 +298,9 @@ For each assumption found: locate where CLAUDE.md or the story itself explicitly
 **Error distinctness:**
 - Does any `catch` block map multiple distinct failure causes to the same error code, exception type, or log event? Each distinct cause must produce a distinct observable. A single error that covers timeout, exhaustion, AND unavailability gives the operator nothing to act on. Flag **[blocking]**. *Rationale: M6B-002 — three FROST failure modes all returned `directory_below_threshold`.*
 
+**Lateral catch audit (package-wide — not just changed files):**
+- For every package touched by this story, scan ALL `catch` blocks in ALL files in that package — not only the files the story changed. Flag **[high]** any pre-existing catch that: (a) silently swallows an exception with no log call, or (b) returns a hardcoded reason string without including the actual exception message. If the fix is a one-liner or small contained change (add a logger call, include the exception message), it is a blocking finding — require the fix. If the fix requires interface changes or touches significant pre-existing code, flag [high] and require a new story to be filed before milestone close. *Rationale: M6B-002 fixed FROST ceremony paths in `directory-node.ts` correctly. A `catch { return { ok: false, reason: "relay_unavailable" } }` in `network-relay-adapter.ts` — same package, different file, untouched by the story — swallowed the real error for months. File-scoped review missed it entirely.*
+
 **Unbounded resources:**
 - Does the implementation introduce any resource that grows without a cap — a connection pool with no `max`, an in-memory map keyed on session/agent IDs, a stream concurrency limit, a queue? If yes: is the cap specified in the story and enforced in the code? Missing cap = **[high]**. *Rationale: M6B-009 — default pg pool of 10 exhausted silently under load.*
 

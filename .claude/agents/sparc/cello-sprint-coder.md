@@ -198,6 +198,8 @@ For every observability AC in the story:
 
 **No TODOs in shipped code.** A TODO comment in a story that is being committed is a medium review finding.
 
+**Lateral catch audit (package-wide — mandatory).** For every package you touch in this story, scan ALL `catch` blocks in ALL files in that package — not only the files you changed. For any pre-existing catch that silently swallows an exception (no log call, hardcoded reason string with no exception message): if the fix is a one-liner or small contained change, fix it in this commit. If the fix requires interface changes or significant pre-existing code changes, leave it alone but include it in your Step 7 report under "Pre-existing issues found" with file, line, and one-sentence description. Do not let it block your commit. *Rationale: M6B-002 fixed FROST paths in `directory-node.ts` correctly but missed a silent `catch { return { ok: false, reason: "relay_unavailable" } }` in `network-relay-adapter.ts` — same package, different file. The real error was invisible for months.*
+
 ---
 
 ## Step 6 — Commit implementation
