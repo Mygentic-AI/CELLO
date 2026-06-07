@@ -390,16 +390,40 @@ read_output() {
     --output text
 }
 
-# purge_stale_dns_record: delete a Route53 record if it exists outside CFN ownership.
+# purge_stale_dns_record: delete a Route53 record only when CFN does not own it.
 # Route53 records survive stack deletion (the hosted zone is never torn down).
 # CFN can only CREATE a record it doesn't already own — a pre-existing record causes
 # CREATE_FAILED with "record set already exists". We delete it so CFN can own it cleanly.
+#
+# CRITICAL: only purge when the CFN stack does not exist or is in a terminal failed/deleted
+# state. If the stack is healthy (CREATE_COMPLETE, UPDATE_COMPLETE, etc.), CFN already owns
+# the record — purging it causes CFN to see no diff and never recreate it (the record
+# stays gone until the next nuclear reset). Root cause of 2026-06-07 outage.
 purge_stale_dns_record() {
   local hosted_zone_id="$1"
   local fqdn="$2."   # Route53 stores names with trailing dot
+  local stack_name="$3"
   if [[ -z "${hosted_zone_id}" || "${hosted_zone_id}" == "PLACEHOLDER" ]]; then
     return 0
   fi
+
+  # Check if CFN stack owns this record. If the stack is healthy, skip the purge.
+  local stack_status
+  stack_status=$(aws cloudformation describe-stacks \
+    --stack-name "${stack_name}" \
+    --region "${REGION}" \
+    --query 'Stacks[0].StackStatus' \
+    --output text 2>/dev/null || echo "NOT_FOUND")
+  echo "  DNS pre-flight: stack ${stack_name} status = ${stack_status}"
+  case "${stack_status}" in
+    CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE)
+      # CFN owns the record — do not purge.
+      echo "  Stack is healthy — skipping DNS purge, CFN owns the record."
+      return 0
+      ;;
+  esac
+
+  # Stack doesn't exist or is in a failed/deleted state — safe to purge.
   local record
   record=$(aws route53 list-resource-record-sets \
     --hosted-zone-id "${hosted_zone_id}" \
@@ -747,7 +771,7 @@ deploy_stack "cello-cloudwatch-${ENVIRONMENT}" "cello-cloudwatch.yaml" \
 # Route53 records survive stack deletion (hosted zone is not torn down).
 # CFN can only CREATE a record it doesn't already own — a pre-existing record
 # causes CREATE_FAILED. We delete it so CFN can create it cleanly.
-purge_stale_dns_record "${HOSTED_ZONE_ID}" "${SUBDOMAIN}.${DOMAIN_NAME}"
+purge_stale_dns_record "${HOSTED_ZONE_ID}" "${SUBDOMAIN}.${DOMAIN_NAME}" "cello-route53-${ENVIRONMENT}"
 
 deploy_stack "cello-route53-${ENVIRONMENT}" "cello-route53.yaml" \
   "Environment=${ENVIRONMENT}" \
@@ -781,7 +805,7 @@ else
 fi
 
 # Pre-flight: delete stale relay DNS record if it exists outside CFN.
-purge_stale_dns_record "${HOSTED_ZONE_ID}" "${RELAY_SUBDOMAIN}.${DOMAIN_NAME}"
+purge_stale_dns_record "${HOSTED_ZONE_ID}" "${RELAY_SUBDOMAIN}.${DOMAIN_NAME}" "cello-route53-relay-${ENVIRONMENT}"
 
 deploy_stack "cello-route53-relay-${ENVIRONMENT}" "cello-route53.yaml" \
   "Environment=${ENVIRONMENT}" \
