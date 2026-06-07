@@ -12,7 +12,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 ## Environments
 
 ### dev — us-east-1
-*Last deployed: 2026-06-06
+*Last deployed: 2026-06-07
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -20,7 +20,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-iam-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
 | cello-secrets-dev | UPDATE_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported; all secrets CFN-managed |
 | cello-ssm-parameters-dev | UPDATE_COMPLETE | 2026-06-06 | SSM migration version = V29 (dynamic) |
-| cello-vpc-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
+| cello-vpc-dev | UPDATE_COMPLETE | 2026-06-07 | M6B-014: NatGateway + NatEip + PrivateNatRoute added; interface endpoints retained for stage-2 removal |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-27 | No changes |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
@@ -28,9 +28,9 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-06 | All M6B stories; image cello-directory:1dea685 |
 | cello-ecs-operations-agent-dev | **CREATE_COMPLETE** | **2026-06-06** | **FRESH CREATE** — tombstone deleted+recreated; image cello-operations-agent:895804c (curl installed); health checks passing; ECS circuit breaker enabled |
 | cello-waf-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
-| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
+| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-06-07 | Running task def :54 (CFN-managed, public DIRECTORY_MULTIADDR); :55 manual workaround superseded |
 | cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
-| cello-route53-dev | UPDATE_COMPLETE (CFN DRIFT) | 2026-06-06 | Deployed r12; A record for directory-us1.cello.mygentic.ai was deleted manually (nuclear reset). Recreated manually 2026-06-07 via Route53 CLI. CFN still believes record exists — drift will resolve on next deploy.sh run. |
+| cello-route53-dev | UPDATE_COMPLETE (CFN DRIFT) | 2026-06-07 | A record deleted by purge_stale_dns_record() bug during M6B-014 deploy. Recreated manually 2026-06-07. deploy.sh fixed (commit 6d17b30) — drift resolves on next deploy.sh run. |
 | cello-route53-relay-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | cello-cicd-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
@@ -140,7 +140,7 @@ IaC changes committed but NOT YET DEPLOYED. The operator must run `./infra/deplo
 - ap-northeast-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-ap1.cello.mygentic.ai --type String --region ap-northeast-1`
 
 ### dev — eu-central-1
-*Last deployed: 2026-06-06 — all stacks fully deployed*
+*Last deployed: 2026-06-07
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -196,7 +196,7 @@ IaC changes committed but NOT YET DEPLOYED. The operator must run `./infra/deplo
 | SNS Topic — ops-warning | arn:aws:sns:eu-central-1:257394457473:cello-ops-warning-dev |
 
 ### dev — ap-northeast-1
-*Last deployed: 2026-06-06 — all stacks fully deployed*
+*Last deployed: 2026-06-07
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|

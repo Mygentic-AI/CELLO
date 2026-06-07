@@ -573,3 +573,31 @@ Reverted the health check change. `/health` always returns 200 as soon as the pr
 2. Verify relay logs show `relay.registered` after deploy
 3. Remove manual SG rule and task def :55 once registration confirmed working
 4. Stage 2 (separate deploy): remove 6 interface endpoints from cello-vpc.yaml
+
+---
+
+## 2026-06-07 — M6B-014 deploy + purge_stale_dns_record bug
+
+**Issue faced:**
+M6B-014 was merged and deployed (`./infra/deploy.sh dev`, all 3 regions, exit 0). Post-deploy, relay registration still failed — all 3 `directory-*.cello.mygentic.ai` A records were missing from Route53.
+
+Root cause: `purge_stale_dns_record()` in deploy.sh ran unconditionally before the route53 stack. It deleted all 3 A records directly from Route53. CFN then ran the route53 stacks, compared its template against its own internal state (which still said "record exists"), saw no diff, and did nothing. Records stayed gone.
+
+The function was originally correct — it solves the nuclear-reset case where CFN needs to do a fresh CREATE but a dangling record blocks it. The bug was that it also ran when the stack was healthy and CFN already owned the record.
+
+**Decision made:**
+Option A — add a CFN stack status check to `purge_stale_dns_record()`. Only purge when the stack is missing or in a failed/deleted state. If the stack is `CREATE_COMPLETE`, `UPDATE_COMPLETE`, or `UPDATE_ROLLBACK_COMPLETE`, CFN owns the record — skip the purge entirely.
+
+This handles both cases correctly:
+- Normal deploy (stack healthy): skip purge, CFN does an UPDATE, record untouched
+- Nuclear reset / fresh region (stack gone): purge runs, CFN does a fresh CREATE cleanly
+
+**What was done:**
+- Fixed `purge_stale_dns_record()` in deploy.sh (commit `6d17b30`) — now takes stack name as third arg and checks status before purging
+- Manually recreated all 3 A records in Route53 (us-east-1, eu-central-1, ap-northeast-1)
+- Forced us-east-1 relay service from task def :55 (manual private IP workaround) to :54 (CFN-managed, public hostname)
+
+**Current state:**
+- All 3 A records live in Route53
+- us-east-1 relay running task def :54 with correct public DIRECTORY_MULTIADDR
+- Relay registration still failing with `directory_unavailable` — under investigation
