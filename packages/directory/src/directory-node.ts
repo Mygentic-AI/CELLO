@@ -2166,9 +2166,14 @@ export class CelloDirectoryNode {
       // (f) Deliver to both clients
       const assignmentFrame: SessionAssignmentFrame = { type: "session_assignment", assignment };
       const encoded = encodeSessionAssignment(assignmentFrame);
-      this.#sendFrame(stream, encoded);
       const pending = this.#pendingSessions.get(sessionIdHex);
-      if (pending) pending.initiatorGotAssignment = true;
+      try {
+        this.#sendFrame(stream, encoded);
+        if (pending) pending.initiatorGotAssignment = true;
+      } catch {
+        // Initiator stream failed mid-delivery; abort — target will get a stale assignment.
+        return;
+      }
       try {
         this.#sendFrame(targetStream, encoded);
         if (pending) {
