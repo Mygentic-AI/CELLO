@@ -60,7 +60,7 @@ export type RegistrationRow = {
   channel_user_id: string;
   state: string;
   state_data: Record<string, unknown>;
-  email_domain: string | null;
+  email_stub_hash: string | null;
   otp_hash: string | null;
   otp_salt: string | null;
   otp_expires_at: Date | null;
@@ -112,7 +112,7 @@ export function rowToRecord(row: RegistrationRow): RegistrationRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     expiresAt: row.expires_at,
-    emailDomain: row.email_domain,
+    emailStubHash: row.email_stub_hash,
   };
 
   // Reconstruct discriminated union state
@@ -207,10 +207,10 @@ export class RegistrationRepository {
     channel: string,
     channelUserId: string,
     maxAgeMs: number,
-  ): Promise<{ id: string; created_at: Date } | null> {
+  ): Promise<{ id: string; created_at: Date; emailStubHash: string | null } | null> {
     const since = new Date(Date.now() - maxAgeMs);
-    const result = await this.#pool.query<{ id: string; created_at: Date }>(
-      `SELECT id, created_at FROM registrations
+    const result = await this.#pool.query<{ id: string; created_at: Date; email_stub_hash: string | null }>(
+      `SELECT id, created_at, email_stub_hash FROM registrations
        WHERE channel = $1 AND channel_user_id = $2
          AND state = 'PRE_AUTH_TOKEN_ISSUED'
          AND created_at > $3
@@ -218,7 +218,8 @@ export class RegistrationRepository {
       [channel, channelUserId, since],
     );
     if (result.rows.length === 0) return null;
-    return result.rows[0];
+    const row = result.rows[0];
+    return { id: row.id, created_at: row.created_at, emailStubHash: row.email_stub_hash };
   }
 
   /**
@@ -316,7 +317,7 @@ export class RegistrationRepository {
     newState: string,
     updates: {
       phoneStubHash?: string;
-      emailDomain?: string | null;
+      emailStubHash?: string | null;
       otpHash?: string | null;
       otpSalt?: string | null;
       otpExpiresAt?: Date | null;
@@ -349,7 +350,7 @@ export class RegistrationRepository {
          updated_at = $2,
          chain_hash = $3,
          phone_stub_hash = COALESCE($4, phone_stub_hash),
-         email_domain = COALESCE($5, email_domain),
+         email_stub_hash = COALESCE($5, email_stub_hash),
          otp_hash = CASE WHEN $6 THEN NULL ELSE COALESCE($7, otp_hash) END,
          otp_salt = CASE WHEN $6 THEN NULL ELSE COALESCE($8, otp_salt) END,
          otp_expires_at = CASE WHEN $6 THEN NULL ELSE COALESCE($9, otp_expires_at) END,
@@ -363,7 +364,7 @@ export class RegistrationRepository {
         now,
         newChainHash,
         updates.phoneStubHash !== undefined ? updates.phoneStubHash : null,
-        updates.emailDomain !== undefined ? updates.emailDomain : null,
+        updates.emailStubHash !== undefined ? updates.emailStubHash : null,
         clearOtp,
         !clearOtp && updates.otpHash !== undefined ? updates.otpHash : null,
         !clearOtp && updates.otpSalt !== undefined ? updates.otpSalt : null,
@@ -492,5 +493,51 @@ export class RegistrationRepository {
     );
     if (result.rows.length === 0) return null;
     return result.rows[0].otp_salt;
+  }
+
+  /**
+   * Fetch a single field from state_data JSONB for a registration record.
+   * Used to retrieve expectedEmailStubHash for email continuity enforcement.
+   */
+  async getStateDataField(id: string, field: string): Promise<unknown> {
+    const result = await this.#pool.query<{ state_data: Record<string, unknown> }>(
+      `SELECT state_data FROM registrations WHERE id = $1`,
+      [id],
+    );
+    if (result.rows.length === 0) return null;
+    return result.rows[0].state_data[field] ?? null;
+  }
+
+  /**
+   * Fetch the email_stub_hash for a registration record.
+   * Used during email continuity enforcement to compare against expected hash.
+   */
+  async getEmailStubHash(id: string): Promise<string | null> {
+    const result = await this.#pool.query<{ email_stub_hash: string | null }>(
+      `SELECT email_stub_hash FROM registrations WHERE id = $1`,
+      [id],
+    );
+    if (result.rows.length === 0) return null;
+    return result.rows[0].email_stub_hash;
+  }
+
+  /**
+   * Upsert a channel identity record. Called when a registration reaches PRE_AUTH_TOKEN_ISSUED.
+   * Uses INSERT ... ON CONFLICT to update existing rows (same phone + channel = same row).
+   * SI-001: channel_user_id stays in ops-agent DB, never sent to directory.
+   */
+  async upsertChannelIdentity(
+    phoneStubHash: string,
+    channel: string,
+    channelUserId: string,
+  ): Promise<void> {
+    await this.#pool.query(
+      `INSERT INTO channel_identities (phone_stub_hash, channel, channel_user_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (phone_stub_hash, channel) DO UPDATE SET
+         channel_user_id = EXCLUDED.channel_user_id,
+         updated_at = now()`,
+      [phoneStubHash, channel, channelUserId],
+    );
   }
 }

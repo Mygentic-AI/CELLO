@@ -317,8 +317,8 @@ export class CelloDirectoryNode {
   // OPS-AGENT-001: Postgres pool for account deduplication (AC-005b)
   readonly #pgPool: import("pg").Pool | undefined;
   // OPS-AGENT-001: stash phone_stub_hash from consumed token for account linking after DKG completes
-  // agentPubkeyHex → { phoneStubHash, emailDomain }
-  readonly #pendingPreAuthData = new Map<string, { phoneStubHash: string; emailDomain: string }>();
+  // agentPubkeyHex → { phoneStubHash, emailStubHash }
+  readonly #pendingPreAuthData = new Map<string, { phoneStubHash: string; emailStubHash: string }>();
 
   // REG-001: forceDkgFailure — test injection for below-threshold DKG simulation
   readonly #forceDkgFailure: boolean;
@@ -922,7 +922,7 @@ export class CelloDirectoryNode {
             // For now, we store it in a per-agent map that #processRegisterRequest reads.
             this.#pendingPreAuthData.set(dkgReq.agentPubkey, {
               phoneStubHash: validationResult.phoneStubHash,
-              emailDomain: validationResult.emailDomain,
+              emailStubHash: validationResult.emailStubHash,
             });
           }
 
@@ -1651,6 +1651,7 @@ export class CelloDirectoryNode {
         agentProfileId: agentId,
         kLocalPubkey: frame.k_local_pubkey,
         phoneStubHash: preAuthDataForHash.phoneStubHash,
+        emailStubHash: preAuthDataForHash.emailStubHash,
       }).catch((err: unknown) => {
         const reason = err instanceof Error ? err.message : String(err);
         this.#logger?.error("preauth.account.link.failed", {

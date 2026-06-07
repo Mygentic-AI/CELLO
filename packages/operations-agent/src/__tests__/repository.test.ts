@@ -152,7 +152,7 @@ describeIntegration("RegistrationRepository integration", () => {
 
     await repo.transition(record.id, "AWAITING_CONTACT");
     await repo.transition(record.id, "PHONE_CONFIRMED");
-    await repo.transition(record.id, "AWAITING_EMAIL", { emailDomain: "example.com" });
+    await repo.transition(record.id, "AWAITING_EMAIL", { emailStubHash: "example-hash" });
 
     const otp = "654321";
     const salt = "test-salt-value";

@@ -100,7 +100,7 @@ function makeTestOtpDelivery(): OtpDeliveryProvider {
  * handleNewUser path (insert, transition × 2, find) return minimal records.
  */
 function makeMockPool(opts: {
-  completedRecord?: { id: string; created_at: Date } | null;
+  completedRecord?: { id: string; created_at: Date; email_stub_hash?: string | null } | null;
 }): pg.Pool {
   const { completedRecord = null } = opts;
 
@@ -112,7 +112,7 @@ function makeMockPool(opts: {
     channel_user_id: "user1",
     state: "AWAITING_CONTACT",
     state_data: {},
-    email_domain: null,
+    email_stub_hash: null,
     otp_hash: null,
     otp_salt: null,
     otp_expires_at: null,
@@ -216,12 +216,15 @@ describe("AC-001: pre-auth failure sends honest error message", () => {
         createdAt: new Date(),
         updatedAt: new Date(),
         expiresAt: new Date(Date.now() + 9999999),
-        emailDomain: "example.com",
+        emailStubHash: "example-hash",
       })),
       transitionOnOtpLockout: vi.fn(),
       incrementOtpAttempt: vi.fn(),
       touchTimestamps: vi.fn(),
       getOtpSalt: vi.fn(async () => "test-salt"),
+      getStateDataField: vi.fn(async () => null),
+      getEmailStubHash: vi.fn(async () => null),
+      upsertChannelIdentity: vi.fn(async () => {}),
       loadAllActive: vi.fn(async () => []),
       findExpiredActive: vi.fn(async () => []),
     };
@@ -257,7 +260,7 @@ describe("AC-001: pre-auth failure sends honest error message", () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       expiresAt: new Date(Date.now() + 9999999),
-      emailDomain: "example.com",
+      emailStubHash: "example-hash",
       otpHash,
       otpExpiresAt: new Date(Date.now() + 999999),
       attemptCount: 0,
@@ -297,12 +300,15 @@ describe("AC-001: pre-auth failure sends honest error message", () => {
       transition: vi.fn(async (id: string, newState: string) => ({
         id, state: newState, phoneStubHash: "hash", channel: "cli" as const,
         channelUserId: "user1", createdAt: new Date(), updatedAt: new Date(),
-        expiresAt: new Date(Date.now() + 9999999), emailDomain: "example.com",
+        expiresAt: new Date(Date.now() + 9999999), emailStubHash: "example-hash",
       })),
       transitionOnOtpLockout: vi.fn(),
       incrementOtpAttempt: vi.fn(),
       touchTimestamps: vi.fn(),
       getOtpSalt: vi.fn(async () => null),
+      getStateDataField: vi.fn(async () => null),
+      getEmailStubHash: vi.fn(async () => null),
+      upsertChannelIdentity: vi.fn(async () => {}),
       loadAllActive: vi.fn(async () => []),
       findExpiredActive: vi.fn(async () => []),
     };
@@ -335,7 +341,7 @@ describe("AC-001: pre-auth failure sends honest error message", () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       expiresAt: new Date(Date.now() + 9999999),
-      emailDomain: "example.com",
+      emailStubHash: "example-hash",
     };
 
     await sm.handleMessage(record, "anything", "user1");

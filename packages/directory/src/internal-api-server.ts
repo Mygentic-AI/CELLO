@@ -17,11 +17,11 @@
  *   1. Mint correlationId for this request (hex from randomBytes(16))
  *   2. Check x-cello-internal-api-key header
  *      - Missing or invalid → log preauth.auth.failed (WARN) → return 401
- *   3. Parse body: { phoneStubHash, emailDomain, registrationId }
+ *   3. Parse body: { phoneStubHash, emailStubHash, registrationId }
  *      - Missing fields → return 400
- *   4. Call issuePreAuthToken(pool, { phoneStubHash, emailDomain, registrationId })
+ *   4. Call issuePreAuthToken(pool, { phoneStubHash, emailStubHash, registrationId })
  *      - On error → log preauth.token.issue.failed (ERROR) → return 500
- *   5. Log preauth.token.issued (INFO) with { tokenId, phoneStubHashPrefix, emailDomain, correlationId }
+ *   5. Log preauth.token.issued (INFO) with { tokenId, phoneStubHashPrefix, emailStubHash, correlationId }
  *      phoneStubHashPrefix = first 8 hex chars of phoneStubHash
  *   6. Return 200 with { token, expiresAt: ISO-8601 }
  */
@@ -84,19 +84,19 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
 
       const p = parsed as Record<string, unknown>;
       const phoneStubHash = typeof p["phoneStubHash"] === "string" ? p["phoneStubHash"] : null;
-      const emailDomain = typeof p["emailDomain"] === "string" ? p["emailDomain"] : null;
+      const emailStubHash = typeof p["emailStubHash"] === "string" ? p["emailStubHash"] : null;
       const registrationId = typeof p["registrationId"] === "string" ? p["registrationId"] : null;
 
-      if (!phoneStubHash || !emailDomain || !registrationId) {
+      if (!phoneStubHash || !emailStubHash || !registrationId) {
         res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "missing required fields: phoneStubHash, emailDomain, registrationId" }));
+        res.end(JSON.stringify({ error: "missing required fields: phoneStubHash, emailStubHash, registrationId" }));
         return;
       }
 
       // Step 3: Issue token
       let result: Awaited<ReturnType<typeof issuePreAuthToken>>;
       try {
-        result = await issuePreAuthToken(pool, { phoneStubHash, emailDomain, registrationId });
+        result = await issuePreAuthToken(pool, { phoneStubHash, emailStubHash, registrationId });
       } catch (err: unknown) {
         // LOW-2: Sanitize Postgres errors to avoid leaking internal schema details.
         // Postgres driver errors have a numeric `code` property (e.g. "23505" for unique violation).
@@ -121,7 +121,7 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
       logger.info("preauth.token.issued", {
         tokenId: result.tokenId,
         phoneStubHashPrefix,
-        emailDomain,
+        emailStubHash,
         correlationId,
       });
 

@@ -16,7 +16,7 @@
  * Observability:
  *   - registration.started logged with { registrationId, channel, correlationId }
  *   - registration.phone.verified logged with { registrationId, channel, correlationId }
- *   - registration.email.verified logged with { registrationId, emailDomain, correlationId }
+ *   - registration.email.verified logged with { registrationId, correlationId }
  *   - registration.completed logged with { registrationId, tokenId, correlationId }
  *   - registration.otp.expired logged with { registrationId, correlationId }
  *   - registration.otp.rate_limited logged at WARN with { registrationId, emailDomain, sendCount, correlationId }
@@ -302,7 +302,6 @@ describeIntegration("RegistrationEngine integration", () => {
 
     // Observability
     const emailVerified = loggerState.events.find((e) => e.event === "registration.email.verified");
-    expect(emailVerified?.context?.emailDomain).toBe("example.com");
     expect(emailVerified?.context?.correlationId).toBeDefined();
 
     const completed = loggerState.events.find((e) => e.event === "registration.completed");

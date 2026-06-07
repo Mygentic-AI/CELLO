@@ -126,7 +126,7 @@ describeIntegration(
       }
 
       // Nullable columns
-      const nullableCols = ["email_domain", "otp_hash", "otp_salt", "otp_expires_at"];
+      const nullableCols = ["email_stub_hash", "otp_hash", "otp_salt", "otp_expires_at"];
       for (const col of nullableCols) {
         expect(cols[col], `registrations.${col} must exist`).toBeDefined();
         expect(cols[col], `registrations.${col} must be nullable`).toBe("YES");

@@ -31,8 +31,8 @@ export type PreAuthorizationToken = {
   token: string;
   /** SHA-256 hash of the operator's phone stub — links token to the phone-verified identity */
   phoneStubHash: string;
-  /** Email domain (not full address) — links token to the email-verified domain */
-  emailDomain: string;
+  /** SHA-256 hash of the normalized email — links token to the email-verified identity */
+  emailStubHash: string;
   /** Timestamp when this token was issued */
   issuedAt: Date;
   /** Expiry timestamp — 24h TTL after issuance */
@@ -59,7 +59,7 @@ export type PreAuthorizationTokenRow = PreAuthorizationToken & {
  */
 export interface PreAuthorizationClient {
   /**
-   * Request a pre-authorization token for the given phone stub hash and email domain.
+   * Request a pre-authorization token for the given phone stub hash and email stub hash.
    * The caller has already verified both; this method records the verification outcome
    * and returns the token that the operator will configure on their agent.
    *
@@ -67,5 +67,5 @@ export interface PreAuthorizationClient {
    * The full PreAuthorizationToken (TTL, timestamps) is managed by the directory
    * and is not surfaced to the Operations Agent.
    */
-  requestToken(phoneStubHash: string, emailDomain: string, registrationId: string): Promise<{ token: string }>;
+  requestToken(phoneStubHash: string, emailStubHash: string, registrationId: string): Promise<{ token: string }>;
 }

@@ -85,10 +85,11 @@ export type RegistrationRecord = {
   /** When this registration record expires (7-day idle timeout) */
   expiresAt: Date;
   /**
-   * Email domain collected during registration (e.g. "example.com").
-   * null before the AWAITING_EMAIL transition — set once the operator provides
-   * their email address and the domain is extracted.
-   * Mirrors the nullable email_domain TEXT column in the registrations table.
+   * SHA-256 hash of the normalized (lowercased, trimmed) email address.
+   * null before the AWAITING_EMAIL_OTP transition — set when the operator provides
+   * their email address and the hash is computed.
+   * Mirrors the nullable email_stub_hash TEXT column in the registrations table.
+   * The full email address is never persisted anywhere.
    */
-  emailDomain: string | null;
+  emailStubHash: string | null;
 } & RegistrationState;

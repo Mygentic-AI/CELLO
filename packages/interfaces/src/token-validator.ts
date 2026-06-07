@@ -27,7 +27,7 @@
  * For the { valid: false } case, tokenId may be null when the token is not found in the DB.
  */
 export type TokenValidationResult =
-  | { valid: true; phoneStubHash: string; emailDomain: string; tokenId: string }
+  | { valid: true; phoneStubHash: string; emailStubHash: string; tokenId: string }
   | { valid: false; reason: string; tokenId: string | null };
 
 /**
@@ -37,7 +37,7 @@ export type TokenValidationResult =
 export interface TokenValidator {
   /**
    * Validate a pre-authorization token.
-   * Returns { valid: true, phoneStubHash, emailDomain } on success.
+   * Returns { valid: true, phoneStubHash, emailStubHash } on success.
    * Returns { valid: false, reason } on any failure (expired, consumed, not found, malformed).
    * Never throws — validation failures are encoded in the return type.
    */
