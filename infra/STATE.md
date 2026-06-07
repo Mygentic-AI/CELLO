@@ -19,16 +19,16 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-ecr-dev | UPDATE_COMPLETE | 2026-06-05 | OperationsAgentRepo imported via CFN resource import |
 | cello-iam-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
 | cello-secrets-dev | UPDATE_COMPLETE | 2026-06-05 | DirectoryTransportKey + RelayTransportKey imported; all secrets CFN-managed |
-| cello-ssm-parameters-dev | UPDATE_COMPLETE | 2026-06-06 | SSM migration version = V29 (dynamic) |
+| cello-ssm-parameters-dev | UPDATE_COMPLETE | 2026-06-07 | SSM migration version = V30 (updated manually 2026-06-07 after M6B-016 pipeline; ops-agent healthy) |
 | cello-vpc-dev | UPDATE_COMPLETE | 2026-06-07 | M6B-014: NatGateway + NatEip + PrivateNatRoute added; interface endpoints retained for stage-2 removal |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-27 | No changes |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-06 | All M6B stories; image cello-directory:1dea685 |
-| cello-ecs-operations-agent-dev | **CREATE_COMPLETE** | **2026-06-06** | **FRESH CREATE** — tombstone deleted+recreated; image cello-operations-agent:895804c (curl installed); health checks passing; ECS circuit breaker enabled |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-07 | M6B-016 + relay logging fixes; image cello-directory:c45d811; task def :149 |
+| cello-ecs-operations-agent-dev | UPDATE_COMPLETE | 2026-06-07 | M6B-016 registration engine; image cello-operations-agent:f4c3e72; task def :43; migrationVersion=30 confirmed healthy |
 | cello-waf-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
-| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-06-07 | Running task def :54 (CFN-managed, public DIRECTORY_MULTIADDR); :55 manual workaround superseded |
+| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-06-07 | Running task def :55 (pipeline-deployed 2026-06-07) |
 | cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | cello-route53-dev | UPDATE_COMPLETE (CFN DRIFT) | 2026-06-07 | A record deleted by purge_stale_dns_record() bug during M6B-014 deploy. Recreated manually 2026-06-07. deploy.sh fixed (commit 6d17b30) — drift resolves on next deploy.sh run. |
 | cello-route53-relay-dev | UPDATE_COMPLETE (CFN DRIFT) | 2026-06-07 | A record deleted by purge_stale_dns_record() bug. Recreated manually 2026-06-07. Drift resolves on next deploy.sh run. |
@@ -153,7 +153,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-06 | All M6B stories; image cello-directory:1dea685 |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-07 | M6B-016 + relay logging fixes; image cello-directory:c45d811; task def :48 |
 | cello-ecs-operations-agent-dev | NOT DEPLOYED | — | eu-central-1 only has PLACEHOLDER secrets; single instance runs in us-east-1 |
 | cello-waf-dev | CREATE_COMPLETE | 2026-06-06 | |
 | cello-ecs-relay-dev | CREATE_COMPLETE | 2026-06-06 | |
@@ -209,7 +209,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-06 | All M6B stories; image cello-directory:1dea685 |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-07 | M6B-016 + relay logging fixes; image cello-directory:c45d811; task def :39 |
 | cello-ecs-operations-agent-dev | NOT DEPLOYED | — | ap-northeast-1 only has PLACEHOLDER secrets; single instance runs in us-east-1 |
 | cello-waf-dev | CREATE_COMPLETE | 2026-06-06 | |
 | cello-ecs-relay-dev | CREATE_COMPLETE | 2026-06-06 | |
@@ -338,9 +338,9 @@ Setup with: `./infra/setup-replication.sh dev`
 | ECR repo — operations-agent (us-east-1) | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; created by cello-ecr stack |
 | ECR repo — operations-agent (eu-central-1) | 257394457473.dkr.ecr.eu-central-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; replicated via account-level ECR replication |
 | ECR repo — operations-agent (ap-northeast-1) | 257394457473.dkr.ecr.ap-northeast-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; replicated via account-level ECR replication |
-| Current directory image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:33377b0 | Built from commit 33377b0, deployed 2026-05-28 via pipeline; all 3 regions; includes INTERNAL_API_KEY + /internal/* ALB rules + port 9090 health |
-| Current relay image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay:6e0c50b | Built from commit 6e0c50b, deployed 2026-05-22 |
-| Current operations-agent image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-operations-agent:895804c | curl installed for ECS health check; deployed 2026-06-06 via pipeline |
+| Current directory image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:c45d811 | M6B-016 + relay failure reason logging; deployed 2026-06-07 via pipeline; all 3 regions; task defs us-east-1:149, eu-central-1:48, ap-northeast-1:39 |
+| Current relay image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay:791f9ce | Deployed 2026-06-07 via pipeline; task defs us-east-1:55, eu-central-1:20, ap-northeast-1:15 |
+| Current operations-agent image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-operations-agent:f4c3e72 | M6B-016 registration engine; Dockerfile stale COPY lines fixed; deployed 2026-06-07 via pipeline; task def :43; migrationVersion=30 |
 | Route 53 Hosted Zone | cello.mygentic.ai | Zone ID read at deploy time via aws route53 list-hosted-zones |
 | CodeStar Connection (us-east-1) | arn:aws:codeconnections:us-east-1:257394457473:connection/1a7fba2b-dd1d-4ebe-8372-7122b89f56b5 | AVAILABLE — override via CELLO_GITHUB_CONNECTION_ID |
 
