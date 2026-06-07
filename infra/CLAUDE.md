@@ -100,6 +100,21 @@ If the task starts but can't reach Telegram API, SES, or RDS, the application wi
 
 ---
 
+## ALB DNS Names — Always Query AWS, Never Use STATE.md
+
+**Never use STATE.md as the source for ALB DNS names.** ALB DNS names change any time a load balancer is recreated (stack delete+create, name conflict, etc.). STATE.md is updated manually and will be stale.
+
+**Always query AWS directly:**
+```bash
+aws elbv2 describe-load-balancers --region <region> \
+  --query 'LoadBalancers[?contains(LoadBalancerName,`cello-dir`)].{dns:DNSName,zone:CanonicalHostedZoneId}' \
+  --output json
+```
+
+*Root cause: 2026-06-07 — manually recreating Route53 A records used a stale ALB DNS name from deploy logs instead of querying AWS. us-east-1 relay registration failed for ~30 minutes.*
+
+---
+
 ## CloudFormation Template Limits
 
 **CloudFormation `Description` field limit is 1024 characters.** This applies to the top-level template `Description` AND to each `AWS::CloudWatch::Alarm` `AlarmDescription` field. Both fields accept `!Sub` — the limit applies to the expanded string. Keep descriptions short or they will fail `CreateChangeSet` with `Template format error: 'Description' length is greater than 1024`.

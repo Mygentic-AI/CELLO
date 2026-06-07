@@ -80,7 +80,7 @@ All six secrets imported via CFN resource import changeset `import-transport-key
 | Relay Manifest Bucket | cello-relay-manifest-dev-us-east-1 |
 | RDS Endpoint | cello-dev.c9iokw02w3f8.us-east-1.rds.amazonaws.com |
 | RDS Port | 5432 |
-| Directory ALB | cello-dir-dev-1136016900.us-east-1.elb.amazonaws.com |
+| Directory ALB | cello-dir-dev-85618485.us-east-1.elb.amazonaws.com |
 | Relay ALB | pending — deploy cello-ecs-relay-dev to populate |
 | ALB Hosted Zone ID | Z35SXDOTRQ7X7K |
 | Route 53 Record | directory-us1.cello.mygentic.ai |
