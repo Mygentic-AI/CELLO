@@ -245,10 +245,10 @@ Resources:
           Value: !Sub "cello-rds-sg-${Environment}"
 
   # NAT Gateway — provides outbound internet access for private subnets.
-  # ECS tasks (directory, relay) use this to reach AWS APIs (ECR, Secrets Manager,
-  # KMS, CloudWatch Logs, SSM) and external services. Replaces 6 interface endpoints
-  # (cost saving: ~$156/month across 3 regions). Single NAT in AZ-A is sufficient
-  # for dev; production should use one NAT per AZ with separate route tables.
+  # Allows ECS tasks to reach public internet (e.g. directory public ALB hostname).
+  # Interface endpoints are retained for now — remove them in a follow-up deploy
+  # once NAT is confirmed working end-to-end (M6B-014 stage 2).
+  # Single NAT in AZ-A is sufficient for dev; production should use one NAT per AZ.
   NatEip:
     Type: AWS::EC2::EIP
     Properties:
@@ -282,7 +282,8 @@ Resources:
       DestinationCidrBlock: "0.0.0.0/0"
       NatGatewayId: !Ref NatGateway
 
-  # VPC Endpoint Security Group — retained for ssmmessages endpoint (ECS Exec)
+  # VPC Interface Endpoints — retained until NAT gateway is confirmed working.
+  # Remove these in a follow-up deploy (M6B-014 stage 2) after E2E verification.
   EndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -296,6 +297,84 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "cello-endpoint-sg-${Environment}"
+
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  EcrDkrEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  KmsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.kms"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  SsmEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
 
   # SsmMessages endpoint retained for ECS Exec (aws ecs execute-command).
   # ECS Exec requires a persistent WebSocket to ssmmessages — NAT alone is
