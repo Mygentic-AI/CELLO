@@ -1,0 +1,431 @@
+---
+name: PORTAL-BACKEND-002 — Registration Data Integrity
+type: user-story
+date: 2026-06-07
+topics: [registration, onboarding, ops-agent, portal-backend, email, channel-identity, security, pii, database, sybil-defense]
+status: ready
+description: >
+  Fixes three registration data integrity gaps discovered in the M6B Sybil
+  audit: (1) email domain stored instead of full email hash, making
+  continuity enforcement impossible; (2) no handleExistingUser code path,
+  allowing a different email to be used on re-registration; (3) channel_user_id
+  never promoted to permanent storage, making notification routing impossible.
+  One migration (V30) covers all schema changes. Must land and deploy healthy
+  BEFORE M6B-015 (portal-backend rename) executes.
+---
+
+# M6B-016 — Registration Data Integrity
+
+## Why
+
+Three gaps exist in the current registration implementation:
+
+**Gap 1 — email_domain instead of email_stub_hash.** The registrations table
+stores only the domain half of the verified email (`email_domain TEXT`). The
+full email address is verified via OTP but the hash is never persisted. This
+makes it impossible to enforce email continuity on re-registration — a user
+could verify `alice@gmail.com` the first time and `attacker@gmail.com` the
+second time and the system has no way to detect the mismatch.
+
+**Gap 2 — no handleExistingUser code path.** When a user with a completed
+registration sends CONFIRM, `engine.ts` calls `handleNewUser()` directly.
+There is no distinct code path for returning users that enforces phone hash
+AND email hash continuity. Adding a `handleExistingUser()` method keeps the
+two paths cleanly separated and makes future per-path logic changes safe.
+
+**Gap 3 — channel_user_id not persisted permanently.** Telegram user IDs are
+stored in the `registrations` table (ceremony state only). Once the ceremony
+completes they are never promoted to a permanent record. The ops-agent has no
+way to contact a user for security alerts, key rotation notifications, or any
+other out-of-band event after registration completes. A `channel_identities`
+table fixes this.
+
+**Gap 4 — bot message copy bug.** The re-registration warning says "your
+existing agent registration will remain active until it reconnects" — implying
+reconnection breaks the old agent. It does not. The old agent continues working
+indefinitely. The message is factually wrong and will confuse users.
+
+**Gap 5 — pre-auth token payload sends emailDomain not emailStubHash.**
+`directory-pre-auth-client.ts` sends `{ phoneStubHash, emailDomain, registrationId }`
+to the directory internal API. After this story it must send `emailStubHash`.
+
+## Security context
+
+The ops-agent database security posture is already solid: RLS enabled on all
+tables, `cello_ops_agent` role scoped to only `registrations` and
+`pre_authorization_tokens`, append-only semantics enforced via REVOKE DELETE,
+OTP fields hashed with salt, chain hash for tamper evidence. This story extends
+that posture to the new `channel_identities` table with the same RLS pattern.
+
+The ops-agent is the signup portal backend — it is the only component that
+holds owner PII (phone, email, channel IDs). The directory never receives PII;
+it receives only hashes. This invariant must be preserved: `channel_user_id`
+stays in the ops-agent database and is never forwarded to the directory.
+
+---
+
+## Migration — V30 (one file, all schema changes)
+
+File: `packages/directory/db/migrations/V30__registration_data_integrity.sql`
+
+### Changes to `registrations` table
+
+```sql
+-- Replace email_domain with email_stub_hash.
+-- email_stub_hash = SHA-256(normalize(full_email)) where normalize lowercases
+-- and strips leading/trailing whitespace.
+-- email_domain is kept for now (nullable) to allow backfill if needed;
+-- a future migration drops it once confirmed unused.
+ALTER TABLE registrations
+  ADD COLUMN email_stub_hash TEXT;
+```
+
+### Changes to `pre_authorization_tokens` table
+
+```sql
+ALTER TABLE pre_authorization_tokens
+  ADD COLUMN email_stub_hash TEXT;
+
+-- email_domain column kept for backward compatibility during transition;
+-- will be dropped in a follow-up migration once confirmed clean.
+```
+
+### New `channel_identities` table
+
+```sql
+-- Permanent mapping from verified phone to channel contact ID.
+-- Populated on successful registration completion (PRE_AUTH_TOKEN_ISSUED).
+-- One row per (phone_stub_hash, channel) pair — UPSERT on re-registration.
+--
+-- Security:
+--   - channel_user_id stored in plaintext (required for notification delivery)
+--   - phone_stub_hash is the same SHA-256 stub used in registrations
+--   - No DELETE: append-only; re-registration UPDATEs the channel_user_id
+--   - RLS: cello_ops_agent INSERT, SELECT, UPDATE — NO DELETE (SI-002 pattern)
+--
+-- This table is the ops-agent's permanent contact book.
+-- It MUST NOT be replicated to the directory — the directory never sees
+-- channel_user_id or phone numbers.
+
+CREATE TABLE IF NOT EXISTS channel_identities (
+  id                UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+  phone_stub_hash   TEXT         NOT NULL,
+  channel           TEXT         NOT NULL CHECK (channel IN ('telegram', 'whatsapp', 'cli')),
+  channel_user_id   TEXT         NOT NULL,
+  created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+-- One active channel identity per (phone, channel) pair
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_identities_phone_channel
+  ON channel_identities (phone_stub_hash, channel);
+
+-- Lookup by channel_user_id (for incoming message routing if needed later)
+CREATE INDEX IF NOT EXISTS idx_channel_identities_channel_user
+  ON channel_identities (channel, channel_user_id);
+
+ALTER TABLE channel_identities ENABLE ROW LEVEL SECURITY;
+
+-- RLS policies for cello_ops_agent (same pattern as registrations/pre_auth_tokens)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies
+    WHERE tablename = 'channel_identities' AND policyname = 'insert_ops_agent') THEN
+    CREATE POLICY insert_ops_agent ON channel_identities
+      FOR INSERT TO cello_ops_agent WITH CHECK (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies
+    WHERE tablename = 'channel_identities' AND policyname = 'select_ops_agent') THEN
+    CREATE POLICY select_ops_agent ON channel_identities
+      FOR SELECT TO cello_ops_agent USING (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies
+    WHERE tablename = 'channel_identities' AND policyname = 'update_ops_agent') THEN
+    CREATE POLICY update_ops_agent ON channel_identities
+      FOR UPDATE TO cello_ops_agent USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+GRANT INSERT, SELECT, UPDATE ON channel_identities TO cello_ops_agent;
+REVOKE DELETE ON channel_identities FROM cello_ops_agent;
+```
+
+---
+
+## Code changes
+
+### 1. Email hashing utility (`state-machine.ts` or shared utils)
+
+Add `hashEmail(email: string): string`:
+- Normalize: `email.trim().toLowerCase()`
+- Hash: `SHA-256` of normalized UTF-8 bytes
+- Return: hex string (same format as `phone_stub_hash`)
+
+Do NOT store or log the pre-hash email anywhere after this function returns.
+
+### 2. `state-machine.ts` — email handling in `#handleAwaitingEmail`
+
+Replace `extractEmailDomain(email)` call with `hashEmail(email)`.
+
+Store `emailStubHash` (not `emailDomain`) in the `AWAITING_EMAIL_OTP` transition:
+```typescript
+const updated = await repository.transition(record.id, "AWAITING_EMAIL_OTP", {
+  emailStubHash,   // replaces emailDomain
+  otpHash,
+  otpSalt: salt,
+  otpExpiresAt,
+  otpAttemptCount: 0,
+});
+```
+
+### 3. `state-machine.ts` — new `handleExistingUser()` method
+
+Add as a distinct method, never modify `handleNewUser()`:
+
+```typescript
+async handleExistingUser(
+  channelUserId: string,
+  channel: "telegram" | "whatsapp" | "cli",
+  phoneStubHash: string,
+  expectedEmailStubHash: string,   // from the prior completed registration
+): Promise<RegistrationRecord>
+```
+
+This method:
+1. Creates a new registration record (same as `handleNewUser`)
+2. Stores `expectedEmailStubHash` on the record so it can be enforced when
+   the user submits their email in step 3 of the re-registration flow
+3. When the user submits their email OTP and it verifies, compare
+   `hashEmail(submittedEmail)` against `expectedEmailStubHash` — if they
+   differ, reject with: "You must use the same email address as your original
+   registration. Please try again."
+
+The `expectedEmailStubHash` comes from the `completed` row found in
+`engine.ts` (`findCompletedByChannelUser`). The `registrations` table already
+has the `completed` row's `email_stub_hash` after this story lands.
+
+### 4. `engine.ts` — call `handleExistingUser` on CONFIRM
+
+Replace:
+```typescript
+record = await this.#stateMachine.handleNewUser(from, this.#opts.channelType, phoneStubHash);
+```
+
+With:
+```typescript
+record = await this.#stateMachine.handleExistingUser(
+  from,
+  this.#opts.channelType,
+  phoneStubHash,
+  completed.emailStubHash,   // from the completed row
+);
+```
+
+### 5. `engine.ts` — fix bot message copy bug
+
+Replace the re-registration warning message:
+```
+"You already have a CELLO pre-authorization token. If you want to re-register
+(you will get a new token and your existing agent registration will remain active
+until it reconnects), reply CONFIRM. Otherwise, ignore this message."
+```
+
+With:
+```
+"You already have a CELLO agent registered to this number. Both agents will work
+independently under the same account. To register an additional agent, reply CONFIRM.
+Otherwise, ignore this message."
+```
+
+### 6. `repository.ts` — add `email_stub_hash` mapping
+
+Update `RegistrationRecord` type and all `transition()` calls to use
+`emailStubHash` instead of `emailDomain`. Update row mapper to read
+`row.email_stub_hash`.
+
+Update `findCompletedByChannelUser` return type to include `emailStubHash`.
+
+### 7. `repository.ts` — add `upsertChannelIdentity()`
+
+New method called from `state-machine.ts` when a registration reaches
+`PRE_AUTH_TOKEN_ISSUED`:
+
+```typescript
+async upsertChannelIdentity(
+  phoneStubHash: string,
+  channel: string,
+  channelUserId: string,
+): Promise<void>
+```
+
+Uses `INSERT ... ON CONFLICT (phone_stub_hash, channel) DO UPDATE SET
+channel_user_id = EXCLUDED.channel_user_id, updated_at = now()`.
+
+### 8. `directory-pre-auth-client.ts` — update payload
+
+Change `requestToken()` signature from `(phoneStubHash, emailDomain, registrationId)`
+to `(phoneStubHash, emailStubHash, registrationId)`.
+
+Update body: `JSON.stringify({ phoneStubHash, emailStubHash, registrationId })`.
+
+### 9. `packages/directory/src/internal-api-server.ts` — accept emailStubHash
+
+Update the `/internal/pre-authorize` endpoint to accept `emailStubHash`
+instead of `emailDomain`. Update validation check accordingly.
+
+---
+
+## Acceptance Criteria
+
+- id: AC-001
+  given: "A user completes a registration ceremony for the first time"
+  when: "they submit their email address and the OTP verifies"
+  then: "`SHA-256(normalize(email))` is stored in `registrations.email_stub_hash`;
+    `email_domain` is NOT populated (column remains NULL for new rows);
+    the full email address does not appear in any database column or log line"
+  test_type: integration
+  component_under_test: operations-agent
+
+- id: AC-002
+  given: "A user with a prior completed registration (PRE_AUTH_TOKEN_ISSUED) sends CONFIRM"
+  when: "they proceed through the re-registration flow and submit a DIFFERENT email address"
+  then: "the OTP for the new email verifies correctly, but when `hashEmail(newEmail)` is
+    compared against the `expectedEmailStubHash` from the prior completed row, they differ —
+    the flow rejects with the continuity error message and the registration does NOT advance
+    to PRE_AUTH_TOKEN_ISSUED"
+  test_type: integration
+  component_under_test: operations-agent
+
+- id: AC-003
+  given: "A user with a prior completed registration sends CONFIRM and uses the SAME email"
+  when: "they submit the email OTP and it verifies"
+  then: "`hashEmail(submittedEmail)` matches `expectedEmailStubHash`; the flow
+    proceeds normally to PRE_AUTH_TOKEN_ISSUED; a new pre-auth token is issued"
+  test_type: integration
+  component_under_test: operations-agent
+
+- id: AC-004
+  given: "A registration completes successfully (reaches PRE_AUTH_TOKEN_ISSUED)"
+  when: "the state machine writes the final state transition"
+  then: "a row is UPSERTED into `channel_identities` with the correct
+    `phone_stub_hash`, `channel`, and `channel_user_id`; if a row already
+    existed for that (phone_stub_hash, channel) pair it is updated, not duplicated"
+  test_type: integration
+  component_under_test: operations-agent
+
+- id: AC-005
+  given: "A user re-registers (CONFIRM flow) after a prior completed registration"
+  when: "the new registration reaches PRE_AUTH_TOKEN_ISSUED"
+  then: "`channel_identities` has exactly one row for this (phone_stub_hash, channel)
+    pair — the `channel_user_id` matches the current registration's `channel_user_id`"
+  test_type: integration
+  component_under_test: operations-agent
+
+- id: AC-006
+  given: "A user with a prior completed registration is shown the re-registration warning"
+  when: "the bot message is sent"
+  then: "the message text does NOT contain the phrase 'until it reconnects'; it correctly
+    states both agents will work independently under the same account"
+  test_type: unit
+  component_under_test: operations-agent
+
+- id: AC-007
+  given: "A registration completes and a pre-auth token is issued"
+  when: "the ops-agent calls the directory internal pre-authorize API"
+  then: "the request body contains `emailStubHash` (not `emailDomain`); the directory
+    internal API accepts the request and returns a token"
+  test_type: integration
+  component_under_test: operations-agent
+
+- id: AC-008-integration-gate
+  given: "The V30 migration SQL"
+  when: "applied to a local PostgreSQL instance that already has V1 through V29 applied"
+  then: "Flyway reports zero checksum errors on all prior migrations; V30 applies cleanly;
+    `registrations` has `email_stub_hash TEXT` column; `pre_authorization_tokens` has
+    `email_stub_hash TEXT` column; `channel_identities` table exists with UNIQUE index
+    on (phone_stub_hash, channel); RLS enabled on `channel_identities`; `cello_ops_agent`
+    has INSERT/SELECT/UPDATE on `channel_identities` and NOT DELETE"
+  test_type: integration
+  component_under_test: directory
+
+---
+
+## Security Invariants
+
+- id: SI-001
+  statement: "channel_user_id (Telegram/WhatsApp user ID) is never sent to the directory"
+  adversarial_condition: "an attacker with read access to directory tables cannot retrieve
+    any user's Telegram user ID — it is not present in any directory table or pre-auth
+    token payload; verified by asserting that `channel_user_id` does not appear in the
+    JSON body of any request from ops-agent to `POST /internal/pre-authorize`"
+
+- id: SI-002
+  statement: "email continuity is enforced by hash comparison, not by trusting user input"
+  adversarial_condition: "a user who knows another user's Telegram account sends CONFIRM
+    and submits a different email — the hash comparison against the stored
+    `expectedEmailStubHash` from the prior completed registration rejects the attempt;
+    the re-registration flow does not advance"
+
+- id: SI-003
+  statement: "channel_identities rows cannot be deleted by the ops-agent database role"
+  adversarial_condition: "a SQL injection vulnerability in the ops-agent cannot be used to
+    delete rows from channel_identities — REVOKE DELETE is enforced at the database level;
+    verified by asserting the cello_ops_agent role has no DELETE privilege on
+    channel_identities in pg_class/pg_acl"
+
+---
+
+## Observability
+
+events:
+  - name: registration.email.hash_stored
+    level: info
+    trigger: "When email_stub_hash is written to the registrations row"
+    context_fields: [registrationId, correlationId]
+    correlationId: true
+    notes: "Must NOT include the email address or hash value — only that it was stored"
+
+  - name: registration.email.continuity_rejected
+    level: warn
+    trigger: "When handleExistingUser rejects a re-registration due to email hash mismatch"
+    context_fields: [registrationId, channelUserId, correlationId]
+    correlationId: true
+
+  - name: registration.channel_identity.upserted
+    level: info
+    trigger: "When channel_identities is upserted on registration completion"
+    context_fields: [registrationId, channel, correlationId]
+    correlationId: true
+    notes: "Must NOT include channel_user_id in log output"
+
+error_events:
+  - name: registration.channel_identity.upsert_failed
+    level: error
+    trigger: "When the channel_identities upsert throws"
+    context_fields: [registrationId, channel, correlationId]
+    correlationId: true
+
+alarms: []
+# No new alarms: email continuity rejection is a normal user-facing flow,
+# not a server-health signal. channel_identity upsert failure is already
+# covered by the existing ops-agent error rate alarm.
+
+---
+
+## Sequencing note
+
+This story MUST be merged and deployed healthy (Telegram bot responds, V30 migration
+applied, ECS task running `portal_backend.started` log event) BEFORE M6B-015
+(the portal-backend rename) is executed. Introducing the rename while this story is
+in flight would make it impossible to distinguish registration bugs from rename bugs.
+
+## References
+
+- [[user-stories/m6b/outline|M6B Outline]] — this story is M6B-016
+- [[discussion_logs/2026-06-07_1221_sybil-confirm-shortcut-audit|Sybil Defense Audit]] — identified all five gaps this story closes
+- [[user-stories/m6b/CELLO-M6B-015|M6B-015 Portal-Backend Rename]] — must execute AFTER this story

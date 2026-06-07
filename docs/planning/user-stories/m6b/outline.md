@@ -102,7 +102,8 @@ M6B fixes all three patterns systematically.
 | M6B-012 | PERSIST-019 Uint8Array round-trip test | P1 | — |
 | M6B-013 | Replace @journeyapps/sqlcipher with pre-built library | P1 | M6B-005 |
 | M6B-014 | NAT gateway + remove interface endpoints (sovereign node networking) | P0 | — |
-| M6B-015 | Rename operations-agent → portal-backend (all repos, IaC, docs) | P1 | — |
+| M6B-015 | Rename operations-agent → portal-backend (all repos, IaC, docs) | P1 | M6B-016 deployed |
+| M6B-016 | Registration data integrity (email hash, handleExistingUser, channel_identities) | P0 | — |
 
 ---
 
@@ -118,7 +119,8 @@ M6B-006  (independent) → M6B-007
 M6B-009  (independent)
 M6B-010  (independent)
 M6B-011  (merged)
-M6B-015  (independent — M6B-011 already merged)
+M6B-016  (independent — P0, implement first)
+M6B-015  (depends on M6B-016 deployed healthy — rename after functional fix)
 M6B-012  (independent)
 M6B-014  (independent)
 ```
@@ -153,7 +155,8 @@ M6B-015 depends on M6B-011 being merged first (both touch the same ops-agent fil
 | M6B-007 | M6B-006 merged |
 | M6B-008 | M6B-006 merged |
 | M6B-013 | M6B-005 merged |
-| M6B-015 | — (M6B-011 already merged) |
+| M6B-015 | M6B-016 deployed healthy |
+| M6B-016 | — (P0 — implement before M6B-015) |
 
 ---
 
