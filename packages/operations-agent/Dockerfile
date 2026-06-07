@@ -31,20 +31,15 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 
 # Copy all package.json files for workspace dependency resolution
 # (all workspace packages in the tsconfig chain + lockfile need their package.json)
-COPY packages/crypto/package.json ./packages/crypto/
+# Post-REPOSPLIT: ops-agent → interfaces only; crypto/protocol-types are in cello-client
 COPY packages/interfaces/package.json ./packages/interfaces/
-COPY packages/protocol-types/package.json ./packages/protocol-types/
 COPY packages/operations-agent/package.json ./packages/operations-agent/
 
 # Install all dependencies (includes devDependencies for build)
 RUN pnpm install --frozen-lockfile
 
 # Copy source files for the full tsconfig project reference chain:
-# ops-agent → interfaces → protocol-types → crypto
-COPY packages/crypto/src ./packages/crypto/src
-COPY packages/crypto/tsconfig.json ./packages/crypto/
-COPY packages/protocol-types/src ./packages/protocol-types/src
-COPY packages/protocol-types/tsconfig.json ./packages/protocol-types/
+# ops-agent → interfaces
 COPY packages/interfaces/src ./packages/interfaces/src
 COPY packages/interfaces/tsconfig.json ./packages/interfaces/
 COPY packages/operations-agent/src ./packages/operations-agent/src
@@ -73,10 +68,9 @@ RUN npm install -g pnpm@10.33.2
 
 # Copy workspace manifests for production install (all workspace packages
 # referenced in lockfile need their package.json present for pnpm resolution)
+# Post-REPOSPLIT: ops-agent → interfaces only; crypto/protocol-types are in cello-client
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
-COPY packages/crypto/package.json ./packages/crypto/
 COPY packages/interfaces/package.json ./packages/interfaces/
-COPY packages/protocol-types/package.json ./packages/protocol-types/
 COPY packages/operations-agent/package.json ./packages/operations-agent/
 
 # AC-006: install production dependencies ONLY
