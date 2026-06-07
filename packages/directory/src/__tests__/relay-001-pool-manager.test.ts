@@ -630,7 +630,7 @@ describe("AC-008 / SI-003: stale manifest version is rejected", () => {
 
     const staleLog = logger.events.find(e => e.name === "relay.manifest.version.stale");
     expect(staleLog).toBeDefined();
-    expect(staleLog!.level).toBe("warn");
+    expect(staleLog!.level).toBe("debug");
     expect((staleLog!.ctx as Record<string, unknown>).currentVersion).toBe(2);
     expect((staleLog!.ctx as Record<string, unknown>).receivedVersion).toBe(1);
   });
