@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  CELLO VPC — private subnets for RDS and ECS, public subnet for ALB only.
-  No NAT Gateway — VPC Interface Endpoints provide AWS service access.
+  CELLO VPC — private subnets for RDS and ECS, public subnets for ALB and NAT Gateway.
+  NAT Gateway provides outbound internet access for private subnets.
   Parameterised by Environment and Region.
 
 Parameters:
@@ -244,7 +244,44 @@ Resources:
         - Key: Name
           Value: !Sub "cello-rds-sg-${Environment}"
 
-  # VPC Interface Endpoints (no NAT Gateway needed)
+  # NAT Gateway — provides outbound internet access for private subnets.
+  # ECS tasks (directory, relay) use this to reach AWS APIs (ECR, Secrets Manager,
+  # KMS, CloudWatch Logs, SSM) and external services. Replaces 6 interface endpoints
+  # (cost saving: ~$156/month across 3 regions). Single NAT in AZ-A is sufficient
+  # for dev; production should use one NAT per AZ with separate route tables.
+  NatEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-nat-eip-${Environment}"
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-nat-${Environment}"
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  PrivateNatRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref NatGateway
+
+  # VPC Endpoint Security Group — retained for ssmmessages endpoint (ECS Exec)
   EndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -259,84 +296,10 @@ Resources:
         - Key: Name
           Value: !Sub "cello-endpoint-sg-${Environment}"
 
-  EcrApiEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
-      VpcEndpointType: Interface
-      SubnetIds:
-        - !Ref PrivateSubnetA
-        - !Ref PrivateSubnetB
-      SecurityGroupIds:
-        - !Ref EndpointSecurityGroup
-      PrivateDnsEnabled: true
-
-  EcrDkrEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
-      VpcEndpointType: Interface
-      SubnetIds:
-        - !Ref PrivateSubnetA
-        - !Ref PrivateSubnetB
-      SecurityGroupIds:
-        - !Ref EndpointSecurityGroup
-      PrivateDnsEnabled: true
-
-  SecretsManagerEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
-      VpcEndpointType: Interface
-      SubnetIds:
-        - !Ref PrivateSubnetA
-        - !Ref PrivateSubnetB
-      SecurityGroupIds:
-        - !Ref EndpointSecurityGroup
-      PrivateDnsEnabled: true
-
-  KmsEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.kms"
-      VpcEndpointType: Interface
-      SubnetIds:
-        - !Ref PrivateSubnetA
-        - !Ref PrivateSubnetB
-      SecurityGroupIds:
-        - !Ref EndpointSecurityGroup
-      PrivateDnsEnabled: true
-
-  LogsEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
-      VpcEndpointType: Interface
-      SubnetIds:
-        - !Ref PrivateSubnetA
-        - !Ref PrivateSubnetB
-      SecurityGroupIds:
-        - !Ref EndpointSecurityGroup
-      PrivateDnsEnabled: true
-
-  SsmEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
-      VpcEndpointType: Interface
-      SubnetIds:
-        - !Ref PrivateSubnetA
-        - !Ref PrivateSubnetB
-      SecurityGroupIds:
-        - !Ref EndpointSecurityGroup
-      PrivateDnsEnabled: true
-
+  # SsmMessages endpoint retained for ECS Exec (aws ecs execute-command).
+  # ECS Exec requires a persistent WebSocket to ssmmessages — NAT alone is
+  # insufficient because the SSM agent needs the interface endpoint for the
+  # session manager channel. Without this, ECS Exec fails silently.
   SsmMessagesEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:

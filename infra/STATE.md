@@ -127,6 +127,13 @@ aws ecs stop-task \
 ```
 ECS will start a replacement task that reads the updated SSM value. The current migration version as of M6B-011 is 28. Whenever a new migration is applied, update this parameter immediately (no code deploy required — that is the point of using SSM).
 
+**M6B-014: NAT Gateway replaces interface endpoints (PENDING DEPLOY):**
+IaC changes committed but NOT YET DEPLOYED. The operator must run `./infra/deploy.sh dev <region>` for all 3 regions to apply. Changes:
+- cello-vpc.yaml: adds NAT Gateway (EIP + NatGateway in Public Subnet A + private route 0.0.0.0/0 → NAT). Removes 6 interface endpoints (ecr.api, ecr.dkr, secretsmanager, kms, logs, ssm). Retains ssmmessages (ECS Exec) and S3 gateway (free).
+- deploy.sh: DirectoryMultiaddr now uses public Route53 hostname unconditionally (`/dns4/{subdomain}.{domain}/tcp/80/ws/p2p/{peer-id}`). Internal ALB DNS fallback removed.
+- After deploy: remove manual SG rule (relay→directory port 4000) and manual task def revision :55 (private IP hack).
+- Route53 fix needed: cello-route53-dev in us-east-1 may have CFN drift on the A record. If directory-us1.cello.mygentic.ai does not resolve after deploy, delete and recreate the cello-route53-dev stack in us-east-1.
+
 **SSM Parameter required for new regions (M6B-004):** CELLO_DIRECTORY_HOSTNAME now fetched from SSM Parameter Store path `/cello/{Environment}/directory/hostname` instead of hardcoded Mappings block. For region expansion, create this parameter before deploying cello-ecs-directory stack. Existing regions (us-east-1, eu-central-1, ap-northeast-1) must have this parameter created manually before next deploy:
 - us-east-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-us1.cello.mygentic.ai --type String --region us-east-1`
 - eu-central-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-eu1.cello.mygentic.ai --type String --region eu-central-1`
