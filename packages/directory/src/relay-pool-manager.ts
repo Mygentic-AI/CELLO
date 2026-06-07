@@ -355,7 +355,7 @@ export class RelayPoolManager {
   applyManifest(manifest: RelayPoolManifest, suppressLoadedLog = false): { ok: boolean } {
     // SI-003: version must strictly increase
     if (manifest.version <= this.#currentVersion) {
-      this.#logger.warn("relay.manifest.version.stale", {
+      this.#logger.debug("relay.manifest.version.stale", {
         currentVersion: this.#currentVersion,
         receivedVersion: manifest.version,
       });
