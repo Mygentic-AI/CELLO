@@ -547,3 +547,29 @@ Reverted the health check change. `/health` always returns 200 as soon as the pr
   4. Rethink the registration architecture entirely
 
 **IaC state is INCONSISTENT.** The manual SG rule and task definition revision :55 exist in AWS but are NOT in the IaC. This must be fixed before the next deploy.sh run.
+
+---
+
+### 2026-06-07 — M6B-014 implementation + Route53 drift fix
+
+**Root cause confirmed:** The relay→directory registration failure had two compounding causes:
+1. No NAT gateway — relay in private subnet cannot reach directory's public ALB IP
+2. Route53 drift — `directory-us1.cello.mygentic.ai` A record was missing (deleted during nuclear reset; CFN believed it existed due to drift)
+
+**What was done:**
+- Written story CELLO-M6B-014 (NAT gateway, sovereign node networking)
+- Implemented M6B-014 in worktree `.claude/worktrees/M6B-014`:
+  - `cello-vpc.yaml`: added NatEip, NatGateway (with DependsOn: GatewayAttachment), PrivateNatRoute; restored 6 interface endpoints (to be removed in stage 2 after E2E verification)
+  - `deploy.sh`: reverted internal ALB DNS fallback — now uses public Route53 hostname unconditionally for CELLO_DIRECTORY_MULTIADDR
+- Fixed Route53 drift manually: recreated `directory-us1.cello.mygentic.ai` A record → `cello-dir-dev-85618485.us-east-1.elb.amazonaws.com` (ALB alias)
+
+**Current state:**
+- M6B-014 worktree is ready — operator must merge and run `./infra/deploy.sh dev` to deploy NAT gateway
+- Route53 A record is live (manual fix, confirmed in Route53 console)
+- Manual SG rule and task def :55 are still in place — will be superseded by the M6B-014 deploy
+
+**Next steps:**
+1. Merge M6B-014 branch and run deploy.sh (VPC stack only needs updating)
+2. Verify relay logs show `relay.registered` after deploy
+3. Remove manual SG rule and task def :55 once registration confirmed working
+4. Stage 2 (separate deploy): remove 6 interface endpoints from cello-vpc.yaml

@@ -30,7 +30,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-waf-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
-| cello-route53-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
+| cello-route53-dev | UPDATE_COMPLETE (CFN DRIFT) | 2026-06-06 | Deployed r12; A record for directory-us1.cello.mygentic.ai was deleted manually (nuclear reset). Recreated manually 2026-06-07 via Route53 CLI. CFN still believes record exists — drift will resolve on next deploy.sh run. |
 | cello-route53-relay-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | cello-cicd-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
