@@ -259,3 +259,7 @@ filter` runs, pushes to `packages/portal-backend/` will not trigger the pipeline
 
 - [[user-stories/m6b/outline|M6B Outline]] — this story is listed as M6B-015
 - [[discussion_logs/2026-06-07_1221_sybil-confirm-shortcut-audit|Sybil Audit]] — session where the rename decision was made
+
+## Prerequisites
+
+None. M6B-011 (ops-agent UX + SSM migration version) merged at commit ab6ea2d.
