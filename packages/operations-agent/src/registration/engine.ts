@@ -276,8 +276,43 @@ export class RegistrationEngine {
           await this.#repository.transition(existing.id, "EXPIRED");
           this.#logger.info("registration.expired", { registrationId: existing.id });
           this.#activeRecords.delete(from);
-          // Start a fresh registration for this message
-          record = await this.#stateMachine.handleNewUser(from, this.#opts.channelType, phoneStubHash);
+          // After expiring, check for a prior completed registration — the same
+          // continuity enforcement that applies when there is no active record.
+          const completedAfterExpiry = await this.#repository.findCompletedByChannelUser(
+            this.#opts.channelType,
+            from,
+            REREGISTRATION_WINDOW_MS,
+          );
+          if (completedAfterExpiry) {
+            if (this.#pendingReregistration.has(from) && message === "CONFIRM") {
+              this.#pendingReregistration.delete(from);
+              record = await this.#stateMachine.handleExistingUser(
+                from,
+                this.#opts.channelType,
+                phoneStubHash,
+                completedAfterExpiry.emailStubHash,
+              );
+            } else {
+              if (!this.#pendingReregistration.has(from)) {
+                this.#pendingReregistration.set(from, Date.now());
+              }
+              const existingRegistrationAge = Date.now() - completedAfterExpiry.created_at.getTime();
+              this.#logger.info("registration.already_registered.warned", {
+                registrationId: completedAfterExpiry.id,
+                channelUserId: from,
+                existingRegistrationAge,
+              });
+              await this.#opts.channel.send(
+                from,
+                "You already have a CELLO agent registered to this number. Both agents will work " +
+                  "independently under the same account. To register an additional agent, reply CONFIRM. " +
+                  "Otherwise, ignore this message.",
+              );
+              return;
+            }
+          } else {
+            record = await this.#stateMachine.handleNewUser(from, this.#opts.channelType, phoneStubHash);
+          }
         } else {
           record = await this.#stateMachine.handleMessage(existing, message, from);
         }
