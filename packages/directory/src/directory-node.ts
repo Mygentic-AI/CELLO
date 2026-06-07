@@ -1338,11 +1338,24 @@ export class CelloDirectoryNode {
           // Unknown frame type for authenticated state — ignore
         }
       }
-    } catch {
-      // stream closed or reset — normal disconnect
+    } catch (streamErr) {
+      const msg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+      protocolLog("AUTH", `Signaling stream error — peer ${authedPubkeyHex ? truncHex(authedPubkeyHex) : "unauthenticated"} error="${msg}"`);
+      this.#logger?.warn("signaling.stream.error", {
+        authedShort: authedPubkeyHex?.slice(0, 16) ?? "none",
+        error: msg,
+      });
     } finally {
+      protocolLog("AUTH", `Signaling stream CLOSED — peer ${authedPubkeyHex ? truncHex(authedPubkeyHex) : "unauthenticated"} streamsMapSize=${this.#streams.size}`);
+      this.#logger?.info("signaling.stream.closed", {
+        authedShort: authedPubkeyHex?.slice(0, 16) ?? "none",
+        streamsMapSize: this.#streams.size,
+        pendingSessionsCount: this.#pendingSessions.size,
+        pendingSessionKeys: [...this.#pendingSessions.keys()].map(k => truncHex(k)),
+      });
       if (authedPubkeyHex && this.#streams.get(authedPubkeyHex) === stream) {
         this.#streams.delete(authedPubkeyHex);
+        protocolLog("AUTH", `Removed stream from map — peer ${truncHex(authedPubkeyHex)}`);
       }
 
       // AC-011: clean up any provisional sessions where this client was a participant
@@ -2162,29 +2175,67 @@ export class CelloDirectoryNode {
 
       // OBS-001 AC-008: assignment issued
       protocolLog("SESS", `Assignment issued — session ${truncHex(sessionIdHex)}`);
+      this.#logger?.info("session.assignment.delivery.begin", {
+        sessionId: truncHex(sessionIdHex),
+        initiatorShort: initiatorHex.slice(0, 16),
+        targetShort: targetHex.slice(0, 16),
+        initiatorStreamInMap: this.#streams.get(initiatorHex) === stream,
+        targetStreamInMap: !!this.#streams.get(targetHex),
+        streamsMapSize: this.#streams.size,
+      });
 
       // (f) Deliver to both clients
       const assignmentFrame: SessionAssignmentFrame = { type: "session_assignment", assignment };
       const encoded = encodeSessionAssignment(assignmentFrame);
       const pending = this.#pendingSessions.get(sessionIdHex);
       try {
+        protocolLog("SESS", `Sending session_assignment to INITIATOR — session ${truncHex(sessionIdHex)}`);
         this.#sendFrame(stream, encoded);
+        protocolLog("SESS", `session_assignment sent to INITIATOR OK — session ${truncHex(sessionIdHex)}`);
+        this.#logger?.info("session.assignment.initiator.sent", { sessionId: truncHex(sessionIdHex), initiatorShort: initiatorHex.slice(0, 16) });
         if (pending) pending.initiatorGotAssignment = true;
-      } catch {
-        // Initiator stream failed mid-delivery; abort — target will get a stale assignment.
+      } catch (initiatorSendErr) {
+        const msg = initiatorSendErr instanceof Error ? initiatorSendErr.message : String(initiatorSendErr);
+        protocolLog("SESS", `session_assignment FAILED to initiator — session ${truncHex(sessionIdHex)} error="${msg}"`);
+        this.#logger?.error("session.assignment.initiator.send.failed", {
+          sessionId: truncHex(sessionIdHex),
+          initiatorShort: initiatorHex.slice(0, 16),
+          error: msg,
+          initiatorStreamInMap: this.#streams.get(initiatorHex) === stream,
+          streamsMapSize: this.#streams.size,
+        });
         return;
       }
       try {
+        protocolLog("SESS", `Sending session_assignment to TARGET — session ${truncHex(sessionIdHex)}`);
         this.#sendFrame(targetStream, encoded);
+        protocolLog("SESS", `session_assignment sent to TARGET OK — session ${truncHex(sessionIdHex)}`);
+        this.#logger?.info("session.assignment.target.sent", { sessionId: truncHex(sessionIdHex), targetShort: targetHex.slice(0, 16) });
         if (pending) {
           pending.targetGotAssignment = true;
           // Both frames sent — session is fully established; finally block will just clean up.
           pending.fullyEstablished = true;
         }
-      } catch {
+      } catch (targetSendErr) {
+        const msg = targetSendErr instanceof Error ? targetSendErr.message : String(targetSendErr);
+        protocolLog("SESS", `session_assignment FAILED to target — session ${truncHex(sessionIdHex)} error="${msg}"`);
+        this.#logger?.error("session.assignment.target.send.failed", {
+          sessionId: truncHex(sessionIdHex),
+          targetShort: targetHex.slice(0, 16),
+          error: msg,
+          targetStreamInMap: !!this.#streams.get(targetHex),
+          streamsMapSize: this.#streams.size,
+        });
         // Target stream failed mid-delivery; session is still registered on relay.
         // Leave fullyEstablished=false so the finally block discards the relay state.
       }
+      protocolLog("SESS", `Delivery complete — session ${truncHex(sessionIdHex)} initiatorGot=${pending?.initiatorGotAssignment} targetGot=${pending?.targetGotAssignment} fullyEstablished=${pending?.fullyEstablished}`);
+      this.#logger?.info("session.assignment.delivery.complete", {
+        sessionId: truncHex(sessionIdHex),
+        initiatorGotAssignment: pending?.initiatorGotAssignment,
+        targetGotAssignment: pending?.targetGotAssignment,
+        fullyEstablished: pending?.fullyEstablished,
+      });
     } finally {
       this.#frostHandler.clearInFlight(initiatorHex, epochId);
     }
