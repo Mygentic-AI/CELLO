@@ -100,6 +100,16 @@ If the task starts but can't reach Telegram API, SES, or RDS, the application wi
 
 ---
 
+## Route53 A Records — CFN Owns Them, Never Purge Manually
+
+**Never delete a Route53 A record that a healthy CFN stack owns.** If you delete it outside CFN, CFN sees no diff on the next deploy and never recreates it — the record stays gone.
+
+`purge_stale_dns_record()` in deploy.sh handles this correctly: it checks the CFN stack status before deleting. It only purges when the stack is missing or in a failed state (fresh region, post-nuclear-reset). If the stack is `CREATE_COMPLETE` or `UPDATE_COMPLETE`, it skips — CFN owns the record.
+
+*Root cause: 2026-06-07 — purge ran unconditionally, deleting all 3 directory A records on every deploy. Fixed in commit `6d17b30`.*
+
+---
+
 ## ALB DNS Names — Always Query AWS, Never Use STATE.md
 
 **Never use STATE.md as the source for ALB DNS names.** ALB DNS names change any time a load balancer is recreated (stack delete+create, name conflict, etc.). STATE.md is updated manually and will be stale.
