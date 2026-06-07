@@ -8,6 +8,7 @@
 #   - CloudFormation stack statuses
 #   - ECS service health (desired == running)
 #   - Route53 A records exist and point to the correct ALB
+#   - manifest-signer-pubkey SSM parameter matches derived pubkey from node-private-key secret
 #
 # Output: one line per check, color-coded PASS/WARN/FAIL
 # Exit code: 0 if all pass, 1 if any FAIL
@@ -92,6 +93,26 @@ alb_dns_for_service() {
     --region "${region}" \
     --query "LoadBalancers[?contains(LoadBalancerName,\`${name_fragment}\`)].DNSName | [0]" \
     --output text 2>/dev/null || echo "None"
+}
+
+ssm_manifest_signer_pubkey() {
+  local region="$1"
+  aws ssm get-parameter \
+    --name "/cello/${ENVIRONMENT}/directory/manifest-signer-pubkey" \
+    --region "${region}" \
+    --query 'Parameter.Value' --output text 2>/dev/null || echo "NOT_FOUND"
+}
+
+derive_pubkey_from_secret() {
+  local region="$1"
+  local priv
+  priv=$(aws secretsmanager get-secret-value \
+    --secret-id "cello/${ENVIRONMENT}/directory/node-private-key" \
+    --region "${region}" \
+    --query 'SecretString' --output text 2>/dev/null) || { echo "ERROR"; return; }
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  printf '%s' "${priv}" | node "${script_dir}/scripts/derive-pubkey.js" 2>/dev/null || echo "ERROR"
 }
 
 # ── Get Route53 hosted zone ID ───────────────────────────────────────────────
@@ -227,6 +248,23 @@ for REGION in "${REGIONS[@]}"; do
       pass "${RELAY_FQDN} → ${RELAY_RECORD_CLEAN}"
     else
       fail "${RELAY_FQDN} → record points to ${RELAY_RECORD_CLEAN} but ALB is ${RELAY_ALB_CLEAN}"
+    fi
+  fi
+
+  # ── 4. Manifest signer pubkey — SSM must match node-private-key ─────────────
+
+  echo "  [Manifest signer key alignment]"
+  SSM_PUBKEY=$(ssm_manifest_signer_pubkey "${REGION}")
+  if [[ "${SSM_PUBKEY}" == "NOT_FOUND" ]]; then
+    fail "/cello/${ENVIRONMENT}/directory/manifest-signer-pubkey → SSM parameter MISSING"
+  else
+    DERIVED_PUBKEY=$(derive_pubkey_from_secret "${REGION}")
+    if [[ "${DERIVED_PUBKEY}" == "ERROR" ]]; then
+      warn "/cello/${ENVIRONMENT}/directory/manifest-signer-pubkey → could not derive pubkey from secret (check permissions)"
+    elif [[ "${SSM_PUBKEY}" == "${DERIVED_PUBKEY}" ]]; then
+      pass "/cello/${ENVIRONMENT}/directory/manifest-signer-pubkey → matches node-private-key (${SSM_PUBKEY:0:16}...)"
+    else
+      fail "/cello/${ENVIRONMENT}/directory/manifest-signer-pubkey → MISMATCH: SSM=${SSM_PUBKEY:0:16}... derived=${DERIVED_PUBKEY:0:16}... — run: aws ssm put-parameter --name /cello/${ENVIRONMENT}/directory/manifest-signer-pubkey --value \${DERIVED} --type String --overwrite --region ${REGION}"
     fi
   fi
 

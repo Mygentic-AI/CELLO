@@ -36,7 +36,9 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
 | Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-06-06 | REPOSPLIT-002: removed 4 dead pipelines (crypto/protocol-types/transport/client); now 5 pipelines only |
 | ECR Replication (account-level) | CONFIGURED | 2026-05-24 | us-east-1 → eu-central-1 + ap-northeast-1; filter: prefix "cello-" |
-| SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-24 | 167ca6...27b5 (directory node pubkey) |
+| SSM: /cello/dev/directory/manifest-signer-pubkey (us-east-1) | UPDATED | 2026-06-07 | 167ca6...27b5 — correct, matches node-private-key |
+| SSM: /cello/dev/directory/manifest-signer-pubkey (eu-central-1) | UPDATED | 2026-06-07 | 8105b1...1b45 — corrected manually; was stale 167ca6...27b5 from nuclear reset |
+| SSM: /cello/dev/directory/manifest-signer-pubkey (ap-northeast-1) | UPDATED | 2026-06-07 | 9b4b67...b984 — corrected manually; was stale 167ca6...27b5 from nuclear reset |
 | SSM: /cello/dev/directory/peer-id (us-east-1) | CREATED | 2026-06-06 | 12D3KooWS46wUj6NYvoAsocxZnxth5EgYD2ZXCm7coMkXUWgS1j3 — relay reads this for auto-registration |
 | Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | Replication user password (alphanumeric, 32-char) |
 

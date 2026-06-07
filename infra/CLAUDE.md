@@ -126,6 +126,46 @@ Run for all 3 regions. The directory picks up the new manifest on its next 2-min
 
 ---
 
+## Manifest Signer Pubkey SSM — Must Match node-private-key Secret
+
+**`/cello/{env}/directory/manifest-signer-pubkey` in SSM must equal the Ed25519 public key derived from `cello/{env}/directory/node-private-key` in Secrets Manager.** The directory reads the SSM value at startup as the expected verification key for relay pool manifests. If they diverge, every directory task in that region crashes at startup with `relay.manifest.invalid: signature_verification_failed`.
+
+**When this can get out of sync:**
+- After a nuclear reset (new key pairs generated, SSM not updated)
+- After manually rotating the `node-private-key` secret without updating the SSM parameter
+- After running `sign-manifest.sh` which signs with the current key but does not update SSM
+
+**How to check all 3 regions:**
+```bash
+for region in us-east-1 eu-central-1 ap-northeast-1; do
+  SSM=$(aws ssm get-parameter --name "/cello/dev/directory/manifest-signer-pubkey" \
+    --region "$region" --query 'Parameter.Value' --output text)
+  PRIV=$(aws secretsmanager get-secret-value \
+    --secret-id "cello/dev/directory/node-private-key" \
+    --region "$region" --query 'SecretString' --output text)
+  DERIVED=$(printf '%s' "$PRIV" | node infra/scripts/derive-pubkey.js 2>/dev/null)
+  [[ "$SSM" == "$DERIVED" ]] && echo "$region: OK" || echo "$region: MISMATCH — SSM=$SSM DERIVED=$DERIVED"
+done
+```
+
+**How to fix a mismatch:**
+```bash
+# Derive the correct pubkey and update SSM
+PRIV=$(aws secretsmanager get-secret-value \
+  --secret-id "cello/{env}/directory/node-private-key" \
+  --region <region> --query 'SecretString' --output text)
+DERIVED=$(printf '%s' "$PRIV" | node infra/scripts/derive-pubkey.js 2>/dev/null)
+aws ssm put-parameter \
+  --name "/cello/{env}/directory/manifest-signer-pubkey" \
+  --value "$DERIVED" --type String --overwrite --region <region>
+```
+
+**`audit-state.sh` now checks this automatically** — a mismatch appears as a FAIL with the fix command printed inline.
+
+*Root cause: 2026-06-07 — eu-central-1 and ap-northeast-1 SSM parameters were stale after key rotation; directory tasks crashed on startup; cello-directory-pipeline failed in ProductionDeploy after passing StagingDeploy (us-east-1 was correct, eu-central-1 was first to fail).*
+
+---
+
 ## Route53 A Records — CFN Owns Them, Never Purge Manually
 
 **Never delete a Route53 A record that a healthy CFN stack owns.** If you delete it outside CFN, CFN sees no diff on the next deploy and never recreates it — the record stays gone.
