@@ -263,6 +263,7 @@ Resources:
 
   NatGateway:
     Type: AWS::EC2::NatGateway
+    DependsOn: GatewayAttachment
     Properties:
       AllocationId: !GetAtt NatEip.AllocationId
       SubnetId: !Ref PublicSubnetA
