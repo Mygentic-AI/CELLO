@@ -158,19 +158,11 @@ fi
 
 DIRECTORY_PEER_ID="${SSM_OUTPUT}"
 
-# Use the internal ALB DNS name — the relay runs in a private subnet with no internet
-# access and cannot reach the public Route53 hostname. The internal ALB DNS is
-# reachable within the VPC. ALB_DNS_NAME is read from the directory stack output
-# in Step 8 and is available here (Step 11 runs after Step 8).
-# Do not use ${SUBDOMAIN}.${DOMAIN_NAME} — that resolves to the public ALB IP
-# which is unreachable from private subnets without a NAT gateway.
-if [[ -n "${ALB_DNS_NAME}" && "${ALB_DNS_NAME}" != "PLACEHOLDER" ]]; then
-  DIRECTORY_MULTIADDR="/dns4/${ALB_DNS_NAME}/tcp/80/ws/p2p/${DIRECTORY_PEER_ID}"
-else
-  echo "WARNING: ALB_DNS_NAME not available — falling back to public hostname for DirectoryMultiaddr." >&2
-  echo "         This will fail if the relay runs in a private subnet without internet access." >&2
-  DIRECTORY_MULTIADDR="/dns4/${SUBDOMAIN}.${DOMAIN_NAME}/tcp/80/ws/p2p/${DIRECTORY_PEER_ID}"
-fi
+# The relay dials the directory via its public Route53 hostname. Private subnets
+# have outbound internet access via the NAT gateway (M6B-014), so the relay can
+# resolve and reach the public ALB IP. This is cloud-agnostic — any node on any
+# cloud can resolve the same hostname.
+DIRECTORY_MULTIADDR="/dns4/${SUBDOMAIN}.${DOMAIN_NAME}/tcp/80/ws/p2p/${DIRECTORY_PEER_ID}"
 echo "  DirectoryMultiaddr: ${DIRECTORY_MULTIADDR}"
 
 # ── GitHub CodeStar Connection ARN ────────────────────────────────────────────

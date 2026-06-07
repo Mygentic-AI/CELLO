@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  CELLO VPC — private subnets for RDS and ECS, public subnet for ALB only.
-  No NAT Gateway — VPC Interface Endpoints provide AWS service access.
+  CELLO VPC — private subnets for RDS and ECS, public subnets for ALB and NAT Gateway.
+  NAT Gateway provides outbound internet access for private subnets.
   Parameterised by Environment and Region.
 
 Parameters:
@@ -244,7 +244,46 @@ Resources:
         - Key: Name
           Value: !Sub "cello-rds-sg-${Environment}"
 
-  # VPC Interface Endpoints (no NAT Gateway needed)
+  # NAT Gateway — provides outbound internet access for private subnets.
+  # Allows ECS tasks to reach public internet (e.g. directory public ALB hostname).
+  # Interface endpoints are retained for now — remove them in a follow-up deploy
+  # once NAT is confirmed working end-to-end (M6B-014 stage 2).
+  # Single NAT in AZ-A is sufficient for dev; production should use one NAT per AZ.
+  NatEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-nat-eip-${Environment}"
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    DependsOn: GatewayAttachment
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-nat-${Environment}"
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  PrivateNatRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref NatGateway
+
+  # VPC Interface Endpoints — retained until NAT gateway is confirmed working.
+  # Remove these in a follow-up deploy (M6B-014 stage 2) after E2E verification.
   EndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -337,6 +376,10 @@ Resources:
         - !Ref EndpointSecurityGroup
       PrivateDnsEnabled: true
 
+  # SsmMessages endpoint retained for ECS Exec (aws ecs execute-command).
+  # ECS Exec requires a persistent WebSocket to ssmmessages — NAT alone is
+  # insufficient because the SSM agent needs the interface endpoint for the
+  # session manager channel. Without this, ECS Exec fails silently.
   SsmMessagesEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
