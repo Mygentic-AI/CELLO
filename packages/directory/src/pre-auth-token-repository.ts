@@ -11,7 +11,7 @@
  *   UPDATE pre_authorization_tokens
  *   SET consumed_at = now()
  *   WHERE token = $1 AND consumed_at IS NULL AND expires_at > now()
- *   RETURNING id, phone_stub_hash, email_domain
+ *   RETURNING id, phone_stub_hash, email_stub_hash
  * Check rowCount. If 0 → determine whether token is consumed or expired via separate SELECT.
  *
  * Account deduplication (AC-005b):
@@ -92,8 +92,8 @@ export function generatePreAuthToken(): string {
 export interface IssuePreAuthTokenParams {
   /** SHA-256(phone_stub) from the verified phone number */
   phoneStubHash: string;
-  /** Email domain from the verified email */
-  emailDomain: string;
+  /** SHA-256(normalized_email) from the verified email */
+  emailStubHash: string;
   /** UUID of the registration record that authorized this token */
   registrationId: string;
 }
@@ -145,13 +145,13 @@ export async function issuePreAuthToken(
     try {
       const result = await pool.query<{ id: string }>(
         `INSERT INTO pre_authorization_tokens
-           (token, phone_stub_hash, email_domain, registration_id, issued_at, expires_at, consumed_at, chain_hash)
+           (token, phone_stub_hash, email_stub_hash, registration_id, issued_at, expires_at, consumed_at, chain_hash)
          VALUES ($1, $2, $3, $4, $5, $6, NULL, $7)
          RETURNING id`,
         [
           token,
           params.phoneStubHash,
-          params.emailDomain,
+          params.emailStubHash,
           params.registrationId,
           issuedAt.toISOString(),
           expiresAt.toISOString(),
@@ -176,7 +176,7 @@ export async function issuePreAuthToken(
 // ─── Token consumption ────────────────────────────────────────────────────────
 
 export type ConsumeTokenResult =
-  | { ok: true; tokenId: string; phoneStubHash: string; emailDomain: string }
+  | { ok: true; tokenId: string; phoneStubHash: string; emailStubHash: string }
   | { ok: false; reason: "PRE_AUTH_TOKEN_CONSUMED" | "PRE_AUTH_TOKEN_EXPIRED" | "PRE_AUTH_TOKEN_NOT_FOUND"; tokenId: string | null };
 
 /**
@@ -188,7 +188,7 @@ export type ConsumeTokenResult =
  * Pseudocode (MED-2: single atomic UPDATE to eliminate TOCTOU):
  *   1. Atomic UPDATE: UPDATE ... SET consumed_at = now()
  *                     WHERE token = $1 AND consumed_at IS NULL AND expires_at > now()
- *                     RETURNING id, phone_stub_hash, email_domain
+ *                     RETURNING id, phone_stub_hash, email_stub_hash
  *   2. If rowCount = 1 → ok, return token data
  *   3. If rowCount = 0 → disambiguation SELECT to distinguish CONSUMED/EXPIRED/NOT_FOUND:
  *      SELECT id, consumed_at, expires_at FROM pre_authorization_tokens WHERE token = $1
@@ -211,12 +211,12 @@ export async function consumePreAuthToken(
   const updateResult = await pool.query<{
     id: string;
     phone_stub_hash: string;
-    email_domain: string;
+    email_stub_hash: string;
   }>(
     `UPDATE pre_authorization_tokens
      SET consumed_at = now()
      WHERE token = $1 AND consumed_at IS NULL AND expires_at > now()
-     RETURNING id, phone_stub_hash, email_domain`,
+     RETURNING id, phone_stub_hash, email_stub_hash`,
     [token],
   );
 
@@ -226,7 +226,7 @@ export async function consumePreAuthToken(
       ok: true,
       tokenId: updated.id,
       phoneStubHash: updated.phone_stub_hash,
-      emailDomain: updated.email_domain,
+      emailStubHash: updated.email_stub_hash,
     };
   }
 
@@ -258,7 +258,7 @@ export async function consumePreAuthToken(
 // ─── DKG token gate ───────────────────────────────────────────────────────────
 
 export type DkgTokenGateResult =
-  | { ok: true; tokenId: string; phoneStubHash: string; emailDomain: string }
+  | { ok: true; tokenId: string; phoneStubHash: string; emailStubHash: string }
   | {
       ok: false;
       reason:
@@ -348,7 +348,7 @@ export async function validatePreAuthTokenForDkg(
     ok: true,
     tokenId: result.tokenId,
     phoneStubHash: result.phoneStubHash,
-    emailDomain: result.emailDomain,
+    emailStubHash: result.emailStubHash,
   };
 }
 

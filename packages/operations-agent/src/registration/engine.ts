@@ -227,9 +227,14 @@ export class RegistrationEngine {
 
         if (completed) {
           if (this.#pendingReregistration.has(from) && message === "CONFIRM") {
-            // User was previously warned and now confirms — proceed with new registration (AC-003).
+            // User was previously warned and now confirms — proceed with re-registration (AC-003).
             this.#pendingReregistration.delete(from);
-            record = await this.#stateMachine.handleNewUser(from, this.#opts.channelType, phoneStubHash);
+            record = await this.#stateMachine.handleExistingUser(
+              from,
+              this.#opts.channelType,
+              phoneStubHash,
+              completed.emailStubHash,
+            );
           } else {
             // User has a recent completed registration. Send re-registration warning (AC-002).
             // Also covers SI-001: if user sends CONFIRM without prior warning, the
@@ -253,9 +258,9 @@ export class RegistrationEngine {
             });
             await this.#opts.channel.send(
               from,
-              "You already have a CELLO pre-authorization token. If you want to re-register " +
-                "(you will get a new token and your existing agent registration will remain active " +
-                "until it reconnects), reply CONFIRM. Otherwise, ignore this message.",
+              "You already have a CELLO agent registered to this number. Both agents will work " +
+                "independently under the same account. To register an additional agent, reply CONFIRM. " +
+                "Otherwise, ignore this message.",
             );
             return;
           }

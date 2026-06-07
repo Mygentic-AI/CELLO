@@ -10,7 +10,7 @@
  * The composition root can wire this stub without any secrets or AWS credentials.
  *
  * Phase P — Pseudocode:
- *   requestToken(phoneStubHash, emailDomain):
+ *   requestToken(phoneStubHash, emailStubHash):
  *     randomPart = crypto.randomBytes(8).toString('hex')  // 8 bytes = 16 hex chars
  *     token = "DEV-CELLO-" + randomPart
  *     return { token }
@@ -35,7 +35,7 @@ export class LocalPreAuthorizationClient implements PreAuthorizationClient {
    */
   async requestToken(
     _phoneStubHash: string,
-    _emailDomain: string,
+    _emailStubHash: string,
     _registrationId: string,
   ): Promise<{ token: string }> {
     const randomPart = randomBytes(8).toString("hex");

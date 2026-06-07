@@ -49,7 +49,7 @@ export class PgTokenValidator implements TokenValidator {
 
   /**
    * Atomically consume a pre-authorization token.
-   * Returns { valid: true, phoneStubHash, emailDomain, tokenId } on success.
+   * Returns { valid: true, phoneStubHash, emailStubHash, tokenId } on success.
    * Returns { valid: false, reason } on any failure.
    * Never throws — all errors are encoded in the return type.
    */
@@ -60,7 +60,7 @@ export class PgTokenValidator implements TokenValidator {
       return {
         valid: true,
         phoneStubHash: result.phoneStubHash,
-        emailDomain: result.emailDomain,
+        emailStubHash: result.emailStubHash,
         tokenId: result.tokenId,
       };
     }

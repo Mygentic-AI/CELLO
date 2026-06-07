@@ -59,7 +59,7 @@ async function insertTokenRow(
   opts: {
     token: string;
     phoneStubHash: string;
-    emailDomain: string;
+    emailStubHash: string;
     registrationId: string;
     issuedAt?: Date;
     expiresAt?: Date;
@@ -72,13 +72,13 @@ async function insertTokenRow(
 
   const result = await pool.query<{ id: string }>(
     `INSERT INTO pre_authorization_tokens
-       (token, phone_stub_hash, email_domain, registration_id, issued_at, expires_at, consumed_at, chain_hash)
+       (token, phone_stub_hash, email_stub_hash, registration_id, issued_at, expires_at, consumed_at, chain_hash)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id`,
     [
       opts.token,
       opts.phoneStubHash,
-      opts.emailDomain,
+      opts.emailStubHash,
       opts.registrationId,
       issuedAt.toISOString(),
       expiresAt.toISOString(),
@@ -164,7 +164,7 @@ describe("OPS-AGENT-001 unit: generatePreAuthToken", () => {
 describeIntegration("OPS-AGENT-001 integration: pre_authorization_tokens table operations", () => {
   let pool: pg.Pool;
   const TEST_PHONE_STUB_HASH = "test-phone-" + Buffer.from(randomBytes(8)).toString("hex");
-  const TEST_EMAIL_DOMAIN = "test.example.com";
+  const TEST_EMAIL_STUB_HASH = "test.example.com";
   let registrationId: string;
 
   beforeAll(async () => {
@@ -187,7 +187,7 @@ describeIntegration("OPS-AGENT-001 integration: pre_authorization_tokens table o
   it("AC-001 issuePreAuthToken: inserts row, returns token + expiresAt", async () => {
     const result = await issuePreAuthToken(pool, {
       phoneStubHash: TEST_PHONE_STUB_HASH,
-      emailDomain: TEST_EMAIL_DOMAIN,
+      emailStubHash: TEST_EMAIL_STUB_HASH,
       registrationId,
     });
 
@@ -208,7 +208,7 @@ describeIntegration("OPS-AGENT-001 integration: pre_authorization_tokens table o
   it("AC-002 consumePreAuthToken: atomically sets consumed_at, returns token metadata", async () => {
     const issued = await issuePreAuthToken(pool, {
       phoneStubHash: TEST_PHONE_STUB_HASH,
-      emailDomain: TEST_EMAIL_DOMAIN,
+      emailStubHash: TEST_EMAIL_STUB_HASH,
       registrationId,
     });
 
@@ -217,7 +217,7 @@ describeIntegration("OPS-AGENT-001 integration: pre_authorization_tokens table o
     if (!result.ok) throw new Error("Expected ok");
     expect(result.tokenId).toBeDefined();
     expect(result.phoneStubHash).toBe(TEST_PHONE_STUB_HASH);
-    expect(result.emailDomain).toBe(TEST_EMAIL_DOMAIN);
+    expect(result.emailStubHash).toBe(TEST_EMAIL_STUB_HASH);
 
     // Verify consumed_at is set in DB
     const row = await pool.query(
@@ -230,7 +230,7 @@ describeIntegration("OPS-AGENT-001 integration: pre_authorization_tokens table o
   it("AC-003 consumePreAuthToken: reused token returns PRE_AUTH_TOKEN_CONSUMED", async () => {
     const issued = await issuePreAuthToken(pool, {
       phoneStubHash: TEST_PHONE_STUB_HASH,
-      emailDomain: TEST_EMAIL_DOMAIN,
+      emailStubHash: TEST_EMAIL_STUB_HASH,
       registrationId,
     });
 
@@ -253,7 +253,7 @@ describeIntegration("OPS-AGENT-001 integration: pre_authorization_tokens table o
     await insertTokenRow(pool, {
       token: expiredToken,
       phoneStubHash: TEST_PHONE_STUB_HASH,
-      emailDomain: TEST_EMAIL_DOMAIN,
+      emailStubHash: TEST_EMAIL_STUB_HASH,
       registrationId,
       issuedAt,
       expiresAt,
@@ -277,7 +277,7 @@ describeIntegration("OPS-AGENT-001 integration: pre_authorization_tokens table o
     // Issue a fresh token
     const issued = await issuePreAuthToken(pool, {
       phoneStubHash: TEST_PHONE_STUB_HASH,
-      emailDomain: TEST_EMAIL_DOMAIN,
+      emailStubHash: TEST_EMAIL_STUB_HASH,
       registrationId,
     });
 
@@ -303,7 +303,7 @@ describeIntegration("OPS-AGENT-001 integration: pre_authorization_tokens table o
     // Issue and consume a token
     const issued = await issuePreAuthToken(pool, {
       phoneStubHash: TEST_PHONE_STUB_HASH,
-      emailDomain: TEST_EMAIL_DOMAIN,
+      emailStubHash: TEST_EMAIL_STUB_HASH,
       registrationId,
     });
     const first = await consumePreAuthToken(pool, issued.token);
@@ -332,7 +332,7 @@ describeIntegration("OPS-AGENT-001 integration: POST /internal/pre-authorize HTT
   let stopServer: () => void;
   const VALID_API_KEY = "test-internal-api-key-" + Buffer.from(randomBytes(8)).toString("hex");
   const PHONE_STUB_HASH_HTTP = "http-test-phone-" + Buffer.from(randomBytes(8)).toString("hex");
-  const EMAIL_DOMAIN_HTTP = "http-test.example.com";
+  const EMAIL_STUB_HASH_HTTP = "http-test.example.com";
   let httpRegistrationId: string;
 
   const noopLogger = {
@@ -369,7 +369,7 @@ describeIntegration("OPS-AGENT-001 integration: POST /internal/pre-authorize HTT
   it("AC-001 HTTP: valid request returns 200 with token + expiresAt", async () => {
     const { status, body } = await postPreAuthorize(
       serverPort,
-      { phoneStubHash: PHONE_STUB_HASH_HTTP, emailDomain: EMAIL_DOMAIN_HTTP, registrationId: httpRegistrationId },
+      { phoneStubHash: PHONE_STUB_HASH_HTTP, emailStubHash: EMAIL_STUB_HASH_HTTP, registrationId: httpRegistrationId },
       VALID_API_KEY,
     );
     expect(status).toBe(200);
@@ -384,7 +384,7 @@ describeIntegration("OPS-AGENT-001 integration: POST /internal/pre-authorize HTT
       expect.objectContaining({
         tokenId: expect.any(String),
         phoneStubHashPrefix: expect.any(String),
-        emailDomain: EMAIL_DOMAIN_HTTP,
+        emailStubHash: EMAIL_STUB_HASH_HTTP,
         correlationId: expect.any(String),
       }),
     );
@@ -400,21 +400,21 @@ describeIntegration("OPS-AGENT-001 integration: POST /internal/pre-authorize HTT
 
   it("AC-005 HTTP: missing API key returns 401, no token row created", async () => {
     const countBefore = await pool.query(
-      "SELECT COUNT(*) FROM pre_authorization_tokens WHERE email_domain = $1",
-      [EMAIL_DOMAIN_HTTP],
+      "SELECT COUNT(*) FROM pre_authorization_tokens WHERE email_stub_hash = $1",
+      [EMAIL_STUB_HASH_HTTP],
     );
     const countBeforeNum = parseInt(String(countBefore.rows[0]!.count), 10);
 
     const { status } = await postPreAuthorize(
       serverPort,
-      { phoneStubHash: PHONE_STUB_HASH_HTTP, emailDomain: EMAIL_DOMAIN_HTTP, registrationId: httpRegistrationId },
+      { phoneStubHash: PHONE_STUB_HASH_HTTP, emailStubHash: EMAIL_STUB_HASH_HTTP, registrationId: httpRegistrationId },
       // No API key
     );
     expect(status).toBe(401);
 
     const countAfter = await pool.query(
-      "SELECT COUNT(*) FROM pre_authorization_tokens WHERE email_domain = $1",
-      [EMAIL_DOMAIN_HTTP],
+      "SELECT COUNT(*) FROM pre_authorization_tokens WHERE email_stub_hash = $1",
+      [EMAIL_STUB_HASH_HTTP],
     );
     const countAfterNum = parseInt(String(countAfter.rows[0]!.count), 10);
     expect(countAfterNum).toBe(countBeforeNum); // No new token created
@@ -432,7 +432,7 @@ describeIntegration("OPS-AGENT-001 integration: POST /internal/pre-authorize HTT
   it("AC-005 SI-001: invalid API key returns 401, no token row created", async () => {
     const { status } = await postPreAuthorize(
       serverPort,
-      { phoneStubHash: PHONE_STUB_HASH_HTTP, emailDomain: EMAIL_DOMAIN_HTTP, registrationId: httpRegistrationId },
+      { phoneStubHash: PHONE_STUB_HASH_HTTP, emailStubHash: EMAIL_STUB_HASH_HTTP, registrationId: httpRegistrationId },
       "wrong-api-key",
     );
     expect(status).toBe(401);
@@ -444,7 +444,7 @@ describeIntegration("OPS-AGENT-001 integration: POST /internal/pre-authorize HTT
 describeIntegration("OPS-AGENT-001 integration: validatePreAuthTokenForDkg", () => {
   let pool: pg.Pool;
   const GATE_PHONE_HASH = "gate-test-phone-" + Buffer.from(randomBytes(8)).toString("hex");
-  const GATE_EMAIL_DOMAIN = "gate-test.example.com";
+  const GATE_EMAIL_STUB_HASH = "gate-test.example.com";
   let gateRegistrationId: string;
 
   const warnLogger = {
@@ -467,7 +467,7 @@ describeIntegration("OPS-AGENT-001 integration: validatePreAuthTokenForDkg", () 
   it("AC-002 validatePreAuthTokenForDkg: valid token consumed, returns phoneStubHash", async () => {
     const issued = await issuePreAuthToken(pool, {
       phoneStubHash: GATE_PHONE_HASH,
-      emailDomain: GATE_EMAIL_DOMAIN,
+      emailStubHash: GATE_EMAIL_STUB_HASH,
       registrationId: gateRegistrationId,
     });
     const correlationId = "corr-" + Buffer.from(randomBytes(8)).toString("hex");
@@ -482,7 +482,7 @@ describeIntegration("OPS-AGENT-001 integration: validatePreAuthTokenForDkg", () 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("Expected ok");
     expect(result.phoneStubHash).toBe(GATE_PHONE_HASH);
-    expect(result.emailDomain).toBe(GATE_EMAIL_DOMAIN);
+    expect(result.emailStubHash).toBe(GATE_EMAIL_STUB_HASH);
 
     // preauth.token.consumed must be logged at INFO
     expect(warnLogger.info).toHaveBeenCalledWith(
@@ -498,7 +498,7 @@ describeIntegration("OPS-AGENT-001 integration: validatePreAuthTokenForDkg", () 
   it("AC-003 validatePreAuthTokenForDkg: reused token → PRE_AUTH_TOKEN_CONSUMED", async () => {
     const issued = await issuePreAuthToken(pool, {
       phoneStubHash: GATE_PHONE_HASH,
-      emailDomain: GATE_EMAIL_DOMAIN,
+      emailStubHash: GATE_EMAIL_STUB_HASH,
       registrationId: gateRegistrationId,
     });
     const correlationId = "corr-reuse-" + Buffer.from(randomBytes(4)).toString("hex");
@@ -535,7 +535,7 @@ describeIntegration("OPS-AGENT-001 integration: validatePreAuthTokenForDkg", () 
     await insertTokenRow(pool, {
       token: expiredToken,
       phoneStubHash: GATE_PHONE_HASH,
-      emailDomain: GATE_EMAIL_DOMAIN,
+      emailStubHash: GATE_EMAIL_STUB_HASH,
       registrationId: gateRegistrationId,
       issuedAt,
       expiresAt,
@@ -620,7 +620,7 @@ async function insertAgentProfileRow(pool: pg.Pool, kLocalPubkey: string): Promi
 describeIntegration("OPS-AGENT-001 integration: AC-005b account deduplication", () => {
   let pool: pg.Pool;
   const SHARED_PHONE_STUB_HASH = "acct-test-phone-" + Buffer.from(randomBytes(8)).toString("hex");
-  const EMAIL_DOMAIN_ACCT = "acct-test.example.com";
+  const EMAIL_STUB_HASH_ACCT = "acct-test.example.com";
   let regId1: string;
   let regId2: string;
   // k_local_pubkey values for the two simulated agent profiles
@@ -644,12 +644,12 @@ describeIntegration("OPS-AGENT-001 integration: AC-005b account deduplication", 
     // Issue two tokens with same phone_stub_hash
     const token1 = await issuePreAuthToken(pool, {
       phoneStubHash: SHARED_PHONE_STUB_HASH,
-      emailDomain: EMAIL_DOMAIN_ACCT,
+      emailStubHash: EMAIL_STUB_HASH_ACCT,
       registrationId: regId1,
     });
     const token2 = await issuePreAuthToken(pool, {
       phoneStubHash: SHARED_PHONE_STUB_HASH,
-      emailDomain: EMAIL_DOMAIN_ACCT,
+      emailStubHash: EMAIL_STUB_HASH_ACCT,
       registrationId: regId2,
     });
 
@@ -725,7 +725,7 @@ describe("OPS-AGENT-001 AC-009: composition root wires DevTokenValidator for CEL
     expect(result.valid).toBe(true);
     if (!result.valid) throw new Error("Expected valid");
     expect(result.phoneStubHash).toBeDefined();
-    expect(result.emailDomain).toBeDefined();
+    expect(result.emailStubHash).toBeDefined();
     expect(result.tokenId).toBe("dev-token");
   });
 

@@ -2,8 +2,8 @@
  * directory-pre-auth-client.ts — DirectoryPreAuthorizationClient
  *
  * Phase P — Pseudocode:
- *   requestToken(phoneStubHash, emailDomain):
- *     1. POST directoryInternalUrl with JSON body { phoneStubHash, emailDomain }
+ *   requestToken(phoneStubHash, emailStubHash):
+ *     1. POST directoryInternalUrl with JSON body { phoneStubHash, emailStubHash }
  *     2. Include header x-cello-internal-api-key: apiKey (SI-001)
  *     3. Include header Content-Type: application/json
  *     4. On network error (fetch throws): throw PreAuthRequestError(message, httpStatus=0)
@@ -83,7 +83,7 @@ export class DirectoryPreAuthorizationClient implements PreAuthorizationClient {
    */
   async requestToken(
     phoneStubHash: string,
-    emailDomain: string,
+    emailStubHash: string,
     registrationId: string,
   ): Promise<{ token: string }> {
     let response: Response;
@@ -94,7 +94,7 @@ export class DirectoryPreAuthorizationClient implements PreAuthorizationClient {
           "Content-Type": "application/json",
           "x-cello-internal-api-key": this.#apiKey,
         },
-        body: JSON.stringify({ phoneStubHash, emailDomain, registrationId }),
+        body: JSON.stringify({ phoneStubHash, emailStubHash, registrationId }),
       });
     } catch (err) {
       // Network-level error (ECONNREFUSED, DNS failure, timeout, etc.)

@@ -38,7 +38,7 @@
  * the repository.
  */
 
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import type {
   RegistrationRecord,
   MessagingChannel,
@@ -92,6 +92,16 @@ export function isValidEmail(s: string): boolean {
 /** Extract domain from a valid email address */
 export function extractEmailDomain(email: string): string {
   return email.slice(email.indexOf("@") + 1).toLowerCase();
+}
+
+/**
+ * Compute the email stub hash: SHA-256(normalize(email)) where normalize
+ * lowercases and trims whitespace. Returns hex string (same format as phone_stub_hash).
+ * The pre-hash email MUST NOT be stored or logged after this function returns.
+ */
+export function hashEmail(email: string): string {
+  const normalized = email.trim().toLowerCase();
+  return createHash("sha256").update(normalized, "utf8").digest("hex");
 }
 
 // ─── RegistrationStateMachine ─────────────────────────────────────────────────
@@ -196,6 +206,60 @@ export class RegistrationStateMachine {
   }
 
   /**
+   * Process a returning user's CONFIRM — create a new registration record and store the
+   * expectedEmailStubHash from the prior completed row so email continuity can be enforced.
+   *
+   * handleExistingUser path:
+   *   1. Create a new registration record (same as handleNewUser)
+   *   2. Store expectedEmailStubHash in state_data so it can be checked when the user
+   *      submits their email in the re-registration flow
+   *   3. If expectedEmailStubHash is null (pre-V30 row): skip continuity enforcement
+   */
+  async handleExistingUser(
+    channelUserId: string,
+    channel: "telegram" | "whatsapp" | "cli",
+    phoneStubHash: string,
+    expectedEmailStubHash: string | null,
+  ): Promise<RegistrationRecord> {
+    const { repository, logger } = this.#deps;
+    const correlationId = randomUUID();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + REGISTRATION_TTL_MS);
+
+    // Create in INITIAL state, then immediately transition to AWAITING_CONTACT
+    const record = await repository.insert({
+      phoneStubHash,
+      channel,
+      channelUserId,
+      state: "INITIAL",
+      expiresAt,
+    });
+
+    // Store expectedEmailStubHash in state_data for later continuity check
+    if (expectedEmailStubHash) {
+      await repository.transition(record.id, "INITIAL", {
+        stateData: { expectedEmailStubHash },
+      });
+    }
+
+    logger.info("registration.started", {
+      registrationId: record.id,
+      channel,
+      correlationId,
+    });
+
+    const awaitingRecord = await repository.transition(record.id, "AWAITING_CONTACT");
+
+    // Send request_contact prompt
+    await this.#deps.channel.send(
+      channelUserId,
+      `${CONTACT_PROMPT_PREFIX}Welcome! Please share your phone number to begin registration.`,
+    );
+
+    return awaitingRecord;
+  }
+
+  /**
    * Re-send the contact sharing prompt for AWAITING_CONTACT (10-min re-prompt, AC-002b).
    * Refreshes updatedAt to prevent 7-day expiry.
    */
@@ -266,7 +330,7 @@ export class RegistrationStateMachine {
     from: string,
     correlationId: string,
   ): Promise<RegistrationRecord> {
-    const { repository, channel } = this.#deps;
+    const { repository, channel, logger } = this.#deps;
 
     if (!isValidEmail(message.trim())) {
       await channel.send(from, "Please provide a valid email address (e.g. user@example.com).");
@@ -274,7 +338,8 @@ export class RegistrationStateMachine {
     }
 
     const email = message.trim();
-    const emailDomain = extractEmailDomain(email);
+    const emailDomain = extractEmailDomain(email); // retained for rate limiter only
+    const emailStubHash = hashEmail(email); // stored in DB
 
     // Check OTP rate limit (AC-009)
     const rateLimited = this.#isRateLimited(emailDomain, record.id, correlationId);
@@ -291,11 +356,16 @@ export class RegistrationStateMachine {
 
     // Write OTP hash to DB first — deliver only after DB write succeeds (MED-001)
     const updated = await repository.transition(record.id, "AWAITING_EMAIL_OTP", {
-      emailDomain,
+      emailStubHash,
       otpHash,
       otpSalt: salt,
       otpExpiresAt,
       otpAttemptCount: 0,
+    });
+
+    logger.info("registration.email.hash_stored", {
+      registrationId: record.id,
+      correlationId,
     });
 
     // Deliver OTP only after DB write succeeds
@@ -369,6 +439,30 @@ export class RegistrationStateMachine {
       }
     }
 
+    // Email continuity enforcement for re-registration (handleExistingUser flow):
+    // If expectedEmailStubHash is set on this record (via state_data), compare against
+    // the email just verified. Reject if they differ.
+    const expectedHash = await repository.getStateDataField(record.id, "expectedEmailStubHash") as string | null;
+    if (expectedHash) {
+      const actualHash = record.emailStubHash ?? (await repository.getEmailStubHash(record.id));
+      if (actualHash && actualHash !== expectedHash) {
+        logger.warn("registration.email.continuity_rejected", {
+          registrationId: record.id,
+          channelUserId: from,
+          correlationId,
+        });
+        await channel.send(
+          from,
+          "You must use the same email address as your original registration. Please try again.",
+        );
+        // Transition back to AWAITING_EMAIL so user can retry with correct email
+        const awaitingEmail = await repository.transition(record.id, "AWAITING_EMAIL", {
+          clearOtp: true,
+        });
+        return awaitingEmail;
+      }
+    }
+
     // OTP correct — transition to EMAIL_CONFIRMED, explicitly clearing OTP fields.
     // clearOtp: true bypasses COALESCE to write NULL directly.
     const emailConfirmed = await repository.transition(record.id, "EMAIL_CONFIRMED", {
@@ -377,7 +471,6 @@ export class RegistrationStateMachine {
 
     logger.info("registration.email.verified", {
       registrationId: record.id,
-      emailDomain: record.emailDomain ?? "",
       correlationId,
     });
 
@@ -386,7 +479,7 @@ export class RegistrationStateMachine {
     try {
       const result = await preAuth.requestToken(
         emailConfirmed.phoneStubHash,
-        record.emailDomain ?? "",
+        emailConfirmed.emailStubHash ?? "",
         record.id,
       );
       token = result.token;
@@ -407,6 +500,27 @@ export class RegistrationStateMachine {
 
     // Transition to PRE_AUTH_TOKEN_ISSUED
     const completed = await repository.transition(emailConfirmed.id, "PRE_AUTH_TOKEN_ISSUED");
+
+    // Upsert channel identity for permanent notification routing
+    try {
+      await repository.upsertChannelIdentity(
+        completed.phoneStubHash,
+        completed.channel,
+        completed.channelUserId,
+      );
+      logger.info("registration.channel_identity.upserted", {
+        registrationId: record.id,
+        channel: completed.channel,
+        correlationId,
+      });
+    } catch (err) {
+      logger.error("registration.channel_identity.upsert_failed", err instanceof Error ? err : new Error(String(err)), {
+        registrationId: record.id,
+        channel: completed.channel,
+        correlationId,
+      });
+      // Non-fatal: registration already completed, token already issued
+    }
 
     // tokenId: first 8 chars of the token (unique enough for log tracing)
     const tokenId = token.slice(0, 8);
@@ -433,7 +547,7 @@ export class RegistrationStateMachine {
     try {
       const result = await preAuth.requestToken(
         record.phoneStubHash,
-        record.emailDomain ?? "",
+        record.emailStubHash ?? "",
         record.id,
       );
       token = result.token;
@@ -452,6 +566,26 @@ export class RegistrationStateMachine {
     }
 
     const completed = await repository.transition(record.id, "PRE_AUTH_TOKEN_ISSUED");
+
+    // Upsert channel identity for permanent notification routing
+    try {
+      await repository.upsertChannelIdentity(
+        completed.phoneStubHash,
+        completed.channel,
+        completed.channelUserId,
+      );
+      logger.info("registration.channel_identity.upserted", {
+        registrationId: record.id,
+        channel: completed.channel,
+        correlationId,
+      });
+    } catch (err) {
+      logger.error("registration.channel_identity.upsert_failed", err instanceof Error ? err : new Error(String(err)), {
+        registrationId: record.id,
+        channel: completed.channel,
+        correlationId,
+      });
+    }
 
     const tokenId = token.slice(0, 8);
     logger.info("registration.completed", {

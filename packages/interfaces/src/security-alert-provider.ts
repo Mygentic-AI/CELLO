@@ -26,7 +26,7 @@ export type SecurityAlert =
   | {
       type: "REGISTRATION_COMPLETE";
       phoneStubHash: string;
-      emailDomain: string;
+      emailStubHash: string;
       completedAt: Date;
     };
 

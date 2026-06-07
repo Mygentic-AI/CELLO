@@ -468,7 +468,7 @@ describe("AC-006 (directory): empty phone_stub succeeds when pre_auth_token cons
           hash = createHash("sha256").update(`phone-${++tokenCount.n}`).digest("hex");
           uniquePhoneHashes.set(token, hash);
         }
-        return { valid: true as const, phoneStubHash: hash, emailDomain: "test.example.com", tokenId: `id-${token}` };
+        return { valid: true as const, phoneStubHash: hash, emailStubHash: "test.example.com", tokenId: `id-${token}` };
       },
     };
 

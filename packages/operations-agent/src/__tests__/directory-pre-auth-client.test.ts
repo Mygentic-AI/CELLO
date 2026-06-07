@@ -135,9 +135,9 @@ describe("DirectoryPreAuthorizationClient", () => {
   });
 
   /**
-   * Sends phoneStubHash and emailDomain in request body.
+   * Sends phoneStubHash and emailStubHash in request body.
    */
-  it("sends phoneStubHash and emailDomain in POST body", async () => {
+  it("sends phoneStubHash and emailStubHash in POST body", async () => {
     let capturedBody: unknown;
 
     const capturingFetch: typeof globalThis.fetch = async (_url, init?) => {
@@ -155,10 +155,10 @@ describe("DirectoryPreAuthorizationClient", () => {
       fetch: capturingFetch,
     });
 
-    await client.requestToken("abc123hash", "mycompany.com");
+    await client.requestToken("abc123hash", "abc123emailhash");
     expect(capturedBody).toMatchObject({
       phoneStubHash: "abc123hash",
-      emailDomain: "mycompany.com",
+      emailStubHash: "abc123emailhash",
     });
   });
 });

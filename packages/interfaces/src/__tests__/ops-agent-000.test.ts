@@ -84,14 +84,14 @@ describe("AC-002: OtpDeliveryProvider + ConsoleOtpDeliveryProvider", () => {
 // ─── AC-003: TokenValidator + DevTokenValidator ───────────────────────────────
 
 describe("AC-003: TokenValidator + DevTokenValidator", () => {
-  it("validateToken with DEV- prefix returns valid: true with phoneStubHash and emailDomain", async () => {
+  it("validateToken with DEV- prefix returns valid: true with phoneStubHash and emailStubHash", async () => {
     const { DevTokenValidator } = await import("../stubs/dev-token-validator.js");
     const validator: TokenValidator = new DevTokenValidator();
     const result: TokenValidationResult = await validator.validateToken("DEV-test-token");
     expect(result.valid).toBe(true);
     if (result.valid) {
       expect(typeof result.phoneStubHash).toBe("string");
-      expect(typeof result.emailDomain).toBe("string");
+      expect(typeof result.emailStubHash).toBe("string");
       // LOW-1: assert tokenId is returned on success
       expect(result.tokenId).toBe("dev-token");
     }
@@ -166,7 +166,7 @@ describe("AC-004: SecurityAlertProvider + ConsoleSecurityAlertProvider", () => {
     const alert: SecurityAlert = {
       type: "REGISTRATION_COMPLETE",
       phoneStubHash: "abc123",
-      emailDomain: "example.com",
+      emailStubHash: "example.com",
       completedAt: new Date(),
     };
     await expect(provider.sendAlert("account-456", alert)).resolves.toBeUndefined();
@@ -188,7 +188,7 @@ describe("AC-004: SecurityAlertProvider + ConsoleSecurityAlertProvider", () => {
     const complete: SecurityAlert = {
       type: "REGISTRATION_COMPLETE",
       phoneStubHash: "h",
-      emailDomain: "e.com",
+      emailStubHash: "e.com",
       completedAt: new Date(),
     };
     expect(handleAlert(canary)).toBe("canary");
@@ -259,7 +259,7 @@ describe("AC-005 + SI-001: PreAuthorizationToken format and entropy", () => {
     const token: PreAuthorizationToken = {
       token: "CELLO-" + "1".repeat(33),
       phoneStubHash: "sha256-of-phone",
-      emailDomain: "example.com",
+      emailStubHash: "example.com",
       issuedAt: new Date(),
       expiresAt: new Date(Date.now() + 86400_000),
       consumedAt: null,
@@ -274,7 +274,7 @@ describe("AC-005 + SI-001: PreAuthorizationToken format and entropy", () => {
       registrationId: "660e8400-e29b-41d4-a716-446655440001",
       token: "CELLO-" + "1".repeat(33),
       phoneStubHash: "sha256-of-phone",
-      emailDomain: "example.com",
+      emailStubHash: "example.com",
       issuedAt: new Date(),
       expiresAt: new Date(Date.now() + 86400_000),
       consumedAt: null,
@@ -339,7 +339,7 @@ describe("AC-006: RegistrationState discriminated union", () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       expiresAt: new Date(Date.now() + 7 * 86400_000),
-      emailDomain: "example.com",
+      emailStubHash: "example.com",
       state: "AWAITING_EMAIL_OTP",
       otpHash: "hashed-otp",
       otpExpiresAt: new Date(Date.now() + 900_000),
@@ -360,7 +360,7 @@ describe("AC-006: RegistrationState discriminated union", () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       expiresAt: new Date(),
-      emailDomain: null,
+      emailStubHash: null,
       state: "INITIAL",
     };
     // TypeScript will error if "chainHash" is a valid key on RegistrationRecord.

@@ -11,7 +11,7 @@
  * Phase P — Pseudocode:
  *   validateToken(token):
  *     if token starts with "DEV-":
- *       return { valid: true, phoneStubHash: "dev-phone-stub-hash", emailDomain: "dev.example.com" }
+ *       return { valid: true, phoneStubHash: "dev-phone-stub-hash", emailStubHash: "dev-email-stub-hash" }
  *     else:
  *       return { valid: false, reason: "DevTokenValidator only accepts 'DEV-' prefix tokens" }
  */
@@ -20,8 +20,8 @@ import type { TokenValidator, TokenValidationResult } from "../token-validator.j
 
 /** Fixed phone stub hash returned by the dev stub for all valid DEV- tokens */
 const DEV_PHONE_STUB_HASH = "dev-phone-stub-hash-0000000000000000000000000000000000000000";
-/** Fixed email domain returned by the dev stub for all valid DEV- tokens */
-const DEV_EMAIL_DOMAIN = "dev.example.com";
+/** Fixed email stub hash returned by the dev stub for all valid DEV- tokens */
+const DEV_EMAIL_STUB_HASH = "dev-email-stub-hash-0000000000000000000000000000000000000000";
 
 /**
  * DevTokenValidator — implements TokenValidator for local development.
@@ -38,7 +38,7 @@ export class DevTokenValidator implements TokenValidator {
       return {
         valid: true,
         phoneStubHash: DEV_PHONE_STUB_HASH,
-        emailDomain: DEV_EMAIL_DOMAIN,
+        emailStubHash: DEV_EMAIL_STUB_HASH,
         tokenId: "dev-token",
       };
     }
