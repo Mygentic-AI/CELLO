@@ -31,7 +31,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-06-07 | Running task def :54 (CFN-managed, public DIRECTORY_MULTIADDR); :55 manual workaround superseded |
 | cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | cello-route53-dev | UPDATE_COMPLETE (CFN DRIFT) | 2026-06-07 | A record deleted by purge_stale_dns_record() bug during M6B-014 deploy. Recreated manually 2026-06-07. deploy.sh fixed (commit 6d17b30) — drift resolves on next deploy.sh run. |
-| cello-route53-relay-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
+| cello-route53-relay-dev | UPDATE_COMPLETE (CFN DRIFT) | 2026-06-07 | A record deleted by purge_stale_dns_record() bug. Recreated manually 2026-06-07. Drift resolves on next deploy.sh run. |
 | cello-cicd-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
 | Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-06-06 | REPOSPLIT-002: removed 4 dead pipelines (crypto/protocol-types/transport/client); now 5 pipelines only |
@@ -81,7 +81,7 @@ All six secrets imported via CFN resource import changeset `import-transport-key
 | RDS Endpoint | cello-dev.c9iokw02w3f8.us-east-1.rds.amazonaws.com |
 | RDS Port | 5432 |
 | Directory ALB | cello-dir-dev-85618485.us-east-1.elb.amazonaws.com |
-| Relay ALB | pending — deploy cello-ecs-relay-dev to populate |
+| Relay ALB | cello-relay-dev-913894764.us-east-1.elb.amazonaws.com |
 | ALB Hosted Zone ID | Z35SXDOTRQ7X7K |
 | Route 53 Record | directory-us1.cello.mygentic.ai |
 | ACM Certificate | arn:aws:acm:us-east-1:257394457473:certificate/900d9dde-abd9-4d05-931b-507a6fdf55f4 |
@@ -127,12 +127,10 @@ aws ecs stop-task \
 ```
 ECS will start a replacement task that reads the updated SSM value. The current migration version as of M6B-011 is 28. Whenever a new migration is applied, update this parameter immediately (no code deploy required — that is the point of using SSM).
 
-**M6B-014: NAT Gateway replaces interface endpoints (PENDING DEPLOY):**
-IaC changes committed but NOT YET DEPLOYED. The operator must run `./infra/deploy.sh dev <region>` for all 3 regions to apply. Changes:
-- cello-vpc.yaml: adds NAT Gateway (EIP + NatGateway in Public Subnet A + private route 0.0.0.0/0 → NAT). Removes 6 interface endpoints (ecr.api, ecr.dkr, secretsmanager, kms, logs, ssm). Retains ssmmessages (ECS Exec) and S3 gateway (free).
-- deploy.sh: DirectoryMultiaddr now uses public Route53 hostname unconditionally (`/dns4/{subdomain}.{domain}/tcp/80/ws/p2p/{peer-id}`). Internal ALB DNS fallback removed.
-- After deploy: remove manual SG rule (relay→directory port 4000) and manual task def revision :55 (private IP hack).
-- Route53 fix needed: cello-route53-dev in us-east-1 may have CFN drift on the A record. If directory-us1.cello.mygentic.ai does not resolve after deploy, delete and recreate the cello-route53-dev stack in us-east-1.
+**M6B-014: NAT Gateway — DEPLOYED 2026-06-07:**
+Deployed to all 3 regions. NAT Gateway active in each VPC, relay→directory registration working via public hostname. 6 interface endpoints retained for stage-2 removal (non-blocking). Manual SG rule (relay→directory port 4000) removed. Manual task def :55 superseded by CFN-managed :54.
+
+Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) deleted all 6 A records (3 directory + 3 relay) during the M6B-014 deploy. All 6 recreated manually 2026-06-07. Drift resolves on next deploy.sh run.
 
 **SSM Parameter required for new regions (M6B-004):** CELLO_DIRECTORY_HOSTNAME now fetched from SSM Parameter Store path `/cello/{Environment}/directory/hostname` instead of hardcoded Mappings block. For region expansion, create this parameter before deploying cello-ecs-directory stack. Existing regions (us-east-1, eu-central-1, ap-northeast-1) must have this parameter created manually before next deploy:
 - us-east-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-us1.cello.mygentic.ai --type String --region us-east-1`
@@ -159,7 +157,7 @@ IaC changes committed but NOT YET DEPLOYED. The operator must run `./infra/deplo
 | cello-ecs-relay-dev | CREATE_COMPLETE | 2026-06-06 | |
 | cello-cloudwatch-dev | CREATE_COMPLETE | 2026-06-06 | |
 | cello-route53-dev | CREATE_COMPLETE | 2026-06-06 | directory-eu1.cello.mygentic.ai |
-| cello-route53-relay-dev | CREATE_COMPLETE | 2026-06-06 | relay-eu1.cello.mygentic.ai |
+| cello-route53-relay-dev | CREATE_COMPLETE (CFN DRIFT) | 2026-06-07 | A record deleted by purge_stale_dns_record() bug. Recreated manually 2026-06-07. Drift resolves on next deploy.sh run. |
 | cello-cicd-dev | NOT DEPLOYED | — | CICD pipeline is us-east-1 only |
 | Lambda: cello-dev-rds-rotation | DEPLOYED (real code) | 2026-05-25 | |
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-25 | 167ca6...27b5 |
@@ -187,7 +185,7 @@ IaC changes committed but NOT YET DEPLOYED. The operator must run `./infra/deplo
 | RDS Endpoint | cello-dev.clu08oy88g6v.eu-central-1.rds.amazonaws.com |
 | RDS Port | 5432 |
 | Directory ALB | cello-dir-dev-1699677837.eu-central-1.elb.amazonaws.com |
-| Relay ALB | pending — deploy cello-ecs-relay-dev to populate |
+| Relay ALB | cello-relay-dev-1538955378.eu-central-1.elb.amazonaws.com |
 | Route 53 Record | directory-eu1.cello.mygentic.ai |
 | ECS Cluster | arn:aws:ecs:eu-central-1:257394457473:cluster/cello-dev |
 | Directory Node Public Key | 8105b180b753d97b50039a7e94433fd2b419f43d61f9ad7caf2ac15ad5cd1b45 |
@@ -215,7 +213,7 @@ IaC changes committed but NOT YET DEPLOYED. The operator must run `./infra/deplo
 | cello-ecs-relay-dev | CREATE_COMPLETE | 2026-06-06 | |
 | cello-cloudwatch-dev | CREATE_COMPLETE | 2026-06-06 | |
 | cello-route53-dev | CREATE_COMPLETE | 2026-06-06 | directory-ap1.cello.mygentic.ai |
-| cello-route53-relay-dev | CREATE_COMPLETE | 2026-06-06 | relay-ap1.cello.mygentic.ai |
+| cello-route53-relay-dev | CREATE_COMPLETE (CFN DRIFT) | 2026-06-07 | A record deleted by purge_stale_dns_record() bug. Recreated manually 2026-06-07. Drift resolves on next deploy.sh run. |
 | cello-cicd-dev | NOT DEPLOYED | — | CICD pipeline is us-east-1 only |
 | Lambda: cello-dev-rds-rotation | DEPLOYED (real code) | 2026-05-25 | |
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-25 | 167ca6...27b5 |
@@ -243,7 +241,7 @@ IaC changes committed but NOT YET DEPLOYED. The operator must run `./infra/deplo
 | RDS Endpoint | cello-dev.cryg2a8say19.ap-northeast-1.rds.amazonaws.com |
 | RDS Port | 5432 |
 | Directory ALB | cello-dir-dev-1435901052.ap-northeast-1.elb.amazonaws.com |
-| Relay ALB | pending — deploy cello-ecs-relay-dev to populate |
+| Relay ALB | cello-relay-dev-1984262345.ap-northeast-1.elb.amazonaws.com |
 | Route 53 Record | directory-ap1.cello.mygentic.ai |
 | ECS Cluster | arn:aws:ecs:ap-northeast-1:257394457473:cluster/cello-dev |
 | Directory Node Public Key | 9b4b673a16487ba47363e3eaff844bf68f19736d82967918fb896b813e39b984 |
