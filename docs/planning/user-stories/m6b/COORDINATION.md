@@ -597,7 +597,11 @@ This handles both cases correctly:
 - Manually recreated all 3 A records in Route53 (us-east-1, eu-central-1, ap-northeast-1)
 - Forced us-east-1 relay service from task def :55 (manual private IP workaround) to :54 (CFN-managed, public hostname)
 
-**Current state:**
-- All 3 A records live in Route53
-- us-east-1 relay running task def :54 with correct public DIRECTORY_MULTIADDR
-- Relay registration still failing with `directory_unavailable` — under investigation
+**Current state — RESOLVED:**
+- All 3 A records live in Route53 pointing to correct ALBs
+- All 3 relays registered: `relay.already.registered` in us-east-1, eu-central-1, ap-northeast-1
+- Manual SG rule (relay→directory port 4000) removed — no longer needed
+- NAT gateway confirmed working end-to-end
+
+**Remaining cleanup (non-blocking):**
+- Stage 2: remove 6 interface endpoints from cello-vpc.yaml in a separate deploy
