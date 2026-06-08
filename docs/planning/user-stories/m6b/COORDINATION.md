@@ -819,3 +819,67 @@ because the ceremony always outlasted the process.
 **Note for M7:** M7 moves to a multi-agent server model (one long-lived process, N CelloClients).
 The lock-file kill-on-startup mechanism becomes irrelevant. The graceful shutdown logic will need
 to aggregate `hasInFlightCryptoOperation()` across all active clients, not just one.
+
+---
+
+### 2026-06-08 — M6-E2E-001 diagnostic investigation: what was eliminated, what remains
+
+**Context:** M6-E2E-001 requires `cello_initiate_session` (AC-005) to succeed end-to-end between
+a local Claude Code client and the EC2 demo agent. Five days of investigation produced:
+
+**Problems found and fixed:**
+
+1. **SIGTERM race with FROST ceremony (M6B-001 regression) — FIXED in 0.0.34**
+   The immediate `process.exit(0)` SIGTERM handler tore down libp2p mid-ceremony. Fixed with
+   graceful 4-second poll (see entry above). Confirmed by log evidence: `aggregate OK sigLength=64`
+   followed immediately by `client.startup.lock.released` and
+   `client.startup.prior.process.killed` — ceremony completed but process exited before
+   `session_assignment` arrived.
+
+2. **Demo agent on 0.0.31 (stale) — FIXED**
+   Demo agent was running `@cello-protocol/connect@0.0.31` because
+   `npm install -g` updates the global install but the service runs from
+   `/opt/cello-demo/node_modules/` (project-local). Fixed: `npm install` inside
+   `/opt/cello-demo/` now pinned to explicit version on every upgrade.
+
+**Current confirmed state (as of 0.0.36):**
+
+Diagnostic logging across 4 published versions (0.0.35, 0.0.36) established the following:
+
+- **DIAG-A did NOT fire** — `onStreamClosed()` synthetic `directory_unreachable` is NOT the
+  cause. The signaling stream stays alive through the ceremony.
+- **DIAG-B fired** — `session_assignment` IS arriving at the local client. The frame is received
+  and parsed successfully.
+- **DIAG-C1/C2 did NOT fire** — `rawAssignment` is present; `parseSessionAssignment` succeeds.
+- **DIAG-C3 fired, DIAG-C4 fired** — `receiveSessionAssignment` returns
+  `{ok: false, reason: "relay_auth_error"}`.
+
+**Root cause narrowed to:** The relay connection or relay auth handshake fails inside
+`session-manager.ts receiveSessionAssignment()`. Specifically:
+- `newStream(relayPeerId, RELAY_PROTOCOL_ID)` throws (line 319-322), OR
+- `performRelayAuth` fails/throws (line 328-336)
+
+The relay peer ID and multiaddr come from the `session_assignment` frame itself (directory-assigned).
+
+**What this means:**
+The client-side signaling and FROST ceremony are working correctly end-to-end. The remaining
+failure is in the relay handshake step. This is either:
+a) The relay is unreachable at the multiaddr in the session assignment
+b) The relay auth protocol is failing (challenge/response mismatch)
+c) The relay is healthy but the libp2p connection attempt fails for networking reasons
+
+**What needs to happen next:**
+
+1. Check relay health independently: does the relay return 200 on its health endpoint?
+2. Check what relay multiaddr is in the `session_assignment` — is it a valid public address?
+3. Add relay-specific diagnostics to `session-manager.ts` (relay peerId, multiaddr, actual error message from `newStream`).
+4. Verify the relay is running the current image and its registration with the directory is fresh.
+
+**Diagnostic versions published:**
+- 0.0.33 — ADV signaling logging (eliminated stream-close hypothesis)
+- 0.0.34 — graceful SIGTERM fix (eliminated SIGTERM race)
+- 0.0.35 — DIAG-A/B (stream-close vs frame-arrival)
+- 0.0.36 — DIAG-C1–C6 (pinned failure to receiveSessionAssignment → relay_auth_error)
+
+All diagnostic `process.stderr.write` lines remain in the codebase on main as of 0.0.36 and
+should be cleaned up once the relay issue is resolved.
