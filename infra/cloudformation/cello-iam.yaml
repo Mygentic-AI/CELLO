@@ -123,6 +123,13 @@ Resources:
                   - s3:PutObject
                 Resource:
                   - !Sub "arn:aws:s3:::cello-audit-logs-${Environment}-${AWS::Region}/*"
+              - Sid: S3RelayManifestReadWrite
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub "arn:aws:s3:::cello-relay-manifest-${Environment}-${AWS::Region}/*"
               # ECS Exec (EnableExecuteCommand: true on the service) requires these
               # ssmmessages permissions on the task role.
               - Sid: EcsExecSsmMessages

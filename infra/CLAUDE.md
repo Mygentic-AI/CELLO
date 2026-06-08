@@ -372,6 +372,40 @@ A single missing reference causes the ECS task to crash-loop, which blocks the e
 
 ---
 
+## IAM Permissions — Verify Before Assuming Code Is Broken
+
+**When a service silently fails to write to S3, KMS, Secrets Manager, or any AWS resource, check IAM before touching application code.** IAM denials are silent by default — the application throws an exception that may be swallowed, logged at the wrong level, or masked by a missing logger. The symptom looks like a code bug. It is an IAM policy gap.
+
+**The pattern that caused this rule (2026-06-08):** The directory's `reSignManifestForRelay` was silently failing with `s3:PutObject` denied on the relay manifest bucket. The application `.catch()` was present but the logger was unwired (`this.#logger` was `undefined`), so the error was completely swallowed. The manifest stayed stale for 20+ hours. Multiple code-level fixes were attempted before the IAM denial was surfaced.
+
+**Rules:**
+
+1. **When a write operation silently does nothing, check IAM first.** Run CloudTrail or check the application error log before changing application code:
+```bash
+aws cloudtrail lookup-events --region <region> \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=PutObject \
+  --query 'Events[0:5].{time:EventTime,user:Username,resource:Resources[0].ResourceName,errorCode:CloudTrailEvent}' \
+  --output json
+```
+
+2. **Every S3 bucket used by a service must have explicit `s3:PutObject`, `s3:GetObject`, and `s3:DeleteObject` grants in the task role.** Read-only access (`s3:GetObject`) is not sufficient for services that write. Check the IAM template (`cello-iam.yaml`) against every S3 operation the service performs.
+
+3. **After adding any new S3 bucket, SQS queue, KMS key, or Secrets Manager secret to a service:** immediately verify the task role has the required permissions in `cello-iam.yaml`. Do not assume broad policies cover new resources — resource ARNs are often explicitly scoped.
+
+4. **The canonical check for a running task's effective permissions:**
+```bash
+# Check what the task role can do on a specific resource
+aws iam simulate-principal-policy \
+  --policy-source-arn <task-role-arn> \
+  --action-names s3:PutObject \
+  --resource-arns arn:aws:s3:::cello-relay-manifest-dev-us-east-1/relay-manifest.json \
+  --query 'EvaluationResults[0].EvalDecision'
+```
+
+*Root cause: 2026-06-08 — directory task role had `s3:GetObject` on relay manifest bucket but lacked `s3:PutObject`. `reSignManifestForRelay` threw an AccessDenied error that was swallowed by an unwired logger, causing the manifest to stay stale and `relay_unavailable` on every session initiation.*
+
+---
+
 ## Ops-Agent Is Single-Region
 
 The operations agent (`cello-ecs-operations-agent`) runs in **us-east-1 only** (single Telegram long-polling instance). The `deploy.sh` script deploys it to all regions for IaC consistency, but eu-central-1 and ap-northeast-1 instances will have PLACEHOLDER values for `telegram-bot-token` and `ses-credentials`. This is acceptable — they exist for IaC parity, not for operation.
