@@ -566,6 +566,12 @@ export class CelloDirectoryNode {
           return;
         }
 
+        // Update the relay adapter's dial address so recordAssignment always reaches the current IP.
+        const multiaddr = req["multiaddr"] as string | undefined;
+        if (multiaddr && typeof (this.#relay as unknown as { updateMultiaddr?: unknown }).updateMultiaddr === "function") {
+          (this.#relay as unknown as { updateMultiaddr: (m: string) => void }).updateMultiaddr(multiaddr);
+        }
+
         // CELLO-M6B-006: After successful registration, re-sign manifest if healthCheckUrl changed.
         // Fire-and-forget — relay_register_ok is already sent. Manifest update failure is logged
         // but does not block the relay's operation.

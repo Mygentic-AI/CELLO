@@ -101,7 +101,7 @@ export interface NetworkRelayAdapterOptions {
 export class NetworkRelayAdapter implements RelayAdapter {
   readonly #keyProvider: KeyProvider;
   readonly #relayPeerId: string;
-  readonly #relayMultiaddrs: string[];
+  #relayMultiaddrs: string[];
   readonly #logger: Logger | undefined;
   #node: CelloNode | null = null;
 
@@ -110,6 +110,15 @@ export class NetworkRelayAdapter implements RelayAdapter {
     this.#relayPeerId = opts.relayPeerId;
     this.#relayMultiaddrs = opts.relayMultiaddrs;
     this.#logger = opts.logger;
+  }
+
+  /**
+   * Update the relay's multiaddr when the relay re-registers with the directory.
+   * Called from the relay_register handler so the adapter always dials the current IP.
+   */
+  updateMultiaddr(multiaddr: string): void {
+    this.#relayMultiaddrs = [multiaddr];
+    this.#logger?.info("relay.adapter.multiaddr.updated", { multiaddr });
   }
 
   /**

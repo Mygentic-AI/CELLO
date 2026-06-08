@@ -73,11 +73,12 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
     publicKeyHex: string;
     region: string;
     healthCheckUrl: string;
+    multiaddr: string;
     keyProvider: KeyProvider;
   }): Promise<{ ok: true; alreadyRegistered?: boolean } | { ok: false; reason: string }> {
     if (!this.#node) return { ok: false, reason: "directory_unavailable" };
 
-    const { relayId, publicKeyHex, region, healthCheckUrl, keyProvider } = params;
+    const { relayId, publicKeyHex, region, healthCheckUrl, multiaddr, keyProvider } = params;
     const timestamp = Date.now();
 
     // SI-003: sign the TBS with the relay's own private key.
@@ -90,14 +91,13 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
       return { ok: false, reason: err instanceof Error ? err.message : "sign_failed" };
     }
 
-    // CELLO-M6B-006: include health_check_url in the relay_register frame
-    // so the directory can update the manifest with the relay's current IP.
     const frame = CBOR_ENC.encode({
       type: "relay_register",
       relay_id: relayId,
       public_key_hex: publicKeyHex,
       region,
       health_check_url: healthCheckUrl,
+      multiaddr,
       timestamp,
       signature,
     }) as Uint8Array;

@@ -375,11 +375,14 @@ if (directoryAdapter) {
 
   let registered = false;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const relayPeerId = relayResult.node.getPeerId();
+    const relayMultiaddr = `${listenAddr}/p2p/${relayPeerId}`;
     const regResult = await directoryAdapter.registerWithDirectory({
       relayId,
       publicKeyHex: relayId, // relayId = hex(pubkey) by convention
       region: awsRegion,
       healthCheckUrl,
+      multiaddr: relayMultiaddr,
       keyProvider: kp,
     });
 

@@ -136,11 +136,13 @@ describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDire
 
     const healthCheckUrl = "http://127.0.0.1:4002/health";
 
+    const relayListenAddr = relayNode.listenAddresses()[0] ?? "/ip4/127.0.0.1/tcp/4001";
     const result = await adapter.registerWithDirectory({
       relayId,
       publicKeyHex: relayId,
       region: "us-east-1",
       healthCheckUrl,
+      multiaddr: `${relayListenAddr}/p2p/${relayId}`,
       keyProvider: relayKp,
     });
 
@@ -208,11 +210,11 @@ describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDire
     adapter.connect(relayNode);
 
     // First registration
-    const r1 = await adapter.registerWithDirectory({ relayId, publicKeyHex: relayId, region: "us-east-1", healthCheckUrl: "http://127.0.0.1:4000/health", keyProvider: relayKp });
+    const r1 = await adapter.registerWithDirectory({ relayId, publicKeyHex: relayId, region: "us-east-1", healthCheckUrl: "http://127.0.0.1:4000/health", multiaddr: "/ip4/127.0.0.1/tcp/4001/p2p/test", keyProvider: relayKp });
     expect(r1.ok).toBe(true);
 
     // Second registration — directory returns ok again (idempotent)
-    const r2 = await adapter.registerWithDirectory({ relayId, publicKeyHex: relayId, region: "us-east-1", healthCheckUrl: "http://127.0.0.1:4000/health", keyProvider: relayKp });
+    const r2 = await adapter.registerWithDirectory({ relayId, publicKeyHex: relayId, region: "us-east-1", healthCheckUrl: "http://127.0.0.1:4000/health", multiaddr: "/ip4/127.0.0.1/tcp/4001/p2p/test", keyProvider: relayKp });
     expect(r2.ok).toBe(true);
 
     await relayNode.stop();
@@ -256,6 +258,7 @@ describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDire
       publicKeyHex: relayId,
       region: "eu-central-1",
       healthCheckUrl: "http://10.0.2.5:4000/health",
+      multiaddr: "/ip4/10.0.2.5/tcp/4001/p2p/test",
       keyProvider: relayKp,
     });
 
@@ -654,6 +657,7 @@ describe("FEDERATION-003 DB-001: NetworkDirectoryAdapter.registerWithDirectory r
       publicKeyHex: relayId,
       region: "us-east-1",
       healthCheckUrl: "http://127.0.0.1:4000/health",
+      multiaddr: "/ip4/127.0.0.1/tcp/4001/p2p/test",
       keyProvider: relayKp,
     });
 
