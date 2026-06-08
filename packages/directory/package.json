@@ -30,7 +30,7 @@
     "cello-directory": "./dist/bin/directory.js"
   },
   "devDependencies": {
-    "@cello-protocol/client": "^0.0.22",
+    "@cello-protocol/client": "^0.0.23",
     "@cello-protocol/relay": "workspace:*",
     "@claude-flow/testing": "3.0.0-alpha.6",
     "@modelcontextprotocol/sdk": "^1.29.0",
