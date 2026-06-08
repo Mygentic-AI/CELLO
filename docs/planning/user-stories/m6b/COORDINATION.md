@@ -723,3 +723,27 @@ The fix: run `deploy.sh dev us-east-1`, which rebuilds the relay task def with `
 **Rule 4 — When a diagnosis has an unexplained gap ("why didn't this break before?"), do not proceed until that gap is resolved.** The gap is usually a sign the diagnosis is incomplete or wrong.
 
 **Post-mortem note:** The fix itself is ~20 lines across 4 files. The tests are 5-6x longer than the fix. By any measure this is a trivial change. The days lost were not due to the complexity of the solution — they were due to not having visibility into what was actually failing. The `[object Object]` error serialization bug in `NetworkRelayAdapter.#sendAndReceive` meant every investigation started without knowing the real error type. The structured logging added in the relay visibility fix (commit `4ff57a4`) was what finally surfaced enough signal to identify the stale-IP pattern. The lesson: when a problem keeps recurring without resolution, the first thing to fix is the observability, not the symptoms.
+
+---
+
+### 2026-06-08 — M6B-017 story written (client.ts structural refactor)
+
+**Story:** CELLO-M6B-017 — structural extraction of `core/client/src/client.ts` (6,198 lines) into 6 focused manager classes behind a thin facade.
+
+**Scope:** Pure structural refactor + conversion of ~15 `process.stderr.write("[SIGREAD-DEBUG]...")` calls to proper `Logger.debug()` events. No logic changes, no dead code removal, no public API changes.
+
+**Primary acceptance gate:** All existing tests pass unmodified (byte-for-byte identical test files).
+
+**Proposed layout:**
+- `client.ts` (~400 lines — facade)
+- `session-manager.ts` (~650 lines)
+- `seal-manager.ts` (~600 lines)
+- `relay-stream-manager.ts` (~600 lines)
+- `registration-manager.ts` (~360 lines)
+- `connection-manager.ts` (~870 lines)
+- `signaling-manager.ts` (~460 lines)
+- `client-context.ts` (~30 lines — shared interface)
+
+**Dependencies:** None — independent of all other M6B stories. Lives entirely in cello-client.
+
+**Deferred to follow-up story:** dead M0 peer path removal, dead per-session directory streams, unused escape hatches, init consolidation, lazy #myPubkeyHex resolution.

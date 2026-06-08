@@ -1,0 +1,355 @@
+---
+name: CELLO-M6B-017 — client.ts structural extraction into manager classes
+type: user-story
+date: 2026-06-08
+topics: [refactor, client, cello-client, code-quality, maintainability]
+status: ready
+description: >
+  Extract CelloClientImpl (6,198 lines) into focused manager classes behind a
+  thin facade. Pure structural refactor — no logic changes, no dead code removal,
+  no public API changes. Converts forensic process.stderr.write calls to proper
+  Logger events during extraction. All existing tests must pass unmodified.
+---
+
+# ─── Identity ───────────────────────────────────────────
+id: CELLO-M6B-017
+milestone: m6b
+domain: MCP Tool Surface
+actor: CLIENT
+priority: P1
+depends_on: []
+components:
+  - client
+
+# ─── Intent ─────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want my implementation split into focused manager classes behind a thin facade
+  so that implementers can reason about one domain at a time without navigating a
+  6,198-line monolith, and so that future stories (M6B-018 signaling reconnect,
+  M7 multi-agent) can modify one domain without risk of unintended side effects
+  in another.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When createClient() is called with the same parameters as before the refactor"
+    action: >
+      the client package shall return an object with the identical public CelloClient
+      interface AND the identical extended return type (escape hatches, composition root
+      setters, connection protocol methods) — same method names, same signatures, same
+      observable behavior for every call
+  - trigger: "When any test file in core/client/src/__tests__/ runs against the refactored code"
+    action: >
+      the test shall pass without any modification to the test file — the refactored
+      code is a drop-in replacement for the monolith with zero test-visible behavioral
+      changes
+  - trigger: "When the persistent signaling stream reader receives a frame from the directory"
+    action: >
+      the signaling manager shall emit a structured Logger event at debug level
+      (signaling.stream.frame.received) with frameType context field instead of writing
+      raw strings to process.stderr — all forensic observability is preserved via the
+      correct mechanism
+  - trigger: "When any manager class needs state owned by another manager"
+    action: >
+      communication shall go through a narrow typed interface (not direct field access)
+      so that each manager's internal state is encapsulated and the dependency direction
+      is explicit
+
+# ─── Acceptance Criteria ────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The refactored code is built and the full test suite is run"
+    when: "pnpm run test --pool-options.threads.maxThreads=1 executes in core/client/"
+    then: >
+      Every test in core/client/src/__tests__/ passes — zero failures, zero test file
+      modifications. The test files are byte-for-byte identical to their pre-refactor state.
+    test_type: unit
+    component_under_test: client
+    notes: >
+      This is the primary acceptance gate. The refactor is successful if and only if all
+      existing tests pass against it without modification. A test that is rewritten to
+      accommodate the refactor is a refactor failure, not a test improvement. test_type is
+      'unit' because this is a regression gate verifying behavioral equivalence, not a
+      cross-component integration test.
+
+  - id: AC-002
+    given: "The refactored code is built"
+    when: "pnpm run typecheck executes in core/client/"
+    then: "Zero type errors. No new type casts introduced beyond what existed pre-refactor."
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-003
+    given: "The refactored code is built"
+    when: "pnpm run lint executes in core/client/"
+    then: "Zero new lint errors or warnings compared to the pre-refactor baseline."
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-004
+    given: "CelloClientImpl is refactored into a facade"
+    when: "the facade's public method list is compared to the pre-refactor CelloClientImpl"
+    then: >
+      Every method that existed on CelloClientImpl before the refactor exists on the
+      facade after — same name, same parameters, same return type. The createClient()
+      factory function signature and return type are identical. The CelloClient interface
+      in types.ts is unchanged (no additions, no removals, no modifications).
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-005
+    given: "The refactored client.ts file (now the facade)"
+    when: "the file is inspected"
+    then: >
+      client.ts contains only: the CelloClientImpl class with constructor, shared
+      infrastructure fields (#node, #keyProvider, #myPubkeyHex, #logger, #persistence),
+      M0 peer-to-peer methods (send, receive, peekAll), one-line escape hatch delegations,
+      and the createClient() factory. All domain logic (session, seal, relay, registration,
+      connection, signaling) is delegated to manager classes in separate files.
+    test_type: unit
+    component_under_test: client
+    notes: >
+      Structural verification: the facade contains no business logic beyond M0 peer path
+      and delegation. Target: under 600 lines. See implementation_notes for line budgets.
+
+  - id: AC-006
+    given: "Each extracted manager class file"
+    when: "the file is inspected"
+    then: >
+      Each manager class is a single file containing a cohesive domain: SessionManager,
+      SealManager, RelayStreamManager, RegistrationManager, ConnectionManager, and
+      SignalingManager. No manager imports another manager class directly — all
+      cross-manager communication goes through interfaces.
+    test_type: unit
+    component_under_test: client
+    notes: >
+      Structural verification: each file owns one domain's state and methods. Target:
+      500-700 lines each, 900 max for ConnectionManager. See implementation_notes for
+      line budgets per file.
+
+  - id: AC-007
+    given: "The persistent signaling stream reader is extracted into SignalingManager"
+    when: "the directory sends any frame on the signaling stream"
+    then: >
+      All process.stderr.write('[SIGREAD-DEBUG]...') calls in the signaling reader are
+      replaced with this.#logger.debug() calls using structured event names:
+      signaling.stream.frame.received (with frameType field), signaling.stream.iter.error
+      (with error field), signaling.stream.decode.error (with error field),
+      signaling.stream.closed (with pendingResolverState fields). No process.stderr.write
+      calls remain in any manager class or the facade.
+    test_type: unit
+    component_under_test: client
+    notes: >
+      This is not a logic change — it replaces the logging mechanism while preserving the
+      same diagnostic information. The events use debug level so they are silent by default
+      but available when a debug logger is injected. The exact count of stderr calls may
+      vary as main branch evolves — the requirement is ALL are converted, not a specific count.
+
+  - id: AC-008
+    given: "The barrel export file (core/client/src/index.ts)"
+    when: "its exports are compared to pre-refactor"
+    then: >
+      The exact same set of symbols is exported. No new public exports are added for
+      internal manager classes. Managers are implementation details, not public API.
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-009
+    given: "A ClientContext interface is defined for shared dependencies"
+    when: "manager classes are instantiated by the facade constructor"
+    then: >
+      Each manager receives its dependencies via constructor parameters — either the
+      ClientContext object (node, keyProvider, logger, persistence, pubkey accessor) or
+      narrow typed interfaces to other managers it depends on. No manager imports another
+      manager class directly — all cross-manager communication goes through interfaces
+      passed at construction time.
+    test_type: unit
+    component_under_test: client
+    notes: >
+      This prevents circular imports and makes the dependency graph explicit. The facade
+      is the composition root that wires managers together.
+
+  - id: AC-010-version-bump
+    given: "All cello-client code changes for this story are implemented and tests pass"
+    when: "the implementer runs the version bump procedure in cello-client CLAUDE.md"
+    then: |
+      - @cello-protocol/client version is incremented in package.json
+      - @cello-protocol/connect is bumped to reflect the dependency change
+      - pnpm install is run and pnpm-lock.yaml is updated
+      - git tag v{connect-version} is pushed to origin
+      - CI publishes the new version to npm beta dist-tag
+      - `npm view @cello-protocol/connect@beta dependencies --json` shows real semver versions (never workspace:*)
+    test_type: integration
+    component_under_test: cello-client CI
+
+  - id: AC-011-trustless-cello-dependency-update
+    given: "The new @cello-protocol/connect version is live on npm beta"
+    when: "packages/directory/package.json and packages/relay/package.json in trustless-cello are updated"
+    then: |
+      - Both package.json files reference the new semver range for @cello-protocol/client
+      - pnpm install is run and pnpm-lock.yaml is updated
+      - pnpm run typecheck passes in trustless-cello
+      - Commit pushed to trustless-cello main
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ───────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The refactored code shall never expose manager class internals through the public
+      createClient() return type — managers are not importable, not constructable, and
+      not accessible from outside the client package
+    adversarial_condition: >
+      even when a consumer imports from @cello-protocol/client and attempts to access
+      internal classes by name or via the returned object's prototype chain
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: >
+      No process.stderr.write or console.log call shall exist in any implementation file
+      after the refactor — all diagnostic output goes through the injected Logger interface
+    adversarial_condition: >
+      verified by grep across all .ts files in core/client/src/ excluding __tests__/;
+      zero hits for process.stderr.write and console.log
+    test_type: unit
+    component_under_test: client
+
+# ─── Observability ─────────────────────────────────────
+observability:
+  events:
+    - name: signaling.stream.frame.received
+      level: debug
+      trigger: "When the persistent signaling reader decodes a valid frame from the directory"
+      context_fields: [frameType]
+      correlationId: false
+    - name: signaling.stream.iter.error
+      level: debug
+      trigger: "When iter.next() throws inside the signaling reader loop"
+      context_fields: [error]
+      correlationId: false
+    - name: signaling.stream.decode.error
+      level: debug
+      trigger: "When CBOR decode fails on a signaling stream frame"
+      context_fields: [error]
+      correlationId: false
+    - name: signaling.stream.closed
+      level: debug
+      trigger: "When the persistent signaling reader loop exits (stream closed or error)"
+      context_fields: [pendingSessionRequest, pendingRegister, pendingDkgReady, pendingConnectionResolvers]
+      correlationId: false
+  error_events: []
+  alarms: [] # no alarm: these are debug-level forensic events; visible only with debug logger injected
+  notes: >
+    These events replace the ~15 process.stderr.write('[SIGREAD-DEBUG]...') calls that
+    bypass the logger interface. Same diagnostic content, correct mechanism. Debug level
+    means they are silent in production unless a debug-enabled logger is injected.
+
+# ─── References ─────────────────────────────────────────
+references:
+  protocol_map: "MCP Tool Surface"
+  end_to_end_flow: "N/A — internal refactor, no protocol change"
+  discussion_logs: [] # no dedicated log — originated from M6B coordination entry (2026-06-08) and investigation brief
+
+# ─── Implementation Notes ──────────────────────────────
+implementation_notes: |
+  ## Architecture: Facade + Manager Classes
+
+  CelloClientImpl becomes a thin facade (~400 lines) that:
+  1. Owns shared infrastructure: #node, #keyProvider, #myPubkeyHex, #logger, #persistence
+  2. Owns the M0 peer-to-peer path: #peers, #receiveQueues, #arrivalLog, send(), receive(), peekAll()
+  3. Delegates all domain methods to the appropriate manager
+  4. Keeps all escape hatch methods (injectTestSession, injectDirectoryFrame, etc.) as one-line
+     delegations to the manager that owns the logic — this is what allows zero test modifications
+
+  ## Proposed File Layout
+
+  ```
+  core/client/src/
+  ├── client.ts               (~400 lines — facade + M0 peer path + factory + error helpers)
+  ├── session-manager.ts      (~650 lines — SESSION-002, MSG-004 send/receive, SESSION-007)
+  ├── seal-manager.ts         (~600 lines — SESSION-003/005, FROST ceremony, seal lifecycle)
+  ├── relay-stream-manager.ts (~600 lines — relay reader, reconnect, cross-check, content handler)
+  ├── registration-manager.ts (~360 lines — REG-001, ML-DSA keygen, DKG)
+  ├── connection-manager.ts   (~870 lines — CONNREQ-002/003, A-side + B-side)
+  ├── signaling-manager.ts    (~460 lines — ADAPTER-003, persistent stream, frame router)
+  ├── client-context.ts       (~30 lines — shared dependency interface)
+  └── types.ts                (UNCHANGED)
+  ```
+
+  ## ClientContext Interface
+
+  ```typescript
+  export interface ClientContext {
+    readonly node: CelloNode;
+    readonly keyProvider: KeyProvider;
+    readonly logger: Logger;
+    readonly persistence: ClientStatePersistence | null;
+    getMyPubkeyHex(): string | null;
+    setMyPubkeyHex(hex: string): void;
+  }
+  ```
+
+  ## Cross-Manager Communication Pattern
+
+  Managers do NOT import each other's classes. Dependencies flow through interfaces:
+
+  - SealManager receives a SessionStateProvider interface (getSession, setSessionStatus,
+    enqueueSessionSealedEvent) — implemented by SessionManager
+  - RelayStreamManager receives a MessageEnqueuer interface (enqueueVerifiedMessage,
+    wakeReceiveWaiters) — implemented by SessionManager
+  - SignalingManager receives a FrameDispatcher interface (routeSessionAssignment,
+    routeSealFrame, routeRegistrationFrame, routeConnectionFrame) — implemented by the facade
+
+  ## Signaling Reader Extraction
+
+  The #runPersistentSignalingReader method is the central frame router (~350 lines). After
+  extraction into SignalingManager, the frame dispatch uses the FrameDispatcher interface:
+
+  ```typescript
+  interface FrameDispatcher {
+    routeSessionAssignment(frame: Record<string, unknown>): void;
+    routeSessionRequestResponse(frame: Record<string, unknown>): void;
+    routeSealFrame(sessionIdHex: string, frame: Record<string, unknown>): void;
+    routeRegistrationFrame(frame: Record<string, unknown>): void;
+    routeConnectionFrame(frame: Record<string, unknown>): void;
+    routeConnectionRequestInbound(frame: Record<string, unknown>): void;
+    routeCeremonyRequest(stream: Stream, frame: Record<string, unknown>): void;
+  }
+  ```
+
+  The facade implements FrameDispatcher and calls into the appropriate manager.
+
+  ## Escape Hatch Preservation Strategy
+
+  Every escape hatch method stays on CelloClientImpl (the facade) as a one-line delegation:
+
+  ```typescript
+  injectTestSession(...args) { this.#sessionManager.injectTestSession(...args); }
+  injectDirectoryFrame(...args) { this.#sealManager.injectDirectoryFrame(...args); }
+  injectLeafDeliver(...args) { this.#relayStreamManager.injectLeafDeliver(...args); }
+  injectRelayDisconnect(...args) { this.#relayStreamManager.injectRelayDisconnect(...args); }
+  _injectPendingConnectionRequest(...args) { this.#connectionManager._injectPendingConnectionRequest(...args); }
+  _injectConnectionFrame(...args) { this.#connectionManager._injectConnectionFrame(...args); }
+  ```
+
+  Tests call these on the facade via `createClient(...) as unknown as TestClient`. The cast
+  resolves because the methods exist on the facade. The delegation is transparent.
+
+  ## Vitest Memory Constraint
+
+  ONE vitest worker only. Always:
+  ```
+  pnpm run test --pool-options.threads.maxThreads=1
+  ```
+  Each worker needs ~4.5GB. Docker is 8GB. Never run with more than 1 worker.
+
+  ## What This Story Does NOT Do (deferred to follow-up)
+
+  - Remove dead M0 peer-to-peer path (send/receive/peekAll) — needs verification of usage
+  - Remove dead per-session directory streams (#directoryStreams) — needs confirmation
+  - Remove unused escape hatches (_injectPendingConnectionRequest, _injectConnectionFrame)
+  - Consolidate the two-phase init pattern (setDirectoryEndpoint/setPersistence/setThresholdSigner)
+  - Resolve #myPubkeyHex once at init instead of lazy-resolving in 4 places
+  - Remove dead forensic debug writes (they are CONVERTED to Logger events, not removed)

@@ -104,6 +104,7 @@ M6B fixes all three patterns systematically.
 | M6B-014 | NAT gateway + remove interface endpoints (sovereign node networking) | P0 | — |
 | M6B-015 | Rename operations-agent → portal-backend (all repos, IaC, docs) | P1 | M6B-016 deployed |
 | M6B-016 | Registration data integrity (email hash, handleExistingUser, channel_identities) | P0 | — |
+| M6B-017 | client.ts structural extraction into manager classes | P1 | — |
 
 ---
 
