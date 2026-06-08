@@ -12,7 +12,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 ## Environments
 
 ### dev — us-east-1
-*Last deployed: 2026-06-07
+*Last deployed: 2026-06-08
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
