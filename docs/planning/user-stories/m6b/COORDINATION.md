@@ -726,6 +726,47 @@ The fix: run `deploy.sh dev us-east-1`, which rebuilds the relay task def with `
 
 ---
 
+### 2026-06-08 — M6B-017 COMPLETE — client.ts structural refactor shipped
+
+**Story:** CELLO-M6B-017 — structural extraction of `core/client/src/client.ts` (6,198 lines) into 6 focused manager classes behind a thin facade.
+
+**Result:** Merged to `cello-client` main. `@cello-protocol/connect@0.0.32` published to npm and promoted to `latest`. `trustless-cello/packages/directory/package.json` updated to `^0.0.22`.
+
+**Final file layout (all in `core/client/src/`):**
+
+| File | Lines |
+|------|-------|
+| `client.ts` (facade) | 594 |
+| `session-manager.ts` | 730 |
+| `seal-manager.ts` | 957 |
+| `relay-stream-manager.ts` | 986 |
+| `registration-manager.ts` | 302 |
+| `connection-manager.ts` | 882 |
+| `signaling-manager.ts` | 667 |
+| `client-wiring.ts` | 398 |
+| `client-startup.ts` | 400 |
+| `connection-inbound-handler.ts` | 376 |
+| `frame-dispatch.ts` | 123 |
+| `session-assignment-parser.ts` | 140 |
+
+**Also in this release:** Diagnostic warn-level logging added for three `directory_unreachable` failure paths (ADV-002: stream closes during in-flight session request; ADV-003: five silent failure paths in `receiveSessionAssignment`; ADV-005: concurrent `initiateSession` overwrites single pending-slot resolver). All `process.stderr.write` calls converted to structured `Logger` events. SI-002 grep now returns zero hits across all `core/client/src/` files.
+
+**Zero test file modifications.** All 319 tests pass.
+
+**Follow-up needed before M6B closes:**
+
+`mcp-server.ts` is the next largest file at 1,674 lines. It is a single function (`createMcpSessionServer`) registering 22 MCP tools. It should be split by domain:
+- `mcp-session-tools.ts` (~350 lines) — `cello_initiate_session`, `cello_await_session`, `cello_send`, `cello_receive_session`, `cello_receive`, `cello_close_session`, `cello_list_sessions`
+- `mcp-identity-tools.ts` (~250 lines) — `cello_register`, `cello_status`, `cello_setup_guidance`
+- `mcp-connection-tools.ts` (~400 lines) — all 8 connection/policy tools
+- `mcp-receipt-tools.ts` (~200 lines) — `cello_get_sealed_receipt`, `cello_get_inclusion_proof`, `cello_backup`, `cello_restore`
+- `mcp-helpers.ts` — shared `jsonText`, `toHex`, `sleep` helpers
+- `mcp-server.ts` becomes pure wiring (~100 lines)
+
+This is lower risk than the `client.ts` refactor — no private state, no escape hatches, just tool handler functions that take `client` as a parameter. No new story is required; a coder agent with a read-only `__tests__/` constraint is sufficient.
+
+---
+
 ### 2026-06-08 — M6B-017 story written (client.ts structural refactor)
 
 **Story:** CELLO-M6B-017 — structural extraction of `core/client/src/client.ts` (6,198 lines) into 6 focused manager classes behind a thin facade.
