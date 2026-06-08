@@ -110,8 +110,8 @@ importers:
         version: 8.18.0
     devDependencies:
       '@cello-protocol/client':
-        specifier: ^0.0.20
-        version: 0.0.20
+        specifier: ^0.0.22
+        version: 0.0.22
       '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
@@ -480,6 +480,10 @@ packages:
 
   '@cello-protocol/client@0.0.20':
     resolution: {integrity: sha512-Q40Zyl4zbSV+g943B7vIEb9gzSdyR8GqEQKKdoW9iV/gaULv1w2uhJuali4SzAV5ZrwZvrh6IlWOj5SvVOI/rg==}
+    engines: {node: '>=24'}
+
+  '@cello-protocol/client@0.0.22':
+    resolution: {integrity: sha512-i80KjmPVkISuQkigxJqQ3Lb2FoI0URi1lLM6TI0OWs06Y9tIukqrUMi4LdHkxqKHr9ZhlicI0vg/vpT0qeb+qA==}
     engines: {node: '>=24'}
 
   '@cello-protocol/connect@0.0.30':
@@ -3966,6 +3970,27 @@ snapshots:
     optional: true
 
   '@cello-protocol/client@0.0.20':
+    dependencies:
+      '@aws-sdk/client-s3': 3.1051.0
+      '@cello-protocol/crypto': 0.0.7
+      '@cello-protocol/interfaces': 0.0.3
+      '@cello-protocol/protocol-types': 0.0.3
+      '@cello-protocol/transport': 0.0.4
+      '@libp2p/interface': 3.2.2
+      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.2)
+      '@noble/curves': 2.2.0
+      '@signalapp/sqlcipher': 3.3.5
+      cbor-x: 1.6.4
+      it-length-prefixed: 10.0.1
+      it-pipe: 3.0.1
+      zod: 4.4.2
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+
+  '@cello-protocol/client@0.0.22':
     dependencies:
       '@aws-sdk/client-s3': 3.1051.0
       '@cello-protocol/crypto': 0.0.7
