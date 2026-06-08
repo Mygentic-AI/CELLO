@@ -272,6 +272,25 @@ Skipping step 3 means the new pipeline will never be triggered by GitHub pushes.
 
 **The `deploy.sh` Step 2b guard preserves the current SSM value across CFN updates** (reads before, restores after). This handles the normal case. The template default only matters on first CREATE or after parameter deletion.
 
+**CI/CD pipeline ordering hazard — migration version mismatch (observed 2026-06-07):**
+
+The directory pipeline and the ops-agent pipeline run independently. Flyway runs inside the directory ECS task at startup and bumps the database version automatically. The ops-agent pipeline only swaps the Docker image — it does not update SSM. This creates a timing window:
+
+1. Directory pipeline runs → new directory task starts → Flyway applies V{N} → database is now at V{N}
+2. Ops-agent pipeline runs → new ops-agent task starts → reads SSM → SSM still says V{N-1} → health check fails → crash loop → ECS circuit breaker fires → pipeline fails
+
+The pipeline failure is a false alarm — the service recovers once SSM is updated. But it fires on every migration deploy.
+
+**Required manual step after any migration deploy:** Update SSM immediately after the directory pipeline completes:
+```bash
+aws ssm put-parameter \
+  --name /cello/dev/ops-agent/expected-migration-version \
+  --value "<N>" --overwrite --region us-east-1
+```
+ECS will restart the ops-agent task and pick up the new value. No code deploy needed.
+
+**Root cause:** `deploy.sh` sets this SSM value automatically from migration files, but the CI/CD pipeline never calls `deploy.sh` — it only swaps images. This is the same class of problem as `RELAY_MANIFEST_SIGNER_PUBKEY` (stage-1 baked values) — both are consequences of the conscious decision that pipelines do not run `deploy.sh`.
+
 ---
 
 ## ECS Task Definition External References
