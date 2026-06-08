@@ -668,3 +668,26 @@ Written and reviewed. Story only — not yet implemented. Depends on M6B-016 bei
 **Monitoring:** Cron agent running every 4 min. Will fix obvious failures; will stop and leave non-obvious failures for morning.
 
 **Next action after pipelines complete:** Implement M6B-015 (rename operations-agent → portal-backend). Do not start until both pipelines show Succeeded and staging bot re-registration is confirmed healthy.
+
+---
+
+### 2026-06-08 — Root cause of relay_unavailable identified and fixed
+
+**Root cause confirmed:** `NetworkRelayAdapter` used a static `CELLO_RELAY_MULTIADDR` env var baked into the ECS task definition at deploy time. When the relay task was replaced and received a new private IP from ECS Fargate, the directory's idle libp2p connection to the relay eventually expired. On re-dial, the adapter went to the stale IP — nothing there — producing `[object Object]` (non-Error thrown by libp2p) and `relay_unavailable` on every `cello_initiate_session` call. The ALB health check passed throughout because it used the manifest URL (current IP) via a completely separate code path.
+
+**This has been the recurring failure for the entire M6/M6B period.** Not a protocol handler crash, not a race condition, not a network routing issue — a stale IP in a static env var.
+
+**Fix — 2 commits, `a60ac4e` and `bcc491f`:**
+- Relay now sends a `multiaddr` field in the `relay_register` frame (explicit, not parsed from health_check_url)
+- Directory's `relay_register` handler calls `NetworkRelayAdapter.updateMultiaddr()` on successful registration
+- `updateMultiaddr()` updates both `#relayMultiaddrs` (dial target) and `#relayPeerId` (extracted from `/p2p/<id>` suffix)
+- From this point forward: every time the relay ECS task is replaced, it re-registers with the directory at startup, and the directory adapter immediately learns the new IP. Self-healing.
+
+**Regression tests added:**
+- `federation-003.test.ts` — `relay_register` frame includes `multiaddr` field
+- `network-relay-adapter.test.ts` — `recordAssignment` succeeds after `updateMultiaddr` replaces a stale relay address (exact failure scenario)
+- `directory-node.test.ts` — directory calls `updateMultiaddr` on adapter when `relay_register` arrives
+
+**Still needed — immediate fix to unblock staging:** Force-replace the directory ECS task so it re-dials the relay at the current IP (`10.0.98.177`). The fix above requires a new deployment to take effect. Until then, the directory still has the stale `10.0.85.235`.
+
+**Next action:** Push commits `a60ac4e` and `bcc491f` to origin → pipeline deploys → relay re-registers → `updateMultiaddr` fires → staging unblocked.
