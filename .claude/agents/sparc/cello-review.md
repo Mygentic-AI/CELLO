@@ -82,6 +82,15 @@ notes: >
 
 If the Architecture phase reasoning is missing or incomplete, that is **[blocking]** for M5+ schema stories.
 
+### Story Review Step 3b — Registration and address propagation completeness
+
+If the story changes how a service registers, announces, or publishes its address:
+
+- [ ] **Consumers enumerated.** Does the story (in its `behavior`, `notes`, or AC preconditions) enumerate every component that needs to reach the service? For a relay registration story, this means at minimum: (a) clients via the S3 manifest, and (b) any directory-side adapter that dials the relay directly. If only the presenting failure path is enumerated, that is **[blocking]**.
+- [ ] **Each consumer has its own AC.** For every enumerated consumer, is there an AC that verifies it can reach the service after an address change? An AC that only tests one consumer while others exist is **[blocking]**.
+- [ ] **Close gate covers each consumer independently.** Does the milestone close gate (or story close gate) verify each consumer's path? A gate that only checks "session initiation works" may be passing via a consumer the story did not fix. Each path must be explicitly named in the gate.
+- [ ] **Registration fields state intent explicitly.** Does any new registration/announcement field reuse an existing field as a carrier for unrelated data (e.g. parsing an IP out of a health check URL)? If yes: **[blocking]**. Each piece of information must have its own field with a name that states its intent. *Rationale: M6B-006 fixed the S3 manifest path, never enumerated `NetworkRelayAdapter` as a second consumer, and the close gate passed. The adapter path broke on every ECS task replacement for weeks.*
+
 ### Story Review Step 4 — Transport-path observables for integration/e2e ACs
 
 For every AC with `test_type: integration` or `test_type: e2e` that describes a multi-party protocol:
@@ -275,6 +284,8 @@ Assumptions to look for:
 For each assumption found: locate where CLAUDE.md or the story itself explicitly authorizes it. If you cannot find authorization, that is a **[blocking]** finding — not medium, not low. An unauthorized assumption is a violation of the system's design intent regardless of whether tests pass and regardless of whether any AC mentions it.
 
 **The key question:** *"If this implementation were deployed in a brand-new region on a different cloud provider with no manual steps, would it work correctly?"* If the answer is no — and CLAUDE.md does not explicitly authorize the constraint that causes it to fail — that is blocking.
+
+**Registration and address propagation check:** If the story changes how a service registers or publishes its address, verify the implementation updates **every consumer** of that address — not just the one named in the presenting failure. Grep the codebase for all dial/connect calls that reference the service. For each consumer found: is it updated by this implementation, and is it covered by a test? A consumer that is reachable from the changed code path but has no corresponding test is a **[blocking]** finding. *Rationale: M6B-006 — `NetworkRelayAdapter.#relayMultiaddrs` was a second consumer of the relay address, was never updated by the story, had no AC, and the reviewer had no prompt to look for it.*
 
 ---
 

@@ -88,6 +88,8 @@ Write pseudocode in code comments for every non-trivial function before implemen
 
 Define or confirm TypeScript interfaces before writing implementation. Interfaces belong in `packages/interfaces/` — do not define them inline in an implementation package. Check whether the interface already exists before creating a new one.
 
+**Registration and address propagation stories:** If this story changes how a service registers, announces, or publishes its address (relay registration, manifest updates, any `relay_register` / `registerWithDirectory` flow), enumerate **every component that needs to reach that service** before writing any tests. For each consumer you identify: confirm there is an AC that covers it. If a consumer exists in the codebase but has no AC, flag it in your Step 7 report under "Consumer gap found" — do not silently skip it. *Rationale: M6B-006 fixed relay address propagation for clients (S3 manifest path) but never checked `NetworkRelayAdapter` in the directory — a second consumer left pointing at a stale IP. No AC covered it, no reviewer caught it, and it broke on every ECS task replacement.*
+
 **M5+ database schema stories:** If this story adds or modifies database tables, reason through **all operations** the table will support during this phase — not just what the immediate ACs require. Ask:
 - What operations will this table support? (Not just what this story needs)
 - What uniqueness constraints prevent conflict scenarios?

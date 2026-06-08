@@ -223,6 +223,37 @@ If the story persists any domain object — via JSON, a database adapter, or any
 
 ---
 
+## Registration and Address Propagation Stories
+
+If the story changes how a service **registers, announces, or publishes its address** — relay registration, directory re-sign on manifest change, any `relay_register` / `registerWithDirectory` / health-check update flow — apply these rules.
+
+**The M6B-006 failure mode:** M6B-006 fixed relay address propagation for the S3 manifest path (clients discovering the relay). It did not enumerate every consumer of the relay's address. `NetworkRelayAdapter` in the directory — a second consumer — was left pointing at a static env var. The close gate only verified the S3/manifest path. The adapter path broke every time ECS replaced the relay task. This pattern recurs when a story authors the mechanism without enumerating all consumers first.
+
+### Rule: enumerate consumers before writing ACs
+
+During the **Before writing any story** phase, before writing a single AC, answer this question:
+
+> **Every component that needs to reach [service X] — what are all of them?**
+
+List every consumer. For the relay, the answer includes: (a) clients via S3 manifest, (b) `NetworkRelayAdapter` inside the directory. Both consumers must appear in the ACs. A story that fixes address propagation for one consumer while leaving another consumer pointing at stale data is incomplete by definition.
+
+**For each enumerated consumer, the story must include:**
+1. An AC verifying that consumer can reach the service after an address change
+2. A close-gate verification that specifically exercises that consumer's path — not a generic "service is reachable" check
+
+### Rule: API fields state intent explicitly
+
+When adding a field to a registration or announcement message, give it a name that states exactly what it is. Do not reuse an existing field as a carrier for unrelated data. If the relay's current address needs to be known by the directory, add a `multiaddr` field — do not parse it out of `healthCheckUrl`. **Fields are free. Clarity is load-bearing in AI-coded systems: future coders (and future AI agents) read field names as the primary signal of intent.**
+
+### Checklist for registration/address-propagation stories
+
+- [ ] Every component that reads or dials the service's address is enumerated in the story notes or behavior section
+- [ ] Each enumerated consumer has its own AC verifying it can reach the service after an address change
+- [ ] The close gate verifies each consumer's path independently — not just the most recently broken one
+- [ ] Every field in the registration/announcement message names its intent explicitly — no implicit data buried in other fields
+
+---
+
 ## Observability ACs (mandatory from M4)
 
 Every story that touches M4+ code must include explicit observability acceptance criteria. Observability is not an implementation detail — it is a first-class AC like any other.
@@ -335,6 +366,7 @@ For each story, run through the Definition of Ready checklist from `user-story-f
 - [ ] **(M4+)** Async/multi-process flows assert `correlationId` threading through all events in the flow
 - [ ] **(M4+)** Every error path has a named error event with sufficient diagnostic context. **Each distinct failure cause must produce a distinct error code or event name** — never map multiple causes to the same error. A catch block that returns `directory_below_threshold` for timeout, exhausted, AND unavailable is a single undifferentiated error: the operator cannot act on it. *Rationale: M6B-002 — three FROST failure modes all surfaced as `directory_below_threshold`, making the error useless for diagnosis.*
 - [ ] **(M4+) Lateral catch audit AC required.** If this story touches any package that contains catch blocks with hardcoded reason strings, the story must include an explicit AC requiring the implementer to scan ALL catch blocks in ALL files in that package — not only the files the story changes — and fix any that silently swallow exceptions. The AC must read: "The implementer scans every catch block in `packages/{name}/src/` and either fixes or reports any pre-existing catch that returns a hardcoded reason string without logging the actual exception message." This AC makes the lateral audit mandatory and visible to the reviewer. *Rationale: M6B-002 fixed FROST paths in `directory-node.ts` but a silent swallowing catch in `network-relay-adapter.ts` — same package, untouched by the story — masked the real relay failure reason for months. Neither the story, the coder, nor the reviewer was required to look beyond the changed files.*
+- [ ] **If the story changes how a service registers, announces, or publishes its address:** every component that needs to reach that service is enumerated before writing ACs, each enumerated consumer has its own AC, and the close gate verifies each consumer's path independently. No consumer may be left pointing at stale data because the story only addressed the presenting failure path. *Rationale: M6B-006 fixed relay address propagation for the S3/manifest path but never enumerated `NetworkRelayAdapter` as a second consumer. The close gate passed. The adapter path broke on every ECS task replacement for weeks.*
 - [ ] **If the story introduces any component that holds in-memory state derived from a database** (connection requests, session participants, relay pool), the story must include an AC that verifies that state is correctly reconstructed after a process restart. Loading state once at startup with no refresh path is also a gap: if the data can change externally, an AC must specify how and when the in-memory view is refreshed. *Rationale: M6B-010 — directory lost all in-flight connection state on ECS task replacement. M6B-008 — relay manifest loaded once at startup, never refreshed, went stale after redeploys.*
 - [ ] **If the story introduces any unbounded resource** — database connection pool, in-memory map that grows with active sessions, stream concurrency, queue depth — the story must specify the cap and include an AC that verifies the system degrades gracefully (or rejects new work cleanly) when the cap is reached. An unbounded resource is a latent OOM or connection exhaustion. *Rationale: M6B-009 — default pg pool of 10 silently queued under load; relay had no stream cap.*
 - [ ] **(M4+)** New failure modes introduced by this story have a corresponding alarm threshold AC
