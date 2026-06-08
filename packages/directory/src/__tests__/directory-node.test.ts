@@ -26,6 +26,7 @@ import {
 import { createHash, randomBytes } from "node:crypto";
 import { Encoder } from "cbor-x";
 import * as lp from "it-length-prefixed";
+import { buildRelayRegistrationTbs } from "@cello-protocol/crypto";
 import {
   generateKeypair,
   buildMerkleTree,
@@ -1337,6 +1338,79 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     }
   });
 
+});
+
+// ─── Regression: relay_register with multiaddr updates NetworkRelayAdapter ────
+//
+// Before this fix, NetworkRelayAdapter used a static CELLO_RELAY_MULTIADDR env var.
+// The directory now calls updateMultiaddr() on the adapter when relay_register arrives,
+// so recordAssignment always dials the relay's current IP.
+
+describe("Regression: relay_register multiaddr updates relay adapter dial target", () => {
+  let scope = createTestScope();
+  beforeEach(() => { scope = createTestScope(); });
+  afterEach(() => scope.run(async () => {}));
+
+  it("directory calls updateMultiaddr on relay adapter when relay_register includes multiaddr", async () => {
+    const dirKp = generateKeypair();
+    const dirPubkey = await dirKp.getPublicKey();
+    const relayKp = generateKeypair();
+    const relayPubkey = await relayKp.getPublicKey();
+    const relayId = Buffer.from(relayPubkey).toString("hex");
+
+    // Spy relay adapter — records updateMultiaddr calls
+    let updatedMultiaddr: string | null = null;
+    const spyRelay: RelayAdapter & { updateMultiaddr(m: string): void } = {
+      recordAssignment() { return { ok: true as const }; },
+      discardSession() {},
+      submitForSeal() { return { ok: false as const, reason: "not_used" }; },
+      confirmSeal() {},
+      rejectSeal() {},
+      updateMultiaddr(m: string) { updatedMultiaddr = m; },
+    };
+
+    const dirResult = await createDirectoryNode({
+      keyProvider: dirKp,
+      relay: spyRelay,
+      relayEndpoint: { peer_id: "placeholder", multiaddrs: [] },
+    });
+    scope.addCleanup(dirResult.stop);
+
+    // Open a relay admin stream and send relay_register with a multiaddr
+    const callerNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await callerNode.start();
+    scope.addCleanup(() => callerNode.stop());
+
+    await callerNode.dial(dirResult.node.listenAddresses()[0]!);
+    const stream = await callerNode.newStream(dirResult.node.getPeerId(), "/cello/directory-relay/1.0.0");
+
+    const timestamp = Date.now();
+    const tbs = buildRelayRegistrationTbs(relayId, relayId, timestamp);
+    const signature = await relayKp.sign(tbs);
+
+    const expectedMultiaddr = "/ip4/10.0.99.1/tcp/4001/p2p/" + relayId;
+    const frame = CBOR_ENC.encode({
+      type: "relay_register",
+      relay_id: relayId,
+      public_key_hex: relayId,
+      region: "us-east-1",
+      health_check_url: "http://10.0.99.1:4000/health",
+      multiaddr: expectedMultiaddr,
+      timestamp,
+      signature,
+    }) as Uint8Array;
+
+    stream.send(lp.encode.single(frame));
+    await stream.close();
+
+    // Drain the response
+    for await (const _ of lp.decode(stream)) { break; }
+
+    // Give the handler a moment to complete
+    await new Promise<void>((r) => setTimeout(r, 100));
+
+    expect(updatedMultiaddr).toBe(expectedMultiaddr);
+  }, 15_000);
 });
 
 // ─── buildValidSealData helper ────────────────────────────────────────────────

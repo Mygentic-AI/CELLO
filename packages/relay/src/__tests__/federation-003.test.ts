@@ -136,13 +136,14 @@ describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDire
 
     const healthCheckUrl = "http://127.0.0.1:4002/health";
 
-    const relayListenAddr = relayNode.listenAddresses()[0] ?? "/ip4/127.0.0.1/tcp/4001";
+    // listenAddresses() already includes /p2p/<peerId>
+    const relayMultiaddr = String(relayNode.listenAddresses()[0] ?? "/ip4/127.0.0.1/tcp/4001");
     const result = await adapter.registerWithDirectory({
       relayId,
       publicKeyHex: relayId,
       region: "us-east-1",
       healthCheckUrl,
-      multiaddr: `${relayListenAddr}/p2p/${relayId}`,
+      multiaddr: relayMultiaddr,
       keyProvider: relayKp,
     });
 
@@ -153,6 +154,8 @@ describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDire
     expect(receivedFrame?.["region"]).toBe("us-east-1");
     // CELLO-M6B-006 AC-002: frame includes health_check_url
     expect(receivedFrame?.["health_check_url"]).toBe(healthCheckUrl);
+    // relay_register must include multiaddr so directory can update NetworkRelayAdapter dial target
+    expect(receivedFrame?.["multiaddr"]).toBe(relayMultiaddr);
 
     // AC-002: relay.registered must be logged at INFO with { relayId, region }
     const registeredEvent = spyLogger.infoEvents.find(([ev]) => ev === "relay.registered");

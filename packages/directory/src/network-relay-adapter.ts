@@ -100,7 +100,7 @@ export interface NetworkRelayAdapterOptions {
  */
 export class NetworkRelayAdapter implements RelayAdapter {
   readonly #keyProvider: KeyProvider;
-  readonly #relayPeerId: string;
+  #relayPeerId: string;
   #relayMultiaddrs: string[];
   readonly #logger: Logger | undefined;
   #node: CelloNode | null = null;
@@ -113,11 +113,18 @@ export class NetworkRelayAdapter implements RelayAdapter {
   }
 
   /**
-   * Update the relay's multiaddr when the relay re-registers with the directory.
+   * Update the relay's multiaddr (and peer ID) when the relay re-registers.
    * Called from the relay_register handler so the adapter always dials the current IP.
+   * The multiaddr must include /p2p/<peerId> — the peer ID is extracted from it.
    */
   updateMultiaddr(multiaddr: string): void {
     this.#relayMultiaddrs = [multiaddr];
+    // Extract peer ID from the multiaddr (/p2p/<peerId> suffix)
+    const parts = multiaddr.split("/");
+    const p2pIndex = parts.findIndex((p) => p === "p2p");
+    if (p2pIndex !== -1 && parts[p2pIndex + 1]) {
+      this.#relayPeerId = parts[p2pIndex + 1]!;
+    }
     this.#logger?.info("relay.adapter.multiaddr.updated", { multiaddr });
   }
 

@@ -451,5 +451,84 @@ describe("Regression: recordAssignment relay rejection exposes relay response ty
   }, 20_000);
 });
 
+// ─── updateMultiaddr: regression tests for stale-IP fix ──────────────────────
+//
+// Before this fix, NetworkRelayAdapter used a static CELLO_RELAY_MULTIADDR env var.
+// When the relay task was replaced and got a new private IP, the idle libp2p connection
+// expired and re-dial went to the stale IP → relay_unavailable on every session request.
+// The fix: relay sends multiaddr in relay_register; directory calls updateMultiaddr().
+
+describe("updateMultiaddr: adapter dials updated address after relay IP changes", () => {
+  let scope = createTestScope();
+  beforeEach(() => { scope = createTestScope(); });
+  afterEach(() => scope.run(async () => {}));
+
+  it("recordAssignment succeeds after updateMultiaddr replaces a stale address", async () => {
+    const dirKp = generateKeypair();
+    const dirPubkey = await dirKp.getPublicKey();
+
+    // Start first relay (represents the "old" relay at a now-dead IP)
+    const { node: relayLibp2pA, stop: stopRelayA } = await createRelayNode({ directoryPubkey: dirPubkey });
+    scope.addCleanup(stopRelayA);
+    const relayPeerIdA = relayLibp2pA.getPeerId();
+    const relayMultiaddrsA = relayLibp2pA.listenAddresses();
+
+    // Start adapter pointed at relay A
+    const networkAdapter = new NetworkRelayAdapter({
+      keyProvider: dirKp,
+      relayPeerId: relayPeerIdA,
+      relayMultiaddrs: relayMultiaddrsA,
+    });
+    const dirResult = await createDirectoryNode({
+      keyProvider: dirKp,
+      relay: networkAdapter,
+      relayEndpoint: { peer_id: relayPeerIdA, multiaddrs: relayMultiaddrsA },
+    });
+    scope.addCleanup(dirResult.stop);
+    await networkAdapter.connect(dirResult.node);
+
+    // Stop relay A — simulates the ECS task being replaced
+    await stopRelayA();
+
+    // Start relay B (new ECS task, different IP = different listen address)
+    const { relay: relayNodeB, node: relayLibp2pB, stop: stopRelayB } = await createRelayNode({ directoryPubkey: dirPubkey });
+    scope.addCleanup(stopRelayB);
+    const relayPeerIdB = relayLibp2pB.getPeerId();
+    const relayMultiaddrsB = relayLibp2pB.listenAddresses();
+
+    // Simulate what relay_register handler does: update the adapter with the new multiaddr.
+    // listenAddresses() already includes /p2p/<peerId> — use it directly.
+    const newMultiaddr = String(relayMultiaddrsB[0]);
+    networkAdapter.updateMultiaddr(newMultiaddr);
+
+    // recordAssignment must now succeed against relay B
+    const clientKpA = generateKeypair();
+    const clientKpB = generateKeypair();
+    const pubA = await clientKpA.getPublicKey();
+    const pubB = await clientKpB.getPublicKey();
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sessionTimestamp = Date.now();
+    const tbs = CBOR_ENC.encode([
+      sessionId, pubA, pubB,
+      sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
+    ]) as Uint8Array;
+    const directory_signature = await dirKp.sign(tbs);
+
+    const result = await networkAdapter.recordAssignment({
+      session_id: sessionId,
+      participant_a: pubA,
+      participant_b: pubB,
+      session_timestamp: sessionTimestamp,
+      directory_signature,
+    });
+
+    expect(result.ok).toBe(true);
+
+    // Confirm relay B actually stored the session
+    const sealCheck = relayNodeB.submitForSeal(sessionId);
+    expect(sealCheck.ok).toBe(true);
+  }, 20_000);
+});
+
 // AC-007 (full end-to-end session flow) lives in:
 // packages/e2e-tests/src/__tests__/node-004-e2e.test.ts
