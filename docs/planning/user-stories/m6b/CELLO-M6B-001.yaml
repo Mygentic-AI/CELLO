@@ -180,12 +180,14 @@ observability:
     - name: client.startup.prior.process.killed
       level: info
       trigger: "When a prior cello-mcp process is found and killed on startup"
-      context_fields: [priorPid, signal]
+      context_fields: [priorPid, signal, "reaped?"]
       correlationId: false
       notes: >
         signal can be "SIGTERM" (normal exit) or "SIGKILL" (escalation after 5s
         timeout). The SIGKILL escalation case should be logged at warn level to
-        distinguish a force-kill from a clean exit.
+        distinguish a force-kill from a clean exit. reaped (boolean, SIGKILL path
+        only) is true when the kernel confirmed the process exited within 500ms of
+        SIGKILL, false when the 500ms poll timed out.
     - name: client.startup.lock.acquired
       level: info
       trigger: "When the current process successfully writes its PID to the lock file"
