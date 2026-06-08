@@ -692,4 +692,34 @@ Written and reviewed. Story only — not yet implemented. Depends on M6B-016 bei
 
 **Next action:** Push commits `a60ac4e` and `bcc491f` to origin → pipeline deploys → relay re-registers → `updateMultiaddr` fires → staging unblocked.
 
+---
+
+## 2026-06-08 — Lesson Learned: Relay crash-loop from hardcoded directory IP
+
+### Symptom
+After the deploy at ~03:30 UTC, the relay crash-looped continuously. Every task started, dialed the directory, got `relay.registration.failed: directory_unavailable` on every attempt (1–10), hit the retry limit, and ECS restarted it. The directory was healthy and serving client traffic normally. The loop ran for ~90 minutes until diagnosed and fixed.
+
+### What we thought it was
+Initial diagnosis (from another agent's analysis, accepted without independent verification): the directory was bound to `127.0.0.1` only, not `0.0.0.0`. This was wrong — the directory logs show it bound on both `127.0.0.1` and its private VPC IP (`10.0.58.145`) on port 4000, and was fully reachable.
+
+### What it actually was
+The relay ECS task definition (revision 55, created 2026-06-06 21:09 UTC by IAM user `Andre_Pemmelaar`) had `CELLO_DIRECTORY_MULTIADDR` set to a hardcoded private IP: `/ip4/10.0.10.179/tcp/4000/p2p/12D3KooW...`. That IP belonged to a previous directory container. When the directory ECS task was replaced during the 03:30 deploy, it got a new IP (`10.0.58.145`). The relay kept dialing `10.0.10.179` — a container that no longer existed.
+
+The fix: run `deploy.sh dev us-east-1`, which rebuilds the relay task def with `DirectoryMultiaddr=/dns4/directory-us1.cello.mygentic.ai/...` — a DNS hostname that resolves through the ALB and never goes stale. Relay came up clean on first attempt after deploy.
+
+### Why it was hard to see
+1. **The underlying libp2p error was swallowed.** The relay logs showed only `reason: "directory_unavailable"` — our own label. The actual TCP connection error (ECONNREFUSED or ETIMEDOUT to a dead IP) was caught and discarded. We had no way to see from logs that it was a TCP-level failure vs a protocol-level rejection.
+2. **Continuation bias.** Another agent's diagnosis was pasted in early in the session. Every subsequent investigation was subconsciously anchored to that diagnosis rather than reading evidence cold.
+3. **The history was confusing.** The bad IP was introduced June 6 but the crash only appeared June 8. This made the diagnosis feel unreliable — if the IP was wrong for two days, why did it only break now? The answer: the directory container happened to stay alive at `10.0.10.179` from June 6 until the June 8 deploy replaced it. But we couldn't confirm this cleanly during diagnosis, which eroded confidence.
+
+### The rules this creates
+
+**Rule 1 — Never set a raw `/ip4/` address in any ECS task definition.** All inter-service addresses must use DNS hostnames (`/dns4/`). A raw IP is a landmine that detonates on the next container replacement. The IaC already enforces this via `deploy.sh` — the violation happened because someone edited the task def directly in AWS outside deploy.sh.
+
+**Rule 2 — Log the underlying error, not just our label.** `directory_unavailable` is useless for diagnosis. The catch block must log `err.message`. One line of logging cost us 90 minutes.
+
+**Rule 3 — Reject external diagnoses until independently verified.** When another agent or a pasted analysis provides a root cause, treat it as a hypothesis, not a fact. Read the actual logs cold before accepting it. Continuation bias is real and expensive.
+
+**Rule 4 — When a diagnosis has an unexplained gap ("why didn't this break before?"), do not proceed until that gap is resolved.** The gap is usually a sign the diagnosis is incomplete or wrong.
+
 **Post-mortem note:** The fix itself is ~20 lines across 4 files. The tests are 5-6x longer than the fix. By any measure this is a trivial change. The days lost were not due to the complexity of the solution — they were due to not having visibility into what was actually failing. The `[object Object]` error serialization bug in `NetworkRelayAdapter.#sendAndReceive` meant every investigation started without knowing the real error type. The structured logging added in the relay visibility fix (commit `4ff57a4`) was what finally surfaced enough signal to identify the stale-IP pattern. The lesson: when a problem keeps recurring without resolution, the first thing to fix is the observability, not the symptoms.
