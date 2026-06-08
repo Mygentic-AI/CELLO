@@ -272,7 +272,7 @@ Skipping step 3 means the new pipeline will never be triggered by GitHub pushes.
 
 **The `deploy.sh` Step 2b guard preserves the current SSM value across CFN updates** (reads before, restores after). This handles the normal case. The template default only matters on first CREATE or after parameter deletion.
 
-**CI/CD pipeline ordering hazard — migration version mismatch (observed 2026-06-07):**
+**CI/CD pipeline ordering hazard — Flyway applies new migration before ops-agent SSM is updated (observed 2026-06-07):**
 
 The directory pipeline and the ops-agent pipeline run independently. Flyway runs inside the directory ECS task at startup and bumps the database version automatically. The ops-agent pipeline only swaps the Docker image — it does not update SSM. This creates a timing window:
 
