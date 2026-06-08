@@ -285,6 +285,30 @@ implementation_notes: >
 
   Version bump required. Follow CLAUDE.md version bump procedure.
 
+# ─── Post-Completion Note (2026-06-08) ──────────────────────
+# This story introduced a regression discovered during M6-E2E-001 testing.
+#
+# THE BUG:
+#   The SIGTERM handler installed by this story called process.exit(0) immediately.
+#   Every new cello-mcp startup (triggered by a new Claude Code session or /mcp reconnect)
+#   kills the prior process via SIGTERM. If the prior process had a FROST ceremony in flight
+#   (session_request sent, session_assignment not yet received), the immediate exit tore down
+#   libp2p before session_assignment arrived. SignalingManager.onStreamClosed() fired
+#   directory_unreachable. This happened on 100% of cello_initiate_session calls because
+#   the ceremony always outlasted the process that started it.
+#
+# THE FIX (applied same day):
+#   Added gracefulShutdown() in cello-mcp.ts. SIGTERM now polls
+#   client.hasInFlightCryptoOperation() (which ORs hasPendingSessionRequest(),
+#   hasPendingRegister(), hasPendingDkgReady() from SignalingManager) every 50ms
+#   for up to 4 seconds before calling process.exit(0). This fits within the 5-second
+#   SIGTERM poll window in lock-file.ts, preserving the single-instance guarantee.
+#   hasInFlightCryptoOperation() was added as a facade method on CelloClientImpl.
+#
+# AI CODERS: if you are reading this story as reference, the graceful shutdown behavior
+# is now part of the contract. Do NOT revert to immediate process.exit(0) in SIGTERM.
+# The 4-second wait is load-bearing.
+
 # ─── References ─────────────────────────────────────────────
 references:
   milestone: M6B

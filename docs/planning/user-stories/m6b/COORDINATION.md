@@ -788,3 +788,34 @@ This is lower risk than the `client.ts` refactor — no private state, no escape
 **Dependencies:** None — independent of all other M6B stories. Lives entirely in cello-client.
 
 **Deferred to follow-up story:** dead M0 peer path removal, dead per-session directory streams, unused escape hatches, init consolidation, lazy #myPubkeyHex resolution.
+
+---
+
+### 2026-06-08 — M6B-001 regression found and fixed during M6-E2E-001 testing
+
+**Root cause of directory_unreachable on every cello_initiate_session:**
+
+M6B-001 installed an immediate `process.exit(0)` SIGTERM handler to enforce the single-instance
+guarantee. This introduced a regression: every new Claude Code session or `/mcp` reconnect spawns
+a new `cello-mcp` process, which kills the prior one via SIGTERM (lock-file.ts). If the prior
+process had a FROST session ceremony in flight (session_request sent, session_assignment not yet
+received), the immediate exit tore down libp2p before session_assignment arrived.
+`SignalingManager.onStreamClosed()` fired `directory_unreachable`. This was 100% reproducible
+because the ceremony always outlasted the process.
+
+**Three operations are vulnerable to this pattern (all in SignalingManager):**
+1. `#pendingSessionRequestResolve` — session ceremony (confirmed broken)
+2. `#pendingRegisterResolve` — registration ceremony (same pattern, first-time setup)
+3. `#pendingDkgReadyResolve` — DKG ceremony (same pattern, first-time setup)
+
+**Fix applied:**
+- Added `hasInFlightCryptoOperation()` facade method on `CelloClientImpl` (ORs all three)
+- Changed SIGTERM handler in `cello-mcp.ts` to `gracefulShutdown()`: polls
+  `client.hasInFlightCryptoOperation()` every 50ms for up to 4 seconds before exit
+- 4s fits within lock-file.ts 5s SIGTERM poll window, preserving single-instance guarantee
+
+**Files changed:** `cello-client/core/client/src/client.ts`, `cello-client/core/adapter-claude-code/src/bin/cello-mcp.ts`
+
+**Note for M7:** M7 moves to a multi-agent server model (one long-lived process, N CelloClients).
+The lock-file kill-on-startup mechanism becomes irrelevant. The graceful shutdown logic will need
+to aggregate `hasInFlightCryptoOperation()` across all active clients, not just one.
