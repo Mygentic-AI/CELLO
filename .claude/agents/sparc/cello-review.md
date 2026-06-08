@@ -45,51 +45,38 @@ Use this mode when the story is being designed, before implementation begins.
 - [ ] Each SI has: `id`, `statement`, `adversarial_condition`, `test_type`, `component_under_test`
 - [ ] Observability section specifies: `events` (named), `error_events` (named), `alarms` (with conditions)
 
-### Story Review Step 3 — M5+ schema story requirements
+### Story Review Step 3 — Shared interface completeness
 
-If this story adds or modifies database tables:
+For every shared datum this story touches (DB table, persisted object, registration message, manifest, in-memory cache), ask: **are all producers and consumers enumerated, and does each have an AC?** A story that covers only the presenting participant is incomplete.
 
-- [ ] **Architecture phase reasoning documented** — does the story notes section (or a referenced discussion log) document: all operations the table will support, uniqueness constraints with conflict scenarios, indexes for all query patterns, foreign key relationships, RLS policy coverage?
-- [ ] **Integration gate AC present** — does the story include a blocking integration gate AC that applies migrations to a PostgreSQL instance with all prior migrations already applied and verifies zero Flyway checksum errors?
-- [ ] **Migration version number reserved** — if this is a parallel milestone with database work, is the migration version number listed in the Migration Version Registry in COORDINATION.md?
+**Known case: DB schema (M5+).** If this story adds or modifies database tables:
+- [ ] Architecture phase reasoning documented: all operations the table supports, uniqueness constraints with conflict scenarios, indexes for all query patterns, foreign key relationships, RLS policies. Missing or incomplete = **[blocking]**.
+- [ ] Integration gate AC present (runs against prior-migrations-applied, not fresh DB).
+- [ ] Migration version reserved in COORDINATION.md if this is a parallel milestone.
 
-Example of what Architecture phase reasoning should look like:
+Example of sufficient Architecture phase reasoning:
 ```
 notes: >
   Architecture phase schema assessment:
-  
-  Operations this table supports:
-  - Insert new registration record (state machine initialization)
-  - Update state on each transition (INITIAL → AWAITING_CONTACT → ...)
-  - Query by phone_stub_hash (operator reconnection)
-  - Query by state and expiry (cleanup job)
-  
-  Uniqueness constraints:
-  - phone_stub_hash UNIQUE — one active registration per phone number
-  - Conflict scenario: operator restarts registration flow → second INSERT
-    must fail with duplicate key error, forcing state machine to resume
-  
-  Indexes:
-  - (phone_stub_hash) — primary lookup path
-  - (state, expires_at) — cleanup job scans expired records
-  
-  Foreign keys: none (registration is root aggregate)
-  
-  RLS policies:
-  - cello_service: INSERT + SELECT only (no UPDATE/DELETE — state machine
-    creates new records for each transition, never modifies in place)
+  Operations: insert on init, update on state transition, query by phone_stub_hash,
+    query by (state, expires_at) for cleanup.
+  Uniqueness: phone_stub_hash UNIQUE — conflict scenario: restart → second INSERT
+    must fail, forcing state machine to resume existing record.
+  Indexes: (phone_stub_hash), (state, expires_at).
+  Foreign keys: none (root aggregate).
+  RLS: cello_service INSERT+SELECT only (append-only state machine).
 ```
 
-If the Architecture phase reasoning is missing or incomplete, that is **[blocking]** for M5+ schema stories.
+**Known case: Persistence serialization (M4+).** If this story persists any domain object:
+- [ ] At least one AC uses a real instance of the domain type (not `randomBytes(N)`). **[blocking]** if absent.
+- [ ] At least one AC verifies the deserialized object in production use (sign, decrypt, pass to handler — not just byte equality). **[blocking]** if absent.
+- [ ] If persistence survives restarts: at least one AC crosses a restart boundary. **[blocking]** if absent. *(PERSIST-005 — `JSON.stringify` on `Uint8Array` passed byte equality; type was gone; `@noble/curves` threw.)*
 
-### Story Review Step 3b — Registration and address propagation completeness
-
-If the story changes how a service registers, announces, or publishes its address:
-
-- [ ] **Consumers enumerated.** Does the story (in its `behavior`, `notes`, or AC preconditions) enumerate every component that needs to reach the service? For a relay registration story, this means at minimum: (a) clients via the S3 manifest, and (b) any directory-side adapter that dials the relay directly. If only the presenting failure path is enumerated, that is **[blocking]**.
-- [ ] **Each consumer has its own AC.** For every enumerated consumer, is there an AC that verifies it can reach the service after an address change? An AC that only tests one consumer while others exist is **[blocking]**.
-- [ ] **Close gate covers each consumer independently.** Does the milestone close gate (or story close gate) verify each consumer's path? A gate that only checks "session initiation works" may be passing via a consumer the story did not fix. Each path must be explicitly named in the gate.
-- [ ] **Registration fields state intent explicitly.** Does any new registration/announcement field reuse an existing field as a carrier for unrelated data (e.g. parsing an IP out of a health check URL)? If yes: **[blocking]**. Each piece of information must have its own field with a name that states its intent. *Rationale: M6B-006 fixed the S3 manifest path, never enumerated `NetworkRelayAdapter` as a second consumer, and the close gate passed. The adapter path broke on every ECS task replacement for weeks.*
+**Known case: Service registration / address propagation.** If this story changes how a service announces its address:
+- [ ] Every component that needs to reach the service is enumerated (not just the presenting consumer). **[blocking]** if only one consumer is covered. *(M6B-006 — `NetworkRelayAdapter` uncovered.)*
+- [ ] Each enumerated consumer has its own AC. **[blocking]** if any consumer lacks one.
+- [ ] Close gate names and verifies each consumer's path independently.
+- [ ] Registration message fields name intent explicitly — no data buried in unrelated fields. **[blocking]** if found.
 
 ### Story Review Step 4 — Transport-path observables for integration/e2e ACs
 
@@ -285,7 +272,9 @@ For each assumption found: locate where CLAUDE.md or the story itself explicitly
 
 **The key question:** *"If this implementation were deployed in a brand-new region on a different cloud provider with no manual steps, would it work correctly?"* If the answer is no — and CLAUDE.md does not explicitly authorize the constraint that causes it to fail — that is blocking.
 
-**Registration and address propagation check:** If the story changes how a service registers or publishes its address, verify the implementation updates **every consumer** of that address — not just the one named in the presenting failure. Grep the codebase for all dial/connect calls that reference the service. For each consumer found: is it updated by this implementation, and is it covered by a test? A consumer that is reachable from the changed code path but has no corresponding test is a **[blocking]** finding. *Rationale: M6B-006 — `NetworkRelayAdapter.#relayMultiaddrs` was a second consumer of the relay address, was never updated by the story, had no AC, and the reviewer had no prompt to look for it.*
+**Shared interface completeness check.** For every shared datum this story touches (registration message, manifest, DB table, persisted object, in-memory cache): does the implementation update every producer and every consumer, or only the one the story was written from? Apply these known cases:
+- *Registration/address change:* grep the codebase for all dial/connect calls that reference the service. For each consumer found: is it updated, and is it covered by a test? A reachable consumer with no test is **[blocking]**. *(M6B-006 — `NetworkRelayAdapter.#relayMultiaddrs` was a second consumer with no AC and no update.)*
+- *In-memory state:* if the story touches a cache or in-memory collection populated from a DB, verify there is a restore path after restart and a refresh path if data can change externally. Missing restore = **[blocking]**. *(M6B-010 — directory lost in-flight state; M6B-008 — manifest never refreshed.)*
 
 ---
 

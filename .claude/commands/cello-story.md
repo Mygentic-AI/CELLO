@@ -111,44 +111,37 @@ For each protocol step or component behavior the E2E story requires:
 - Does a method exist to store/produce this data? → Who calls it in the live flow? Name the caller explicitly.
 - Is a field described in the output shape? → Which AC describes how it gets populated, not just that it's present?
 
-## Database Schema Stories (M5+ rules)
+## Shared Interface Completeness — the general rule
 
-If the story introduces new database tables or modifies existing ones, apply these rules extracted from the M5 retrospective:
+**Before writing any AC for a story that introduces or modifies a shared interface, enumerate every producer and every consumer of that interface.** A shared interface is anything multiple components exchange: a database table, a persisted domain object, a registration message, a manifest, a message frame field, an in-memory cache populated by one component and read by another.
 
-### Rule 1: Thoroughly Assess Schema Requirements
+The failure pattern is always the same: the story is written from one participant's perspective. The author fixes the presenting problem for the consumer they can see, never asks "who else reads this?", and the other consumers break silently. Stories that enumerate only the presenting consumer are incomplete by definition.
 
-During the Architecture phase, reason through **all use cases** that will touch the table — not just the immediate story's requirements.
+**The question to ask before writing ACs:**
+> For every shared datum this story touches — who produces it, and who consumes it? Does each producer have an AC? Does each consumer have an AC?
 
-**Example from M5:** FEDERATION-001 created `checkpoint_node_signatures` without the `UNIQUE (checkpoint_id, node_id)` constraint. Only when FEDERATION-002 implemented coordinator logic did the gap surface. By then V18 was applied and parallel stories had claimed later version numbers, forcing cascading renumbers.
+The three sections below are known cases of this failure, each with its own mechanics. The general rule above applies to all of them and to any case not listed.
 
-**The question to ask:** "If three nodes are cross-signing, what prevents duplicate signatures?" should have been asked in FEDERATION-001, not discovered in FEDERATION-002.
+---
 
-**For schema stories, the Architecture phase must:**
-1. List every operation the table will support (not just what this story needs)
-2. Identify all uniqueness constraints by reasoning through conflict scenarios
-3. Specify indexes for every query pattern (not just the obvious one)
-4. Check foreign key relationships with all related tables (including ones not in this milestone)
-5. Validate RLS policies cover all access patterns (read-only observers, multi-tenant isolation, append-only constraints)
+### Known case 1: Database schema (M5+ rules)
 
-### Mitigation C: Schema-Complete-First for Parallel Milestones
+**Trigger:** story introduces or modifies database tables.
 
-If the milestone has parallel stories that will all touch the database, **one story must produce the complete schema design before any parallel implementation begins.**
+**The risk:** a table designed for the story's immediate use cases missing constraints, indexes, or RLS policies that parallel or downstream stories require. Discovered late, after the migration is applied, forcing cascading version renumbers. *(FEDERATION-001/002 — missing UNIQUE constraint discovered only when FEDERATION-002 implemented coordinator logic; V18 already applied, parallel stories had claimed later numbers.)*
 
-**M6 example:** OPS-AGENT-000 is a P0 design story that:
-- Defines all TypeScript interfaces
-- Writes all migration SQL for the registration state machine
-- Reserves all migration version numbers (V24+)
-- Populates the Migration Version Registry in COORDINATION.md
-- Gates all downstream stories (001-005B) on AC-010 passing
+**Architecture phase must enumerate:**
+1. Every operation the table supports — not just what this story needs
+2. Uniqueness constraints for all conflict scenarios
+3. Indexes for all query patterns
+4. Foreign key relationships with all related tables
+5. RLS policies for all access patterns (read-only observers, multi-tenant isolation, append-only)
 
-This eliminates reactive mid-milestone migrations and version number conflicts.
+Document this reasoning in a comment block at the top of the migration file or in the story notes before writing ACs.
 
-### Mitigation B: Integration Gate ACs with Flyway Verification
+**For parallel milestones with DB changes:** one P0 schema-design story reserves all migration version numbers and populates COORDINATION.md's Migration Version Registry before any parallel implementation begins. No downstream story may claim an unregistered version.
 
-Every database story that adds or modifies migrations must include a blocking integration gate AC as its final acceptance criterion.
-
-**Standard AC language for migration stories:**
-
+**Integration gate AC (required on every migration story):**
 ```yaml
 - id: AC-[N]-integration-gate
   given: "All migration SQL files produced by this story"
@@ -159,49 +152,22 @@ Every database story that adds or modifies migrations must include a blocking in
     policies are created as specified"
   test_type: integration
   component_under_test: directory
-  notes: "This is the Mitigation B integration gate AC. It must pass before
-    this branch merges. No downstream story may begin implementation until
-    this story's integration gate AC is verified and the story is merged."
+  notes: "Runs against prior-migrations-applied, not a fresh DB — catches
+    the FEDERATION-002 pattern where a previously-applied migration is modified."
 ```
-
-**Key constraint:** The AC runs against an environment with prior migrations **already applied** — not a fresh database. A fresh database will not catch the FEDERATION-002 pattern where a previously-applied migration gets modified.
-
-### Migration Version Registry (parallel milestones only)
-
-For milestones with parallel database work, the COORDINATION.md must include a Migration Version Registry table:
-
-```markdown
-## Migration Version Registry
-
-M{N} migrations start at **V{X}**. All version numbers are reserved by
-{SCHEMA-DESIGN-STORY-ID} before parallel implementation begins. No story
-may claim a migration version not listed here.
-
-| Version | Story | Table/Purpose |
-|---|---|---|
-| V{X} | {STORY-ID} | {table_name} — {purpose} |
-| V{X+1} | {STORY-ID} | {table_name} — {purpose} |
-```
-
-The schema-design story (e.g., OPS-AGENT-000) populates this registry as part of its integration gate AC. No downstream story may add a migration not listed here.
 
 ---
 
-## Persistence Serialization Stories (M4+ rules)
+### Known case 2: Persistence serialization (M4+ rules)
 
-If the story persists any domain object — via JSON, a database adapter, or any serialize/deserialize round-trip — apply these rules. This failure class is silent: the bytes come back correctly, the structural checks pass, and the bug only surfaces when a crypto or typed operation tries to use the deserialized value.
+**Trigger:** story persists any domain object via JSON, a database adapter, or any serialize/deserialize round-trip.
 
-**The PERSIST-005 incident (2026-06-02):** `PersistentShareStore` used `JSON.stringify` to serialize `LocalShare`, which contains `FrostSecret.signingShare: Uint8Array`. `JSON.stringify` converts `Uint8Array` to `{"0":1,"1":2,...}`. `JSON.parse` restores a plain object — not a `Uint8Array`. `@noble/curves` `signShare()` threw on the plain object. The catch mapped it to `AGENT_NOT_BOOTSTRAPPED`, which surfaced as `directory_below_threshold`. The shares were written. The shares were loaded. The bytes matched. The type was gone.
+**The risk:** serialization silently destroys typed fields. Bytes round-trip correctly; the type is gone; the bug surfaces only when a crypto or typed operation tries to use the deserialized value — by then the error is mapped to a generic code with no hint of the real cause. *(PERSIST-005 — `JSON.stringify` on `LocalShare.signingShare: Uint8Array` corrupted the type to a plain object. Byte equality passed. `@noble/curves` threw. The catch returned `directory_below_threshold`.)*
 
-**The rule:** Any story that serializes a typed domain object must include an AC that:
-
-1. Uses a **real instance** of the domain object — not `randomBytes(N)`, not a plain object literal. If the real type has a `Uint8Array` field, the test must use the real type with a real `Uint8Array` in that field.
-2. Verifies the loaded object can be **used for its actual purpose** after deserialization — not just that `bytes_in === bytes_out`. For a FROST share: sign something. For a key: encrypt/decrypt. For a connection record: pass it to the handler that consumes it.
-3. If the persistence survives process restarts, **at least one AC must cross a restart boundary**: persist in process A, load in a fresh process B, use in process B.
-
-**The test that only checks `bytes_in === bytes_out` is testing the encryption layer, not the domain correctness.** It will pass even when the type is corrupted. Both checks are required — but byte equality alone is not sufficient.
-
-**What a passing serialization AC looks like:**
+**Every persistence story must include an AC that:**
+1. Uses a **real instance** of the domain type — not `randomBytes(N)` or a plain object literal
+2. Verifies the deserialized object works in its **actual production use** — for a FROST share: sign something; for a key: encrypt/decrypt; for a connection record: pass it to the handler
+3. If persistence survives restarts: **crosses a process restart boundary** — persist in process A, load in a fresh process B, use in process B
 
 ```yaml
 - id: AC-[N]-serialization-round-trip
@@ -214,43 +180,23 @@ If the story persists any domain object — via JSON, a database adapter, or any
     verifies, a decryption succeeds, a handler returns without error]"
   test_type: integration
   component_under_test: [component]
-  notes: "Byte equality between original and deserialized bytes is also
-    asserted, but is not sufficient alone — type integrity must be verified
-    by exercising the deserialized object in its actual production use."
+  notes: "Byte equality is also asserted, but is not sufficient alone —
+    type integrity must be verified by exercising the object in production use."
 ```
 
-**The broader concern:** Any adapter that calls `JSON.stringify/parse` on an object containing `Uint8Array`, `Buffer`, `BigInt`, `Date`, `Map`, `Set`, or any class instance is a serialization hazard. Before writing the story, enumerate every field in the domain object being persisted and confirm the serialization format preserves its type through the round-trip.
+Before writing the story, enumerate every field of the domain object being persisted. Any `Uint8Array`, `Buffer`, `BigInt`, `Date`, `Map`, `Set`, or class instance field is a serialization hazard under bare `JSON.stringify/parse`.
 
 ---
 
-## Registration and Address Propagation Stories
+### Known case 3: Service registration and address propagation
 
-If the story changes how a service **registers, announces, or publishes its address** — relay registration, directory re-sign on manifest change, any `relay_register` / `registerWithDirectory` / health-check update flow — apply these rules.
+**Trigger:** story changes how a service registers, announces, or publishes its address — relay registration, manifest re-sign, any `relay_register` / `registerWithDirectory` / health-check update flow.
 
-**The M6B-006 failure mode:** M6B-006 fixed relay address propagation for the S3 manifest path (clients discovering the relay). It did not enumerate every consumer of the relay's address. `NetworkRelayAdapter` in the directory — a second consumer — was left pointing at a static env var. The close gate only verified the S3/manifest path. The adapter path broke every time ECS replaced the relay task. This pattern recurs when a story authors the mechanism without enumerating all consumers first.
+**The risk:** a service has multiple consumers of its address. The story fixes the presenting consumer (the one that was recently broken) and never enumerates the others. Each unaddressed consumer breaks silently on the next address change. *(M6B-006 — fixed relay address propagation for the S3/manifest path. Never enumerated `NetworkRelayAdapter` in the directory as a second consumer. The close gate only verified the manifest path. The adapter broke on every ECS task replacement.)*
 
-### Rule: enumerate consumers before writing ACs
+**Before writing ACs, answer:** every component that needs to reach [service X] — list them all. For each consumer, the story must include an AC verifying it can reach the service after an address change. The close gate must name and verify each consumer's path independently.
 
-During the **Before writing any story** phase, before writing a single AC, answer this question:
-
-> **Every component that needs to reach [service X] — what are all of them?**
-
-List every consumer. For the relay, the answer includes: (a) clients via S3 manifest, (b) `NetworkRelayAdapter` inside the directory. Both consumers must appear in the ACs. A story that fixes address propagation for one consumer while leaving another consumer pointing at stale data is incomplete by definition.
-
-**For each enumerated consumer, the story must include:**
-1. An AC verifying that consumer can reach the service after an address change
-2. A close-gate verification that specifically exercises that consumer's path — not a generic "service is reachable" check
-
-### Rule: API fields state intent explicitly
-
-When adding a field to a registration or announcement message, give it a name that states exactly what it is. Do not reuse an existing field as a carrier for unrelated data. If the relay's current address needs to be known by the directory, add a `multiaddr` field — do not parse it out of `healthCheckUrl`. **Fields are free. Clarity is load-bearing in AI-coded systems: future coders (and future AI agents) read field names as the primary signal of intent.**
-
-### Checklist for registration/address-propagation stories
-
-- [ ] Every component that reads or dials the service's address is enumerated in the story notes or behavior section
-- [ ] Each enumerated consumer has its own AC verifying it can reach the service after an address change
-- [ ] The close gate verifies each consumer's path independently — not just the most recently broken one
-- [ ] Every field in the registration/announcement message names its intent explicitly — no implicit data buried in other fields
+**API field rule:** registration/announcement message fields must name their intent explicitly. Do not reuse an existing field as a carrier for unrelated data. If the relay's current address needs to be known, add a `multiaddr` field — do not parse it out of `healthCheckUrl`. Fields are free; clarity is load-bearing.
 
 ---
 
@@ -359,21 +305,20 @@ For each story, run through the Definition of Ready checklist from `user-story-f
 - [ ] No AC would pass if `NODE_ENV=test` routed through a stub shortcut instead of the real protocol
 - [ ] The story does NOT require implementing a new `makeFixture()` — test infrastructure comes from `packages/e2e-tests/src/session-fixture.ts`; if a new capability is needed, the fixture is extended with a new `opts` field (with a non-breaking default), not replaced or duplicated
 - [ ] **If any test in the story requires a pre-registered agent identity, persisted FROST shares in an external directory, or any resource that `createSessionFixture()` cannot provide in-process:** the story's ACs must note that every top-level `describe` block in that test file must be wrapped with `describe.skipIf(!process.env.CELLO_E2E_LIVE)` using the `liveOnly` pattern. Tests using only in-process `createSessionFixture()` nodes do not need this guard. *Rationale: mcp-002 and mcp-003-e2e failed in CI for months with errors indistinguishable from real regressions — masking any actual new failure in those files.*
-- [ ] **(M4+ persistence stories)** If the story serializes any domain object to JSON, a database column, or any other format: (a) at least one AC uses a **real instance** of the domain type (not `randomBytes(N)`), (b) at least one AC verifies the deserialized object works in its **actual production use** (sign, decrypt, pass to handler — not just byte equality), and (c) if the persistence survives restarts, at least one AC crosses a **process restart boundary**. *Rationale: PERSIST-005 used `JSON.stringify` on `LocalShare.signingShare: Uint8Array`, which JSON corrupts silently to a plain object. Bytes round-tripped correctly; the type did not. The bug only surfaced when `@noble/curves` tried to use the value.*
-- [ ] **(M4+ adapter stories)** If the story touches any adapter that calls `deserializeRow()` or adds to `BIGINT_COLUMNS`, at least one AC must be a live round-trip type test: write a known BIGINT value to the real database, read it back, and assert `typeof result === 'number'` for each declared column. A static gate (PERSIST-021 AC-005) checks map completeness; this test checks coercion correctness. Both are required. *Rationale: BIGINT-as-string hit twice in M4 (initial integration tests + first live session) under a "should" policy. A class of bug that recurs under a recommendation is evidence the recommendation won't self-enforce.*
+- [ ] **(M4+ persistence stories)** Real domain instance used in AC (not `randomBytes(N)`), deserialized object verified in production use (not just byte equality), restart boundary crossed if persistence survives restarts. *See "Known case 2: Persistence serialization" above.*
+- [ ] **(M4+ adapter stories)** If the story touches any adapter that calls `deserializeRow()` or adds to `BIGINT_COLUMNS`, at least one AC must be a live round-trip type test: write a known BIGINT value to the real database, read it back, and assert `typeof result === 'number'` for each declared column. *(BIGINT-as-string hit twice in M4 under a "should" policy.)*
 - [ ] **(M4+)** Every significant state transition has a named log event in `domain.noun.verb` format
 - [ ] **(M4+)** Every named log event specifies its required context fields
 - [ ] **(M4+)** Async/multi-process flows assert `correlationId` threading through all events in the flow
 - [ ] **(M4+)** Every error path has a named error event with sufficient diagnostic context. **Each distinct failure cause must produce a distinct error code or event name** — never map multiple causes to the same error. A catch block that returns `directory_below_threshold` for timeout, exhausted, AND unavailable is a single undifferentiated error: the operator cannot act on it. *Rationale: M6B-002 — three FROST failure modes all surfaced as `directory_below_threshold`, making the error useless for diagnosis.*
 - [ ] **(M4+) Lateral catch audit AC required.** If this story touches any package that contains catch blocks with hardcoded reason strings, the story must include an explicit AC requiring the implementer to scan ALL catch blocks in ALL files in that package — not only the files the story changes — and fix any that silently swallow exceptions. The AC must read: "The implementer scans every catch block in `packages/{name}/src/` and either fixes or reports any pre-existing catch that returns a hardcoded reason string without logging the actual exception message." This AC makes the lateral audit mandatory and visible to the reviewer. *Rationale: M6B-002 fixed FROST paths in `directory-node.ts` but a silent swallowing catch in `network-relay-adapter.ts` — same package, untouched by the story — masked the real relay failure reason for months. Neither the story, the coder, nor the reviewer was required to look beyond the changed files.*
-- [ ] **If the story changes how a service registers, announces, or publishes its address:** every component that needs to reach that service is enumerated before writing ACs, each enumerated consumer has its own AC, and the close gate verifies each consumer's path independently. No consumer may be left pointing at stale data because the story only addressed the presenting failure path. *Rationale: M6B-006 fixed relay address propagation for the S3/manifest path but never enumerated `NetworkRelayAdapter` as a second consumer. The close gate passed. The adapter path broke on every ECS task replacement for weeks.*
-- [ ] **If the story introduces any component that holds in-memory state derived from a database** (connection requests, session participants, relay pool), the story must include an AC that verifies that state is correctly reconstructed after a process restart. Loading state once at startup with no refresh path is also a gap: if the data can change externally, an AC must specify how and when the in-memory view is refreshed. *Rationale: M6B-010 — directory lost all in-flight connection state on ECS task replacement. M6B-008 — relay manifest loaded once at startup, never refreshed, went stale after redeploys.*
-- [ ] **If the story introduces any unbounded resource** — database connection pool, in-memory map that grows with active sessions, stream concurrency, queue depth — the story must specify the cap and include an AC that verifies the system degrades gracefully (or rejects new work cleanly) when the cap is reached. An unbounded resource is a latent OOM or connection exhaustion. *Rationale: M6B-009 — default pg pool of 10 silently queued under load; relay had no stream cap.*
+- [ ] **Shared interface completeness.** For every shared datum this story touches (registration message, manifest, DB table, persisted object, in-memory cache), all producers and consumers are enumerated and each has its own AC. See the three known cases above; the general rule applies to any case not listed.
+  - Registration/address change: every consumer of the service's address has its own AC; close gate names each independently. *(M6B-006 — `NetworkRelayAdapter` uncovered.)*
+  - In-memory state derived from DB: AC verifies reconstruction after restart; AC specifies refresh schedule if data can change externally. *(M6B-010 — directory lost in-flight state; M6B-008 — manifest never refreshed.)*
+- [ ] **If the story introduces any unbounded resource** — DB connection pool, in-memory map, stream concurrency, queue depth — the story specifies the cap and includes an AC for graceful degradation at the cap. *(M6B-009 — pg pool of 10 exhausted silently.)*
 - [ ] **(M4+)** New failure modes introduced by this story have a corresponding alarm threshold AC
 - [ ] **(M4+)** All event names appear in (or are proposed additions to) the event taxonomy in [[2026-05-16_0753_development-pipeline-and-local-iteration]]
-- [ ] **(M5+ schema stories)** If the story adds or modifies database tables, the Architecture phase reasoning is documented in the story notes: all operations the table supports, uniqueness constraints with conflict scenarios, indexes for all query patterns, foreign key relationships, RLS policy coverage
-- [ ] **(M5+ parallel milestones with DB changes)** If the milestone has parallel database work, one P0 schema-design story exists that reserves all migration version numbers and populates the Migration Version Registry in COORDINATION.md before any parallel implementation begins
-- [ ] **(M5+ migration stories)** The story includes a blocking integration gate AC that applies migrations to a PostgreSQL instance with all prior migrations already applied and verifies zero Flyway checksum errors
+- [ ] **(M5+ schema stories)** Architecture phase reasoning documented in story notes: all operations the table supports, uniqueness constraints, indexes, foreign keys, RLS policies. Integration gate AC present. For parallel milestones: migration version numbers reserved in COORDINATION.md by a P0 schema-design story before parallel work begins. *See "Known case 1: Database schema" above.*
 
 ## What the shared fixture already covers
 
