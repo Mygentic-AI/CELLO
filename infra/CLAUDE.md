@@ -274,6 +274,8 @@ Skipping step 3 means the new pipeline will never be triggered by GitHub pushes.
 
 **CI/CD pipeline ordering hazard — Flyway applies new migration before ops-agent SSM is updated (observed 2026-06-07):**
 
+This hazard is ops-agent specific. The directory *runs* Flyway on startup and applies migrations — it has no version assertion. The ops-agent does not run Flyway; it only reads the database and refuses to start if the schema version doesn't match its SSM parameter. Any future service that adds a similar startup version assertion would be subject to the same hazard.
+
 The directory pipeline and the ops-agent pipeline run independently. Flyway runs inside the directory ECS task at startup and bumps the database version automatically. The ops-agent pipeline only swaps the Docker image — it does not update SSM. This creates a timing window:
 
 1. Directory pipeline runs → new directory task starts → Flyway applies V{N} → database is now at V{N}
