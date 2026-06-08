@@ -110,8 +110,8 @@ importers:
         version: 8.18.0
     devDependencies:
       '@cello-protocol/client':
-        specifier: ^0.0.22
-        version: 0.0.22
+        specifier: ^0.0.24
+        version: 0.0.24
       '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
@@ -482,8 +482,8 @@ packages:
     resolution: {integrity: sha512-Q40Zyl4zbSV+g943B7vIEb9gzSdyR8GqEQKKdoW9iV/gaULv1w2uhJuali4SzAV5ZrwZvrh6IlWOj5SvVOI/rg==}
     engines: {node: '>=24'}
 
-  '@cello-protocol/client@0.0.22':
-    resolution: {integrity: sha512-i80KjmPVkISuQkigxJqQ3Lb2FoI0URi1lLM6TI0OWs06Y9tIukqrUMi4LdHkxqKHr9ZhlicI0vg/vpT0qeb+qA==}
+  '@cello-protocol/client@0.0.24':
+    resolution: {integrity: sha512-yQaOZb5IcrMmamR/lEFcsYoYgzn+KAyi/MCfSA7FcCFcc8Qz1W8N2ha2iy8C5KViTgpaHYzwSMd/xq7IQH9Yqw==}
     engines: {node: '>=24'}
 
   '@cello-protocol/connect@0.0.30':
@@ -3990,7 +3990,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@cello-protocol/client@0.0.22':
+  '@cello-protocol/client@0.0.24':
     dependencies:
       '@aws-sdk/client-s3': 3.1051.0
       '@cello-protocol/crypto': 0.0.7
