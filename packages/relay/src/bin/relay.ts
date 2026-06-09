@@ -29,6 +29,10 @@
  *   CELLO_RELAY_HEALTH_CHECK_URL      — VPC-internal health check URL sent in relay_register
  *                                        (default: http://127.0.0.1:{healthPort}/health)
  *                                        In ECS, the relay fetches its private IP from task metadata.
+ *   CELLO_RELAY_PUBLIC_MULTIADDR      — public multiaddr base used in relay_register (without /p2p suffix)
+ *                                        e.g. /dns4/relay-us1.cello.mygentic.ai/tcp/80/ws
+ *                                        When set, the relay registers this address so clients can dial it.
+ *                                        When unset, falls back to CELLO_RELAY_LISTEN_ADDR (correct for local dev).
  *   AWS_REGION                        — AWS region for observability events (default: us-east-1)
  *   WAL_DIR                           — directory for per-session WAL files (required for CELLO_ENV=dev/production)
  *                                        PERSIST-013: FileSessionWal writes one {sessionId}.wal per active session.
@@ -62,6 +66,7 @@ const directoryMultiaddr = process.env["CELLO_DIRECTORY_MULTIADDR"];
 const transportKeyPath = process.env["CELLO_RELAY_TRANSPORT_KEY_FILE"] ?? join(homedir(), ".cello", "relay-transport-key");
 const listenAddr = process.env["CELLO_RELAY_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/tcp/4001";
 const wsListenAddr = process.env["CELLO_RELAY_WS_LISTEN_ADDR"] ?? "";
+const publicMultiaddrBase = process.env["CELLO_RELAY_PUBLIC_MULTIADDR"] ?? "";
 const healthPort = parseInt(process.env["CELLO_RELAY_HEALTH_PORT"] ?? "4000", 10);
 const dirPubkeyHex = process.env["CELLO_DIRECTORY_PUBKEY"];
 const startedAt = Date.now();
@@ -376,7 +381,10 @@ if (directoryAdapter) {
   let registered = false;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const relayPeerId = relayResult.node.getPeerId();
-    const relayMultiaddr = `${listenAddr}/p2p/${relayPeerId}`;
+    // Use the public multiaddr (DNS hostname) when set so the directory sends
+    // a dialable address to clients. Falls back to listenAddr for local dev.
+    const relayMultiaddrBase = publicMultiaddrBase || listenAddr;
+    const relayMultiaddr = `${relayMultiaddrBase}/p2p/${relayPeerId}`;
     const regResult = await directoryAdapter.registerWithDirectory({
       relayId,
       publicKeyHex: relayId, // relayId = hex(pubkey) by convention

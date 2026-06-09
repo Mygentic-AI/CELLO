@@ -31,6 +31,9 @@ Parameters:
     Type: String
     Description: "Directory node multiaddr including /p2p/{peer-id} suffix (e.g. /dns4/directory-us1.cello.mygentic.ai/tcp/80/ws/p2p/12D3Koo...). Required — relay will not register with the directory and cannot participate in session assignment without this."
     ConstraintDescription: "Must be a libp2p multiaddr string starting with /dns4/ or /ip4/ and ending with /p2p/{peer-id}."
+  RelayPublicMultiaddr:
+    Type: String
+    Description: "Public multiaddr base (without /p2p suffix) sent in relay_register so the directory advertises a client-dialable address. e.g. /dns4/relay-us1.cello.mygentic.ai/tcp/80/ws. Required — without this the relay registers its internal VPC address which clients cannot reach."
 
 Resources:
   LogGroup:
@@ -84,6 +87,10 @@ Resources:
             # M6B-007: enable the relay WebSocket listener on port 4002.
             - Name: CELLO_RELAY_WS_LISTEN_ADDR
               Value: /ip4/0.0.0.0/tcp/4002/ws
+            # Public multiaddr base registered with the directory — clients dial this address.
+            # Without this, the relay registers its internal VPC IP which clients cannot reach.
+            - Name: CELLO_RELAY_PUBLIC_MULTIADDR
+              Value: !Ref RelayPublicMultiaddr
             # CELLO-M6B-009: Idle session sweep configuration.
             - Name: RELAY_SESSION_MAX_IDLE_MS
               Value: "86400000"

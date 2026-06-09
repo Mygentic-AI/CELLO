@@ -765,13 +765,17 @@ deploy_stack "cello-waf-${ENVIRONMENT}" "cello-waf.yaml" \
 # ── STEP 11: cello-ecs-relay — relay ECS service ─────────────────────────────
 # depends on: cello-iam, cello-vpc, cello-ecs-directory (for cluster ARN)
 
+RELAY_PUBLIC_MULTIADDR="/dns4/${RELAY_SUBDOMAIN}.${DOMAIN_NAME}/tcp/80/ws"
+echo "  RelayPublicMultiaddr: ${RELAY_PUBLIC_MULTIADDR}"
+
 deploy_stack "cello-ecs-relay-${ENVIRONMENT}" "cello-ecs-relay.yaml" \
   "Environment=${ENVIRONMENT}" \
   "Cpu=${RELAY_CPU}" \
   "Memory=${RELAY_MEM}" \
   "ImageUri=${RELAY_IMAGE}" \
   "DirectoryNodePubkey=${RELAY_DIRECTORY_PUBKEY}" \
-  "DirectoryMultiaddr=${DIRECTORY_MULTIADDR}"
+  "DirectoryMultiaddr=${DIRECTORY_MULTIADDR}" \
+  "RelayPublicMultiaddr=${RELAY_PUBLIC_MULTIADDR}"
 
 # ── STEP 12: cello-cloudwatch — CloudWatch alarms and dashboards ─────────────
 # depends on: cello-ecs-directory, cello-ecs-relay (alarm dimensions reference ECS services)
