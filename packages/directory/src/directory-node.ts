@@ -579,6 +579,7 @@ export class CelloDirectoryNode {
           void this.#relayPoolManager.reSignManifestForRelay({
             relayId,
             healthCheckUrl,
+            multiaddr: multiaddr ?? undefined,
             keyProvider: this.#keyProvider,
           }).catch((err: unknown) => {
             const reason = err instanceof Error ? err.message : String(err);
