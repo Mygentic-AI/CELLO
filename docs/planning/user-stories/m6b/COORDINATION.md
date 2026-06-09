@@ -1052,4 +1052,78 @@ assertion still banned it.
 - Relay has no reconnection logic — after every directory redeploy, relay must be manually restarted
   (tracked as M6B-018 dependency)
 - `mcp-server.ts` refactor (1,674 lines → 6 focused files) — planned, not yet a story
+
+---
+
+### 2026-06-09 22:00 — AC-006 `seal_rejected / session_not_active` Root Cause & Fix
+
+**Agent:** orchestrator (diagnosis session)
+**Story:** M6-E2E-001 AC-006
+
+#### Symptom
+
+After the local agent calls `cello_close_session`, the relay never receives two SEAL ctrl leaves
+and the directory never processes the bilateral seal. The MCP tool returns
+`{status: "seal_rejected", reason: "session_not_active"}`.
+
+#### Diagnosis — producer/consumer analysis
+
+**The bilateral seal protocol (relay-node.ts:942-960):**
+The relay requires TWO ctrl leaves (leaf_kind 0x02) from DISTINCT senders before calling
+`processSeal` on the directory. If it has fewer than 2, it returns early and waits.
+
+**What `cello_close_session` does:**
+`mcp-server.ts:751` → `client.initiateSessionSeal(session_id)` → `seal-manager.ts` →
+submits a SEAL ctrl leaf to the relay. This is ONE leaf — the relay still needs the other party's.
+
+**The deadlock sequence:**
+1. Demo agent (initiator) calls `closeSession` → submits its SEAL ctrl leaf to relay
+2. Relay receives one leaf, stores it, waits for the second
+3. The initiator's ctrl leaf is forwarded to the responder (local agent) via the relay stream
+4. `relay-stream-manager.ts:783-784`: responder receives the ctrl leaf →
+   `if (kind === "ctrl" && session.status === "active") { session.status = "sealing"; }`
+5. Local agent (responder) calls `cello_close_session` → `seal-manager.ts:132`:
+   `if (session.status !== "active") return { ok: false, reason: "session_not_active" };`
+6. Status is "sealing" (set in step 4) → **guard rejects** → responder's SEAL leaf is never submitted
+7. Relay never gets 2 leaves → directory never processes seal → **deadlock**
+
+**The guard at seal-manager.ts:132 is the root cause.** It treats "sealing" as an invalid state,
+but "sealing" means "the counterparty already started sealing" — which is exactly when the
+responder SHOULD submit its own leaf to complete the bilateral ceremony.
+
+#### Additional finding: dead code path
+
+`relay-stream-manager.ts:788-791` calls `handleSealVerified` with `{type: "_responder_seal_trigger"}`
+after setting status to "sealing". But `handleSealVerified` expects a frame with `sessionId`,
+`sealHash`, etc. — the `_responder_seal_trigger` frame lacks these fields, so the call returns
+immediately doing nothing. This is dead code — seal completion actually comes from the directory's
+confirmation relayed back through the stream.
+
+#### Fix plan (all in cello-client)
+
+**Part A — Guard expansion (seal-manager.ts:132):**
+Allow `"sealing"` status to pass through. Change:
+```typescript
+if (session.status !== "active") return { ok: false, reason: "session_not_active" };
+```
+to:
+```typescript
+if (session.status !== "active" && session.status !== "sealing")
+  return { ok: false, reason: "session_not_active" };
+```
+
+**Part B — MCP error guidance (mcp-server.ts):**
+- `cello_send` when session is sealing: return guidance telling the agent to call `cello_close_session`
+- `cello_close_session` success when status was "sealing": return guidance confirming seal submitted
+
+**Part C — Dead code cleanup (relay-stream-manager.ts:788-791):**
+Remove the no-op `handleSealVerified({type: "_responder_seal_trigger"})` call.
+
+#### Rules this creates
+
+**The `"sealing"` status is a valid state for initiating a seal — it means the counterparty already
+started, and the local agent completing its half is the correct protocol action.**
+
+**Every MCP tool failure response must include a `guidance` field.** Added to cello-story.md,
+cello-sprint-coder.md, and cello-review.md in commit ce3e079.
 - Interface endpoint removal (M6B-014 stage 2 — 6 VPC endpoints still present, planned cleanup)
