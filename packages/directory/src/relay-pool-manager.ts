@@ -206,7 +206,6 @@ export class RelayPoolManager {
   #failureState = new Map<string, RelayState>();
   #healthCheckTimer: ReturnType<typeof setInterval> | undefined;
   #relayHealthCheckUrls = new Map<string, string>();
-  #relayMultiaddrs = new Map<string, string>();
   #manifestUpdateLock: Promise<void> = Promise.resolve();
   #pollInterval: ReturnType<typeof setInterval> | undefined;
   #isStartingPoll = false;
@@ -393,7 +392,6 @@ export class RelayPoolManager {
       if (!newRelayIds.has(relayId)) {
         this.#failureState.delete(relayId);
         this.#relayHealthCheckUrls.delete(relayId); // CELLO-M6B-006
-        this.#relayMultiaddrs.delete(relayId);
       }
     }
 
@@ -688,7 +686,6 @@ export class RelayPoolManager {
   async reSignManifestForRelay(params: {
     relayId: string;
     healthCheckUrl: string;
-    multiaddr?: string;
     keyProvider: import("@cello-protocol/crypto").KeyProvider;
   }): Promise<{ updated: true; version: number } | { updated: false; reason: string }> {
     // Serialize concurrent calls: read-increment-write is not atomic on S3.
@@ -710,15 +707,13 @@ export class RelayPoolManager {
   async #reSignManifestForRelayInner(params: {
     relayId: string;
     healthCheckUrl: string;
-    multiaddr?: string;
     keyProvider: import("@cello-protocol/crypto").KeyProvider;
   }): Promise<{ updated: true; version: number } | { updated: false; reason: string }> {
-    const { relayId, healthCheckUrl, multiaddr, keyProvider } = params;
+    const { relayId, healthCheckUrl, keyProvider } = params;
 
-    // 1. Check if anything changed
+    // 1. Check if URL changed
     const previousUrl = this.#relayHealthCheckUrls.get(relayId);
-    const previousMultiaddr = this.#relayMultiaddrs.get(relayId);
-    if (previousUrl === healthCheckUrl && previousMultiaddr === multiaddr) {
+    if (previousUrl === healthCheckUrl) {
       return { updated: false, reason: "no_change" };
     }
 
@@ -746,15 +741,6 @@ export class RelayPoolManager {
 
     relayEntry.healthCheckUrl = healthCheckUrl;
 
-    if (multiaddr) {
-      const p2pSuffix = multiaddr.match(/\/p2p\/(.+)$/);
-      if (!p2pSuffix) {
-        throw new Error(`RELAY_MULTIADDR_MISSING_PEER_ID:${relayId}:${multiaddr}`);
-      }
-      relayEntry.multiaddrs = [multiaddr];
-      relayEntry.peerId = p2pSuffix[1];
-    }
-
     // 4. Increment version
     manifest.version += 1;
     manifest.updatedAt = new Date().toISOString();
@@ -775,11 +761,8 @@ export class RelayPoolManager {
       new TextEncoder().encode(JSON.stringify(manifest))
     );
 
-    // 8. Update in-memory tracking maps
+    // 8. Update in-memory healthCheckUrl map
     this.#relayHealthCheckUrls.set(relayId, healthCheckUrl);
-    if (multiaddr) {
-      this.#relayMultiaddrs.set(relayId, multiaddr);
-    }
 
     // 9. Log relay.manifest.updated with required context fields
     this.#logger.info("relay.manifest.updated", {

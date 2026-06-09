@@ -198,11 +198,11 @@ describe("DEPLOY-001: AC-005 directory task role IAM policy", () => {
     expect(raw).toContain("directory/*");
   });
 
-  it("has s3:PutObject only (no GetObject, DeleteObject, ListBucket)", () => {
-    // After DEPLOY-001A refactor: DirectoryTaskRole is in cello-iam.yaml
+  it("has s3:PutObject and s3:GetObject for relay manifest (no DeleteObject, ListBucket)", () => {
+    // Directory needs PutObject (upload manifest) and GetObject (loadManifest at startup)
     const raw = loadTemplateRaw("cello-iam.yaml");
     expect(raw).toContain("s3:PutObject");
-    expect(raw).not.toContain("s3:GetObject");
+    expect(raw).toContain("s3:GetObject");
     expect(raw).not.toContain("s3:DeleteObject");
     expect(raw).not.toContain("s3:ListBucket");
   });
