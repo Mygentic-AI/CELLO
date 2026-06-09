@@ -122,13 +122,21 @@ cd /opt/cello-demo && npm install @cello-protocol/connect@{new-connect-version}
 sudo systemctl restart cello-demo
 ```
 
-## Step 7: Promote to latest (manual, requires explicit user approval)
+## Step 7: Promote to latest — REQUIRED before MCP reconnects
 
-Beta is the default publish target. Only promote to `latest` when the user explicitly approves:
+**Always promote to `latest` after verifying the binary.** This is not optional. Claude Code and npx without a pinned version both resolve `latest` — operators who reconnect the MCP server get the `latest` tag. If `latest` still points to an old version, reconnect will silently serve stale code.
 
 ```bash
 npm dist-tag add @cello-protocol/connect@{version} latest
 ```
+
+Then confirm:
+```bash
+npm view @cello-protocol/connect@latest version
+# Must match the version you just published
+```
+
+**After promoting and asking the human operator to reconnect the MCP server**, they must restart Claude Code (or disconnect/reconnect via /mcp) before the new version takes effect.
 
 ## Common mistake: checking the connect binary instead of the client package
 
