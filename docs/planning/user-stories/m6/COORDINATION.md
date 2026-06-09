@@ -1090,3 +1090,34 @@ All 330 tests pass. Code reviewer approved with no actionable findings. The low-
 
 **Versions:** `@cello-protocol/client` 0.0.28 → 0.0.29, `@cello-protocol/connect` 0.0.38 → 0.0.39. Fix commit: `e87572f`.
 
+---
+
+## 2026-06-09 — M6-E2E-001: relay_unavailable resolved, full message exchange verified, AC-006 seal blocked
+
+### What was resolved this session
+
+**1. `relay_unavailable` on `cello_initiate_session`**
+
+The directory's `CELLO_RELAY_MULTIADDR` env var contained the private IP of a previous relay ECS task (`10.0.85.235`). The relay's current task IP was `10.0.112.219`. The directory's `updateMultiaddr()` had never been called in the current directory process — `relay.adapter.multiaddr.updated` had not appeared in directory logs since the directory was last redeployed. After restarting the relay ECS service, the relay sent a `relay_register` frame, `relay.adapter.multiaddr.updated` fired at 2026-06-09 13:01 UTC with `/dns4/relay-us1.cello.mygentic.ai/tcp/80/ws/p2p/12D3KooWDbUVg6tnvDu1quscr6cmHJ8jke4mZsh85RNqvwT8UPy9`, and `cello_initiate_session` succeeded immediately after.
+
+Two directory commits preceded this discovery: `a1fc5d5` (relay error logging — `JSON.stringify` instead of `String()` for plain error objects) and `a4bfc33` (relay re-dial guard — `dialSucceeded` flag, per-address `relay.adapter.redial.failed` log). These commits exposed that the re-dial was failing on every attempt, and that the address being dialed was the stale `10.0.85.235`.
+
+**2. `transport_unavailable` on `cello_send` after successful `cello_initiate_session`**
+
+The local MCP process was running `connect@0.0.38` / `client@0.0.28` from the npx cache. The `setRelayStream` fix (commit `e87572f`) is in `client@0.0.29`. Running `npm install -g @cello-protocol/connect@latest` and reconnecting picked up `client@0.0.29`. Sends delivered successfully after that.
+
+### What now works
+
+`cello_initiate_session` → 4 × `cello_send` (all `delivered: true`) → 4 × `cello_receive` (all 4 demo agent responses received in sequence). This is the first time the full message exchange has completed end-to-end in this flow.
+
+### Current blocker — AC-006 seal not completing
+
+`cello_close_session` returns `{"status":"seal_rejected","reason":"session_not_active"}`. `cello_get_sealed_receipt` returns `{"reason":"session_not_sealed"}`. This was observed across three separate sessions (`20d51061`, `0839aadf`, and one prior). The relay log for each session shows both clients joined but contains no seal events. No `confirmSeal`, `rejectSeal`, or `processSeal`-related events appear in directory logs in the corresponding time windows.
+
+### Infra state
+
+- Directory: us-east-1 task def 165, running, healthy. `relay.adapter.multiaddr.updated` confirmed 2026-06-09 13:01 UTC.
+- Relay: redeployed 2026-06-09 ~13:00 UTC, manifest version 14, health checks passing.
+- Demo agent EC2 `i-0ad3e7c22470f266e`: `connect@0.0.39` / `client@0.0.29`, `cello-demo.service` running.
+- Local agent pubkey: `35313056d41fd7ce96cb5caf1e3c870e35343380b5595428bde5d98309500f72`
+- Demo agent pubkey: `12ccbfd5fa4049177e4c4a81f7462641c1ab4490bfd640ea7e6407a69d06a2f8`
