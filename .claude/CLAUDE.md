@@ -175,6 +175,54 @@ These rules are extracted from the M5 retrospective (`docs/planning/discussion_l
 
 ---
 
+## Debugging Discipline — Non-Negotiable
+
+These rules exist because the opposite patterns have repeatedly cost days of investigation. They are mandatory, not suggestions.
+
+### The Four Failure Modes to Avoid
+
+**1. Error messages are not root causes.** An error string describes where the failure surfaced, not why it happened. `transport_unavailable`, `directory_unreachable`, `relay_auth_error` — these are labels on the exit point. The cause is upstream. Never treat an error message as an explanation. Always ask: what produced this error, what did it check, what returned false or threw?
+
+**2. The first log line that looks suspicious is rarely the cause.** Logs from failing systems are full of noise and downstream symptoms. A thrown exception at line 449 does not mean line 449 is broken — it means a precondition set earlier was wrong. Chase the precondition, not the throw site.
+
+**3. Narrating a hypothesis as fact is the default failure mode.** The moment an agent says "the relay stream has closed or timed out" from a single error message, it has committed to a hypothesis and will filter all subsequent evidence through it. All you know is what the error message says. State that and nothing more until you have evidence.
+
+**4. Analyze in terms of producers and consumers.** Every object, method, or value in a failure path has a producer (who sets it, initializes it, populates it) and a consumer (who reads it, checks it, fails on it). When something is missing or wrong, trace both directions: who should have produced this, and did they? That is the correct diagnostic frame — not "what does this line do?"
+
+### Required Diagnostic Protocol
+
+When investigating a failure:
+
+1. State only what the evidence shows. "Error X was returned" — not "X happened because Y."
+2. Map the failure path as a numbered flow: what called what, what checked what, what returned what.
+3. Identify the specific precondition that was violated — not the line that threw.
+4. Trace the producer of that precondition: who sets it, when, under what conditions.
+5. State explicitly what you cannot prove from code alone, and what additional evidence would resolve it.
+6. Only after steps 1–5: propose a hypothesis, marked as a hypothesis.
+
+Do not propose a fix until the hypothesis is stated and the producer/consumer chain is mapped.
+
+### Before implementing any fix — mandatory falsification step
+
+Before writing a single line of code, attempt to prove the fix is wrong. Specifically:
+
+1. Does the proposed call site have access to the required method? Check the interface, not just the class. A method that exists on a class is not available to a caller that holds a context interface — verify the interface exposes it.
+2. Does the fix location match where responsibility actually lives? The reconnect path is the reference implementation. If the initial path and reconnect path diverge, ask why — the divergence may be intentional.
+3. Would the fix create redundancy? If the caller sets a value and the method now also sets it, one of them is wrong about where responsibility lives.
+4. What breaks if this fix is applied? Test the fix mentally against at least one other call site.
+
+Only after failing to falsify: propose the fix and state which falsification attempts you made.
+
+### When asked to "prove it"
+
+Format the proof as a numbered flow. Include:
+- The consume path (what fails and why, step by step)
+- The produce path (what should have set the precondition, and whether it did)
+- The gap (exactly where the producer failed to produce)
+- What you cannot prove from code alone
+
+---
+
 ## npm Publishing — @cello-protocol/connect
 
 **NEVER run `npm publish`.** Use `pnpm publish` via CI only. `npm publish` ships raw `workspace:*` specifiers → broken package → version burned forever.
