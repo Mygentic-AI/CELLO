@@ -182,7 +182,12 @@ export class NetworkRelayAdapter implements RelayAdapter {
       this.#logger?.error("relay.record_assignment.rejected", { reason });
       return { ok: false, reason };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      let msg: string;
+      try {
+        msg = err instanceof Error ? err.message : JSON.stringify(err);
+      } catch {
+        msg = String(err);
+      }
       this.#logger?.error("relay.record_assignment.transport_error", { error: msg });
       return { ok: false, reason: "relay_unavailable" };
     }
@@ -255,7 +260,17 @@ export class NetworkRelayAdapter implements RelayAdapter {
     // Re-dial if the connection to the relay has dropped since startup (idle timeout).
     // newStream throws on a dead connection; re-dial once and retry.
     const stream = await node.newStream(this.#relayPeerId, DIRECTORY_RELAY_PROTOCOL_ID).catch(
-      async () => {
+      async (firstErr: unknown) => {
+        let firstMsg: string;
+        try {
+          firstMsg = firstErr instanceof Error ? firstErr.message : JSON.stringify(firstErr);
+        } catch {
+          firstMsg = String(firstErr);
+        }
+        this.#logger?.warn("relay.adapter.newstream.first_attempt_failed", {
+          relayPeerId: this.#relayPeerId,
+          error: firstMsg,
+        });
         for (const addr of this.#relayMultiaddrs) {
           try { await node.dial(addr); break; } catch { /* try next */ }
         }
