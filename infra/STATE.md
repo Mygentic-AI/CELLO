@@ -12,7 +12,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 ## Environments
 
 ### dev — us-east-1
-*Last deployed: 2026-06-08
+*Last deployed: 2026-06-09
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -140,7 +140,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 - ap-northeast-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-ap1.cello.mygentic.ai --type String --region ap-northeast-1`
 
 ### dev — eu-central-1
-*Last deployed: 2026-06-07
+*Last deployed: 2026-06-09
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -196,7 +196,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | SNS Topic — ops-warning | arn:aws:sns:eu-central-1:257394457473:cello-ops-warning-dev |
 
 ### dev — ap-northeast-1
-*Last deployed: 2026-06-07
+*Last deployed: 2026-06-09
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
