@@ -271,15 +271,34 @@ export class NetworkRelayAdapter implements RelayAdapter {
           relayPeerId: this.#relayPeerId,
           error: firstMsg,
         });
+        let dialSucceeded = false;
         for (const addr of this.#relayMultiaddrs) {
-          try { await node.dial(addr); break; } catch { /* try next */ }
+          try {
+            await node.dial(addr);
+            dialSucceeded = true;
+            break;
+          } catch (dialErr: unknown) {
+            let dialMsg: string;
+            try {
+              dialMsg = dialErr instanceof Error ? dialErr.message : JSON.stringify(dialErr);
+            } catch {
+              dialMsg = String(dialErr);
+            }
+            this.#logger?.warn("relay.adapter.redial.failed", { addr, error: dialMsg });
+          }
+        }
+        if (!dialSucceeded) {
+          const addrList = this.#relayMultiaddrs.length > 0 ? this.#relayMultiaddrs.join(", ") : "(no addresses configured)";
+          throw new Error(`relay.adapter.redial: all addresses failed — ${addrList}`);
         }
         return node.newStream(this.#relayPeerId, DIRECTORY_RELAY_PROTOCOL_ID);
       },
     );
+    let closeSent = false;
     try {
       stream.send(lp.encode.single(frameBytes));
       await stream.close();
+      closeSent = true;
 
       for await (const chunk of lp.decode(stream)) {
         const bytes = chunk instanceof Uint8Array ? chunk : (chunk as unknown as { slice(): Uint8Array }).slice();
@@ -288,7 +307,7 @@ export class NetworkRelayAdapter implements RelayAdapter {
 
       throw new Error("NetworkRelayAdapter: no response frame received");
     } finally {
-      stream.close().catch(() => {});
+      if (!closeSent) stream.close().catch(() => {});
     }
   }
 }
