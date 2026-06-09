@@ -1003,3 +1003,90 @@ When the initiator sent a SEAL ctrl frame, the responder called `#submitSealLeaf
 3. Wait for `AUTH Peer 12ccbfd5` in directory logs (demo agent re-authenticates)
 4. Run AC-005 + AC-006 full flow
 
+---
+
+## 2026-06-09 — M6-E2E-001 AC-005/AC-006 post-mortem: transport_unavailable after successful initiate_session
+
+**Status:** Fix complete. `@cello-protocol/connect@0.0.39` pushed to CI (publishing to beta).
+
+### The bug
+
+After `cello_initiate_session` returned `ok: true`, every subsequent `cello_send` immediately returned `transport_unavailable`. The session was established (FROST ceremony completed, relay stream opened), but the client could not use it to send.
+
+### Root cause
+
+`cello_send` resolves the relay stream by calling `RelayStreamManager.getRelayStream(sessionId)`, which reads from the in-memory `#relayStreams` map. That map was **never populated** during the initial session assignment path.
+
+The `#relayStreams` map is populated by `RelayStreamManager.setRelayStream(sessionId, stream)`. There are two call sites in the codebase where a relay stream is established:
+
+1. **Initial assignment path** (`session-manager.ts` `receiveSessionAssignment`) — responsible for the first connection after FROST DKG. **This was the broken path.** It dialed the relay, opened the stream, called `initRelaySession` and `runRelayStreamReader`, but never called `setRelayStream`.
+
+2. **Reconnect path** (`relay-stream-manager.ts` line 379) — handles re-dialing after a dropped connection. This path correctly calls `this.#relayStreams.set(sessionIdHex, newStream)` before calling `runRelayStreamReader`. **This was the reference implementation.**
+
+The two paths diverged silently: the reconnect path worked, the initial path did not.
+
+### How the regression was introduced
+
+The M6B-017 refactor (commit `ebc636e`, titled "refactor(client): extract session management into SessionManager class") split the original 6,198-line `client.ts` into six manager classes. During extraction, `setRelayStream` was explicitly present in the original extraction commit (`5dc8383`):
+
+```
+// extraction commit 5dc8383 — SessionManagerCtx interface
+setRelayStream(sessionIdHex: string, stream: Stream): void;
+```
+
+The subsequent refactor commit (`ebc636e`) removed `setRelayStream` from the `SessionManagerCtx` interface and removed the corresponding call from `receiveSessionAssignment`. The reconnect path was not touched — it lives in a different method on `RelayStreamManager` and was never extracted.
+
+There was no type error. No test failed. The broken path only executes after a successful FROST ceremony against live infrastructure — an integration test that was not run as part of the refactor.
+
+### Why it took 6 days to find
+
+The error message `transport_unavailable` was unhelpful. It is the same error returned for at least three distinct failure modes:
+1. No relay stream (the actual bug)
+2. Relay authentication failure
+3. Relay connection timeout
+
+All 6 days of investigation before this session were consumed by infrastructure issues that were real and also needed fixing (manifest missing multiaddrs/peerId, directory cold-start share loading, Uint8Array serialization, signaling stream reconnect on seal). Each of those fixes was verified with `cello_initiate_session` returning `ok: true` — but the subsequent `cello_send` failure was never reached until this session.
+
+When `transport_unavailable` appeared again after `initiate_session` returned `ok: true`, the first hypothesis was "the relay stream closed between initiate and send." Multiple arguments were made for this (stream timeout, relay restart, timing). None were proven. The actual cause — the map was never populated in the first place — was not reached until the operator pushed back: "try to disprove your theory."
+
+That challenge forced a shift from "what could explain this error" to "what is the producer/consumer chain." Tracing it:
+
+1. `cello_send` → `#sendMessageLocked` → `getRelayStream(sessionId)` → returns `undefined`
+2. `getRelayStream` → reads `this.#relayStreams.get(sessionId)` → map is empty
+3. Who writes to `#relayStreams`? Only `setRelayStream`
+4. Where is `setRelayStream` called? Search results: reconnect path only
+5. Should `receiveSessionAssignment` call it? Compare with reconnect path — yes
+
+The producer/consumer framing made the gap obvious in one read.
+
+### The fix
+
+One line added to `session-manager.ts` `receiveSessionAssignment`, mirroring the reconnect path:
+
+```typescript
+this.#ctx.initRelaySession(sessionIdHex);
+this.#ctx.setRelayStream(sessionIdHex, relayStream);  // ← ADDED: mirrors reconnect path
+if (!this.#ctx.getMyPubkeyHex()) this.#ctx.setMyPubkeyHex(myPubkeyHex);
+this.#ctx.runRelayStreamReader(sessionIdHex, relayStream, myPubkeyHex, relayIter);
+```
+
+One matching wiring line added to `client-wiring.ts`:
+
+```typescript
+setRelayStream: (id, stream) => f.relayStreamManager.setRelayStream(id, stream),
+```
+
+`setRelayStream` added back to the `SessionManagerCtx` interface.
+
+All 330 tests pass. Code reviewer approved with no actionable findings. The low-confidence observation about theoretical concurrent duplicate assignments was explicitly not a code change.
+
+### The lesson
+
+**Error messages are not root causes.** `transport_unavailable` described where the failure surfaced, not why. Six days of genuine infrastructure debugging were required before the actual client-side cause was reachable — but once infrastructure was ruled out, the first thing that should have happened was tracing the producer/consumer chain for the relay stream.
+
+**The reconnect path is the reference implementation.** When two paths should do the same thing, they must be compared explicitly. A refactor that extracts one path without checking the other path silently diverges them. The correct check after any extraction refactor: find every other call site that should do the same thing and verify both paths are equivalent.
+
+**Hypotheses stated as facts create drag.** Once "the stream closed between initiate and send" was stated as a probable cause, subsequent evidence was filtered through that frame. Logs were read looking for stream closure events. None were found — but that absence was treated as inconclusive rather than evidence against the hypothesis. The correct discipline: state what evidence shows, not what it implies; require falsification before implementation.
+
+**Versions:** `@cello-protocol/client` 0.0.28 → 0.0.29, `@cello-protocol/connect` 0.0.38 → 0.0.39. Fix commit: `e87572f`.
+
