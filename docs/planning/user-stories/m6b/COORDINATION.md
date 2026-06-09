@@ -883,3 +883,173 @@ c) The relay is healthy but the libp2p connection attempt fails for networking r
 
 All diagnostic `process.stderr.write` lines remain in the codebase on main as of 0.0.36 and
 should be cleaned up once the relay issue is resolved.
+
+---
+
+### 2026-06-09 — M6-E2E-001 AC-005 RESOLVED: root cause post-mortem
+
+**Result:** `cello_initiate_session` returned `{ok: true, session_id: "b752ee59..."}` at 09:22 UTC.
+Six days of investigation. The fix: 4 files, ~40 lines.
+
+---
+
+#### What we tested / what we eliminated
+
+This entry reconstructs the full diagnostic arc from the COORDINATION log, commit history, and today's session.
+
+**Day 1–2 (2026-06-03 to 2026-06-04): Infrastructure wasn't ready**
+
+The first attempts at AC-005 never got a clean run because M6B was incomplete. The relay had no
+auto-registration, the directory had a hardcoded relay IP in its task def, and 7 orphan `cello-mcp`
+processes were competing for FROST ceremonies. These failures were infrastructure, not protocol.
+
+**Day 3 (2026-06-05 to 2026-06-06): Nuclear reset + REPOSPLIT-002**
+
+After the nuclear reset recreated all ECS stacks, the relay wouldn't register at all because:
+1. No NAT gateway — relay in private subnet couldn't reach the directory's public ALB
+2. `CELLO_DIRECTORY_MULTIADDR` was empty (deploy.sh never passed it, `Default: ""` in CFN)
+3. Route53 A record for `directory-us1.cello.mygentic.ai` was deleted by `purge_stale_dns_record()`
+   running unconditionally against a healthy stack
+
+REPOSPLIT-002 was also completed in this window — `workspace:*` references to cello-client packages
+replaced with published semver. Stale Dockerfiles had to be fixed separately (they still COPY'd
+the deleted local package directories).
+
+**Day 4 (2026-06-07): Stale IP in NetworkRelayAdapter**
+
+With infrastructure finally stable, `cello_initiate_session` returned `relay_unavailable` on every
+attempt. Root cause: `NetworkRelayAdapter` used a static `/ip4/10.0.X.X/tcp/4000` address baked
+into the ECS task definition. When the relay ECS task was replaced and got a new private IP, the
+directory's adapter kept dialing the dead container.
+
+This had been the recurring failure across all of M6/M6B. Not a race condition, not a routing issue
+— a stale IP in a static env var. The underlying libp2p error was swallowed (serialized as
+`[object Object]`) and the label `relay_unavailable` was all that was visible. It took adding
+structured error logging (`4ff57a4`) to surface enough signal to see it.
+
+Fix (`a60ac4e`): relay now sends a `multiaddr` field in `relay_register`. Directory calls
+`updateMultiaddr()` on the adapter when registration arrives. Self-healing from this point.
+
+**Day 5 (2026-06-08): SIGTERM race with FROST ceremony**
+
+After the relay fix, failure mode changed: `directory_unreachable` on every `cello_initiate_session`.
+Diagnostic logging across 4 published versions (0.0.33–0.0.36) established:
+- The signaling stream was staying alive (DIAG-A did NOT fire)
+- `session_assignment` WAS arriving at the client (DIAG-B fired)
+- The ceremony was completing (aggregate OK, sigLength=64 in logs)
+- Process was exiting immediately after ceremony completion
+
+Root cause: M6B-001's SIGTERM handler was `process.exit(0)` — immediate exit on receiving
+SIGTERM from the lock file's kill of the prior process. The ceremony completed but the process
+exited before `session_assignment` could be processed. Every new Claude Code session or `/mcp`
+reconnect triggered the kill, which guaranteed the first `cello_initiate_session` would fail.
+
+Fix (`graceful shutdown in 0.0.34`): SIGTERM handler polls `hasInFlightCryptoOperation()` every
+50ms for up to 4 seconds before exit. Ceremony always completes within that window.
+
+**Day 5 continued: relay_auth_error**
+
+After the SIGTERM fix, failure mode changed again: `relay_auth_error`. The ceremony completed, the
+`session_assignment` arrived, but the client couldn't open a libp2p stream to the relay.
+
+Diagnostic logging (DIAG-C3/C4) confirmed: `receiveSessionAssignment` → `newStream(relayPeerId,
+RELAY_PROTOCOL_ID)` was throwing. The relay peer ID and multiaddr came from the `session_assignment`
+frame — specifically from `pickRelay()` reading the S3 manifest.
+
+Checked the manifest: version 11, updated at 06:13 UTC. **The `multiaddrs` and `peerId` fields were
+missing.** The manifest only had `relayId` (hex Ed25519 key, NOT a libp2p PeerId), `endpoint`
+(`wss://relay-us1.cello.mygentic.ai` — NOT a libp2p multiaddr), and `healthCheckUrl`.
+
+`pickRelay()` in `directory-node.ts` built the assignment with:
+```
+multiaddrs: picked.multiaddrs ?? [picked.endpoint]
+peer_id: picked.peerId ?? picked.relayId
+```
+
+So the client received `wss://relay-us1.cello.mygentic.ai` as the multiaddr (not dialable as
+libp2p) and the hex Ed25519 key as the peer ID (not a libp2p PeerId). `newStream` threw immediately.
+
+---
+
+#### The actual root cause
+
+Two missing fields in the S3 manifest. The relay sent a correct multiaddr during registration
+(commit `7a1df1a` added `CELLO_RELAY_PUBLIC_MULTIADDR` env var and `/p2p/` suffix to the
+`relay_register` frame). But `reSignManifestForRelay` in the directory never wrote those fields
+to the manifest — it only updated `healthCheckUrl`.
+
+Fix (`7c6a493`):
+- `relay-pool-manager.ts`: `reSignManifestForRelay` accepts `multiaddr?: string`, extracts
+  the `/p2p/<peerId>` suffix, writes `relayEntry.multiaddrs = [multiaddr]` and
+  `relayEntry.peerId = p2pSuffix[1]` to the manifest entry. Throws if `/p2p/` is absent.
+  Tracks `#relayMultiaddrs` in memory for no-op comparison.
+- `directory-node.ts`: passes `multiaddr: multiaddr ?? undefined` at the call site.
+
+After fix: manifest version 13, relay registered at 09:22 UTC. `multiaddrs` and `peerId` present.
+`cello_initiate_session` returned `ok: true`.
+
+---
+
+#### Why it took six days
+
+Three compounding factors:
+
+**1. Layered failures masked the real problem.**
+Each fix unblocked the next failure. The failure sequence was:
+- No NAT gateway → relay can't register → `relay_unavailable`
+- Stale IP in adapter → `relay_unavailable` (same symptom, different cause)
+- SIGTERM race → `directory_unreachable`
+- Missing manifest fields → `relay_auth_error`
+
+Each layer looked like the same class of problem until the previous layer was fixed. You couldn't
+see layer N+1 until layer N was resolved. And each layer required a 25-30 minute directory
+pipeline deploy to verify.
+
+**2. The deploy cycle cost was brutal.**
+Every hypothesis test cost 25-30 minutes of pipeline. The relay also has no reconnection logic —
+every directory redeploy required a manual relay restart afterward. Several sessions were consumed
+just waiting for deploys that deployed the wrong thing (accidental reverts, wrong images in ECR,
+Dockerfiles referencing deleted directories).
+
+**3. Observability gaps hid the real failure.**
+- `NetworkRelayAdapter` serialized libp2p errors as `[object Object]` — invisible until `4ff57a4`
+- `reSignManifestForRelay` had a `catch()` block but the logger was unwired — errors swallowed silently
+- The IAM `s3:PutObject` denial on the manifest bucket was completely silent (fixed in `1848bcf`)
+- Without the manifest fields, `pickRelay()` silently fell back to the wrong values — no warning logged
+
+Every time the actual error was surfaced (through adding logging, reading CloudTrail, checking S3
+directly), the diagnosis took minutes. Every time we were working from symptoms alone, it took hours.
+
+---
+
+#### Rules this creates
+
+**Manifest fields must be populated at registration, not health-check time.**
+The relay registers once at startup and sends its full address. That's the moment to write
+`multiaddrs` and `peerId` to the manifest. Waiting for a health state transition means the fields
+stay missing forever if the relay stays healthy.
+
+**After any directory redeploy, restart the relay.**
+The relay registers once at startup. If the directory redeploys, the relay's stream to the old
+container is dead. The relay has no reconnection logic (as of M6B). Until reconnect is implemented
+(M6B-018), the relay must be manually restarted after every directory redeploy.
+
+**Manifest S3 operations need explicit IAM verification.**
+`s3:GetObject` and `s3:PutObject` on the relay manifest bucket are both required by the directory.
+The IAM template must grant both. Any silent S3 failure must be detectable from CloudWatch — the
+catch block must log with context, not just swallow.
+
+**IAM changes require updating the IAC validation test.**
+`deploy-001-iac-validation.test.ts` asserts exact IAM permissions. When IAM legitimately changes,
+the test must be updated. The test failed because `s3:GetObject` was added (correctly) but the
+assertion still banned it.
+
+---
+
+#### What is still open
+
+- Diagnostic `process.stderr.write` lines in `cello-client` (from 0.0.33–0.0.36) should be cleaned up
+- Relay has no reconnection logic — after every directory redeploy, relay must be manually restarted
+  (tracked as M6B-018 dependency)
+- `mcp-server.ts` refactor (1,674 lines → 6 focused files) — planned, not yet a story
+- Interface endpoint removal (M6B-014 stage 2 — 6 VPC endpoints still present, planned cleanup)
