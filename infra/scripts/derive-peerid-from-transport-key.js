@@ -114,9 +114,20 @@ try {
   ]);
 
   // 3. Identity multihash: code=0x00, length=<varint of protobuf length>, data=protobuf
-  // For Ed25519 keys (36 bytes protobuf), the identity multihash is used directly.
+  // Use a proper varint encoder to support key types with protobuf lengths > 127 bytes.
+  // Ed25519 protobuf is 36 bytes (fits in a single-byte varint), but other key types may not.
+  function encodeVarint(value) {
+    const bytes = [];
+    while (value > 0x7f) {
+      bytes.push((value & 0x7f) | 0x80);
+      value >>>= 7;
+    }
+    bytes.push(value);
+    return Buffer.from(bytes);
+  }
   const multihashBytes = Buffer.concat([
-    Buffer.from([0x00, protobuf.length]),
+    Buffer.from([0x00]),
+    encodeVarint(protobuf.length),
     protobuf,
   ]);
 

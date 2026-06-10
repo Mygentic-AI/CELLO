@@ -43,6 +43,11 @@ export interface NodeRegistryEntry {
   port: number;
   transport: string;
   status: string;
+  /** Ed25519 public key hex — used as relayId to match relay_register frames.
+   * Derived from cello/{env}/relay/node-private-key in Secrets Manager.
+   * Populated by deploy.sh Step 6.7. Optional for backward-compat with older entries.
+   */
+  nodeId?: string;
 }
 
 /**
@@ -53,6 +58,10 @@ export interface NodeRegistryResolvedRelay {
   peerId: string;
   multiaddr: string;
   region: string;
+  /** Ed25519 public key hex — used as relayId for RelayManifestEntry and relay_register matching.
+   * Empty string if the SSM entry predates the nodeId field (backward-compat).
+   */
+  nodeId: string;
 }
 
 /**
@@ -126,7 +135,8 @@ export function parseNodeRegistryEntries(
     }
 
     // Validate required fields
-    if (!entry.hostname || !entry.peerId || !entry.port || !entry.transport || !entry.status) {
+    // Note: entry.port == null || entry.port <= 0 instead of !entry.port to reject port:0 correctly
+    if (!entry.hostname || !entry.peerId || entry.port == null || entry.port <= 0 || !entry.transport || !entry.status) {
       logger.warn("node.registry.parse.failed", {
         parameterName: param.Name,
         error: "missing required fields (hostname, peerId, port, transport, status)",
@@ -152,13 +162,15 @@ export function parseNodeRegistryEntries(
     const multiaddr = constructRelayMultiaddr(entry);
 
     if (isRelay) {
+      const nodeId = entry.nodeId ?? "";
       logger.info("node.registry.relay.resolved", {
         hostname: entry.hostname,
         peerId: entry.peerId,
         multiaddr,
         region: entryRegion,
+        nodeId,
       });
-      relays.push({ hostname: entry.hostname, peerId: entry.peerId, multiaddr, region: entryRegion });
+      relays.push({ hostname: entry.hostname, peerId: entry.peerId, multiaddr, region: entryRegion, nodeId });
     } else if (isDirectory) {
       directories.push({ hostname: entry.hostname, peerId: entry.peerId, multiaddr, region: entryRegion });
     }

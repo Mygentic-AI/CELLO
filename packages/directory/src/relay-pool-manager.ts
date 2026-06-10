@@ -397,7 +397,22 @@ export class RelayPoolManager {
       }
     }
 
-    this.#currentRelays = manifest.relays;
+    // Finding 3 fix: preserve SSM-seeded peerId/multiaddrs across manifest poll cycles.
+    // applyManifest replaces #currentRelays with the manifest's relay list. The S3 manifest
+    // carries healthCheckUrl and relayId but NOT peerId/multiaddrs — those come from SSM seeding
+    // at startup. Without this merge, the first manifest poll (every 2 minutes) would discard
+    // SSM-seeded peerId and multiaddrs, breaking DNS-based relay addressing.
+    const oldRelays = this.#currentRelays;
+    this.#currentRelays = manifest.relays.slice();
+    for (const entry of this.#currentRelays) {
+      const seeded = oldRelays.find(r => r.relayId === entry.relayId);
+      if (seeded) {
+        if (!entry.peerId && seeded.peerId) entry.peerId = seeded.peerId;
+        if ((!entry.multiaddrs || entry.multiaddrs.length === 0) && seeded.multiaddrs?.length) {
+          entry.multiaddrs = seeded.multiaddrs;
+        }
+      }
+    }
 
     if (!suppressLoadedLog) {
       this.#logger.info("relay.manifest.loaded", {

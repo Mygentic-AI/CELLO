@@ -630,12 +630,15 @@ echo "  /cello/${ENVIRONMENT}/directory/manifest-signer-pubkey: OK"
 echo ""
 echo "── Writing node registry SSM parameters (M6B-019) ─────────────────"
 
-# Derive relay peer ID for each region
+# Derive relay peer ID and nodeId for each region.
+# RELAY_PEER_IDS  — libp2p PeerId (transport-key derived, base58btc) — used in multiaddrs for dialing.
+# RELAY_NODE_IDS  — Ed25519 pubkey hex (node-private-key derived) — matches relay_register relayId field.
 declare -A RELAY_PEER_IDS
+declare -A RELAY_NODE_IDS
 declare -A DIRECTORY_PEER_IDS
 
 for NODE_REGION in us-east-1 eu-central-1 ap-northeast-1; do
-  # Read or derive relay peer ID
+  # Read or derive relay peer ID (transport-key derived libp2p PeerId for multiaddr)
   _RELAY_PEER_ID=$(aws ssm get-parameter \
     --name "/cello/${ENVIRONMENT}/relay/peer-id" \
     --region "${NODE_REGION}" \
@@ -672,6 +675,28 @@ for NODE_REGION in us-east-1 eu-central-1 ap-northeast-1; do
     fi
   else
     RELAY_PEER_IDS["${NODE_REGION}"]="${_RELAY_PEER_ID}"
+  fi
+
+  # Derive relay nodeId (Ed25519 pubkey hex from node-private-key).
+  # This matches the relayId sent in relay_register frames so the directory can
+  # look up SSM-seeded entries by relayId and update healthCheckUrl (AC-006 fix).
+  _RELAY_NODE_PRIV=$(aws secretsmanager get-secret-value \
+    --secret-id "cello/${ENVIRONMENT}/relay/node-private-key" \
+    --region "${NODE_REGION}" \
+    --query 'SecretString' \
+    --output text 2>/dev/null || echo "")
+  if [[ -n "${_RELAY_NODE_PRIV}" && "${_RELAY_NODE_PRIV}" != "PLACEHOLDER_POPULATE_VIA_CLI" ]]; then
+    _RELAY_NODE_ID=$(printf '%s' "${_RELAY_NODE_PRIV}" | node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts/derive-pubkey.js" 2>/dev/null)
+    if [[ -n "${_RELAY_NODE_ID}" ]]; then
+      echo "  Derived relay nodeId for ${NODE_REGION}: ${_RELAY_NODE_ID:0:16}..."
+      RELAY_NODE_IDS["${NODE_REGION}"]="${_RELAY_NODE_ID}"
+    else
+      echo "  NOTE: Failed to derive relay nodeId for ${NODE_REGION} — relay_register matching will fall back to hostname-derived label."
+      RELAY_NODE_IDS["${NODE_REGION}"]=""
+    fi
+  else
+    echo "  NOTE: cello/${ENVIRONMENT}/relay/node-private-key not found in ${NODE_REGION} — nodeId omitted from SSM entry."
+    RELAY_NODE_IDS["${NODE_REGION}"]=""
   fi
 
   # Read directory peer ID
@@ -715,7 +740,14 @@ for NODE_REGION in us-east-1 eu-central-1 ap-northeast-1; do
   _RELAY_PID="${RELAY_PEER_IDS[${NODE_REGION}]}"
   if [[ -n "${_RELAY_PID}" ]]; then
     _RELAY_HOST="$(get_relay_subdomain "${NODE_REGION}").${DOMAIN_NAME}"
-    _RELAY_JSON="{\"hostname\":\"${_RELAY_HOST}\",\"peerId\":\"${_RELAY_PID}\",\"port\":443,\"transport\":\"ws\",\"status\":\"active\"}"
+    _RELAY_NID="${RELAY_NODE_IDS[${NODE_REGION}]:-}"
+    if [[ -n "${_RELAY_NID}" ]]; then
+      # Include nodeId (Ed25519 pubkey hex) so directory can match relay_register frames by relayId (AC-006)
+      _RELAY_JSON="{\"hostname\":\"${_RELAY_HOST}\",\"peerId\":\"${_RELAY_PID}\",\"nodeId\":\"${_RELAY_NID}\",\"port\":443,\"transport\":\"ws\",\"status\":\"active\"}"
+    else
+      # Backward-compat: nodeId omitted when node-private-key not yet populated
+      _RELAY_JSON="{\"hostname\":\"${_RELAY_HOST}\",\"peerId\":\"${_RELAY_PID}\",\"port\":443,\"transport\":\"ws\",\"status\":\"active\"}"
+    fi
     aws ssm put-parameter \
       --name "/cello/${ENVIRONMENT}/nodes/relay/aws-${NODE_REGION}" \
       --value "${_RELAY_JSON}" \

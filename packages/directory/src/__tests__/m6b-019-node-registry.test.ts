@@ -412,20 +412,122 @@ describe("CELLO-M6B-019: RelayPoolManager — seed relay entries", () => {
   });
 });
 
-describe("CELLO-M6B-019: Node Registry — AC-010 local fallback", () => {
+describe("CELLO-M6B-019: Node Registry — AC-010 and nodeId field", () => {
   let logger: ReturnType<typeof createCapturingLogger>;
 
   beforeEach(() => {
     logger = createCapturingLogger();
   });
 
-  // AC-010: CELLO_ENV=local uses env var, logs source: 'env'
-  it("AC-010: parseNodeRegistryEntries not called for CELLO_ENV=local (tested via integration)", () => {
-    // This test verifies the parseNodeRegistryEntries function handles
-    // the case where it's called with empty params (simulating what would happen
-    // if somehow called in local mode with no SSM data)
-    const result = parseNodeRegistryEntries([], "local", logger);
+  // AC-010: CELLO_ENV=local logging of source:'env' is in the composition root (directory.ts)
+  // and is not testable here. Coverage is provided by the integration test that runs the full
+  // startup with CELLO_ENV=local and asserts the node.registry.loaded event with source:'env'.
+  //
+  // What IS testable here: that parseNodeRegistryEntries with params that produce zero relay
+  // entries (all inactive) still emits node.registry.empty — covering the case where SSM has
+  // entries but none are active (a distinct failure mode from no entries at all).
+  it("AC-010/DB-001: emits node.registry.empty when all SSM relay entries are inactive", () => {
+    const ssmParams = [
+      {
+        Name: "/cello/dev/nodes/relay/aws-us-east-1",
+        Value: JSON.stringify({
+          hostname: "relay-us1.cello.mygentic.ai",
+          peerId: "12D3KooWRelay1",
+          port: 443,
+          transport: "ws",
+          status: "draining", // inactive — should be excluded
+        }),
+      },
+      {
+        Name: "/cello/dev/nodes/relay/aws-eu-central-1",
+        Value: JSON.stringify({
+          hostname: "relay-eu1.cello.mygentic.ai",
+          peerId: "12D3KooWRelay2",
+          port: 443,
+          transport: "ws",
+          status: "inactive", // also excluded
+        }),
+      },
+    ];
+
+    const result = parseNodeRegistryEntries(ssmParams, "us-east-1", logger);
+
     expect(result.relays).toHaveLength(0);
-    expect(result.directories).toHaveLength(0);
+    // Must emit node.registry.empty at ERROR — on-call engineers must be alerted
+    const emptyEvent = logger.events.find(e => e.event === "node.registry.empty");
+    expect(emptyEvent).toBeDefined();
+    expect(emptyEvent!.level).toBe("error");
+    expect(emptyEvent!.ctx.guidance).toBeDefined();
+    // Must NOT also emit node.registry.loaded — that would be misleading
+    const loadedEvent = logger.events.find(e => e.event === "node.registry.loaded");
+    expect(loadedEvent).toBeUndefined();
+  });
+
+  // Finding 2: nodeId field is propagated from SSM entries to NodeRegistryResolvedRelay
+  // so relay_register lookup can match by Ed25519 pubkey hex.
+  it("nodeId field is propagated from SSM entry to resolved relay result", () => {
+    const relayNodeId = "a".repeat(64); // 32-byte Ed25519 pubkey hex
+    const ssmParams = [
+      {
+        Name: "/cello/dev/nodes/relay/aws-us-east-1",
+        Value: JSON.stringify({
+          hostname: "relay-us1.cello.mygentic.ai",
+          peerId: "12D3KooWRelay1",
+          nodeId: relayNodeId, // Ed25519 pubkey hex — matches relay_register relayId
+          port: 443,
+          transport: "ws",
+          status: "active",
+        }),
+      },
+    ];
+
+    const result = parseNodeRegistryEntries(ssmParams, "us-east-1", logger);
+
+    expect(result.relays).toHaveLength(1);
+    expect(result.relays[0]!.nodeId).toBe(relayNodeId);
+  });
+
+  // Backward-compat: SSM entries without nodeId produce empty string nodeId
+  it("nodeId defaults to empty string for backward-compat SSM entries without nodeId field", () => {
+    const ssmParams = [
+      {
+        Name: "/cello/dev/nodes/relay/aws-us-east-1",
+        Value: JSON.stringify({
+          hostname: "relay-us1.cello.mygentic.ai",
+          peerId: "12D3KooWRelay1",
+          // nodeId omitted — older SSM entry format
+          port: 443,
+          transport: "ws",
+          status: "active",
+        }),
+      },
+    ];
+
+    const result = parseNodeRegistryEntries(ssmParams, "us-east-1", logger);
+
+    expect(result.relays).toHaveLength(1);
+    expect(result.relays[0]!.nodeId).toBe("");
+  });
+
+  // Finding 6: port:0 is rejected as invalid (not just falsy check)
+  it("rejects relay entry with port:0 (zero port is invalid)", () => {
+    const ssmParams = [
+      {
+        Name: "/cello/dev/nodes/relay/aws-us-east-1",
+        Value: JSON.stringify({
+          hostname: "relay-us1.cello.mygentic.ai",
+          peerId: "12D3KooWRelay1",
+          port: 0, // invalid — zero port should fail validation
+          transport: "ws",
+          status: "active",
+        }),
+      },
+    ];
+
+    const result = parseNodeRegistryEntries(ssmParams, "us-east-1", logger);
+
+    expect(result.relays).toHaveLength(0);
+    const failedEvent = logger.events.find(e => e.event === "node.registry.parse.failed");
+    expect(failedEvent).toBeDefined();
   });
 });

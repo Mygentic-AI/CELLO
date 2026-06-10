@@ -85,6 +85,18 @@ const listenAddr = process.env["CELLO_DIRECTORY_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/t
 // Default: /ip4/0.0.0.0/tcp/8080/ws (port 8080 matches the ALB target group).
 // Set CELLO_DIRECTORY_WS_LISTEN_ADDR="" to disable the WS listener.
 const wsListenAddr = process.env["CELLO_DIRECTORY_WS_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/tcp/8080/ws";
+// Finding 8 fix: validate CELLO_ENV before any env-dependent checks (relay addr, SSM, etc.)
+// so an unrecognised value gets a clear error rather than a confusing AWS SDK error.
+if (!env) {
+  logger.error("adapter.config.missing", { missingKey: "CELLO_ENV", env: "(unset)" });
+  process.exit(1);
+}
+
+if (env !== "local" && env !== "dev" && env !== "staging" && env !== "production") {
+  logger.error("adapter.config.missing", { missingKey: "CELLO_ENV", env, reason: "unrecognised value" });
+  process.exit(1);
+}
+
 // CELLO-M6B-019: CELLO_RELAY_MULTIADDR is only used for CELLO_ENV=local.
 // For dev/staging/production, relay addressing comes from SSM node registry at startup.
 const relayAddr = process.env["CELLO_RELAY_MULTIADDR"];
@@ -99,16 +111,6 @@ const startedAt = Date.now();
 // dev/staging/production use SSM node registry (loaded later in "Relay setup" section).
 if (env === "local" && !relayAddr) {
   logger.error("adapter.config.missing", { missingKey: "CELLO_RELAY_MULTIADDR", env });
-  process.exit(1);
-}
-
-if (!env) {
-  logger.error("adapter.config.missing", { missingKey: "CELLO_ENV", env: "(unset)" });
-  process.exit(1);
-}
-
-if (env !== "local" && env !== "dev" && env !== "staging" && env !== "production") {
-  logger.error("adapter.config.missing", { missingKey: "CELLO_ENV", env, reason: "unrecognised value" });
   process.exit(1);
 }
 
@@ -484,8 +486,8 @@ if (pgPool) {
 
 import { parseNodeRegistryEntries, type SsmParameter } from "../node-registry.js";
 
-let relayPeerId: string;
-let relayMultiaddrs: string[];
+let relayPeerId: string = "";
+let relayMultiaddrs: string[] = [];
 let ssmRelayEntries: Array<{ relayId: string; peerId: string; multiaddr: string; hostname: string; region: string }> = [];
 
 if (env === "local") {
@@ -530,34 +532,47 @@ if (env === "local") {
     } while (nextToken);
   } catch (err: unknown) {
     const reason = err instanceof Error ? err.message : String(err);
+    // Finding 1 fix: emit node.registry.empty once here, then skip parseNodeRegistryEntries
+    // (which would emit it a second time) by leaving ssmParams empty and falling to the else branch.
     logger.error("node.registry.empty", {
       ssmPath,
       region: awsRegion,
       guidance: `Failed to read SSM node registry: ${reason}. Run deploy.sh to populate the node registry.`,
     });
+    relayPeerId = "";
+    relayMultiaddrs = [];
     // Start but relay will be unavailable — DB-001 degraded behavior
   }
 
-  const registryResult = parseNodeRegistryEntries(ssmParams, awsRegion, logger);
+  // Only call parseNodeRegistryEntries when SSM returned at least one parameter.
+  // When ssmParams is empty due to a caught SSM error above, we already emitted
+  // node.registry.empty and set relayPeerId/relayMultiaddrs — skip to avoid double-emit.
+  if (ssmParams.length > 0) {
+    const registryResult = parseNodeRegistryEntries(ssmParams, awsRegion, logger);
 
-  if (registryResult.relays.length > 0) {
-    // Use the first relay as the primary dial target for NetworkRelayAdapter
-    const primaryRelay = registryResult.relays[0]!;
-    relayPeerId = primaryRelay.peerId;
-    relayMultiaddrs = registryResult.relays.map(r => r.multiaddr);
+    if (registryResult.relays.length > 0) {
+      // Use the first relay as the primary dial target for NetworkRelayAdapter
+      const primaryRelay = registryResult.relays[0]!;
+      relayPeerId = primaryRelay.peerId;
+      relayMultiaddrs = registryResult.relays.map(r => r.multiaddr);
 
-    // Store for RelayPoolManager seeding below
-    ssmRelayEntries = registryResult.relays.map(r => ({
-      relayId: r.hostname.split(".")[0]!, // e.g. "relay-us1" from "relay-us1.cello.mygentic.ai"
-      peerId: r.peerId,
-      multiaddr: r.multiaddr,
-      hostname: r.hostname,
-      region: r.region,
-    }));
-  } else {
-    // DB-001: No relay entries — start but relay_unavailable on every session request
-    relayPeerId = "";
-    relayMultiaddrs = [];
+      // Store for RelayPoolManager seeding below.
+      // Finding 2 fix: use r.nodeId (Ed25519 pubkey hex) as relayId so it matches
+      // the relayId sent in relay_register frames. r.nodeId is empty string for
+      // older SSM entries that predate the nodeId field — fall back to hostname-derived
+      // label only in that case (backward-compat).
+      ssmRelayEntries = registryResult.relays.map(r => ({
+        relayId: r.nodeId || r.hostname.split(".")[0]!, // nodeId = Ed25519 pubkey hex (matches relay_register)
+        peerId: r.peerId,
+        multiaddr: r.multiaddr,
+        hostname: r.hostname,
+        region: r.region,
+      }));
+    } else {
+      // DB-001: No relay entries — start but relay_unavailable on every session request
+      relayPeerId = "";
+      relayMultiaddrs = [];
+    }
   }
 }
 
@@ -635,8 +650,9 @@ relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes("manifest not found")) {
       // FEDERATION-E2E-001: secondary regions may not have a manifest yet.
-      // Fall back to CELLO_RELAY_MULTIADDR — the relay pool manager is non-operational.
-      logger.info("relay.manifest.not_found", { env, reason: "no manifest published yet, using CELLO_RELAY_MULTIADDR fallback" });
+      // RelayPoolManager is non-operational; session assignments will use the
+      // SSM-derived relay addresses from relayEndpoint directly.
+      logger.info("relay.manifest.not_found", { env, reason: "no manifest published yet" });
       mgr.stop();
       return undefined;
     }

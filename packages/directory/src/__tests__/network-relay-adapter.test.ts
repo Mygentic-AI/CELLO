@@ -493,7 +493,6 @@ describe("updateMultiaddr: adapter dials updated address after relay IP changes"
     // Start relay B (new ECS task, different IP = different listen address)
     const { relay: relayNodeB, node: relayLibp2pB, stop: stopRelayB } = await createRelayNode({ directoryPubkey: dirPubkey });
     scope.addCleanup(stopRelayB);
-    const relayPeerIdB = relayLibp2pB.getPeerId();
     const relayMultiaddrsB = relayLibp2pB.listenAddresses();
 
     // Simulate what relay_register handler does: update the adapter with the new multiaddr.
