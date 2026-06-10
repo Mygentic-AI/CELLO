@@ -12,7 +12,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 ## Environments
 
 ### dev — us-east-1
-*Last deployed: 2026-06-09
+*Last deployed: 2026-06-10
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -25,7 +25,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-07 | M6B-016 + relay logging fixes; image cello-directory:c45d811; task def :149 |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-10 | M6B-019 SSM node registry; image cello-directory:934d130; task def :170 |
 | cello-ecs-operations-agent-dev | UPDATE_COMPLETE | 2026-06-07 | M6B-016 registration engine; image cello-operations-agent:f4c3e72; task def :43; migrationVersion=30 confirmed healthy |
 | cello-waf-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-06-07 | Running task def :55 (pipeline-deployed 2026-06-07) |
@@ -57,7 +57,7 @@ Written by deploy.sh at deploy time. Directory reads at startup via `ssm:GetPara
 | /cello/dev/nodes/directory/aws-eu-central-1 | Directory node registry entry (eu-central-1) | deploy.sh step 6.7 |
 | /cello/dev/nodes/directory/aws-ap-northeast-1 | Directory node registry entry (ap-northeast-1) | deploy.sh step 6.7 |
 
-Status: NOT YET DEPLOYED (code committed in M6B-019, pending next deploy.sh run)
+Status: DEPLOYED 2026-06-10 — deploy.sh wrote all 6 parameters across all 3 regions; directory reading from SSM at startup as of image 934d130
 
 **Transport key secrets (all regions) — IMPORTED into cello-secrets-dev stack 2026-06-05:**
 | Secret | Logical ID | ARN | CFN Status |
@@ -157,7 +157,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 - ap-northeast-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-ap1.cello.mygentic.ai --type String --region ap-northeast-1`
 
 ### dev — eu-central-1
-*Last deployed: 2026-06-09
+*Last deployed: 2026-06-10
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -170,7 +170,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-07 | M6B-016 + relay logging fixes; image cello-directory:c45d811; task def :48 |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-10 | M6B-019 SSM node registry; image cello-directory:934d130; task def :59 |
 | cello-ecs-operations-agent-dev | NOT DEPLOYED | — | eu-central-1 only has PLACEHOLDER secrets; single instance runs in us-east-1 |
 | cello-waf-dev | CREATE_COMPLETE | 2026-06-06 | |
 | cello-ecs-relay-dev | CREATE_COMPLETE | 2026-06-06 | |
@@ -213,7 +213,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | SNS Topic — ops-warning | arn:aws:sns:eu-central-1:257394457473:cello-ops-warning-dev |
 
 ### dev — ap-northeast-1
-*Last deployed: 2026-06-09
+*Last deployed: 2026-06-10
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -226,7 +226,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-07 | M6B-016 + relay logging fixes; image cello-directory:c45d811; task def :39 |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-10 | M6B-019 SSM node registry; image cello-directory:934d130; task def :50 |
 | cello-ecs-operations-agent-dev | NOT DEPLOYED | — | ap-northeast-1 only has PLACEHOLDER secrets; single instance runs in us-east-1 |
 | cello-waf-dev | CREATE_COMPLETE | 2026-06-06 | |
 | cello-ecs-relay-dev | CREATE_COMPLETE | 2026-06-06 | |
@@ -355,7 +355,7 @@ Setup with: `./infra/setup-replication.sh dev`
 | ECR repo — operations-agent (us-east-1) | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; created by cello-ecr stack |
 | ECR repo — operations-agent (eu-central-1) | 257394457473.dkr.ecr.eu-central-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; replicated via account-level ECR replication |
 | ECR repo — operations-agent (ap-northeast-1) | 257394457473.dkr.ecr.ap-northeast-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; replicated via account-level ECR replication |
-| Current directory image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:c45d811 | M6B-016 + relay failure reason logging; deployed 2026-06-07 via pipeline; all 3 regions; task defs us-east-1:149, eu-central-1:48, ap-northeast-1:39 |
+| Current directory image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:934d130 | M6B-019 SSM node registry; deployed 2026-06-10 via pipeline; all 3 regions; task defs us-east-1:170, eu-central-1:59, ap-northeast-1:50 |
 | Current relay image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay:791f9ce | Deployed 2026-06-07 via pipeline; task defs us-east-1:55, eu-central-1:20, ap-northeast-1:15 |
 | Current operations-agent image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-operations-agent:f4c3e72 | M6B-016 registration engine; Dockerfile stale COPY lines fixed; deployed 2026-06-07 via pipeline; task def :43; migrationVersion=30 |
 | Route 53 Hosted Zone | cello.mygentic.ai | Zone ID read at deploy time via aws route53 list-hosted-zones |
