@@ -164,31 +164,62 @@ Perplexity recommended: AutoNAT, Kademlia DHT, gossipsub, circuit relay
 hop/stop. These are the right tools for a large open P2P network where you
 don't know your peers. CELLO is not that network — yet. Assessment:
 
-**AutoNAT — load-bearing for dcutr; not low priority.**
-Directories and relays have stable ALB DNS hostnames. They always know their
-public address. AutoNAT is designed for nodes that don't know if they're
-dialable and need to ask peers to check. Clients — which run on developer
-laptops with no stable DNS — need AutoNAT to determine whether their address
-is dialable, and to decide whether to advertise a direct multiaddr or a
-circuit-relay multiaddr.
+**AutoNAT — the precondition for dcutr to function; an M7 concern.**
 
-The original analysis called this "low priority." That was wrong. `dcutr()` —
-libp2p's hole-punching protocol — is already present in `createNode`. DCU
-upgrades two clients communicating through a relay to a direct connection when
-NAT permits. For dcutr to function correctly, a client must know whether it is
-dialable from the outside. Without AutoNAT, the client attempts hole-punching
-blind — it does not know if the other side can reach it. AutoNAT is the
-precondition for dcutr working at all.
+*Background: the NAT problem for clients.*
+Directories and relays have stable ALB DNS hostnames. They are always dialable
+from anywhere on the internet. Clients are different: they run on developer
+laptops on WiFi, behind home routers or corporate NAT. The laptop has an
+internal IP (`192.168.x.x`) that is unreachable from the outside. The router
+has a public IP, but inbound connections only succeed if port forwarding is
+configured — which it almost never is. The client can dial out to anyone, but
+it cannot determine from its own network interfaces whether inbound connections
+from peers will succeed.
 
-At scale — thousands of clients all relaying through 20–40 directory/relay nodes
-with stable DNS — the relay connection count becomes a real capacity concern.
-DHT and gossipsub remain unnecessary for node address propagation (the signed
-manifest handles that at any scale). But AutoNAT + dcutr is how CELLO moves
-some of that connection load off the relay once clients can reach each other
-directly. This matters at 1,000 clients, not just at 100,000.
+*What AutoNAT does.*
+AutoNAT asks a small set of known peers to attempt a dial-back to the client's
+advertised address. "Here is my multiaddr — try to reach me." If the dial-back
+succeeds: the client is dialable, it can advertise its direct multiaddr. If it
+fails: the client is behind NAT, it should advertise a circuit-relay multiaddr
+instead — meaning "reach me via the relay, not directly." Without AutoNAT, the
+client has no way to know which kind of address to advertise.
 
-Priority reassessment: AutoNAT is an M7 concern, not a future-network concern.
-It should be on the M7 outline alongside multi-agent client-to-client sessions.
+*Why this is load-bearing for dcutr.*
+`dcutr()` — libp2p's Direct Connection Upgrade Through Relay protocol — is
+already present in `createNode`. Its purpose: when two clients are communicating
+through a relay, attempt to upgrade to a direct connection if the NAT topology
+permits (hole-punching). This reduces relay load and improves latency.
+
+For dcutr to function, each client must know whether it is dialable and must
+advertise the right kind of address to its peer. A client that advertises a
+direct multiaddr when it is actually behind symmetric NAT will cause the
+hole-punch attempt to fail silently. A client that always advertises a
+circuit-relay multiaddr when it is dialable wastes relay capacity. AutoNAT
+gives the client the information it needs to make the correct choice.
+
+Without AutoNAT: dcutr fires blind. Two clients both behind NAT may attempt
+hole-punching and both fail. Or a dialable client advertises the wrong address
+and the upgrade never happens. Either way, sessions stay on the relay
+indefinitely when they could be direct.
+
+*Correction to earlier analysis.*
+The earlier version of this section called AutoNAT "low priority." That was
+wrong on two counts. First, it ignored dcutr: AutoNAT is not a
+nice-to-have enhancement, it is the precondition for the hole-punching
+protocol that is already wired into `createNode`. Second, the capacity argument
+that replaced it ("relay load at 1,000 clients") was also wrong — ECS tasks
+handling signaling streams scale horizontally without special concern, and
+relay bandwidth is the limiting factor for active sessions, not idle connection
+count. The directory and relay capacity story is ordinary ECS scaling, not a
+libp2p-specific problem.
+
+The real reason AutoNAT belongs in M7 is functional correctness: when two
+CELLO agents on different machines try to establish a direct session, each
+client needs to know what kind of address to advertise. That is the M7 use
+case, and AutoNAT is what makes it work correctly.
+
+Priority: AutoNAT is an M7 concern, not a future-network concern. It should be
+on the M7 outline alongside multi-agent client-to-client sessions.
 
 **DHT — premature.**
 The DHT is designed for a network where you don't know the addresses of peers
