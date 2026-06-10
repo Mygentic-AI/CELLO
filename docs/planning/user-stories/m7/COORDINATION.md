@@ -133,6 +133,46 @@ Key facts from M6 that were not known when these stories were written:
 
 ---
 
+## AutoNAT / dcutr Gap — Cross-Machine Agent Sessions
+
+**Added:** 2026-06-10
+
+### Background
+
+`dcutr()` — libp2p's Direct Connection Upgrade Through Relay protocol — is already present in `createNode` (cello-client). Its purpose: when two clients are communicating through a relay, attempt to upgrade to a direct peer-to-peer connection via hole-punching if the NAT topology permits. This reduces relay load and improves latency.
+
+For dcutr to work correctly, each client must know whether it is dialable from the outside, and must advertise the right kind of multiaddr to its peer:
+- **If dialable:** advertise a direct multiaddr → dcutr can attempt the upgrade
+- **If behind NAT:** advertise a circuit-relay multiaddr → stay on the relay
+
+A client that doesn't know which applies will either attempt hole-punching blind (and fail silently) or always stay on the relay when it could go direct.
+
+**AutoNAT** solves this: it asks a small set of known peers to attempt a dial-back to the client's advertised address. Success → the client is dialable. Failure → the client is behind NAT. Without AutoNAT, dcutr is present in the code but does not have the information it needs to function correctly.
+
+AutoNAT is NOT currently in `createNode`. It needs to be added.
+
+### Why This Matters for M7
+
+The M7 close gate (MULTI-008) is two agents on the **same machine** — dcutr is irrelevant there (they're on localhost). M7 ships correctly without AutoNAT.
+
+However, the immediate post-M7 use case is two agents on **different machines** (the natural extension: two operators exchanging messages). That is where dcutr becomes functional, and where the absence of AutoNAT causes incorrect behavior. Any implementer extending M7 toward cross-machine sessions must understand this dependency.
+
+### What a Post-M7 Story Needs
+
+A story targeting cross-machine direct sessions must:
+
+1. Add `autonat()` to `createNode` in `cello-client/core/transport/src/node.ts`
+2. Verify that dcutr upgrade attempts succeed/fail correctly based on actual NAT topology (not just whether the code runs)
+3. Ensure clients advertise circuit-relay multiaddrs when behind NAT, direct multiaddrs when dialable
+4. Add an observable to `CelloNodeImpl` or `CelloClient` exposing whether the client is currently dialable (for diagnostics/`cello_status`)
+
+### References
+
+- `docs/planning/discussion_logs/2026-06-10_2000_peer-reconnect-libp2p-primitives.md` — AutoNAT section with full background
+- `cello-client/core/transport/src/node.ts` — `createNode` implementation; `dcutr()` is present, `autonat()` is not
+
+---
+
 ## Cross-Repo CI/CD Gap (post-REPOSPLIT)
 
 **Identified:** 2026-06-01
