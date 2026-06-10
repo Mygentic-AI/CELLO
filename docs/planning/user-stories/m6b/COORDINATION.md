@@ -1317,3 +1317,28 @@ Full bilateral seal completed:
 - Both participants present
 
 **M6B-019 is verified end-to-end.** The startup-ordering dependency between directory and relay is eliminated in production.
+
+---
+
+### Known Gap — Mesh Reconnect (prerequisite for multi-directory/multi-relay topology)
+
+**What the gap is:**
+
+The relay registers with only its own region's directory at startup. If the directory restarts, the relay does not detect the dropped connection and does not re-register. The operational workaround is: restart the relay after any directory redeploy.
+
+This is acceptable for M7 under a single-region topology where the operational rule can be followed manually. It is a non-starter for the intended sovereign multi-directory/multi-relay topology (e.g. 20 directories × 20 relays = 400 connections — one directory restart would require restarting every relay in the network).
+
+**The correct fix (defer to federation milestone):**
+
+Symmetric startup announcement pattern:
+1. Relay dials **all** directories at startup (DNS addresses from SSM) — not just its own region's
+2. Directory dials **all** relays at startup (DNS addresses from SSM — already reads them via M6B-019)
+3. Both sides retry announcements with bounded exponential backoff
+4. Relay trusts multiple directory pubkeys — `CELLO_DIRECTORY_PUBKEY` becomes a set, not a single value
+5. Both sides treat an inbound connection + announcement from a known pubkey as a valid resync trigger — no prior connection state required
+
+Infrastructure is ready: `createNode` (from `@cello-protocol/transport`) already includes both `tcp()` and `webSockets()` transports. The relay can accept inbound WebSocket connections via its ALB. The directory can dial relay DNS addresses. No new transport work needed.
+
+**Operational rule until this is fixed:** restart the relay after any directory redeploy.
+
+**Milestone pointer:** this story belongs in the federation milestone (multi-directory/multi-relay topology), not M7.
