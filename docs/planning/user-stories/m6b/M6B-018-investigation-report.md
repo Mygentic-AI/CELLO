@@ -15,6 +15,52 @@ description: >
 
 # CELLO-M6B-018 Investigation Report: Signaling Stream Keepalive + Reconnect
 
+## Update — 2026-06-10: Scope Revision After Fault Injection Investigation
+
+**Read this before implementing from this document.**
+
+A structured fault injection investigation (Scenarios 1–5, see
+`discussion_logs/2026-06-10_1856_reconnect-cluster-findings.md`) and a
+review of the libp2p primitives available in `createNode` (see
+`discussion_logs/2026-06-10_2000_peer-reconnect-libp2p-primitives.md`)
+have revised the understanding of this problem.
+
+**What changed:**
+
+1. **The root cause of the sleep/wake failure (Scenario 5) is not a dropped
+   TCP connection — it is the bootstrap endpoint returning null at process
+   startup.** When the laptop closes and Claude Code spawns a new cello-mcp
+   process, the bootstrap fetch sometimes returns null in 9ms (reachable but
+   empty). The process starts with `directory_reachable: false` and has no
+   retry loop. `/mcp reconnect` always fixes it. The fix is a startup bootstrap
+   retry loop (~10 lines), not a keepalive mechanism.
+
+2. **The relay reconnect problem is separate and simpler than this document
+   covers.** `onPeerDisconnect` already fires in `relay-node.ts` — it is
+   wired only to a log line. Wiring it to call `registerWithDirectory()` with
+   exponential backoff is ~15 lines using existing code. This eliminates the
+   "restart relay after directory redeploy" operational rule without any
+   changes to this story's scope.
+
+3. **The ping/pong keepalive design below is still correct and still worth
+   doing**, but it is the lowest priority of the four items. The 11-second
+   Yamux detection lag is a production concern, not the cause of any observed
+   failure.
+
+**Revised priority order for M6B-018 implementation:**
+
+1. Bootstrap retry on startup failure (new — not in this document below)
+2. Unconditional reconnect on signaling stream close (Section C below — change
+   the conditional seal-only 200ms one-shot to `#runReconnectLoop()`)
+3. Relay `onPeerDisconnect` → re-register (new — add as AC to this story or
+   as a companion story)
+4. Ping/pong keepalive (Sections B–E below — still correct, lowest urgency)
+
+The sections below remain valid as the design for items 2 and 4. Read the
+linked discussion log for the full scope picture before writing the story YAML.
+
+---
+
 ## Preamble: M6B-017 Status
 
 **M6B-017 is partially implemented but not yet closed.** The commit `000a016` extracted `RegistrationManager` and `ConnectionManager`. The `SignalingManager` class exists in `signaling-manager.ts` and is instantiated in the constructor, but **`client.ts` never calls any of its methods**. All signaling call sites still invoke `this.#openPersistentSignalingStream()` and `this.#doOpenPersistentSignalingStream()` — private methods that remain in `client.ts`. There is a dual-implementation situation: `signaling-manager.ts` has a full `#doOpen` and `runPersistentSignalingReader` implementation, but the live code paths still go through the `client.ts` private methods.
