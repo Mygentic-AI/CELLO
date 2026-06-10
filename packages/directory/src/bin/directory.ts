@@ -511,6 +511,11 @@ if (env === "local") {
 
   const ssmPath = `/cello/${env}/nodes/`;
   const ssmParams: SsmParameter[] = [];
+  // CRITICAL #2: track whether the SSM call itself threw (as opposed to returning 0 params).
+  // When ssmThrew is false (SSM succeeded, possibly returning 0 params), we call
+  // parseNodeRegistryEntries unconditionally so it can emit node.registry.empty with
+  // actionable guidance when deploy.sh step 6.7 has not been run yet.
+  let ssmThrew = false;
 
   try {
     let nextToken: string | undefined;
@@ -532,23 +537,28 @@ if (env === "local") {
     } while (nextToken);
   } catch (err: unknown) {
     const reason = err instanceof Error ? err.message : String(err);
-    // Finding 1 fix: emit node.registry.empty once here, then skip parseNodeRegistryEntries
-    // (which would emit it a second time) by leaving ssmParams empty and falling to the else branch.
+    // SSM call failed entirely (auth error, network error, etc.) — emit the error event
+    // directly here rather than delegating to parseNodeRegistryEntries, because we want
+    // distinct guidance text for an AWS API failure vs. a successful but empty response.
     logger.error("node.registry.empty", {
       ssmPath,
       region: awsRegion,
-      guidance: `Failed to read SSM node registry: ${reason}. Run deploy.sh to populate the node registry.`,
+      guidance: `Failed to read SSM node registry: ${reason}. Check IAM permissions and run deploy.sh.`,
     });
     relayPeerId = "";
     relayMultiaddrs = [];
     // Start but relay will be unavailable — DB-001 degraded behavior
+    ssmThrew = true;
   }
 
-  // Only call parseNodeRegistryEntries when SSM returned at least one parameter.
-  // When ssmParams is empty due to a caught SSM error above, we already emitted
-  // node.registry.empty and set relayPeerId/relayMultiaddrs — skip to avoid double-emit.
-  if (ssmParams.length > 0) {
-    const registryResult = parseNodeRegistryEntries(ssmParams, awsRegion, logger);
+  // CRITICAL #2 fix: call parseNodeRegistryEntries unconditionally when the SSM call
+  // succeeded (even when it returned zero parameters). An empty successful response means
+  // deploy.sh step 6.7 has not run yet — parseNodeRegistryEntries handles this case and
+  // emits node.registry.empty with actionable guidance.
+  // When ssmThrew is true, we already emitted node.registry.empty above — skip to avoid
+  // double-emit and because ssmParams is empty by definition.
+  if (!ssmThrew) {
+    const registryResult = parseNodeRegistryEntries(ssmParams, ssmPath, awsRegion, logger);
 
     if (registryResult.relays.length > 0) {
       // Use the first relay as the primary dial target for NetworkRelayAdapter

@@ -397,20 +397,34 @@ export class RelayPoolManager {
       }
     }
 
-    // Finding 3 fix: preserve SSM-seeded peerId/multiaddrs across manifest poll cycles.
+    // IMPORTANT #2 fix: preserve SSM-seeded peerId/multiaddrs across manifest poll cycles.
     // applyManifest replaces #currentRelays with the manifest's relay list. The S3 manifest
     // carries healthCheckUrl and relayId but NOT peerId/multiaddrs — those come from SSM seeding
     // at startup. Without this merge, the first manifest poll (every 2 minutes) would discard
     // SSM-seeded peerId and multiaddrs, breaking DNS-based relay addressing.
+    //
+    // The merge now unconditionally prefers DNS-based multiaddrs from SSM over whatever is
+    // in the S3 manifest. Any existing seeded entry that has /dns4/ multiaddrs always wins
+    // over the S3 manifest content — defensive against any future path that writes IP-based
+    // addresses into S3 (e.g. before CRITICAL #1 was fixed in this story).
     const oldRelays = this.#currentRelays;
     this.#currentRelays = manifest.relays.slice();
     for (const entry of this.#currentRelays) {
       const seeded = oldRelays.find(r => r.relayId === entry.relayId);
       if (seeded) {
-        if (!entry.peerId && seeded.peerId) entry.peerId = seeded.peerId;
-        if ((!entry.multiaddrs || entry.multiaddrs.length === 0) && seeded.multiaddrs?.length) {
-          entry.multiaddrs = seeded.multiaddrs;
+        // Always prefer SSM-seeded DNS multiaddrs over whatever S3 carries.
+        // /dns4/ addresses are stable (Route53 → ALB → container), /ip4/ addresses
+        // are ephemeral (ECS task replacement). A seeded entry with DNS multiaddrs
+        // must survive every manifest poll cycle.
+        const ssmHasDnsMultiaddrs = seeded.multiaddrs?.some(a => a.includes("/dns4/"));
+        if (ssmHasDnsMultiaddrs) {
+          entry.multiaddrs = seeded.multiaddrs!;
+        } else if (!entry.multiaddrs || entry.multiaddrs.length === 0) {
+          // Seeded but no DNS addresses — only merge if S3 manifest has nothing either
+          if (seeded.multiaddrs?.length) entry.multiaddrs = seeded.multiaddrs;
         }
+        // peerId: prefer seeded over S3 (seeded is derived from stable transport key)
+        if (seeded.peerId && !entry.peerId) entry.peerId = seeded.peerId;
       }
     }
 
@@ -463,6 +477,12 @@ export class RelayPoolManager {
   async #pingOne(relay: RelayManifestEntry): Promise<void> {
     const state = this.#failureState.get(relay.relayId);
     if (!state) return;
+
+    // IMPORTANT #1: Skip health check when healthCheckUrl is empty.
+    // SSM-seeded entries have healthCheckUrl: "" until relay_register provides it.
+    // fetch("") throws immediately — counting against consecutiveFailures and marking
+    // the relay unavailable within ~90 seconds, defeating the purpose of this story.
+    if (!relay.healthCheckUrl) return;
 
     const startTime = Date.now();
     let result: PingResult;

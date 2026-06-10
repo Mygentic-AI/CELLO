@@ -123,7 +123,7 @@ describe("CELLO-M6B-019: Node Registry — SSM parameter parsing", () => {
       },
     ];
 
-    const result = parseNodeRegistryEntries(ssmParams, "us-east-1", logger);
+    const result = parseNodeRegistryEntries(ssmParams, "/cello/dev/nodes/", "us-east-1", logger);
 
     expect(result.relays).toHaveLength(2);
     expect(result.directories).toHaveLength(1);
@@ -164,7 +164,7 @@ describe("CELLO-M6B-019: Node Registry — SSM parameter parsing", () => {
       },
     ];
 
-    const result = parseNodeRegistryEntries(ssmParams, "us-east-1", logger);
+    const result = parseNodeRegistryEntries(ssmParams, "/cello/dev/nodes/", "us-east-1", logger);
 
     expect(result.relays).toHaveLength(0);
 
@@ -172,7 +172,8 @@ describe("CELLO-M6B-019: Node Registry — SSM parameter parsing", () => {
     const emptyEvent = logger.events.find(e => e.event === "node.registry.empty");
     expect(emptyEvent).toBeDefined();
     expect(emptyEvent!.level).toBe("error");
-    expect(emptyEvent!.ctx.ssmPath).toContain("/nodes/relay/");
+    // ssmPath must be the real path passed to the function (not a placeholder template)
+    expect(emptyEvent!.ctx.ssmPath).toBe("/cello/dev/nodes/");
     expect(emptyEvent!.ctx.region).toBe("us-east-1");
     expect(emptyEvent!.ctx.guidance).toBeDefined();
   });
@@ -186,7 +187,7 @@ describe("CELLO-M6B-019: Node Registry — SSM parameter parsing", () => {
       },
     ];
 
-    const result = parseNodeRegistryEntries(ssmParams, "us-east-1", logger);
+    const result = parseNodeRegistryEntries(ssmParams, "/cello/dev/nodes/", "us-east-1", logger);
 
     expect(result.relays).toHaveLength(0);
 
@@ -207,12 +208,30 @@ describe("CELLO-M6B-019: Node Registry — SSM parameter parsing", () => {
       },
     ];
 
-    const result = parseNodeRegistryEntries(ssmParams, "us-east-1", logger);
+    const result = parseNodeRegistryEntries(ssmParams, "/cello/dev/nodes/", "us-east-1", logger);
 
     expect(result.relays).toHaveLength(0);
 
     const failedEvent = logger.events.find(e => e.event === "node.registry.parse.failed");
     expect(failedEvent).toBeDefined();
+  });
+
+  // LOW #2: empty SSM response (zero params) emits node.registry.empty with the real ssmPath.
+  // This covers CRITICAL #2: when deploy.sh step 6.7 has not yet run in a new region,
+  // SSM responds successfully with zero parameters. parseNodeRegistryEntries must still
+  // emit node.registry.empty with the actual path so operators know where to look.
+  it("LOW #2: empty SSM params array emits node.registry.empty with real ssmPath", () => {
+    const result = parseNodeRegistryEntries([], "/cello/dev/nodes/", "us-east-1", logger);
+
+    expect(result.relays).toHaveLength(0);
+
+    const emptyEvent = logger.events.find(e => e.event === "node.registry.empty");
+    expect(emptyEvent).toBeDefined();
+    expect(emptyEvent!.level).toBe("error");
+    // ssmPath must be the real path, not a literal placeholder like "/cello/{env}/nodes/relay/"
+    expect(emptyEvent!.ctx.ssmPath).toBe("/cello/dev/nodes/");
+    expect(emptyEvent!.ctx.region).toBe("us-east-1");
+    expect(emptyEvent!.ctx.guidance).toContain("/cello/dev/nodes/");
   });
 
   // Entries with inactive status are excluded
@@ -230,7 +249,7 @@ describe("CELLO-M6B-019: Node Registry — SSM parameter parsing", () => {
       },
     ];
 
-    const result = parseNodeRegistryEntries(ssmParams, "us-east-1", logger);
+    const result = parseNodeRegistryEntries(ssmParams, "/cello/dev/nodes/", "us-east-1", logger);
 
     expect(result.relays).toHaveLength(0);
   });
@@ -278,8 +297,17 @@ describe("CELLO-M6B-019: RelayPoolManager — seed relay entries", () => {
     mgr.stop();
   });
 
-  // AC-006: relay_register only updates healthCheckUrl, not multiaddrs/peerId
-  it("AC-006: after seeding, reSignManifestForRelay updates healthCheckUrl only (multiaddrs/peerId preserved from SSM)", () => {
+  // AC-006: relay_register → reSignManifestForRelay → S3 write → applyManifest poll cycle
+  // This tests the actual risk: that calling reSignManifestForRelay WITHOUT a multiaddr
+  // (as fixed by CRITICAL #1) followed by applyManifest (simulating a 2-minute poll) still
+  // preserves the DNS multiaddrs from SSM seeding.
+  //
+  // Before CRITICAL #1 fix: reSignManifestForRelay would write the raw /ip4/ multiaddr from
+  // relay_register into the S3 manifest. applyManifest would see non-empty multiaddrs in the
+  // manifest and skip the SSM DNS merge — permanently replacing DNS addresses with the raw IP.
+  // After fix: reSignManifestForRelay only updates healthCheckUrl. applyManifest merges the
+  // SSM DNS multiaddrs unconditionally (IMPORTANT #2 fix), preserving them across poll cycles.
+  it("AC-006: DNS multiaddrs survive relay_register → reSignManifestForRelay (no multiaddr) → applyManifest poll cycle", () => {
     const storage: CloudStorageProvider = {
       upload: async () => {},
       download: async () => undefined,
@@ -290,7 +318,9 @@ describe("CELLO-M6B-019: RelayPoolManager — seed relay entries", () => {
       logger,
     });
 
-    // Seed relay entries
+    const dnsMultiaddr = "/dns4/relay-us1.cello.mygentic.ai/tcp/443/ws/p2p/12D3KooWRelay1";
+
+    // Step 1: Seed relay entries from SSM (DNS multiaddrs, no healthCheckUrl yet)
     mgr.seedRelayEntries([
       {
         relayId: "relay-us1",
@@ -299,19 +329,61 @@ describe("CELLO-M6B-019: RelayPoolManager — seed relay entries", () => {
         status: "active",
         healthCheckUrl: "",
         peerId: "12D3KooWRelay1",
-        multiaddrs: ["/dns4/relay-us1.cello.mygentic.ai/tcp/443/ws/p2p/12D3KooWRelay1"],
+        multiaddrs: [dnsMultiaddr],
       },
     ]);
 
-    // Simulate what relay_register would do: only update healthCheckUrl
+    // Verify initial state: pickRelay() returns DNS multiaddr
+    const initialPick = mgr.pickRelay();
+    expect(initialPick).not.toBeNull();
+    expect(initialPick!.multiaddrs).toEqual([dnsMultiaddr]);
+
+    // Step 2: Simulate relay_register → reSignManifestForRelay WITHOUT multiaddr.
+    // The fixed code in directory-node.ts omits multiaddr from this call (CRITICAL #1 fix).
+    // We simulate this by calling reSignManifestForRelay without a multiaddr, but since
+    // reSignManifestForRelay requires S3 round-trip (download→upload), we simulate the
+    // post-call state directly: the healthCheckUrl map is updated but in-memory multiaddrs
+    // are NOT changed (because no multiaddr was passed).
+    // updateRelayHealthCheckUrl is what reSignManifestForRelay calls internally after upload.
     mgr.updateRelayHealthCheckUrl("relay-us1", "http://10.0.1.50:4000/health");
 
-    // pickRelay() should still have DNS multiaddr (not the private IP from healthCheckUrl)
+    // Step 3: Simulate a 2-minute manifest poll — applyManifest is called with a manifest
+    // that came from S3 BEFORE reSignManifestForRelay was called (i.e. missing multiaddrs/peerId,
+    // as if deploy.sh wrote the manifest without those fields). This represents the state of
+    // the manifest on a fresh region where sign-manifest.sh ran before relay first started.
+    const simulatedS3Manifest = {
+      version: 2, // Higher version so applyManifest accepts it
+      signedBy: "a".repeat(64),
+      signature: "b".repeat(128),
+      updatedAt: new Date().toISOString(),
+      relays: [
+        {
+          relayId: "relay-us1",
+          endpoint: "wss://relay-us1.cello.mygentic.ai",
+          region: "us-east-1",
+          status: "active" as const,
+          healthCheckUrl: "http://10.0.1.50:4000/health",
+          // multiaddrs and peerId intentionally absent — as would be the case if
+          // reSignManifestForRelay was called WITHOUT multiaddr (CRITICAL #1 fix)
+        },
+      ],
+    };
+
+    // Note: applyManifest does NOT verify the signature — loadManifest does that.
+    // Calling applyManifest directly is correct for testing the merge logic.
+    const applyResult = mgr.applyManifest(simulatedS3Manifest);
+    expect(applyResult.ok).toBe(true);
+
+    // Step 4: Assert that pickRelay() still returns DNS multiaddr after the poll cycle.
+    // This is the core AC-006 / SI-001 invariant: relay_register must not cause loss of
+    // DNS-based addressing. The SSM seeded /dns4/ multiaddr must survive applyManifest.
     const picked = mgr.pickRelay();
     expect(picked).not.toBeNull();
-    expect(picked!.multiaddrs).toEqual(["/dns4/relay-us1.cello.mygentic.ai/tcp/443/ws/p2p/12D3KooWRelay1"]);
+    expect(picked!.multiaddrs).toContain(dnsMultiaddr);
+    expect(picked!.multiaddrs?.every(a => !a.includes("/ip4/"))).toBe(true);
     expect(picked!.peerId).toBe("12D3KooWRelay1");
-    // healthCheckUrl was updated via internal map
+
+    // Step 5: Assert that healthCheckUrl from relay_register is also visible
     expect(mgr.getRelayHealthCheckUrl("relay-us1")).toBe("http://10.0.1.50:4000/health");
 
     mgr.stop();
@@ -358,8 +430,15 @@ describe("CELLO-M6B-019: RelayPoolManager — seed relay entries", () => {
       },
     ]);
 
-    // healthCheckUrl from relay_register must be preserved
+    // healthCheckUrl from relay_register must be preserved in the internal map
     expect(mgr.getRelayHealthCheckUrl("relay-us1")).toBe("http://10.0.1.50:4000/health");
+
+    // LOW #1: re-seeding must NOT overwrite the healthCheckUrl on the entry object itself.
+    // The entry object is what pickRelay() returns — it carries the manifest healthCheckUrl
+    // (written by reSignManifestForRelay), not the SSM value (which is always empty).
+    // seedRelayEntries only updates multiaddrs and peerId on existing entries; healthCheckUrl
+    // on the entry object is preserved from the previous state.
+    expect(mgr.relays[0]?.healthCheckUrl).toBe("");
 
     // Addressing fields should be updated from the new seed
     const picked = mgr.pickRelay();
@@ -450,7 +529,7 @@ describe("CELLO-M6B-019: Node Registry — AC-010 and nodeId field", () => {
       },
     ];
 
-    const result = parseNodeRegistryEntries(ssmParams, "us-east-1", logger);
+    const result = parseNodeRegistryEntries(ssmParams, "/cello/dev/nodes/", "us-east-1", logger);
 
     expect(result.relays).toHaveLength(0);
     // Must emit node.registry.empty at ERROR — on-call engineers must be alerted
@@ -481,7 +560,7 @@ describe("CELLO-M6B-019: Node Registry — AC-010 and nodeId field", () => {
       },
     ];
 
-    const result = parseNodeRegistryEntries(ssmParams, "us-east-1", logger);
+    const result = parseNodeRegistryEntries(ssmParams, "/cello/dev/nodes/", "us-east-1", logger);
 
     expect(result.relays).toHaveLength(1);
     expect(result.relays[0]!.nodeId).toBe(relayNodeId);
@@ -503,7 +582,7 @@ describe("CELLO-M6B-019: Node Registry — AC-010 and nodeId field", () => {
       },
     ];
 
-    const result = parseNodeRegistryEntries(ssmParams, "us-east-1", logger);
+    const result = parseNodeRegistryEntries(ssmParams, "/cello/dev/nodes/", "us-east-1", logger);
 
     expect(result.relays).toHaveLength(1);
     expect(result.relays[0]!.nodeId).toBe("");
@@ -524,7 +603,7 @@ describe("CELLO-M6B-019: Node Registry — AC-010 and nodeId field", () => {
       },
     ];
 
-    const result = parseNodeRegistryEntries(ssmParams, "us-east-1", logger);
+    const result = parseNodeRegistryEntries(ssmParams, "/cello/dev/nodes/", "us-east-1", logger);
 
     expect(result.relays).toHaveLength(0);
     const failedEvent = logger.events.find(e => e.event === "node.registry.parse.failed");

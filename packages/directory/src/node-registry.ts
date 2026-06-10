@@ -109,6 +109,12 @@ export function constructRelayMultiaddr(entry: NodeRegistryEntry): string {
  *   /cello/{env}/nodes/relay/{cloud}-{region}
  *   /cello/{env}/nodes/directory/{cloud}-{region}
  *
+ * @param ssmParams - raw SSM parameter list from GetParametersByPath
+ * @param ssmPath - the actual SSM path queried (e.g. "/cello/dev/nodes/"), included in
+ *   node.registry.empty so operators can check the exact path rather than a placeholder template.
+ * @param region - AWS region of the current directory node
+ * @param logger - injected structured logger
+ *
  * Observability:
  *   - node.registry.relay.resolved (info): logged for each valid relay entry
  *   - node.registry.parse.failed (warn): logged for malformed/invalid entries
@@ -117,6 +123,7 @@ export function constructRelayMultiaddr(entry: NodeRegistryEntry): string {
  */
 export function parseNodeRegistryEntries(
   ssmParams: SsmParameter[],
+  ssmPath: string,
   region: string,
   logger: Logger,
 ): NodeRegistryRelayResult {
@@ -179,9 +186,9 @@ export function parseNodeRegistryEntries(
   // Observability: log final state
   if (relays.length === 0) {
     logger.error("node.registry.empty", {
-      ssmPath: "/cello/{env}/nodes/relay/",
+      ssmPath,
       region,
-      guidance: "No relay entries found in SSM. Run deploy.sh to populate the node registry.",
+      guidance: `No relay entries found under ${ssmPath}. Run deploy.sh to populate the node registry.`,
     });
   } else {
     logger.info("node.registry.loaded", {
