@@ -294,8 +294,6 @@ CELLO is split across two repos. `trustless-cello` (server-side) depends on pack
 2. The story's ACs must include an explicit version bump AC: "After implementation, `@cello-protocol/connect` is bumped to `X.Y.Z` in cello-client, tagged, and published to beta. `trustless-cello/packages/directory/package.json` and `trustless-cello/packages/relay/package.json` are updated to reference the new versions. `pnpm install` is run to update the lockfile."
 3. Never write a story that changes cello-client behavior without also specifying the version bump and the trustless-cello package.json update as blocking ACs.
 
-**REPOSPLIT-002 completion gap (tracked, not yet fixed):** As of 2026-06-06, `packages/directory/package.json` and `packages/relay/package.json` in trustless-cello still use `workspace:*` for all four cello-client packages. The investigation (2026-06-06) confirmed the published versions (crypto 0.0.7, transport 0.0.4, protocol-types 0.0.3, client 0.0.20) are API-compatible — no breaking changes, pure dependency swap. This must be fixed before any M7 story that changes cello-client APIs begins.
-
 **Dead pipelines (cleanup pending):** `cello-crypto-pipeline`, `cello-transport-pipeline`, `cello-client-pipeline`, `cello-protocol-types-pipeline` in `cello-cicd.yaml` still watch `packages/crypto/`, `packages/transport/` etc. in trustless-cello. These paths are stale post-REPOSPLIT — no code changes will ever land there. These pipelines trigger on ghost changes and waste CI resources. They must be removed from `cello-cicd.yaml` and from `pipeline-mappings.json`, and `deploy-lambdas.sh dev filter` must be run after.
 
 ---
