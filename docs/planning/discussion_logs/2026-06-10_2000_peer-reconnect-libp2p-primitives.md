@@ -164,16 +164,31 @@ Perplexity recommended: AutoNAT, Kademlia DHT, gossipsub, circuit relay
 hop/stop. These are the right tools for a large open P2P network where you
 don't know your peers. CELLO is not that network — yet. Assessment:
 
-**AutoNAT — useful, but only for clients.**
+**AutoNAT — load-bearing for dcutr; not low priority.**
 Directories and relays have stable ALB DNS hostnames. They always know their
 public address. AutoNAT is designed for nodes that don't know if they're
 dialable and need to ask peers to check. Clients — which run on developer
-laptops with no stable DNS — would benefit from AutoNAT to determine their
-dialable address and decide whether to advertise a direct multiaddr or a
-circuit-relay multiaddr. Low priority for now because the local cello-mcp
-process successfully connects to the directory via outbound dial; it doesn't
-need to advertise a dialable address until M7 multi-agent work requires
-inbound connections between agents on different machines.
+laptops with no stable DNS — need AutoNAT to determine whether their address
+is dialable, and to decide whether to advertise a direct multiaddr or a
+circuit-relay multiaddr.
+
+The original analysis called this "low priority." That was wrong. `dcutr()` —
+libp2p's hole-punching protocol — is already present in `createNode`. DCU
+upgrades two clients communicating through a relay to a direct connection when
+NAT permits. For dcutr to function correctly, a client must know whether it is
+dialable from the outside. Without AutoNAT, the client attempts hole-punching
+blind — it does not know if the other side can reach it. AutoNAT is the
+precondition for dcutr working at all.
+
+At scale — thousands of clients all relaying through 20–40 directory/relay nodes
+with stable DNS — the relay connection count becomes a real capacity concern.
+DHT and gossipsub remain unnecessary for node address propagation (the signed
+manifest handles that at any scale). But AutoNAT + dcutr is how CELLO moves
+some of that connection load off the relay once clients can reach each other
+directly. This matters at 1,000 clients, not just at 100,000.
+
+Priority reassessment: AutoNAT is an M7 concern, not a future-network concern.
+It should be on the M7 outline alongside multi-agent client-to-client sessions.
 
 **DHT — premature.**
 The DHT is designed for a network where you don't know the addresses of peers
