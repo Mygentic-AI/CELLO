@@ -105,6 +105,94 @@ Record all artifacts in the findings doc (see template at end).
 
 ---
 
+## Pre-Requisite for Scenarios 1 and 2 — Publishing a New Version
+
+Scenarios 1 and 2 require a version that is different from what is currently
+installed (`latest`). Without a real version change, there is nothing for
+`/mcp reconnect` or remove/re-add to pick up. A no-code patch bump is
+sufficient — the purpose is to create a new `latest` to install, not to ship
+new behaviour.
+
+### What we believe to be correct (hypothesis before testing)
+
+The README states:
+
+> ```bash
+> npm install -g @cello-protocol/connect@latest
+> ```
+> Then restart Claude Code (or run `/mcp`). No `claude mcp remove` /
+> `claude mcp add` required — the binary name `cello-mcp` stays constant
+> across versions.
+
+This is the claim Scenario 1 validates. The hypothesis is that a global
+`npm install -g` followed by `/mcp reconnect` is sufficient to run the new
+version. Scenario 2 tests whether remove/re-add is actually needed.
+
+### Publish procedure (from cello-publish skill)
+
+**Current versions (as of 2026-06-10):**
+- `@cello-protocol/adapter-claude-code` (connect): 0.0.41
+- `@cello-protocol/client`: 0.0.31
+
+**Step 1 — Confirm no uncommitted code in cello-client:**
+```bash
+git -C /Users/andrep/Documents/code/cello-client status
+```
+
+**Step 2 — Bump versions in cello-client:**
+- `core/adapter-claude-code/package.json`: 0.0.41 → 0.0.42
+- `core/client/package.json`: 0.0.31 → 0.0.32 (if client changed; bump connect only if not)
+
+For a no-code test bump, only `core/adapter-claude-code/package.json` needs
+to change (connect = adapter-claude-code). Client version stays at 0.0.31.
+
+```bash
+cd /Users/andrep/Documents/code/cello-client
+# Edit core/adapter-claude-code/package.json: "version": "0.0.42"
+pnpm install
+git add core/adapter-claude-code/package.json pnpm-lock.yaml
+git commit -m "chore: version bump — connect 0.0.41→0.0.42 (test publish for reconnect investigation)"
+git push origin main
+```
+
+**Step 3 — Wait for main-branch CI to pass (does NOT publish — just validates).**
+
+**Step 4 — Tag and push:**
+```bash
+git tag v0.0.42
+git push origin v0.0.42
+```
+
+Tag CI will likely fail the pre-publish gate (by design — known CI issue).
+The publish step runs anyway (`|| true`). Wait for the run to complete.
+
+**Step 5 — Verify binary on npm:**
+```bash
+npm view @cello-protocol/connect@beta version
+# Must show 0.0.42
+```
+
+**Step 6 — Promote to `latest` (operator runs this):**
+```bash
+npm dist-tag add @cello-protocol/connect@0.0.42 latest
+npm view @cello-protocol/connect@latest version
+# Must show 0.0.42
+```
+
+**Step 7 — Update demo agent:**
+```bash
+aws ssm send-command \
+  --instance-ids i-0ad3e7c22470f266e \
+  --document-name AWS-RunShellScript \
+  --parameters 'commands=["cd /opt/cello-demo && npm install @cello-protocol/connect@0.0.42 && sudo systemctl restart cello-demo.service"]' \
+  --region us-east-1
+```
+
+**Only after `latest` is promoted:** run the pre-conditions (kill local
+cello-mcp, clear logs, restart demo agent) and proceed with Scenario 1.
+
+---
+
 ## Scenario 1 — Version Bump: Reconnect Only (No Remove/Re-Add)
 
 **Diagnostic question:** When you update the connect version and do only
