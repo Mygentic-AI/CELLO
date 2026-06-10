@@ -743,10 +743,10 @@ for NODE_REGION in us-east-1 eu-central-1 ap-northeast-1; do
     _RELAY_NID="${RELAY_NODE_IDS[${NODE_REGION}]:-}"
     if [[ -n "${_RELAY_NID}" ]]; then
       # Include nodeId (Ed25519 pubkey hex) so directory can match relay_register frames by relayId (AC-006)
-      _RELAY_JSON="{\"hostname\":\"${_RELAY_HOST}\",\"peerId\":\"${_RELAY_PID}\",\"nodeId\":\"${_RELAY_NID}\",\"port\":443,\"transport\":\"ws\",\"status\":\"active\"}"
+      _RELAY_JSON="{\"hostname\":\"${_RELAY_HOST}\",\"peerId\":\"${_RELAY_PID}\",\"nodeId\":\"${_RELAY_NID}\",\"port\":80,\"transport\":\"ws\",\"status\":\"active\"}"
     else
       # Backward-compat: nodeId omitted when node-private-key not yet populated
-      _RELAY_JSON="{\"hostname\":\"${_RELAY_HOST}\",\"peerId\":\"${_RELAY_PID}\",\"port\":443,\"transport\":\"ws\",\"status\":\"active\"}"
+      _RELAY_JSON="{\"hostname\":\"${_RELAY_HOST}\",\"peerId\":\"${_RELAY_PID}\",\"port\":80,\"transport\":\"ws\",\"status\":\"active\"}"
     fi
     aws ssm put-parameter \
       --name "/cello/${ENVIRONMENT}/nodes/relay/aws-${NODE_REGION}" \
