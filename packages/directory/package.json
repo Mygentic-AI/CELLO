@@ -41,6 +41,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "3.1051.0",
     "@aws-sdk/client-secrets-manager": "3.1051.0",
+    "@aws-sdk/client-ssm": "3.1051.0",
     "@cello-protocol/crypto": "^0.0.7",
     "@cello-protocol/interfaces": "workspace:*",
     "@cello-protocol/protocol-types": "^0.0.3",

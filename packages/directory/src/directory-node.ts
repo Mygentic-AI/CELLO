@@ -546,11 +546,11 @@ export class CelloDirectoryNode {
           if (regResult?.alreadyRegistered) {
             // Log relay.already.registered at the handler layer (M4+ convention: store layers
             // return results; handlers own observability).
-            this.#logger?.info("relay.already.registered", { relayId, region });
+            this.#logger?.info("relay.already.registered", { relayId, region, healthCheckUrl });
             stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_ok", already_registered: true })));
           } else {
             // Log relay.registered at the handler layer.
-            this.#logger?.info("relay.registered", { relayId, region });
+            this.#logger?.info("relay.registered", { relayId, region, healthCheckUrl });
             stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_ok" })));
           }
         } catch (err: unknown) {
@@ -567,6 +567,10 @@ export class CelloDirectoryNode {
         }
 
         // Update the relay adapter's dial address so recordAssignment always reaches the current IP.
+        // SI-001 exemption: updateMultiaddr sets the VPC-internal /ip4/ dial path used exclusively
+        // for directory→relay RPC calls (recordAssignment, confirmSeal). This is NOT the
+        // client-facing manifest dial target — that path is governed by SSM DNS multiaddrs written
+        // by deploy.sh and is unaffected by relay_register.
         const multiaddr = req["multiaddr"] as string | undefined;
         if (multiaddr && typeof (this.#relay as unknown as { updateMultiaddr?: unknown }).updateMultiaddr === "function") {
           (this.#relay as unknown as { updateMultiaddr: (m: string) => void }).updateMultiaddr(multiaddr);
@@ -575,11 +579,17 @@ export class CelloDirectoryNode {
         // CELLO-M6B-006: After successful registration, re-sign manifest if healthCheckUrl changed.
         // Fire-and-forget — relay_register_ok is already sent. Manifest update failure is logged
         // but does not block the relay's operation.
+        //
+        // SI-001 fix: Do NOT pass multiaddr to reSignManifestForRelay. The multiaddr in
+        // relay_register is the relay's current container /ip4/ address. If written into the S3
+        // manifest, the next applyManifest() poll would see non-empty multiaddrs and skip the
+        // SSM DNS merge — permanently overwriting DNS addresses with the raw IP.
+        // multiaddrs/peerId in the S3 manifest come exclusively from deploy.sh (sign-manifest.sh).
         if (healthCheckUrl && this.#relayPoolManager) {
           void this.#relayPoolManager.reSignManifestForRelay({
             relayId,
             healthCheckUrl,
-            multiaddr: multiaddr ?? undefined,
+            // multiaddr intentionally omitted: relay_register must only update healthCheckUrl.
             keyProvider: this.#keyProvider,
           }).catch((err: unknown) => {
             const reason = err instanceof Error ? err.message : String(err);

@@ -397,7 +397,37 @@ export class RelayPoolManager {
       }
     }
 
-    this.#currentRelays = manifest.relays;
+    // IMPORTANT #2 fix: preserve SSM-seeded peerId/multiaddrs across manifest poll cycles.
+    // applyManifest replaces #currentRelays with the manifest's relay list. The S3 manifest
+    // carries healthCheckUrl and relayId but NOT peerId/multiaddrs — those come from SSM seeding
+    // at startup. Without this merge, the first manifest poll (every 2 minutes) would discard
+    // SSM-seeded peerId and multiaddrs, breaking DNS-based relay addressing.
+    //
+    // The merge now unconditionally prefers DNS-based multiaddrs from SSM over whatever is
+    // in the S3 manifest. Any existing seeded entry that has /dns4/ multiaddrs always wins
+    // over the S3 manifest content — defensive against any future path that writes IP-based
+    // addresses into S3 (e.g. before CRITICAL #1 was fixed in this story).
+    const oldRelays = this.#currentRelays;
+    this.#currentRelays = manifest.relays.slice();
+    for (const entry of this.#currentRelays) {
+      const seeded = oldRelays.find(r => r.relayId === entry.relayId);
+      if (seeded) {
+        // Always prefer SSM-seeded DNS multiaddrs over whatever S3 carries.
+        // /dns4/ addresses are stable (Route53 → ALB → container), /ip4/ addresses
+        // are ephemeral (ECS task replacement). A seeded entry with DNS multiaddrs
+        // must survive every manifest poll cycle.
+        const ssmHasDnsMultiaddrs = seeded.multiaddrs?.some(a => a.includes("/dns4/"));
+        if (ssmHasDnsMultiaddrs) {
+          entry.multiaddrs = seeded.multiaddrs!;
+        } else if (!entry.multiaddrs || entry.multiaddrs.length === 0) {
+          // Seeded but no DNS addresses — only merge if S3 manifest has nothing either
+          if (seeded.multiaddrs?.length) entry.multiaddrs = seeded.multiaddrs;
+        }
+        // peerId: always prefer seeded over S3 (seeded is derived from stable transport key,
+        // matches relay_register frames; S3 may carry a stale peerId from before a key rotation)
+        if (seeded.peerId) entry.peerId = seeded.peerId;
+      }
+    }
 
     if (!suppressLoadedLog) {
       this.#logger.info("relay.manifest.loaded", {
@@ -448,6 +478,12 @@ export class RelayPoolManager {
   async #pingOne(relay: RelayManifestEntry): Promise<void> {
     const state = this.#failureState.get(relay.relayId);
     if (!state) return;
+
+    // IMPORTANT #1: Skip health check when healthCheckUrl is empty.
+    // SSM-seeded entries have healthCheckUrl: "" until relay_register provides it.
+    // fetch("") throws immediately — counting against consecutiveFailures and marking
+    // the relay unavailable within ~90 seconds, defeating the purpose of this story.
+    if (!relay.healthCheckUrl) return;
 
     const startTime = Date.now();
     let result: PingResult;
@@ -663,6 +699,41 @@ export class RelayPoolManager {
    */
   updateRelayHealthCheckUrl(relayId: string, url: string): void {
     this.#relayHealthCheckUrls.set(relayId, url);
+  }
+
+  /**
+   * CELLO-M6B-019: Seed relay entries from SSM node registry data.
+   *
+   * Pre-populates the relay pool with entries so pickRelay() works before any
+   * relay_register frame arrives. Called at startup when CELLO_ENV is dev/staging/production.
+   *
+   * The seeded entries have:
+   *   - multiaddrs: DNS-based addresses from SSM (not raw IPs)
+   *   - peerId: stable peer ID from SSM (derived from transport key)
+   *   - healthCheckUrl: empty (set later by relay_register for VPC health checks only)
+   *
+   * AC-004: pickRelay() returns valid endpoint immediately after seeding.
+   * AC-006: relay_register only updates healthCheckUrl; multiaddrs/peerId preserved.
+   */
+  seedRelayEntries(entries: RelayManifestEntry[]): void {
+    for (const entry of entries) {
+      const existing = this.#currentRelays.find(r => r.relayId === entry.relayId);
+      if (existing) {
+        // Update addressing fields but preserve healthCheckUrl from relay_register
+        if (entry.multiaddrs?.length) existing.multiaddrs = entry.multiaddrs;
+        if (entry.peerId) existing.peerId = entry.peerId;
+      } else {
+        this.#currentRelays.push(entry);
+        // Initialize health state as available (optimistic — SSM entries are deploy-time verified)
+        this.#failureState.set(entry.relayId, {
+          consecutiveFailures: 0,
+          consecutiveSuccesses: 0,
+          available: true,
+          unavailableSince: undefined,
+          healthCheckUrl: entry.healthCheckUrl,
+        });
+      }
+    }
   }
 
   /**

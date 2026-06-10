@@ -9,9 +9,9 @@ Parameters:
     Type: String
     AllowedValues: [dev, staging, production]
     Description: Deployment environment
-  RelayMultiaddr:
-    Type: String
-    Description: "Relay libp2p multiaddr including peer ID (e.g. /ip4/10.x.x.x/tcp/4001/p2p/12D3KooW...)"
+  # CELLO-M6B-019: RelayMultiaddr parameter removed.
+  # Relay addressing is now sourced from the SSM node registry at runtime.
+  # The directory reads /cello/{env}/nodes/relay/* via GetParametersByPath at startup.
   Cpu:
     Type: String
     Default: "256"
@@ -107,8 +107,6 @@ Resources:
               Value: !Sub "{{resolve:ssm:/cello/${Environment}/directory/hostname}}"
             - Name: HOME
               Value: /tmp
-            - Name: CELLO_RELAY_MULTIADDR
-              Value: !Ref RelayMultiaddr
             - Name: CELLO_AUDIT_BUCKET
               Value:
                 Fn::ImportValue: !Sub "cello-${Environment}-audit-bucket"

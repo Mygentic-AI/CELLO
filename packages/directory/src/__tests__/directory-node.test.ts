@@ -1353,7 +1353,6 @@ describe("Regression: relay_register multiaddr updates relay adapter dial target
 
   it("directory calls updateMultiaddr on relay adapter when relay_register includes multiaddr", async () => {
     const dirKp = generateKeypair();
-    const dirPubkey = await dirKp.getPublicKey();
     const relayKp = generateKeypair();
     const relayPubkey = await relayKp.getPublicKey();
     const relayId = Buffer.from(relayPubkey).toString("hex");
@@ -1403,8 +1402,9 @@ describe("Regression: relay_register multiaddr updates relay adapter dial target
     stream.send(lp.encode.single(frame));
     await stream.close();
 
-    // Drain the response
-    for await (const _ of lp.decode(stream)) { break; }
+    // Drain the response (discard chunks — we only care that the handler completed)
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for await (const _chunk of lp.decode(stream)) { break; }
 
     // Give the handler a moment to complete
     await new Promise<void>((r) => setTimeout(r, 100));

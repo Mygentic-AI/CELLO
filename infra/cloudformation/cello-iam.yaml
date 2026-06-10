@@ -130,6 +130,16 @@ Resources:
                   - s3:PutObject
                 Resource:
                   - !Sub "arn:aws:s3:::cello-relay-manifest-${Environment}-${AWS::Region}/*"
+              # CELLO-M6B-019: SSM node registry read access.
+              # The directory reads relay and directory node entries at startup via
+              # GetParametersByPath on /cello/{env}/nodes/*. Read-only — SI-002 requires
+              # that application code never writes to this path.
+              - Sid: SsmNodeRegistryRead
+                Effect: Allow
+                Action:
+                  - ssm:GetParametersByPath
+                Resource:
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cello/${Environment}/nodes/*"
               # ECS Exec (EnableExecuteCommand: true on the service) requires these
               # ssmmessages permissions on the task role.
               - Sid: EcsExecSsmMessages
