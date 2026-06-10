@@ -1297,3 +1297,23 @@ The DNS hostnames for directories and relays are inherently public (Route53 enum
 3. `audit-state.sh` run post-deployment: **0 failures, 2 transient warnings** (relay CFN stacks still finishing their own updates — relay ECS services healthy at 1/1 in all regions). All M6B-019-specific checks passed: node registry parameters present and valid, `CELLO_RELAY_MULTIADDR` absent from directory task def (AC-007/AC-008 ✓), manifest signer pubkey aligned in all 3 regions.
 
 **Outcome:** The startup-ordering dependency between directory and relay is eliminated. The directory now reads relay DNS multiaddrs from SSM at startup and can reach the relay immediately after any restart — regardless of whether the relay has re-registered.
+
+---
+
+### 2026-06-10 — M6B-019 port bug fix + E2E verification
+
+**Bug found during testing:** `deploy.sh` wrote `"port":443` for relay SSM node registry entries. The relay WebSocket ALB listener (M6B-007) runs on port 80. The directory read port 443 at startup, constructed `/dns4/relay-us1.../tcp/443/ws/...` multiaddrs, and handed them to clients in session assignments — causing `relay_auth_error` on every `cello_initiate_session` after M6B-019 deployed.
+
+**Fix (commit `bf992ba`):** `deploy.sh` lines 746/749 changed from `"port":443` to `"port":80`. SSM parameters updated directly in all 3 regions. Directory task restarted to pick up corrected values.
+
+**E2E verification — PASSED:**
+
+Directory restarted (new task `50e5889d`). Relay NOT restarted beforehand — this is the key test condition. Directory read SSM at startup, seeded relay pool with `/dns4/relay-us1.cello.mygentic.ai/tcp/80/ws/p2p/...`. Relay re-registered ~90s after directory came up. `cello_initiate_session` returned `ok: true` — no relay restart required.
+
+Full bilateral seal completed:
+- Session: `317a864908ab6be88d1227d91b8bac05`
+- Sealed root: `34f1cecf973ea4a605c16929968d93eedb7579d521b49c811f4831e01c1c78ba`
+- Leaf count: 10
+- Both participants present
+
+**M6B-019 is verified end-to-end.** The startup-ordering dependency between directory and relay is eliminated in production.
