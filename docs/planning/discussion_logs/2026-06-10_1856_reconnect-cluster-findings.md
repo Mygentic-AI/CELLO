@@ -553,3 +553,119 @@ After 6 minutes stopped, `cello_status` showed `directory_reachable: true` and `
 | Directory CloudWatch | Key lines inline above; full STOP-window analysis included |
 | Demo agent log | `/tmp/cello-mcp-stderr.log` on i-0ad3e7c22470f266e, key lines inline above |
 | Connect version | 0.0.42 |
+
+---
+
+## Scenario 4 — Directory Redeploy While Client Is Running
+
+**Date/time run:** 2026-06-10, 20:07:00–20:21:29 local (UTC+2) / 18:07:00–18:21:29 UTC
+**Connect version:** 0.0.42
+**Baseline passed:** Yes — full 4-round exchange, `status: sealed` (session `5f8817eb`) before trigger.
+
+---
+
+### Trigger
+
+```bash
+TASK_ARN=$(aws ecs list-tasks --cluster cello-dev --service-name cello-directory-dev \
+  --region us-east-1 --query 'taskArns[0]' --output text)
+aws ecs stop-task --cluster cello-dev --task "$TASK_ARN" --region us-east-1 \
+  --reason "Scenario 4: directory redeploy fault injection"
+# Stopped at 20:07:00 local
+```
+
+---
+
+### Timeline
+
+| UTC | Event |
+|-----|-------|
+| 18:07:40 | Old directory task: `Peer disconnected` (relay, both agents) |
+| 18:07:44 | Old directory task: `signaling.stream.closed` for demo agent (`12ccbfd5`) and local client (`35313056`) |
+| 18:07:50 | Old directory task: `directory.service.stopped` — uptime 28580877ms (~7.9 hours) |
+| 18:07:55 | New directory task: `migration.starting` (task ID `9a3b1202`) |
+| 18:08:16 | New directory task: Flyway — schema v30, no migration needed |
+| 18:08:22 | New directory task: `relay.manifest.loaded` — version **18** (stale, pre-re-sign) |
+| 18:08:23 | New directory task: `directory.service.started`, relay connected immediately |
+| 18:09:52 | Relay: `relay.health.check.passed` on new directory |
+| 18:10:36 | Relay: `relay.already.registered` — relay re-registered with new directory, new IP `10.0.64.132` |
+| 18:13:04 | Local client: authenticated and `peer_id` announced on new directory |
+| 18:13:17 | Local client: `cello_initiate_session` attempted — **`target_offline`** (demo agent not yet connected) |
+| 18:13:39 | Manifest re-signed: version 18 → 20 uploaded to S3 |
+| 18:16:22 | New directory: `relay.manifest.poll.noop` — already at version 20 (picked up before re-sign; timing coincidence) |
+| 18:19:37 | Second `cello_initiate_session` attempt — **`target_offline`** (demo agent still not connected) |
+| 18:20:08 | Demo agent: authenticated and `peer_id` announced — `streamsMapSize: 2` (both agents registered) |
+| 18:20:29 | `cello_initiate_session` — **`ok: true`**, session `a9f961a8` |
+| 18:21:29 | Session `a9f961a8` sealed — root `a13dfd0b` |
+
+---
+
+### Phase 1 — Before Relay Restart (Expected Failure)
+
+`cello_initiate_session` at 18:13:17Z returned `target_offline`. The directory log shows:
+
+```
+[SESS]  Request failed — agent 35313056, reason: target_offline
+frost.debug.session_request.target_stream: targetStreamFound=false
+```
+
+The demo agent (`12ccbfd5`) had not yet reconnected to the new directory container. Its signaling stream was in the old container — which was dead. The local client reconnected to the new directory (authenticated at 18:13:04Z) but could not reach its counterparty.
+
+Note: the failure mode was `target_offline`, not `relay_unavailable`. The relay had already re-registered at this point (`relay.already.registered` at 18:10:36Z). The manifest re-sign was performed but was not the blocker — the demo agent's reconnect was.
+
+---
+
+### Phase 2 — After Demo Agent Restart
+
+The demo agent was manually restarted via SSM (`systemctl restart cello-demo.service`). It re-connected to the new directory in 137ms (`connecting_to_directory: ok (137ms)`, via `CELLO_DIRECTORY_MULTIADDR`). Once both agents were registered (`streamsMapSize: 2` at 18:20:08Z), session initiation succeeded immediately.
+
+**Post-restart session `a9f961a8`:** 4-round exchange, clean seal, `status: sealed`, `sealed_root: a13dfd0b`.
+
+**Local log:** Two additional `client.startup.prior.process.killed` cycles visible between baseline and the post-restart session — these are the `/mcp reconnect` calls during the investigation.
+
+---
+
+### Key Observations
+
+**1. Local client auto-reconnected to new directory.** After the directory replacement, the local cello-mcp process reconnected silently and without intervention. No `/mcp reconnect` was needed — `directory_reachable: true` was restored automatically.
+
+**2. The relay re-registered without any operator action.** The relay detected the old directory container going down (libp2p disconnect) and re-registered with the new container within ~2 minutes. `relay.already.registered` confirmed this at 18:10:36Z. The manifest re-sign was performed but the relay had already re-registered before the new manifest was polled.
+
+**3. The new directory loaded a stale manifest (version 18) at startup.** The manifest in S3 at startup time was version 18 (the relay's old IP). By the time the directory polled S3 (at 18:16:22Z, ~8 minutes after startup), the manifest was already at version 20 — re-signed during the investigation. No action was needed because the relay had already re-registered in-memory. The manifest re-sign is required for *client* relay discovery, not for directory-side relay assignment.
+
+**4. The real blocker was the demo agent, not the relay or manifest.** `target_offline` persisted until the demo agent restarted and re-registered. The demo agent uses `CELLO_DIRECTORY_MULTIADDR` (pinned env var) and reconnects in ~137ms on startup, but has no in-process reconnect logic — it does not detect that its current directory connection is dead and dial a new one.
+
+---
+
+### Diagnostic Question Answer
+
+**Does the local client auto-recover after a directory redeploy?** Yes — the local cello-mcp process reconnected to the new directory container silently, without `/mcp reconnect`.
+
+**Does the relay need to be restarted?** No — in this run the relay re-registered automatically. The `infra/CLAUDE.md` documented the "relay must be restarted" rule, but the actual observed behavior was automatic re-registration. The distinction may be: the rule was written when the relay had no reconnect logic; the current relay apparently does detect the directory disconnect and re-registers.
+
+**Does the manifest need to be re-signed?** It was re-signed as a precaution. In practice the relay had already re-registered in memory before the manifest was polled, so the re-sign was not the unblocking action.
+
+**Does session initiation work immediately after directory replacement?** No — it fails with `target_offline` until the *counterparty* also reconnects to the new directory. In this case that required manually restarting the demo agent. A production counterparty with the same reconnect behavior as the local client (auto-reconnect on directory disconnect) would unblock itself without operator action.
+
+---
+
+### Hypotheses Raised
+
+1. **The relay has reconnect logic; the documented "must restart" rule may be stale.** The relay re-registered without a restart in this run. Either the relay now dials the directory on disconnect (if so, the CLAUDE.md rule is outdated), or the directory rebooted fast enough that the relay's connection was still in-flight and the relay dialed the new instance automatically. Worth verifying in the relay code.
+
+2. **The local client has auto-reconnect to directory; the demo agent does not.** The local client (`35313056`) reconnected silently. The demo agent (`12ccbfd5`) required a service restart. The difference is environment: the demo agent runs as a `systemd` service — the service itself restarted (via SSM) to pick up the new directory. An agent with no process supervisor would stay disconnected indefinitely. This is the same architectural gap as the bootstrap-null issue in Scenario 5 — no retry/reconnect loop means a dead connection stays dead.
+
+3. **`target_offline` is the correct error for this failure mode** (not `relay_unavailable`). When the relay is healthy and registered but the counterparty's signaling stream is not in the directory's map, the directory correctly returns `target_offline`. The error message is accurate and actionable.
+
+---
+
+### Artifacts
+
+| Artifact | Location |
+|----------|----------|
+| Local MCP stderr | Key lines inline above (3 PIDs: 78710, 80368, 80740) |
+| cello_status (post-directory-restart) | `directory_reachable: true` — auto-recovered |
+| Sealed receipt | `status: sealed`, `sealed_root: a13dfd0b...` |
+| Directory CloudWatch | Full timeline inline above |
+| Demo agent log | `/tmp/cello-mcp-stderr.log` on i-0ad3e7c22470f266e — startup + session `5f8817eb` + session `a9f961a8` |
+| Connect version | 0.0.42 |
