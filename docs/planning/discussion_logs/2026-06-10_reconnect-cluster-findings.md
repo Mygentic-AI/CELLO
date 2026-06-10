@@ -295,3 +295,126 @@ No `checkpoint.complete` — same federation gap as Scenario 5.
 ### Ancillary Finding — seal_deferred / directory_unreachable When Exchange Is Incomplete
 
 Closing a session after fewer than 4 rounds produces `seal_deferred` with `reason: directory_unreachable`. The seal never reaches the directory — it fails client-side. The demo agent is left in `sealing` state indefinitely. The error message `directory_unreachable` is misleading — the directory was reachable; the protocol exchange was incomplete. A clearer error (e.g. `exchange_incomplete` or `seal_precondition_failed`) would help operators diagnose this without confusion.
+
+---
+
+## Scenario 2 — Version Bump: Remove/Re-Add
+
+**Date/time run:** 2026-06-10, ~19:20 local (UTC+2) / ~17:20 UTC
+**Connect version before:** 0.0.41
+**Connect version after:** 0.0.42 (same as Scenario 1 — npx pulled from cache)
+**Baseline passed:** Yes — fresh pre-conditions run after Scenario 1: logs cleared, demo agent restarted.
+
+---
+
+### Trigger
+
+```bash
+claude mcp remove cello
+claude mcp add cello -- npx --yes @cello-protocol/connect@latest
+```
+
+Note: `claude mcp remove` failed silently (the MCP server had already disconnected — it was not in the active config). The `add` command succeeded and registered `cello` as an npx-invoked MCP server.
+
+---
+
+### Startup Observations
+
+**Two-PID startup pattern (local log):**
+
+On `/mcp` invocation, two cello-mcp processes started in sequence:
+
+- **PID 74269**: acquired lock → opened DB (`agentId: 35313056...`) → fetching directory address… released lock mid-bootstrap before completing startup
+- **PID 74347**: acquired lock → DB opened → `fetching_directory_address: ok` (984ms) → `loading_agent_state: ok` (0ms) → `connecting_to_directory: ok` (3439ms) → `ready: ok`
+
+The lock release by PID 74269 and acquisition by PID 74347 indicates the `npx` invocation triggered a concurrent startup race — the first process was likely a stale or partial invocation that detected an existing process and gracefully released. PID 74347 completed the full startup and became the live process.
+
+**npx cache:** The `/mcp` reconnect was instantaneous (as noted by the operator). npx served 0.0.42 from the local cache — no network download occurred.
+
+---
+
+### cello_status After Reconnect
+
+```json
+{
+  "transport_started": true,
+  "own_pubkey": "35313056d41fd7ce96cb5caf1e3c870e35343380b5595428bde5d98309500f72",
+  "connected_peer_count": 1,
+  "uptime_seconds": 21,
+  "active_session_count": 0,
+  "directory_reachable": true,
+  "registered": true,
+  "agent_id": "b8ff33d5169be79758aa9df9f3aea482",
+  "connection_count": 1,
+  "policy_mode": "open",
+  "policy_review_mode": "deterministic"
+}
+```
+
+`registered: true`, `directory_reachable: true`. Agent identity preserved.
+
+---
+
+### Session — Full Protocol (4 rounds, clean seal)
+
+Session `2d49dcd24f75bbf2076ec20b2cc19b1f` — 4 complete rounds, then `cello_close_session`.
+
+`cello_close_session` result:
+```json
+{"status":"sealed","sealed_root":"a41effeb6f72e7d88d0de2ce2f9f21ff31afaee99c45022af77b55c91756b73c","reason":null}
+```
+
+**Local log:** 10 leaves (indices 0-9: 8 msg + 2 ctrl), `sealing` → FROST ceremony completed (`sigLength=64`, commit + sign OK, aggregate OK) → `sealed`.
+
+**Demo agent log (via SSM):** Startup for Scenario 2 shows the demo agent also had the two-startup-variant pattern on its side (PIDs 847508 → 847931). Demo agent uses `CELLO_DIRECTORY_MULTIADDR` (env var), so `fetching_directory_address: ok (0ms)` — no bootstrap HTTP call. Session `2d49dcd2`: `active` → 8 msg leaves (indices 0-7) → `sealing` → FROST ceremony completed (`sigLength=64`) → `sealed`. No errors.
+
+**Directory CloudWatch (UTC):**
+```
+17:20:47Z  Session 2d49dcd2 established (35313056 → 12ccbfd5)
+17:21:32Z  federation.checkpoint.round.initiated batchSize=4 — then skipped (availableNodes: 1, threshold: 2)
+17:22:01Z  Seal initiated — session 2d49dcd2 (10 leaves)
+17:22:02Z  Sealed — root a41effeb
+17:22:02Z  notarization.recorded
+17:22:02Z  mmr.leaf.appended — leafIndex: 4
+17:22:02Z  mmr.checkpoint.pending — stagedAt: 1781109722
+17:22:11Z  signaling.stream.closed — peer 35313056, pendingSessionsCount: 1, pendingSessionKeys: ["2d49dcd24f75bbf2076ec20b2cc19b1f"]
+```
+
+The `signaling.stream.closed` event at 17:22:11Z — 9 seconds post-seal — represents the directory detecting that the local client disconnected after `cello_close_session` returned. `pendingSessionsCount: 1` with the sealed session still listed means the directory's session record had not been fully cleared from the signaling layer's session map before the stream closed. This is expected post-seal behavior; the session was already in `sealed` state when the stream closed.
+
+Same federation checkpoint gap as Scenarios 5 and 1 — no `checkpoint.complete`, just `mmr.checkpoint.pending`.
+
+---
+
+### Diagnostic Question Answer
+
+**Does remove/re-add succeed where reconnect-only (Scenario 1) failed?** Not applicable — Scenario 1 also succeeded. Both paths work for a version bump.
+
+**What is different between the two paths?**
+
+- Scenario 1 (`/mcp reconnect`): Claude Code kills and respawns the existing process. Startup is deterministic — single process, no lock race.
+- Scenario 2 (remove/re-add with `npx`): Process invocation via npx produces a two-PID startup sequence. The first process releases the lock before finishing; the second completes startup. Net result is the same — one running process — but the startup trace is noisier.
+- Both approaches: npx served from cache (instantaneous). If the cache were absent, Scenario 2 would include a download step that Scenario 1 would not.
+
+**Verdict: PASS.** Remove/re-add works. Behaviorally identical to reconnect-only for an already-cached version. The startup race (two PIDs) resolved cleanly without intervention.
+
+---
+
+### Hypotheses Raised
+
+1. **Two-PID startup pattern is specific to npx invocation.** When Claude Code invokes `npx --yes @cello-protocol/connect@latest`, the first process may be the npx launcher or a competing Claude Code subprocess that detects the MCP slot being filled and backs off. The DB lock discipline handles this gracefully. Worth confirming: does this pattern appear consistently with npx, or is it occasional?
+
+2. **signaling.stream.closed with pendingSessionsCount: 1 post-seal is normal.** The sealed session persists in the directory's signaling session map until the stream closes. The directory has no explicit "session fully closed" message from the client — it learns of client disconnect from the stream closure. The `pendingSessionKeys` list at closure is a directory-side cleanup artifact, not a failure. This should be verified against the signaling manager code: is there a race where the directory could attempt to re-deliver to a disconnected client?
+
+---
+
+### Artifacts
+
+| Artifact | Location |
+|----------|----------|
+| Local MCP stderr | Full log read above (no timestamps) |
+| cello_status (post-reconnect) | Inline above |
+| Sealed receipt | `status: sealed`, `sealed_root: a41effeb...` |
+| Directory CloudWatch | Key lines inline above |
+| Demo agent log | `/tmp/cello-mcp-stderr.log` on i-0ad3e7c22470f266e, key lines inline above |
+| Connect version | 0.0.42 (npx cached) |
