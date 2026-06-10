@@ -240,6 +240,26 @@ aws elbv2 describe-load-balancers --region <region> \
 
 ---
 
+## Startup Sequence — Relay Must Be Restarted After Every Directory Redeploy
+
+**After any directory redeploy, restart the relay ECS task in each affected region.**
+
+The relay registers with the directory once at startup and has no reconnect logic. When the directory restarts, the relay's libp2p connection to the old container goes dead. The relay does not detect this and does not re-register with the new directory instance. Until the relay restarts and re-registers, `recordAssignment` calls from the directory will fail — clients will see `relay_unavailable` on every `cello_initiate_session`.
+
+**Procedure (per region):**
+```bash
+TASK=$(aws ecs list-tasks --cluster cello-dev --family cello-relay-dev \
+  --region <region> --query 'taskArns[0]' --output text)
+aws ecs stop-task --cluster cello-dev --task "$TASK" --region <region> \
+  --reason "Relay reconnect after directory redeploy"
+```
+
+ECS will launch a replacement task automatically. Wait for `relay.already.registered` in the directory CloudWatch logs before considering the relay healthy.
+
+**This is a known architectural gap.** The permanent fix (symmetric startup announcements — relay dials all directories, directory dials all relays, both retry with backoff) is deferred to the federation milestone. See `docs/planning/user-stories/m6b/COORDINATION.md` → "Known Gap — Mesh Reconnect" for the full design and requirements.
+
+---
+
 ## Pipeline Mappings Must Stay in Sync with the Live Lambda
 
 **`infra/pipeline-mappings.json` is bundled into the `cello-pipeline-filter` Lambda at deploy time — it is NOT read from the repo at runtime.** The Lambda reads `/var/task/pipeline-mappings.json`, which is whatever was in the zip when `deploy-lambdas.sh` last ran. A git change to the file has zero effect until the Lambda is redeployed.
