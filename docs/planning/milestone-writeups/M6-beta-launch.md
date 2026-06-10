@@ -11,7 +11,7 @@ description: M6 write-up — CELLO beta launch. Installable @cello-protocol/conn
 
 **Started:** 2026-05-26
 **Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001, OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-002, PERSIST-024, DEMO-001, M6-DX-001
-**Stories open:** M6-E2E-001 (ACs 005-010 pending — directory pipeline deploying 2026-06-01)
+**Stories open:** M6-E2E-001 (AC-007 and AC-010 pending)
 
 **Unblocked by OPS-AGENT-002:** OPS-AGENT-003 (Telegram adapter), OPS-AGENT-004 (SES OTP delivery), OPS-AGENT-005B (wire app code)
 
@@ -657,10 +657,27 @@ Reactive story. Discovered during DEMO-001 deployment when `systemctl start cell
 
 ---
 
-## M6-E2E-001 — Stranger Flow Verification (IN PROGRESS)
+## M6-E2E-001 — Stranger Flow Verification
 
 **Started:** 2026-06-01
-**Status:** ACs 001-005 verified 2026-06-03. AC-006 blocked — sealed receipt not returned (see below). ACs 007-010 pending.
+**Status:** ACs 001–006, 009 verified. AC-008 satisfied by ongoing @latest promotion procedure. AC-007 and AC-010 remaining.
+
+### AC Verification Record
+
+| AC | Status | Date | Notes |
+|----|--------|------|-------|
+| AC-001 / AC-001b | ✅ Verified | 2026-06-01 | Install worked on clean machine |
+| AC-002 | ✅ Verified | 2026-06-01 | Telegram registration complete via @CelloConnectStagingBot |
+| AC-003 | ✅ Verified | 2026-06-01 | `cello_register` succeeded; agent `00a71840...` registered |
+| AC-004 | ✅ Verified | 2026-06-01 | Connection to demo agent accepted |
+| AC-005 | ✅ Verified | 2026-06-09 | Full 4-message exchange completed; session `20d51061` |
+| AC-006 | ✅ Verified | 2026-06-10 | Bilateral seal complete; sealed root `0317ee3a...`; 10 leaves; both participants present |
+| AC-007 | ⏳ Pending | — | Second agent registration + agent-to-agent exchange not yet run |
+| AC-008 | ✅ Satisfied | ongoing | `@latest` promotion is a routine procedure; `@cello-protocol/connect@latest` at v0.0.41+ |
+| AC-009 | ✅ Verified | 2026-06-07 | Single-use token rejection confirmed; `PRE_AUTH_TOKEN_CONSUMED` returned on re-use |
+| AC-010 | ⏳ Pending | — | End-to-end timing not formally measured |
+
+AC-007 and AC-010 are the only remaining gates before M6-E2E-001 closes.
 
 ### Infrastructure fixes deployed during E2E-001 verification
 
