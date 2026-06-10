@@ -1248,3 +1248,9 @@ The operational workaround (restart relay after every directory redeploy) is not
 Until this is fixed in code, the operational rule is: **restart the relay whenever the directory redeploys.** The relay re-registers within ~30 seconds of coming up, and `relay.adapter.multiaddr.updated` in the directory logs confirms the fix has taken effect.
 
 This is a known design gap — logged here for the M7 story author to pick up.
+
+---
+
+### 2026-06-10 — Note: DDoS surface on node ALBs
+
+The DNS hostnames for directories and relays are inherently public (Route53 enumerable, returned by /bootstrap, in the S3 manifest, visible in any libp2p handshake). The node registry design (SSM) does not change this exposure. The DDoS surface is the ALBs themselves. AWS Shield Standard is active by default; WAF rate-limiting rules and Shield Advanced are not yet deployed. Multi-region design provides natural resilience (attacker must hit all 3 simultaneously). Tracked as a future infrastructure hardening story — not blocking the addressing fix.
