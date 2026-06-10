@@ -681,14 +681,14 @@ export class RelayPoolManager {
    */
   seedRelayEntries(entries: RelayManifestEntry[]): void {
     for (const entry of entries) {
-      // Add to current relays (skip duplicates)
       const existing = this.#currentRelays.find(r => r.relayId === entry.relayId);
-      if (!existing) {
+      if (existing) {
+        // Update addressing fields but preserve healthCheckUrl from relay_register
+        if (entry.multiaddrs?.length) existing.multiaddrs = entry.multiaddrs;
+        if (entry.peerId) existing.peerId = entry.peerId;
+      } else {
         this.#currentRelays.push(entry);
-      }
-
-      // Initialize health state as available (optimistic — SSM entries are deploy-time verified)
-      if (!this.#failureState.has(entry.relayId)) {
+        // Initialize health state as available (optimistic — SSM entries are deploy-time verified)
         this.#failureState.set(entry.relayId, {
           consecutiveFailures: 0,
           consecutiveSuccesses: 0,

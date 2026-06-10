@@ -107,9 +107,6 @@ Resources:
               Value: !Sub "{{resolve:ssm:/cello/${Environment}/directory/hostname}}"
             - Name: HOME
               Value: /tmp
-            # CELLO-M6B-019: CELLO_RELAY_MULTIADDR removed from ECS task definition.
-            # Relay addressing is sourced from SSM node registry at runtime
-            # via GetParametersByPath on /cello/{env}/nodes/relay/*.
             - Name: CELLO_AUDIT_BUCKET
               Value:
                 Fn::ImportValue: !Sub "cello-${Environment}-audit-bucket"

@@ -643,8 +643,33 @@ for NODE_REGION in us-east-1 eu-central-1 ap-northeast-1; do
     --output text 2>/dev/null || echo "")
 
   if [[ -z "${_RELAY_PEER_ID}" || "${_RELAY_PEER_ID}" == "None" ]]; then
-    echo "  NOTE: /cello/${ENVIRONMENT}/relay/peer-id not found in ${NODE_REGION}, skipping relay entry for that region."
-    RELAY_PEER_IDS["${NODE_REGION}"]=""
+    # Derive relay peer ID from transport key in Secrets Manager
+    _RELAY_TRANSPORT_KEY=$(aws secretsmanager get-secret-value \
+      --secret-id "cello/${ENVIRONMENT}/relay/transport-key" \
+      --region "${NODE_REGION}" \
+      --query 'SecretString' \
+      --output text 2>/dev/null || echo "")
+    if [[ -n "${_RELAY_TRANSPORT_KEY}" && "${_RELAY_TRANSPORT_KEY}" != "PLACEHOLDER_POPULATE_VIA_CLI" ]]; then
+      _RELAY_PEER_ID=$(printf '%s' "${_RELAY_TRANSPORT_KEY}" | node infra/scripts/derive-peerid-from-transport-key.js 2>/dev/null)
+      if [[ -n "${_RELAY_PEER_ID}" ]]; then
+        echo "  Derived relay peer ID for ${NODE_REGION}: ${_RELAY_PEER_ID}"
+        # Write to SSM for future deploys
+        aws ssm put-parameter \
+          --name "/cello/${ENVIRONMENT}/relay/peer-id" \
+          --value "${_RELAY_PEER_ID}" \
+          --type String \
+          --overwrite \
+          --region "${NODE_REGION}" \
+          --output text --query Version > /dev/null
+        RELAY_PEER_IDS["${NODE_REGION}"]="${_RELAY_PEER_ID}"
+      else
+        echo "  NOTE: Failed to derive relay peer ID for ${NODE_REGION}, skipping relay entry."
+        RELAY_PEER_IDS["${NODE_REGION}"]=""
+      fi
+    else
+      echo "  NOTE: /cello/${ENVIRONMENT}/relay/peer-id and transport-key not found in ${NODE_REGION}, skipping relay entry."
+      RELAY_PEER_IDS["${NODE_REGION}"]=""
+    fi
   else
     RELAY_PEER_IDS["${NODE_REGION}"]="${_RELAY_PEER_ID}"
   fi

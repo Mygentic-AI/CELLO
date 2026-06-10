@@ -317,6 +317,59 @@ describe("CELLO-M6B-019: RelayPoolManager — seed relay entries", () => {
     mgr.stop();
   });
 
+  // HIGH #1: seedRelayEntries does not overwrite healthCheckUrl from prior relay_register
+  it("seedRelayEntries preserves existing healthCheckUrl and failureState for known relays", () => {
+    const storage: CloudStorageProvider = {
+      upload: async () => {},
+      download: async () => undefined,
+    };
+    const mgr = new RelayPoolManager({
+      storage,
+      signerPublicKeyHex: "a".repeat(64),
+      logger,
+    });
+
+    // First seed: relay-us1 with empty healthCheckUrl (SSM data at startup)
+    mgr.seedRelayEntries([
+      {
+        relayId: "relay-us1",
+        endpoint: "wss://relay-us1.cello.mygentic.ai",
+        region: "us-east-1",
+        status: "active",
+        healthCheckUrl: "",
+        peerId: "12D3KooWRelay1",
+        multiaddrs: ["/dns4/relay-us1.cello.mygentic.ai/tcp/443/ws/p2p/12D3KooWRelay1"],
+      },
+    ]);
+
+    // Simulate relay_register providing the healthCheckUrl
+    mgr.updateRelayHealthCheckUrl("relay-us1", "http://10.0.1.50:4000/health");
+
+    // Second seed: same relay with empty healthCheckUrl (e.g. re-reading SSM)
+    mgr.seedRelayEntries([
+      {
+        relayId: "relay-us1",
+        endpoint: "wss://relay-us1.cello.mygentic.ai",
+        region: "us-east-1",
+        status: "active",
+        healthCheckUrl: "", // SSM doesn't know the VPC health URL
+        peerId: "12D3KooWRelay1Updated",
+        multiaddrs: ["/dns4/relay-us1.cello.mygentic.ai/tcp/443/ws/p2p/12D3KooWRelay1Updated"],
+      },
+    ]);
+
+    // healthCheckUrl from relay_register must be preserved
+    expect(mgr.getRelayHealthCheckUrl("relay-us1")).toBe("http://10.0.1.50:4000/health");
+
+    // Addressing fields should be updated from the new seed
+    const picked = mgr.pickRelay();
+    expect(picked).not.toBeNull();
+    expect(picked!.peerId).toBe("12D3KooWRelay1Updated");
+    expect(picked!.multiaddrs).toEqual(["/dns4/relay-us1.cello.mygentic.ai/tcp/443/ws/p2p/12D3KooWRelay1Updated"]);
+
+    mgr.stop();
+  });
+
   // Multiple relays seeded
   it("seeds multiple relay entries and pickRelay returns the best available", () => {
     const storage: CloudStorageProvider = {

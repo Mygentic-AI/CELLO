@@ -143,7 +143,8 @@ export function parseNodeRegistryEntries(
     const isRelay = param.Name.includes("/nodes/relay/");
     const isDirectory = param.Name.includes("/nodes/directory/");
 
-    // Extract region identifier from path (last segment, e.g. "aws-us-east-1")
+    // Extract region identifier from path (last segment).
+    // Assumed path format: /cello/{env}/nodes/{role}/{cloud}-{region}
     const pathParts = param.Name.split("/");
     const entryRegion = pathParts[pathParts.length - 1] ?? "unknown";
 
