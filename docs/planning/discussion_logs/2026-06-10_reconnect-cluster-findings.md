@@ -195,3 +195,103 @@ The process restarted during the idle period (a new Claude Code session spawned 
 | Directory CloudWatch | Key lines inline above |
 | Demo agent log | `/tmp/cello-mcp-stderr.log` on i-0ad3e7c22470f266e, key lines inline above |
 | Connect version | 0.0.41 |
+
+---
+
+## Scenario 1 — Version Bump: Reconnect Only (No Remove/Re-Add)
+
+**Date/time run:** 2026-06-10, ~19:06 local (UTC+2) / ~17:06 UTC
+**Connect version before:** 0.0.41
+**Connect version after:** 0.0.42
+**Install timestamp:** 19:05:58 local (confirmed by `date` command after `npm install -g`)
+
+**Baseline passed:** Yes — `cello_status` showed `directory_reachable: true`, `registered: true`, session and close completed before trigger.
+
+---
+
+### Trigger
+
+```bash
+npm install -g @cello-protocol/connect@latest   # installed 0.0.42 at 19:05:58
+/mcp reconnect                                   # Claude Code MCP reconnect
+```
+
+No `claude mcp remove` / `claude mcp add` performed.
+
+---
+
+### cello_status After Reconnect
+
+```json
+{
+  "transport_started": true,
+  "connected_peer_count": 1,
+  "uptime_seconds": 20,
+  "directory_reachable": true,
+  "registered": true,
+  "agent_id": "b8ff33d5169be79758aa9df9f3aea482"
+}
+```
+
+Version confirmed: `package.json` timestamp 19:05 in npm global dir, version field 0.0.42.
+
+---
+
+### Session A — Aborted (1 round, then close)
+
+Session `8d49643cdb819b3c3480f06e2c7e5bfb` — initiated, 1 send/receive, then `cello_close_session` called prematurely.
+
+`cello_close_session` result:
+```json
+{"status":"seal_deferred","sealed_root":null,"reason":"directory_unreachable","mmr_peak":null}
+```
+
+**Local log:** 2 leaves (indices 0-1, seq 1-2), then `sealing` → `seal_deferred`.
+
+**Demo agent log:** Session went `active` → 2 leaves → `sealing`. No `sealed` entry — demo agent left in `sealing` state with no resolution.
+
+**Directory CloudWatch:** No seal attempt for `8d49643c` appears at all. The `reason: directory_unreachable` was a client-side error — the seal ceremony never reached the directory.
+
+**Conclusion:** `seal_deferred` was caused by closing after only 1 round. See ancillary finding below.
+
+---
+
+### Session B — Full Protocol (4 rounds, clean seal)
+
+Session `1ace1e21c70aeefc667b768a2fd7a68d` — 4 complete rounds, then `cello_close_session`.
+
+`cello_close_session` result:
+```json
+{"status":"sealed","sealed_root":"6e4a1b7eec56176e6d5e4931e1c7180b01953f627856a2556ab9259f5d5e12a0","reason":null}
+```
+
+**Local log:** 10 leaves (indices 0-9: 8 msg + 2 ctrl), `sealing` → `sealed`. FROST ceremony completed (commit + sign OK, sigLength=64).
+
+**Demo agent log:** Clean. 10 leaves → `sealing` → FROST ceremony → `sealed`. Notable startup difference: `fetching_directory_address: ok (from CELLO_DIRECTORY_MULTIADDR)` — the demo agent uses a pinned env var, not the bootstrap HTTP endpoint. This is why it never hits the bootstrap-returns-null failure seen on the local client.
+
+**Directory CloudWatch (UTC):**
+```
+17:11:54Z  Session request: 35313056 → 12ccbfd5
+17:11:56Z  FROST ceremony complete, assignment delivered (initiatorGot=true, targetGot=true)
+17:13:02Z  Seal initiated — session 1ace1e21 (10 leaves)
+17:13:03Z  Sealed — root 6e4a1b7e
+17:13:03Z  notarization.recorded, mmr.leaf.appended (leafIndex: 3), mmr.checkpoint.pending
+```
+
+No `checkpoint.complete` — same federation gap as Scenario 5.
+
+---
+
+### Diagnostic Question Answer
+
+**Does `npm install -g @cello-protocol/connect@latest` + `/mcp reconnect` pick up the new version and maintain working state?** Yes.
+
+0.0.42 was loaded, `registered: true` and key material survived, full 4-round session and seal completed correctly.
+
+**README claim validated:** The documented upgrade path works. No remove/re-add required.
+
+---
+
+### Ancillary Finding — seal_deferred / directory_unreachable When Exchange Is Incomplete
+
+Closing a session after fewer than 4 rounds produces `seal_deferred` with `reason: directory_unreachable`. The seal never reaches the directory — it fails client-side. The demo agent is left in `sealing` state indefinitely. The error message `directory_unreachable` is misleading — the directory was reachable; the protocol exchange was incomplete. A clearer error (e.g. `exchange_incomplete` or `seal_precondition_failed`) would help operators diagnose this without confusion.
