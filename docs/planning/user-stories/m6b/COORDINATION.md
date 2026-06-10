@@ -1268,3 +1268,15 @@ The DNS hostnames for directories and relays are inherently public (Route53 enum
 **Dependencies:** Blocked by M6B-014 (NAT gateway). No other blockers.
 
 **Status:** Story written and sprint-reviewed (APPROVED, 3 mediums fixed). Ready to implement.
+
+---
+
+### 2026-06-10 — Fix worth addressing: parallelize CodePipeline region deploys
+
+**Observation:** The `cello-directory-pipeline` (and likely relay/ops-agent pipelines) deploy regions sequentially — StagingDeploy (us-east-1) → SmokeTest → ProductionDeploy (eu-central-1 + ap-northeast-1). There is no protocol necessity for this ordering. Sovereign node design means each region is fully independent; parallel ECS deploys across all 3 regions would not conflict.
+
+**Current cost:** ~25-30 min wall-clock per pipeline run. Parallelizing would reduce this to ~10 min.
+
+**Fix:** Restructure the ProductionDeploy stage to use parallel CodePipeline actions (one per region) rather than sequential deploys. Low complexity — purely a pipeline config change in `cello-cicd.yaml`.
+
+**Suggested story:** Write as a M7 infrastructure story (or post-M6B cleanup) — "Parallelize CodePipeline ECS deploy actions across regions."
