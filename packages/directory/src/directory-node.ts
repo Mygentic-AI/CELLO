@@ -567,6 +567,10 @@ export class CelloDirectoryNode {
         }
 
         // Update the relay adapter's dial address so recordAssignment always reaches the current IP.
+        // SI-001 exemption: updateMultiaddr sets the VPC-internal /ip4/ dial path used exclusively
+        // for directory→relay RPC calls (recordAssignment, confirmSeal). This is NOT the
+        // client-facing manifest dial target — that path is governed by SSM DNS multiaddrs written
+        // by deploy.sh and is unaffected by relay_register.
         const multiaddr = req["multiaddr"] as string | undefined;
         if (multiaddr && typeof (this.#relay as unknown as { updateMultiaddr?: unknown }).updateMultiaddr === "function") {
           (this.#relay as unknown as { updateMultiaddr: (m: string) => void }).updateMultiaddr(multiaddr);

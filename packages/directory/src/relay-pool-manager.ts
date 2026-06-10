@@ -423,8 +423,9 @@ export class RelayPoolManager {
           // Seeded but no DNS addresses — only merge if S3 manifest has nothing either
           if (seeded.multiaddrs?.length) entry.multiaddrs = seeded.multiaddrs;
         }
-        // peerId: prefer seeded over S3 (seeded is derived from stable transport key)
-        if (seeded.peerId && !entry.peerId) entry.peerId = seeded.peerId;
+        // peerId: always prefer seeded over S3 (seeded is derived from stable transport key,
+        // matches relay_register frames; S3 may carry a stale peerId from before a key rotation)
+        if (seeded.peerId) entry.peerId = seeded.peerId;
       }
     }
 
