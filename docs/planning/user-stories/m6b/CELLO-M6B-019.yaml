@@ -1,0 +1,358 @@
+---
+name: CELLO-M6B-019
+type: user-story
+date: 2026-06-10
+topics: [infrastructure, addressing, ssm, relay, directory, dns, startup-ordering, sovereign-nodes]
+status: draft
+description: >
+  Replace the startup-order-dependent relay_register addressing mechanism with a
+  persisted SSM node registry. The directory reads relay DNS hostnames and peer IDs
+  from SSM at startup, eliminating the requirement for the relay to register before
+  the directory can dial it or assign sessions.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M6B-019
+domain: Node Operations
+milestone: M6B
+actor: DIR
+priority: P0
+components:
+  - directory
+  - infra
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a directory node,
+  I want to read relay addresses from a persisted SSM node registry at startup,
+  so that I can dial the relay and assign sessions immediately — regardless of
+  which service started first and without depending on the relay sending a
+  relay_register frame before I can function.
+
+# ─── Context ────────────────────────────────────────────────
+# Root cause: the directory depends on the relay sending a relay_register frame
+# to learn its multiaddr. If the directory restarts after the relay, the relay
+# never re-registers (no reconnect logic), and NetworkRelayAdapter holds no
+# address. Every cello_initiate_session fails with relay_unavailable until the
+# relay is manually restarted. This has been the single recurring failure mode
+# across all of M6/M6B — documented in COORDINATION.md entries from 2026-06-04
+# through 2026-06-10.
+#
+# The fix: deploy.sh writes a node registry to SSM at deploy time. Each entry
+# contains the stable DNS hostname and libp2p peer ID for a node. The directory
+# reads relay entries at startup and constructs DNS-based multiaddrs. The address
+# is always valid because it uses a hostname (Route53 → ALB → current container)
+# rather than a container-specific IP.
+#
+# SSM parameter path: /cello/{env}/nodes/{role}/{cloud}-{region}
+# JSON value: { hostname, peerId, port, transport, status }
+# Multiaddr constructed: /dns4/{hostname}/tcp/{port}/{transport}/p2p/{peerId}
+#
+# This design is multi-cloud ready: the JSON schema is cloud-agnostic. When GCP
+# or Azure nodes are added, their equivalent config stores hold the same schema.
+# deploy.sh writes the full node set to every target region (SSM is region-scoped
+# in AWS, so cross-region reads would add latency).
+
+# ─── Sovereign Node Constraint ──────────────────────────────
+# Directory nodes are sovereign by design. Their independence requires that each
+# node can function without depending on another node's startup announcement.
+# A directory that cannot dial the relay without a prior relay_register frame is
+# coupled to the relay's lifecycle — violating sovereignty. DNS-based addressing
+# via SSM restores independence: the directory can reach the relay at any time
+# by resolving its stable hostname, regardless of the relay's startup state.
+
+# ─── Behavior ──────────────────────────────────────────────
+behavior:
+  - trigger: "When deploy.sh runs for any region"
+    action: >
+      deploy.sh writes one SSM parameter per node at
+      /cello/{env}/nodes/{role}/{cloud}-{region} containing a JSON object with
+      fields: hostname, peerId, port, transport, status. It writes the full set
+      of nodes (all roles, all regions) to the current target region so any
+      service in that region can read the complete topology without cross-region
+      API calls.
+
+  - trigger: "When the directory ECS task starts"
+    action: >
+      The directory reads all SSM parameters under /cello/{env}/nodes/relay/ and
+      constructs a DNS multiaddr for each active relay entry. It passes the
+      multiaddr(s) to NetworkRelayAdapter and pre-populates the relay pool
+      manifest's multiaddrs and peerId fields from the same data.
+
+  - trigger: "When a relay_register frame arrives at the directory"
+    action: >
+      The directory updates only the healthCheckUrl in the manifest (the
+      container's current private IP for VPC health checks). It does NOT use
+      relay_register as the source of the dial address or the manifest's
+      multiaddrs/peerId fields — those come from SSM.
+
+  - trigger: "When the directory needs to dial the relay (recordAssignment, confirmSeal, etc.)"
+    action: >
+      NetworkRelayAdapter dials using the DNS multiaddr from SSM. libp2p resolves
+      the hostname at dial time (Route53 → ALB → current container). No raw IP
+      addresses are used.
+
+# ─── Acceptance Criteria ───────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "deploy.sh has been modified to write node registry SSM parameters"
+    when: "deploy.sh runs for region us-east-1"
+    then: >
+      An SSM parameter exists at /cello/{env}/nodes/relay/aws-us-east-1
+      containing valid JSON with fields hostname (string, non-empty), peerId
+      (string, starts with '12D3Koo'), port (number), transport (string, 'ws'),
+      and status (string, 'active'). AND an equivalent parameter exists for each
+      directory node at /cello/{env}/nodes/directory/aws-{region}. Verified by
+      aws ssm get-parameter for each path.
+    test_type: integration
+    component_under_test: infra
+
+  - id: AC-002
+    given: "deploy.sh runs for all 3 regions (us-east-1, eu-central-1, ap-northeast-1)"
+    when: "SSM parameters are read from any one region"
+    then: >
+      That region contains the full node set — all relay entries AND all directory
+      entries for all 3 regions. Verified by aws ssm get-parameters-by-path with
+      path /cello/{env}/nodes/ returning at least 6 entries (3 relays + 3
+      directories) in each region.
+    test_type: integration
+    component_under_test: infra
+
+  - id: AC-003
+    given: "The directory ECS task starts with SSM node registry parameters present"
+    when: "the directory reads relay entries from SSM at startup"
+    then: >
+      NetworkRelayAdapter is initialized with a DNS multiaddr of the form
+      /dns4/{hostname}/tcp/{port}/{transport}/p2p/{peerId} constructed from the
+      SSM entry. No raw /ip4/ address appears in the adapter's dial target. AND
+      the event 'node.registry.loaded' is logged at INFO with fields: relayCount,
+      directoryCount, source ('ssm').
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "The directory has loaded relay entries from SSM at startup"
+    when: "pickRelay() is called during session establishment (before any relay_register has arrived)"
+    then: >
+      pickRelay() returns a valid relay endpoint with multiaddrs containing the
+      DNS-based address and a valid peerId from the SSM entry. The
+      SessionAssignment sent to the client contains these values. Verified by
+      the directory log event 'session.relay.assigned' containing the DNS
+      multiaddr (not an IP address).
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "The directory is running with relay addresses from SSM"
+    when: "the directory is restarted AFTER the relay is already running (relay does not re-register)"
+    then: >
+      The directory can immediately dial the relay via the DNS multiaddr from SSM.
+      recordAssignment succeeds on the first cello_initiate_session attempt after
+      directory restart — no relay restart required. Verified by the absence of
+      relay.adapter.newstream.first_attempt_failed AND the presence of a
+      successful session assignment in CloudWatch logs.
+    test_type: e2e
+    component_under_test: directory
+    notes: >
+      This is the core acceptance test: the startup ordering dependency is
+      eliminated. This AC fails on the current codebase and passes after this
+      story is implemented. The test must be wrapped in
+      describe.skipIf(!process.env.CELLO_E2E_LIVE) — it requires live deployed
+      infrastructure and cannot run in CI without the environment variable set.
+
+  - id: AC-006
+    given: "A relay_register frame arrives at the directory"
+    when: "the directory processes the registration"
+    then: >
+      The directory updates only the healthCheckUrl in the relay pool manifest.
+      The multiaddrs and peerId fields in the manifest are NOT overwritten by
+      relay_register — they retain the values set from SSM at startup. AND
+      'relay.registered' or 'relay.already.registered' is logged with the
+      healthCheckUrl field showing the container's private IP.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "The directory ECS task definition in cello-ecs-directory.yaml"
+    when: "the template is reviewed"
+    then: >
+      The CELLO_RELAY_MULTIADDR environment variable no longer exists in the
+      ECS task definition. For deployed environments (dev/staging/production),
+      all relay addressing comes from SSM reads at startup. The env var is
+      retained in the application code for CELLO_ENV=local only (see AC-010).
+    test_type: unit
+    component_under_test: infra
+
+  - id: AC-008
+    given: "deploy.sh code"
+    when: "the script is reviewed"
+    then: >
+      The RELAY_MULTIADDR variable (currently hardcoded to
+      /ip4/10.0.85.235/tcp/4001/p2p/...) and its CELLO_RELAY_MULTIADDR override
+      mechanism are removed. The RelayMultiaddr parameter is no longer passed to
+      the directory stack deployment.
+    test_type: unit
+    component_under_test: infra
+
+  - id: AC-009
+    given: "All changes from this story deployed"
+    when: "the implementer finishes"
+    then: >
+      infra/STATE.md is updated to document the new SSM parameters (paths,
+      purpose, when they are written).
+    test_type: manual
+    component_under_test: infra
+
+  - id: AC-010
+    given: "CELLO_ENV=local (Docker Compose / local dev / integration tests)"
+    when: "the directory starts without access to AWS SSM"
+    then: >
+      The directory falls back to CELLO_RELAY_MULTIADDR env var for local
+      development. SSM reads are only performed for CELLO_ENV=dev, staging,
+      or production. Local integration tests continue to pass unchanged —
+      the createSessionFixture() path (which uses opts.networkRelay with
+      in-process relay) is not affected by this story. AND
+      'node.registry.loaded' is logged with source: 'env' (not 'ssm').
+    test_type: integration
+    component_under_test: directory
+    notes: >
+      CELLO_RELAY_MULTIADDR is preserved for CELLO_ENV=local only. For all
+      deployed environments (dev/staging/production), it is removed from the
+      CFN template and SSM is the sole source.
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The directory shall never construct a dial target using a raw IP address
+      from an environment variable or from a relay_register frame. All dial
+      targets must be DNS-based multiaddrs sourced from the SSM node registry.
+    adversarial_condition: >
+      A compromised relay sends a relay_register frame with a multiaddr
+      containing /ip4/10.0.0.1/tcp/4001/p2p/... (an attacker-controlled IP).
+      The directory must ignore this for dial purposes — it only uses the
+      DNS hostname from SSM, which resolves through the ALB and cannot be
+      spoofed by a single compromised relay.
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: >
+      SSM node registry parameters shall only be written by deploy.sh (an
+      operator-initiated action). Application code shall never write to the
+      node registry path.
+    adversarial_condition: >
+      A compromised directory or relay process attempts to overwrite
+      /cello/{env}/nodes/relay/aws-us-east-1 with an attacker-controlled
+      hostname. The ECS task role must NOT have ssm:PutParameter permission
+      on the /cello/{env}/nodes/ path — only the deploy-time IAM user
+      (Andre_Pemmelaar) has write access.
+    test_type: integration
+    component_under_test: infra
+
+# ─── Degraded Behavior ────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While SSM parameters under /cello/{env}/nodes/relay/ are missing or empty"
+    fallback: >
+      The directory logs 'node.registry.empty' at ERROR with guidance: 'No relay
+      entries found in SSM. Run deploy.sh to populate the node registry.' The
+      directory starts but returns relay_unavailable on every session request
+      until the parameters are created (by running deploy.sh).
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ─────────────────────────────────────────
+observability:
+  events:
+    - name: node.registry.loaded
+      level: info
+      trigger: "When the directory successfully reads the SSM node registry at startup"
+      context_fields: [relayCount, directoryCount, source]
+      correlationId: false
+    - name: node.registry.relay.resolved
+      level: info
+      trigger: "When a relay entry from SSM is parsed into a DNS multiaddr"
+      context_fields: [hostname, peerId, multiaddr, region]
+      correlationId: false
+  error_events:
+    - name: node.registry.empty
+      level: error
+      trigger: "When no relay entries are found in SSM at startup"
+      context_fields: [ssmPath, region, guidance]
+      correlationId: false
+    - name: node.registry.parse.failed
+      level: warn
+      trigger: "When an SSM parameter value cannot be parsed as valid node registry JSON"
+      context_fields: [parameterName, error]
+      correlationId: false
+  alarms: []
+  notes: >
+    No alarm for node.registry.empty — this condition only occurs on a
+    misconfigured deploy (deploy.sh not run) and is immediately visible as
+    relay_unavailable on every session attempt. The existing relay-health alarm
+    already fires on sustained relay_unavailable rates.
+
+# ─── Implementation Notes ──────────────────────────────────
+implementation_notes:
+  - >
+    deploy.sh changes: after STEP 6.6 (SSM parameters), add a new step that
+    writes the full node set to the current region. For each node, construct the
+    JSON from existing variables (SUBDOMAIN, DOMAIN_NAME, DIRECTORY_PEER_ID for
+    directories; RELAY_SUBDOMAIN, DOMAIN_NAME, relay peer ID for relays). The
+    relay peer ID must be read from SSM (/cello/{env}/relay/peer-id) — if this
+    parameter does not exist, it must be created from the relay transport key
+    the same way the directory peer ID is created.
+  - >
+    Directory startup changes: before constructing NetworkRelayAdapter, read
+    SSM parameters by path (/cello/{env}/nodes/relay/) using aws-sdk
+    GetParametersByPath. Parse each JSON value. Construct multiaddrs. Pass to
+    NetworkRelayAdapter and pre-populate RelayPoolManager manifest entries.
+  - >
+    NetworkRelayAdapter constructor already accepts relayPeerId and
+    relayMultiaddrs — no interface change needed. The change is in how the
+    directory.ts binary derives those values (SSM read instead of env var).
+  - >
+    opts.relayEndpoint on createDirectoryNode (line 686): after removing the
+    env var, this field must be derived from the same SSM data used for
+    NetworkRelayAdapter. It provides the fallback relay endpoint when
+    RelayPoolManager is not configured (which currently only happens in
+    CELLO_ENV=local). For deployed environments, RelayPoolManager is always
+    present and pickRelay() takes precedence — but opts.relayEndpoint must
+    still be populated from SSM as a safety net.
+  - >
+    CELLO_ENV=local path: the directory.ts startup code must branch on env.
+    For local: read CELLO_RELAY_MULTIADDR env var (existing behavior). For
+    dev/staging/production: read SSM via GetParametersByPath. This keeps
+    docker-compose dev and createSessionFixture() tests working unchanged.
+  - >
+    Manifest pre-population: RelayPoolManager.#relayEntries (or equivalent
+    in-memory manifest state) should be seeded with { multiaddrs, peerId } from
+    the SSM data so pickRelay() returns valid entries before any relay_register
+    arrives. The healthCheckUrl field remains empty until relay_register provides
+    it — but healthCheckUrl is only used by the health check loop, not by
+    pickRelay() or by the client dial path.
+  - >
+    IAM: the directory ECS task execution role needs ssm:GetParametersByPath on
+    /cello/{env}/nodes/*. This is stage-3 resolution (application runtime read),
+    not stage-1 (CFN resolve). Add to cello-iam.yaml DirectoryTaskRole.
+  - >
+    The relay peer ID SSM parameter (/cello/{env}/relay/peer-id) may not exist
+    yet. deploy.sh must derive it from the relay transport key in Secrets Manager
+    the same way it derives the directory peer ID. Add this derivation before the
+    node registry write step.
+
+# ─── Dependencies ──────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M6B-014  # NAT gateway (relay must be able to reach directory ALB)
+  blocks: []
+  related:
+    - CELLO-M6B-006  # relay auto-registration (relay_register becomes metadata-only)
+    - CELLO-M6B-008  # manifest poll loop (manifest now pre-populated from SSM)
+
+# ─── References ────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-06-06_2100_sovereign-node-networking-requirements"
+    - "2026-06-03_1146_beta-launch-brittleness-analysis"

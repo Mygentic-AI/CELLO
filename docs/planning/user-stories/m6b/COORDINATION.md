@@ -1254,3 +1254,17 @@ This is a known design gap — logged here for the M7 story author to pick up.
 ### 2026-06-10 — Note: DDoS surface on node ALBs
 
 The DNS hostnames for directories and relays are inherently public (Route53 enumerable, returned by /bootstrap, in the S3 manifest, visible in any libp2p handshake). The node registry design (SSM) does not change this exposure. The DDoS surface is the ALBs themselves. AWS Shield Standard is active by default; WAF rate-limiting rules and Shield Advanced are not yet deployed. Multi-region design provides natural resilience (attacker must hit all 3 simultaneously). Tracked as a future infrastructure hardening story — not blocking the addressing fix.
+
+---
+
+### 2026-06-10 — CELLO-M6B-019 written: SSM node registry for DNS-based addressing
+
+**Story:** CELLO-M6B-019 — replace startup-order-dependent `relay_register` addressing with persisted SSM node registry.
+
+**What it fixes:** The directory cannot reach the relay after its own restart because `NetworkRelayAdapter` holds no address until the relay re-registers (which it never does — no reconnect logic). This has been the single recurring failure mode across all of M6/M6B.
+
+**Design:** `deploy.sh` writes `/cello/{env}/nodes/{role}/{cloud}-{region}` SSM parameters (JSON: hostname, peerId, port, transport, status). Directory reads at startup, constructs DNS multiaddrs, passes to `NetworkRelayAdapter` and pre-populates the relay pool manifest. `relay_register` becomes healthCheckUrl-only. `CELLO_RELAY_MULTIADDR` removed from ECS task definitions (kept for `CELLO_ENV=local` only).
+
+**Dependencies:** Blocked by M6B-014 (NAT gateway). No other blockers.
+
+**Status:** Story written and sprint-reviewed (APPROVED, 3 mediums fixed). Ready to implement.
