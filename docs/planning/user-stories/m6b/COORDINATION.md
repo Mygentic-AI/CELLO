@@ -1280,3 +1280,20 @@ The DNS hostnames for directories and relays are inherently public (Route53 enum
 **Fix:** Restructure the ProductionDeploy stage to use parallel CodePipeline actions (one per region) rather than sequential deploys. Low complexity — purely a pipeline config change in `cello-cicd.yaml`.
 
 **Suggested story:** Write as a M7 infrastructure story (or post-M6B cleanup) — "Parallelize CodePipeline ECS deploy actions across regions."
+
+---
+
+### 2026-06-10 — CELLO-M6B-019 deployment complete
+
+**What was done:**
+
+1. `deploy.sh` run in parallel across all 3 regions (us-east-1, eu-central-1, ap-northeast-1). All CFN stacks updated:
+   - `cello-iam-dev`: added `ssm:GetParametersByPath` on `/cello/dev/nodes/*` to the directory task role
+   - `cello-ecs-directory-dev`: removed `CELLO_RELAY_MULTIADDR` env var from task definition
+   - SSM node registry written: all 6 `/cello/dev/nodes/{role}/aws-{region}` parameters populated with hostname, peerId, nodeId, port, transport, status
+
+2. `main` pushed (commit `934d130`) triggering `cello-directory-pipeline`. Build → StagingDeploy (us-east-1) → SmokeTest → ProductionDeploy (eu-central-1, ap-northeast-1) all succeeded. New image `cello-directory:934d130` deployed to all 3 regions (task defs :170, :59, :50).
+
+3. `audit-state.sh` run post-deployment: **0 failures, 2 transient warnings** (relay CFN stacks still finishing their own updates — relay ECS services healthy at 1/1 in all regions). All M6B-019-specific checks passed: node registry parameters present and valid, `CELLO_RELAY_MULTIADDR` absent from directory task def (AC-007/AC-008 ✓), manifest signer pubkey aligned in all 3 regions.
+
+**Outcome:** The startup-ordering dependency between directory and relay is eliminated. The directory now reads relay DNS multiaddrs from SSM at startup and can reach the relay immediately after any restart — regardless of whether the relay has re-registered.
