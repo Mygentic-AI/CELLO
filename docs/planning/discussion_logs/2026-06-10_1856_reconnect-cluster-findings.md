@@ -418,3 +418,138 @@ Same federation checkpoint gap as Scenarios 5 and 1 — no `checkpoint.complete`
 | Directory CloudWatch | Key lines inline above |
 | Demo agent log | `/tmp/cello-mcp-stderr.log` on i-0ad3e7c22470f266e, key lines inline above |
 | Connect version | 0.0.42 (npx cached) |
+
+---
+
+## Scenario 3 — Idle Process: SIGSTOP Sleep Simulation
+
+**Date/time run:** 2026-06-10, 19:32:19–19:38:23 local (UTC+2) / 17:32:19–17:38:23 UTC
+**Connect version:** 0.0.42
+**STOP duration:** ~6 minutes (target was 5; executed `kill -CONT` at 19:38:23)
+**Baseline passed:** Yes — full 4-round exchange, `status: sealed` (session `52294f98`) before STOP.
+
+---
+
+### Trigger
+
+```bash
+PID=$(pgrep -f cello-mcp)   # PID 76606
+kill -STOP $PID              # 19:32:19 local
+sleep 300
+kill -CONT $PID              # 19:38:23 local
+```
+
+---
+
+### cello_status Immediately After SIGCONT
+
+```json
+{
+  "transport_started": true,
+  "connected_peer_count": 1,
+  "uptime_seconds": 463,
+  "active_session_count": 0,
+  "directory_reachable": true,
+  "registered": true,
+  "agent_id": "b8ff33d5169be79758aa9df9f3aea482"
+}
+```
+
+**Auto-recovered. No `/mcp reconnect` required.** `directory_reachable: true`, `connected_peer_count: 1` — the connection was restored without any intervention after SIGCONT.
+
+---
+
+### What the Directory Saw During the STOP Window
+
+The directory detected the client disconnect at **17:32:30Z** — 11 seconds after SIGSTOP was issued (17:32:19Z). The disconnect was detected via a signaling stream error:
+
+```
+17:32:30Z  Peer disconnected: 12D3KooW
+17:32:30Z  Signaling stream error — peer 35313056, error="The operation was aborted due to timeout"
+17:32:30Z  signaling.stream.closed — peer 35313056, pendingSessionsCount: 1, pendingSessionKeys: ["52294f98"]
+17:32:30Z  Removed stream from map — peer 35313056
+```
+
+The `pendingSessionKeys: ["52294f98"]` is the baseline session, which had already been sealed before the STOP — the directory's session map had not yet been cleared when the stream closed. This is the same post-seal cleanup artifact as Scenarios 1 and 2.
+
+After the stream was removed at 17:32:30Z, the directory log shows no activity for the local client's peer ID (`35313056`) until the session initiation for `062af363` at 17:38:38Z — over 6 minutes of silence. The directory correctly treated the client as disconnected for the entire STOP window.
+
+---
+
+### Reconnection Behavior After SIGCONT
+
+After SIGCONT, the local process re-established its signaling stream with the directory. The first evidence of this in the directory log is the FROST ceremony for session `062af363` at 17:38:38Z — the directory's `ClientDelegatedSigner` found the stream open (`stream=found, status=open`) for peer `35313056d41fd7ce`, confirming the stream had been re-established before the session initiation call.
+
+The local log shows no explicit reconnection event — no `client.startup.progress` lines after SIGCONT, just the FROST ceremony entries for the new session. The process did not restart; it resumed where it left off and silently re-established its connection to the directory.
+
+---
+
+### Post-SIGCONT Session — Full Protocol (4 rounds, clean seal)
+
+Session `062af363888d6669f4f13ed9a61af037` — 4 complete rounds, then `cello_close_session`.
+
+`cello_close_session` result:
+```json
+{"status":"sealed","sealed_root":"aa257d22b4164f016b2bf796f85908bfd3dc4a52c1c10a39914de67d810e813e","reason":null}
+```
+
+**Local log:** 10 leaves (indices 0-9: 8 msg + 2 ctrl), `sealing` → FROST ceremony completed (sigLength=64) → `sealed`. No errors.
+
+**Demo agent log:** Session `062af363` clean: `active` → 10 leaves → `sealing` → FROST completed → `sealed`. Also shows the Scenario 2 baseline session (`52294f98`) being processed on startup — the demo agent had queued the seal ceremony for it from before the STOP window and completed it after restart.
+
+**Directory CloudWatch (UTC):**
+```
+17:38:38Z  Session 062af363 established (35313056 → 12ccbfd5)
+17:39:37Z  Seal initiated — session 062af363 (10 leaves)
+17:39:37Z  Sealed — root aa257d22
+17:39:37Z  notarization.recorded
+17:39:37Z  mmr.leaf.appended — leafIndex: 6
+17:39:37Z  mmr.checkpoint.pending
+```
+
+---
+
+### Ancillary Finding — Queued counterparty_closing Delivered After SIGCONT
+
+On the first `cello_receive` call after SIGCONT, the client delivered a `counterparty_closing` event for the already-sealed baseline session `52294f98`. This event was queued during the STOP window — the demo agent had closed its side before the STOP, but the close notification was buffered by the transport and only delivered to the local process when it resumed.
+
+`cello_close_session` on the already-sealed session returned `seal_rejected` / `session_not_active` as expected. The next `cello_receive` returned `session_sealed` for the same session, confirming both parties had sealed. No data loss, no state corruption.
+
+**The queuing of events across a STOP/CONT is correct behavior** — the transport held the incoming messages in its buffer and delivered them on resume. This is distinct from the laptop sleep scenario (Scenario 5) where the process restarted and had no buffer continuity.
+
+---
+
+### Diagnostic Question Answer
+
+**Does a SIGSTOP'd process auto-recover after SIGCONT?** Yes, completely.
+
+After 6 minutes stopped, `cello_status` showed `directory_reachable: true` and `connected_peer_count: 1` immediately after SIGCONT. No `/mcp reconnect` was needed. The process silently re-established its signaling stream with the directory and was immediately ready to initiate new sessions.
+
+**Did the directory detect the disconnect?** Yes — within 11 seconds of SIGSTOP, via a stream timeout. The client was removed from the directory's streams map and treated as disconnected for the full 6-minute window.
+
+**Did the demo agent detect the disconnect?** Not directly (it has no active session during the STOP window). The demo agent had already sealed the baseline session before the STOP; its log shows no events during the STOP window.
+
+**Key difference from Scenario 5:** In Scenario 5, the process restarted during sleep and the bootstrap endpoint returned null — the process came back unhealthy. In Scenario 3, the process never restarted — SIGSTOP pauses execution in place, preserving all in-memory state including the transport's connection state. On SIGCONT, the OS resumes the process and the existing transport layer re-establishes the stream.
+
+---
+
+### Hypotheses Raised
+
+1. **The reconnection after SIGCONT happens inside the transport layer, not in application code.** There is no log event like `client.transport.reconnected` — the process just resumes and the next operation works. This means the reconnect logic lives at the libp2p or stream level, and the application code never sees it as a disconnect. This is correct behavior for SIGSTOP (the OS suspends all syscalls), but it means the reconnect path is not exercised in this scenario.
+
+2. **11-second detection lag on the directory side.** The stream error appeared 11 seconds after SIGSTOP. This is the keepalive/heartbeat timeout on the directory's side — it takes 11 seconds of silence to declare the stream dead. The local process was stopped before it could send or receive anything, so the directory's timeout was the only detection mechanism.
+
+3. **The STOP/CONT scenario does NOT reproduce the laptop-sleep failure (Scenario 5).** In Scenario 5, the process restarts (new PID, new startup sequence, bootstrap called again). In Scenario 3, the process never restarts. These are fundamentally different failure modes with different recovery paths.
+
+---
+
+### Artifacts
+
+| Artifact | Location |
+|----------|----------|
+| Local MCP stderr | Full log read above (no timestamps) |
+| cello_status (post-SIGCONT) | Inline above |
+| Sealed receipt | `status: sealed`, `sealed_root: aa257d22...` |
+| Directory CloudWatch | Key lines inline above; full STOP-window analysis included |
+| Demo agent log | `/tmp/cello-mcp-stderr.log` on i-0ad3e7c22470f266e, key lines inline above |
+| Connect version | 0.0.42 |
