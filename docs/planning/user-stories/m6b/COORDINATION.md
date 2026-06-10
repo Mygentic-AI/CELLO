@@ -1127,3 +1127,124 @@ started, and the local agent completing its half is the correct protocol action.
 **Every MCP tool failure response must include a `guidance` field.** Added to cello-story.md,
 cello-sprint-coder.md, and cello-review.md in commit ce3e079.
 - Interface endpoint removal (M6B-014 stage 2 — 6 VPC endpoints still present, planned cleanup)
+
+---
+
+### 2026-06-10 — M6-E2E-001 AC-006 COMPLETE: full bilateral seal verified end-to-end
+
+**Result:** All ACs passed. `cello_get_sealed_receipt` returned a sealed root with 10 leaves. M6-E2E-001 is closed.
+
+---
+
+#### Methodology
+
+Before starting the test, all logs were cleared for a clean diagnostic baseline:
+
+1. **Demo agent logs backed up** to `/opt/cello-demo/logs-backup-2026-06-10.txt` (117 lines) via SSM, then `systemctl restart cello-demo.service`. Fresh startup confirmed at `04:56:07 UTC`: DB opened (WAL), directory connected in 141ms, ready as `c94dfa2e5df1b5b4f00a3e174f4c71e4`.
+
+2. **Local cello-mcp logs backed up** to `/tmp/cello-mcp-stderr-backup-2026-06-10.log` (55 lines). MCP reconnected (`/mcp reconnect cello`). Fresh process PID `10071` confirmed connected to directory in 3,175ms, ready as `b8ff33d5169be79758aa9df9f3aea482`.
+
+---
+
+#### Problem: `relay_unavailable` on first `cello_initiate_session`
+
+**What happened:**
+
+`cello_status` showed registered, directory reachable, 1 connected peer. `cello_request_connection` to demo agent `c94dfa2e...` accepted immediately (`connection_id: edf2fd0fd3bb3c4f5a8a06bde391b3a4`). `cello_initiate_session` returned `{ok: false, reason: "relay_unavailable"}`.
+
+The local log showed the FROST ceremony completed successfully (`aggregate OK sigLength=64`) — so the failure was not in the ceremony. `relay_unavailable` was a catch-all label, not the real cause.
+
+---
+
+#### Diagnosis: stale relay IP in directory's `NetworkRelayAdapter`
+
+The directory CloudWatch logs for the ceremony showed the actual failure:
+
+```
+relay.adapter.newstream.first_attempt_failed
+  relayPeerId: 12D3KooWDbUVg6tnvDu1quscr6cmHJ8jke4mZsh85RNqvwT8UPy9
+  error: No open connection to peer
+
+relay.adapter.redial.failed
+  addr: /ip4/10.0.85.235/tcp/4001/p2p/12D3KooWDbUVg6...
+  error: connect EHOSTUNREACH 10.0.85.235:4001
+
+relay.record_assignment.transport_error
+  error: relay.adapter.redial: all addresses failed
+```
+
+The directory's `NetworkRelayAdapter` was dialing `10.0.85.235` — a dead container. The relay's actual current private IP (from ECS) was `10.0.20.40`.
+
+The S3 manifest (`healthCheckUrl: http://10.0.20.40:4000/health`) was correct, and `relay.health.check.passed` was firing every 30s. The health check and the libp2p dial are completely separate code paths — the manifest is used for health checks; `#relayMultiaddrs` in memory is used for libp2p streams. The health check passing masked the stale dial address entirely.
+
+---
+
+#### Corroborating evidence: timeline proves the ordering
+
+ECS task start times confirmed the exact cause:
+
+- **Relay task started:** `2026-06-09 13:01 UTC` — got IP `10.0.20.40`
+- **Directory task started:** `2026-06-09 16:34 UTC` — 3.5 hours **after** the relay
+
+The relay registers with the directory once at startup and never retries. When the directory was restarted at 16:34, it came up with no in-memory relay address. The `updateMultiaddr()` mechanism (M6B-006) only fires when the relay sends a `relay_register` frame. The relay never re-registered because it was already running and has no reconnect logic.
+
+The stale `10.0.85.235` address in `#relayMultiaddrs` is from an earlier relay instance — preserved from a prior directory session via whatever mechanism populated it initially, or baked in from `CELLO_RELAY_MULTIADDR` in the task definition at the time that container started.
+
+---
+
+#### Fix: restart relay ECS task
+
+Stopped relay task `1a52cc42724643c58b730f8a57517cf7` (IP `10.0.20.40`) via AWS CLI. ECS launched replacement task `9c73ff7176704b55bdaed01dda830677` (IP `10.0.127.141`).
+
+Directory CloudWatch logs confirmed the fix at `05:19:32 UTC`:
+
+```
+relay.already.registered   relayId: 8c3a882b...  region: us-east-1
+relay.adapter.multiaddr.updated
+  multiaddr: /dns4/relay-us1.cello.mygentic.ai/tcp/80/ws/p2p/12D3KooWDbUVg6...
+relay.manifest.updated   manifestVersion: 15   healthCheckUrl: http://10.0.127.141:4000/health
+```
+
+Three events in sequence: relay reconnected → `updateMultiaddr()` fired → manifest updated to version 15 with the new IP. Directory `#relayMultiaddrs` now pointed at the DNS address.
+
+---
+
+#### Full AC run — all passed
+
+After relay restart, ran the complete E2E sequence without any further issues:
+
+| AC | Tool | Result |
+|----|------|--------|
+| AC-001 | `cello_status` | registered, directory reachable, 1 peer |
+| AC-002 | `cello_request_connection` | accepted, `connection_id: edf2fd0fd3bb3c4f5a8a06bde391b3a4` |
+| AC-003 | `cello_initiate_session` | `ok: true`, `session_id: 9f6b0deae2872ade9781f294bb6724d6` |
+| AC-004 | `cello_send` × 4 + `cello_receive` × 4 | all 4 messages delivered and echoed by demo agent |
+| AC-005 | `cello_receive` after message 4 | `counterparty_closing` received — demo agent initiated seal |
+| AC-006 | `cello_close_session` | `status: sealed`, `sealed_root: 0317ee3a66222b72143b5867bb7954bedb756704f967a80d0f843cad2ea2bc30` |
+| AC-006 | `cello_get_sealed_receipt` | 10 leaves, both participants present, sealed root confirmed |
+
+**Sealed receipt:**
+```json
+{
+  "session_id": "9f6b0deae2872ade9781f294bb6724d6",
+  "sealed_root": "0317ee3a66222b72143b5867bb7954bedb756704f967a80d0f843cad2ea2bc30",
+  "participants": [
+    "35313056d41fd7ce96cb5caf1e3c870e35343380b5595428bde5d98309500f72",
+    "12ccbfd5fa4049177e4c4a81f7462641c1ab4490bfd640ea7e6407a69d06a2f8"
+  ],
+  "close_timestamp": 1781069028706,
+  "leaf_count": 10
+}
+```
+
+---
+
+#### Root cause and permanent fix required
+
+The operational workaround (restart relay after every directory redeploy) is not sustainable. The permanent fix is:
+
+**The directory should not depend on a dynamic in-memory IP from `relay_register` to reach the relay.** `NetworkRelayAdapter` should dial via the relay's stable DNS multiaddr (`/dns4/relay-us1.cello.mygentic.ai/...`) which is available in the manifest it already polls every 2 minutes. The relay's startup registration would still update `healthCheckUrl` in the manifest for health checks, but the dial address would be DNS-based and never go stale.
+
+Until this is fixed in code, the operational rule is: **restart the relay whenever the directory redeploys.** The relay re-registers within ~30 seconds of coming up, and `relay.adapter.multiaddr.updated` in the directory logs confirms the fix has taken effect.
+
+This is a known design gap — logged here for the M7 story author to pick up.
