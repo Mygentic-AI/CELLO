@@ -139,9 +139,10 @@ else
   echo "  RELAY_DIRECTORY_PUBKEY: derived ${RELAY_DIRECTORY_PUBKEY:0:16}... from node-private-key"
 fi
 
-# Relay libp2p multiaddr — directory needs this to connect to the relay at startup.
-# Override with CELLO_RELAY_MULTIADDR env var when the relay private IP or peer ID changes.
-RELAY_MULTIADDR="${CELLO_RELAY_MULTIADDR:-/ip4/10.0.85.235/tcp/4001/p2p/12D3KooWDbUVg6tnvDu1quscr6cmHJ8jke4mZsh85RNqvwT8UPy9}"
+# CELLO-M6B-019: RELAY_MULTIADDR variable removed.
+# Relay addressing is now handled by the SSM node registry.
+# The directory reads /cello/{env}/nodes/relay/* at startup via GetParametersByPath.
+# See "STEP 6.7: Write node registry SSM parameters" below.
 
 # ── Directory multiaddr for relay auto-registration (M6B-006) ────────────────
 # The relay dials the directory on startup to register. The multiaddr includes
@@ -616,6 +617,108 @@ aws ssm put-parameter \
   --output text --query Version > /dev/null
 echo "  /cello/${ENVIRONMENT}/directory/manifest-signer-pubkey: OK"
 
+# ── STEP 6.7: Write node registry SSM parameters (CELLO-M6B-019) ─────────────
+# Each region stores the full node set (all relays + all directories) so any
+# service can read the complete topology without cross-region SSM reads.
+# Path: /cello/{env}/nodes/{role}/{cloud}-{region}
+# Value: JSON { hostname, peerId, port, transport, status }
+#
+# The relay peer ID is read from SSM /cello/{env}/relay/peer-id in the target
+# region. If it does not exist, it is derived from the relay transport key in
+# Secrets Manager (same derivation as the directory peer ID).
+
+echo ""
+echo "── Writing node registry SSM parameters (M6B-019) ─────────────────"
+
+# Derive relay peer ID for each region
+declare -A RELAY_PEER_IDS
+declare -A DIRECTORY_PEER_IDS
+
+for NODE_REGION in us-east-1 eu-central-1 ap-northeast-1; do
+  # Read or derive relay peer ID
+  _RELAY_PEER_ID=$(aws ssm get-parameter \
+    --name "/cello/${ENVIRONMENT}/relay/peer-id" \
+    --region "${NODE_REGION}" \
+    --query 'Parameter.Value' \
+    --output text 2>/dev/null || echo "")
+
+  if [[ -z "${_RELAY_PEER_ID}" || "${_RELAY_PEER_ID}" == "None" ]]; then
+    echo "  NOTE: /cello/${ENVIRONMENT}/relay/peer-id not found in ${NODE_REGION}, skipping relay entry for that region."
+    RELAY_PEER_IDS["${NODE_REGION}"]=""
+  else
+    RELAY_PEER_IDS["${NODE_REGION}"]="${_RELAY_PEER_ID}"
+  fi
+
+  # Read directory peer ID
+  _DIR_PEER_ID=$(aws ssm get-parameter \
+    --name "/cello/${ENVIRONMENT}/directory/peer-id" \
+    --region "${NODE_REGION}" \
+    --query 'Parameter.Value' \
+    --output text 2>/dev/null || echo "")
+
+  if [[ -z "${_DIR_PEER_ID}" || "${_DIR_PEER_ID}" == "None" ]]; then
+    echo "  NOTE: /cello/${ENVIRONMENT}/directory/peer-id not found in ${NODE_REGION}, skipping directory entry for that region."
+    DIRECTORY_PEER_IDS["${NODE_REGION}"]=""
+  else
+    DIRECTORY_PEER_IDS["${NODE_REGION}"]="${_DIR_PEER_ID}"
+  fi
+done
+
+# Map region to subdomain
+get_relay_subdomain() {
+  case "$1" in
+    us-east-1)      echo "relay-us1" ;;
+    eu-central-1)   echo "relay-eu1" ;;
+    ap-northeast-1) echo "relay-ap1" ;;
+    *)              echo "relay-${1}" ;;
+  esac
+}
+
+get_directory_subdomain() {
+  case "$1" in
+    us-east-1)      echo "directory-us1" ;;
+    eu-central-1)   echo "directory-eu1" ;;
+    ap-northeast-1) echo "directory-ap1" ;;
+    *)              echo "directory-${1}" ;;
+  esac
+}
+
+# Write node registry entries to the current target region
+# (each region gets the full node set for local reads without cross-region calls)
+for NODE_REGION in us-east-1 eu-central-1 ap-northeast-1; do
+  # Write relay entry if peer ID is known
+  _RELAY_PID="${RELAY_PEER_IDS[${NODE_REGION}]}"
+  if [[ -n "${_RELAY_PID}" ]]; then
+    _RELAY_HOST="$(get_relay_subdomain "${NODE_REGION}").${DOMAIN_NAME}"
+    _RELAY_JSON="{\"hostname\":\"${_RELAY_HOST}\",\"peerId\":\"${_RELAY_PID}\",\"port\":443,\"transport\":\"ws\",\"status\":\"active\"}"
+    aws ssm put-parameter \
+      --name "/cello/${ENVIRONMENT}/nodes/relay/aws-${NODE_REGION}" \
+      --value "${_RELAY_JSON}" \
+      --type String \
+      --overwrite \
+      --region "${REGION}" \
+      --output text --query Version > /dev/null
+    echo "  /cello/${ENVIRONMENT}/nodes/relay/aws-${NODE_REGION}: OK (${_RELAY_HOST})"
+  fi
+
+  # Write directory entry if peer ID is known
+  _DIR_PID="${DIRECTORY_PEER_IDS[${NODE_REGION}]}"
+  if [[ -n "${_DIR_PID}" ]]; then
+    _DIR_HOST="$(get_directory_subdomain "${NODE_REGION}").${DOMAIN_NAME}"
+    _DIR_JSON="{\"hostname\":\"${_DIR_HOST}\",\"peerId\":\"${_DIR_PID}\",\"port\":80,\"transport\":\"ws\",\"status\":\"active\"}"
+    aws ssm put-parameter \
+      --name "/cello/${ENVIRONMENT}/nodes/directory/aws-${NODE_REGION}" \
+      --value "${_DIR_JSON}" \
+      --type String \
+      --overwrite \
+      --region "${REGION}" \
+      --output text --query Version > /dev/null
+    echo "  /cello/${ENVIRONMENT}/nodes/directory/aws-${NODE_REGION}: OK (${_DIR_HOST})"
+  fi
+done
+
+echo "  Node registry write complete for ${REGION}."
+
 # ── STEP 7: cello-ecs-directory — directory ECS service ──────────────────────
 # depends on: cello-iam, cello-kms, cello-vpc, cello-ecr
 
@@ -623,8 +726,7 @@ deploy_stack "cello-ecs-directory-${ENVIRONMENT}" "cello-ecs-directory.yaml" \
   "Environment=${ENVIRONMENT}" \
   "Cpu=${DIR_CPU}" \
   "Memory=${DIR_MEM}" \
-  "ImageUri=${DIR_IMAGE}" \
-  "RelayMultiaddr=${RELAY_MULTIADDR}"
+  "ImageUri=${DIR_IMAGE}"
 
 # ── STEP 8: Read ALB outputs from cello-ecs-directory (AC-006) ───────────────
 # ALB DNS name and hosted zone ID are runtime values — not knowable at script-write time.

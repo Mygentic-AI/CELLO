@@ -85,6 +85,8 @@ const listenAddr = process.env["CELLO_DIRECTORY_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/t
 // Default: /ip4/0.0.0.0/tcp/8080/ws (port 8080 matches the ALB target group).
 // Set CELLO_DIRECTORY_WS_LISTEN_ADDR="" to disable the WS listener.
 const wsListenAddr = process.env["CELLO_DIRECTORY_WS_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/tcp/8080/ws";
+// CELLO-M6B-019: CELLO_RELAY_MULTIADDR is only used for CELLO_ENV=local.
+// For dev/staging/production, relay addressing comes from SSM node registry at startup.
 const relayAddr = process.env["CELLO_RELAY_MULTIADDR"];
 const awsRegion = process.env["AWS_REGION"] ?? "us-east-1";
 const nodeId = process.env["NODE_ID"] ?? (env === "local" ? "local" : awsRegion);
@@ -93,7 +95,9 @@ const nodeId = process.env["NODE_ID"] ?? (env === "local" ? "local" : awsRegion)
 const healthPort = parseInt(process.env["HEALTH_PORT"] ?? "9090", 10);
 const startedAt = Date.now();
 
-if (!relayAddr) {
+// AC-010: CELLO_ENV=local requires CELLO_RELAY_MULTIADDR env var.
+// dev/staging/production use SSM node registry (loaded later in "Relay setup" section).
+if (env === "local" && !relayAddr) {
   logger.error("adapter.config.missing", { missingKey: "CELLO_RELAY_MULTIADDR", env });
   process.exit(1);
 }
@@ -460,21 +464,107 @@ if (pgPool) {
   logger.info("adapter.initialised", { adapterName: "ShareStore", implementation: "InMemoryShareStore", env });
 }
 
-// ─── Relay setup ──────────────────────────────────────────────────────────
+// ─── Relay setup (CELLO-M6B-019: SSM node registry) ─────────────────────────
+// CELLO_ENV=local:                  Uses CELLO_RELAY_MULTIADDR env var (existing behavior)
+// CELLO_ENV=dev/staging/production: Reads SSM node registry at startup
+//
+// Pseudocode:
+//   if env === 'local':
+//     parse relayAddr from env var
+//     extract peerId from multiaddr
+//     create NetworkRelayAdapter with that single address
+//     log node.registry.loaded { source: 'env' }
+//   else:
+//     call GetParametersByPath(/cello/{env}/nodes/relay/)
+//     parse JSON entries into NodeRegistryEntry[]
+//     construct DNS multiaddrs
+//     create NetworkRelayAdapter with first relay's multiaddr
+//     pre-populate RelayPoolManager manifest entries
+//     log node.registry.loaded { source: 'ssm' }
 
-const relayParts = relayAddr.split("/");
-const p2pIndex = relayParts.findIndex((p) => p === "p2p");
-const relayPeerId = p2pIndex !== -1 ? relayParts[p2pIndex + 1] : "";
+import { parseNodeRegistryEntries, type SsmParameter } from "../node-registry.js";
 
-if (!relayPeerId) {
-  logger.error("adapter.config.missing", { missingKey: "CELLO_RELAY_MULTIADDR", env, reason: "must include /p2p/<peer-id>" });
-  process.exit(1);
+let relayPeerId: string;
+let relayMultiaddrs: string[];
+let ssmRelayEntries: Array<{ relayId: string; peerId: string; multiaddr: string; hostname: string; region: string }> = [];
+
+if (env === "local") {
+  // AC-010: CELLO_ENV=local uses CELLO_RELAY_MULTIADDR env var
+  const relayParts = relayAddr!.split("/");
+  const p2pIndex = relayParts.findIndex((p) => p === "p2p");
+  relayPeerId = p2pIndex !== -1 ? relayParts[p2pIndex + 1]! : "";
+
+  if (!relayPeerId) {
+    logger.error("adapter.config.missing", { missingKey: "CELLO_RELAY_MULTIADDR", env, reason: "must include /p2p/<peer-id>" });
+    process.exit(1);
+  }
+
+  relayMultiaddrs = [relayAddr!];
+  logger.info("node.registry.loaded", { relayCount: 1, directoryCount: 0, source: "env" });
+} else {
+  // dev/staging/production: read SSM node registry
+  // Dynamic import to avoid loading @aws-sdk in CELLO_ENV=local
+  const { SSMClient, GetParametersByPathCommand } = await import("@aws-sdk/client-ssm");
+  const ssmClient = new SSMClient({ region: awsRegion });
+
+  const ssmPath = `/cello/${env}/nodes/`;
+  const ssmParams: SsmParameter[] = [];
+
+  try {
+    let nextToken: string | undefined;
+    do {
+      const cmd = new GetParametersByPathCommand({
+        Path: ssmPath,
+        Recursive: true,
+        NextToken: nextToken,
+      });
+      const resp = await ssmClient.send(cmd);
+      if (resp.Parameters) {
+        for (const p of resp.Parameters) {
+          if (p.Name && p.Value) {
+            ssmParams.push({ Name: p.Name, Value: p.Value });
+          }
+        }
+      }
+      nextToken = resp.NextToken;
+    } while (nextToken);
+  } catch (err: unknown) {
+    const reason = err instanceof Error ? err.message : String(err);
+    logger.error("node.registry.empty", {
+      ssmPath,
+      region: awsRegion,
+      guidance: `Failed to read SSM node registry: ${reason}. Run deploy.sh to populate the node registry.`,
+    });
+    // Start but relay will be unavailable — DB-001 degraded behavior
+  }
+
+  const registryResult = parseNodeRegistryEntries(ssmParams, awsRegion, logger);
+
+  if (registryResult.relays.length > 0) {
+    // Use the first relay as the primary dial target for NetworkRelayAdapter
+    const primaryRelay = registryResult.relays[0]!;
+    relayPeerId = primaryRelay.peerId;
+    relayMultiaddrs = registryResult.relays.map(r => r.multiaddr);
+
+    // Store for RelayPoolManager seeding below
+    ssmRelayEntries = registryResult.relays.map(r => ({
+      relayId: r.hostname.split(".")[0]!, // e.g. "relay-us1" from "relay-us1.cello.mygentic.ai"
+      peerId: r.peerId,
+      multiaddr: r.multiaddr,
+      hostname: r.hostname,
+      region: r.region,
+    }));
+  } else {
+    // DB-001: No relay entries — start but relay_unavailable on every session request
+    relayPeerId = "";
+    relayMultiaddrs = [];
+  }
 }
 
 const networkRelay = new NetworkRelayAdapter({
   keyProvider: kp,
   relayPeerId,
-  relayMultiaddrs: [relayAddr],
+  relayMultiaddrs,
   logger,
 });
 
@@ -565,6 +655,29 @@ relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
 
   return mgr;
 })();
+
+// ─── CELLO-M6B-019: Pre-populate RelayPoolManager with SSM entries ───────────
+// AC-004: pickRelay() works immediately after startup, before any relay_register.
+// AC-006: relay_register only updates healthCheckUrl — multiaddrs/peerId from SSM are preserved.
+if (relayPoolManager && ssmRelayEntries.length > 0) {
+  relayPoolManager.seedRelayEntries(
+    ssmRelayEntries.map(entry => ({
+      relayId: entry.relayId,
+      endpoint: `wss://${entry.hostname}`,
+      region: entry.region,
+      status: "active" as const,
+      healthCheckUrl: "", // Populated by relay_register later (VPC health checks only)
+      peerId: entry.peerId,
+      multiaddrs: [entry.multiaddr],
+    })),
+  );
+  logger.info("adapter.initialised", {
+    adapterName: "RelayPoolManager",
+    implementation: "ssm_seeded",
+    env,
+    relayCount: ssmRelayEntries.length,
+  });
+}
 
 // ─── FEDERATION-E2E-001: CheckpointTransport instantiation ───────────────────
 // CELLO_ENV=local  → InMemoryCheckpointTransport (no peers, no signing)
@@ -683,7 +796,7 @@ try {
     keyProvider: kp,
     listenAddresses,
     relay: networkRelay,
-    relayEndpoint: { peer_id: relayPeerId, multiaddrs: [relayAddr] },
+    relayEndpoint: { peer_id: relayPeerId, multiaddrs: relayMultiaddrs },
     store,
     shareStore,
     transportPrivateKey,

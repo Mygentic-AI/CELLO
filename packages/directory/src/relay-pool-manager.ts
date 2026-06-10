@@ -666,6 +666,41 @@ export class RelayPoolManager {
   }
 
   /**
+   * CELLO-M6B-019: Seed relay entries from SSM node registry data.
+   *
+   * Pre-populates the relay pool with entries so pickRelay() works before any
+   * relay_register frame arrives. Called at startup when CELLO_ENV is dev/staging/production.
+   *
+   * The seeded entries have:
+   *   - multiaddrs: DNS-based addresses from SSM (not raw IPs)
+   *   - peerId: stable peer ID from SSM (derived from transport key)
+   *   - healthCheckUrl: empty (set later by relay_register for VPC health checks only)
+   *
+   * AC-004: pickRelay() returns valid endpoint immediately after seeding.
+   * AC-006: relay_register only updates healthCheckUrl; multiaddrs/peerId preserved.
+   */
+  seedRelayEntries(entries: RelayManifestEntry[]): void {
+    for (const entry of entries) {
+      // Add to current relays (skip duplicates)
+      const existing = this.#currentRelays.find(r => r.relayId === entry.relayId);
+      if (!existing) {
+        this.#currentRelays.push(entry);
+      }
+
+      // Initialize health state as available (optimistic — SSM entries are deploy-time verified)
+      if (!this.#failureState.has(entry.relayId)) {
+        this.#failureState.set(entry.relayId, {
+          consecutiveFailures: 0,
+          consecutiveSuccesses: 0,
+          available: true,
+          unavailableSince: undefined,
+          healthCheckUrl: entry.healthCheckUrl,
+        });
+      }
+    }
+  }
+
+  /**
    * CELLO-M6B-006: Re-sign the relay manifest with updated healthCheckUrl for a relay.
    *
    * Pseudocode:

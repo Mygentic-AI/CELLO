@@ -42,6 +42,23 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | SSM: /cello/dev/directory/peer-id (us-east-1) | CREATED | 2026-06-06 | 12D3KooWS46wUj6NYvoAsocxZnxth5EgYD2ZXCm7coMkXUWgS1j3 — relay reads this for auto-registration |
 | Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | Replication user password (alphanumeric, 32-char) |
 
+**SSM Node Registry (CELLO-M6B-019) — written by deploy.sh step 6.7:**
+
+Each region stores the full node set so services read locally without cross-region calls.
+Path: `/cello/{env}/nodes/{role}/aws-{region}` — Value: JSON `{ hostname, peerId, port, transport, status }`
+Written by deploy.sh at deploy time. Directory reads at startup via `ssm:GetParametersByPath`.
+
+| Parameter Path | Purpose | Written By |
+|---|---|---|
+| /cello/dev/nodes/relay/aws-us-east-1 | Relay node registry entry (us-east-1) | deploy.sh step 6.7 |
+| /cello/dev/nodes/relay/aws-eu-central-1 | Relay node registry entry (eu-central-1) | deploy.sh step 6.7 |
+| /cello/dev/nodes/relay/aws-ap-northeast-1 | Relay node registry entry (ap-northeast-1) | deploy.sh step 6.7 |
+| /cello/dev/nodes/directory/aws-us-east-1 | Directory node registry entry (us-east-1) | deploy.sh step 6.7 |
+| /cello/dev/nodes/directory/aws-eu-central-1 | Directory node registry entry (eu-central-1) | deploy.sh step 6.7 |
+| /cello/dev/nodes/directory/aws-ap-northeast-1 | Directory node registry entry (ap-northeast-1) | deploy.sh step 6.7 |
+
+Status: NOT YET DEPLOYED (code committed in M6B-019, pending next deploy.sh run)
+
 **Transport key secrets (all regions) — IMPORTED into cello-secrets-dev stack 2026-06-05:**
 | Secret | Logical ID | ARN | CFN Status |
 |---|---|---|---|
