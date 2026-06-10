@@ -1342,3 +1342,36 @@ Infrastructure is ready: `createNode` (from `@cello-protocol/transport`) already
 **Operational rule until this is fixed:** restart the relay after any directory redeploy.
 
 **Milestone pointer:** this story belongs in the federation milestone (multi-directory/multi-relay topology), not M7.
+
+---
+
+### 2026-06-10 — Connection persistence model gap: persisted ≠ live
+
+**Context:** During E2E testing, agents (and the demo agent EC2 process) were observed skipping `cello_request_connection` entirely and calling `cello_initiate_session` directly — and succeeding. Investigation confirmed this is not a protocol bug: `mcp-server.ts:466` checks `client.hasConnection(pubkey)` before allowing `initiate_session` to proceed. `hasConnection()` reads from `#connectionsByPeer`, which is populated both from live `request_connection` outcomes AND from PERSIST-024 DB restore at startup. A connection established in a previous cello-mcp session is fully visible after process restart, so `initiate_session` works without calling `request_connection` first.
+
+**Why this is a problem — persisted ≠ live:**
+
+A `ClientConnectionRecord` in the SQLite DB records that two agents once negotiated a connection. It does not represent a live state. The following scenarios are unaddressed:
+
+1. **Counterparty re-registers (new pubkey).** The local DB has a record keyed to the counterparty's old `primary_pubkey`. If the counterparty re-registers (new FROST ceremony → new `primaryPubkey`), `hasConnection(oldPubkey)` returns the stale record and `initiate_session` proceeds — but the directory assigns a ceremony using the counterparty's new identity, which will not match the connection record. The outcome depends on how the directory resolves pubkey→agent_id lookups at ceremony time. This scenario has not been tested.
+
+2. **Counterparty's cello-mcp restarts with a new libp2p peer ID.** The libp2p `peer_id` is distinct from the Ed25519 `primary_pubkey`. Transport keys are persisted (M6B-006 pattern for relay) but cello-mcp client transport identity is not. If the counterparty's transport peer ID changes, any in-flight libp2p operation will fail, but the connection record in the DB will still look valid.
+
+3. **Sessions persisted in DB from a prior run, connection no longer live.** A session record in the DB references a `session_id` and a sequence of leaf hashes. Nothing prevents an agent from calling `cello_send` with a session_id from a previous process run against a connection that is no longer valid. The relay has no in-memory state for that session. The outcome (silent failure, error, or relay rejection) has not been mapped.
+
+4. **No connection liveness check.** There is no keepalive, no heartbeat, and no protocol for verifying that a persisted connection is still valid from the counterparty's perspective. `cello_list_connections` will return all DB records as `status: "active"` regardless of whether the counterparty still holds that connection record.
+
+5. **`request_connection` skip means connection policy is not re-evaluated.** On the initiator's side, skipping `request_connection` also means the target's current connection policy is never consulted for existing connections. If the target tightens its policy after a connection is established, the initiator can still call `initiate_session` against the stale connection record without going through the policy gate again.
+
+**What needs to be investigated:**
+
+- What does the directory do when `session_request` arrives for a ceremony and the two agents are using a connection record from a previous registration cycle? Does it validate that both agents' current `primary_pubkey` values match the connection record?
+- Can `cello_send` succeed against a session_id that exists in the local DB but not in the relay's in-memory state? What does the relay return?
+- What happens if the counterparty's connection record was deleted (e.g. after a DB wipe + re-registration) but the local agent still has the record? The `initiate_session` will proceed through the ceremony but the counterparty will have no matching connection record for when the session assignment arrives.
+- Should persisted sessions from a prior process run be surfaced to `cello_list_sessions`? If yes, what status should they carry? If no, they should be hidden or marked `closed` on startup.
+
+**Relationship to M6B-018:**
+
+M6B-018 addresses signaling stream keepalive and reconnect — the liveness problem for the directory connection. The connection persistence model gap is a separate, orthogonal concern about the semantic validity of persisted connection records across process restarts and re-registrations. M6B-018's investigation report (M6B-018-investigation-report.md) does not cover this gap. A new investigation story is needed.
+
+**Proposed story scope:** Audit connection and session DB restore on startup — define what "persisted connection" means semantically, add a validity check during restore (e.g. verify the counterparty's current pubkey against the directory, or at minimum mark connections as `unverified` until a successful `initiate_session` confirms them), and clarify the expected behavior for each failure scenario above.
