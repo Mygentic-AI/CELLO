@@ -1375,3 +1375,35 @@ A `ClientConnectionRecord` in the SQLite DB records that two agents once negotia
 M6B-018 addresses signaling stream keepalive and reconnect — the liveness problem for the directory connection. The connection persistence model gap is a separate, orthogonal concern about the semantic validity of persisted connection records across process restarts and re-registrations. M6B-018's investigation report (M6B-018-investigation-report.md) does not cover this gap. A new investigation story is needed.
 
 **Proposed story scope:** Audit connection and session DB restore on startup — define what "persisted connection" means semantically, add a validity check during restore (e.g. verify the counterparty's current pubkey against the directory, or at minimum mark connections as `unverified` until a successful `initiate_session` confirms them), and clarify the expected behavior for each failure scenario above.
+
+---
+
+### 2026-06-10 — Reconnect cluster fault injection investigation
+
+**Document:** `docs/planning/discussion_logs/2026-06-10_1856_reconnect-cluster-findings.md`
+
+Five scenarios run against connect@0.0.42 with local client + demo agent (EC2):
+
+| # | Scenario | Result |
+|---|----------|--------|
+| 5 | Bootstrap returns null at laptop wake | Client hangs until `/mcp reconnect`; no retry loop |
+| 1 | Upgrade path (`/mcp reconnect` only) | Works for cached version; no full reinstall needed |
+| 2 | Remove/re-add vs reconnect | Identical behavior for cached version; two-PID race on startup (benign) |
+| 3 | SIGSTOP/SIGCONT (37-min suspend) | Fully transparent — auto-recovers, no intervention, queued events delivered |
+| 4 | Directory ECS task replacement | Three manual steps required; local client auto-reconnects; relay auto-re-registers |
+
+#### Actionable findings (need stories or fixes)
+
+1. **No retry loop on bootstrap null (Scenario 5)** — `http://directory-us1...` returns null at wake; cello-mcp stays dead until `/mcp reconnect`. Needs bounded retry with backoff at startup.
+
+2. **`target_offline` vs `relay_unavailable` in infra/CLAUDE.md (Scenario 4)** — Post-redeploy error documented as `relay_unavailable`; actual error is `target_offline` (counterparty not registered with new container). Update the doc.
+
+3. **"Relay must be restarted after directory redeploy" rule may be stale (Scenario 4)** — Relay auto-re-registered without a restart. If relay now has reconnect logic, the mandatory-restart rule in infra/CLAUDE.md is misleading. Verify in relay source and update.
+
+4. **Long-running agents need a reconnect loop (Scenario 4)** — Demo agent (and any persistent process without a supervisor) stays disconnected from a replaced directory container indefinitely. Local cello-mcp auto-reconnects; the demo agent required a `systemctl restart`. This asymmetry is a client spec gap.
+
+#### Interesting findings (not bugs but worth knowing)
+
+- **`seal_deferred`/`directory_unreachable` is misleading (Scenario 1)** — fires when a session is closed before all 4 rounds complete; looks like connectivity failure but is incomplete exchange. Consider renaming to `exchange_incomplete`.
+- **Two-PID startup race (Scenario 2)** — npx occasionally spawns two cello-mcp processes; SQLite lock resolves the race silently. Benign today; fragile if lock behavior ever differs by platform.
+- **SIGSTOP/SIGCONT is fully transparent (Scenario 3)** — 37-minute OS-level suspension recovered cleanly with no intervention. Confirms transport layer is resilient to process suspension.
