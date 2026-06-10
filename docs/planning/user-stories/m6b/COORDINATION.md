@@ -1378,6 +1378,19 @@ M6B-018 addresses signaling stream keepalive and reconnect — the liveness prob
 
 ---
 
+### 2026-06-10 — M6 milestone CLOSED
+
+**M6-E2E-001 closed 2026-06-10.** All 10 ACs verified:
+
+- AC-001 through AC-006 and AC-009: verified during M6 beta launch and E2E testing sessions
+- AC-007: retired as redundant — the stranger-to-demo-agent exchange already proves peer-to-peer between two independently registered agents on different machines; the directory has no special "demo agent" path. MULTI-008 (M7) delivers the proper multi-agent exchange.
+- AC-008: satisfied by the ongoing `@latest` promotion procedure
+- AC-010: satisfied by Scenario 2 of the reconnect fault injection investigation — `npm install -g @cello-protocol/connect@latest` at 19:05:58, full 4-message exchange and seal completed well under 10 minutes. Evidence in `docs/planning/discussion_logs/2026-06-10_1856_reconnect-cluster-findings.md`.
+
+**M6 milestone writeup** updated to `status: closed`. All stories closed.
+
+---
+
 ### 2026-06-10 — Reconnect cluster fault injection investigation
 
 **Document:** `docs/planning/discussion_logs/2026-06-10_1856_reconnect-cluster-findings.md`
