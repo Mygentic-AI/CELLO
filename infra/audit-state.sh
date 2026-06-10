@@ -312,6 +312,52 @@ for REGION in "${REGIONS[@]}"; do
     fi
   fi
 
+  # ── 5. Node registry SSM parameters (M6B-019) ───────────────────────────────
+  # Verify all 6 node registry entries exist in this region and contain valid JSON.
+  # Also verify CELLO_RELAY_MULTIADDR is absent from the directory task definition.
+
+  echo "  [Node registry — M6B-019]"
+
+  NODE_ROLES=("relay" "directory")
+  NODE_REGIONS=("us-east-1" "eu-central-1" "ap-northeast-1")
+  REGISTRY_FAIL=0
+
+  for NODE_ROLE in "${NODE_ROLES[@]}"; do
+    for NODE_REGION in "${NODE_REGIONS[@]}"; do
+      PARAM_PATH="/cello/${ENVIRONMENT}/nodes/${NODE_ROLE}/aws-${NODE_REGION}"
+      PARAM_VALUE=$(aws ssm get-parameter \
+        --name "${PARAM_PATH}" --region "${REGION}" \
+        --query 'Parameter.Value' --output text 2>/dev/null || echo "NOT_FOUND")
+      if [[ "${PARAM_VALUE}" == "NOT_FOUND" ]]; then
+        fail "${PARAM_PATH} → MISSING in ${REGION} — run deploy.sh to populate"
+        (( REGISTRY_FAIL++ )) || true
+      else
+        # Validate JSON has required fields
+        HOSTNAME=$(echo "${PARAM_VALUE}" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('hostname',''))" 2>/dev/null || echo "")
+        PEER_ID=$(echo "${PARAM_VALUE}"  | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('peerId',''))" 2>/dev/null || echo "")
+        if [[ -z "${HOSTNAME}" || -z "${PEER_ID}" ]]; then
+          fail "${PARAM_PATH} → invalid JSON or missing hostname/peerId"
+          (( REGISTRY_FAIL++ )) || true
+        else
+          pass "${PARAM_PATH} → ${HOSTNAME} (${PEER_ID:0:16}...)"
+        fi
+      fi
+    done
+  done
+
+  # AC-007/AC-008: CELLO_RELAY_MULTIADDR must not appear in directory task def for non-local envs
+  if [[ -n "${DIR_TASK_DEF:-}" && "${DIR_TASK_DEF}" != "None" ]]; then
+    RELAY_MULTIADDR_IN_TASKDEF=$(aws ecs describe-task-definition \
+      --task-definition "${DIR_TASK_DEF}" --region "${REGION}" \
+      --query 'taskDefinition.containerDefinitions[0].environment[?name==`CELLO_RELAY_MULTIADDR`].value | [0]' \
+      --output text 2>/dev/null || echo "")
+    if [[ -z "${RELAY_MULTIADDR_IN_TASKDEF}" || "${RELAY_MULTIADDR_IN_TASKDEF}" == "None" ]]; then
+      pass "Directory task def has no CELLO_RELAY_MULTIADDR (AC-007/AC-008 ✓)"
+    else
+      fail "Directory task def still contains CELLO_RELAY_MULTIADDR=${RELAY_MULTIADDR_IN_TASKDEF:0:30}... — run deploy.sh to remove it"
+    fi
+  fi
+
   # ── 6. Manifest signer pubkey — SSM must match node-private-key ─────────────
 
   echo "  [Manifest signer key alignment]"
