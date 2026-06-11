@@ -91,9 +91,10 @@ behavior:
     action: >
       The CLI connects to the daemon via IPC and returns a structured JSON
       object containing: daemon state (running), directory_signaling state
-      (connected / reconnecting / lost), agents array (each with name and
-      state: registered / online / current), and connections array (each with
-      counterpartyPubkey and status: verified / stale / gone / unverified).
+      (connected | reconnecting | lost — the three values defined in CONTEXT.md;
+      no other values), agents array (each with name and state: registered /
+      online / current), and connections array (each with counterpartyPubkey and
+      status: verified / stale / gone / unverified).
 
   - trigger: "When an MCP client or CLI command connects to the daemon via IPC"
     action: >
@@ -145,6 +146,13 @@ acceptance_criteria:
       Uses the opts.daemon: true fixture extension added by AC-014. The test
       spawns the binary directly — not via CLI — to capture structured log
       output for assertion.
+      Agent directory layout: a valid agent directory is a subdirectory of
+      ~/.cello/agents/ containing a file named exactly `key` in the same format
+      as the legacy ~/.cello/key file (raw Ed25519 private key bytes or the
+      serialized KeyProvider format used by M6). Subdirectories without a `key`
+      file are silently skipped (no log event, not counted in agentCount).
+      Subdirectories with an unreadable or malformed `key` file trigger
+      agent.load.failed (see DB-002).
 
   - id: AC-002
     given: "A daemon running with agents loaded from ~/.cello/agents/"
@@ -247,12 +255,16 @@ acceptance_criteria:
     when: "an IPC client sends a status request"
     then: >
       The daemon responds to the IPC request and returns status with
-      directory_signaling: 'reconnecting' (or 'disconnected' if connection
-      has not been attempted yet). The daemon does NOT refuse the IPC
+      directory_signaling: 'reconnecting'. The daemon does NOT refuse the IPC
       connection or block waiting for directory connectivity. Liveness
       (responding to IPC) is independent of readiness (directory connected).
       A daemon that refuses IPC connections until the directory is reachable
       violates this AC.
+      Note: 'disconnected' is NOT a valid directory_signaling value — CONTEXT.md
+      defines exactly three values: connected, reconnecting, lost. From the moment
+      the daemon first attempts a directory connection (which happens at startup),
+      any non-connected state is 'reconnecting'. There is no pre-attempt state
+      exposed to callers.
     test_type: integration
     component_under_test: daemon
     notes: >
@@ -356,10 +368,13 @@ security_invariants:
       A second OS user on the same machine discovers the socket path and
       attempts to connect via net.connect(). The socket file permissions must
       be 0600 (owner read/write only), causing the connect syscall to fail with
-      EACCES before any framing or IPC logic executes. Verified by asserting
-      that the socket stat mode is 0600 immediately after daemon startup, and
-      that a connection attempt by a different effective UID is refused at the
-      OS level.
+      EACCES before any framing or IPC logic executes. Verified in two parts:
+      (1) automated — assert that fs.statSync(socketPath).mode & 0o777 === 0o600
+      immediately after daemon startup; (2) manual — a connection attempt by a
+      different effective UID is refused at the OS level. The automated stat
+      check is the CI gate; the UID-refused check requires multi-user test
+      infrastructure and is a manual verification step documented in the milestone
+      close checklist.
     test_type: integration
     component_under_test: daemon
 
@@ -442,7 +457,9 @@ observability:
         When an agent transitions from Registered to Online state. Emitted by
         the daemon when it processes a cello_start_agent call (MCP-001).
         Defined here because the event is emitted in packages/daemon; the AC
-        that verifies it fires is in MCP-001.
+        that verifies it fires is in MCP-001. These events fire from daemon code
+        and cannot be tested until cello_start_agent exists — AC coverage is in
+        MCP-001 by design.
       context_fields: [agentName, agentPubkey]
       correlationId: false
     - name: agent.offline
@@ -450,8 +467,20 @@ observability:
       trigger: >
         When an agent transitions from Online to Registered state (cello_stop_agent
         or IPC connection drop that held the agent as current). Emitted by
-        packages/daemon; verified by MCP-001 ACs.
+        packages/daemon; verified by MCP-001 ACs. Defined here because the
+        emission point is daemon code — these events fire from packages/daemon
+        and cannot be tested until cello_start_agent exists. AC coverage is in
+        MCP-001 by design.
       context_fields: [agentName, reason]
+      correlationId: false
+    - name: agent.current.switched
+      level: info
+      trigger: >
+        When the current agent for an IPC connection changes (via cello_use_agent).
+        Emitted by the daemon's per-connection state manager. Defined here because
+        the emission point is in packages/daemon; the AC that verifies it fires is
+        in MCP-001 (requires cello_use_agent to trigger).
+      context_fields: [connectionId, fromAgent, toAgent]
       correlationId: false
   error_events:
     - name: agent.load.failed
@@ -511,12 +540,15 @@ implementation_notes:
     cello status response structure (authoritative for downstream stories):
     {
       daemon: 'running',
-      directory_signaling: 'connected' | 'reconnecting' | 'lost' | 'disconnected',
+      directory_signaling: 'connected' | 'reconnecting' | 'lost',
       agents: [{ name, state: 'registered' | 'online' | 'current', pubkey? }],
       connections: [{ counterpartyPubkey, status: 'verified' | 'stale' | 'gone' | 'unverified' }]
     }
-    DAEMON-002 adds standing_receiver_ready: boolean. SESSION-001 adds
-    interrupted_sessions. This story establishes the base structure only.
+    directory_signaling values are exactly the three defined in CONTEXT.md — no
+    other values. The daemon initiates a directory connection at startup so
+    'reconnecting' covers the pre-connected state. DAEMON-002 adds
+    standing_receiver_ready: boolean. SESSION-001 adds interrupted_sessions.
+    This story establishes the base structure only.
   - >
     Connection validation is a batch query at login only. The daemon queries
     the directory's signaling stream for all stored counterparty pubkeys in a
@@ -554,7 +586,7 @@ dependencies:
 # ─── References ──────────────────────────────────────────────
 references:
   protocol_map: "Multi-Party Conversations, Node Operations"
-  end_to_end_flow: "§5.7 Session Establishment"
+  end_to_end_flow: "§2 Bootstrap Discovery, §2 Persistent Authenticated Connection"
   milestone: M7
   discussion_logs:
     - "2026-06-11_1030_daemon-transport-architecture"
