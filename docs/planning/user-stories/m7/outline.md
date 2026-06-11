@@ -467,7 +467,7 @@ Stories use the format `M7-{DOMAIN}-{NNN}`:
 
 | Story ID | Title | Depends on | Repo(s) | Primary package(s) |
 |----------|-------|------------|---------|-------------------|
-| **M7-E2E-001** | M7 integration gate — daemon running, two Claude sessions via IPC, two agents with ephemeral session nodes, full exchange, bidirectional auth exercised, signaling resilience verified | all others | **both** | `packages/e2e-tests` |
+| **CELLO-M7-E2E-001** | M7 integration gate — daemon running, two Claude sessions via IPC, two agents with ephemeral session nodes, full exchange, bidirectional auth exercised, signaling resilience verified | all others | **both** | `packages/e2e-tests` |
 | **M7-DAEMON-001** | Daemon foundation — IPC socket, connect-or-start, `cello login/logout/status`, agent loading, backwards compat, connection validation on login | — | cello-client | `packages/daemon` (new), `packages/cli` (new) |
 | **M7-MCP-001** | MCP adapter — stdio-to-socket proxy, per-connection current-agent state, `cello_use_agent / list_agents / start_agent / stop_agent` | M7-DAEMON-001 | cello-client | `packages/adapter-claude-code` |
 | **M7-DAEMON-002** | Ephemeral session nodes — create/teardown lifecycle, connectionGater, standing receiver node | M7-DAEMON-001 | cello-client | `packages/daemon/src/session-node-manager.ts` (new) |
@@ -485,12 +485,12 @@ Stories use the format `M7-{DOMAIN}-{NNN}`:
 
 ## Story Writing Order
 
-Write stories in this order. M7-E2E-001 is written first as the anchor —
+Write stories in this order. CELLO-M7-E2E-001 is written first as the anchor —
 it defines the observable end state that all component stories work toward.
-After all component stories are written, do a **cohesion pass on M7-E2E-001**
+After all component stories are written, do a **cohesion pass on CELLO-M7-E2E-001**
 to align its ACs with what the component stories actually specify.
 
-1. M7-E2E-001 *(write now; revise after all others are written)*
+1. CELLO-M7-E2E-001 *(write now; revise after all others are written)*
 2. M7-DAEMON-001
 3. M7-MCP-001
 4. M7-DAEMON-002
@@ -503,13 +503,13 @@ to align its ACs with what the component stories actually specify.
 11. M7-MCP-002
 12. M7-MANIFEST-002
 13. M7-CICD-001
-14. M7-E2E-001 *(cohesion pass — revise ACs to match component stories)*
+14. CELLO-M7-E2E-001 *(cohesion pass — revise ACs to match component stories)*
 
 ---
 
 ## Implementation Order
 
-Implementation order differs from writing order. M7-E2E-001 is implemented
+Implementation order differs from writing order. CELLO-M7-E2E-001 is implemented
 **last** — it is the close gate, not the starting point.
 
 1. M7-DAEMON-001 *(no deps; everything else flows from here)*
@@ -524,7 +524,7 @@ Implementation order differs from writing order. M7-E2E-001 is implemented
 10. M7-MANIFEST-002 *(needs M7-DAEMON-001 + M7-MANIFEST-001; batch pipeline push with M7-WIRE-001)*
 11. M7-TRANSPORT-001 *(needs M7-WIRE-001)*
 12. M7-MCP-002 *(needs M7-MCP-001 + M7-DAEMON-002 + M7-DAEMON-003)*
-13. M7-E2E-001 *(implemented last — close gate)*
+13. CELLO-M7-E2E-001 *(implemented last — close gate)*
 
 **Pipeline batching note:** M7-WIRE-001, M7-SESSION-001, and M7-MANIFEST-002
 all require directory/relay CloudFormation deploys (~25-30 min each). Never
@@ -706,7 +706,7 @@ network conditions that `createSessionFixture()` cannot provide in-process:
 
 - **M7-TRANSPORT-001** — AutoNAT requires real network (or at minimum, multiple libp2p nodes on distinct ports performing dial-back)
 - **M7-SIGNAL-001** — Signaling resilience requires a killable signaling stream (daemon + real directory or mock directory process)
-- **M7-E2E-001** — Full integration gate — all processes live
+- **CELLO-M7-E2E-001** — Full integration gate — all processes live
 - **M7-MANIFEST-002** — Handshake step 6 against a real directory node with a signed challenge
 
 **Stories testable in-process via fixture extension:**
