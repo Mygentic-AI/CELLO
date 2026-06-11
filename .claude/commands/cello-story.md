@@ -120,7 +120,7 @@ The failure pattern is always the same: the story is written from one participan
 **The question to ask before writing ACs:**
 > For every shared datum this story touches — who produces it, and who consumes it? Does each producer have an AC? Does each consumer have an AC?
 
-The three sections below are known cases of this failure, each with its own mechanics. The general rule above applies to all of them and to any case not listed.
+The sections below are known cases of this failure, each with its own mechanics. The general rule above applies to all of them and to any case not listed.
 
 ---
 
@@ -197,6 +197,127 @@ Before writing the story, enumerate every field of the domain object being persi
 **Before writing ACs, answer:** every component that needs to reach [service X] — list them all. For each consumer, the story must include an AC verifying it can reach the service after an address change. The close gate must name and verify each consumer's path independently.
 
 **API field rule:** registration/announcement message fields must name their intent explicitly. Do not reuse an existing field as a carrier for unrelated data. If the relay's current address needs to be known, add a `multiaddr` field — do not parse it out of `healthCheckUrl`. Fields are free; clarity is load-bearing.
+
+---
+
+### Known case 4: Composition root wiring
+
+**Trigger:** story introduces a new class, adapter, handler, or service that must be instantiated at runtime.
+
+**The risk:** the component is fully implemented and all tests pass via direct construction in test files — but the composition root (`server.ts`, `daemon.ts`, or the equivalent entrypoint) never instantiates it. The component exists in source but is dead code in production. Tests exercise the component in isolation; no test exercises the path from entrypoint → component instantiation → real use. *(M6 — multiple components implemented and reviewed green, but `server.ts` never called `new X()`. The live smoke test was the first thing that tried the production path.)*
+
+**Every story that introduces a new runtime component must include an AC that:**
+1. Names the composition root file that must instantiate it
+2. Asserts the component is reachable from the entrypoint — not just importable, but actually constructed and wired into the request/event path
+3. Verifies via an integration test that exercises the entrypoint (not a unit test that constructs the component directly)
+
+```yaml
+- id: AC-[N]-composition-root
+  given: "The [component] is implemented with passing unit tests"
+  when: "the application starts via its normal entrypoint ([server.ts / daemon.ts])"
+  then: "the [component] is instantiated by the composition root AND
+    a request/event that should reach it actually does — verified by an
+    integration test that starts the application and triggers the path,
+    not by a unit test that constructs the component directly"
+  test_type: integration
+  component_under_test: [entrypoint package]
+  notes: "Unit tests proving the component works do not prove it is wired in.
+    This AC catches the pattern where everything compiles and tests pass
+    but the component is dead code in production."
+```
+
+---
+
+### Known case 5: Send-path liveness
+
+**Trigger:** story sends data over a shared long-lived channel — a signaling stream, relay connection, IPC socket, database connection, or any resource that can be dead at the moment of use.
+
+**The risk:** the happy path works because the channel is established earlier and assumed alive. No test exercises the send with a dead channel. In production, channels die (TCP reset, idle timeout, process crash, ECS task replacement). The send throws or hangs, and the error surfaces far from the cause because the code never checked liveness before sending. *(M6B — signaling stream drops caused FROST ceremony failures that surfaced as `directory_below_threshold`. The stream was dead at send time; no code path handled this.)*
+
+**Every story that sends over a shared channel must include an AC where:**
+1. The channel is dead (closed, timed out, or unreachable) at the moment of send
+2. The send fails with a distinct, diagnosable error — not a generic timeout or catch-all
+3. If the channel supports reconnection: the story specifies the reconnect behavior and an AC verifies the send succeeds after automatic reconnection
+
+```yaml
+- id: AC-[N]-send-path-dead-channel
+  given: "A [channel type] was previously established and is now dead
+    (closed by remote, timed out, or network-partitioned)"
+  when: "[the operation] attempts to send over the dead channel"
+  then: "the operation fails within [timeout]ms with error code
+    '[specific_error_code]' (not a generic timeout or catch-all),
+    AND [reconnect behavior: either the channel is re-established
+    automatically and the send retries, OR the caller receives
+    the error with guidance on what to do next]"
+  test_type: integration
+  component_under_test: [component]
+  notes: "Tests must actually kill/close the channel before sending —
+    not mock the send method. The failure mode is 'channel looks alive
+    but is actually dead', which only surfaces with a real dead channel."
+```
+
+---
+
+### Known case 6: Health semantics for long-running processes
+
+**Trigger:** story introduces or modifies a long-running process (daemon, ECS service, persistent server) that exposes a health endpoint or participates in health checks.
+
+**The risk:** a single `/health` returning 200 conflates multiple independent readiness conditions. The process is alive (liveness) but the transport is disconnected (not ready for traffic), or the transport is connected but the local state isn't loaded (not ready for operations). Load balancers, orchestrators, and clients each need different answers, and a single boolean health check gives them all the same wrong one. *(M6B — ECS health checks passed (process alive) while the relay had no active directory connection. Traffic routed to a relay that couldn't complete any operation.)*
+
+**Every story introducing a long-running process must distinguish at minimum:**
+
+| Check | Answers | Consumers |
+|---|---|---|
+| **Liveness** | "Is the process alive and not deadlocked?" | Container orchestrator (ECS, k8s) — restart if no |
+| **Readiness** | "Can this instance accept new work right now?" | Load balancer — remove from rotation if no |
+| **Startup** | "Has initial setup completed?" | Orchestrator — don't kill during slow init |
+
+**The story must include ACs that:**
+1. Define what each health level means for this specific process (not generic definitions — name the actual preconditions)
+2. Verify that a process which is live but not ready returns the correct distinct response for each check type
+3. Specify the consumer of each check and what action that consumer takes on failure
+
+```yaml
+- id: AC-[N]-health-semantics
+  given: "The [process] is running but [specific precondition] is not yet met
+    (e.g. transport not connected, local state not loaded, DB not reachable)"
+  when: "the liveness check and readiness check are both called"
+  then: "liveness returns healthy (process is alive), readiness returns
+    unhealthy with reason '[specific_reason]' — AND the [consumer: ALB/ECS/client]
+    responds correctly (e.g. ALB removes from rotation, client retries another instance)"
+  test_type: integration
+  component_under_test: [process package]
+  notes: "A single boolean /health endpoint that returns 200 when the process
+    is alive but not ready is a production incident waiting to happen."
+```
+
+---
+
+## Send-Time Error Extraction (mandatory from M4)
+
+**The anti-pattern:** a catch block interpolates an error object directly into a string — `` `Operation failed: ${error}` `` — which produces `[object Object]` for non-Error objects or loses the stack trace. This is invisible in tests (where errors are typically well-formed Error instances) and catastrophic in production (where errors may be plain objects, strings, or framework-specific types).
+
+**The rule:** every catch block must extract `.message` explicitly or pass the error object to the structured Logger interface — never interpolate it into a template string.
+
+```typescript
+// WRONG — produces [object Object] for non-Error types
+catch (error) {
+  return { reason: `frost_ceremony_failed: ${error}` }
+}
+
+// RIGHT — explicit extraction with fallback
+catch (error) {
+  const message = error instanceof Error ? error.message : String(error)
+  logger.error('frost.ceremony.failed', error instanceof Error ? error : new Error(message), { sessionId })
+  return { reason: 'frost_ceremony_failed', detail: message }
+}
+```
+
+**This extends the existing lateral catch audit.** When the lateral catch audit AC fires (scanning all catch blocks in the package), the implementer must also fix any catch that interpolates an error object into a string. The two failure modes are:
+1. Swallowing the exception entirely (returning a hardcoded reason with no logging) — existing rule
+2. Logging/returning the error via interpolation, producing `[object Object]` — this rule
+
+Both are blocking findings.
 
 ---
 
@@ -312,7 +433,11 @@ For each story, run through the Definition of Ready checklist from `user-story-f
 - [ ] **(M4+)** Async/multi-process flows assert `correlationId` threading through all events in the flow
 - [ ] **(M4+)** Every error path has a named error event with sufficient diagnostic context. **Each distinct failure cause must produce a distinct error code or event name** — never map multiple causes to the same error. A catch block that returns `directory_below_threshold` for timeout, exhausted, AND unavailable is a single undifferentiated error: the operator cannot act on it. *Rationale: M6B-002 — three FROST failure modes all surfaced as `directory_below_threshold`, making the error useless for diagnosis.*
 - [ ] **(M4+) Lateral catch audit AC required.** If this story touches any package that contains catch blocks with hardcoded reason strings, the story must include an explicit AC requiring the implementer to scan ALL catch blocks in ALL files in that package — not only the files the story changes — and fix any that silently swallow exceptions. The AC must read: "The implementer scans every catch block in `packages/{name}/src/` and either fixes or reports any pre-existing catch that returns a hardcoded reason string without logging the actual exception message." This AC makes the lateral audit mandatory and visible to the reviewer. *Rationale: M6B-002 fixed FROST paths in `directory-node.ts` but a silent swallowing catch in `network-relay-adapter.ts` — same package, untouched by the story — masked the real relay failure reason for months. Neither the story, the coder, nor the reviewer was required to look beyond the changed files.*
-- [ ] **Shared interface completeness.** For every shared datum this story touches (registration message, manifest, DB table, persisted object, in-memory cache), all producers and consumers are enumerated and each has its own AC. See the three known cases above; the general rule applies to any case not listed.
+- [ ] **(All stories introducing new runtime components)** Composition root wiring AC present. The AC names the entrypoint file, asserts the component is instantiated (not just importable), and is verified by an integration test that starts the application — not a unit test that constructs the component directly. *See "Known case 4: Composition root wiring" above.*
+- [ ] **(All stories that send over a shared channel)** Send-path liveness AC present. The AC kills/closes the channel before sending and asserts a distinct error code (not a generic timeout or catch-all). If the channel supports reconnection, a second AC verifies send-after-reconnect. *See "Known case 5: Send-path liveness" above.*
+- [ ] **(All stories introducing long-running processes)** Health semantics AC distinguishes liveness from readiness from startup. Names the preconditions for each level, the consumer of each check, and what action the consumer takes on failure. A single boolean `/health` is never acceptable. *See "Known case 6: Health semantics for long-running processes" above.*
+- [ ] **(M4+ lateral catch audit)** In addition to fixing swallowed exceptions, the audit must also fix any catch block that interpolates an error object into a template string (`` `...${error}` ``). Both failure modes — silent swallowing and `[object Object]` interpolation — are blocking. *See "Send-Time Error Extraction" above.*
+- [ ] **Shared interface completeness.** For every shared datum this story touches (registration message, manifest, DB table, persisted object, in-memory cache), all producers and consumers are enumerated and each has its own AC. See the known cases above; the general rule applies to any case not listed.
   - Registration/address change: every consumer of the service's address has its own AC; close gate names each independently. *(M6B-006 — `NetworkRelayAdapter` uncovered.)*
   - In-memory state derived from DB: AC verifies reconstruction after restart; AC specifies refresh schedule if data can change externally. *(M6B-010 — directory lost in-flight state; M6B-008 — manifest never refreshed.)*
 - [ ] **If the story introduces any unbounded resource** — DB connection pool, in-memory map, stream concurrency, queue depth — the story specifies the cap and includes an AC for graceful degradation at the cap. *(M6B-009 — pg pool of 10 exhausted silently.)*
