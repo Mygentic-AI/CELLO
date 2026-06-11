@@ -63,9 +63,14 @@ story: >
 #      been implemented. After M7, a client connecting to a rogue directory
 #      node must reject it. This gate verifies the rejection.
 #
-# This story is the finish line. All S1–S9 and S12 stories are prerequisites.
-# M7 does not close until every AC in this story passes against a live daemon,
-# live directory nodes, and a real network path.
+# This story is the finish line. All DAEMON-001/002/003, MCP-001/002, WIRE-001,
+# TRANSPORT-001, SESSION-001, SIGNAL-001, MANIFEST-001/002 stories are
+# prerequisites. M7 does not close until every AC in this story passes against
+# a live daemon, live directory nodes, and a real network path.
+#
+# NOTE: This story was written first (per /cello-story E2E-first rule) and will
+# be revised in a cohesion pass after all component stories are written, to
+# align ACs with what the component stories actually specify.
 
 # ─── Sovereign Node Constraint ──────────────────────────────
 # Directory nodes are sovereign and independent. This gate must be run against
@@ -242,9 +247,8 @@ acceptance_criteria:
 
   - id: AC-006
     given: "An active session between Alice and Bob with the signaling stream live"
-    when: "the signaling stream is killed (TCP reset on the directory-facing
-      node's connection, simulated via tc qdisc or by restarting the directory
-      node the daemon is connected to)"
+    when: "the signaling stream is killed (TCP reset simulated — see
+      implementation_notes for method)"
     then: >
       Within 30 seconds, directory.signaling.disconnected is logged at WARN.
       directory.signaling.reconnecting is logged at INFO with attempt: 1 and
@@ -262,6 +266,27 @@ acceptance_criteria:
       Requires CELLO_E2E_LIVE. Killing the TCP connection (not just the process)
       is required — a graceful disconnect is not sufficient to test the reconnect
       path. The 30-second detection window comes from the S7 heartbeat interval.
+
+  - id: AC-006b
+    given: "An active session between Alice and Bob with 3 messages queued in the
+      retry queue (peer temporarily unreachable — connection dropped before delivery
+      confirmed)"
+    when: "the daemon is stopped cleanly and restarted (cello login)"
+    then: >
+      After restart, the retry queue contains the same 3 messages in the same
+      order. message.retry.queued is logged for each on restart (confirming
+      SQLCipher persistence). When the peer reconnects, all 3 messages are
+      delivered in order and message.retry.delivered is logged for each with
+      attemptsTotal > 1. AND cello_receive on Bob's side returns all 3 messages
+      in the original order with no duplicates — nonce dedup rejects any
+      retransmission of already-delivered messages.
+    test_type: e2e
+    component_under_test: daemon
+    notes: >
+      Requires CELLO_E2E_LIVE. This AC covers close gate criterion 6 at the
+      E2E level — DAEMON-003 verifies the persistence logic in isolation; this
+      AC verifies it is wired into the daemon and survives a real restart
+      boundary. Wrap in describe.skipIf(!process.env.CELLO_E2E_LIVE).
 
   - id: AC-007
     given: "An active session between Alice and Bob with 3 messages sent but not sealed"
@@ -313,7 +338,7 @@ acceptance_criteria:
         3. Two agents exchange messages via ephemeral session nodes with distinct Peer IDs (AC-003, AC-004)
         4. Direct P2P or relay fallback verified (AC-005/AC-005b)
         5. Interrupted session surfaced at next login (AC-007)
-        6. Retry queue and nonce dedup survive daemon restart (verified via S8 story gate; cited here as dependency)
+        6. Retry queue and nonce dedup survive daemon restart (AC-006b)
         7. Signaling stream kill → reconnect → drain (AC-006)
         8. Directory bidirectional auth — rogue node rejected (AC-008)
         9. cello_list_agents shows correct state at every step (verified by agent.online, agent.current.switched events across all ACs)
@@ -350,10 +375,11 @@ security_invariants:
       A third agent (Charlie) obtains Alice's session Peer ID from a compromised
       relay and attempts to dial Alice's session node during an active Alice-Bob
       session. Alice's connectionGater must reject Charlie's connection attempt.
-      Verified by asserting: (a) Charlie's dial fails, (b) no stream is accepted
-      from Charlie on Alice's session node, (c) session.node.gater.rejected is
-      logged with the unexpected Peer ID, (d) Alice and Bob's session continues
-      unaffected.
+      Verified by asserting: (a) Charlie's dial fails or times out, (b) no stream
+      is accepted from Charlie on Alice's session node, (c) a warn-level log event
+      is emitted with the unexpected Peer ID (event name to be defined by
+      M7-DAEMON-002 implementer and added to the observability taxonomy),
+      (d) Alice and Bob's session continues unaffected.
     test_type: e2e
     component_under_test: daemon
 
@@ -408,7 +434,9 @@ observability:
   error_events: []
   notes: >
     This is a gate story, not a code story. It exercises observability events
-    defined in S1–S9 and S12. The specific events verified by each AC are:
+    defined in DAEMON-001/002/003, MCP-001/002, WIRE-001, TRANSPORT-001,
+    SESSION-001, SIGNAL-001, MANIFEST-001/002. The specific events verified
+    by each AC are:
       AC-001: daemon.started, daemon.login.validation.complete
       AC-002: agent.current.switched
       AC-003: session.node.created (×2), session.assignment.received (×2)
@@ -416,29 +444,67 @@ observability:
       AC-005: session.transport.mode.selected, transport.autonat.result
       AC-006: directory.signaling.disconnected, directory.signaling.reconnecting,
               directory.signaling.connected
+      AC-006b: message.retry.queued (×3), message.retry.delivered (×3)
       AC-007: session.interrupted.detected (on next login after SIGKILL)
       AC-008: directory.auth.challenge.failed
     No new events are introduced by this story.
   alarms: [] # no alarm: this is a verification story; upstream stories define the alarms
 
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    AC-006 — killing the signaling stream: the cleanest method is to use
+    `iptables -A OUTPUT -p tcp --dport <directory-port> -j DROP` (or
+    equivalent `pf` rule on macOS) to simulate a TCP black-hole without
+    killing the directory process. This forces heartbeat timeout rather than
+    a clean FIN/RST, which is the harder and more realistic failure mode.
+    Alternatively, restart the specific directory ECS task the daemon is
+    connected to (the daemon should fall back to another node). Remove the
+    rule immediately after the disconnected log event fires to allow reconnect.
+  - >
+    AC-008 — rogue directory node: implement as a minimal Node.js process that
+    opens a libp2p node with a fresh Ed25519 key (not in the manifest), speaks
+    the /cello/signaling/1.0.0 protocol, completes steps 1-5 of the handshake
+    (challenge-response up to but not including step 6 verification), and then
+    sends a valid-looking step-6 response signed by its own key. The daemon
+    must reject at step 6 when it checks the key against the manifest. A
+    process that refuses TCP at step 1 does not test step 6.
+  - >
+    AC-006b — triggering the retry queue: drop the peer connection at the
+    libp2p level (close the stream without a seal) after cello_send succeeds
+    but before the delivery confirmation is received. The simplest approach
+    is to kill Bob's session node process mid-flight. The retry queue should
+    hold the messages until Bob reconnects.
+  - >
+    Cohesion pass: after all component stories (DAEMON-001/002/003, MCP-001/002,
+    WIRE-001, TRANSPORT-001, SESSION-001, SIGNAL-001, MANIFEST-001/002) are
+    written, re-read this story and update any AC whose observable names,
+    field names, or event names conflict with what the component stories
+    actually specify. The cohesion pass is a story-writing task, not an
+    implementation task.
+
 # ─── Dependencies ────────────────────────────────────────────
 dependencies:
   blocked_by:
-    - CELLO-M7-S1   # daemon foundation
-    - CELLO-M7-S2   # MCP adapter
-    - CELLO-M7-S3   # ephemeral session nodes
-    - CELLO-M7-S4   # SessionAssignment wire format
-    - CELLO-M7-S5   # AutoNAT + direct P2P
-    - CELLO-M7-S6   # interrupted session handling
-    - CELLO-M7-S7   # signaling stream resilience
-    - CELLO-M7-S8   # nonce dedup + retry queue
-    - CELLO-M7-S9   # agent-aware notifications
-    - CELLO-M7-S12  # manifest verification + bidirectional auth
+    - CELLO-M7-DAEMON-001   # daemon foundation
+    - CELLO-M7-MCP-001      # MCP adapter
+    - CELLO-M7-DAEMON-002   # ephemeral session nodes
+    - CELLO-M7-WIRE-001     # SessionAssignment wire format
+    - CELLO-M7-TRANSPORT-001 # AutoNAT + direct P2P
+    - CELLO-M7-SESSION-001  # interrupted session handling
+    - CELLO-M7-SIGNAL-001   # signaling stream resilience
+    - CELLO-M7-DAEMON-003   # nonce dedup + retry queue
+    - CELLO-M7-MCP-002      # agent-aware notifications
+    - CELLO-M7-MANIFEST-002 # manifest verification + bidirectional auth
   blocks: []
   notes: >
     Written first (per /cello-story E2E-first rule) but implemented last.
-    S1–S9 and S12 are all prerequisites. S11 is a prerequisite for S12.
-    S14 (CI/CD) is independent and does not block this gate.
+    All component stories above are prerequisites. MANIFEST-001 is a
+    prerequisite for MANIFEST-002. CICD-001 is independent and does not
+    block this gate.
+    COHESION PASS REQUIRED: after all component stories are written, revisit
+    this story's ACs and align them with what the component stories actually
+    specify. Update this note when the cohesion pass is complete.
 
 # ─── References ─────────────────────────────────────────────
 references:
@@ -455,3 +521,5 @@ references:
     This story is the M7 finish line. M7 does not close until all ACs pass
     against a live daemon connected to the staging directory cluster. The
     milestone writeup is updated with dated confirmation before close.
+    A cohesion pass is required after all component stories are written —
+    see implementation_notes and the COHESION PASS note in dependencies.
