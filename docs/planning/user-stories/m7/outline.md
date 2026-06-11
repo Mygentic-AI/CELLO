@@ -433,6 +433,32 @@ IPC connections and report its state — not refuse connections or exit.
 
 ---
 
+## Coordination
+
+Two files govern parallel work on M7. **Read both before starting any story.**
+
+**`COORDINATION.md`** — structural state; edit in place.
+- Story ownership claims (who is working on what)
+- Package ownership table (which stories touch which packages)
+- Migration version registry
+- Cross-repo pipeline batching status
+- Active blockers
+
+Read this in 60 seconds at the start of every session. It answers: "what can I
+touch, what is already claimed, what is blocked."
+
+**`WORKLOG.md`** — append-only running diary.
+- Debugging sessions and root cause findings
+- Deployment results and ECS/pipeline observations
+- Mid-story decisions and AC interpretations
+- Anything useful for a future agent hitting the same problem
+
+Append freely. Never edit existing entries. When a log entry produces a durable
+rule, promote it to `outline.md`, `CLAUDE.md`, or the milestone writeup — the
+log entry stays as history, but rules must not live only in the log.
+
+---
+
 ## Story Breakdown
 
 **Writing order:** Write S10 (integration gate) FIRST as the E2E story — it is
