@@ -100,13 +100,15 @@ For every SI (Security Invariant) in the story:
 
 ---
 
-## Step 4 — Package boundary check
+## Step 4 — Implementation quality checks
+
+### Step 4a — Package boundary check
 
 - Does the implementation import from packages it should not? Check `CONTEXT.md` for the allowed dependency graph.
 - Does `@cello/test-fixtures` appear in `dependencies` or `peerDependencies` of any production package? That is always blocking.
 - Does any production package import from a `__tests__` directory or a test-only file?
 
-## Step 4b — Test fixture discipline check
+### Step 4b — Test fixture discipline check
 
 - Does the test file define its own `makeFixture()`, `makeE2EFixture()`, `makeFullFixture()`, or any equivalent from-scratch fixture function that sets up relay/directory/libp2p nodes? If yes: **blocking**. The test must import `createSessionFixture` from `packages/e2e-tests/src/session-fixture.ts`.
 - Exception: lightweight helpers local to the test file (e.g. `waitForStatus`, `buildMinimalPackageCbor`) that are genuinely test-specific are acceptable. The rule targets infrastructure duplication (relay, directory, libp2p node setup), not local assertion utilities.
@@ -126,7 +128,23 @@ scope.addCleanup(fix.stopAll);
 
 ---
 
-## Step 4c — Observability implementation check (M4+)
+### Step 4c — Composition root wiring check
+
+If the story introduces a new class, adapter, handler, service, or any runtime component:
+
+1. **Find the composition root.** For `cello-client` stories this is typically `packages/adapter-claude-code/src/bin/cello-mcp.ts` (M6) or `packages/daemon/src/server.ts` (M7+). For `trustless-cello` stories it is `packages/directory/src/server.ts` or `packages/relay/src/server.ts`.
+
+2. **Verify the composition root was modified.** If the story delivers a new component but the composition root file appears in no commit diff for this story, that is **blocking**. A component that is never `new`-ed from the entrypoint is dead code in production — it can have 100% unit test coverage and be completely non-functional.
+
+3. **Verify the wiring is an integration test, not a unit test.** The composition root AC must be verified by a test that starts the application via its entrypoint and triggers the path — not by a test that constructs the component directly. A unit test proves the component works; only an entrypoint-level test proves it is reachable from production.
+
+   The diagnostic question: *"If I deleted the `new ComponentX(...)` line from the composition root, would any test fail?"* If no — the integration is untested and the finding is **blocking**.
+
+*(This check exists because PERSIST-024 delivered a complete, well-tested persistence layer that the composition root never instantiated. Every test was green. The live deployment was the first thing that tried the production path.)*
+
+---
+
+### Step 4d — Observability implementation check (M4+)
 
 For every observability AC in the story, verify the implementation:
 
@@ -140,7 +158,9 @@ For every observability AC in the story, verify the implementation:
 
 5. **Error paths are covered.** Every error path that has an observability AC must have a corresponding log call with the correct event name and context fields. An empty `catch` block or a `catch` that only rethrows without logging is blocking.
 
-6. **No ad-hoc event names.** Event names not in the story's observability ACs and not in the canonical event taxonomy are flagged [medium] — they should be added to the taxonomy, not silently used.
+6. **Error objects are not interpolated directly.** Scan every `catch` block in the changed files. Any catch that uses `` `...${error}` `` or `String(error)` or `'' + error` on an Error object produces `[object Object]` for non-Error types and loses the stack trace for Error types. The correct pattern is `error instanceof Error ? error.message : String(error)` for inline use, or passing the Error object directly to `logger.error`. This is **blocking** — it is the failure mode that made relay socket errors invisible for days (the actual `EHOSTUNREACH 10.0.x.x:4001` was never logged).
+
+7. **No ad-hoc event names.** Event names not in the story's observability ACs and not in the canonical event taxonomy are flagged [medium] — they should be added to the taxonomy, not silently used.
 
 **The key verification question for each log call:** *"If this service crashes immediately after this log line, would the on-call engineer have enough information to diagnose the problem without SSH access?"* If no — the context fields are insufficient.
 
@@ -173,7 +193,7 @@ Confirm the implementation agent ran the full Phase C gate sequence:
 - [ ] Lint clean (`pnpm run lint`) — zero errors in the changed packages
 - [ ] Typecheck clean (`pnpm run typecheck`) — zero errors
 - [ ] Story ID present in commit message
-- [ ] **(M4+)** Observability implementation check passed (Step 4c)
+- [ ] **(M4+)** Observability implementation check passed (Step 4d)
 - [ ] **(M4+ stories touching Postgres)** Integration tests ran with `CELLO_ENV=local` — not skipped
 - [ ] **(M5+ migration stories)** Integration gate AC passed — migrations applied to PostgreSQL instance with all prior migrations already applied, zero Flyway checksum errors
 - [ ] **(M5+ infrastructure stories)** `infra/STATE.md` updated with any deployed stacks, modified resources, or AWS changes
@@ -234,7 +254,7 @@ If the story modified any code in `cello-client` (`core/crypto`, `core/transport
 
 Report findings using severity levels:
 
-- **[blocking]** — must be fixed before this story is considered done. AC not covered, SI negative test missing, transport-path assertion missing for integration/e2e protocol ACs, package boundary violation, gate sequence failure. For M4+ stories: observability event name mismatch, missing required context fields, `console.log` in implementation code, dropped correlationId. For M5+ migration stories: integration gate AC missing or Flyway checksum errors present. For M5+ infrastructure stories: STATE.md not updated.
+- **[blocking]** — must be fixed before this story is considered done. AC not covered, SI negative test missing, transport-path assertion missing for integration/e2e protocol ACs, package boundary violation, gate sequence failure, composition root not modified for a new component, error object interpolated directly in a catch block. For M4+ stories: observability event name mismatch, missing required context fields, `console.log` in implementation code, dropped correlationId. For M5+ migration stories: integration gate AC missing or Flyway checksum errors present. For M5+ infrastructure stories: STATE.md not updated.
 - **[high]** — security surface, key material leak path, correctness bug, or any gap that would allow a hollow or wrong implementation to pass all tests. Must be fixed before this story is considered done.
 - **[medium]** — code quality, naming, missing edge case coverage, spec ambiguity, or style inconsistency. Must be fixed before the next story that depends on this one begins.
 - **[low]** — informational or cosmetic. Must be fixed before milestone close; does not block the immediate story.
