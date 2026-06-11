@@ -67,7 +67,13 @@ Inbound session request (M1+): `{ "type": "cello_session_request", "from": "<cou
 
 **KeyProvider** — the abstraction over the private key backend. `getPublicKey()` and `sign(data)`. Backend varies per deployment (OS Keychain, TPM, cloud secret manager, encrypted file). The private key never leaves the provider. `KeyProvider` is for CELLO envelope signing only — it is NOT wired into libp2p's Noise handshake. See ADR-0001. K_local must persist across restarts — it is the Agent's operational identity, tied to pseudonym, FROST ceremonies, and counterparty trust. Generating a fresh key on every restart would break the protocol. In M0, `InMemoryKeyProvider` loads from a key file on startup (generated once, stored at `~/.cello/key` or `CELLO_KEY_FILE` env var).
 
-**Peer ID** — a libp2p transport identifier derived from a libp2p-managed keypair, not from K_local. Authenticates the transport connection (Noise handshake). In M1+, Peer IDs are ephemeral — fresh per session. K_local authenticates message content via envelope signatures. These are different keys serving different trust claims. See ADR-0001.
+**Peer ID** — a libp2p transport identifier derived from a libp2p-managed keypair, not from K_local. Authenticates the transport connection (Noise handshake). K_local authenticates message content via envelope signatures. These are different keys serving different trust claims. See ADR-0001.
+
+In M7+, Peer IDs operate at two distinct scopes:
+- **Directory-facing node Peer ID** — changes on every reconnect to the directory. Only the directory ever sees this Peer ID. Never shared with counterparties.
+- **Session node Peer ID** — fresh per session, generated when the session node is created, destroyed when the session node tears down. This is the Peer ID exchanged in the `SessionAssignment` and used for all session content exchange. After session close, the Peer ID is gone — any address a counterparty recorded leads nowhere.
+
+Both scopes are ephemeral by design. The distinction matters for security: the directory-facing identity and the per-session identity are never the same node.
 
 **CELLO identification exchange** — a minimal handshake that happens immediately after a libp2p connection is established on `/cello/m0/1.0.0`. The remote sends `{pubkey: <K_local hex>}` — self-reported, unverified at connect time. The first signed envelope exchange verifies it: if the signature matches the claimed pubkey, the pubkey is genuine. This is how `cello_connect_peer` returns `peer_pubkey` despite the Peer ID being separate from K_local.
 
@@ -102,6 +108,31 @@ The domain context string is the cross-ceremony confusion guard — an establish
 **Structure 2** — the relay-built Merkle leaf. Includes Structure 1 plus the relay-assigned canonical sequence number and `prev_root`.
 
 **sealed root** — the final Merkle root produced by the bilateral seal. Both parties sign a SEAL control leaf committing to it; the directory independently recomputes it at seal.
+
+**daemon** — the single long-running background process that is the CELLO client from M7 onward. Holds all agent identities, the directory-facing node, all active session nodes, and the local SQLite database. Started by `cello login`, stopped by `cello logout`. Multiple MCP client connections (from different Claude sessions) connect to it simultaneously via IPC. No process ever kills another — the lock file mechanism is connect-or-start, not kill-and-replace.
+
+**directory-facing node** — the one libp2p node per daemon that maintains the persistent connection to the directory. Handles registration, FROST ceremonies, seal coordination, and connection negotiation. Its Peer ID changes on every reconnect; it is never shared with counterparties. Outlives any individual session — this is what allows session nodes to be created and destroyed without losing directory connectivity.
+
+**ephemeral session node** — a libp2p node created for exactly one session. Fresh transport key, fresh Peer ID, generated during session negotiation. Torn down after seal + close. The session node's Peer ID is exchanged via the `SessionAssignment` and is the only identity the counterparty ever learns for that session. After teardown the address is permanently dead — DDoS defense and cross-session unlinkability are achieved at session granularity.
+
+**standing receiver node** — one pre-created session node kept running at all times, ready to accept the next inbound session. When a connection is accepted, the standing node is handed to the new session. A replacement standing node is immediately spun up. Eliminates setup latency from the inbound path — the address is already known and relay-registered before any session request arrives.
+
+**three agent states** — the M7 state model for agents within a daemon:
+- **Registered** — identity exists in `~/.cello/agents/<name>/`, completed FROST, known to the network. Not currently online from this daemon.
+- **Online** — live on the network from this daemon. Directory connection active, can receive session requests. Multiple agents can be online simultaneously.
+- **Current** — the one online agent that this MCP connection's tool calls route to. Per-connection state — switching current in one connection does not affect other connections. One current agent per connection at a time.
+
+**IPC** — the inter-process communication channel between MCP client connections and the daemon. Unix domain socket at `~/.cello/daemon.sock` on macOS/Linux; named pipe on Windows. Each MCP client (from a Claude session or other consumer) connects to the daemon via a thin stdio-to-socket proxy. From the MCP client's perspective it is a normal stdio MCP server.
+
+**consortium manifest** — the TUF-aligned signed JSON document listing all current directory nodes and their public keys. Fields: `version` (monotonic integer), `not_before`, `expires`, `nodes` (array of node entries), and a threshold signature from t-of-n consortium root keys. The client enforces: version monotonicity (never accept a lower version than the last trusted), expiry (refuse to connect to any directory node when holding an expired manifest), and threshold signature validity. The daemon polls for a fresh manifest every 6–12 hours.
+
+**consortium root keys** — N officer Ed25519 public keys embedded as constants in the client binary at build time. The trust anchor for the entire directory node authentication chain. Manifest validity requires a threshold signature from t-of-n of these keys (3-of-5 at Alpha). Rotation is in-band: a new manifest signed by the existing threshold adds a replacement key and removes the old one — no binary update required. Jurisdiction of key holders is a governance requirement: no two of the N officers may be subject to the same jurisdiction's compelled-disclosure law.
+
+**AutoNAT** — a libp2p protocol that asks a set of known peers to attempt a dial-back to the client's advertised address. Answers the question "am I dialable from the outside?" A dialable node advertises direct multiaddrs in its `SessionAssignment`; a node behind NAT advertises a circuit relay address instead. Required for standing receiver nodes to know their own dialability from the moment they are created. Not currently in `createNode` — added in M7 S5.
+
+**`directory_signaling` status** — the client-visible state of the signaling stream to the directory. Three values: `connected` (stream alive, operations proceeding normally), `reconnecting` (stream dropped, daemon is retrying with exponential backoff), `lost` (reconnection has failed beyond the retry budget — operator intervention required). Distinct from directory node reachability at the TCP level — the libp2p connection can be alive while the signaling stream is dead. Introduced in M7 S7 (signaling stream resilience).
+
+**interrupted session** — a session that was active when the daemon stopped. On restart, session nodes are gone and cannot be resumed — the transport keys are destroyed. Interrupted sessions are marked with `interrupted` status in the local SQLite DB. Surfaced to the operator on `cello login` before any other operations. Both parties must agree to either seal whatever was exchanged or discard the session at next contact.
 
 **walking skeleton** — M0. Two agents on two different machines exchange a tamper-evident signed message peer-to-peer over libp2p with no server in the middle. Cross-machine connectivity (DCuTR hole-punch or circuit relay fallback) is a M0 acceptance criterion, not deferred. Exercises the full transport, security, and signature substrate end-to-end.
 
