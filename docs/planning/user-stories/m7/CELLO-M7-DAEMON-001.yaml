@@ -1,0 +1,569 @@
+---
+name: CELLO-M7-DAEMON-001
+type: user-story
+date: 2026-06-11
+topics: [daemon, ipc, cli, lock-file, agent-loading, login, logout, status, backwards-compat, connection-validation, m7]
+status: draft
+description: >
+  Daemon foundation for M7. Introduces the cello daemon process, IPC socket at
+  ~/.cello/daemon.sock, connect-or-start lock file, cello login/logout/status
+  CLI entry points, agent loading from ~/.cello/agents/ in Registered state,
+  legacy ~/.cello/key backwards compat, and connection validation at login.
+  Establishes the explicit-control model: cello login does not auto-start agents.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-DAEMON-001
+domain: Daemon
+milestone: M7
+actor: OPS
+priority: P0
+components:
+  - daemon
+  - cli
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the operator,
+  I want a single long-running daemon that holds all agent identities and the
+  directory-facing connection, started explicitly via cello login and stopped
+  via cello logout,
+  so that multiple Claude sessions can share the same protocol state without
+  conflicting, and the directory-facing connection outlives any individual MCP
+  session or agent state change.
+
+# ─── Context ────────────────────────────────────────────────
+# Design decision: cello login does NOT auto-start agents. After login, all
+# agents loaded from ~/.cello/agents/ appear in Registered state. The operator
+# must call cello_start_agent (MCP-001) to bring an agent Online. This is the
+# only interpretation consistent with CELLO-M7-E2E-001 AC-002b, which explicitly
+# tests that 'registered' state is observable before cello_start_agent is called.
+# Auto-start would make that precondition impossible to satisfy.
+#
+# DAEMON-001 scope: IPC socket, lock file, connect-or-start, cello
+# login/logout/status, agent loading from ~/.cello/agents/, legacy ~/.cello/key
+# backwards compat, and connection validation at login.
+#
+# NOT in scope: cello_start_agent / Online state transition (MCP-001),
+# standing receiver node (DAEMON-002), session nodes (DAEMON-002), signaling
+# reconnect logic (SIGNAL-001), retry queue / nonce dedup (DAEMON-003),
+# MCP proxy rewrite (MCP-001).
+
+# ─── Sovereign Node Constraint ──────────────────────────────
+# Directory nodes are sovereign and independent — no two share a region or cloud
+# provider. The daemon's connection validation at login queries whichever
+# directory node is reachable from the current manifest. No assumption of
+# co-location or shared networking between directory nodes. This constraint
+# must not be violated by hardcoding a single directory endpoint in daemon
+# startup code.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When `cello login` is run and no daemon is running"
+    action: >
+      The daemon process starts, writes a lock file at ~/.cello/daemon.lock
+      containing its PID and protocol version, opens a Unix domain socket at
+      ~/.cello/daemon.sock (named pipe on Windows), loads all agent identities
+      from ~/.cello/agents/<name>/ into Registered state, connects to the
+      directory cluster, runs connection validation against stored counterparty
+      records, and exits the CLI process with status 0. The CLI process does
+      not become the daemon — it waits for daemon.started, then exits.
+
+  - trigger: "When `cello login` is run and the daemon is already running and healthy"
+    action: >
+      The CLI connects to the existing daemon via IPC and returns the current
+      status, identical to running `cello status`. The daemon is NOT restarted,
+      connection validation is NOT re-run, and the running process is NOT killed.
+
+  - trigger: "When `cello login` is run and the lock file exists but the process is dead (stale lock)"
+    action: >
+      The daemon removes the stale lock file and socket file if present, then
+      starts fresh as if no prior daemon had run. No error is reported to the
+      operator — stale lock recovery is silent.
+
+  - trigger: "When `cello logout` is run"
+    action: >
+      The daemon finishes all in-flight IPC requests, sends a shutdown frame
+      to each open IPC connection, removes ~/.cello/daemon.lock and
+      ~/.cello/daemon.sock, logs daemon.stopped with reason: 'graceful', and
+      exits with code 0.
+
+  - trigger: "When `cello status` is run"
+    action: >
+      The CLI connects to the daemon via IPC and returns a structured JSON
+      object containing: daemon state (running), directory_signaling state
+      (connected / reconnecting / lost), agents array (each with name and
+      state: registered / online / current), and connections array (each with
+      counterpartyPubkey and status: verified / stale / gone / unverified).
+
+  - trigger: "When an MCP client or CLI command connects to the daemon via IPC"
+    action: >
+      The daemon assigns a unique connectionId, logs daemon.ipc.connected with
+      connectionId and clientType ('mcp' or 'cli'), and begins serving IPC
+      requests on that connection. If 16 connections are already active, the
+      new connection receives an error frame with reason: 'ipc_connection_limit'
+      and guidance, then the socket is closed.
+
+  - trigger: "When ~/.cello/key exists and ~/.cello/agents/ does not exist at startup"
+    action: >
+      The daemon loads the legacy key file as an agent named 'default' in
+      Registered state. The file is not moved or deleted — backwards compat
+      is read-only.
+
+  - trigger: "When the daemon connects to the directory after startup"
+    action: >
+      The daemon runs a batch connection validation query for all stored
+      connection records and classifies each as verified (pubkey current),
+      stale (pubkey changed), gone (deregistered), or unverified (query timed
+      out). daemon.login.validation.complete is logged at INFO with
+      verifiedCount, staleCount, goneCount. Results are held in memory and
+      returned by `cello status`.
+
+  - trigger: "While an IPC connection is open and the client disconnects"
+    action: >
+      The daemon logs daemon.ipc.disconnected with connectionId and reason,
+      releases the connection slot, and continues serving other connections
+      normally.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "No prior daemon running; at least one agent directory exists under ~/.cello/agents/<name>/ containing a valid key file"
+    when: "`cello login` is run"
+    then: >
+      The daemon process starts within 5 seconds. A lock file appears at
+      ~/.cello/daemon.lock containing a valid PID. A socket is accessible at
+      ~/.cello/daemon.sock (or the Windows named pipe equivalent). The CLI
+      process exits with status 0. daemon.started is logged at INFO with pid
+      (matching the lock file PID), ipcSocketPath (~/.cello/daemon.sock), and
+      agentCount (integer ≥ 1, matching the number of valid agent directories
+      under ~/.cello/agents/). Verified by a test that spawns the daemon binary
+      as a child process, waits for daemon.started in structured log output,
+      and asserts the socket file exists at the logged path.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Uses the opts.daemon: true fixture extension added by AC-014. The test
+      spawns the binary directly — not via CLI — to capture structured log
+      output for assertion.
+
+  - id: AC-002
+    given: "A daemon running with agents loaded from ~/.cello/agents/"
+    when: "`cello status` is called"
+    then: >
+      The response contains an `agents` array. Every subdirectory of
+      ~/.cello/agents/ with a valid key file appears with state: 'registered'.
+      No agent is in 'online' or 'current' state (cello_start_agent has not
+      been called; that is MCP-001's scope). AND daemon.ipc.connected is logged
+      at INFO with clientType: 'cli' for the `cello status` connection — proving
+      `cello status` routes through the daemon IPC socket, not around it.
+      A `cello status` implementation that reads state directly from disk would
+      not produce daemon.ipc.connected and does not satisfy this AC.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-003
+    given: "~/.cello/key exists (legacy path) AND ~/.cello/agents/ does not exist"
+    when: "the daemon starts via `cello login`"
+    then: >
+      The daemon loads the legacy key file as agent named 'default'. `cello
+      status` returns an agents array with one entry: name: 'default', state:
+      'registered'. The legacy key file is not modified or moved. No error is
+      reported to the operator.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-004
+    given: "A daemon already running and healthy (responding to IPC)"
+    when: "`cello login` is run a second time"
+    then: >
+      The CLI exits with status 0 and outputs the current daemon state,
+      identical to `cello status`. The lock file PID is unchanged. No
+      daemon.started event fires — only daemon.ipc.connected (clientType: 'cli')
+      fires for the second login's IPC connection. Connection validation is NOT
+      re-run. Verified by asserting the lock file PID before and after the
+      second login call is identical.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-005
+    given: "A daemon starting with at least one stored connection record AND the directory cluster is reachable"
+    when: "the daemon completes connection validation during login"
+    then: >
+      daemon.login.validation.complete is logged at INFO with verifiedCount,
+      staleCount, goneCount — all integers, none undefined, sum equals the
+      total number of stored connection records. `cello status` returns each
+      connection record with one of the four statuses: verified, stale, gone,
+      or unverified. No connection is left without a status.
+    test_type: e2e
+    component_under_test: daemon
+    notes: >
+      Requires CELLO_E2E_LIVE — needs a live directory for the batch validation
+      query. Wrap in describe.skipIf(!process.env.CELLO_E2E_LIVE).
+
+  - id: AC-006
+    given: "A daemon running with at least one open IPC connection"
+    when: "`cello logout` is run"
+    then: >
+      All in-flight IPC requests complete before the shutdown proceeds. Each
+      open IPC connection receives a shutdown frame. daemon.ipc.disconnected
+      is logged for each connection that closes during shutdown (reason:
+      'daemon_shutdown'). ~/.cello/daemon.lock is deleted. ~/.cello/daemon.sock
+      is deleted. daemon.stopped is logged at INFO with pid and reason:
+      'graceful'. The daemon process exits with code 0. A subsequent `cello
+      login` call starts a fresh daemon (no stale lock file present).
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-007
+    given: "A daemon running with 16 IPC connections already active"
+    when: "a 17th client attempts to connect to ~/.cello/daemon.sock"
+    then: >
+      The 17th connection receives a JSON error frame:
+      { error: { code: 'ipc_connection_limit', message: '...', guidance:
+      'The daemon has reached its maximum of 16 concurrent connections. Close
+      an existing connection before opening a new one.' } }
+      The socket is then closed by the daemon. daemon.ipc.connection.limit.reached
+      is logged at WARN with currentCount: 16 and maxCount: 16. The existing
+      16 connections are unaffected and continue serving normally. The daemon
+      does not crash or log at error level — this is an expected operational
+      condition.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-008
+    given: "A lock file at ~/.cello/daemon.lock with a PID of a process that is no longer running"
+    when: "`cello login` is run"
+    then: >
+      The daemon detects the stale lock (process.kill(pid, 0) returns ESRCH),
+      removes the stale lock file and socket file (if present), and starts a
+      new daemon without error. daemon.started is logged normally with the new
+      PID. No error is reported to the operator. The new PID appears in the
+      new lock file.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-009
+    given: "The daemon is alive and accepting IPC connections, but the directory signaling stream is not yet established (e.g., directory is temporarily unreachable)"
+    when: "an IPC client sends a status request"
+    then: >
+      The daemon responds to the IPC request and returns status with
+      directory_signaling: 'reconnecting' (or 'disconnected' if connection
+      has not been attempted yet). The daemon does NOT refuse the IPC
+      connection or block waiting for directory connectivity. Liveness
+      (responding to IPC) is independent of readiness (directory connected).
+      A daemon that refuses IPC connections until the directory is reachable
+      violates this AC.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Directly addresses M7 lesson L8 — health check conflates liveness with
+      readiness. The IPC socket responding is the liveness signal. Directory
+      connection state is a field in the response, not a gate on accepting
+      connections.
+
+  - id: AC-010
+    given: "A daemon serving an in-flight IPC request"
+    when: "the IPC socket connection drops mid-request (TCP RST simulated by closing the socket client-side before the response is written)"
+    then: >
+      The daemon catches the write error, logs daemon.ipc.disconnected with
+      connectionId and reason: 'socket_error' (including the actual error.message
+      from the socket write failure — not the string '[object Object]' or a
+      hardcoded reason), releases the connection slot, and continues serving
+      other connections. The daemon does not crash.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Send-path liveness check for the IPC socket. The socket can be dead at
+      the moment of write; this AC verifies the error is caught and reported
+      with the actual error.message, never interpolated as an object.
+
+  - id: AC-011
+    given: "packages/daemon/src/server.ts is implemented as the composition root"
+    when: "the daemon binary (packages/cli/src/bin.ts) is started"
+    then: >
+      The composition root instantiates all runtime components — IPC server,
+      agent registry, connection validator, and logger — and the full startup
+      sequence runs through this wiring: load agents → attempt directory
+      connection → run connection validation → open IPC socket → log
+      daemon.started. Verified by an integration test that starts the actual
+      binary and asserts daemon.started fires with all required fields. A test
+      that directly constructs DaemonServer without starting the binary does
+      NOT satisfy this AC.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Addresses M7 lesson L3 — composition root never wired. The binary is the
+      only test of the composition root.
+
+  - id: AC-012
+    given: "All error paths in this story's scope: stale lock detection, socket bind failure, agent key load failure, IPC connection limit, connection validation timeout"
+    when: "each distinct failure cause is triggered independently"
+    then: >
+      Each produces a unique error code: daemon_lock_stale_removed,
+      daemon_socket_bind_failed, agent_load_failed (includes agentName in context),
+      ipc_connection_limit, connection_validation_timeout. No catch block returns
+      a hardcoded reason string without logging error.message (never the error
+      object directly via string interpolation — never ${error}, always
+      error instanceof Error ? error.message : String(error)). The implementer
+      scans every catch block in packages/daemon/src/ and packages/cli/src/
+      and fixes or reports any that swallow exceptions silently or interpolate
+      the error object directly into a string.
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-013
+    given: "All daemon and CLI code for this story is implemented and tests pass in cello-client"
+    when: "the version bump procedure documented in cello-client CLAUDE.md is followed for packages/daemon and packages/cli"
+    then: >
+      packages/daemon has an initial version (≥ 0.1.0) in package.json.
+      packages/cli has an initial version (≥ 0.1.0) in package.json.
+      If @cello-protocol/connect bundles the cello binary from packages/cli,
+      connect is bumped to reflect the new dependency; otherwise connect version
+      is unchanged. pnpm install is run and pnpm-lock.yaml is updated. git tag
+      is pushed for the relevant packages. CI publishes to npm beta dist-tag.
+      No workspace:* references to cello-client packages appear in
+      trustless-cello — directory and relay do not import from packages/daemon
+      or packages/cli, so no trustless-cello package.json update is required.
+    test_type: integration
+    component_under_test: cli
+    notes: >
+      packages/daemon and packages/cli are new packages in cello-client.
+      trustless-cello has no runtime dependency on these packages — they are
+      client-side only. No trustless-cello-dependency-update AC is required
+      for this story.
+
+  - id: AC-014
+    given: "packages/e2e-tests/src/session-fixture.ts"
+    when: "createSessionFixture is called with opts.daemon: true"
+    then: >
+      The fixture starts a daemon process (not a direct CelloClient instance),
+      waits for daemon.started in the daemon's log output, and returns the IPC
+      socket path in the fixture result object. After the test, the fixture
+      tears down the daemon cleanly. All existing tests that do not pass
+      opts.daemon: true continue to use the direct CelloClient path unchanged —
+      the change is non-breaking with a default of false.
+    test_type: integration
+    component_under_test: e2e-tests
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The IPC socket must only be accessible to the OS user that started the
+      daemon. No other user on the same machine must be able to send IPC
+      commands to the daemon.
+    adversarial_condition: >
+      A second OS user on the same machine discovers the socket path and
+      attempts to connect via net.connect(). The socket file permissions must
+      be 0600 (owner read/write only), causing the connect syscall to fail with
+      EACCES before any framing or IPC logic executes. Verified by asserting
+      that the socket stat mode is 0600 immediately after daemon startup, and
+      that a connection attempt by a different effective UID is refused at the
+      OS level.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: SI-002
+    statement: >
+      An IPC connection must never be able to read or modify the per-connection
+      state (current agent, active operations) of any other IPC connection.
+    adversarial_condition: >
+      Connection 1 has been assigned a connectionId. Connection 2 sends a
+      status IPC request that includes all active connection IDs. The response
+      to connection 2 must not include any per-connection state (current agent,
+      pending operations) belonging to connection 1 — only connection 2's own
+      per-connection state is visible. Verified by asserting that the status
+      response for connection 2 omits connection 1's per-connection fields even
+      when connection 1 has a current agent set.
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the directory cluster is unreachable during `cello login`"
+    fallback: >
+      The daemon starts, loads all agents as Registered state, and marks all
+      stored connections as 'unverified' without classifying them as stale or
+      gone. directory_signaling is reported as 'reconnecting'. The daemon retries
+      directory connection in the background (retry logic is SIGNAL-001's scope).
+      Tool calls requiring the directory return:
+      { ok: false, reason: 'directory_unreachable_at_login', guidance: 'The
+      directory is unreachable. Check network connectivity. The daemon will
+      reconnect automatically — retry this operation once directory_signaling
+      shows connected in cello status.' }
+      Tool calls that do not require the directory (cello status,
+      cello_list_agents) succeed normally.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: DB-002
+    condition: "While an agent's key file at ~/.cello/agents/<name>/key is missing or unreadable"
+    fallback: >
+      The daemon logs agent.load.failed at ERROR with agentName and the actual
+      error.message from the file read failure (not a hardcoded string). The
+      affected agent is skipped — other agents load normally and the daemon
+      does not fail to start. `cello status` includes the failed agent with
+      state: 'load_failed' and an error field containing the error message.
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: daemon.started
+      level: info
+      trigger: "When the daemon process starts and opens the IPC socket successfully"
+      context_fields: [pid, ipcSocketPath, agentCount]
+      correlationId: false
+    - name: daemon.stopped
+      level: info
+      trigger: "When the daemon shuts down, gracefully or via OS signal"
+      context_fields: [pid, reason]
+      correlationId: false
+    - name: daemon.ipc.connected
+      level: info
+      trigger: "When an MCP client or CLI command establishes an IPC connection to the daemon"
+      context_fields: [connectionId, clientType]
+      correlationId: false
+    - name: daemon.ipc.disconnected
+      level: info
+      trigger: "When an IPC connection closes for any reason"
+      context_fields: [connectionId, reason]
+      correlationId: false
+    - name: daemon.login.validation.complete
+      level: info
+      trigger: "When the batch connection validation query finishes at login"
+      context_fields: [verifiedCount, staleCount, goneCount]
+      correlationId: false
+    - name: agent.online
+      level: info
+      trigger: >
+        When an agent transitions from Registered to Online state. Emitted by
+        the daemon when it processes a cello_start_agent call (MCP-001).
+        Defined here because the event is emitted in packages/daemon; the AC
+        that verifies it fires is in MCP-001.
+      context_fields: [agentName, agentPubkey]
+      correlationId: false
+    - name: agent.offline
+      level: info
+      trigger: >
+        When an agent transitions from Online to Registered state (cello_stop_agent
+        or IPC connection drop that held the agent as current). Emitted by
+        packages/daemon; verified by MCP-001 ACs.
+      context_fields: [agentName, reason]
+      correlationId: false
+  error_events:
+    - name: agent.load.failed
+      level: error
+      trigger: "When the daemon cannot load an agent's key file at startup"
+      context_fields: [agentName, error]
+      correlationId: false
+    - name: daemon.ipc.connection.limit.reached
+      level: warn
+      trigger: "When a new IPC connection is rejected because 16 are already active"
+      context_fields: [currentCount, maxCount]
+      correlationId: false
+  notes: >
+    All events follow the daemon.* and agent.* taxonomy from outline.md
+    §Observability Events. agent.online and agent.offline are implemented in
+    packages/daemon but verified by MCP-001 ACs (they require cello_start_agent
+    to trigger). The implementer must add all events listed here to the canonical
+    event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+    No console.log in implementation code — all events go through the injected
+    Logger interface.
+  alarms:
+    - condition: "daemon.ipc.connection.limit.reached fires more than 10 times per minute for 5 minutes"
+      fires_to: "daemon-health CloudWatch alarm — sustained IPC pressure indicates a connection leak"
+    - condition: "agent.load.failed fires at any time"
+      fires_to: "daemon-health CloudWatch alarm — agent key corruption requires operator investigation"
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Design decision — cello login does NOT auto-start agents. After login all
+    registered agents appear with state: 'registered'. The operator calls
+    cello_start_agent (MCP-001) or `cello start <name>` to bring an agent
+    Online. This is the only interpretation consistent with CELLO-M7-E2E-001
+    AC-002b. Auto-start as a convenience option is out of scope for DAEMON-001.
+  - >
+    Package structure: two new packages in cello-client. packages/daemon/ is
+    the composition root — IPC server, agent registry, connection validator,
+    logger injection. packages/cli/ is the cello binary and the thin
+    stdio-to-socket proxy that MCP clients use. packages/daemon is a workspace
+    dependency of packages/cli. packages/adapter-claude-code imports the proxy
+    from packages/cli in MCP-001.
+  - >
+    Lock file format: ~/.cello/daemon.lock contains JSON { pid, socketPath,
+    version }. The version field allows future clients to detect
+    daemon_version_mismatch before attempting IPC. Stale lock detection:
+    process.kill(pid, 0) throws ESRCH → stale. Remove lock + socket and start
+    fresh.
+  - >
+    IPC framing: JSON-newline-delimited frames over the Unix socket (Windows:
+    named pipe at \\.\pipe\cello-daemon-<username>). Each frame is a JSON
+    object terminated by \n. Requests: { id, method, params }. Responses:
+    { id, result } or { id, error: { code, message, guidance } }. Rejection
+    frames (e.g., ipc_connection_limit) have no id field — the request was
+    never processed.
+  - >
+    cello status response structure (authoritative for downstream stories):
+    {
+      daemon: 'running',
+      directory_signaling: 'connected' | 'reconnecting' | 'lost' | 'disconnected',
+      agents: [{ name, state: 'registered' | 'online' | 'current', pubkey? }],
+      connections: [{ counterpartyPubkey, status: 'verified' | 'stale' | 'gone' | 'unverified' }]
+    }
+    DAEMON-002 adds standing_receiver_ready: boolean. SESSION-001 adds
+    interrupted_sessions. This story establishes the base structure only.
+  - >
+    Connection validation is a batch query at login only. The daemon queries
+    the directory's signaling stream for all stored counterparty pubkeys in a
+    single pass. Timeout: 10 seconds total for the batch; individual entries
+    that time out within the batch are classified as 'unverified'. If the
+    signaling stream is not yet established when validation runs, all connections
+    are marked 'unverified' immediately and remain so until the next successful
+    signaling connection (SIGNAL-001's reconnect logic will re-trigger validation
+    after reconnect — that logic is SIGNAL-001's scope, not this story's).
+  - >
+    Socket permissions: create the socket file before chmod, or pass the mode
+    to net.createServer — Node.js on Linux defaults to 0o600 for Unix sockets
+    created by net.createServer, but verify this explicitly. On macOS, the mode
+    may need to be set after binding. SI-001 requires 0600; test it.
+  - >
+    Logger injection: all log events go through the injected Logger interface.
+    The composition root instantiates a stdout JSON logger for all CELLO_ENV
+    values in M7 (CloudWatch integration is a later story). CELLO_ENV drives
+    adapter selection at startup — the only place environment is inspected is
+    the composition root.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by: []
+  blocks:
+    - CELLO-M7-MCP-001       # needs IPC socket + daemon process
+    - CELLO-M7-DAEMON-002    # needs daemon process + agent registry
+    - CELLO-M7-SIGNAL-001    # needs daemon process
+    - CELLO-M7-MANIFEST-002  # needs daemon process
+  notes: >
+    DAEMON-001 has no blocking dependencies — it is the foundation story for
+    all M7 implementation work and can be started immediately. MANIFEST-001 is
+    the only other independent story and can run in parallel.
+
+# ─── References ──────────────────────────────────────────────
+references:
+  protocol_map: "Multi-Party Conversations, Node Operations"
+  end_to_end_flow: "§5.7 Session Establishment"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-11_1030_daemon-transport-architecture"
+  related_docs:
+    - "[[daemon-transport-architecture]]"
+    - "[[CELLO-M7-E2E-001]]"
+  notes: >
+    Daemon model specified in daemon-transport-architecture.md §5. Lock file
+    connect-or-start replaces M6B-001's kill-on-startup (§5, "What M6B-001's
+    PID lock becomes"). Connection validation at login: §10 decision 6.
+    Three agent states (Registered / Online / Current): CONTEXT.md. The
+    explicit-control model (no auto-start) is confirmed by E2E-001 AC-002b.
