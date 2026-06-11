@@ -249,15 +249,15 @@ a distinct code and actionable guidance:
 
 | Story | New failure modes (each needs distinct code + guidance) |
 |-------|-------------------------------------------------------|
-| S1 | daemon_not_running, daemon_version_mismatch, ipc_connection_refused, ipc_connection_limit, agent_not_found, agent_not_online, login_already_active (idempotent success), directory_unreachable_at_login |
-| S2 | no_current_agent, agent_already_current, agent_not_online (distinguish from not_found), ipc_deserialization_error |
-| S3 | max_sessions_reached, session_node_creation_failed, standing_receiver_unavailable, connectionGater_rejected_peer |
-| S4 | assignment_missing_session_peer_id, assignment_peer_id_mismatch, assignment_tbs_verification_failed (distinguish from existing frost_verification_failed) |
-| S5 | autonat_unavailable, direct_dial_failed_falling_back_to_relay, relay_fallback_also_failed, dcutr_upgrade_failed (non-fatal) |
-| S6 | session_already_interrupted, seal_interrupted_counterparty_unavailable, seal_interrupted_rejected_by_counterparty |
-| S7 | signaling_reconnecting (not an error — but tool calls during this state need guidance: "wait and retry"), signaling_lost (operator intervention needed), outbound_queue_full |
-| S8 | retry_queue_full (oldest evicted — inform caller), nonce_duplicate_detected (silent discard, but logged) |
-| S12 | manifest_expired, manifest_signature_invalid, manifest_version_rollback, directory_challenge_failed |
+| M7-DAEMON-001 | daemon_not_running, daemon_version_mismatch, ipc_connection_refused, ipc_connection_limit, agent_not_found, agent_not_online, login_already_active (idempotent success), directory_unreachable_at_login |
+| M7-MCP-001 | no_current_agent, agent_already_current, agent_not_online (distinguish from not_found), ipc_deserialization_error |
+| M7-DAEMON-002 | max_sessions_reached, session_node_creation_failed, standing_receiver_unavailable, connectionGater_rejected_peer |
+| M7-WIRE-001 | assignment_missing_session_peer_id, assignment_peer_id_mismatch, assignment_tbs_verification_failed (distinguish from existing frost_verification_failed) |
+| M7-TRANSPORT-001 | autonat_unavailable, direct_dial_failed_falling_back_to_relay, relay_fallback_also_failed, dcutr_upgrade_failed (non-fatal) |
+| M7-SESSION-001 | session_already_interrupted, seal_interrupted_counterparty_unavailable, seal_interrupted_rejected_by_counterparty |
+| M7-SIGNAL-001 | signaling_reconnecting (not an error — but tool calls during this state need guidance: "wait and retry"), signaling_lost (operator intervention needed), outbound_queue_full |
+| M7-DAEMON-003 | retry_queue_full (oldest evicted — inform caller), nonce_duplicate_detected (silent discard, but logged) |
+| M7-MANIFEST-002 | manifest_expired, manifest_signature_invalid, manifest_version_rollback, directory_challenge_failed |
 
 ---
 
@@ -461,56 +461,105 @@ log entry stays as history, but rules must not live only in the log.
 
 ## Story Breakdown
 
-**Writing order:** Write S10 (integration gate) FIRST as the E2E story — it is
-the `/cello-story` anchor that all component stories reference. Then write
-S1–S9, S11–S12, and S14 as component stories that depend on it.
-Implementation order is different — S10 is implemented last.
+## Story IDs
 
-| ID | Title | Depends on | Repo(s) | Primary package(s) |
-|----|-------|------------|---------|-------------------|
-| **S1** | Daemon foundation — IPC socket, connect-or-start, `cello login/logout/status`, agent loading, backwards compat, connection validation on login | — | cello-client | `packages/daemon` (new), `packages/cli` (new) |
-| **S2** | MCP adapter — stdio-to-socket proxy, per-connection current-agent state, `cello_use_agent / list_agents / start_agent / stop_agent` | S1 | cello-client | `packages/adapter-claude-code` |
-| **S3** | Ephemeral session nodes — create/teardown lifecycle, connectionGater, standing receiver node | S1 | cello-client | `packages/daemon/src/session-node-manager.ts` (new) |
-| **S4** | SessionAssignment wire format — add `counterparty_session_peer_id` + `counterparty_session_addrs` to signed frame (cross-repo: directory, relay, client) | S3 | **both** | `packages/protocol-types`, `packages/directory`, `packages/relay`, `packages/client` |
-| **S5** | AutoNAT + direct P2P default — `autonat()` in createNode, dialability observable, direct dial default, relay fallback, dcutr upgrade | S4 | cello-client | `packages/transport/src/node.ts`, `packages/daemon` |
-| **S6** | Interrupted session handling — relay `session_interrupted` frame, DB `interrupted` status, login surfacing, seal-interrupted protocol flow | S3, S4 | **both** | `packages/relay`, `packages/daemon`, `packages/client` |
-| **S7** | Signaling stream resilience — heartbeat/keepalive on signaling stream, exponential backoff reconnect, `directory_signaling` status, queued outbound ops retry after reconnect | S1 | cello-client | `packages/transport/src/signaling-manager.ts`, `packages/daemon` |
-| **S8** | Nonce dedup + retry queue — rehoused in daemon; SQLCipher `retry_queue` and `session_seen_nonces` tables | S3 | cello-client | `packages/daemon`, `packages/client` |
-| **S9** | Agent-aware notifications — `agent` field on existing notifications, session node lifecycle as presence signals | S2, S3, S8 | cello-client | `packages/adapter-claude-code`, `packages/daemon` |
-| **S10** | M7 integration gate — daemon running, two Claude sessions via IPC, two agents with ephemeral session nodes, full exchange, bidirectional auth exercised, signaling resilience verified | S1–S9, S12 | **both** | `packages/e2e-tests` |
-| **S11** | Manifest schema + initial manifest — JSON schema (`version`, `not_before`, `expires`, threshold sig), officer key ceremony, N root key constants in binary | — | cello-client | `packages/crypto`, `packages/protocol-types` |
-| **S12** | Client verification + handshake step 6 + manifest polling — threshold sig check, version/expiry enforcement, directory signs challenge response, client verifies against manifest; 6–12 hour background poll in daemon | S1, S11 | **both** | `packages/transport`, `packages/daemon`, `packages/directory` |
-| **S14** | Cross-repo CI/CD — wire cello-client as second source into integration pipelines; cello-client push triggers build→e2e→block npm publish on failure | — | trustless-cello | `infra/` |
+Stories use the format `M7-{DOMAIN}-{NNN}`:
+
+| Story ID | Title | Depends on | Repo(s) | Primary package(s) |
+|----------|-------|------------|---------|-------------------|
+| **M7-E2E-001** | M7 integration gate — daemon running, two Claude sessions via IPC, two agents with ephemeral session nodes, full exchange, bidirectional auth exercised, signaling resilience verified | all others | **both** | `packages/e2e-tests` |
+| **M7-DAEMON-001** | Daemon foundation — IPC socket, connect-or-start, `cello login/logout/status`, agent loading, backwards compat, connection validation on login | — | cello-client | `packages/daemon` (new), `packages/cli` (new) |
+| **M7-MCP-001** | MCP adapter — stdio-to-socket proxy, per-connection current-agent state, `cello_use_agent / list_agents / start_agent / stop_agent` | M7-DAEMON-001 | cello-client | `packages/adapter-claude-code` |
+| **M7-DAEMON-002** | Ephemeral session nodes — create/teardown lifecycle, connectionGater, standing receiver node | M7-DAEMON-001 | cello-client | `packages/daemon/src/session-node-manager.ts` (new) |
+| **M7-WIRE-001** | SessionAssignment wire format — add `counterparty_session_peer_id` + `counterparty_session_addrs` to signed frame (cross-repo: directory, relay, client) | M7-DAEMON-002 | **both** | `packages/protocol-types`, `packages/directory`, `packages/relay`, `packages/client` |
+| **M7-TRANSPORT-001** | AutoNAT + direct P2P default — `autonat()` in createNode, dialability observable, direct dial default, relay fallback, dcutr upgrade | M7-WIRE-001 | cello-client | `packages/transport/src/node.ts`, `packages/daemon` |
+| **M7-SESSION-001** | Interrupted session handling — relay `session_interrupted` frame, DB `interrupted` status, login surfacing, seal-interrupted protocol flow | M7-DAEMON-002, M7-WIRE-001 | **both** | `packages/relay`, `packages/daemon`, `packages/client` |
+| **M7-SIGNAL-001** | Signaling stream resilience — heartbeat/keepalive on signaling stream, exponential backoff reconnect, `directory_signaling` status, queued outbound ops retry after reconnect | M7-DAEMON-001 | cello-client | `packages/transport/src/signaling-manager.ts`, `packages/daemon` |
+| **M7-DAEMON-003** | Nonce dedup + retry queue — rehoused in daemon; SQLCipher `retry_queue` and `session_seen_nonces` tables | M7-DAEMON-002 | cello-client | `packages/daemon`, `packages/client` |
+| **M7-MCP-002** | Agent-aware notifications — `agent` field on existing notifications, session node lifecycle as presence signals | M7-MCP-001, M7-DAEMON-002, M7-DAEMON-003 | cello-client | `packages/adapter-claude-code`, `packages/daemon` |
+| **M7-MANIFEST-001** | Manifest schema + initial manifest — JSON schema (`version`, `not_before`, `expires`, threshold sig), officer key ceremony, N root key constants in binary | — | cello-client | `packages/crypto`, `packages/protocol-types` |
+| **M7-MANIFEST-002** | Client verification + handshake step 6 + manifest polling — threshold sig check, version/expiry enforcement, directory signs challenge response, client verifies against manifest; 6–12 hour background poll in daemon | M7-DAEMON-001, M7-MANIFEST-001 | **both** | `packages/transport`, `packages/daemon`, `packages/directory` |
+| **M7-CICD-001** | Cross-repo CI/CD — wire cello-client as second source into integration pipelines; cello-client push triggers build→e2e→block npm publish on failure | — | trustless-cello | `infra/` |
+
+---
+
+## Story Writing Order
+
+Write stories in this order. M7-E2E-001 is written first as the anchor —
+it defines the observable end state that all component stories work toward.
+After all component stories are written, do a **cohesion pass on M7-E2E-001**
+to align its ACs with what the component stories actually specify.
+
+1. M7-E2E-001 *(write now; revise after all others are written)*
+2. M7-DAEMON-001
+3. M7-MCP-001
+4. M7-DAEMON-002
+5. M7-SIGNAL-001
+6. M7-DAEMON-003
+7. M7-MANIFEST-001
+8. M7-WIRE-001
+9. M7-TRANSPORT-001
+10. M7-SESSION-001
+11. M7-MCP-002
+12. M7-MANIFEST-002
+13. M7-CICD-001
+14. M7-E2E-001 *(cohesion pass — revise ACs to match component stories)*
+
+---
+
+## Implementation Order
+
+Implementation order differs from writing order. M7-E2E-001 is implemented
+**last** — it is the close gate, not the starting point.
+
+1. M7-DAEMON-001 *(no deps; everything else flows from here)*
+2. M7-MANIFEST-001 *(independent; start in parallel with M7-DAEMON-001)*
+3. M7-CICD-001 *(independent; can run any time)*
+4. M7-DAEMON-002 *(needs M7-DAEMON-001)*
+5. M7-SIGNAL-001 *(needs M7-DAEMON-001)*
+6. M7-MCP-001 *(needs M7-DAEMON-001)*
+7. M7-DAEMON-003 *(needs M7-DAEMON-002)*
+8. M7-WIRE-001 *(needs M7-DAEMON-002; cross-repo deploy — batch with M7-SESSION-001 and M7-MANIFEST-002)*
+9. M7-SESSION-001 *(needs M7-DAEMON-002 + M7-WIRE-001; batch pipeline push with M7-WIRE-001)*
+10. M7-MANIFEST-002 *(needs M7-DAEMON-001 + M7-MANIFEST-001; batch pipeline push with M7-WIRE-001)*
+11. M7-TRANSPORT-001 *(needs M7-WIRE-001)*
+12. M7-MCP-002 *(needs M7-MCP-001 + M7-DAEMON-002 + M7-DAEMON-003)*
+13. M7-E2E-001 *(implemented last — close gate)*
+
+**Pipeline batching note:** M7-WIRE-001, M7-SESSION-001, and M7-MANIFEST-002
+all require directory/relay CloudFormation deploys (~25-30 min each). Never
+push these one at a time. Batch all three into a single pipeline push.
 
 ---
 
 ## Dependency Map
 
 ```
-S1  ──→ S2  ─────────────────────────────────────────────────┐
-    ├──→ S3  ──→ S4  ──→ S5  ──────────────────────────────→ │
-    │               └──→ S6  ──────────────────────────────→ │
-    │       └──→ S8  ──→ S9  ──────────────────────────────→ S10 (gate)
-    └──→ S7  ───────────────────────────────────────────────→ │
-                                                              │
-S11 ──→ S12 ───────────────────────────────────────────────→ │
+DAEMON-001 ──→ MCP-001   ────────────────────────────────────────┐
+           ├──→ DAEMON-002 ──→ WIRE-001 ──→ TRANSPORT-001 ──────→ │
+           │               │           └──→ SESSION-001  ──────→ │
+           │               └──→ DAEMON-003 ──→ MCP-002   ──────→ E2E-001 (gate)
+           └──→ SIGNAL-001 ────────────────────────────────────→ │
+                                                                  │
+MANIFEST-001 ──→ MANIFEST-002 ──────────────────────────────────→ │
 
-S14  (independent — no deps, no blockers)
+CICD-001  (independent — no deps, no blockers)
 ```
 
 **Three independent tracks** run from day one:
 
 | Track | Stories | Bottleneck |
 |-------|---------|------------|
-| **Daemon + transport track** | S1 → S3 → S4 → S5/S6 + S7 + S8 → S9 | S4 (cross-repo deploy) |
-| **Security track** | S11 → S12 | Key ceremony (S11) is operational work before code |
-| **CI/CD track** | S14 | Independent — can run any time |
+| **Daemon + transport track** | DAEMON-001 → DAEMON-002 → WIRE-001 → TRANSPORT-001/SESSION-001 + SIGNAL-001 + DAEMON-003 → MCP-002 | WIRE-001 (cross-repo deploy) |
+| **Security track** | MANIFEST-001 → MANIFEST-002 | Key ceremony (MANIFEST-001) is operational work before code |
+| **CI/CD track** | CICD-001 | Independent — can run any time |
 
-**Critical path:** S1 → S3 → S4 → S5 → S10 (five stories deep).
+**Critical path:** DAEMON-001 → DAEMON-002 → WIRE-001 → TRANSPORT-001 → E2E-001 (five stories deep).
 
-**S4 is the serialization bottleneck.** It is a cross-repo protocol change
+**WIRE-001 is the pipeline bottleneck.** It is a cross-repo protocol change
 requiring directory and relay CloudFormation deploys (~25-30 min each). Batch
-all pending directory/relay changes before triggering the pipeline.
+all pending directory/relay changes (WIRE-001 + SESSION-001 + MANIFEST-002)
+before triggering the pipeline.
 
 ---
 
@@ -622,12 +671,12 @@ authoritative for M7 — story authors use these values directly:
 
 | Resource | Cap | Story | Degradation behavior |
 |----------|-----|-------|---------------------|
-| Concurrent session nodes per daemon | 32 | S3 | `initiate_session` returns `{ ok: false, reason: "max_sessions_reached", guidance: "Close an existing session before starting a new one." }` |
-| IPC connections per daemon | 16 | S1 | New connection attempt receives an error frame and socket closes gracefully |
-| Retry queue depth per session | 1000 messages | S8 | Oldest message evicted (FIFO) with `message.retry.evicted` event |
-| Nonce dedup set size per session | 10,000 entries | S8 | Oldest nonce evicted (LRU); acceptable because nonces older than the queue depth cannot arrive via legitimate retry |
-| Pending outbound ops during signaling reconnect | 64 | S7 | New ops return `{ ok: false, reason: "signaling_queue_full", guidance: "Wait for directory reconnection." }` |
-| Standing receiver nodes | 1 per daemon | S3 | Only one pre-created; additional inbound sessions wait for node creation (~50ms) |
+| Concurrent session nodes per daemon | 32 | M7-DAEMON-002 | `initiate_session` returns `{ ok: false, reason: "max_sessions_reached", guidance: "Close an existing session before starting a new one." }` |
+| IPC connections per daemon | 16 | M7-DAEMON-001 | New connection attempt receives an error frame and socket closes gracefully |
+| Retry queue depth per session | 1000 messages | M7-DAEMON-003 | Oldest message evicted (FIFO) with `message.retry.evicted` event |
+| Nonce dedup set size per session | 10,000 entries | M7-DAEMON-003 | Oldest nonce evicted (LRU); acceptable because nonces older than the queue depth cannot arrive via legitimate retry |
+| Pending outbound ops during signaling reconnect | 64 | M7-SIGNAL-001 | New ops return `{ ok: false, reason: "signaling_queue_full", guidance: "Wait for directory reconnection." }` |
+| Standing receiver nodes | 1 per daemon | M7-DAEMON-002 | Only one pre-created; additional inbound sessions wait for node creation (~50ms) |
 
 ---
 
@@ -643,35 +692,33 @@ extended — story authors should note these extensions in their ACs.
 
 | Extension | Needed by | What it does |
 |-----------|-----------|-------------|
-| `opts.daemon: true` | S1 | Start a daemon process instead of direct CelloClient; returns IPC socket path |
-| `opts.ipcClients: number` | S2 | Connect N test MCP clients to daemon via IPC |
-| `opts.ephemeralSessionNodes: true` | S3 | Use per-session nodes (default for M7+ once S3 lands) |
-| `opts.directP2P: true` | S5 | Skip relay for session transport; dial counterparty directly |
-| `opts.standingReceiver: true` | S3 | Pre-create a standing receiver node at daemon startup |
-| `opts.manifest: ManifestConfig` | S12 | Provide a test manifest with specified keys and expiry |
+| `opts.daemon: true` | M7-DAEMON-001 | Start a daemon process instead of direct CelloClient; returns IPC socket path |
+| `opts.ipcClients: number` | M7-MCP-001 | Connect N test MCP clients to daemon via IPC |
+| `opts.ephemeralSessionNodes: true` | M7-DAEMON-002 | Use per-session nodes (default for M7+ once DAEMON-002 lands) |
+| `opts.directP2P: true` | M7-TRANSPORT-001 | Skip relay for session transport; dial counterparty directly |
+| `opts.standingReceiver: true` | M7-DAEMON-002 | Pre-create a standing receiver node at daemon startup |
+| `opts.manifest: ManifestConfig` | M7-MANIFEST-002 | Provide a test manifest with specified keys and expiry |
 
 ### Stories requiring `CELLO_E2E_LIVE`
 
 These stories require a running daemon, real directory connection, or real
 network conditions that `createSessionFixture()` cannot provide in-process:
 
-- **S5** — AutoNAT requires real network (or at minimum, multiple libp2p nodes
-  on distinct ports performing dial-back)
-- **S7** — Signaling resilience requires a killable signaling stream (daemon +
-  real directory or mock directory process)
-- **S10** — Full integration gate — all processes live
-- **S12** — Handshake step 6 against a real directory node with a signed challenge
+- **M7-TRANSPORT-001** — AutoNAT requires real network (or at minimum, multiple libp2p nodes on distinct ports performing dial-back)
+- **M7-SIGNAL-001** — Signaling resilience requires a killable signaling stream (daemon + real directory or mock directory process)
+- **M7-E2E-001** — Full integration gate — all processes live
+- **M7-MANIFEST-002** — Handshake step 6 against a real directory node with a signed challenge
 
 **Stories testable in-process via fixture extension:**
 
-- **S1** — Daemon lifecycle and IPC (test daemon as a spawned child process)
-- **S2** — MCP proxy (test against daemon socket)
-- **S3** — Ephemeral node lifecycle (multiple libp2p nodes in-process)
-- **S4** — Wire format (serialization tests are pure; integration needs fixture)
-- **S6** — Interrupted handling (simulate disconnect in-process)
-- **S8** — Retry queue + nonce dedup (pure logic + SQLCipher round-trip)
-- **S9** — Notifications (test against daemon socket)
-- **S11** — Manifest schema (pure crypto, no network)
+- **M7-DAEMON-001** — Daemon lifecycle and IPC (test daemon as a spawned child process)
+- **M7-MCP-001** — MCP proxy (test against daemon socket)
+- **M7-DAEMON-002** — Ephemeral node lifecycle (multiple libp2p nodes in-process)
+- **M7-WIRE-001** — Wire format (serialization tests are pure; integration needs fixture)
+- **M7-SESSION-001** — Interrupted handling (simulate disconnect in-process)
+- **M7-DAEMON-003** — Retry queue + nonce dedup (pure logic + SQLCipher round-trip)
+- **M7-MCP-002** — Notifications (test against daemon socket)
+- **M7-MANIFEST-001** — Manifest schema (pure crypto, no network)
 
 ---
 
@@ -680,7 +727,7 @@ network conditions that `createSessionFixture()` cannot provide in-process:
 Story authors must use these exact event names in their `observability:` blocks
 and corresponding ACs. All events follow the `domain.noun.verb` taxonomy.
 
-### Daemon lifecycle (S1)
+### Daemon lifecycle (M7-DAEMON-001)
 
 | Event | Level | Context fields |
 |-------|-------|---------------|
@@ -690,7 +737,7 @@ and corresponding ACs. All events follow the `domain.noun.verb` taxonomy.
 | `daemon.ipc.disconnected` | info | `connectionId`, `reason` |
 | `daemon.login.validation.complete` | info | `verifiedCount`, `staleCount`, `goneCount` |
 
-### Agent state (S1, S2)
+### Agent state (M7-DAEMON-001, M7-MCP-001)
 
 | Event | Level | Context fields |
 |-------|-------|---------------|
@@ -698,7 +745,7 @@ and corresponding ACs. All events follow the `domain.noun.verb` taxonomy.
 | `agent.offline` | info | `agentName`, `reason` |
 | `agent.current.switched` | info | `connectionId`, `fromAgent`, `toAgent` |
 
-### Session nodes (S3)
+### Session nodes (M7-DAEMON-002)
 
 | Event | Level | Context fields |
 |-------|-------|---------------|
@@ -706,14 +753,14 @@ and corresponding ACs. All events follow the `domain.noun.verb` taxonomy.
 | `session.node.destroyed` | info | `sessionId`, `agentName`, `reason` (sealed / interrupted / error) |
 | `session.node.cap.reached` | warn | `agentName`, `currentCount`, `maxCount` |
 
-### Session assignment (S4)
+### Session assignment (M7-WIRE-001)
 
 | Event | Level | Context fields |
 |-------|-------|---------------|
 | `session.assignment.received` | info | `sessionId`, `counterpartyPubkey`, `transportMode` (direct / relay), `correlationId` |
 | `session.assignment.verification.failed` | error | `sessionId`, `reason`, `correlationId` |
 
-### AutoNAT + direct P2P (S5)
+### AutoNAT + direct P2P (M7-TRANSPORT-001)
 
 | Event | Level | Context fields |
 |-------|-------|---------------|
@@ -721,14 +768,14 @@ and corresponding ACs. All events follow the `domain.noun.verb` taxonomy.
 | `session.transport.mode.selected` | info | `sessionId`, `mode` (direct / relay / dcutr_upgrade), `correlationId` |
 | `session.transport.dcutr.upgraded` | info | `sessionId`, `correlationId` |
 
-### Interrupted sessions (S6)
+### Interrupted sessions (M7-SESSION-001)
 
 | Event | Level | Context fields |
 |-------|-------|---------------|
 | `session.interrupted.detected` | warn | `sessionId`, `agentName`, `source` (relay_frame / stream_close) |
 | `session.interrupted.sealed` | info | `sessionId`, `agentName`, `leafCount` |
 
-### Signaling resilience (S7)
+### Signaling resilience (M7-SIGNAL-001)
 
 | Event | Level | Context fields |
 |-------|-------|---------------|
@@ -737,7 +784,7 @@ and corresponding ACs. All events follow the `domain.noun.verb` taxonomy.
 | `directory.signaling.reconnecting` | info | `attempt`, `backoffMs`, `directoryNodeId` |
 | `directory.signaling.reconnect.failed` | error | `attempt`, `maxAttempts`, `lastError` |
 
-### Retry queue + nonce dedup (S8)
+### Retry queue + nonce dedup (M7-DAEMON-003)
 
 | Event | Level | Context fields |
 |-------|-------|---------------|
@@ -746,7 +793,7 @@ and corresponding ACs. All events follow the `domain.noun.verb` taxonomy.
 | `message.retry.evicted` | warn | `sessionId`, `nonce`, `queueDepth` |
 | `message.nonce.duplicate` | debug | `sessionId`, `nonce`, `senderPubkey` |
 
-### Bidirectional auth (S12)
+### Bidirectional auth (M7-MANIFEST-002)
 
 | Event | Level | Context fields |
 |-------|-------|---------------|
@@ -766,16 +813,16 @@ them inline in the relevant story's behavior or ACs — not only in
 
 | Constraint | Applies to | What to restate |
 |-----------|-----------|----------------|
-| **Sovereign node invariant** | S11, S12, S4 | Directory nodes are independent. The manifest lists multiple nodes across providers and regions. No story may assume co-location, shared networking, or single-provider deployment. Each directory node signs independently. |
+| **Sovereign node invariant** | M7-MANIFEST-001, M7-MANIFEST-002, M7-WIRE-001 | Directory nodes are independent. The manifest lists multiple nodes across providers and regions. No story may assume co-location, shared networking, or single-provider deployment. Each directory node signs independently. |
 | **No console.log** | All stories | All log events go through the injected `Logger` interface. No `console.log` in implementation code. |
-| **Never push Docker from local** | S14 | CI/CD pipeline is the only image push mechanism. |
-| **workspace:\* is a bug** | S4, S6, S12 (any cross-repo story) | References to cello-client packages in trustless-cello must be pinned semver, never `workspace:*`. |
-| **Adapter pattern mandatory** | S3, S5 | Session node creation, AutoNAT, and transport selection are behind interfaces with local stubs. |
-| **Batch before push** | S4 (cross-repo deploy) | Never push a small fix alone when other directory/relay changes are pending. Pipeline is 25-30 min. |
-| **FROST TBS domain separation** | S4 | Context string `"cello-frost-session-establishment-v1"` must be used; new fields in TBS extend the positional array. |
-| **Cross-repo version bump** | S4, S6, S12 | Stories that change cello-client packages require version-bump + trustless-cello dependency-update ACs. |
-| **IaC-only resource creation** | S14 | Never create AWS resources manually that CloudFormation should manage. |
-| **connectionGater per session node** | S3 | Each session node accepts connections from exactly one peer. The directory-facing node only accepts directory Peer IDs. |
+| **Never push Docker from local** | M7-CICD-001 | CI/CD pipeline is the only image push mechanism. |
+| **workspace:\* is a bug** | M7-WIRE-001, M7-SESSION-001, M7-MANIFEST-002 (any cross-repo story) | References to cello-client packages in trustless-cello must be pinned semver, never `workspace:*`. |
+| **Adapter pattern mandatory** | M7-DAEMON-002, M7-TRANSPORT-001 | Session node creation, AutoNAT, and transport selection are behind interfaces with local stubs. |
+| **Batch before push** | M7-WIRE-001 (cross-repo deploy) | Never push a small fix alone when other directory/relay changes are pending. Pipeline is 25-30 min. |
+| **FROST TBS domain separation** | M7-WIRE-001 | Context string `"cello-frost-session-establishment-v1"` must be used; new fields in TBS extend the positional array. |
+| **Cross-repo version bump** | M7-WIRE-001, M7-SESSION-001, M7-MANIFEST-002 | Stories that change cello-client packages require version-bump + trustless-cello dependency-update ACs. |
+| **IaC-only resource creation** | M7-CICD-001 | Never create AWS resources manually that CloudFormation should manage. |
+| **connectionGater per session node** | M7-DAEMON-002 | Each session node accepts connections from exactly one peer. The directory-facing node only accepts directory Peer IDs. |
 
 ---
 
@@ -787,21 +834,21 @@ the `AC-version-bump` and `AC-trustless-cello-dependency-update` ACs defined in
 
 | Story | What changes in cello-client | What changes in trustless-cello |
 |-------|------------------------------|-------------------------------|
-| S1 | New `packages/daemon`, `packages/cli` | — |
-| S2 | `packages/adapter-claude-code` rewrite | — |
-| S3 | `packages/daemon` (session node manager) | — |
-| S4 | `packages/protocol-types`, `packages/client` | `packages/directory`, `packages/relay` |
-| S5 | `packages/transport` (AutoNAT) | — |
-| S6 | `packages/client` (interrupted handling) | `packages/relay` (new frame type) |
-| S7 | `packages/transport` (signaling manager) | — |
-| S8 | `packages/daemon`, `packages/client` | — |
-| S9 | `packages/adapter-claude-code` | — |
-| S11 | `packages/crypto`, `packages/protocol-types` | — |
-| S12 | `packages/transport`, `packages/daemon` | `packages/directory` (signs challenge) |
+| M7-DAEMON-001 | New `packages/daemon`, `packages/cli` | — |
+| M7-MCP-001 | `packages/adapter-claude-code` rewrite | — |
+| M7-DAEMON-002 | `packages/daemon` (session node manager) | — |
+| M7-WIRE-001 | `packages/protocol-types`, `packages/client` | `packages/directory`, `packages/relay` |
+| M7-TRANSPORT-001 | `packages/transport` (AutoNAT) | — |
+| M7-SESSION-001 | `packages/client` (interrupted handling) | `packages/relay` (new frame type) |
+| M7-SIGNAL-001 | `packages/transport` (signaling manager) | — |
+| M7-DAEMON-003 | `packages/daemon`, `packages/client` | — |
+| M7-MCP-002 | `packages/adapter-claude-code` | — |
+| M7-MANIFEST-001 | `packages/crypto`, `packages/protocol-types` | — |
+| M7-MANIFEST-002 | `packages/transport`, `packages/daemon` | `packages/directory` (signs challenge) |
 
-**S4, S6, and S12 touch both repos.** Their version-bump ACs must include the
-trustless-cello dependency update and a push triggering the directory/relay
-pipeline.
+**M7-WIRE-001, M7-SESSION-001, and M7-MANIFEST-002 touch both repos.** Their
+version-bump ACs must include the trustless-cello dependency update and a push
+triggering the directory/relay pipeline. Batch all three before pushing.
 
 ---
 

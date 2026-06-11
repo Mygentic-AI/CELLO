@@ -39,19 +39,19 @@ The log entry stays as history. The rule must not live only in the log.
 
 | Story | Assigned to | Status | Notes |
 |-------|-------------|--------|-------|
-| S1 — Daemon foundation | — | not started | |
-| S2 — MCP adapter | — | not started | Blocked on S1 |
-| S3 — Ephemeral session nodes | — | not started | Blocked on S1 |
-| S4 — SessionAssignment wire format | — | not started | Blocked on S3; cross-repo; batch with S6/S12 before pipeline push |
-| S5 — AutoNAT + direct P2P | — | not started | Blocked on S4 |
-| S6 — Interrupted session handling | — | not started | Blocked on S3, S4 |
-| S7 — Signaling stream resilience | — | not started | Blocked on S1 |
-| S8 — Nonce dedup + retry queue | — | not started | Blocked on S3 |
-| S9 — Agent-aware notifications | — | not started | Blocked on S2, S3, S8 |
-| S10 — M7 integration gate (E2E) | — | not started | Written first; implemented last |
-| S11 — Manifest schema + initial manifest | — | not started | Independent; key ceremony is pre-implementation work |
-| S12 — Client verification + handshake step 6 + polling | — | not started | Blocked on S1, S11 |
-| S14 — Cross-repo CI/CD | — | not started | Independent |
+| M7-E2E-001 — Integration gate | — | not started | Written first; revised after all others; implemented last |
+| M7-DAEMON-001 — Daemon foundation | — | not started | |
+| M7-MCP-001 — MCP adapter | — | not started | Blocked on M7-DAEMON-001 |
+| M7-DAEMON-002 — Ephemeral session nodes | — | not started | Blocked on M7-DAEMON-001 |
+| M7-WIRE-001 — SessionAssignment wire format | — | not started | Blocked on M7-DAEMON-002; cross-repo; batch with M7-SESSION-001 + M7-MANIFEST-002 |
+| M7-TRANSPORT-001 — AutoNAT + direct P2P | — | not started | Blocked on M7-WIRE-001 |
+| M7-SESSION-001 — Interrupted session handling | — | not started | Blocked on M7-DAEMON-002 + M7-WIRE-001 |
+| M7-SIGNAL-001 — Signaling stream resilience | — | not started | Blocked on M7-DAEMON-001 |
+| M7-DAEMON-003 — Nonce dedup + retry queue | — | not started | Blocked on M7-DAEMON-002 |
+| M7-MCP-002 — Agent-aware notifications | — | not started | Blocked on M7-MCP-001 + M7-DAEMON-002 + M7-DAEMON-003 |
+| M7-MANIFEST-001 — Manifest schema | — | not started | Independent |
+| M7-MANIFEST-002 — Client verification + polling | — | not started | Blocked on M7-DAEMON-001 + M7-MANIFEST-001 |
+| M7-CICD-001 — Cross-repo CI/CD | — | not started | Independent |
 
 ### Migration Version Registry
 
@@ -66,17 +66,17 @@ claim a version here before writing the migration.
 
 | Package | Story | Notes |
 |---------|-------|-------|
-| `packages/daemon` (new) | S1 | Created by S1; S3, S7, S8 add to it |
-| `packages/cli` (new) | S1 | Created by S1 |
-| `packages/adapter-claude-code` | S2, S9 | Major rewrite in S2; S9 adds notifications |
-| `packages/transport` | S5, S7 | S7 adds signaling manager; S5 adds AutoNAT |
-| `packages/protocol-types` | S4, S11 | Wire format extensions |
-| `packages/client` | S4, S6, S8 | Session assignment + interrupted handling + nonce dedup |
-| `packages/crypto` | S11 | Manifest schema crypto |
-| `packages/relay` | S4, S6 | Wire format + interrupted frame |
-| `packages/directory` | S4, S12 | Wire format + challenge signing |
-| `packages/e2e-tests` | S10 | Integration gate |
-| `infra/` | S14 | CI/CD pipeline changes |
+| `packages/daemon` (new) | M7-DAEMON-001 | Created by DAEMON-001; DAEMON-002, SIGNAL-001, DAEMON-003 add to it |
+| `packages/cli` (new) | M7-DAEMON-001 | Created by DAEMON-001 |
+| `packages/adapter-claude-code` | M7-MCP-001, M7-MCP-002 | Major rewrite in MCP-001; MCP-002 adds notifications |
+| `packages/transport` | M7-TRANSPORT-001, M7-SIGNAL-001 | SIGNAL-001 adds signaling manager; TRANSPORT-001 adds AutoNAT |
+| `packages/protocol-types` | M7-WIRE-001, M7-MANIFEST-001 | Wire format extensions + manifest schema |
+| `packages/client` | M7-WIRE-001, M7-SESSION-001, M7-DAEMON-003 | Session assignment + interrupted handling + nonce dedup |
+| `packages/crypto` | M7-MANIFEST-001 | Manifest schema crypto |
+| `packages/relay` | M7-WIRE-001, M7-SESSION-001 | Wire format + interrupted frame |
+| `packages/directory` | M7-WIRE-001, M7-MANIFEST-002 | Wire format + challenge signing |
+| `packages/e2e-tests` | M7-E2E-001 | Integration gate |
+| `infra/` | M7-CICD-001 | CI/CD pipeline changes |
 
 ### Cross-Repo Pipeline Batching
 
@@ -85,9 +85,9 @@ S4, S6, and S12 all require directory/relay CloudFormation deploys (~25-30 min).
 directory or relay changes, ask: are S4, S6, and S12 all ready to batch?
 
 Current batch status:
-- S4 ready to batch: **no**
-- S6 ready to batch: **no**
-- S12 ready to batch: **no**
+- M7-WIRE-001 ready to batch: **no**
+- M7-SESSION-001 ready to batch: **no**
+- M7-MANIFEST-002 ready to batch: **no**
 
 ### Blocked / Waiting
 
@@ -102,5 +102,6 @@ _(append new entries below this line — newest at bottom)_
 ### 2026-06-11 — COORDINATION.md created
 
 Coordination file and WORKLOG.md created at M7 start. Claims section populated
-from outline.md story table. No stories assigned yet. S10 (integration gate /
-E2E story) will be written first per `/cello-story` rules.
+from outline.md story table. No stories assigned yet. M7-E2E-001 (integration
+gate / E2E story) will be written first per `/cello-story` rules, then revised
+after all component stories are written for cohesion.
