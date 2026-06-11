@@ -1,0 +1,690 @@
+---
+name: CELLO-M7-MCP-001
+type: user-story
+date: 2026-06-11
+topics: [mcp, daemon, ipc, adapter, cello_start_agent, cello_use_agent, per-connection-agent, proxy, m7]
+status: draft
+description: >
+  MCP adapter rewrite for M7. Replaces the direct-CelloClient model in
+  packages/adapter-claude-code with a thin stdio-to-IPC proxy that connects to
+  the running daemon via ~/.cello/daemon.sock. Introduces cello_start_agent,
+  cello_use_agent, cello_stop_agent, and cello_list_agents. Per-connection
+  current agent state ensures multiple Claude sessions operating through the
+  same daemon are fully isolated. All existing MCP tools route through daemon IPC.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-MCP-001
+domain: MCP
+milestone: M7
+actor: AGENT
+priority: P0
+components:
+  - adapter-claude-code
+  - daemon
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO MCP adapter (cello-mcp process),
+  I want to be a thin stdio-to-IPC proxy that routes all tool calls through the
+  running daemon's IPC socket, with per-connection current agent state managed
+  in the daemon,
+  so that multiple Claude sessions can share one daemon simultaneously — each
+  operating with an independent current agent, without conflicting over protocol
+  resources, key material, or session routing.
+
+# ─── Context ────────────────────────────────────────────────
+# Root cause of the rewrite: the existing cello-mcp.ts (~690 lines) directly
+# instantiates FileKeyProvider, creates a libp2p node, opens SQLCipher, and
+# bootstraps FROST. Two Claude sessions = two conflicting cello-mcp processes
+# competing for the same DB write lock, the same lock file, and the same
+# directory signaling stream. This is the multi-session conflict that the daemon
+# model is designed to eliminate.
+#
+# In M7, the adapter becomes a thin process:
+#   1. Connect to ~/.cello/daemon.sock (fail immediately if daemon not running)
+#   2. Establish an IPC connection; daemon assigns a connectionId
+#   3. Open an MCP stdio server
+#   4. Proxy every MCP tool call: translate to IPC JSON-newline frame, await
+#      response, translate back to MCP response
+#   5. On IPC socket close: all subsequent tool calls return ipc_connection_lost
+#
+# What is REMOVED from cello-mcp.ts:
+#   - FileKeyProvider, FrostThresholdSigner, createNode, createClient
+#   - Lock file acquisition and release
+#   - SQLCipherClientStore, ClientStatePersistence, AgentHashQueue, deriveDbKey
+#   - bootstrapNetworkKeyShares, NetworkDirectoryNode
+#   - Background init task (Step 1–5 async startup sequence)
+#   - Graceful SIGTERM ceremony wait (daemon handles this)
+#   - S3CloudStorageProvider, ClientBackup, LocalCloudStorageProvider
+#
+# What is KEPT:
+#   - --version flag (reads package.json)
+#   - TTY detection (print updated instructions that include "run cello login first")
+#   - stderr tee to /tmp/cello-mcp-stderr.log
+#
+# What is ADDED:
+#   - IPC socket connect with daemon_not_running guard
+#   - cello_start_agent, cello_stop_agent, cello_use_agent, cello_list_agents
+#   - Per-connection agent state (held in daemon, not adapter)
+#
+# Three agent states (canonical from CONTEXT.md):
+#   Registered — identity loaded by daemon; not online from this daemon
+#   Online      — live on network from this daemon; can receive sessions
+#   Current     — the one Online agent this MCP connection routes tool calls to
+#
+# IPC framing (from DAEMON-001 implementation_notes):
+#   Requests:  { id, method, params }  (newline-terminated JSON)
+#   Responses: { id, result }          (success)
+#              { id, error: { code, message, guidance } }  (failure)
+# The adapter includes no connectionId in frames — the daemon derives it from
+# the socket handle for each accepted connection.
+#
+# Existing session tools (cello_send, cello_receive, cello_initiate_session,
+# cello_await_session, cello_close_session, cello_list_sessions,
+# cello_get_sealed_receipt, cello_get_inclusion_proof, cello_status,
+# cello_backup, cello_restore, cello_connect_peer, cello_register, and any
+# other tools present in the M6B adapter) are proxied without modification to
+# their input/output contracts. The daemon resolves the current agent from the
+# connectionId and routes accordingly. If no current agent is set, the daemon
+# returns no_current_agent and the adapter surfaces it.
+#
+# DAEMON-001 design decision inherited here: cello login does NOT auto-start
+# agents. After daemon start, agents are in Registered state. The operator must
+# call cello_start_agent explicitly to bring an agent Online. This is the only
+# interpretation consistent with CELLO-M7-E2E-001 AC-002b.
+
+# ─── Sovereign Node Constraint ──────────────────────────────
+# The MCP adapter is client-side only — it does not interact with directory
+# nodes directly. This constraint applies indirectly: cello_start_agent causes
+# the daemon to open a directory-facing connection for the agent, which connects
+# to whichever directory node is reachable from the consortium manifest. No
+# hardcoded directory endpoint appears in the adapter layer.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the cello-mcp binary starts and ~/.cello/daemon.sock exists"
+    action: >
+      The adapter connects to the daemon IPC socket, establishes a connection
+      (daemon assigns a connectionId and logs daemon.ipc.connected with
+      clientType: 'mcp'), opens an MCP stdio server, and begins serving tool
+      calls. The adapter holds no key material and instantiates no CelloClient
+      — it is a pure proxy. The connection has no current agent initially.
+
+  - trigger: "When the cello-mcp binary starts and ~/.cello/daemon.sock does not exist or the daemon is not listening"
+    action: >
+      The adapter writes a structured error to stderr:
+      'cello-mcp: daemon not running — run `cello login` to start it' and exits
+      with code 1. No MCP server is started and no tool calls are accepted.
+
+  - trigger: "When cello_start_agent(name) is called on a connection"
+    action: >
+      The adapter proxies the call to the daemon. The daemon transitions the
+      named agent from Registered to Online state, emits agent.online at INFO
+      with agentName and agentPubkey, and returns { ok: true }. If the agent is
+      already Online, the daemon returns { ok: true } idempotently — no second
+      agent.online event fires. If the agent name is not found, the daemon
+      returns { ok: false, reason: 'agent_not_found', guidance: '...' }.
+
+  - trigger: "When cello_use_agent(name) is called on a connection"
+    action: >
+      The adapter proxies the call to the daemon. The daemon sets the named
+      agent as the current agent for this connection (per-connection — other
+      connections are unaffected), emits agent.current.switched at INFO with
+      connectionId, fromAgent (previous current or null), and toAgent, and
+      returns { ok: true }. If the agent is not Online (still Registered), the
+      daemon returns { ok: false, reason: 'agent_not_online', guidance: '...' }.
+      If the agent name is not found, the daemon returns
+      { ok: false, reason: 'agent_not_found', guidance: '...' }. If the agent
+      is already current for this connection, the daemon returns
+      { ok: false, reason: 'agent_already_current', guidance: '...' }.
+
+  - trigger: "When cello_stop_agent(name) is called on a connection"
+    action: >
+      The adapter proxies the call to the daemon. The daemon transitions the
+      agent from Online to Registered, emits agent.offline at INFO with
+      agentName and reason: 'cello_stop_agent', and returns { ok: true }. If
+      the agent was current for any connection, those connections lose their
+      current agent (the daemon clears the current agent slot for each affected
+      connection, emitting agent.current.switched with toAgent: null).
+
+  - trigger: "When cello_list_agents() is called on a connection"
+    action: >
+      The adapter proxies the call to the daemon. The daemon returns the full
+      agent list with state from this connection's perspective: an agent that
+      is current for THIS connection is reported as state: 'current'; an agent
+      that is online but not current for this connection is reported as
+      state: 'online'; an unstarted agent is state: 'registered'.
+
+  - trigger: "When any session tool (cello_send, cello_receive, cello_initiate_session, cello_await_session, cello_close_session, cello_list_sessions) is called and no current agent is set for this connection"
+    action: >
+      The daemon returns { ok: false, reason: 'no_current_agent', guidance:
+      'No current agent is set for this connection. Call cello_start_agent to
+      bring an agent online, then call cello_use_agent to set it as the current
+      agent for this connection.' } The adapter surfaces this response unchanged.
+
+  - trigger: "While serving tool calls and the IPC socket connection to the daemon drops"
+    action: >
+      The adapter catches the socket error and returns
+      { ok: false, reason: 'ipc_connection_lost', guidance: 'The connection to
+      the CELLO daemon was lost. Restart this MCP server (close and reopen
+      Claude Code) to reconnect. The daemon itself may still be running —
+      run `cello status` in a terminal to check.' } for all subsequent tool
+      calls. The MCP server continues accepting calls and returning this error
+      rather than crashing — callers can detect the condition and advise the
+      user.
+
+  - trigger: "When the daemon sends a response that cannot be parsed as valid JSON-newline"
+    action: >
+      The adapter returns { ok: false, reason: 'ipc_deserialization_error',
+      guidance: 'The daemon sent a malformed response. This may indicate a
+      version mismatch between cello-mcp and the running daemon. Run
+      `cello-mcp --version` and `cello logout && cello login` to restart with
+      a compatible daemon.' }
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A running daemon (opts.daemon: true fixture) and a cello-mcp adapter connecting to its IPC socket"
+    when: "the adapter binary starts and the MCP stdio server is ready"
+    then: >
+      daemon.ipc.connected is logged by the daemon at INFO with
+      clientType: 'mcp' and a unique connectionId. No FileKeyProvider,
+      createNode, CelloClient, FrostThresholdSigner, SQLCipherClientStore,
+      or acquireLockFile call appears in the adapter's startup code path
+      (verified statically by asserting these imports are absent from the
+      new cello-mcp.ts). The IPC socket at ~/.cello/daemon.sock (as returned
+      by the fixture) has an active connection from the adapter process —
+      verified by asserting daemon.ipc.connected fires within 2 seconds of
+      the adapter binary starting.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      Addresses M7 lesson L3 — composition root never wired. The adapter binary
+      is the composition root for the proxy; this AC verifies that the binary
+      actually connects to the daemon rather than instantiating protocol objects
+      internally. Fixture uses opts.daemon: true (added by DAEMON-001 AC-014)
+      and opts.ipcClients: 1 (added by this story's AC-013).
+
+  - id: AC-002
+    given: "A running daemon with agent 'alice' in Registered state (cello login run, cello_start_agent not yet called)"
+    when: "cello_start_agent('alice') is called via MCP"
+    then: >
+      The tool returns { ok: true }. cello_list_agents (called immediately after)
+      returns alice with state: 'online'. agent.online is logged by the daemon
+      at INFO with agentName: 'alice' and a non-empty agentPubkey hex string.
+      Calling cello_start_agent('alice') a second time is idempotent — it returns
+      { ok: true } and does NOT emit a second agent.online event (verified by
+      asserting agent.online fires exactly once between the two calls).
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      agent.online is emitted by packages/daemon (defined in DAEMON-001
+      observability block) and verified here because cello_start_agent (the
+      trigger) lives in this story. The idempotency check catches daemon
+      implementations that emit duplicate events on repeated cello_start_agent.
+
+  - id: AC-003
+    given: "A running daemon with agent 'alice' in Online state (cello_start_agent already called)"
+    when: "cello_use_agent('alice') is called via MCP"
+    then: >
+      The tool returns { ok: true }. cello_list_agents (called immediately after)
+      returns alice with state: 'current'. agent.current.switched is logged by
+      the daemon at INFO with fromAgent: null (no prior current agent), toAgent:
+      'alice', and a non-empty connectionId. The connectionId in the log matches
+      the connectionId logged when this adapter connected (daemon.ipc.connected
+      for this connection).
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      agent.current.switched is emitted by packages/daemon (defined in
+      DAEMON-001 observability block) and verified here because cello_use_agent
+      is the trigger. The connectionId linkage between daemon.ipc.connected and
+      agent.current.switched proves per-connection state is keyed correctly.
+
+  - id: AC-004
+    given: "A running daemon with agent 'alice' in Online state and set as current for the connection"
+    when: "cello_stop_agent('alice') is called via MCP"
+    then: >
+      The tool returns { ok: true }. cello_list_agents (called immediately after)
+      returns alice with state: 'registered'. agent.offline is logged by the
+      daemon at INFO with agentName: 'alice' and reason: 'cello_stop_agent'.
+      A second call to cello_stop_agent('alice') (when already Registered) is
+      idempotent — it returns { ok: true } and does NOT emit a second
+      agent.offline event.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      agent.offline is emitted by packages/daemon (defined in DAEMON-001
+      observability block) and verified here because cello_stop_agent is the
+      trigger. The current agent slot for this connection is cleared when the
+      agent is stopped — verified by asserting cello_list_agents shows alice
+      as 'registered', not 'current', after the call.
+
+  - id: AC-005
+    given: "A running daemon with agents 'alice' (Online, current for connection 1), 'bob' (Online, current for connection 2), and 'charlie' (Registered)"
+    when: "cello_list_agents is called from connection 1 and then from connection 2"
+    then: >
+      Connection 1 response: alice → state: 'current', bob → state: 'online',
+      charlie → state: 'registered'. Connection 2 response: alice → state: 'online',
+      bob → state: 'current', charlie → state: 'registered'. Neither response
+      shows the other connection's 'current' assignment as 'current' — the state
+      is per-connection. Verified by making both calls concurrently via two
+      separate IPC socket connections (opts.ipcClients: 2 fixture), not via
+      in-process method dispatch. Confirmed by asserting daemon.ipc.connected
+      fired twice with distinct connectionId values before the concurrent calls.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      This AC verifies the per-connection state model at the cello_list_agents
+      surface. AC-006 verifies isolation at the session tool surface. Uses the
+      opts.ipcClients: 2 fixture extension added by AC-013.
+
+  - id: AC-006
+    given: "Two adapter connections to the same daemon: connection 1 has alice as current, connection 2 has bob as current"
+    when: "connection 2 calls cello_use_agent('alice') to switch its current agent to alice"
+    then: >
+      Connection 2's cello_list_agents now shows alice as 'current'. Connection 1's
+      cello_list_agents still shows alice as 'current' — the state is independent.
+      agent.current.switched is logged for connection 2 only (fromAgent: 'bob',
+      toAgent: 'alice'). No agent.current.switched event fires for connection 1.
+      Both connections still function: connection 1 can call cello_send (using
+      alice) and connection 2 can call cello_send (using alice) — they are the
+      same agent used from two independent connection contexts.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      Stub-resistance: the two connections must be real separate IPC socket
+      connections, not in-process state shared via a shared object reference.
+      Verified by asserting daemon.ipc.connected fires twice with distinct
+      connectionId values. A test that calls cello_use_agent and then reads
+      per-connection state via an in-process variable would satisfy the assertion
+      but would not prove IPC isolation.
+
+  - id: AC-007
+    given: "A running daemon with agent 'alice' in Registered state — cello_use_agent has NOT been called for this connection (no current agent)"
+    when: "cello_send, cello_receive, cello_initiate_session, cello_await_session, or cello_close_session is called"
+    then: >
+      Each tool returns { ok: false, reason: 'no_current_agent', guidance:
+      'No current agent is set for this connection. Call cello_start_agent to
+      bring an agent online, then call cello_use_agent to set it as the current
+      agent for this connection.' } Not one of the tools proceeds to a protocol
+      operation — the check is at the IPC routing layer in the daemon. Verified
+      by asserting each tool call returns this exact structure and that no
+      protocol log events (session.*, frost.*) fire in the daemon during any
+      of the calls.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      Tests must trigger each tool independently, not together, to verify the
+      guard applies universally. The protocol log event assertion is the
+      transport-path check — if any protocol operation ran, it would produce a
+      session.* or frost.* event, proving the guard was bypassed.
+
+  - id: AC-008
+    given: "No daemon running (no process listening on ~/.cello/daemon.sock)"
+    when: "the cello-mcp binary starts"
+    then: >
+      The adapter writes 'cello-mcp: daemon not running — run `cello login` to
+      start it' to stderr and exits with code 1 within 2 seconds. No MCP stdio
+      server is started, no tools/list response is sent to stdout. The stderr
+      message must contain the exact string 'cello login' so the operator
+      knows the specific command to run.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      Addresses M7 error surface map entry: daemon_not_running. The adapter must
+      fail fast — it must NOT wait for a connection timeout. If ~/.cello/daemon.sock
+      does not exist, the error fires immediately. If the socket exists but no
+      process is listening (ECONNREFUSED), the error fires on connect failure.
+
+  - id: AC-009
+    given: "A running daemon with an established adapter IPC connection serving MCP tool calls"
+    when: "the daemon IPC socket is closed from the daemon side (simulated by stopping the daemon process) and then cello_list_agents is called"
+    then: >
+      cello_list_agents returns { ok: false, reason: 'ipc_connection_lost',
+      guidance: 'The connection to the CELLO daemon was lost. Restart this
+      MCP server (close and reopen Claude Code) to reconnect. The daemon itself
+      may still be running — run `cello status` in a terminal to check.' }.
+      The adapter process does NOT crash. Subsequent calls to any other tool also
+      return the same ipc_connection_lost error — the adapter correctly tracks
+      the dead socket state and does not attempt to re-send on the closed socket.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      Send-path liveness AC. The socket must actually be closed (not mocked) to
+      test this path. The test kills the daemon process and then calls a tool —
+      this is the realistic failure mode when the daemon crashes mid-session.
+      A mock that intercepts the send does not test the liveness path.
+
+  - id: AC-010
+    given: "A running daemon injecting a malformed JSON string in place of a valid IPC response for a single tool call"
+    when: "the tool call that receives the malformed response is processed"
+    then: >
+      The tool returns { ok: false, reason: 'ipc_deserialization_error',
+      guidance: 'The daemon sent a malformed response. This may indicate a
+      version mismatch between cello-mcp and the running daemon. Run
+      `cello-mcp --version` and `cello logout && cello login` to restart with
+      a compatible daemon.' }. The adapter does not crash and subsequent tool
+      calls that receive valid responses succeed normally.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      Covers the ipc_deserialization_error failure mode from the M7 error surface
+      map. The test injects a malformed line (e.g. 'not-json\n') via a test
+      daemon stub that otherwise behaves normally. The adapter must recover after
+      the single bad frame — the IPC connection is not closed on one bad frame.
+
+  - id: AC-011
+    given: "cello_use_agent called with an agent name that is in Registered state (not Online)"
+    when: "the call is processed"
+    then: >
+      Returns { ok: false, reason: 'agent_not_online', guidance: 'Agent
+      <name> exists but is not online. Call cello_start_agent(<name>) first to
+      bring it online, then retry cello_use_agent.' }. This is DISTINCT from
+      { reason: 'agent_not_found' } which fires when the name does not exist
+      in the daemon at all. A test must independently trigger both:
+      (1) cello_use_agent with a Registered agent → agent_not_online,
+      (2) cello_use_agent with an unknown name → agent_not_found,
+      and assert the reason codes differ.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      Directly addresses the M7 error surface map requirement: 'agent_not_online
+      (distinguish from not_found)'. The distinction matters for recovery:
+      agent_not_found means the operator needs to add the agent; agent_not_online
+      means the operator just needs to call cello_start_agent first.
+
+  - id: AC-012
+    given: "cello_use_agent called with the name of the agent that is already current for this connection"
+    when: "the call is processed"
+    then: >
+      Returns { ok: false, reason: 'agent_already_current', guidance:
+      'Agent <name> is already the current agent for this connection. No action
+      needed — you can proceed with session operations.' }. No agent.current.switched
+      event fires. The response is { ok: false } (not { ok: true }) to distinguish
+      from a successful switch, but the guidance makes clear this is not a
+      blocking error.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      From M7 error surface map: 'agent_already_current'. The ok: false signals
+      that no state change happened; the guidance clarifies the operator can
+      proceed. This distinguishes the already-current case from a successful
+      switch (ok: true).
+
+  - id: AC-013
+    given: "All MCP tool failure responses in tools introduced or modified by this story"
+    when: "each failure path is triggered independently (no_current_agent, agent_not_found, agent_not_online, agent_already_current, ipc_connection_lost, ipc_deserialization_error, daemon_not_running)"
+    then: >
+      Every { ok: false } response includes a non-empty 'guidance' field that
+      names the specific next action the calling LLM should take. The guidance
+      must answer: (1) what happened, (2) which specific tool or CLI command
+      to call next, or what state to wait for. A guidance field that says only
+      'an error occurred' or repeats the reason code without instruction is not
+      sufficient. Verified by asserting every failure response shape includes
+      the guidance field and that it contains a tool name or CLI command.
+    test_type: unit
+    component_under_test: adapter-claude-code
+    notes: >
+      Enforces the M7 Rule 2 — every MCP tool failure includes actionable
+      guidance. The test checks the response structure, not the English quality,
+      so it can be automated: assert typeof response.guidance === 'string' &&
+      response.guidance.length > 20 && (response.guidance.includes('cello_') ||
+      response.guidance.includes('cello ')).
+
+  - id: AC-014
+    given: "All error paths in packages/adapter-claude-code/src/ after the rewrite"
+    when: "each distinct failure cause is triggered independently"
+    then: >
+      Each produces a unique reason code distinguishable from all other failure
+      causes: daemon_not_running, ipc_connection_lost, ipc_deserialization_error,
+      no_current_agent, agent_not_found, agent_not_online, agent_already_current.
+      No catch block in packages/adapter-claude-code/src/ returns a hardcoded
+      reason string without logging the actual exception message. No catch block
+      interpolates the error object into a template string (${error} — produces
+      [object Object] for non-Error types). Every catch block uses
+      `error instanceof Error ? error.message : String(error)`.
+      The implementer scans EVERY catch block in packages/adapter-claude-code/src/
+      (not only files changed by this story) and fixes or reports any that
+      swallow exceptions silently or interpolate the error object directly.
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-015
+    given: "packages/e2e-tests/src/session-fixture.ts"
+    when: "createSessionFixture is called with opts.ipcClients: 2 (requires opts.daemon: true)"
+    then: >
+      The fixture opens 2 separate IPC socket connections to the daemon's socket
+      path and returns both connection handles in the fixture result. Each handle
+      can independently call MCP tools that are dispatched to the daemon with
+      distinct connectionId values. All existing tests that do not pass opts.ipcClients
+      continue working unchanged (default: 0 additional IPC clients). A test using
+      opts.ipcClients: 2 can independently set current agents and verify isolation
+      per AC-005 and AC-006. The fixture tears down all IPC connections cleanly
+      after the test.
+    test_type: integration
+    component_under_test: e2e-tests
+    notes: >
+      opts.ipcClients requires opts.daemon: true (which provides the IPC socket
+      path). If opts.daemon is not set and opts.ipcClients > 0, the fixture
+      throws a configuration error at setup time to prevent silent test failures.
+
+  - id: AC-016
+    given: "All adapter-claude-code and daemon code for this story is implemented and tests pass in cello-client"
+    when: "the version bump procedure documented in cello-client CLAUDE.md is followed for packages/adapter-claude-code"
+    then: >
+      packages/adapter-claude-code has its version incremented in package.json
+      to reflect the breaking API change (the binary now requires a running daemon
+      — operators cannot use the old binary with a new adapter without upgrading).
+      @cello-protocol/connect is bumped to a new version in package.json.
+      pnpm install is run and pnpm-lock.yaml is updated.
+      git tag v{connect-version} is pushed to origin.
+      CI publishes the new version to npm beta dist-tag.
+      `npm view @cello-protocol/connect@beta dependencies --json` shows real
+      semver versions (never workspace:*).
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      trustless-cello (directory, relay) has no runtime dependency on
+      packages/adapter-claude-code. No trustless-cello package.json update is
+      required for this story — the adapter is client-side only.
+      The version bump is nonetheless required because operators running the
+      new adapter against an old daemon (or vice versa) will get daemon_not_running
+      or daemon_version_mismatch errors. A clear version boundary lets operators
+      know they need to run `cello logout && cello login` after upgrading.
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      A connection must never route tool calls to an agent that was not
+      explicitly set as current for that connection via cello_use_agent. Cross-
+      connection agent leakage — where connection 2's tool call executes using
+      connection 1's current agent — must be impossible.
+    adversarial_condition: >
+      Connection 1 has agent alice as current and has an active session S1 with
+      a counterparty. Connection 2 has agent bob as current. Connection 2 calls
+      cello_receive — the dequeued message must come from bob's receive queue,
+      not alice's. Verified by asserting: (a) a message is sent to alice's
+      counterparty and placed in alice's session queue, (b) cello_receive on
+      connection 2 returns timeout (not alice's message), (c) cello_receive
+      on connection 1 returns the message. The two connections must be real
+      separate IPC socket connections with distinct connectionId values in the
+      daemon log — not in-process object references.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: SI-002
+    statement: >
+      The adapter binary must never hold, log, or transmit private key material
+      (Ed25519 seeds, FROST key shares, SQLCipher dbKey, backup identity key).
+      The adapter communicates with the daemon over IPC using agent names and
+      session IDs only — the daemon holds all key material and performs all
+      crypto operations.
+    adversarial_condition: >
+      The adapter's cello-mcp.ts source is inspected. No import of FileKeyProvider,
+      FrostThresholdSigner, deriveDbKey, SQLCipherClientStore, or
+      bootstrapNetworkKeyShares must appear. Verified statically: grep
+      packages/adapter-claude-code/src/ for these identifiers and assert none
+      are found in the post-rewrite source.
+    test_type: unit
+    component_under_test: adapter-claude-code
+    notes: >
+      This invariant is architectural: the thin proxy design makes it impossible
+      to leak key material because the adapter never has access to it. The grep
+      check catches regressions where a developer accidentally re-adds a key
+      import.
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the daemon IPC socket is not available at startup (daemon_not_running)"
+    fallback: >
+      The adapter exits with code 1 and a human-readable stderr message naming
+      `cello login` as the recovery command. It does NOT fall back to the M6
+      direct-CelloClient model — that code path is removed entirely. An operator
+      running cello-mcp without first running cello login receives a clear
+      instruction, not a silent hang or an unrelated error.
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: DB-002
+    condition: "While the daemon's directory_signaling is 'reconnecting' (directory temporarily unreachable)"
+    fallback: >
+      Tool calls that require the directory (cello_initiate_session, cello_register)
+      return { ok: false, reason: 'signaling_reconnecting', guidance: 'The daemon
+      is reconnecting to the directory. Check cello status in a terminal. The
+      daemon reconnects automatically — retry this operation once
+      directory_signaling shows connected.' }. Tool calls that do not require
+      the directory (cello_list_agents, cello_list_sessions, cello_receive) succeed
+      normally. This response is proxied from the daemon — the adapter does not
+      independently check signaling state.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      The daemon returns signaling_reconnecting; the adapter passes it through.
+      The test triggers this by calling cello_initiate_session while the daemon's
+      directory signaling is in reconnecting state (simulated by blocking the
+      directory socket in the test fixture).
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: agent.online
+      level: info
+      trigger: "When cello_start_agent brings an agent from Registered to Online state"
+      context_fields: [agentName, agentPubkey]
+      correlationId: false
+    - name: agent.offline
+      level: info
+      trigger: "When cello_stop_agent brings an agent from Online to Registered state"
+      context_fields: [agentName, reason]
+      correlationId: false
+    - name: agent.current.switched
+      level: info
+      trigger: "When cello_use_agent sets a new current agent for an IPC connection"
+      context_fields: [connectionId, fromAgent, toAgent]
+      correlationId: false
+  error_events: []
+  notes: >
+    These three events are emitted by packages/daemon (the emission code is
+    specified and owned by CELLO-M7-DAEMON-001 observability block). They are
+    listed here because their verification ACs are in this story — the trigger
+    (cello_start_agent, cello_stop_agent, cello_use_agent) is an MCP tool that
+    lives in this story.
+    The implementer must verify that packages/daemon emits these events when the
+    corresponding IPC method is dispatched, and must add all three event names to
+    the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+    No new events are introduced by the adapter-claude-code package itself — the
+    adapter is a thin proxy and emits no domain log events of its own.
+    No console.log in adapter or daemon code — all events go through the injected
+    Logger interface.
+  alarms: [] # no alarm: adapter-level events (connect/disconnect) are covered by
+             # daemon.ipc.connection.limit.reached alarm in DAEMON-001. No new
+             # failure modes introduced by this story warrant additional alarms.
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes:
+  - >
+    cello-mcp.ts rewrite: the new binary should be ~100 lines. Startup is:
+    (1) --version flag, (2) TTY detection (update message: add "Run `cello login`
+    to start the daemon first"), (3) connect to ~/.cello/daemon.sock via
+    net.createConnection({ path: socketPath }), (4) if connection fails with
+    ENOENT or ECONNREFUSED → exit 1 with daemon_not_running message, (5) open
+    MCP stdio server, (6) register IPC proxy for every tool. The background init
+    task, lock file, and all crypto wiring are gone.
+  - >
+    IPC framing: each JSON-newline request generates a unique numeric `id`
+    (e.g. incrementing counter). The adapter sends the frame, then awaits a
+    response with a matching `id`. Concurrent in-flight requests are tracked in
+    a Map<id, resolver>. The framing loop splits incoming data on '\n' boundaries
+    and deserializes each complete line as a JSON object. If JSON.parse throws,
+    return ipc_deserialization_error for the pending request (if any) and
+    continue reading subsequent lines.
+  - >
+    Connecting: include the connection identification frame after socket open:
+    { id: 0, method: 'ipc.connect', params: { clientType: 'mcp' } } — this is
+    the frame that triggers daemon.ipc.connected with clientType: 'mcp'. All
+    other tool calls use { method: 'cello_<tool>', params: { ... } }.
+  - >
+    cello status in M7: the daemon's cello status response structure (per
+    DAEMON-001 implementation_notes) is: { daemon, directory_signaling, agents,
+    connections }. The cello_status MCP tool proxies to the daemon and returns
+    this structure. The previous fields (transport_started, own_pubkey,
+    listen_addresses, connected_peer_count, uptime_seconds, directory_reachable)
+    are replaced by the daemon status fields. The own_pubkey of the current agent
+    is the pubkey field in the agents array entry for state: 'current'. If no
+    current agent is set, own_pubkey is absent from the response.
+  - >
+    cello_status returns from this connection's perspective. The agents array
+    has the same per-connection current semantics as cello_list_agents.
+  - >
+    The daemon version mismatch (daemon_version_mismatch in DAEMON-001 error
+    surface map) is detected at IPC connect time if the daemon responds to
+    ipc.connect with an error frame containing reason: 'version_mismatch'. The
+    adapter surfaces this as: 'cello-mcp: daemon version mismatch — run
+    `cello logout && cello login` to restart with a compatible daemon' and exits
+    with code 1. This is a startup guard, not a per-tool error.
+  - >
+    Existing tools (cello_backup, cello_restore): these route to the daemon IPC
+    like all other tools. The daemon's cello_backup handler uses the current
+    agent's backup configuration. If no current agent is set, no_current_agent
+    is returned. The adapter does not hold a ClientBackup instance.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-DAEMON-001   # IPC socket + daemon process + agent registry + agent state events
+  blocks:
+    - CELLO-M7-MCP-002      # agent-aware notifications build on the per-connection model
+    - CELLO-M7-E2E-001      # gate story exercises cello_start_agent + cello_use_agent
+  notes: >
+    DAEMON-001 is the hard dependency — this story cannot be implemented until
+    the daemon IPC socket exists and the agent registry is running. The daemon's
+    agent.online, agent.offline, and agent.current.switched events must be
+    implemented (in packages/daemon) before the ACs in this story can pass.
+    MCP-001 does NOT depend on DAEMON-002 (ephemeral session nodes), SIGNAL-001,
+    DAEMON-003, or any of the cross-repo stories. It can be implemented in
+    parallel with those stories after DAEMON-001 lands.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "MCP Tool Surface"
+  end_to_end_flow: "§2 Bootstrap Discovery, §2 Persistent Authenticated Connection"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-11_1030_daemon-transport-architecture"
+  related_docs:
+    - "[[daemon-transport-architecture]]"
+    - "[[CELLO-M7-DAEMON-001]]"
+    - "[[CELLO-M7-E2E-001]]"
+  notes: >
+    Three agent states (Registered / Online / Current) and IPC framing are
+    specified in CONTEXT.md and DAEMON-001 implementation_notes. The explicit-
+    control model (no auto-start at login) is confirmed by E2E-001 AC-002b and
+    DAEMON-001 design decision. Per-connection Current state model: CONTEXT.md
+    §Three agent states. Sovereign node constraint applies indirectly through
+    the daemon's directory connection (this adapter is client-side only and
+    makes no direct network calls to infrastructure).
