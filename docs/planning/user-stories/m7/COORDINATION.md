@@ -40,7 +40,7 @@ The log entry stays as history. The rule must not live only in the log.
 | Story | Assigned to | Status | Notes |
 |-------|-------------|--------|-------|
 | M7-E2E-001 — Integration gate | — | written — cohesion pass pending | Written 2026-06-11; cohesion pass required after all component stories written |
-| M7-DAEMON-001 — Daemon foundation | — | not started | |
+| M7-DAEMON-001 — Daemon foundation | — | written — review pending | Written 2026-06-11 |
 | M7-MCP-001 — MCP adapter | — | not started | Blocked on M7-DAEMON-001 |
 | M7-DAEMON-002 — Ephemeral session nodes | — | not started | Blocked on M7-DAEMON-001 |
 | M7-WIRE-001 — SessionAssignment wire format | — | not started | Blocked on M7-DAEMON-002; cross-repo; batch with M7-SESSION-001 + M7-MANIFEST-002 |
@@ -105,3 +105,10 @@ Coordination file and WORKLOG.md created at M7 start. Claims section populated
 from outline.md story table. No stories assigned yet. M7-E2E-001 (integration
 gate / E2E story) will be written first per `/cello-story` rules, then revised
 after all component stories are written for cohesion.
+
+### 2026-06-11 — M7-DAEMON-001 written
+
+CELLO-M7-DAEMON-001 YAML written. Resolves the E2E-001 AC-002b design question:
+cello login does NOT auto-start agents. Registered state is observable after
+login; Online requires explicit cello_start_agent (MCP-001 scope). Story marked
+written — review pending. Sprint reviewer dispatched.
