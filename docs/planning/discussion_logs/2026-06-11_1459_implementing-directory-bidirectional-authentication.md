@@ -1,23 +1,25 @@
 ---
-name: directory-node-auth-and-tuf-bootstrap-design
+name: implementing-directory-bidirectional-authentication
 type: discussion
 date: 2026-06-11
 topics: [security, directory, authentication, bootstrap, manifest, tuf, key-management, certificate-pinning, bidirectional-auth, consortium-keys]
 status: closed
 description: >
-  Audit of directory bidirectional authentication — confirmed NOT implemented.
-  Design specifies 7-step mutual challenge-response (end-to-end-flow.md §3.1,
-  server-infrastructure.md §Authentication); only client→directory (steps 1-4)
-  exists; directory→client (steps 5-6) is missing entirely. External research
-  via Perplexity identified TUF (The Update Framework) as the canonical standard
-  for the signed manifest + root key model. Four concrete gaps resolved: root
-  key rotation mechanism, manifest replay prevention, revocation latency SLA,
-  and jurisdiction requirement for key holders.
+  How to correctly implement directory bidirectional authentication. The design
+  has always specified a 7-step mutual challenge-response (end-to-end-flow.md
+  §3.1); this log audits the current code, identifies TUF (The Update Framework)
+  as the canonical standard for the signed manifest and root key model, and
+  resolves four open design questions: root key rotation, manifest replay
+  prevention, revocation latency SLA, and jurisdiction of key holders.
 ---
 
-## 1. Is Directory Bidirectional Authentication Implemented?
+# Implementing Directory Bidirectional Authentication
 
-**Definitive answer: No.**
+The design has always specified mutual authentication between client and directory node. This log audits what is currently in place, identifies the correct implementation approach using TUF as the canonical reference, and resolves the open design questions needed before stories can be written.
+
+## 1. Current State
+
+Steps 1–4 (client→directory) are implemented. Steps 5–6 (directory→client) are not.
 
 The design specifies a 7-step mutual challenge-response in two canonical documents:
 
