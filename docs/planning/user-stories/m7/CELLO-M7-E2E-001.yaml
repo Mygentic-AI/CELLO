@@ -213,6 +213,15 @@ acceptance_criteria:
       full three-state model (registered / online / current) defined in CONTEXT.md
       is observable via cello_list_agents. A daemon that initializes all agents as
       'online' at startup without distinguishing 'registered' would fail this AC.
+      DESIGN QUESTION FOR DAEMON-001: does `cello login` automatically bring all
+      registered agents online, or does the operator call cello_start_agent
+      explicitly? The behavior section of this story says login "brings agents
+      online", which would make the precondition "before cello_start_agent has been
+      called" impossible to satisfy after login. DAEMON-001 must resolve this: if
+      login auto-starts all agents, the three-state AC may need to be structured
+      differently (e.g. a freshly registered agent that has never logged in, or an
+      agent that was explicitly set offline). Reconcile and update this AC during
+      the cohesion pass.
 
   - id: AC-003
     given: "Agent Alice (connection 1) initiates a session with agent Bob (connection 2),
@@ -228,17 +237,23 @@ acceptance_criteria:
       sessionPeerId and a correlationId that matches between the two events.
       AND session.assignment.received is logged on both sides with the same
       sessionId and transportMode (direct or relay).
-      AND the standing receiver node's session.node.created event (logged at daemon
-      startup) precedes the session offer by a nonzero duration — the standing
-      receiver was created at startup, not on demand when the offer arrived.
+      AND the standing receiver exists and is already listening before the session
+      offer arrives — verified structurally: call `cello status` BEFORE calling
+      cello_initiate_session and assert standing_receiver_ready: true in the
+      response. This proves the standing receiver was created at startup, not on
+      demand. A daemon that creates the standing receiver lazily would return
+      standing_receiver_ready: false (or absent) at this point. Do not assert
+      this via log timestamps — clock skew and buffered writes make timestamp
+      ordering unreliable in test environments.
     test_type: e2e
     component_under_test: daemon
     notes: >
       Requires CELLO_E2E_LIVE. Transport path evidence is required — the Peer ID
       comparison proves ephemeral session nodes are created, not that the protocol
       happened to return the right values. Session nodes that share the directory
-      node Peer ID indicate the daemon is not creating separate nodes. The standing
-      receiver timestamp check proves setup latency is eliminated from the inbound path.
+      node Peer ID indicate the daemon is not creating separate nodes.
+      The standing_receiver_ready field in cello status is specified by DAEMON-002;
+      cohesion pass should confirm the field name matches what DAEMON-002 defines.
 
   - id: AC-004
     given: "An active session between Alice and Bob via ephemeral session nodes"
@@ -575,7 +590,7 @@ dependencies:
 # ─── References ─────────────────────────────────────────────
 references:
   protocol_map: "Multi-Party Conversations, Node Operations, Authentication"
-  end_to_end_flow: "§3.1 (authentication handshake steps 1-7), §5.7 (session establishment), §6.1 (message delivery dual-path)"
+  end_to_end_flow: "§3.1 Authentication — Challenge-Response, §5.7 Session Establishment, §6.1 Hash Relay Mechanics — Dual-Path Architecture"
   milestone: M7
   discussion_logs:
     - "2026-06-11_1030_daemon-transport-architecture"
