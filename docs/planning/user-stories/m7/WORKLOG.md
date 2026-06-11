@@ -41,6 +41,45 @@ or the milestone writeup. Note the promotion inline so the history is traceable:
 
 ---
 
+### 2026-06-11 — M7-E2E-001 written and reviewed
+
+**Story:** M7-E2E-001
+**Agent/Author:** orchestrator
+
+CELLO-M7-E2E-001.yaml written by a sprint-coder agent, then reviewed inline.
+Five issues found and fixed in the same session (commit 2d84d56):
+
+1. **Blocking — old story IDs in dependencies.** `blocked_by` listed
+   `CELLO-M7-S1` through `CELLO-M7-S12` (the pre-rename IDs). Replaced with
+   correct domain IDs (CELLO-M7-DAEMON-001, etc.) throughout the file.
+
+2. **Blocking — undeclared event name in SI-002.** `session.node.gater.rejected`
+   appeared in the adversarial condition but is not in the DAEMON-002
+   observability taxonomy. Replaced with "warn-level event — name to be
+   defined by DAEMON-002 implementer and added to taxonomy."
+
+3. **Medium — close gate criterion 6 had no E2E AC.** AC-009 item 6 said
+   "verified via S8 story gate" — deferred entirely to DAEMON-003. Added
+   AC-006b: kill daemon mid-session with pending retries in queue, restart,
+   verify queue drains in order with no duplicates via SQLCipher persistence.
+
+4. **Minor — test setup detail in then clause.** AC-006 had `tc qdisc` in
+   the `then` clause. Moved to `implementation_notes`.
+
+5. **Minor — no implementation_notes section.** Added notes covering: how to
+   kill the signaling stream for AC-006 (iptables black-hole, not clean
+   disconnect — forces heartbeat timeout, the harder failure mode), how to
+   build the rogue directory node for AC-008 (must complete handshake steps
+   1-5 then fail at 6 — a node that refuses at step 1 does not test step 6),
+   and how to trigger the retry queue for AC-006b.
+
+**Cohesion pass reminder:** this story was written before component stories.
+After all component stories are written, re-read CELLO-M7-E2E-001.yaml and
+align ACs with what the component stories actually specify (event names,
+field names, observable IDs). Update COORDINATION.md status when done.
+
+---
+
 ### 2026-06-11 — WORKLOG.md created
 
 **Story:** general

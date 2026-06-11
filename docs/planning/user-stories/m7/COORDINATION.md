@@ -39,7 +39,7 @@ The log entry stays as history. The rule must not live only in the log.
 
 | Story | Assigned to | Status | Notes |
 |-------|-------------|--------|-------|
-| M7-E2E-001 — Integration gate | — | not started | Written first; revised after all others; implemented last |
+| M7-E2E-001 — Integration gate | — | written — cohesion pass pending | Written 2026-06-11; cohesion pass required after all component stories written |
 | M7-DAEMON-001 — Daemon foundation | — | not started | |
 | M7-MCP-001 — MCP adapter | — | not started | Blocked on M7-DAEMON-001 |
 | M7-DAEMON-002 — Ephemeral session nodes | — | not started | Blocked on M7-DAEMON-001 |
