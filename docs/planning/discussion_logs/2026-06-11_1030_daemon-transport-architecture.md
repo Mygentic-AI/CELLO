@@ -451,33 +451,114 @@ valid.
 
 ---
 
-## 10. Open Design Questions
+## 10. Design Decisions
 
-1. **Session establishment round-trips.** Can the "Bob creates node, reports
-   Peer ID; Alice creates node, reports Peer ID" exchange be collapsed? Or is
-   the extra round-trip acceptable for the security guarantee?
+### 1. Session establishment round-trips
 
-2. **NAT traversal for session nodes.** A session node behind NAT cannot be
-   dialed directly. It must either use the relay as a circuit, or hole-punch
-   via dcutr. dcutr requires a coordination point. How does a freshly-created
-   session node that is behind NAT become reachable by its counterparty?
+Alice creates her ephemeral receiver node speculatively at `request_connection`
+time — she already knows she wants a relationship with Bob. Her session node
+Peer ID travels with the connection request to the directory. Bob creates his
+session node when he accepts and reports his Peer ID in the acceptance. The
+directory now has both Peer IDs and can sign and deliver both SessionAssignments
+simultaneously. One extra round-trip over today, not two.
 
-3. **Interrupted session handling.** When the daemon restarts and active
-   sessions die, what is the protocol for the counterparty to learn this?
-   Do they detect the dead session node via Yamux keepalive failure? How long
-   should they wait before giving up? Should the directory be notified?
+**Standing receiver node:** An even better approach is to keep one receiver
+node always running, ready to accept an incoming session. When a connection is
+accepted, that standing node is handed to the session. A new standing node is
+immediately spun up to replace it. This eliminates all setup latency from the
+inbound path — the address is already known, already registered with the relay
+if needed, already AutoNAT-verified. The directory can hand it to counterparties
+immediately without waiting for node creation.
 
-4. **IPC mechanism.** How do multiple Claude sessions connect to the running
-   daemon? Unix domain socket? stdio proxy? Named pipe? This has platform
-   implications (macOS, Linux, Windows).
+### 2. NAT traversal for session nodes
 
-5. **Daemon lifecycle on desktop.** Does it start at login? On first MCP
-   connection? Does it shut down after idle timeout? Or run indefinitely?
+AutoNAT peers co-located in the same AWS regions as the directory and relay
+act as the dialability oracle. On node creation (or for the standing receiver
+node at startup), the daemon queries these peers: "can you reach me?" If yes,
+direct multiaddr goes into the SessionAssignment. If no, the node dials the
+relay and obtains a circuit relay reservation — the circuit address goes into
+the assignment instead. If dcutr hole-punching succeeds after the session
+starts, the connection upgrades to direct automatically.
 
-6. **Connection validation on restart.** The `unverified` → validate-with-
-   directory flow needs protocol support. Does the directory offer a
-   "is this connection still valid?" query? Or does the client just attempt
-   `initiate_session` and handle the failure?
+AutoNAT belongs in new M7 because standing receiver nodes need dialability
+self-knowledge from the moment they are created, not after the first session
+attempt fails.
+
+The AutoNAT peers are operated by CELLO infrastructure alongside the directory
+and relay. Their only function is dialability checks — they learn nothing about
+session content or counterparty identities.
+
+### 3. Interrupted session handling
+
+The relay notifies the remaining participant via an explicit `session_interrupted`
+frame when a client disconnects mid-session. This is faster and more reliable
+than waiting for Yamux keepalive timeout (~30 seconds of silence).
+
+On `cello login`, sessions found in the DB with no live state are surfaced
+immediately with `interrupted` status. The operator sees them and decides:
+seal whatever was exchanged, or discard. The protocol should support a
+"seal interrupted session" flow where both parties agree on close terms at
+next contact. Step-by-step flow is required as a pre-implementation artifact
+before the story is written.
+
+### 4. IPC mechanism
+
+Unix domain socket on macOS/Linux, named pipe on Windows. The daemon listens
+on a socket at `~/.cello/daemon.sock`. Each MCP connection (from Claude Code
+or any other client) goes through a thin stdio-to-socket proxy process that
+forwards MCP messages to the running daemon. From Claude's perspective it is
+a normal stdio MCP server.
+
+The platform difference (Unix socket vs. named pipe) is a small branch in the
+proxy — approximately 50 lines — not a separate client. The daemon itself and
+the MCP interface are identical across platforms. Node.js `net` largely
+abstracts this already.
+
+### 5. CLI-first architecture — `cello` as the universal interface
+
+The daemon is a first-class CLI application, not an MCP server with a daemon
+attached. The mental model is `gcloud` or `aws`:
+
+- `cello register` — create a new agent identity, complete FROST ceremony
+- `cello login` — authenticate, start the daemon, connect to the directory
+- `cello logout` — stop the daemon gracefully
+- `cello status` — current state of connections, sessions, agents
+- `cello send`, `cello receive`, `cello list-sessions` — full protocol surface
+  available as CLI commands
+
+**MCP is one adapter on top of the running daemon**, not the primary interface.
+Claude Code uses it via MCP. Any other AI agent — Codex, OpenClaw, Hermes, or
+any future system — can use it via CLI without MCP at all. CLIs are platform
+and AI-framework agnostic.
+
+This also addresses the "MCP is inferior for some use cases" concern directly.
+Long-running autonomous agents, scripted workflows, and power users can use
+the CLI. Token-efficient direct invocation. Authentication is handled once at
+`cello login` and is independent of the MCP transport layer.
+
+The daemon lifecycle is explicit and operator-controlled: `cello login` starts
+it, `cello logout` stops it. No silent background process, no idle timeout,
+no surprise termination. Operators understand the model because it matches
+every other professional CLI they use.
+
+### 6. Connection validation on `cello login`
+
+`cello login` is the natural validation boundary. The operator is present,
+authenticated, and online. At login the daemon connects to the directory and
+immediately runs a batch query: check all stored counterparty pubkeys against
+current directory registrations.
+
+Results are available instantly via `cello status`:
+- **verified** — counterparty still registered with the same pubkey
+- **stale** — counterparty re-registered with a new pubkey (connection record
+  is invalid; operator must re-request the connection)
+- **gone** — counterparty deregistered
+- **unverified** — directory was unreachable during login (daemon will retry)
+
+This surfaces the state of the operator's world at the moment they log in,
+not silently in the background. Interrupted sessions from the previous run
+are also surfaced at this moment (see Q3). The operator acts with full
+information before doing anything.
 
 ---
 
@@ -491,9 +572,12 @@ valid.
   known directory Peer IDs)
 - **Directory bidirectional auth** — unrelated to this architecture; still
   needs its own audit
-- **AutoNAT** — relevant to session node NAT traversal (question 2 above);
-  placement in new M7 depends on whether session nodes need self-knowledge
-  of dialability
+- **AutoNAT** — belongs in new M7; standing receiver nodes need dialability
+  self-knowledge from creation time; AutoNAT peers co-located with directory
+  and relay infrastructure in each AWS region
+- **CLI-first client** — new M7 must be designed around the `cello` CLI as
+  the primary interface; MCP is an adapter; this affects the cello-client
+  repo structure significantly (new `packages/cli`, daemon IPC layer)
 
 ---
 
