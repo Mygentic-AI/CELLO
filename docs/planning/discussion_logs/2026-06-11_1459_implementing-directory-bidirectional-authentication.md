@@ -117,7 +117,7 @@ TUF is a security framework that protects software update delivery against compr
 | Periodic manifest polling | Not specified | Not implemented |
 | Client rejects expired manifest | Not specified | Not implemented |
 
-The CELLO design invented a subset of TUF independently. The correct move is to explicitly adopt TUF's model rather than continue reinventing it without its security properties.
+The CELLO design invented a subset of TUF independently — this is the second time CELLO has arrived at TUF's architecture from first principles (the first was the bootstrap/manifest model). That's a strong signal the threat model is being reasoned about correctly. The correct move now is to explicitly adopt TUF rather than continue reinventing it without its operational completeness properties.
 
 ---
 
