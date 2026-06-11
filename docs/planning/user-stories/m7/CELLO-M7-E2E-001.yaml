@@ -1,0 +1,457 @@
+---
+name: CELLO-M7-E2E-001
+type: user-story
+date: 2026-06-11
+topics: [daemon, ephemeral-session-nodes, ipc, direct-p2p, bidirectional-auth, manifest, signaling-resilience, interrupted-session, multi-agent, e2e, m7]
+status: draft
+description: >
+  M7 milestone close gate. Two Claude Code sessions connect to a single daemon via
+  IPC, bring two agents online with ephemeral session nodes, exchange messages
+  end-to-end, exercise signaling resilience and interrupted session handling, and
+  verify directory bidirectional authentication against the consortium manifest.
+  All nine milestone close gate criteria must pass.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-E2E-001
+domain: E2E
+milestone: M7
+actor: OPS
+priority: P0
+components:
+  - daemon
+  - cli
+  - adapter-claude-code
+  - client
+  - transport
+  - directory
+  - relay
+  - crypto
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the M7 milestone close gate,
+  I want two Claude Code sessions to connect to a single running daemon,
+  bring two agents online with ephemeral per-session libp2p nodes, exchange
+  messages end-to-end, survive signaling stream loss, handle an interrupted
+  session, and verify directory identity against a consortium manifest —
+  so that M7 is provably done: the daemon model, ephemeral session transport,
+  and directory bidirectional authentication are all exercised in combination
+  with real processes on real network paths.
+
+# ─── Context ────────────────────────────────────────────────
+# Why this story exists:
+#
+# M6 showed that green unit and integration tests do not prove the protocol
+# works. PERSIST-024 delivered a complete persistence layer — tests passed,
+# composition root never wired it, discovered only in the live smoke test.
+# M6B-001 introduced graceful shutdown — SIGTERM handler was correct in unit
+# tests but caused a 100% session failure rate in production because ceremonies
+# outlasted the process. The lesson: the integration gate is the only test that
+# matters for protocol correctness.
+#
+# M7 introduces four new failure surfaces that did not exist before:
+#   1. IPC transport — the MCP adapter is now a proxy; Unix socket errors,
+#      framing bugs, and per-connection agent state all live here.
+#   2. Ephemeral session nodes — each session creates and tears down a libp2p
+#      node. Lifecycle ordering bugs (teardown before seal, port exhaustion,
+#      connectionGater misconfiguration) are invisible until two real sessions run.
+#   3. Signaling stream resilience — M6B demonstrated that a dead signaling
+#      stream causes silent protocol failure. M7 S7 implements reconnect logic;
+#      this gate must exercise the reconnect path, not just the happy path.
+#   4. Directory bidirectional auth — steps 5-6 of the handshake have never
+#      been implemented. After M7, a client connecting to a rogue directory
+#      node must reject it. This gate verifies the rejection.
+#
+# This story is the finish line. All S1–S9 and S12 stories are prerequisites.
+# M7 does not close until every AC in this story passes against a live daemon,
+# live directory nodes, and a real network path.
+
+# ─── Sovereign Node Constraint ──────────────────────────────
+# Directory nodes are sovereign and independent. This gate must be run against
+# the real multi-node directory cluster (not a single local test instance) to
+# prove that:
+#   - The consortium manifest lists multiple nodes across independent regions
+#     and cloud providers — no single point of failure in the manifest chain
+#   - Bidirectional auth (AC-008) verifies against a manifest signed by ≥2
+#     consortium root keys — not a test manifest with a single key
+#   - Session establishment completes when the signaling connection routes to
+#     a different directory node than the one that processed registration —
+#     because directory state is replicated, not centralized
+# Any gate run that uses a single local directory node satisfies functional
+# correctness only. Sovereign node compliance requires the full cluster.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When `cello login` is run with valid credentials"
+    action: "the daemon starts (or connects to an existing instance), connects
+      to the directory cluster, loads all registered agent identities, validates
+      persisted connection records against the live directory, surfaces any
+      interrupted sessions from the prior run, and exits with status 0; `cello
+      status` reports at least one agent online and directory_signaling: connected"
+
+  - trigger: "When a second Claude Code session connects to the running daemon via IPC"
+    action: "the daemon accepts the connection, assigns it an independent
+      current-agent slot, and reports the correct agent state per connection —
+      the second session's current agent is independent of the first session's
+      current agent; switching current in one connection does not affect the other"
+
+  - trigger: "When agent A calls cello_initiate_session targeting agent B's pubkey"
+    action: "the daemon creates an ephemeral session node for this session
+      (fresh transport key, fresh Peer ID), reports the session Peer ID to the
+      directory, receives a FROST-signed SessionAssignment carrying both agents'
+      session Peer IDs and multiaddrs, and establishes a transport path (direct
+      P2P if AutoNAT reports dialable, relay fallback otherwise); the session
+      node's Peer ID is provably different from the directory-facing node's Peer ID"
+
+  - trigger: "When the signaling stream to the directory drops while a session is active"
+    action: "the daemon detects the drop via heartbeat timeout, transitions
+      directory_signaling to 'reconnecting', retries with exponential backoff,
+      reconnects to an available directory node, transitions to 'connected', and
+      drains any outbound operations queued during the reconnect window; the active
+      session's message exchange continues without interruption after reconnect"
+
+  - trigger: "When the daemon stops while a session is active"
+    action: "the session is marked 'interrupted' in the local SQLCipher DB; on
+      next `cello login`, the interrupted session is surfaced before any other
+      operations; the operator sees the session ID, counterparty pubkey, and
+      message count at interruption"
+
+  - trigger: "When a client attempts to connect to a directory node whose key is
+      not in the consortium manifest"
+    action: "the handshake step 6 verification fails; the client rejects the
+      connection with directory_challenge_failed; no session is established via
+      that node; the daemon falls back to another node from the manifest"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+# All ACs are manual or CELLO_E2E_LIVE — this story has no automated Vitest
+# tests of its own. It exercises observability events defined in S1–S9, S12.
+
+acceptance_criteria:
+  - id: AC-001
+    given: "A machine with cello installed (no prior daemon running) and at least
+      one registered agent identity in ~/.cello/agents/<name>/"
+    when: "`cello login` is run"
+    then: >
+      The daemon starts within 5 seconds. `cello status` returns:
+        - daemon: running
+        - directory_signaling: connected
+        - agents: at least one entry with state 'online'
+        - connections: list with at least one entry (verified or unverified)
+      AND daemon.started is logged at INFO with pid, ipcSocketPath, agentCount.
+      AND daemon.login.validation.complete is logged at INFO with verifiedCount,
+      staleCount, goneCount (all integers; none undefined).
+      AND if any session was interrupted in the prior run,
+      cello status --interrupted shows those sessions before returning.
+    test_type: e2e
+    component_under_test: daemon
+    notes: >
+      Requires CELLO_E2E_LIVE. Wrap in describe.skipIf(!process.env.CELLO_E2E_LIVE).
+      Run against the staging directory cluster (not a local test instance) to
+      satisfy the sovereign node constraint.
+
+  - id: AC-002
+    given: "A daemon running with agent Alice online (current in connection 1)"
+    when: "a second Claude Code session (connection 2) connects to the same daemon
+      via IPC and calls cello_use_agent('bob')"
+    then: >
+      Connection 2's current agent is 'bob'. Connection 1's current agent remains
+      'alice'. Verified by calling cello_list_agents from each connection
+      simultaneously — connection 1 sees alice as current, connection 2 sees bob
+      as current. AND agent.current.switched is logged with connectionId, fromAgent,
+      toAgent for connection 2's switch — connection 1 produces no such event.
+    test_type: e2e
+    component_under_test: daemon
+    notes: >
+      Requires CELLO_E2E_LIVE. This AC proves per-connection agent state isolation —
+      the core correctness property of the multi-session daemon model. A test that
+      only checks one connection cannot satisfy this AC.
+
+  - id: AC-003
+    given: "Agent Alice (connection 1) initiates a session with agent Bob (connection 2),
+      both running in the same daemon"
+    when: "cello_initiate_session is called from connection 1"
+    then: >
+      A session is established. The session node Peer IDs for Alice and Bob are
+      reported in the SessionAssignment and are distinct from:
+        (a) the daemon's directory-facing node Peer ID (reported by `cello status`)
+        (b) each other
+      Verified by asserting all three Peer IDs are different hex strings.
+      AND session.node.created is logged twice (once per agent) each with a unique
+      sessionPeerId and a correlationId that matches between the two events.
+      AND session.assignment.received is logged on both sides with the same
+      sessionId and transportMode (direct or relay).
+    test_type: e2e
+    component_under_test: daemon
+    notes: >
+      Requires CELLO_E2E_LIVE. Transport path evidence is required — the Peer ID
+      comparison proves ephemeral session nodes are created, not that the protocol
+      happened to return the right values. Session nodes that share the directory
+      node Peer ID indicate the daemon is not creating separate nodes.
+
+  - id: AC-004
+    given: "An active session between Alice and Bob via ephemeral session nodes"
+    when: "Alice sends a message via cello_send and Bob calls cello_receive"
+    then: >
+      The message is delivered. The end-to-end path is verified by the relay log
+      showing a hash_submit from Alice's session Peer ID (not her directory-facing
+      Peer ID) and a leaf_deliver to Bob's session Peer ID (not his directory-facing
+      Peer ID). Both Peer IDs match those reported in AC-003's SessionAssignment.
+      Content is never present in relay logs — only structure 1 hashes.
+    test_type: e2e
+    component_under_test: client
+    notes: >
+      Requires CELLO_E2E_LIVE. The relay log check is the transport-path evidence
+      that ephemeral session Peer IDs are used for content exchange, not the
+      directory-facing node. A test that only checks cello_receive returns content
+      cannot distinguish correct from incorrect Peer ID usage.
+
+  - id: AC-005
+    given: "An active session with network conditions that allow direct P2P
+      (both agents dialable — AutoNAT returns dialable for both)"
+    when: "the session is established"
+    then: >
+      session.transport.mode.selected is logged with mode: 'direct'. Content
+      frames flow without the relay in the path — verified by the relay showing
+      no hash_submit events for this session's session IDs during the message
+      exchange phase (after SessionAssignment is delivered). AND transport.autonat.result
+      is logged for the standing receiver node with dialable: true and a non-empty
+      publicAddr.
+    test_type: e2e
+    component_under_test: transport
+    notes: >
+      Requires CELLO_E2E_LIVE. If AutoNAT returns not-dialable for the test
+      environment (symmetric NAT, CI), skip this AC and proceed to AC-005b.
+      Do not skip silently — log the AutoNAT result and mark the AC as
+      environment-dependent.
+
+  - id: AC-005b
+    given: "Network conditions that require relay (AutoNAT returns not-dialable,
+      or direct dial fails)"
+    when: "the session is established"
+    then: >
+      session.transport.mode.selected is logged with mode: 'relay'. Content
+      frames flow through the relay. AND session.transport.dcutr.upgraded may
+      fire subsequently if hole-punching succeeds — this is non-fatal and must
+      not cause an error or disconnect.
+    test_type: e2e
+    component_under_test: transport
+    notes: >
+      Requires CELLO_E2E_LIVE. At least one of AC-005 or AC-005b must pass
+      in every run. Both may pass if the environment changes between runs.
+
+  - id: AC-006
+    given: "An active session between Alice and Bob with the signaling stream live"
+    when: "the signaling stream is killed (TCP reset on the directory-facing
+      node's connection, simulated via tc qdisc or by restarting the directory
+      node the daemon is connected to)"
+    then: >
+      Within 30 seconds, directory.signaling.disconnected is logged at WARN.
+      directory.signaling.reconnecting is logged at INFO with attempt: 1 and
+      a backoffMs value.
+      Within 120 seconds, directory.signaling.connected is logged (reconnect
+      succeeded).
+      Any cello_send calls issued during the reconnect window return
+      { ok: false, reason: 'signaling_reconnecting', guidance: '...' } — they
+      are NOT silently dropped and do NOT hang indefinitely.
+      After reconnect, a cello_send call succeeds and the message is delivered
+      to Bob — proving outbound queue drains after signaling restored.
+    test_type: e2e
+    component_under_test: daemon
+    notes: >
+      Requires CELLO_E2E_LIVE. Killing the TCP connection (not just the process)
+      is required — a graceful disconnect is not sufficient to test the reconnect
+      path. The 30-second detection window comes from the S7 heartbeat interval.
+
+  - id: AC-007
+    given: "An active session between Alice and Bob with 3 messages sent but not sealed"
+    when: "the daemon is killed (SIGKILL — not graceful) while the session is active"
+    then: >
+      After restart (cello login), the session appears in `cello status --interrupted`
+      with:
+        - sessionId matching the pre-kill session
+        - counterpartyPubkey (hex) of the other agent
+        - messageCount: 3 (messages sent before kill)
+        - status: interrupted
+      The DB shows status = 'interrupted' for this session row.
+      The operator can proceed to either seal or discard the interrupted session.
+    test_type: e2e
+    component_under_test: daemon
+    notes: >
+      Requires CELLO_E2E_LIVE. SIGKILL is required — graceful shutdown marks the
+      session differently. The point of this AC is that an unclean stop produces
+      the correct interrupted state, not that it handles a clean stop gracefully.
+
+  - id: AC-008
+    given: "A daemon configured with the consortium manifest (N root key constants
+      embedded in the binary, manifest fetched from the directory cluster)"
+    when: "the daemon connects to a rogue directory node — a local process that
+      speaks the /cello/signaling/1.0.0 protocol but whose Ed25519 key is NOT
+      listed in the consortium manifest"
+    then: >
+      Handshake step 6 fails. directory.auth.challenge.failed is logged at ERROR
+      with directoryNodeId and reason: 'key_not_in_manifest'. The daemon rejects
+      the connection and does NOT transition to directory_signaling: connected for
+      this node. If other manifest-listed nodes are reachable, the daemon falls
+      back to one of them and eventually achieves directory_signaling: connected.
+    test_type: e2e
+    component_under_test: transport
+    notes: >
+      Requires CELLO_E2E_LIVE. The rogue node must be a real process that
+      completes steps 1-5 of the handshake (so the rejection happens in step 6,
+      not before). A test that only checks the client refuses to connect at TCP
+      level does not verify handshake step 6 specifically. Run this as
+      describe.skipIf(!process.env.CELLO_E2E_LIVE).
+
+  - id: AC-009
+    given: "AC-001 through AC-008 all pass"
+    when: "the milestone close gate is satisfied"
+    then: >
+      All 9 conditions from outline.md §Milestone Close Gate are met:
+        1. cello login starts the daemon; cello status shows directory connected
+        2. Two Claude Code sessions with independent current-agent state (AC-002)
+        3. Two agents exchange messages via ephemeral session nodes with distinct Peer IDs (AC-003, AC-004)
+        4. Direct P2P or relay fallback verified (AC-005/AC-005b)
+        5. Interrupted session surfaced at next login (AC-007)
+        6. Retry queue and nonce dedup survive daemon restart (verified via S8 story gate; cited here as dependency)
+        7. Signaling stream kill → reconnect → drain (AC-006)
+        8. Directory bidirectional auth — rogue node rejected (AC-008)
+        9. cello_list_agents shows correct state at every step (verified by agent.online, agent.current.switched events across all ACs)
+      The milestone writeup (docs/planning/milestone-writeups/M7-daemon-transport.md)
+      is updated with a dated confirmation that all 9 conditions passed.
+    test_type: manual
+    component_under_test: e2e-tests
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      A session node Peer ID must never be reused across sessions. After a session
+      is sealed and the session node is torn down, the Peer ID that counterparty
+      recorded must lead nowhere — any dial attempt to that Peer ID must fail.
+    adversarial_condition: >
+      After Alice seals session S1 with Bob, Bob retains Alice's session node
+      multiaddr from the S1 SessionAssignment. Bob's process then attempts to
+      dial that multiaddr. The dial must fail — Alice's session node is torn down
+      after seal. Verified by asserting the dial returns an error within 10 seconds
+      and that no stream is accepted on Alice's daemon.
+    test_type: e2e
+    component_under_test: daemon
+    notes: >
+      Requires CELLO_E2E_LIVE. This is the DDoS defense invariant — it proves
+      session-scoped Peer ID ephemerality is real, not just documented.
+
+  - id: SI-002
+    statement: >
+      A session node must only accept connections from its designated counterparty.
+      Any peer other than the one specified in the SessionAssignment must be
+      rejected before the Noise handshake completes.
+    adversarial_condition: >
+      A third agent (Charlie) obtains Alice's session Peer ID from a compromised
+      relay and attempts to dial Alice's session node during an active Alice-Bob
+      session. Alice's connectionGater must reject Charlie's connection attempt.
+      Verified by asserting: (a) Charlie's dial fails, (b) no stream is accepted
+      from Charlie on Alice's session node, (c) session.node.gater.rejected is
+      logged with the unexpected Peer ID, (d) Alice and Bob's session continues
+      unaffected.
+    test_type: e2e
+    component_under_test: daemon
+
+  - id: SI-003
+    statement: >
+      The daemon must never route an IPC connection's tool calls to an agent
+      that connection has not explicitly set as current. Cross-connection agent
+      leakage must be impossible.
+    adversarial_condition: >
+      Connection 1 has agent Alice as current. Connection 2 has agent Bob as current.
+      A message sent via connection 2's cello_send is received and processed by
+      connection 2's current agent (Bob) — it is never processed by Alice, even if
+      Alice has an active session with the same counterparty. Verified by asserting:
+      cello_receive called from connection 1 returns null while cello_receive from
+      connection 2 returns the message, using the same counterparty pubkey for both
+      calls.
+    test_type: e2e
+    component_under_test: daemon
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the directory cluster is unreachable during `cello login`"
+    fallback: >
+      The daemon starts but reports directory_signaling: reconnecting in cello
+      status. Connection records are loaded from the local DB with status
+      'unverified' — NOT marked stale or gone. The daemon retries directory
+      connection in the background with exponential backoff. MCP tool calls that
+      require the directory (cello_initiate_session, cello_register) return
+      { ok: false, reason: 'directory_unreachable_at_login', guidance: 'The
+      directory is unreachable. Check network connectivity. The daemon will
+      reconnect automatically — retry this operation once directory_signaling
+      shows connected in cello status.' }. Tool calls that do not require the
+      directory (cello_list_agents, cello_list_sessions) succeed normally.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: DB-002
+    condition: "While the consortium manifest has expired (expires timestamp is in the past)"
+    fallback: >
+      The daemon refuses to connect to any directory node. directory.auth.manifest.expired
+      is logged at ERROR with manifestVersion and expiresAt. cello login returns an error
+      message visible to the operator: 'The directory node manifest has expired. Run
+      cello update-manifest to fetch a fresh manifest from the directory cluster.'
+      No silent fallback to an expired manifest — expired means untrusted.
+    test_type: integration
+    component_under_test: transport
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events: []
+  error_events: []
+  notes: >
+    This is a gate story, not a code story. It exercises observability events
+    defined in S1–S9 and S12. The specific events verified by each AC are:
+      AC-001: daemon.started, daemon.login.validation.complete
+      AC-002: agent.current.switched
+      AC-003: session.node.created (×2), session.assignment.received (×2)
+      AC-004: relay hash_submit and leaf_deliver with session Peer IDs
+      AC-005: session.transport.mode.selected, transport.autonat.result
+      AC-006: directory.signaling.disconnected, directory.signaling.reconnecting,
+              directory.signaling.connected
+      AC-007: session.interrupted.detected (on next login after SIGKILL)
+      AC-008: directory.auth.challenge.failed
+    No new events are introduced by this story.
+  alarms: [] # no alarm: this is a verification story; upstream stories define the alarms
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-S1   # daemon foundation
+    - CELLO-M7-S2   # MCP adapter
+    - CELLO-M7-S3   # ephemeral session nodes
+    - CELLO-M7-S4   # SessionAssignment wire format
+    - CELLO-M7-S5   # AutoNAT + direct P2P
+    - CELLO-M7-S6   # interrupted session handling
+    - CELLO-M7-S7   # signaling stream resilience
+    - CELLO-M7-S8   # nonce dedup + retry queue
+    - CELLO-M7-S9   # agent-aware notifications
+    - CELLO-M7-S12  # manifest verification + bidirectional auth
+  blocks: []
+  notes: >
+    Written first (per /cello-story E2E-first rule) but implemented last.
+    S1–S9 and S12 are all prerequisites. S11 is a prerequisite for S12.
+    S14 (CI/CD) is independent and does not block this gate.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Multi-Party Conversations, Node Operations, Authentication"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-11_1030_daemon-transport-architecture"
+    - "2026-06-11_0822_transport-security-audit-and-libp2p-primitives"
+  related_docs:
+    - "[[daemon-transport-architecture]]"
+    - "[[implementing-directory-bidirectional-authentication]]"
+    - "[[transport-security-audit-and-libp2p-primitives]]"
+  notes: >
+    This story is the M7 finish line. M7 does not close until all ACs pass
+    against a live daemon connected to the staging directory cluster. The
+    milestone writeup is updated with dated confirmation before close.
