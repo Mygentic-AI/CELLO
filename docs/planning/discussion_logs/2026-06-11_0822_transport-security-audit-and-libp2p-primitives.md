@@ -359,24 +359,20 @@ tradeoff do so by choice. CELLO never imposes a centralized solution.
 
 ---
 
-## 7. Open Question: Directory Bidirectional Authentication
+## 7. Directory Bidirectional Authentication
 
-The design (end-to-end-flow.md §3.1) specifies bidirectional authentication:
+**Resolved — see [[implementing-directory-bidirectional-authentication]].**
 
-1. Client proves to directory via K_local challenge-response (implemented)
-2. **Directory proves to client** by signing its own challenge response
-3. Client verifies directory's signature against consortium-pinned node keys
+The design (end-to-end-flow.md §3.1) specifies a 7-step mutual challenge-response.
+Steps 1-4 (client→directory) are implemented. Steps 5-6 (directory→client) are not:
+the directory sends a plain `signaling_auth_ok` frame with no signature, and the
+client trusts any node that responds at the dialled address. No consortium-pinned
+node keys exist in the client source.
 
-Open questions not yet verified in code:
-- Does the implementation actually do step 2-3?
-- Are directory node keys pinned in the client source?
-- Does the client verify "this Peer ID belongs to a known directory node"?
-- Or does it just trust "if I dialed this address and it responded, it's the
-  directory"?
-- How does this work with sovereign directories in different regions?
-
-**Not yet audited.** The adversarial agent covered the content receive path and
-FROST but did not trace the signaling connection authentication.
+Full audit, gap analysis, TUF adoption as canonical standard, and four resolved
+design questions (root key rotation, manifest replay prevention, revocation
+latency SLA, jurisdiction of key holders) are in
+[[implementing-directory-bidirectional-authentication]].
 
 ---
 
@@ -391,10 +387,10 @@ FROST but did not trace the signaling connection authentication.
 3. Add `maxConnections` / `maxInboundConnections` on the directory-facing node
 4. Per-peer stream limits
 
-**Needs its own investigation and discussion log:**
-5. Directory bidirectional authentication — whether the client actually verifies
-   the directory's signature against consortium-pinned keys (§7 above). Has not
-   been audited. Needs a dedicated session before it can become a story.
+**Resolved — see [[implementing-directory-bidirectional-authentication]]:**
+5. Directory bidirectional authentication — audited; steps 5-6 of the
+   handshake unimplemented; TUF adopted as canonical standard; four design
+   gaps resolved; story list defined
 
 **Resolved — see [[daemon-transport-architecture]]:**
 6. Session-scoped Peer ID ephemerality — daemon model with ephemeral per-session

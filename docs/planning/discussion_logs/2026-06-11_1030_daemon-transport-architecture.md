@@ -570,8 +570,10 @@ information before doing anything.
 - **connectionGater** — trivially solved per session node (allow only the one
   counterparty); the directory-facing node needs its own gater (allow only
   known directory Peer IDs)
-- **Directory bidirectional auth** — unrelated to this architecture; still
-  needs its own audit
+- **Directory bidirectional auth** — audited and resolved in
+  [[implementing-directory-bidirectional-authentication]]; steps 5-6 of
+  the handshake unimplemented; TUF adopted as canonical standard; story
+  list defined
 - **AutoNAT** — belongs in new M7; standing receiver nodes need dialability
   self-knowledge from creation time; AutoNAT peers co-located with directory
   and relay infrastructure in each AWS region
