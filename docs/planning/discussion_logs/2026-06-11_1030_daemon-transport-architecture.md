@@ -95,7 +95,9 @@ requirements, and different audiences. They should be separate nodes.
 - Created during session negotiation, AFTER the counterparty accepts the
   connection request
 - Fresh transport key, fresh Peer ID — generated at session creation time
-- Torn down when the session closes (either by explicit close or seal)
+- Torn down after the session is sealed and closed (the exact ordering of
+  seal → close → teardown needs detailed design; the session node must
+  remain alive at least through seal completion)
 - Each session node's Peer ID is communicated to the counterparty via the
   SessionAssignment (protocol change required — see §4)
 - After session close, the Peer ID vanishes. Any address the counterparty
@@ -311,7 +313,75 @@ a protocol-level concern that needs its own story.
 
 ---
 
-## 7. Resource Considerations
+## 7. Direct P2P by Default — Relay as Opt-In
+
+### The default
+
+CELLO defaults to direct peer-to-peer communication. Once the directory has
+brokered the session and both parties have each other's ephemeral session node
+addresses, all content exchange happens directly between the two agents. No
+CELLO infrastructure is in the path. The conversation cannot be intercepted,
+logged, or metered by the relay.
+
+This means the protocol works anywhere two devices can reach each other —
+local networks, private LANs, constrained IoT environments, air-gapped systems,
+a robot talking to a car, a warehouse system talking to a delivery drone. The
+directory is needed only for session establishment. After that, the session
+is independent of CELLO's infrastructure entirely.
+
+### The relay's two roles
+
+The relay serves two distinct purposes, both opt-in:
+
+1. **NAT traversal** — approximately 20-30% of sessions cannot hole-punch
+   through symmetric NAT. For these, the relay acts as a circuit bridge.
+   Not a choice — a technical necessity for those operators.
+
+2. **IP privacy** — operators with static IPs, or who don't trust their
+   counterparty with their network location, can elect to route their session
+   through the relay. Their counterparty sees the relay's IP, not theirs.
+   This is a conscious tradeoff: you gain IP privacy, you accept that traffic
+   passes through relay infrastructure.
+
+### The IP exposure tradeoff
+
+Direct P2P sessions expose your IP address to your counterparty. This is
+inherent to how TCP/IP works — routing requires it. There is no direct P2P
+with IP hiding. Operators should understand this tradeoff:
+
+- **Dynamic IP** (mobile, public WiFi, DHCP that rotates) — low risk. The
+  IP your counterparty learned will belong to someone else shortly.
+- **Static IP** (home broadband, server, business connection) — higher risk.
+  Your counterparty has a permanent identifier for your network location.
+
+Operators who are concerned about static IP exposure should elect relay routing
+for those sessions. CELLO does not force this choice — it makes it available.
+
+### Why this matters for the trust model
+
+When the relay is optional and most traffic bypasses it, the "we don't store
+anything" claim becomes structurally credible. There is no business model
+pressure to mine relay traffic — most conversations never touch the relay.
+Compare this to Signal or WhatsApp, where every message must pass through
+central servers and users take the provider's word for it.
+
+CELLO's position: we built a system that works without us. The relay is offered
+as infrastructure for those who need it. Operators who don't want to trust it
+don't have to use it. That's a claim you can verify by reading the protocol
+spec — not a promise you have to take on faith.
+
+### Future use cases
+
+Defaulting to direct P2P opens the protocol to environments that centralized
+relay-dependent systems cannot reach: private enterprise networks, embedded
+systems, vehicles, robotics, satellite links, offline-first applications. Two
+agents that can reach each other on any network can establish a CELLO session
+without CELLO's infrastructure being reachable at all. This is the long-term
+value of the architecture — not just a cost or privacy optimization.
+
+---
+
+## 8. Resource Considerations (Session Nodes)
 
 ### Relay connections
 
@@ -349,7 +419,7 @@ addressed by limits, not by compromising the architecture.
 
 ---
 
-## 8. What M7 Becomes
+## 9. What M7 Becomes
 
 M7 as currently written (Multi-Agent MCP Server outline, 2026-05-28) assumed
 one CelloClient per agent, each with its own libp2p node — but those nodes
@@ -381,7 +451,7 @@ valid.
 
 ---
 
-## 9. Open Design Questions
+## 10. Open Design Questions
 
 1. **Session establishment round-trips.** Can the "Bob creates node, reports
    Peer ID; Alice creates node, reports Peer ID" exchange be collapsed? Or is
@@ -411,7 +481,7 @@ valid.
 
 ---
 
-## 10. Relationship to Other Open Work
+## 11. Relationship to Other Open Work
 
 - **5-line counterparty pubkey fix** — still needed on the session node's
   receive path; same fix, different location (session node's relay stream
