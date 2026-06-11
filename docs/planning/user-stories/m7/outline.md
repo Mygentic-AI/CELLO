@@ -150,6 +150,289 @@ surfaced at next `cello login`.
 
 ---
 
+## M7 Error Discipline — Non-Negotiable
+
+M5/M6 cost days of debugging because errors were obscured at two levels: (1)
+catch blocks mapped multiple distinct failure causes to the same generic error
+code, making diagnosis impossible; and (2) MCP tool responses returned a reason
+code with no guidance, leaving the calling LLM unable to recover. M7 introduces
+a daemon layer, a new IPC transport, and rewrites the MCP adapter — three new
+error surfaces. Every story must enforce both rules below.
+
+### Rule 1: Every distinct failure cause produces a distinct error
+
+**The M6B-002 pattern:** Three FROST failure modes (timeout waiting for
+directory response, all directory nodes exhausted, directory node returned
+malformed commitment) all surfaced as `directory_below_threshold`. The operator
+saw one error for three different problems. The fix for each was different. Days
+were spent proving which cause was actually firing because the error provided no
+signal.
+
+**The M7 risk:** The daemon adds new failure surfaces — IPC serialization errors,
+daemon not running, wrong daemon version, agent not online, session node creation
+failure, signaling reconnect in progress. If these all surface as a generic
+`daemon_error` or `internal_error`, the same pattern repeats.
+
+**What every story must include:**
+
+For every catch block or error return path in the story's scope:
+- A distinct error code (not shared with any other failure cause)
+- The actual exception message preserved in the error event (never swallowed)
+- Enough context to identify the producer of the failed precondition
+
+**AC pattern (include in every story that has error paths):**
+```yaml
+- id: AC-[N]-error-distinctness
+  given: "All error paths in this story's implementation"
+  when: "each distinct failure cause is triggered independently"
+  then: "each produces a unique error code distinguishable from all other
+    failure causes in the same package; no catch block returns a hardcoded
+    reason string without logging the actual exception; the operator can
+    determine from the error alone which failure cause fired and what
+    component produced it"
+  test_type: unit
+  component_under_test: [component]
+```
+
+**Lateral catch audit:** If this story touches a package that has existing catch
+blocks with generic reason strings, the story must include an AC requiring the
+implementer to scan ALL catch blocks in that package and fix or report any that
+swallow exceptions silently. This is not optional — it prevents the "fixed the
+new code but the old code in the same file still obscures errors" pattern.
+
+### Rule 2: Every MCP tool failure includes actionable guidance
+
+**The M6-E2E-001 pattern:** `cello_send` returned
+`{ delivered: false, reason: "session_not_active" }`. The calling LLM had no
+idea what to do. The correct action was to call `cello_close_session` because
+the counterparty had already initiated the seal ceremony. But nothing in the
+response said that.
+
+**The M7 risk:** M7 introduces new MCP tools (`cello_use_agent`,
+`cello_list_agents`, `cello_start_agent`, `cello_stop_agent`) and rewrites
+existing ones to route through the daemon. Each tool has multiple failure modes.
+An LLM calling these tools cannot read source code — it needs the response to
+tell it what happened and what to do next.
+
+**What every MCP tool failure response must include:**
+
+```typescript
+{
+  ok: false,
+  reason: "connection_not_found",           // machine-readable, distinct
+  guidance: "No active connection exists with this counterparty. " +
+            "Call cello_request_connection first to establish one."
+}
+```
+
+The `guidance` field is a plain-English instruction for the LLM. It must answer:
+1. What happened (in terms the LLM can understand without code context)
+2. What to do next (which specific tool to call, or what state to wait for)
+
+**AC pattern (include in every story that exposes MCP tool responses):**
+```yaml
+- id: AC-[N]-actionable-guidance
+  given: "Every failure response path in MCP tools introduced or modified by
+    this story"
+  when: "each failure path is triggered"
+  then: "the response includes a `guidance` field that names the specific
+    next action the calling LLM should take; the guidance is sufficient for
+    an LLM with no code access to recover without human intervention"
+  test_type: unit
+  component_under_test: adapter-claude-code
+```
+
+### M7 Error Surface Map
+
+Story authors must anticipate these failure modes in their ACs. Each must have
+a distinct code and actionable guidance:
+
+| Story | New failure modes (each needs distinct code + guidance) |
+|-------|-------------------------------------------------------|
+| S1 | daemon_not_running, daemon_version_mismatch, ipc_connection_refused, ipc_connection_limit, agent_not_found, agent_not_online, login_already_active (idempotent success), directory_unreachable_at_login |
+| S2 | no_current_agent, agent_already_current, agent_not_online (distinguish from not_found), ipc_deserialization_error |
+| S3 | max_sessions_reached, session_node_creation_failed, standing_receiver_unavailable, connectionGater_rejected_peer |
+| S4 | assignment_missing_session_peer_id, assignment_peer_id_mismatch, assignment_tbs_verification_failed (distinguish from existing frost_verification_failed) |
+| S5 | autonat_unavailable, direct_dial_failed_falling_back_to_relay, relay_fallback_also_failed, dcutr_upgrade_failed (non-fatal) |
+| S6 | session_already_interrupted, seal_interrupted_counterparty_unavailable, seal_interrupted_rejected_by_counterparty |
+| S7 | signaling_reconnecting (not an error — but tool calls during this state need guidance: "wait and retry"), signaling_lost (operator intervention needed), outbound_queue_full |
+| S8 | retry_queue_full (oldest evicted — inform caller), nonce_duplicate_detected (silent discard, but logged) |
+| S12 | manifest_expired, manifest_signature_invalid, manifest_version_rollback, directory_challenge_failed |
+
+---
+
+## M6/M6B Lessons — Patterns That Must Not Repeat
+
+These failure patterns each cost 1–4 days of debugging time. They are all fixed
+in M6/M6B code. M7 introduces new surfaces (daemon, IPC, CLI, session nodes,
+manifest polling) where the same patterns can recur. Every story author must
+read this list and verify their story doesn't reintroduce any of them.
+
+### L1: Typed fields corrupted through serialization
+
+**What happened:** `JSON.stringify` silently converts `Uint8Array` to
+`{"0":1,"1":2,...}`. Bytes round-trip correctly but the TYPE is lost. Crypto
+operations fail later with no link back to the serialization bug. PERSIST-005
+cost 2 days — the error surfaced as `directory_below_threshold`, not as a
+serialization failure.
+
+**M7 risk:** S8 persists retry queue entries and nonce sets to SQLCipher. Any
+`Uint8Array` field (message content hashes, nonces) that passes through JSON
+without a typed serializer will corrupt silently.
+
+**Story AC requirement:** Every story that persists a domain object must include
+a round-trip AC that (a) uses a real domain instance (not `randomBytes`), (b)
+serializes → persists → restarts → loads → deserializes, and (c) exercises the
+object in its actual production use (sign with it, verify with it, send it).
+Byte equality alone is not sufficient.
+
+---
+
+### L2: In-memory state not loaded from DB at startup
+
+**What happened:** The directory's `PgDirectoryStore` had ~15 in-memory Maps
+populated during runtime but never loaded from Postgres at startup. Every
+restart made all registered agents invisible. Also: `FrostThresholdSigner` was
+restored without `setBootstrapContext` — signatures failed.
+
+**M7 risk:** The daemon holds agent state, session metadata, connection records,
+retry queues, nonce sets, and the manifest version. If any of these are
+populated at runtime but not loaded from SQLCipher at `cello login`, the daemon
+appears healthy but is non-functional.
+
+**Story AC requirement:** Every story that adds a runtime-populated data
+structure must include an AC that: (1) populates the structure during normal
+operation, (2) stops and restarts the daemon, (3) verifies the structure is
+loaded and functional after restart — not just present, but usable in its
+actual protocol operation.
+
+---
+
+### L3: Composition root never wired
+
+**What happened:** PERSIST-024 built the entire persistence layer — classes,
+methods, tests all passing. The composition root (`cello-mcp.ts`) never called
+any of it. Everything was dead code. Discovered only during live deployment.
+
+**M7 risk:** M7 creates two new entrypoints: `packages/daemon/src/server.ts`
+(daemon) and `packages/cli/src/bin.ts` (CLI). Both are composition roots that
+must instantiate every component. If a story delivers a class but the
+composition root doesn't instantiate it, the feature doesn't exist in
+production.
+
+**Story AC requirement:** Every story must include an AC that verifies the
+composition root constructs and calls the new component — not just that the
+component exists and passes its own tests. The AC's `then` clause must assert
+observable behavior from the entrypoint (e.g. "calling `cello status` via CLI
+shows the new field"), not just that a class method returns the right value.
+
+---
+
+### L4: Tests exercise preconditions, not actual operations
+
+**What happened:** After M6-DX-001, `registered=true` and
+`directory_reachable=true` both verified. But calling `cello_initiate_session`
+(which triggers a real FROST ceremony) still failed — because
+`setBootstrapContext` was never called on the restored signer stub. Tests that
+checked "is setup correct?" all passed. The test that checked "does the
+operation work?" didn't exist.
+
+**M7 risk:** The daemon has a complex startup sequence (load agents, validate
+connections, connect to directory, create standing receiver). Tests that assert
+"daemon started successfully" or "agent status = online" verify preconditions.
+Only a test that actually sends a message through the full path (IPC → daemon →
+session node → counterparty) proves the system works.
+
+**Story AC requirement:** At least one AC per story must exercise the END
+operation, not just the setup. For S1 that means "a CLI command reaches the
+directory and gets a response." For S3 that means "a message is delivered via
+the ephemeral session node." State-only assertions (`status === 'online'`) are
+precondition checks, not behavior proof.
+
+---
+
+### L5: Silent signaling stream death
+
+**What happened:** After ~2 minutes of idle signaling, the stream dropped. The
+process stayed alive with `directory_reachable: false`. No reconnect, no error,
+no user-visible indication. FROST ceremonies silently failed. Seal frames went
+into a dead stream.
+
+**M7 risk:** S7 addresses signaling resilience directly. But every OTHER story
+that sends anything over the signaling stream (S4: session assignment, S6:
+interrupted handling, S12: manifest poll) must assume the stream can be dead at
+the moment of use. Operations must check `directory_signaling` status before
+sending, or queue for delivery after reconnect.
+
+**Story AC requirement:** Any story that sends a frame over the directory
+signaling stream must include an AC where the stream is dead at the moment of
+the operation. The expected behavior is either: (a) the operation queues and
+succeeds after reconnect, or (b) the operation returns a distinct error with
+guidance ("directory connection lost — reconnecting, retry in N seconds"). Never
+silent failure.
+
+---
+
+### L6: Error objects serialized as `[object Object]`
+
+**What happened:** The relay's TCP error (`EHOSTUNREACH to 10.0.85.235:4001`)
+was caught and stringified. The catch block logged `reason: relay_unavailable`
+with the error object interpolated as `[object Object]`. The actual cause was
+invisible for days.
+
+**M7 risk:** The daemon introduces IPC (Unix socket) and multiple libp2p nodes.
+Socket errors, connection refusals, and libp2p dial failures all produce Error
+objects. If any catch block logs `${error}` or interpolates an object without
+`.message`, the same pattern recurs.
+
+**Story AC requirement:** Every catch block in M7 code must log
+`error.message` (string) explicitly — never the error object directly. The
+`/cello-review` lateral catch audit enforces this, but story authors should
+specify it in their error-path ACs to prevent the bug from being written in
+the first place.
+
+---
+
+### L7: `NODE_ENV=test` shortcuts bypassing real protocol paths
+
+**What happened:** `bootstrapKeyShares` (a test-only shortcut) made all FROST
+tests pass without running a real multi-party ceremony. The real ceremony path
+had bugs that were invisible until production.
+
+**M7 risk:** The daemon introduces an IPC layer between the MCP adapter and the
+protocol core. If tests call the daemon's internal methods directly (bypassing
+IPC), the IPC serialization/deserialization path is never tested. Same for
+session nodes — if tests skip node creation and inject mock connections, the
+`connectionGater` path is never exercised.
+
+**Story AC requirement:** Integration and E2E ACs must explicitly state that the
+test path goes through the real transport boundary (IPC socket, libp2p stream,
+session node connectionGater). An AC that says "the daemon processes the request"
+must specify "received via IPC from a separate process/connection, not via
+internal method call." `/cello-story`'s stub-resistance rules apply here.
+
+---
+
+### L8: Health check conflates liveness with readiness
+
+**What happened:** Relay health endpoint returned 503 until registered with the
+directory. ECS uses health checks for liveness. Result: ECS killed tasks before
+they could register → 29-task crash loop across 3 regions.
+
+**M7 risk:** The daemon has a startup sequence: open DB → load agents → connect
+to directory → validate connections → create standing receiver. If the health
+endpoint (used by process supervisors or IPC clients) gates on "fully ready,"
+a slow directory connection blocks everything.
+
+**Story AC requirement:** S1 must specify: the daemon's health/liveness signal
+(e.g. responding to IPC `ping`) reflects "process is alive and accepting
+connections," NOT "directory connected and all agents online." Readiness for
+operations is a separate status field (`cello status` output), not a liveness
+gate. A daemon that is alive but reconnecting to the directory must still accept
+IPC connections and report its state — not refuse connections or exit.
+
+---
+
 ## Story Breakdown
 
 **Writing order:** Write S10 (integration gate) FIRST as the E2E story — it is
