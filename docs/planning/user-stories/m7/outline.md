@@ -238,8 +238,19 @@ a story can be written.
 
 ## Related Documents
 
-- [[daemon-transport-architecture]] — primary architecture; supersedes all prior transport assumptions
-- [[implementing-directory-bidirectional-authentication]] — TUF analysis, manifest design, resolved gaps
-- [[transport-security-audit-and-libp2p-primitives]] — audit that surfaced the gaps this milestone closes
-- [[peer-reconnect-libp2p-primitives]] — AutoNAT and dcutr background
+### Required reading for all story implementers
+
+- `CONTEXT.md` (repo root) — canonical glossary; all M7 terms (daemon, ephemeral session node, standing receiver node, three agent states, IPC, consortium manifest, consortium root keys, AutoNAT, `directory_signaling` status, interrupted session) are defined here. Use these terms exactly in code and story ACs.
+- [[end-to-end-flow]] — canonical session establishment narrative; S3, S4, and S6 all modify this flow. Read before writing any story that touches session negotiation or the SessionAssignment wire format.
+- [[agent-client]] §2 "Bootstrap discovery", §2 "Persistent authenticated connection", §2 "Degraded mode" — specifies the three-level fallback chain and consortium key model that S10/S11 implement; the exact 4-step challenge-response that S12 completes; and the expected client behavior when the directory connection drops, which S7 must not contradict.
+
+### Design references
+
+- [[daemon-transport-architecture]] — primary architecture document; supersedes all prior transport assumptions
+- [[implementing-directory-bidirectional-authentication]] — TUF analysis, manifest design, four resolved gaps
+- [[transport-security-audit-and-libp2p-primitives]] — audit that surfaced the Peer ID ephemerality and bidirectional auth gaps this milestone closes
+- [[peer-reconnect-libp2p-primitives]] — AutoNAT and dcutr background; required reading for S5
+
+### Archive
+
 - `m7-archived/outline.md` — superseded; MULTI-001 scope reused in S1; MULTI-006 scope reused in S8
