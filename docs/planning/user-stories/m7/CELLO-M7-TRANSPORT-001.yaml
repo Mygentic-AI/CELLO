@@ -16,7 +16,7 @@ description: >
 id: CELLO-M7-TRANSPORT-001
 domain: Transport
 milestone: M7
-actor: AGT
+actor: CLIENT
 priority: P0
 components:
   - transport
@@ -762,10 +762,17 @@ observability:
         DEBUG level because dcutr failure is expected in many network topologies.
         failureReason is error.message. Session continues normally via relay.
   alarms:
-    - condition: "relay_fallback_also_failed rate > 10% of session establishment
-        attempts over 15 minutes"
-      fires_to: "transport-health CloudWatch alarm — elevated rate suggests relay
-        infrastructure degradation or widespread network partition"
+    - condition: "relay_fallback_also_failed emitted more than 5 times in 15 minutes
+        from the same daemon (operator-local monitoring)"
+      fires_to: "operator-local alert — relay_fallback_also_failed is a client-side
+        error code returned by the daemon's transport selector. CloudWatch cannot
+        observe local daemon events. This alarm is for operator-side monitoring
+        (e.g. structured log aggregation or daemon health dashboard). If the
+        operator runs centralized log shipping, the alarm triggers there.
+        Server-side visibility: the relay MAY observe elevated circuit-relay
+        connection attempts from the same client Peer ID without successful
+        session establishment — a separate relay-side metric (out of scope for
+        this story) would cover the server-side view."
   notes: >
     All events must be added to the canonical event taxonomy in
     docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
