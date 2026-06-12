@@ -151,6 +151,19 @@ export interface SessionFixtureOpts {
    * Default: no-op.
    */
   loggerDir?: Logger;
+  /**
+   * Use per-session ephemeral libp2p nodes for all session establishment (M7-DAEMON-002).
+   * When true, the fixture creates a daemon (via opts.daemon: true from DAEMON-001) that
+   * uses per-session nodes; session Peer IDs returned will differ from the
+   * directory-facing node Peer ID. Default: false (pre-M7 behavior unchanged).
+   */
+  ephemeralSessionNodes?: boolean;
+  /**
+   * Pre-create a standing receiver node at daemon startup (M7-DAEMON-002).
+   * When true, the fixture waits for standing_receiver_ready: true in cello status
+   * before returning to the test. Requires a running daemon. Default: false.
+   */
+  standingReceiver?: boolean;
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────

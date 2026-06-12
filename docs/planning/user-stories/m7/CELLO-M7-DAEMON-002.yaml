@@ -679,6 +679,18 @@ observability:
         does not complete within the 2-second timeout"
       context_fields: [sessionId, error]
       correlationId: false
+    - name: session.node.stop.failed
+      level: error
+      trigger: "When a session node fails to stop cleanly during destroySessionNode
+        or gracefulShutdown (libp2p stop() throws)"
+      context_fields: [sessionId, agentName, error, correlationId]
+      correlationId: true
+    - name: daemon.shutdown.failed
+      level: error
+      trigger: "When the SIGTERM/SIGINT handler encounters an error during graceful
+        shutdown (logged by cello-daemon.ts binary)"
+      context_fields: [signal, error]
+      correlationId: false
   notes: >
     All events follow the session.node.* and session.interrupted.* taxonomy from
     outline.md §Observability Events. The implementer must:
