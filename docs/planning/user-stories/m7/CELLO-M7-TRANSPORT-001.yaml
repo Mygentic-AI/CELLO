@@ -1,0 +1,855 @@
+---
+name: CELLO-M7-TRANSPORT-001
+type: user-story
+date: 2026-06-12
+topics: [autonat, direct-p2p, dcutr, relay-fallback, transport-mode, session-nodes, dialability, cross-repo, m7]
+status: draft
+description: >
+  Adds AutoNAT client service to session and standing receiver nodes for
+  dialability detection; makes direct P2P the default transport with relay
+  fallback and dcutr upgrade path; exposes a dialability observable; enables
+  the AutoNAT service protocol on directory nodes so they serve as dial-back
+  probers. Cross-repo story touching packages/transport (cello-client) and
+  packages/directory (trustless-cello).
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-TRANSPORT-001
+domain: Transport
+milestone: M7
+actor: AGT
+priority: P0
+components:
+  - transport
+  - daemon
+  - directory
+  - interfaces
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a CELLO agent daemon,
+  I want to determine my own dialability via AutoNAT (using directory nodes as
+  probers), advertise my direct multiaddr in the SessionAssignment when dialable,
+  fall back to relay circuit addresses when behind NAT, and attempt a dcutr
+  hole-punch upgrade on relay-fallback connections —
+  so that session content travels directly between agents by default (no CELLO
+  infrastructure in the path), with relay as a reliable fallback and dcutr as
+  a best-effort upgrade to direct connectivity even when initial conditions
+  required relay.
+
+# ─── Context ────────────────────────────────────────────────
+# Direct P2P is the default transport for M7. The relay is opt-in for NAT
+# traversal and IP privacy. This story implements the dial strategy that
+# consumes the transport_mode field from WIRE-001's SessionAssignment.
+#
+# AutoNAT background (from peer-reconnect-libp2p-primitives discussion):
+# The AutoNAT protocol asks known peers to dial back the client's advertised
+# address. If the dial-back succeeds, the client is publicly dialable. If it
+# fails, the client must use a relay circuit address. CELLO uses directory
+# nodes as the AutoNAT probers — they are already connected, already trusted
+# (identity verified via manifest), and distributed across three independent
+# regions. No dedicated AutoNAT bootstrap infrastructure is needed.
+#
+# Dial strategy:
+#   1. Read transport_mode from SessionAssignment (WIRE-001 produces this)
+#   2. If transport_mode === 'direct': dial counterparty_session_addrs directly
+#   3. If direct dial fails OR transport_mode === 'relay': use relay circuit address
+#   4. After relay connection established: attempt dcutr hole-punch upgrade
+#   5. dcutr failure is non-fatal — session continues via relay
+#
+# Adapter pattern (mandatory per CLAUDE.md): session node creation, AutoNAT
+# result, and transport selection logic are behind interfaces in
+# packages/interfaces/ with local stubs in packages/interfaces/stubs/. This
+# means:
+#   - IAutoNatService: interface for querying dialability status
+#   - ITransportSelector: interface for choosing dial strategy (direct/relay/dcutr)
+#   - LocalAutoNatStub: returns configurable dialability (default: false)
+#   - LocalTransportSelectorStub: returns configurable mode selection
+#   CELLO_ENV drives selection in the daemon composition root (server.ts).
+#
+# Sovereign node invariant: directory nodes providing AutoNAT dial-back are
+# independent — three different regions, different cloud providers. A valid
+# AutoNAT result requires at least ONE successful dial-back response from ANY
+# directory node. The AutoNAT client does not require all three to agree —
+# it follows standard libp2p AutoNAT confidence thresholds. Each directory
+# node independently confirms or denies dialability from its network position.
+# No assumption that probers share networking or are co-located.
+#
+# Edge case — AutoNAT unavailable at standing receiver creation:
+# If the directory connection is in 'reconnecting' state when the standing
+# receiver node is created (per SIGNAL-001), AutoNAT cannot run — there are
+# no connected directory nodes to probe. The conservative fallback: assume
+# NOT dialable, advertise relay address in SessionAssignment. Once the
+# directory reconnects and AutoNAT succeeds, the NEXT standing receiver (after
+# the current one is consumed) will use the updated dialability. The current
+# standing receiver does NOT re-issue its SessionAssignment — that would
+# require notifying an already-negotiated counterparty, which is out of scope.
+#
+# transport_mode field is authoritative: per WIRE-001 SI-002, the transport_mode
+# field in SessionAssignment is the ONLY source for dial strategy. Do NOT infer
+# transport mode from the address format. This story's implementation reads
+# transport_mode from the assignment and acts on it directly.
+#
+# Cross-repo scope:
+#   cello-client: packages/transport/src/node.ts (AutoNAT client in createNode),
+#     packages/interfaces/ (IAutoNatService, ITransportSelector), packages/daemon/
+#     (dialability observable, transport selection in session establishment)
+#   trustless-cello: packages/directory (enable AutoNAT service protocol — one-line
+#     addition to directory createNode config, allowing directory nodes to respond
+#     to AutoNAT dial-back requests from clients)
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When createNode is called for a standing receiver node or a session
+      node in packages/transport/src/node.ts"
+    action: >
+      The libp2p configuration includes the AutoNAT client service (autonat()).
+      The AutoNAT client uses the already-connected directory nodes as probers —
+      no separate peer list is needed. The directory node addresses are obtained
+      from the daemon's active directory connection (via DaemonContext or
+      equivalent). If no directory nodes are currently connected (reconnecting
+      state), the AutoNAT service is still configured but will not produce a
+      result until at least one directory node is reachable.
+
+  - trigger: "When the AutoNAT client service completes a probe cycle on a
+      standing receiver node or session node"
+    action: >
+      The probe result updates a dialability observable on the node:
+        dialable: boolean — true if at least one directory node confirmed
+          dial-back success; false otherwise
+        publicAddr: string | null — the externally-reachable multiaddr if dialable;
+          null if behind NAT
+      transport.autonat.result is logged at INFO with dialable, publicAddr, and
+      nodeType ('standing_receiver' or 'session'). The observable is readable by
+      the daemon's session establishment logic to determine what address to
+      advertise in the SessionAssignment. The three directory node probers are in
+      different regions — each independently confirms dialability from its own
+      network position. A single positive response from any one prober is sufficient
+      for dialable: true (standard AutoNAT confidence threshold).
+
+  - trigger: "When the daemon's session establishment logic needs to determine
+      transport_mode for a new SessionAssignment (consumed by WIRE-001 directory
+      producer)"
+    action: >
+      The daemon reads the standing receiver's dialability observable. If
+      dialable === true: the daemon reports its direct multiaddr (publicAddr) as
+      the session address in the session negotiation flow (SessionRequest for
+      initiator, SessionOfferAccept for target). The directory sets transport_mode
+      to 'direct'. If dialable === false: the daemon reports its relay circuit
+      address. The directory sets transport_mode to 'relay'. This decision is
+      made once at session establishment time and is immutable for that session —
+      a subsequent AutoNAT result change does not affect already-negotiated sessions.
+
+  - trigger: "When the initiator's session node receives a SessionAssignment with
+      transport_mode: 'direct' from WIRE-001"
+    action: >
+      The session node dials counterparty_session_addrs directly using the
+      counterparty_session_peer_id as the target. If the dial succeeds,
+      session.transport.mode.selected is logged at INFO with sessionId,
+      mode: 'direct', and correlationId. The relay is not involved in the
+      transport path. The session content stream is opened directly to the
+      counterparty's session node.
+
+  - trigger: "When a direct dial to counterparty_session_addrs fails (timeout,
+      connection refused, or unreachable)"
+    action: >
+      The session node falls back to the relay circuit address. The relay circuit
+      address is obtained from the SessionAssignment's counterparty_session_addrs
+      (if transport_mode was 'relay') or from the daemon's known relay endpoint
+      (if transport_mode was 'direct' but the direct dial failed). The error code
+      'direct_dial_failed_falling_back_to_relay' is logged at WARN (NOT error —
+      this is a recoverable fallback, not a failure). session.transport.mode.selected
+      is logged at INFO with sessionId, mode: 'relay', and correlationId after the
+      relay connection succeeds. The direct dial failure is NOT returned to the
+      caller as an error — it is handled transparently with the relay fallback.
+
+  - trigger: "When a relay-fallback connection is successfully established (either
+      because transport_mode was 'relay' from the start, or because direct dial
+      failed)"
+    action: >
+      The dcutr service on the session node attempts a hole-punch upgrade to
+      direct connectivity. This is a non-blocking, best-effort operation. If dcutr
+      succeeds: session.transport.dcutr.upgraded is logged at INFO with sessionId
+      and correlationId. The session continues over the direct connection — the
+      relay is removed from the data path. If dcutr fails: 'dcutr_upgrade_failed'
+      is logged at DEBUG (non-fatal — the session continues via relay). No error
+      is returned to the caller. The session is fully functional over the relay
+      path regardless of dcutr outcome.
+
+  - trigger: "When both direct dial AND relay fallback fail for a session"
+    action: >
+      The session cannot be established. The error code 'relay_fallback_also_failed'
+      is returned to the caller with guidance: 'Both direct P2P connection and
+      relay fallback failed. The counterparty may be offline or unreachable from
+      any path. Try again later, or check network connectivity.' This is a distinct
+      error from 'direct_dial_failed_falling_back_to_relay' (which is a non-fatal
+      intermediate state, not a terminal failure). session.transport.mode.selected
+      is NOT logged (no mode was selected because no connection succeeded).
+
+  - trigger: "When the directory connection is in 'reconnecting' state at the moment
+      a standing receiver node is created"
+    action: >
+      AutoNAT cannot run because there are no connected directory nodes to probe.
+      The dialability observable defaults to { dialable: false, publicAddr: null }.
+      The standing receiver advertises a relay circuit address in the SessionAssignment.
+      transport.autonat.result is logged at INFO with dialable: false, publicAddr:
+      null, nodeType: 'standing_receiver', and a note field: 'autonat_unavailable —
+      directory in reconnecting state'. The 'autonat_unavailable' reason is recorded
+      so the operator can distinguish "confirmed behind NAT" from "could not determine
+      dialability." Once the directory reconnects and AutoNAT completes, the NEXT
+      standing receiver (created after the current one is consumed) uses the updated
+      result. The current receiver does NOT re-issue its SessionAssignment.
+
+  - trigger: "When packages/directory createNode config is inspected in
+      trustless-cello/packages/directory/src/"
+    action: >
+      The directory's libp2p node configuration includes the AutoNAT service
+      protocol (autonatService() or equivalent). This enables directory nodes to
+      respond to AutoNAT dial-back requests from clients. The directory does not
+      initiate AutoNAT probes — it only responds to them. This is a one-line
+      addition to the existing services list in createNode. Directory nodes in
+      all three regions (us-east-1, eu-central-1, ap-northeast-1) serve as
+      independent AutoNAT probers — each confirms or denies dialability from its
+      own network position. No assumption of shared networking between directory
+      nodes.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "packages/transport/src/node.ts createNode function for standing receiver
+      nodes"
+    when: "createNode is called with the standing receiver configuration"
+    then: >
+      The libp2p services configuration includes the AutoNAT client service
+      (autonat()). The AutoNAT client is configured with the directory node
+      addresses from the daemon's active connection as the prober set. Verified
+      by a unit test that: (a) calls createNode with the standing receiver config;
+      (b) inspects the returned node's services to confirm AutoNAT client is present;
+      (c) asserts the configured prober list includes directory node multiaddrs
+      (not empty, not hardcoded — from the injected IAutoNatService adapter).
+      The test uses the LocalAutoNatStub to avoid requiring a real network.
+    test_type: unit
+    component_under_test: transport
+
+  - id: AC-002
+    given: "packages/transport/src/node.ts createNode function for session nodes
+      (non-standing-receiver ephemeral nodes)"
+    when: "createNode is called with the session node configuration"
+    then: >
+      The libp2p services configuration includes the AutoNAT client service.
+      Session nodes also need dialability awareness for the dcutr decision path.
+      Verified identically to AC-001 but with session node config. The dcutr
+      service is also present in the session node configuration — it is not
+      added to the standing receiver (the standing receiver only needs to know
+      its own dialability, not upgrade existing connections).
+    test_type: unit
+    component_under_test: transport
+
+  - id: AC-003
+    given: "A standing receiver node created when the directory connection is
+      active and healthy"
+    when: "the AutoNAT probe cycle completes with at least one directory node
+      confirming dial-back success"
+    then: >
+      The dialability observable on the standing receiver node reads:
+        { dialable: true, publicAddr: '/ip4/203.0.113.5/tcp/4001/p2p/PEER_ID' }
+      (publicAddr is the externally-reachable multiaddr confirmed by AutoNAT).
+      transport.autonat.result is logged at INFO with:
+        dialable: true, publicAddr: (non-null string), nodeType: 'standing_receiver'
+      Verified by an integration test with CELLO_E2E_LIVE gate that: starts a
+      real daemon with a real directory connection; waits for the standing receiver
+      AutoNAT probe to complete; reads the dialability observable and asserts
+      dialable is true with a non-null publicAddr. In-process stubs cannot satisfy
+      this AC — real AutoNAT requires actual network dial-back from directory nodes.
+    test_type: integration
+    component_under_test: transport
+    notes: >
+      This test requires CELLO_E2E_LIVE. The AutoNAT probe hits real directory
+      nodes performing real dial-back. The test must be wrapped with
+      describe.skipIf(!process.env.CELLO_E2E_LIVE).
+
+  - id: AC-004
+    given: "A standing receiver node created when the directory connection is in
+      'reconnecting' state (all directory nodes unreachable)"
+    when: "the standing receiver needs to determine its dialability for the
+      SessionAssignment address"
+    then: >
+      The dialability observable defaults to { dialable: false, publicAddr: null }.
+      The standing receiver reports its relay circuit address (not a direct address)
+      for use in the SessionAssignment. transport.autonat.result is logged at INFO
+      with dialable: false, publicAddr: null, nodeType: 'standing_receiver'.
+      The error code 'autonat_unavailable' is NOT returned to the caller (it is
+      not a terminal error) — it is an internal condition that drives the conservative
+      relay fallback. Verified by a unit test using the LocalAutoNatStub configured
+      to simulate 'reconnecting' state: (a) creates a standing receiver when the
+      stub reports no connected directory nodes; (b) asserts dialable is false;
+      (c) asserts the address advertised is a relay circuit address, not a direct
+      address.
+    test_type: unit
+    component_under_test: daemon
+    notes: >
+      This is the edge case from outline.md and SIGNAL-001. AutoNAT cannot run
+      without connected probers. The conservative fallback (relay) ensures the
+      session can still be established — just not via direct P2P.
+
+  - id: AC-005
+    given: "A SessionAssignment received by the initiator's session node with
+      transport_mode: 'direct' and counterparty_session_addrs containing a direct
+      multiaddr"
+    when: "the session node's transport selection logic executes"
+    then: >
+      The session node dials the counterparty directly using the addresses from
+      counterparty_session_addrs. It does NOT contact the relay. The transport
+      selection reads transport_mode from the assignment (never infers from address
+      format). session.transport.mode.selected is logged at INFO with sessionId,
+      mode: 'direct', and correlationId. Verified by a unit test using the
+      LocalTransportSelectorStub configured for direct dial success: (a) injects
+      a SessionAssignment with transport_mode: 'direct'; (b) asserts the
+      ITransportSelector.dial() was called with the direct addresses; (c) asserts
+      no relay circuit address was used; (d) asserts the log event fires with
+      mode: 'direct'.
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-006
+    given: "A SessionAssignment received by the initiator with transport_mode:
+      'direct', but the direct dial to counterparty_session_addrs fails (timeout
+      after configurable dial timeout)"
+    when: "the direct dial fails"
+    then: >
+      The session node falls back to the relay circuit address. The intermediate
+      condition 'direct_dial_failed_falling_back_to_relay' is logged at WARN with
+      sessionId, counterpartyPeerId, failureReason (the actual error message from
+      the dial failure — never ${error}), and correlationId. After relay connection
+      succeeds, session.transport.mode.selected is logged at INFO with mode: 'relay'.
+      The fallback is transparent to the caller — no error is returned for the
+      failed direct dial. Verified by a unit test: (a) configures the
+      ITransportSelector stub to fail direct dial and succeed on relay; (b) asserts
+      both log events fire in order (WARN then INFO); (c) asserts the session is
+      established via relay.
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-007
+    given: "A relay-fallback session is established (either transport_mode: 'relay'
+      from the assignment, or direct dial failed and relay succeeded)"
+    when: "the dcutr service on the session node attempts a hole-punch upgrade"
+    then: >
+      If dcutr succeeds: session.transport.dcutr.upgraded is logged at INFO with
+      sessionId and correlationId. The connection is upgraded to direct — the relay
+      is removed from the data path. If dcutr fails: 'dcutr_upgrade_failed' is
+      logged at DEBUG with sessionId, correlationId, and failureReason (error.message,
+      not ${error}). No error is returned to the caller. The session continues via
+      relay. The dcutr attempt is non-blocking and does not delay session readiness —
+      the session is usable immediately upon relay connection, with dcutr as a
+      background upgrade. Verified by two unit tests: (a) stub dcutr success —
+      assert upgraded event fires, connection mode transitions to direct; (b) stub
+      dcutr failure — assert failure logged at DEBUG, session continues, no error
+      returned.
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-008
+    given: "A SessionAssignment with transport_mode: 'direct' where both direct
+      dial AND relay fallback fail"
+    when: "both dial attempts have been exhausted"
+    then: >
+      The session establishment returns { ok: false,
+      reason: 'relay_fallback_also_failed',
+      guidance: 'Both direct P2P connection and relay fallback failed. The
+      counterparty may be offline or unreachable from any path. Try again later,
+      or check network connectivity.' }. This is a terminal error — the session
+      cannot be established. The error code 'relay_fallback_also_failed' is distinct
+      from 'direct_dial_failed_falling_back_to_relay' (intermediate, non-fatal) and
+      from any pre-existing relay error code. session.transport.mode.selected is NOT
+      logged (no mode was successfully selected). Verified by a unit test: (a)
+      configures ITransportSelector stub to fail both direct and relay; (b) asserts
+      the return value matches the error shape above exactly; (c) asserts
+      session.transport.mode.selected was NOT emitted.
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-009
+    given: "packages/interfaces/src/ in cello-client"
+    when: "the interface definitions are inspected"
+    then: >
+      Two new interfaces exist:
+        IAutoNatService — exposes getDialability(): { dialable: boolean;
+          publicAddr: string | null } and a mechanism to observe changes (event
+          emitter or callback). The implementation receives directory node addresses
+          from the daemon context.
+        ITransportSelector — exposes dial(assignment: SessionAssignment):
+          Promise<TransportResult> where TransportResult encodes the three outcomes
+          (direct success, relay fallback success, both failed) with appropriate
+          error codes.
+      Both interfaces are in packages/interfaces/src/. Both have corresponding
+      local stubs in packages/interfaces/stubs/ (LocalAutoNatStub,
+      LocalTransportSelectorStub) that return configurable values without network
+      access. CELLO_ENV='local' or 'test' selects the stubs; 'dev'/'staging'/
+      'production' selects the real implementations. Verified by TypeScript
+      compilation (interfaces exist and are importable) and by a unit test that
+      instantiates both stubs, configures them, and asserts return values match
+      configuration.
+    test_type: unit
+    component_under_test: interfaces
+
+  - id: AC-010
+    given: "The daemon's composition root (packages/daemon/src/server.ts)"
+    when: "the daemon starts via its normal entrypoint with CELLO_ENV='local'"
+    then: >
+      The IAutoNatService and ITransportSelector adapters are instantiated by the
+      composition root. The LocalAutoNatStub and LocalTransportSelectorStub are
+      selected when CELLO_ENV is 'local' or 'test'. The real implementations are
+      selected when CELLO_ENV is 'dev', 'staging', or 'production'. If CELLO_ENV
+      is a production variant and required configuration is missing (e.g. no
+      directory addresses available), the daemon fails at startup with a clear
+      error naming the missing config — not at first session establishment time.
+      Verified by an integration test that starts the daemon binary with
+      CELLO_ENV='local' and asserts: (a) the daemon starts successfully; (b) the
+      AutoNAT service is accessible (returns the stub default: dialable=false);
+      (c) calling initiate_session exercises the transport selector path (does
+      not crash with "adapter not wired").
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Addresses M7 lesson L3 (composition root never wired). The binary-start
+      test is the only test that catches dead-code adapters.
+
+  - id: AC-011
+    given: "packages/directory/src/ createNode configuration in trustless-cello"
+    when: "the directory node's libp2p configuration is inspected"
+    then: >
+      The services list includes the AutoNAT service protocol
+      (/libp2p/autonat/2.0.0 — the server/responder role, not the client role).
+      This enables directory nodes to respond to dial-back requests from clients.
+      The directory does NOT initiate AutoNAT probes — it only responds. All
+      three directory regions (us-east-1, eu-central-1, ap-northeast-1) have the
+      service enabled via the same createNode config — no per-region override.
+      Verified by a unit test that: (a) calls createNode with the directory
+      configuration; (b) inspects the returned node's services; (c) asserts the
+      AutoNAT service protocol handler is registered. The sovereign node invariant
+      is preserved: each directory node responds to AutoNAT independently from its
+      own network position. No cross-node coordination is required for dial-back.
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-012
+    given: "A CELLO_E2E_LIVE environment with a running daemon connected to real
+      directory nodes, and a standing receiver node with AutoNAT confirming
+      dialable: true"
+    when: "a session is initiated by a counterparty and both sides' session nodes
+      are created"
+    then: >
+      The initiator dials the standing receiver's direct multiaddr (the publicAddr
+      from AutoNAT). The connection is established without touching the relay. The
+      session content stream opens directly between the two session nodes. Verified
+      by an integration test with CELLO_E2E_LIVE gate that: (a) creates two daemons
+      with real directory connections; (b) verifies standing receiver dialability is
+      true; (c) initiates a session; (d) asserts the transport mode selected is
+      'direct'; (e) sends a message end-to-end over the direct connection;
+      (f) asserts the relay node received ZERO streams for this session_id (proving
+      the relay was not in the path). This test exercises the full path: AutoNAT →
+      dialability → address advertisement → direct dial → message exchange.
+    test_type: e2e
+    component_under_test: e2e-tests
+    notes: >
+      This is the primary end-to-end AC for the story. It requires real network
+      conditions where at least one daemon is publicly dialable (or both are on
+      a LAN where dial-back succeeds). Gated on CELLO_E2E_LIVE.
+
+  - id: AC-013
+    given: "A CELLO_E2E_LIVE environment where one daemon is behind NAT (AutoNAT
+      confirms dialable: false) and a relay is available"
+    when: "a session is initiated between the NAT'd daemon and a public daemon"
+    then: >
+      The transport_mode in the SessionAssignment is 'relay'. The initiator
+      connects via the relay circuit address. After relay connection is established,
+      dcutr is attempted. Whether dcutr succeeds or fails, the session is functional.
+      Verified by an integration test with CELLO_E2E_LIVE gate that: (a) configures
+      one daemon behind simulated NAT (firewall rules blocking inbound, or a test
+      network topology); (b) asserts transport_mode is 'relay'; (c) asserts relay
+      connection succeeds; (d) sends a message end-to-end; (e) logs whether dcutr
+      upgraded or failed (both outcomes are acceptable for this test — the assertion
+      is that the session works regardless).
+    test_type: e2e
+    component_under_test: e2e-tests
+    notes: >
+      Exercises the relay fallback path under real NAT conditions. Gated on
+      CELLO_E2E_LIVE. dcutr success/failure depends on network topology — both
+      are valid test outcomes.
+
+  - id: AC-014
+    given: "All error paths in this story's implementation: autonat_unavailable,
+      direct_dial_failed_falling_back_to_relay, relay_fallback_also_failed,
+      dcutr_upgrade_failed"
+    when: "each distinct failure cause is triggered independently"
+    then: >
+      Each produces a unique error code distinguishable from all other error codes
+      in the same packages and from all pre-existing codes. Specifically:
+        'autonat_unavailable' — internal condition logged when no probers are
+          reachable (distinct from 'direct_dial_failed_falling_back_to_relay')
+        'direct_dial_failed_falling_back_to_relay' — WARN-level intermediate
+          state, not a terminal error (distinct from 'relay_fallback_also_failed')
+        'relay_fallback_also_failed' — terminal session establishment failure
+          (distinct from all other transport errors)
+        'dcutr_upgrade_failed' — DEBUG-level non-fatal (distinct from all others)
+      No catch block in packages/transport/src/ or packages/daemon/src/ (including
+      files NOT modified by this story) interpolates error objects via ${error}
+      template strings. error.message is extracted explicitly. The implementer
+      scans every catch block in packages/transport/src/ and packages/daemon/src/
+      and fixes or reports any that (a) return a hardcoded reason string without
+      logging the actual exception message, or (b) interpolate an error object
+      into a template string.
+    test_type: unit
+    component_under_test: daemon
+    notes: >
+      Lateral catch audit for packages/transport and packages/daemon. Covers M7
+      lessons L1 (typed field corruption) and L6 (${error} producing [object Object]).
+
+  - id: AC-015
+    given: "A SessionAssignment with transport_mode: 'relay' and
+      counterparty_session_addrs containing a direct /ip4/ multiaddr (address
+      format contradicts transport_mode)"
+    when: "the transport selection logic executes"
+    then: >
+      The transport selector uses transport_mode: 'relay' as the authoritative
+      value — it does NOT parse the address string to infer the mode. The dial
+      goes to the relay circuit address, not the direct /ip4/ address. Separately:
+      a symmetric test with transport_mode: 'direct' and an address containing
+      '/p2p-circuit' asserts the transport selector uses 'direct'. In both cases,
+      address-format-based inference would yield the wrong answer. Only the signed
+      transport_mode field is authoritative. Verified by two unit tests matching
+      the scenarios above.
+    test_type: unit
+    component_under_test: daemon
+    notes: >
+      Encodes WIRE-001 SI-002 requirement at the transport selection layer.
+      transport_mode is FROST-signed and must not be overridden by heuristics.
+
+  - id: AC-016
+    given: "The existing test suite in packages/transport/src/ and packages/daemon/src/"
+    when: "the implementation is complete and pnpm run test passes"
+    then: >
+      All existing tests continue to pass unchanged. The AutoNAT and transport
+      selection additions do not break any pre-existing session establishment
+      flow. Tests that do not use opts.directP2P or the new fixture extensions
+      continue to use their existing transport path (relay by default via stub).
+      Verified by running the full test suite without CELLO_E2E_LIVE set and
+      asserting zero regressions.
+    test_type: unit
+    component_under_test: transport
+
+  - id: AC-017
+    given: "All cello-client code changes for this story are implemented and tests
+      pass (packages/transport and packages/interfaces modified)"
+    when: "the implementer follows the version bump procedure in cello-client CLAUDE.md"
+    then: |
+      - packages/transport has its version incremented in package.json
+      - packages/interfaces has its version incremented if new interfaces were added
+      - @cello-protocol/connect is bumped to reflect the net change
+      - All dependent packages have their inter-dependency versions updated
+      - pnpm install is run and pnpm-lock.yaml is updated
+      - git tag v{connect-version} is pushed to origin
+      - CI publishes the new version to npm beta dist-tag
+      - npm view @cello-protocol/connect@beta dependencies --json shows real semver
+        versions (never workspace:*)
+    test_type: integration
+    component_under_test: cello-client CI
+    notes: >
+      Hard gate. A story that ships AutoNAT changes without a version bump leaves
+      operators on a transport package that cannot determine dialability.
+
+  - id: AC-018
+    given: "The new @cello-protocol/transport version is live on npm beta"
+    when: "packages/directory/package.json in trustless-cello is updated"
+    then: |
+      - packages/directory/package.json references the new semver range for
+        @cello-protocol/transport (e.g. "^X.Y.Z")
+      - No workspace:* references to @cello-protocol/transport remain
+      - @cello-protocol/interfaces remains as workspace:* — it is the only
+        package maintained in trustless-cello
+      - pnpm install is run in trustless-cello and pnpm-lock.yaml is updated
+      - pnpm run typecheck passes in trustless-cello (directory compiles with
+        the AutoNAT service protocol addition)
+      - Commit pushed to trustless-cello main
+    test_type: integration
+    component_under_test: directory
+    notes: >
+      workspace:* resolves to stale local copies post-REPOSPLIT-002. This AC
+      ensures the directory runs against the published transport version that
+      includes the AutoNAT service protocol.
+
+  - id: AC-019
+    given: "The daemon is running with a healthy directory connection and the
+      standing receiver's dialability observable shows dialable: true"
+    when: "the directory reconnects after a signaling drop (SIGNAL-001 reconnect
+      cycle completes) and a new AutoNAT probe runs"
+    then: >
+      The dialability observable on the standing receiver is updated with the new
+      probe result (may remain true or change to false depending on the new network
+      conditions). The NEXT standing receiver created (after the current one is
+      consumed by a session) uses the updated dialability. The CURRENT standing
+      receiver does NOT re-issue its assignment — already-negotiated sessions are
+      not affected by AutoNAT state changes. Verified by a unit test that:
+      (a) creates a standing receiver with dialable: true; (b) simulates a
+      directory reconnect cycle; (c) updates the stub to return dialable: false;
+      (d) asserts the existing standing receiver's SESSION ASSIGNMENT (if already
+      issued) remains unchanged; (e) creates a new standing receiver and asserts
+      it advertises relay (reflecting the new state).
+    test_type: unit
+    component_under_test: daemon
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The transport_mode field from the FROST-signed SessionAssignment is the only
+      authority for dial strategy. The transport selector must not override it by
+      parsing address format, inspecting network topology, or applying local
+      heuristics.
+    adversarial_condition: >
+      An attacker controls the relay and injects a modified SessionAssignment where
+      transport_mode says 'direct' but counterparty_session_addrs contains the
+      attacker's relay address (hoping the client will infer 'relay' from the
+      address and route through the attacker). The client must dial the address
+      as a DIRECT connection (TCP/QUIC, not circuit relay) because transport_mode
+      says 'direct'. The attacker's relay-format address fails as a direct dial
+      (connection refused or wrong protocol). The client either succeeds via the
+      legitimate direct path or returns 'relay_fallback_also_failed' — it never
+      voluntarily routes through the attacker's relay. Verified by AC-015's
+      transport_mode authority tests.
+    test_type: unit
+    component_under_test: daemon
+
+  - id: SI-002
+    statement: >
+      AutoNAT dial-back probers are exclusively directory nodes whose identity
+      is verified via the consortium manifest. An attacker cannot inject a rogue
+      prober that falsely confirms dialability (which would cause the client to
+      advertise a direct address that is actually unreachable, denying service).
+    adversarial_condition: >
+      An attacker advertises an AutoNAT service on the network and attempts to
+      respond to the client's AutoNAT probe with a false-positive "yes you are
+      dialable." The client's AutoNAT configuration restricts probers to the
+      directory nodes listed in the active manifest — the attacker's node is not
+      in the manifest and its response is not counted toward the dialability
+      confidence threshold. The client remains dialable: false (or gets a
+      legitimate result from real directory nodes). Verified by a unit test that:
+      (a) configures the AutoNAT prober list from the manifest; (b) injects a
+      response from a non-manifest peer; (c) asserts the response is ignored
+      and dialability remains unchanged.
+    test_type: unit
+    component_under_test: transport
+
+  - id: SI-003
+    statement: >
+      A dcutr upgrade failure must not terminate or disrupt an active session.
+      The session must remain fully functional over the relay path regardless
+      of dcutr outcome.
+    adversarial_condition: >
+      An attacker interferes with dcutr hole-punch attempts (blocking UDP, injecting
+      invalid STUN responses, or timing out the coordination). The dcutr service
+      reports failure. The session must continue operating over the relay path with
+      no message loss, no stream reset, and no error returned to the application
+      layer. The attacker cannot use dcutr interference as a denial-of-service
+      vector against established sessions. Verified by a unit test that:
+      (a) establishes a relay session; (b) injects a dcutr failure; (c) sends
+      multiple messages after the dcutr failure; (d) asserts all messages are
+      delivered successfully via relay; (e) asserts no error was returned to the
+      caller at any point.
+    test_type: unit
+    component_under_test: daemon
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While no directory nodes are reachable (all three in 'reconnecting'
+      state simultaneously)"
+    fallback: >
+      AutoNAT cannot determine dialability. The standing receiver and any new
+      session nodes default to { dialable: false, publicAddr: null }. All new
+      sessions advertise relay circuit addresses. Existing sessions are unaffected
+      (they are already established with a fixed transport mode). Once any
+      directory node reconnects, the next AutoNAT probe runs and updates the
+      observable — the next standing receiver will use the correct dialability.
+      This degradation is non-fatal: the system falls back to relay-only transport
+      until directory connectivity is restored.
+    test_type: unit
+    component_under_test: daemon
+
+  - id: DB-002
+    condition: "While the relay is unreachable AND the counterparty is not directly
+      dialable (transport_mode: 'relay' but relay connection fails)"
+    fallback: >
+      The session establishment fails with 'relay_fallback_also_failed'. The caller
+      receives actionable guidance: 'Both direct P2P connection and relay fallback
+      failed.' This is a terminal condition — no silent retry loop. The daemon does
+      not hold resources for a session that cannot be established. The caller must
+      initiate a new session attempt when network conditions change.
+    test_type: unit
+    component_under_test: daemon
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: transport.autonat.result
+      level: info
+      trigger: "When AutoNAT probe cycle completes on any node (standing receiver
+        or session node), including when AutoNAT is unavailable (directory in
+        reconnecting state)"
+      context_fields: [dialable, publicAddr, nodeType]
+      correlationId: false
+      notes: >
+        nodeType is 'standing_receiver' or 'session'. When AutoNAT is unavailable,
+        dialable is false and publicAddr is null — the event still fires to make
+        the condition visible. This is a node-level event (not session-scoped),
+        so no correlationId.
+    - name: session.transport.mode.selected
+      level: info
+      trigger: "When a session's transport mode is finalized — either direct dial
+        succeeded, or relay fallback succeeded"
+      context_fields: [sessionId, mode, correlationId]
+      correlationId: true
+      notes: >
+        mode is 'direct' or 'relay'. This event does NOT fire if both paths fail
+        (relay_fallback_also_failed) — in that case, no mode was selected.
+    - name: session.transport.dcutr.upgraded
+      level: info
+      trigger: "When dcutr hole-punch upgrade succeeds on a relay-fallback session"
+      context_fields: [sessionId, correlationId]
+      correlationId: true
+  error_events:
+    - name: transport.autonat.unavailable
+      level: warn
+      trigger: "When AutoNAT cannot run because no directory nodes are connected
+        (all in reconnecting state)"
+      context_fields: [nodeType, directorySignalingStatus]
+      correlationId: false
+      notes: >
+        This is a WARN, not an error — it drives a conservative fallback, not
+        a failure. The standing receiver defaults to relay. Distinguished from
+        a real NAT detection (which is INFO-level autonat.result with dialable:false).
+    - name: session.transport.direct_dial.failed
+      level: warn
+      trigger: "When direct dial to counterparty fails and relay fallback is initiated"
+      context_fields: [sessionId, counterpartyPeerId, failureReason, correlationId]
+      correlationId: true
+      notes: >
+        failureReason is error.message from the dial failure (never ${error}).
+        This is WARN because it is recoverable via relay fallback.
+    - name: session.transport.dcutr.failed
+      level: debug
+      trigger: "When dcutr hole-punch upgrade attempt fails (non-fatal)"
+      context_fields: [sessionId, failureReason, correlationId]
+      correlationId: true
+      notes: >
+        DEBUG level because dcutr failure is expected in many network topologies.
+        failureReason is error.message. Session continues normally via relay.
+  alarms:
+    - condition: "relay_fallback_also_failed rate > 10% of session establishment
+        attempts over 15 minutes"
+      fires_to: "transport-health CloudWatch alarm — elevated rate suggests relay
+        infrastructure degradation or widespread network partition"
+  notes: >
+    All events must be added to the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+    No console.log in implementation code — all events go through the injected
+    Logger interface. The event names match outline.md §Observability Events exactly.
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    AutoNAT in createNode: in packages/transport/src/node.ts, add autonat() to
+    the services configuration for both standing receiver and session nodes.
+    The prober list comes from the IAutoNatService adapter — the adapter's real
+    implementation reads directory node multiaddrs from the daemon context. The
+    stub returns a configurable dialability value. The dcutr service (dcutr()) is
+    added to session nodes only — standing receivers do not need it (they are
+    receivers, not dialers).
+  - >
+    Dialability observable: expose a typed observable on each node (e.g. EventEmitter
+    or RxJS BehaviorSubject pattern) with shape { dialable: boolean; publicAddr:
+    string | null }. The standing receiver's observable is read by the session
+    establishment logic to determine what address to report in SessionRequest or
+    SessionOfferAccept. The observable fires on each AutoNAT probe completion.
+  - >
+    Transport selection: ITransportSelector.dial() implements the three-step
+    strategy: (1) if transport_mode === 'direct', dial direct; (2) if direct fails
+    or transport_mode === 'relay', dial relay; (3) after relay success, attempt
+    dcutr upgrade (non-blocking). The method returns a TransportResult discriminated
+    union: { mode: 'direct' } | { mode: 'relay', dcutrUpgraded: boolean } |
+    { mode: 'failed', reason: 'relay_fallback_also_failed' }.
+  - >
+    Directory-side AutoNAT service: in trustless-cello/packages/directory/src/
+    (likely node.ts or create-node.ts), add autonatService() to the libp2p services
+    list. This is the responder role — the directory answers dial-back requests from
+    clients. No new code beyond the one-line addition is needed. The autonatService()
+    import comes from @libp2p/autonat (or equivalent).
+  - >
+    Dial timeout configuration: the direct dial timeout should be configurable
+    (default 5000ms). If the direct dial does not succeed within this timeout,
+    the relay fallback is initiated. The timeout is a constant in the transport
+    selector, not a user-facing config option.
+  - >
+    CELLO_E2E_LIVE tests: AC-003, AC-012, and AC-013 require real network conditions.
+    These tests must be in a describe.skipIf(!process.env.CELLO_E2E_LIVE) block.
+    They require multiple real daemons with real directory connections. The CI
+    pipeline runs these only in the E2E stage, not in unit test stages.
+  - >
+    The relay circuit address for fallback: when the standing receiver is not
+    dialable, the relay address is constructed from the daemon's known relay
+    endpoint (from the SessionAssignment relay_endpoint field, or from the relay
+    registration in the daemon context). The exact construction depends on how
+    WIRE-001 delivers relay addresses — consult WIRE-001's implementation for
+    the address format.
+  - >
+    Error code registry for this story — these strings are fixed:
+      'autonat_unavailable' — internal, logged when no probers reachable
+      'direct_dial_failed_falling_back_to_relay' — WARN, intermediate non-fatal
+      'relay_fallback_also_failed' — terminal session establishment failure
+      'dcutr_upgrade_failed' — DEBUG, non-fatal
+    Add these to CONTEXT.md's error code glossary.
+  - >
+    packages/interfaces/ is maintained in trustless-cello — it remains as
+    workspace:*. The IAutoNatService and ITransportSelector interfaces live here.
+    Their stubs live in packages/interfaces/stubs/. The real implementations live
+    in packages/transport/src/ (AutoNAT) and packages/daemon/src/ (transport selector).
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-WIRE-001  # produces transport_mode field and counterparty_session_addrs
+                          # in SessionAssignment; this story consumes them
+  blocks:
+    - CELLO-M7-E2E-001   # gate story items 3 and 4: direct P2P where NAT permits,
+                          # relay fallback where it does not
+  notes: >
+    SIGNAL-001 is a soft dependency: the autonat_unavailable edge case requires
+    understanding the 'reconnecting' state semantics from SIGNAL-001. However,
+    the stub adapter makes this testable without SIGNAL-001 being implemented first.
+    DAEMON-002 is a transitive dependency (via WIRE-001): session nodes and standing
+    receivers must exist before AutoNAT can be added to them.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Transport, Node Operations"
+  end_to_end_flow: "§5.7 Session Establishment, §5.8 Direct P2P Transport"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-11_1030_daemon-transport-architecture"
+    - "2026-06-10_2000_peer-reconnect-libp2p-primitives"
+    - "2026-06-11_0822_transport-security-audit-and-libp2p-primitives"
+  related_docs:
+    - "[[daemon-transport-architecture]]"
+    - "[[CELLO-M7-E2E-001]]"
+    - "[[CELLO-M7-WIRE-001]]"
+    - "[[CELLO-M7-DAEMON-002]]"
+    - "[[CELLO-M7-SIGNAL-001]]"
+  notes: >
+    Shared interface: IAutoNatService is consumed by both the standing receiver
+    (to determine its own dialability) and the session establishment logic (to
+    select transport mode). ITransportSelector is consumed by the session
+    establishment logic when dialing a counterparty. The directory's AutoNAT
+    service protocol is consumed by all clients running AutoNAT probes. The
+    outline.md §AutoNAT — Who Provides the Dial-Back Peers? is the authoritative
+    design source for the prober model.
