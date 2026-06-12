@@ -145,9 +145,12 @@ behavior:
       delivery confirmation the entry is deleted from retry_queue; message.retry.delivered
       is logged at INFO with sessionId, nonce (hex), and attemptsTotal (integer,
       the total number of send attempts for this message including the original).
-      If a resend fails, the message remains in the queue (position unchanged) and
-      the drain continues to the next entry. The drain is atomic per-message:
-      delete from DB only on confirmed delivery.
+      If a resend fails, the drain halts for that session immediately — the failed
+      message and all subsequent entries remain in the queue at their original
+      positions for the next drain attempt on peer reconnect. Skipping a failed
+      entry to deliver later entries is explicitly forbidden: FIFO ordering requires
+      M2 to arrive before M3 regardless of transient M2 failures. The drain is
+      atomic per-message: delete from DB only on confirmed delivery.
 
   - trigger: "When an incoming message arrives on a session node stream"
     action: >
@@ -379,7 +382,7 @@ acceptance_criteria:
       packages/client/src/ returns no matches. No class, type, or variable
       related to retry queuing or nonce deduplication exists in packages/client.
       The cello_send failure path in packages/client (or in its IPC caller) sends
-      a 'queue_failed_message' IPC request to the daemon instead of managing a
+      a 'queue_failed_send' IPC request to the daemon instead of managing a
       local queue. The cello_receive path in packages/client does not filter nonces
       — it delivers whatever the daemon provides (dedup happens before the daemon
       writes to the receive buffer). Verified by the grep command above returning
@@ -467,6 +470,33 @@ acceptance_criteria:
       false.
     test_type: integration
     component_under_test: e2e-tests
+
+  - id: AC-015
+    given: "A retry queue for session S containing 3 messages in order: M1
+      (position 1), M2 (position 2), M3 (position 3); the peer has reconnected
+      and the drain begins; M1 is delivered successfully; the resend of M2 fails
+      (stream closes again mid-drain)"
+    when: "the drain encounters the M2 failure"
+    then: >
+      The drain halts immediately. M3 is NOT sent. M2 remains in retry_queue at
+      its original position. M3 remains in retry_queue at its original position.
+      The delivery order invariant is preserved: M3 must not be delivered ahead of
+      M2. message.retry.delivered is logged once (for M1). No delivery event fires
+      for M2 or M3. On the next peer reconnect, the drain resumes from M2 (the
+      first undelivered message). Verified by a unit test that: (a) pre-populates
+      the RetryQueue in-memory state with M1, M2, M3; (b) stubs the resend call
+      to succeed for M1 and fail for M2; (c) calls drainSession(sessionId); (d)
+      asserts the stub was called twice (M1 and M2 only — M3 was never attempted);
+      (e) asserts retry_queue still contains M2 and M3 after the drain attempt;
+      (f) asserts message.retry.delivered fired once (M1) and not for M2 or M3.
+    test_type: unit
+    component_under_test: daemon
+    notes: >
+      This AC ensures the halt-on-failure invariant is implemented, not just
+      documented. The behavior is intentional: skipping M2 to deliver M3 would
+      violate FIFO ordering at the receiver. The resend stub must fail at the
+      network level (return a rejected promise) — not merely set a flag — to
+      exercise the real error path in drainSession.
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
@@ -611,7 +641,7 @@ observability:
       context_fields: [sessionId, nonce, error]
       correlationId: false
   notes: >
-    All four events are in the message.retry.* and message.nonce.* taxonomy
+    All five events are in the message.retry.* and message.nonce.* taxonomy
     defined in outline.md §Observability Events. The implementer must add
     message.retry.queued, message.retry.delivered, message.retry.evicted,
     message.nonce.duplicate, and message.retry.persist.failed to the canonical
@@ -696,8 +726,11 @@ implementation_notes:
     Retry drain trigger: the SessionManager calls RetryQueue.drainSession(sessionId)
     when a session node reports a new stream from the counterparty (peer reconnect
     event). Drain is sequential (not concurrent): send M1, await confirmation,
-    delete from DB, send M2, etc. If any resend fails, drain stops for that
-    session and the remaining messages stay in the queue for the next reconnect.
+    delete from DB, send M2, etc. If any resend fails, the drain halts immediately
+    for that session — the failed message stays at its position and the remaining
+    messages are not delivered. FIFO is absolute: a failure on M2 must not allow
+    M3 to be delivered ahead of it. The queue waits for the next reconnect event
+    to attempt again from the first undelivered message.
   - >
     packages/client changes: remove any RetryQueue or NonceDedupSet class from
     packages/client/src/. The IPC protocol gains two new message types:

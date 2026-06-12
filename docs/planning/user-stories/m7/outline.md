@@ -837,6 +837,7 @@ and corresponding ACs. All events follow the `domain.noun.verb` taxonomy.
 | `message.retry.delivered` | info | `sessionId`, `nonce`, `attemptsTotal` |
 | `message.retry.evicted` | warn | `sessionId`, `nonce`, `queueDepth` |
 | `message.nonce.duplicate` | debug | `sessionId`, `nonce`, `senderPubkey` |
+| `message.retry.persist.failed` | error | `sessionId`, `nonce`, `error` |
 
 ### Bidirectional auth (M7-MANIFEST-002)
 
