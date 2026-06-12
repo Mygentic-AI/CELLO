@@ -44,7 +44,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-DAEMON-002 — Ephemeral session nodes | — | **implemented — PR ready** | Branch m7/daemon-002 in cello-client; 76 tests; all reviewer findings fixed; stacked on m7/daemon-001 |
 | M7-MANIFEST-001 — Manifest schema | — | **in progress** | Branch m7/manifest-001 in cello-client; nearly complete as of 2026-06-12 |
 | M7-MANIFEST-002 — Client verification + polling | — | **implemented — PR ready** | Branch m7/manifest-002 in both repos; 815 cello-client tests + 6 directory tests; all sprint-reviewer findings fixed |
-| M7-MCP-001 — MCP adapter | — | written — not yet started | Blocked on M7-DAEMON-001 (done); ready to start |
+| M7-MCP-001 — MCP adapter | — | **implemented — PR ready** | Branch m7/mcp-001 in cello-client; 11 adapter tests + 28 daemon tests; stacked on m7/daemon-003; all reviewer findings fixed |
 | M7-SIGNAL-001 — Signaling stream resilience | — | written — not yet started | Blocked on M7-DAEMON-001 (done); ready to start |
 | M7-DAEMON-003 — Nonce dedup + retry queue | — | **implemented — PR ready** | Branch m7/daemon-003 in cello-client; 112 tests; stacked on m7/daemon-002; 2 code-review rounds (7 findings round 1, 0 round 2); version bump deferred (AC-013) |
 | M7-WIRE-001 — SessionAssignment wire format | — | written — not yet started | Blocked on M7-DAEMON-002; cross-repo; batch with M7-SESSION-001 + M7-MANIFEST-002 |
@@ -367,6 +367,33 @@ Sprint-review findings (4 blocking, all fixed):
 
 Commits: 5d433cc, 5d58cb1, 376e62a (cello-client branch m7/manifest-002).
 Batch gate: NOT pushed — waiting for M7-WIRE-001 + M7-SESSION-001.
+
+### 2026-06-12 — M7-MCP-001 implemented
+
+Branch `m7/mcp-001` in cello-client (worktree at `/Users/andrep/Documents/code/cello-client-m7-mcp-001`). Stacked on m7/daemon-003. 11 adapter proxy tests + 28 daemon agent-lifecycle tests. Implementation:
+
+- `IpcProxy` (new): thin JSON-newline-over-Unix-socket client with request/response correlation, buffer overflow protection (1MB), orphaned response warnings, and connection loss detection
+- `cello-mcp.ts` (rewritten ~230 lines): --version flag, TTY detection, stderr tee to /tmp/cello-mcp-stderr.log, daemon.sock connect, ipc.connect frame, 14 MCP tools registered as IPC proxies
+- `daemon.ts` (extended): perConnectionState Map, onlineAgents Set, handlers for ipc.connect / cello_start_agent / cello_stop_agent / cello_use_agent / cello_list_agents / cello_status, no_current_agent guard on 7 session tools, onDisconnect cleanup
+- `ipc-server.ts` (modified): connectionId passed to handlers, onDisconnect hook, daemon.ipc.accepted event (distinct from handler's daemon.ipc.connected)
+
+Key decisions:
+- No key material in adapter (grep-verified: SI-002)
+- Per-connection isolation: separate connectionId, separate currentAgent, no cross-connection leakage (SI-001)
+- agent_already_current is an error (not idempotent) — distinct from agent_not_online
+- Session tools return not_implemented stub with correct no_current_agent guard (SIGNAL-001 wires real routing)
+- AC-021 (taxonomy update in trustless-cello) deferred — requires separate commit in trustless-cello
+
+Code-reviewer findings (9 total — 3 CRITICAL, 2 HIGH, 2 MEDIUM, 2 LOW):
+- All fixed in commit 454fb04
+
+Sprint-reviewer findings (2 MEDIUM, 2 LOW):
+- Double-logging fixed (daemon.ipc.accepted vs daemon.ipc.connected)
+- cello_receive_session added to guard
+- cello_list_sessions + cello_receive_session added to AC-007 test
+- (AC-015 fixture extension deferred — lives in trustless-cello e2e-tests)
+
+All fixed in commit ef8f717. Unblocks: M7-MCP-002.
 
 ### 2026-06-12 — M7-DIR-PING-001 written
 

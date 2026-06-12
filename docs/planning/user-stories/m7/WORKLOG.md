@@ -235,3 +235,45 @@ DB before IPC socket opens (AC-007/AC-008 restart boundary).
 - 0 findings — clean pass. Reviewer initially flagged missing debug() in test logger doubles,
   but this was a false positive (debug() present in all 8 test files from round 1 fixes).
   No additional changes required.
+
+---
+
+### 2026-06-12 16:10 — MCP-001 implemented
+
+**Story:** CELLO-M7-MCP-001
+**Agent/Author:** orchestrator + sprint-coder
+
+Rewrote the MCP adapter from a 690-line fat binary (holding CelloClient, libp2p node, SQLCipher DB, crypto keys) into a ~230-line thin stdio-to-IPC proxy. The adapter now holds zero key material — it connects to the daemon via Unix domain socket and forwards all tool calls as JSON-newline IPC frames.
+
+**What was built:**
+- `ipc-proxy.ts` — request/response correlation via incrementing numeric IDs, 1MB buffer overflow protection, orphaned response stderr warning, method name validation, graceful connection loss handling (all pending calls resolve to ipc_connection_lost)
+- `cello-mcp.ts` — --version (dynamic from package.json), TTY detection with instructions, stderr tee to /tmp/cello-mcp-stderr.log, daemon.sock connect with ENOENT/ECONNREFUSED handling, ipc.connect frame, 14 MCP tools (4 agent management + 8 session + 2 utility) registered as IPC proxies
+- Daemon agent lifecycle: perConnectionState Map tracks currentAgent per connectionId; onlineAgents Set tracks global online state; 6 new IPC handlers (ipc.connect, cello_start_agent, cello_stop_agent, cello_use_agent, cello_list_agents, cello_status)
+- no_current_agent guard on 7 session tools (cello_send, cello_receive, cello_receive_session, cello_initiate_session, cello_await_session, cello_close_session, cello_list_sessions)
+- onDisconnect hook in ipc-server: cleans up perConnectionState on socket close
+- daemon.ipc.accepted (accept time) vs daemon.ipc.connected (after ipc.connect handler) — distinct events
+
+**Sprint-coder challenges:**
+- First two agent dispatches failed (process killed mid-run, no commits)
+- Third dispatch succeeded (commit fedb002), stacked correctly on m7/daemon-003
+
+**Code-reviewer findings (9 total, all fixed in 454fb04):**
+1. CRITICAL-1: createSessionFixture not available in cello-client — correctly handled (uses connectToDaemon directly)
+2. CRITICAL-2: Missing AC-018 test — added signaling_reconnecting passthrough test
+3. CRITICAL-3: Missing AC-020 tests — added --version subprocess test + daemon_not_running exit test
+4. HIGH-1: Malformed frame handling — stderr logging added (already resolved oldest-pending)
+5. HIGH-2: Orphaned response warning — added stderr.write for unmatched IDs
+6. MEDIUM-1: Method name validation — added non-empty string check
+7. MEDIUM-2: Write failure logging — stderr + #dead flag set
+8. LOW-1: Hardcoded version "0.0.43" — replaced with dynamic package.json read
+9. LOW-2: Buffer overflow — 1MB limit matching IPC server
+
+**Sprint-reviewer findings (4 total, all fixed in ef8f717):**
+1. MEDIUM: Double-logging of daemon.ipc.connected — split into daemon.ipc.accepted (server) + daemon.ipc.connected (handler)
+2. MEDIUM: cello_receive_session not in SESSION_TOOLS_REQUIRING_AGENT — added
+3. LOW: AC-007 test covers 5 tools but guard covers 7 — added cello_receive_session + cello_list_sessions
+4. LOW: AC-015 fixture extension — deferred (lives in trustless-cello e2e-tests)
+
+**Final test counts:** 739 root workspace tests + 140 daemon tests (all passing). Lint and typecheck clean.
+
+**AC-021 deferral:** Taxonomy update requires trustless-cello commit — will be batched with next trustless-cello story.
