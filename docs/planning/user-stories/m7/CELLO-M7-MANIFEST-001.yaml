@@ -1,0 +1,567 @@
+---
+name: CELLO-M7-MANIFEST-001
+type: user-story
+date: 2026-06-12
+topics: [manifest, consortium-keys, tuf, cryptography, officer-ceremony, authentication, protocol-types, m7]
+milestone: M7
+status: draft
+description: >
+  Define the consortium manifest JSON schema, embed N officer Ed25519 public keys
+  as binary constants in the client binary, implement the threshold signature
+  verification function and canonical serialization, document the officer key
+  ceremony output specification, and produce a test manifest with known keys for
+  integration tests. Foundation for MANIFEST-002's runtime enforcement and
+  handshake step 6.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-MANIFEST-001
+domain: Manifest
+milestone: M7
+actor: CLIENT
+priority: P0
+components:
+  - crypto
+  - protocol-types
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO client binary,
+  I want a well-defined consortium manifest schema with N officer Ed25519 public
+  key constants baked in at build time and a threshold signature verification
+  function,
+  so that MANIFEST-002 can verify every directory node's identity against a
+  cryptographically-anchored node list before any connection is trusted.
+
+# ─── Context ────────────────────────────────────────────────
+# Background — bidirectional auth gap:
+# Steps 5-6 of the 7-step mutual challenge-response (end-to-end-flow.md §3.1)
+# are currently unimplemented. The client accepts "signaling_auth_ok" from any
+# process that responds — no cryptographic proof of directory identity. This
+# story delivers the primitive that makes steps 5-6 implementable: the schema,
+# the binary trust anchor, and the verifyManifest function. Runtime enforcement
+# (version monotonicity, expiry, background polling, handshake step 6) is
+# MANIFEST-002's scope.
+#
+# TUF alignment (canonical standard):
+# The design has independently arrived at TUF's architecture twice. This story
+# explicitly adopts TUF as the authoritative reference (see §4 of the
+# implementing-directory-bidirectional-authentication discussion log):
+#   - N officer keys in binary  = TUF root key set
+#   - t-of-n threshold          = TUF signature threshold
+#   - version + expires         = TUF version and expiry
+#   - in-band rotation          = TUF root key rotation (signed by t existing keys)
+# TUF spec: https://theupdateframework.github.io/specification/latest/
+#
+# Sovereign Node Constraint (restated inline — required by outline.md):
+# Directory nodes are sovereign and independent, deployed across separate AWS,
+# GCP, and Azure regions. Each node has its own Ed25519 signing key — listed as
+# an individual entry in the manifest's nodes array. The officer threshold
+# signature applies to the manifest as a whole; it does not create shared
+# secrets or co-location dependencies between nodes. No implementation may
+# assume that two directory nodes share a network, a provider, or any secret
+# material. The manifest schema must support nodes[].provider values from
+# multiple distinct cloud providers in the same array.
+
+# ─── Behavior ──────────────────────────────────────────────
+behavior:
+  - trigger: "When verifyManifest(manifest, rootKeys, threshold) is called with a
+      valid manifest whose threshold-count of signatures verify"
+    action: >
+      The function serializes the manifest body (all fields except signatures) as
+      canonical JSON — object keys sorted lexicographically at every nesting level,
+      no whitespace, no trailing newline — then counts the number of unique officer
+      key indices (0-based, into rootKeys[]) whose Ed25519 signature over the
+      canonical bytes is valid. If the count of valid unique-officer signatures is
+      >= threshold, returns { ok: true, signerCount: count }.
+
+  - trigger: "When the number of valid unique-officer signatures is below threshold"
+    action: >
+      verifyManifest returns { ok: false, reason: 'manifest_signature_invalid',
+      detail: string including the valid count and the required threshold }.
+
+  - trigger: "When a signature entry references an officerIndex outside [0, rootKeys.length-1]"
+    action: >
+      verifyManifest treats that entry as invalid and does not count it toward the
+      threshold. No out-of-bounds exception is thrown.
+
+  - trigger: "When the same officerIndex appears in multiple signature entries"
+    action: >
+      Only one valid signature from a given officer counts toward the threshold,
+      regardless of how many entries carry that officerIndex. A single officer
+      signing multiple times never satisfies a threshold > 1.
+
+  - trigger: "When a signature hex string is malformed (odd length, invalid characters,
+      wrong length for Ed25519)"
+    action: >
+      verifyManifest treats that entry as invalid, catches the parse error
+      internally, and continues processing remaining entries.
+
+  - trigger: "Where CELLO_ENV=test or integration tests import TEST_CONSORTIUM_ROOT_KEYS"
+    action: >
+      Test officer keypairs (deterministic, fixed seeds) are available for
+      constructing valid test manifests. Production root key constants
+      (CONSORTIUM_ROOT_KEYS) are distinct from test constants — no test key
+      appears in the production set.
+
+# ─── Acceptance Criteria ───────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "packages/protocol-types/src/manifest.ts is implemented"
+    when: "the file is reviewed for type completeness and typecheck passes"
+    then: >
+      The ConsortiumManifest type contains exactly these fields (no others):
+        version        — number (monotonic integer; schema definition only;
+                         enforcement in MANIFEST-002)
+        not_before     — string (ISO8601 UTC)
+        expires        — string (ISO8601 UTC; schema definition only;
+                         enforcement in MANIFEST-002)
+        nodes          — ConsortiumNode[] (array of node entries)
+        signatures     — OfficerSignature[] (threshold officer signatures)
+      ConsortiumNode contains exactly: nodeId (string), pubkey (string —
+      Ed25519 hex, 64 chars), region (string), provider (string — 'aws' |
+      'gcp' | 'azure'), endpoint (string — HTTPS URL). OfficerSignature
+      contains exactly: officerIndex (number — 0-based index into root key
+      array), signature (string — Ed25519 hex, 128 chars). All fields on all
+      types are non-optional. pnpm run typecheck passes with zero errors.
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-002
+    given: "A ManifestError type is defined in packages/protocol-types/src/manifest.ts"
+    when: "the type and its exported string constants are reviewed"
+    then: >
+      ManifestError is a string literal union type that includes at minimum:
+      'manifest_signature_invalid', 'manifest_version_rollback', 'manifest_expired'.
+      All three are exported as named const string values (not just type-level
+      literals) so callers can compare at runtime without string literals. The
+      'manifest_version_rollback' and 'manifest_expired' codes are defined here
+      as named constants; their runtime enforcement is MANIFEST-002's scope.
+      pnpm run typecheck passes with zero errors.
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-003
+    given: "packages/crypto/src/manifest.ts exports canonicalManifestBody and
+      verifyManifest"
+    when: "canonicalManifestBody(m) is called on a ConsortiumManifest instance m"
+    then: >
+      Returns a Uint8Array containing the UTF-8 encoding of the JSON serialization
+      of all manifest fields EXCEPT signatures, with object keys sorted
+      lexicographically at every nesting level, no whitespace, and no trailing
+      newline. Specifically:
+        (a) top-level field order: expires, nodes, not_before, version
+        (b) each node entry key order: endpoint, nodeId, provider, pubkey, region
+        (c) the nodes array preserves its insertion order (array element order is
+            not sorted — only object keys within elements are sorted)
+        (d) number values (version) are serialized as JSON numbers, not strings
+      Determinism test: two ConsortiumManifest objects with identical field values
+      but keys set in opposite insertion order must produce byte-for-byte identical
+      output. Verified by: constructing m1 with fields in forward order and m2
+      with fields in reverse order, asserting Buffer.from(canonicalManifestBody(m1))
+      .equals(Buffer.from(canonicalManifestBody(m2))).
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-004
+    given: "A ConsortiumManifest with 3 valid Ed25519 officer signatures from 3
+      distinct officers (officerIndex 0, 1, 2), verified against the 5
+      TEST_CONSORTIUM_ROOT_KEYS constants (threshold=3, N=5)"
+    when: "verifyManifest(manifest, TEST_CONSORTIUM_ROOT_KEYS, 3) is called"
+    then: >
+      Returns { ok: true, signerCount: 3 }. The test must produce the 3 signatures
+      by calling @noble/curves/ed25519 sign() on the canonicalManifestBody bytes
+      with the test private keys — not by mocking the verify function. The private
+      keys are imported from the test-fixtures module (not from the package's
+      public index.ts). Verified by: asserting the returned signerCount equals 3
+      AND that changing any signature byte causes the same manifest to return
+      { ok: false }.
+    test_type: unit
+    component_under_test: crypto
+    notes: >
+      Stub-resistance: the test must exercise the real @noble/curves/ed25519 verify
+      path. A stub returning true regardless of input would satisfy a simple shape
+      check but not this AC.
+
+  - id: AC-005
+    given: "A ConsortiumManifest with 3 valid signatures, where one signature hex
+      has one byte corrupted (e.g. last char replaced with 'X')"
+    when: "verifyManifest is called with threshold=3"
+    then: >
+      Returns { ok: false, reason: 'manifest_signature_invalid', detail: string
+      containing '2 valid' and '3 required' (or equivalent phrasing with the
+      actual counts) }. The function does not throw. The two remaining valid
+      signatures are still counted — only the corrupted entry is treated as
+      invalid.
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-006
+    given: "A ConsortiumManifest with only 2 valid signatures (below the threshold=3)"
+    when: "verifyManifest(manifest, TEST_CONSORTIUM_ROOT_KEYS, 3) is called"
+    then: >
+      Returns { ok: false, reason: 'manifest_signature_invalid', detail: string
+      containing the counts (e.g. '2 valid of 3 required') }. Does not throw.
+      Does not return ok: true under any path with 2 valid entries and threshold 3.
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-007
+    given: "A ConsortiumManifest with threshold=3 and 3 signature entries all
+      with officerIndex: 0, all bearing a valid Ed25519 signature from officer 0"
+    when: "verifyManifest is called"
+    then: >
+      Returns { ok: false, reason: 'manifest_signature_invalid', detail: string
+      noting that only 1 unique officer contributed despite 3 valid entries (or
+      equivalent phrasing) }. Three valid signatures from the same officer never
+      satisfy a threshold of 3 unique officers.
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-008
+    given: "A signature entry with officerIndex: 99 in a manifest where the root
+      key array has length 5"
+    when: "verifyManifest processes this entry"
+    then: >
+      The entry is treated as invalid (counts 0 toward threshold). No RangeError
+      or array-index exception is thrown. If remaining valid entries are below
+      threshold, returns { ok: false, reason: 'manifest_signature_invalid' }.
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-009
+    given: "A signature entry where the signature field is a malformed hex string
+      (e.g. 'gggg', odd length, or correct length but not parseable as Ed25519)"
+    when: "verifyManifest processes this entry"
+    then: >
+      The malformed entry is caught internally and treated as invalid. No unhandled
+      exception propagates. verifyManifest continues processing remaining entries
+      and returns { ok: false, reason: 'manifest_signature_invalid' } if remaining
+      valid entries are below threshold.
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-010
+    given: "packages/crypto/src/consortium-keys.ts is implemented"
+    when: "the file is reviewed and typecheck passes"
+    then: >
+      CONSORTIUM_ROOT_KEYS is a readonly tuple of exactly 5 hex-encoded Ed25519
+      public keys (64 hex chars each) exported as a const. CONSORTIUM_THRESHOLD
+      is exported as the number 3. Both are non-configurable at runtime. TypeScript
+      enforces readonly — an attempt to assign to CONSORTIUM_ROOT_KEYS after import
+      causes a compile-time error. No private keys are present in any source file
+      under packages/crypto/src/ (excluding .test-fixtures.ts files). Verified by:
+      grep -r 'privateKey\|secretKey\|PRIVATE_KEY' packages/crypto/src/ returns
+      no matches outside of *.test-fixtures.ts files.
+    test_type: unit
+    component_under_test: crypto
+    notes: >
+      Alpha production root keys are NOT committed in this story — CONSORTIUM_ROOT_KEYS
+      initially holds placeholder values (5 zero-filled 64-char hex strings). The
+      actual officer-ceremony-derived values are substituted in a governance commit
+      after the officer ceremony occurs. The story is complete when the schema,
+      verification function, and test fixtures pass all ACs — not when production
+      keys are committed. Placeholder values must be clearly marked with a comment
+      indicating they are pre-ceremony placeholders.
+
+  - id: AC-011
+    given: "packages/crypto/src/consortium-keys.ts also exports TEST_CONSORTIUM_ROOT_KEYS
+      and TEST_CONSORTIUM_THRESHOLD"
+    when: "the test constants and their separation from production constants are reviewed"
+    then: >
+      TEST_CONSORTIUM_ROOT_KEYS is a readonly tuple of exactly 5 hex-encoded Ed25519
+      public keys generated from deterministic fixed seeds (NOT the same values as
+      CONSORTIUM_ROOT_KEYS — no overlap). TEST_CONSORTIUM_THRESHOLD is 3.
+      Corresponding test private keys (required to sign test manifests) are exported
+      ONLY from a file named *.test-fixtures.ts under packages/crypto/src/ and are
+      NOT re-exported from the package's public entrypoint (packages/crypto/src/index.ts).
+      Verified by: attempting to import test private keys via
+      import { ... } from '@cello-protocol/crypto' — TypeScript reports an error
+      or the import is undefined (the key is not in the public surface).
+      SI-003 independently verifies the non-overlap invariant.
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-012
+    given: "packages/crypto/src/manifest-test-fixture.ts exports makeTestManifest
+      and the 5 test officer keypairs"
+    when: "makeTestManifest(nodes, opts?) is called with a non-empty nodes array"
+    then: >
+      Returns a ConsortiumManifest where:
+        version:    opts.version ?? 1
+        not_before: opts.notBefore ?? a fixed test date (e.g. '2026-01-01T00:00:00Z')
+        expires:    opts.expires ?? a fixed future date 7 days after not_before
+        nodes:      the provided array unchanged
+        signatures: 3 valid Ed25519 signatures from test officers at indices 0, 1, 2,
+                    each signing the canonicalManifestBody of the above fields
+      AND verifyManifest(result, TEST_CONSORTIUM_ROOT_KEYS, TEST_CONSORTIUM_THRESHOLD)
+      returns { ok: true, signerCount: 3 }. This function is the shared fixture for
+      all downstream stories (MANIFEST-002, E2E-001) that need a valid manifest
+      without running the production officer ceremony.
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-013
+    given: "The officer key ceremony specification in implementation_notes"
+    when: "a sample ceremony output is constructed using test officer keypairs as
+      stand-ins and verifyManifest is called on the result"
+    then: >
+      verifyManifest(ceremonyOutput, TEST_CONSORTIUM_ROOT_KEYS, 3) returns
+      { ok: true, signerCount: 3 }. AND replacing any one signature entry in
+      ceremonyOutput with a signature from a non-officer key (a freshly generated
+      unrelated keypair) causes verifyManifest to return { ok: false }. This AC
+      validates that the ceremony specification and the verification function are
+      consistent — a correctly-run ceremony produces a manifest that passes
+      verification, and a tampered one fails.
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-014-error-distinctness
+    given: "All error paths in verifyManifest and canonicalManifestBody"
+    when: "each distinct failure cause is triggered independently in separate tests"
+    then: >
+      Each produces a unique and diagnosable result: (a) threshold not met →
+      { ok: false, reason: 'manifest_signature_invalid', detail: '<n> valid of
+      <t> required' }; (b) duplicate officer → detail mentions 'duplicate' or
+      'unique'; (c) out-of-bounds index → entry silently skipped; (d) malformed
+      signature hex → entry silently skipped; (e) empty signatures array →
+      { ok: false, detail: '0 valid of <t> required' }. No catch block in
+      packages/crypto/src/ or packages/protocol-types/src/ swallows an exception
+      without preserving the underlying error message. The implementer scans every
+      catch block in both packages and fixes any that: (i) return a hardcoded
+      reason string without logging or preserving the exception, or (ii) interpolate
+      an error object directly into a template string (producing [object Object]).
+      Both patterns are blocking per M7 error discipline rules.
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-015
+    given: "All cello-client code changes for this story are implemented and all
+      tests pass"
+    when: "the implementer runs the version bump procedure in cello-client CLAUDE.md"
+    then: |
+      - @cello-protocol/crypto is bumped (new exports: verifyManifest,
+        canonicalManifestBody, CONSORTIUM_ROOT_KEYS, CONSORTIUM_THRESHOLD,
+        TEST_CONSORTIUM_ROOT_KEYS, TEST_CONSORTIUM_THRESHOLD)
+      - @cello-protocol/protocol-types is bumped (new exports: ConsortiumManifest,
+        ConsortiumNode, OfficerSignature, ManifestError)
+      - @cello-protocol/connect is bumped to reflect the net change
+      - Every package depending on a modified package has its dependency version updated
+      - pnpm install is run and pnpm-lock.yaml is updated in cello-client
+      - git tag v{connect-version} is pushed to origin
+      - CI publishes the new version to npm beta dist-tag
+      - `npm view @cello-protocol/connect@beta dependencies --json` shows real semver
+        versions for @cello-protocol/crypto and @cello-protocol/protocol-types
+        (never workspace:*)
+    test_type: integration
+    component_under_test: cello-client CI
+    notes: >
+      Hard gate. A story that changes cello-client packages without publishing
+      leaves every downstream story and operator on stale versions.
+
+  - id: AC-016
+    given: "The new @cello-protocol/crypto and @cello-protocol/protocol-types
+      versions are live on npm beta"
+    when: "packages/directory/package.json and packages/relay/package.json in
+      trustless-cello are reviewed"
+    then: |
+      - Both package.json files reference the new semver ranges for
+        @cello-protocol/crypto and @cello-protocol/protocol-types
+      - No workspace:* references to these packages remain in either file
+      - pnpm install is run and pnpm-lock.yaml is updated in trustless-cello
+      - pnpm run typecheck passes in trustless-cello with zero errors
+      - Commit pushed to trustless-cello main
+    test_type: integration
+    component_under_test: directory
+    notes: >
+      workspace:* resolves to stale local copies post-REPOSPLIT-002. Even though
+      this story does not change directory or relay logic, directory and relay
+      depend on protocol-types and crypto transitively — their semver references
+      must be kept current.
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      verifyManifest must never count a single officer's valid signature more than
+      once toward the threshold, even when that officer's officerIndex appears
+      multiple times in the signatures array.
+    adversarial_condition: >
+      An attacker constructs a manifest with threshold=3, supplying 3 signature
+      entries all with officerIndex: 0 and a valid signature from officer 0. All
+      3 entries pass individual Ed25519 verification against rootKeys[0]. Despite
+      this, verifyManifest must return { ok: false, reason: 'manifest_signature_invalid' }
+      because only 1 unique officer contributed. Verified by calling verifyManifest
+      with the described manifest and asserting ok === false. An implementation that
+      counts distinct signature entries (rather than distinct valid officer indices)
+      would incorrectly return ok: true here.
+    test_type: unit
+    component_under_test: crypto
+
+  - id: SI-002
+    statement: >
+      canonicalManifestBody must produce identical bytes for any two structurally
+      equal ConsortiumManifest instances, regardless of JavaScript property
+      insertion order or runtime property enumeration order.
+    adversarial_condition: >
+      An attacker attempts a malleability attack: constructing two manifest objects
+      with identical field values but different JavaScript property insertion orders,
+      hoping that canonicalManifestBody produces different bytes for each — allowing
+      one to verify while the other does not. The canonical serialization must
+      produce byte-for-byte identical output for both. Verified by constructing m1
+      with all fields set in alphabetical order and m2 with all fields set in reverse
+      alphabetical order, asserting canonicalManifestBody(m1) deepEquals
+      canonicalManifestBody(m2).
+    test_type: unit
+    component_under_test: crypto
+
+  - id: SI-003
+    statement: >
+      No test consortium root key may appear in the production CONSORTIUM_ROOT_KEYS
+      array. Production key constants and test key constants must be disjoint sets.
+    adversarial_condition: >
+      A test officer private key (exported from the test-fixtures module) is used to
+      sign a manifest, and verifyManifest is called with the production
+      CONSORTIUM_ROOT_KEYS. The test key must NOT appear in CONSORTIUM_ROOT_KEYS, so
+      the signature must not contribute to threshold satisfaction. Verified by:
+      asserting that the intersection of CONSORTIUM_ROOT_KEYS and
+      TEST_CONSORTIUM_ROOT_KEYS is the empty set (no hex string appears in both arrays).
+      An implementation that accidentally includes a test key in the production
+      constants would allow test-signed manifests to pass production verification.
+    test_type: unit
+    component_under_test: crypto
+
+# ─── Degraded Behavior ────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While verifyManifest is called with signatures: [] (empty array)"
+    fallback: >
+      verifyManifest returns { ok: false, reason: 'manifest_signature_invalid',
+      detail: '0 valid of <threshold> required' } without throwing. Does not
+      access any array index. Does not return ok: true.
+    test_type: unit
+    component_under_test: crypto
+
+  - id: DB-002
+    condition: "While verifyManifest is called with a signatures array where all
+      entries have malformed hex strings"
+    fallback: >
+      Each malformed entry is caught and treated as invalid (counts 0 toward
+      threshold). verifyManifest returns { ok: false, reason: 'manifest_signature_invalid' }.
+      No unhandled exception propagates to the caller.
+    test_type: unit
+    component_under_test: crypto
+
+# ─── Observability ─────────────────────────────────────────
+observability:
+  events: []
+  error_events: []
+  notes: >
+    This story delivers pure cryptographic primitives (verifyManifest,
+    canonicalManifestBody) and TypeScript schema types. These functions do not
+    fire log events — they return structured results that callers log via the
+    injected Logger interface. The log events for manifest verification
+    (directory.auth.manifest.verified, directory.auth.manifest.expired,
+    directory.auth.manifest.poll.success, directory.auth.challenge.verified,
+    directory.auth.challenge.failed) are fired by MANIFEST-002's transport layer
+    when it calls verifyManifest at connection time and during background polling.
+    All runtime observability for the manifest trust chain belongs to MANIFEST-002.
+    No alarm threshold is applicable here: this story introduces no background task,
+    no network call, and no runtime state change that could trigger a CloudWatch
+    alarm. Alarm thresholds for manifest-related failure modes are specified in
+    MANIFEST-002.
+  alarms: []
+
+# ─── Implementation Notes ──────────────────────────────────
+implementation_notes:
+  - >
+    Officer key ceremony specification (what the ceremony must produce for Alpha):
+    This is a documented manual ceremony. The code verifies the output; this note
+    specifies what the output must be and how to verify it.
+
+    Steps:
+    (1) Each of the 5 officers independently generates an Ed25519 keypair offline
+        (air-gapped machine or hardware security module such as YubiKey). The private
+        key never leaves the device or is disclosed to any other party.
+    (2) Each officer provides their 64-char hex public key to the ceremony coordinator
+        via a pre-established out-of-band channel (encrypted messaging, not email
+        that can be MITM'd).
+    (3) The coordinator assembles a ConsortiumManifest body: version: 1, not_before:
+        <ceremony date ISO8601 UTC>, expires: <7 days after not_before ISO8601 UTC>,
+        nodes: <current directory node list>, and computes canonicalManifestBody().
+    (4) The canonical bytes (printed as hex or a hash for comparison) are distributed
+        to all 5 officers for independent verification.
+    (5) Each officer signs the canonical bytes with Ed25519 and returns their 128-char
+        hex signature and officerIndex to the coordinator. At least 3 officers must sign.
+    (6) The coordinator constructs the signatures array and calls:
+        verifyManifest(manifest, publicKeys, 3) — must return { ok: true }.
+    (7) The verified manifest is embedded as a JSON file in the npm package and the 5
+        public keys are committed as CONSORTIUM_ROOT_KEYS in consortium-keys.ts (replacing
+        the placeholder values).
+
+    Jurisdiction requirement (governance — not enforced in code but required for Alpha):
+    No two of the 5 officers may be subject to the same jurisdiction's compelled-disclosure
+    law. Key holders must be distributed across at least 3 distinct legal jurisdictions.
+    A manifest signed by 3 officers from the same jurisdiction satisfies the cryptographic
+    threshold but violates the governance requirement. The ceremony coordinator must verify
+    jurisdiction diversity before admitting any public key to CONSORTIUM_ROOT_KEYS.
+  - >
+    Canonical JSON implementation: do not use JSON.stringify() alone — key ordering
+    is not guaranteed across JS engines and object property order is insertion-dependent.
+    Instead: (1) collect the top-level field names of the body (all fields except
+    signatures), sort them lexicographically; (2) for each ConsortiumNode in the nodes
+    array, sort its field names; (3) produce the final JSON string from a custom
+    recursive serializer or a proven canonical-json library. The result must be byte-
+    for-byte identical on Node.js 24 LTS across Linux, macOS, and Windows.
+  - >
+    Alpha placeholder values: CONSORTIUM_ROOT_KEYS initially contains 5 placeholder
+    hex strings (e.g. '0'.repeat(64) for each) clearly marked with a comment:
+    '// PRE-CEREMONY PLACEHOLDER — replace after officer key ceremony'. The story
+    completion criteria are: tests pass, schema is correct, verifyManifest works
+    against test keys. Production keys are committed in a separate governance commit
+    after the ceremony.
+  - >
+    Error code constants: define ManifestError as a const union in protocol-types:
+      type ManifestError = typeof MANIFEST_SIGNATURE_INVALID
+                         | typeof MANIFEST_VERSION_ROLLBACK
+                         | typeof MANIFEST_EXPIRED
+      const MANIFEST_SIGNATURE_INVALID = 'manifest_signature_invalid' as const
+      const MANIFEST_VERSION_ROLLBACK  = 'manifest_version_rollback' as const
+      const MANIFEST_EXPIRED           = 'manifest_expired' as const
+    This gives MANIFEST-002 type-safe references without string literals.
+    'manifest_version_rollback' and 'manifest_expired' are defined here for schema
+    completeness; their enforcement logic belongs to MANIFEST-002.
+  - >
+    TUF reference: the threat model, root key rotation mechanism, and version + expiry
+    semantics are specified by the TUF specification
+    (https://theupdateframework.github.io/specification/latest/). Implementers should
+    read the TUF spec §4 (root metadata) and §5.3.3 (version numbers) before
+    implementing canonicalManifestBody and verifyManifest.
+
+# ─── Dependencies ──────────────────────────────────────────
+dependencies:
+  blocked_by: []
+  blocks:
+    - CELLO-M7-MANIFEST-002  # requires verifyManifest, ConsortiumManifest type,
+                             # root key constants, and ManifestError codes
+    - CELLO-M7-E2E-001       # gate exercises bidirectional auth via MANIFEST-002
+  notes: >
+    Independent — no dependency on any other M7 story. Per the outline
+    implementation order, MANIFEST-001 is the second story to implement and
+    runs in parallel with CELLO-M7-DAEMON-001. No cross-repo CloudFormation
+    deployment is required for this story — it adds code to packages/crypto and
+    packages/protocol-types in cello-client only.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Authentication, Node Operations"
+  end_to_end_flow: "§3.1 Authentication — Challenge-Response (steps 5-6)"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-11_1459_implementing-directory-bidirectional-authentication"
+    - "2026-06-11_1030_daemon-transport-architecture"
+    - "2026-06-11_0822_transport-security-audit-and-libp2p-primitives"
+  related_docs:
+    - "[[implementing-directory-bidirectional-authentication]]"
+    - "[[daemon-transport-architecture]]"
+  external_sources:
+    - "https://theupdateframework.github.io/specification/latest/ — TUF spec; canonical reference for root key set, threshold signature, version+expiry, and in-band rotation threat model"
