@@ -15,7 +15,7 @@ description: >
 id: CELLO-M7-MCP-002
 domain: MCP
 milestone: M7
-actor: AGENT
+actor: CLIENT
 priority: P1
 components:
   - adapter-claude-code
@@ -267,7 +267,7 @@ acceptance_criteria:
     test_type: integration
     component_under_test: adapter-claude-code
 
-  - id: AC-011-observability
+  - id: AC-011
     given: "Agent state transitions and session lifecycle events occur via the daemon (started via binary entrypoint)"
     when: "each event fires through the real daemon event bus"
     then: >
@@ -292,7 +292,7 @@ acceptance_criteria:
       the log events and the notification dispatch fire independently. Unit test
       of Logger call sites alone cannot verify the independence guarantee.
 
-  - id: AC-012-composition-root
+  - id: AC-012
     given: "The notification dispatcher is implemented with passing unit tests"
     when: "the daemon starts via its normal entrypoint (packages/daemon/src/server.ts) and the MCP adapter connects via IPC (packages/adapter-claude-code/src/bin/cello-mcp.ts)"
     then: >
@@ -308,7 +308,7 @@ acceptance_criteria:
       This catches the PERSIST-024 pattern: component exists, tests pass in
       isolation, but composition root never wires it.
 
-  - id: AC-013-lateral-catch-audit
+  - id: AC-013
     given: "All catch blocks in packages/adapter-claude-code/src/ and packages/daemon/src/"
     when: "the implementer scans every catch block in both packages"
     then: >
@@ -324,7 +324,7 @@ acceptance_criteria:
       Lateral audit covers ALL files in both packages, not only files changed
       by this story.
 
-  - id: AC-014-version-bump
+  - id: AC-014
     given: "All cello-client code changes for this story are implemented and tests pass"
     when: "the implementer runs the version bump procedure in cello-client CLAUDE.md"
     then: |
@@ -416,10 +416,12 @@ observability:
     daemon's existing daemon.ipc.disconnected event (from DAEMON-001) fires
     shortly after, and the connection is removed from the routing table. The
     DEBUG level is appropriate: this is operational noise unless actively
-    debugging a zombie connection. The log events listed above also fire from
-    DAEMON-001, DAEMON-002, and MCP-001 contexts — this story adds the MCP
-    notification dispatch paired with those events, not a second log of the same
-    event.
+    debugging a zombie connection. Agent state transitions (agent.online,
+    agent.offline) are operator-initiated via cello_start_agent/cello_stop_agent
+    or daemon shutdown — no alarm on expected operator actions. The log events
+    listed above also fire from DAEMON-001, DAEMON-002, and MCP-001 contexts —
+    this story adds the MCP notification dispatch paired with those events, not
+    a second log of the same event.
 
 # ─── Implementation Notes ──────────────────────────────────
 implementation_notes:
@@ -472,11 +474,11 @@ dependencies:
   blocked_by:
     - CELLO-M7-MCP-001    # MCP adapter rewrite, per-connection state, four new tools
     - CELLO-M7-DAEMON-002 # session node lifecycle events (session.node.created/destroyed)
-  blocks: []
+  blocks:
+    - CELLO-M7-E2E-001    # integration gate — close gate item 9 requires notification verification at every step
   related:
     - CELLO-M7-DAEMON-001 # daemon foundation, EventBus, IPC connections
     - CELLO-M7-DAEMON-003 # retry queue events — design confirmation only (message.retry.evicted excluded from MCP notifications)
-    - CELLO-M7-E2E-001    # integration gate — close gate item 9 requires correct state at every step
 
 # ─── References ────────────────────────────────────────────
 references:
