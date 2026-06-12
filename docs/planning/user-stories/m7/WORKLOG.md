@@ -144,3 +144,33 @@ directory tests passing in trustless-cello. Lint and typecheck clean.
 
 **Batch gate:** trustless-cello branch NOT pushed to origin — must batch with
 M7-WIRE-001 and M7-SESSION-001 before any directory pipeline push.
+
+---
+
+### 2026-06-12 14:48 — MANIFEST-002 code-review round 2 and 3
+
+**Story:** CELLO-M7-MANIFEST-002
+**Agent/Author:** orchestrator
+
+Code-review round 2 returned 3 findings (1 CRITICAL, 2 HIGH). All fixed in commit 376e62a:
+
+1. **CRITICAL — handleManifestPollResponse missing verifyManifest():** The poll handler
+   accepted manifests without threshold signature verification. Fixed by adding
+   `rootKeys` and `threshold` to SignalingManagerConfig, threading them through daemon.ts
+   composition root, and calling `verifyManifest()` as the first step in
+   handleManifestPollResponse. All 6 test call sites updated.
+
+2. **HIGH — missing not_before validity check:** Both daemon startup and poll handler
+   now reject manifests where `now < not_before`. Prevents accepting a manifest before
+   its intended activation time (e.g. pre-staged rotation manifest).
+
+3. **HIGH — malformed pubkey returns misleading reason:** ManifestDirectoryChallengeVerifier
+   returned `key_not_in_manifest` when the node's pubkey was malformed (wrong length /
+   non-hex). Fixed to return `signature_invalid` — the node IS in the manifest, its key
+   is just unparseable.
+
+Code-review round 3 returned **ZERO findings** — clean pass. Implementation confirmed
+production-ready by reviewer across all crypto paths, version monotonicity, backward
+compat, error handling, and test coverage.
+
+**Total review rounds:** 3 code-review + 1 sprint-review. All findings resolved.

@@ -88,7 +88,7 @@ directory or relay changes, ask: are S4, S6, and S12 all ready to batch?
 Current batch status:
 - M7-WIRE-001 ready to batch: **no**
 - M7-SESSION-001 ready to batch: **no**
-- M7-MANIFEST-002 ready to batch: **written — awaiting sprint review**
+- M7-MANIFEST-002 ready to batch: **yes — all reviews passed (3 code-review rounds + 1 sprint-review)**
 
 ### Blocked / Waiting
 
@@ -344,6 +344,29 @@ Key bugs found and fixed during review:
 - DirectoryConnectionGater had no outbound gate (fixed: symmetric denyOutbound)
 
 Unblocks: M7-DAEMON-003, M7-WIRE-001, M7-SESSION-001, M7-MCP-002.
+
+### 2026-06-12 — M7-MANIFEST-002 all reviews passed
+
+Branch `m7/manifest-002` in both repos. Three rounds of code review + one sprint
+review, all findings fixed. Final state: 815 cello-client tests (54 files) + 6
+directory tests passing; typecheck and lint clean.
+
+Code-review findings fixed across 3 rounds:
+- Round 1 (8 findings): IManifestProvider.updateManifest(), event name alignment,
+  test assertion precision, missing edge cases
+- Round 2 (3 findings): CRITICAL — verifyManifest() in poll handler (threshold
+  sig verification was missing); HIGH — not_before validity check; HIGH — malformed
+  pubkey reason code
+- Round 3: ZERO findings — clean pass
+
+Sprint-review findings (4 blocking, all fixed):
+1. IDirectoryChallengeVerifier boolean → ChallengeVerifyResult discriminated union
+2. version <= → version < (equal version is valid, not rollback)
+3. AC-005 process-restart boundary test (FileManifestVersionStore + binary spawn)
+4. AC-015 event-ordering test (manifest.verified before daemon.started)
+
+Commits: 5d433cc, 5d58cb1, 376e62a (cello-client branch m7/manifest-002).
+Batch gate: NOT pushed — waiting for M7-WIRE-001 + M7-SESSION-001.
 
 ### 2026-06-12 — M7-DIR-PING-001 written
 
