@@ -101,10 +101,13 @@ story: >
 behavior:
   - trigger: "When `cello login` is run with valid credentials"
     action: "the daemon starts (or connects to an existing instance), connects
-      to the directory cluster, loads all registered agent identities, validates
+      to the directory cluster, loads all registered agent identities (in
+      Registered state — NOT auto-started Online; explicit cello_start_agent is
+      required, per DAEMON-001 design decision confirmed by MCP-001), validates
       persisted connection records against the live directory, surfaces any
       interrupted sessions from the prior run, and exits with status 0; `cello
-      status` reports at least one agent online and directory_signaling: connected"
+      status` reports at least one agent in 'registered' state and
+      directory_signaling: connected"
 
   - trigger: "When a second Claude Code session connects to the running daemon via IPC"
     action: "the daemon accepts the connection, assigns it an independent
