@@ -43,7 +43,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-DAEMON-001 — Daemon foundation | — | **implemented — PR ready** | Branch m7/daemon-001 in cello-client; 52 tests; all reviewer findings fixed |
 | M7-DAEMON-002 — Ephemeral session nodes | — | **implemented — PR ready** | Branch m7/daemon-002 in cello-client; 76 tests; all reviewer findings fixed; stacked on m7/daemon-001 |
 | M7-MANIFEST-001 — Manifest schema | — | **in progress** | Branch m7/manifest-001 in cello-client; nearly complete as of 2026-06-12 |
-| M7-MANIFEST-002 — Client verification + polling | — | **in progress** | Branch m7/manifest-002 in both repos; stacked on m7/manifest-001 (cello-client) + fresh branch (trustless-cello); blocked until MANIFEST-001 finishes |
+| M7-MANIFEST-002 — Client verification + polling | — | **implemented — PR ready** | Branch m7/manifest-002 in both repos; 815 cello-client tests + 6 directory tests; all sprint-reviewer findings fixed |
 | M7-MCP-001 — MCP adapter | — | written — not yet started | Blocked on M7-DAEMON-001 (done); ready to start |
 | M7-SIGNAL-001 — Signaling stream resilience | — | written — not yet started | Blocked on M7-DAEMON-001 (done); ready to start |
 | M7-DAEMON-003 — Nonce dedup + retry queue | — | written — not yet started | Blocked on M7-DAEMON-002 (in progress) |

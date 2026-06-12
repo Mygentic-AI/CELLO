@@ -103,3 +103,44 @@ WORKLOG.md for prior art without it blocking the quick-start read.
 
 Sprint-reviewer returned APPROVED. Final commit: 63e59b7.
 Cohesion pass still required after all component stories are written.
+
+---
+
+### 2026-06-12 — MANIFEST-002 implemented
+
+**Story:** CELLO-M7-MANIFEST-002
+**Agent/Author:** orchestrator + cello-sprint-coder
+
+Implemented directory trust closure: step-5 Ed25519 signing (directory side), step-6
+manifest-based verification (client side), daemon startup manifest loading, and
+background 6–12 hour polling.
+
+**Key decisions:**
+- `IManifestProvider.updateManifest()` added so polled manifests update the in-memory
+  copy used by `IDirectoryChallengeVerifier` — without this, key rotation silently
+  breaks all connections.
+- `IDirectoryChallengeVerifier.verifyChallenge()` returns a discriminated union
+  (`ChallengeVerifyResult`) rather than boolean, enabling AC-007 (`key_not_in_manifest`)
+  and AC-008 (`signature_invalid`) to be observably distinct.
+- `FileManifestVersionStore` introduced (file-backed) to bridge until DAEMON-001
+  delivers SQLCipher. Required by AC-005 (cross-process restart monotonicity).
+- Daemon composition root updated: `CELLO_MANIFEST_PATH`, `CELLO_TEST_CONSORTIUM_KEYS`,
+  `CELLO_TEST_CONSORTIUM_THRESHOLD` env overrides allow integration tests to inject test
+  manifests and keys without modifying production constants.
+
+**Code-review findings (feature-dev:code-reviewer):** 8 findings, all fixed before Step 4.
+**Sprint-reviewer findings:** 4 blocking, all fixed:
+  1. `IDirectoryChallengeVerifier` boolean → discriminated union
+  2. `manifest.version <= lastSeen` → `manifest.version < lastSeen` (equal version is valid)
+  3. AC-005 process-restart boundary test (binary spawning, file-backed version store)
+  4. AC-015 event-ordering test (manifest.verified before daemon.started in binary log)
+
+**Final test counts:** 815 tests passing (54 files) in cello-client; 6 MANIFEST-002
+directory tests passing in trustless-cello. Lint and typecheck clean.
+
+**Commits:**
+- cello-client m7/manifest-002: sprint-coder initial + two fix rounds (commits 5d433cc, 5d58cb1)
+- trustless-cello m7/manifest-002: sprint-coder initial + test manifest fix (commits in branch)
+
+**Batch gate:** trustless-cello branch NOT pushed to origin — must batch with
+M7-WIRE-001 and M7-SESSION-001 before any directory pipeline push.
