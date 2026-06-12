@@ -49,9 +49,9 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-SIGNAL-001 — Signaling stream resilience | — | not started | Blocked on M7-DAEMON-001 |
 | M7-DAEMON-003 — Nonce dedup + retry queue | — | not started | Blocked on M7-DAEMON-002 |
 | M7-MCP-002 — Agent-aware notifications | — | not started | Blocked on M7-MCP-001 + M7-DAEMON-002 + M7-DAEMON-003 |
-| M7-MANIFEST-001 — Manifest schema | — | not started | Independent |
+| M7-MANIFEST-001 — Manifest schema | — | written — review pending | Written 2026-06-12; independent; no other story blocks it |
 | M7-MANIFEST-002 — Client verification + polling | — | not started | Blocked on M7-DAEMON-001 + M7-MANIFEST-001 |
-| M7-CICD-001 — Cross-repo CI/CD | — | not started | Independent |
+| M7-CICD-001 — Cross-repo CI/CD | — | written — review pending | Written 2026-06-12; independent; no other story blocks it |
 
 ### Migration Version Registry
 
@@ -134,3 +134,31 @@ daemon; full M7 error surface map coverage for MCP failure codes; SI-001 (cross-
 connection leakage impossible), SI-002 (no key material in adapter, grep-verifiable);
 opts.ipcClients fixture extension for multi-connection integration tests. Story
 marked written — review pending.
+
+### 2026-06-12 — M7-MANIFEST-001 written
+
+CELLO-M7-MANIFEST-001 YAML written. Key decisions: ConsortiumManifest and
+OfficerSignature types in protocol-types; canonicalManifestBody (sorted keys, no
+whitespace) and verifyManifest (t-of-n Ed25519, dedup by officerIndex) in crypto;
+CONSORTIUM_ROOT_KEYS (5 placeholder hex values pre-ceremony) and TEST_CONSORTIUM_ROOT_KEYS
+(5 deterministic test keys, disjoint from production) in consortium-keys.ts; officer
+key ceremony spec documented in implementation_notes (jurisdiction requirement: ≥3
+distinct legal jurisdictions). 'manifest_version_rollback' and 'manifest_expired'
+error codes defined as constants; runtime enforcement deferred to MANIFEST-002. No
+log events emitted by this story — observability lives in MANIFEST-002's transport
+layer. Story marked written — review pending. AC-015 and AC-016 are the version-bump
+gate; MANIFEST-001 touches only crypto and protocol-types in cello-client.
+
+### 2026-06-12 — M7-CICD-001 written
+
+CELLO-M7-CICD-001 YAML written. Key decisions: GitHub Actions in cello-client is
+the authoritative publish gate (direct StartPipelineExecution call + poll); the
+webhook/pipeline-filter Lambda route is secondary/observability only. OIDC role
+(GitHubOidcRole) grants StartPipelineExecution on cello-e2e-tests-pipeline only
+— SI-001 forbids escalation to other pipelines. Candidate tarballs uploaded to
+s3://cello-artifacts-dev/candidates/{sha}/ with 7-day lifecycle TTL. CodeBuild
+install phase is bifurcated: CELLO_CANDIDATE_SHA set → install from S3 tarball;
+unset → install from npm registry. Dead pipeline cleanup (cello-crypto-pipeline,
+cello-transport-pipeline, cello-client-pipeline, cello-protocol-types-pipeline)
+confirmed complete at CFN and mappings level; deploy-lambdas.sh dev filter run
+is an explicit AC. Story marked written — review pending.
