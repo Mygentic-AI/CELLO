@@ -359,16 +359,27 @@ acceptance_criteria:
       are reachable, the daemon falls back and eventually connects to one of them.
       The error code is 'directory_challenge_failed' — NOT 'directory_unreachable' —
       these are distinct codes. Transport evidence: no stream is opened beyond the
-      signaling protocol layer on the rogue node after step 5. Verified by: a test
-      process implementing the rogue node behavior described in E2E-001 AC-008
-      implementation_notes.
+      signaling protocol layer on the rogue node after step 5.
+      Rogue node test process setup (self-contained — do not rely on E2E-001 for this):
+        The test spawns a helper Node.js process (packages/e2e-tests/src/helpers/rogue-node.ts)
+        that: (1) listens for libp2p connections on a random port, (2) speaks
+        /cello/signaling/1.0.0, (3) completes steps 1–4 using the real CELLO handshake logic
+        (i.e. correctly verifies the client's step-3 signature to pass step 4), then
+        (4) sends { type: 'signaling_auth_ok', nodeId: 'rogue-node-001', signature: <sig
+        made with a fresh random keypair not in any manifest.nodes[]>, timestamp: <now> }.
+        The daemon's manifest is configured via opts.manifest with a makeTestManifest that
+        does NOT include 'rogue-node-001'. The test endpoint is passed to the daemon via
+        opts.manifest.nodes[0].endpoint (replacing the normal staging endpoint). The daemon
+        must reject the rogue node and emit directory.auth.challenge.failed.
     test_type: e2e
     component_under_test: transport
     notes: >
       Requires CELLO_E2E_LIVE. This AC directly satisfies close gate condition 8:
       "connection to a rogue node (wrong key) is rejected." The rogue node must
       complete steps 1–4 — a process that refuses TCP at step 1 does not test
-      step-6 rejection.
+      step-6 rejection. The rogue node helper process is defined in this story's
+      implementation_notes and packages/e2e-tests/src/helpers/rogue-node.ts — it
+      does not depend on E2E-001's implementation for its correctness.
 
   - id: AC-008
     given: "A rogue node that sends nodeId matching a legitimate manifest entry (e.g.
@@ -445,6 +456,42 @@ acceptance_criteria:
       is injected via the IManifestPollScheduler interface (opts.manifest.pollIntervalMs
       in tests). Production uses randomized interval. Tests use a short injected
       interval (e.g. 100ms) to avoid real-time waits.
+
+  - id: AC-010b
+    given: "packages/directory/src/directory-node.ts has a new handler for the
+      manifest_poll_request frame type, and a DirectoryManifestStore is injected
+      at startup with the current ConsortiumManifest (read from the officer-signed
+      JSON deployed alongside the binary)"
+    when: "a connected client sends { type: 'manifest_poll_request' } over the
+      signaling stream"
+    then: >
+      The directory's signaling handler receives the frame. It calls
+      DirectoryManifestStore.getCurrentManifest() and serializes the result into
+      { type: 'manifest_poll_response', manifest: <ConsortiumManifest> }. The
+      response is sent on the same signaling stream. Verified by: a unit test that
+      injects a TestDirectoryManifestStore with a known ConsortiumManifest (v42,
+      built with makeTestManifest), calls the signaling handler with a
+      manifest_poll_request frame, and asserts the outgoing frame is:
+        { type: 'manifest_poll_response', manifest: <the v42 manifest> }
+      with the manifest fields unchanged (no re-serialization or pruning). A second
+      assertion confirms the handler does NOT call verifyManifest on the manifest
+      it is serving — the directory trusts its own bundled manifest. This test
+      runs without CELLO_E2E_LIVE.
+      DirectoryManifestStore interface (directory-side):
+        getCurrentManifest(): ConsortiumManifest
+      Stub: TestDirectoryManifestStore (takes a fixed ConsortiumManifest at construction)
+      Real: FileDirectoryManifestStore (reads the JSON file deployed alongside the binary)
+      This interface goes in packages/interfaces/src/manifest.ts alongside the other four
+      manifest interfaces.
+    test_type: unit
+    component_under_test: directory
+    notes: >
+      This AC closes the gap identified in the sprint review: AC-010 exercises the
+      client side (poll request sent, response processed) but the directory-side
+      handler that produces the response was uncovered. Without this AC, a directory
+      that never handles manifest_poll_request would not be caught until the first
+      live poll. The directory-side handler is new protocol behavior added by this
+      story and must have its own test.
 
   - id: AC-011
     given: "A daemon whose background polling task receives a manifest_poll_response
@@ -758,6 +805,21 @@ observability:
       context_fields: [manifestVersion, expiresAt]
       correlationId: false
 
+    - name: directory.auth.manifest.version.rollback
+      level: error
+      trigger: "When the loaded manifest's version (at startup) or the polled manifest's
+        version is lower than the persisted lastSeenVersion. At startup this fires at
+        ERROR and blocks all directory connections. During polling this fires at WARN
+        (the daemon continues operating on the existing manifest)."
+      context_fields: [manifestVersion, lastSeenVersion]
+      correlationId: false
+      notes: >
+        Two severity levels for the same event name depending on context: ERROR at
+        startup (blocking), WARN during polling (non-blocking). The context_fields are
+        identical in both cases. AC-004 (startup path) and DB-002 (poll path) both
+        reference this named event. Alarms are keyed on the event name and fire after 3
+        occurrences within 60 minutes regardless of severity level.
+
     - name: directory.auth.challenge.failed
       level: error
       trigger: "When step-6 verification fails: either the nodeId is not in
@@ -772,12 +834,14 @@ observability:
         key (possible MITM or node key rotation in progress).
 
   notes: >
-    All five events are from the Bidirectional Auth section of outline.md §Observability
-    Events. Exact names are required — 'directory.auth.manifest.verified' not
-    'manifest.verified'. All events must be verified by corresponding ACs (AC-001 through
-    AC-008) — listing them here is metadata for the implementer; the ACs are the gate.
+    Six events total. Five are from the Bidirectional Auth section of outline.md
+    §Observability Events; the sixth (directory.auth.manifest.version.rollback) was
+    added in the sprint review fix to give the version rollback condition a canonical
+    name. Exact names are required — 'directory.auth.manifest.verified' not
+    'manifest.verified'. All events must be verified by corresponding ACs — listing
+    them here is metadata for the implementer; the ACs are the gate.
     All events go through the injected Logger interface. No console.log in implementation
-    code. The implementer must add all five events to the canonical event taxonomy in
+    code. The implementer must add all six events to the canonical event taxonomy in
     docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
   alarms:
     - condition: "directory.auth.challenge.failed fires more than 3 times in 10 minutes"
@@ -791,8 +855,8 @@ observability:
         This condition should be impossible if the background polling is functioning. Its
         occurrence indicates either the daemon was offline for >7 days (manifest TTL) or
         the polling task has a bug. Alarm fires once per occurrence (no rate threshold).
-    - condition: "manifest_version_rollback logged (at poll time) more than 3 times in
-        60 minutes"
+    - condition: "directory.auth.manifest.version.rollback logged (at poll time, WARN level)
+        more than 3 times in 60 minutes"
       fires_to: >
         transport-security CloudWatch alarm — repeated version rollback in polled manifests
         suggests either a buggy directory manifest server or an active downgrade attack.
@@ -857,15 +921,26 @@ implementation_notes:
     a small addition to directory-node.ts — it does not require a new protocol stream.
 
   - >
-    Directory per-node signing key:
-    Each directory node's per-node Ed25519 private key is the key whose public key is
-    listed in manifest.nodes[] for that nodeId. In production, this key is stored in
-    AWS Secrets Manager under a path like /cello/{env}/directory/{cloud}-{region}/node-signing-key.
-    The composition root reads it at startup via the DirectoryKeyProvider interface.
-    The nodeId is set from an environment variable CELLO_DIRECTORY_NODE_ID (already
-    present as CELLO_DIRECTORY_NODE_ID or derivable from existing configuration).
-    The private key is NEVER logged, NEVER included in frames, and NEVER exposed via
-    any API. The only operation performed with it is Ed25519 sign(tbsBytes, privateKey).
+    Directory per-node signing key — DirectoryKeyProvider interface (formal contract):
+
+    DirectoryKeyProvider:
+      getNodeId(): string              // returns CELLO_DIRECTORY_NODE_ID from env
+      sign(tbsBytes: Uint8Array): Promise<Uint8Array>  // Ed25519 sign, returns 64-byte signature
+    Stub: TestDirectoryKeyProvider (constructor takes { nodeId: string, privateKeyHex: string };
+      sign() calls ed25519.sign(tbs, hexToBytes(privateKeyHex)) synchronously — no async needed
+      in test context; returned as Promise to match the interface)
+    Real: SecretsManagerDirectoryKeyProvider (reads private key bytes from AWS Secrets Manager
+      at startup via path /cello/{env}/directory/{nodeId}/node-signing-key; caches in-memory;
+      sign() calls ed25519.sign from @noble/curves/ed25519)
+    Location: packages/interfaces/src/manifest.ts (directory-side interfaces section) and
+      packages/interfaces/src/stubs/manifest.ts for the stub.
+
+    The nodeId is set from environment variable CELLO_DIRECTORY_NODE_ID (already present
+    from the directory's existing configuration). The private key is NEVER logged, NEVER
+    included in frames, and NEVER exposed via any API. The only operation performed with
+    it is sign(tbsBytes) → 64-byte signature, then encoded as 128-char lowercase hex.
+    AC-009 injects TestDirectoryKeyProvider and verifies the real @noble/curves/ed25519
+    sign/verify path.
 
   - >
     Bundled manifest file location:
@@ -898,9 +973,29 @@ implementation_notes:
     (outline.md §M7 Error Discipline). The AC-015-error-distinctness AC is the gate.
 
   - >
+    Rogue node helper process for AC-007 and AC-008
+    (packages/e2e-tests/src/helpers/rogue-node.ts):
+    A standalone Node.js module that starts a minimal libp2p listener and speaks
+    /cello/signaling/1.0.0. Exported function signature:
+      startRogueNode(opts: {
+        behavior: 'key_not_in_manifest' | 'signature_invalid',
+        manifestNodeId?: string,  // for 'signature_invalid': use a real nodeId from the test manifest
+      }): Promise<{ endpoint: string; stop(): Promise<void> }>
+    Internal behavior for 'key_not_in_manifest': completes steps 1–4, then sends
+      { type: 'signaling_auth_ok', nodeId: 'rogue-node-001', signature: <random-key sig>, timestamp }
+    Internal behavior for 'signature_invalid': completes steps 1–4, then sends
+      { type: 'signaling_auth_ok', nodeId: manifestNodeId, signature: <different-random-key sig>, timestamp }
+    The helper does NOT mock the client side — it is a real listener the daemon's transport
+    layer dials over a real TCP connection. This makes steps 1–4 actually execute.
+    The returned endpoint is passed to the daemon's manifest via opts.manifest.nodes[0].endpoint
+    so the daemon dials this helper process instead of a real staging node.
+    This helper is defined in this story's scope. E2E-001 may reference it but does not own it.
+
+  - >
     CELLO_E2E_LIVE guard:
     AC-006, AC-007, and AC-008 require a running directory node with per-node signing
-    key configured. Every test file containing these ACs must wrap them in:
+    key configured (AC-006) or the rogue node helper process (AC-007, AC-008). Every
+    test file containing these ACs must wrap them in:
       describe.skipIf(!process.env.CELLO_E2E_LIVE)
     This guard is required by the cello-story rules for any AC that requires resources
     createSessionFixture() cannot provide in-process.
