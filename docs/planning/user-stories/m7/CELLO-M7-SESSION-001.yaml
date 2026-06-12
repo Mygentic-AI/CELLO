@@ -163,14 +163,22 @@ behavior:
       context 'cello-frost-seal-v1' with the interrupted Merkle root as the sealed
       root. The normal session_sealed notification flow runs unchanged.
 
-  - trigger: "When seal-interrupted is attempted on a session whose status is already
-      'interrupted' and a prior seal-interrupted attempt is in progress or completed"
+  - trigger: "When cello_close_session is called on a session whose status is 'sealed'
+      (a prior seal-interrupted attempt has already completed)"
     action: >
-      The daemon returns { ok: false, reason: 'session_already_interrupted',
-      guidance: 'This session is already in interrupted state. If a seal-interrupted
-      attempt is in progress, wait for session.interrupted.sealed. If it already
-      completed, the session is sealed — check cello_list_sessions for its sealed
-      record.' }
+      The daemon returns { ok: false, reason: 'session_already_sealed',
+      guidance: 'This session is already sealed. No further action is needed —
+      check cello_list_sessions to view its sealed record and the FROST
+      notarization.' }
+
+  - trigger: "When cello_close_session is called on a session whose status is 'interrupted'
+      and a seal-interrupted attempt is currently in progress (SEAL-INTERRUPTED frame
+      exchange or FROST ceremony already initiated but not yet completed)"
+    action: >
+      The daemon returns { ok: false, reason: 'seal_interrupted_in_progress',
+      guidance: 'A seal-interrupted attempt is already in progress for this session.
+      Wait for session.interrupted.sealed to appear in the daemon logs before
+      retrying.' }
 
   - trigger: "When the initiating side cannot reach the counterparty to deliver
       the SEAL-INTERRUPTED control frame (directory signaling returns unreachable)"
@@ -220,8 +228,10 @@ acceptance_criteria:
 
   - id: AC-002
     given: "An active relay-mediated session where A's stream has been idle beyond
-      the relay's session timeout threshold (simulated by advancing the relay's
-      internal clock or injecting a timeout)"
+      the relay's session timeout threshold (simulated by injecting a configurable
+      idle threshold — the relay's timeout is set to a short value, e.g. 100ms,
+      via a constructor parameter or environment override; real clock is used,
+      no synthetic clock manipulation)"
     when: "the relay detects a session timeout"
     then: >
       The relay sends a session_interrupted frame to the remaining connected
@@ -230,6 +240,11 @@ acceptance_criteria:
       as AC-001 with reason: 'timeout' asserted.
     test_type: integration
     component_under_test: relay
+    notes: >
+      The authoritative simulation approach is a configurable idle threshold
+      injected at construction time (not clock manipulation). The relay's timeout
+      check must be parameterisable so tests can shorten the window without
+      relying on synthetic time control.
 
   - id: AC-003
     given: "packages/relay/src/ — all existing and new catch blocks"
@@ -377,7 +392,7 @@ acceptance_criteria:
     test_type: integration
     component_under_test: client
     notes: >
-      The SEAL-INTERRUPTED leaf is prepended to the normal FROST seal path — it is
+      The SEAL-INTERRUPTED leaf is appended to the normal FROST seal path — it is
       NOT a new ceremony. The context string 'cello-frost-seal-v1' is the same as
       the normal seal (defined in CONTEXT.md FROST TBS arrays). The domain
       separation that distinguishes seal-interrupted from seal is the presence of
@@ -386,21 +401,46 @@ acceptance_criteria:
       SEAL-INTERRUPTED leaf) at the same seal verification step — no directory-side
       changes are needed.
 
+      Leaf count precision: the FROST TBS 'leaf_count' field equals
+      leafCountAtInterruption + 1 (message leaves + 1 SEAL-INTERRUPTED control leaf).
+      merkleRootAtInterruption is the root of the same tree (includes the
+      SEAL-INTERRUPTED leaf). Both values are computed after appending the
+      SEAL-INTERRUPTED leaf. Both sides must agree on the exact same leafCount
+      and merkleRoot before proceeding to the FROST ceremony.
+
   - id: AC-009
-    given: "A session with status 'interrupted' where seal-interrupted has already
-      completed (status: 'sealed') OR where a seal-interrupted initiation is
-      currently in progress"
+    given: "A session that has already been sealed (SQLite status: 'sealed')"
     when: "cello_close_session is called again for the same sessionId"
     then: >
-      The daemon returns { ok: false, reason: 'session_already_interrupted',
-      guidance: 'This session is already in interrupted state. If a seal-interrupted
-      attempt is in progress, wait for session.interrupted.sealed. If it already
-      completed, the session is sealed — check cello_list_sessions for its sealed
-      record.' }
+      The daemon returns { ok: false, reason: 'session_already_sealed',
+      guidance: 'This session is already sealed. No further action is needed —
+      check cello_list_sessions to view its sealed record and the FROST
+      notarization.' }
       No new SEAL-INTERRUPTED frame is sent. No new FROST ceremony is initiated.
-      The existing session state is unaffected.
     test_type: unit
     component_under_test: client
+
+  - id: AC-009b
+    given: "A session with status 'interrupted' where a seal-interrupted attempt is
+      currently in progress (the SEAL-INTERRUPTED frame exchange or FROST ceremony
+      has already been initiated but has not yet completed)"
+    when: "cello_close_session is called again for the same sessionId"
+    then: >
+      The daemon returns { ok: false, reason: 'seal_interrupted_in_progress',
+      guidance: 'A seal-interrupted attempt is already in progress for this session.
+      Wait for session.interrupted.sealed to appear in the daemon logs before
+      retrying. Do not call cello_close_session again until the current attempt
+      completes or times out.' }
+      No new SEAL-INTERRUPTED frame is sent. The in-progress attempt is not
+      cancelled. The existing session state is unaffected.
+    test_type: unit
+    component_under_test: client
+    notes: >
+      M7 error discipline Rule 1: every distinct failure cause produces a distinct
+      error code. 'session_already_sealed' (status='sealed') and
+      'seal_interrupted_in_progress' (attempt in flight) are distinct causes —
+      the operator action differs (nothing vs. wait). A single 'session_already_interrupted'
+      code would conflate them and give the operator wrong guidance.
 
   - id: AC-010
     given: "An interrupted session where the counterparty is not reachable via the
@@ -439,7 +479,8 @@ acceptance_criteria:
     when: "each distinct failure cause is triggered independently"
     then: >
       Each produces a unique error code distinguishable from all others:
-      'session_already_interrupted', 'seal_interrupted_counterparty_unavailable',
+      'session_already_sealed', 'seal_interrupted_in_progress',
+      'seal_interrupted_counterparty_unavailable',
       'seal_interrupted_rejected_by_counterparty' are each distinct and do not
       collide with any existing error codes in these packages. No catch block in
       packages/relay/src/, packages/daemon/src/, or packages/client/src/ returns
@@ -464,7 +505,8 @@ acceptance_criteria:
       The response includes both a machine-readable 'reason' field and a
       'guidance' field. The guidance field is a plain-English instruction for
       the LLM that names the specific next action to take. Verified for each
-      of the three error codes: session_already_interrupted, seal_interrupted_counterparty_unavailable,
+      of the four error codes: session_already_sealed, seal_interrupted_in_progress,
+      seal_interrupted_counterparty_unavailable,
       seal_interrupted_rejected_by_counterparty. A response with reason alone
       and no guidance field does not satisfy this AC.
     test_type: unit
@@ -542,15 +584,21 @@ security_invariants:
       upon receipt of a session_interrupted frame. The decision to seal or discard
       must be explicit and operator-driven.
     adversarial_condition: >
-      A malicious relay injects a forged session_interrupted frame for an active
-      session between A and B. B's daemon receives the frame. B must NOT trigger
-      a FROST seal ceremony automatically — this would allow the relay to terminate
-      sessions and consume FROST ceremony resources without operator consent. Verified
-      by: (a) injecting a session_interrupted frame over a real relay stream for an
-      active session; (b) asserting no session_sealed or seal-related events fire on
-      B's daemon; (c) asserting B's session status transitions to 'interrupted' only;
-      (d) asserting B's operator must call cello_close_session explicitly to initiate
-      seal-interrupted. A daemon that auto-seals on frame receipt fails this invariant.
+      The relay sends a session_interrupted frame to B's daemon — whether the relay
+      is legitimate or has been compromised. The frame is intentionally unsigned:
+      there is no cryptographic way to distinguish a legitimate relay-originated
+      frame from one sent by a malicious relay operator. The protection is a
+      code-path invariant, not a cryptographic check: the daemon must have no
+      code path that auto-seals on receipt of a session_interrupted frame. If such
+      a code path existed, a malicious relay could force FROST ceremony consumption
+      without operator consent.
+
+      Verified by: (a) delivering a session_interrupted frame over a real relay
+      stream for an active session; (b) asserting no session_sealed or seal-related
+      events fire on B's daemon; (c) asserting B's session status transitions to
+      'interrupted' only; (d) asserting B's operator must call cello_close_session
+      explicitly to initiate seal-interrupted. A daemon that auto-seals on frame
+      receipt fails this invariant regardless of whether the relay was legitimate.
     test_type: integration
     component_under_test: daemon
 
@@ -649,15 +697,30 @@ observability:
     Logger interface.
   alarms:
     - condition: "session.interrupted.detected fires more than 10 times in 5 minutes
-        across all agents on a single daemon"
-      fires_to: "daemon-health CloudWatch alarm — sustained interruption rate
-        indicates relay instability or network degradation"
+        across all agents on a single daemon, filtered to source IN
+        ('relay_frame', 'stream_close') — daemon_restart events are explicitly
+        excluded from this count. A daemon restart with 8+ interrupted sessions
+        fires 8 daemon_restart-sourced events; excluding them prevents spurious
+        alarm triggers on normal restart."
+      fires_to: "daemon-health CloudWatch alarm — sustained relay_frame or
+        stream_close interruption rate indicates relay instability or network
+        degradation"
+      notes: >
+        Implement as a CloudWatch metric filter on source == 'relay_frame' OR
+        source == 'stream_close'. The metric is distinct from the unfiltered
+        count so both are independently observable.
     - condition: "session.interrupted.seal.failed fires with reason:
         'seal_interrupted_counterparty_unavailable' more than 5 times in 1 hour
-        for the same sessionId"
+        for the same sessionId (per-session CloudWatch metric filter, not a
+        global count across all sessions)"
       fires_to: "operator notification — the counterparty has been unreachable
-        for an extended period; the operator should decide whether to discard
-        the session"
+        for an extended period on a specific session; the operator should decide
+        whether to discard the session"
+      notes: >
+        Implement as a per-session CloudWatch metric filter using sessionId as
+        the dimension. A global count would be too noisy (5 different sessions
+        each failing once would not warrant the same alert as one session failing
+        5 times, which indicates a stuck counterparty).
 
 # ─── Implementation Notes ────────────────────────────────────
 implementation_notes:
@@ -672,23 +735,63 @@ implementation_notes:
     SEAL-INTERRUPTED control leaf: a new Merkle control leaf type (distinct from
     the existing SEAL leaf). Structure: { type: 'SEAL_INTERRUPTED', sessionId: string,
     leafCount: number, merkleRootAtInterruption: string, timestamp: number,
-    signerPubkey: string }. Both sides produce one before the FROST ceremony.
+    signerPubkey: string }.
+
+    leafCount in the control leaf DEFINITION: the count of session message leaves
+    at the moment of interruption — i.e. before the SEAL-INTERRUPTED leaf itself
+    is appended. This records how many messages were in the chain and lets both
+    sides verify they agree on the tree state.
+
+    The SEAL-INTERRUPTED leaf is then appended to the Merkle tree, making the total
+    leaf count (leafCountAtInterruption + 1). merkleRootAtInterruption is the Merkle
+    root of the tree AFTER appending the SEAL-INTERRUPTED leaf (i.e. the root
+    includes the SEAL-INTERRUPTED leaf at the tip).
+
+    FROST TBS leaf_count: the FROST TBS positional array field 'leaf_count' equals
+    leafCountAtInterruption + 1 (the count AFTER appending the SEAL-INTERRUPTED leaf).
+    This is consistent with merkleRootAtInterruption, which also covers the
+    SEAL-INTERRUPTED leaf. Both sides compute leafCount the same way — there is no
+    asymmetry between initiator and responder.
+
+    Both sides produce one SEAL-INTERRUPTED leaf before the FROST ceremony.
     The FROST ceremony uses the normal 'cello-frost-seal-v1' context string with
-    the merkleRootAtInterruption (which already includes the SEAL-INTERRUPTED
-    leaf at the tip of the chain) as the sealed root.
+    merkleRootAtInterruption as the sealed root.
   - >
     Directory signaling path for SEAL-INTERRUPTED delivery: the session node is
-    torn down, so SEAL-INTERRUPTED coordination must route through the existing
-    signaling stream (the same channel used for connection negotiation and session
-    offers). The exact frame type for this coordination must be added to the
-    directory signaling protocol spec. This does not require a new directory
-    endpoint — it uses the existing bidirectional signaling stream.
+    torn down, so SEAL-INTERRUPTED coordination routes through the existing
+    bidirectional signaling stream (the same stream used for connection negotiation
+    and session offers — no new directory endpoint needed).
+
+    New message type in packages/protocol-types: add SealInterruptedRequest to the
+    signaling message union alongside the existing signaling frame types.
+    Schema: { type: 'seal_interrupted_request', sessionId: string, initiatorPubkey:
+    string, leafCountAtInterruption: number, nonce: string }. The counterparty
+    daemon responds with a SealInterruptedAck:
+    { type: 'seal_interrupted_ack', sessionId: string, sealInterruptedLeaf:
+    SealInterruptedLeaf } or a SealInterruptedRejection:
+    { type: 'seal_interrupted_rejection', sessionId: string, reason: string }.
+    All three types must be added to the SignalingMessage discriminated union in
+    packages/protocol-types/src/signaling.ts (or equivalent file).
+
+    SESSION-001 owns these type definitions. The directory routes them as
+    pass-through frames on the existing signaling stream — no new directory handler
+    is required. The directory already relays arbitrary signaling frames between
+    agents; the routing does not need to understand the payload type.
+
+    The implementer must verify that the signaling stream's message codec (the
+    decoder used by packages/daemon) handles the new discriminated union members
+    without falling through to an 'unknown frame type' error path.
   - >
-    SQLite schema extension (if not already in DAEMON-002): the sessions table
-    needs counterpartyPubkey, messageCount, and interruptedAt columns to support
-    the login surfacing AC-006. If DAEMON-002's schema already captures them,
-    SESSION-001 verifies they are populated. If not, SESSION-001 adds them via an
-    inline ALTER TABLE (client-side SQLite uses inline migrations, not Flyway).
+    SQLite schema extension: DAEMON-002 does NOT persist counterpartyPubkey,
+    messageCount, or interruptedAt in the sessions table. SESSION-001 adds all
+    three columns via inline ALTER TABLE statements executed at daemon startup
+    (client-side SQLite uses inline migrations, not Flyway). The migrations must
+    be idempotent (use ALTER TABLE ... ADD COLUMN IF NOT EXISTS or equivalent guard
+    so they do not fail on a fresh schema created by DAEMON-002 that already has
+    the columns from a future story). These columns are required for the login
+    surfacing AC-006 — any path that reads interrupted_sessions from SQLite must
+    populate all five fields (sessionId, agentName, counterpartyPubkey, messageCount,
+    interruptedAt) or the AC fails.
   - >
     DAEMON-002 scope: DAEMON-002 marks sessions interrupted on graceful shutdown
     (SIGTERM) and at login for rows left 'active' by a prior SIGKILL. SESSION-001
