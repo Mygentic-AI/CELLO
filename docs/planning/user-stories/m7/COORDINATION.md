@@ -44,7 +44,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-MCP-001 — MCP adapter | — | written — review pending | Written 2026-06-11; blocked on M7-DAEMON-001 for implementation |
 | M7-DAEMON-002 — Ephemeral session nodes | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 for implementation |
 | M7-WIRE-001 — SessionAssignment wire format | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-002; cross-repo; batch with M7-SESSION-001 + M7-MANIFEST-002 |
-| M7-TRANSPORT-001 — AutoNAT + direct P2P | — | not started | Blocked on M7-WIRE-001 |
+| M7-TRANSPORT-001 — AutoNAT + direct P2P | — | written — review pending | Written 2026-06-12; blocked on M7-WIRE-001 for implementation; cross-repo; touches packages/transport + packages/interfaces (cello-client) and packages/directory (trustless-cello) |
 | M7-SESSION-001 — Interrupted session handling | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-002 + M7-WIRE-001 for implementation; cross-repo; batch with M7-WIRE-001 + M7-MANIFEST-002 |
 | M7-SIGNAL-001 — Signaling stream resilience | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 for implementation |
 | M7-DIR-PING-001 — Directory-side ping/pong handler | — | not started | Blocked on M7-SIGNAL-001 (frame type defined there); touches packages/directory (trustless-cello); required for heartbeat to function end-to-end |
@@ -291,3 +291,25 @@ session notification routing isolation, no key material in payloads. cello-clien
 only — touches packages/adapter-claude-code and packages/daemon. No trustless-cello
 dependency update needed (no directory/relay changes). Story marked written —
 review pending.
+
+### 2026-06-12 — M7-TRANSPORT-001 written
+
+CELLO-M7-TRANSPORT-001 YAML written. Adds AutoNAT client service to standing
+receiver and session nodes (packages/transport/src/node.ts), exposes dialability
+observable ({ dialable, publicAddr }), implements three-step transport selection
+(direct → relay fallback → dcutr upgrade), and enables AutoNAT service protocol
+on directory nodes (one-line addition in trustless-cello/packages/directory).
+Key decisions: IAutoNatService + ITransportSelector interfaces in packages/interfaces/
+with local stubs; directory nodes as probers (from manifest, sovereign-independent);
+conservative fallback on autonat_unavailable (assume not dialable); dcutr is
+non-fatal best-effort; transport_mode from WIRE-001 is sole authority for dial
+strategy (never infer from address format). 19 ACs cover: AutoNAT in createNode
+(AC-001/002), dialability observable (AC-003/004), direct dial (AC-005), relay
+fallback (AC-006), dcutr (AC-007), relay_fallback_also_failed (AC-008), adapter
+interfaces (AC-009), composition root (AC-010), directory AutoNAT service (AC-011),
+E2E live tests (AC-012/013), lateral catch audit (AC-014), transport_mode authority
+(AC-015), regression (AC-016), version bump (AC-017), trustless-cello update
+(AC-018), autonat-after-reconnect (AC-019). 3 SIs: transport_mode authority,
+prober identity verification, dcutr non-disruption. 2 DBs. Cross-repo: packages/
+transport + packages/interfaces (cello-client) and packages/directory (trustless-cello).
+Story marked written — review pending.
