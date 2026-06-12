@@ -117,9 +117,9 @@ behavior:
     action: >
       The session establishment path returns { ok: false, reason:
       'standing_receiver_unavailable', guidance: 'The standing receiver node is
-      initializing. This takes approximately 50ms. Retry cello_await_session in
-      a moment.' } No new session node is created until the standing receiver is
-      available (either the existing one finishes starting, or the call retries).
+      initializing (completes within 200ms). Retry cello_await_session in a moment.' }
+      No new session node is created until the standing receiver is available
+      (either the existing one finishes starting, or the call retries).
 
   - trigger: "When a session is sealed and closed"
     action: >
@@ -200,24 +200,36 @@ acceptance_criteria:
       that a separate node was created.
 
   - id: AC-002
-    given: "A daemon that has just started (SessionNodeManager.initialize() called)"
+    given: "A daemon that has just started (SessionNodeManager.initialize() called,
+      no agent has been brought Online yet via cello_start_agent)"
     when: "`cello status` is called before any session is initiated"
     then: >
       The response includes standing_receiver_ready: true. The standing receiver
       node is already listening (a TCP port is bound). session.node.created is
-      logged for the standing receiver with sessionPeerId and agentName set to
-      the first online agent (or a sentinel value if no agent is online yet).
-      The standing receiver's Peer ID is different from the directory-facing node
-      Peer ID. Verified by asserting the field is present in the cello status JSON
-      response before any cello_initiate_session or cello_await_session call.
-      A daemon that creates the standing receiver lazily (only when first needed)
-      returns standing_receiver_ready: false and fails this AC.
+      logged for the standing receiver with a sessionPeerId (distinct from the
+      directory-facing node Peer ID) and agentName set to the sentinel value
+      '__standing_receiver__' (no agent is Online at initialize() time — the IPC
+      socket opens after initialize() completes, so cello_start_agent cannot have
+      been called yet). The standing receiver's Peer ID is different from the
+      directory-facing node Peer ID. Verified by asserting the field is present
+      in the cello status JSON response before any cello_initiate_session or
+      cello_await_session call. A daemon that creates the standing receiver lazily
+      (only when first needed) returns standing_receiver_ready: false and fails
+      this AC.
     test_type: integration
     component_under_test: daemon
     notes: >
       E2E-001 AC-003 depends on this field being true before cello_initiate_session
       is called. The assertion must use cello status response, not log timestamps —
       clock skew and buffered writes make timestamp ordering unreliable.
+      The sentinel agentName '__standing_receiver__' is used specifically because
+      the startup sequence (DAEMON-001) opens the IPC socket after initialize()
+      completes; no agent can transition to Online before the standing receiver
+      exists. When an inbound session is accepted and the standing receiver is
+      handed to a session, the replacement standing receiver inherits the same
+      sentinel agentName until cello_start_agent updates the assignment. The
+      implementer must add this sentinel value to the Logger's accepted agentName
+      values in the daemon's type definitions.
 
   - id: AC-003
     given: "A daemon with a standing receiver node ready (standing_receiver_ready: true)
@@ -321,12 +333,13 @@ acceptance_criteria:
     when: "cello_await_session is called"
     then: >
       The response is { ok: false, reason: 'standing_receiver_unavailable', guidance:
-      'The standing receiver node is initializing. This takes approximately 50ms.
-      Retry cello_await_session in a moment.' }
+      'The standing receiver node is initializing (completes within 200ms). Retry
+      cello_await_session in a moment.' }
       No session node is created. standing_receiver_ready is false in cello status
       at this point. The standing receiver completes initialization within 200ms
-      and standing_receiver_ready transitions to true. A retry of cello_await_session
-      after that point succeeds normally.
+      (the authoritative hard bound — behavior description uses "within 200ms"
+      consistently) and standing_receiver_ready transitions to true. A retry of
+      cello_await_session after that point succeeds normally.
     test_type: unit
     component_under_test: daemon
 
@@ -455,6 +468,30 @@ acceptance_criteria:
     test_type: integration
     component_under_test: e2e-tests
 
+  - id: AC-014b
+    given: "A standing receiver node that has just been assigned to an inbound session
+      (cello_await_session called — the node's connectionGater is being updated from
+      open to allow only the initiator's Peer ID)"
+    when: "the standing receiver's multiaddr is delivered to the directory in the
+      session accept response"
+    then: >
+      The connectionGater update completes before the accept response is written
+      to the IPC socket. Verified by asserting that sessionNodeManager.acceptSession()
+      calls gater.setAllowedPeer(initiatorPeerId) before returning the node's
+      Peer ID and multiaddrs to the caller. A unit test injects a gater spy and
+      asserts setAllowedPeer is called with the correct Peer ID before
+      acceptSession() resolves. An implementation that delivers the multiaddr first
+      and updates the gater after creates a window where an unexpected peer could
+      connect — this AC closes that window at the specification level.
+    test_type: unit
+    component_under_test: daemon
+    notes: >
+      This verifies the standing receiver open-gater window is as tight as the
+      code allows. The window between node creation and gater update is
+      implementation-scope; this AC ensures the gater update happens before the
+      address is externally observable. The implementation notes already call this
+      out explicitly; this AC makes it testable.
+
   - id: AC-015
     given: "The directory-facing node is running (created by DAEMON-001) with
       DirectoryPeerIdProvider installed via SessionNodeManager.attachDirectoryGater()"
@@ -577,6 +614,14 @@ degraded_behavior:
       the status field is not updated.
     test_type: integration
     component_under_test: daemon
+    notes: >
+      The 2-second retry loop and exponential backoff behavior are not separately
+      tested by an AC in this story — testing them requires precise timing control
+      over SQLite lock acquisition, which adds significant fixture complexity.
+      The final fallback path (session.interrupt.db.write.failed logged, AC-010
+      recovery on next login) is the observable gate. If the retry timeout behavior
+      matters for a future SLA, it should be extracted to a separate story with
+      dedicated timing infrastructure.
 
 # ─── Observability ──────────────────────────────────────────
 observability:
