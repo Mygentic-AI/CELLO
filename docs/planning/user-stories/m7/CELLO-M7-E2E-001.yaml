@@ -195,7 +195,7 @@ acceptance_criteria:
       uses in-process method dispatch rather than real IPC socket connections would
       satisfy the state check but not the IPC isolation guarantee.
 
-  - id: AC-002b
+  - id: AC-003
     given: "A daemon running with agent Alice registered but not yet started online
       (cello login succeeded but cello_start_agent has not been called for alice)"
     when: "cello_list_agents is called, then cello_start_agent('alice'), then
@@ -216,17 +216,14 @@ acceptance_criteria:
       full three-state model (registered / online / current) defined in CONTEXT.md
       is observable via cello_list_agents. A daemon that initializes all agents as
       'online' at startup without distinguishing 'registered' would fail this AC.
-      DESIGN QUESTION FOR DAEMON-001: does `cello login` automatically bring all
-      registered agents online, or does the operator call cello_start_agent
-      explicitly? The behavior section of this story says login "brings agents
-      online", which would make the precondition "before cello_start_agent has been
-      called" impossible to satisfy after login. DAEMON-001 must resolve this: if
-      login auto-starts all agents, the three-state AC may need to be structured
-      differently (e.g. a freshly registered agent that has never logged in, or an
-      agent that was explicitly set offline). Reconcile and update this AC during
-      the cohesion pass.
+      Resolved by DAEMON-001 design decision: `cello login` does NOT auto-start
+      agents. After login, all agents loaded from `~/.cello/agents/` appear in
+      Registered state. The operator must call cello_start_agent explicitly to
+      bring an agent Online. This makes the precondition "before cello_start_agent
+      has been called for alice" valid — alice is in Registered state after login
+      even if she was Online in a previous daemon session.
 
-  - id: AC-003
+  - id: AC-004
     given: "Agent Alice (connection 1) initiates a session with agent Bob (connection 2),
       both running in the same daemon"
     when: "cello_initiate_session is called from connection 1"
@@ -255,10 +252,11 @@ acceptance_criteria:
       comparison proves ephemeral session nodes are created, not that the protocol
       happened to return the right values. Session nodes that share the directory
       node Peer ID indicate the daemon is not creating separate nodes.
-      The standing_receiver_ready field in cello status is specified by DAEMON-002;
-      cohesion pass should confirm the field name matches what DAEMON-002 defines.
+      The standing_receiver_ready field name is confirmed by DAEMON-002 AC-007
+      (cello status shape) and SESSION-001 AC-007 (extended shape with
+      interrupted_sessions) — both use the exact field name standing_receiver_ready.
 
-  - id: AC-004
+  - id: AC-005
     given: "An active session between Alice and Bob via ephemeral session nodes"
     when: "Alice sends a message via cello_send and Bob calls cello_receive"
     then: >
@@ -279,7 +277,7 @@ acceptance_criteria:
       Alice's session Peer ID from AC-003. Same filter for leaf_deliver and Bob's
       session Peer ID.
 
-  - id: AC-005
+  - id: AC-006
     given: "An active session with network conditions that allow direct P2P
       (both agents dialable — AutoNAT returns dialable for both)"
     when: "the session is established"
@@ -294,11 +292,11 @@ acceptance_criteria:
     component_under_test: transport
     notes: >
       Requires CELLO_E2E_LIVE. If AutoNAT returns not-dialable for the test
-      environment (symmetric NAT, CI), skip this AC and proceed to AC-005b.
+      environment (symmetric NAT, CI), skip this AC and proceed to AC-007.
       Do not skip silently — log the AutoNAT result and mark the AC as
       environment-dependent.
 
-  - id: AC-005b
+  - id: AC-007
     given: "Network conditions that require relay (AutoNAT returns not-dialable,
       or direct dial fails)"
     when: "the session is established"
@@ -310,10 +308,10 @@ acceptance_criteria:
     test_type: e2e
     component_under_test: transport
     notes: >
-      Requires CELLO_E2E_LIVE. At least one of AC-005 or AC-005b must pass
+      Requires CELLO_E2E_LIVE. At least one of AC-006 or AC-007 must pass
       in every run. Both may pass if the environment changes between runs.
 
-  - id: AC-006
+  - id: AC-008
     given: "An active session between Alice and Bob with the signaling stream live"
     when: "the signaling stream is killed (TCP reset simulated — see
       implementation_notes for method)"
@@ -345,7 +343,7 @@ acceptance_criteria:
       path. The 30-second detection window comes from the SIGNAL-001 heartbeat
       interval. See implementation_notes for the exact TCP kill method.
 
-  - id: AC-006b
+  - id: AC-009
     given: "An active session between Alice and Bob with 3 messages queued in the
       retry queue (peer temporarily unreachable — connection dropped before delivery
       confirmed)"
@@ -365,32 +363,40 @@ acceptance_criteria:
       E2E level — DAEMON-003 verifies the persistence logic in isolation; this
       AC verifies it is wired into the daemon and survives a real restart
       boundary. Wrap in describe.skipIf(!process.env.CELLO_E2E_LIVE).
+      Heartbeat path dependency: this AC assumes the signaling stream stays
+      live during the restart boundary test. DIR-PING-001 must be deployed
+      alongside SIGNAL-001 — without it, heartbeat timeouts will cascade during
+      the restart window and trigger spurious reconnect events.
 
-  - id: AC-007
+  - id: AC-010
     given: "An active session between Alice and Bob with 3 messages sent but not sealed"
     when: "the daemon is killed (SIGKILL — not graceful) while the session is active,
       then `cello login` is run on the next session"
     then: >
-      The session appears in `cello status --interrupted` with:
+      The session appears in `cello status` under interrupted_sessions with:
         - sessionId matching the pre-kill session
+        - agentName of the agent whose session was interrupted
         - counterpartyPubkey (hex) of the other agent
         - messageCount: 3 (messages sent before kill)
-        - status: interrupted
+        - interruptedAt: ISO 8601 timestamp
       The DB shows status = 'interrupted' for this session row.
       AND session.interrupted.detected is logged at WARN on the next `cello login`
-      with sessionId, agentName, and source: 'stream_close' — not 'relay_frame',
-      which would indicate misclassification of a SIGKILL as a relay-initiated
-      interruption.
+      with sessionId, agentName, and source: 'daemon_restart' — not 'relay_frame'
+      or 'stream_close'. The SIGKILL path is detected at startup when DAEMON-002
+      scans for rows left 'active' from the prior killed process; the source is
+      'daemon_restart', not 'stream_close' (which is a relay-detected dropout).
       The operator can proceed to either seal or discard the interrupted session.
     test_type: e2e
     component_under_test: daemon
     notes: >
       Requires CELLO_E2E_LIVE. SIGKILL is required — graceful shutdown marks the
-      session differently. The source field assertion catches incorrect event
-      classification: on SIGKILL the relay detects the client disconnect via stream
-      close, not via an explicit relay_frame; the logged source must reflect this.
+      session differently via DAEMON-002's SIGTERM handler. The source field
+      assertion is critical: 'daemon_restart' distinguishes "this daemon died and
+      we found orphaned active rows at login" from 'stream_close' (relay detects
+      dropout mid-session for a still-running daemon) and 'relay_frame' (explicit
+      relay notification). Confusing these would give operators wrong guidance.
 
-  - id: AC-008
+  - id: AC-011
     given: "A daemon configured with the consortium manifest"
     when: "the daemon connects to a rogue directory node — a local process that
       speaks the /cello/signaling/1.0.0 protocol, completes handshake steps 1-5,
@@ -411,20 +417,20 @@ acceptance_criteria:
       for the exact rogue node implementation. Run this as
       describe.skipIf(!process.env.CELLO_E2E_LIVE).
 
-  - id: AC-009
-    given: "AC-001 through AC-008 all pass"
+  - id: AC-012
+    given: "AC-001 through AC-011 all pass"
     when: "the milestone close gate is satisfied"
     then: >
       All 9 conditions from outline.md §Milestone Close Gate are met:
         1. cello login starts the daemon; cello status shows directory connected (AC-001)
         2. Two Claude Code sessions with independent current-agent state (AC-002)
-        3. Two agents exchange messages via ephemeral session nodes with distinct Peer IDs (AC-003, AC-004)
-        4. Direct P2P or relay fallback verified (AC-005/AC-005b)
-        5. Interrupted session surfaced at next login (AC-007)
-        6. Retry queue and nonce dedup survive daemon restart (AC-006b)
-        7. Signaling stream kill → reconnect → drain (AC-006)
-        8. Directory bidirectional auth — rogue node rejected (AC-008)
-        9. cello_list_agents shows correct state (registered/online/current) at every step (AC-002b)
+        3. Three-state model verified: registered → online → current in sequence (AC-003)
+        4. Two agents exchange messages via ephemeral session nodes with distinct Peer IDs (AC-004, AC-005)
+        5. Direct P2P or relay fallback verified (AC-006/AC-007)
+        6. Retry queue and nonce dedup survive daemon restart (AC-009)
+        7. Signaling stream kill → reconnect → drain (AC-008)
+        8. Directory bidirectional auth — rogue node rejected (AC-011)
+        9. Interrupted session surfaced at next login with correct source: 'daemon_restart' (AC-010)
       The milestone writeup (docs/planning/milestone-writeups/M7-daemon-transport.md)
       is updated with a dated confirmation that all 9 conditions passed.
     test_type: manual
@@ -518,19 +524,23 @@ observability:
   notes: >
     This is a gate story, not a code story. It exercises observability events
     defined in DAEMON-001/002/003, MCP-001/002, WIRE-001, TRANSPORT-001,
-    SESSION-001, SIGNAL-001, MANIFEST-001/002. The specific events verified
-    by each AC are:
+    SESSION-001, SIGNAL-001, MANIFEST-001/002, DIR-PING-001. The specific
+    events verified by each AC are:
       AC-001: daemon.started, daemon.login.validation.complete, daemon.ipc.connected
       AC-002: daemon.ipc.connected (×2 with distinct connectionId), agent.current.switched
-      AC-002b: agent.online
-      AC-003: session.node.created (×2), session.assignment.received (×2)
-      AC-004: relay hash_submit and leaf_deliver with session Peer IDs
-      AC-005: session.transport.mode.selected, transport.autonat.result
-      AC-006: directory.signaling.disconnected, directory.signaling.reconnecting,
+      AC-003: agent.online
+      AC-004: session.node.created (×2), session.assignment.received (×2)
+      AC-005: relay hash_submit and leaf_deliver with session Peer IDs
+      AC-006: session.transport.mode.selected, transport.autonat.result
+      AC-007: session.transport.mode.selected (mode: 'relay'), session.transport.dcutr.upgraded (optional)
+      AC-008: directory.signaling.disconnected, directory.signaling.reconnecting,
               directory.signaling.connected; NOT directory.signaling.reconnect.failed
-      AC-006b: message.retry.queued (×3), message.retry.delivered (×3)
-      AC-007: session.interrupted.detected (source: 'stream_close')
-      AC-008: directory.auth.challenge.failed
+      AC-009: message.retry.queued (×3), message.retry.delivered (×3)
+      AC-010: session.interrupted.detected (source: 'daemon_restart')
+      AC-011: directory.auth.challenge.failed
+    DIR-PING-001 events (directory.signaling.ping.received, directory.signaling.pong.sent)
+    are exercised implicitly by AC-008 (heartbeat must be live for the signaling
+    kill to be detected) — they are not individually asserted in the gate ACs.
     No new events are introduced by this story.
   alarms: [] # no alarm: this is a verification story; upstream stories define the alarms
 
@@ -554,7 +564,7 @@ implementation_notes:
     must reject at step 6 when it checks the key against the manifest. A
     process that refuses TCP at step 1 does not test step 6.
   - >
-    AC-006b — triggering the retry queue: drop the peer connection at the
+    AC-009 — triggering the retry queue: drop the peer connection at the
     libp2p level (close the stream without a seal) after cello_send succeeds
     but before the delivery confirmation is received. The simplest approach
     is to kill Bob's session node process mid-flight. The retry queue should
@@ -570,25 +580,30 @@ implementation_notes:
 # ─── Dependencies ────────────────────────────────────────────
 dependencies:
   blocked_by:
-    - CELLO-M7-DAEMON-001   # daemon foundation
-    - CELLO-M7-MCP-001      # MCP adapter
-    - CELLO-M7-DAEMON-002   # ephemeral session nodes
-    - CELLO-M7-WIRE-001     # SessionAssignment wire format
+    - CELLO-M7-DAEMON-001    # daemon foundation
+    - CELLO-M7-MCP-001       # MCP adapter
+    - CELLO-M7-DAEMON-002    # ephemeral session nodes
+    - CELLO-M7-WIRE-001      # SessionAssignment wire format
     - CELLO-M7-TRANSPORT-001 # AutoNAT + direct P2P
-    - CELLO-M7-SESSION-001  # interrupted session handling
-    - CELLO-M7-SIGNAL-001   # signaling stream resilience
-    - CELLO-M7-DAEMON-003   # nonce dedup + retry queue
-    - CELLO-M7-MCP-002      # agent-aware notifications
-    - CELLO-M7-MANIFEST-002 # manifest verification + bidirectional auth
+    - CELLO-M7-SESSION-001   # interrupted session handling
+    - CELLO-M7-SIGNAL-001    # signaling stream resilience (client-side heartbeat)
+    - CELLO-M7-DIR-PING-001  # directory-side ping/pong handler (completes heartbeat path)
+    - CELLO-M7-DAEMON-003    # nonce dedup + retry queue
+    - CELLO-M7-MCP-002       # agent-aware notifications
+    - CELLO-M7-MANIFEST-002  # manifest verification + bidirectional auth
   blocks: []
   notes: >
     Written first (per /cello-story E2E-first rule) but implemented last.
     All component stories above are prerequisites. MANIFEST-001 is a
     prerequisite for MANIFEST-002. CICD-001 is independent and does not
-    block this gate.
-    COHESION PASS REQUIRED: after all component stories are written, revisit
-    this story's ACs and align them with what the component stories actually
-    specify. Update this note when the cohesion pass is complete.
+    block this gate. DIR-PING-001 must be deployed alongside SIGNAL-001 —
+    without the directory-side handler, heartbeat pings go unanswered and
+    clients false-positive on stream death.
+    COHESION PASS COMPLETED: 2026-06-12. AC IDs renumbered to sequential
+    integers (AC-001–AC-012). AC-002b resolved (cello login does not auto-start
+    agents — confirmed by DAEMON-001 design decision). AC-007 source field
+    corrected (SIGKILL → 'daemon_restart', not 'stream_close'). DIR-PING-001
+    added to blocked_by. Observability event map updated to new AC IDs.
 
 # ─── References ─────────────────────────────────────────────
 references:
