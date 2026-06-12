@@ -1,0 +1,623 @@
+---
+name: CELLO-M7-SIGNAL-001
+type: user-story
+date: 2026-06-12
+topics: [signaling, resilience, heartbeat, exponential-backoff, reconnect, directory_signaling, daemon, transport, m7]
+status: draft
+description: >
+  Signaling stream resilience for the daemon's directory-facing connection.
+  Introduces heartbeat/keepalive (ping every 15s, detection within 30s),
+  automatic reconnect with exponential backoff (1s→60s cap, max 10 attempts),
+  the directory_signaling status observable (connected / reconnecting / lost),
+  outbound operation queuing during reconnect (64-op cap, FIFO drain after
+  reconnect), and full re-authentication on reconnect (no resume token).
+  Eliminates the silent signaling stream death documented as M6/M6B lesson L5.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-SIGNAL-001
+domain: Signal
+milestone: M7
+actor: OPS
+priority: P0
+components:
+  - daemon
+  - transport
+  - cli
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the daemon,
+  I want to detect signaling stream death via heartbeat, reconnect automatically
+  with exponential backoff to any reachable directory node from the manifest node
+  list, and queue outbound operations during the reconnect window,
+  so that transient directory connection failures never cause silent protocol
+  failures — FROST ceremonies, session initiations, and manifest polls succeed
+  after reconnect without manual intervention, and the operator always knows the
+  current signaling state via cello status.
+
+# ─── Context ────────────────────────────────────────────────
+# Root cause addressed: M6/M6B lesson L5. After ~2 minutes of idle signaling,
+# the stream dropped silently. The process stayed alive with
+# directory_reachable: false. No reconnect, no error, no user-visible indication.
+# FROST ceremonies silently failed. Seal frames went into a dead stream. This
+# story eliminates silent stream death at every failure mode: idle timeout,
+# TCP reset, network partition, ECS task replacement.
+#
+# SIGNAL-001 scope:
+#   - Heartbeat/keepalive: ping every 15s, pong timeout 15s, detection ≤ 30s
+#   - Exponential backoff reconnect: 1s → 2s → 4s → ... → 60s cap, max 10 attempts
+#   - directory_signaling transitions: connected → reconnecting → lost
+#   - Queued outbound ops during reconnecting: 64-op FIFO cap
+#   - Queue drains in FIFO order after reconnect
+#   - Immediate signaling_lost error for new ops in lost state
+#   - Full re-authentication on reconnect (Q5: no resume token, full 7-step handshake)
+#
+# NOT in scope:
+#   - The 7-step handshake itself (that belongs to the directory-facing node
+#     transport layer established by DAEMON-001)
+#   - Manifest polling (MANIFEST-002 builds on the SignalingManager this story creates)
+#   - Session node reconnect (sessions cannot survive daemon restart by design)
+#   - Connection validation re-run after reconnect (DAEMON-001 scope at login only)
+#
+# New class: packages/transport/src/signaling-manager.ts — SignalingManager.
+# It wraps the directory-facing node's signaling stream and owns: heartbeat loop,
+# backoff reconnect, outbound queue, and directory_signaling status.
+
+# ─── Sovereign Node Constraint ──────────────────────────────
+# Directory nodes are sovereign and independent — no two share a region or
+# cloud provider. On reconnect the daemon must iterate the manifest node list
+# and attempt connection to ANY reachable node — not a hardcoded single endpoint,
+# not necessarily the same node it was previously connected to. The directoryNodeId
+# in observability events reflects which specific node the daemon is currently
+# connected to. This is how E2E-001 AC-006 verifies the manifest node list is
+# used: the directoryNodeId in directory.signaling.connected may differ from the
+# one in directory.signaling.disconnected, proving fallback routing is real.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "While the signaling stream to the directory is in 'connected' state"
+    action: >
+      The SignalingManager sends a ping frame on the signaling stream every 15
+      seconds. If a pong is not received within 15 seconds of sending the ping,
+      the stream is declared dead. The maximum time from actual stream death to
+      detection is 30 seconds (one ping-pong cycle). Any stream error on send or
+      receive also immediately declares the stream dead without waiting for the
+      heartbeat timeout.
+
+  - trigger: "When the signaling stream is declared dead (no pong within timeout, or stream error on send/receive)"
+    action: >
+      The daemon transitions directory_signaling from 'connected' to 'reconnecting'.
+      directory.signaling.disconnected is logged at WARN with directoryNodeId (the
+      node whose stream died) and reason (the actual error.message or 'heartbeat_timeout'
+      — never '[object Object]' or a hardcoded string). The daemon begins the
+      exponential backoff reconnect loop: attempt 1 after 1s, attempt 2 after 2s,
+      attempt 3 after 4s, doubling each time, capping at 60s. Each attempt selects
+      the next reachable directory node from the manifest node list (round-robin
+      across available nodes — not fixed to the last connected node). On each
+      attempt, directory.signaling.reconnecting is logged at INFO with attempt,
+      backoffMs, and directoryNodeId (the node being attempted).
+
+  - trigger: "When a reconnect attempt succeeds (full 7-step handshake completes)"
+    action: >
+      directory_signaling transitions to 'connected'. directory.signaling.connected
+      is logged at INFO with directoryNodeId (the newly connected node) and
+      manifestVersion. The outbound operation queue is drained in FIFO order —
+      each queued operation executes against the restored signaling stream before
+      any new operations are accepted. If a queued operation fails during drain,
+      its caller receives a distinct error; the drain continues with remaining ops.
+
+  - trigger: "When all 10 reconnect attempts are exhausted without success"
+    action: >
+      directory_signaling transitions from 'reconnecting' to 'lost'.
+      directory.signaling.reconnect.failed is logged at ERROR with attempt: 10,
+      maxAttempts: 10, and lastError (the error.message from the final attempt —
+      never the error object). All operations currently in the outbound queue are
+      flushed: each caller receives { ok: false, reason: 'signaling_lost',
+      guidance: 'The daemon has lost its connection to the directory and automatic
+      reconnection has failed. Check network connectivity, then run cello logout
+      followed by cello login to restart the directory connection.' }. New
+      operations that require the signaling stream return signaling_lost immediately.
+
+  - trigger: "When an outbound operation (session initiation, manifest poll, FROST ceremony request) is attempted while directory_signaling is 'reconnecting'"
+    action: >
+      The operation is added to the outbound queue if the queue depth is below 64.
+      The operation does not execute until the signaling stream is restored — the
+      caller's promise is held pending. If the queue is at capacity (64 ops), the
+      new operation is rejected immediately with:
+      { ok: false, reason: 'signaling_queue_full', guidance: 'The outbound
+      operation queue is full. The daemon is reconnecting to the directory. Wait
+      for directory_signaling to show connected in cello status before retrying.' }
+
+  - trigger: "When an outbound operation is attempted while directory_signaling is 'lost'"
+    action: >
+      The operation is rejected immediately — not queued — with:
+      { ok: false, reason: 'signaling_lost', guidance: 'The daemon has lost its
+      connection to the directory and automatic reconnection has failed. Check
+      network connectivity, then run cello logout followed by cello login to
+      restart the directory connection.' }
+
+  - trigger: "When cello status is called"
+    action: >
+      The response includes directory_signaling with the current value from the
+      SignalingManager: 'connected', 'reconnecting', or 'lost' — exactly the three
+      values defined in CONTEXT.md. No other values are ever returned. The status
+      starts as 'reconnecting' at daemon startup (the connection attempt begins
+      immediately; there is no pre-attempt state exposed to callers).
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A daemon with an established signaling stream (directory.signaling.connected
+      has been observed — at least one ping-pong cycle has completed, confirming
+      heartbeat is active)"
+    when: "the signaling stream is killed at the TCP level (TCP RST — not a graceful
+      FIN close) and the daemon's next heartbeat ping receives no pong within 15 seconds"
+    then: >
+      Within 30 seconds of the TCP kill, directory.signaling.disconnected is logged
+      at WARN with directoryNodeId (the node that dropped) and reason containing
+      the actual error.message or 'heartbeat_timeout' (never '[object Object]',
+      never a hardcoded string). cello status returns directory_signaling: 'reconnecting'.
+      The test kills the TCP connection AFTER observing a pong in the log — this
+      proves heartbeat was running before the kill and the detection window starts
+      from a known live-stream state.
+    test_type: integration
+    component_under_test: transport
+    notes: >
+      Requires CELLO_E2E_LIVE — needs a real directory connection for heartbeat
+      observation. TCP kill method: `iptables -A OUTPUT -p tcp --dport
+      <directory-port> -j DROP` on Linux, or `pfctl` equivalent on macOS, or
+      restart the specific ECS task. Wrap in describe.skipIf(!process.env.CELLO_E2E_LIVE).
+      The 30-second detection window: heartbeat ping every 15s + pong timeout 15s
+      = maximum 30s from stream death to detection.
+
+  - id: AC-002
+    given: "A SignalingManager configured with a mock connect function that always
+      rejects (simulating all directory nodes unreachable)"
+    when: "the backoff reconnect loop runs for the first 4 attempts"
+    then: >
+      directory.signaling.reconnecting is logged 4 times with the following
+      backoffMs values: attempt 1 → 1000ms, attempt 2 → 2000ms, attempt 3 →
+      4000ms, attempt 4 → 8000ms. Each log event fires no earlier than its
+      scheduled backoffMs after the previous attempt. The timestamps on consecutive
+      directory.signaling.reconnecting events are at least backoffMs apart (within
+      ±500ms tolerance for timer jitter). No attempt fires before its backoff elapses.
+    test_type: unit
+    component_under_test: transport
+    notes: >
+      Does NOT require CELLO_E2E_LIVE — uses the injectable connect function.
+      The backoff formula: Math.min(initialBackoffMs * (2 ** (attempt - 1)), maxBackoffMs).
+      For the cap: attempts 7+ all fire at 60000ms. Verify the 7th attempt
+      logs backoffMs: 60000 (not 64000).
+
+  - id: AC-003
+    given: "A daemon in 'reconnecting' state (signaling stream dead) with at least
+      one directory node available for reconnect in the manifest"
+    when: "a reconnect attempt succeeds (full handshake completes)"
+    then: >
+      directory.signaling.connected is logged at INFO with directoryNodeId
+      (non-empty string) and manifestVersion (integer ≥ 1). cello status returns
+      directory_signaling: 'connected'. The full state transition sequence is
+      observable in the log in this order:
+        (1) directory.signaling.connected [initial connection]
+        (2) directory.signaling.disconnected [stream death]
+        (3) directory.signaling.reconnecting [attempt 1..N]
+        (4) directory.signaling.connected [after reconnect]
+      In staging (multiple directory nodes reachable), the directoryNodeId in
+      event (4) may differ from event (1) — proving the manifest node list is
+      used for fallback, not a hardcoded single endpoint. This difference is not
+      required (reconnect to the same node is valid) but must be possible.
+    test_type: e2e
+    component_under_test: transport
+    notes: >
+      Requires CELLO_E2E_LIVE. Wrap in describe.skipIf(!process.env.CELLO_E2E_LIVE).
+      This AC closes milestone close gate criterion 7 at the component level and
+      directly satisfies the observable required by E2E-001 AC-006.
+
+  - id: AC-004
+    given: "A SignalingManager configured with a mock connect function that always
+      rejects (simulating all directory nodes permanently unreachable)"
+    when: "10 consecutive reconnect attempts all fail"
+    then: >
+      directory.signaling.reconnecting fires exactly 10 times (attempt 1 through 10).
+      directory.signaling.reconnect.failed fires once with attempt: 10,
+      maxAttempts: 10, and lastError containing the actual error.message from the
+      final rejection (not '[object Object]', not a hardcoded string — the mock
+      must throw a real Error object). cello status returns directory_signaling:
+      'lost'. No 11th reconnect attempt is made after 'lost' is reached.
+    test_type: unit
+    component_under_test: transport
+
+  - id: AC-005
+    given: "A daemon in 'reconnecting' state with a mock connect function that
+      rejects 3 times then succeeds, and one cello_initiate_session call made
+      immediately after stream death (before reconnect succeeds)"
+    when: "the session initiation is attempted and the reconnect loop runs"
+    then: >
+      The cello_initiate_session call does not return immediately — it is held
+      in the outbound queue. After directory.signaling.connected fires (on the
+      4th connect attempt), the queued session initiation executes and the tool
+      call resolves with a result (success or session-level error — not a
+      signaling error). The operation executes only after directory.signaling.connected
+      is logged — not during the reconnect window. cello status shows
+      directory_signaling: 'reconnecting' while the operation is queued, then
+      'connected' after drain.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Tests end-to-end queue behavior: enqueue during reconnecting → drain after
+      connected. Uses the injectable connect function — does not require CELLO_E2E_LIVE.
+      The test must assert the tool call resolves AFTER the reconnect event, not
+      before — use log ordering or event sequencing to prove this.
+
+  - id: AC-006
+    given: "A daemon in 'reconnecting' state with exactly 64 operations already
+      in the outbound queue (cap reached)"
+    when: "a 65th operation requiring the signaling stream is attempted"
+    then: >
+      The 65th operation is rejected immediately (not queued) with:
+      { ok: false, reason: 'signaling_queue_full', guidance: 'The outbound
+      operation queue is full. The daemon is reconnecting to the directory.
+      Wait for directory_signaling to show connected in cello status before
+      retrying.' }
+      The queue depth remains at 64. The existing 64 queued operations are
+      unaffected. directory_signaling remains 'reconnecting' (not 'lost').
+    test_type: unit
+    component_under_test: transport
+
+  - id: AC-007
+    given: "A daemon in 'lost' state (10 reconnect attempts exhausted)"
+    when: "any operation requiring the signaling stream is attempted (cello_initiate_session,
+      manifest poll, FROST ceremony request)"
+    then: >
+      The operation is rejected immediately — not queued — with:
+      { ok: false, reason: 'signaling_lost', guidance: 'The daemon has lost its
+      connection to the directory and automatic reconnection has failed. Check
+      network connectivity, then run cello logout followed by cello login to
+      restart the directory connection.' }
+      AND any operations previously queued in the outbound queue (from the
+      preceding 'reconnecting' state) have been flushed with the same
+      signaling_lost response at the moment of the lost transition.
+    test_type: unit
+    component_under_test: transport
+
+  - id: AC-008
+    given: "A SignalingManager in 'reconnecting' state with 3 queued operations
+      (Op-A queued first, Op-B second, Op-C third). The mock connect succeeds on
+      the next attempt."
+    when: "directory.signaling.connected fires and the outbound queue drains"
+    then: >
+      Op-A executes first, Op-B second, Op-C third — strict FIFO order. No
+      operation is dropped or reordered. After all 3 complete, new operations
+      proceed normally without queuing. If Op-B throws during drain, Op-B's
+      caller receives the error and Op-C still executes (partial drain failure
+      does not halt the queue).
+    test_type: unit
+    component_under_test: transport
+
+  - id: AC-009
+    given: "A SignalingManager that successfully reconnects to the directory"
+    when: "the authentication handshake runs during the reconnect attempt"
+    then: >
+      The full 7-step handshake executes on reconnect. The SignalingManager does
+      not store or send any session-resumption token from a prior connection.
+      Verified structurally: grep packages/transport/src/signaling-manager.ts for
+      any field or variable named 'resume', 'resumeToken', 'sessionToken', or
+      equivalent — none must exist. Verified behaviorally: the handshake produces
+      a new directory.signaling.connected event with directoryNodeId and
+      manifestVersion; a reconnect to the same directory node produces a new
+      directoryNodeId (the Peer ID changes on reconnect — fresh transport key,
+      Q5 decision from outline.md Resolved Design Questions).
+    test_type: unit
+    component_under_test: transport
+    notes: >
+      Q5 from outline.md is authoritative: "Full re-authentication. No resume
+      token." The fresh Peer ID on reconnect is a design requirement — the
+      directory-facing Peer ID changes on every reconnect so re-proving identity
+      is required regardless. Re-running the full handshake also re-verifies the
+      directory's identity against the manifest on every reconnect (preventing
+      MITM hijack of a disconnected stream).
+
+  - id: AC-010
+    given: "packages/daemon/src/server.ts (the composition root)"
+    when: "the daemon binary is started via cello login"
+    then: >
+      The composition root instantiates SignalingManager and wires it into the
+      daemon's directory-facing node. The directory_signaling field in cello status
+      is sourced from SignalingManager.status — not hardcoded, not a separate
+      boolean flag. Verified by an integration test that: (a) starts the actual
+      daemon binary as a child process, (b) kills the signaling stream, (c) polls
+      cello status via IPC and asserts directory_signaling: 'reconnecting' within
+      30 seconds — proving SignalingManager is instantiated, connected, and
+      emitting status changes. A test that directly constructs SignalingManager
+      without starting the daemon binary does NOT satisfy this AC.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Addresses M7 lesson L3 (composition root never wired). Addresses L4 (tests
+      must exercise the END operation: status field change visible via IPC).
+      The binary start uses opts.daemon: true from the session-fixture extension
+      defined in DAEMON-001 AC-014.
+
+  - id: AC-011
+    given: "A SignalingManager with an active 'connected' signaling stream"
+    when: "a send operation is attempted on the signaling stream and the underlying
+      write throws (connection reset mid-write — simulated by closing the stream
+      socket immediately before the write attempt)"
+    then: >
+      The write failure is caught. error.message is logged — not the error object
+      via ${error} interpolation. directory.signaling.disconnected is logged at
+      WARN with directoryNodeId and reason containing the actual socket error
+      message. The daemon transitions to 'reconnecting' and the backoff loop
+      begins. The daemon does not crash. The caller of the failed send receives
+      a queued response (if queue has capacity) or signaling_queue_full.
+    test_type: unit
+    component_under_test: transport
+    notes: >
+      Send-path liveness AC — required by /cello-story known case 5 and M7
+      lesson L5. Tests that the stream can be dead at the exact moment of a
+      send write, not only during idle heartbeat timeout.
+
+  - id: AC-012
+    given: "All error paths in this story's scope: heartbeat timeout, stream error
+      on send, stream error on receive, connect rejection (single attempt), max
+      10 attempts exhausted, queue full (64-op cap), lost state rejection"
+    when: "each distinct failure cause is triggered independently"
+    then: >
+      Each produces a unique, distinguishable outcome:
+        - heartbeat_timeout: stream declared dead after pong not received in 15s
+        - stream_write_error: stream declared dead via write failure (distinct reason in log)
+        - signaling_connect_failed: directory.signaling.reconnecting logged per attempt
+        - signaling_lost: directory.signaling.reconnect.failed after 10 attempts
+        - signaling_reconnecting: returned to MCP tool caller with guidance
+        - signaling_queue_full: returned immediately when 64-op cap hit
+      No catch block returns a hardcoded reason string without logging the actual
+      exception via error.message. No catch block interpolates an error object
+      into a template string (${error} produces [object Object] for non-Error types —
+      use `error instanceof Error ? error.message : String(error)` instead).
+      The implementer scans every catch block in packages/transport/src/ and
+      packages/daemon/src/ and fixes or reports any that swallow exceptions
+      silently or interpolate error objects directly. This lateral catch audit
+      covers ALL files in both packages — not only files changed by this story.
+    test_type: unit
+    component_under_test: transport
+
+  - id: AC-013
+    given: "All cello-client code changes for this story are implemented and all
+      tests pass"
+    when: "the version bump procedure documented in cello-client CLAUDE.md is
+      followed for packages/transport"
+    then: >
+      packages/transport has its version incremented in package.json.
+      Every package that depends on packages/transport (at minimum
+      @cello-protocol/client and @cello-protocol/connect) has its dependency
+      version updated to the new semver range.
+      @cello-protocol/connect is bumped to reflect the net change.
+      pnpm install is run and pnpm-lock.yaml is updated.
+      git tag v{connect-version} is pushed to origin.
+      CI publishes the new version to npm beta dist-tag.
+      npm view @cello-protocol/connect@beta dependencies --json shows real
+      semver versions for @cello-protocol/transport (never workspace:*).
+      M7-SIGNAL-001 modifies packages/transport only — no changes to
+      trustless-cello directory or relay packages are required, so no
+      trustless-cello package.json update AC is needed.
+    test_type: integration
+    component_under_test: transport
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The daemon must never silently discard an outbound operation that fails
+      because the signaling stream is dead. Every failed-because-of-signaling
+      operation must either queue for retry (during 'reconnecting') or return
+      a distinct error to the caller (during 'lost' or queue full). Silent
+      discard creates invisible protocol failures.
+    adversarial_condition: >
+      A cello_initiate_session call is made at the exact moment the signaling
+      stream transitions from 'connected' to 'reconnecting' (the race window
+      between stream death detection and status update). The operation must
+      receive exactly one of: (a) a completed result if the transition had not
+      yet been detected, (b) a queued-pending response if the transition was
+      detected before send, or (c) a signaling_reconnecting error with guidance.
+      It must never resolve to null, undefined, or a silent no-op. Verified by
+      asserting the caller's promise resolves to one of these three outcomes after
+      50 rapid calls issued at transition time — none resolve silently.
+    test_type: unit
+    component_under_test: transport
+
+  - id: SI-002
+    statement: >
+      On reconnect, the daemon must run the full 7-step directory authentication
+      handshake. A reconnect that skips handshake steps 1-6 (by assuming the
+      remote is still the same trusted directory) allows a MITM node to hijack
+      the signaling stream after a disconnection.
+    adversarial_condition: >
+      After a signaling stream disconnection, a rogue process (not listed in the
+      consortium manifest) begins answering on the same TCP address as the previous
+      directory node. The daemon's reconnect attempt contacts this rogue process.
+      The reconnect path must invoke the same full handshake function as the
+      initial connect path — including step 6 (client verifies directory's
+      identity against the manifest, implemented by M7-MANIFEST-002). The rogue
+      node fails step 6 and the daemon logs directory.auth.challenge.failed
+      (M7-MANIFEST-002 event), falls back to another manifest-listed node, and
+      never transitions to 'connected' for the rogue node. Verified in SIGNAL-001
+      by code review: SignalingManager.connect is the injectable function — in
+      production it is the same full handshake path as the initial connect, not
+      a shortcut. The injectable interface must not offer a "skip-auth" variant.
+    test_type: unit
+    component_under_test: transport
+    notes: >
+      Full enforcement of step 6 is M7-MANIFEST-002's scope. This SI establishes
+      that SIGNAL-001 must not bypass or short-circuit the handshake in the
+      reconnect path — the injectable connect function must be the same as the
+      initial connect, verified by code review.
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While all directory nodes in the manifest are unreachable (network partition, all ECS tasks replaced simultaneously)"
+    fallback: >
+      The daemon retries round-robin across all manifest nodes for up to 10
+      attempts with exponential backoff (1s → 60s cap). After 10 failed attempts,
+      it transitions to 'lost'. directory.signaling.reconnect.failed is logged at
+      ERROR. Any queued operations are flushed with signaling_lost responses. New
+      operations return signaling_lost immediately. The daemon process stays alive
+      and continues accepting IPC connections — directory_signaling: 'lost' does
+      not crash the daemon. The operator must run cello logout then cello login
+      after restoring connectivity to reset the reconnect state.
+    test_type: integration
+    component_under_test: transport
+
+  - id: DB-002
+    condition: "While the signaling stream is in 'reconnecting' state and the daemon is stopped (cello logout)"
+    fallback: >
+      The shutdown sequence cancels the backoff reconnect loop immediately —
+      no further reconnect attempts are made. Any operations in the outbound queue
+      are flushed with an appropriate error (daemon shutting down, not signaling_lost).
+      The daemon exits cleanly. daemon.stopped is logged with reason: 'graceful'.
+      The 'lost' state is not reached on clean shutdown — the reconnect loop
+      termination is a shutdown artifact, not a signaling failure.
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: directory.signaling.connected
+      level: info
+      trigger: "When the signaling stream to a directory node is successfully established
+        (initial connection or reconnect after drop)"
+      context_fields: [directoryNodeId, manifestVersion]
+      correlationId: false
+    - name: directory.signaling.reconnecting
+      level: info
+      trigger: "When the daemon begins a reconnect attempt after stream death — once per attempt"
+      context_fields: [attempt, backoffMs, directoryNodeId]
+      correlationId: false
+  error_events:
+    - name: directory.signaling.disconnected
+      level: warn
+      trigger: "When the signaling stream to the directory is declared dead (heartbeat
+        timeout — no pong in 15s — or stream error on send/receive)"
+      context_fields: [directoryNodeId, reason]
+      correlationId: false
+    - name: directory.signaling.reconnect.failed
+      level: error
+      trigger: "When all 10 reconnect attempts are exhausted without success"
+      context_fields: [attempt, maxAttempts, lastError]
+      correlationId: false
+  notes: >
+    All four events are defined in outline.md §Observability Events for SIGNAL-001.
+    The implementer must add all four to the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+    No console.log in implementation code — all events go through the injected
+    Logger interface.
+    Event-to-AC mapping:
+      AC-001 verifies directory.signaling.disconnected fires within 30s of stream death.
+      AC-002 verifies directory.signaling.reconnecting backoffMs sequence.
+      AC-003 verifies directory.signaling.connected fires on successful reconnect.
+      AC-004 verifies directory.signaling.reconnect.failed fires after 10 exhausted attempts.
+  alarms:
+    - condition: "directory.signaling.reconnect.failed fires more than once in 24 hours"
+      fires_to: >
+        daemon-health CloudWatch alarm — sustained signaling loss requires operator
+        investigation; may indicate persistent network configuration issue or
+        directory cluster health degradation beyond transient ECS task replacement.
+    - condition: "directory.signaling.disconnected fires more than 10 times in 1 hour"
+      fires_to: >
+        daemon-health CloudWatch alarm — frequent transient disconnects indicate TCP
+        instability between operator machine and directory cluster; typically NAT
+        keepalive misconfiguration or aggressive network middlebox behavior.
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    SignalingManager constructor signature (authoritative for DAEMON-001's
+    composition root and MANIFEST-002's manifest poll integration):
+      new SignalingManager({
+        connect: () => Promise<SignalingStream>,  // injectable — full 7-step handshake in prod
+        logger: Logger,
+        heartbeatIntervalMs?: number,             // default: 15_000
+        heartbeatTimeoutMs?: number,              // default: 15_000
+        maxReconnectAttempts?: number,            // default: 10
+        initialBackoffMs?: number,                // default: 1_000
+        maxBackoffMs?: number,                    // default: 60_000
+        outboundQueueCap?: number,                // default: 64
+      })
+    The `connect` parameter is the injectable connect function — this is the
+    adapter pattern mandated by CLAUDE.md. In production it calls the full
+    7-step handshake function from the transport layer. In tests it is replaced
+    with a mock. This makes backoff logic, queue behavior, and state transitions
+    fully testable without CELLO_E2E_LIVE.
+  - >
+    Backoff formula: backoff(attempt) = Math.min(initialBackoffMs * (2 ** (attempt - 1)), maxBackoffMs).
+    Results: attempt 1 → 1000ms, 2 → 2000ms, 3 → 4000ms, 4 → 8000ms,
+    5 → 16000ms, 6 → 32000ms, 7+ → 60000ms. No jitter in M7 (deterministic
+    for testing). Jitter can be added in a later story if thundering-herd
+    concerns arise at scale.
+  - >
+    Heartbeat ping frame: { type: 'ping', ts: <number> }. The ts field is the
+    monotonic counter value (not Date.now() — avoids clock skew confusion).
+    The directory must respond with { type: 'pong', ts: <same value> }.
+    The heartbeat timer resets on any pong received (not on a strict send
+    interval) — this prevents spurious timeouts under momentary load spikes.
+    If the directory signaling protocol (post-DAEMON-001) does not yet include
+    ping/pong frames, SIGNAL-001's implementation adds this frame type within
+    the existing /cello/signaling/1.0.0 stream — it is a keepalive addition,
+    not a protocol version bump. The directory must echo pong without triggering
+    any ceremony or state change.
+  - >
+    Outbound queue type:
+      type PendingOperation = {
+        execute: () => Promise<unknown>,
+        resolve: (result: unknown) => void,
+        reject: (error: Error) => void,
+      }
+    On transition to 'connected', drain in FIFO order: call execute() for each
+    item, route result to resolve() or error to reject(). A failed operation
+    during drain calls reject() for that item and continues draining. On
+    transition to 'lost', call reject() for all items with signaling_lost error.
+    Queue is implemented as a bounded array (maxLength: 64). Capacity check is
+    O(1) via length comparison.
+  - >
+    directory_signaling status: SignalingManager exposes a read-only `status`
+    getter returning 'connected' | 'reconnecting' | 'lost'. The daemon's
+    composition root wires this getter into the cello status IPC response.
+    Initial status at construction is 'reconnecting' — the connect() call
+    begins immediately at construction, so there is no pre-attempt state.
+    This is consistent with DAEMON-001 AC-009: from the IPC client's perspective,
+    any non-connected state is 'reconnecting'.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-DAEMON-001  # needs daemon process, directory-facing node, Logger injection
+  blocks:
+    - CELLO-M7-E2E-001     # gate story AC-006 exercises signaling resilience
+  notes: >
+    SIGNAL-001 depends only on DAEMON-001. It is independent of DAEMON-002
+    (ephemeral session nodes) — signaling resilience operates at the
+    directory-facing node level, not the session node level. MANIFEST-002
+    will depend on the SignalingManager created by this story (manifest polling
+    runs over the managed signaling stream), but SIGNAL-001 does not depend on
+    MANIFEST-002. Implementation order per outline.md: DAEMON-001 → SIGNAL-001
+    in parallel with DAEMON-002 and MCP-001.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations, Authentication"
+  end_to_end_flow: "§2 Persistent Authenticated Connection, §2 Degraded Mode"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-11_1030_daemon-transport-architecture"
+  related_docs:
+    - "[[daemon-transport-architecture]]"
+    - "[[CELLO-M7-DAEMON-001]]"
+    - "[[CELLO-M7-E2E-001]]"
+  notes: >
+    L5 from outline.md (silent signaling stream death) is the root cause this
+    story directly addresses. The heartbeat interval (15s) and maximum detection
+    window (30s) are derived from E2E-001 AC-006's observable: detection within
+    30 seconds of TCP kill. Q5 from outline.md Resolved Design Questions is
+    authoritative for re-authentication on reconnect: full 7-step handshake,
+    no resume token, always re-verify directory identity against the manifest.
