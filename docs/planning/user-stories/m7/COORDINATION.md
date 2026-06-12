@@ -43,7 +43,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-DAEMON-001 — Daemon foundation | — | written — review pending | Written 2026-06-11 |
 | M7-MCP-001 — MCP adapter | — | written — review pending | Written 2026-06-11; blocked on M7-DAEMON-001 for implementation |
 | M7-DAEMON-002 — Ephemeral session nodes | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 for implementation |
-| M7-WIRE-001 — SessionAssignment wire format | — | not started | Blocked on M7-DAEMON-002; cross-repo; batch with M7-SESSION-001 + M7-MANIFEST-002 |
+| M7-WIRE-001 — SessionAssignment wire format | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-002; cross-repo; batch with M7-SESSION-001 + M7-MANIFEST-002 |
 | M7-TRANSPORT-001 — AutoNAT + direct P2P | — | not started | Blocked on M7-WIRE-001 |
 | M7-SESSION-001 — Interrupted session handling | — | not started | Blocked on M7-DAEMON-002 + M7-WIRE-001 |
 | M7-SIGNAL-001 — Signaling stream resilience | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 for implementation |
@@ -188,3 +188,19 @@ functional until DIR-PING-001 lands. (2) MEDIUM — AC-005b renumbered to AC-006
 existing AC-006 through AC-013 shifted to AC-007 through AC-014. (3) MEDIUM —
 explicit known limitation added to implementation_notes: no self-recovery from
 'lost' state; operator must run cello logout + cello login after network restores.
+
+### 2026-06-12 — M7-WIRE-001 written
+
+CELLO-M7-WIRE-001 YAML written. Extends SessionAssignment with 5 new fields
+(initiator_session_peer_id, initiator_session_addrs, counterparty_session_peer_id,
+counterparty_session_addrs, transport_mode) and extends the FROST TBS positional
+array from 5 to 10 fields. Canonical address encoding: JSON.stringify(addrs.slice().sort()).
+Context string "cello-frost-session-establishment-v1" unchanged. 18 ACs cover:
+TypeScript schema change, TBS extension + determinism, directory producer via
+real integration test, both client consumers (initiator self-check + target
+connectionGater configuration), relay participant binding (relay-path only),
+3 error codes (assignment_missing_session_peer_id, assignment_peer_id_mismatch,
+assignment_tbs_verification_failed — distinct from frost_verification_failed),
+transport_mode authority (never infer from address format), dead signaling channel
+path, composition root AC, e2e fixture extension, version bump, and trustless-cello
+dependency update. 3 SIs and 2 DBs. Story marked written — review pending.
