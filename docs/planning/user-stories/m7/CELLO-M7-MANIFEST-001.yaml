@@ -151,8 +151,11 @@ acceptance_criteria:
       newline. Specifically:
         (a) top-level field order: expires, nodes, not_before, version
         (b) each node entry key order: endpoint, nodeId, provider, pubkey, region
-        (c) the nodes array preserves its insertion order (array element order is
-            not sorted — only object keys within elements are sorted)
+        (c) the nodes array preserves its insertion order — array element order
+            is intentionally NOT sorted. Array order is controlled by the signing
+            ceremony coordinator; sorting array elements would silently change the
+            canonical bytes of an already-signed manifest, invalidating existing
+            signatures. Only object keys (not array elements) are sorted.
         (d) number values (version) are serialized as JSON numbers, not strings
       Determinism test: two ConsortiumManifest objects with identical field values
       but keys set in opposite insertion order must produce byte-for-byte identical
@@ -211,8 +214,9 @@ acceptance_criteria:
     when: "verifyManifest is called"
     then: >
       Returns { ok: false, reason: 'manifest_signature_invalid', detail: string
-      noting that only 1 unique officer contributed despite 3 valid entries (or
-      equivalent phrasing) }. Three valid signatures from the same officer never
+      containing '1 unique' and '3 required' (or '1 of 3 unique officers', or
+      equivalent phrasing that includes both the unique-officer count and the
+      required threshold). Three valid signatures from the same officer never
       satisfy a threshold of 3 unique officers.
     test_type: unit
     component_under_test: crypto
@@ -249,9 +253,11 @@ acceptance_criteria:
       is exported as the number 3. Both are non-configurable at runtime. TypeScript
       enforces readonly — an attempt to assign to CONSORTIUM_ROOT_KEYS after import
       causes a compile-time error. No private keys are present in any source file
-      under packages/crypto/src/ (excluding .test-fixtures.ts files). Verified by:
-      grep -r 'privateKey\|secretKey\|PRIVATE_KEY' packages/crypto/src/ returns
-      no matches outside of *.test-fixtures.ts files.
+      under packages/crypto/src/ outside of test fixture files. Verified by:
+      grep -r 'privateKey\|secretKey\|PRIVATE_KEY\|privKey\|\\bsk\b\|seed' packages/crypto/src/
+      returns no matches outside of manifest-test-fixture.ts (the file named in
+      AC-012 that holds the test officer keypairs). The grep pattern covers the
+      idiomatic @noble/curves variable names as well as the obvious patterns.
     test_type: unit
     component_under_test: crypto
     notes: >
@@ -271,13 +277,16 @@ acceptance_criteria:
       TEST_CONSORTIUM_ROOT_KEYS is a readonly tuple of exactly 5 hex-encoded Ed25519
       public keys generated from deterministic fixed seeds (NOT the same values as
       CONSORTIUM_ROOT_KEYS — no overlap). TEST_CONSORTIUM_THRESHOLD is 3.
-      Corresponding test private keys (required to sign test manifests) are exported
-      ONLY from a file named *.test-fixtures.ts under packages/crypto/src/ and are
-      NOT re-exported from the package's public entrypoint (packages/crypto/src/index.ts).
-      Verified by: attempting to import test private keys via
-      import { ... } from '@cello-protocol/crypto' — TypeScript reports an error
-      or the import is undefined (the key is not in the public surface).
-      SI-003 independently verifies the non-overlap invariant.
+      Corresponding test private keys (required to sign test manifests) are defined
+      in packages/crypto/src/manifest-test-fixture.ts (the same file that exports
+      makeTestManifest per AC-012) and are NOT re-exported from the package's public
+      entrypoint (packages/crypto/src/index.ts). makeTestManifest IS exported from
+      the public index (it uses the private keys internally but does not expose them
+      — its return type is ConsortiumManifest). Verified by two checks: (a) attempting
+      to import test private key arrays via import { ... } from '@cello-protocol/crypto'
+      — TypeScript reports a compile error (the raw arrays are not in index.ts);
+      (b) makeTestManifest IS importable from '@cello-protocol/crypto' and returns
+      a valid manifest. SI-003 independently verifies the key-set non-overlap invariant.
     test_type: unit
     component_under_test: crypto
 
@@ -307,8 +316,9 @@ acceptance_criteria:
     then: >
       verifyManifest(ceremonyOutput, TEST_CONSORTIUM_ROOT_KEYS, 3) returns
       { ok: true, signerCount: 3 }. AND replacing any one signature entry in
-      ceremonyOutput with a signature from a non-officer key (a freshly generated
-      unrelated keypair) causes verifyManifest to return { ok: false }. This AC
+      ceremonyOutput with a signature from a fixed-seed rogue keypair (defined
+      alongside the test fixture — not a randomly generated key; fixed seed ensures
+      test determinism) causes verifyManifest to return { ok: false }. This AC
       validates that the ceremony specification and the verification function are
       consistent — a correctly-run ceremony produces a manifest that passes
       verification, and a tampered one fails.
@@ -325,12 +335,14 @@ acceptance_criteria:
       'unique'; (c) out-of-bounds index → entry silently skipped; (d) malformed
       signature hex → entry silently skipped; (e) empty signatures array →
       { ok: false, detail: '0 valid of <t> required' }. No catch block in
-      packages/crypto/src/ or packages/protocol-types/src/ swallows an exception
-      without preserving the underlying error message. The implementer scans every
-      catch block in both packages and fixes any that: (i) return a hardcoded
-      reason string without logging or preserving the exception, or (ii) interpolate
-      an error object directly into a template string (producing [object Object]).
-      Both patterns are blocking per M7 error discipline rules.
+      packages/crypto/src/ swallows an exception without preserving the underlying
+      error message. (packages/protocol-types/src/ contains only TypeScript type
+      definitions and const values — it has no catch blocks; the audit scope for
+      runtime catch blocks is packages/crypto/src/ only.) The implementer scans
+      every catch block in packages/crypto/src/ and fixes any that: (i) return a
+      hardcoded reason string without logging or preserving the exception, or
+      (ii) interpolate an error object directly into a template string (producing
+      [object Object]). Both patterns are blocking per M7 error discipline rules.
     test_type: unit
     component_under_test: crypto
 
@@ -341,17 +353,20 @@ acceptance_criteria:
     then: |
       - @cello-protocol/crypto is bumped (new exports: verifyManifest,
         canonicalManifestBody, CONSORTIUM_ROOT_KEYS, CONSORTIUM_THRESHOLD,
-        TEST_CONSORTIUM_ROOT_KEYS, TEST_CONSORTIUM_THRESHOLD)
+        TEST_CONSORTIUM_ROOT_KEYS, TEST_CONSORTIUM_THRESHOLD, makeTestManifest)
       - @cello-protocol/protocol-types is bumped (new exports: ConsortiumManifest,
-        ConsortiumNode, OfficerSignature, ManifestError)
-      - @cello-protocol/connect is bumped to reflect the net change
-      - Every package depending on a modified package has its dependency version updated
+        ConsortiumNode, OfficerSignature, ManifestError and its three const values)
+      - @cello-protocol/client is bumped because it depends on @cello-protocol/crypto
+        and @cello-protocol/protocol-types; its dependency entries are updated to the
+        new semver ranges
+      - @cello-protocol/connect is bumped because it depends on @cello-protocol/client;
+        its dependency entries are updated. Version bump chain: crypto → client → connect
       - pnpm install is run and pnpm-lock.yaml is updated in cello-client
       - git tag v{connect-version} is pushed to origin
       - CI publishes the new version to npm beta dist-tag
       - `npm view @cello-protocol/connect@beta dependencies --json` shows real semver
-        versions for @cello-protocol/crypto and @cello-protocol/protocol-types
-        (never workspace:*)
+        versions for @cello-protocol/crypto, @cello-protocol/protocol-types, and
+        @cello-protocol/client (never workspace:*)
     test_type: integration
     component_under_test: cello-client CI
     notes: >
@@ -373,12 +388,39 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
     notes: >
-      workspace:* resolves to stale local copies post-REPOSPLIT-002. Even though
-      this story does not change directory or relay logic, directory and relay
-      depend on protocol-types and crypto transitively — their semver references
-      must be kept current.
+      workspace:* resolves to stale local copies post-REPOSPLIT-002. This is a
+      semver hygiene update — directory and relay do not use any of MANIFEST-001's
+      new symbols (verifyManifest, ConsortiumManifest, etc.) at this stage. Their
+      functional use of these symbols begins in MANIFEST-002. The update is required
+      purely to prevent workspace:* drift; the new exports are not yet called by
+      either package.
 
-# ─── Security Invariants ───────────────────────────────────
+  - id: AC-017
+    given: "verifyManifest is called with a ConsortiumManifest whose signatures
+      field is an empty array []"
+    when: "verifyManifest(manifest, TEST_CONSORTIUM_ROOT_KEYS, 3) executes"
+    then: >
+      Returns { ok: false, reason: 'manifest_signature_invalid', detail: '0 valid
+      of 3 required' } (or equivalent phrasing containing '0 valid' and '3 required').
+      Does not throw. Does not return ok: true. No array index is accessed.
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-018
+    given: "verifyManifest is called with a signatures array where every entry
+      has a hex string that is syntactically malformed (e.g. all entries have
+      signature: 'gggg' — not valid hex)"
+    when: "verifyManifest processes all entries"
+    then: >
+      Every malformed entry is caught internally and treated as invalid (counts 0).
+      verifyManifest returns { ok: false, reason: 'manifest_signature_invalid' }
+      without throwing. No unhandled exception propagates to the caller. The function
+      does not exit early on the first malformed entry — it processes all entries
+      and reports the final count.
+    test_type: unit
+    component_under_test: crypto
+
+# ─── Security Invariants (no degraded_behavior section — edge cases promoted to AC-017/AC-018) ──
 security_invariants:
   - id: SI-001
     statement: >
@@ -427,27 +469,6 @@ security_invariants:
       TEST_CONSORTIUM_ROOT_KEYS is the empty set (no hex string appears in both arrays).
       An implementation that accidentally includes a test key in the production
       constants would allow test-signed manifests to pass production verification.
-    test_type: unit
-    component_under_test: crypto
-
-# ─── Degraded Behavior ────────────────────────────────────
-degraded_behavior:
-  - id: DB-001
-    condition: "While verifyManifest is called with signatures: [] (empty array)"
-    fallback: >
-      verifyManifest returns { ok: false, reason: 'manifest_signature_invalid',
-      detail: '0 valid of <threshold> required' } without throwing. Does not
-      access any array index. Does not return ok: true.
-    test_type: unit
-    component_under_test: crypto
-
-  - id: DB-002
-    condition: "While verifyManifest is called with a signatures array where all
-      entries have malformed hex strings"
-    fallback: >
-      Each malformed entry is caught and treated as invalid (counts 0 toward
-      threshold). verifyManifest returns { ok: false, reason: 'manifest_signature_invalid' }.
-      No unhandled exception propagates to the caller.
     test_type: unit
     component_under_test: crypto
 
