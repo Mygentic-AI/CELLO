@@ -1,0 +1,756 @@
+---
+name: CELLO-M7-DAEMON-002
+type: user-story
+date: 2026-06-12
+topics: [daemon, ephemeral-session-nodes, session-node-manager, connectionGater, standing-receiver, interrupted-sessions, m7]
+status: draft
+description: >
+  Introduces the SessionNodeManager in packages/daemon. Creates fresh libp2p nodes
+  (new transport key, new Peer ID) per session, manages the standing receiver node,
+  enforces a per-session connectionGater allowing only the designated counterparty,
+  caps concurrent session nodes at 32, marks active sessions as interrupted in
+  SQLite on daemon stop, and surfaces them on cello login. Extends cello status
+  with standing_receiver_ready: boolean. Also wires a connectionGater on the
+  directory-facing node (allows only known directory Peer IDs).
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-DAEMON-002
+domain: Daemon
+milestone: M7
+actor: OPS
+priority: P0
+components:
+  - daemon
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the daemon,
+  I want to create a fresh ephemeral libp2p node for each session (new transport
+  key, new Peer ID) with a connectionGater that admits only the designated
+  counterparty, maintain one standing receiver node at all times ready for the
+  next inbound session, and mark active sessions as interrupted in SQLite when
+  the daemon stops —
+  so that session transport identities are session-scoped (DDoS defense and
+  unlinkability), cross-session isolation is enforced at the network layer, and
+  interrupted sessions are recoverable on next login without operator data loss.
+
+# ─── Context ────────────────────────────────────────────────
+# DAEMON-001 created the daemon process, IPC socket, agent registry, and the
+# directory-facing node. DAEMON-002 adds the per-session ephemeral node layer.
+#
+# Three distinct roles in this story:
+#
+#   1. SessionNodeManager — new component in packages/daemon/src/session-node-manager.ts.
+#      Owns the lifecycle of all session nodes: create, connectionGater wiring,
+#      teardown. Enforces the 32-node cap. Manages the standing receiver.
+#
+#   2. Standing receiver node — one pre-created session node kept alive at all times.
+#      When an inbound session is accepted, this node is handed to the new session.
+#      A replacement standing receiver is immediately spun up. Eliminates setup
+#      latency from the inbound path. Created during daemon startup (DAEMON-001's
+#      composition root calls SessionNodeManager.initialize()).
+#
+#   3. Interrupted session handling (scoped) — on graceful daemon shutdown, all
+#      active sessions are marked `interrupted` in SQLite. On `cello login`, the
+#      daemon detects any `interrupted` rows and surfaces them before any other
+#      operations. The full seal-or-discard protocol is SESSION-001's scope.
+#
+# connectionGater scope in DAEMON-002:
+#   - Per session node: allows exactly one counterparty Peer ID (from
+#     SessionAssignment). All other attempts rejected before Noise handshake.
+#   - Directory-facing node (created by DAEMON-001): DAEMON-002 adds a
+#     connectionGater that allows only Peer IDs from the known directory set.
+#     The directory Peer ID set is provided by a DirectoryPeerIdProvider
+#     interface (local stub: permissive; MANIFEST-002 wires the real check).
+#
+# NOT in scope: AutoNAT (TRANSPORT-001), session Peer ID exchange in
+# SessionAssignment wire format (WIRE-001), relay `session_interrupted` frame
+# (SESSION-001), seal-or-discard at next contact (SESSION-001), nonce dedup
+# and retry queue (DAEMON-003).
+#
+# Scope of `standing_receiver_ready` field: DAEMON-001 established the base
+# `cello status` response shape. DAEMON-002 adds `standing_receiver_ready: boolean`.
+# E2E-001 AC-003 asserts this field is true before any session is initiated.
+
+# ─── Sovereign Node Constraint ──────────────────────────────
+# Session nodes are ephemeral by design. The session-scoped Peer ID exchanged
+# in the SessionAssignment is the only transport identity the counterparty ever
+# learns. After seal + close the Peer ID is permanently gone — no counterparty
+# can enumerate, target, or DDoS a node that no longer exists. This is an active
+# security defense, not an implementation detail, and it must be preserved exactly.
+# No session node Peer ID may be reused, persisted beyond session close, or shared
+# with any party other than the designated counterparty via the SessionAssignment.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the daemon starts (composition root calls SessionNodeManager.initialize())"
+    action: >
+      SessionNodeManager creates the standing receiver node — a fresh libp2p node
+      with a new transport key and a new Peer ID — and starts listening. The daemon
+      sets standing_receiver_ready: true in the status structure. A connectionGater
+      is attached to the directory-facing node (created by DAEMON-001) that allows
+      only Peer IDs provided by DirectoryPeerIdProvider. transport.autonat.result
+      is logged for the standing receiver node once AutoNAT probes complete
+      (AutoNAT itself is TRANSPORT-001's scope; the event is logged here from the
+      stub result).
+
+  - trigger: "When session establishment requires a new outbound session node (during cello_initiate_session)"
+    action: >
+      SessionNodeManager creates a new libp2p node with a fresh transport key and
+      fresh Peer ID, attaches a connectionGater that allows only the counterparty's
+      Peer ID (from the pending session's negotiation context), adds it to the
+      active node map, and returns the new Peer ID and multiaddrs to the caller.
+      session.node.created is logged with sessionId, agentName, sessionPeerId,
+      and correlationId.
+
+  - trigger: "When an inbound session request is accepted and the standing receiver exists"
+    action: >
+      SessionNodeManager hands the standing receiver node to the incoming session,
+      updates the node's connectionGater to allow only the initiator's Peer ID
+      (from the session offer), removes the node from the standing receiver slot,
+      increments the active session count, and immediately creates a new standing
+      receiver to replace it. session.node.created is logged for the new standing
+      receiver. standing_receiver_ready remains true in cello status.
+
+  - trigger: "When an inbound session request arrives but the standing receiver is not yet ready"
+    action: >
+      The session establishment path returns { ok: false, reason:
+      'standing_receiver_unavailable', guidance: 'The standing receiver node is
+      initializing. This takes approximately 50ms. Retry cello_await_session in
+      a moment.' } No new session node is created until the standing receiver is
+      available (either the existing one finishes starting, or the call retries).
+
+  - trigger: "When a session is sealed and closed"
+    action: >
+      SessionNodeManager stops the session node (closes the libp2p node, releases
+      the TCP listener port), removes it from the active node map, decrements the
+      active session count, and marks the session row in SQLite with status:
+      'sealed'. session.node.destroyed is logged with sessionId, agentName, and
+      reason: 'sealed'. After teardown the Peer ID is unreachable — any dial to
+      the former multiaddr must fail.
+
+  - trigger: "When a Peer ID other than the designated counterparty attempts to connect to a session node"
+    action: >
+      The connectionGater's intercept method returns false before the Noise
+      handshake completes. session.node.connection.rejected is logged at WARN
+      with sessionId, attemptedPeerId, and expectedPeerId. The dial from the
+      unexpected peer fails. The active session between the two designated peers
+      is unaffected.
+
+  - trigger: "When cello_initiate_session or cello_await_session is called and 32 session nodes are already active"
+    action: >
+      SessionNodeManager returns { ok: false, reason: 'max_sessions_reached',
+      guidance: 'The daemon has reached its maximum of 32 concurrent session nodes.
+      Close an existing session before starting a new one.' }
+      session.node.cap.reached is logged at WARN with agentName, currentCount: 32,
+      maxCount: 32. No new node is created.
+
+  - trigger: "When a session node fails to start (libp2p startup throws for any reason)"
+    action: >
+      SessionNodeManager catches the error, extracts error.message (never
+      interpolates the error object directly), logs session.node.create.failed at
+      ERROR with sessionId, agentName, and the actual error.message, and returns
+      { ok: false, reason: 'session_node_creation_failed', guidance: 'Failed to
+      create session transport node. The daemon logged the cause in session.node.create.failed.
+      Check that the system has available ports and sufficient memory.' }
+
+  - trigger: "When the daemon stops gracefully (SIGTERM or cello logout) with active sessions"
+    action: >
+      Before accepting the shutdown signal, SessionNodeManager marks all sessions
+      whose status is 'active' in SQLite as 'interrupted', logs
+      session.node.destroyed for each with reason: 'interrupted', stops all active
+      session nodes, and stops the standing receiver node. The SQLite writes complete
+      before the process exits so the interrupted status survives the restart.
+
+  - trigger: "When cello login starts and finds sessions with status 'interrupted' in SQLite"
+    action: >
+      The daemon logs session.interrupted.detected at WARN for each interrupted
+      session with sessionId, agentName, and source: 'daemon_restart'. These
+      sessions are included in the cello status response with status: 'interrupted'
+      before any other operations are surfaced to the operator. The operator must
+      explicitly acknowledge or discard interrupted sessions (full seal-or-discard
+      flow is SESSION-001's scope).
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A running daemon with one agent online, the standing receiver node is ready,
+      and fewer than 32 active session nodes exist"
+    when: "cello_initiate_session is called with a valid counterparty pubkey"
+    then: >
+      SessionNodeManager creates a new libp2p node with a transport key distinct
+      from the directory-facing node's key. The new node's Peer ID differs from
+      the directory-facing node Peer ID reported by `cello status`. The new node
+      binds a TCP listener on an ephemeral port. A connectionGater is attached that
+      allows only the counterparty Peer ID derived from the session negotiation
+      context. session.node.created is logged at INFO with sessionId (non-empty
+      hex string), agentName (matching the online agent), sessionPeerId (different
+      from all other Peer IDs in the system), and correlationId (same value
+      threaded through the initiating tool call). Verified by an integration test
+      that starts the daemon binary via opts.daemon: true, calls cello_initiate_session,
+      captures the session.node.created log event, and asserts all four context fields
+      are present and the sessionPeerId hex string differs from the
+      directory-facing node Peer ID returned by cello status.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Addresses M7 lesson L4 — tests must exercise the end operation, not just
+      setup state. The sessionPeerId comparison is the transport-path evidence
+      that a separate node was created.
+
+  - id: AC-002
+    given: "A daemon that has just started (SessionNodeManager.initialize() called)"
+    when: "`cello status` is called before any session is initiated"
+    then: >
+      The response includes standing_receiver_ready: true. The standing receiver
+      node is already listening (a TCP port is bound). session.node.created is
+      logged for the standing receiver with sessionPeerId and agentName set to
+      the first online agent (or a sentinel value if no agent is online yet).
+      The standing receiver's Peer ID is different from the directory-facing node
+      Peer ID. Verified by asserting the field is present in the cello status JSON
+      response before any cello_initiate_session or cello_await_session call.
+      A daemon that creates the standing receiver lazily (only when first needed)
+      returns standing_receiver_ready: false and fails this AC.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      E2E-001 AC-003 depends on this field being true before cello_initiate_session
+      is called. The assertion must use cello status response, not log timestamps —
+      clock skew and buffered writes make timestamp ordering unreliable.
+
+  - id: AC-003
+    given: "A daemon with a standing receiver node ready (standing_receiver_ready: true)
+      and an inbound session offer from a counterparty (counterparty Peer ID known)"
+    when: "the inbound session is accepted via cello_await_session"
+    then: >
+      The standing receiver node is handed to the session — its connectionGater is
+      updated to allow only the initiator's Peer ID. A new standing receiver node
+      is created immediately. standing_receiver_ready remains true in cello status
+      after the handoff. The new standing receiver has a different Peer ID from the
+      handed-off node. session.node.created is logged for the new replacement
+      standing receiver within 200ms of the handoff. Verified by an integration
+      test that: (1) asserts standing_receiver_ready: true before accept; (2) calls
+      cello_await_session; (3) asserts the replacement session.node.created event
+      fires with a new sessionPeerId; (4) asserts standing_receiver_ready: true
+      in cello status after the accept. Tests go through the daemon IPC socket,
+      not via internal method dispatch.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-004
+    given: "An active session between two nodes using session Peer IDs from AC-001/AC-003"
+    when: "the session is sealed and closed (both sides have sent their SEAL leaves)"
+    then: >
+      SessionNodeManager stops the session node. session.node.destroyed is logged
+      at INFO with sessionId, agentName, and reason: 'sealed'. The TCP listener
+      port is released. Within 10 seconds of teardown, any attempt to dial the
+      former session node multiaddr returns an error — the Peer ID leads nowhere.
+      The active session count decreases by 1. The session row in SQLite shows
+      status: 'sealed'. Verified by: (a) asserting session.node.destroyed fires
+      with reason: 'sealed'; (b) attempting a libp2p dial to the former
+      sessionPeerId multiaddr (using a test libp2p node) and asserting the dial
+      fails within 10 seconds; (c) querying the SQLite sessions table and asserting
+      the row's status column equals 'sealed'. The dial test uses a real libp2p
+      node — a mock dial that short-circuits without touching the network stack
+      does not satisfy this AC.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      The dial-failure check is the transport evidence for session-scoped Peer ID
+      ephemerality — it proves the node is gone, not just that the manager updated
+      its in-memory map. E2E-001 SI-001 depends on this behavior.
+
+  - id: AC-005
+    given: "An active session between agent A and counterparty B using session node S"
+    when: "a third party C (any Peer ID other than B's) dials session node S"
+    then: >
+      The connectionGater's intercept returns false. C's TCP connection attempt to
+      S fails before the Noise handshake begins (or at the gating layer before any
+      protocol bytes are exchanged). session.node.connection.rejected is logged at
+      WARN with sessionId, attemptedPeerId (C's Peer ID hex), and expectedPeerId
+      (B's Peer ID hex). The A↔B session continues unaffected — existing streams
+      are not closed, no error is surfaced to the session layer. Verified by an
+      integration test that: (a) establishes an A↔B session; (b) creates a third
+      libp2p node (C) and dials S's multiaddr; (c) asserts the dial fails or
+      returns a connection refused error; (d) asserts session.node.connection.rejected
+      fires with the correct context fields; (e) asserts A and B can still exchange
+      a message. The test must use real libp2p nodes — C must actually attempt a
+      network-level dial, not a mocked call.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Addresses M7 lesson L7 — the connectionGater path is only exercised when a
+      real libp2p dial hits the gate. An in-process method call bypasses the gate
+      entirely and cannot satisfy this AC. E2E-001 SI-002 depends on this behavior.
+
+  - id: AC-006
+    given: "A daemon with exactly 32 active session nodes (the maximum per outline.md Resource Caps)"
+    when: "cello_initiate_session is called for a 33rd session"
+    then: >
+      SessionNodeManager returns { ok: false, reason: 'max_sessions_reached',
+      guidance: 'The daemon has reached its maximum of 32 concurrent session nodes.
+      Close an existing session before starting a new one.' }
+      session.node.cap.reached is logged at WARN with agentName, currentCount: 32,
+      maxCount: 32. No new libp2p node is created. The existing 32 sessions are
+      unaffected. Verified by creating 32 session node stubs in the SessionNodeManager's
+      internal map before calling the cap-enforcement path.
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-007
+    given: "SessionNodeManager.createSessionNode() is called but the underlying libp2p
+      node.start() throws (simulated by injecting a failing ISessionNodeFactory stub)"
+    when: "createSessionNode is invoked"
+    then: >
+      The error is caught. error.message is extracted (never ${error} interpolation).
+      session.node.create.failed is logged at ERROR with sessionId, agentName, and
+      the actual error.message string (not '[object Object]' or a hardcoded reason).
+      The call returns { ok: false, reason: 'session_node_creation_failed', guidance:
+      'Failed to create session transport node. The daemon logged the cause in
+      session.node.create.failed. Check that the system has available ports and
+      sufficient memory.' }
+      The active session count is not incremented. No partial node state is left
+      in the internal map.
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-008
+    given: "A daemon whose standing receiver is still initializing (start() has been
+      called but has not resolved yet)"
+    when: "cello_await_session is called"
+    then: >
+      The response is { ok: false, reason: 'standing_receiver_unavailable', guidance:
+      'The standing receiver node is initializing. This takes approximately 50ms.
+      Retry cello_await_session in a moment.' }
+      No session node is created. standing_receiver_ready is false in cello status
+      at this point. The standing receiver completes initialization within 200ms
+      and standing_receiver_ready transitions to true. A retry of cello_await_session
+      after that point succeeds normally.
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-009
+    given: "A daemon with 2 active sessions (session rows in SQLite with status: 'active')"
+    when: "the daemon receives SIGTERM (graceful shutdown)"
+    then: >
+      Before the process exits, SessionNodeManager iterates all active session rows
+      and updates their status to 'interrupted' in SQLite. session.node.destroyed
+      is logged at INFO for each with reason: 'interrupted'. The standing receiver
+      node is stopped. The SQLite writes are committed before the daemon process
+      exits with code 0. After a `cello login` in a fresh daemon process,
+      `cello status` includes both sessions with status: 'interrupted' and
+      session.interrupted.detected is logged at WARN for each with source:
+      'daemon_restart'. Verified by an integration test that: (a) starts a daemon
+      via opts.daemon: true; (b) creates 2 session node stubs; (c) sends SIGTERM
+      to the daemon process; (d) starts a new daemon on the same DB path; (e) calls
+      cello status and asserts both sessions appear with status: 'interrupted'.
+      The SQLite write must survive the restart — a daemon that only updates in-memory
+      state without persisting to SQLite does not satisfy this AC.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      This AC covers the graceful shutdown path. E2E-001 AC-007 covers SIGKILL via
+      detection at restart. The 'daemon_restart' source value distinguishes this
+      event (detected at login from DB) from SESSION-001's 'relay_frame' and
+      'stream_close' sources (detected during active operation from relay signals).
+
+  - id: AC-010
+    given: "A daemon restarted after a SIGKILL (DB has sessions with status: 'active',
+      left by the killed process that never ran its shutdown handler)"
+    when: "`cello login` runs and the daemon loads the SQLite DB"
+    then: >
+      The daemon detects any session rows with status: 'active' (which cannot
+      legitimately exist on a fresh start, because session nodes are ephemeral and
+      not present in memory). These rows are updated to 'interrupted'. session.interrupted.detected
+      is logged at WARN for each with source: 'daemon_restart'. `cello status`
+      shows these sessions with status: 'interrupted'. No session nodes are
+      resurrected — interrupted sessions have no live transport state. Verified by
+      writing a sessions row directly to the SQLite DB with status: 'active', then
+      starting a fresh daemon binary and asserting the row is updated to 'interrupted'
+      and the log event fires.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Guards against the SIGKILL case where the shutdown handler never ran.
+      The invariant is: a 'active' session in a freshly-started daemon is always
+      a remnant from a prior killed process and must be treated as interrupted.
+
+  - id: AC-011
+    given: "packages/daemon/src/server.ts (the composition root from DAEMON-001)"
+    when: "the daemon binary starts"
+    then: >
+      The composition root instantiates SessionNodeManager and calls
+      SessionNodeManager.initialize() during startup (after agent loading and before
+      the IPC socket opens). The directory-facing node (instantiated by DAEMON-001)
+      is passed to SessionNodeManager.attachDirectoryGater(), which installs the
+      DirectoryPeerIdProvider connectionGater on it. These calls must happen through
+      the composition root — not directly from test code. Verified by an integration
+      test that starts the daemon binary (not a directly-constructed SessionNodeManager)
+      and asserts: (a) session.node.created fires for the standing receiver; (b)
+      `cello status` returns standing_receiver_ready: true. A test that constructs
+      SessionNodeManager directly without starting the binary does NOT satisfy this AC.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Addresses M7 lesson L3 — composition root never wired. The binary start is
+      the only test of the composition root wiring.
+
+  - id: AC-012
+    given: "An active session node with a libp2p stream that was alive at last send but
+      is now dead (closed by the remote or timed out — simulated by calling .close()
+      on the stream handle before the next send attempt)"
+    when: "the session layer attempts to send a message over the dead stream"
+    then: >
+      The send catches the write error within 10 seconds. The error.message is
+      extracted and logged via the Logger interface (never interpolated as ${error}).
+      The failure is reported up the call chain with a distinct error code
+      (not a generic timeout or catch-all) that identifies the stream as the failed
+      component. The daemon does not crash. The session node remains in the active
+      map (the transport layer deciding whether to reconnect or surface the error
+      is beyond this story's scope — this AC verifies the catch-and-report path).
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Addresses M7 lesson L6 (send-path dead channel). The test must actually close
+      the stream handle — not mock the send method — to exercise the real error path.
+
+  - id: AC-013
+    given: "All error paths in SessionNodeManager: max_sessions_reached,
+      session_node_creation_failed, standing_receiver_unavailable, connectionGater_rejected_peer,
+      session_node_destroyed, session.interrupted.detected"
+    when: "each distinct failure cause is triggered independently"
+    then: >
+      Each produces a unique error code or reason string distinguishable from all
+      others. No catch block in packages/daemon/src/ returns a hardcoded reason string
+      without logging error.message (never `${error}` — always
+      error instanceof Error ? error.message : String(error)).
+      The implementer scans every catch block in packages/daemon/src/ and
+      packages/cli/src/ (including files not modified by this story) and fixes or
+      reports any that swallow exceptions silently or interpolate error objects into
+      template strings. The operator can determine from the error alone which failure
+      cause fired and which component produced it.
+    test_type: unit
+    component_under_test: daemon
+    notes: >
+      This is the lateral catch audit for packages/daemon. It covers both new code
+      introduced by this story and any pre-existing catch blocks in the package.
+      M7 lesson L6 — catch blocks that log ${error} produce [object Object] for
+      non-Error types and are as invisible as swallowed exceptions.
+
+  - id: AC-014
+    given: "packages/e2e-tests/src/session-fixture.ts"
+    when: "createSessionFixture is called with opts.ephemeralSessionNodes: true
+      and/or opts.standingReceiver: true"
+    then: >
+      opts.ephemeralSessionNodes: true — the fixture creates a daemon (via
+      opts.daemon: true from DAEMON-001) that uses per-session nodes for all session
+      establishment, rather than a shared persistent node. The session Peer IDs
+      returned by the fixture differ from the directory-facing node Peer ID.
+      opts.standingReceiver: true — the fixture waits for the standing receiver
+      to be ready (standing_receiver_ready: true in cello status) before returning
+      to the test. All existing tests that pass neither option continue to work
+      unchanged (non-breaking defaults of false). Both options compose with each
+      other and with opts.daemon: true from DAEMON-001.
+    test_type: integration
+    component_under_test: e2e-tests
+
+  - id: AC-015
+    given: "The directory-facing node is running (created by DAEMON-001) with
+      DirectoryPeerIdProvider installed via SessionNodeManager.attachDirectoryGater()"
+    when: "a non-directory Peer ID (e.g. a test libp2p node with a fresh keypair
+      that is not listed in DirectoryPeerIdProvider) attempts to dial the
+      directory-facing node's multiaddr"
+    then: >
+      The connectionGater rejects the connection. The dial attempt fails at the
+      gating layer. session.node.connection.rejected is logged (or a dedicated
+      directory.node.connection.rejected event — implementer chooses; must be
+      added to the observability taxonomy). The directory-facing node's signaling
+      stream to the real directory continues unaffected. The daemon does not crash.
+      Verified by a unit test that instantiates the gater with an empty allowed
+      set and asserts intercept() returns false for an arbitrary Peer ID.
+    test_type: unit
+    component_under_test: daemon
+    notes: >
+      The DirectoryPeerIdProvider is a stub in DAEMON-002 (permissive or empty).
+      MANIFEST-002 wires the real manifest-backed provider. This AC verifies the
+      gater is installed and the interface is correct — not that it correctly
+      identifies directory Peer IDs (that is MANIFEST-002's AC).
+
+  - id: AC-016
+    given: "All packages/daemon code for this story is implemented and tests pass
+      in cello-client"
+    when: "the version bump procedure in cello-client CLAUDE.md is followed"
+    then: >
+      packages/daemon has its version incremented in package.json to reflect the
+      new SessionNodeManager capability. If any packages that depend on packages/daemon
+      are also modified (e.g. packages/cli gains a standing_receiver_ready display),
+      those packages are also bumped and their dependency on packages/daemon is
+      updated. pnpm install is run and pnpm-lock.yaml is updated. git tag is pushed
+      for the bumped packages. CI publishes to npm beta dist-tag.
+      No workspace:* references to cello-client packages appear in trustless-cello —
+      packages/daemon is client-side only and trustless-cello has no runtime
+      dependency on it; no trustless-cello package.json update is required for
+      this story.
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      A session node Peer ID must never be reused across sessions. Once a session
+      node is torn down after seal + close, its Peer ID must be permanently gone.
+    adversarial_condition: >
+      After session S1 is sealed and its session node N1 is torn down, a test
+      libp2p node retains N1's multiaddr from the S1 negotiation and attempts to
+      dial N1 10 seconds after teardown. The dial must fail — N1 is stopped and
+      its port released. Verified by: (a) capturing N1's multiaddr during session
+      establishment; (b) sealing the session and waiting for session.node.destroyed;
+      (c) creating a fresh libp2p node that dials the captured multiaddr; (d) asserting
+      the dial returns an error within 10 seconds and no stream is accepted on the
+      daemon. A daemon that keeps session nodes alive after seal fails this invariant.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: SI-002
+    statement: >
+      A session node must only accept connections from its designated counterparty.
+      No other Peer ID may establish a stream on a session node.
+    adversarial_condition: >
+      During an active session between A and B on session node S, a third agent C
+      (with a distinct keypair not listed in S's connectionGater) dials S. C must
+      be rejected before the Noise handshake completes. Verified by: (a) establishing
+      an A↔B session; (b) having C dial S and asserting the dial fails or hangs with
+      no stream accepted; (c) asserting session.node.connection.rejected fires with
+      C's Peer ID in attemptedPeerId; (d) asserting A and B exchange a message
+      successfully after the rejected dial — the rejection must not disrupt the
+      legitimate session.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: SI-003
+    statement: >
+      The session node Peer ID and multiaddrs must only be delivered to the
+      designated counterparty via the signed SessionAssignment. They must never
+      appear in any other protocol message, log line, or observable output that
+      a third party could intercept.
+    adversarial_condition: >
+      The session.node.created log event contains sessionPeerId for operational
+      observability. A test asserts that this event does not include the
+      counterparty's K_local pubkey or any secret key material — only the session
+      node's Peer ID (a derived transport identity, not a secret). The implementation
+      must never log K_local, FROST shares, or transport private keys alongside
+      the sessionPeerId. Verified by asserting the session.node.created event
+      context fields contain exactly: sessionId, agentName, sessionPeerId,
+      correlationId — and no additional fields.
+    test_type: unit
+    component_under_test: daemon
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the system has exhausted the TCP ephemeral port range (all ~16,000
+      ports in use — edge case at extreme session counts)"
+    fallback: >
+      Session node creation fails with session_node_creation_failed. The error.message
+      from the failed bind (e.g. EADDRINUSE) is logged in session.node.create.failed.
+      Existing sessions are unaffected. The operator is informed via the actionable
+      guidance field that the system is under port pressure and should close inactive
+      sessions.
+    test_type: unit
+    component_under_test: daemon
+    notes: >
+      This is an extreme edge case (requires 8000+ concurrent sessions). No special
+      retry logic is needed — the operator must close sessions. The AC verifies
+      the error is caught and reported, not that port exhaustion is prevented.
+
+  - id: DB-002
+    condition: "While the SQLite DB is locked (another process holds a write lock)"
+    fallback: >
+      The interrupted session status write on shutdown retries for up to 2 seconds
+      with exponential backoff. If the write does not complete within 2 seconds,
+      the daemon logs session.interrupt.db.write.failed at ERROR with sessionId
+      and error.message, then exits. On next login, these sessions appear with
+      status: 'active' (not yet converted to 'interrupted') and AC-010's recovery
+      logic converts them. No data is lost — the session history is preserved; only
+      the status field is not updated.
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: session.node.created
+      level: info
+      trigger: "When a new ephemeral session node starts listening (both outbound session
+        nodes and standing receiver replacements)"
+      context_fields: [sessionId, agentName, sessionPeerId, correlationId]
+      correlationId: true
+    - name: session.node.destroyed
+      level: info
+      trigger: "When a session node is stopped after seal, interruption, or error teardown"
+      context_fields: [sessionId, agentName, reason]
+      correlationId: true
+      notes: >
+        reason is one of: 'sealed', 'interrupted', 'error'. These three values
+        cover all teardown paths. No other values are permitted.
+    - name: session.interrupted.detected
+      level: warn
+      trigger: "When cello login finds interrupted sessions in SQLite (source: 'daemon_restart'),
+        or when SESSION-001 receives a relay_frame or stream_close notification
+        (source: 'relay_frame' / 'stream_close'). DAEMON-002 owns the 'daemon_restart'
+        source path. SESSION-001 owns the other two sources."
+      context_fields: [sessionId, agentName, source]
+      correlationId: false
+  error_events:
+    - name: session.node.cap.reached
+      level: warn
+      trigger: "When the 32-node cap is hit and a new session cannot be created"
+      context_fields: [agentName, currentCount, maxCount]
+      correlationId: false
+    - name: session.node.create.failed
+      level: error
+      trigger: "When libp2p node creation or startup throws for any reason"
+      context_fields: [sessionId, agentName, error]
+      correlationId: true
+    - name: session.node.connection.rejected
+      level: warn
+      trigger: "When the connectionGater rejects a peer that is not the designated counterparty"
+      context_fields: [sessionId, attemptedPeerId, expectedPeerId]
+      correlationId: false
+    - name: session.interrupt.db.write.failed
+      level: error
+      trigger: "When the SQLite write that marks a session interrupted on shutdown
+        does not complete within the 2-second timeout"
+      context_fields: [sessionId, error]
+      correlationId: false
+  notes: >
+    All events follow the session.node.* and session.interrupted.* taxonomy from
+    outline.md §Observability Events. The implementer must add session.node.created,
+    session.node.destroyed, session.node.cap.reached, session.node.create.failed,
+    session.node.connection.rejected, and session.interrupt.db.write.failed to the
+    canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+    No console.log in implementation code — all events go through the injected
+    Logger interface. correlationId is minted once at session establishment initiation
+    and threaded through all session.node.* events for that session.
+  alarms:
+    - condition: "session.node.create.failed fires more than 3 times in 5 minutes"
+      fires_to: "daemon-health CloudWatch alarm — repeated session node creation failures
+        indicate port exhaustion, system resource pressure, or a libp2p bug"
+    - condition: "session.node.cap.reached fires more than 5 times in 1 minute"
+      fires_to: "daemon-health CloudWatch alarm — sustained cap pressure indicates an
+        operator is unable to close sessions or a session leak"
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    SessionNodeManager is a new file at packages/daemon/src/session-node-manager.ts.
+    It is instantiated in the composition root (packages/daemon/src/server.ts)
+    and initialize() is called during daemon startup, after DAEMON-001's agent
+    loading step and before the IPC socket opens (so the standing receiver is
+    ready before any MCP client can call cello_await_session).
+  - >
+    ISessionNodeFactory interface: the factory that creates libp2p nodes for
+    session nodes and the standing receiver. In production this calls createNode()
+    from packages/transport. In tests, a factory stub can be injected that
+    simulates startup failures (AC-007) or port exhaustion (DB-001). The adapter
+    pattern is mandatory per outline.md constraints — session node creation must
+    go through this interface.
+  - >
+    DirectoryPeerIdProvider interface: a pluggable provider that answers
+    isDirectoryPeer(peerId: string): boolean. The local stub for DAEMON-002
+    returns true for any peer (permissive) or false for all peers (empty set —
+    use the permissive stub for the directory-facing node so the handshake can
+    complete). MANIFEST-002 replaces the stub with a manifest-backed implementation.
+    The interface boundary is narrow — do not add to it until a specific failing
+    test requires it.
+  - >
+    connectionGater API: libp2p's Libp2p constructor accepts a connectionGater
+    option. The gater must implement the libp2p ConnectionGater interface and
+    override intercept(peerId): boolean (or the equivalent libp2p v1 method).
+    Check libp2p version in cello-client for the exact method signatures before
+    implementing — the API changed between libp2p v0.x and v1.x.
+  - >
+    SQLite sessions table: the local SQLite DB (managed by packages/daemon)
+    needs a sessions table if one does not already exist from prior milestones.
+    Minimum columns: session_id (TEXT PK), agent_name (TEXT), counterparty_pubkey
+    (TEXT), status (TEXT — 'active'/'sealed'/'interrupted'), created_at (INTEGER),
+    updated_at (INTEGER). If the table already exists with a different schema,
+    add an ALTER TABLE migration inline rather than a new Flyway version (Flyway
+    is for the directory's Postgres; client-side SQLite uses inline migrations).
+  - >
+    Standing receiver's connectionGater is initially open (all peers allowed)
+    because the designated counterparty Peer ID is unknown at creation time.
+    When an inbound session is accepted (cello_await_session), the gater is
+    updated to allow only the initiator's Peer ID. The window between creation
+    and gater update is brief (IPC round-trip). The standing receiver must not
+    accept any incoming streams during this window — ensure the update happens
+    before the node's multiaddr is delivered to the directory as the accept
+    response.
+  - >
+    Session node teardown ordering: the session node must remain alive through
+    the entire seal ceremony (FROST rounds + SealNotarization delivery). Only
+    after the session layer confirms 'session_sealed' should the node be torn
+    down. WIRE-001 and SESSION-001 define the exact point where teardown is safe.
+    For now, expose a SessionNodeManager.destroySessionNode(sessionId) method
+    that WIRE-001/SESSION-001's implementation can call at the appropriate point.
+  - >
+    Interrupted session detection at login: on startup, the daemon opens SQLite
+    and queries SELECT * FROM sessions WHERE status = 'active'. Any rows found
+    are remnants of a prior process (SIGKILL or graceful shutdown that didn't
+    complete its write). These rows are batch-updated to 'interrupted' and
+    session.interrupted.detected is logged for each. This query runs before the
+    IPC socket opens (so no tool call can race with the cleanup).
+  - >
+    The `standing_receiver_ready` field is added to the cello status response
+    object defined in DAEMON-001's implementation_notes. The full updated shape is:
+    {
+      daemon: 'running',
+      directory_signaling: 'connected' | 'reconnecting' | 'lost',
+      agents: [...],
+      connections: [...],
+      standing_receiver_ready: boolean  // added by DAEMON-002
+    }
+    SESSION-001 adds interrupted_sessions to this shape. DAEMON-002 does not add
+    interrupted_sessions — that field is SESSION-001's scope.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-DAEMON-001  # daemon process, IPC socket, agent registry, directory-facing node, SQLite setup
+  blocks:
+    - CELLO-M7-WIRE-001    # needs session node Peer IDs to extend SessionAssignment wire format
+    - CELLO-M7-SESSION-001 # needs session node lifecycle (create/destroy) and interrupted DB marking
+    - CELLO-M7-DAEMON-003  # needs session node map to associate retry queues and nonce sets
+    - CELLO-M7-MCP-002     # needs session node lifecycle events for presence signals
+  notes: >
+    DAEMON-002 depends only on DAEMON-001. It can be implemented immediately after
+    DAEMON-001 is complete. WIRE-001 is the next critical path story and needs both
+    DAEMON-001 and DAEMON-002 before it can be written in full detail — the session
+    node Peer ID fields in SessionAssignment come from DAEMON-002's node creation.
+    TRANSPORT-001 (AutoNAT) is not a dependency — DAEMON-002 stubs the AutoNAT
+    result (transport.autonat.result event is logged but the actual AutoNAT probe
+    is TRANSPORT-001's scope). The standing receiver correctly logs the event
+    with dialable: false (stub) until TRANSPORT-001 wires real AutoNAT.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Multi-Party Conversations, Node Operations"
+  end_to_end_flow: "§5.7 Session Establishment, §6.1 Hash Relay Mechanics — Dual-Path Architecture"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-11_1030_daemon-transport-architecture"
+    - "2026-06-11_0822_transport-security-audit-and-libp2p-primitives"
+  related_docs:
+    - "[[daemon-transport-architecture]]"
+    - "[[CELLO-M7-E2E-001]]"
+    - "[[CELLO-M7-DAEMON-001]]"
+  notes: >
+    Ephemeral session node model: daemon-transport-architecture.md §2–§3.
+    Standing receiver node: daemon-transport-architecture.md §10 Decision 1.
+    connectionGater: daemon-transport-architecture.md §3 (security properties table).
+    Session establishment round-trips: outline.md §Resolved Design Questions Q1.
+    Resource caps (32 session nodes, 1 standing receiver): outline.md §Resource Caps.
+    Observability event taxonomy: outline.md §Observability Events (session nodes).
