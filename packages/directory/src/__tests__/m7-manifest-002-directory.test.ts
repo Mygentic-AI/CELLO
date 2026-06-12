@@ -127,33 +127,24 @@ function makeRelay(): RelayAdapter & {
 
 function makeTestManifest(): ConsortiumManifest {
   // Minimal valid-shape manifest (not cryptographically signed — tests only check structure)
-  const pubkeyHex = Buffer.from(
+  const pubkey = Buffer.from(
     ed25519.getPublicKey(hexToBytes(TEST_NODE_A_PRIVATE_KEY_HEX)),
   ).toString("hex");
   return {
     version: 1,
-    generated_at: new Date().toISOString(),
-    expires_at: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+    not_before: new Date().toISOString(),
+    expires: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
     nodes: [
       {
         nodeId: TEST_NODE_A_NODE_ID,
+        pubkey,
         region: "us-east-1",
-        pubkeyHex,
-        multiaddrs: ["/ip4/127.0.0.1/tcp/9900"],
-        health_check_url: "http://localhost:9900/health",
-        relay_peer_id: "12D3KooWRelay",
-        relay_multiaddrs: ["/ip4/127.0.0.1/tcp/9901"],
-      },
-    ],
-    threshold: 1,
-    root_keys: [
-      {
-        keyId: "root-key-1",
-        pubkeyHex: "00".repeat(32),
+        provider: "aws",
+        endpoint: "https://dir-us-east-1.example.com",
       },
     ],
     signatures: [],
-  } as unknown as ConsortiumManifest;
+  };
 }
 
 // ─── StreamReader ─────────────────────────────────────────────────────────────
