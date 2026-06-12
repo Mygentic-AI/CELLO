@@ -16,7 +16,7 @@ description: >
 id: CELLO-M7-DAEMON-003
 domain: Daemon
 milestone: M7
-actor: OPS
+actor: CLIENT
 priority: P0
 components:
   - daemon
@@ -581,8 +581,6 @@ degraded_behavior:
       blocked (nonce check is synchronous before delivery to cello_receive, but
       the persistence write can be fire-and-forget if the in-memory LRU is the
       source of truth for duplicate checks during live operation).
-    test_type: unit
-    component_under_test: daemon
     notes: >
       No dedicated test is required — this is a note for the implementer: the
       NonceDedupStore may use the in-memory LRU as the authoritative source
@@ -654,13 +652,14 @@ observability:
   alarms:
     - condition: "message.retry.evicted fires more than 10 times in 1 minute for
         the same session"
-      fires_to: "daemon-health CloudWatch alarm — sustained queue overflow for a
-        single session indicates the peer is persistently unreachable and the
-        queue is cycling; operator may need to close the session or investigate
-        peer connectivity"
+      fires_to: "surfaced as a persistent WARN in daemon logs; operator can detect
+        via cello status retryQueueDepth (rising value = queue cycling) or by
+        inspecting daemon logs — sustained eviction indicates the peer is
+        persistently unreachable and the operator may need to close the session"
     - condition: "message.retry.persist.failed fires more than 3 times in 5 minutes"
-      fires_to: "daemon-health CloudWatch alarm — repeated SQLite write failures
-        indicate DB corruption or disk pressure"
+      fires_to: "surfaced as ERROR in daemon logs; operator detects via log
+        inspection — repeated SQLite write failures indicate DB corruption or
+        disk pressure; daemon should be restarted and DB integrity checked"
 
 # ─── Implementation Notes ────────────────────────────────────
 implementation_notes:
