@@ -118,15 +118,28 @@ behavior:
       followed by cello login to restart the directory connection.' }. New
       operations that require the signaling stream return signaling_lost immediately.
 
-  - trigger: "When an outbound operation (session initiation, manifest poll, FROST ceremony request) is attempted while directory_signaling is 'reconnecting'"
+  - trigger: "When an MCP tool call that requires the signaling stream (cello_initiate_session, cello_register) is attempted while directory_signaling is 'reconnecting'"
     action: >
-      The operation is added to the outbound queue if the queue depth is below 64.
-      The operation does not execute until the signaling stream is restored — the
-      caller's promise is held pending. If the queue is at capacity (64 ops), the
-      new operation is rejected immediately with:
-      { ok: false, reason: 'signaling_queue_full', guidance: 'The outbound
-      operation queue is full. The daemon is reconnecting to the directory. Wait
-      for directory_signaling to show connected in cello status before retrying.' }
+      The MCP tool call returns immediately with:
+      { ok: false, reason: 'signaling_reconnecting', guidance: 'The directory
+      signaling stream is reconnecting. The daemon reconnects automatically —
+      wait for directory_signaling to show connected in cello status before
+      retrying this operation.' }
+      MCP tool calls are never queued during 'reconnecting' state — the calling
+      LLM receives an actionable response immediately and can retry when the
+      stream is restored.
+
+  - trigger: "When an internal daemon protocol operation (FROST ceremony, manifest poll) is dispatched while directory_signaling is 'reconnecting'"
+    action: >
+      The internal operation is added to the outbound queue if the queue depth is
+      below 64. The operation does not execute until the signaling stream is
+      restored — its internal promise is held pending. If the queue is at capacity
+      (64 ops), the internal operation is rejected immediately with reason:
+      'signaling_queue_full'. After reconnect, queued operations drain in FIFO
+      order before any new operations are accepted. This two-tier model ensures
+      MCP callers (LLMs) receive immediate, actionable responses, while daemon-
+      internal operations (which are owned by the daemon itself and can safely
+      wait) are retried transparently after reconnect.
 
   - trigger: "When an outbound operation is attempted while directory_signaling is 'lost'"
     action: >
@@ -229,38 +242,58 @@ acceptance_criteria:
 
   - id: AC-005
     given: "A daemon in 'reconnecting' state with a mock connect function that
-      rejects 3 times then succeeds, and one cello_initiate_session call made
-      immediately after stream death (before reconnect succeeds)"
-    when: "the session initiation is attempted and the reconnect loop runs"
+      rejects 3 times then succeeds. Two operations are issued during reconnect:
+      (a) one cello_initiate_session MCP tool call, and (b) one internal
+      manifest poll operation."
+    when: "both operations are attempted while reconnect is in progress"
     then: >
-      The cello_initiate_session call does not return immediately — it is held
-      in the outbound queue. After directory.signaling.connected fires (on the
-      4th connect attempt), the queued session initiation executes and the tool
-      call resolves with a result (success or session-level error — not a
-      signaling error). The operation executes only after directory.signaling.connected
-      is logged — not during the reconnect window. cello status shows
-      directory_signaling: 'reconnecting' while the operation is queued, then
-      'connected' after drain.
+      (a) The MCP cello_initiate_session call returns immediately with
+      { ok: false, reason: 'signaling_reconnecting', guidance: 'The directory
+      signaling stream is reconnecting. The daemon reconnects automatically —
+      wait for directory_signaling to show connected in cello status before
+      retrying this operation.' } — it does not block or queue.
+      (b) The internal manifest poll is added to the outbound queue and its
+      promise is held pending. After directory.signaling.connected fires (on
+      the 4th connect attempt), the queued manifest poll executes and its
+      promise resolves. The manifest poll executes only after
+      directory.signaling.connected is logged — not during the reconnect window.
+      cello status shows directory_signaling: 'reconnecting' while the queue
+      holds the manifest poll, then 'connected' after drain.
     test_type: integration
     component_under_test: daemon
     notes: >
-      Tests end-to-end queue behavior: enqueue during reconnecting → drain after
-      connected. Uses the injectable connect function — does not require CELLO_E2E_LIVE.
-      The test must assert the tool call resolves AFTER the reconnect event, not
-      before — use log ordering or event sequencing to prove this.
+      Tests the two-tier model: MCP tool calls → immediate rejection with
+      actionable guidance; internal protocol operations → queue → drain after
+      reconnect. Uses the injectable connect function — does not require
+      CELLO_E2E_LIVE. The test must assert the manifest poll resolves AFTER the
+      reconnect event — use log ordering or event sequencing to prove this.
+
+  - id: AC-005b
+    given: "A daemon in 'reconnecting' state (mock connect still rejecting)"
+    when: "two different MCP tool calls requiring the signaling stream are made
+      back-to-back (cello_initiate_session and cello_register)"
+    then: >
+      Both MCP tool calls return immediately — neither blocks nor is added to the
+      outbound queue. Both return { ok: false, reason: 'signaling_reconnecting',
+      guidance: 'The directory signaling stream is reconnecting. The daemon
+      reconnects automatically — wait for directory_signaling to show connected
+      in cello status before retrying this operation.' }. The outbound queue
+      depth remains 0 after both calls. This proves the two-tier model: MCP tool
+      calls never enter the internal reconnect queue.
+    test_type: unit
+    component_under_test: transport
 
   - id: AC-006
-    given: "A daemon in 'reconnecting' state with exactly 64 operations already
-      in the outbound queue (cap reached)"
-    when: "a 65th operation requiring the signaling stream is attempted"
+    given: "A daemon in 'reconnecting' state with exactly 64 internal protocol
+      operations already in the outbound queue (cap reached)"
+    when: "a 65th internal protocol operation is dispatched"
     then: >
-      The 65th operation is rejected immediately (not queued) with:
-      { ok: false, reason: 'signaling_queue_full', guidance: 'The outbound
-      operation queue is full. The daemon is reconnecting to the directory.
-      Wait for directory_signaling to show connected in cello status before
-      retrying.' }
-      The queue depth remains at 64. The existing 64 queued operations are
-      unaffected. directory_signaling remains 'reconnecting' (not 'lost').
+      The 65th operation is rejected immediately (not queued) with reason:
+      'signaling_queue_full'. The queue depth remains at 64. The existing 64
+      queued operations are unaffected. directory_signaling remains 'reconnecting'
+      (not 'lost'). MCP tool calls are not affected by queue depth — they return
+      signaling_reconnecting immediately regardless of queue depth (they are never
+      queued).
     test_type: unit
     component_under_test: transport
 
@@ -295,27 +328,34 @@ acceptance_criteria:
     component_under_test: transport
 
   - id: AC-009
-    given: "A SignalingManager that successfully reconnects to the directory"
-    when: "the authentication handshake runs during the reconnect attempt"
+    given: "A SignalingManager configured with a mock connect function that records
+      every invocation with all arguments passed to it. The manager has been
+      connected once, then disconnected (stream death detected), then reconnects
+      successfully."
+    when: "the reconnect attempt completes and directory.signaling.connected fires"
     then: >
-      The full 7-step handshake executes on reconnect. The SignalingManager does
-      not store or send any session-resumption token from a prior connection.
-      Verified structurally: grep packages/transport/src/signaling-manager.ts for
-      any field or variable named 'resume', 'resumeToken', 'sessionToken', or
-      equivalent — none must exist. Verified behaviorally: the handshake produces
-      a new directory.signaling.connected event with directoryNodeId and
-      manifestVersion; a reconnect to the same directory node produces a new
-      directoryNodeId (the Peer ID changes on reconnect — fresh transport key,
-      Q5 decision from outline.md Resolved Design Questions).
+      The mock connect function was invoked exactly once for the reconnect attempt.
+      The invocation received no argument derived from prior connection state —
+      specifically: no 'resumeToken' field, no 'sessionToken' field, no 'continuationId'
+      field, and no argument that references any value captured from the first
+      connection's invocation. Each connect() call is a fresh invocation with no
+      shared mutable context from a prior call. This proves the SignalingManager
+      does not implement resume-token logic: it cannot pass a token it has never
+      stored. directory.signaling.connected fires with a directoryNodeId and
+      manifestVersion on every successful reconnect — there is no "resumed" or
+      "fast-path" connected event that skips handshake steps.
     test_type: unit
     component_under_test: transport
     notes: >
       Q5 from outline.md is authoritative: "Full re-authentication. No resume
-      token." The fresh Peer ID on reconnect is a design requirement — the
-      directory-facing Peer ID changes on every reconnect so re-proving identity
-      is required regardless. Re-running the full handshake also re-verifies the
-      directory's identity against the manifest on every reconnect (preventing
-      MITM hijack of a disconnected stream).
+      token." The connect() function is injectable — in production it calls the
+      full 7-step handshake, which generates a fresh transport key and therefore
+      a new Peer ID on every call. The unit test uses the mock to verify the
+      contract: no resumption state is threaded through the SignalingManager.
+      Code review criterion (not a test): the implementer must verify that
+      packages/transport/src/signaling-manager.ts contains no field or variable
+      named 'resume', 'resumeToken', 'sessionToken', or equivalent. This is a
+      code review check, not a Vitest assertion.
 
   - id: AC-010
     given: "packages/daemon/src/server.ts (the composition root)"
@@ -348,8 +388,10 @@ acceptance_criteria:
       via ${error} interpolation. directory.signaling.disconnected is logged at
       WARN with directoryNodeId and reason containing the actual socket error
       message. The daemon transitions to 'reconnecting' and the backoff loop
-      begins. The daemon does not crash. The caller of the failed send receives
-      a queued response (if queue has capacity) or signaling_queue_full.
+      begins. The daemon does not crash. If the operation was an MCP tool call,
+      the caller receives { ok: false, reason: 'signaling_reconnecting' }. If it
+      was an internal protocol operation, it is added to the outbound queue (if
+      capacity allows) or receives signaling_queue_full.
     test_type: unit
     component_under_test: transport
     notes: >
@@ -413,15 +455,18 @@ security_invariants:
       a distinct error to the caller (during 'lost' or queue full). Silent
       discard creates invisible protocol failures.
     adversarial_condition: >
-      A cello_initiate_session call is made at the exact moment the signaling
-      stream transitions from 'connected' to 'reconnecting' (the race window
-      between stream death detection and status update). The operation must
-      receive exactly one of: (a) a completed result if the transition had not
-      yet been detected, (b) a queued-pending response if the transition was
-      detected before send, or (c) a signaling_reconnecting error with guidance.
-      It must never resolve to null, undefined, or a silent no-op. Verified by
-      asserting the caller's promise resolves to one of these three outcomes after
-      50 rapid calls issued at transition time — none resolve silently.
+      A cello_initiate_session MCP tool call is made at the exact moment the
+      signaling stream transitions from 'connected' to 'reconnecting' (the race
+      window between stream death detection and status update). Because
+      cello_initiate_session is an MCP tool call, it must receive exactly one of:
+      (a) a completed result if the transition had not yet been detected, or (b)
+      { ok: false, reason: 'signaling_reconnecting', guidance: '...' } if the
+      transition was detected. It must never resolve to null, undefined, or a
+      silent no-op. Verified by asserting the caller's promise resolves to one of
+      these two outcomes after 50 rapid calls issued at transition time — none
+      resolve silently. Internal protocol operations in the same race window must
+      be queued or rejected with a distinct reason; they must also never be
+      silently discarded.
     test_type: unit
     component_under_test: transport
 
