@@ -24,6 +24,7 @@ components:
   - client
   - relay
   - e2e-tests
+  - infra
 
 # ─── Intent ─────────────────────────────────────────────────
 story: >
@@ -79,6 +80,52 @@ story: >
 # This is a functional distinction, not just a performance optimization —
 # the relay must not be given session Peer IDs when it has no role in the session.
 #
+# Schema disambiguation — participant_a.peer_id vs initiator_session_peer_id:
+# The existing SessionAssignment type has participant_a.peer_id and
+# participant_b.peer_id (from ParticipantInfo). In the M7 daemon architecture,
+# these carry the DIRECTORY-FACING NODE Peer ID — populated by the directory
+# from PeerInfoAnnounce frames (the client's stable signaling identity). Per
+# CONTEXT.md and the daemon architecture, the directory-facing Peer ID is NEVER
+# shared with counterparties; it is an internal routing identifier used by the
+# directory only. The new flat fields initiator_session_peer_id and
+# counterparty_session_peer_id carry the EPHEMERAL SESSION NODE Peer IDs —
+# these are the identities counterparties dial. These two Peer ID types are
+# distinct by design and must never be confused:
+#   participant_a.peer_id       → directory-facing node Peer ID (internal routing)
+#   initiator_session_peer_id   → ephemeral session node Peer ID (dialing identity)
+# Consumer code in session-manager.ts and relay-node.ts MUST read the new flat
+# fields for session dialing/binding. Reading participant_a.peer_id for this
+# purpose is a security error — it exposes the directory-facing identity to
+# session-layer code and would allow counterparties to reach the signaling layer.
+# participant_a.peer_id is NOT deprecated — it remains for directory-internal
+# use — but it is out of scope for the session transport layer.
+#
+# Inbound message types (the "other side" of the wire format):
+# For the directory to populate initiator_session_peer_id and
+# counterparty_session_peer_id into the SessionAssignment, two inbound message
+# types must be extended or created:
+#
+# 1. SessionRequest (client → directory, existing type in directory-types.ts):
+#    Must be extended with:
+#      initiator_session_peer_id: string   — Alice's session node Peer ID
+#      initiator_session_addrs: string[]   — Alice's session node multiaddrs
+#    Per outline.md Q1: "Alice creates her ephemeral session node at
+#    initiate_session time. Her session Peer ID travels in the session request
+#    to the directory." These fields are NON-OPTIONAL — a session request without
+#    them is an M6-era frame that cannot complete M7 session establishment.
+#
+# 2. SessionOfferAccept (directory → client inbound; new type needed for Bob):
+#    The directory sends a session offer to Bob (the target). Bob creates his
+#    standing receiver node and responds. A new message type is needed to carry:
+#      session_id: Uint8Array (16 bytes, identifies which offer is being accepted)
+#      counterparty_session_peer_id: string   — Bob's standing receiver Peer ID
+#      counterparty_session_addrs: string[]   — Bob's standing receiver multiaddrs
+#    The exact type name is left to the implementer (e.g. SessionAccept or
+#    SessionOfferAccept), but it must be a distinct CBOR-encoded wire frame with
+#    a 'type' discriminant field — not a new field grafted onto an existing frame.
+#    The directory reads this response to obtain Bob's Peer ID and addrs before
+#    issuing the final SessionAssignment to both parties.
+#
 # Cross-repo packages affected:
 #   cello-client: packages/protocol-types (schema), packages/client (consumers + TBS)
 #   trustless-cello: packages/directory (producer), packages/relay (relay consumer)
@@ -113,13 +160,50 @@ behavior:
       A SessionAssignment missing any of these five fields fails TypeScript
       compilation and runtime schema validation.
 
+  - trigger: "When the directory-types.ts SessionRequest type is inspected in
+      packages/directory/src/"
+    action: >
+      The SessionRequest type includes two new required fields:
+      initiator_session_peer_id (string — Alice's session node Peer ID hex) and
+      initiator_session_addrs (string[] — Alice's session node multiaddrs).
+      Both fields are non-optional. A session_request frame that omits either
+      field is rejected by the directory with reason 'missing_session_peer_id'
+      before any target lookup or FROST ceremony is initiated. This field carries
+      the Peer ID of Alice's EPHEMERAL SESSION NODE — NOT her directory-facing node
+      Peer ID (which is already known to the directory from PeerInfoAnnounce and
+      stored separately).
+
+  - trigger: "When the directory receives a session_request from Alice (the initiator)"
+    action: >
+      directory-node.ts reads initiator_session_peer_id and initiator_session_addrs
+      from the incoming SessionRequest and stores them in the in-flight session
+      negotiation state for this session_id. These values are later embedded in
+      the SessionAssignment frame (as the initiator_session_peer_id and
+      initiator_session_addrs fields) once Bob's Peer ID is also known. The
+      directory does NOT confuse Alice's session Peer ID with her directory-facing
+      Peer ID (stored separately from PeerInfoAnnounce).
+
+  - trigger: "When the directory constructs a session_offer to send to the target
+      (Bob) during session negotiation"
+    action: >
+      A new SessionOfferAccept wire type is defined in directory-types.ts (or in
+      @cello-protocol/protocol-types if consumed by the client). Bob's response
+      to the offer must carry:
+        session_id: Uint8Array (16 bytes — identifies which session offer)
+        counterparty_session_peer_id: string — Bob's standing receiver Peer ID
+        counterparty_session_addrs: string[] — Bob's standing receiver multiaddrs
+      The type has a 'type' discriminant field (e.g. 'session_offer_accept').
+      This is a new CBOR-encoded wire frame — not a new field grafted onto
+      any existing frame type. The directory waits for this response before
+      issuing the final SessionAssignment to either party.
+
   - trigger: "When the directory node constructs a SessionAssignment after both
       parties have reported their session Peer IDs during negotiation"
     action: >
       directory-node.ts populates all five new fields from the session negotiation
       context: initiator_session_peer_id and initiator_session_addrs from Alice's
-      session accept response; counterparty_session_peer_id and
-      counterparty_session_addrs from Bob's standing receiver; transport_mode
+      SessionRequest frame; counterparty_session_peer_id and
+      counterparty_session_addrs from Bob's SessionOfferAccept response; transport_mode
       set to "direct" if both parties' session nodes returned dialable: true from
       AutoNAT (TRANSPORT-001 stub returns false until TRANSPORT-001 wires real
       AutoNAT — this story defaults to "relay" when the stub is active), or
@@ -250,6 +334,62 @@ acceptance_criteria:
     test_type: unit
     component_under_test: protocol-types
 
+  - id: AC-001b
+    given: "The SessionRequest type in packages/directory/src/directory-types.ts"
+    when: "the type definition is inspected"
+    then: >
+      The SessionRequest type includes two new required (non-optional) fields:
+        initiator_session_peer_id: string
+        initiator_session_addrs: string[]
+      Both fields are absent from legacy M6 session_request frames. The CBOR frame
+      parser in packages/directory/src/directory-frames.ts rejects any session_request
+      that omits either field with a distinct error distinct from the existing
+      'missing_session_peer_id' assignment error — e.g. 'session_request_missing_peer_id'
+      — so the operator can distinguish an initiator that sent an incomplete request
+      from a tampered assignment. Verified by a unit test that: (a) constructs a CBOR
+      session_request frame without initiator_session_peer_id; (b) passes it to the
+      frame parser; (c) asserts the parser returns null or throws (no crash, no panic).
+      The rejection must happen at the parse layer before any handler is invoked.
+    test_type: unit
+    component_under_test: directory
+    notes: >
+      These fields carry Alice's EPHEMERAL SESSION NODE Peer ID — not her
+      directory-facing node Peer ID (which is stored separately from PeerInfoAnnounce).
+      The two must never be confused. The directory uses initiator_session_peer_id
+      from SessionRequest, NOT from participant_a.peer_id, when populating the
+      SessionAssignment's initiator_session_peer_id field.
+
+  - id: AC-001c
+    given: "A new wire type (SessionOfferAccept or equivalent) defined for the
+      target-to-directory response path in packages/directory/src/directory-types.ts
+      (or @cello-protocol/protocol-types if the client also sends it)"
+    when: "the type definition is inspected"
+    then: >
+      A new frame type exists with at minimum these fields:
+        type: 'session_offer_accept' (or equivalent discriminant string)
+        session_id: Uint8Array (16 bytes — identifies which session offer)
+        counterparty_session_peer_id: string
+        counterparty_session_addrs: string[]
+      The type is added to the InboundSignalingFrame union in directory-frames.ts
+      so the directory message router can dispatch it. The CBOR parser for this
+      frame type is tested with a unit test that: (a) constructs a valid CBOR
+      session_offer_accept frame; (b) passes it through the parser; (c) asserts
+      counterparty_session_peer_id and counterparty_session_addrs are extracted
+      with correct types. The directory stores the parsed values in the
+      in-flight session negotiation state keyed by session_id, and uses them
+      (not participant_b.peer_id) to populate the SessionAssignment's
+      counterparty_session_peer_id and counterparty_session_addrs fields.
+    test_type: unit
+    component_under_test: directory
+    notes: >
+      The exact type name (SessionOfferAccept, SessionAccept, etc.) is left to
+      the implementer. The discriminant string must be documented in
+      implementation_notes and consistent with CONTEXT.md's wire frame taxonomy.
+      This is the second inbound interface this story introduces; without it,
+      the directory has no way to obtain Bob's session Peer ID, and AC-003's
+      "both parties having reported their session Peer IDs" precondition cannot
+      be satisfied through the production code path.
+
   - id: AC-002
     given: "The FROST TBS construction utility in packages/client (or packages/crypto)"
     when: "buildSessionEstablishmentTbs(assignment) is called with a complete
@@ -260,14 +400,18 @@ acceptance_criteria:
       initiator_session_peer_id, initiator_session_addrs_canonical,
       counterparty_session_peer_id, counterparty_session_addrs_canonical,
       transport_mode]. The canonical encoding of each address array is
-      JSON.stringify(addrs.slice().sort()) applied consistently. The context string
-      "cello-frost-session-establishment-v1" is passed to the FROST signing
-      function and does not change. Verified by a unit test that constructs two
-      SessionAssignment values identical except that one has addrs in a different
-      order — after canonical encoding, both produce identical TBS byte arrays
-      (sort order normalization works). A third test constructs two assignments
-      identical except one has a different counterparty_session_peer_id — they
-      produce different TBS byte arrays (the field is included in TBS).
+      JSON.stringify(addrs.slice().sort()) — a JSON string is the value passed as
+      the array element in the CBOR positional array (fields 7 and 9 are JSON
+      strings, NOT nested CBOR arrays). This encoding choice is intentional and
+      deterministic: CBOR implementations may encode arrays differently across
+      languages; JSON strings with sorted keys guarantee byte-identical output.
+      The context string "cello-frost-session-establishment-v1" is passed to the
+      FROST signing function and does not change. Verified by a unit test that
+      constructs two SessionAssignment values identical except that one has addrs
+      in a different order — after canonical encoding, both produce identical TBS
+      byte arrays (sort order normalization works). A third test constructs two
+      assignments identical except one has a different counterparty_session_peer_id
+      — they produce different TBS byte arrays (the field is included in TBS).
     test_type: unit
     component_under_test: client
     notes: >
@@ -275,6 +419,8 @@ acceptance_criteria:
       CONTEXT.md for session establishment. This AC does NOT change the context
       string — it only extends the positional array. The CONTEXT.md FROST TBS
       table must be updated by the implementer to document the new 10-field array.
+      Verifiable by: grep -A5 'cello-frost-session-establishment-v1' CONTEXT.md
+      showing 10 entries in the TBS array description.
 
   - id: AC-003
     given: "A running directory node with both parties having reported their
@@ -367,12 +513,31 @@ acceptance_criteria:
       not via a mocked method call.
     test_type: integration
     component_under_test: relay
+
+  - id: AC-006b
+    given: "A direct P2P session (transport_mode: 'direct') is processed by the
+      directory after the FROST ceremony completes"
+    when: "directory-node.ts sends the SessionAssignment"
+    then: >
+      The directory sends the SessionAssignment to both Alice and Bob via their
+      respective signaling streams. The directory does NOT send the assignment to
+      the relay node. The relay node does NOT receive the assignment and does NOT
+      create a session binding entry for this session_id. This is not a conditional
+      omission — the directory code path that forwards the assignment to the relay
+      is executed only when transport_mode === 'relay'. The conditional guard is
+      verified by a unit test that: (a) constructs a session with transport_mode
+      set to 'direct'; (b) injects a relay spy; (c) runs the directory assignment
+      dispatch path; (d) asserts the relay spy received ZERO calls for this
+      session_id. A symmetric test with transport_mode: 'relay' asserts the relay
+      spy received exactly ONE call. This is a security property: the relay must
+      not hold session Peer IDs for sessions it has no role in.
+    test_type: unit
+    component_under_test: directory
     notes: >
-      For direct P2P sessions, the relay does not receive the assignment — there
-      is no AC-006 path to exercise for direct sessions. The implementer must
-      add a unit test that asserts the directory code path that sends the
-      assignment to the relay is conditioned on transport_mode === 'relay' and
-      does not execute for transport_mode === 'direct'.
+      This AC encodes the security property from SI-003: session Peer IDs must
+      not be delivered to parties with no role in the session. For direct P2P,
+      the relay has no role. This AC promotes what was previously only a note
+      in AC-006 to a verifiable, gate-checked requirement.
 
   - id: AC-007
     given: "The session-manager.ts initiator self-check path, with a valid
@@ -649,6 +814,54 @@ acceptance_criteria:
       would compile against the old type silently and the new fields would be absent
       from every SessionAssignment it constructs.
 
+  - id: AC-019
+    given: "The infra/cloudformation/ CloudWatch alarm definitions for the
+      security-anomaly alarm stack"
+    when: "the alarm configuration is inspected"
+    then: >
+      A CloudWatch metric filter and alarm exist for the
+      session.assignment.verification.failed event with reason:
+      'assignment_tbs_verification_failed', configured to fire when this event
+      fires more than 2 times in a 5-minute period from the same agentName.
+      The alarm SNS target is the existing security-anomaly SNS topic used by
+      other CELLO security alarms. Verified by:
+        grep -r 'assignment_tbs_verification_failed' infra/cloudformation/
+      returning at least one CFN resource definition. The metric filter pattern
+      must match the exact event name 'session.assignment.verification.failed'
+      and the exact reason string 'assignment_tbs_verification_failed'.
+    test_type: integration
+    component_under_test: infra
+    notes: >
+      Security-anomaly alarms are load-bearing — an unfired alarm for a MITM
+      scenario defeats the monitoring. The alarm must be in IaC, not created
+      manually in the console. Consistent with the security alarm wiring pattern
+      used for other CELLO events (e.g. frost_verification_failed alarm).
+
+  - id: AC-020
+    given: "The infra/cloudformation/ CloudWatch alarm definitions for the
+      security-anomaly alarm stack"
+    when: "the alarm configuration is inspected"
+    then: >
+      A CloudWatch metric filter and alarm exist for the
+      session.assignment.verification.failed event with reason:
+      'assignment_peer_id_mismatch', configured to fire on ANY single occurrence
+      (threshold: >= 1 in a 1-minute period). This alarm pages immediately —
+      a single Peer ID mismatch after valid FROST verification is an active attack
+      indicator. The alarm SNS target is the existing security-anomaly SNS topic.
+      Verified by:
+        grep -r 'assignment_peer_id_mismatch' infra/cloudformation/
+      returning at least one CFN resource definition. This alarm has a lower
+      threshold than AC-019 because even one occurrence is anomalous and
+      requires investigation.
+    test_type: integration
+    component_under_test: infra
+    notes: >
+      peer_id_mismatch after FROST verification passing means: (a) the directory
+      signed a TBS with Alice's real Peer ID, (b) the signed frame arrived at
+      Alice, but (c) the Peer ID in the frame does not match Alice's session node.
+      This scenario requires the directory to have been compromised or the signed
+      frame to have been delivered to the wrong client. Either is a critical event.
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
@@ -796,11 +1009,33 @@ observability:
 # ─── Implementation Notes ────────────────────────────────────
 implementation_notes:
   - >
+    Inbound message changes (prerequisite for directory producer): Two inbound
+    message types must be changed before the directory can populate the new
+    SessionAssignment fields. (1) SessionRequest in directory-types.ts: add
+    initiator_session_peer_id: string and initiator_session_addrs: string[]
+    as required fields. Update the CBOR parser in directory-frames.ts to parse
+    them. (2) New SessionOfferAccept type in directory-types.ts: add a new
+    CBOR-encoded frame type (discriminant 'session_offer_accept') with fields
+    session_id, counterparty_session_peer_id, counterparty_session_addrs. Add
+    to the InboundSignalingFrame union. The directory stores both values in
+    in-flight session state keyed by session_id before issuing the final
+    SessionAssignment. These changes are prerequisites for AC-001b, AC-001c,
+    and AC-003.
+  - >
+    participant_a.peer_id vs initiator_session_peer_id — do NOT confuse them:
+    participant_a.peer_id carries the directory-facing node Peer ID (from
+    PeerInfoAnnounce). initiator_session_peer_id carries the ephemeral session
+    node Peer ID (from the extended SessionRequest). Never use participant_a.peer_id
+    as the dial target in session-manager.ts — that would expose the directory-
+    facing identity to the session transport layer and break the unlinkability
+    guarantee. Grep for any existing code that reads participant_a.peer_id in
+    session establishment flows and replace it with initiator_session_peer_id.
+  - >
     Protocol-types change: add the five new fields to the SessionAssignment type
-    in packages/protocol-types/src/types.ts. If a Zod schema exists, add them
-    with z.string() (Peer IDs and transport_mode) and z.array(z.string()) (addrs).
-    Make all five non-optional — a frame without them is invalid and must be
-    rejected at parse time.
+    in packages/protocol-types/src/session.ts (or types.ts). If a Zod schema
+    exists, add them with z.string() (Peer IDs and transport_mode) and
+    z.array(z.string()) (addrs). Make all five non-optional — a frame without
+    them is invalid and must be rejected at parse time.
   - >
     TBS construction: add or update buildSessionEstablishmentTbs() in
     packages/client/src/ (or packages/crypto/src/ if shared). The function takes
@@ -830,13 +1065,15 @@ implementation_notes:
     from "the seal FROST ceremony failed."
   - >
     Directory producer path: in directory-node.ts, the SessionAssignment construction
-    occurs after both parties have reported their session Peer IDs. The exact call
-    site is where the FROST ceremony currently starts (after session_accept from Bob).
-    The new fields are populated from: (a) Alice's session_initiate request payload
-    (initiator_session_peer_id, initiator_session_addrs); (b) Bob's session_accept
-    response (counterparty_session_peer_id, counterparty_session_addrs); (c)
-    transport_mode derived from AutoNAT results (TRANSPORT-001 stub returns
-    dialable: false → transport_mode: 'relay' until TRANSPORT-001 lands).
+    occurs after both parties have reported their session Peer IDs. The call site
+    is after the directory receives Bob's SessionOfferAccept response. The new
+    fields are populated from: (a) Alice's SessionRequest frame — field
+    initiator_session_peer_id and initiator_session_addrs (NOT from
+    participant_a.peer_id); (b) Bob's SessionOfferAccept response —
+    counterparty_session_peer_id and counterparty_session_addrs (NOT from
+    participant_b.peer_id); (c) transport_mode derived from AutoNAT results
+    (TRANSPORT-001 stub returns dialable: false → transport_mode: 'relay' until
+    TRANSPORT-001 lands).
   - >
     Relay binding: in relay-node.ts, add a session binding map:
     Map<sessionId, { initiatorPeerId: string; counterpartyPeerId: string }>.
