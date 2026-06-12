@@ -167,7 +167,7 @@ behavior:
       initiator_session_peer_id (string — Alice's session node Peer ID hex) and
       initiator_session_addrs (string[] — Alice's session node multiaddrs).
       Both fields are non-optional. A session_request frame that omits either
-      field is rejected by the directory with reason 'missing_session_peer_id'
+      field is rejected by the directory with reason 'session_request_missing_peer_id'
       before any target lookup or FROST ceremony is initiated. This field carries
       the Peer ID of Alice's EPHEMERAL SESSION NODE — NOT her directory-facing node
       Peer ID (which is already known to the directory from PeerInfoAnnounce and
@@ -334,7 +334,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: protocol-types
 
-  - id: AC-001b
+  - id: AC-002
     given: "The SessionRequest type in packages/directory/src/directory-types.ts"
     when: "the type definition is inspected"
     then: >
@@ -343,9 +343,9 @@ acceptance_criteria:
         initiator_session_addrs: string[]
       Both fields are absent from legacy M6 session_request frames. The CBOR frame
       parser in packages/directory/src/directory-frames.ts rejects any session_request
-      that omits either field with a distinct error distinct from the existing
-      'missing_session_peer_id' assignment error — e.g. 'session_request_missing_peer_id'
-      — so the operator can distinguish an initiator that sent an incomplete request
+      that omits either field with the error code 'session_request_missing_peer_id'
+      — distinct from the client-side 'assignment_missing_session_peer_id' —
+      so the operator can distinguish an initiator that sent an incomplete request
       from a tampered assignment. Verified by a unit test that: (a) constructs a CBOR
       session_request frame without initiator_session_peer_id; (b) passes it to the
       frame parser; (c) asserts the parser returns null or throws (no crash, no panic).
@@ -359,7 +359,7 @@ acceptance_criteria:
       from SessionRequest, NOT from participant_a.peer_id, when populating the
       SessionAssignment's initiator_session_peer_id field.
 
-  - id: AC-001c
+  - id: AC-003
     given: "A new wire type (SessionOfferAccept or equivalent) defined for the
       target-to-directory response path in packages/directory/src/directory-types.ts
       (or @cello-protocol/protocol-types if the client also sends it)"
@@ -386,11 +386,11 @@ acceptance_criteria:
       the implementer. The discriminant string must be documented in
       implementation_notes and consistent with CONTEXT.md's wire frame taxonomy.
       This is the second inbound interface this story introduces; without it,
-      the directory has no way to obtain Bob's session Peer ID, and AC-003's
+      the directory has no way to obtain Bob's session Peer ID, and AC-005's
       "both parties having reported their session Peer IDs" precondition cannot
       be satisfied through the production code path.
 
-  - id: AC-002
+  - id: AC-004
     given: "The FROST TBS construction utility in packages/client (or packages/crypto)"
     when: "buildSessionEstablishmentTbs(assignment) is called with a complete
       SessionAssignment including all 10 fields"
@@ -422,7 +422,7 @@ acceptance_criteria:
       Verifiable by: grep -A5 'cello-frost-session-establishment-v1' CONTEXT.md
       showing 10 entries in the TBS array description.
 
-  - id: AC-003
+  - id: AC-005
     given: "A running directory node with both parties having reported their
       session Peer IDs during negotiation — Alice has reported
       initiator_session_peer_id 'PEER_A' with multiaddrs ['ADDR_A1'],
@@ -455,7 +455,7 @@ acceptance_criteria:
       exercise the "relay" path unless it explicitly configures the AutoNAT
       stub to return dialable: true for "direct".
 
-  - id: AC-004
+  - id: AC-006
     given: "The initiator client's session-manager.ts receives a valid
       SessionAssignment containing both session Peer IDs, multiaddrs, and
       transport_mode — and the initiator's own session node has Peer ID 'PEER_A'"
@@ -477,7 +477,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-005
+  - id: AC-007
     given: "The target client's session-manager.ts receives a valid
       SessionAssignment — the standing receiver has Peer ID 'PEER_B', and the
       assignment carries initiator_session_peer_id 'PEER_A'"
@@ -497,7 +497,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-006
+  - id: AC-008
     given: "A relay-path session (transport_mode: 'relay') with session Peer IDs
       'PEER_A' (Alice) and 'PEER_B' (Bob) bound to the relay"
     when: "relay-node.ts processes the SessionAssignment for this session"
@@ -514,7 +514,7 @@ acceptance_criteria:
     test_type: integration
     component_under_test: relay
 
-  - id: AC-006b
+  - id: AC-009
     given: "A direct P2P session (transport_mode: 'direct') is processed by the
       directory after the FROST ceremony completes"
     when: "directory-node.ts sends the SessionAssignment"
@@ -537,9 +537,9 @@ acceptance_criteria:
       This AC encodes the security property from SI-003: session Peer IDs must
       not be delivered to parties with no role in the session. For direct P2P,
       the relay has no role. This AC promotes what was previously only a note
-      in AC-006 to a verifiable, gate-checked requirement.
+      in AC-008 to a verifiable, gate-checked requirement.
 
-  - id: AC-007
+  - id: AC-010
     given: "The session-manager.ts initiator self-check path, with a valid
       FROST-signed SessionAssignment where initiator_session_peer_id is 'PEER_X'
       but the initiator's actual session node Peer ID is 'PEER_A'"
@@ -557,7 +557,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-008
+  - id: AC-011
     given: "A SessionAssignment received by a client where counterparty_session_peer_id
       is present but initiator_session_peer_id is absent (empty string, null, or
       undefined)"
@@ -577,7 +577,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-009
+  - id: AC-012
     given: "A SessionAssignment where all 10 TBS fields are present, but the FROST
       signature was computed over a TBS that used a different
       counterparty_session_peer_id ('PEER_TAMPERED' instead of 'PEER_B')"
@@ -601,7 +601,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-010
+  - id: AC-013
     given: "The transport_mode field in a received SessionAssignment set to 'relay',
       but the counterparty_session_addrs array contains a direct /ip4/ multiaddr"
     when: "session-manager.ts processes the assignment"
@@ -622,7 +622,7 @@ acceptance_criteria:
       address format." It prevents both the current-impl accident (inferring from
       address) and future regressions.
 
-  - id: AC-011
+  - id: AC-014
     given: "The signaling stream to the directory drops after the directory has
       computed the SessionAssignment (all 5 new fields populated, FROST ceremony
       complete) but before the frame is delivered to the client"
@@ -648,7 +648,7 @@ acceptance_criteria:
       the queuing and reconnect logic; this AC verifies the WIRE-001 send path
       does not bypass it or silently discard the assignment.
 
-  - id: AC-012
+  - id: AC-015
     given: "The full session establishment flow: directory constructs assignment,
       Alice receives it as initiator, Bob receives it as target, Alice creates her
       session node from counterparty addrs, Bob configures his connectionGater from
@@ -665,7 +665,7 @@ acceptance_criteria:
       each party's counterpartyPubkey (the other's K_local hex), the same
       transportMode, and a correlationId present on both events.
       This is the "producer → both consumers" round-trip: one integration test
-      that chains AC-003, AC-004, and AC-005 into a single end-to-end assertion.
+      that chains AC-005, AC-006, and AC-007 into a single end-to-end assertion.
       The test goes through real libp2p dial/accept — not mocked connection objects.
     test_type: integration
     component_under_test: client
@@ -673,7 +673,7 @@ acceptance_criteria:
       Addresses M7 lesson L7 (NODE_ENV=test shortcuts). The connectionGater
       path is only exercised when a real libp2p dial hits the gate.
 
-  - id: AC-013
+  - id: AC-016
     given: "All error paths in this story's scope: assignment_missing_session_peer_id,
       assignment_peer_id_mismatch, assignment_tbs_verification_failed"
     when: "each distinct failure cause is triggered independently"
@@ -699,7 +699,7 @@ acceptance_criteria:
       [object Object]) both apply here. audit all three packages, not only
       the changed files.
 
-  - id: AC-014
+  - id: AC-017
     given: "packages/directory/src/directory-node.ts before this story"
     when: "the implementer searches for any catch block that catches a FROST
       verification exception and returns 'frost_verification_failed'"
@@ -715,7 +715,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: directory
 
-  - id: AC-015
+  - id: AC-018
     given: "packages/directory/src/directory-node.ts (the composition root
       for the FROST TBS construction call)"
     when: "a session establishment request is processed end-to-end through the
@@ -726,7 +726,7 @@ acceptance_criteria:
       contains all five new fields with non-empty values. The composition root
       change is verified by an integration test that starts the directory binary
       via the test fixture, completes a real session negotiation, and asserts the
-      received SessionAssignment passes AC-003's TBS verification check. A test
+      received SessionAssignment passes AC-005's TBS verification check. A test
       that calls the TBS construction function directly without starting the
       directory binary does NOT satisfy this AC.
     test_type: integration
@@ -735,7 +735,7 @@ acceptance_criteria:
       Addresses M7 lesson L3 — composition root never wired. The directory binary
       start is the only test of composition root wiring.
 
-  - id: AC-016
+  - id: AC-019
     given: "packages/e2e-tests/src/session-fixture.ts"
     when: "createSessionFixture() is called with opts.ephemeralSessionNodes: true
       (from DAEMON-002) and a session assignment is produced during the fixture run"
@@ -747,12 +747,12 @@ acceptance_criteria:
       opts.ephemeralSessionNodes continue to pass unchanged (non-breaking). The
       fixture is extended with a helper that calls buildSessionEstablishmentTbs
       and asserts TBS verification succeeds — this helper is used by the integration
-      tests for AC-003 and AC-012 to avoid duplicating TBS verification logic in
+      tests for AC-005 and AC-015 to avoid duplicating TBS verification logic in
       test code.
     test_type: integration
     component_under_test: e2e-tests
 
-  - id: AC-017
+  - id: AC-020
     given: "All cello-client code changes for this story are implemented and tests
       pass (packages/protocol-types and packages/client modified)"
     when: "the implementer follows the version bump procedure in cello-client CLAUDE.md"
@@ -785,9 +785,9 @@ acceptance_criteria:
       five new fields. workspace:* references are a bug post-REPOSPLIT-002 —
       they resolve to stale local copies and must never appear in published artifacts.
 
-  - id: AC-018
+  - id: AC-021
     given: "The new @cello-protocol/protocol-types and @cello-protocol/client
-      versions are live on npm beta (AC-017 complete)"
+      versions are live on npm beta (AC-020 complete)"
     when: "packages/directory/package.json and packages/relay/package.json in
       trustless-cello are updated"
     then: |
@@ -814,7 +814,7 @@ acceptance_criteria:
       would compile against the old type silently and the new fields would be absent
       from every SessionAssignment it constructs.
 
-  - id: AC-019
+  - id: AC-022
     given: "The infra/cloudformation/ CloudWatch alarm definitions for the
       security-anomaly alarm stack"
     when: "the alarm configuration is inspected"
@@ -837,7 +837,7 @@ acceptance_criteria:
       manually in the console. Consistent with the security alarm wiring pattern
       used for other CELLO events (e.g. frost_verification_failed alarm).
 
-  - id: AC-020
+  - id: AC-023
     given: "The infra/cloudformation/ CloudWatch alarm definitions for the
       security-anomaly alarm stack"
     when: "the alarm configuration is inspected"
@@ -851,7 +851,7 @@ acceptance_criteria:
       Verified by:
         grep -r 'assignment_peer_id_mismatch' infra/cloudformation/
       returning at least one CFN resource definition. This alarm has a lower
-      threshold than AC-019 because even one occurrence is anomalous and
+      threshold than AC-022 because even one occurrence is anomalous and
       requires investigation.
     test_type: integration
     component_under_test: infra
@@ -899,7 +899,7 @@ security_invariants:
       assignment with transport_mode: 'relay' and a direct '/ip4/' address. The
       client must use transport_mode: 'relay'. In both cases, address-format-based
       inference would yield the wrong answer — only the signed transport_mode field
-      is authoritative. Verified by the unit tests in AC-010.
+      is authoritative. Verified by the unit tests in AC-013.
     test_type: unit
     component_under_test: client
 
@@ -1019,8 +1019,8 @@ implementation_notes:
     session_id, counterparty_session_peer_id, counterparty_session_addrs. Add
     to the InboundSignalingFrame union. The directory stores both values in
     in-flight session state keyed by session_id before issuing the final
-    SessionAssignment. These changes are prerequisites for AC-001b, AC-001c,
-    and AC-003.
+    SessionAssignment. These changes are prerequisites for AC-002, AC-003,
+    and AC-005.
   - >
     participant_a.peer_id vs initiator_session_peer_id — do NOT confuse them:
     participant_a.peer_id carries the directory-facing node Peer ID (from
@@ -1056,6 +1056,21 @@ implementation_notes:
     mySessionPeerId is the Peer ID returned by SessionNodeManager.createSessionNode()
     during the session initiation call. The comparison is a string equality check on
     hex Peer ID values — no libp2p peer ID parsing required.
+  - >
+    Error code registry for this story — these strings are fixed and must not be
+    invented at implementation time:
+      'session_request_missing_peer_id' — directory rejects a session_request
+        frame that omits initiator_session_peer_id or initiator_session_addrs
+        (AC-002). This is a directory-side parse error, distinct from the
+        client-side 'assignment_missing_session_peer_id'.
+      'assignment_missing_session_peer_id' — client rejects a received
+        SessionAssignment that omits session Peer ID fields (AC-011, AC-012).
+      'assignment_peer_id_mismatch' — initiator self-check fails (AC-010).
+      'assignment_tbs_verification_failed' — FROST signature over 10-field TBS
+        fails (AC-012). Distinct from 'frost_verification_failed' (seal only).
+    Add these four strings to the SessionRequestErrorReason union (for the
+    directory-side code) and to the client-side error reason union as appropriate.
+    Document them in CONTEXT.md's error code glossary alongside existing codes.
   - >
     Error code separation for FROST verification: grep packages/client/src/ and
     packages/directory/src/ for 'frost_verification_failed'. Any catch block on
@@ -1107,7 +1122,7 @@ dependencies:
                                # to choose direct dial vs relay fallback
     - CELLO-M7-SESSION-001    # needs session Peer IDs in assignment to detect
                                # which peer disconnected mid-session
-    - CELLO-M7-E2E-001        # gate story; AC-003 verifies ephemeral session Peer IDs
+    - CELLO-M7-E2E-001        # gate story; AC-005 verifies ephemeral session Peer IDs
                                # are distinct from directory-facing Peer IDs
   notes: >
     This story is the pipeline bottleneck in M7: it is a cross-repo protocol
@@ -1135,7 +1150,7 @@ references:
     Shared interface completeness: SessionAssignment is the most widely-consumed
     frame in the protocol. This story enumerates all four parties — one producer
     (directory) and three consumers (initiator client, target client, relay) —
-    and every consumer has its own AC (AC-003 to AC-006 respectively).
+    and every consumer has its own AC (AC-005 to AC-008 respectively).
     The outline.md §Shared Interface: SessionAssignment Wire Format (S4) is the
     authoritative design source for this producer/consumer breakdown.
     All five new fields are protected by the FROST TBS — SI-001 verifies this.
