@@ -475,6 +475,7 @@ Stories use the format `M7-{DOMAIN}-{NNN}`:
 | **M7-TRANSPORT-001** | AutoNAT + direct P2P default — `autonat()` in createNode, dialability observable, direct dial default, relay fallback, dcutr upgrade; **also enables AutoNAT service protocol on directory nodes** (cross-repo: `packages/directory`) | M7-WIRE-001 | **both** | `packages/transport/src/node.ts`, `packages/daemon`, `packages/directory` |
 | **M7-SESSION-001** | Interrupted session handling — relay `session_interrupted` frame, DB `interrupted` status, login surfacing, seal-interrupted protocol flow | M7-DAEMON-002, M7-WIRE-001 | **both** | `packages/relay`, `packages/daemon`, `packages/client` |
 | **M7-SIGNAL-001** | Signaling stream resilience — heartbeat/keepalive on signaling stream, exponential backoff reconnect, `directory_signaling` status, queued outbound ops retry after reconnect | M7-DAEMON-001 | cello-client | `packages/transport/src/signaling-manager.ts`, `packages/daemon` |
+| **M7-DIR-PING-001** | Directory-side ping/pong handler — directory receives ping frames on authenticated signaling streams and responds with pong frames within 1 second; pure responder, no state persistence | M7-SIGNAL-001 | trustless-cello | `packages/directory` |
 | **M7-DAEMON-003** | Nonce dedup + retry queue — rehoused in daemon; SQLCipher `retry_queue` and `session_seen_nonces` tables | M7-DAEMON-002 | cello-client | `packages/daemon`, `packages/client` |
 | **M7-MCP-002** | Agent-aware notifications — `agent` field on existing notifications, session node lifecycle as presence signals | M7-MCP-001, M7-DAEMON-002, M7-DAEMON-003 | cello-client | `packages/adapter-claude-code`, `packages/daemon` |
 | **M7-MANIFEST-001** | Manifest schema + initial manifest — JSON schema (`version`, `not_before`, `expires`, threshold sig), officer key ceremony, N root key constants in binary | — | cello-client | `packages/crypto`, `packages/protocol-types` |
@@ -503,7 +504,8 @@ to align its ACs with what the component stories actually specify.
 11. M7-MCP-002
 12. M7-MANIFEST-002
 13. M7-CICD-001
-14. CELLO-M7-E2E-001 *(cohesion pass — revise ACs to match component stories)*
+14. M7-DIR-PING-001
+15. CELLO-M7-E2E-001 *(cohesion pass — revise ACs to match component stories)*
 
 ---
 
@@ -517,14 +519,15 @@ Implementation order differs from writing order. CELLO-M7-E2E-001 is implemented
 3. M7-CICD-001 *(independent; can run any time)*
 4. M7-DAEMON-002 *(needs M7-DAEMON-001)*
 5. M7-SIGNAL-001 *(needs M7-DAEMON-001)*
-6. M7-MCP-001 *(needs M7-DAEMON-001)*
-7. M7-DAEMON-003 *(needs M7-DAEMON-002)*
-8. M7-WIRE-001 *(needs M7-DAEMON-002; cross-repo deploy — batch with M7-SESSION-001 and M7-MANIFEST-002)*
-9. M7-SESSION-001 *(needs M7-DAEMON-002 + M7-WIRE-001; batch pipeline push with M7-WIRE-001)*
-10. M7-MANIFEST-002 *(needs M7-DAEMON-001 + M7-MANIFEST-001; batch pipeline push with M7-WIRE-001)*
-11. M7-TRANSPORT-001 *(needs M7-WIRE-001)*
-12. M7-MCP-002 *(needs M7-MCP-001 + M7-DAEMON-002 + M7-DAEMON-003)*
-13. CELLO-M7-E2E-001 *(implemented last — close gate)*
+6. M7-DIR-PING-001 *(needs M7-SIGNAL-001; trustless-cello only — deploy after SIGNAL-001 lands)*
+7. M7-MCP-001 *(needs M7-DAEMON-001)*
+8. M7-DAEMON-003 *(needs M7-DAEMON-002)*
+9. M7-WIRE-001 *(needs M7-DAEMON-002; cross-repo deploy — batch with M7-SESSION-001 and M7-MANIFEST-002)*
+10. M7-SESSION-001 *(needs M7-DAEMON-002 + M7-WIRE-001; batch pipeline push with M7-WIRE-001)*
+11. M7-MANIFEST-002 *(needs M7-DAEMON-001 + M7-MANIFEST-001; batch pipeline push with M7-WIRE-001)*
+12. M7-TRANSPORT-001 *(needs M7-WIRE-001)*
+13. M7-MCP-002 *(needs M7-MCP-001 + M7-DAEMON-002 + M7-DAEMON-003)*
+14. CELLO-M7-E2E-001 *(implemented last — close gate)*
 
 **Pipeline batching note:** M7-WIRE-001, M7-SESSION-001, and M7-MANIFEST-002
 all require directory/relay CloudFormation deploys (~25-30 min each). Never
@@ -539,7 +542,7 @@ DAEMON-001 ──→ MCP-001   ────────────────�
            ├──→ DAEMON-002 ──→ WIRE-001 ──→ TRANSPORT-001 ──────→ │
            │               │           └──→ SESSION-001  ──────→ │
            │               └──→ DAEMON-003 ──→ MCP-002   ──────→ E2E-001 (gate)
-           └──→ SIGNAL-001 ────────────────────────────────────→ │
+           └──→ SIGNAL-001 ──→ DIR-PING-001 ───────────────────→ │
                                                                   │
 MANIFEST-001 ──→ MANIFEST-002 ──────────────────────────────────→ │
 
@@ -891,6 +894,7 @@ the `AC-version-bump` and `AC-trustless-cello-dependency-update` ACs defined in
 | M7-MCP-002 | `packages/adapter-claude-code` | — |
 | M7-MANIFEST-001 | `packages/crypto`, `packages/protocol-types` | — |
 | M7-MANIFEST-002 | `packages/transport`, `packages/daemon` | `packages/directory` (signs challenge) |
+| M7-DIR-PING-001 | — | `packages/directory` (ping/pong handler — trustless-cello only; no cello-client changes) |
 
 **M7-WIRE-001, M7-SESSION-001, and M7-MANIFEST-002 touch both repos.** Their
 version-bump ACs must include the trustless-cello dependency update and a push
