@@ -15,7 +15,7 @@ description: >
 id: CELLO-M7-SESSION-001
 domain: Session
 milestone: M7
-actor: OPS
+actor: CLIENT
 priority: P0
 components:
   - relay
@@ -410,7 +410,7 @@ acceptance_criteria:
       SEAL-INTERRUPTED leaf. Both sides must agree on the exact same leafCount
       and merkleRoot before proceeding to the FROST ceremony.
 
-  - id: AC-008b
+  - id: AC-009
     given: "A directory node with authenticated signaling streams for agent A and agent B"
     when: "A's daemon sends a SealInterruptedRequest frame over the directory signaling
       stream targeting B (the directory receives type: 'seal_interrupted_request'
@@ -690,8 +690,11 @@ degraded_behavior:
       to receiving a session_interrupted frame — the source field distinguishes
       which detection path fired. The operator sees the interrupted session on
       next login via interrupted_sessions in cello status.
-    test_type: integration
-    component_under_test: daemon
+    notes: >
+      Covered by AC-005 — no additional test beyond what AC-005 already asserts
+      (stream close detection → SQLite interrupted + session.interrupted.detected
+      with source: 'stream_close'). This DB entry documents the degraded behavior
+      narrative; it does not introduce a new test obligation.
 
 # ─── Observability ──────────────────────────────────────────
 observability:
@@ -742,25 +745,26 @@ observability:
         excluded from this count. A daemon restart with 8+ interrupted sessions
         fires 8 daemon_restart-sourced events; excluding them prevents spurious
         alarm triggers on normal restart."
-      fires_to: "daemon-health CloudWatch alarm — sustained relay_frame or
-        stream_close interruption rate indicates relay instability or network
-        degradation"
+      fires_to: "surfaced as persistent WARN in daemon logs; operator detects via
+        cello status (which reports interrupted_sessions count) or log inspection.
+        The threshold is implementer guidance for when the rate indicates relay
+        instability vs. normal transient disconnects."
       notes: >
-        Implement as a CloudWatch metric filter on source == 'relay_frame' OR
-        source == 'stream_close'. The metric is distinct from the unfiltered
-        count so both are independently observable.
+        These events fire in the operator's local daemon process — not an ECS
+        task. CloudWatch cannot observe them. The threshold is useful guidance
+        for implementers building local monitoring, but the monitoring target
+        is the local daemon log, not a CloudWatch metric filter.
     - condition: "session.interrupted.seal.failed fires with reason:
         'seal_interrupted_counterparty_unavailable' more than 5 times in 1 hour
-        for the same sessionId (per-session CloudWatch metric filter, not a
-        global count across all sessions)"
-      fires_to: "operator notification — the counterparty has been unreachable
-        for an extended period on a specific session; the operator should decide
-        whether to discard the session"
+        for the same sessionId (per-session, not global count)"
+      fires_to: "surfaced as persistent ERROR in daemon logs; operator detects
+        via log inspection or a future local monitoring integration. The
+        threshold indicates a stuck counterparty on a specific session — the
+        operator should decide whether to discard the session."
       notes: >
-        Implement as a per-session CloudWatch metric filter using sessionId as
-        the dimension. A global count would be too noisy (5 different sessions
-        each failing once would not warrant the same alert as one session failing
-        5 times, which indicates a stuck counterparty).
+        Same as above: fires in the local daemon process, not an ECS task.
+        A per-session count is the correct dimension — 5 different sessions
+        each failing once is not the same as one session failing 5 times.
 
 # ─── Implementation Notes ────────────────────────────────────
 implementation_notes:
