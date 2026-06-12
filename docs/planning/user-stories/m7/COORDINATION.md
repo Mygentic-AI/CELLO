@@ -47,7 +47,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-TRANSPORT-001 — AutoNAT + direct P2P | — | written — review pending | Written 2026-06-12; blocked on M7-WIRE-001 for implementation; cross-repo; touches packages/transport + packages/interfaces (cello-client) and packages/directory (trustless-cello) |
 | M7-SESSION-001 — Interrupted session handling | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-002 + M7-WIRE-001 for implementation; cross-repo; batch with M7-WIRE-001 + M7-MANIFEST-002 |
 | M7-SIGNAL-001 — Signaling stream resilience | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 for implementation |
-| M7-DIR-PING-001 — Directory-side ping/pong handler | — | not started | Blocked on M7-SIGNAL-001 (frame type defined there); touches packages/directory (trustless-cello); required for heartbeat to function end-to-end |
+| M7-DIR-PING-001 — Directory-side ping/pong handler | — | written — review pending | Written 2026-06-12; blocked on M7-SIGNAL-001 (frame type defined there); touches packages/directory (trustless-cello) only; required for heartbeat to function end-to-end |
 | M7-DAEMON-003 — Nonce dedup + retry queue | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-002 for implementation |
 | M7-MCP-002 — Agent-aware notifications | — | written — review pending | Written 2026-06-12; blocked on M7-MCP-001 + M7-DAEMON-002 + M7-DAEMON-003 for implementation |
 | M7-MANIFEST-001 — Manifest schema | — | written — review pending | Written 2026-06-12; independent; no other story blocks it |
@@ -313,3 +313,22 @@ E2E live tests (AC-012/013), lateral catch audit (AC-014), transport_mode author
 prober identity verification, dcutr non-disruption. 2 DBs. Cross-repo: packages/
 transport + packages/interfaces (cello-client) and packages/directory (trustless-cello).
 Story marked written — review pending.
+
+### 2026-06-12 — M7-DIR-PING-001 written
+
+CELLO-M7-DIR-PING-001 YAML written. Directory-side ping/pong handler for signaling
+heartbeat frames. The directory receives ping frames on authenticated signaling
+streams and responds with pong frames within 1 second. No state persistence, no
+blocking operations — pure responder. Key decisions: DEBUG-level observability
+(fires every 15s per client, INFO would spam logs); client owns heartbeat detection
+logic (directory only echoes back); pong failures logged but do NOT terminate the
+stream (client timeout detects the failure); composition root AC verifies handler
+is reachable from directory binary entrypoint (L3); lateral catch audit covers all
+catch blocks in packages/directory/src/ (L6). 8 ACs cover: basic ping/pong with
+1-second response (AC-001), multi-client routing isolation (AC-002), no blocking
+operations (code review, AC-003), stream write error handling (AC-004), log spam
+prevention (AC-005), composition root wiring via integration test (AC-006), lateral
+catch audit (AC-007), CI/CD pipeline push (AC-008). 1 SI: no blocking in handler
+(burst load test with 100 pings). trustless-cello only — touches packages/directory;
+no cello-client package changes. Completes the end-to-end heartbeat path started by
+SIGNAL-001. Story marked written — review pending.

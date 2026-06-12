@@ -1,0 +1,357 @@
+---
+name: CELLO-M7-DIR-PING-001
+type: user-story
+date: 2026-06-12
+topics: [signaling, heartbeat, ping-pong, directory, resilience, m7]
+status: draft
+description: >
+  Directory-side ping/pong handler for signaling heartbeat frames. The directory
+  receives ping frames on authenticated signaling streams and responds with pong
+  frames within 1 second. No state persistence, no blocking operations in the
+  handler — pure responder. The client (SIGNAL-001) owns heartbeat detection
+  logic; the directory only echoes back. Minimal observability (DEBUG level,
+  fires every 15s per client). Completes the end-to-end heartbeat path started
+  by SIGNAL-001.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-DIR-PING-001
+domain: Directory
+milestone: M7
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the directory node,
+  I want to respond to ping frames on authenticated signaling streams with pong
+  frames within 1 second,
+  so that clients can detect signaling stream liveness via heartbeat without
+  requiring any state persistence or blocking operations in the directory's
+  ping handler.
+
+# ─── Context ────────────────────────────────────────────────
+# SIGNAL-001 (cello-client) sends ping frames every 15s and expects pong within
+# 15s. DIR-PING-001 (trustless-cello) delivers the directory-side handler that
+# receives those pings and sends pongs. The directory does NOT own heartbeat
+# detection logic — the client does. The directory is a pure responder.
+#
+# Frame format (defined by SIGNAL-001):
+#   ping: { type: 'ping', ts: <monotonic counter> }
+#   pong: { type: 'pong', ts: <same value> }
+#
+# The ts field is a monotonic counter (not Date.now() — avoids clock skew).
+# The directory echoes back the same ts value it received.
+#
+# No state persistence: the directory does NOT persist ping timestamps, count
+# pings, or maintain heartbeat state. It is a pure responder. The client owns
+# heartbeat timeout detection logic.
+#
+# No blocking operations: the pong must be sent within 1 second of receiving
+# the ping. Any operation that could block (DB query, external API call) is
+# prohibited in the ping/pong path.
+#
+# Observability: ping/pong events at DEBUG level (not INFO — fires every 15s
+# per connected client; INFO would spam logs). All events include clientPubkey
+# (the agent's K_local pubkey hex) and streamId (signaling stream identifier).
+#
+# Composition root: the ping handler is registered in the directory's signaling
+# stream protocol handler during createNode or directory startup. An AC verifies
+# the handler is reachable from the directory binary entrypoint — unit tests of
+# the handler in isolation are not sufficient.
+#
+# Error handling: if sending the pong fails (stream write error), log at DEBUG
+# with error.message (never ${error} interpolation). Do NOT terminate the
+# stream — the client's heartbeat timeout will detect the failure.
+
+# ─── Sovereign Node Constraint ──────────────────────────────
+# Directory nodes are sovereign and independent. Each directory node handles
+# ping/pong for its own connected clients independently. No cross-node
+# coordination or shared state. Three directory regions each respond to their
+# own clients. No assumption of co-location, shared networking, or coordination
+# between directory nodes.
+
+# ─── Behavior ──────────────────────────────────────────────
+behavior:
+  - trigger: "When a ping frame arrives on an authenticated signaling stream"
+    action: >
+      The directory reads the ts field from the ping frame, constructs a pong
+      frame { type: 'pong', ts: <same value> }, and sends it to the same
+      signaling stream within 1 second. No blocking operations (DB query,
+      external call) are executed in the handler. directory.signaling.ping.received
+      is logged at DEBUG with clientPubkey and streamId.
+
+  - trigger: "When the pong frame is successfully sent"
+    action: >
+      directory.signaling.pong.sent is logged at DEBUG with clientPubkey and
+      streamId. No other action is taken — the directory maintains no heartbeat
+      state.
+
+  - trigger: "When sending the pong fails (stream write error)"
+    action: >
+      directory.signaling.pong.failed is logged at DEBUG with clientPubkey,
+      streamId, and error (the actual error.message, never ${error}
+      interpolation). The stream is NOT terminated by the directory — the
+      client's heartbeat timeout will detect the missing pong and trigger
+      reconnection.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A directory node with an authenticated signaling stream to a client"
+    when: "a ping frame { type: 'ping', ts: 42 } is sent over the signaling stream"
+    then: >
+      The directory receives the ping, logs directory.signaling.ping.received
+      at DEBUG with clientPubkey (non-empty hex string) and streamId (non-empty
+      string), constructs { type: 'pong', ts: 42 }, sends it to the same
+      stream, and logs directory.signaling.pong.sent at DEBUG with clientPubkey
+      and streamId. The pong is sent within 1 second of receiving the ping
+      (measured by test harness). The ts value in the pong matches the ts value
+      from the ping exactly.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "A directory node with two authenticated signaling streams to different
+      clients (Agent A with clientPubkey aaa..., Agent B with clientPubkey bbb...)"
+    when: "Agent A sends ping { ts: 10 } and Agent B sends ping { ts: 20 }
+      within the same 1-second window"
+    then: >
+      The directory sends pong { ts: 10 } to Agent A's stream and pong { ts: 20 }
+      to Agent B's stream. The responses do NOT cross streams — A receives only
+      its own pong, B receives only its own pong. directory.signaling.ping.received
+      fires twice (once with clientPubkey aaa..., once with bbb...). Same for
+      directory.signaling.pong.sent — twice with correct clientPubkey values.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "The directory's ping handler code path"
+    when: "reviewed by a human or static analyzer"
+    then: >
+      No blocking operations appear in the handler — no await on a DB query, no
+      await on an external HTTP call, no file I/O. The handler's execution path
+      from ping receipt to pong send is synchronous or uses only non-blocking
+      stream writes. This is a code review criterion, not a runtime test.
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-004
+    given: "A directory node with an authenticated signaling stream"
+    when: "the stream is killed at the OS level (TCP RST) immediately before the
+      directory attempts to send a pong frame"
+    then: >
+      The stream write throws. The directory catches the error, logs
+      directory.signaling.pong.failed at DEBUG with clientPubkey, streamId, and
+      error (the actual error.message from the stream write failure — not
+      '[object Object]', not ${error}), and does not crash. The directory does
+      NOT terminate the stream itself (the stream is already dead from the
+      client's perspective). directory.signaling.ping.received was logged before
+      the write failure; directory.signaling.pong.sent does NOT fire (the send
+      failed).
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "A directory node with an authenticated signaling stream"
+    when: "the client sends ping frames every 15 seconds for 2 minutes (8 pings)"
+    then: >
+      The directory responds with 8 pongs. directory.signaling.ping.received
+      fires 8 times at DEBUG level. directory.signaling.pong.sent fires 8 times
+      at DEBUG level. No other log events fire for routine ping/pong — no INFO,
+      no WARN, no ERROR. The directory's log is not spammed by heartbeat frames.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "packages/directory/src/directory-node.ts (or the equivalent composition
+      root for the directory binary)"
+    when: "the directory starts via its normal entrypoint"
+    then: >
+      The ping handler is registered in the signaling stream protocol handler.
+      Verified by an integration test that: (a) starts the directory binary (not
+      just constructs DirectoryNode), (b) establishes an authenticated signaling
+      stream from a client, (c) sends a ping frame, (d) asserts a pong is
+      received within 1 second. A test that directly constructs the handler
+      without starting the directory binary does NOT satisfy this AC.
+    test_type: integration
+    component_under_test: directory
+    notes: >
+      Addresses M7 lesson L3 (composition root never wired). The handler can be
+      implemented and unit-tested, but if the directory's entrypoint never
+      registers it, it is dead code. This AC proves the handler is reachable
+      from the running binary.
+
+  - id: AC-007
+    given: "All catch blocks in packages/directory/src/ that handle signaling
+      stream errors or frame send errors"
+    when: "each catch block is reviewed"
+    then: >
+      No catch block interpolates the error object into a template string via
+      ${error}. All error logging uses error.message explicitly:
+      error instanceof Error ? error.message : String(error). The implementer
+      scans every catch block in packages/directory/src/ and fixes or reports
+      any that interpolate error objects directly. This lateral catch audit
+      covers ALL files in packages/directory/src/ — not only files changed by
+      this story.
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-008
+    given: "All directory code changes for this story are implemented and tests
+      pass in trustless-cello"
+    when: "the directory image is built and tagged"
+    then: >
+      The directory Docker image is built via the CI/CD pipeline (CodeBuild).
+      The image is pushed to ECR in all 3 regions (us-east-1, eu-central-1,
+      ap-northeast-1) via the same pipeline that deployed M6B directory changes.
+      CloudFormation stack updates are triggered in all 3 regions. ECS services
+      are updated with the new image. No manual docker push from local. No
+      changes to trustless-cello package.json dependency versions are required
+      (DIR-PING-001 touches only packages/directory in trustless-cello; no
+      cello-client packages are modified).
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The directory shall never execute a blocking operation (DB query, external
+      API call, file I/O) in the ping handler. The pong must be sent within 1
+      second of receiving the ping, and the 1-second budget cannot tolerate a
+      blocking call.
+    adversarial_condition: >
+      An attacker sends a burst of 100 ping frames within 1 second. The directory
+      must respond to all 100 pongs within the 1-second window (or as close as
+      stream write capacity allows). If the handler blocks on any operation, the
+      burst will cause all subsequent pongs to be delayed beyond the 1-second
+      budget, triggering false-positive heartbeat timeouts on legitimate clients
+      sharing the same directory node. Verified by a load test that sends 100
+      pings in rapid succession and asserts all pongs are received within 2
+      seconds total (allowing for stream write serialization).
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior: []
+# No degraded behavior section — ping/pong is a pure in-memory operation with no
+# external dependencies. The only failure mode (stream write error) is handled
+# by logging and relying on the client's timeout detection.
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: directory.signaling.ping.received
+      level: debug
+      trigger: "When a ping frame is received on an authenticated signaling stream"
+      context_fields: [clientPubkey, streamId]
+      correlationId: false
+    - name: directory.signaling.pong.sent
+      level: debug
+      trigger: "When a pong frame is successfully sent in response to a ping"
+      context_fields: [clientPubkey, streamId]
+      correlationId: false
+  error_events:
+    - name: directory.signaling.pong.failed
+      level: debug
+      trigger: "When sending a pong frame fails (stream write error)"
+      context_fields: [clientPubkey, streamId, error]
+      correlationId: false
+  notes: >
+    All three events are at DEBUG level (not INFO). Heartbeat fires every 15
+    seconds per connected client. With 100 connected clients, INFO-level logging
+    would generate 400 log lines per minute per directory node (ping + pong for
+    each client). DEBUG is the correct level for routine keepalive chatter. The
+    implementer must add all three events to the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+    No console.log in implementation code — all events go through the injected
+    Logger interface.
+  alarms: []
+  notes_alarms: >
+    No CloudWatch alarms for ping/pong events. If pong fails to send, the
+    client's heartbeat timeout (SIGNAL-001) detects the failure and triggers
+    reconnection. No alarm is needed at the directory level for individual pong
+    failures. Sustained pong failures across many clients would surface as
+    increased directory.signaling.disconnected rates in SIGNAL-001's client-side
+    logs — that alarm already exists.
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Frame routing: the ping handler is wired into the directory's existing
+    authenticated signaling stream handler — the same handler that routes
+    connection_request, disclosure_request, session_request, seal_verify,
+    etc. (per DAEMON-001's authenticated stream model). The handler is a frame
+    type case in a switch statement or a registered protocol handler for the
+    /cello/signaling/1.0.0 stream. SIGNAL-001 defines the frame type; this
+    story implements the directory-side response.
+  - >
+    Ping frame schema (authoritative from SIGNAL-001):
+      { type: 'ping', ts: <number> }
+    Pong frame schema (authoritative):
+      { type: 'pong', ts: <same value> }
+    The ts field is a monotonic counter (performance.now() or equivalent), not
+    Date.now(). This avoids clock skew confusion if system time jumps.
+  - >
+    No state persistence: the directory does NOT write ping timestamps to
+    Postgres, does NOT count pings, does NOT maintain any in-memory heartbeat
+    state per client. The handler is entirely stateless — receive ts, echo ts.
+  - >
+    Error handling: if stream.write(pongFrame) throws, catch and log
+    directory.signaling.pong.failed with error.message. Do NOT call
+    stream.destroy() or stream.end() — the stream is already dead from the
+    client's perspective. The catch is purely for logging; no recovery action
+    is taken.
+  - >
+    Composition root: in packages/directory/src/directory-node.ts (or the
+    equivalent binary entrypoint), the ping handler is registered during the
+    signaling stream setup. If the directory uses a protocol router (e.g.
+    registering handlers by frame type), add:
+      signalingProtocol.registerHandler('ping', handlePing)
+    If the directory uses a single onMessage handler with a switch, add:
+      case 'ping': return handlePong(frame, stream)
+    AC-006 verifies this wiring via an integration test that starts the
+    directory binary and exercises the full path.
+  - >
+    Known limitation until SIGNAL-001 completes: heartbeat will not be
+    functional end-to-end until SIGNAL-001 lands in cello-client. The client
+    will send ping frames, but if DIR-PING-001 has not yet deployed, pongs
+    will never arrive. The client will detect stream death after every 30-second
+    window and enter the reconnect loop. This is expected behavior — DIR-PING-001
+    unblocks the end-to-end path, but SIGNAL-001 must land first to initiate
+    the pings.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-SIGNAL-001  # ping/pong frame type defined in SIGNAL-001; DIR-PING-001 implements the server-side response
+  blocks: []
+  notes: >
+    DIR-PING-001 depends on SIGNAL-001 (cello-client) because SIGNAL-001
+    defines the ping/pong frame schema and the heartbeat interval. DIR-PING-001
+    delivers the directory-side handler that responds to those frames.
+    Implementation order: SIGNAL-001 lands in cello-client, then DIR-PING-001
+    lands in trustless-cello. Until both are deployed, heartbeat will not
+    function end-to-end — clients will send pings, directories will ignore them
+    (no handler registered), and clients will detect stream death via timeout.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations, Authentication"
+  end_to_end_flow: "§2 Persistent Authenticated Connection, §2 Degraded Mode"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-11_1030_daemon-transport-architecture"
+  related_docs:
+    - "[[daemon-transport-architecture]]"
+    - "[[CELLO-M7-SIGNAL-001]]"
+    - "[[CELLO-M7-DAEMON-001]]"
+  notes: >
+    DIR-PING-001 completes the heartbeat path started by SIGNAL-001. SIGNAL-001
+    sends ping every 15s and expects pong within 15s (30s max detection window).
+    DIR-PING-001 delivers the server-side handler that echoes pong. The client
+    owns heartbeat detection logic; the directory is a pure responder. This is
+    a small story — one frame handler, three log events, minimal scope — but it
+    is a blocking dependency for SIGNAL-001's heartbeat to function end-to-end.
