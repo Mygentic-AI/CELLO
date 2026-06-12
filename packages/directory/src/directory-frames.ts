@@ -25,6 +25,7 @@ import type {
   SealFrostSignature,
   SessionFrostSealed,
   PeerInfoAnnounce,
+  ManifestPollResponse,
 } from "./directory-types.js";
 
 const ENC = new Encoder({ tagUint8Array: false });
@@ -39,8 +40,27 @@ export function encodeSignalingAuthFailed(frame: SignalingAuthFailed): Uint8Arra
   return ENC.encode({ type: frame.type, reason: frame.reason });
 }
 
-export function encodeSignalingAuthOk(_frame: SignalingAuthOk): Uint8Array {
-  return ENC.encode({ type: "signaling_auth_ok" });
+/**
+ * M7-MANIFEST-002: encode signaling_auth_ok with optional step-5 fields.
+ *
+ * Pre-MANIFEST-002 directories omit nodeId/signature/timestamp — the frame
+ * remains a bare `{type: "signaling_auth_ok"}` for backward compatibility.
+ * MANIFEST-002 directories include all three fields so the client can verify
+ * the directory's identity against the consortium manifest (step 6).
+ */
+export function encodeSignalingAuthOk(frame: SignalingAuthOk): Uint8Array {
+  const obj: Record<string, unknown> = { type: "signaling_auth_ok" };
+  if (frame.nodeId !== undefined) obj["nodeId"] = frame.nodeId;
+  if (frame.signature !== undefined) obj["signature"] = frame.signature;
+  if (frame.timestamp !== undefined) obj["timestamp"] = frame.timestamp;
+  return ENC.encode(obj);
+}
+
+// ─── M7-MANIFEST-002: Manifest poll frame encoders (directory → client) ──────
+
+/** Encode a manifest_poll_response frame from directory → client. */
+export function encodeManifestPollResponse(frame: ManifestPollResponse): Uint8Array {
+  return ENC.encode({ type: "manifest_poll_response", manifest: frame.manifest });
 }
 
 export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Array {
@@ -231,9 +251,9 @@ export function encodeDisclosureResponseInbound(frame: DisclosureResponseInbound
 
 import type { RegisterRequest, DkgComplete, ConnectionRequest, ConnectionResponse, DisclosureRequest, DisclosureResponse } from "@cello-protocol/protocol-types";
 
-import type { SealAttempt, SealRejectedTreeMismatch, SealAttemptAck, SealUnilateral, SealUnilateralTooEarly, SealUnilateralConfirmed, SealUnilateralNotification } from "./directory-types.js";
+import type { SealAttempt, SealRejectedTreeMismatch, SealAttemptAck, SealUnilateral, SealUnilateralTooEarly, SealUnilateralConfirmed, SealUnilateralNotification, ManifestPollRequest } from "./directory-types.js";
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral;
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | ManifestPollRequest;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -357,6 +377,11 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     return { type: "seal_unilateral", session_id, reported_root, reported_seq };
   }
 
+  // M7-MANIFEST-002: manifest poll request from client → directory
+  if (o["type"] === "manifest_poll_request") {
+    return { type: "manifest_poll_request" };
+  }
+
   return null;
 }
 
@@ -435,7 +460,8 @@ export type OutboundSignalingFrame =
   | SealAttemptAck
   | SealUnilateralTooEarly
   | SealUnilateralConfirmed
-  | SealUnilateralNotification;
+  | SealUnilateralNotification
+  | ManifestPollResponse;
 
 /** Decode a frame sent by the directory (used in tests to inspect what was sent). */
 export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignalingFrame | null {
@@ -461,7 +487,15 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
   }
 
   if (o["type"] === "signaling_auth_ok") {
-    return { type: "signaling_auth_ok" };
+    // M7-MANIFEST-002: optional nodeId/signature/timestamp fields (step 5)
+    const nodeId = typeof o["nodeId"] === "string" ? o["nodeId"] : undefined;
+    const signature = typeof o["signature"] === "string" ? o["signature"] : undefined;
+    const timestamp = typeof o["timestamp"] === "string" ? o["timestamp"] : undefined;
+    const result: SignalingAuthOk = { type: "signaling_auth_ok" };
+    if (nodeId !== undefined) result.nodeId = nodeId;
+    if (signature !== undefined) result.signature = signature;
+    if (timestamp !== undefined) result.timestamp = timestamp;
+    return result;
   }
 
   if (o["type"] === "session_assignment") {
@@ -767,6 +801,14 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     if (!sealed_root || sealed_root.length !== 32) return null;
     if (sealed_at === null) return null;
     return { type: "seal_unilateral_notification", session_id, sealed_root, sealed_at, seal_type: "UNILATERAL" };
+  }
+
+  // M7-MANIFEST-002: manifest poll response (directory → client)
+  if (o["type"] === "manifest_poll_response") {
+    const manifest = o["manifest"];
+    if (typeof manifest !== "object" || manifest === null) return null;
+    // Trust the manifest shape — full validation happens in the client's verifyManifest()
+    return { type: "manifest_poll_response", manifest: manifest as ManifestPollResponse["manifest"] };
   }
 
   return null;

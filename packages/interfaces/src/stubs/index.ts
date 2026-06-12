@@ -14,3 +14,7 @@ export { ConsoleOtpDeliveryProvider } from "./console-otp-delivery-provider.js";
 export { DevTokenValidator } from "./dev-token-validator.js";
 export { LocalPreAuthorizationClient } from "./local-pre-authorization-client.js";
 export { ConsoleSecurityAlertProvider } from "./console-security-alert-provider.js";
+
+// M7-MANIFEST-002: directory-side manifest stubs
+export { TestDirectoryKeyProvider } from "./test-directory-key-provider.js";
+export { TestDirectoryManifestStore } from "./test-directory-manifest-store.js";

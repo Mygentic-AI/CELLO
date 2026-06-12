@@ -26,7 +26,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cello-protocol/protocol-types": "^0.0.3"
+    "@cello-protocol/protocol-types": "^0.0.4",
+    "@noble/curves": "2.2.0"
   },
   "devDependencies": {
     "@types/node": "^25.6.2"

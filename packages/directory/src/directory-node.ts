@@ -152,6 +152,7 @@ import {
   encodeSealUnilateralTooEarly,
   encodeSealUnilateralConfirmed,
   encodeSealUnilateralNotification,
+  encodeManifestPollResponse,
   decodeInboundSignalingFrame,
 } from "./directory-frames.js";
 import { ed25519_FROST } from "@noble/curves/ed25519.js";
@@ -292,6 +293,20 @@ export interface DirectoryNodeOptions {
    * When absent, account linking is skipped (backward compat).
    */
   pgPool?: import("pg").Pool;
+  /**
+   * M7-MANIFEST-002: per-node Ed25519 signing key provider.
+   * When provided, the directory signs a step-5 TBS after successful client
+   * authentication and includes nodeId + signature + timestamp in signaling_auth_ok.
+   * When absent, signaling_auth_ok is sent without MANIFEST-002 fields (backward compat).
+   */
+  directoryKeyProvider?: import("@cello-protocol/interfaces").DirectoryKeyProvider;
+  /**
+   * M7-MANIFEST-002: consortium manifest store for manifest_poll_request handling.
+   * When provided, the directory responds to manifest_poll_request frames with
+   * the current manifest (manifest_poll_response).
+   * When absent, manifest_poll_request frames are ignored.
+   */
+  directoryManifestStore?: import("@cello-protocol/interfaces").DirectoryManifestStore;
 }
 
 export class CelloDirectoryNode {
@@ -319,6 +334,10 @@ export class CelloDirectoryNode {
   // OPS-AGENT-001: stash phone_stub_hash from consumed token for account linking after DKG completes
   // agentPubkeyHex → { phoneStubHash, emailStubHash }
   readonly #pendingPreAuthData = new Map<string, { phoneStubHash: string; emailStubHash: string }>();
+  // M7-MANIFEST-002: per-node Ed25519 signing key provider for step-5 auth proof
+  readonly #directoryKeyProvider: import("@cello-protocol/interfaces").DirectoryKeyProvider | undefined;
+  // M7-MANIFEST-002: manifest store for manifest_poll_request responses
+  readonly #directoryManifestStore: import("@cello-protocol/interfaces").DirectoryManifestStore | undefined;
 
   // REG-001: forceDkgFailure — test injection for below-threshold DKG simulation
   readonly #forceDkgFailure: boolean;
@@ -446,6 +465,8 @@ export class CelloDirectoryNode {
     this.#checkpointTransport = opts.checkpointTransport;
     this.#tokenValidator = opts.tokenValidator;
     this.#pgPool = opts.pgPool;
+    this.#directoryKeyProvider = opts.directoryKeyProvider;
+    this.#directoryManifestStore = opts.directoryManifestStore;
   }
 
   async start(): Promise<void> {
@@ -1120,7 +1141,54 @@ export class CelloDirectoryNode {
           // ADAPTER-003: send auth ack so client can synchronize on auth completion.
           // This allows clients to know the directory has registered their stream
           // before sending session_request frames.
-          this.#sendFrame(stream, encodeSignalingAuthOk({ type: "signaling_auth_ok" }));
+          //
+          // M7-MANIFEST-002 (step 5): if a DirectoryKeyProvider is configured, sign a TBS
+          // that binds this directory's nodeId to the client's nonce + pubkey, and include
+          // the signature in signaling_auth_ok. The client verifies this in step 6.
+          //
+          // TBS format (RFC 8032 Ed25519):
+          //   UTF-8('cello-directory-auth-challenge-v1\n')
+          //   + UTF-8(nodeId) + '\n'
+          //   + UTF-8(agentPubkeyHex) + '\n'
+          //   + UTF-8(nonceHex) + '\n'
+          //   + UTF-8(isoTimestamp)
+          if (this.#directoryKeyProvider) {
+            const nodeId = this.#directoryKeyProvider.getNodeId();
+            const isoTimestamp = new Date(this.#clock.now()).toISOString();
+            const tbsText = [
+              "cello-directory-auth-challenge-v1",
+              nodeId,
+              authedPubkeyHex,
+              nonceHex,
+              isoTimestamp,
+            ].join("\n");
+            const tbsBytes = new TextEncoder().encode(tbsText);
+            try {
+              const sigBytes = await this.#directoryKeyProvider.sign(tbsBytes);
+              const sigHex = Buffer.from(sigBytes).toString("hex");
+              this.#logger?.info("directory.auth.challenge.signed", {
+                nodeId,
+                agentPubkeyHex: authedPubkeyHex.slice(0, 16),
+                correlationId: nonceHex,
+              });
+              this.#sendFrame(stream, encodeSignalingAuthOk({
+                type: "signaling_auth_ok",
+                nodeId,
+                signature: sigHex,
+                timestamp: isoTimestamp,
+              }));
+            } catch (err) {
+              this.#logger?.warn("directory.auth.challenge.sign.failed", {
+                nodeId,
+                agentPubkeyHex: authedPubkeyHex.slice(0, 16),
+                error: err instanceof Error ? err.message : String(err),
+              });
+              // Signing failed: fall back to bare auth_ok for availability
+              this.#sendFrame(stream, encodeSignalingAuthOk({ type: "signaling_auth_ok" }));
+            }
+          } else {
+            this.#sendFrame(stream, encodeSignalingAuthOk({ type: "signaling_auth_ok" }));
+          }
 
           // Stash peer transport info for session assignments.
           // In M1 tests the peer_id is the node's Peer ID; multiaddrs are the listen addresses.
@@ -1351,6 +1419,17 @@ export class CelloDirectoryNode {
         } else if (parsed.type === "seal_unilateral") {
           // PERSIST-015: process unilateral seal request
           this.#processSealUnilateral(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "manifest_poll_request") {
+          // M7-MANIFEST-002: client requests a fresh copy of the consortium manifest.
+          // Respond immediately if a DirectoryManifestStore is configured.
+          if (this.#directoryManifestStore) {
+            const manifest = this.#directoryManifestStore.getCurrentManifest();
+            this.#logger?.info("directory.manifest.poll.response", {
+              agentPubkeyHex: authedPubkeyHex!.slice(0, 16),
+            });
+            this.#sendFrame(stream, encodeManifestPollResponse({ type: "manifest_poll_response", manifest }));
+          }
+          // When no store is configured, manifest_poll_request is silently ignored for backward compat.
         } else {
           // Unknown frame type for authenticated state — ignore
         }
@@ -3296,6 +3375,20 @@ export interface CreateDirectoryNodeOptions {
    * When absent, account linking is skipped (backward compat).
    */
   pgPool?: import("pg").Pool;
+  /**
+   * M7-MANIFEST-002: per-node Ed25519 signing key provider.
+   * When provided, the directory signs a step-5 TBS after successful client
+   * authentication and includes nodeId + signature + timestamp in signaling_auth_ok.
+   * When absent, signaling_auth_ok is sent without MANIFEST-002 fields (backward compat).
+   */
+  directoryKeyProvider?: import("@cello-protocol/interfaces").DirectoryKeyProvider;
+  /**
+   * M7-MANIFEST-002: consortium manifest store for manifest_poll_request handling.
+   * When provided, the directory responds to manifest_poll_request frames with
+   * the current manifest (manifest_poll_response).
+   * When absent, manifest_poll_request frames are ignored.
+   */
+  directoryManifestStore?: import("@cello-protocol/interfaces").DirectoryManifestStore;
 }
 
 export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Promise<{
@@ -3333,6 +3426,8 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     checkpointTransport: opts.checkpointTransport,
     tokenValidator: opts.tokenValidator,
     pgPool: opts.pgPool,
+    directoryKeyProvider: opts.directoryKeyProvider,
+    directoryManifestStore: opts.directoryManifestStore,
   });
   await directory.start();
 
