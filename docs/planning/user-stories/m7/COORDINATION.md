@@ -41,7 +41,7 @@ The log entry stays as history. The rule must not live only in the log.
 |-------|-------------|--------|-------|
 | M7-E2E-001 — Integration gate | — | written — cohesion pass complete | Cohesion pass done 2026-06-12; implements last after all component stories land |
 | M7-DAEMON-001 — Daemon foundation | — | **implemented — PR ready** | Branch m7/daemon-001 in cello-client; 52 tests; all reviewer findings fixed |
-| M7-DAEMON-002 — Ephemeral session nodes | — | **in progress** | Branch m7/daemon-002 in cello-client; stacked on m7/daemon-001 |
+| M7-DAEMON-002 — Ephemeral session nodes | — | **implemented — PR ready** | Branch m7/daemon-002 in cello-client; 76 tests; all reviewer findings fixed; stacked on m7/daemon-001 |
 | M7-MANIFEST-001 — Manifest schema | — | **in progress** | Branch m7/manifest-001 in cello-client; nearly complete as of 2026-06-12 |
 | M7-MANIFEST-002 — Client verification + polling | — | **in progress** | Branch m7/manifest-002 in both repos; stacked on m7/manifest-001 (cello-client) + fresh branch (trustless-cello); blocked until MANIFEST-001 finishes |
 | M7-MCP-001 — MCP adapter | — | written — not yet started | Blocked on M7-DAEMON-001 (done); ready to start |
@@ -325,6 +325,25 @@ by DAEMON-001 but not yet started. All other stories unchanged.
 Rule added to all future kickoff prompts: COORDINATION.md Claims update + log
 entry are a hard gate step in the sprint-coder's completion sequence, same weight
 as lint and typecheck. Agents that skip this step have not completed the story.
+
+### 2026-06-12 — M7-DAEMON-002 implemented
+
+Branch `m7/daemon-002` in cello-client (worktree at `/Users/andrep/Documents/code/cello-client-m7-daemon-002`). 76 tests (28 in session-node-manager.test.ts + 48 existing). Implementation:
+
+- `SessionNodeManager` (new): ephemeral libp2p node lifecycle, 32-node cap, standing receiver with bounded retry (3 attempts), SQLite tracking, SIGKILL orphan detection at startup, gracefulShutdown batch-UPDATE
+- `SessionConnectionGater` / `DirectoryConnectionGater` (new): inbound AND outbound encrypted connection denial, single-peer allowlists, shared #denyIfNotAllowed / #denyIfNotDirectory helpers
+- `ISessionNodeFactory`: adapter pattern for test injection (FailingNodeFactory, StubNodeFactory, RealNodeFactory in tests)
+- Transport: `connectionGater` option added to `CreateNodeOptions` and spread into createLibp2p config
+- Composition root: `daemon.ts` wires SessionNodeManager, calls initialize() before IPC socket opens
+
+Key bugs found and fixed during review:
+- gracefulShutdown emitted `session.node.destroyed` even when `stop()` threw (fixed: .then/.catch ordering)
+- INSERT OR REPLACE silently overwrote created_at on duplicate sessionId (fixed: plain INSERT)
+- Standing receiver replacement had no retry (fixed: 3-attempt exponential backoff)
+- AC-012 test was hollow — conditional assertion could pass with zero checks (fixed: unconditional + server stop)
+- DirectoryConnectionGater had no outbound gate (fixed: symmetric denyOutbound)
+
+Unblocks: M7-DAEMON-003, M7-WIRE-001, M7-SESSION-001, M7-MCP-002.
 
 ### 2026-06-12 — M7-DIR-PING-001 written
 
