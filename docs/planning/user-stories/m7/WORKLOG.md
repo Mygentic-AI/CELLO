@@ -313,3 +313,65 @@ Implemented signaling stream resilience for the daemon's directory-facing connec
 **Commits:** 42044a1 (initial), 2f3aa46 (code-review fixes), c74a2c5 (sprint-reviewer fixes). Branch: m7/signal-001 in cello-client stacked on m7/daemon-001.
 
 **Unblocked by this story:** M7-DIR-PING-001 (directory-side ping/pong handler — blocked on SIGNAL-001 for the ping/pong frame type definition).
+
+---
+
+### 2026-06-12 16:25 — MANIFEST-002 merged to main (via manifest-002-fix branch)
+
+**Story:** CELLO-M7-MANIFEST-002
+**Agent/Author:** sprint-coder (Opus)
+
+Original `m7/manifest-002` branch was built before DAEMON-001/002/003 existed
+and contained invented daemon scaffolding (no SessionNodeManager, no RetryQueue,
+no NonceDedupStore, no session-connection-gater) that conflicted with the real
+daemon on main. Direct merge was attempted and aborted. The branch was discarded
+for daemon-side code.
+
+**What was reused from m7/manifest-002:**
+- Transport layer (already on main from commit edf31cb): manifest-interfaces.ts,
+  manifest-stubs.ts, signaling-manager.ts, signaling-manager.test.ts — all 690
+  lines copied cleanly earlier.
+- trustless-cello directory changes: merged cleanly via `git merge --no-ff` (no
+  daemon code on this side) — directory-frames.ts, directory-node.ts step-5 signing,
+  directory-types.ts, interfaces/manifest.ts, stubs, test file (404 lines).
+
+**What was re-implemented fresh on m7/manifest-002-fix:**
+- `core/daemon/src/manifest-loader.ts` — FileManifestProvider (reads JSON, calls
+  verifyManifest, caches result)
+- `core/daemon/src/manifest-poll-scheduler.ts` — RandomizedPollScheduler (6-12h)
+  + ImmediatePollScheduler re-export
+- `core/daemon/src/manifest-version-store.ts` — InMemoryManifestVersionStore re-export
+- `core/daemon/src/manifest-version-store-file.ts` — FileManifestVersionStore
+  (file-backed cross-process persistence)
+- `core/daemon/src/challenge-verifier.ts` — ManifestDirectoryChallengeVerifier
+  + TestDirectoryChallengeVerifier re-exports
+- `core/daemon/src/consortium-manifest.json` — placeholder (version 1, placeholder keys)
+- `core/daemon/src/__tests__/manifest.test.ts` — 13 tests covering AC-002 through
+  AC-012, SI-002, backward compat
+- `core/daemon/src/daemon.ts` — manifest loading block (before agent loading),
+  manifestVerified field on daemon.started, poll scheduler start, cancel in stop()
+- `core/daemon/src/types.ts` — DaemonConfig extended with 6 optional manifest fields
+- `core/daemon/src/index.ts` — exports for all new manifest modules
+
+**Daemon wiring details:**
+- Manifest verification runs FIRST in startDaemon() — before mkdir, agent loading,
+  lock acquisition, or SessionNodeManager init
+- DaemonConfig fields are all optional (undefined = skip) for backward compat
+- Poll scheduler starts only when manifestVerified && manifestPollScheduler provided
+- stop() calls manifestPollScheduler.cancel() before gracefulShutdown
+
+**Test counts:**
+- cello-client: 815 tests (54 files) passing — 13 new manifest tests + all existing
+- trustless-cello: 539 tests passing + 6 new directory manifest tests (47 files pass)
+
+**ACs intentionally deferred (require live infrastructure or other stories):**
+- AC-005: cross-process persistence via binary restart — needs DAEMON-001 binary test
+  pattern extended (test exists but uses InMemoryManifestVersionStore, not file-backed)
+- AC-006, AC-007, AC-008: CELLO_E2E_LIVE tests — require running staging directory
+- AC-013: poll queuing during reconnecting state — requires SIGNAL-001 queue wiring
+- AC-014: session-fixture opts.manifest extension — requires e2e-tests in trustless-cello
+- AC-015: composition root event ordering from binary — partially covered (manifestVerified
+  in daemon.started), full binary log ordering test deferred
+- AC-017: version bump — deferred per user instruction (will batch)
+- AC-018: trustless-cello dependency update — merged directory code directly, npm
+  version bump deferred
