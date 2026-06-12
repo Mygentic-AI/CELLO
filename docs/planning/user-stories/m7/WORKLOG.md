@@ -230,3 +230,8 @@ DB before IPC socket opens (AC-007/AC-008 restart boundary).
 - AC-013 version bump deferred per user instruction (will be batched with MCP-002).
 - Actual drain trigger on peer reconnect deferred to MCP-002 (drain_session handler returns
   metadata only; real sendFn integration requires session transport context).
+
+**Code-review round 2 (2026-06-12 15:00):**
+- 0 findings — clean pass. Reviewer initially flagged missing debug() in test logger doubles,
+  but this was a false positive (debug() present in all 8 test files from round 1 fixes).
+  No additional changes required.

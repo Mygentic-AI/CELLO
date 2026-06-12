@@ -46,7 +46,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-MANIFEST-002 — Client verification + polling | — | **implemented — PR ready** | Branch m7/manifest-002 in both repos; 815 cello-client tests + 6 directory tests; all sprint-reviewer findings fixed |
 | M7-MCP-001 — MCP adapter | — | written — not yet started | Blocked on M7-DAEMON-001 (done); ready to start |
 | M7-SIGNAL-001 — Signaling stream resilience | — | written — not yet started | Blocked on M7-DAEMON-001 (done); ready to start |
-| M7-DAEMON-003 — Nonce dedup + retry queue | — | **implemented — PR ready** | Branch m7/daemon-003 in cello-client; 112 tests; stacked on m7/daemon-002; all reviewer findings fixed; version bump deferred (AC-013) |
+| M7-DAEMON-003 — Nonce dedup + retry queue | — | **implemented — PR ready** | Branch m7/daemon-003 in cello-client; 112 tests; stacked on m7/daemon-002; 2 code-review rounds (7 findings round 1, 0 round 2); version bump deferred (AC-013) |
 | M7-WIRE-001 — SessionAssignment wire format | — | written — not yet started | Blocked on M7-DAEMON-002; cross-repo; batch with M7-SESSION-001 + M7-MANIFEST-002 |
 | M7-TRANSPORT-001 — AutoNAT + direct P2P | — | written — not yet started | Blocked on M7-WIRE-001; cross-repo |
 | M7-SESSION-001 — Interrupted session handling | — | written — not yet started | Blocked on M7-DAEMON-002 + M7-WIRE-001; cross-repo; batch with M7-WIRE-001 + M7-MANIFEST-002 |
