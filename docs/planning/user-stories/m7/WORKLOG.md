@@ -277,3 +277,39 @@ Rewrote the MCP adapter from a 690-line fat binary (holding CelloClient, libp2p 
 **Final test counts:** 739 root workspace tests + 140 daemon tests (all passing). Lint and typecheck clean.
 
 **AC-021 deferral:** Taxonomy update requires trustless-cello commit — will be batched with next trustless-cello story.
+
+---
+
+### 2026-06-12 16:30 — SIGNAL-001 implemented
+
+**Story:** CELLO-M7-SIGNAL-001
+**Agent/Author:** sprint-coder + orchestrator
+
+Implemented signaling stream resilience for the daemon's directory-facing connection. Addresses M6/M6B lesson L5 (silent signaling stream death).
+
+**What was built:**
+- `core/transport/src/signaling-manager.ts` (new): SignalingManager class with heartbeat loop (ping every N seconds, pong timeout N seconds), exponential backoff reconnect (1s → 60s cap, max 10 attempts), `directory_signaling` status observable (`connected` | `reconnecting` | `lost`), 64-op FIFO outbound queue with two-tier model (MCP calls rejected immediately, internal ops queued), and graceful shutdown that cancels the reconnect loop without transitioning to `lost`.
+- `core/transport/src/__tests__/signaling-manager.test.ts` (new): 28 passing + 2 E2E-skipped tests covering AC-002 through AC-013, SI-001, DB-001, DB-002. Includes inter-attempt timing assertion and production defaults test.
+- `core/daemon/src/daemon.ts` updated: SignalingManager instantiated in composition root; `directory_signaling` field in IPC status response sourced from `signalingManager.status` — not hardcoded.
+- `core/daemon/src/__tests__/binary.test.ts` extended: AC-011 IPC integration test spawns daemon binary, connects via IPC, calls `status`, asserts `directory_signaling: 'reconnecting'` — proves composition root wiring through the END operation (IPC status call), addressing L3 and L4.
+
+**Mid-story decisions:**
+- Initial connect attempt (at construction) is separate from the reconnect cycle. If initial connect fails, the reconnect cycle starts from attempt 1. This means total connect() calls on all-fail is 1 (initial) + 10 (cycle) = 11.
+- Heartbeat timeout: set on first unanswered ping, NOT reset on each subsequent ping — only reset on pong receipt. This gives correct max detection window: heartbeatIntervalMs + heartbeatTimeoutMs = 30s (matching AC-001). The code reviewer incorrectly flagged this as a bug; the original logic was correct.
+- AC-014 (version bump) intentionally deferred per user instruction.
+
+**Code-reviewer findings (2 total, all addressed):**
+1. HIGH: Heartbeat timeout logic — reviewer analysis was wrong; original logic correct. Fixed by improving the comment to explain why the timeout is NOT reset on each ping.
+2. MEDIUM: Missing AC-011 IPC integration test — added binary test that connects via IPC and asserts `directory_signaling` field.
+
+**Sprint-reviewer findings (4 total, all fixed):**
+1. MEDIUM: AC-002 no production defaults test — added test verifying SignalingManager constructs with default config.
+2. MEDIUM: AC-002 no inter-attempt timing assertion — added timestamp-based test asserting gaps ≥ backoffMs.
+3. LOW: `OperationFailure.reason` used plain string — changed to `SignalingFailureReason` literal union type.
+4. LOW: Logger interface duplicated — added comment explaining intentional local definition (transport must not depend on daemon; structural typing ensures compatibility).
+
+**Final test counts:** 28 transport signaling-manager tests (+ 2 E2E skipped) + 49 daemon tests. Lint and typecheck clean.
+
+**Commits:** 42044a1 (initial), 2f3aa46 (code-review fixes), c74a2c5 (sprint-reviewer fixes). Branch: m7/signal-001 in cello-client stacked on m7/daemon-001.
+
+**Unblocked by this story:** M7-DIR-PING-001 (directory-side ping/pong handler — blocked on SIGNAL-001 for the ping/pong frame type definition).
