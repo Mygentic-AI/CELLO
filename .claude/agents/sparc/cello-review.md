@@ -295,6 +295,19 @@ For each assumption found: locate where CLAUDE.md or the story itself explicitly
 - Did the implementation create orphans (unused imports, variables, functions made unused by this change) and leave them in place? Flag [medium].
 - Did the implementation remove or rewrite pre-existing code that the story did not require touching? Flag [medium] unless it fixes a security issue.
 
+**Redundancy audit (M7+ stories that rewrite or replace a component):**
+
+For every package this story touches, ask: *"Does this implementation render any existing code, test, or comment in those packages obsolete?"*
+
+- **Dead code:** functions, classes, exports, or types no longer reachable from any entry point after this change. Grep for the primary symbol names being removed or replaced — verify all call sites are gone, not only the ones the story was written from. A reachable-looking export with no consumer misleads the next implementer.
+- **Stale tests:** tests that exercised a path this story has replaced or removed. A passing test that now tests nothing is actively harmful — it signals "this behavior is verified" when the behavior it described no longer exists. Identify the test by the function/class it imports; if that function/class is gone or unreachable, the test is stale.
+- **Comment rot:** M1–M4 era comments describing removed concepts, deprecated patterns, or design rationale that no longer applies. Comments that say "this is needed because X" when X is gone cause the next implementer to preserve code they should delete.
+- **Dead imports:** imports that were needed by the replaced code but now have no consumer in the file.
+
+**Threshold for this story vs. a cleanup story:**
+- If the redundant code is contained (≤ ~30 lines, same package as the story): require cleanup in this PR — flag **[medium]**.
+- If the cleanup is large or spans packages the story's ACs don't require touching: flag **[low]** and recommend a dedicated cleanup story. Never require unrelated-package cleanup in a critical-path story. Unscoped cleanup in a critical story is how regressions sneak in.
+
 **Error distinctness:**
 - Does any `catch` block map multiple distinct failure causes to the same error code, exception type, or log event? Each distinct cause must produce a distinct observable. A single error that covers timeout, exhaustion, AND unavailability gives the operator nothing to act on. Flag **[blocking]**. *Rationale: M6B-002 — three FROST failure modes all returned `directory_below_threshold`.*
 

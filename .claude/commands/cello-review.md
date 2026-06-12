@@ -183,6 +183,17 @@ For every observability AC in the story, verify the implementation:
 - Did the implementation create orphans (unused imports, variables, functions made unused by this change) and leave them in place? Flag [medium].
 - Did the implementation remove or rewrite pre-existing code that the story did not require touching? Flag [medium] unless it fixes a security issue.
 
+**Redundancy audit (M7+ stories that rewrite or replace a component):**
+
+For every package this story touches, ask: *"Does this implementation render any existing code, test, or comment in those packages obsolete?"*
+
+- **Dead code:** functions, classes, exports, or types no longer reachable from any entry point after this change. Grep for the primary symbol names being removed or replaced — verify all call sites are gone, not only the ones the story was written from.
+- **Stale tests:** tests that exercised a path this story has replaced or removed. A passing test that now tests nothing is actively harmful — it signals verified behavior that no longer exists. Identify them by the function/class they import; if that import is gone or unreachable, the test is stale.
+- **Comment rot:** M1–M4 era comments describing removed concepts, deprecated patterns, or design rationale that no longer applies.
+- **Dead imports:** imports that were needed by the replaced code but now have no consumer in the file.
+
+**Threshold:** if the redundant code is contained (≤ ~30 lines, same package as this story), require cleanup here — flag **[medium]**. If it is large or spans other packages, flag **[low]** and recommend a dedicated cleanup story. Never require unrelated-package cleanup in a critical-path story.
+
 ---
 
 ## Step 6 — Gate sequence verification

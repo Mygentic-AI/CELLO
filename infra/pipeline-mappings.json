@@ -1,13 +1,6 @@
 {
   "packageMappings": [
     {
-      "prefix": "packages/adapter-claude-code/",
-      "pipelines": [
-        "cello-connect-pipeline"
-      ],
-      "description": "connect (@cello-protocol/connect) is a leaf package"
-    },
-    {
       "prefix": "packages/directory/",
       "pipelines": [
         "cello-directory-pipeline"
@@ -42,7 +35,6 @@
     "package.json"
   ],
   "allCelloPipelines": [
-    "cello-connect-pipeline",
     "cello-directory-pipeline",
     "cello-relay-pipeline",
     "cello-e2e-tests-pipeline",
