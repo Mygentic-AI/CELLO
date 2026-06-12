@@ -15,7 +15,7 @@ description: >
 id: CELLO-M7-MCP-002
 domain: MCP
 milestone: M7
-actor: LLM
+actor: AGENT
 priority: P1
 components:
   - adapter-claude-code
@@ -124,6 +124,15 @@ behavior:
       That connection is removed from the notification routing table. It no
       longer receives any notifications. Pending notifications queued for that
       connection are discarded.
+
+  - trigger: "When writing a notification to an IPC socket fails (socket half-closed, write error)"
+    action: >
+      The daemon logs 'notification.dispatch.failed' at DEBUG via the injected
+      Logger with context fields connectionId, notificationType, and
+      error.message. The notification is discarded for that connection. Other
+      connections continue to receive notifications normally. No exception
+      propagates to the event bus — a failing socket does not block notification
+      delivery to healthy connections.
 
 # ─── Acceptance Criteria ───────────────────────────────────
 acceptance_criteria:
@@ -259,8 +268,8 @@ acceptance_criteria:
     component_under_test: adapter-claude-code
 
   - id: AC-011-observability
-    given: "Agent state transitions and session lifecycle events occur"
-    when: "each event fires"
+    given: "Agent state transitions and session lifecycle events occur via the daemon (started via binary entrypoint)"
+    when: "each event fires through the real daemon event bus"
     then: >
       The following log events are emitted via the injected Logger (not
       console.log):
@@ -273,12 +282,15 @@ acceptance_criteria:
         - 'session.node.destroyed' at INFO with context fields sessionId,
           agentName, reason
       Each event fires independently from the MCP notification — both occur,
-      neither replaces the other.
-    test_type: unit
+      neither replaces the other. Verified by starting the daemon with a
+      structured-log sink, triggering state changes via IPC, and asserting the
+      log output contains the named events with correct fields.
+    test_type: integration
     component_under_test: daemon
     notes: >
-      Log events are verified via a test Logger spy. MCP notifications are
-      verified separately in AC-001 through AC-010.
+      Integration test starts daemon and triggers events via IPC to verify both
+      the log events and the notification dispatch fire independently. Unit test
+      of Logger call sites alone cannot verify the independence guarantee.
 
   - id: AC-012-composition-root
     given: "The notification dispatcher is implemented with passing unit tests"
@@ -391,16 +403,23 @@ observability:
       trigger: "When a session node is destroyed (sealed/interrupted/error)"
       context_fields: [sessionId, agentName, reason]
       correlationId: true
-  error_events: []
+  error_events:
+    - name: notification.dispatch.failed
+      level: debug
+      trigger: "When writing a notification to an IPC socket fails (socket half-closed, write error)"
+      context_fields: [connectionId, notificationType, error]
+      correlationId: false
   alarms: []
   notes: >
-    No new error events or alarms: MCP-002 is notification-only and does not
-    introduce new failure modes beyond those already covered by CELLO-M7-MCP-001
-    (IPC disconnection, daemon not running). Session node creation/destruction
-    errors are covered by CELLO-M7-DAEMON-002's error events. The log events
-    listed above also fire from DAEMON-001, DAEMON-002, and MCP-001 contexts —
-    this story adds the MCP notification dispatch paired with those events, not
-    a second log of the same event.
+    No alarm for notification.dispatch.failed — this is a transient condition
+    that occurs only when a connection is in the process of disconnecting. The
+    daemon's existing daemon.ipc.disconnected event (from DAEMON-001) fires
+    shortly after, and the connection is removed from the routing table. The
+    DEBUG level is appropriate: this is operational noise unless actively
+    debugging a zombie connection. The log events listed above also fire from
+    DAEMON-001, DAEMON-002, and MCP-001 contexts — this story adds the MCP
+    notification dispatch paired with those events, not a second log of the same
+    event.
 
 # ─── Implementation Notes ──────────────────────────────────
 implementation_notes:
@@ -453,10 +472,10 @@ dependencies:
   blocked_by:
     - CELLO-M7-MCP-001    # MCP adapter rewrite, per-connection state, four new tools
     - CELLO-M7-DAEMON-002 # session node lifecycle events (session.node.created/destroyed)
-    - CELLO-M7-DAEMON-003 # retry queue events (confirms message.retry.evicted is daemon-internal)
   blocks: []
   related:
     - CELLO-M7-DAEMON-001 # daemon foundation, EventBus, IPC connections
+    - CELLO-M7-DAEMON-003 # retry queue events — design confirmation only (message.retry.evicted excluded from MCP notifications)
     - CELLO-M7-E2E-001    # integration gate — close gate item 9 requires correct state at every step
 
 # ─── References ────────────────────────────────────────────
