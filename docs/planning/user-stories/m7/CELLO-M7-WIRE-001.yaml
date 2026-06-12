@@ -1,0 +1,904 @@
+---
+name: CELLO-M7-WIRE-001
+type: user-story
+date: 2026-06-12
+topics: [wire-format, session-assignment, frost-tbs, protocol-types, direct-p2p, transport-mode, ephemeral-session-nodes, cross-repo, m7]
+status: draft
+description: >
+  Extends the SessionAssignment wire format to carry both parties' ephemeral
+  session Peer IDs and multiaddrs, adds a transport_mode discriminant field,
+  and extends the FROST TBS array to protect all new fields under the session
+  establishment signature. Updates the directory producer, both client consumers
+  (initiator and target), and the relay consumer (relay-path sessions only).
+  Requires cross-repo version bump and trustless-cello dependency update.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-WIRE-001
+domain: Wire
+milestone: M7
+actor: DIR
+priority: P0
+components:
+  - protocol-types
+  - directory
+  - client
+  - relay
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the directory node,
+  I want to include both parties' ephemeral session Peer IDs, multiaddrs, and
+  a transport_mode field in the SessionAssignment wire frame — and to cover all
+  of them under the FROST threshold signature —
+  so that each agent can dial or receive its counterparty's session-specific
+  transport identity directly, without trusting the relay for identity, and so
+  that any tampered Peer ID or address causes signature verification to fail
+  before a connection is attempted.
+
+# ─── Context ────────────────────────────────────────────────
+# SessionAssignment is the most widely-consumed wire frame in the protocol.
+# Three independent code paths read it: the initiator client (to dial Bob's
+# session node), the target client (to configure its standing receiver's
+# connectionGater), and the relay (to bind participant Peer IDs on relay-path
+# sessions). All three consumers must be updated and all three must have ACs.
+#
+# DAEMON-002 introduced SessionNodeManager, which creates ephemeral session
+# nodes with fresh Peer IDs. This story is the wire protocol change that
+# makes those Peer IDs visible to counterparties via the directory's signed
+# assignment.
+#
+# FROST TBS change: CONTEXT.md defines the current session establishment TBS as:
+#   context "cello-frost-session-establishment-v1",
+#   fields [session_id, agent_A_pubkey, agent_B_pubkey, genesis_prev_root, timestamp]
+# This story extends the positional array to 10 fields by appending:
+#   [6] initiator_session_peer_id (hex string)
+#   [7] initiator_session_addrs_canonical (sorted multiaddr strings, JSON-encoded)
+#   [8] counterparty_session_peer_id (hex string)
+#   [9] counterparty_session_addrs_canonical (sorted multiaddr strings, JSON-encoded)
+#   [10] transport_mode ("direct" | "relay")
+# The context string does NOT change. The canonical encoding for address arrays is
+# JSON.stringify(addrs.slice().sort()) — sorted to ensure determinism across
+# implementations. The CONTEXT.md FROST TBS table must be updated by the
+# implementer to reflect the new 10-field array.
+#
+# Two verification paths for the extended TBS:
+#   - Initiator self-check: Alice verifies the FROST signature AND asserts that
+#     initiator_session_peer_id in the received assignment matches the Peer ID
+#     of the session node she created. A mismatch means the directory substituted
+#     a different Peer ID and must be rejected.
+#   - Counterparty directory-trust: Bob verifies the FROST signature over the
+#     extended TBS and trusts the directory's assertion about both Peer IDs.
+#     If verification passes, Bob configures his connectionGater to allow the
+#     initiator Peer ID; if it fails, the session is rejected.
+#
+# Relay scope: for relay-path sessions (transport_mode: "relay"), the relay
+# receives the SessionAssignment and uses both session Peer IDs for participant
+# binding enforcement. For direct P2P sessions (transport_mode: "direct"),
+# the relay is NOT in the transport path and does NOT receive the assignment.
+# This is a functional distinction, not just a performance optimization —
+# the relay must not be given session Peer IDs when it has no role in the session.
+#
+# Cross-repo packages affected:
+#   cello-client: packages/protocol-types (schema), packages/client (consumers + TBS)
+#   trustless-cello: packages/directory (producer), packages/relay (relay consumer)
+# All four must be updated atomically. The version bump triggers a trustless-cello
+# dependency update. The pipeline push for directory/relay MUST be batched with
+# M7-SESSION-001 and M7-MANIFEST-002 per COORDINATION.md.
+
+# ─── Sovereign Node Constraint ──────────────────────────────
+# Directory nodes are sovereign and independent. Each node signs the
+# SessionAssignment independently using its own FROST ceremony output.
+# The TBS extension must be signable by any single independent directory node —
+# not by a set of co-located nodes, not by nodes with shared networking, not
+# by nodes in the same cloud region. The TBS array is a positional structure
+# with no fields that name a specific directory node or require cross-node
+# coordination: each entry in the array is populated from the assignment
+# parameters (session Peer IDs, addresses, transport mode) that any
+# independent directory node receives during session negotiation. No story
+# may assume that the directory node that processes the session request is
+# the same node that signs the assignment, or that two nodes can compare
+# state before signing.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When packages/protocol-types defines the SessionAssignment type"
+    action: >
+      The type includes five new required fields alongside existing fields:
+      initiator_session_peer_id (string — Peer ID hex),
+      initiator_session_addrs (string[] — multiaddr strings),
+      counterparty_session_peer_id (string — Peer ID hex),
+      counterparty_session_addrs (string[] — multiaddr strings),
+      transport_mode ("direct" | "relay"). All five fields are non-optional.
+      A SessionAssignment missing any of these five fields fails TypeScript
+      compilation and runtime schema validation.
+
+  - trigger: "When the directory node constructs a SessionAssignment after both
+      parties have reported their session Peer IDs during negotiation"
+    action: >
+      directory-node.ts populates all five new fields from the session negotiation
+      context: initiator_session_peer_id and initiator_session_addrs from Alice's
+      session accept response; counterparty_session_peer_id and
+      counterparty_session_addrs from Bob's standing receiver; transport_mode
+      set to "direct" if both parties' session nodes returned dialable: true from
+      AutoNAT (TRANSPORT-001 stub returns false until TRANSPORT-001 wires real
+      AutoNAT — this story defaults to "relay" when the stub is active), or
+      "relay" if either party is behind NAT. The directory coordinates the FROST
+      ceremony over the extended 10-field TBS array before sending the assignment
+      to either party.
+
+  - trigger: "When the FROST ceremony signs the session establishment frame"
+    action: >
+      The TBS array is constructed with all 10 fields in order:
+      [session_id, agent_A_pubkey, agent_B_pubkey, genesis_prev_root, timestamp,
+      initiator_session_peer_id, initiator_session_addrs_canonical,
+      counterparty_session_peer_id, counterparty_session_addrs_canonical,
+      transport_mode]. The canonical form of each address array is
+      JSON.stringify(addrs.slice().sort()). The context string
+      "cello-frost-session-establishment-v1" is unchanged. The domain context
+      string continues to guard against cross-ceremony confusion — a seal
+      signature cannot be replayed as an establishment signature. The FROST
+      signature covers all 10 fields; omitting any of the 5 new fields from
+      the TBS produces a signature that fails verification against any compliant
+      verifier.
+
+  - trigger: "When the initiator client (session-manager.ts) receives a
+      SessionAssignment"
+    action: >
+      session-manager.ts reconstructs the extended 10-field TBS from the received
+      frame, verifies the FROST signature against the signer_pubkey (the
+      initiator's primary_pubkey), and then performs the initiator self-check:
+      asserts that initiator_session_peer_id matches the Peer ID of the session
+      node the initiator created during negotiation. If verification passes,
+      session-manager.ts passes counterparty_session_peer_id and
+      counterparty_session_addrs to the daemon's SessionNodeManager so it can
+      configure the outbound session node's dial target. The transport_mode field
+      is passed through to inform whether to attempt direct dial first or go
+      straight to relay — do NOT infer transport mode from the address format.
+      session.assignment.received is logged at INFO with sessionId,
+      counterpartyPubkey, transportMode, and correlationId.
+
+  - trigger: "When the target client (session-manager.ts) receives a
+      SessionAssignment"
+    action: >
+      session-manager.ts reconstructs the extended 10-field TBS from the received
+      frame and verifies the FROST signature. If verification passes,
+      session-manager.ts passes initiator_session_peer_id to the daemon's
+      SessionNodeManager to configure the standing receiver node's connectionGater
+      to allow only the initiator's session Peer ID. The standing receiver's
+      multiaddrs are already known (from DAEMON-002); this story only adds the
+      gater configuration step. The transport_mode field informs whether the
+      relay's circuit address or a direct address is expected for the initiator.
+      session.assignment.received is logged at INFO with sessionId,
+      counterpartyPubkey (the initiator's pubkey), transportMode, and correlationId.
+
+  - trigger: "When the relay node receives a SessionAssignment for a relay-path
+      session (transport_mode: 'relay')"
+    action: >
+      relay-node.ts reads initiator_session_peer_id and counterparty_session_peer_id
+      from the assignment and stores them as the bound participants for this
+      session. Any stream from a Peer ID other than these two is rejected at the
+      relay layer. The relay does not store session Peer IDs for any purpose other
+      than participant binding — it does not forward them or expose them to
+      other peers.
+
+  - trigger: "When the relay node processes a SessionAssignment for a direct P2P
+      session (transport_mode: 'direct')"
+    action: >
+      The relay does NOT receive the SessionAssignment. For direct P2P sessions
+      the relay is not in the transport path. This is not a conditional receive —
+      the directory simply does not send the assignment to the relay when
+      transport_mode is "direct". The relay learns of direct P2P sessions only
+      via absence (no relay_channel_open is received for that session_id).
+
+  - trigger: "When session-manager.ts receives a SessionAssignment where
+      initiator_session_peer_id or counterparty_session_peer_id is absent, empty,
+      or undefined"
+    action: >
+      The client returns { ok: false, reason: 'assignment_missing_session_peer_id',
+      guidance: 'The SessionAssignment received from the directory is missing one
+      or both session Peer ID fields. This may indicate a directory version mismatch.
+      Ensure both directory and client are running M7 or later. Do not attempt to
+      dial — the session cannot be established without verified session Peer IDs.' }
+      session.assignment.verification.failed is logged at ERROR with sessionId,
+      reason: 'assignment_missing_session_peer_id', and correlationId.
+
+  - trigger: "When the connectionGater cross-check detects that the Peer ID of
+      the connecting peer does not match the Peer ID in the SessionAssignment"
+    action: >
+      The session layer returns { ok: false, reason: 'assignment_peer_id_mismatch',
+      guidance: 'The Peer ID of the connecting peer does not match the Peer ID in
+      the signed SessionAssignment. This may indicate a relay substituting a
+      different identity or a MITM. The connection has been rejected. Report this
+      incident — a peer_id_mismatch after FROST verification passing is a security
+      anomaly.' } session.assignment.verification.failed is logged at ERROR with
+      sessionId, reason: 'assignment_peer_id_mismatch', expectedPeerId, and
+      actualPeerId.
+
+  - trigger: "When FROST signature verification over the extended 10-field TBS fails"
+    action: >
+      The session layer returns { ok: false,
+      reason: 'assignment_tbs_verification_failed', guidance: 'The FROST signature
+      over the session establishment frame is invalid. The SessionAssignment may
+      have been tampered with in transit. Do not proceed with this session. If this
+      error persists, reconnect to the directory — your directory connection may
+      have been intercepted.' } This error code is distinct from the pre-existing
+      frost_verification_failed code (which applies to seal operations). Any catch
+      block that returns frost_verification_failed for this verification path must
+      be split. session.assignment.verification.failed is logged at ERROR with
+      sessionId, reason: 'assignment_tbs_verification_failed', and correlationId.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "packages/protocol-types/src/types.ts (or equivalent schema file)"
+    when: "the SessionAssignment type is inspected"
+    then: >
+      The type includes all five new required fields with the following TypeScript
+      signatures:
+        initiator_session_peer_id: string
+        initiator_session_addrs: string[]
+        counterparty_session_peer_id: string
+        counterparty_session_addrs: string[]
+        transport_mode: 'direct' | 'relay'
+      All five fields are non-optional (no '?' suffix, no '| undefined'). A
+      SessionAssignment value omitting any of the five new fields fails TypeScript
+      strict-mode type checking. Verified by a unit test that constructs a
+      SessionAssignment value with each field removed in turn and asserts the
+      TypeScript compiler (tsc --strict) reports an error for each omission.
+      The runtime Zod/io-ts schema (if present) also rejects incomplete frames.
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-002
+    given: "The FROST TBS construction utility in packages/client (or packages/crypto)"
+    when: "buildSessionEstablishmentTbs(assignment) is called with a complete
+      SessionAssignment including all 10 fields"
+    then: >
+      The returned byte array encodes all 10 positional fields in order:
+      [session_id, agent_A_pubkey, agent_B_pubkey, genesis_prev_root, timestamp,
+      initiator_session_peer_id, initiator_session_addrs_canonical,
+      counterparty_session_peer_id, counterparty_session_addrs_canonical,
+      transport_mode]. The canonical encoding of each address array is
+      JSON.stringify(addrs.slice().sort()) applied consistently. The context string
+      "cello-frost-session-establishment-v1" is passed to the FROST signing
+      function and does not change. Verified by a unit test that constructs two
+      SessionAssignment values identical except that one has addrs in a different
+      order — after canonical encoding, both produce identical TBS byte arrays
+      (sort order normalization works). A third test constructs two assignments
+      identical except one has a different counterparty_session_peer_id — they
+      produce different TBS byte arrays (the field is included in TBS).
+    test_type: unit
+    component_under_test: client
+    notes: >
+      The context string "cello-frost-session-establishment-v1" is defined in
+      CONTEXT.md for session establishment. This AC does NOT change the context
+      string — it only extends the positional array. The CONTEXT.md FROST TBS
+      table must be updated by the implementer to document the new 10-field array.
+
+  - id: AC-003
+    given: "A running directory node with both parties having reported their
+      session Peer IDs during negotiation — Alice has reported
+      initiator_session_peer_id 'PEER_A' with multiaddrs ['ADDR_A1'],
+      Bob's standing receiver has Peer ID 'PEER_B' with multiaddrs ['ADDR_B1'] —
+      and the FROST ceremony has completed successfully"
+    when: "directory-node.ts constructs and signs the SessionAssignment"
+    then: >
+      The signed SessionAssignment contains:
+        initiator_session_peer_id: 'PEER_A'
+        initiator_session_addrs: ['ADDR_A1']
+        counterparty_session_peer_id: 'PEER_B'
+        counterparty_session_addrs: ['ADDR_B1']
+        transport_mode: 'direct' or 'relay' (set by the directory, not inferred from
+          address format — the test must use a transport_mode value explicitly
+          provided by the negotiation context, not derived by inspecting the addrs)
+      The FROST signature in the frame verifies against the extended 10-field TBS.
+      Verified by an integration test that: (a) runs the full session establishment
+      negotiation through the directory (real libp2p directory node in-process,
+      not a method mock); (b) captures the SessionAssignment delivered to Alice;
+      (c) reconstructs the 10-field TBS and verifies the FROST signature passes;
+      (d) asserts each new field in the frame matches the value reported during
+      negotiation. A test that constructs the SessionAssignment directly without
+      going through the directory's negotiation handler does NOT satisfy this AC —
+      the production path must produce the frame.
+    test_type: integration
+    component_under_test: directory
+    notes: >
+      This AC verifies the producer. For the TRANSPORT-001 stub case (AutoNAT
+      returns false): transport_mode defaults to "relay" — the test must
+      exercise the "relay" path unless it explicitly configures the AutoNAT
+      stub to return dialable: true for "direct".
+
+  - id: AC-004
+    given: "The initiator client's session-manager.ts receives a valid
+      SessionAssignment containing both session Peer IDs, multiaddrs, and
+      transport_mode — and the initiator's own session node has Peer ID 'PEER_A'"
+    when: "session-manager.ts processes the assignment"
+    then: >
+      session-manager.ts: (a) reconstructs the 10-field TBS and verifies the
+      FROST signature against signer_pubkey — verification passes; (b) performs
+      the initiator self-check — asserts that initiator_session_peer_id in the
+      frame equals 'PEER_A' (the Peer ID the initiator created); (c) passes
+      counterparty_session_peer_id and counterparty_session_addrs to the daemon's
+      SessionNodeManager for dial configuration; (d) passes transport_mode to
+      inform the dial strategy without parsing the address format.
+      session.assignment.received is logged at INFO with sessionId (non-empty hex),
+      counterpartyPubkey (the counterparty's K_local hex), transportMode ('direct'
+      or 'relay'), and correlationId (same value minted at session initiation).
+      Verified by a unit test that: injects a mock SessionNodeManager spy;
+      constructs a valid signed assignment; calls session-manager.ts with it;
+      asserts (a)–(d) via the spy's recorded calls and the captured log event.
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-005
+    given: "The target client's session-manager.ts receives a valid
+      SessionAssignment — the standing receiver has Peer ID 'PEER_B', and the
+      assignment carries initiator_session_peer_id 'PEER_A'"
+    when: "session-manager.ts processes the assignment on the target (Bob) side"
+    then: >
+      session-manager.ts: (a) reconstructs the 10-field TBS and verifies the
+      FROST signature — verification passes; (b) passes initiator_session_peer_id
+      'PEER_A' to SessionNodeManager.acceptSession() so the standing receiver's
+      connectionGater is updated to allow only 'PEER_A'; (c) passes transport_mode
+      to inform expected connection type without inspecting address format.
+      session.assignment.received is logged at INFO with sessionId,
+      counterpartyPubkey (Alice's K_local hex), transportMode, and correlationId.
+      Verified by a unit test that: injects a SessionNodeManager spy; constructs
+      a valid signed assignment; calls session-manager.ts; asserts (b) via the
+      spy's call to acceptSession(initiatorPeerId: 'PEER_A'); asserts the log event
+      fires with all four context fields.
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-006
+    given: "A relay-path session (transport_mode: 'relay') with session Peer IDs
+      'PEER_A' (Alice) and 'PEER_B' (Bob) bound to the relay"
+    when: "relay-node.ts processes the SessionAssignment for this session"
+    then: >
+      relay-node.ts stores initiator_session_peer_id 'PEER_A' and
+      counterparty_session_peer_id 'PEER_B' as the bound participants for this
+      session_id. Any stream from a Peer ID other than these two is rejected.
+      Verified by an integration test that: (a) delivers a SessionAssignment to
+      the relay; (b) opens a relay stream from 'PEER_A' — stream is accepted;
+      (c) opens a relay stream from an unknown Peer ID 'PEER_C' — stream is
+      rejected. The test uses real libp2p streams, not mocked stream handles —
+      the rejection must occur at the relay's connection/stream acceptance layer,
+      not via a mocked method call.
+    test_type: integration
+    component_under_test: relay
+    notes: >
+      For direct P2P sessions, the relay does not receive the assignment — there
+      is no AC-006 path to exercise for direct sessions. The implementer must
+      add a unit test that asserts the directory code path that sends the
+      assignment to the relay is conditioned on transport_mode === 'relay' and
+      does not execute for transport_mode === 'direct'.
+
+  - id: AC-007
+    given: "The session-manager.ts initiator self-check path, with a valid
+      FROST-signed SessionAssignment where initiator_session_peer_id is 'PEER_X'
+      but the initiator's actual session node Peer ID is 'PEER_A'"
+    when: "session-manager.ts processes the assignment"
+    then: >
+      The initiator self-check detects the mismatch. session-manager.ts returns
+      { ok: false, reason: 'assignment_peer_id_mismatch', guidance: '...' }.
+      session.assignment.verification.failed is logged at ERROR with sessionId,
+      reason: 'assignment_peer_id_mismatch', expectedPeerId: 'PEER_A', and
+      actualPeerId: 'PEER_X'. The FROST signature itself passes verification
+      (the test constructs a validly-signed assignment to isolate the self-check
+      logic). The error code is 'assignment_peer_id_mismatch', NOT
+      'assignment_tbs_verification_failed' and NOT 'frost_verification_failed' —
+      these are three distinct codes for three distinct failure causes.
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-008
+    given: "A SessionAssignment received by a client where counterparty_session_peer_id
+      is present but initiator_session_peer_id is absent (empty string, null, or
+      undefined)"
+    when: "session-manager.ts attempts to process the assignment"
+    then: >
+      session-manager.ts returns { ok: false,
+      reason: 'assignment_missing_session_peer_id',
+      guidance: 'The SessionAssignment received from the directory is missing one
+      or both session Peer ID fields. This may indicate a directory version
+      mismatch. Ensure both directory and client are running M7 or later. Do not
+      attempt to dial — the session cannot be established without verified session
+      Peer IDs.' }. session.assignment.verification.failed is logged at ERROR with
+      sessionId, reason: 'assignment_missing_session_peer_id', and correlationId.
+      The check fires BEFORE any TBS reconstruction or FROST verification attempt.
+      Verified by a unit test with an assignment struct that has
+      initiator_session_peer_id set to '' (empty string) — same result as undefined.
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-009
+    given: "A SessionAssignment where all 10 TBS fields are present, but the FROST
+      signature was computed over a TBS that used a different
+      counterparty_session_peer_id ('PEER_TAMPERED' instead of 'PEER_B')"
+    when: "session-manager.ts attempts to verify the signature"
+    then: >
+      FROST signature verification fails because the TBS reconstructed from the
+      received frame ('PEER_B') does not match the TBS that was signed ('PEER_TAMPERED').
+      session-manager.ts returns { ok: false,
+      reason: 'assignment_tbs_verification_failed',
+      guidance: 'The FROST signature over the session establishment frame is invalid.
+      The SessionAssignment may have been tampered with in transit. Do not proceed
+      with this session. If this error persists, reconnect to the directory —
+      your directory connection may have been intercepted.' }.
+      session.assignment.verification.failed is logged at ERROR with sessionId,
+      reason: 'assignment_tbs_verification_failed', and correlationId.
+      The reason code is 'assignment_tbs_verification_failed' — NOT
+      'frost_verification_failed' (which is reserved for seal FROST failures).
+      Any catch block in packages/client/src/ or packages/directory/src/ that
+      currently maps any TBS-related failure to 'frost_verification_failed' must
+      be split into a distinct code for session establishment failures.
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-010
+    given: "The transport_mode field in a received SessionAssignment set to 'relay',
+      but the counterparty_session_addrs array contains a direct /ip4/ multiaddr"
+    when: "session-manager.ts processes the assignment"
+    then: >
+      session-manager.ts uses transport_mode: 'relay' to select the relay
+      transport path — it does NOT parse the address string to infer the mode.
+      The transport decision is driven by the transport_mode field alone.
+      Verified by a unit test that: constructs an assignment with
+      transport_mode: 'relay' and a direct /ip4/... address; asserts the
+      session-manager passes transport_mode: 'relay' to SessionNodeManager
+      (not a value inferred from the address). A symmetric test verifies
+      transport_mode: 'direct' is passed even when the address contains
+      '/p2p-circuit' — the address format is ignored in transport mode selection.
+    test_type: unit
+    component_under_test: client
+    notes: >
+      This AC encodes the requirement from outline.md: "do NOT infer mode from
+      address format." It prevents both the current-impl accident (inferring from
+      address) and future regressions.
+
+  - id: AC-011
+    given: "The signaling stream to the directory drops after the directory has
+      computed the SessionAssignment (all 5 new fields populated, FROST ceremony
+      complete) but before the frame is delivered to the client"
+    when: "directory-node.ts attempts to send the assignment over the dead signaling
+      stream"
+    then: >
+      The send does not hang indefinitely and does not succeed silently. The
+      directory catches the write error, extracts error.message (never ${error}
+      interpolation), and returns or logs a distinct error. The session is not
+      marked as established on the directory side. M7-SIGNAL-001's outbound
+      queue mechanism handles this path: if the stream is in 'reconnecting' state,
+      the assignment is queued for delivery after reconnect (per outline.md
+      Resource Caps: up to 64 pending outbound ops). If the queue is full,
+      the operation returns { reason: 'signaling_queue_full' }. The directory does
+      NOT silently drop the assignment. Verified by an integration test that:
+      (a) completes the FROST ceremony producing a signed assignment; (b) calls
+      stream.close() to simulate the dead channel; (c) asserts the send either
+      queues (if SIGNAL-001 is wired) or returns a distinct error (if stub used).
+    test_type: integration
+    component_under_test: directory
+    notes: >
+      Addresses M7 lesson L5 (silent signaling stream death). M7-SIGNAL-001 owns
+      the queuing and reconnect logic; this AC verifies the WIRE-001 send path
+      does not bypass it or silently discard the assignment.
+
+  - id: AC-012
+    given: "The full session establishment flow: directory constructs assignment,
+      Alice receives it as initiator, Bob receives it as target, Alice creates her
+      session node from counterparty addrs, Bob configures his connectionGater from
+      initiator Peer ID"
+    when: "the integration test runs with real in-process libp2p nodes for the
+      session nodes (using opts.ephemeralSessionNodes: true from DAEMON-002)"
+    then: >
+      Alice's session node successfully dials Bob's standing receiver using
+      counterparty_session_peer_id and counterparty_session_addrs from the
+      assignment. Bob's connectionGater accepts Alice's connection (because
+      initiator_session_peer_id matches Alice's dialing Peer ID) and rejects a
+      third party dialing from a different Peer ID.
+      session.assignment.received is logged on both sides with matching sessionId,
+      each party's counterpartyPubkey (the other's K_local hex), the same
+      transportMode, and a correlationId present on both events.
+      This is the "producer → both consumers" round-trip: one integration test
+      that chains AC-003, AC-004, and AC-005 into a single end-to-end assertion.
+      The test goes through real libp2p dial/accept — not mocked connection objects.
+    test_type: integration
+    component_under_test: client
+    notes: >
+      Addresses M7 lesson L7 (NODE_ENV=test shortcuts). The connectionGater
+      path is only exercised when a real libp2p dial hits the gate.
+
+  - id: AC-013
+    given: "All error paths in this story's scope: assignment_missing_session_peer_id,
+      assignment_peer_id_mismatch, assignment_tbs_verification_failed"
+    when: "each distinct failure cause is triggered independently"
+    then: >
+      Each produces a unique error code distinguishable from all others and from
+      pre-existing error codes (frost_verification_failed, relay_unavailable, etc.).
+      No catch block in packages/client/src/ returns 'frost_verification_failed'
+      for a session establishment TBS failure — session establishment and seal
+      FROST failures are split. No catch block in packages/directory/src/ or
+      packages/relay/src/ interpolates error objects via ${error} template strings
+      (produces '[object Object]') — error.message is extracted explicitly.
+      The implementer scans every catch block in packages/client/src/,
+      packages/directory/src/, and packages/relay/src/ (including files NOT
+      modified by this story) and fixes or reports any that (a) return a hardcoded
+      reason string without logging the actual exception message, or (b) interpolate
+      an error object into a template string. The operator can determine from the
+      error code alone which failure cause fired and which component produced it.
+    test_type: unit
+    component_under_test: client
+    notes: >
+      This is the lateral catch audit for this story's three packages.
+      M7 lessons L1 (typed field corruption) and L6 (${error} producing
+      [object Object]) both apply here. audit all three packages, not only
+      the changed files.
+
+  - id: AC-014
+    given: "packages/directory/src/directory-node.ts before this story"
+    when: "the implementer searches for any catch block that catches a FROST
+      verification exception and returns 'frost_verification_failed'"
+    then: >
+      Any such catch block that runs during the session establishment TBS
+      verification path is split: session establishment failures return
+      'assignment_tbs_verification_failed'; seal operation failures continue
+      to return 'frost_verification_failed'. The two codes are distinct
+      TypeScript literals and must not share a catch block. Verified by
+      grep -r 'frost_verification_failed' packages/directory/src/ showing
+      no file uses that string in a path reachable from session assignment
+      construction.
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-015
+    given: "packages/directory/src/directory-node.ts (the composition root
+      for the FROST TBS construction call)"
+    when: "a session establishment request is processed end-to-end through the
+      directory binary (not via a direct method call in a test)"
+    then: >
+      The FROST ceremony is invoked with the 10-field TBS (all new fields
+      populated from the negotiation context), and the resulting SessionAssignment
+      contains all five new fields with non-empty values. The composition root
+      change is verified by an integration test that starts the directory binary
+      via the test fixture, completes a real session negotiation, and asserts the
+      received SessionAssignment passes AC-003's TBS verification check. A test
+      that calls the TBS construction function directly without starting the
+      directory binary does NOT satisfy this AC.
+    test_type: integration
+    component_under_test: directory
+    notes: >
+      Addresses M7 lesson L3 — composition root never wired. The directory binary
+      start is the only test of composition root wiring.
+
+  - id: AC-016
+    given: "packages/e2e-tests/src/session-fixture.ts"
+    when: "createSessionFixture() is called with opts.ephemeralSessionNodes: true
+      (from DAEMON-002) and a session assignment is produced during the fixture run"
+    then: >
+      The SessionAssignment produced by the fixture contains all five new fields.
+      The fixture's session establishment path uses the real FROST ceremony
+      over the extended 10-field TBS, not a stub that populates the new fields
+      with empty strings. Existing tests that use createSessionFixture() without
+      opts.ephemeralSessionNodes continue to pass unchanged (non-breaking). The
+      fixture is extended with a helper that calls buildSessionEstablishmentTbs
+      and asserts TBS verification succeeds — this helper is used by the integration
+      tests for AC-003 and AC-012 to avoid duplicating TBS verification logic in
+      test code.
+    test_type: integration
+    component_under_test: e2e-tests
+
+  - id: AC-017
+    given: "All cello-client code changes for this story are implemented and tests
+      pass (packages/protocol-types and packages/client modified)"
+    when: "the implementer follows the version bump procedure in cello-client CLAUDE.md"
+    then: |
+      - packages/protocol-types has its version incremented in package.json
+      - packages/client has its version incremented in package.json
+      - packages/client's dependency on @cello-protocol/protocol-types is updated
+        to the new semver range
+      - @cello-protocol/connect (packages/adapter-claude-code) is bumped to reflect
+        the net protocol change — operators on the old connect version cannot receive
+        a valid M7 SessionAssignment
+      - All dependent packages (protocol-types → client → connect) have their
+        inter-dependency versions updated to the new values
+      - pnpm install is run and pnpm-lock.yaml is updated
+      - git tag v{connect-version} is pushed to origin
+      - CI publishes the new version to npm beta dist-tag
+      - npm view @cello-protocol/connect@beta dependencies --json shows real semver
+        versions (e.g. "^0.0.X"), NEVER workspace:* for @cello-protocol/protocol-types
+        or @cello-protocol/client
+      Before pushing: check COORDINATION.md to confirm M7-SESSION-001 and
+      M7-MANIFEST-002 are also ready to batch. All three stories touch
+      packages/directory and/or packages/relay. Do NOT push the directory/relay
+      pipeline alone — batch all three pipeline changes in a single push per
+      COORDINATION.md §Cross-Repo Pipeline Batching.
+    test_type: integration
+    component_under_test: cello-client CI
+    notes: >
+      Hard gate. A story that ships wire format changes without publishing a new
+      version leaves all operators on a SessionAssignment type that is missing the
+      five new fields. workspace:* references are a bug post-REPOSPLIT-002 —
+      they resolve to stale local copies and must never appear in published artifacts.
+
+  - id: AC-018
+    given: "The new @cello-protocol/protocol-types and @cello-protocol/client
+      versions are live on npm beta (AC-017 complete)"
+    when: "packages/directory/package.json and packages/relay/package.json in
+      trustless-cello are updated"
+    then: |
+      - Both package.json files reference the new semver ranges for
+        @cello-protocol/protocol-types and @cello-protocol/client (e.g. "^X.Y.Z")
+      - No workspace:* references to @cello-protocol/crypto, transport,
+        protocol-types, or client remain in either file
+      - @cello-protocol/interfaces remains as workspace:* — it is the only
+        cello-client package maintained in trustless-cello and is correct as-is
+      - pnpm install is run in trustless-cello and pnpm-lock.yaml is updated
+      - pnpm run typecheck passes in trustless-cello (directory and relay compile
+        against the new types including all five new SessionAssignment fields)
+      - Commit pushed to trustless-cello main
+      - Before the pipeline push: confirm M7-SESSION-001 and M7-MANIFEST-002 are
+        ready to batch (COORDINATION.md §Cross-Repo Pipeline Batching). Push all
+        three stories' directory/relay changes together — never push this story's
+        directory change alone.
+    test_type: integration
+    component_under_test: directory
+    notes: >
+      workspace:* resolves to stale local copies post-REPOSPLIT-002. This AC
+      ensures directory and relay run against the published SessionAssignment type
+      with the five new fields. A directory compiled against workspace:* protocol-types
+      would compile against the old type silently and the new fields would be absent
+      from every SessionAssignment it constructs.
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The FROST signature in a SessionAssignment must cover all five new fields
+      (initiator_session_peer_id, initiator_session_addrs, counterparty_session_peer_id,
+      counterparty_session_addrs, transport_mode). An attacker who modifies any of
+      these fields must not be able to present a valid signature.
+    adversarial_condition: >
+      A valid signed SessionAssignment for session S has counterparty_session_peer_id
+      set to Bob's genuine session Peer ID 'PEER_B'. An attacker (e.g. a compromised
+      relay) intercepts the assignment and replaces counterparty_session_peer_id with
+      a controlled Peer ID 'PEER_EVIL'. The attacker then forwards the modified
+      assignment to Alice. Alice's session-manager.ts reconstructs the 10-field TBS
+      using 'PEER_EVIL' and verifies the FROST signature. Verification must fail with
+      'assignment_tbs_verification_failed' — the signature was computed over the TBS
+      with 'PEER_B', which differs from the TBS with 'PEER_EVIL'. Alice does not dial
+      'PEER_EVIL'. Verified by a unit test that: (a) signs a TBS with 'PEER_B'; (b)
+      constructs an assignment with 'PEER_EVIL'; (c) runs verification and asserts it
+      returns assignment_tbs_verification_failed. The FROST signature must not be
+      reusable from one Peer ID substitution to another.
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: >
+      The transport_mode field must be set by the directory as a FROST-signed value.
+      No client or relay may infer transport mode from the address format as a
+      substitute for the signed field.
+    adversarial_condition: >
+      A session assignment is delivered with transport_mode: 'direct' but the
+      counterparty_session_addrs array contains a '/p2p-circuit' relay circuit address.
+      The client must use transport_mode: 'direct' as the authoritative value (even
+      though the address suggests relay). Separately: a second test delivers an
+      assignment with transport_mode: 'relay' and a direct '/ip4/' address. The
+      client must use transport_mode: 'relay'. In both cases, address-format-based
+      inference would yield the wrong answer — only the signed transport_mode field
+      is authoritative. Verified by the unit tests in AC-010.
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-003
+    statement: >
+      The session Peer IDs in a SessionAssignment must only be delivered to the
+      designated session participants. The relay must not broadcast session Peer IDs
+      to any party other than the designated participants.
+    adversarial_condition: >
+      A relay-path session has Peer IDs 'PEER_A' and 'PEER_B' bound. A third
+      party queries the relay (via any protocol message or relay API) for the
+      session Peer IDs of session S. The relay must return nothing — it has no
+      mechanism to disclose session Peer IDs outside of its internal binding
+      enforcement. Verified by asserting that: (a) the relay's
+      IRelaySessionBinding interface (or equivalent) has no method that returns
+      session Peer IDs to an external caller; (b) the session Peer IDs are stored
+      in a private in-memory map not exposed via any public API; (c) grep
+      packages/relay/src/ for any export of session Peer ID data returns zero
+      results for endpoints other than stream acceptance.
+    test_type: unit
+    component_under_test: relay
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the signaling stream is in 'reconnecting' state at the moment
+      the directory attempts to send the SessionAssignment to a client"
+    fallback: >
+      M7-SIGNAL-001's outbound queue (64-op FIFO) holds the assignment for delivery
+      after reconnect. When the stream reconnects, the queued assignment is delivered.
+      The client receives the assignment (with all five new fields) and processes it
+      normally. If the queue is full (64 ops already waiting), the directory returns
+      { ok: false, reason: 'signaling_queue_full', guidance: '...' } to the session
+      layer — the session establishment fails cleanly rather than silently. The
+      assignment is NOT lost silently; the session layer is notified of the failure.
+    test_type: integration
+    component_under_test: directory
+    notes: >
+      M7-SIGNAL-001 implements the outbound queue. This DB tests that the WIRE-001
+      send path feeds into it correctly. The test must use a real (not mocked)
+      signaling manager stub that rejects writes when in 'reconnecting' state.
+
+  - id: DB-002
+    condition: "While a client receives a SessionAssignment from a pre-M7 directory
+      (all five new fields absent — the frame is a valid M6 assignment)"
+    fallback: >
+      The client detects the missing fields at the schema validation layer
+      (TypeScript strict types or runtime Zod check) and returns
+      { ok: false, reason: 'assignment_missing_session_peer_id', guidance:
+      'The SessionAssignment received from the directory is missing one or both
+      session Peer ID fields. This may indicate a directory version mismatch.
+      Ensure both directory and client are running M7 or later. Do not attempt
+      to dial — the session cannot be established without verified session
+      Peer IDs.' }. The client does not crash, does not attempt to dial null
+      addresses, and does not emit a generic error. The operator can immediately
+      identify the cause (version mismatch) and the remediation (upgrade directory).
+    test_type: unit
+    component_under_test: client
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: session.assignment.received
+      level: info
+      trigger: "When a client (initiator or target) successfully receives and
+        verifies a SessionAssignment including all new fields"
+      context_fields: [sessionId, counterpartyPubkey, transportMode, correlationId]
+      correlationId: true
+      notes: >
+        transportMode must be the value from the transport_mode field in the
+        assignment (never inferred from address format). This event fires once
+        per side (once on Alice's daemon, once on Bob's daemon) per session
+        establishment. The correlationId must match the value minted when the
+        session initiation began.
+  error_events:
+    - name: session.assignment.verification.failed
+      level: error
+      trigger: "When assignment validation fails for any reason: missing Peer ID
+        fields, initiator self-check Peer ID mismatch, or FROST TBS signature failure"
+      context_fields: [sessionId, reason, correlationId]
+      correlationId: true
+      notes: >
+        reason is one of: 'assignment_missing_session_peer_id',
+        'assignment_peer_id_mismatch', 'assignment_tbs_verification_failed'.
+        For 'assignment_peer_id_mismatch', additionally include expectedPeerId
+        and actualPeerId in context_fields. These reason strings are distinct
+        TypeScript literals — they must not overlap with 'frost_verification_failed'
+        (which is reserved for seal FROST failures) or any other pre-existing code.
+  alarms:
+    - condition: "session.assignment.verification.failed with reason
+        'assignment_tbs_verification_failed' fires more than 2 times in 5 minutes
+        from the same agentName"
+      fires_to: "security-anomaly CloudWatch alarm — repeated TBS verification
+        failures may indicate a MITM between the client and directory"
+    - condition: "session.assignment.verification.failed with reason
+        'assignment_peer_id_mismatch' fires at all"
+      fires_to: "security-anomaly CloudWatch alarm — a Peer ID mismatch after
+        valid FROST verification is an active attack indicator and must page
+        immediately"
+  notes: >
+    Both events must be added to the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
+    by the implementer. The events are defined in outline.md §Observability Events
+    (Session assignment). No console.log in implementation code — all events go
+    through the injected Logger interface.
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Protocol-types change: add the five new fields to the SessionAssignment type
+    in packages/protocol-types/src/types.ts. If a Zod schema exists, add them
+    with z.string() (Peer IDs and transport_mode) and z.array(z.string()) (addrs).
+    Make all five non-optional — a frame without them is invalid and must be
+    rejected at parse time.
+  - >
+    TBS construction: add or update buildSessionEstablishmentTbs() in
+    packages/client/src/ (or packages/crypto/src/ if shared). The function takes
+    a complete SessionAssignment and returns the Uint8Array TBS for FROST signing.
+    Canonical address encoding: JSON.stringify(addrs.slice().sort()). This must
+    be the same function used by both the signing path (directory) and the
+    verification path (client) — any divergence produces a verification failure.
+    Update CONTEXT.md's FROST TBS table to document the 10-field array.
+  - >
+    FROST TBS domain separation: the context string "cello-frost-session-establishment-v1"
+    is defined in CONTEXT.md and must not change. The extension is purely positional
+    (fields 6–10 appended). The seal TBS context string ("cello-frost-seal-v1") is
+    unaffected. Any implementer who changes the context string without updating this
+    story and CONTEXT.md has introduced a breaking change.
+  - >
+    Initiator self-check: in session-manager.ts, after verifying the FROST signature,
+    add an explicit check: if (assignment.initiator_session_peer_id !== mySessionPeerId).
+    mySessionPeerId is the Peer ID returned by SessionNodeManager.createSessionNode()
+    during the session initiation call. The comparison is a string equality check on
+    hex Peer ID values — no libp2p peer ID parsing required.
+  - >
+    Error code separation for FROST verification: grep packages/client/src/ and
+    packages/directory/src/ for 'frost_verification_failed'. Any catch block on
+    the session establishment TBS path that currently maps to this string must be
+    updated to return 'assignment_tbs_verification_failed'. Do not create a combined
+    code — the operator must be able to distinguish "the session was tampered with"
+    from "the seal FROST ceremony failed."
+  - >
+    Directory producer path: in directory-node.ts, the SessionAssignment construction
+    occurs after both parties have reported their session Peer IDs. The exact call
+    site is where the FROST ceremony currently starts (after session_accept from Bob).
+    The new fields are populated from: (a) Alice's session_initiate request payload
+    (initiator_session_peer_id, initiator_session_addrs); (b) Bob's session_accept
+    response (counterparty_session_peer_id, counterparty_session_addrs); (c)
+    transport_mode derived from AutoNAT results (TRANSPORT-001 stub returns
+    dialable: false → transport_mode: 'relay' until TRANSPORT-001 lands).
+  - >
+    Relay binding: in relay-node.ts, add a session binding map:
+    Map<sessionId, { initiatorPeerId: string; counterpartyPeerId: string }>.
+    Populate it when a SessionAssignment is received (transport_mode: 'relay' only).
+    In the stream acceptance handler, reject any stream whose Peer ID is not in
+    the binding for the claimed session_id. For transport_mode: 'direct', no entry
+    is created — the relay is not in the path and must not attempt to accept streams
+    for that session.
+  - >
+    Cross-repo version bump: this story touches packages/protocol-types and
+    packages/client in cello-client. Both must be bumped. The connect package
+    must also be bumped because it transitively exports the new SessionAssignment
+    type. The trustless-cello packages/directory and packages/relay must be updated
+    to reference the new published semver ranges. Follow the full version bump
+    procedure in cello-client CLAUDE.md exactly — workspace:* references to
+    cello-client packages are a bug post-REPOSPLIT-002.
+  - >
+    Pipeline batching: this story's directory/relay changes MUST be pushed together
+    with M7-SESSION-001 and M7-MANIFEST-002. Before running any pipeline push that
+    includes directory or relay, verify COORDINATION.md §Cross-Repo Pipeline
+    Batching shows all three stories ready. A 25-30 minute deploy for one story
+    alone is wasteful and adds risk from partial deploys.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-DAEMON-002  # session node Peer IDs originate in SessionNodeManager;
+                            # without DAEMON-002 there are no session Peer IDs to carry
+  blocks:
+    - CELLO-M7-TRANSPORT-001  # reads transport_mode and counterparty_session_addrs
+                               # to choose direct dial vs relay fallback
+    - CELLO-M7-SESSION-001    # needs session Peer IDs in assignment to detect
+                               # which peer disconnected mid-session
+    - CELLO-M7-E2E-001        # gate story; AC-003 verifies ephemeral session Peer IDs
+                               # are distinct from directory-facing Peer IDs
+  notes: >
+    This story is the pipeline bottleneck in M7: it is a cross-repo protocol
+    change requiring directory and relay CloudFormation deploys (~25-30 min each).
+    TRANSPORT-001 and SESSION-001 both depend on it. Batch all three stories'
+    directory/relay changes (WIRE-001 + SESSION-001 + MANIFEST-002) before
+    triggering any pipeline push. The pipeline batching section of COORDINATION.md
+    must show all three stories ready before any push.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Authentication, Node Operations"
+  end_to_end_flow: "§3.1 Authentication — Challenge-Response, §5.7 Session Establishment"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-11_1030_daemon-transport-architecture"
+    - "2026-06-11_1459_implementing-directory-bidirectional-authentication"
+    - "2026-06-11_0822_transport-security-audit-and-libp2p-primitives"
+  related_docs:
+    - "[[daemon-transport-architecture]]"
+    - "[[CELLO-M7-E2E-001]]"
+    - "[[CELLO-M7-DAEMON-002]]"
+    - "[[CELLO-M7-TRANSPORT-001]]"
+  notes: >
+    Shared interface completeness: SessionAssignment is the most widely-consumed
+    frame in the protocol. This story enumerates all four parties — one producer
+    (directory) and three consumers (initiator client, target client, relay) —
+    and every consumer has its own AC (AC-003 to AC-006 respectively).
+    The outline.md §Shared Interface: SessionAssignment Wire Format (S4) is the
+    authoritative design source for this producer/consumer breakdown.
+    All five new fields are protected by the FROST TBS — SI-001 verifies this.
