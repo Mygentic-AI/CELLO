@@ -375,3 +375,59 @@ for daemon-side code.
 - AC-017: version bump — deferred per user instruction (will batch)
 - AC-018: trustless-cello dependency update — merged directory code directly, npm
   version bump deferred
+
+---
+
+### 2026-06-12 18:00 — MANIFEST-002 adversarial review fixes
+
+**Story:** CELLO-M7-MANIFEST-002
+**Agent/Author:** sprint-coder (Opus)
+
+Adversarial code review returned 8 findings (ADV-001 through ADV-008). All fixed
+on branch m7/manifest-002-fixes in cello-client, merged to main.
+
+**Findings fixed:**
+1. **ADV-001 (CRITICAL): Step-6 challenge verification not wired in real handshake.**
+   `core/client/src/signaling-manager.ts` performs the actual handshake (not
+   `core/transport/src/signaling-manager.ts` which only defines types). Added
+   `getChallengeVerifier()` to `SignalingContext`, wired through `ClientWiringSurface`
+   and `CelloClientImpl.createClient()`, and inserted verification blocks in all three
+   handshake paths (`#doOpen`, `connectDirectorySignalingStream`, `getRelayPublicKey`).
+
+2. **ADV-002 (HIGH): Non-fatal manifest failure when manifestProvider configured.**
+   `startDaemon()` now throws after the manifest loading block when `manifestProvider`
+   is set but `manifestVerified` remains false. 4 existing tests updated to expect throws.
+
+3. **ADV-003 (MEDIUM): Timer race in ManifestPollScheduler.cancel().**
+   Added `#cancelled` flag set on cancel(), checked at timer callback entry. Reset on
+   `scheduleNext()` to allow reuse after cancel.
+
+4. **ADV-004 (MEDIUM): consortium-manifest.json shipped in npm tarball.**
+   Removed `"src/consortium-manifest.json"` from `package.json` `files` array.
+
+5. **ADV-005 (MEDIUM): Non-atomic file write in FileManifestVersionStore.**
+   Changed to write-to-temp-then-rename pattern (write `.tmp`, then `rename()`).
+
+6. **ADV-006 (HIGH): manifestProvider accepted without manifestRootKeys.**
+   Added config validation at daemon startup — throws if manifestProvider provided
+   without manifestRootKeys (non-empty) or manifestThreshold (positive integer).
+
+7. **ADV-007 (LOW): Dead code — InMemorySignalingOutboundQueue instantiated and unused.**
+   Removed the dead block and unused imports. Added `directory.auth.manifest.poll.deferred`
+   debug log event explaining why polling isn't wired yet (deferred to SIGNAL-001).
+
+8. **ADV-008 (HIGH): No validation that manifestThreshold > 0.**
+   Covered by ADV-006 fix — threshold must be a positive integer >= 1.
+
+**New tests added:** 3 (ADV-006 config validation, ADV-008 threshold=0, ADV-007 poll.deferred).
+**Tests updated:** 4 (ADV-002 fatal behavior change).
+
+**Final test counts:**
+- daemon: 155 passed
+- transport: 50 passed
+- client: 334 passed
+- Full workspace: 821 passed, 8 skipped, 3 todo (53 files pass, 2 skipped)
+- Lint: clean
+- Typecheck: clean
+
+**Commit:** 09d5c51 — merged to main via `--no-ff` in cello-client.
