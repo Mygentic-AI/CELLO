@@ -1,0 +1,471 @@
+---
+name: CELLO-M7-MCP-002
+type: user-story
+date: 2026-06-12
+topics: [mcp, notifications, agent-state, session-lifecycle, presence, daemon, ipc, multi-connection]
+status: draft
+description: >
+  Add an agent field to all MCP notifications and surface agent state transitions
+  and session node lifecycle events as MCP notifications with explicit routing
+  rules: agent state changes broadcast to all IPC connections, current-agent
+  changes fire on the triggering connection only, and session lifecycle fires on
+  connections where the affected agent is current.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-MCP-002
+domain: MCP
+milestone: M7
+actor: LLM
+priority: P1
+components:
+  - adapter-claude-code
+  - daemon
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As an LLM managing multiple CELLO agents over a single daemon,
+  I want every MCP notification to carry an agent field identifying which agent
+  the event concerns, and I want agent state transitions and session lifecycle
+  events surfaced as MCP notifications with well-defined routing rules,
+  so that I can route notifications to the correct conversation context without
+  ambiguity and react to presence changes (agent online/offline, sessions
+  created/sealed/interrupted) in real time.
+
+# ─── Context ────────────────────────────────────────────────
+# The daemon manages multiple agents simultaneously. Multiple MCP connections
+# (Claude sessions) can be connected to the daemon at the same time, each with
+# its own current-agent state (per-connection, set by cello_use_agent in
+# CELLO-M7-MCP-001).
+#
+# Without an agent field on notifications, an LLM receiving a session event
+# cannot determine which agent the event concerns — it would need to infer from
+# context, which is unreliable.
+#
+# Without routing rules, agent state broadcasts would spam connections that don't
+# care, and session events for one agent would leak into another agent's context.
+#
+# Notification types introduced by this story:
+#   agent_state_changed — agent goes online/offline/registered
+#   agent_current_changed — this connection's current agent switched
+#   session_state_changed — a session node was created/sealed/interrupted/errored
+#
+# Routing rules:
+#   agent_state_changed → ALL active IPC connections (all connections need to
+#     know if an agent goes offline; an LLM managing agent B may have an active
+#     session referencing agent A)
+#   agent_current_changed → the connection that called cello_use_agent ONLY
+#     (the switch is per-connection state; other connections are unaffected)
+#   session_state_changed → connections where the affected agent is current
+#     (only the LLM actively working with that agent needs session presence)
+#
+# message.retry.evicted events from CELLO-M7-DAEMON-003 are daemon-internal
+# only — they do NOT surface as MCP notifications. The operator monitors retry
+# queue state via cello status or log inspection.
+#
+# No console.log: all log events go through the injected Logger interface.
+
+# ─── Behavior ──────────────────────────────────────────────
+behavior:
+  - trigger: "When any MCP notification is dispatched (including those introduced by CELLO-M7-MCP-001 and by this story)"
+    action: >
+      The notification payload includes an agent field containing the agentName
+      string identifying which agent the event concerns. This applies to all
+      existing notifications from MCP-001 and all new notifications introduced
+      by this story.
+
+  - trigger: "When an agent transitions from registered to online (via cello_start_agent)"
+    action: >
+      The daemon emits an agent_state_changed notification to ALL active IPC
+      connections with fields: { agent: agentName, type: 'agent_state_changed',
+      agentName, state: 'online', reason: 'started' }. The daemon also emits
+      the 'agent.online' log event at INFO via the injected Logger with context
+      fields agentName and agentPubkey.
+
+  - trigger: "When an agent transitions from online to registered (via cello_stop_agent) or from online to offline (daemon shutdown / error)"
+    action: >
+      The daemon emits an agent_state_changed notification to ALL active IPC
+      connections with fields: { agent: agentName, type: 'agent_state_changed',
+      agentName, state: 'offline', reason }. The reason field distinguishes
+      'stopped' (explicit cello_stop_agent), 'daemon_shutdown' (graceful
+      shutdown), or 'error' (unexpected failure). The daemon also emits the
+      'agent.offline' log event at INFO via the injected Logger with context
+      fields agentName and reason.
+
+  - trigger: "When cello_use_agent switches the current agent on a connection"
+    action: >
+      The daemon emits an agent_current_changed notification to the triggering
+      connection ONLY with fields: { agent: toAgent, type: 'agent_current_changed',
+      fromAgent, toAgent }. The daemon also emits the 'agent.current.switched'
+      log event at INFO via the injected Logger with context fields connectionId,
+      fromAgent, and toAgent. Other IPC connections do NOT receive this
+      notification — current-agent state is per-connection.
+
+  - trigger: "When a session node is created for an agent (event from CELLO-M7-DAEMON-002)"
+    action: >
+      The daemon emits a session_state_changed notification to all IPC
+      connections where the affected agent is the current agent, with fields:
+      { agent: agentName, type: 'session_state_changed', agentName, sessionId,
+      state: 'created', counterpartyPubkey }. The daemon also emits the
+      'session.node.created' log event at INFO via the injected Logger with
+      context fields sessionId, agentName, sessionPeerId, and correlationId.
+
+  - trigger: "When a session node is destroyed for an agent (seal complete, interrupted, or error — event from CELLO-M7-DAEMON-002)"
+    action: >
+      The daemon emits a session_state_changed notification to all IPC
+      connections where the affected agent is the current agent, with fields:
+      { agent: agentName, type: 'session_state_changed', agentName, sessionId,
+      state, counterpartyPubkey }. The state field is one of 'sealed',
+      'interrupted', or 'error'. The daemon also emits the
+      'session.node.destroyed' log event at INFO via the injected Logger with
+      context fields sessionId, agentName, and reason.
+
+  - trigger: "When an IPC connection disconnects"
+    action: >
+      That connection is removed from the notification routing table. It no
+      longer receives any notifications. Pending notifications queued for that
+      connection are discarded.
+
+# ─── Acceptance Criteria ───────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Two IPC connections (A and B) are connected to the daemon"
+    when: "connection A calls cello_start_agent for agent 'alice'"
+    then: >
+      BOTH connection A and connection B receive an agent_state_changed
+      notification with { agent: 'alice', type: 'agent_state_changed',
+      agentName: 'alice', state: 'online', reason: 'started' }. Verified via
+      actual IPC socket messages received by both connections — not by asserting
+      internal daemon state.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      Uses opts.ipcClients: 2 in the session fixture. Two separate IPC socket
+      connections verify the broadcast routing rule.
+
+  - id: AC-002
+    given: "Two IPC connections (A and B) are connected to the daemon, agent 'alice' is online"
+    when: "connection A calls cello_stop_agent for agent 'alice'"
+    then: >
+      BOTH connection A and connection B receive an agent_state_changed
+      notification with { agent: 'alice', type: 'agent_state_changed',
+      agentName: 'alice', state: 'offline', reason: 'stopped' }. Verified via
+      actual IPC socket messages received by both connections.
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-003
+    given: "Two IPC connections (A and B), agent 'alice' is online, connection A has agent 'bob' as current"
+    when: "connection A calls cello_use_agent('alice')"
+    then: >
+      Connection A receives an agent_current_changed notification with
+      { agent: 'alice', type: 'agent_current_changed', fromAgent: 'bob',
+      toAgent: 'alice' }. Connection B does NOT receive this notification.
+      Verified by asserting that connection B's IPC message buffer contains
+      zero agent_current_changed messages after the operation completes and a
+      sufficient wait period elapses.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      This AC proves the per-connection routing rule. A single-connection test
+      cannot verify that other connections are excluded.
+
+  - id: AC-004
+    given: "Two IPC connections (A and B), both have agent 'alice' as current"
+    when: "a session node is created for agent 'alice' (via session initiation)"
+    then: >
+      BOTH connection A and connection B receive a session_state_changed
+      notification with { agent: 'alice', type: 'session_state_changed',
+      agentName: 'alice', sessionId, state: 'created', counterpartyPubkey }.
+      Verified via actual IPC socket messages received by both connections.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      Both connections have 'alice' as current, so both receive the session
+      lifecycle notification.
+
+  - id: AC-005
+    given: "Two IPC connections (A and B), A has 'alice' as current, B has 'bob' as current"
+    when: "a session node is created for agent 'alice'"
+    then: >
+      Connection A receives a session_state_changed notification with
+      { agent: 'alice', type: 'session_state_changed', agentName: 'alice',
+      sessionId, state: 'created', counterpartyPubkey }. Connection B does NOT
+      receive this notification. Verified by asserting that connection B's IPC
+      message buffer contains zero session_state_changed messages for 'alice'
+      after the operation completes and a sufficient wait period elapses.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      Proves session_state_changed routing targets only connections where the
+      affected agent is current.
+
+  - id: AC-006
+    given: "Two IPC connections, both have 'alice' as current, session active"
+    when: "the session for 'alice' is sealed (session node destroyed with reason 'sealed')"
+    then: >
+      BOTH connections receive a session_state_changed notification with
+      { agent: 'alice', type: 'session_state_changed', agentName: 'alice',
+      sessionId, state: 'sealed', counterpartyPubkey }. Verified via actual IPC
+      socket messages.
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-007
+    given: "Two IPC connections, both have 'alice' as current, session active"
+    when: "the session for 'alice' is interrupted (session node destroyed with reason 'interrupted')"
+    then: >
+      BOTH connections receive a session_state_changed notification with
+      { agent: 'alice', type: 'session_state_changed', agentName: 'alice',
+      sessionId, state: 'interrupted', counterpartyPubkey }. Verified via actual
+      IPC socket messages.
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-008
+    given: "All existing MCP notifications from CELLO-M7-MCP-001 (tool responses, status updates)"
+    when: "any notification is dispatched by the MCP adapter"
+    then: >
+      The notification payload includes an agent field containing the agentName
+      string that the notification concerns. No notification is dispatched
+      without the agent field. Verified by a test that triggers at least one
+      existing MCP-001 notification and asserts the agent field is present and
+      correct.
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-009
+    given: "A connection has no current agent set (freshly connected, before cello_use_agent)"
+    when: "an agent_state_changed notification is broadcast"
+    then: >
+      The connection still receives the agent_state_changed notification (agent
+      state is system-wide, not filtered by current). The agent field in the
+      notification identifies which agent changed state.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      Connections without a current agent still need to know about agent state
+      changes (online/offline) — the LLM may need to call cello_use_agent to
+      select one.
+
+  - id: AC-010
+    given: "An IPC connection is disconnected from the daemon"
+    when: "a subsequent agent_state_changed notification is broadcast"
+    then: >
+      The disconnected connection does NOT receive the notification. No error is
+      thrown in the daemon. The daemon continues broadcasting to all remaining
+      connections. Verified by disconnecting one connection, triggering a state
+      change, and asserting only the remaining connection receives it.
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-011-observability
+    given: "Agent state transitions and session lifecycle events occur"
+    when: "each event fires"
+    then: >
+      The following log events are emitted via the injected Logger (not
+      console.log):
+        - 'agent.online' at INFO with context fields agentName, agentPubkey
+        - 'agent.offline' at INFO with context fields agentName, reason
+        - 'agent.current.switched' at INFO with context fields connectionId,
+          fromAgent, toAgent
+        - 'session.node.created' at INFO with context fields sessionId,
+          agentName, sessionPeerId, correlationId
+        - 'session.node.destroyed' at INFO with context fields sessionId,
+          agentName, reason
+      Each event fires independently from the MCP notification — both occur,
+      neither replaces the other.
+    test_type: unit
+    component_under_test: daemon
+    notes: >
+      Log events are verified via a test Logger spy. MCP notifications are
+      verified separately in AC-001 through AC-010.
+
+  - id: AC-012-composition-root
+    given: "The notification dispatcher is implemented with passing unit tests"
+    when: "the daemon starts via its normal entrypoint (packages/daemon/src/server.ts) and the MCP adapter connects via IPC (packages/adapter-claude-code/src/bin/cello-mcp.ts)"
+    then: >
+      The notification dispatcher is instantiated by the composition root AND
+      wired to the daemon's event bus such that when an agent state change or
+      session lifecycle event occurs, the IPC connection receives the
+      corresponding MCP notification. Verified by an integration test that
+      starts the daemon binary, connects an IPC client, triggers a state change
+      (cello_start_agent), and asserts the notification arrives on the IPC socket.
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      This catches the PERSIST-024 pattern: component exists, tests pass in
+      isolation, but composition root never wires it.
+
+  - id: AC-013-lateral-catch-audit
+    given: "All catch blocks in packages/adapter-claude-code/src/ and packages/daemon/src/"
+    when: "the implementer scans every catch block in both packages"
+    then: >
+      Every catch block either (a) logs the actual error.message via the Logger
+      interface and returns a distinct error code, or (b) re-throws. No catch
+      block returns a hardcoded reason string without logging the actual exception.
+      No catch block interpolates an error object into a template string
+      (producing [object Object]). Pre-existing violations are fixed or reported
+      as blocking findings.
+    test_type: unit
+    component_under_test: adapter-claude-code
+    notes: >
+      Lateral audit covers ALL files in both packages, not only files changed
+      by this story.
+
+  - id: AC-014-version-bump
+    given: "All cello-client code changes for this story are implemented and tests pass"
+    when: "the implementer runs the version bump procedure in cello-client CLAUDE.md"
+    then: |
+      - Every modified package has its version incremented in package.json
+      - Every package that depends on a modified package has its dependency version updated
+      - @cello-protocol/connect is bumped to reflect the net change
+      - pnpm install is run and pnpm-lock.yaml is updated
+      - git tag v{connect-version} is pushed to origin
+      - CI publishes the new version to npm beta dist-tag
+      - `npm view @cello-protocol/connect@beta dependencies --json` shows real semver versions (never workspace:*)
+    test_type: integration
+    component_under_test: cello-client CI
+    notes: >
+      This is a hard gate. A story that changes cello-client code without
+      publishing a new version breaks every operator on the stale version.
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      Session lifecycle notifications (session_state_changed) shall only be
+      delivered to IPC connections where the affected agent is the current agent.
+      A connection with agent B as current shall never receive session events for
+      agent A's sessions.
+    adversarial_condition: >
+      Two IPC connections are active: connection X has agent A as current,
+      connection Y has agent B as current. A session node is created for agent A.
+      The test asserts that connection Y's IPC message buffer contains zero
+      session_state_changed notifications for agent A — proving the routing
+      logic does not leak session presence across agent boundaries.
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: SI-002
+    statement: >
+      Notifications shall never include cryptographic key material (private keys,
+      FROST shares, signing keys). Only public identifiers (agentName,
+      agentPubkey, sessionId, counterpartyPubkey) are permitted in notification
+      payloads.
+    adversarial_condition: >
+      A grep across all notification construction sites in
+      packages/adapter-claude-code/src/ and packages/daemon/src/ verifies that
+      no field named 'privateKey', 'signingShare', 'localShare', 'secretKey',
+      or any Uint8Array serialization of key material appears in notification
+      payloads. The grep pattern covers both the field name in object literals
+      and any variable assignment that could pass key material into a
+      notification field.
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+# ─── Observability ─────────────────────────────────────────
+observability:
+  events:
+    - name: agent.online
+      level: info
+      trigger: "When an agent transitions to online state via cello_start_agent"
+      context_fields: [agentName, agentPubkey]
+      correlationId: false
+    - name: agent.offline
+      level: info
+      trigger: "When an agent transitions to offline state via cello_stop_agent or daemon shutdown"
+      context_fields: [agentName, reason]
+      correlationId: false
+    - name: agent.current.switched
+      level: info
+      trigger: "When cello_use_agent switches the current agent on a connection"
+      context_fields: [connectionId, fromAgent, toAgent]
+      correlationId: false
+    - name: session.node.created
+      level: info
+      trigger: "When a session node is created for an agent"
+      context_fields: [sessionId, agentName, sessionPeerId, correlationId]
+      correlationId: true
+    - name: session.node.destroyed
+      level: info
+      trigger: "When a session node is destroyed (sealed/interrupted/error)"
+      context_fields: [sessionId, agentName, reason]
+      correlationId: true
+  error_events: []
+  alarms: []
+  notes: >
+    No new error events or alarms: MCP-002 is notification-only and does not
+    introduce new failure modes beyond those already covered by CELLO-M7-MCP-001
+    (IPC disconnection, daemon not running). Session node creation/destruction
+    errors are covered by CELLO-M7-DAEMON-002's error events. The log events
+    listed above also fire from DAEMON-001, DAEMON-002, and MCP-001 contexts —
+    this story adds the MCP notification dispatch paired with those events, not
+    a second log of the same event.
+
+# ─── Implementation Notes ──────────────────────────────────
+implementation_notes:
+  - >
+    Notification dispatcher: implement as a class in packages/daemon (e.g.
+    NotificationDispatcher) that holds a registry of active IPC connections and
+    their current-agent assignments. It subscribes to the daemon's EventBus for
+    agent state events (from DAEMON-001) and session lifecycle events (from
+    DAEMON-002). On each event, it applies the routing rules and serializes the
+    notification to the appropriate IPC sockets.
+  - >
+    The agent field on all notifications: modify the notification serialization
+    layer in the MCP adapter to inject the agent field into every outbound
+    notification. For notifications inherited from MCP-001 (e.g. tool result
+    notifications), the agent field is the current agent of the connection at
+    dispatch time. For the three new notification types introduced here, the
+    agent field is explicit in the event payload.
+  - >
+    Routing table: the dispatcher maintains a Map<connectionId, { socket,
+    currentAgent: string | null }>. cello_use_agent calls update the
+    currentAgent entry. IPC disconnect removes the entry. agent_state_changed
+    iterates all entries. agent_current_changed targets one entry.
+    session_state_changed filters entries where currentAgent matches agentName.
+  - >
+    message.retry.evicted events from CELLO-M7-DAEMON-003 are daemon-internal
+    only. They emit a 'message.retry.evicted' log event (per DAEMON-003's
+    observability spec) but are NOT forwarded as MCP notifications. The operator
+    monitors retry queue state via the retryQueueDepth field in cello status
+    (added by DAEMON-003) or by inspecting daemon logs directly.
+  - >
+    Composition root wiring: packages/adapter-claude-code/src/bin/cello-mcp.ts
+    must subscribe to the daemon's event bus (via the IPC connection) and
+    dispatch notifications to the connected LLM via stdio. The daemon side
+    (packages/daemon/src/server.ts) instantiates the NotificationDispatcher
+    and wires it to the EventBus during startup.
+  - >
+    The session.node.created and session.node.destroyed events originate in
+    CELLO-M7-DAEMON-002's SessionNodeManager. MCP-002 subscribes to these
+    events and translates them to session_state_changed MCP notifications with
+    the appropriate routing.
+  - >
+    counterpartyPubkey in session_state_changed: may be null/undefined at
+    session creation time if the counterparty identity is not yet confirmed
+    (e.g. inbound session offer before acceptance). The notification includes
+    the field with whatever value is available; the LLM should treat null as
+    "counterparty not yet identified."
+
+# ─── Dependencies ──────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-MCP-001    # MCP adapter rewrite, per-connection state, four new tools
+    - CELLO-M7-DAEMON-002 # session node lifecycle events (session.node.created/destroyed)
+    - CELLO-M7-DAEMON-003 # retry queue events (confirms message.retry.evicted is daemon-internal)
+  blocks: []
+  related:
+    - CELLO-M7-DAEMON-001 # daemon foundation, EventBus, IPC connections
+    - CELLO-M7-E2E-001    # integration gate — close gate item 9 requires correct state at every step
+
+# ─── References ────────────────────────────────────────────
+references:
+  protocol_map: "MCP Adapter"
+  discussion_logs:
+    - "2026-06-11_1030_daemon-transport-architecture"
+  outline_sections:
+    - "Three Agent States"
+    - "Observability Events — Agent state"
+    - "Observability Events — Session nodes"
+    - "M7 Error Discipline"
