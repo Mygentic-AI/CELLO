@@ -1,0 +1,737 @@
+---
+name: CELLO-M7-SESSION-001
+type: user-story
+date: 2026-06-12
+topics: [session, interrupted-session, relay-frame, seal-interrupted, daemon, sqlite, login-surfacing, m7]
+status: draft
+description: >
+  Introduces the relay-originated session_interrupted control frame, client-side
+  interrupted session detection (relay frame or stream close), SQLite interrupted
+  status, login surfacing of interrupted sessions, graceful daemon shutdown marking
+  active sessions interrupted, and the bilateral seal-interrupted protocol flow where
+  both sides sign SEAL control leaves then run the normal FROST seal ceremony.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-SESSION-001
+domain: Session
+milestone: M7
+actor: OPS
+priority: P0
+components:
+  - relay
+  - daemon
+  - client
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the daemon and relay,
+  I want to detect when a session is interrupted mid-conversation (either by an
+  explicit relay session_interrupted frame or by stream close), mark it in SQLite,
+  surface it to the operator on next login, and later support a bilateral
+  seal-interrupted flow that lets both sides commit to whatever Merkle state existed
+  at interruption before running the normal FROST seal ceremony —
+  so that no conversation history is silently lost when a daemon stops unexpectedly,
+  and operators can choose to permanently seal or discard interrupted sessions at
+  next contact.
+
+# ─── Context ────────────────────────────────────────────────
+# DAEMON-002 introduced session node lifecycle and marks sessions interrupted on
+# graceful daemon shutdown (SIGTERM) and SIGKILL recovery at login. SESSION-001
+# extends that foundation in two directions:
+#
+#   1. relay-initiated interruption: when the OTHER participant disconnects
+#      mid-session, the relay pushes a session_interrupted control frame to the
+#      REMAINING client. DAEMON-002 handles the local-shutdown path; SESSION-001
+#      handles the remote-disconnect path.
+#
+#   2. bilateral seal-interrupted flow: both parties must agree to close an
+#      interrupted session. Each signs a SEAL-INTERRUPTED control leaf committing
+#      to the Merkle state at interruption, then the normal FROST seal ceremony
+#      runs. This is NOT a new ceremony type — it prepends one extra control leaf
+#      to the existing FROST seal path.
+#
+# Design authority: outline.md §Resolved Design Questions Q4 is canonical.
+# session_interrupted is a relay-originated control frame — it is NOT a seal.
+# No Merkle root is committed at receipt. No FROST ceremony runs at receipt.
+# The remaining client marks the session interrupted and waits for operator action.
+#
+# Scope boundary with DAEMON-002:
+#   DAEMON-002 owns: graceful shutdown → mark interrupted; login scan of 'active'
+#     rows from a killed daemon → mark interrupted (source: 'daemon_restart').
+#   SESSION-001 owns: relay frame → mark interrupted (source: 'relay_frame');
+#     stream close detection → mark interrupted (source: 'stream_close');
+#     login surfacing with detail (sessionId, counterpartyPubkey, messageCount,
+#     interrupted_sessions field in cello status); seal-interrupted bilateral flow.
+#
+# Shared interface completeness (session_interrupted frame):
+#   Producer:
+#     - packages/relay (trustless-cello): emits session_interrupted when a
+#       participant's connection drops; carries sessionId and reason
+#       (peer_disconnected | timeout).
+#   Consumers:
+#     - packages/daemon (cello-client): receives session_interrupted frame on the
+#       relay stream; marks session interrupted in SQLite; tears down session node;
+#       emits session.interrupted.detected.
+#     - packages/client (cello-client): handles seal-interrupted initiation and
+#       receipt; coordinates SEAL-INTERRUPTED control leaf exchange; then drives
+#       the normal FROST seal ceremony.
+#   Each producer and consumer has its own AC below.
+#
+# Sovereign node constraint: directory nodes are independent. This story does not
+# add new directory involvement — interrupted session marking and seal-interrupted
+# coordination are client-side and relay-side concerns. The existing FROST seal
+# path (which does involve the directory) is reused unchanged.
+#
+# Cross-repo constraint: this story modifies packages/relay (trustless-cello) and
+# packages/daemon + packages/client (cello-client). The relay changes and the
+# cello-client changes must be batched with M7-WIRE-001 and M7-MANIFEST-002 into
+# a single pipeline push — never pushed alone. Check COORDINATION.md batching
+# section before any pipeline trigger.
+
+# ─── Sovereign Node Constraint ──────────────────────────────
+# Directory nodes are independent and sovereign. This story does not add
+# directory-side logic for interrupted sessions — the interrupted session state
+# is a local client concern managed in SQLite. The FROST seal ceremony reused
+# by the seal-interrupted flow involves the directory, but that is the existing
+# seal path unchanged. No new directory coupling is introduced.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a participant's connection drops mid-session (stream close detected by the relay)"
+    action: >
+      The relay pushes a session_interrupted control frame to the remaining
+      connected participant. The frame carries: sessionId (hex string), reason
+      ('peer_disconnected' | 'timeout'). The frame is relay-originated — it is
+      NOT a client-initiated seal and does NOT commit any Merkle root. The relay
+      emits it exactly once per dropout event and does not retry. If the remaining
+      participant is also unreachable, the relay discards the frame silently (best
+      effort delivery).
+
+  - trigger: "When the daemon receives a session_interrupted frame on a relay stream"
+    action: >
+      The daemon identifies the corresponding session by sessionId. It marks the
+      session's SQLite row status as 'interrupted' (updating updated_at). It tears
+      down the session node (equivalent to SessionNodeManager.destroySessionNode()
+      with reason 'interrupted'). It emits session.interrupted.detected at WARN
+      with sessionId, agentName, and source: 'relay_frame'. It does NOT
+      automatically initiate a seal ceremony. The session is available for
+      seal-interrupted or discard at next operator contact.
+
+  - trigger: "When the daemon detects a relay stream close for an active session
+      without receiving a session_interrupted frame first"
+    action: >
+      The daemon marks the session's SQLite row status as 'interrupted'. It tears
+      down the session node with reason 'interrupted'. It emits
+      session.interrupted.detected at WARN with source: 'stream_close'. This covers
+      the case where the relay itself crashes before it can deliver the frame.
+
+  - trigger: "When cello login starts and finds sessions with status 'interrupted' in SQLite
+      (both the DAEMON-002 'daemon_restart' path and the SESSION-001 detection paths)"
+    action: >
+      The daemon includes interrupted sessions in the cello status response under
+      the key 'interrupted_sessions'. Each entry carries: sessionId, agentName,
+      counterpartyPubkey, messageCount (number of leaves in the Merkle tree at
+      interruption), and interruptedAt (ISO timestamp). The operator sees this
+      before any other operations. The daemon does NOT auto-seal or auto-discard —
+      it waits for explicit operator action via cello_close_session or
+      'cello seal <session-id>'.
+
+  - trigger: "When the daemon stops gracefully (SIGTERM or cello logout) with active sessions"
+    action: >
+      This path is owned by DAEMON-002 (which marks sessions interrupted before
+      shutdown). SESSION-001 extends it: in addition to DAEMON-002's status update,
+      the daemon ensures the interrupted_sessions field is populated correctly on
+      next login by verifying that messageCount and counterpartyPubkey are persisted
+      alongside the 'interrupted' status. If DAEMON-002's schema already captures
+      these fields, no schema change is needed — SESSION-001 verifies the data is
+      present and surfaces it.
+
+  - trigger: "When the operator initiates seal on an interrupted session via
+      cello_close_session or 'cello seal <session-id>'"
+    action: >
+      The daemon begins the seal-interrupted bilateral flow. It sends a
+      SEAL-INTERRUPTED control frame to the counterparty's agent (via the directory
+      signaling path, since the session node is torn down). The frame carries:
+      sessionId, the local agent's Merkle leaf count at interruption, and a nonce.
+      The counterparty's daemon receives the request and prompts its operator.
+      Both sides independently sign a SEAL-INTERRUPTED control leaf committing to
+      their respective Merkle state at interruption (the leaf carries:
+      sessionId, leafCount, merkleRootAtInterruption, timestamp, and the signing
+      agent's K_local pubkey). Once both SEAL-INTERRUPTED leaves are exchanged and
+      verified, the initiating side drives the normal FROST seal ceremony using
+      context 'cello-frost-seal-v1' with the interrupted Merkle root as the sealed
+      root. The normal session_sealed notification flow runs unchanged.
+
+  - trigger: "When seal-interrupted is attempted on a session whose status is already
+      'interrupted' and a prior seal-interrupted attempt is in progress or completed"
+    action: >
+      The daemon returns { ok: false, reason: 'session_already_interrupted',
+      guidance: 'This session is already in interrupted state. If a seal-interrupted
+      attempt is in progress, wait for session.interrupted.sealed. If it already
+      completed, the session is sealed — check cello_list_sessions for its sealed
+      record.' }
+
+  - trigger: "When the initiating side cannot reach the counterparty to deliver
+      the SEAL-INTERRUPTED control frame (directory signaling returns unreachable)"
+    action: >
+      The daemon returns { ok: false, reason: 'seal_interrupted_counterparty_unavailable',
+      guidance: 'The counterparty is not currently reachable to complete the
+      seal-interrupted flow. Retry when the counterparty is online — check their
+      connection status via cello_list_connections.' }
+
+  - trigger: "When the counterparty receives the SEAL-INTERRUPTED request but rejects it
+      (their local session state is inconsistent or they explicitly decline)"
+    action: >
+      The daemon returns { ok: false, reason: 'seal_interrupted_rejected_by_counterparty',
+      guidance: 'The counterparty rejected the seal-interrupted request. This may
+      indicate their session state is inconsistent. Ask the counterparty to check
+      their interrupted sessions via cello status on their end.' }
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+
+  # ── Relay: new session_interrupted frame ─────────────────
+
+  - id: AC-001
+    given: "An active relay-mediated session between participant A and participant B,
+      where B's relay stream drops (simulated by closing B's TCP connection to the relay)"
+    when: "the relay detects B's stream close"
+    then: >
+      The relay sends a session_interrupted frame to A's stream. The frame has:
+      sessionId matching the active session (non-empty hex string), and reason:
+      'peer_disconnected'. The frame is relay-originated — no Merkle root field,
+      no FROST signature field. A does NOT receive a session_sealed frame or any
+      frame that resembles a seal ceremony initiation. Verified by an integration
+      test that: (a) establishes a relay session between two in-process libp2p
+      nodes; (b) closes B's stream to the relay; (c) asserts A's stream receives
+      a frame with type: 'session_interrupted', sessionId, and reason:
+      'peer_disconnected'; (d) asserts no session_sealed or seal-related frame
+      arrives on A's stream. The relay stream must be a real libp2p stream — no
+      in-process stub that bypasses the relay protocol handler.
+    test_type: integration
+    component_under_test: relay
+    notes: >
+      This is the L7-guard AC: the session_interrupted frame must travel over a
+      real relay stream (not injected in-process) to prevent the pattern where
+      a test passes by calling an internal method directly. The in-process
+      libp2p nodes satisfy this — what is prohibited is calling relay.emitFrame()
+      directly without going through a real stream.
+
+  - id: AC-002
+    given: "An active relay-mediated session where A's stream has been idle beyond
+      the relay's session timeout threshold (simulated by advancing the relay's
+      internal clock or injecting a timeout)"
+    when: "the relay detects a session timeout"
+    then: >
+      The relay sends a session_interrupted frame to the remaining connected
+      participant with reason: 'timeout'. The remaining participant's stream
+      receives the frame with the correct sessionId. Verified by the same pattern
+      as AC-001 with reason: 'timeout' asserted.
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-003
+    given: "packages/relay/src/ — all existing and new catch blocks"
+    when: "the implementer adds the session_interrupted frame emission code"
+    then: >
+      The implementer scans every catch block in packages/relay/src/ and either
+      fixes or reports any that return a hardcoded reason string without logging
+      error.message, or that interpolate an error object into a template string
+      (e.g. `${error}`). Every catch block extracts error.message explicitly
+      (error instanceof Error ? error.message : String(error)) before logging.
+      No catch block swallows an exception silently. This is the lateral catch
+      audit for packages/relay.
+    test_type: unit
+    component_under_test: relay
+
+  # ── Daemon: session_interrupted frame receipt ────────────
+
+  - id: AC-004
+    given: "A daemon with an active session, where the relay stream delivers a
+      session_interrupted frame (sessionId matches the active session, reason:
+      'peer_disconnected')"
+    when: "the daemon's relay stream handler processes the frame"
+    then: >
+      The daemon marks the session's SQLite row status as 'interrupted' and
+      updates updated_at. SessionNodeManager.destroySessionNode() is called with
+      reason: 'interrupted'. session.interrupted.detected is logged at WARN with
+      sessionId (matching the frame's sessionId), agentName (the agent whose
+      session was interrupted), and source: 'relay_frame'. The daemon does NOT
+      initiate a FROST seal ceremony or a seal-interrupted flow automatically.
+      No further relay stream messages are processed for this sessionId. Verified
+      by an integration test that delivers a real session_interrupted frame over
+      a relay stream (not injected via internal method call) and asserts: (a)
+      the SQLite row status equals 'interrupted'; (b) session.interrupted.detected
+      fires with source: 'relay_frame'; (c) session.node.destroyed fires with
+      reason: 'interrupted'; (d) no seal-related events fire.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      The frame must arrive via a real relay stream per L7 anti-pattern guard.
+      Use the same integration fixture as relay AC-001: real libp2p nodes with
+      a real relay process between them.
+
+  - id: AC-005
+    given: "A daemon with an active session, where the relay stream closes without
+      delivering a session_interrupted frame (relay crash scenario)"
+    when: "the daemon's relay stream close event fires for an active session"
+    then: >
+      The daemon marks the session's SQLite row status as 'interrupted'.
+      session.interrupted.detected is logged at WARN with source: 'stream_close'.
+      session.node.destroyed fires with reason: 'interrupted'. The daemon does not
+      crash or leave the session node in a partially-torn-down state. Verified by
+      an integration test that: (a) establishes a session with a real relay
+      stream; (b) forcibly closes the stream (without sending session_interrupted);
+      (c) asserts the SQLite row transitions to 'interrupted' and the log event
+      fires with source: 'stream_close'.
+    test_type: integration
+    component_under_test: daemon
+
+  # ── Login surfacing ──────────────────────────────────────
+
+  - id: AC-006
+    given: "A daemon whose SQLite DB contains two sessions with status: 'interrupted'
+      (one from a prior SIGKILL — source: 'daemon_restart', set by DAEMON-002;
+      one from a relay_frame — source: 'relay_frame', set by SESSION-001)"
+    when: "cello login runs and then cello status is called"
+    then: >
+      The cello status response includes interrupted_sessions: an array of two
+      entries. Each entry contains: sessionId (hex string, non-empty),
+      agentName (string), counterpartyPubkey (hex string), messageCount (integer
+      ≥ 0), and interruptedAt (ISO 8601 timestamp string). The interrupted_sessions
+      field appears in the response before any other session-related fields.
+      session.interrupted.detected is logged at WARN for each session during
+      login — even for the 'daemon_restart' session that DAEMON-002 already
+      detected (the login scan re-emits the event so the operator can see it in
+      the current session's log). Verified by: (a) writing two interrupted session
+      rows to SQLite with the required fields; (b) starting a fresh daemon binary;
+      (c) calling cello status; (d) asserting both entries appear with all five
+      fields populated (none undefined, none null); (e) asserting
+      session.interrupted.detected fires twice.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      The messageCount field requires that the message count at interruption was
+      persisted alongside the 'interrupted' status. If DAEMON-002's schema already
+      includes this column, this AC verifies it is populated correctly. If not, this
+      AC triggers the schema extension. Either way, the AC gates on the field being
+      present and non-null in the response.
+
+  - id: AC-007
+    given: "The daemon's cello status response shape (defined by DAEMON-001 and
+      extended by DAEMON-002 with standing_receiver_ready)"
+    when: "SESSION-001 extends the shape with interrupted_sessions"
+    then: >
+      The full updated shape is:
+        {
+          daemon: 'running',
+          directory_signaling: 'connected' | 'reconnecting' | 'lost',
+          agents: [...],
+          connections: [...],
+          standing_receiver_ready: boolean,      // DAEMON-002
+          interrupted_sessions: [               // SESSION-001
+            {
+              sessionId: string,
+              agentName: string,
+              counterpartyPubkey: string,
+              messageCount: number,
+              interruptedAt: string
+            }
+          ]
+        }
+      interrupted_sessions is always present (empty array if no interrupted
+      sessions). It is never undefined or omitted. Verified by a unit test
+      asserting the status response always includes the field.
+    test_type: unit
+    component_under_test: daemon
+
+  # ── Seal-interrupted bilateral flow ─────────────────────
+
+  - id: AC-008
+    given: "An interrupted session where both agents are online and mutually reachable
+      via the directory signaling path (the session node is torn down — only
+      directory signaling is available)"
+    when: "the operator calls cello_close_session with the interrupted sessionId"
+    then: >
+      The daemon sends a SEAL-INTERRUPTED control frame to the counterparty via the
+      directory signaling path (not the session node — it is gone). The frame
+      carries sessionId, the initiator's leafCount at interruption (from SQLite),
+      and a nonce. The counterparty's daemon receives the frame and returns an
+      acknowledgement that includes the counterparty's SEAL-INTERRUPTED control
+      leaf (signed by their K_local, containing: sessionId, leafCount,
+      merkleRootAtInterruption, timestamp, signerPubkey). Once the initiator
+      receives the counterparty's signed leaf and verifies the signature, both
+      sides' SEAL-INTERRUPTED leaves are exchanged. The initiator then runs the
+      normal FROST seal ceremony via the directory using context
+      'cello-frost-seal-v1' with the merkleRootAtInterruption as the sealed root.
+      session.interrupted.sealed is logged at INFO with sessionId, agentName,
+      and leafCount on both sides when the FROST seal notarization is received.
+      The session row in SQLite transitions from 'interrupted' to 'sealed'.
+      Verified by an integration test that: (a) writes an interrupted session to
+      SQLite for both parties; (b) calls cello_close_session on the initiator;
+      (c) asserts the counterparty receives a SEAL-INTERRUPTED frame over the
+      directory signaling stream (not injected in-process); (d) asserts both sides
+      log session.interrupted.sealed; (e) asserts both SQLite rows show status:
+      'sealed'. The directory signaling path must be a real libp2p stream.
+    test_type: integration
+    component_under_test: client
+    notes: >
+      The SEAL-INTERRUPTED leaf is prepended to the normal FROST seal path — it is
+      NOT a new ceremony. The context string 'cello-frost-seal-v1' is the same as
+      the normal seal (defined in CONTEXT.md FROST TBS arrays). The domain
+      separation that distinguishes seal-interrupted from seal is the presence of
+      the SEAL-INTERRUPTED control leaf in the Merkle tree, not a different context
+      string. The directory verifies the Merkle tree (which now includes the
+      SEAL-INTERRUPTED leaf) at the same seal verification step — no directory-side
+      changes are needed.
+
+  - id: AC-009
+    given: "A session with status 'interrupted' where seal-interrupted has already
+      completed (status: 'sealed') OR where a seal-interrupted initiation is
+      currently in progress"
+    when: "cello_close_session is called again for the same sessionId"
+    then: >
+      The daemon returns { ok: false, reason: 'session_already_interrupted',
+      guidance: 'This session is already in interrupted state. If a seal-interrupted
+      attempt is in progress, wait for session.interrupted.sealed. If it already
+      completed, the session is sealed — check cello_list_sessions for its sealed
+      record.' }
+      No new SEAL-INTERRUPTED frame is sent. No new FROST ceremony is initiated.
+      The existing session state is unaffected.
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-010
+    given: "An interrupted session where the counterparty is not reachable via the
+      directory signaling path (directory returns a delivery failure for the
+      SEAL-INTERRUPTED frame)"
+    when: "cello_close_session is called"
+    then: >
+      The daemon returns { ok: false, reason: 'seal_interrupted_counterparty_unavailable',
+      guidance: 'The counterparty is not currently reachable to complete the
+      seal-interrupted flow. Retry when the counterparty is online — check their
+      connection status via cello_list_connections.' }
+      The session status remains 'interrupted' (not changed to an error state).
+      The operator can retry later.
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-011
+    given: "An interrupted session where the counterparty is reachable but explicitly
+      rejects the SEAL-INTERRUPTED request (their daemon returns a rejection frame)"
+    when: "cello_close_session is called and the counterparty's rejection arrives"
+    then: >
+      The daemon returns { ok: false, reason: 'seal_interrupted_rejected_by_counterparty',
+      guidance: 'The counterparty rejected the seal-interrupted request. This may
+      indicate their session state is inconsistent. Ask the counterparty to check
+      their interrupted sessions via cello status on their end.' }
+      The session status remains 'interrupted'. The operator can retry after
+      coordinating with the counterparty.
+    test_type: unit
+    component_under_test: client
+
+  # ── Error distinctness + lateral catch audit ─────────────
+
+  - id: AC-012
+    given: "All error paths introduced by this story across packages/relay,
+      packages/daemon, and packages/client"
+    when: "each distinct failure cause is triggered independently"
+    then: >
+      Each produces a unique error code distinguishable from all others:
+      'session_already_interrupted', 'seal_interrupted_counterparty_unavailable',
+      'seal_interrupted_rejected_by_counterparty' are each distinct and do not
+      collide with any existing error codes in these packages. No catch block in
+      packages/relay/src/, packages/daemon/src/, or packages/client/src/ returns
+      a hardcoded reason string without logging error.message. No catch block
+      interpolates an error object directly into a template string
+      (error instanceof Error ? error.message : String(error) is the required
+      pattern). The implementer scans ALL catch blocks in ALL files in each of
+      the three affected packages — not only the files changed by this story —
+      and fixes or reports any that swallow exceptions silently or produce
+      '[object Object]'. This is the lateral catch audit for packages/relay,
+      packages/daemon, and packages/client.
+    test_type: unit
+    component_under_test: relay
+
+  # ── MCP tool guidance ────────────────────────────────────
+
+  - id: AC-013
+    given: "Every failure response path in MCP tools introduced or modified by this story
+      (specifically: cello_close_session when called on an interrupted session)"
+    when: "each failure path is triggered"
+    then: >
+      The response includes both a machine-readable 'reason' field and a
+      'guidance' field. The guidance field is a plain-English instruction for
+      the LLM that names the specific next action to take. Verified for each
+      of the three error codes: session_already_interrupted, seal_interrupted_counterparty_unavailable,
+      seal_interrupted_rejected_by_counterparty. A response with reason alone
+      and no guidance field does not satisfy this AC.
+    test_type: unit
+    component_under_test: daemon
+
+  # ── Composition root wiring ──────────────────────────────
+
+  - id: AC-014
+    given: "packages/daemon/src/server.ts (the composition root)"
+    when: "the daemon binary starts"
+    then: >
+      The composition root wires the relay stream handler for session_interrupted
+      frames into the daemon's relay stream event pipeline. The session_interrupted
+      handler is not a dead code path — it is reachable from the daemon's relay
+      stream reader and produces observable behavior (SQLite update + log event)
+      when a real session_interrupted frame arrives. Verified by an integration
+      test that starts the daemon binary, delivers a session_interrupted frame
+      over a real relay stream (not an internal method call), and asserts the
+      SQLite row transitions to 'interrupted'. A unit test that directly invokes
+      the handler without going through the composition root does NOT satisfy
+      this AC.
+    test_type: integration
+    component_under_test: daemon
+
+  # ── Cross-repo version bump ──────────────────────────────
+
+  - id: AC-015
+    given: "All cello-client code changes for this story are implemented and tests pass"
+    when: "the implementer runs the version bump procedure in cello-client CLAUDE.md"
+    then: >
+      - packages/client has its version incremented in package.json
+      - packages/daemon has its version incremented in package.json
+      - Every package that depends on a modified package has its dependency version updated
+      - @cello-protocol/connect is bumped to reflect the net change
+      - pnpm install is run and pnpm-lock.yaml is updated
+      - git tag v{connect-version} is pushed to origin
+      - CI publishes the new version to npm beta dist-tag
+      - `npm view @cello-protocol/connect@beta dependencies --json` shows real semver
+        versions (never workspace:*)
+    test_type: integration
+    component_under_test: cello-client CI
+    notes: >
+      Hard gate. The implementer must also check COORDINATION.md batching section
+      before pushing any tag — the relay changes in packages/relay (trustless-cello)
+      and the cello-client changes must be batched with M7-WIRE-001 and
+      M7-MANIFEST-002 into a single pipeline push. Never push this story's relay
+      changes alone.
+
+  - id: AC-016
+    given: "The new @cello-protocol/connect version is live on npm beta"
+    when: "packages/relay/package.json in trustless-cello is updated"
+    then: >
+      - packages/relay/package.json references the new semver ranges for
+        @cello-protocol/client and any other modified cello-client packages
+      - No workspace:* references to @cello-protocol/crypto, transport,
+        protocol-types, or client remain in packages/relay/package.json or
+        packages/directory/package.json
+      - pnpm install is run and pnpm-lock.yaml is updated in trustless-cello
+      - pnpm run typecheck passes in trustless-cello
+      - Commit pushed to trustless-cello main — only after confirming with
+        COORDINATION.md that M7-WIRE-001 and M7-MANIFEST-002 are also ready
+        to batch (never push relay-only changes alone — pipeline is 25-30 min)
+    test_type: integration
+    component_under_test: directory
+    notes: >
+      workspace:* resolves to stale local copies post-REPOSPLIT-002. This AC
+      ensures relay runs against the published version with the new
+      session_interrupted frame handling.
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The remaining participant must never automatically initiate a seal ceremony
+      upon receipt of a session_interrupted frame. The decision to seal or discard
+      must be explicit and operator-driven.
+    adversarial_condition: >
+      A malicious relay injects a forged session_interrupted frame for an active
+      session between A and B. B's daemon receives the frame. B must NOT trigger
+      a FROST seal ceremony automatically — this would allow the relay to terminate
+      sessions and consume FROST ceremony resources without operator consent. Verified
+      by: (a) injecting a session_interrupted frame over a real relay stream for an
+      active session; (b) asserting no session_sealed or seal-related events fire on
+      B's daemon; (c) asserting B's session status transitions to 'interrupted' only;
+      (d) asserting B's operator must call cello_close_session explicitly to initiate
+      seal-interrupted. A daemon that auto-seals on frame receipt fails this invariant.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: SI-002
+    statement: >
+      The seal-interrupted flow must verify both sides' SEAL-INTERRUPTED leaf
+      signatures before proceeding to the FROST ceremony. A forged or unsigned
+      SEAL-INTERRUPTED leaf from the counterparty must cause the flow to abort.
+    adversarial_condition: >
+      An attacker intercepts the SEAL-INTERRUPTED leaf exchange and substitutes a
+      leaf with a modified merkleRootAtInterruption (pointing to a different Merkle
+      tree state). The initiating daemon must verify the counterparty's K_local
+      signature on the SEAL-INTERRUPTED leaf before accepting it. If the signature
+      does not verify, the flow must abort with a distinct error and the session
+      must remain 'interrupted' (not transition to 'sealed'). Verified by: (a)
+      constructing a SEAL-INTERRUPTED leaf with a tampered merkleRootAtInterruption;
+      (b) having the initiator process it; (c) asserting the signature verification
+      fails and the FROST ceremony does not run; (d) asserting the session status
+      remains 'interrupted'.
+    test_type: unit
+    component_under_test: client
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the directory signaling stream is in 'reconnecting' state when
+      the operator calls cello_close_session on an interrupted session"
+    fallback: >
+      The seal-interrupted flow returns { ok: false, reason: 'signaling_reconnecting',
+      guidance: 'The directory signaling stream is reconnecting. Wait for
+      directory_signaling to show connected in cello status before initiating
+      seal-interrupted. The daemon reconnects automatically — no manual intervention
+      required.' } The session status remains 'interrupted'. The operator retries
+      after the signaling stream is restored.
+    test_type: unit
+    component_under_test: client
+    notes: >
+      Addresses M7 lesson L5 (send-path dead channel). The seal-interrupted
+      flow must check directory_signaling status before attempting to send the
+      SEAL-INTERRUPTED frame. A send over a dead channel must fail with a distinct
+      error, not hang or crash.
+
+  - id: DB-002
+    condition: "While the relay is unreachable when the relay would emit a
+      session_interrupted frame (relay crash scenario)"
+    fallback: >
+      The daemon detects the relay stream close (AC-005 path). The session is
+      marked 'interrupted' with source: 'stream_close'. The behavior is identical
+      to receiving a session_interrupted frame — the source field distinguishes
+      which detection path fired. The operator sees the interrupted session on
+      next login via interrupted_sessions in cello status.
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: session.interrupted.detected
+      level: warn
+      trigger: "When the daemon receives a session_interrupted relay frame
+        (source: 'relay_frame'), detects a relay stream close for an active session
+        (source: 'stream_close'), or scans interrupted rows at login
+        (source: 'daemon_restart' — emitted by DAEMON-002 for graceful/SIGKILL;
+        SESSION-001 re-emits for relay-side detections). SESSION-001 owns the
+        relay_frame and stream_close sources. DAEMON-002 owns daemon_restart."
+      context_fields: [sessionId, agentName, source]
+      correlationId: false
+      notes: >
+        source must be exactly one of: 'relay_frame', 'stream_close',
+        'daemon_restart'. No other values are permitted.
+    - name: session.interrupted.sealed
+      level: info
+      trigger: "When the seal-interrupted bilateral flow completes and the FROST
+        seal notarization is received, transitioning the interrupted session to sealed"
+      context_fields: [sessionId, agentName, leafCount]
+      correlationId: true
+      notes: >
+        correlationId is minted at cello_close_session invocation and threaded
+        through all seal-interrupted events for that flow (SEAL-INTERRUPTED frame
+        send, leaf verification, FROST ceremony events, session.interrupted.sealed).
+  error_events:
+    - name: session.interrupted.seal.failed
+      level: error
+      trigger: "When the seal-interrupted flow fails at any step: counterparty
+        unreachable, counterparty rejection, leaf signature verification failure,
+        or FROST ceremony failure"
+      context_fields: [sessionId, agentName, reason, error]
+      correlationId: true
+  notes: >
+    These events extend the session.interrupted.* taxonomy introduced in DAEMON-002.
+    The implementer must add session.interrupted.detected (relay_frame and
+    stream_close sources), session.interrupted.sealed, and
+    session.interrupted.seal.failed to the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+    No console.log in implementation code — all events go through the injected
+    Logger interface.
+  alarms:
+    - condition: "session.interrupted.detected fires more than 10 times in 5 minutes
+        across all agents on a single daemon"
+      fires_to: "daemon-health CloudWatch alarm — sustained interruption rate
+        indicates relay instability or network degradation"
+    - condition: "session.interrupted.seal.failed fires with reason:
+        'seal_interrupted_counterparty_unavailable' more than 5 times in 1 hour
+        for the same sessionId"
+      fires_to: "operator notification — the counterparty has been unreachable
+        for an extended period; the operator should decide whether to discard
+        the session"
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    session_interrupted frame type: add to packages/relay/src/ as a new control
+    frame type alongside the existing seal-related frames. Wire the emit into the
+    relay's participant disconnect handler. The frame schema:
+    { type: 'session_interrupted', sessionId: string, reason: 'peer_disconnected' | 'timeout' }
+    No signature, no Merkle root — this is a relay notification, not a
+    cryptographic commitment.
+  - >
+    SEAL-INTERRUPTED control leaf: a new Merkle control leaf type (distinct from
+    the existing SEAL leaf). Structure: { type: 'SEAL_INTERRUPTED', sessionId: string,
+    leafCount: number, merkleRootAtInterruption: string, timestamp: number,
+    signerPubkey: string }. Both sides produce one before the FROST ceremony.
+    The FROST ceremony uses the normal 'cello-frost-seal-v1' context string with
+    the merkleRootAtInterruption (which already includes the SEAL-INTERRUPTED
+    leaf at the tip of the chain) as the sealed root.
+  - >
+    Directory signaling path for SEAL-INTERRUPTED delivery: the session node is
+    torn down, so SEAL-INTERRUPTED coordination must route through the existing
+    signaling stream (the same channel used for connection negotiation and session
+    offers). The exact frame type for this coordination must be added to the
+    directory signaling protocol spec. This does not require a new directory
+    endpoint — it uses the existing bidirectional signaling stream.
+  - >
+    SQLite schema extension (if not already in DAEMON-002): the sessions table
+    needs counterpartyPubkey, messageCount, and interruptedAt columns to support
+    the login surfacing AC-006. If DAEMON-002's schema already captures them,
+    SESSION-001 verifies they are populated. If not, SESSION-001 adds them via an
+    inline ALTER TABLE (client-side SQLite uses inline migrations, not Flyway).
+  - >
+    DAEMON-002 scope: DAEMON-002 marks sessions interrupted on graceful shutdown
+    (SIGTERM) and at login for rows left 'active' by a prior SIGKILL. SESSION-001
+    does NOT change DAEMON-002's behavior — it adds the relay-side detection paths
+    (relay_frame, stream_close). The two stories' interrupted-session code coexists
+    in the daemon without conflict.
+  - >
+    Cross-repo batching: SESSION-001 touches packages/relay (trustless-cello) and
+    packages/daemon + packages/client (cello-client). The relay changes must be
+    batched with M7-WIRE-001 and M7-MANIFEST-002 before any pipeline push.
+    Never push relay changes alone — the directory/relay pipeline is 25-30 minutes.
+    Check COORDINATION.md batching section and confirm all three stories are ready
+    before triggering the push.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-DAEMON-002  # session node lifecycle (create/destroy), interrupted DB marking, graceful shutdown path
+    - CELLO-M7-WIRE-001    # SessionAssignment wire format (session Peer IDs); SESSION-001's seal-interrupted flow routes via directory signaling, which is the same channel WIRE-001 extends
+  blocks:
+    - CELLO-M7-E2E-001     # AC-007 (daemon stop → session interrupted → surfaced at next login)
+  notes: >
+    SESSION-001 and WIRE-001 both touch packages/relay and packages/client.
+    Coordinate with the WIRE-001 implementer to avoid concurrent edits to the
+    same files. Both must be ready to batch before any pipeline push — check
+    COORDINATION.md. MANIFEST-002 is also in the batch. Push all three together.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Session Lifecycle, Multi-Party Conversations"
+  end_to_end_flow: "§5.7 Session Establishment, §6.1 Hash Relay Mechanics"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-11_1030_daemon-transport-architecture"
+    - "2026-06-11_0822_transport-security-audit-and-libp2p-primitives"
+  related_docs:
+    - "[[daemon-transport-architecture]]"
+    - "[[CELLO-M7-E2E-001]]"
+    - "[[CELLO-M7-DAEMON-002]]"
+    - "[[CELLO-M7-WIRE-001]]"
+  notes: >
+    Q4 authority: outline.md §Resolved Design Questions Q4 — session_interrupted
+    is relay-originated, not a client seal; no auto-seal on receipt; operator
+    action required. This is the canonical design decision for this story.
+    Seal ceremony context string: CONTEXT.md §FROST TBS arrays — 'cello-frost-seal-v1'.
+    Observability event taxonomy: outline.md §Observability Events (interrupted sessions).

@@ -45,7 +45,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-DAEMON-002 — Ephemeral session nodes | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 for implementation |
 | M7-WIRE-001 — SessionAssignment wire format | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-002; cross-repo; batch with M7-SESSION-001 + M7-MANIFEST-002 |
 | M7-TRANSPORT-001 — AutoNAT + direct P2P | — | not started | Blocked on M7-WIRE-001 |
-| M7-SESSION-001 — Interrupted session handling | — | not started | Blocked on M7-DAEMON-002 + M7-WIRE-001 |
+| M7-SESSION-001 — Interrupted session handling | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-002 + M7-WIRE-001 for implementation; cross-repo; batch with M7-WIRE-001 + M7-MANIFEST-002 |
 | M7-SIGNAL-001 — Signaling stream resilience | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 for implementation |
 | M7-DIR-PING-001 — Directory-side ping/pong handler | — | not started | Blocked on M7-SIGNAL-001 (frame type defined there); touches packages/directory (trustless-cello); required for heartbeat to function end-to-end |
 | M7-DAEMON-003 — Nonce dedup + retry queue | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-002 for implementation |
@@ -219,3 +219,24 @@ assignment_tbs_verification_failed — distinct from frost_verification_failed),
 transport_mode authority (never infer from address format), dead signaling channel
 path, composition root AC, e2e fixture extension, version bump, and trustless-cello
 dependency update. 3 SIs and 2 DBs. Story marked written — review pending.
+
+### 2026-06-12 — M7-SESSION-001 written
+
+CELLO-M7-SESSION-001 YAML written. Covers: relay session_interrupted frame
+(new control frame type in packages/relay — relay-originated, no Merkle root,
+no FROST ceremony); client-side detection on relay frame receipt (source:
+'relay_frame') and relay stream close (source: 'stream_close'); SQLite status
+transition to 'interrupted'; login surfacing via interrupted_sessions field
+in cello status (sessionId, agentName, counterpartyPubkey, messageCount,
+interruptedAt); graceful-shutdown extension (verifies DAEMON-002's persisted
+fields are present); bilateral seal-interrupted flow (SEAL-INTERRUPTED control
+leaf exchange, then normal FROST seal with 'cello-frost-seal-v1' context string
+and merkleRootAtInterruption); 3 new error codes (session_already_interrupted,
+seal_interrupted_counterparty_unavailable, seal_interrupted_rejected_by_counterparty);
+Q4 SI (no auto-seal on relay frame receipt); L7-guard AC on relay stream (AC-001
+requires real libp2p stream, not in-process stub); lateral catch audit across
+packages/relay, packages/daemon, packages/client; composition root wiring AC;
+version bump (AC-015) and trustless-cello dependency update (AC-016). Cross-repo:
+packages/relay (trustless-cello) + packages/daemon + packages/client (cello-client).
+Must batch with M7-WIRE-001 + M7-MANIFEST-002 before any pipeline push. Story
+marked written — review pending.
