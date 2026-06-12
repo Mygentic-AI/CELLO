@@ -39,20 +39,20 @@ The log entry stays as history. The rule must not live only in the log.
 
 | Story | Assigned to | Status | Notes |
 |-------|-------------|--------|-------|
-| M7-E2E-001 — Integration gate | — | written — cohesion pass pending | Written 2026-06-11; cohesion pass required after all component stories written |
-| M7-DAEMON-001 — Daemon foundation | — | written — review pending | Written 2026-06-11 |
-| M7-MCP-001 — MCP adapter | — | written — review pending | Written 2026-06-11; blocked on M7-DAEMON-001 for implementation |
-| M7-DAEMON-002 — Ephemeral session nodes | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 for implementation |
-| M7-WIRE-001 — SessionAssignment wire format | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-002; cross-repo; batch with M7-SESSION-001 + M7-MANIFEST-002 |
-| M7-TRANSPORT-001 — AutoNAT + direct P2P | — | written — review pending | Written 2026-06-12; blocked on M7-WIRE-001 for implementation; cross-repo; touches packages/transport + packages/interfaces (cello-client) and packages/directory (trustless-cello) |
-| M7-SESSION-001 — Interrupted session handling | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-002 + M7-WIRE-001 for implementation; cross-repo; batch with M7-WIRE-001 + M7-MANIFEST-002 |
-| M7-SIGNAL-001 — Signaling stream resilience | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 for implementation |
-| M7-DIR-PING-001 — Directory-side ping/pong handler | — | written — review pending | Written 2026-06-12; blocked on M7-SIGNAL-001 (frame type defined there); touches packages/directory (trustless-cello) only; required for heartbeat to function end-to-end |
-| M7-DAEMON-003 — Nonce dedup + retry queue | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-002 for implementation |
-| M7-MCP-002 — Agent-aware notifications | — | written — review pending | Written 2026-06-12; blocked on M7-MCP-001 + M7-DAEMON-002 + M7-DAEMON-003 for implementation |
-| M7-MANIFEST-001 — Manifest schema | — | written — review pending | Written 2026-06-12; independent; no other story blocks it |
-| M7-MANIFEST-002 — Client verification + polling | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 + M7-MANIFEST-001 + M7-SIGNAL-001 for implementation; cross-repo; batch with M7-WIRE-001 + M7-SESSION-001 |
-| M7-CICD-001 — Cross-repo CI/CD | — | written — review pending | Written 2026-06-12; independent; no other story blocks it |
+| M7-E2E-001 — Integration gate | — | written — cohesion pass complete | Cohesion pass done 2026-06-12; implements last after all component stories land |
+| M7-DAEMON-001 — Daemon foundation | — | **implemented — PR ready** | Branch m7/daemon-001 in cello-client; 52 tests; all reviewer findings fixed |
+| M7-DAEMON-002 — Ephemeral session nodes | — | **in progress** | Branch m7/daemon-002 in cello-client; stacked on m7/daemon-001 |
+| M7-MANIFEST-001 — Manifest schema | — | **in progress** | Branch m7/manifest-001 in cello-client; nearly complete as of 2026-06-12 |
+| M7-MANIFEST-002 — Client verification + polling | — | **in progress** | Branch m7/manifest-002 in both repos; stacked on m7/manifest-001 (cello-client) + fresh branch (trustless-cello); blocked until MANIFEST-001 finishes |
+| M7-MCP-001 — MCP adapter | — | written — not yet started | Blocked on M7-DAEMON-001 (done); ready to start |
+| M7-SIGNAL-001 — Signaling stream resilience | — | written — not yet started | Blocked on M7-DAEMON-001 (done); ready to start |
+| M7-DAEMON-003 — Nonce dedup + retry queue | — | written — not yet started | Blocked on M7-DAEMON-002 (in progress) |
+| M7-WIRE-001 — SessionAssignment wire format | — | written — not yet started | Blocked on M7-DAEMON-002; cross-repo; batch with M7-SESSION-001 + M7-MANIFEST-002 |
+| M7-TRANSPORT-001 — AutoNAT + direct P2P | — | written — not yet started | Blocked on M7-WIRE-001; cross-repo |
+| M7-SESSION-001 — Interrupted session handling | — | written — not yet started | Blocked on M7-DAEMON-002 + M7-WIRE-001; cross-repo; batch with M7-WIRE-001 + M7-MANIFEST-002 |
+| M7-DIR-PING-001 — Directory-side ping/pong handler | — | written — not yet started | Blocked on M7-SIGNAL-001; trustless-cello only |
+| M7-MCP-002 — Agent-aware notifications | — | written — not yet started | Blocked on M7-MCP-001 + M7-DAEMON-002 + M7-DAEMON-003 |
+| M7-CICD-001 — Cross-repo CI/CD | — | written — not yet started | Independent; no deps; can start any time |
 
 ### Migration Version Registry
 
@@ -313,6 +313,18 @@ E2E live tests (AC-012/013), lateral catch audit (AC-014), transport_mode author
 prober identity verification, dcutr non-disruption. 2 DBs. Cross-repo: packages/
 transport + packages/interfaces (cello-client) and packages/directory (trustless-cello).
 Story marked written — review pending.
+
+### 2026-06-12 — Claims table synced to implementation reality
+
+DAEMON-001 implemented and reviewed (branch m7/daemon-001, 52 tests, all findings
+fixed). DAEMON-002 in progress (branch m7/daemon-002, stacked on daemon-001).
+MANIFEST-001 in progress (branch m7/manifest-001). MANIFEST-002 kicked off
+(branches in both repos, stacked on manifest-001). MCP-001 and SIGNAL-001 unlocked
+by DAEMON-001 but not yet started. All other stories unchanged.
+
+Rule added to all future kickoff prompts: COORDINATION.md Claims update + log
+entry are a hard gate step in the sprint-coder's completion sequence, same weight
+as lint and typecheck. Agents that skip this step have not completed the story.
 
 ### 2026-06-12 — M7-DIR-PING-001 written
 
