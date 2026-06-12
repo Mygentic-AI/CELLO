@@ -90,10 +90,9 @@ behavior:
       with a new transport key and a new Peer ID — and starts listening. The daemon
       sets standing_receiver_ready: true in the status structure. A connectionGater
       is attached to the directory-facing node (created by DAEMON-001) that allows
-      only Peer IDs provided by DirectoryPeerIdProvider. transport.autonat.result
-      is logged for the standing receiver node once AutoNAT probes complete
-      (AutoNAT itself is TRANSPORT-001's scope; the event is logged here from the
-      stub result).
+      only Peer IDs provided by DirectoryPeerIdProvider. AutoNAT probing is
+      TRANSPORT-001's scope — DAEMON-002 does not log transport.autonat.result;
+      TRANSPORT-001 adds that event when it wires real AutoNAT into createNode.
 
   - trigger: "When session establishment requires a new outbound session node (during cello_initiate_session)"
     action: >
@@ -468,7 +467,7 @@ acceptance_criteria:
     test_type: integration
     component_under_test: e2e-tests
 
-  - id: AC-014b
+  - id: AC-015
     given: "A standing receiver node that has just been assigned to an inbound session
       (cello_await_session called — the node's connectionGater is being updated from
       open to allow only the initiator's Peer ID)"
@@ -492,7 +491,7 @@ acceptance_criteria:
       address is externally observable. The implementation notes already call this
       out explicitly; this AC makes it testable.
 
-  - id: AC-015
+  - id: AC-016
     given: "The directory-facing node is running (created by DAEMON-001) with
       DirectoryPeerIdProvider installed via SessionNodeManager.attachDirectoryGater()"
     when: "a non-directory Peer ID (e.g. a test libp2p node with a fresh keypair
@@ -514,7 +513,7 @@ acceptance_criteria:
       gater is installed and the interface is correct — not that it correctly
       identifies directory Peer IDs (that is MANIFEST-002's AC).
 
-  - id: AC-016
+  - id: AC-017
     given: "All packages/daemon code for this story is implemented and tests pass
       in cello-client"
     when: "the version bump procedure in cello-client CLAUDE.md is followed"
@@ -569,18 +568,21 @@ security_invariants:
   - id: SI-003
     statement: >
       The session node Peer ID and multiaddrs must only be delivered to the
-      designated counterparty via the signed SessionAssignment. They must never
-      appear in any other protocol message, log line, or observable output that
-      a third party could intercept.
+      designated counterparty via the signed SessionAssignment. The session.node.created
+      log event must never include K_local private keys, FROST shares, or transport
+      private keys alongside the session Peer ID.
     adversarial_condition: >
       The session.node.created log event contains sessionPeerId for operational
-      observability. A test asserts that this event does not include the
-      counterparty's K_local pubkey or any secret key material — only the session
-      node's Peer ID (a derived transport identity, not a secret). The implementation
-      must never log K_local, FROST shares, or transport private keys alongside
-      the sessionPeerId. Verified by asserting the session.node.created event
-      context fields contain exactly: sessionId, agentName, sessionPeerId,
-      correlationId — and no additional fields.
+      observability. An attacker who can read the daemon log must not learn any
+      secret key material from that event. A test asserts that the session.node.created
+      event context object does not contain any field whose value is K_local, a FROST
+      share, or a transport private key. Verified by asserting that: (a) the event
+      context passes a key-material grep (no 64-byte hex string that matches the agent's
+      known K_local pubkey or any share material appears as a field value); (b) the
+      event does not log any field beyond the declared context fields
+      (sessionId, agentName, sessionPeerId, correlationId) without a corresponding
+      entry in the observability taxonomy. Future additions to the context fields are
+      permitted provided they are added to the taxonomy and contain no secret material.
     test_type: unit
     component_under_test: daemon
 
