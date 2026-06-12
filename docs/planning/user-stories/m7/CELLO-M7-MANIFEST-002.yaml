@@ -1,0 +1,951 @@
+---
+name: CELLO-M7-MANIFEST-002
+type: user-story
+date: 2026-06-12
+topics: [manifest, bidirectional-auth, handshake, directory-auth, polling, daemon, transport, signaling, m7]
+milestone: M7
+status: draft
+description: >
+  Client-side manifest verification at daemon startup, handshake step 6
+  (directory→client authentication against the consortium manifest), and
+  background manifest polling every 6–12 hours over the signaling stream.
+  Also covers the directory-side addition: each directory node signs its
+  step-5 challenge response with its per-node Ed25519 key. Closes the
+  directory trust gap identified in the transport security audit.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-MANIFEST-002
+domain: Manifest
+milestone: M7
+actor: CLIENT
+priority: P0
+components:
+  - transport
+  - daemon
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO client daemon,
+  I want to verify every directory node's identity against the consortium
+  manifest before trusting the connection, enforce version monotonicity and
+  expiry on the manifest, and keep the manifest current via background polling —
+  so that a rogue node cannot impersonate a legitimate directory node, and an
+  operator running a long-lived daemon is never silently trusting a revoked node.
+
+# ─── Context ────────────────────────────────────────────────
+# Current state (the gap this story closes):
+#
+# Steps 1–4 of the 7-step mutual challenge-response are implemented. Steps 5–6
+# are not. After step 4 the directory sends:
+#   { type: "signaling_auth_ok" }
+# — a plain frame with no cryptographic proof of identity. The client checks
+# only that the frame type is "signaling_auth_ok" and proceeds.
+#
+# This means: any process that speaks the /cello/signaling/1.0.0 protocol and
+# responds to the right challenge can impersonate a legitimate directory node.
+# An attacker controlling a DNS seed, a stale manifest, or a lapsed Elastic IP
+# can present a rogue node that passes the current handshake without any valid
+# credentials. This is the gap identified in transport-security-audit-and-libp2p-
+# primitives and resolved in implementing-directory-bidirectional-authentication.
+#
+# This story implements:
+#
+# 1. MANIFEST LOADING + VERIFICATION AT STARTUP
+#    The daemon loads the consortium manifest bundled in the npm package
+#    (packages/daemon/src/consortium-manifest.json), calls
+#    verifyManifest(manifest, CONSORTIUM_ROOT_KEYS, CONSORTIUM_THRESHOLD) from
+#    MANIFEST-001, enforces not_before <= now < expires, and enforces version
+#    monotonicity (loaded version >= last-seen version stored in SQLCipher).
+#    Failure at any check means the daemon refuses to connect to any directory
+#    node until a valid manifest is obtained.
+#
+# 2. HANDSHAKE STEP 6 (CLIENT SIDE — packages/transport/src/signaling-manager.ts)
+#    After the directory verifies the client's step-3 signature (step 4), the
+#    directory sends an augmented signaling_auth_ok frame carrying its nodeId and
+#    an Ed25519 signature over the challenge TBS (step 5). The client:
+#      (a) Finds the manifest.nodes[] entry matching nodeId.
+#      (b) Verifies the Ed25519 signature against node.pubkey.
+#      (c) On success: emits directory.auth.challenge.verified, proceeds to step 7.
+#      (d) On failure: emits directory.auth.challenge.failed, terminates the
+#          connection with distinct error code directory_challenge_failed — never
+#          a generic timeout.
+#    This is step 6 of the 7-step handshake in end-to-end-flow.md §3.1.
+#
+# 3. HANDSHAKE STEP 5 (DIRECTORY SIDE — packages/directory in trustless-cello)
+#    The existing step-4 handler (directory-node.ts) is extended: after verifying
+#    the client's challenge response, the directory signs a TBS array with its
+#    per-node Ed25519 private key (injected at startup via the DirectoryKeyProvider
+#    interface) and includes nodeId + signature in the signaling_auth_ok frame.
+#    Each directory node signs independently using its own key — the key listed in
+#    manifest.nodes[] for that nodeId. No two directory nodes share a signing key.
+#
+# 4. BACKGROUND MANIFEST POLLING (packages/daemon)
+#    A background task polls the connected directory node for a fresh manifest
+#    every 6–12 hours (randomized within the window to avoid thundering herd).
+#    Poll request travels over the existing signaling stream as a new frame type
+#    (manifest_poll_request / manifest_poll_response) — not a separate HTTP
+#    endpoint. On receiving a valid polled manifest (threshold sig + version
+#    monotonicity + expiry), the daemon updates the in-memory manifest and
+#    persists the new version to SQLCipher. If the stream is in reconnecting
+#    state, the poll is queued (same queue behavior as SIGNAL-001's outbound ops).
+#
+# Adapter pattern:
+#    IManifestVersionStore (interface in packages/interfaces/) abstracts the
+#    SQLCipher read/write for last-seen manifest version.
+#    IManifestProvider (interface) abstracts loading and verification, enabling
+#    test overrides via opts.manifest fixture extension.
+#    CELLO_ENV drives selection at the composition root.
+#    Unit/integration tests run without CELLO_E2E_LIVE by supplying test manifests
+#    using TEST_CONSORTIUM_ROOT_KEYS and makeTestManifest from MANIFEST-001.
+
+# ─── Sovereign Node Constraint (restated inline — required by outline.md) ───
+# Directory nodes are sovereign and independent, deployed across separate AWS,
+# GCP, and Azure regions. EACH directory node has its own Ed25519 signing key —
+# its entry in manifest.nodes[] is unique to that node. Step 6 verification
+# MUST look up the specific nodeId received from the directory and verify
+# against that entry's pubkey field. No implementation may use a shared signing
+# key or a single signature that covers multiple nodes.
+#
+# Concretely: if a MITM substitutes nodeId "B" while using node A's private key,
+# the lookup finds node B's pubkey and verification fails — because the signature
+# was made by node A's key, not node B's. The per-node binding is load-bearing
+# for the security model. Any implementation that skips the nodeId lookup and
+# uses a shared key would make impersonation trivially easy.
+#
+# The background polling task must iterate the manifest node list (not a
+# hardcoded endpoint) when selecting a directory node to poll, consistent with
+# the sovereign node model and SIGNAL-001's reconnect behavior.
+
+# ─── Behavior ──────────────────────────────────────────────
+behavior:
+  - trigger: "When the daemon starts and loads the bundled consortium manifest
+      from packages/daemon/src/consortium-manifest.json"
+    action: >
+      The daemon calls verifyManifest(manifest, CONSORTIUM_ROOT_KEYS,
+      CONSORTIUM_THRESHOLD) from @cello-protocol/crypto. If the result is
+      { ok: true }: checks not_before <= now < expires; if expiry passes,
+      reads the last-seen version from IManifestVersionStore (SQLCipher),
+      enforces manifest.version >= lastSeenVersion, and if all checks pass:
+      stores the manifest in-memory, updates lastSeenVersion if the loaded
+      version is higher, and emits directory.auth.manifest.verified at INFO
+      with manifestVersion and signerCount. The daemon then proceeds to
+      connect to directory nodes listed in manifest.nodes[].
+
+  - trigger: "When the bundled manifest fails verifyManifest (threshold
+      signature invalid)"
+    action: >
+      The daemon emits no directory.auth.manifest.verified event. It logs an
+      error event with code manifest_signature_invalid and refuses to connect
+      to any directory node. cello login returns an operator-visible error
+      message: 'The consortium manifest signature is invalid. The npm package
+      may be corrupt or tampered. Reinstall @cello-protocol/connect to restore
+      a valid manifest.'
+
+  - trigger: "When the bundled manifest's expires field is in the past at
+      daemon startup"
+    action: >
+      The daemon emits directory.auth.manifest.expired at ERROR with
+      manifestVersion and expiresAt. It refuses to connect to any directory
+      node. cello login returns an operator-visible error: 'The consortium
+      manifest has expired (expired at {expiresAt}). Update @cello-protocol/
+      connect to receive a current manifest, or wait for the background poll
+      to fetch one.'
+
+  - trigger: "When the loaded manifest's version is lower than the last-seen
+      version persisted in SQLCipher"
+    action: >
+      The daemon rejects the loaded manifest with code manifest_version_rollback,
+      logs at ERROR with manifestVersion and the persisted lastSeenVersion, and
+      refuses to connect to any directory node. This protects against an attacker
+      supplying an older (potentially compromised-node-including) manifest.
+
+  - trigger: "When a directory node sends a signaling_auth_ok frame containing
+      nodeId and signature fields (step 5 of the handshake)"
+    action: >
+      The client locates the manifest.nodes[] entry where entry.nodeId === nodeId
+      from the frame. If no entry matches: emits directory.auth.challenge.failed
+      at ERROR with directoryNodeId and reason: 'key_not_in_manifest', closes
+      the connection. If an entry is found: verifies the Ed25519 signature in the
+      frame against entry.pubkey using @noble/curves/ed25519. If verification
+      passes: emits directory.auth.challenge.verified at INFO with directoryNodeId,
+      proceeds to step 7 (authenticated session established). If verification fails:
+      emits directory.auth.challenge.failed at ERROR with directoryNodeId and
+      reason: 'signature_invalid', closes the connection immediately.
+
+  - trigger: "When a directory node's step-5 handler processes a verified
+      step-4 client challenge response"
+    action: >
+      The directory node reads its nodeId and signs the challenge TBS with its
+      per-node Ed25519 private key (injected via DirectoryKeyProvider). TBS is
+      defined as: UTF-8 bytes of 'cello-directory-auth-challenge-v1\n' +
+      nodeId + '\n' + agentPubkeyHex + '\n' + nonceHex + '\n' + isoTimestamp,
+      where nonce is the challenge nonce issued in step 2 and agentPubkeyHex is
+      the agent's registered K_local public key. The frame sent is:
+      { type: 'signaling_auth_ok', nodeId: string, signature: string,
+        timestamp: string (ISO8601 UTC) }. No per-node private key material is
+      ever included in the frame or logged.
+
+  - trigger: "When the background manifest polling task fires (randomized
+      6–12 hour interval after daemon start)"
+    action: >
+      The daemon sends a manifest_poll_request frame on the active signaling
+      stream. The connected directory node responds with manifest_poll_response
+      carrying the current ConsortiumManifest. The daemon calls verifyManifest
+      against CONSORTIUM_ROOT_KEYS/CONSORTIUM_THRESHOLD, checks not_before <=
+      now < expires, and checks manifest.version >= lastSeenVersion from
+      SQLCipher. If all pass and the polled version is higher than the current
+      in-memory manifest version: updates the in-memory manifest, calls
+      IManifestVersionStore.persistVersion(version), and emits
+      directory.auth.manifest.poll.success at INFO with oldVersion and newVersion.
+      If any check fails: retains the existing in-memory manifest, logs the
+      failure reason, and does not disconnect from the directory. If the polled
+      version equals the current version: no event is emitted (up-to-date, no
+      change needed).
+
+  - trigger: "While the signaling stream is in reconnecting state when a
+      manifest poll is due"
+    action: >
+      The poll is enqueued in the signaling stream's outbound operations queue
+      (consistent with SIGNAL-001's outbound queue behavior, cap 64). When the
+      stream reconnects and step 6 completes on the new connection, the queued
+      poll is dispatched. The poll interval timer resets on successful dispatch.
+      The daemon does not skip the poll — it defers it.
+
+# ─── Acceptance Criteria ───────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A valid ConsortiumManifest (threshold sig valid, not_before <= now < expires,
+      version >= any prior stored version) is bundled at packages/daemon/src/
+      consortium-manifest.json, and CONSORTIUM_ROOT_KEYS / CONSORTIUM_THRESHOLD
+      are exported from packages/crypto"
+    when: "the daemon starts (cello login)"
+    then: >
+      verifyManifest is called with the bundled manifest and CONSORTIUM_ROOT_KEYS /
+      CONSORTIUM_THRESHOLD. The result is { ok: true }. The not_before and expires
+      fields are checked against the current time. IManifestVersionStore.getLastSeenVersion()
+      is called and returns either null (first run) or a version <= the manifest's
+      version (no rollback). The manifest is stored in-memory. IManifestVersionStore.
+      persistVersion(manifest.version) is called. directory.auth.manifest.verified is
+      logged at INFO with manifestVersion: manifest.version and signerCount matching
+      the verifyManifest return value. The daemon proceeds to connect to directory
+      nodes from manifest.nodes[]. Verified by: a test using opts.manifest fixture
+      extension (AC-014) with a makeTestManifest-produced manifest and
+      TEST_CONSORTIUM_ROOT_KEYS/TEST_CONSORTIUM_THRESHOLD that asserts the log event
+      fires with correct fields before any IPC tool call returns.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-002
+    given: "A ConsortiumManifest where the threshold signature is invalid (one byte
+      of one signature corrupted) is the bundled manifest, verified against
+      TEST_CONSORTIUM_ROOT_KEYS with TEST_CONSORTIUM_THRESHOLD"
+    when: "the daemon starts"
+    then: >
+      verifyManifest returns { ok: false, reason: 'manifest_signature_invalid' }.
+      The daemon does NOT proceed to connect to any directory node.
+      directory.auth.manifest.verified is NOT logged. An error is logged at ERROR
+      with code manifest_signature_invalid and the detail string from verifyManifest.
+      cello status returns directory_signaling: 'reconnecting' (daemon is alive but
+      not connected — consistent with DAEMON-001 AC-009 liveness-readiness separation).
+      Any IPC tool call that requires the directory returns:
+        { ok: false, reason: 'manifest_signature_invalid',
+          guidance: 'The consortium manifest signature is invalid. The npm package
+          may be corrupt or tampered. Reinstall @cello-protocol/connect to restore
+          a valid manifest.' }
+      The daemon does NOT crash — it remains alive and serving IPC connections
+      (SI of DAEMON-001 AC-009: liveness is independent of directory connectivity).
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-003
+    given: "A valid-signature ConsortiumManifest whose expires field is
+      '2020-01-01T00:00:00Z' (past) is the bundled manifest"
+    when: "the daemon starts"
+    then: >
+      directory.auth.manifest.expired is logged at ERROR with:
+        manifestVersion: manifest.version
+        expiresAt: '2020-01-01T00:00:00Z'
+      The daemon does NOT proceed to connect to any directory node. Any IPC tool
+      call requiring the directory returns:
+        { ok: false, reason: 'manifest_expired',
+          guidance: 'The consortium manifest has expired (expired at 2020-01-01T00:00:00Z).
+          Update @cello-protocol/connect to receive a current manifest.' }
+      cello status shows directory_signaling: 'reconnecting'. The daemon remains
+      alive. Verified by: an integration test using the opts.manifest fixture extension
+      with makeTestManifest({ expires: '2020-01-01T00:00:00Z' }).
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-004
+    given: "IManifestVersionStore has a persisted lastSeenVersion of 42 AND the
+      bundled manifest has version: 40 (below last-seen)"
+    when: "the daemon starts"
+    then: >
+      The daemon calls IManifestVersionStore.getLastSeenVersion() and receives 42.
+      It compares 40 < 42 and rejects the manifest with code manifest_version_rollback.
+      An error is logged at ERROR with: manifestVersion: 40, lastSeenVersion: 42.
+      directory.auth.manifest.verified is NOT logged. The daemon does not connect to
+      any directory node. Any tool call requiring the directory returns:
+        { ok: false, reason: 'manifest_version_rollback',
+          guidance: 'The bundled manifest (version 40) is older than the last trusted
+          version (42). This may indicate a downgrade attack. Update @cello-protocol/
+          connect to receive a current manifest.' }
+      Verified by: an integration test that (1) starts the daemon with a v42 manifest
+      (persists the version via the IManifestVersionStore stub), then (2) restarts with
+      a v40 manifest and asserts the rejection fires.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-005
+    given: "A daemon that started successfully with a valid manifest (AC-001 passing),
+      then stopped cleanly, and a new test run starts with a manifest at version 43"
+    when: "the daemon restarts with the v43 manifest"
+    then: >
+      IManifestVersionStore.getLastSeenVersion() returns the persisted value (the
+      version from the prior run, e.g. 42). 43 >= 42 passes. directory.auth.manifest.
+      verified fires with manifestVersion: 43. IManifestVersionStore.persistVersion(43)
+      is called. The manifest version monotonicity check crosses a real process restart
+      boundary — not an in-memory reset. Verified by: a test that starts a daemon
+      process (not a direct construction), stops it, starts a new daemon process with
+      a higher-version manifest, and asserts the log event fires with the new version.
+      The SQLCipher-backed IManifestVersionStore real stub is used (not an in-memory
+      no-op stub) so persistence is exercised.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Addresses M7 lesson L2 — in-memory state not loaded from DB at startup.
+      The test must cross a real process boundary. A test that resets in-memory
+      state between "runs" without restarting the process does not satisfy this AC.
+
+  - id: AC-006
+    given: "A daemon running with a valid in-memory manifest containing a node entry
+      for a staging directory node (nodeId: X, pubkey: <known>, endpoint: <staging URL>),
+      and a real staging directory node process that has loaded its per-node Ed25519
+      private key and is configured to sign step-5 challenge responses"
+    when: "the daemon connects to the staging directory node and the handshake
+      reaches step 5 (directory sends signaling_auth_ok with nodeId and signature)"
+    then: >
+      The client locates manifest.nodes[].find(n => n.nodeId === X). The node entry
+      is found. verifyManifest is NOT called here — only the individual node's
+      Ed25519 signature is verified using @noble/curves/ed25519 verify(signature,
+      canonicalTBS, entry.pubkey). Verification succeeds. directory.auth.challenge.
+      verified is logged at INFO with directoryNodeId: X. The handshake proceeds to
+      step 7 (authenticated session established). cello status shows
+      directory_signaling: 'connected'. Transport evidence: directory.signaling.
+      connected is also logged (SIGNAL-001 event), AND the directoryNodeId in that
+      event matches the nodeId from the manifest entry — proving the step-6 verified
+      identity is the same node the signaling stream connected to.
+    test_type: e2e
+    component_under_test: transport
+    notes: >
+      Requires CELLO_E2E_LIVE. Wrap in describe.skipIf(!process.env.CELLO_E2E_LIVE).
+      Run against the staging directory cluster. A test that bypasses the signaling
+      stream and calls the verifier directly does not satisfy this AC.
+
+  - id: AC-007
+    given: "A rogue node process that: (a) speaks /cello/signaling/1.0.0,
+      (b) holds an Ed25519 keypair whose public key is NOT in any manifest.nodes[]
+      entry, (c) completes handshake steps 1–4 successfully, and (d) sends
+      { type: 'signaling_auth_ok', nodeId: 'rogue-node-001', signature: <sig
+      made with rogue private key>, timestamp: <now> } at step 5"
+    when: "the daemon attempts to connect to this rogue node"
+    then: >
+      The client's step-6 verifier attempts manifest.nodes[].find(n => n.nodeId ===
+      'rogue-node-001') and finds no entry. directory.auth.challenge.failed is logged
+      at ERROR with directoryNodeId: 'rogue-node-001' and reason: 'key_not_in_manifest'.
+      The connection to the rogue node is terminated immediately. directory_signaling
+      does NOT transition to 'connected' for this node. If other manifest-listed nodes
+      are reachable, the daemon falls back and eventually connects to one of them.
+      The error code is 'directory_challenge_failed' — NOT 'directory_unreachable' —
+      these are distinct codes. Transport evidence: no stream is opened beyond the
+      signaling protocol layer on the rogue node after step 5. Verified by: a test
+      process implementing the rogue node behavior described in E2E-001 AC-008
+      implementation_notes.
+    test_type: e2e
+    component_under_test: transport
+    notes: >
+      Requires CELLO_E2E_LIVE. This AC directly satisfies close gate condition 8:
+      "connection to a rogue node (wrong key) is rejected." The rogue node must
+      complete steps 1–4 — a process that refuses TCP at step 1 does not test
+      step-6 rejection.
+
+  - id: AC-008
+    given: "A rogue node that sends nodeId matching a legitimate manifest entry (e.g.
+      'staging-node-us-east-1') but signs the TBS with a different Ed25519 private
+      key (not the one corresponding to that entry's pubkey)"
+    when: "the daemon processes the step-5 frame"
+    then: >
+      The client finds the manifest entry for 'staging-node-us-east-1'. It verifies
+      the signature against entry.pubkey. Verification fails (the private key used
+      did not match the listed public key). directory.auth.challenge.failed is logged
+      at ERROR with directoryNodeId: 'staging-node-us-east-1' and reason:
+      'signature_invalid'. The connection is terminated. The error code is distinct
+      from reason: 'key_not_in_manifest' (AC-007) — the failure reason is specific
+      enough for a human operator to distinguish "unknown node" from "known node ID
+      but wrong key." Transport evidence: same as AC-007.
+    test_type: e2e
+    component_under_test: transport
+    notes: >
+      Requires CELLO_E2E_LIVE. This is the MITM scenario: an attacker who learned
+      a legitimate nodeId but does not hold the corresponding private key cannot
+      complete step 6.
+
+  - id: AC-009
+    given: "packages/directory/src/directory-node.ts step-4 handler is modified
+      to produce the step-5 signed frame"
+    when: "the step-4 handler processes a valid client challenge response and
+      the DirectoryKeyProvider is injected with a valid Ed25519 private key and
+      its corresponding nodeId"
+    then: >
+      The handler constructs the TBS bytes as:
+        UTF-8('cello-directory-auth-challenge-v1\n') ||
+        UTF-8(nodeId) || UTF-8('\n') ||
+        UTF-8(agentPubkeyHex) || UTF-8('\n') ||
+        UTF-8(nonceHex) || UTF-8('\n') ||
+        UTF-8(isoTimestamp)
+      Signs the TBS with the per-node Ed25519 private key using
+      @noble/curves/ed25519. Sends:
+        { type: 'signaling_auth_ok', nodeId, signature: <128-char hex>, timestamp }
+      Verified by: a unit test that injects a TEST_OFFICER_KEYPAIR_0 private key
+      (from MANIFEST-001's test fixture) as the DirectoryKeyProvider, calls the
+      step-4 handler, captures the outgoing frame, and calls ed25519.verify(
+      frame.signature, tbs, TEST_OFFICER_KEYPAIR_0.publicKey) — asserts
+      verify returns true. This test runs without CELLO_E2E_LIVE.
+    test_type: unit
+    component_under_test: directory
+    notes: >
+      Sovereign node invariant enforced here: the DirectoryKeyProvider is a per-node
+      injected interface — there is no shared key across nodes. The unit test exercises
+      the real @noble/curves/ed25519 sign/verify path (not a mock). A test that
+      checks only the frame shape (without verifying the signature) does not satisfy
+      this AC.
+
+  - id: AC-010
+    given: "A daemon running with a valid in-memory manifest at version 42, and a
+      background polling task registered with a 6–12 hour interval"
+    when: "the polling interval fires (simulated in tests by injecting a
+      short interval via opts.manifest.pollIntervalMs fixture field)"
+    then: >
+      A manifest_poll_request frame is sent over the active signaling stream (not
+      a separate HTTP call). The directory responds with a manifest_poll_response
+      carrying a ConsortiumManifest at version 43. The daemon calls verifyManifest
+      against CONSORTIUM_ROOT_KEYS (or TEST_CONSORTIUM_ROOT_KEYS in test context).
+      version 43 >= 42 passes. not_before <= now < expires passes. The in-memory
+      manifest is replaced with the v43 manifest. IManifestVersionStore.persistVersion(43)
+      is called. directory.auth.manifest.poll.success is logged at INFO with
+      oldVersion: 42 and newVersion: 43. Transport evidence: the test asserts that
+      the manifest_poll_request frame was sent over the signaling stream socket (not
+      via an HTTP client), verified by checking that no outbound HTTP requests were
+      made during the polling cycle.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      The polling interval randomization (6–12 hours = 21,600,000–43,200,000 ms)
+      is injected via the IManifestPollScheduler interface (opts.manifest.pollIntervalMs
+      in tests). Production uses randomized interval. Tests use a short injected
+      interval (e.g. 100ms) to avoid real-time waits.
+
+  - id: AC-011
+    given: "A daemon whose background polling task receives a manifest_poll_response
+      carrying a manifest with an invalid threshold signature (simulated via
+      makeTestManifest with a deliberately corrupted signature)"
+    when: "the poll response is processed"
+    then: >
+      verifyManifest returns { ok: false, reason: 'manifest_signature_invalid' }.
+      The in-memory manifest is NOT updated — the daemon continues using the v42
+      manifest. IManifestVersionStore.persistVersion is NOT called. An error is
+      logged at ERROR with code manifest_signature_invalid and the manifestVersion
+      from the rejected manifest. directory.auth.manifest.poll.success is NOT logged.
+      The daemon does NOT disconnect from the directory — it continues operating
+      normally on the existing manifest. A subsequent poll attempt will be scheduled
+      at the next interval.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-012
+    given: "A daemon whose background polling task fires when the signaling stream
+      is in 'reconnecting' state"
+    when: "the poll is due"
+    then: >
+      The poll request is enqueued in the signaling stream's outbound queue
+      (SIGNAL-001's queue — consistent with existing outbound op queuing). The
+      poll request is NOT dropped silently. When the signaling stream reconnects
+      and step 6 completes on the new connection, the queued poll is dispatched.
+      directory.auth.manifest.poll.success fires when the response arrives.
+      Verified by: a test that sets the signaling manager state to 'reconnecting'
+      (via the injectable connect() function from SIGNAL-001), schedules a poll,
+      then restores the signaling stream and asserts the poll request is dispatched
+      and the success event fires.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Addresses M7 lesson L5 — silent signaling stream death. The poll must not
+      be silently dropped when the stream is dead. The send-path liveness rule
+      applies: the poll either queues for retry or fails with a distinct error,
+      never silently disappears.
+
+  - id: AC-013
+    given: "packages/e2e-tests/src/session-fixture.ts"
+    when: "createSessionFixture is called with opts.manifest: { manifest: ConsortiumManifest,
+      rootKeys: typeof TEST_CONSORTIUM_ROOT_KEYS, threshold: 3, pollIntervalMs?: number }"
+    then: >
+      The fixture injects the provided manifest and root keys into the daemon's
+      IManifestProvider interface (bypassing the bundled file read). When
+      opts.manifest.pollIntervalMs is provided, the polling task uses that interval
+      instead of the randomized 6–12 hour window. All existing tests that do not
+      pass opts.manifest continue to use the bundled manifest unchanged — the change
+      is non-breaking with a default of undefined. The fixture teardown resets the
+      IManifestVersionStore stub state so version numbers do not leak between tests.
+    test_type: integration
+    component_under_test: e2e-tests
+
+  - id: AC-014
+    given: "packages/daemon/src/server.ts is the composition root"
+    when: "the daemon binary starts (cello login)"
+    then: >
+      The composition root instantiates:
+        (a) IManifestProvider implementation (reads consortium-manifest.json, calls
+            verifyManifest, enforces expiry and version monotonicity)
+        (b) IManifestVersionStore implementation (SQLCipher-backed, keyed to the
+            daemon's data directory)
+        (c) The step-6 verifier (wired into SignalingManager as an injectable
+            IDirectoryChallengeVerifier interface)
+        (d) The background polling task (registered with DAEMON-001's task runner,
+            randomized 6–12 hour interval)
+      AND the manifest verification runs BEFORE the first directory connection
+      attempt — evidenced by directory.auth.manifest.verified appearing in the
+      structured logs before directory.signaling.connected. A daemon that attempts
+      a directory connection before verifying the manifest does not satisfy this AC.
+      Verified by: an integration test that starts the actual daemon binary and
+      asserts the log event ordering: daemon.started → directory.auth.manifest.verified
+      → directory.signaling.connected (or a connection failure if the directory is
+      unreachable — but manifest.verified must precede any connection attempt).
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Addresses M7 lesson L3 — composition root never wired. The binary is the
+      only test of the composition root. A unit test constructing DaemonServer
+      directly does not satisfy this AC.
+
+  - id: AC-015-error-distinctness
+    given: "All error paths in MANIFEST-002's scope: manifest_signature_invalid,
+      manifest_expired, manifest_version_rollback, directory_challenge_failed
+      (key_not_in_manifest and signature_invalid sub-reasons)"
+    when: "each distinct failure cause is triggered independently"
+    then: >
+      (a) manifest_signature_invalid: logged at ERROR with reason: 'manifest_signature_invalid'
+          and the verifyManifest detail string (e.g. '2 valid of 3 required')
+      (b) manifest_expired: logged at ERROR with reason: 'manifest_expired',
+          manifestVersion, expiresAt
+      (c) manifest_version_rollback: logged at ERROR with reason: 'manifest_version_rollback',
+          manifestVersion (the rejected version), lastSeenVersion (the persisted floor)
+      (d) directory_challenge_failed (key_not_in_manifest): logged at ERROR with
+          directoryNodeId and reason: 'key_not_in_manifest'
+      (e) directory_challenge_failed (signature_invalid): logged at ERROR with
+          directoryNodeId and reason: 'signature_invalid'
+      No two distinct failure causes produce the same error code. No catch block in
+      packages/transport/src/ or packages/daemon/src/ (for code added by this story)
+      returns a hardcoded reason string without logging the actual error.message (never
+      '${error}' — always 'error instanceof Error ? error.message : String(error)').
+      The implementer scans every catch block in packages/transport/src/ and
+      packages/daemon/src/ and fixes or reports any that swallow exceptions silently
+      or interpolate the error object directly into a template string.
+    test_type: unit
+    component_under_test: transport
+
+  - id: AC-016-version-bump
+    given: "All cello-client code changes for this story are implemented and all
+      tests pass in cello-client"
+    when: "the implementer runs the version bump procedure in cello-client CLAUDE.md"
+    then: |
+      - @cello-protocol/transport is bumped (new exports: IDirectoryChallengeVerifier
+        interface, step-6 verification logic in SignalingManager, manifest_poll_request
+        / manifest_poll_response frame handlers — functional additions)
+      - @cello-protocol/daemon is bumped (new exports: IManifestProvider,
+        IManifestVersionStore, IManifestPollScheduler interfaces; background polling
+        task; composition root changes — functional additions)
+      - @cello-protocol/connect is bumped to reflect the net change (depends on daemon)
+      - Every package that depends on a modified package has its dependency version
+        updated in package.json
+      - pnpm install is run and pnpm-lock.yaml is updated in cello-client
+      - git tag v{connect-version} is pushed to origin
+      - CI publishes the new version to npm beta dist-tag
+      - `npm view @cello-protocol/connect@beta dependencies --json` shows real semver
+        versions for all modified packages (never workspace:*)
+    test_type: integration
+    component_under_test: cello-client CI
+    notes: >
+      Hard gate. workspace:* references to cello-client packages in trustless-cello
+      are a bug (CLAUDE.md). The published version is the only way to guarantee
+      packages/directory in trustless-cello runs the new step-5 signing code against
+      the client's step-6 verification code at matching versions.
+
+  - id: AC-017-trustless-cello-dependency-update
+    given: "The new @cello-protocol/connect version is live on npm beta"
+    when: "packages/directory/package.json in trustless-cello is updated"
+    then: |
+      - packages/directory/package.json references the new semver ranges for
+        @cello-protocol/transport and @cello-protocol/daemon (or whichever packages
+        directory imports that were modified by this story)
+      - No workspace:* references to @cello-protocol/crypto, transport, protocol-types,
+        client, or daemon remain in packages/directory/package.json or
+        packages/relay/package.json
+      - pnpm install is run and pnpm-lock.yaml is updated in trustless-cello
+      - pnpm run typecheck passes in trustless-cello with zero errors
+      - Commit pushed to trustless-cello main — BUT NOT PUSHED ALONE. This commit is
+        batched with M7-WIRE-001 and M7-SESSION-001 directory/relay changes into a
+        single pipeline push per COORDINATION.md §Cross-Repo Pipeline Batching.
+        Before pushing, confirm COORDINATION.md batch status shows all three ready.
+    test_type: integration
+    component_under_test: directory
+    notes: >
+      BATCH GATE: do not push this commit to trustless-cello until M7-WIRE-001 and
+      M7-SESSION-001 are also ready to push. The directory pipeline is 25-30 minutes.
+      Pushing each story separately multiplies pipeline cost by 3. See COORDINATION.md
+      §Cross-Repo Pipeline Batching.
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The step-6 verifier must look up the received nodeId in manifest.nodes[] and
+      verify the signature against THAT NODE's pubkey field specifically. It must never
+      verify against a shared key, a hardcoded key outside the manifest, or a key from
+      a different nodeId entry.
+    adversarial_condition: >
+      An attacker controls directory node B's machine and its private key. They intercept
+      a signaling connection destined for node A (which has a different private key).
+      They send { nodeId: 'node-A', signature: <sig made with node-B's private key> }.
+      The step-6 verifier must: (1) find the manifest entry for 'node-A', (2) use
+      node-A's pubkey (not node-B's) for verification, (3) fail verification because
+      node-B's private key was used but node-A's public key is being checked. The
+      attacker cannot impersonate node A without holding node A's private key.
+      Verified by: a unit test that creates two node entries in a test manifest with
+      distinct keypairs, signs the TBS with keypair-B's private key, presents nodeId-A
+      in the frame, and asserts directory.auth.challenge.failed fires with reason:
+      'signature_invalid' — not 'key_not_in_manifest'. The test also asserts that
+      presenting nodeId-A with a signature from keypair-A succeeds.
+    test_type: unit
+    component_under_test: transport
+
+  - id: SI-002
+    statement: >
+      A daemon holding an expired manifest must refuse to connect to ANY directory node,
+      including nodes that were trusted at the time the manifest was signed. An expired
+      manifest cannot be used to establish new directory connections under any circumstances.
+    adversarial_condition: >
+      A daemon's bundled manifest expired yesterday. The operator restarts the daemon.
+      A legitimate directory node (whose key IS in the expired manifest) attempts the
+      handshake. The daemon must refuse at startup (manifest_expired), before the TCP
+      dial even begins, because an expired manifest cannot be trusted to reflect the
+      current node list. The adversary in this scenario is time: by accepting an expired
+      manifest, the operator would be trusting a potentially-outdated node list. A
+      compromised node removed from an updated manifest would pass step-6 because it
+      appeared in the old one.
+      Verified by: an integration test using opts.manifest with expires in the past.
+      The test asserts no directory connection attempt is made (no directory.signaling.
+      connected event fires, no TCP connection is opened to any manifest.nodes[] endpoint).
+    test_type: integration
+    component_under_test: daemon
+
+  - id: SI-003
+    statement: >
+      The step-5 TBS signed by the directory must include the nonce issued in step 2.
+      A signature over a TBS without the nonce can be captured from one handshake and
+      replayed against another — the nonce binding prevents replay.
+    adversarial_condition: >
+      An attacker captures a valid step-5 signaling_auth_ok frame from a legitimate
+      handshake (nodeId, signature, timestamp). They attempt to replay this frame in a
+      new handshake with a different challenge nonce. Because the TBS includes the
+      original nonce, the replayed signature verifies against the wrong TBS bytes
+      (the new handshake has a different nonce) and directory.auth.challenge.failed
+      fires with reason: 'signature_invalid'. Verified by: a unit test that signs a
+      TBS with nonce-A, presents the signature in a step-6 check that uses nonce-B,
+      and asserts verification fails.
+    test_type: unit
+    component_under_test: transport
+
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the bundled manifest has expired (expires in the past at daemon startup)"
+    fallback: >
+      The daemon refuses ALL directory connections. directory.auth.manifest.expired is
+      logged at ERROR with manifestVersion and expiresAt. cello login surfaces this error
+      to the operator: 'The consortium manifest has expired (at {expiresAt}). Update
+      @cello-protocol/connect to receive a current manifest, or — if the daemon previously
+      cached a fresher version — restart cello login after running cello update-manifest.'
+      The daemon remains alive (liveness independent of directory connectivity per
+      DAEMON-001 lesson L8) and accepts IPC connections, returning manifest_expired with
+      guidance on any tool call that requires the directory. Normal tool calls that do not
+      require the directory (cello_list_agents, cello status) succeed. The operator has a
+      path to recovery without reinstalling: if a fresher manifest is available from the
+      background poll cache, the daemon can load it on next restart.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: DB-002
+    condition: "While a polled manifest response carries a version lower than the
+      last-seen version (version rollback detected during polling)"
+    fallback: >
+      The polled manifest is rejected silently (from the operator's perspective — the
+      daemon continues operating normally). An error is logged at WARN (not ERROR —
+      this is a poll failure, not a startup-blocking failure) with code
+      manifest_version_rollback and the rollback versions. The in-memory manifest is
+      unchanged. IManifestVersionStore.persistVersion is NOT called. The next poll is
+      scheduled at the next interval. If this condition persists across multiple polls,
+      an alarm fires (see observability.alarms). The operator is not notified until the
+      alarm threshold is reached.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: DB-003
+    condition: "While the directory node that would receive the manifest poll request
+      is unreachable (step 6 failed on reconnect, no other manifest node reachable)"
+    fallback: >
+      The poll is not dispatched. The outbound queue entry is retained until the
+      signaling stream reconnects. The in-memory manifest continues to be used. If the
+      manifest expires before a poll succeeds, DB-001 behavior takes over at the next
+      connection attempt (expired manifest → refuse to connect). The daemon emits a WARN
+      log indicating the poll could not be sent, with the reason (signaling_lost or
+      reconnecting), so operators monitoring the log can detect the condition before it
+      reaches expiry.
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Observability ─────────────────────────────────────────
+observability:
+  events:
+    - name: directory.auth.manifest.verified
+      level: info
+      trigger: "When the bundled manifest passes all three checks at daemon startup:
+        threshold signature valid, not_before <= now < expires, version >= lastSeenVersion"
+      context_fields: [manifestVersion, signerCount]
+      correlationId: false
+      notes: >
+        This event must fire BEFORE any directory connection attempt. AC-014 asserts
+        the ordering. An implementation that fires this event after the first connection
+        succeeds is out of spec.
+
+    - name: directory.auth.manifest.poll.success
+      level: info
+      trigger: "When a polled manifest passes all checks AND its version is higher
+        than the current in-memory version (i.e. an actual update occurred)"
+      context_fields: [oldVersion, newVersion]
+      correlationId: false
+      notes: >
+        Only fires on version increase. If the polled manifest has the same version as
+        the current one (up-to-date), no event is emitted — this is expected during
+        normal polling and must not be logged as an error.
+
+    - name: directory.auth.challenge.verified
+      level: info
+      trigger: "When step-6 Ed25519 verification of the directory's step-5 signature
+        succeeds against the matching manifest node entry"
+      context_fields: [directoryNodeId]
+      correlationId: false
+      notes: >
+        This event is verified by AC-006. The directoryNodeId must match the nodeId
+        field in the received signaling_auth_ok frame, which in turn must match a
+        manifest.nodes[] entry.
+
+  error_events:
+    - name: directory.auth.manifest.expired
+      level: error
+      trigger: "When the manifest's expires field is in the past at startup or at
+        poll time (polled manifest that is already expired)"
+      context_fields: [manifestVersion, expiresAt]
+      correlationId: false
+
+    - name: directory.auth.challenge.failed
+      level: error
+      trigger: "When step-6 verification fails: either the nodeId is not in
+        manifest.nodes[], or the Ed25519 signature does not verify against the
+        node's pubkey"
+      context_fields: [directoryNodeId, reason]
+      correlationId: false
+      notes: >
+        reason takes exactly two values: 'key_not_in_manifest' or 'signature_invalid'.
+        These are distinct — they tell the operator (and log analysis) whether the
+        failure was an unknown node (possible rogue) or a known node with the wrong
+        key (possible MITM or node key rotation in progress).
+
+  notes: >
+    All five events are from the Bidirectional Auth section of outline.md §Observability
+    Events. Exact names are required — 'directory.auth.manifest.verified' not
+    'manifest.verified'. All events must be verified by corresponding ACs (AC-001 through
+    AC-008) — listing them here is metadata for the implementer; the ACs are the gate.
+    All events go through the injected Logger interface. No console.log in implementation
+    code. The implementer must add all five events to the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+  alarms:
+    - condition: "directory.auth.challenge.failed fires more than 3 times in 10 minutes"
+      fires_to: >
+        transport-security CloudWatch alarm — sustained step-6 failures indicate either
+        a rogue node attack in progress or an unplanned directory node key rotation that
+        has not been reflected in a new manifest. Requires immediate operator investigation.
+    - condition: "directory.auth.manifest.expired fires at daemon startup"
+      fires_to: >
+        client-health CloudWatch alarm — an operator's daemon is running an expired manifest.
+        This condition should be impossible if the background polling is functioning. Its
+        occurrence indicates either the daemon was offline for >7 days (manifest TTL) or
+        the polling task has a bug. Alarm fires once per occurrence (no rate threshold).
+    - condition: "manifest_version_rollback logged (at poll time) more than 3 times in
+        60 minutes"
+      fires_to: >
+        transport-security CloudWatch alarm — repeated version rollback in polled manifests
+        suggests either a buggy directory manifest server or an active downgrade attack.
+
+# ─── Implementation Notes ──────────────────────────────────
+implementation_notes:
+  - >
+    Step-5 TBS definition (authoritative for both directory and client implementations):
+    The to-be-signed bytes are the UTF-8 encoding of the following concatenation:
+      'cello-directory-auth-challenge-v1\n' + nodeId + '\n' +
+      agentPubkeyHex + '\n' + nonceHex + '\n' + isoTimestamp
+    where:
+      nodeId       — the directory node's unique identifier (string from manifest.nodes[])
+      agentPubkeyHex — the connecting agent's K_local public key in 64-char lowercase hex
+      nonceHex     — the challenge nonce issued by the directory in step 2, as lowercase hex
+      isoTimestamp — the current time at signing as ISO 8601 UTC (e.g. '2026-06-12T14:30:00Z')
+    The context string prefix 'cello-directory-auth-challenge-v1' provides cross-protocol
+    confusion defense — this signature cannot be replayed as any other CELLO signature type.
+    The nonce inclusion prevents replay across handshake sessions.
+    The client reconstructs the TBS from the original nonce (stored in SignalingManager's
+    handshake state from step 2), the agent's own pubkey, and the received timestamp field.
+
+  - >
+    New interfaces to add to packages/interfaces/ (adapter pattern):
+
+    IManifestVersionStore:
+      getLastSeenVersion(): Promise<number | null>   // null on first run (no prior version)
+      persistVersion(version: number): Promise<void>
+    Stub: InMemoryManifestVersionStore (starts at null, holds version in-memory)
+    Real: SQLCipherManifestVersionStore (reads/writes to daemon's SQLCipher DB)
+
+    IManifestProvider:
+      loadAndVerify(rootKeys: readonly string[], threshold: number): Promise<ConsortiumManifest>
+      getCurrentManifest(): ConsortiumManifest | null
+    Stub: TestManifestProvider (takes a pre-built ConsortiumManifest, skips file read)
+    Real: FileManifestProvider (reads consortium-manifest.json from package root)
+
+    IDirectoryChallengeVerifier:
+      verifyChallenge(nodeId: string, tbsBytes: Uint8Array, signatureHex: string): boolean
+    Stub: TestDirectoryChallengeVerifier (configurable pass/fail per nodeId)
+    Real: ManifestDirectoryChallengeVerifier (reads pubkey from in-memory manifest, calls
+      ed25519.verify from @noble/curves/ed25519)
+
+    IManifestPollScheduler:
+      scheduleNext(callbackFn: () => Promise<void>): void
+      cancel(): void
+    Stub: ImmediatePollScheduler (fires once with opts.pollIntervalMs or 0 delay, for tests)
+    Real: RandomizedPollScheduler (6-12 hour window, uses crypto.getRandomValues for jitter)
+
+    These interfaces go in packages/interfaces/src/manifest.ts and their stubs in
+    packages/interfaces/src/stubs/manifest.ts.
+
+  - >
+    Manifest polling frame types (new in the signaling protocol):
+    manifest_poll_request: { type: 'manifest_poll_request' }  // sent by client
+    manifest_poll_response: { type: 'manifest_poll_response', manifest: ConsortiumManifest }
+    Both frames travel over the existing signaling stream alongside existing frame types.
+    The directory's signaling handler must add a case for 'manifest_poll_request' that
+    reads the current manifest from its own IManifestStore (a directory-side adapter for
+    its canonical manifest — typically the officer-signed JSON file deployed alongside
+    the binary) and responds with manifest_poll_response. This directory-side handler is
+    a small addition to directory-node.ts — it does not require a new protocol stream.
+
+  - >
+    Directory per-node signing key:
+    Each directory node's per-node Ed25519 private key is the key whose public key is
+    listed in manifest.nodes[] for that nodeId. In production, this key is stored in
+    AWS Secrets Manager under a path like /cello/{env}/directory/{cloud}-{region}/node-signing-key.
+    The composition root reads it at startup via the DirectoryKeyProvider interface.
+    The nodeId is set from an environment variable CELLO_DIRECTORY_NODE_ID (already
+    present as CELLO_DIRECTORY_NODE_ID or derivable from existing configuration).
+    The private key is NEVER logged, NEVER included in frames, and NEVER exposed via
+    any API. The only operation performed with it is Ed25519 sign(tbsBytes, privateKey).
+
+  - >
+    Bundled manifest file location:
+    packages/daemon/src/consortium-manifest.json — loaded at startup by FileManifestProvider.
+    For Alpha/pre-ceremony: the file contains a placeholder manifest (version 0, expires
+    far in the future, nodes array matching the production node set with placeholder pubkeys
+    matching CONSORTIUM_ROOT_KEYS placeholder values). After the officer ceremony, the real
+    manifest replaces it. The file is part of the published npm package (listed in
+    packages/daemon/package.json "files" array). The TestManifestProvider bypasses this
+    file entirely — tests never depend on the bundled file content.
+
+  - >
+    The 6–12 hour polling interval randomization:
+    The daemon randomizes the first poll within a [6h, 12h] window using
+    crypto.getRandomValues for timing jitter. Specifically:
+      baseMs = 6 * 60 * 60 * 1000  // 21,600,000 ms
+      jitterMs = randomInt(0, 6 * 60 * 60 * 1000)  // 0 to 21,600,000 ms
+      firstPollMs = baseMs + jitterMs
+    Subsequent polls use the same randomization. This prevents all running daemons from
+    polling simultaneously (thundering herd) when they were all started at the same time.
+
+  - >
+    Lateral catch audit (M7 error discipline):
+    The implementer must scan ALL catch blocks in:
+      packages/transport/src/ (all files, not just signaling-manager.ts)
+      packages/daemon/src/ (all files, not just the new manifest files)
+    and fix any that: (1) return a hardcoded reason string without logging the actual
+    exception message, OR (2) interpolate an error object into a template string
+    (producing '[object Object]'). Both patterns are blocking per M7 error discipline
+    (outline.md §M7 Error Discipline). The AC-015-error-distinctness AC is the gate.
+
+  - >
+    CELLO_E2E_LIVE guard:
+    AC-006, AC-007, and AC-008 require a running directory node with per-node signing
+    key configured. Every test file containing these ACs must wrap them in:
+      describe.skipIf(!process.env.CELLO_E2E_LIVE)
+    This guard is required by the cello-story rules for any AC that requires resources
+    createSessionFixture() cannot provide in-process.
+
+# ─── Dependencies ──────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-DAEMON-001   # daemon process, SQLCipher DB handle, background task runner,
+                            # and packages/daemon/src/server.ts composition root all required
+    - CELLO-M7-MANIFEST-001 # verifyManifest, canonicalManifestBody, ConsortiumManifest type,
+                            # CONSORTIUM_ROOT_KEYS, CONSORTIUM_THRESHOLD,
+                            # TEST_CONSORTIUM_ROOT_KEYS, TEST_CONSORTIUM_THRESHOLD,
+                            # makeTestManifest, and ManifestError constants all required
+    - CELLO-M7-SIGNAL-001   # outbound queue behavior (poll queuing during reconnecting state,
+                            # AC-012) requires SIGNAL-001's queue interface and connect()
+                            # injection to be in place
+  blocks:
+    - CELLO-M7-E2E-001      # close gate condition 8: directory handshake steps 5–6 pass;
+                            # rogue node (wrong key) is rejected
+  notes: >
+    MANIFEST-002 touches packages/directory in trustless-cello (directory-side signing,
+    AC-009, manifest_poll_request handler). Per outline.md §Cross-Repo Pipeline Batching
+    and COORDINATION.md, this story's trustless-cello changes MUST be batched with
+    M7-WIRE-001 and M7-SESSION-001 before any pipeline push. Never push this story's
+    directory changes alone. AC-017-trustless-cello-dependency-update contains the batch
+    gate reminder as a blocking AC — do not mark this story done until all three are
+    pushed together.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Authentication, Node Operations"
+  end_to_end_flow: "§3.1 Authentication — Challenge-Response (steps 5–6)"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-11_1459_implementing-directory-bidirectional-authentication"
+    - "2026-06-11_1030_daemon-transport-architecture"
+    - "2026-06-11_0822_transport-security-audit-and-libp2p-primitives"
+  related_docs:
+    - "[[implementing-directory-bidirectional-authentication]]"
+    - "[[daemon-transport-architecture]]"
+    - "[[CELLO-M7-MANIFEST-001]]"
+    - "[[CELLO-M7-DAEMON-001]]"
+    - "[[CELLO-M7-SIGNAL-001]]"
+    - "[[CELLO-M7-E2E-001]]"
+  external_sources:
+    - "https://theupdateframework.github.io/specification/latest/ — TUF spec; version+expiry
+      semantics (§5.3.3), root key threshold model (§4), and in-band rotation threat model
+      are the authoritative references for the manifest validation logic in this story"
