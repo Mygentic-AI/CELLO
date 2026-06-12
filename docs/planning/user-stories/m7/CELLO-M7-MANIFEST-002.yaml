@@ -283,17 +283,20 @@ acceptance_criteria:
     when: "the daemon starts"
     then: >
       The daemon calls IManifestVersionStore.getLastSeenVersion() and receives 42.
-      It compares 40 < 42 and rejects the manifest with code manifest_version_rollback.
-      An error is logged at ERROR with: manifestVersion: 40, lastSeenVersion: 42.
-      directory.auth.manifest.verified is NOT logged. The daemon does not connect to
-      any directory node. Any tool call requiring the directory returns:
+      It compares 40 < 42 and rejects the manifest. The log event name is
+      'directory.auth.manifest.version.rollback' (not the error code 'manifest_version_rollback')
+      — the event name follows the domain.noun.verb taxonomy. Logged at ERROR with:
+      manifestVersion: 40, lastSeenVersion: 42. directory.auth.manifest.verified is NOT
+      logged. The daemon does not connect to any directory node. Any tool call requiring
+      the directory returns:
         { ok: false, reason: 'manifest_version_rollback',
           guidance: 'The bundled manifest (version 40) is older than the last trusted
           version (42). This may indicate a downgrade attack. Update @cello-protocol/
           connect to receive a current manifest.' }
       Verified by: an integration test that (1) starts the daemon with a v42 manifest
       (persists the version via the IManifestVersionStore stub), then (2) restarts with
-      a v40 manifest and asserts the rejection fires.
+      a v40 manifest and asserts the rejection fires with the named event
+      'directory.auth.manifest.version.rollback'.
     test_type: integration
     component_under_test: daemon
 
@@ -418,11 +421,19 @@ acceptance_criteria:
       Signs the TBS with the per-node Ed25519 private key using
       @noble/curves/ed25519. Sends:
         { type: 'signaling_auth_ok', nodeId, signature: <128-char hex>, timestamp }
-      Verified by: a unit test that injects a TEST_OFFICER_KEYPAIR_0 private key
-      (from MANIFEST-001's test fixture) as the DirectoryKeyProvider, calls the
-      step-4 handler, captures the outgoing frame, and calls ed25519.verify(
-      frame.signature, tbs, TEST_OFFICER_KEYPAIR_0.publicKey) — asserts
-      verify returns true. This test runs without CELLO_E2E_LIVE.
+      Verified by: a unit test that:
+        (1) Builds a test manifest using makeTestManifest with nodes[0].pubkey set to
+            TEST_DIRECTORY_NODE_KEYPAIR.publicKey (a deterministic fixed-seed keypair
+            defined in packages/e2e-tests/src/helpers/test-keys.ts, distinct from officer
+            test keys — officer keys sign the manifest body, node keys sign challenge
+            responses).
+        (2) Injects TestDirectoryKeyProvider with TEST_DIRECTORY_NODE_KEYPAIR.privateKey.
+        (3) Calls the step-4 handler, captures the outgoing signaling_auth_ok frame.
+        (4) Verifies ed25519.verify(frame.signature, tbs, TEST_DIRECTORY_NODE_KEYPAIR.publicKey)
+            returns true.
+      This test runs without CELLO_E2E_LIVE. The test demonstrates that the directory
+      signs with its per-node key (not an officer key), and the signature verifies
+      against the pubkey listed in manifest.nodes[0] for that nodeId.
     test_type: unit
     component_under_test: directory
     notes: >
@@ -457,7 +468,7 @@ acceptance_criteria:
       in tests). Production uses randomized interval. Tests use a short injected
       interval (e.g. 100ms) to avoid real-time waits.
 
-  - id: AC-010b
+  - id: AC-011
     given: "packages/directory/src/directory-node.ts has a new handler for the
       manifest_poll_request frame type, and a DirectoryManifestStore is injected
       at startup with the current ConsortiumManifest (read from the officer-signed
@@ -492,8 +503,9 @@ acceptance_criteria:
       that never handles manifest_poll_request would not be caught until the first
       live poll. The directory-side handler is new protocol behavior added by this
       story and must have its own test.
+      (Formerly AC-010b; renumbered to AC-011 for sequential numbering per user review.)
 
-  - id: AC-011
+  - id: AC-012
     given: "A daemon whose background polling task receives a manifest_poll_response
       carrying a manifest with an invalid threshold signature (simulated via
       makeTestManifest with a deliberately corrupted signature)"
@@ -509,8 +521,10 @@ acceptance_criteria:
       at the next interval.
     test_type: integration
     component_under_test: daemon
+    notes: >
+      Renumbered from AC-011 to AC-012 to accommodate the sequential AC-011 insertion.
 
-  - id: AC-012
+  - id: AC-013
     given: "A daemon whose background polling task fires when the signaling stream
       is in 'reconnecting' state"
     when: "the poll is due"
@@ -531,8 +545,9 @@ acceptance_criteria:
       be silently dropped when the stream is dead. The send-path liveness rule
       applies: the poll either queues for retry or fails with a distinct error,
       never silently disappears.
+      (Renumbered from AC-012 to AC-013 to accommodate the sequential AC-011 insertion.)
 
-  - id: AC-013
+  - id: AC-014
     given: "packages/e2e-tests/src/session-fixture.ts"
     when: "createSessionFixture is called with opts.manifest: { manifest: ConsortiumManifest,
       rootKeys: typeof TEST_CONSORTIUM_ROOT_KEYS, threshold: 3, pollIntervalMs?: number }"
@@ -546,8 +561,10 @@ acceptance_criteria:
       IManifestVersionStore stub state so version numbers do not leak between tests.
     test_type: integration
     component_under_test: e2e-tests
+    notes: >
+      Renumbered from AC-013 to AC-014 to accommodate the sequential AC-011 insertion.
 
-  - id: AC-014
+  - id: AC-015
     given: "packages/daemon/src/server.ts is the composition root"
     when: "the daemon binary starts (cello login)"
     then: >
@@ -574,8 +591,9 @@ acceptance_criteria:
       Addresses M7 lesson L3 — composition root never wired. The binary is the
       only test of the composition root. A unit test constructing DaemonServer
       directly does not satisfy this AC.
+      (Renumbered from AC-014 to AC-015 to accommodate the sequential AC-011 insertion.)
 
-  - id: AC-015-error-distinctness
+  - id: AC-016-error-distinctness
     given: "All error paths in MANIFEST-002's scope: manifest_signature_invalid,
       manifest_expired, manifest_version_rollback, directory_challenge_failed
       (key_not_in_manifest and signature_invalid sub-reasons)"
@@ -600,8 +618,10 @@ acceptance_criteria:
       or interpolate the error object directly into a template string.
     test_type: unit
     component_under_test: transport
+    notes: >
+      Renumbered from AC-015 to AC-016 to accommodate the sequential AC-011 insertion.
 
-  - id: AC-016-version-bump
+  - id: AC-017-version-bump
     given: "All cello-client code changes for this story are implemented and all
       tests pass in cello-client"
     when: "the implementer runs the version bump procedure in cello-client CLAUDE.md"
@@ -627,8 +647,9 @@ acceptance_criteria:
       are a bug (CLAUDE.md). The published version is the only way to guarantee
       packages/directory in trustless-cello runs the new step-5 signing code against
       the client's step-6 verification code at matching versions.
+      (Renumbered from AC-016 to AC-017 to accommodate the sequential AC-011 insertion.)
 
-  - id: AC-017-trustless-cello-dependency-update
+  - id: AC-018-trustless-cello-dependency-update
     given: "The new @cello-protocol/connect version is live on npm beta"
     when: "packages/directory/package.json in trustless-cello is updated"
     then: |
@@ -651,6 +672,7 @@ acceptance_criteria:
       M7-SESSION-001 are also ready to push. The directory pipeline is 25-30 minutes.
       Pushing each story separately multiplies pipeline cost by 3. See COORDINATION.md
       §Cross-Repo Pipeline Batching.
+      (Renumbered from AC-017 to AC-018 to accommodate the sequential AC-011 insertion.)
 
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
@@ -846,20 +868,28 @@ observability:
   alarms:
     - condition: "directory.auth.challenge.failed fires more than 3 times in 10 minutes"
       fires_to: >
-        transport-security CloudWatch alarm — sustained step-6 failures indicate either
-        a rogue node attack in progress or an unplanned directory node key rotation that
-        has not been reflected in a new manifest. Requires immediate operator investigation.
+        Surfaced as persistent ERROR in daemon logs; operator detects via `cello status`
+        (directory_signaling: 'reconnecting' or 'lost') or log inspection. Threshold (3
+        occurrences in 10 minutes) indicates either a rogue node attack in progress or an
+        unplanned directory node key rotation that has not been reflected in a new manifest.
+        Requires immediate operator investigation. The daemon remains alive but refuses to
+        connect — liveness is independent of directory connectivity per DAEMON-001.
     - condition: "directory.auth.manifest.expired fires at daemon startup"
       fires_to: >
-        client-health CloudWatch alarm — an operator's daemon is running an expired manifest.
-        This condition should be impossible if the background polling is functioning. Its
-        occurrence indicates either the daemon was offline for >7 days (manifest TTL) or
-        the polling task has a bug. Alarm fires once per occurrence (no rate threshold).
+        Surfaced as ERROR in daemon logs and via `cello status` (directory_signaling:
+        'reconnecting', no directory node reachable). Any IPC tool call requiring the
+        directory returns manifest_expired with guidance. This condition should be impossible
+        if the background polling is functioning. Its occurrence indicates either the daemon
+        was offline for >7 days (manifest TTL) or the polling task has a bug. Fires once per
+        occurrence (no rate threshold).
     - condition: "directory.auth.manifest.version.rollback logged (at poll time, WARN level)
         more than 3 times in 60 minutes"
       fires_to: >
-        transport-security CloudWatch alarm — repeated version rollback in polled manifests
-        suggests either a buggy directory manifest server or an active downgrade attack.
+        Surfaced as WARN in daemon logs; operator detects via log inspection. Threshold (3
+        occurrences in 60 minutes) suggests either a buggy directory manifest server or an
+        active downgrade attack. The daemon continues operating normally on the existing
+        in-memory manifest — this is non-blocking, but the sustained pattern warrants
+        investigation.
 
 # ─── Implementation Notes ──────────────────────────────────
 implementation_notes:
@@ -971,6 +1001,22 @@ implementation_notes:
     exception message, OR (2) interpolate an error object into a template string
     (producing '[object Object]'). Both patterns are blocking per M7 error discipline
     (outline.md §M7 Error Discipline). The AC-015-error-distinctness AC is the gate.
+
+  - >
+    TEST_DIRECTORY_NODE_KEYPAIR constant (packages/e2e-tests/src/helpers/test-keys.ts):
+    A deterministic Ed25519 keypair used in AC-009 and AC-011 to represent a directory
+    node's per-node signing key in tests. Generated from a fixed seed (distinct from
+    TEST_CONSORTIUM_ROOT_KEYS seeds) so tests are reproducible. Structure:
+      export const TEST_DIRECTORY_NODE_KEYPAIR = {
+        privateKey: '<64-char hex>',  // deterministic from seed 'cello-test-directory-node-key-0'
+        publicKey: '<64-char hex>',   // corresponding public key
+      }
+    This keypair is NOT part of the officer set (TEST_CONSORTIUM_ROOT_KEYS). Officer keys
+    sign the manifest body via threshold ceremony. Node keys sign challenge responses at
+    step 5. Conflating these two key roles in tests would mislead implementers toward
+    reusing officer keys as node keys in production — a security mistake. AC-009 builds
+    its test manifest with nodes[0].pubkey = TEST_DIRECTORY_NODE_KEYPAIR.publicKey and
+    injects the private key into TestDirectoryKeyProvider.
 
   - >
     Rogue node helper process for AC-007 and AC-008
