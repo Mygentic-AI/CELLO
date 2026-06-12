@@ -1,0 +1,754 @@
+---
+name: CELLO-M7-DAEMON-003
+type: user-story
+date: 2026-06-12
+topics: [daemon, retry-queue, nonce-dedup, sqlcipher, persistence, serialization, m7]
+status: draft
+description: >
+  Rehomes nonce deduplication and the retry queue from packages/client into
+  packages/daemon with SQLCipher persistence. Adds two new SQLCipher tables
+  (retry_queue and session_seen_nonces) to the daemon DB. Retry queue is FIFO
+  per session, depth 1,000, oldest evicted on overflow. Nonce dedup is
+  per-session LRU, 10,000 entries. Both survive daemon restart. packages/client
+  is stripped of retry and dedup state; it delegates to the daemon via IPC.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-DAEMON-003
+domain: Daemon
+milestone: M7
+actor: OPS
+priority: P0
+components:
+  - daemon
+  - client
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the daemon,
+  I want to own the retry queue and nonce dedup sets for all active sessions,
+  persisted in SQLCipher tables that survive daemon restart,
+  so that messages queued for retry are not lost when the operator restarts the
+  daemon for a system update, and duplicate inbound nonces (from legitimate
+  retries or replay attempts) are suppressed across restart boundaries.
+
+# ─── Context ────────────────────────────────────────────────
+# DAEMON-001 created the daemon process and the SQLCipher DB handle.
+# DAEMON-002 added the session node map. DAEMON-003 adds two new tables to the
+# existing DB and moves state that previously lived in packages/client into the
+# daemon layer where it can be persisted.
+#
+# Two components:
+#
+#   1. RetryQueue (packages/daemon/src/retry-queue.ts)
+#      Per-session FIFO queue of messages awaiting delivery. When a send over a
+#      session node stream fails (peer unreachable), the message envelope is
+#      added to the queue. When the peer reconnects, the daemon drains the queue
+#      in FIFO order. Cap: 1,000 messages per session. On overflow the OLDEST
+#      message is evicted (not the new one) — the new message is always accepted.
+#      Eviction is observable via message.retry.evicted at WARN; no error is
+#      returned to the caller. Queue entries survive daemon restart via the
+#      retry_queue SQLCipher table.
+#
+#   2. NonceDedupStore (packages/daemon/src/nonce-dedup.ts)
+#      Per-session LRU set of already-seen incoming nonces. When an incoming
+#      message arrives on a session node stream, the daemon checks its nonce
+#      against the set BEFORE delivering to cello_receive. If the nonce is
+#      already present the message is silently discarded and
+#      message.nonce.duplicate is logged at DEBUG with sessionId, nonce (hex),
+#      and senderPubkey. LRU cap: 10,000 nonces per session. The nonce set
+#      survives daemon restart via the session_seen_nonces SQLCipher table.
+#
+# Design decision from Q6 (authoritative — do not re-open):
+#   Retry queue and nonce dedup are persisted in SQLCipher. The daemon model
+#   makes persistence viable: the SQLite handle is always open while the daemon
+#   runs, and messages queued for retry must survive a brief daemon restart.
+#   Nonces older than the queue depth cannot arrive via legitimate retry, so LRU
+#   eviction of the nonce set is acceptable.
+#
+# Serialization discipline (M6/M6B lesson L1):
+#   Uint8Array fields (nonces, content hashes) MUST be serialized via a typed
+#   serializer — Buffer.from(uint8array).toString('hex') for write,
+#   Buffer.from(hex, 'hex') for read. Bare JSON.stringify silently converts
+#   Uint8Array to {"0":1,"1":2,...} — the bytes look correct but the TYPE is
+#   gone, and the crypto operation that uses the deserialized value fails later
+#   with no link back to the serialization bug. This lesson cost 2 days on
+#   PERSIST-005. Any persistence AC in this story verifies type integrity, not
+#   only byte equality.
+#
+# Startup loading (M6/M6B lesson L2):
+#   Both tables must be loaded into working state at daemon startup, BEFORE the
+#   IPC socket opens. "Working state" means: RetryQueue.loadFromDb() has
+#   populated the in-memory FIFO; NonceDedupStore.loadFromDb() has populated
+#   the in-memory LRU. The first IPC tool call must be able to drain the queue
+#   and recognize seen nonces immediately, with no "not yet loaded" window.
+#
+# Composition root (M6/M6B lesson L3):
+#   packages/daemon/src/server.ts must instantiate RetryQueue and NonceDedupStore
+#   and wire them to the SessionManager. If these classes are instantiated in
+#   tests but not in server.ts, they are dead code in production. A dedicated
+#   composition root AC (AC-008) is required.
+#
+# Scope of client changes:
+#   packages/client removes any RetryQueue or NonceDedupSet classes that
+#   previously lived there. cello_send failure-and-requeue and cello_receive
+#   dedup filtering are now handled in the daemon layer. The MCP adapter
+#   (packages/adapter-claude-code) is unchanged — it already routes all tool
+#   calls through the daemon IPC socket (MCP-001's scope).
+#
+# NOT in scope:
+#   Application-level delivery receipts (separate future story).
+#   Per-session retry backoff scheduling (retry is triggered by peer reconnect,
+#   not by a timer — M7's retry model is reconnect-driven, not interval-driven).
+#   Relay-mediated retry (M7 session transport is direct P2P first; relay fallback
+#   is TRANSPORT-001's scope and does not change the retry queue semantics).
+
+# ─── Sovereign Node Constraint ──────────────────────────────
+# Retry queue and nonce dedup are client-side state scoped to the operator's
+# daemon. Directory nodes are sovereign and independent — none of them hold or
+# interact with the retry queue or nonce set. This story adds no cross-node
+# state, no replication, and no directory dependency. The constraint is satisfied
+# by design: the SQLCipher tables are local to the daemon process on the
+# operator's machine.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the daemon starts (server.ts startup sequence, after agent loading
+      and before the IPC socket opens)"
+    action: >
+      RetryQueue.loadFromDb() reads all rows from the retry_queue table for all
+      sessions, reconstructs the per-session FIFO order (by position column), and
+      populates in-memory state. NonceDedupStore.loadFromDb() reads all rows from
+      session_seen_nonces for all sessions, reconstructs the per-session LRU order
+      (by seen_at), and populates in-memory state. Both complete before the IPC
+      socket opens. daemon.started is logged only after both loads succeed.
+
+  - trigger: "When a message send over a session node stream fails (peer unreachable,
+      stream closed, or dial error)"
+    action: >
+      The daemon adds the message envelope to the session's RetryQueue: writes a
+      row to retry_queue with session_id, nonce (hex), content_blob, queued_at
+      (integer epoch ms), attempts: 1, and position (monotonically increasing
+      integer for FIFO ordering). message.retry.queued is logged at INFO with
+      sessionId, nonce (hex), and queueDepth (integer, the queue size after
+      insertion). If the queue already has 1,000 entries, the row with the lowest
+      position value (oldest) is deleted and message.retry.evicted is logged at
+      WARN with sessionId, nonce (hex of evicted message), and queueDepth: 1000,
+      before the new entry is written. No error is returned to the send caller —
+      the enqueue (and any eviction) is an internal bookkeeping operation.
+
+  - trigger: "When a peer reconnects to a session node (new stream established
+      from the counterparty's Peer ID)"
+    action: >
+      The daemon drains the session's RetryQueue in FIFO order (ascending position).
+      For each entry: the message envelope is resent over the new stream; on
+      delivery confirmation the entry is deleted from retry_queue; message.retry.delivered
+      is logged at INFO with sessionId, nonce (hex), and attemptsTotal (integer,
+      the total number of send attempts for this message including the original).
+      If a resend fails, the message remains in the queue (position unchanged) and
+      the drain continues to the next entry. The drain is atomic per-message:
+      delete from DB only on confirmed delivery.
+
+  - trigger: "When an incoming message arrives on a session node stream"
+    action: >
+      Before delivering the message to the receive buffer for cello_receive, the
+      daemon checks the message's nonce against the session's NonceDedupStore. If
+      the nonce is already present in session_seen_nonces, the message is silently
+      discarded; message.nonce.duplicate is logged at DEBUG with sessionId, nonce
+      (hex), and senderPubkey (hex). If the nonce is not present, it is added to
+      session_seen_nonces (with sender_pubkey and seen_at) and the message is
+      delivered normally. If the nonce set has 10,000 entries, the entry with the
+      oldest seen_at is deleted before the new nonce is inserted (LRU eviction) —
+      no event is emitted for LRU eviction of nonce entries (only retry eviction
+      produces a log event).
+
+  - trigger: "When cello status is called via CLI or IPC"
+    action: >
+      The status response includes retryQueueDepth (integer) — the total count of
+      all retry_queue rows across all sessions. The field is always present; it is
+      0 when no messages are queued.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An active session between Alice and Bob; Bob's session node stream is
+      dead (simulated by closing the stream handle before the send)"
+    when: "cello_send is called for a message M1 with nonce N1"
+    then: >
+      The send fails to deliver M1. RetryQueue adds M1 to the retry_queue table.
+      message.retry.queued is logged at INFO with sessionId (non-empty hex),
+      nonce (hex string matching N1), and queueDepth: 1. The daemon is then
+      stopped cleanly and restarted. After restart, the retry_queue table still
+      contains M1's entry. The daemon log at startup includes no "queue empty"
+      or "nothing to load" message — it loads the entry silently (no per-entry
+      log on load; loading is a bulk operation). When Bob's session node stream
+      is re-established (simulated by reconnecting the stream handle), the daemon
+      drains the queue: M1 is delivered and message.retry.delivered is logged
+      at INFO with sessionId, nonce matching N1, and attemptsTotal ≥ 2.
+      Verified by an integration test that: (a) kills the stream before send;
+      (b) asserts message.retry.queued fires; (c) restarts the daemon binary via
+      the test fixture; (d) re-establishes the stream; (e) asserts
+      message.retry.delivered fires with attemptsTotal ≥ 2.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Crosses the restart boundary — addresses M7 lesson L2. The
+      message.retry.delivered attemptsTotal ≥ 2 check is the transport evidence
+      that the message was retried (not just delivered on the original attempt).
+      The stream kill must be at the network level (close the actual stream handle)
+      — not a mock of the send method — to exercise the real error path (L7).
+
+  - id: AC-002
+    given: "A retry queue for session S containing 3 messages in order: M1 (position 1),
+      M2 (position 2), M3 (position 3)"
+    when: "the peer reconnects and the RetryQueue drains"
+    then: >
+      The daemon sends M1 first, then M2, then M3. The receiver's cello_receive
+      returns M1 before M2 before M3 — FIFO order is preserved end-to-end.
+      message.retry.delivered is logged three times in the same order, with
+      nonces matching M1, M2, M3 respectively. No message is delivered out of
+      order. Verified by an integration test that populates the retry_queue
+      table directly with three rows in ascending position order, simulates peer
+      reconnect, and asserts both the delivery order on the receiver side (via
+      three sequential cello_receive calls) and the log event order. The
+      delivery-order assertion goes through the real IPC socket — not via
+      internal method dispatch.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-003
+    given: "A RetryQueue for session S that already contains 1,000 messages
+      (the cap from outline.md Resource Caps)"
+    when: "message M1001 fails delivery and the daemon attempts to enqueue it"
+    then: >
+      The message at position 1 (oldest) is evicted from retry_queue.
+      message.retry.evicted is logged at WARN with sessionId, nonce (hex of the
+      evicted message — NOT M1001's nonce), and queueDepth: 1000.
+      M1001 is written to retry_queue at the next position. The queue size
+      remains exactly 1,000. No error is returned to the send caller.
+      message.retry.queued is logged for M1001 with queueDepth: 1000.
+      The evicted message's nonce does NOT appear in retry_queue after the
+      operation. Verified by a unit test that pre-populates the RetryQueue's
+      in-memory state with 1,000 stubs and asserts the overflow path.
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-004
+    given: "Session S whose NonceDedupStore already contains nonce N (senderPubkey P)"
+    when: "an incoming message with the same nonce N and sender P arrives on session S"
+    then: >
+      The message is NOT delivered to the cello_receive buffer — it is silently
+      discarded at the daemon layer before any deliver call. message.nonce.duplicate
+      is logged at DEBUG with sessionId, nonce (hex string of N), and senderPubkey
+      (hex string of P). No response of any kind is sent to the sender. No error
+      is surfaced to the operator via cello_receive. The existing messages in the
+      receive buffer (if any) are unaffected. Verified by a unit test that (a)
+      pre-seeds the NonceDedupStore with nonce N; (b) calls the daemon's inbound
+      message handler with a message carrying nonce N; (c) asserts cello_receive
+      returns null (queue unchanged); (d) asserts message.nonce.duplicate fired
+      with the correct context fields.
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-005
+    given: "Session S has previously seen nonce N (stored in session_seen_nonces table);
+      the daemon is restarted"
+    when: "after restart, an incoming message with nonce N arrives on session S"
+    then: >
+      NonceDedupStore.loadFromDb() at startup populated the in-memory LRU with N.
+      The incoming message is recognized as a duplicate and discarded.
+      message.nonce.duplicate is logged at DEBUG. The message is NOT delivered via
+      cello_receive as if it were new. Verified by an integration test that:
+      (a) processes a message with nonce N so the nonce is written to SQLCipher;
+      (b) restarts the daemon binary; (c) sends an incoming message with the same
+      nonce N; (d) asserts cello_receive returns null and message.nonce.duplicate
+      fires. The restart must use a real daemon binary restart (not an in-memory
+      reset) — the NonceDedupStore must be loaded from the DB, not from a
+      persistent in-process object.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      This is the anti-replay AC across the restart boundary. An ephemeral nonce
+      set (M7 archived MULTI-006 design) would fail this AC — nonce N would be
+      absent after restart and the duplicate would be delivered. SQLCipher
+      persistence is the correctness requirement.
+
+  - id: AC-006
+    given: "A RetryQueueEntry constructed via the normal send-failure path with:
+      nonce as Uint8Array(32) derived from signing a real message envelope
+      (Ed25519 sign output truncated to nonce length), content_hash as
+      Uint8Array(32) derived from SHA-256 of real message content"
+    when: "the entry is serialized, written to SQLCipher via the TypedSerializer,
+      the daemon process is restarted, and the entry is loaded and deserialized"
+    then: >
+      The deserialized nonce is byte-equal to the original Uint8Array (verified
+      by comparing each byte). The deserialized nonce TYPE is Uint8Array — not a
+      plain object, not a Buffer with wrong prototype, not a string. The
+      deserialized nonce can be passed to NonceDedupStore.has(nonce) and correctly
+      identified as a duplicate — this proves type integrity, not just byte
+      equality. The deserialized content_hash is byte-equal to the original and
+      can be passed to the same SHA-256 verification path used for Structure 1
+      hash verification (the call must return 'match', not throw a type error).
+      Byte equality alone is NOT sufficient to pass this AC — the production-use
+      verification (NonceDedupStore.has and hash verification) is required.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Addresses M7 lesson L1 (serialization corruption). The typed serializer
+      MUST store Uint8Array as hex string (Buffer.from(u8).toString('hex')) and
+      restore as Buffer.from(hex, 'hex'). JSON.stringify on Uint8Array produces
+      {"0":1,"1":2,...} — bytes survive but the type is lost. This bug is
+      invisible in tests that only check byte equality; it surfaces only when a
+      crypto operation uses the deserialized value. The production-use check is
+      the gate.
+
+  - id: AC-007
+    given: "SQLCipher DB contains 3 retry_queue entries for session A and 5
+      session_seen_nonces entries for session B; the daemon is starting"
+    when: "the daemon binary runs its startup sequence (server.ts)"
+    then: >
+      RetryQueue.loadFromDb() and NonceDedupStore.loadFromDb() both complete
+      BEFORE the IPC socket opens (daemon.started is logged only after both
+      loads succeed). The IPC socket is not available until loading is done —
+      verified by asserting that a tool call arriving at the earliest possible
+      moment (immediately after daemon.started) can access the loaded state:
+      specifically, cello_send to session A's peer (once reconnected) immediately
+      delivers the 3 queued messages (proving the queue was loaded and functional,
+      not just present in DB); and an incoming message to session B with one of
+      the 5 seen nonces is discarded (proving the nonce set was loaded and
+      functional). A daemon that opens the IPC socket before loading completes
+      would produce a race where the first tool call finds an empty in-memory
+      state even though the DB is populated — this AC closes that race at the
+      specification level.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Addresses M7 lesson L2. "Loaded and functional" is not the same as "present
+      in DB." The AC verifies both by exercising the loaded state in its actual
+      production operation (drain and dedup), not by asserting a count.
+
+  - id: AC-008
+    given: "packages/daemon/src/server.ts (the composition root from DAEMON-001)"
+    when: "the daemon binary starts"
+    then: >
+      The composition root instantiates RetryQueue and NonceDedupStore and passes
+      them to the SessionManager during its construction. The loadFromDb() call
+      for both components happens in the startup sequence BEFORE the IPC socket
+      opens (consistent with AC-007). These instantiations and calls must occur
+      in server.ts — not only in test files or in SessionManager's own methods.
+      Verified by an integration test that starts the actual daemon binary (not a
+      directly-constructed RetryQueue or NonceDedupStore) and asserts observable
+      behavior: (a) message.retry.queued fires when a send fails over a dead stream
+      (proving RetryQueue is wired to the send path); (b) message.nonce.duplicate
+      fires when an incoming message carries a seen nonce (proving NonceDedupStore
+      is wired to the receive path). Both assertions go through the real IPC
+      socket, not via internal method calls on the classes.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Addresses M7 lesson L3 (composition root never wired). The binary start is
+      the only test of the wiring — a test that constructs RetryQueue directly
+      cannot catch a missing instantiation in server.ts.
+
+  - id: AC-009
+    given: "A running daemon with session A having 5 messages in its retry queue
+      and session B having 3 messages in its retry queue (8 total)"
+    when: "cello status is called"
+    then: >
+      The response JSON includes retryQueueDepth: 8. The field is always present
+      as an integer (value 0 when no messages are queued, never absent, never
+      undefined). After all queued messages are delivered and the retry queues
+      drain, a subsequent cello status call returns retryQueueDepth: 0.
+      Verified by an integration test that: (a) populates retry_queue with 8
+      rows across 2 sessions; (b) calls cello status via IPC and asserts the
+      retryQueueDepth field equals 8; (c) drains the queues; (d) calls cello
+      status again and asserts retryQueueDepth equals 0. The cello status call
+      goes through the daemon IPC socket — not by reading SQLite directly.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      This is the composition root observable for cello status (L3). A daemon
+      that exposes retryQueueDepth only in a standalone test without wiring it
+      into the status response handler would fail this AC.
+
+  - id: AC-010
+    given: "packages/client/src/ after this story is implemented"
+    when: "the codebase is searched for retry queue and nonce dedup logic"
+    then: >
+      grep -r "RetryQueue\|retryQueue\|seenNonces\|nonceDedup\|NonceDedupSet\|seen_nonces"
+      packages/client/src/ returns no matches. No class, type, or variable
+      related to retry queuing or nonce deduplication exists in packages/client.
+      The cello_send failure path in packages/client (or in its IPC caller) sends
+      a 'queue_failed_message' IPC request to the daemon instead of managing a
+      local queue. The cello_receive path in packages/client does not filter nonces
+      — it delivers whatever the daemon provides (dedup happens before the daemon
+      writes to the receive buffer). Verified by the grep command above returning
+      zero matches, run in CI.
+    test_type: unit
+    component_under_test: client
+    notes: >
+      The grep command is the test. Any match is a blocking finding — it means
+      the story is incomplete and the refactor did not fully migrate the logic.
+
+  - id: AC-011
+    given: "A NonceDedupStore for session S that already holds exactly 10,000 nonces
+      (the LRU cap from outline.md Resource Caps)"
+    when: "a new, unique nonce N_new arrives on session S"
+    then: >
+      The entry with the oldest seen_at timestamp is deleted from session_seen_nonces
+      before N_new is inserted. After the operation, the set size remains exactly
+      10,000. The evicted nonce does NOT appear in session_seen_nonces. N_new DOES
+      appear in session_seen_nonces. A subsequent incoming message carrying the
+      evicted nonce would NOT be recognized as a duplicate (LRU eviction means it
+      is no longer tracked — this is the documented acceptable tradeoff per Q6).
+      A subsequent incoming message carrying N_new IS recognized as a duplicate.
+      Verified by a unit test that pre-seeds the NonceDedupStore in-memory state
+      with 10,000 nonces, calls the insertion path for N_new, and asserts: (a) set
+      size is 10,000; (b) the oldest nonce is absent; (c) N_new is present; (d) a
+      NonceDedupStore.has(evicted_nonce) call returns false; (e) a
+      NonceDedupStore.has(N_new) call returns true.
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-012
+    given: "All error paths in this story's scope: retry_queue SQLite write failure,
+      retry drain stream error, nonce dedup SQLite write failure, malformed nonce
+      (wrong byte length), typed serializer round-trip failure"
+    when: "each distinct failure cause is triggered independently"
+    then: >
+      Each produces a distinct error code or log event name, distinguishable from
+      all others in packages/daemon. No catch block in packages/daemon/src/ or
+      packages/client/src/ (all files in both packages, not only files modified
+      by this story) interpolates an error object into a template string
+      (${error}) or swallows an exception silently. Every catch block must use
+      error instanceof Error ? error.message : String(error) when logging the
+      error. The implementer scans every catch block in packages/daemon/src/ and
+      packages/client/src/ and fixes or reports any violations found. The
+      operator can determine from the error alone which failure cause fired and
+      which component produced it.
+    test_type: unit
+    component_under_test: daemon
+    notes: >
+      Lateral catch audit for packages/daemon and packages/client. Addresses M7
+      lessons L6 (catch blocks log [object Object]) and the lateral audit rule
+      from /cello-story (scan ALL catch blocks in the package, not only changed
+      files). Any pre-existing catch in these packages that swallows or interpolates
+      is a blocking finding regardless of whether this story's code introduced it.
+
+  - id: AC-013
+    given: "All packages/daemon and packages/client code changes for this story
+      are implemented and tests pass in cello-client"
+    when: "the version bump procedure in cello-client CLAUDE.md is followed"
+    then: >
+      packages/daemon has its version incremented in package.json to reflect the
+      new RetryQueue and NonceDedupStore capability. packages/client has its
+      version incremented to reflect the removal of retry/dedup logic and the new
+      IPC delegation. Every package that depends on packages/daemon or
+      packages/client has its dependency versions updated. pnpm install is run
+      and pnpm-lock.yaml is updated. git tag is pushed for the bumped packages.
+      CI publishes to npm beta dist-tag. npm view @cello-protocol/connect@beta
+      dependencies --json shows real semver versions, never workspace:*.
+      No trustless-cello package.json update is required — packages/daemon and
+      packages/client are client-side only; trustless-cello has no runtime
+      dependency on them.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-014
+    given: "packages/e2e-tests/src/session-fixture.ts"
+    when: "createSessionFixture is called with opts.retryQueue: true"
+    then: >
+      The fixture starts a daemon (via opts.daemon: true from DAEMON-001) with
+      RetryQueue and NonceDedupStore enabled and pre-loaded (empty). The fixture
+      provides a helper method simulateStreamDrop(sessionId) that closes the
+      underlying session node stream to trigger the retry queue path without
+      requiring a real network interruption. All existing tests that do not pass
+      opts.retryQueue: true continue to work unchanged — non-breaking default of
+      false.
+    test_type: integration
+    component_under_test: e2e-tests
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      A message whose nonce has been previously processed by the daemon MUST be
+      discarded as a duplicate, even if the daemon was restarted between the
+      original delivery and the retry attempt. The nonce dedup set must not reset
+      to empty on restart.
+    adversarial_condition: >
+      Alice sends message M1 (nonce N1) to Bob. Bob's daemon processes M1 and
+      adds N1 to session_seen_nonces. Bob's daemon is then restarted. Alice (or
+      an attacker replaying Alice's signed envelope) retransmits M1 with nonce N1
+      to Bob after the restart. Bob's daemon must recognize N1 as a duplicate from
+      the SQLCipher-loaded nonce set and discard the retransmission without
+      delivering it to cello_receive. Verified by the integration test in AC-005.
+      An ephemeral (in-memory-only) nonce set would pass N1 through as a new
+      message after restart — a replay attack succeeds. SQLCipher persistence
+      is the defense.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: SI-002
+    statement: >
+      Retry queue entries must never expose message content outside the encrypted
+      SQLCipher DB. The content_blob column must be encrypted at rest via the same
+      SQLCipher key used for the rest of the daemon DB. Unencrypted message content
+      must not appear in log events, error messages, or IPC frames.
+    adversarial_condition: >
+      An attacker with read access to the filesystem (but not the SQLCipher key)
+      reads the raw SQLite file at ~/.cello/daemon.db. The retry_queue and
+      session_seen_nonces tables must be unreadable without the key. Verified by
+      asserting: (a) the SQLCipher DB is opened with PRAGMA key before any reads
+      or writes; (b) a hex dump of the raw DB file does not contain plaintext from
+      any queued message content (spot-check: write a message with known ASCII
+      content, assert that content does not appear as a substring in the raw file
+      bytes). Additionally: grep over all Logger.info/warn/error calls in
+      packages/daemon/src/ that touch retry queue entries asserts that no call
+      logs a content field — only nonce (hex), sessionId, queueDepth, attemptsTotal,
+      senderPubkey are logged.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      The SQLCipher key derivation is DAEMON-001's scope. This SI verifies the
+      retry_queue and session_seen_nonces tables participate in the same encryption
+      scheme — they must not be created in a separate unencrypted attachment.
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the SQLCipher DB is temporarily locked (another thread holds
+      a write lock) when the daemon tries to persist a retry queue entry"
+    fallback: >
+      The retry queue write retries for up to 2 seconds with exponential backoff
+      (SQLite's built-in busy_timeout). If the write does not complete within 2
+      seconds, message.retry.persist.failed is logged at ERROR with sessionId,
+      nonce (hex), and error.message from the SQLite error. The message remains
+      in the in-memory FIFO and will be retried on next peer reconnect — no
+      message is permanently lost from the in-memory queue. On daemon restart
+      before the next reconnect, the message will be absent from SQLite and lost.
+      The operator is not interrupted — this is an internal bookkeeping degradation,
+      not a protocol error.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      The busy_timeout is SQLite's built-in mechanism — set via
+      PRAGMA busy_timeout = 2000 at DB open time. No custom retry loop is needed.
+      The fallback of "stays in memory, lost on restart" is acceptable: the
+      SQLite lock contention case is extremely rare (the daemon owns the only
+      write path), and the DB-level retry handles transient contention without
+      data loss in normal operation.
+
+  - id: DB-002
+    condition: "While the session_seen_nonces table grows beyond the SQLite WAL
+      threshold during high-volume sessions (many incoming messages)"
+    fallback: >
+      SQLite WAL checkpointing handles write amplification transparently. The
+      NonceDedupStore LRU eviction (10,000 entries per session, AC-011) bounds
+      the table size per session. No special fallback is needed — WAL is the
+      fallback mechanism. If WAL checkpoint latency exceeds 100ms, the next
+      nonce dedup write is delayed by that amount; message delivery is not
+      blocked (nonce check is synchronous before delivery to cello_receive, but
+      the persistence write can be fire-and-forget if the in-memory LRU is the
+      source of truth for duplicate checks during live operation).
+    test_type: unit
+    component_under_test: daemon
+    notes: >
+      No dedicated test is required — this is a note for the implementer: the
+      NonceDedupStore may use the in-memory LRU as the authoritative source
+      during live operation and flush to SQLite asynchronously, provided the
+      flush completes before any daemon restart (DB.close() must await all
+      pending writes). This design is permitted; the synchronous-write design
+      is also permitted. The AC requirements (persistence across restart) apply
+      to both designs.
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: message.retry.queued
+      level: info
+      trigger: "When a message send fails and the message envelope is added to
+        the retry_queue for later delivery"
+      context_fields: [sessionId, nonce, queueDepth]
+      correlationId: false
+      notes: >
+        nonce is a hex string. queueDepth is the queue size after insertion
+        (1 on the first queued message; up to 1000 when at cap).
+    - name: message.retry.delivered
+      level: info
+      trigger: "When a queued message is successfully delivered after peer reconnect
+        and its retry_queue row is deleted"
+      context_fields: [sessionId, nonce, attemptsTotal]
+      correlationId: false
+      notes: >
+        attemptsTotal includes the original failed attempt. A message queued
+        after one failure and delivered on the first retry has attemptsTotal: 2.
+  error_events:
+    - name: message.retry.evicted
+      level: warn
+      trigger: "When the retry queue for a session reaches 1,000 entries and the
+        oldest message is evicted to make room for a new entry"
+      context_fields: [sessionId, nonce, queueDepth]
+      correlationId: false
+      notes: >
+        nonce is the hex nonce of the EVICTED message (not the newly queued one).
+        queueDepth is 1000 (at cap). This event fires before message.retry.queued
+        for the new entry.
+    - name: message.nonce.duplicate
+      level: debug
+      trigger: "When an incoming message carries a nonce already present in
+        session_seen_nonces for this session"
+      context_fields: [sessionId, nonce, senderPubkey]
+      correlationId: false
+      notes: >
+        Both nonce and senderPubkey are hex strings. Logged at DEBUG because
+        duplicate nonces are an expected operational event (legitimate retries)
+        and should not pollute INFO-level logs in normal operation.
+    - name: message.retry.persist.failed
+      level: error
+      trigger: "When the SQLCipher write for a retry queue entry fails after the
+        2-second busy_timeout (DB-001 degraded path)"
+      context_fields: [sessionId, nonce, error]
+      correlationId: false
+  notes: >
+    All four events are in the message.retry.* and message.nonce.* taxonomy
+    defined in outline.md §Observability Events. The implementer must add
+    message.retry.queued, message.retry.delivered, message.retry.evicted,
+    message.nonce.duplicate, and message.retry.persist.failed to the canonical
+    event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+    No console.log in implementation code — all events go through the injected
+    Logger interface. No correlationId is required for retry/nonce events: these
+    are per-message bookkeeping operations, not multi-step async flows initiated
+    by a single agent action.
+  alarms:
+    - condition: "message.retry.evicted fires more than 10 times in 1 minute for
+        the same session"
+      fires_to: "daemon-health CloudWatch alarm — sustained queue overflow for a
+        single session indicates the peer is persistently unreachable and the
+        queue is cycling; operator may need to close the session or investigate
+        peer connectivity"
+    - condition: "message.retry.persist.failed fires more than 3 times in 5 minutes"
+      fires_to: "daemon-health CloudWatch alarm — repeated SQLite write failures
+        indicate DB corruption or disk pressure"
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Two new files in packages/daemon/src/:
+      packages/daemon/src/retry-queue.ts   — RetryQueue class
+      packages/daemon/src/nonce-dedup.ts   — NonceDedupStore class
+    Both are instantiated in packages/daemon/src/server.ts (the composition root)
+    and passed to the SessionManager.
+  - >
+    SQLCipher table DDL (inline migrations — NOT Flyway; Flyway is for the
+    directory's Postgres; client-side SQLite uses inline migrations run at
+    daemon startup if tables do not exist):
+
+      CREATE TABLE IF NOT EXISTS retry_queue (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id      TEXT    NOT NULL,
+        nonce_hex       TEXT    NOT NULL,
+        content_blob    BLOB    NOT NULL,
+        queued_at       INTEGER NOT NULL,
+        attempts        INTEGER NOT NULL DEFAULT 1,
+        position        INTEGER NOT NULL,
+        UNIQUE(session_id, nonce_hex)
+      );
+      CREATE INDEX IF NOT EXISTS retry_queue_by_session_position
+        ON retry_queue(session_id, position ASC);
+
+      CREATE TABLE IF NOT EXISTS session_seen_nonces (
+        session_id      TEXT    NOT NULL,
+        nonce_hex       TEXT    NOT NULL,
+        sender_pubkey   TEXT    NOT NULL,
+        seen_at         INTEGER NOT NULL,
+        PRIMARY KEY (session_id, nonce_hex)
+      );
+      CREATE INDEX IF NOT EXISTS seen_nonces_by_session_seen_at
+        ON session_seen_nonces(session_id, seen_at ASC);
+
+    The index on (session_id, position ASC) enables O(log n) FIFO drain.
+    The index on (session_id, seen_at ASC) enables O(log n) LRU eviction.
+  - >
+    TypedSerializer for Uint8Array fields: stored as hex strings in nonce_hex
+    (and as BLOB for content_blob using Uint8Array directly via better-sqlite3's
+    BLOB binding). On read: better-sqlite3 returns Buffer for BLOB columns;
+    use Buffer.from(result.nonce_hex, 'hex') for nonce; the BLOB column is
+    already a Buffer and can be passed directly to Uint8Array.from(blob).
+    Never use JSON.stringify on any Uint8Array field.
+  - >
+    FIFO position column: use a session-scoped monotonically increasing integer.
+    Simplest implementation: SELECT COALESCE(MAX(position), 0) + 1 FROM
+    retry_queue WHERE session_id = ? in the same transaction as the INSERT. No
+    race: SQLite serializes writes per connection.
+  - >
+    LRU eviction for nonce set:
+      DELETE FROM session_seen_nonces
+      WHERE session_id = ? AND nonce_hex = (
+        SELECT nonce_hex FROM session_seen_nonces
+        WHERE session_id = ? ORDER BY seen_at ASC LIMIT 1
+      );
+    Run this DELETE before the INSERT when COUNT(*) for the session equals
+    10,000. Use a per-session in-memory count to avoid the COUNT(*) query
+    on every insertion.
+  - >
+    Retry drain trigger: the SessionManager calls RetryQueue.drainSession(sessionId)
+    when a session node reports a new stream from the counterparty (peer reconnect
+    event). Drain is sequential (not concurrent): send M1, await confirmation,
+    delete from DB, send M2, etc. If any resend fails, drain stops for that
+    session and the remaining messages stay in the queue for the next reconnect.
+  - >
+    packages/client changes: remove any RetryQueue or NonceDedupSet class from
+    packages/client/src/. The IPC protocol gains two new message types:
+    { type: 'queue_failed_send', sessionId, nonce, content } (sent by client when
+    send fails) and { type: 'check_nonce', sessionId, nonce, senderPubkey }
+    (sent by client when an incoming message arrives; daemon responds with
+    { duplicate: true|false }). The exact IPC message shape is implementation
+    detail — the AC requirement is that packages/client has no local retry or
+    dedup state.
+  - >
+    cello status response update (authoritative shape after this story):
+    {
+      daemon: 'running',
+      directory_signaling: 'connected' | 'reconnecting' | 'lost',
+      agents: [...],
+      connections: [...],
+      standing_receiver_ready: boolean,      // added by DAEMON-002
+      retryQueueDepth: number                // added by DAEMON-003; always integer ≥ 0
+    }
+    SESSION-001 adds interrupted_sessions. DAEMON-003 adds retryQueueDepth.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-DAEMON-002  # session node map required; retry queue is per session node
+  blocks:
+    - CELLO-M7-MCP-002     # agent-aware notifications depend on retry queue + nonce dedup being in daemon
+  notes: >
+    DAEMON-003 depends only on DAEMON-002. It can be implemented immediately
+    after DAEMON-002 is complete. MCP-002 is blocked on DAEMON-003 because
+    notification presence signals must account for retry queue state. No
+    cross-repo dependency — packages/daemon and packages/client are both in
+    cello-client; trustless-cello has no dependency on either.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Multi-Party Conversations, Node Operations"
+  end_to_end_flow: "§6.1 Hash Relay Mechanics — Dual-Path Architecture"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-11_1030_daemon-transport-architecture"
+  related_docs:
+    - "[[daemon-transport-architecture]]"
+    - "[[CELLO-M7-E2E-001]]"
+    - "[[CELLO-M7-DAEMON-002]]"
+    - "[[CELLO-M7-DAEMON-001]]"
+  notes: >
+    Design decision to persist retry queue and nonce dedup: outline.md
+    §Resolved Design Questions Q6. Resource caps (1,000 queue depth, 10,000
+    nonce set): outline.md §Resource Caps. Error surface map: outline.md
+    §M7 Error Surface Map row for M7-DAEMON-003. Observability events taxonomy:
+    outline.md §Observability Events (retry queue + nonce dedup). Serialization
+    lesson: outline.md §M6/M6B Lessons L1. Startup loading lesson: L2.
+    Composition root lesson: L3.
