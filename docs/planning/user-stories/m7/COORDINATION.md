@@ -40,13 +40,13 @@ The log entry stays as history. The rule must not live only in the log.
 | Story | Assigned to | Status | Notes |
 |-------|-------------|--------|-------|
 | M7-E2E-001 — Integration gate | — | written — cohesion pass complete | Cohesion pass done 2026-06-12; implements last after all component stories land |
-| M7-DAEMON-001 — Daemon foundation | — | **implemented — PR ready** | Branch m7/daemon-001 in cello-client; 52 tests; all reviewer findings fixed |
-| M7-DAEMON-002 — Ephemeral session nodes | — | **implemented — PR ready** | Branch m7/daemon-002 in cello-client; 76 tests; all reviewer findings fixed; stacked on m7/daemon-001 |
-| M7-MANIFEST-001 — Manifest schema | — | **in progress** | Branch m7/manifest-001 in cello-client; nearly complete as of 2026-06-12 |
-| M7-MANIFEST-002 — Client verification + polling | — | **merged to main** | Original m7/manifest-002 branch discarded (daemon scaffolding conflict); re-implemented as m7/manifest-002-fix in cello-client (daemon integration only); merged to main in both repos; 815+13 cello-client tests + 6 directory tests; adversarial review complete — 8 findings fixed (branch m7/manifest-002-fixes, merged to main) |
-| M7-MCP-001 — MCP adapter | — | **implemented — PR ready** | Branch m7/mcp-001 in cello-client; 11 adapter tests + 28 daemon tests; stacked on m7/daemon-003; all reviewer findings fixed |
-| M7-SIGNAL-001 — Signaling stream resilience | — | **merged to main** | Branch m7/signal-001-merge in cello-client; 835 tests; two code-review rounds (4+4 findings fixed); nonce-cleared SI-003 fix; full SIGNAL-001 test suite added |
-| M7-DAEMON-003 — Nonce dedup + retry queue | — | **implemented — PR ready** | Branch m7/daemon-003 in cello-client; 112 tests; stacked on m7/daemon-002; 2 code-review rounds (7 findings round 1, 0 round 2); version bump deferred (AC-013) |
+| M7-DAEMON-001 — Daemon foundation | — | **merged to main** | cello-client main; 52 tests |
+| M7-DAEMON-002 — Ephemeral session nodes | — | **merged to main** | cello-client main; 76 tests |
+| M7-DAEMON-003 — Nonce dedup + retry queue | — | **merged to main** | cello-client main; 112 tests |
+| M7-MANIFEST-001 — Manifest schema | — | **merged to main** | cello-client main |
+| M7-MANIFEST-002 — Client verification + polling | — | **merged to main** | cello-client main (both repos); 835 tests; adversarial review complete |
+| M7-MCP-001 — MCP adapter | — | **merged to main** | cello-client main |
+| M7-SIGNAL-001 — Signaling stream resilience | — | **merged to main** | cello-client main; 835 tests; two code-review rounds; nonce-cleared SI-003 fix |
 | M7-WIRE-001 — SessionAssignment wire format | — | written — not yet started | Blocked on M7-DAEMON-002; cross-repo; batch with M7-SESSION-001 + M7-MANIFEST-002 |
 | M7-TRANSPORT-001 — AutoNAT + direct P2P | — | written — not yet started | Blocked on M7-WIRE-001; cross-repo |
 | M7-SESSION-001 — Interrupted session handling | — | written — not yet started | Blocked on M7-DAEMON-002 + M7-WIRE-001; cross-repo; batch with M7-WIRE-001 + M7-MANIFEST-002 |
