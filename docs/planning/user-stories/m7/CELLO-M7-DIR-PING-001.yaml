@@ -127,17 +127,6 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-003
-    given: "The directory's ping handler code path"
-    when: "reviewed by a human or static analyzer"
-    then: >
-      No blocking operations appear in the handler — no await on a DB query, no
-      await on an external HTTP call, no file I/O. The handler's execution path
-      from ping receipt to pong send is synchronous or uses only non-blocking
-      stream writes. This is a code review criterion, not a runtime test.
-    test_type: unit
-    component_under_test: directory
-
-  - id: AC-004
     given: "A directory node with an authenticated signaling stream"
     when: "the stream is killed at the OS level (TCP RST) immediately before the
       directory attempts to send a pong frame"
@@ -153,7 +142,7 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
-  - id: AC-005
+  - id: AC-004
     given: "A directory node with an authenticated signaling stream"
     when: "the client sends ping frames every 15 seconds for 2 minutes (8 pings)"
     then: >
@@ -165,36 +154,38 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-006
-    given: "packages/directory/src/directory-node.ts (or the equivalent composition
-      root for the directory binary)"
-    when: "the directory starts via its normal entrypoint"
+    given: "The directory binary's main entrypoint (packages/directory/src/index.ts
+      or bin.ts)"
+    when: "the directory starts via `node dist/index.js` (the command ECS runs)"
     then: >
-      The ping handler is registered in the signaling stream protocol handler.
-      Verified by an integration test that: (a) starts the directory binary (not
-      just constructs DirectoryNode), (b) establishes an authenticated signaling
-      stream from a client, (c) sends a ping frame, (d) asserts a pong is
-      received within 1 second. A test that directly constructs the handler
-      without starting the directory binary does NOT satisfy this AC.
+      The ping handler is reachable from a real client. Verified by an integration
+      test that: (a) spawns the directory process via child_process.spawn() running
+      the actual binary, (b) establishes an authenticated signaling stream from a
+      separate CelloClient, (c) sends a ping frame, (d) asserts a pong is received
+      within 1 second. A test that calls `new DirectoryNode().start()` directly
+      or imports the handler function for isolated unit testing does NOT satisfy
+      this AC — the test must exercise the actual deployment artifact.
     test_type: integration
     component_under_test: directory
     notes: >
       Addresses M7 lesson L3 (composition root never wired). The handler can be
       implemented and unit-tested, but if the directory's entrypoint never
       registers it, it is dead code. This AC proves the handler is reachable
-      from the running binary.
+      from the running binary by spawning the actual binary that ECS deploys.
 
   - id: AC-007
-    given: "All catch blocks in packages/directory/src/ that handle signaling
-      stream errors or frame send errors"
+    given: "All catch blocks in packages/directory/src/"
     when: "each catch block is reviewed"
     then: >
       No catch block interpolates the error object into a template string via
       ${error}. All error logging uses error.message explicitly:
       error instanceof Error ? error.message : String(error). The implementer
-      scans every catch block in packages/directory/src/ and fixes or reports
-      any that interpolate error objects directly. This lateral catch audit
-      covers ALL files in packages/directory/src/ — not only files changed by
-      this story.
+      scans EVERY catch block in EVERY file in packages/directory/src/ (not
+      only files changed by this story, and not only catch blocks judged to
+      be "signaling-related") and fixes or reports any that interpolate error
+      objects directly. If a catch block is found that requires an interface
+      change or touches significant pre-existing code, the implementer reports
+      it as [high] and files a new story before milestone close.
     test_type: unit
     component_under_test: directory
 
@@ -212,6 +203,20 @@ acceptance_criteria:
       (DIR-PING-001 touches only packages/directory in trustless-cello; no
       cello-client packages are modified).
     test_type: integration
+    component_under_test: directory
+
+  - id: AC-009
+    given: "docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
+      (the canonical event taxonomy)"
+    when: "the implementation is complete"
+    then: >
+      The three events (directory.signaling.ping.received,
+      directory.signaling.pong.sent, directory.signaling.pong.failed) are added
+      to the Observability Events section under a new "Directory Signaling (M7-DIR-PING-001)"
+      subsection with: event name, level, context fields, correlationId: false,
+      trigger description. The entries match the format of existing taxonomy
+      entries (see SESSION-007 or FEDERATION-003 for examples).
+    test_type: unit
     component_under_test: directory
 
 # ─── Security Invariants ────────────────────────────────────
@@ -232,6 +237,21 @@ security_invariants:
       pings in rapid succession and asserts all pongs are received within 2
       seconds total (allowing for stream write serialization).
     test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: >
+      The directory's ping handler shall execute no blocking operations
+      (database queries, external API calls, file I/O). The handler's
+      execution path from ping receipt to pong send must be synchronous
+      or use only non-blocking stream writes.
+    adversarial_condition: >
+      An implementer attempts to add a blocking operation (e.g., a Postgres
+      query to log ping statistics, or an HTTP request to a metrics endpoint)
+      inside the ping handler. A code reviewer inspects the handler's call
+      graph and rejects the change because any blocking call would violate
+      the 1-second pong budget and introduce a DoS vector under load.
+    test_type: unit
     component_under_test: directory
 
 # ─── Degraded Behavior ──────────────────────────────────────
@@ -348,6 +368,7 @@ references:
     - "[[daemon-transport-architecture]]"
     - "[[CELLO-M7-SIGNAL-001]]"
     - "[[CELLO-M7-DAEMON-001]]"
+    - "[[m7/outline]]"
   notes: >
     DIR-PING-001 completes the heartbeat path started by SIGNAL-001. SIGNAL-001
     sends ping every 15s and expects pong within 15s (30s max detection window).
