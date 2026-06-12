@@ -174,3 +174,59 @@ production-ready by reviewer across all crypto paths, version monotonicity, back
 compat, error handling, and test coverage.
 
 **Total review rounds:** 3 code-review + 1 sprint-review. All findings resolved.
+
+---
+
+### 2026-06-12 14:30 — DAEMON-003 implemented
+
+**Story:** CELLO-M7-DAEMON-003
+**Agent/Author:** sprint-coder
+
+Built RetryQueue and NonceDedupStore for the CELLO daemon — per-session FIFO retry with
+SQLCipher persistence and per-session LRU nonce deduplication. Both components load from
+DB before IPC socket opens (AC-007/AC-008 restart boundary).
+
+**What was built:**
+- `retry-queue.ts` — per-session FIFO, cap 1000, oldest-evicted on overflow, SQLCipher
+  persistence via `node:sqlite` DatabaseSync. Methods: loadFromDb, enqueue, drainSession,
+  getTotalDepth, getSessionDepth, getSessionEntries.
+- `nonce-dedup.ts` — per-session LRU, cap 10000, SQLCipher persistence. Uses indexed
+  SQLite query for O(log n) eviction with in-memory fallback. Methods: loadFromDb, has,
+  checkAndAdd.
+- `daemon.ts` composition root updated — instantiates both components from
+  SessionNodeManager's DB handle, calls loadFromDb() before IPC socket opens.
+- Three IPC handlers: `queue_failed_send`, `check_nonce`, `drain_session`.
+- `daemon-retry-dedup.test.ts` — 8 integration tests covering AC-001 (restart boundary),
+  AC-002 (FIFO via IPC), AC-007, AC-008, AC-009 (cap/eviction).
+- `retryQueueDepth` added to DaemonStatusResponse.
+- `debug()` added to Logger interface; all test mocks updated (8 files).
+
+**Mid-story decisions:**
+- Shared SQLite DB handle from SessionNodeManager (avoids second DB file / lock contention).
+- drain_session IPC returns nonce metadata only (SI-002: content never in IPC frames).
+- TypedSerializer pattern: Uint8Array stored as hex via Buffer.from().toString('hex').
+- AC-013 (version bump) intentionally skipped per user instruction.
+
+**Code-reviewer findings (7 total, all fixed):**
+1. drain never triggered — added drain_session IPC handler + getSessionEntries method.
+2. No debug() on Logger — added to interface, updated all usages.
+3. Attempts not incremented on failed drain — added UPDATE statement.
+4. Missing integration tests for AC-001/AC-002 — added restart boundary + FIFO-via-IPC tests.
+5. O(n) LRU eviction — rewrote to use SQLite indexed query.
+6. getSessionEntries returns live array — switched to defensive copy.
+7. Silent catch in ipc-client — added onFrameError callback.
+
+**Sprint-reviewer findings (4 total, all fixed):**
+1. BLOCKING: AC-001 missing restart boundary test — added integration test.
+2. BLOCKING: AC-002 missing FIFO-via-IPC test — added integration test.
+3. MEDIUM: SI-002 content leak in drain_session — removed content from response.
+4. MEDIUM: Silent catch in ipc-client — added onFrameError callback.
+
+**Constraints discovered:**
+- node:sqlite (DatabaseSync) requires Node.js 24 LTS — documented in package.json engines.
+- Logger interface needed debug() level for message.nonce.duplicate events (taxonomy requirement).
+
+**Intentional deferrals:**
+- AC-013 version bump deferred per user instruction (will be batched with MCP-002).
+- Actual drain trigger on peer reconnect deferred to MCP-002 (drain_session handler returns
+  metadata only; real sendFn integration requires session transport context).
