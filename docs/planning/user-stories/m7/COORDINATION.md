@@ -49,7 +49,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-SIGNAL-001 — Signaling stream resilience | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 for implementation |
 | M7-DIR-PING-001 — Directory-side ping/pong handler | — | not started | Blocked on M7-SIGNAL-001 (frame type defined there); touches packages/directory (trustless-cello); required for heartbeat to function end-to-end |
 | M7-DAEMON-003 — Nonce dedup + retry queue | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-002 for implementation |
-| M7-MCP-002 — Agent-aware notifications | — | not started | Blocked on M7-MCP-001 + M7-DAEMON-002 + M7-DAEMON-003 |
+| M7-MCP-002 — Agent-aware notifications | — | written — review pending | Written 2026-06-12; blocked on M7-MCP-001 + M7-DAEMON-002 + M7-DAEMON-003 for implementation |
 | M7-MANIFEST-001 — Manifest schema | — | written — review pending | Written 2026-06-12; independent; no other story blocks it |
 | M7-MANIFEST-002 — Client verification + polling | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 + M7-MANIFEST-001 + M7-SIGNAL-001 for implementation; cross-repo; batch with M7-WIRE-001 + M7-SESSION-001 |
 | M7-CICD-001 — Cross-repo CI/CD | — | written — review pending | Written 2026-06-12; independent; no other story blocks it |
@@ -71,11 +71,11 @@ claim a version here before writing the migration.
 | `packages/cli` (new) | M7-DAEMON-001 | Created by DAEMON-001 |
 | `packages/adapter-claude-code` | M7-MCP-001, M7-MCP-002 | Major rewrite in MCP-001; MCP-002 adds notifications |
 | `packages/transport` | M7-TRANSPORT-001, M7-SIGNAL-001 | SIGNAL-001 adds signaling manager; TRANSPORT-001 adds AutoNAT |
-| `packages/protocol-types` | M7-WIRE-001, M7-MANIFEST-001 | Wire format extensions + manifest schema |
+| `packages/protocol-types` | M7-WIRE-001, M7-MANIFEST-001, M7-SESSION-001 | Wire format extensions + manifest schema + SealInterruptedRequest signaling types |
 | `packages/client` | M7-WIRE-001, M7-SESSION-001, M7-DAEMON-003 | Session assignment + interrupted handling + nonce dedup |
 | `packages/crypto` | M7-MANIFEST-001 | Manifest schema crypto |
 | `packages/relay` | M7-WIRE-001, M7-SESSION-001 | Wire format + interrupted frame |
-| `packages/directory` | M7-WIRE-001, M7-MANIFEST-002 | Wire format + challenge signing |
+| `packages/directory` | M7-WIRE-001, M7-MANIFEST-002, M7-SESSION-001 | Wire format + challenge signing + SealInterruptedRequest pass-through routing |
 | `packages/e2e-tests` | M7-E2E-001 | Integration gate |
 | `infra/` | M7-CICD-001 | CI/CD pipeline changes |
 
@@ -259,15 +259,35 @@ no FROST ceremony); client-side detection on relay frame receipt (source:
 'relay_frame') and relay stream close (source: 'stream_close'); SQLite status
 transition to 'interrupted'; login surfacing via interrupted_sessions field
 in cello status (sessionId, agentName, counterpartyPubkey, messageCount,
-interruptedAt); graceful-shutdown extension (verifies DAEMON-002's persisted
-fields are present); bilateral seal-interrupted flow (SEAL-INTERRUPTED control
-leaf exchange, then normal FROST seal with 'cello-frost-seal-v1' context string
-and merkleRootAtInterruption); 3 new error codes (session_already_interrupted,
+interruptedAt); graceful-shutdown extension (adds SQLite columns via inline
+ALTER TABLE); bilateral seal-interrupted flow (SEAL-INTERRUPTED control
+leaf exchange via directory signaling stream, then normal FROST seal with
+'cello-frost-seal-v1' context string and merkleRootAtInterruption);
+SealInterruptedRequest/Ack/Rejection signaling types in packages/protocol-types;
+directory pass-through handlers for all three seal_interrupted signaling types;
+4 new error codes (session_already_sealed, seal_interrupted_in_progress,
 seal_interrupted_counterparty_unavailable, seal_interrupted_rejected_by_counterparty);
-Q4 SI (no auto-seal on relay frame receipt); L7-guard AC on relay stream (AC-001
-requires real libp2p stream, not in-process stub); lateral catch audit across
+Q4 SI (no auto-seal on relay frame receipt); L7-guard ACs on relay stream
+(AC-001) and directory signaling (AC-008b); lateral catch audit across
 packages/relay, packages/daemon, packages/client; composition root wiring AC;
-version bump (AC-015) and trustless-cello dependency update (AC-016). Cross-repo:
-packages/relay (trustless-cello) + packages/daemon + packages/client (cello-client).
-Must batch with M7-WIRE-001 + M7-MANIFEST-002 before any pipeline push. Story
-marked written — review pending.
+version bump (AC-017 covering protocol-types, client, daemon) and trustless-cello
+dependency update (AC-018). Cross-repo: packages/directory + packages/relay
+(trustless-cello) + packages/protocol-types + packages/daemon + packages/client
+(cello-client). Must batch with M7-WIRE-001 + M7-MANIFEST-002 before any pipeline
+push. Story marked written — review pending.
+
+### 2026-06-12 — M7-MCP-002 written
+
+CELLO-M7-MCP-002 YAML written. Adds agent field to all MCP notifications and
+introduces three new notification types: agent_state_changed (broadcast to all
+IPC connections), agent_current_changed (triggering connection only),
+session_state_changed (connections where affected agent is current). Explicit
+routing rules enforced in ACs via opts.ipcClients: 2 fixture extension — single-
+connection tests cannot verify routing correctness. message.retry.evicted
+confirmed as daemon-internal only (no MCP notification). 14 ACs: multi-connection
+routing proof (AC-001 through AC-010), observability (AC-011), composition root
+wiring (AC-012), lateral catch audit (AC-013), version bump (AC-014). 2 SIs:
+session notification routing isolation, no key material in payloads. cello-client
+only — touches packages/adapter-claude-code and packages/daemon. No trustless-cello
+dependency update needed (no directory/relay changes). Story marked written —
+review pending.
