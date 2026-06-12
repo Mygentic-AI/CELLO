@@ -431,3 +431,49 @@ on branch m7/manifest-002-fixes in cello-client, merged to main.
 - Typecheck: clean
 
 **Commit:** 09d5c51 — merged to main via `--no-ff` in cello-client.
+
+---
+
+### 2026-06-12 18:30 — SIGNAL-001 merged to main (via signal-001-merge branch)
+
+**Story:** CELLO-M7-SIGNAL-001
+**Agent/Author:** orchestrator
+
+Original `m7/signal-001` branch was stacked on `m7/daemon-001` before MANIFEST-002
+landed. MANIFEST-002 also created `core/transport/src/signaling-manager.ts` from
+scratch (add/add conflict). The branch had completed sprint-reviewer and code-reviewer
+but could not be merged cleanly.
+
+**Resolution:** Manual merge performed in main context (not a subagent):
+- Created `m7/signal-001-merge` from current main
+- Took MANIFEST-002's version of `signaling-manager.ts` as the base (contains
+  step-6 challenge verification and manifest polling)
+- Added SIGNAL-001's additions on top: SignalingManager connection lifecycle
+  (heartbeat, backoff reconnect, status observable, operation queue, graceful stop),
+  daemon wiring in `daemon.ts`, config types in `types.ts`
+- Result: single unified `SignalingManager` class with both security and resilience
+
+**Two code-review rounds on the merge branch:**
+
+Round 1 (4 findings, all fixed):
+1. HIGH: challengeVerifier dead-code in daemon wiring — wired correctly
+2. HIGH: Missing test coverage for SIGNAL-001 behaviors — (addressed in round 2)
+3. MEDIUM: `this.reconnectLoop()` floating promise — added `void`
+4. LOW: Incorrect comment "structurally identical" — corrected to "subset of"
+
+Round 2 (4 findings, all fixed):
+1. HIGH (security): `_pendingNonce` / `_agentPubkeyHex` never cleared after
+   `processStep5Frame()` — stale nonce reusable across reconnects (SI-003 bypass).
+   Fixed: consume both fields into locals and null them out before verification.
+2. HIGH: SIGNAL-001 test suite missing from merged file — added full suite
+   (backoff, lost state, queue cap, FIFO drain, send-path liveness, graceful
+   shutdown, status transitions, nonce-cleared SI-001 test)
+3. MEDIUM: Floating `reconnectLoop()` — `void` added
+4. LOW: Comment corrected
+
+**Final test counts:** 835 passing, 10 skipped, 3 todo. Lint and typecheck clean.
+
+**Commits:** 7438adc (merge), 2f66cf9 (round 1 fixes), 24a55d2 (round 2 fixes)
+Merged to main: 7f80441
+
+**Unblocks:** M7-DIR-PING-001 (trustless-cello only; can start immediately)
