@@ -51,7 +51,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-DAEMON-003 — Nonce dedup + retry queue | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-002 for implementation |
 | M7-MCP-002 — Agent-aware notifications | — | not started | Blocked on M7-MCP-001 + M7-DAEMON-002 + M7-DAEMON-003 |
 | M7-MANIFEST-001 — Manifest schema | — | written — review pending | Written 2026-06-12; independent; no other story blocks it |
-| M7-MANIFEST-002 — Client verification + polling | — | not started | Blocked on M7-DAEMON-001 + M7-MANIFEST-001 |
+| M7-MANIFEST-002 — Client verification + polling | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 + M7-MANIFEST-001 + M7-SIGNAL-001 for implementation; cross-repo; batch with M7-WIRE-001 + M7-SESSION-001 |
 | M7-CICD-001 — Cross-repo CI/CD | — | written — review pending | Written 2026-06-12; independent; no other story blocks it |
 
 ### Migration Version Registry
@@ -88,7 +88,7 @@ directory or relay changes, ask: are S4, S6, and S12 all ready to batch?
 Current batch status:
 - M7-WIRE-001 ready to batch: **no**
 - M7-SESSION-001 ready to batch: **no**
-- M7-MANIFEST-002 ready to batch: **no**
+- M7-MANIFEST-002 ready to batch: **written — awaiting sprint review**
 
 ### Blocked / Waiting
 
@@ -219,6 +219,37 @@ assignment_tbs_verification_failed — distinct from frost_verification_failed),
 transport_mode authority (never infer from address format), dead signaling channel
 path, composition root AC, e2e fixture extension, version bump, and trustless-cello
 dependency update. 3 SIs and 2 DBs. Story marked written — review pending.
+
+### 2026-06-12 — M7-MANIFEST-002 written
+
+CELLO-M7-MANIFEST-002 YAML written. Closes the directory trust gap identified in
+the transport security audit: after step 4 the directory was sending a plain
+signaling_auth_ok frame with no cryptographic proof of identity. Key decisions:
+
+Step-6 TBS definition: 'cello-directory-auth-challenge-v1\n' + nodeId + '\n' +
+agentPubkeyHex + '\n' + nonceHex + '\n' + isoTimestamp. Context string prefix
+provides cross-protocol confusion defense; nonce inclusion prevents replay.
+
+Four new adapter interfaces: IManifestVersionStore (SQLCipher-backed version
+persistence), IManifestProvider (manifest loading + verification), IDirectoryChallengeVerifier
+(Ed25519 step-6 check against manifest entry), IManifestPollScheduler (randomized
+6–12h interval with injectable override for tests). All in packages/interfaces/;
+local stubs for CELLO_ENV=local/test.
+
+MANIFEST-001's verifyManifest, CONSORTIUM_ROOT_KEYS, makeTestManifest used
+throughout. Step-5 directory side: packages/directory in trustless-cello adds
+directoryKeyProvider injection; sends nodeId + signature in signaling_auth_ok.
+
+Critical AC lessons baked in: AC-005 crosses real process restart boundary (L2
+— in-memory state not loaded from DB at startup); AC-014 verifies composition
+root wiring from binary entrypoint, not direct class construction (L3). AC-012
+covers poll queuing during reconnecting state (SIGNAL-001 queue consistency).
+
+Story marked written — review pending. SIGNAL-001 added as blocking dependency
+(AC-012 requires the SIGNAL-001 outbound queue interface). Cross-repo: touches
+packages/transport + packages/daemon (cello-client) and packages/directory
+(trustless-cello). Must batch push with M7-WIRE-001 + M7-SESSION-001 per batch
+gate in AC-017-trustless-cello-dependency-update.
 
 ### 2026-06-12 — M7-SESSION-001 written
 
