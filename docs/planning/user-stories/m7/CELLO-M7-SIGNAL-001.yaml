@@ -268,7 +268,7 @@ acceptance_criteria:
       CELLO_E2E_LIVE. The test must assert the manifest poll resolves AFTER the
       reconnect event — use log ordering or event sequencing to prove this.
 
-  - id: AC-005b
+  - id: AC-006
     given: "A daemon in 'reconnecting' state (mock connect still rejecting)"
     when: "two different MCP tool calls requiring the signaling stream are made
       back-to-back (cello_initiate_session and cello_register)"
@@ -283,7 +283,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: transport
 
-  - id: AC-006
+  - id: AC-007
     given: "A daemon in 'reconnecting' state with exactly 64 internal protocol
       operations already in the outbound queue (cap reached)"
     when: "a 65th internal protocol operation is dispatched"
@@ -297,7 +297,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: transport
 
-  - id: AC-007
+  - id: AC-008
     given: "A daemon in 'lost' state (10 reconnect attempts exhausted)"
     when: "any operation requiring the signaling stream is attempted (cello_initiate_session,
       manifest poll, FROST ceremony request)"
@@ -313,7 +313,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: transport
 
-  - id: AC-008
+  - id: AC-009
     given: "A SignalingManager in 'reconnecting' state with 3 queued operations
       (Op-A queued first, Op-B second, Op-C third). The mock connect succeeds on
       the next attempt."
@@ -327,7 +327,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: transport
 
-  - id: AC-009
+  - id: AC-010
     given: "A SignalingManager configured with a mock connect function that records
       every invocation with all arguments passed to it. The manager has been
       connected once, then disconnected (stream death detected), then reconnects
@@ -357,7 +357,7 @@ acceptance_criteria:
       named 'resume', 'resumeToken', 'sessionToken', or equivalent. This is a
       code review check, not a Vitest assertion.
 
-  - id: AC-010
+  - id: AC-011
     given: "packages/daemon/src/server.ts (the composition root)"
     when: "the daemon binary is started via cello login"
     then: >
@@ -378,7 +378,7 @@ acceptance_criteria:
       The binary start uses opts.daemon: true from the session-fixture extension
       defined in DAEMON-001 AC-014.
 
-  - id: AC-011
+  - id: AC-012
     given: "A SignalingManager with an active 'connected' signaling stream"
     when: "a send operation is attempted on the signaling stream and the underlying
       write throws (connection reset mid-write — simulated by closing the stream
@@ -399,7 +399,7 @@ acceptance_criteria:
       lesson L5. Tests that the stream can be dead at the exact moment of a
       send write, not only during idle heartbeat timeout.
 
-  - id: AC-012
+  - id: AC-013
     given: "All error paths in this story's scope: heartbeat timeout, stream error
       on send, stream error on receive, connect rejection (single attempt), max
       10 attempts exhausted, queue full (64-op cap), lost state rejection"
@@ -423,7 +423,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: transport
 
-  - id: AC-013
+  - id: AC-014
     given: "All cello-client code changes for this story are implemented and all
       tests pass"
     when: "the version bump procedure documented in cello-client CLAUDE.md is
@@ -562,6 +562,7 @@ observability:
       AC-002 verifies directory.signaling.reconnecting backoffMs sequence.
       AC-003 verifies directory.signaling.connected fires on successful reconnect.
       AC-004 verifies directory.signaling.reconnect.failed fires after 10 exhausted attempts.
+      AC-013 verifies all error paths produce distinct, non-swallowed log events.
   alarms:
     - condition: "directory.signaling.reconnect.failed fires more than once in 24 hours"
       fires_to: >
@@ -610,7 +611,14 @@ implementation_notes:
     ping/pong frames, SIGNAL-001's implementation adds this frame type within
     the existing /cello/signaling/1.0.0 stream — it is a keepalive addition,
     not a protocol version bump. The directory must echo pong without triggering
-    any ceremony or state change.
+    any ceremony or state change. The directory-side ping handler is out of scope
+    for SIGNAL-001 (cello-client only) and is explicitly deferred to
+    CELLO-M7-DIR-PING-001. Until DIR-PING-001 lands, heartbeat will not be
+    functional end-to-end: ping frames will be sent by the daemon but pong
+    responses will never arrive, causing the daemon to detect stream death after
+    every 30-second window and enter the reconnect loop. CELLO-M7-DIR-PING-001
+    is blocked on SIGNAL-001 (the ping/pong frame type defined here must exist
+    first) and touches only packages/directory in trustless-cello.
   - >
     Outbound queue type:
       type PendingOperation = {
@@ -632,6 +640,15 @@ implementation_notes:
     begins immediately at construction, so there is no pre-attempt state.
     This is consistent with DAEMON-001 AC-009: from the IPC client's perspective,
     any non-connected state is 'reconnecting'.
+  - >
+    Known limitation — no self-recovery from 'lost' state. Once the reconnect
+    loop exhausts all 10 attempts and transitions to 'lost', the loop stops.
+    If network connectivity is restored afterwards, the daemon does not detect
+    this and does not resume reconnecting — it stays 'lost' indefinitely. The
+    operator must run `cello logout` followed by `cello login` to restart the
+    directory connection from scratch. Automatic self-recovery from 'lost' state
+    (resuming the backoff loop on an external network-restoration signal) is a
+    known gap deferred to a future story.
 
 # ─── Dependencies ────────────────────────────────────────────
 dependencies:

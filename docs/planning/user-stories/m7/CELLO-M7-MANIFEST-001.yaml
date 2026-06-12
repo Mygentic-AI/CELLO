@@ -150,7 +150,11 @@ acceptance_criteria:
       lexicographically at every nesting level, no whitespace, and no trailing
       newline. Specifically:
         (a) top-level field order: expires, nodes, not_before, version
+            (listed for illustration — the implementer must derive this from the
+            sort algorithm, not from a hardcoded list. If a field is ever added,
+            the algorithm must continue to work without updating a hardcoded order)
         (b) each node entry key order: endpoint, nodeId, provider, pubkey, region
+            (same principle — sort the keys at serialization time, not at definition time)
         (c) the nodes array preserves its insertion order — array element order
             is intentionally NOT sorted. Array order is controlled by the signing
             ceremony coordinator; sorting array elements would silently change the
@@ -353,14 +357,20 @@ acceptance_criteria:
     then: |
       - @cello-protocol/crypto is bumped (new exports: verifyManifest,
         canonicalManifestBody, CONSORTIUM_ROOT_KEYS, CONSORTIUM_THRESHOLD,
-        TEST_CONSORTIUM_ROOT_KEYS, TEST_CONSORTIUM_THRESHOLD, makeTestManifest)
+        TEST_CONSORTIUM_ROOT_KEYS, TEST_CONSORTIUM_THRESHOLD, makeTestManifest —
+        these are functional additions; client code that imports from crypto is
+        directly affected)
       - @cello-protocol/protocol-types is bumped (new exports: ConsortiumManifest,
-        ConsortiumNode, OfficerSignature, ManifestError and its three const values)
-      - @cello-protocol/client is bumped because it depends on @cello-protocol/crypto
-        and @cello-protocol/protocol-types; its dependency entries are updated to the
-        new semver ranges
-      - @cello-protocol/connect is bumped because it depends on @cello-protocol/client;
-        its dependency entries are updated. Version bump chain: crypto → client → connect
+        ConsortiumNode, OfficerSignature, ManifestError and its three const values —
+        functional additions)
+      - @cello-protocol/client is bumped as a semver hygiene bump: it depends on
+        crypto and protocol-types and its dependency version entries must be updated.
+        client does not yet call verifyManifest or use ConsortiumManifest — those
+        calls are added in MANIFEST-002. This bump is semver-hygiene-only.
+      - @cello-protocol/connect is bumped as a semver hygiene bump: it depends on
+        client. connect does not directly use any MANIFEST-001 symbols. Version bump
+        chain: crypto (functional) → protocol-types (functional) → client (hygiene)
+        → connect (hygiene)
       - pnpm install is run and pnpm-lock.yaml is updated in cello-client
       - git tag v{connect-version} is pushed to origin
       - CI publishes the new version to npm beta dist-tag
@@ -372,28 +382,6 @@ acceptance_criteria:
     notes: >
       Hard gate. A story that changes cello-client packages without publishing
       leaves every downstream story and operator on stale versions.
-
-  - id: AC-016
-    given: "The new @cello-protocol/crypto and @cello-protocol/protocol-types
-      versions are live on npm beta"
-    when: "packages/directory/package.json and packages/relay/package.json in
-      trustless-cello are reviewed"
-    then: |
-      - Both package.json files reference the new semver ranges for
-        @cello-protocol/crypto and @cello-protocol/protocol-types
-      - No workspace:* references to these packages remain in either file
-      - pnpm install is run and pnpm-lock.yaml is updated in trustless-cello
-      - pnpm run typecheck passes in trustless-cello with zero errors
-      - Commit pushed to trustless-cello main
-    test_type: integration
-    component_under_test: directory
-    notes: >
-      workspace:* resolves to stale local copies post-REPOSPLIT-002. This is a
-      semver hygiene update — directory and relay do not use any of MANIFEST-001's
-      new symbols (verifyManifest, ConsortiumManifest, etc.) at this stage. Their
-      functional use of these symbols begins in MANIFEST-002. The update is required
-      purely to prevent workspace:* drift; the new exports are not yet called by
-      either package.
 
   - id: AC-017
     given: "verifyManifest is called with a ConsortiumManifest whose signatures
@@ -486,11 +474,12 @@ observability:
     directory.auth.challenge.failed) are fired by MANIFEST-002's transport layer
     when it calls verifyManifest at connection time and during background polling.
     All runtime observability for the manifest trust chain belongs to MANIFEST-002.
-    No alarm threshold is applicable here: this story introduces no background task,
-    no network call, and no runtime state change that could trigger a CloudWatch
-    alarm. Alarm thresholds for manifest-related failure modes are specified in
-    MANIFEST-002.
   alarms: []
+  alarms_notes: >
+    No alarm thresholds are applicable here. This story introduces no background
+    task, no network call, and no runtime state that could trigger a CloudWatch
+    alarm. All manifest-related alarm thresholds (verification failure rate,
+    expiry window, poll failure count) are specified in MANIFEST-002.
 
 # ─── Implementation Notes ──────────────────────────────────
 implementation_notes:

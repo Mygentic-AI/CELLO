@@ -47,6 +47,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-TRANSPORT-001 — AutoNAT + direct P2P | — | not started | Blocked on M7-WIRE-001 |
 | M7-SESSION-001 — Interrupted session handling | — | not started | Blocked on M7-DAEMON-002 + M7-WIRE-001 |
 | M7-SIGNAL-001 — Signaling stream resilience | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 for implementation |
+| M7-DIR-PING-001 — Directory-side ping/pong handler | — | not started | Blocked on M7-SIGNAL-001 (frame type defined there); touches packages/directory (trustless-cello); required for heartbeat to function end-to-end |
 | M7-DAEMON-003 — Nonce dedup + retry queue | — | not started | Blocked on M7-DAEMON-002 |
 | M7-MCP-002 — Agent-aware notifications | — | not started | Blocked on M7-MCP-001 + M7-DAEMON-002 + M7-DAEMON-003 |
 | M7-MANIFEST-001 — Manifest schema | — | written — review pending | Written 2026-06-12; independent; no other story blocks it |
@@ -176,3 +177,14 @@ pattern — all backoff/queue logic testable without CELLO_E2E_LIVE); sovereign
 node constraint: reconnect iterates entire manifest node list, not a hardcoded
 endpoint. packages/transport/src/signaling-manager.ts is the primary new file.
 Story marked written — review pending.
+
+### 2026-06-12 — M7-SIGNAL-001 review findings fixed
+
+Fixed 3 issues from user review: (1) BLOCKING — directory-side ping handler
+scoped out explicitly; added CELLO-M7-DIR-PING-001 to Claims as a new story
+blocked on SIGNAL-001 (frame type must exist first), touches packages/directory
+in trustless-cello; implementation_notes now states heartbeat will NOT be
+functional until DIR-PING-001 lands. (2) MEDIUM — AC-005b renumbered to AC-006;
+existing AC-006 through AC-013 shifted to AC-007 through AC-014. (3) MEDIUM —
+explicit known limitation added to implementation_notes: no self-recovery from
+'lost' state; operator must run cello logout + cello login after network restores.
