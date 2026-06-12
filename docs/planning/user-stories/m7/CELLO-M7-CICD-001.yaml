@@ -1,0 +1,387 @@
+---
+name: CELLO-M7-CICD-001
+type: user-story
+date: 2026-06-12
+topics: [cicd, cross-repo, cello-client, e2e-gate, pipeline-filter, iam, oidc, s3, codepipeline, dead-pipeline-cleanup, m7]
+status: draft
+description: >
+  Cross-repo CI/CD gate. A push to cello-client triggers the trustless-cello e2e
+  pipeline against the candidate @cello-protocol/connect tarball before npm
+  publish proceeds. If e2e fails, publish is blocked. The pipeline-filter Lambda
+  and pipeline-mappings.json are extended to route cello-client events. Post-REPOSPLIT
+  dead pipeline cleanup (cello-crypto-pipeline etc.) is verified complete and Lambda
+  state confirmed clean. All new AWS resources are IaC-only.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-CICD-001
+domain: CICD
+milestone: M7
+actor: OPS
+priority: P1
+components:
+  - infra
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the operator,
+  I want a cross-repo e2e gate that blocks @cello-protocol/connect from
+  publishing to npm unless the trustless-cello integration suite passes
+  against the candidate build,
+  so that a cello-client change that breaks the directory or relay never
+  reaches beta-tagged npm consumers.
+
+# ─── Context ────────────────────────────────────────────────
+# Architecture decision: pre-publish gating via direct CodePipeline API call.
+#
+# The GitHub Actions workflow in cello-client:
+#   1. Builds all packages and runs local tests
+#   2. Runs `pnpm pack` in packages/adapter-claude-code → uploads the tarball
+#      to S3 at cello-artifacts-dev/candidates/{git-sha}/connect.tgz
+#   3. Calls codepipeline:StartPipelineExecution on cello-e2e-tests-pipeline,
+#      passing CELLO_CANDIDATE_SHA as a pipeline variable
+#   4. Polls GetPipelineExecution every 30 s for up to 15 min
+#   5. If SUCCEEDED → runs `pnpm publish --tag beta`
+#   6. If FAILED or timeout → exits non-zero; publish never runs
+#
+# The e2e CodeBuild project is extended to detect CELLO_CANDIDATE_SHA.
+# When set, it installs @cello-protocol/connect from the S3 tarball
+# (npm install /tmp/connect.tgz) instead of the registry. This lets the
+# e2e suite run against the exact build that is about to be published.
+#
+# The pipeline-filter Lambda and pipeline-mappings.json are also extended
+# to route push events from the cello-client GitHub repo. This provides
+# observability (the event appears in pipeline logs) and allows manual
+# re-runs via EventBridge replay. The GitHub Actions direct API call is
+# the authoritative gate; the Lambda route is secondary / observability only.
+#
+# GitHub Actions authentication: OIDC. A GitHubOidcRole is defined in
+# cello-cicd.yaml. The role's trust policy restricts to repo:Mygentic-AI/cello-client
+# on the main branch. Permissions: codepipeline:StartPipelineExecution on
+# cello-e2e-tests-pipeline ARN only; s3:PutObject on the candidates/ prefix only.
+# It MUST NOT have permission to trigger directory, relay, or operations-agent pipelines.
+#
+# Dead pipeline cleanup: cello-crypto-pipeline, cello-transport-pipeline,
+# cello-client-pipeline, cello-protocol-types-pipeline were removed from
+# cello-cicd.yaml and pipeline-mappings.json as part of REPOSPLIT-002.
+# This story confirms the Lambda has no residual stale state by verifying
+# the live Lambda deployment reflects the current mappings (run
+# ./infra/deploy-lambdas.sh dev filter as part of this story if not already done).
+#
+# Three-step Lambda mapping procedure (infra/CLAUDE.md):
+#   1. Add pipeline ARN to PipelineFilterLambdaRole StartPipelines in cello-cicd.yaml
+#      (already present for cello-e2e-tests-pipeline; no change needed)
+#   2. Add cello-client → cello-e2e-tests-pipeline mapping to pipeline-mappings.json
+#   3. Run ./infra/deploy-lambdas.sh dev filter
+
+# ─── REPOSPLIT Constraint ────────────────────────────────────
+# Five packages originate in cello-client, not trustless-cello:
+#   @cello-protocol/crypto, /transport, /protocol-types, /client, /connect
+# workspace:* references to these packages in trustless-cello are bugs.
+# The e2e CodeBuild project must install from the S3 candidate tarball
+# (not workspace:*) when CELLO_CANDIDATE_SHA is set. This is the only correct
+# behaviour — workspace:* means the old stale local copy, not the candidate.
+
+# ─── Sovereign Node Constraint ──────────────────────────────
+# The e2e suite tests real directory nodes across all three regions. The
+# OIDC role and CodeBuild environment must not assume any single region
+# for the directory or relay endpoints. No hardcoded endpoints.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a push lands on cello-client/main and all local cello-client tests pass"
+    action: >
+      The GitHub Actions job packs the @cello-protocol/connect workspace package
+      into a tarball, uploads it to s3://cello-artifacts-dev/candidates/{git-sha}/connect.tgz,
+      then calls codepipeline:StartPipelineExecution on cello-e2e-tests-pipeline
+      with CELLO_CANDIDATE_SHA={git-sha} as a pipeline variable.
+
+  - trigger: "When cello-e2e-tests-pipeline completes with status SUCCEEDED for a candidate run"
+    action: >
+      The GitHub Actions job proceeds to run `pnpm publish --tag beta` for all
+      @cello-protocol/* packages that changed in this push.
+
+  - trigger: "When cello-e2e-tests-pipeline completes with status FAILED or SUPERSEDED for a candidate run"
+    action: >
+      The GitHub Actions job exits non-zero. The `pnpm publish` step is never
+      reached. A pipeline.e2e_gate.failed event is emitted with the candidate SHA.
+
+  - trigger: "When the GitHub Actions pipeline poll reaches 15 minutes without a terminal status"
+    action: >
+      The job times out, exits non-zero, and the publish step is skipped. This
+      prevents indefinite blocking if CodeBuild hangs.
+
+  - trigger: "When cello-e2e-tests-pipeline's CodeBuild phase runs with CELLO_CANDIDATE_SHA set"
+    action: >
+      The CodeBuild install script downloads s3://cello-artifacts-dev/candidates/{CELLO_CANDIDATE_SHA}/connect.tgz
+      and installs it via `npm install /tmp/connect.tgz` instead of resolving
+      @cello-protocol/connect from the npm registry.
+
+  - trigger: "When cello-e2e-tests-pipeline's CodeBuild phase runs without CELLO_CANDIDATE_SHA (native trustless-cello push)"
+    action: >
+      The CodeBuild install script installs @cello-protocol/connect from the
+      npm registry using the version pinned in packages/e2e-tests/package.json.
+      Candidate logic is bypassed.
+
+  - trigger: "When a push event from the cello-client GitHub repo arrives at the webhook receiver Lambda"
+    action: >
+      The Lambda validates the GitHub webhook HMAC signature using the cello-client
+      webhook secret (stored in SSM as /cello/cicd/cello-client-webhook-secret),
+      then publishes a pipeline.webhook.received event to the GitHubEventBus with
+      source "cello-client". The pipeline-filter Lambda routes this to
+      cello-e2e-tests-pipeline (observability / manual-replay path).
+
+  - trigger: "If a push event from the cello-client GitHub repo arrives at the webhook receiver Lambda with an invalid HMAC"
+    action: >
+      The Lambda returns HTTP 401 and emits pipeline.webhook.hmac_invalid. The
+      event is not forwarded to EventBridge.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A cello-client GitHub Actions job has passed local tests and uploaded candidates/{sha}/connect.tgz to S3"
+    when: "The job calls StartPipelineExecution on cello-e2e-tests-pipeline with CELLO_CANDIDATE_SHA={sha} and the pipeline returns SUCCEEDED"
+    then: "`pnpm publish --tag beta` runs successfully and completes without error"
+    test_type: integration
+    component_under_test: infra
+    notes: >
+      Verified by inspecting the GitHub Actions job log showing publish step
+      running after pipeline poll exits 0.
+
+  - id: AC-002
+    given: "A cello-client GitHub Actions job has passed local tests and uploaded a candidate tarball"
+    when: "The e2e pipeline returns FAILED (e.g. an intentionally broken connect package)"
+    then: "The GitHub Actions job exits non-zero and `pnpm publish` is never invoked; npm registry shows no new version for that commit"
+    test_type: integration
+    component_under_test: infra
+    notes: >
+      Verified by checking npm registry for the beta dist-tag after a forced
+      e2e failure run. Must confirm no new version was published.
+
+  - id: AC-003
+    given: "cello-e2e-tests-pipeline CodeBuild is invoked with environment variable CELLO_CANDIDATE_SHA set to a valid SHA"
+    when: "The install phase runs"
+    then: >
+      The tarball is downloaded from s3://cello-artifacts-dev/candidates/{sha}/connect.tgz
+      and installed via `npm install /tmp/connect.tgz`. The npm registry is NOT
+      consulted for @cello-protocol/connect. `npm list @cello-protocol/connect`
+      shows the version from the tarball, not any previously published beta.
+    test_type: integration
+    component_under_test: infra
+
+  - id: AC-004
+    given: "cello-e2e-tests-pipeline CodeBuild is invoked WITHOUT CELLO_CANDIDATE_SHA (native trustless-cello push)"
+    when: "The install phase runs"
+    then: >
+      @cello-protocol/connect is installed from the npm registry at the version
+      pinned in packages/e2e-tests/package.json. No S3 download is attempted.
+    test_type: integration
+    component_under_test: infra
+
+  - id: AC-005
+    given: "A GitHub webhook push event from the cello-client repo arrives at the webhook receiver Lambda with a valid HMAC"
+    when: "The Lambda processes the event"
+    then: >
+      A pipeline.webhook.received event appears in CloudWatch Logs with
+      {source: "cello-client", branch, commitSha}. The pipeline-filter Lambda
+      picks it up and triggers cello-e2e-tests-pipeline (observable in the
+      pipeline execution list).
+    test_type: integration
+    component_under_test: infra
+    notes: >
+      The webhook path is the observability/secondary path. The direct
+      StartPipelineExecution call in GitHub Actions is the primary gate.
+
+  - id: AC-006
+    given: "The pipeline-mappings.json is inspected"
+    when: "Searching for cello-crypto-pipeline, cello-transport-pipeline, cello-client-pipeline, cello-protocol-types-pipeline"
+    then: "None of these entries are present. Only the five live pipelines exist: cello-connect-pipeline, cello-directory-pipeline, cello-relay-pipeline, cello-e2e-tests-pipeline, cello-operations-agent-pipeline (plus the new cello-client repo mapping)"
+    test_type: unit
+    component_under_test: infra
+    notes: >
+      Dead pipeline entries were removed in REPOSPLIT-002. This AC confirms
+      the live Lambda state matches by running deploy-lambdas.sh dev filter
+      and verifying the Lambda's bundled mappings contain no stale entries.
+
+  - id: AC-007
+    given: "The CloudFormation template infra/cloudformation/cello-cicd.yaml is inspected"
+    when: "Searching for cello-crypto-pipeline, cello-transport-pipeline, cello-client-pipeline, cello-protocol-types-pipeline resource definitions"
+    then: "None are defined. A comment at the removed location confirms removal was deliberate (post-REPOSPLIT-002)."
+    test_type: unit
+    component_under_test: infra
+
+  - id: AC-008
+    given: "The GitHubOidcRole defined in cello-cicd.yaml is deployed"
+    when: "A GitHub Actions job from repo Mygentic-AI/cello-client on branch main assumes the role and calls StartPipelineExecution"
+    then: >
+      The call succeeds. A job from any other repo, branch, or GitHub organization
+      is denied by the role trust policy (sts:AssumeRoleWithWebIdentity condition).
+    test_type: integration
+    component_under_test: infra
+    notes: >
+      Trust policy condition: token.actions.githubusercontent.com:sub =
+      "repo:Mygentic-AI/cello-client:ref:refs/heads/main"
+
+  - id: AC-009
+    given: "The GitHubOidcRole's IAM policy is inspected"
+    when: "Listing all codepipeline:StartPipelineExecution resource ARNs"
+    then: "Only the ARN for cello-e2e-tests-pipeline is present. cello-directory-pipeline, cello-relay-pipeline, cello-connect-pipeline, and cello-operations-agent-pipeline are absent."
+    test_type: unit
+    component_under_test: infra
+
+  - id: AC-010
+    given: "The S3 bucket cello-artifacts-{env} has a lifecycle configuration"
+    when: "Inspecting the lifecycle rule for the candidates/ prefix"
+    then: "Objects under candidates/ expire after 7 days. No candidates/ objects older than 7 days exist."
+    test_type: unit
+    component_under_test: infra
+    notes: >
+      Prevents unbounded S3 growth from candidate tarballs. Each cello-client
+      push produces a ~300 KB tarball; 7-day TTL is sufficient for any in-flight
+      e2e run.
+
+  - id: AC-011
+    given: "Two concurrent cello-client pushes land within seconds of each other"
+    when: "Both call StartPipelineExecution on cello-e2e-tests-pipeline"
+    then: >
+      CodePipeline queues or supersedes the earlier execution per its native
+      behavior. The later execution's CELLO_CANDIDATE_SHA is the one used.
+      Neither execution's candidate tarball is deleted before the execution completes.
+    test_type: integration
+    component_under_test: infra
+    notes: >
+      CodePipeline V2 supersedes rather than queues by default. The tarball
+      for the superseded execution remains in S3 until the lifecycle TTL expires.
+
+# ─── Security Invariants ──────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The GitHubOidcRole shall never grant permission to trigger cello-directory-pipeline, cello-relay-pipeline, cello-connect-pipeline, or cello-operations-agent-pipeline"
+    adversarial_condition: "even when an attacker compromises cello-client CI or forks the repo and attempts to escalate permissions by calling StartPipelineExecution on production pipelines"
+    test_type: unit
+    component_under_test: infra
+
+  - id: SI-002
+    statement: "The webhook receiver Lambda shall never forward a cello-client push event to EventBridge if the GitHub HMAC signature is invalid or absent"
+    adversarial_condition: "even when the request body is otherwise well-formed and the repo field matches cello-client"
+    test_type: unit
+    component_under_test: infra
+
+  - id: SI-003
+    statement: "The candidates/ S3 prefix shall not be readable by the GitHubOidcRole across repositories — a cello-client push may only read or overwrite its own candidate tarball by SHA key"
+    adversarial_condition: "even when an attacker knows a prior candidate SHA and attempts to download or overwrite another push's tarball"
+    test_type: unit
+    component_under_test: infra
+    notes: >
+      The s3:PutObject permission is scoped to candidates/${github:sha}/* via
+      an IAM condition on the OIDC role. s3:GetObject is not granted to the OIDC
+      role — download is handled by CodeBuild's own execution role.
+
+# ─── Degraded Behavior ────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While cello-e2e-tests-pipeline is unavailable or CodeBuild is in a degraded state"
+    fallback: >
+      The GitHub Actions poll loop reaches the 15-minute timeout, exits non-zero,
+      and the publish step is skipped. The operator is alerted via the
+      cicd.e2e_gate.timeout event. Publish is never silently allowed through
+      on infrastructure failure.
+    test_type: integration
+    component_under_test: infra
+
+  - id: DB-002
+    condition: "While the S3 bucket is unreachable and the candidate tarball cannot be downloaded by CodeBuild"
+    fallback: >
+      The CodeBuild install phase fails with a clear error message identifying
+      the S3 key that could not be retrieved. The pipeline execution ends in
+      FAILED state. The GitHub Actions job sees FAILED and blocks publish.
+    test_type: integration
+    component_under_test: infra
+
+# ─── Observability ─────────────────────────────────────────
+observability:
+  events:
+    - name: "cicd.candidate.uploaded"
+      level: info
+      trigger: "GitHub Actions uploads the connect.tgz to S3"
+      context_fields: [candidateSha, s3Key, sizeBytes, repo]
+      correlationId: true
+
+    - name: "cicd.e2e_gate.started"
+      level: info
+      trigger: "GitHub Actions calls StartPipelineExecution for a candidate run"
+      context_fields: [candidateSha, pipelineExecutionId, repo]
+      correlationId: true
+
+    - name: "cicd.e2e_gate.passed"
+      level: info
+      trigger: "e2e pipeline returns SUCCEEDED for a candidate run; publish proceeds"
+      context_fields: [candidateSha, pipelineExecutionId, durationMs]
+      correlationId: true
+
+    - name: "pipeline.webhook.received"
+      level: info
+      trigger: "Webhook receiver Lambda accepts a push event from cello-client"
+      context_fields: [source, branch, commitSha, repo]
+      correlationId: true
+
+  error_events:
+    - name: "cicd.e2e_gate.failed"
+      level: error
+      trigger: "e2e pipeline returns FAILED for a candidate run; publish blocked"
+      context_fields: [candidateSha, pipelineExecutionId, failedStageName, repo]
+
+    - name: "cicd.e2e_gate.timeout"
+      level: error
+      trigger: "GitHub Actions poll loop reaches 15-minute timeout without terminal status"
+      context_fields: [candidateSha, pipelineExecutionId, elapsedMs]
+
+    - name: "pipeline.webhook.hmac_invalid"
+      level: warn
+      trigger: "Webhook receiver Lambda receives a cello-client push with invalid or absent HMAC"
+      context_fields: [repo, remoteIp, statusCode]
+
+  alarms:
+    - condition: "cicd.e2e_gate.failed count >= 2 within 24 hours"
+      fires_to: "cello-cicd-alerts SNS topic"
+    - condition: "cicd.e2e_gate.timeout count >= 1 within 1 hour"
+      fires_to: "cello-cicd-alerts SNS topic"
+
+# ─── Implementation Notes ────────────────────────────────────
+# New resources in IaC (all in infra/cloudformation/cello-cicd.yaml):
+#   - GitHubOidcRole: IAM role with OIDC trust for Mygentic-AI/cello-client main branch
+#   - CandidatesLifecycleRule: S3 lifecycle rule on cello-artifacts-{env} for candidates/ prefix
+#   - CelloClientWebhookSecret: SSM SecureString at /cello/cicd/cello-client-webhook-secret
+#     (value injected at deploy time via CloudFormation parameter, not hardcoded)
+#
+# Modified resources:
+#   - E2eTestsPipeline CodeBuild project: new buildspec branch for candidate mode
+#     (reads CELLO_CANDIDATE_SHA; if set, downloads from S3 and installs tarball)
+#   - WebhookLambda: add cello-client HMAC validation path
+#     (reads /cello/cicd/cello-client-webhook-secret; validates before forwarding)
+#   - pipeline-mappings.json: add cello-client repo entry → cello-e2e-tests-pipeline
+#
+# Deploy sequence:
+#   1. Update cello-cicd.yaml (GitHubOidcRole, lifecycle rule, parameter for webhook secret)
+#   2. Run ./infra/deploy.sh to apply CloudFormation
+#   3. Update pipeline-mappings.json with cello-client mapping
+#   4. Run ./infra/deploy-lambdas.sh dev filter to rebundle Lambda
+#   5. Update cello-client GitHub Actions workflow (publish gate logic)
+#   6. Register GitHub webhook on cello-client repo pointing to existing webhook URL
+#
+# Note: deploy.sh is the ONLY mechanism for CloudFormation changes. CI/CD pipelines
+# only swap Docker images. Any change to cello-cicd.yaml requires running deploy.sh.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by: []
+  blocks:
+    - CELLO-M7-E2E-001  # E2E gate verifies this cross-repo wiring end-to-end
+  related:
+    - CELLO-M7-E2E-001  # Integration gate story exercises this pipeline
+    - REPOSPLIT-002      # Dead pipeline cleanup was completed here
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations (NODE)"
+  discussion_logs:
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
