@@ -317,16 +317,26 @@ acceptance_criteria:
       after configurable dial timeout)"
     when: "the direct dial fails"
     then: >
-      The session node falls back to the relay circuit address. The intermediate
-      condition 'direct_dial_failed_falling_back_to_relay' is logged at WARN with
-      sessionId, counterpartyPeerId, failureReason (the actual error message from
-      the dial failure — never ${error}), and correlationId. After relay connection
-      succeeds, session.transport.mode.selected is logged at INFO with mode: 'relay'.
-      The fallback is transparent to the caller — no error is returned for the
-      failed direct dial. Verified by a unit test: (a) configures the
-      ITransportSelector stub to fail direct dial and succeed on relay; (b) asserts
-      both log events fire in order (WARN then INFO); (c) asserts the session is
-      established via relay.
+      The session node falls back to the relay circuit address. The relay circuit
+      address source: the daemon maintains a relay endpoint registry (populated
+      during directory connection setup — the relay endpoint is communicated to
+      the daemon as part of the session negotiation context, independent of
+      transport_mode). This relay address is always available to the daemon
+      regardless of whether the SessionAssignment's transport_mode is 'direct'
+      or 'relay'. The intermediate condition 'direct_dial_failed_falling_back_to_relay'
+      is logged at WARN with sessionId, counterpartyPeerId, failureReason (the
+      actual error message from the dial failure — never ${error}), and
+      correlationId. After relay connection succeeds, session.transport.mode.selected
+      is logged at INFO with mode: 'relay'. The fallback is transparent to the
+      caller — no error is returned for the failed direct dial. Verified by a
+      unit test: (a) configures the ITransportSelector stub to fail direct dial
+      and succeed on relay; (b) asserts both log events fire in order (WARN then
+      INFO); (c) asserts the session is established via relay.
+    notes: >
+      The relay endpoint is not derived from the SessionAssignment's address
+      fields — it comes from the daemon's relay registry (populated during
+      directory connection). This means the fallback path does not depend on
+      WIRE-001 including relay addresses when transport_mode is 'direct'.
     test_type: unit
     component_under_test: daemon
 
@@ -370,7 +380,9 @@ acceptance_criteria:
     component_under_test: daemon
 
   - id: AC-009
-    given: "packages/interfaces/src/ in cello-client"
+    given: "packages/interfaces/src/ in trustless-cello (packages/interfaces is
+      the only cello-protocol package maintained in trustless-cello; it uses
+      workspace:* within its monorepo and is never published to npm)"
     when: "the interface definitions are inspected"
     then: >
       Two new interfaces exist:
@@ -541,11 +553,10 @@ acceptance_criteria:
 
   - id: AC-017
     given: "All cello-client code changes for this story are implemented and tests
-      pass (packages/transport and packages/interfaces modified)"
+      pass (packages/transport modified in cello-client)"
     when: "the implementer follows the version bump procedure in cello-client CLAUDE.md"
     then: |
       - packages/transport has its version incremented in package.json
-      - packages/interfaces has its version incremented if new interfaces were added
       - @cello-protocol/connect is bumped to reflect the net change
       - All dependent packages have their inter-dependency versions updated
       - pnpm install is run and pnpm-lock.yaml is updated
@@ -553,11 +564,16 @@ acceptance_criteria:
       - CI publishes the new version to npm beta dist-tag
       - npm view @cello-protocol/connect@beta dependencies --json shows real semver
         versions (never workspace:*)
+      NOTE: packages/interfaces is in trustless-cello and is NOT published to npm.
+      It uses workspace:* within trustless-cello's monorepo. Interface additions
+      are committed directly to trustless-cello — they are not part of the
+      cello-client version bump flow.
     test_type: integration
     component_under_test: cello-client CI
     notes: >
       Hard gate. A story that ships AutoNAT changes without a version bump leaves
       operators on a transport package that cannot determine dialability.
+      packages/interfaces changes go directly to trustless-cello (not npm-published).
 
   - id: AC-018
     given: "The new @cello-protocol/transport version is live on npm beta"
@@ -755,6 +771,13 @@ observability:
     docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
     No console.log in implementation code — all events go through the injected
     Logger interface. The event names match outline.md §Observability Events exactly.
+    Dual-event clarification: when AutoNAT is unavailable (directory in reconnecting
+    state), BOTH transport.autonat.result (INFO, with dialable:false) AND
+    transport.autonat.unavailable (WARN) fire. These serve different purposes:
+    the INFO event is the standard result-reporting event (fires on every probe
+    cycle completion, successful or not); the WARN event is the operational alert
+    that drives monitoring and makes the degraded condition visible to alarms.
+    Implementers must emit both — do not treat them as redundant.
 
 # ─── Implementation Notes ────────────────────────────────────
 implementation_notes:

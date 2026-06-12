@@ -810,7 +810,7 @@ and corresponding ACs. All events follow the `domain.noun.verb` taxonomy.
 | Event | Level | Context fields |
 |-------|-------|---------------|
 | `transport.autonat.result` | info | `dialable`, `publicAddr`, `nodeType` (standing_receiver / session) |
-| `session.transport.mode.selected` | info | `sessionId`, `mode` (direct / relay / dcutr_upgrade), `correlationId` |
+| `session.transport.mode.selected` | info | `sessionId`, `mode` (direct / relay), `correlationId` |
 | `session.transport.dcutr.upgraded` | info | `sessionId`, `correlationId` |
 
 ### Interrupted sessions (M7-SESSION-001)
