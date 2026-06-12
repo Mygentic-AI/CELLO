@@ -21,6 +21,8 @@ components:
   - relay
   - daemon
   - client
+  - directory
+  - protocol-types
   - e2e-tests
 
 # ─── Intent ─────────────────────────────────────────────────
@@ -408,7 +410,39 @@ acceptance_criteria:
       SEAL-INTERRUPTED leaf. Both sides must agree on the exact same leafCount
       and merkleRoot before proceeding to the FROST ceremony.
 
-  - id: AC-009
+  - id: AC-008b
+    given: "A directory node with authenticated signaling streams for agent A and agent B"
+    when: "A's daemon sends a SealInterruptedRequest frame over the directory signaling
+      stream targeting B (the directory receives type: 'seal_interrupted_request'
+      with initiatorPubkey: A, counterpartyPubkey: B)"
+    then: >
+      The directory looks up B's authenticated signaling stream by B's pubkey
+      and forwards the frame to B via #sendFrame(targetStream, frame). B's daemon
+      receives the frame over its directory signaling stream. The directory does
+      NOT validate the frame payload, persist the request, or modify the frame —
+      it is a pure pass-through router. The same pass-through behavior applies to
+      'seal_interrupted_ack' (sent from B → A) and 'seal_interrupted_rejection'
+      (sent from B → A). Verified by an integration test that: (a) establishes
+      authenticated signaling streams for both A and B connected to the directory;
+      (b) sends a SealInterruptedRequest from A's stream; (c) asserts B's stream
+      receives the frame with the exact same sessionId and nonce (no directory
+      tampering); (d) sends a SealInterruptedAck from B's stream; (e) asserts A's
+      stream receives the ack. The directory signaling streams must be real libp2p
+      streams — no in-process stubs bypassing the directory protocol handler. If
+      the target pubkey is not found or their stream is not authenticated, the
+      directory silently drops the frame (best-effort delivery, consistent with
+      existing signaling frame behavior).
+    test_type: integration
+    component_under_test: directory
+    notes: >
+      This is the L7-guard AC for the directory pass-through handler: the frames
+      must travel over real libp2p directory signaling streams. A unit test that
+      directly calls directory.#sendFrame() without going through the
+      authenticated signaling loop does NOT satisfy this AC. The integration test
+      must go through the full transport path: daemon → directory signaling stream
+      → directory frame handler → target's signaling stream → target daemon.
+
+  - id: AC-010
     given: "A session that has already been sealed (SQLite status: 'sealed')"
     when: "cello_close_session is called again for the same sessionId"
     then: >
@@ -420,7 +454,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-009b
+  - id: AC-011
     given: "A session with status 'interrupted' where a seal-interrupted attempt is
       currently in progress (the SEAL-INTERRUPTED frame exchange or FROST ceremony
       has already been initiated but has not yet completed)"
@@ -442,7 +476,7 @@ acceptance_criteria:
       the operator action differs (nothing vs. wait). A single 'session_already_interrupted'
       code would conflate them and give the operator wrong guidance.
 
-  - id: AC-010
+  - id: AC-012
     given: "An interrupted session where the counterparty is not reachable via the
       directory signaling path (directory returns a delivery failure for the
       SEAL-INTERRUPTED frame)"
@@ -457,7 +491,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-011
+  - id: AC-013
     given: "An interrupted session where the counterparty is reachable but explicitly
       rejects the SEAL-INTERRUPTED request (their daemon returns a rejection frame)"
     when: "cello_close_session is called and the counterparty's rejection arrives"
@@ -473,7 +507,7 @@ acceptance_criteria:
 
   # ── Error distinctness + lateral catch audit ─────────────
 
-  - id: AC-012
+  - id: AC-014
     given: "All error paths introduced by this story across packages/relay,
       packages/daemon, and packages/client"
     when: "each distinct failure cause is triggered independently"
@@ -497,7 +531,7 @@ acceptance_criteria:
 
   # ── MCP tool guidance ────────────────────────────────────
 
-  - id: AC-013
+  - id: AC-015
     given: "Every failure response path in MCP tools introduced or modified by this story
       (specifically: cello_close_session when called on an interrupted session)"
     when: "each failure path is triggered"
@@ -514,7 +548,7 @@ acceptance_criteria:
 
   # ── Composition root wiring ──────────────────────────────
 
-  - id: AC-014
+  - id: AC-016
     given: "packages/daemon/src/server.ts (the composition root)"
     when: "the daemon binary starts"
     then: >
@@ -533,10 +567,11 @@ acceptance_criteria:
 
   # ── Cross-repo version bump ──────────────────────────────
 
-  - id: AC-015
+  - id: AC-017
     given: "All cello-client code changes for this story are implemented and tests pass"
     when: "the implementer runs the version bump procedure in cello-client CLAUDE.md"
     then: >
+      - packages/protocol-types has its version incremented in package.json
       - packages/client has its version incremented in package.json
       - packages/daemon has its version incremented in package.json
       - Every package that depends on a modified package has its dependency version updated
@@ -550,17 +585,22 @@ acceptance_criteria:
     component_under_test: cello-client CI
     notes: >
       Hard gate. The implementer must also check COORDINATION.md batching section
-      before pushing any tag — the relay changes in packages/relay (trustless-cello)
-      and the cello-client changes must be batched with M7-WIRE-001 and
-      M7-MANIFEST-002 into a single pipeline push. Never push this story's relay
-      changes alone.
+      before pushing any tag — the directory changes in packages/directory
+      (trustless-cello), the relay changes in packages/relay (trustless-cello),
+      and the cello-client changes must all be batched with M7-WIRE-001 and
+      M7-MANIFEST-002 into a single pipeline push. Never push this story's
+      directory or relay changes alone.
 
-  - id: AC-016
+  - id: AC-018
     given: "The new @cello-protocol/connect version is live on npm beta"
-    when: "packages/relay/package.json in trustless-cello is updated"
+    when: "packages/relay/package.json and packages/directory/package.json in
+      trustless-cello are updated"
     then: >
       - packages/relay/package.json references the new semver ranges for
-        @cello-protocol/client and any other modified cello-client packages
+        @cello-protocol/protocol-types, @cello-protocol/client, and any other
+        modified cello-client packages
+      - packages/directory/package.json references the new semver ranges for
+        @cello-protocol/protocol-types (for the new SealInterruptedRequest types)
       - No workspace:* references to @cello-protocol/crypto, transport,
         protocol-types, or client remain in packages/relay/package.json or
         packages/directory/package.json
@@ -568,13 +608,13 @@ acceptance_criteria:
       - pnpm run typecheck passes in trustless-cello
       - Commit pushed to trustless-cello main — only after confirming with
         COORDINATION.md that M7-WIRE-001 and M7-MANIFEST-002 are also ready
-        to batch (never push relay-only changes alone — pipeline is 25-30 min)
+        to batch (never push directory+relay changes alone — pipeline is 25-30 min)
     test_type: integration
     component_under_test: directory
     notes: >
       workspace:* resolves to stale local copies post-REPOSPLIT-002. This AC
-      ensures relay runs against the published version with the new
-      session_interrupted frame handling.
+      ensures directory and relay run against the published version with the new
+      session_interrupted frame handling and SealInterruptedRequest types.
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
@@ -773,10 +813,18 @@ implementation_notes:
     All three types must be added to the SignalingMessage discriminated union in
     packages/protocol-types/src/signaling.ts (or equivalent file).
 
-    SESSION-001 owns these type definitions. The directory routes them as
-    pass-through frames on the existing signaling stream — no new directory handler
-    is required. The directory already relays arbitrary signaling frames between
-    agents; the routing does not need to understand the payload type.
+    Directory-side pass-through handler: the directory at
+    packages/directory/src/directory-node.ts line 1354 silently drops unknown
+    frame types. There is no generic agent-to-agent forwarding — all existing
+    agent-to-agent frames (connection_request, connection_response,
+    disclosure_request) are implemented via explicit case handlers that look up
+    the target's stream and call #sendFrame(targetStream, ...). SESSION-001 must
+    add three new case handlers to the directory's authenticated signaling loop:
+    'seal_interrupted_request' (look up counterpartyPubkey stream, forward frame),
+    'seal_interrupted_ack' (look up initiatorPubkey stream, forward frame),
+    'seal_interrupted_rejection' (look up initiatorPubkey stream, forward frame).
+    Each handler is a pass-through — the directory does not validate the payload
+    or persist state; it only routes the frame to the target's stream.
 
     The implementer must verify that the signaling stream's message codec (the
     decoder used by packages/daemon) handles the new discriminated union members
