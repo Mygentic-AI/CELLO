@@ -816,11 +816,11 @@ and corresponding ACs. All events follow the `domain.noun.verb` taxonomy.
 | `session.transport.mode.selected` | info | `sessionId`, `mode` (direct / relay), `correlationId` |
 | `session.transport.dcutr.upgraded` | info | `sessionId`, `correlationId` |
 
-### Interrupted sessions (M7-SESSION-001)
+### Interrupted sessions (M7-DAEMON-002 + M7-SESSION-001)
 
 | Event | Level | Context fields |
 |-------|-------|---------------|
-| `session.interrupted.detected` | warn | `sessionId`, `agentName`, `source` (relay_frame / stream_close) |
+| `session.interrupted.detected` | warn | `sessionId`, `agentName`, `source` (daemon_restart / relay_frame / stream_close) — DAEMON-002 owns `daemon_restart`; SESSION-001 owns `relay_frame` and `stream_close` |
 | `session.interrupted.sealed` | info | `sessionId`, `agentName`, `leafCount` |
 
 ### Signaling resilience (M7-SIGNAL-001)

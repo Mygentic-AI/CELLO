@@ -181,22 +181,24 @@ acceptance_criteria:
       SessionNodeManager creates a new libp2p node with a transport key distinct
       from the directory-facing node's key. The new node's Peer ID differs from
       the directory-facing node Peer ID reported by `cello status`. The new node
-      binds a TCP listener on an ephemeral port. A connectionGater is attached that
-      allows only the counterparty Peer ID derived from the session negotiation
-      context. session.node.created is logged at INFO with sessionId (non-empty
-      hex string), agentName (matching the online agent), sessionPeerId (different
-      from all other Peer IDs in the system), and correlationId (same value
-      threaded through the initiating tool call). Verified by an integration test
-      that starts the daemon binary via opts.daemon: true, calls cello_initiate_session,
-      captures the session.node.created log event, and asserts all four context fields
-      are present and the sessionPeerId hex string differs from the
-      directory-facing node Peer ID returned by cello status.
+      binds a TCP listener on an ephemeral port. A connectionGater is attached
+      (enforcement of the single-peer restriction is verified by AC-005 and SI-002
+      — this AC verifies node creation, not gater enforcement). session.node.created
+      is logged at INFO with sessionId (non-empty hex string), agentName (matching
+      the online agent), sessionPeerId (different from all other Peer IDs in the
+      system), and correlationId (same value threaded through the initiating tool
+      call). Verified by an integration test that starts the daemon binary via
+      opts.daemon: true, calls cello_initiate_session, captures the
+      session.node.created log event, and asserts all four context fields are
+      present and the sessionPeerId hex string differs from the directory-facing
+      node Peer ID returned by cello status.
     test_type: integration
     component_under_test: daemon
     notes: >
       Addresses M7 lesson L4 — tests must exercise the end operation, not just
       setup state. The sessionPeerId comparison is the transport-path evidence
-      that a separate node was created.
+      that a separate node was created. ConnectionGater enforcement is verified
+      by AC-005 (network-level rejection of a third-party dial) and SI-002.
 
   - id: AC-002
     given: "A daemon that has just started (SessionNodeManager.initialize() called,
@@ -499,10 +501,11 @@ acceptance_criteria:
       directory-facing node's multiaddr"
     then: >
       The connectionGater rejects the connection. The dial attempt fails at the
-      gating layer. session.node.connection.rejected is logged (or a dedicated
-      directory.node.connection.rejected event — implementer chooses; must be
-      added to the observability taxonomy). The directory-facing node's signaling
-      stream to the real directory continues unaffected. The daemon does not crash.
+      gating layer. session.node.connection.rejected is logged at WARN with
+      sessionId set to the sentinel '__directory_facing__', attemptedPeerId (the
+      rejected peer's hex string), and expectedPeerId set to 'known_directory_peer'.
+      The directory-facing node's signaling stream to the real directory continues
+      unaffected. The daemon does not crash.
       Verified by a unit test that instantiates the gater with an empty allowed
       set and asserts intercept() returns false for an arbitrary Peer ID.
     test_type: unit
@@ -638,10 +641,14 @@ observability:
       level: info
       trigger: "When a session node is stopped after seal, interruption, or error teardown"
       context_fields: [sessionId, agentName, reason]
-      correlationId: true
+      correlationId: false
       notes: >
         reason is one of: 'sealed', 'interrupted', 'error'. These three values
         cover all teardown paths. No other values are permitted.
+        correlationId is not included because interrupted and error teardown paths
+        may have no active correlationId (SIGTERM fires outside any request context).
+        The originating session.node.created event carries the correlationId for
+        tracing the full session lifecycle.
     - name: session.interrupted.detected
       level: warn
       trigger: "When cello login finds interrupted sessions in SQLite (source: 'daemon_restart'),
@@ -674,11 +681,14 @@ observability:
       correlationId: false
   notes: >
     All events follow the session.node.* and session.interrupted.* taxonomy from
-    outline.md §Observability Events. The implementer must add session.node.created,
-    session.node.destroyed, session.node.cap.reached, session.node.create.failed,
-    session.node.connection.rejected, and session.interrupt.db.write.failed to the
-    canonical event taxonomy in
+    outline.md §Observability Events. The implementer must:
+    (1) Add session.node.created, session.node.destroyed, session.node.cap.reached,
+    session.node.create.failed, session.node.connection.rejected, and
+    session.interrupt.db.write.failed to the canonical event taxonomy in
     docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+    (2) Update outline.md §Observability Events — extend the session.interrupted.detected
+    row to include 'daemon_restart' as a valid source value alongside 'relay_frame'
+    and 'stream_close' (SESSION-001 owns those two; DAEMON-002 owns 'daemon_restart').
     No console.log in implementation code — all events go through the injected
     Logger interface. correlationId is minted once at session establishment initiation
     and threaded through all session.node.* events for that session.
@@ -777,10 +787,10 @@ dependencies:
     DAEMON-001 is complete. WIRE-001 is the next critical path story and needs both
     DAEMON-001 and DAEMON-002 before it can be written in full detail — the session
     node Peer ID fields in SessionAssignment come from DAEMON-002's node creation.
-    TRANSPORT-001 (AutoNAT) is not a dependency — DAEMON-002 stubs the AutoNAT
-    result (transport.autonat.result event is logged but the actual AutoNAT probe
-    is TRANSPORT-001's scope). The standing receiver correctly logs the event
-    with dialable: false (stub) until TRANSPORT-001 wires real AutoNAT.
+    TRANSPORT-001 (AutoNAT) is not a dependency — DAEMON-002 does not log
+    transport.autonat.result (see behavior section — this event is explicitly
+    out of scope). TRANSPORT-001 adds that event when it wires real AutoNAT
+    into createNode.
 
 # ─── References ─────────────────────────────────────────────
 references:
