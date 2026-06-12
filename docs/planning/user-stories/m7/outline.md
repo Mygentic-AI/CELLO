@@ -472,7 +472,7 @@ Stories use the format `M7-{DOMAIN}-{NNN}`:
 | **M7-MCP-001** | MCP adapter — stdio-to-socket proxy, per-connection current-agent state, `cello_use_agent / list_agents / start_agent / stop_agent` | M7-DAEMON-001 | cello-client | `packages/adapter-claude-code` |
 | **M7-DAEMON-002** | Ephemeral session nodes — create/teardown lifecycle, connectionGater, standing receiver node | M7-DAEMON-001 | cello-client | `packages/daemon/src/session-node-manager.ts` (new) |
 | **M7-WIRE-001** | SessionAssignment wire format — add `counterparty_session_peer_id` + `counterparty_session_addrs` to signed frame (cross-repo: directory, relay, client) | M7-DAEMON-002 | **both** | `packages/protocol-types`, `packages/directory`, `packages/relay`, `packages/client` |
-| **M7-TRANSPORT-001** | AutoNAT + direct P2P default — `autonat()` in createNode, dialability observable, direct dial default, relay fallback, dcutr upgrade | M7-WIRE-001 | cello-client | `packages/transport/src/node.ts`, `packages/daemon` |
+| **M7-TRANSPORT-001** | AutoNAT + direct P2P default — `autonat()` in createNode, dialability observable, direct dial default, relay fallback, dcutr upgrade; **also enables AutoNAT service protocol on directory nodes** (cross-repo: `packages/directory`) | M7-WIRE-001 | **both** | `packages/transport/src/node.ts`, `packages/daemon`, `packages/directory` |
 | **M7-SESSION-001** | Interrupted session handling — relay `session_interrupted` frame, DB `interrupted` status, login surfacing, seal-interrupted protocol flow | M7-DAEMON-002, M7-WIRE-001 | **both** | `packages/relay`, `packages/daemon`, `packages/client` |
 | **M7-SIGNAL-001** | Signaling stream resilience — heartbeat/keepalive on signaling stream, exponential backoff reconnect, `directory_signaling` status, queued outbound ops retry after reconnect | M7-DAEMON-001 | cello-client | `packages/transport/src/signaling-manager.ts`, `packages/daemon` |
 | **M7-DAEMON-003** | Nonce dedup + retry queue — rehoused in daemon; SQLCipher `retry_queue` and `session_seen_nonces` tables | M7-DAEMON-002 | cello-client | `packages/daemon`, `packages/client` |
@@ -588,6 +588,51 @@ consumers:
 must be extended to include the new fields. Both `signer_pubkey` verification
 paths (initiator self-check, counterparty directory-trust) must handle the
 enlarged TBS.
+
+---
+
+## AutoNAT — Who Provides the Dial-Back Peers?
+
+AutoNAT works by asking a set of known peers to attempt a dial-back to the
+client's advertised address. The question of **who performs that dial-back** is
+answered here and is authoritative for all story authors.
+
+**Answer: directory nodes serve as AutoNAT probers.**
+
+Directory nodes are enabled with the libp2p AutoNAT service protocol
+(`/libp2p/autonat/2.0.0`) as part of M7-TRANSPORT-001. This means:
+
+- No dedicated AutoNAT bootstrap infrastructure is needed.
+- The client already has directory node addresses from the consortium manifest —
+  no separate peer list required.
+- Three directory nodes across regions = three independent probers, giving a
+  reliable dialability signal.
+- The daemon already has an established directory connection before any standing
+  receiver or session node is created, so there is no chicken-and-egg problem.
+
+**Scope split:**
+
+- **M7-TRANSPORT-001 (client-side):** `autonat()` service added to session node
+  `createNode` config; dialability observable exposed on standing receiver and
+  session nodes; direct vs. relay address selection based on AutoNAT result.
+- **M7-TRANSPORT-001 (directory-side):** AutoNAT service protocol enabled on
+  `packages/directory` `createNode` config. This is a small one-line addition
+  to the directory's libp2p services list. M7-TRANSPORT-001 is therefore a
+  **cross-repo story** touching both repos.
+
+**Edge case — AutoNAT unavailable at standing receiver creation:**
+
+If the directory connection is in `reconnecting` state when the standing receiver
+node is created, the AutoNAT query cannot run. The fallback is conservative:
+assume not dialable, advertise relay address in `SessionAssignment`. Once the
+directory reconnects, the next AutoNAT probe may upgrade the address — but the
+standing receiver does NOT re-issue its assignment for an already-negotiated
+session. A new session will use the updated dialability result.
+
+**Story authors:** any story that reads `counterparty_session_addrs` from a
+`SessionAssignment` must handle both a direct multiaddr and a relay circuit
+address. The transport mode field (`direct` / `relay`) in the `SessionAssignment`
+disambiguates — do not infer transport mode from the address format.
 
 ---
 
@@ -838,7 +883,7 @@ the `AC-version-bump` and `AC-trustless-cello-dependency-update` ACs defined in
 | M7-MCP-001 | `packages/adapter-claude-code` rewrite | — |
 | M7-DAEMON-002 | `packages/daemon` (session node manager) | — |
 | M7-WIRE-001 | `packages/protocol-types`, `packages/client` | `packages/directory`, `packages/relay` |
-| M7-TRANSPORT-001 | `packages/transport` (AutoNAT) | — |
+| M7-TRANSPORT-001 | `packages/transport` (AutoNAT, client-side) | `packages/directory` (enable AutoNAT service protocol — one-line addition to directory `createNode`) |
 | M7-SESSION-001 | `packages/client` (interrupted handling) | `packages/relay` (new frame type) |
 | M7-SIGNAL-001 | `packages/transport` (signaling manager) | — |
 | M7-DAEMON-003 | `packages/daemon`, `packages/client` | — |
