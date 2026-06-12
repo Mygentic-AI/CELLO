@@ -153,7 +153,7 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
-  - id: AC-006
+  - id: AC-005
     given: "The directory binary's main entrypoint (packages/directory/src/index.ts
       or bin.ts)"
     when: "the directory starts via `node dist/index.js` (the command ECS runs)"
@@ -173,7 +173,7 @@ acceptance_criteria:
       registers it, it is dead code. This AC proves the handler is reachable
       from the running binary by spawning the actual binary that ECS deploys.
 
-  - id: AC-007
+  - id: AC-006
     given: "All catch blocks in packages/directory/src/"
     when: "each catch block is reviewed"
     then: >
@@ -189,23 +189,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: directory
 
-  - id: AC-008
-    given: "All directory code changes for this story are implemented and tests
-      pass in trustless-cello"
-    when: "the directory image is built and tagged"
-    then: >
-      The directory Docker image is built via the CI/CD pipeline (CodeBuild).
-      The image is pushed to ECR in all 3 regions (us-east-1, eu-central-1,
-      ap-northeast-1) via the same pipeline that deployed M6B directory changes.
-      CloudFormation stack updates are triggered in all 3 regions. ECS services
-      are updated with the new image. No manual docker push from local. No
-      changes to trustless-cello package.json dependency versions are required
-      (DIR-PING-001 touches only packages/directory in trustless-cello; no
-      cello-client packages are modified).
-    test_type: integration
-    component_under_test: directory
-
-  - id: AC-009
+  - id: AC-007
     given: "docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
       (the canonical event taxonomy)"
     when: "the implementation is complete"
@@ -224,34 +208,22 @@ security_invariants:
   - id: SI-001
     statement: >
       The directory shall never execute a blocking operation (DB query, external
-      API call, file I/O) in the ping handler. The pong must be sent within 1
-      second of receiving the ping, and the 1-second budget cannot tolerate a
-      blocking call.
+      API call, file I/O) or hold a cross-stream lock in the ping handler. Each
+      client's pong must be sent within 1 second of receiving the ping,
+      regardless of burst load from other clients sharing the same directory node.
     adversarial_condition: >
-      An attacker sends a burst of 100 ping frames within 1 second. The directory
-      must respond to all 100 pongs within the 1-second window (or as close as
-      stream write capacity allows). If the handler blocks on any operation, the
-      burst will cause all subsequent pongs to be delayed beyond the 1-second
-      budget, triggering false-positive heartbeat timeouts on legitimate clients
-      sharing the same directory node. Verified by a load test that sends 100
-      pings in rapid succession and asserts all pongs are received within 2
-      seconds total (allowing for stream write serialization).
+      An attacker controls Client A and sends a burst of 100 ping frames within
+      1 second to the directory. Simultaneously, legitimate Client B sends a
+      single ping. The directory must respond to Client B's pong within 1 second
+      — Client A's burst must not delay Client B's response. If the handler
+      blocks on any operation or holds a serializing lock across streams, Client
+      A's burst will delay Client B's pong beyond the 1-second budget, triggering
+      a false-positive heartbeat timeout on the legitimate client. Verified by a
+      load test that sends 100 pings from Client A and 1 ping from Client B
+      concurrently, then asserts Client B's pong arrives within 1 second (Client
+      A's 100 pongs may arrive within 2 seconds due to stream write serialization,
+      but must not block Client B).
     test_type: integration
-    component_under_test: directory
-
-  - id: SI-002
-    statement: >
-      The directory's ping handler shall execute no blocking operations
-      (database queries, external API calls, file I/O). The handler's
-      execution path from ping receipt to pong send must be synchronous
-      or use only non-blocking stream writes.
-    adversarial_condition: >
-      An implementer attempts to add a blocking operation (e.g., a Postgres
-      query to log ping statistics, or an HTTP request to a metrics endpoint)
-      inside the ping handler. A code reviewer inspects the handler's call
-      graph and rejects the change because any blocking call would violate
-      the 1-second pong budget and introduce a DoS vector under load.
-    test_type: unit
     component_under_test: directory
 
 # ─── Degraded Behavior ──────────────────────────────────────
@@ -289,13 +261,12 @@ observability:
     No console.log in implementation code — all events go through the injected
     Logger interface.
   alarms: []
-  notes_alarms: >
-    No CloudWatch alarms for ping/pong events. If pong fails to send, the
-    client's heartbeat timeout (SIGNAL-001) detects the failure and triggers
-    reconnection. No alarm is needed at the directory level for individual pong
-    failures. Sustained pong failures across many clients would surface as
-    increased directory.signaling.disconnected rates in SIGNAL-001's client-side
-    logs — that alarm already exists.
+  # No CloudWatch alarms for ping/pong events. If pong fails to send, the
+  # client's heartbeat timeout (SIGNAL-001) detects the failure and triggers
+  # reconnection. No alarm is needed at the directory level for individual pong
+  # failures. Sustained pong failures across many clients would surface as
+  # increased directory.signaling.disconnected rates in SIGNAL-001's client-side
+  # logs — that alarm already exists.
 
 # ─── Implementation Notes ────────────────────────────────────
 implementation_notes:
