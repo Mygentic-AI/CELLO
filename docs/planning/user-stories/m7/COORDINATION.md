@@ -46,7 +46,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-WIRE-001 — SessionAssignment wire format | — | not started | Blocked on M7-DAEMON-002; cross-repo; batch with M7-SESSION-001 + M7-MANIFEST-002 |
 | M7-TRANSPORT-001 — AutoNAT + direct P2P | — | not started | Blocked on M7-WIRE-001 |
 | M7-SESSION-001 — Interrupted session handling | — | not started | Blocked on M7-DAEMON-002 + M7-WIRE-001 |
-| M7-SIGNAL-001 — Signaling stream resilience | — | not started | Blocked on M7-DAEMON-001 |
+| M7-SIGNAL-001 — Signaling stream resilience | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 for implementation |
 | M7-DAEMON-003 — Nonce dedup + retry queue | — | not started | Blocked on M7-DAEMON-002 |
 | M7-MCP-002 — Agent-aware notifications | — | not started | Blocked on M7-MCP-001 + M7-DAEMON-002 + M7-DAEMON-003 |
 | M7-MANIFEST-001 — Manifest schema | — | written — review pending | Written 2026-06-12; independent; no other story blocks it |
@@ -162,3 +162,17 @@ unset → install from npm registry. Dead pipeline cleanup (cello-crypto-pipelin
 cello-transport-pipeline, cello-client-pipeline, cello-protocol-types-pipeline)
 confirmed complete at CFN and mappings level; deploy-lambdas.sh dev filter run
 is an explicit AC. Story marked written — review pending.
+
+### 2026-06-12 — M7-SIGNAL-001 written
+
+CELLO-M7-SIGNAL-001 YAML written. Addresses M6/M6B lesson L5 (silent signaling
+stream death). Key decisions: heartbeat 15s interval + 15s pong timeout (30s
+max detection window, matching E2E-001 AC-006 observable); backoff formula
+min(initialMs * 2^(attempt-1), 60000ms), 10-attempt cap; 'lost' state reached
+after exhaustion; 64-op FIFO outbound queue with full queue returning
+signaling_queue_full immediately; full 7-step re-auth on reconnect (Q5
+authoritative — no resume token); injectable connect() function (adapter
+pattern — all backoff/queue logic testable without CELLO_E2E_LIVE); sovereign
+node constraint: reconnect iterates entire manifest node list, not a hardcoded
+endpoint. packages/transport/src/signaling-manager.ts is the primary new file.
+Story marked written — review pending.
