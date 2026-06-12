@@ -407,59 +407,64 @@ degraded_behavior:
 # ─── Observability ─────────────────────────────────────────
 observability:
   events:
+    # Note: correlationId is not used for CI/CD events. These are GitHub Actions
+    # job-log lines and CodeBuild build-log lines — not daemon async flows with a
+    # Logger interface threading a correlationId. The candidateSha serves as the
+    # natural correlation key across all events in a single publish run.
     - name: "cicd.candidate.uploaded"
       level: info
       trigger: "GitHub Actions uploads the connect.tgz to S3"
       context_fields: [candidateSha, s3Key, sizeBytes, repo]
-      correlationId: true
+      correlationId: false
 
     - name: "cicd.e2e_gate.started"
       level: info
       trigger: "GitHub Actions calls StartPipelineExecution for a candidate run"
       context_fields: [candidateSha, pipelineExecutionId, repo]
-      correlationId: true
+      correlationId: false
 
     - name: "cicd.e2e_gate.passed"
       level: info
       trigger: "e2e pipeline returns SUCCEEDED for a candidate run; publish proceeds"
       context_fields: [candidateSha, pipelineExecutionId, durationMs]
-      correlationId: true
+      correlationId: false
 
     - name: "cicd.candidate.install.completed"
       level: info
       trigger: "CodeBuild install phase successfully installs the candidate tarball from S3"
       context_fields: [candidateSha, s3Key, connectVersion]
-      correlationId: true
+      correlationId: false
 
     - name: "pipeline.webhook.received"
       level: info
       trigger: "Webhook receiver Lambda accepts a push event from cello-client"
       context_fields: [source, branch, commitSha, repo]
-      correlationId: true
+      correlationId: false
 
   error_events:
     - name: "cicd.e2e_gate.failed"
       level: error
       trigger: "e2e pipeline returns FAILED for a candidate run; publish blocked"
       context_fields: [candidateSha, pipelineExecutionId, failedStageName, repo]
-      correlationId: true
+      correlationId: false
 
     - name: "cicd.e2e_gate.timeout"
       level: error
       trigger: "GitHub Actions poll loop reaches 15-minute timeout without terminal status"
       context_fields: [candidateSha, pipelineExecutionId, elapsedMs]
-      correlationId: true
+      correlationId: false
 
     - name: "cicd.candidate.install.failed"
       level: error
       trigger: "CodeBuild install phase fails to download or install the candidate tarball from S3"
       context_fields: [candidateSha, s3Key, reason]
-      correlationId: true
+      correlationId: false
 
     - name: "pipeline.webhook.hmac_invalid"
       level: warn
       trigger: "Webhook receiver Lambda receives a cello-client push with invalid or absent HMAC"
       context_fields: [repo, remoteIp, statusCode]
+      correlationId: false
 
   alarms:
     - condition: "cicd.e2e_gate.failed count >= 2 within 24 hours"
@@ -468,45 +473,49 @@ observability:
       fires_to: "cello-cicd-alerts SNS topic"
 
 # ─── Implementation Notes ────────────────────────────────────
-# New resources in IaC (all in infra/cloudformation/cello-cicd.yaml):
-#   - GitHubOidcRole: IAM role with OIDC trust for Mygentic-AI/cello-client main branch
-#   - CandidatesLifecycleRule: S3 lifecycle rule on cello-artifacts-{env} for candidates/ prefix
-#   - CelloClientWebhookSecretParam: CloudFormation parameter (no Default) for SSM SecureString
-#     at /cello/cicd/cello-client-webhook-secret; supplied at deploy time
-#
-# Modified resources:
-#   - packages/e2e-tests/buildspec.yml: bifurcated install phase
-#     (if CELLO_CANDIDATE_SHA set → download from S3 + npm install tarball;
-#      else → pnpm install --frozen-lockfile from registry)
-#   - WebhookLambda: add cello-client HMAC validation path
-#     (reads /cello/cicd/cello-client-webhook-secret; validates before forwarding)
-#   - pipeline-mappings.json: add sourceRepoMappings top-level key with
-#     "Mygentic-AI/cello-client" → "cello-e2e-tests-pipeline" entry
-#   - infra/lambda/pipeline-filter/handler.py: handle sourceRepoMappings lookup
-#     for events where repo name is the routing key (not file path prefix)
-#   - infra/lambda/pipeline-filter/test_filter_handler.py: update ALL_CELLO_PIPELINES
-#     to 5 entries, remove dead pipeline references, add cello-client routing test
-#   - cello-client/.github/workflows/ci.yml: add pre-publish gate steps
-#
-# Deploy sequence:
-#   1. Update cello-cicd.yaml (GitHubOidcRole, lifecycle rule, parameter for webhook secret)
-#   2. Run ./infra/deploy.sh to apply CloudFormation
-#   3. Update pipeline-mappings.json with sourceRepoMappings entry
-#   4. Run ./infra/deploy-lambdas.sh dev filter to rebundle Lambda
-#   5. Update cello-client/.github/workflows/ci.yml with publish gate logic
-#   6. Register GitHub webhook on cello-client repo pointing to existing webhook URL
-#
-# deploy.sh is the ONLY mechanism for CloudFormation changes (infra/CLAUDE.md).
-# CI/CD pipelines only swap Docker images; cello-cicd.yaml changes require deploy.sh.
+implementation_notes:
+  - >
+    New resources in IaC (all in infra/cloudformation/cello-cicd.yaml):
+    GitHubOidcRole — IAM role with OIDC trust for Mygentic-AI/cello-client main branch;
+    CandidatesLifecycleRule — S3 lifecycle rule on cello-artifacts-{env} for candidates/ prefix;
+    CelloClientWebhookSecretParam — CloudFormation parameter (no Default) for SSM SecureString
+    at /cello/cicd/cello-client-webhook-secret; value supplied at deploy time.
+  - >
+    Modified resources:
+    packages/e2e-tests/buildspec.yml — bifurcated install phase: if CELLO_CANDIDATE_SHA is set,
+    download from S3 and install tarball; else pnpm install --frozen-lockfile from registry.
+    WebhookLambda — add cello-client HMAC validation path reading
+    /cello/cicd/cello-client-webhook-secret before forwarding to EventBridge.
+    pipeline-mappings.json — add sourceRepoMappings top-level key with
+    "Mygentic-AI/cello-client" → "cello-e2e-tests-pipeline" entry.
+    infra/lambda/pipeline-filter/handler.py — handle sourceRepoMappings lookup for events
+    where the routing key is a full repo name rather than a file path prefix.
+    infra/lambda/pipeline-filter/test_filter_handler.py — update ALL_CELLO_PIPELINES to 5
+    entries, remove dead pipeline references, add cello-client routing test.
+    cello-client/.github/workflows/ci.yml — add pre-publish gate steps.
+  - >
+    Path note: the connect adapter lives at core/adapter-claude-code/ in the cello-client
+    repo (not packages/adapter-claude-code/). AC-013 uses core/adapter-claude-code — this
+    is correct per the cello-client repo structure.
+  - >
+    Deploy sequence:
+    (1) Update cello-cicd.yaml (GitHubOidcRole, lifecycle rule, webhook secret parameter).
+    (2) Run ./infra/deploy.sh to apply CloudFormation.
+    (3) Update pipeline-mappings.json with sourceRepoMappings entry.
+    (4) Run ./infra/deploy-lambdas.sh dev filter to rebundle Lambda.
+    (5) Update cello-client/.github/workflows/ci.yml with publish gate logic.
+    (6) Register GitHub webhook on cello-client repo pointing to existing webhook URL.
+    deploy.sh is the ONLY mechanism for CloudFormation changes (infra/CLAUDE.md).
+    CI/CD pipelines only swap Docker images; cello-cicd.yaml changes require deploy.sh.
 
 # ─── Dependencies ────────────────────────────────────────────
 dependencies:
   blocked_by: []
   blocks:
-    - CELLO-M7-E2E-001  # E2E gate verifies this cross-repo wiring end-to-end
-  related:
-    - CELLO-M7-E2E-001  # Integration gate story exercises this pipeline
-    - REPOSPLIT-002      # Dead pipeline cleanup was completed here
+    - CELLO-M7-E2E-001
+  notes: >
+    Related: CELLO-M7-E2E-001 (integration gate story exercises this pipeline);
+    REPOSPLIT-002 (dead pipeline cleanup was completed there).
 
 # ─── References ─────────────────────────────────────────────
 references:
