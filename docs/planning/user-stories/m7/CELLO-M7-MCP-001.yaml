@@ -80,14 +80,18 @@ story: >
 # The adapter includes no connectionId in frames — the daemon derives it from
 # the socket handle for each accepted connection.
 #
-# Existing session tools (cello_send, cello_receive, cello_initiate_session,
-# cello_await_session, cello_close_session, cello_list_sessions,
-# cello_get_sealed_receipt, cello_get_inclusion_proof, cello_status,
-# cello_backup, cello_restore, cello_connect_peer, cello_register, and any
-# other tools present in the M6B adapter) are proxied without modification to
-# their input/output contracts. The daemon resolves the current agent from the
-# connectionId and routes accordingly. If no current agent is set, the daemon
-# returns no_current_agent and the adapter surfaces it.
+# Existing tools (as registered in
+# packages/adapter-claude-code/src/server.ts in the M6B adapter):
+#   cello_initiate_session, cello_await_session, cello_send,
+#   cello_receive_session, cello_receive, cello_close_session,
+#   cello_list_sessions, cello_get_sealed_receipt, cello_get_inclusion_proof,
+#   cello_status, cello_backup, cello_restore
+# MCP notification channels (not tools, no IPC proxy needed):
+#   cello_message, cello_session_request
+# All tools are proxied without modification to their input/output contracts.
+# The daemon resolves the current agent from the connectionId and routes
+# accordingly. If no current agent is set, the daemon returns no_current_agent
+# and the adapter surfaces it.
 #
 # DAEMON-001 design decision inherited here: cello login does NOT auto-start
 # agents. After daemon start, agents are in Registered state. The operator must
@@ -177,10 +181,12 @@ behavior:
   - trigger: "When the daemon sends a response that cannot be parsed as valid JSON-newline"
     action: >
       The adapter returns { ok: false, reason: 'ipc_deserialization_error',
-      guidance: 'The daemon sent a malformed response. This may indicate a
-      version mismatch between cello-mcp and the running daemon. Run
-      `cello-mcp --version` and `cello logout && cello login` to restart with
-      a compatible daemon.' }
+      guidance: 'The daemon sent a malformed response — this may be transient.
+      Retry your operation. If the error persists, run `cello-mcp --version` and
+      `cello status` to check for a version mismatch between cello-mcp and the
+      running daemon.' } The adapter recovers: subsequent tool calls that receive
+      valid JSON responses succeed normally. The IPC connection is NOT closed on
+      a single bad frame.
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -364,18 +370,22 @@ acceptance_criteria:
     when: "the tool call that receives the malformed response is processed"
     then: >
       The tool returns { ok: false, reason: 'ipc_deserialization_error',
-      guidance: 'The daemon sent a malformed response. This may indicate a
-      version mismatch between cello-mcp and the running daemon. Run
-      `cello-mcp --version` and `cello logout && cello login` to restart with
-      a compatible daemon.' }. The adapter does not crash and subsequent tool
-      calls that receive valid responses succeed normally.
+      guidance: 'The daemon sent a malformed response — this may be transient.
+      Retry your operation. If the error persists, run `cello-mcp --version` and
+      `cello status` to check for a version mismatch between cello-mcp and the
+      running daemon.' }. The adapter does NOT crash. A subsequent tool call (in
+      the same test, same IPC connection) that receives a well-formed JSON
+      response succeeds normally — the adapter recovers after a single bad frame
+      and does not close the IPC connection.
     test_type: integration
     component_under_test: adapter-claude-code
     notes: >
       Covers the ipc_deserialization_error failure mode from the M7 error surface
       map. The test injects a malformed line (e.g. 'not-json\n') via a test
-      daemon stub that otherwise behaves normally. The adapter must recover after
-      the single bad frame — the IPC connection is not closed on one bad frame.
+      daemon stub that otherwise behaves normally for all other calls. The
+      recover-and-continue behavior is verified by the two-call assertion: bad
+      frame → error response; next frame → success response. An adapter that
+      closes the connection on parse error would fail the second assertion.
 
   - id: AC-011
     given: "cello_use_agent called with an agent name that is in Registered state (not Online)"
@@ -614,15 +624,17 @@ security_invariants:
       connection agent leakage — where connection 2's tool call executes using
       connection 1's current agent — must be impossible.
     adversarial_condition: >
-      Connection 1 has agent alice as current and has an active session S1 with
-      a counterparty. Connection 2 has agent bob as current. Connection 2 calls
+      Connection 1 has agent alice as current. Connection 2 has agent bob as
+      current. A test message is placed directly into alice's inbound receive
+      queue in the daemon (using a test fixture helper that enqueues a message
+      for a named agent without requiring an established session node — within
+      this story's scope and not requiring DAEMON-002). Connection 2 calls
       cello_receive — the dequeued message must come from bob's receive queue,
-      not alice's. Verified by asserting: (a) a message is sent to alice's
-      counterparty and placed in alice's session queue, (b) cello_receive on
-      connection 2 returns timeout (not alice's message), (c) cello_receive
-      on connection 1 returns the message. The two connections must be real
-      separate IPC socket connections with distinct connectionId values in the
-      daemon log — not in-process object references.
+      not alice's. Verified by asserting: (a) a message is enqueued for alice,
+      (b) cello_receive on connection 2 returns timeout (not alice's message),
+      (c) cello_receive on connection 1 returns the message. The two connections
+      must be real separate IPC socket connections with distinct connectionId
+      values in the daemon log — not in-process object references.
     test_type: integration
     component_under_test: daemon
 
@@ -717,9 +729,11 @@ observability:
     adapter would violate the thin-proxy principle and add a startup dependency.
     No console.log in adapter or daemon code — all events go through the injected
     Logger interface (daemon side only; the adapter has no Logger).
-  alarms: [] # no alarm: adapter-level events (connect/disconnect) are covered by
-             # daemon.ipc.connection.limit.reached alarm in DAEMON-001. No new
-             # failure modes introduced by this story warrant additional alarms.
+    No new alarms are warranted by this story: adapter-level IPC connect/disconnect
+    events are covered by the daemon.ipc.connection.limit.reached alarm defined in
+    DAEMON-001. No new failure modes introduced here require alerting beyond what
+    the daemon already surfaces.
+  alarms: []
 
 # ─── Implementation Notes ───────────────────────────────────
 implementation_notes:
