@@ -48,7 +48,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-SESSION-001 — Interrupted session handling | — | not started | Blocked on M7-DAEMON-002 + M7-WIRE-001 |
 | M7-SIGNAL-001 — Signaling stream resilience | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-001 for implementation |
 | M7-DIR-PING-001 — Directory-side ping/pong handler | — | not started | Blocked on M7-SIGNAL-001 (frame type defined there); touches packages/directory (trustless-cello); required for heartbeat to function end-to-end |
-| M7-DAEMON-003 — Nonce dedup + retry queue | — | not started | Blocked on M7-DAEMON-002 |
+| M7-DAEMON-003 — Nonce dedup + retry queue | — | written — review pending | Written 2026-06-12; blocked on M7-DAEMON-002 for implementation |
 | M7-MCP-002 — Agent-aware notifications | — | not started | Blocked on M7-MCP-001 + M7-DAEMON-002 + M7-DAEMON-003 |
 | M7-MANIFEST-001 — Manifest schema | — | written — review pending | Written 2026-06-12; independent; no other story blocks it |
 | M7-MANIFEST-002 — Client verification + polling | — | not started | Blocked on M7-DAEMON-001 + M7-MANIFEST-001 |
@@ -188,6 +188,21 @@ functional until DIR-PING-001 lands. (2) MEDIUM — AC-005b renumbered to AC-006
 existing AC-006 through AC-013 shifted to AC-007 through AC-014. (3) MEDIUM —
 explicit known limitation added to implementation_notes: no self-recovery from
 'lost' state; operator must run cello logout + cello login after network restores.
+
+### 2026-06-12 — M7-DAEMON-003 written
+
+CELLO-M7-DAEMON-003 YAML written. Moves retry queue and nonce dedup from
+packages/client into packages/daemon with SQLCipher persistence. Two new
+inline-migration tables: retry_queue (FIFO per session, depth 1,000,
+oldest evicted on overflow) and session_seen_nonces (per-session LRU,
+10,000 entries). Key ACs: serialization round-trip with real Uint8Array
+nonce (L1), startup loading before IPC socket opens (L2), composition root
+wiring in server.ts verified via binary-start integration test (L3), lateral
+catch audit across all catch blocks in packages/daemon and packages/client
+(L6), anti-replay SI across restart boundary, retryQueueDepth field added
+to cello status, packages/client stripped of all retry/dedup state (grep-
+verified), and version bump gate. cello-client only — no trustless-cello
+package.json update needed.
 
 ### 2026-06-12 — M7-WIRE-001 written
 
