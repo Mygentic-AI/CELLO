@@ -33,8 +33,34 @@ export interface SignalingAuthFailed {
   reason: DirAuthFailedReason;
 }
 
+/**
+ * M7-MANIFEST-002: Augmented signaling_auth_ok frame.
+ *
+ * After authenticating the client's step-4 response, the directory signs a TBS
+ * (to-be-signed) byte array with its per-node Ed25519 key and includes nodeId,
+ * signature, and timestamp. The client verifies this in step 6.
+ *
+ * Fields are optional for backward compatibility with pre-MANIFEST-002 clients.
+ */
 export interface SignalingAuthOk {
   type: "signaling_auth_ok";
+  /** Directory node unique identifier. Present in MANIFEST-002+ directories. */
+  nodeId?: string;
+  /** Ed25519 signature over the step-5 TBS — 128-char hex (64 bytes). */
+  signature?: string;
+  /** ISO 8601 UTC timestamp at signing. Present alongside nodeId. */
+  timestamp?: string;
+}
+
+/** M7-MANIFEST-002: Client requests a fresh manifest from the directory. */
+export interface ManifestPollRequest {
+  type: "manifest_poll_request";
+}
+
+/** M7-MANIFEST-002: Directory responds to a manifest poll with the current manifest. */
+export interface ManifestPollResponse {
+  type: "manifest_poll_response";
+  manifest: import("@cello-protocol/protocol-types").ConsortiumManifest;
 }
 
 // ─── Peer info announce (client → directory, after signaling_auth_ok) ─────────

@@ -20,3 +20,6 @@ export type { TokenValidator, TokenValidationResult } from "./token-validator.js
 export type { PreAuthorizationClient, PreAuthorizationToken, PreAuthorizationTokenRow } from "./pre-authorization-client.js";
 export type { SecurityAlertProvider, SecurityAlert } from "./security-alert-provider.js";
 export type { RegistrationState, RegistrationRecord } from "./registration-state.js";
+
+// M7-MANIFEST-002: directory-side manifest interfaces
+export type { DirectoryKeyProvider, DirectoryManifestStore } from "./manifest.js";

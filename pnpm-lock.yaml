@@ -36,43 +36,6 @@ importers:
         specifier: ^3.0.0
         version: 3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0)
 
-  packages/adapter-claude-code:
-    dependencies:
-      '@cello-protocol/client':
-        specifier: ^0.0.20
-        version: 0.0.20
-      '@cello-protocol/crypto':
-        specifier: ^0.0.7
-        version: 0.0.7
-      '@cello-protocol/interfaces':
-        specifier: workspace:*
-        version: link:../interfaces
-      '@cello-protocol/transport':
-        specifier: ^0.0.4
-        version: 0.0.4
-      '@libp2p/peer-id':
-        specifier: ^6.0.8
-        version: 6.0.8
-      '@modelcontextprotocol/sdk':
-        specifier: ^1.29.0
-        version: 1.29.0(zod@4.4.2)
-      zod:
-        specifier: ^4.4.2
-        version: 4.4.2
-    devDependencies:
-      '@claude-flow/testing':
-        specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
-      '@types/node':
-        specifier: ^25.6.2
-        version: 25.6.2
-      cbor-x:
-        specifier: ^1.6.0
-        version: 1.6.4
-      it-length-prefixed:
-        specifier: ^10.0.1
-        version: 10.0.1
-
   packages/directory:
     dependencies:
       '@aws-sdk/client-s3':
@@ -91,8 +54,8 @@ importers:
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.3
-        version: 0.0.3
+        specifier: ^0.0.4
+        version: 0.0.4
       '@cello-protocol/transport':
         specifier: ^0.0.4
         version: 0.0.4
@@ -176,8 +139,11 @@ importers:
   packages/interfaces:
     dependencies:
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.3
-        version: 0.0.3
+        specifier: ^0.0.4
+        version: 0.0.4
+      '@noble/curves':
+        specifier: 2.2.0
+        version: 2.2.0
     devDependencies:
       '@types/node':
         specifier: ^25.6.2
@@ -510,6 +476,10 @@ packages:
     resolution: {integrity: sha512-PkcaSZW3dNwOB8kUt0ayQGoSg2vKwZT8UOmJA3V3PIhQ/etjnODvL+m/L7Fr16QFRNXvpUQrv/KAHjwlSLw1kw==}
     engines: {node: '>=24'}
 
+  '@cello-protocol/crypto@0.0.8':
+    resolution: {integrity: sha512-CoD1tzS1TRVmxYT0xhajShFBTLn29ew0l+vVMRojMuXWTUENHwhE+78+8ftUdU/QAZVypn7SbTESTzL0kJ3iFA==}
+    engines: {node: '>=24'}
+
   '@cello-protocol/interfaces@0.0.3':
     resolution: {integrity: sha512-b4MmBEjOlj9E0QU/PIlM0GKznDIl11B03MAxB2V4vW/0bBxEoN/Tb8OLKApktiUJHIv38pm7HM5oZO0zo+ySrg==}
     engines: {node: '>=24'}
@@ -520,6 +490,10 @@ packages:
 
   '@cello-protocol/protocol-types@0.0.3':
     resolution: {integrity: sha512-PM5Zz2lmZKynI/BGaA5IoAu3UqnPuRYidlyUcVpR0/KPlfew4cRx1EMRTQXmS5Rb1HAKYjRgnoJhZ6uglOOIew==}
+    engines: {node: '>=24'}
+
+  '@cello-protocol/protocol-types@0.0.4':
+    resolution: {integrity: sha512-9yJSL4fPDzQWngI3awGrLhsaoncrVs73zPnI1GY2CNg7nbdDPKGOvKLhyhbbY8xF2jBn7T1815I26xkyJo9xmw==}
     engines: {node: '>=24'}
 
   '@cello-protocol/transport@0.0.4':
@@ -4064,6 +4038,12 @@ snapshots:
       '@noble/hashes': 2.2.0
       '@oqs/liboqs-js': 0.15.1
 
+  '@cello-protocol/crypto@0.0.8':
+    dependencies:
+      '@noble/curves': 2.2.0
+      '@noble/hashes': 2.2.0
+      '@oqs/liboqs-js': 0.15.1
+
   '@cello-protocol/interfaces@0.0.3':
     dependencies:
       '@cello-protocol/protocol-types': 0.0.2
@@ -4076,6 +4056,11 @@ snapshots:
   '@cello-protocol/protocol-types@0.0.3':
     dependencies:
       '@cello-protocol/crypto': 0.0.3
+      cbor-x: 1.6.4
+
+  '@cello-protocol/protocol-types@0.0.4':
+    dependencies:
+      '@cello-protocol/crypto': 0.0.8
       cbor-x: 1.6.4
 
   '@cello-protocol/transport@0.0.4':
