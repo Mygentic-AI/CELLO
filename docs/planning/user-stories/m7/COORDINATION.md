@@ -52,7 +52,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-SESSION-001 — Interrupted session handling | — | written — not yet started | Blocked on M7-DAEMON-002 + M7-WIRE-001; cross-repo; batch with M7-WIRE-001 + M7-MANIFEST-002 |
 | M7-DIR-PING-001 — Directory-side ping/pong handler | — | **merged to main** | trustless-cello main; 6 tests (ping/pong, multi-client, burst load, composition root); PingFrame decode + encodePong + handler in dispatch chain |
 | M7-MCP-002 — Agent-aware notifications | — | **merged to main** | cello-client main; NotificationDispatcher with broadcast/single/filtered routing; 175 daemon tests + full suite |
-| M7-CICD-001 — Cross-repo CI/CD | — | written — not yet started | Independent; no deps; can start any time |
+| M7-CICD-001 — Cross-repo CI/CD | — | **implemented — review complete** | Both worktrees (trustless-cello + cello-client); 2 review rounds complete; ready for merge |
 
 ### Migration Version Registry
 

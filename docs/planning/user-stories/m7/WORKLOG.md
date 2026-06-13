@@ -596,3 +596,61 @@ Directory-side ping/pong heartbeat handler implemented. PingFrame decode, encode
 handler wired into dispatch chain. 6 tests covering: ping/pong, multi-client broadcast,
 burst load, composition root. All code-review findings fixed (bigint coercion, PongFrame
 type, TypeScript validation, deterministic test assertions). Sprint-reviewer approved.
+
+---
+
+### 2026-06-13 — CICD-001 implemented
+
+**Story:** CELLO-M7-CICD-001
+**Agent/Author:** sprint-coder + orchestrator
+
+Cross-repo CI/CD gate: cello-client pushes must pass trustless-cello e2e pipeline
+before npm publish proceeds. Both repos touched.
+
+**What was built:**
+
+trustless-cello (branch m7/cicd-001):
+- `infra/pipeline-mappings.json`: allCelloPipelines updated to 5 entries (added
+  cello-connect-pipeline); sourceRepoMappings section added routing
+  Mygentic-AI/cello-client → cello-e2e-tests-pipeline
+- `infra/lambda/pipeline-filter/index.py`: _resolve_pipelines_by_repo() added for
+  source-repo routing; lambda_handler checks sourceRepoMappings before path fallback
+- `infra/lambda/pipeline-filter/test_filter_handler.py`: rewritten for 5-pipeline
+  state; 15 tests covering AC-002/004/006/007/012 + DB-002 + observability
+- `infra/cloudformation/cello-cicd.yaml`: GitHubOidcProvider (conditional on
+  ExistingGitHubOidcProviderArn), GitHubOidcRole (main + tags trust, StartPipelineExecution
+  + GetPipelineExecution + ListActionExecutions on e2e-tests-pipeline only, s3:PutObject
+  on candidates/*), ExpireCandidates lifecycle rule (7 days), CelloClientWebhookSecretStore
+  (Secrets Manager), E2eTestsPipeline Variables section (CELLO_CANDIDATE_SHA with
+  EnvironmentVariables propagation to CodeBuild)
+- `packages/e2e-tests/buildspec.yml`: bifurcated install — CELLO_CANDIDATE_SHA set
+  downloads from S3; unset installs from registry
+
+cello-client (branch m7/cicd-001):
+- `.github/workflows/ci.yml`: restructured into 5 jobs — build, e2e-gate (main
+  pushes), publish (depends on e2e-gate), e2e-gate-tag (tag pushes), publish-tag
+  (depends on e2e-gate-tag). OIDC credentials, S3 upload, pipeline trigger, 30s poll
+  for 15min with Stopped/Stopping/Cancelled terminal states + failedStageName lookup.
+
+**Code-reviewer findings (6 total — 2 critical, 3 important, 1 medium):**
+1. CRITICAL: AWS_REGION reserved variable → hardcoded us-east-1
+2. CRITICAL: SSM String → Secrets Manager secret
+3. IMPORTANT: Poll loop missing Stopped/Stopping/Cancelled terminal states
+4. IMPORTANT: publish-tag bypassed e2e gate entirely → added e2e-gate-tag job
+5. IMPORTANT: GitHubOidcProvider unconditional → Condition + parameter
+6. MEDIUM: Test coverage gap for unknown repo with matching paths → added test
+
+**Sprint-reviewer findings (2 blocking, 1 medium, 1 low):**
+1. BLOCKING: CELLO_CANDIDATE_SHA pipeline variable never propagated to CodeBuild →
+   added Variables section + EnvironmentVariables override with #{variables.CELLO_CANDIDATE_SHA}
+2. BLOCKING: OIDC trust rejected tag refs → added refs/tags/* to StringLike condition
+3. MEDIUM: failedStageName missing → added list-action-executions call on failure
+4. LOW: StringLike without wildcards → now has wildcard (refs/tags/*), so appropriate
+
+**Final state:** 15 Lambda tests passing. YAML valid. All review findings fixed.
+
+**Commits:**
+- trustless-cello: 223afd7 (initial), 5dceb7f (code-review fixes), 3a4bd10 (sprint-review fixes)
+- cello-client: 57fa7b8 (initial), ca24e69 (code-review fixes), 928e24b (sprint-review fixes)
+
+**Ready for merge.** No push to origin — deferred to orchestrator.
