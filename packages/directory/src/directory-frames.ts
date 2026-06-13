@@ -390,7 +390,8 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
 
   // M7-DIR-PING-001: heartbeat ping from client → directory
   if (o["type"] === "ping") {
-    const ts = typeof o["ts"] === "number" ? o["ts"] : null;
+    const tsRaw = o["ts"];
+    const ts = typeof tsRaw === "number" ? tsRaw : typeof tsRaw === "bigint" ? Number(tsRaw) : null;
     if (ts === null || !Number.isFinite(ts)) return null;
     return { type: "ping", ts };
   }
@@ -832,7 +833,8 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
 
   // M7-DIR-PING-001: heartbeat pong (directory → client)
   if (o["type"] === "pong") {
-    const ts = typeof o["ts"] === "number" ? o["ts"] : null;
+    const tsRaw = o["ts"];
+    const ts = typeof tsRaw === "number" ? tsRaw : typeof tsRaw === "bigint" ? Number(tsRaw) : null;
     if (ts === null || !Number.isFinite(ts)) return null;
     return { type: "pong", ts };
   }

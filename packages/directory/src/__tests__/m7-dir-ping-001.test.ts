@@ -42,6 +42,11 @@ import {
 } from "../directory-node.js";
 import type { RelayAdapter } from "../directory-node.js";
 import type { RelaySessionAssignment } from "../directory-types.js";
+import {
+  decodeInboundSignalingFrame,
+  decodeOutboundSignalingFrame,
+  encodePong,
+} from "../directory-frames.js";
 import type { Logger } from "@cello-protocol/interfaces";
 
 // ─── Test utilities ──────────────────────────────────────────────────────────
@@ -310,6 +315,53 @@ describe("M7-DIR-PING-001: directory ping/pong handler", () => {
     }
   }, 10_000);
 
+  // ─── AC-003b: Deterministic error path — aborted stream + directory resilience
+
+  it("AC-003b: directory survives aborted stream and serves subsequent clients", async () => {
+    const { stream } = await connectAndAuth(
+      clientNodeA,
+      dirNode,
+      clientKeyA,
+    );
+
+    logger.calls.length = 0;
+
+    // Send a ping then immediately abort the stream — forces the directory's
+    // send() to throw synchronously when it attempts the pong response.
+    sendFrame(stream, CBOR_ENC.encode({ type: "ping", ts: 99 }));
+    stream.abort(new Error("test_forced_abort"));
+
+    // Wait for the directory to process the ping and hit the error path
+    await new Promise(resolve => setTimeout(resolve, 300));
+
+    // Either pong.sent (if sent before abort propagated) or pong.failed must fire
+    const pongFailed = logger.calls.find(c => c.event === "directory.signaling.pong.failed");
+    const pongSent = logger.calls.find(c => c.event === "directory.signaling.pong.sent");
+    expect(pongFailed || pongSent).toBeDefined();
+
+    if (pongFailed) {
+      expect(pongFailed.level).toBe("debug");
+      const ctx = pongFailed.context as Record<string, unknown>;
+      expect(ctx["streamId"]).toBeDefined();
+      expect(typeof ctx["error"]).toBe("string");
+      expect(ctx["error"]).not.toBe("");
+    }
+
+    // Critical: directory did NOT crash — verify by connecting a new client
+    const { stream: stream2, reader: reader2 } = await connectAndAuth(
+      clientNodeB,
+      dirNode,
+      clientKeyB,
+    );
+
+    sendFrame(stream2, CBOR_ENC.encode({ type: "ping", ts: 1 }));
+    const pong = await reader2.readFrameWithTimeout(2_000);
+    expect(pong["type"]).toBe("pong");
+    expect(pong["ts"]).toBe(1);
+
+    stream2.close();
+  }, 10_000);
+
   // ─── AC-004: Repeated pings (8 pings) ───────────────────────────────────────
 
   it("AC-004: responds to 8 consecutive pings, all events at DEBUG only", async () => {
@@ -426,4 +478,41 @@ describe("M7-DIR-PING-001: directory ping/pong handler", () => {
     authA.stream.close();
     authB.stream.close();
   }, 30_000);
+
+  // ─── Codec unit tests: bigint coercion ──────────────────────────────────────
+
+  it("decodeInboundSignalingFrame handles bigint ts from CBOR", () => {
+    // cbor-x promotes integers > 2^32 to BigInt — decoder must coerce to Number
+    const frame = CBOR_ENC.encode({ type: "ping", ts: BigInt(42) });
+    const decoded = decodeInboundSignalingFrame(frame);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.type).toBe("ping");
+    expect((decoded as { ts: number }).ts).toBe(42);
+  });
+
+  it("decodeInboundSignalingFrame rejects non-numeric ts", () => {
+    const frame = CBOR_ENC.encode({ type: "ping", ts: "hello" });
+    expect(decodeInboundSignalingFrame(frame)).toBeNull();
+  });
+
+  it("decodeInboundSignalingFrame rejects Infinity ts", () => {
+    const frame = CBOR_ENC.encode({ type: "ping", ts: Infinity });
+    expect(decodeInboundSignalingFrame(frame)).toBeNull();
+  });
+
+  it("decodeOutboundSignalingFrame handles bigint ts in pong", () => {
+    const frame = CBOR_ENC.encode({ type: "pong", ts: BigInt(777) });
+    const decoded = decodeOutboundSignalingFrame(frame);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.type).toBe("pong");
+    expect((decoded as { ts: number }).ts).toBe(777);
+  });
+
+  it("encodePong produces a frame decodable by decodeOutboundSignalingFrame", () => {
+    const encoded = encodePong(12345);
+    const decoded = decodeOutboundSignalingFrame(encoded);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.type).toBe("pong");
+    expect((decoded as { ts: number }).ts).toBe(12345);
+  });
 });
