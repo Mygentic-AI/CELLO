@@ -103,25 +103,21 @@ export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Arr
   if (a.signature_type === "frost") {
     encodedAssignment["signer_pubkey"] = a.signer_pubkey;
   }
-  // M7-WIRE-001 AC-009: encode session Peer ID fields when present on the assignment.
-  // These are set by the directory when both initiator and counterparty provide their
-  // ephemeral session identities. Cast through unknown to access the optional M7 fields
-  // that are not on the base SessionAssignment type (they are wire-format extensions).
-  const aAny = a as unknown as Record<string, unknown>;
-  if (typeof aAny["initiator_session_peer_id"] === "string") {
-    encodedAssignment["initiator_session_peer_id"] = aAny["initiator_session_peer_id"];
+  // M7-WIRE-001: encode session Peer ID fields — now typed on SessionAssignmentCommon
+  if (a.initiator_session_peer_id) {
+    encodedAssignment["initiator_session_peer_id"] = a.initiator_session_peer_id;
   }
-  if (Array.isArray(aAny["initiator_session_addrs"])) {
-    encodedAssignment["initiator_session_addrs"] = aAny["initiator_session_addrs"];
+  if (a.initiator_session_addrs && a.initiator_session_addrs.length > 0) {
+    encodedAssignment["initiator_session_addrs"] = a.initiator_session_addrs;
   }
-  if (typeof aAny["counterparty_session_peer_id"] === "string") {
-    encodedAssignment["counterparty_session_peer_id"] = aAny["counterparty_session_peer_id"];
+  if (a.counterparty_session_peer_id) {
+    encodedAssignment["counterparty_session_peer_id"] = a.counterparty_session_peer_id;
   }
-  if (Array.isArray(aAny["counterparty_session_addrs"])) {
-    encodedAssignment["counterparty_session_addrs"] = aAny["counterparty_session_addrs"];
+  if (a.counterparty_session_addrs && a.counterparty_session_addrs.length > 0) {
+    encodedAssignment["counterparty_session_addrs"] = a.counterparty_session_addrs;
   }
-  if (typeof aAny["transport_mode"] === "string") {
-    encodedAssignment["transport_mode"] = aAny["transport_mode"];
+  if (a.transport_mode) {
+    encodedAssignment["transport_mode"] = a.transport_mode;
   }
   return ENC.encode({ type: frame.type, assignment: encodedAssignment });
 }
@@ -601,6 +597,14 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     const signature_type = raw["signature_type"];
     if (signature_type !== "frost" && signature_type !== "single") return null;
 
+    // M7-WIRE-001: parse session Peer ID fields from the wire format.
+    const initiator_session_peer_id = typeof raw["initiator_session_peer_id"] === "string" ? raw["initiator_session_peer_id"] : "";
+    const initiator_session_addrs = toStringArray(raw["initiator_session_addrs"]) ?? [];
+    const counterparty_session_peer_id = typeof raw["counterparty_session_peer_id"] === "string" ? raw["counterparty_session_peer_id"] : "";
+    const counterparty_session_addrs = toStringArray(raw["counterparty_session_addrs"]) ?? [];
+    const transport_mode_raw = raw["transport_mode"];
+    const transport_mode: "direct" | "relay" = transport_mode_raw === "direct" ? "direct" : "relay";
+
     const commonFields = {
       session_id,
       participant_a: pa,
@@ -610,6 +614,11 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       session_timestamp,
       directory_pubkey,
       directory_signature,
+      initiator_session_peer_id,
+      initiator_session_addrs,
+      counterparty_session_peer_id,
+      counterparty_session_addrs,
+      transport_mode,
     };
 
     let assignment: SessionAssignment;
@@ -619,33 +628,6 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       assignment = { ...commonFields, signature_type: "frost", signer_pubkey };
     } else {
       assignment = { ...commonFields, signature_type: "single" };
-    }
-
-    // M7-WIRE-001 AC-009: parse optional session Peer ID fields from the wire format.
-    // These are present when both initiator and counterparty provided ephemeral session identities.
-    // Cast through unknown since these fields are wire-format extensions not on the base type.
-    const initiator_session_peer_id = typeof raw["initiator_session_peer_id"] === "string" ? raw["initiator_session_peer_id"] : undefined;
-    const initiator_session_addrs = toStringArray(raw["initiator_session_addrs"]) ?? undefined;
-    const counterparty_session_peer_id = typeof raw["counterparty_session_peer_id"] === "string" ? raw["counterparty_session_peer_id"] : undefined;
-    const counterparty_session_addrs = toStringArray(raw["counterparty_session_addrs"]) ?? undefined;
-    const transport_mode_raw = raw["transport_mode"];
-    const transport_mode = (transport_mode_raw === "direct" || transport_mode_raw === "relay") ? transport_mode_raw : undefined;
-
-    const assignmentRecord = assignment as unknown as Record<string, unknown>;
-    if (initiator_session_peer_id !== undefined) {
-      assignmentRecord["initiator_session_peer_id"] = initiator_session_peer_id;
-    }
-    if (initiator_session_addrs !== undefined) {
-      assignmentRecord["initiator_session_addrs"] = initiator_session_addrs;
-    }
-    if (counterparty_session_peer_id !== undefined) {
-      assignmentRecord["counterparty_session_peer_id"] = counterparty_session_peer_id;
-    }
-    if (counterparty_session_addrs !== undefined) {
-      assignmentRecord["counterparty_session_addrs"] = counterparty_session_addrs;
-    }
-    if (transport_mode !== undefined) {
-      assignmentRecord["transport_mode"] = transport_mode;
     }
 
     return { type: "session_assignment", assignment };

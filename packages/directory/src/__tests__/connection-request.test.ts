@@ -511,6 +511,8 @@ describe("SESSION-006 — Directory-side session gate", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: Buffer.from(targetPubkeyHex, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
       // no connection_id field
     }));
 
@@ -594,6 +596,8 @@ describe("SESSION-006 — Directory-side session gate", () => {
       type: "session_request",
       target_pubkey: Buffer.from(targetPubkeyHex, "hex"),
       connection_id: connectionIdAC, // wrong: belongs to A-C, not A-B
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const frame = await readerA.readFrameWithTimeout(5000);
@@ -668,6 +672,8 @@ describe("SESSION-006 — Directory-side session gate", () => {
       type: "session_request",
       target_pubkey: Buffer.from(targetPubkeyHex, "hex"),
       connection_id: fakeConnectionId,
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const frame = await readerA.readFrameWithTimeout(5000);

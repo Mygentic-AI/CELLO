@@ -255,6 +255,8 @@ describe("CELLO-NODE-001: peer_info_announce signaling step", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     // Both should receive session_assignment
@@ -313,6 +315,8 @@ describe("CELLO-NODE-001: peer_info_announce signaling step", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());

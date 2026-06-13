@@ -215,6 +215,8 @@ describe("CELLO-M6B-002: FROST ceremony error propagation", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: targetPubkey,
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     // Read response
@@ -292,6 +294,8 @@ describe("CELLO-M6B-002: FROST ceremony error propagation", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: targetPubkey,
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const response = await reader.readDecoded();
@@ -362,6 +366,8 @@ describe("CELLO-M6B-002: FROST ceremony error propagation", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: targetPubkey,
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const response = await reader.readDecoded();
@@ -446,6 +452,8 @@ describe("CELLO-M6B-002: FROST ceremony error propagation", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: targetPubkey,
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     await reader.readDecoded(); // consume the error response

@@ -222,7 +222,7 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
 
     // Request session to non-existent target
     const unknownPubkey = new Uint8Array(randomBytes(32));
-    sendFrame(stream, CBOR_ENC.encode({ type: "session_request", target_pubkey: unknownPubkey }));
+    sendFrame(stream, CBOR_ENC.encode({ type: "session_request", target_pubkey: unknownPubkey, initiator_session_peer_id: "12D3KooWInitiatorSession", initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"] }));
 
     const responseBytes = await reader.readDecoded();
     const response = decodeOutboundSignalingFrame(responseBytes);
@@ -377,6 +377,8 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     // Both should receive session_assignment
@@ -499,6 +501,8 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const frameABytes = await readerA.readDecoded();
@@ -559,6 +563,8 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const responseBytes = await readerA.readDecoded();
@@ -642,6 +648,8 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const responseBytes = await readerA.readDecoded();
@@ -663,7 +671,7 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     const { stream, reader } = await connectAndAuth(keyA);
 
     const offlinePubkey = new Uint8Array(randomBytes(32));
-    sendFrame(stream, CBOR_ENC.encode({ type: "session_request", target_pubkey: offlinePubkey }));
+    sendFrame(stream, CBOR_ENC.encode({ type: "session_request", target_pubkey: offlinePubkey, initiator_session_peer_id: "12D3KooWInitiatorSession", initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"] }));
 
     const responseBytes = await reader.readDecoded();
     const response = decodeOutboundSignalingFrame(responseBytes);
@@ -742,12 +750,12 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
       // Ping sB with an unknown target to confirm directory has processed B's auth
       // before A sends a session_request that targets B. This ensures #streams has B's entry.
       const unknownKey = new Uint8Array(32);
-      sendFrame(sB, CBOR_ENC.encode({ type: "session_request", target_pubkey: unknownKey }));
+      sendFrame(sB, CBOR_ENC.encode({ type: "session_request", target_pubkey: unknownKey, initiator_session_peer_id: "12D3KooWInitiatorSession", initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"] }));
       const pingB = await rB.readDecoded();
       const pingBFrame = decodeOutboundSignalingFrame(pingB);
       if (pingBFrame?.type !== "session_request_error") throw new Error(`expected target_offline ping, got ${pingBFrame?.type}`);
 
-      sendFrame(sA, CBOR_ENC.encode({ type: "session_request", target_pubkey: Buffer.from(hexB, "hex") }));
+      sendFrame(sA, CBOR_ENC.encode({ type: "session_request", target_pubkey: Buffer.from(hexB, "hex"), initiator_session_peer_id: "12D3KooWInitiatorSession", initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"] }));
       const frameBytes = await rA.readDecoded();
       const frame = decodeOutboundSignalingFrame(frameBytes);
       if (frame?.type !== "session_assignment") throw new Error(`expected session_assignment, got ${frame?.type}`);
@@ -777,6 +785,8 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());
@@ -821,6 +831,8 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());
@@ -967,6 +979,8 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());
@@ -993,6 +1007,8 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());
@@ -1036,6 +1052,8 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());
@@ -1118,14 +1136,14 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     dirNode.directory.registerPeerInfo(Buffer.from(pkB).toString("hex"), nodeB.getPeerId(), nodeB.listenAddresses());
 
     // Ping B to confirm B is in #streams before A requests
-    sendFrame(streamB, CBOR_ENC.encode({ type: "session_request", target_pubkey: new Uint8Array(32) }));
+    sendFrame(streamB, CBOR_ENC.encode({ type: "session_request", target_pubkey: new Uint8Array(32), initiator_session_peer_id: "12D3KooWInitiatorSession", initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"] }));
     const pingB = decodeOutboundSignalingFrame(await readerB.readDecoded());
     if (pingB?.type !== "session_request_error") throw new Error("expected target_offline ping");
 
     const discardedCountBefore = relay.discarded.length;
 
     // A requests session with B — both frames delivered
-    sendFrame(streamA, CBOR_ENC.encode({ type: "session_request", target_pubkey: pkB }));
+    sendFrame(streamA, CBOR_ENC.encode({ type: "session_request", target_pubkey: pkB, initiator_session_peer_id: "12D3KooWInitiatorSession", initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"] }));
     const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());
     expect(frameA?.type).toBe("session_assignment");
     const frameB = decodeOutboundSignalingFrame(await readerB.readDecoded());
@@ -1228,7 +1246,7 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     interceptDirNode.directory.registerPeerInfo(hexB, nodeB.getPeerId(), nodeB.listenAddresses());
 
     // Ping B to confirm B is in #streams
-    sendFrame(streamB, CBOR_ENC.encode({ type: "session_request", target_pubkey: new Uint8Array(32) }));
+    sendFrame(streamB, CBOR_ENC.encode({ type: "session_request", target_pubkey: new Uint8Array(32), initiator_session_peer_id: "12D3KooWInitiatorSession", initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"] }));
     const pingB = decodeOutboundSignalingFrame(await readerB.readDecoded());
     if (pingB?.type !== "session_request_error") throw new Error("expected target_offline");
 
@@ -1236,7 +1254,7 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     // Immediately after sending (but before sign() resolves), abort B's stream.
     // By the time sign() resolves and #processSessionRequest calls sendFrame(B),
     // B's stream should be in a closed/error state causing send to throw.
-    sendFrame(streamA, CBOR_ENC.encode({ type: "session_request", target_pubkey: pkB }));
+    sendFrame(streamA, CBOR_ENC.encode({ type: "session_request", target_pubkey: pkB, initiator_session_peer_id: "12D3KooWInitiatorSession", initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"] }));
     // Abort B immediately (same event loop tick, before sign() resolves)
     streamB.abort(new Error("B_disconnect_before_delivery"));
 
@@ -1279,7 +1297,7 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
       await connectAndAuth(keyA);
 
     const discardedBefore = relay.discarded.length;
-    sendFrame(streamA, CBOR_ENC.encode({ type: "session_request", target_pubkey: new Uint8Array(randomBytes(32)) }));
+    sendFrame(streamA, CBOR_ENC.encode({ type: "session_request", target_pubkey: new Uint8Array(randomBytes(32)), initiator_session_peer_id: "12D3KooWInitiatorSession", initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"] }));
     const errFrame = decodeOutboundSignalingFrame(await readerA.readDecoded());
     expect(errFrame?.type).toBe("session_request_error");
     if (errFrame?.type === "session_request_error") expect(errFrame.reason).toBe("target_offline");
@@ -1303,6 +1321,8 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());

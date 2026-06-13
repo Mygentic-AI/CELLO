@@ -172,6 +172,8 @@ describe("AC-002 (directory): frost_signer_not_configured when no IThresholdSign
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: pubkeyB,
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const response = await readerA.readDecoded();
@@ -244,6 +246,8 @@ describe("AC-004: DIRECTORY_BELOW_THRESHOLD → session_request_error, no partia
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: pubkeyB,
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     // Directory should return session_request_error with reason=directory_below_threshold
@@ -320,6 +324,8 @@ describe("AC-005: CEREMONY_CONFLICT — second session_request while first in-fl
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: pubkeyBKey,
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     const response = await readerA.readDecoded();
@@ -390,6 +396,8 @@ describe("Integration: Directory issues FROST-signed assignment when signer regi
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: pubkeyB,
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
     // A receives session_assignment

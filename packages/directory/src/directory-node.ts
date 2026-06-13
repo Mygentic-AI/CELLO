@@ -105,7 +105,7 @@ import * as lp from "it-length-prefixed";
 import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash } from "@cello-protocol/crypto";
 
 import type { KeyProvider, LeafInput, IThresholdSigner } from "@cello-protocol/crypto";
-import { encodeStructure2, computeGenesisPrevRoot, buildSessionEstablishmentTbs, buildSealTbs } from "@cello-protocol/protocol-types";
+import { encodeStructure2, computeGenesisPrevRoot, buildSealTbs } from "@cello-protocol/protocol-types";
 import type { AgentProfile } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
 import type { CelloNode } from "@cello-protocol/transport";
@@ -179,6 +179,35 @@ const AUTH_DOMAIN = "CELLO-DIR-AUTH-v1";
 const NONCE_TTL_MS = 30_000;
 
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
+
+// M7-WIRE-001: Local 10-field TBS builder. Identical to buildSessionEstablishmentTbs in
+// @cello-protocol/protocol-types ≥0.0.5 which is not yet published. Remove after AC-021.
+function buildSessionEstablishmentTbsM7(
+  sessionId: Uint8Array,
+  pubA: Uint8Array,
+  pubB: Uint8Array,
+  genesisPrevRoot: Uint8Array,
+  timestamp: number,
+  initiatorSessionPeerId: string,
+  initiatorSessionAddrs: string[],
+  counterpartySessionPeerId: string,
+  counterpartySessionAddrs: string[],
+  transportMode: "direct" | "relay",
+): Uint8Array {
+  const tsEncoded = timestamp > 0xffffffff ? BigInt(timestamp) : timestamp;
+  return CBOR_ENC.encode([
+    sessionId,
+    pubA,
+    pubB,
+    genesisPrevRoot,
+    tsEncoded,
+    initiatorSessionPeerId,
+    JSON.stringify(initiatorSessionAddrs.slice().sort()),
+    counterpartySessionPeerId,
+    JSON.stringify(counterpartySessionAddrs.slice().sort()),
+    transportMode,
+  ]) as Uint8Array;
+}
 
 // ─── Nonce registry ────────────────────────────────────────────────────────────
 
@@ -422,6 +451,11 @@ export class CelloDirectoryNode {
     tbs: Uint8Array;
     correlationId: string;
   }>();
+
+  // M7-WIRE-001: session_id_hex → counterparty session info from SessionOfferAccept
+  readonly #pendingSessionOfferAccepts = new Map<string, { counterpartySessionPeerId: string; counterpartySessionAddrs: string[] }>();
+  // M7-WIRE-001: session_id_hex → resolve function for waiting on Bob's SessionOfferAccept
+  readonly #sessionOfferAcceptWaiters = new Map<string, () => void>();
 
   // session_id_hex → provisional session (relay registered, frames may not yet be delivered)
   // Entry remains until the stream's finally block processes it.
@@ -1397,9 +1431,31 @@ export class CelloDirectoryNode {
             this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "peer_not_registered" }));
             continue;
           }
+          // M7-WIRE-001 AC-002: Reject session_request missing initiator session Peer ID
+          const parsedReq = parsed as { connection_id?: string; relay_rtt?: Record<string, number>; initiator_session_peer_id?: string; initiator_session_addrs?: string[] };
+          if (!parsedReq.initiator_session_peer_id || !parsedReq.initiator_session_addrs) {
+            this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "session_request_missing_peer_id" }));
+            continue;
+          }
           // Run concurrently — ceremony_result frames must be processed by this same loop
           // while #processSessionRequest is suspended awaiting the ceremony round-trip.
-          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), (parsed as { connection_id?: string }).connection_id, (parsed as { relay_rtt?: Record<string, number> }).relay_rtt);
+          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), parsedReq.connection_id, parsedReq.relay_rtt, parsedReq.initiator_session_peer_id, parsedReq.initiator_session_addrs);
+        } else if (parsed.type === "session_offer_accept") {
+          // M7-WIRE-001 AC-003: handle session offer acceptance from target (Bob)
+          const acceptFrame = parsed as { session_id?: Uint8Array; counterparty_session_peer_id?: string; counterparty_session_addrs?: string[] };
+          if (acceptFrame.session_id && acceptFrame.counterparty_session_peer_id && acceptFrame.counterparty_session_addrs) {
+            const acceptSessionIdHex = Buffer.from(acceptFrame.session_id).toString("hex");
+            this.#pendingSessionOfferAccepts.set(acceptSessionIdHex, {
+              counterpartySessionPeerId: acceptFrame.counterparty_session_peer_id,
+              counterpartySessionAddrs: acceptFrame.counterparty_session_addrs,
+            });
+            // Resolve any pending waiter for this session_id
+            const waiter = this.#sessionOfferAcceptWaiters.get(acceptSessionIdHex);
+            if (waiter) {
+              waiter();
+              this.#sessionOfferAcceptWaiters.delete(acceptSessionIdHex);
+            }
+          }
         } else if (parsed.type === "seal_frost_signature") {
           void this.#processSealFrostSignature(authedPubkeyHex!, parsed);
         } else if (parsed.type === "connection_request") {
@@ -2068,6 +2124,8 @@ export class CelloDirectoryNode {
     targetHex: string,
     connectionId?: string,
     relayRtt?: Record<string, number>,
+    initiatorSessionPeerId?: string,
+    initiatorSessionAddrs?: string[],
   ): Promise<void> {
     protocolLog("SESS", `Session request: ${truncHex(initiatorHex)} → ${truncHex(targetHex)}`);
     this.#logger?.info("frost.debug.session_request.enter", {
@@ -2145,14 +2203,57 @@ export class CelloDirectoryNode {
       session_timestamp,
     );
 
+    // M7-WIRE-001 AC-003: Resolve counterparty session Peer ID.
+    // If an offer-accept has already arrived (race-won), use it.
+    // Otherwise, check if one arrives within a brief window. If not, proceed with
+    // empty defaults — the counterparty may be a pre-M7 client or the session_offer
+    // notification hasn't triggered yet. Full offer-accept handshake requires a
+    // session_offer frame to be sent to the target first (wired in WIRE-002).
+    const sessionIdHexForWait = Buffer.from(session_id).toString("hex");
+    let counterpartySessionPeerId = "";
+    let counterpartySessionAddrs: string[] = [];
+    const existingAccept = this.#pendingSessionOfferAccepts.get(sessionIdHexForWait);
+    if (existingAccept) {
+      counterpartySessionPeerId = existingAccept.counterpartySessionPeerId;
+      counterpartySessionAddrs = existingAccept.counterpartySessionAddrs;
+      this.#pendingSessionOfferAccepts.delete(sessionIdHexForWait);
+    } else {
+      // Brief wait (100ms) for a session_offer_accept that arrived concurrently
+      const accepted = await Promise.race([
+        new Promise<boolean>((resolve) => {
+          this.#sessionOfferAcceptWaiters.set(sessionIdHexForWait, () => resolve(true));
+        }),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
+      ]);
+      this.#sessionOfferAcceptWaiters.delete(sessionIdHexForWait);
+      if (accepted) {
+        const acceptData = this.#pendingSessionOfferAccepts.get(sessionIdHexForWait)!;
+        counterpartySessionPeerId = acceptData.counterpartySessionPeerId;
+        counterpartySessionAddrs = acceptData.counterpartySessionAddrs;
+        this.#pendingSessionOfferAccepts.delete(sessionIdHexForWait);
+      }
+      // If not accepted, proceed with empty defaults — counterparty is pre-M7 or
+      // the full offer→accept round-trip will be added in WIRE-002.
+    }
+
+    // TRANSPORT-001 stub: AutoNAT not yet wired — default to 'relay'
+    // TRANSPORT-001: replace with real AutoNAT probe
+    const transportMode: "direct" | "relay" = "relay";
+
     // SESSION-004 Step 3: Build TBS — single source of truth via protocol-types (HIGH-5)
-    // Fields: [session_id, pubA, pubB, genesis_prev_root, timestamp]
-    const tbs = buildSessionEstablishmentTbs(
+    // M7-WIRE-001: Extended to 10 fields. Uses local buildSessionEstablishmentTbsM7
+    // until @cello-protocol/protocol-types ≥0.0.5 is published (AC-021).
+    const tbs = buildSessionEstablishmentTbsM7(
       session_id,
       new Uint8Array(initiatorPubkey),
       new Uint8Array(targetPubkey),
       genesis_prev_root,
       session_timestamp,
+      initiatorSessionPeerId!,
+      initiatorSessionAddrs!,
+      counterpartySessionPeerId,
+      counterpartySessionAddrs,
+      transportMode,
     );
 
     // SESSION-004 Step 4: Conflict detection (MEDIUM-N1 fix + IMPORTANT-N3 fix)
@@ -2223,6 +2324,7 @@ export class CelloDirectoryNode {
       }
 
       // SESSION-004 Step 7: Build SessionAssignment with signature_type: 'frost'
+      // M7-WIRE-001: includes session Peer IDs and transport mode
       const assignment: SessionAssignment = {
         session_id,
         participant_a: { pubkey: new Uint8Array(initiatorPubkey), peer_id: initiatorInfo.peer_id, multiaddrs: initiatorInfo.multiaddrs },
@@ -2234,35 +2336,44 @@ export class CelloDirectoryNode {
         directory_signature: new Uint8Array(frostedSig),
         signature_type: "frost",
         signer_pubkey: initiatorPrimaryPubkey,
+        initiator_session_peer_id: initiatorSessionPeerId!,
+        initiator_session_addrs: initiatorSessionAddrs!,
+        counterparty_session_peer_id: counterpartySessionPeerId,
+        counterparty_session_addrs: counterpartySessionAddrs,
+        transport_mode: transportMode,
       };
 
       // (e) Register with relay BEFORE delivering to clients (SI-003)
-      // The relay verifies Ed25519 over the M1 TBS: [session_id, participant_a, participant_b, session_timestamp].
-      // The client-facing assignment uses a FROST signature, so we compute a separate Ed25519 sig for the relay.
-      const relayTbs = CBOR_ENC.encode([
-        session_id,
-        new Uint8Array(initiatorPubkey),
-        new Uint8Array(targetPubkey),
-        session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
-      ]) as Uint8Array;
-      const relayDirSig = new Uint8Array(await this.#keyProvider.sign(relayTbs));
-      const relayAssignment: RelaySessionAssignment = {
-        session_id,
-        participant_a: new Uint8Array(initiatorPubkey),
-        participant_b: new Uint8Array(targetPubkey),
-        session_timestamp,
-        directory_signature: relayDirSig,
-      };
-      const recorded = await this.#relay.recordAssignment(relayAssignment);
-      if (recorded.ok && !this.#relayAuthenticated) {
-        this.#relayAuthenticated = true;
-        protocolLog("AUTH", `Relay ${truncHex(this.#relayEndpoint.peer_id)} authenticated`);
-      }
-      if (!recorded.ok) {
-        protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: ${recorded.reason}`);
-        this.#logger?.warn("relay.record_assignment.failed", { agentShort: truncHex(initiatorHex), reason: recorded.reason });
-        this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "relay_unavailable" }));
-        return;
+      // M7-WIRE-001 AC-009: only register with relay when transport_mode === 'relay'.
+      // For direct P2P sessions, the relay has no role and must not hold session Peer IDs.
+      if (transportMode === "relay") {
+        const relayTbs = CBOR_ENC.encode([
+          session_id,
+          new Uint8Array(initiatorPubkey),
+          new Uint8Array(targetPubkey),
+          session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
+        ]) as Uint8Array;
+        const relayDirSig = new Uint8Array(await this.#keyProvider.sign(relayTbs));
+        const relayAssignment: RelaySessionAssignment = {
+          session_id,
+          participant_a: new Uint8Array(initiatorPubkey),
+          participant_b: new Uint8Array(targetPubkey),
+          session_timestamp,
+          directory_signature: relayDirSig,
+          initiator_session_peer_id: initiatorSessionPeerId!,
+          counterparty_session_peer_id: counterpartySessionPeerId,
+        };
+        const recorded = await this.#relay.recordAssignment(relayAssignment);
+        if (recorded.ok && !this.#relayAuthenticated) {
+          this.#relayAuthenticated = true;
+          protocolLog("AUTH", `Relay ${truncHex(this.#relayEndpoint.peer_id)} authenticated`);
+        }
+        if (!recorded.ok) {
+          protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: ${recorded.reason}`);
+          this.#logger?.warn("relay.record_assignment.failed", { agentShort: truncHex(initiatorHex), reason: recorded.reason });
+          this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "relay_unavailable" }));
+          return;
+        }
       }
 
       // Track as provisional: relay has registered it, but clients haven't yet received it.

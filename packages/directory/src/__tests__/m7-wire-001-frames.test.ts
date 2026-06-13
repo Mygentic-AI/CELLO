@@ -63,6 +63,11 @@ function makeBaseAssignment(): SessionAssignmentFrame {
       directory_signature: makeSignature(0xdd),
       signature_type: "frost",
       signer_pubkey: makePubkey(0x04),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/192.168.1.1/tcp/7001"],
+      counterparty_session_peer_id: "12D3KooWCounterpartySession",
+      counterparty_session_addrs: ["/ip4/192.168.1.2/tcp/7002"],
+      transport_mode: "relay",
     },
   };
 }
@@ -184,6 +189,13 @@ describe("M7-WIRE-001: session_offer_accept frame", () => {
 describe("M7-WIRE-001: encodeSessionAssignment with M7 fields", () => {
   it("AC-009: encodes assignment without M7 fields (backward compat)", () => {
     const frame = makeBaseAssignment();
+    // Strip M7 fields to simulate a pre-M7 assignment
+    const stripped = frame.assignment as unknown as Record<string, unknown>;
+    delete stripped["initiator_session_peer_id"];
+    delete stripped["initiator_session_addrs"];
+    delete stripped["counterparty_session_peer_id"];
+    delete stripped["counterparty_session_addrs"];
+    delete stripped["transport_mode"];
     const encoded = encodeSessionAssignment(frame);
     const decoded = decode(encoded) as Record<string, unknown>;
     const assignment = decoded["assignment"] as Record<string, unknown>;
@@ -257,15 +269,23 @@ describe("M7-WIRE-001: decodeOutboundSignalingFrame with M7 fields", () => {
 
   it("AC-009: decodes session_assignment without M7 fields (backward compat)", () => {
     const frame = makeBaseAssignment();
+    // Strip M7 fields to simulate a pre-M7 wire frame
+    const stripped = frame.assignment as unknown as Record<string, unknown>;
+    delete stripped["initiator_session_peer_id"];
+    delete stripped["initiator_session_addrs"];
+    delete stripped["counterparty_session_peer_id"];
+    delete stripped["counterparty_session_addrs"];
+    delete stripped["transport_mode"];
     const encoded = encodeSessionAssignment(frame);
     const decoded = decodeOutboundSignalingFrame(encoded);
     expect(decoded).not.toBeNull();
     expect(decoded!.type).toBe("session_assignment");
 
     const sa = (decoded as unknown as { type: "session_assignment"; assignment: Record<string, unknown> }).assignment;
-    expect(sa["initiator_session_peer_id"]).toBeUndefined();
-    expect(sa["counterparty_session_peer_id"]).toBeUndefined();
-    expect(sa["transport_mode"]).toBeUndefined();
+    // When M7 fields are absent from wire, decoder defaults to empty string / "relay"
+    expect(sa["initiator_session_peer_id"]).toBe("");
+    expect(sa["counterparty_session_peer_id"]).toBe("");
+    expect(sa["transport_mode"]).toBe("relay");
   });
 
   it("AC-009: decodes transport_mode 'direct' correctly", () => {
@@ -304,7 +324,7 @@ describe("M7-WIRE-001: decodeOutboundSignalingFrame with M7 fields", () => {
     const decoded = decodeOutboundSignalingFrame(raw);
     expect(decoded).not.toBeNull();
     const sa = (decoded as unknown as { type: "session_assignment"; assignment: Record<string, unknown> }).assignment;
-    expect(sa["transport_mode"]).toBeUndefined();
+    expect(sa["transport_mode"]).toBe("relay");
   });
 });
 

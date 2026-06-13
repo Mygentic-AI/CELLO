@@ -122,8 +122,19 @@ export interface SessionOfferAccept {
 
 // SessionAssignment and participant/relay types live in @cello-protocol/protocol-types (MSG-004 boundary fix).
 // Re-exported here for backwards compatibility.
-import type { SessionAssignment, ParticipantInfo, RelayEndpointInfo } from "@cello-protocol/protocol-types";
-export type { SessionAssignment, ParticipantInfo, RelayEndpointInfo };
+import type { SessionAssignment as SessionAssignmentBase, ParticipantInfo, RelayEndpointInfo } from "@cello-protocol/protocol-types";
+export type { ParticipantInfo, RelayEndpointInfo };
+
+// M7-WIRE-001: Extend SessionAssignment with M7 fields locally until @cello-protocol/protocol-types
+// is published at 0.0.5+. Remove this extension after AC-021 dependency update.
+export type SessionAssignment = SessionAssignmentBase & {
+  initiator_session_peer_id: string;
+  initiator_session_addrs: string[];
+  counterparty_session_peer_id: string;
+  counterparty_session_addrs: string[];
+  transport_mode: "direct" | "relay";
+};
+export type { SessionAssignmentBase };
 /** @deprecated Use RelayEndpointInfo instead */
 export type RelayEndpoint = RelayEndpointInfo;
 
