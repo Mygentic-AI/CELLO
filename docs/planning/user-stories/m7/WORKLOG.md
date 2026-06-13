@@ -654,3 +654,18 @@ cello-client (branch m7/cicd-001):
 - cello-client: 57fa7b8 (initial), ca24e69 (code-review fixes), 928e24b (sprint-review fixes)
 
 **Ready for merge.** No push to origin — deferred to orchestrator.
+
+---
+
+### 2026-06-13 — CICD-001 merged to main
+
+**Story:** CELLO-M7-CICD-001
+**Agent/Author:** orchestrator
+
+Branch m7/cicd-001 merged to trustless-cello main and cello-client main.
+trustless-cello: 5 commits. cello-client: 2 commits.
+
+GitHubOidcRole (OIDC trust for Mygentic-AI/cello-client main), candidates/ lifecycle rule
+on ArtifactsBucket (7-day TTL), sourceRepoMappings in pipeline-mappings.json, pipeline-filter
+Lambda updated and redeployed, test_filter_handler.py cleaned to 5 pipelines, buildspec.yml
+bifurcated on CELLO_CANDIDATE_SHA, ci.yml pre-publish e2e gate added (pack → S3 → start pipeline → poll → publish).
