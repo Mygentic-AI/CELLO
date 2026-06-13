@@ -581,3 +581,18 @@ Branch m7/mcp-002 merged to cello-client main (merge commit 16c474a).
 
 NotificationDispatcher implemented with broadcast/single-connection/filtered routing.
 175 daemon tests + full workspace suite passing. Code-review and sprint-review complete, all findings fixed.
+
+---
+
+### 2026-06-13 — DIR-PING-001 merged to main
+
+**Story:** CELLO-M7-DIR-PING-001
+**Agent/Author:** orchestrator
+
+Branch m7/dir-ping-001 merged to trustless-cello main (merge commit 36bc053).
+3 commits: c34b377 (initial), ee1daae (code-review round 1 fixes), cc3476a (code-review round 2 fixes).
+
+Directory-side ping/pong heartbeat handler implemented. PingFrame decode, encodePong,
+handler wired into dispatch chain. 6 tests covering: ping/pong, multi-client broadcast,
+burst load, composition root. All code-review findings fixed (bigint coercion, PongFrame
+type, TypeScript validation, deterministic test assertions). Sprint-reviewer approved.
