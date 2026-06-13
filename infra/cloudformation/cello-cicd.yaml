@@ -291,8 +291,12 @@ Resources:
               StringEquals:
                 "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
               StringLike:
-                # AC-008: restrict to cello-client repo, main branch only.
-                "token.actions.githubusercontent.com:sub": "repo:Mygentic-AI/cello-client:ref:refs/heads/main"
+                # AC-008: restrict to cello-client repo, main branch and version tags.
+                # Main branch pushes trigger the continuous e2e gate; tag pushes
+                # trigger the release e2e gate (e2e-gate-tag job in ci.yml).
+                "token.actions.githubusercontent.com:sub":
+                  - "repo:Mygentic-AI/cello-client:ref:refs/heads/main"
+                  - "repo:Mygentic-AI/cello-client:ref:refs/tags/*"
       Policies:
         # AC-009 / SI-001: ONLY cello-e2e-tests-pipeline. No directory, relay,
         # connect, or operations-agent pipeline access.
@@ -304,6 +308,7 @@ Resources:
                 Action:
                   - codepipeline:StartPipelineExecution
                   - codepipeline:GetPipelineExecution
+                  - codepipeline:ListActionExecutions
                 Resource:
                   - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-e2e-tests-pipeline"
         # SI-003: s3:PutObject scoped to candidates/${github.sha}/* only.
@@ -1063,6 +1068,14 @@ Resources:
       ArtifactStore:
         Type: S3
         Location: !Ref ArtifactsBucket
+      # M7-CICD-001: Pipeline variable for cross-repo gate. When cello-client
+      # CI starts this pipeline, it passes the candidate commit SHA. When the
+      # pipeline-filter Lambda starts it (native trustless-cello push), the
+      # variable defaults to empty → buildspec takes the registry install path.
+      Variables:
+        - Name: CELLO_CANDIDATE_SHA
+          DefaultValue: ""
+          Description: "Git SHA of candidate connect tarball (cross-repo gate)"
       Stages:
         - Name: Source
           Actions:
@@ -1089,6 +1102,7 @@ Resources:
                 Version: "1"
               Configuration:
                 ProjectName: !Ref E2eTestsBuild
+                EnvironmentVariables: '[{"name":"CELLO_CANDIDATE_SHA","value":"#{variables.CELLO_CANDIDATE_SHA}","type":"PLAINTEXT"}]'
               InputArtifacts:
                 - Name: SourceOutput
               OutputArtifacts:
