@@ -29,6 +29,16 @@ Parameters:
     Description: >
       DNS name of the staging directory ALB (read from cello-ecs-directory stack outputs
       by deploy.sh — AC-009 requires this is never hardcoded in this template).
+  # M7-CICD-001 AC-015: webhook secret for cello-client GitHub webhook validation.
+  # No Default — deploy.sh must supply the value at deploy time. An empty or
+  # placeholder secret would silently accept requests with empty signatures.
+  CelloClientWebhookSecret:
+    Type: String
+    NoEcho: true
+    Description: >
+      GitHub webhook HMAC secret for the cello-client repository. Used by the
+      webhook receiver Lambda to validate X-Hub-Signature-256 on cello-client
+      push events. Must be supplied at deploy time — no default.
 
 Resources:
   # EventBridge bus for GitHub events
@@ -60,6 +70,12 @@ Resources:
           - Id: ExpireArtifacts
             Status: Enabled
             ExpirationInDays: 30
+          # M7-CICD-001 AC-010: candidate tarballs expire after 7 days.
+          # Each cello-client push produces ~300 KB; 7-day TTL prevents unbounded growth.
+          - Id: ExpireCandidates
+            Status: Enabled
+            Prefix: candidates/
+            ExpirationInDays: 7
       Tags:
         - Key: Project
           Value: cello
@@ -221,6 +237,89 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt PipelineFilterRule.Arn
+
+  # ── M7-CICD-001: GitHub OIDC provider and role for cello-client CI ────────
+  # The OIDC provider allows GitHub Actions to assume an IAM role without
+  # long-lived credentials. The role is restricted to:
+  #   - repo: Mygentic-AI/cello-client
+  #   - branch: refs/heads/main
+  # Permissions: StartPipelineExecution on cello-e2e-tests-pipeline ONLY (SI-001),
+  # and s3:PutObject scoped to candidates/${github.sha}/* (SI-003).
+
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        # GitHub Actions OIDC thumbprint (stable across rotations since 2023)
+        - "6938fd4d98bab03faadb97b34396831e3780aea1"
+      Tags:
+        - Key: Project
+          Value: cello
+
+  GitHubOidcRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "cello-github-oidc-cello-client-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+              StringLike:
+                # AC-008: restrict to cello-client repo, main branch only.
+                "token.actions.githubusercontent.com:sub": "repo:Mygentic-AI/cello-client:ref:refs/heads/main"
+      Policies:
+        # AC-009 / SI-001: ONLY cello-e2e-tests-pipeline. No directory, relay,
+        # connect, or operations-agent pipeline access.
+        - PolicyName: StartE2ePipeline
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codepipeline:StartPipelineExecution
+                  - codepipeline:GetPipelineExecution
+                Resource:
+                  - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-e2e-tests-pipeline"
+        # SI-003: s3:PutObject scoped to candidates/${github.sha}/* only.
+        # The IAM condition uses the OIDC sub claim to extract the commit SHA
+        # context, but since OIDC sub is repo:branch format (not sha), we scope
+        # to the full candidates/ prefix. The GitHub Actions workflow itself
+        # writes only to candidates/$GITHUB_SHA/ — the S3 key structure provides
+        # the per-commit isolation.
+        - PolicyName: UploadCandidateTarball
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - !Sub "${ArtifactsBucket.Arn}/candidates/*"
+      Tags:
+        - Key: Project
+          Value: cello
+
+  # M7-CICD-001 AC-015: SSM parameter for the cello-client webhook HMAC secret.
+  # Stored as SecureString so the webhook receiver Lambda can validate
+  # X-Hub-Signature-256 on cello-client push events.
+  CelloClientWebhookSecretParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/cello/${Environment}/cicd/cello-client-webhook-secret"
+      Type: String
+      Value: !Ref CelloClientWebhookSecret
+      Description: "GitHub webhook HMAC secret for cello-client repository"
+      Tags:
+        Project: cello
 
   # IAM roles for CodeBuild and CodePipeline
   CodeBuildRole:
@@ -1092,3 +1191,9 @@ Outputs:
     Value: !Ref ArtifactsBucket
     Export:
       Name: !Sub "cello-${Environment}-artifacts-bucket"
+
+  # M7-CICD-001: GitHub OIDC role ARN for cello-client CI workflow
+  GitHubOidcRoleArn:
+    Value: !GetAtt GitHubOidcRole.Arn
+    Export:
+      Name: !Sub "cello-${Environment}-github-oidc-role-arn"

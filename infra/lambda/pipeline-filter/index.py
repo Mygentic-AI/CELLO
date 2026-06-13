@@ -9,10 +9,10 @@ AC-007: The mappings are data-driven — read from pipeline-mappings.json at
 invocation time. No Lambda redeployment is required to add a new pipeline.
 
 AC-002: A path under packages/directory/ triggers only cello-directory-pipeline.
-AC-003: A path under packages/crypto/ triggers ALL 8 CELLO pipelines (crypto is
-        a shared dependency — changing it requires downstream re-test everywhere).
 AC-004: A root config file (tsconfig.base.json, pnpm-workspace.yaml, package.json)
-        triggers all 8 CELLO pipelines.
+        triggers all 5 CELLO pipelines.
+AC-006 (M7-CICD-001): sourceRepoMappings routes events by source repo full name
+        (e.g. Mygentic-AI/cello-client → cello-e2e-tests-pipeline).
 DB-002: A single pipeline start failure does not block other pipelines; each is
         attempted independently.
 
@@ -25,17 +25,20 @@ Pseudocode:
   1. Load pipeline-mappings.json from /var/task/ (Lambda working directory).
      - packageMappings: list of { prefix, pipelines }
      - rootConfigFiles: list of filenames that trigger all pipelines
-     - allCelloPipelines: list of all 8 pipeline names
+     - allCelloPipelines: list of all 5 pipeline names
+     - sourceRepoMappings: dict of { repo_full_name: pipeline_name }
   2. Parse EventBridge event.detail to get commit list.
-  3. Collect changed file paths from modified + added + removed across all commits.
-  4. If any changed path is in rootConfigFiles → trigger allCelloPipelines.
-  5. Else → for each mapping, if any changed path starts with mapping.prefix →
+  3. Check if event has a source repo (event.source or detail.repository.full_name).
+     If a sourceRepoMappings entry matches → trigger that pipeline and return.
+  4. Collect changed file paths from modified + added + removed across all commits.
+  5. If any changed path is in rootConfigFiles → trigger allCelloPipelines.
+  6. Else → for each mapping, if any changed path starts with mapping.prefix →
      add mapping.pipelines to the trigger set.
-  6. For each pipeline in the trigger set:
+  7. For each pipeline in the trigger set:
      a. Call codepipeline.start_pipeline_execution(name=pipeline).
      b. On success → log pipeline.triggered with executionId.
      c. On failure → log pipeline.trigger.failed with reason, continue.
-  7. Return 200 with summary.
+  8. Return 200 with summary.
 """
 
 import json
@@ -87,11 +90,25 @@ def _collect_changed_files(detail: dict) -> list:
     return changed
 
 
+def _resolve_pipelines_by_repo(source_repo: str, mappings: dict) -> set:
+    """
+    Resolve pipelines by source repository name (sourceRepoMappings).
+
+    Used for cross-repo events where routing is by repo identity, not file path.
+    Returns an empty set if no mapping exists for the repo.
+    """
+    source_repo_mappings = mappings.get("sourceRepoMappings", {})
+    pipeline = source_repo_mappings.get(source_repo)
+    if pipeline:
+        return {pipeline}
+    return set()
+
+
 def _resolve_pipelines(changed_files: list, mappings: dict) -> set:
     """
     Determine which pipelines to trigger given the changed file list.
 
-    Root config files trigger all 8 CELLO pipelines.
+    Root config files trigger all 5 CELLO pipelines.
     Package path prefixes trigger the pipelines listed for that prefix.
     """
     root_config_set = set(mappings.get("rootConfigFiles", []))
@@ -138,11 +155,22 @@ def lambda_handler(event, context):
 
     commit_sha = detail.get("after", detail.get("head_commit", {}).get("id", "unknown"))
 
-    # ── 3. Collect changed files ─────────────────────────────────────────────
+    # ── 3. Check source repo routing (M7-CICD-001) ─────────────────────────
+    # If the event identifies a source repo (via event.source or
+    # detail.repository.full_name), check sourceRepoMappings first.
+    source_repo = event.get("source") or detail.get("repository", {}).get("full_name", "")
+    pipelines_to_trigger = set()
     changed_files = _collect_changed_files(detail)
+    routed_by_repo = False
 
-    # ── 4. Resolve which pipelines to trigger ───────────────────────────────
-    pipelines_to_trigger = _resolve_pipelines(changed_files, mappings)
+    if source_repo:
+        pipelines_to_trigger = _resolve_pipelines_by_repo(source_repo, mappings)
+        if pipelines_to_trigger:
+            routed_by_repo = True
+
+    # ── 4. Fall back to path-based resolution if no repo match ──────────────
+    if not pipelines_to_trigger:
+        pipelines_to_trigger = _resolve_pipelines(changed_files, mappings)
 
     if not pipelines_to_trigger:
         _log("info", "pipeline.filter.no_match", changedFileCount=len(changed_files))
@@ -156,14 +184,15 @@ def lambda_handler(event, context):
     triggered = []
     for pipeline_name in pipelines_to_trigger:
         # Identify the first matching path for observability context.
-        matched_path = "root_config"
-        for mapping in mappings.get("packageMappings", []):
-            if pipeline_name in mapping["pipelines"]:
-                prefix = mapping["prefix"]
-                candidates = [p for p in changed_files if p.startswith(prefix)]
-                if candidates:
-                    matched_path = candidates[0]
-                    break
+        matched_path = f"source_repo:{source_repo}" if routed_by_repo else "root_config"
+        if not routed_by_repo:
+            for mapping in mappings.get("packageMappings", []):
+                if pipeline_name in mapping["pipelines"]:
+                    prefix = mapping["prefix"]
+                    candidates = [p for p in changed_files if p.startswith(prefix)]
+                    if candidates:
+                        matched_path = candidates[0]
+                        break
 
         try:
             resp = codepipeline.start_pipeline_execution(name=pipeline_name)

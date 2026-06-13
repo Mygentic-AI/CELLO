@@ -1,11 +1,43 @@
 version: 0.2
+
+# M7-CICD-001: Bifurcated install phase.
+# When CELLO_CANDIDATE_SHA is set (cross-repo gate from cello-client CI),
+# download the candidate tarball from S3 and install it instead of using
+# the npm registry version of @cello-protocol/connect.
+# When CELLO_CANDIDATE_SHA is NOT set (native trustless-cello push),
+# install from the registry as before.
+
+env:
+  variables:
+    CELLO_CANDIDATE_SHA: ""
+
 phases:
   install:
     runtime-versions:
       nodejs: 24
     commands:
       - npm install -g pnpm@10.33.2
-      - pnpm install --frozen-lockfile
+      - |
+        if [ -n "$CELLO_CANDIDATE_SHA" ]; then
+          echo "::cicd.candidate.install.started:: candidateSha=$CELLO_CANDIDATE_SHA"
+          S3_KEY="candidates/${CELLO_CANDIDATE_SHA}/connect.tgz"
+          S3_BUCKET="cello-codepipeline-artifacts-${AWS_REGION}"
+          echo "Downloading s3://${S3_BUCKET}/${S3_KEY} to /tmp/connect.tgz"
+          aws s3 cp "s3://${S3_BUCKET}/${S3_KEY}" /tmp/connect.tgz
+          if [ $? -ne 0 ]; then
+            echo '{"event":"cicd.candidate.install.failed","level":"error","candidateSha":"'"$CELLO_CANDIDATE_SHA"'","s3Key":"'"$S3_KEY"'","reason":"s3_download_failed"}'
+            exit 1
+          fi
+          pnpm install --frozen-lockfile
+          # Override @cello-protocol/connect with the candidate tarball
+          cd packages/e2e-tests
+          npm install /tmp/connect.tgz
+          CONNECT_VERSION=$(npm list @cello-protocol/connect --json 2>/dev/null | node -e "const j=require('fs').readFileSync('/dev/stdin','utf8');const p=JSON.parse(j);console.log(p.dependencies?.['@cello-protocol/connect']?.version||'unknown')")
+          echo '{"event":"cicd.candidate.install.completed","level":"info","candidateSha":"'"$CELLO_CANDIDATE_SHA"'","s3Key":"'"$S3_KEY"'","connectVersion":"'"$CONNECT_VERSION"'"}'
+          cd ../..
+        else
+          pnpm install --frozen-lockfile
+        fi
   build:
     commands:
       - pnpm --filter @cello-protocol/e2e-tests run typecheck
