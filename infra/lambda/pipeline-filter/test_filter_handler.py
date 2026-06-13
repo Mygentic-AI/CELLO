@@ -90,7 +90,12 @@ def _make_event(changed_files: list) -> dict:
 
 
 def _make_repo_event(repo_full_name: str, branch: str = "main", commit_sha: str = "abc123") -> dict:
-    """Build a minimal EventBridge event for a source-repo-based routing lookup."""
+    """Build a minimal EventBridge event for a source-repo-based routing lookup.
+
+    In production, event.source is "cello.github" (set by the webhook-receiver
+    Lambda), NOT the repo name. The repo identity comes from
+    detail.repository.full_name inside the GitHub payload.
+    """
     return {
         "detail": json.dumps({
             "repository": {"full_name": repo_full_name},
@@ -104,7 +109,7 @@ def _make_repo_event(repo_full_name: str, branch: str = "main", commit_sha: str 
                 }
             ],
         }),
-        "source": repo_full_name,
+        "source": "cello.github",
     }
 
 
@@ -358,6 +363,7 @@ class TestPipelineFilter(unittest.TestCase):
         """An unknown repo with files matching a trustless-cello prefix triggers via path routing."""
         mod = _load_module()
         # Build event from unknown repo but with a path that matches packages/directory/
+        # In production, event.source is always "cello.github" — repo identity is in detail.
         event = {
             "detail": json.dumps({
                 "repository": {"full_name": "SomeOrg/fork-of-cello"},
@@ -371,7 +377,7 @@ class TestPipelineFilter(unittest.TestCase):
                     }
                 ],
             }),
-            "source": "SomeOrg/fork-of-cello",
+            "source": "cello.github",
         }
         mod.lambda_handler(event, None)
         # Path-based routing fires because the repo has no sourceRepoMappings entry

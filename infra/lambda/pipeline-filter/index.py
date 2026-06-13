@@ -156,9 +156,10 @@ def lambda_handler(event, context):
     commit_sha = detail.get("after", detail.get("head_commit", {}).get("id", "unknown"))
 
     # ── 3. Check source repo routing (M7-CICD-001) ─────────────────────────
-    # If the event identifies a source repo (via event.source or
-    # detail.repository.full_name), check sourceRepoMappings first.
-    source_repo = event.get("source") or detail.get("repository", {}).get("full_name", "")
+    # Extract source repo from detail.repository.full_name (the actual repo
+    # identity in the GitHub payload). event.source is NOT used — it contains
+    # the EventBridge source string (e.g. "cello.github"), not the repo name.
+    source_repo = detail.get("repository", {}).get("full_name", "")
     pipelines_to_trigger = set()
     changed_files = _collect_changed_files(detail)
     routed_by_repo = False
