@@ -20,6 +20,7 @@ export type {
   RelaySealLeaf,
   RelaySealData,
   RelaySessionAssignment,
+  SessionOfferAccept,
 } from "./directory-types.js";
 export { WALL_CLOCK } from "./directory-types.js";
 

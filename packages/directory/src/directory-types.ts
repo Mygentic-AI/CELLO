@@ -92,6 +92,32 @@ export interface SessionRequest {
    * consecutive failure count.
    */
   relay_rtt?: Record<string, number>;
+  /**
+   * M7-WIRE-001 AC-001: Initiator's ephemeral session libp2p Peer ID.
+   * Required by handler — if absent, directory rejects with 'session_request_missing_peer_id'.
+   * Optional at parse level for backward compat with pre-M7 frames.
+   */
+  initiator_session_peer_id?: string;
+  /**
+   * M7-WIRE-001 AC-001: Initiator's ephemeral session listen multiaddrs.
+   * Required by handler — if absent, directory rejects with 'session_request_missing_peer_id'.
+   * Optional at parse level for backward compat with pre-M7 frames.
+   */
+  initiator_session_addrs?: string[];
+}
+
+// ─── M7-WIRE-001: Session offer accept (target → directory) ─────────────────
+
+/**
+ * M7-WIRE-001 AC-003: Target accepts a session offer by providing its ephemeral
+ * session Peer ID and listen multiaddrs. The directory embeds these in the final
+ * SessionAssignment so both parties can attempt direct transport.
+ */
+export interface SessionOfferAccept {
+  type: "session_offer_accept";
+  session_id: Uint8Array;               // 16 bytes — matches pending session offer
+  counterparty_session_peer_id: string;  // target's ephemeral session libp2p Peer ID
+  counterparty_session_addrs: string[];  // target's ephemeral session listen multiaddrs
 }
 
 // SessionAssignment and participant/relay types live in @cello-protocol/protocol-types (MSG-004 boundary fix).
@@ -157,7 +183,8 @@ export type SessionRequestErrorReason =
   | "peer_not_registered"          // NODE-001 AC-014: client has not sent peer_info_announce yet
   | "not_registered"               // REG-001 AC-009: agent has not completed registration
   | "no_connection"                // SESSION-006/CONNREQ-002: no active connection between initiator+target
-  | "connection_id_required";      // SESSION-006: session_request missing connection_id field
+  | "connection_id_required"       // SESSION-006: session_request missing connection_id field
+  | "session_request_missing_peer_id";  // M7-WIRE-001 AC-002: session_request missing initiator_session_peer_id or addrs
 
 export interface SessionRequestError {
   type: "session_request_error";
@@ -292,6 +319,22 @@ export interface RelaySessionAssignment {
   participant_b: Uint8Array;  // 32-byte K_local pubkey
   session_timestamp: number;
   directory_signature: Uint8Array;
+  /**
+   * M7-WIRE-001 AC-009: Initiator's ephemeral session Peer ID for relay binding.
+   * The relay uses this to verify the connecting peer matches the session assignment.
+   */
+  initiator_session_peer_id?: string;
+  /**
+   * M7-WIRE-001 AC-009: Counterparty's ephemeral session Peer ID for relay binding.
+   * The relay uses this to verify the connecting peer matches the session assignment.
+   */
+  counterparty_session_peer_id?: string;
+  /**
+   * M7-WIRE-001 AC-009: Transport mode for this session.
+   * 'direct' — clients attempt direct P2P connection using ephemeral session Peer IDs.
+   * 'relay' — clients route through the assigned relay.
+   */
+  transport_mode?: "direct" | "relay";
 }
 
 // ─── Time source abstraction (test-only injection) ────────────────────────────

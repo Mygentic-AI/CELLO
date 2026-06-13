@@ -676,6 +676,92 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # ── M7-WIRE-001 AC-022: assignment_tbs_verification_failed alarm ──────────
+  # Fires ops-critical when TBS verification failures exceed 2 in 5 minutes.
+  # This indicates a client is receiving a tampered or replayed assignment.
+  # Custom metric: extracted from directory logs via MetricFilter.
+
+  AssignmentTbsVerificationFailedMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub "/ecs/cello-directory-${Environment}"
+      FilterPattern: '{ $.event = "assignment_tbs_verification_failed" }'
+      MetricTransformations:
+        - MetricNamespace: CelloDirectory
+          MetricName: AssignmentTbsVerificationFailed
+          MetricValue: "1"
+          DefaultValue: 0
+
+  AssignmentTbsVerificationFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-assignment-tbs-verification-failed-${Environment}"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO assignment TBS verification failed > 2 times in 5 minutes.
+        Region: ${AWS::Region}. This is a security anomaly — a client received an assignment
+        whose TBS signature does not verify. Possible causes: directory key mismatch,
+        replayed assignment, or wire-level tampering. Investigate immediately.
+      MetricName: AssignmentTbsVerificationFailed
+      Namespace: CelloDirectory
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 2
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsCriticalTopic
+      OKActions:
+        - !Ref OpsCriticalTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── M7-WIRE-001 AC-023: assignment_peer_id_mismatch alarm ───────────────
+  # Fires ops-critical immediately (>=1 in 1 minute) when a connecting peer's
+  # libp2p Peer ID does not match the session assignment. This is a critical
+  # security event — possible session hijack attempt.
+
+  AssignmentPeerIdMismatchMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub "/ecs/cello-directory-${Environment}"
+      FilterPattern: '{ $.event = "assignment_peer_id_mismatch" }'
+      MetricTransformations:
+        - MetricNamespace: CelloDirectory
+          MetricName: AssignmentPeerIdMismatch
+          MetricValue: "1"
+          DefaultValue: 0
+
+  AssignmentPeerIdMismatchAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-assignment-peer-id-mismatch-${Environment}"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO assignment Peer ID mismatch detected.
+        Region: ${AWS::Region}. A connecting peer's libp2p Peer ID does not match the
+        session assignment. This is a critical security event — possible session hijack
+        attempt. Investigate the source peer and session immediately.
+      MetricName: AssignmentPeerIdMismatch
+      Namespace: CelloDirectory
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsCriticalTopic
+      OKActions:
+        - !Ref OpsCriticalTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
   # ═══════════════════════════════════════════════════════════════════════════
   # DASHBOARD — AC-004
   #
