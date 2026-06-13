@@ -1,6 +1,13 @@
 {
   "packageMappings": [
     {
+      "prefix": "packages/adapter-claude-code/",
+      "pipelines": [
+        "cello-connect-pipeline"
+      ],
+      "description": "connect adapter pipeline — builds and tests @cello-protocol/connect"
+    },
+    {
       "prefix": "packages/directory/",
       "pipelines": [
         "cello-directory-pipeline"
@@ -35,9 +42,13 @@
     "package.json"
   ],
   "allCelloPipelines": [
+    "cello-connect-pipeline",
     "cello-directory-pipeline",
     "cello-relay-pipeline",
     "cello-e2e-tests-pipeline",
     "cello-operations-agent-pipeline"
-  ]
+  ],
+  "sourceRepoMappings": {
+    "Mygentic-AI/cello-client": "cello-e2e-tests-pipeline"
+  }
 }
