@@ -84,7 +84,7 @@ Both scopes are ephemeral by design. The distinction matters for security: the d
 **IThresholdSigner** — the abstraction over the multi-party threshold ceremony. `FrostThresholdSigner` is the day-one implementation. Exists as a day-one interface so threshold ML-DSA can swap in without changing the protocol layer. FROST implementation library: `@noble/curves` (`@noble/curves/frost`) — same audit lineage and pure-JS guarantee as the Ed25519 and SHA-256 primitives already in use. No other FROST library is used.
 
 **FROST TBS (to-be-signed) arrays** — positional arrays signed via RFC 9591 FROST with a domain context string to prevent cross-ceremony confusion:
-- Session establishment: context `"cello-frost-session-establishment-v1"`, fields `[session_id, agent_A_pubkey, agent_B_pubkey, genesis_prev_root, timestamp]`
+- Session establishment: context `"cello-frost-session-establishment-v1"`, fields `[session_id, agent_A_pubkey, agent_B_pubkey, genesis_prev_root, timestamp, initiator_session_peer_id, initiator_session_addrs_canonical, counterparty_session_peer_id, counterparty_session_addrs_canonical, transport_mode]` (10 fields; M7-WIRE-001 extended from 5). Canonical address encoding: `JSON.stringify(addrs.slice().sort())` — a JSON string as the CBOR element (fields 7 and 9). The context string is unchanged from the original 5-field version.
 - Conversation seal: context `"cello-frost-seal-v1"`, fields `[session_id, sealed_root, leaf_count, timestamp]`
 
 The domain context string is the cross-ceremony confusion guard — an establishment signature cannot be replayed as a seal signature and vice versa.
@@ -218,6 +218,21 @@ Canonical port numbers for CELLO services. These are the authoritative values fo
 | 5432 | RDS PostgreSQL (logical replication) | TCP | VPC Peering only; never exposed to internet |
 
 Security group rules on VPC Peering connections permit only ports 5432 and 4001 from peer VPC CIDR ranges.
+
+---
+
+## Error Code Glossary
+
+Error codes are distinct string literals. Each code identifies exactly one failure cause and one originating component. Operators and calling LLMs can determine from the code alone what happened and where.
+
+### Session Assignment Errors (M7-WIRE-001)
+
+| Code | Origin | Meaning |
+|------|--------|---------|
+| `session_request_missing_peer_id` | directory | A session_request frame from the client omits `initiator_session_peer_id` or `initiator_session_addrs`. Indicates a pre-M7 client. |
+| `assignment_missing_session_peer_id` | client | A received SessionAssignment is missing one or both session Peer ID fields (`initiator_session_peer_id`, `counterparty_session_peer_id`). May indicate a directory version mismatch. |
+| `assignment_peer_id_mismatch` | client (initiator) | The initiator's self-check failed: `initiator_session_peer_id` in the FROST-signed assignment does not match the Peer ID of the session node the initiator created. Security anomaly — the directory may have substituted a different identity. |
+| `assignment_tbs_verification_failed` | client | FROST signature verification over the 10-field session establishment TBS failed. The assignment may have been tampered with in transit. Distinct from `frost_verification_failed` (which applies to seal FROST operations only). |
 
 ---
 
