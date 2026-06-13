@@ -21,7 +21,7 @@ phases:
         if [ -n "$CELLO_CANDIDATE_SHA" ]; then
           echo "::cicd.candidate.install.started:: candidateSha=$CELLO_CANDIDATE_SHA"
           S3_KEY="candidates/${CELLO_CANDIDATE_SHA}/connect.tgz"
-          S3_BUCKET="cello-codepipeline-artifacts-${AWS_REGION}"
+          S3_BUCKET="cello-codepipeline-artifacts-us-east-1"
           echo "Downloading s3://${S3_BUCKET}/${S3_KEY} to /tmp/connect.tgz"
           aws s3 cp "s3://${S3_BUCKET}/${S3_KEY}" /tmp/connect.tgz
           if [ $? -ne 0 ]; then

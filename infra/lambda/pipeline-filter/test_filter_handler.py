@@ -354,6 +354,37 @@ class TestPipelineFilter(unittest.TestCase):
         # and the repo doesn't match sourceRepoMappings, so nothing triggers.
         _fake_codepipeline.start_pipeline_execution.assert_not_called()
 
+    def test_unknown_repo_with_matching_paths_falls_through_to_path_routing(self):
+        """An unknown repo with files matching a trustless-cello prefix triggers via path routing."""
+        mod = _load_module()
+        # Build event from unknown repo but with a path that matches packages/directory/
+        event = {
+            "detail": json.dumps({
+                "repository": {"full_name": "SomeOrg/fork-of-cello"},
+                "ref": "refs/heads/main",
+                "after": "deadbeef",
+                "commits": [
+                    {
+                        "modified": ["packages/directory/src/server.ts"],
+                        "added": [],
+                        "removed": [],
+                    }
+                ],
+            }),
+            "source": "SomeOrg/fork-of-cello",
+        }
+        mod.lambda_handler(event, None)
+        # Path-based routing fires because the repo has no sourceRepoMappings entry
+        # but its changed files match a packageMapping prefix.
+        triggered_names = [
+            args[0] if args else kwargs.get("name")
+            for args, kwargs in [
+                (c.args, c.kwargs)
+                for c in _fake_codepipeline.start_pipeline_execution.call_args_list
+            ]
+        ]
+        self.assertIn("cello-directory-pipeline", triggered_names)
+
     # ── AC-012(b): no dead pipeline references in ALL_CELLO_PIPELINES ────────
 
     def test_no_dead_pipeline_in_all_cello_pipelines(self):
