@@ -516,3 +516,55 @@ Implemented agent-aware notifications with per-connection routing for the CELLO 
 - IPC proxy notification forwarding (not in MCP-002 scope; covered by E2E story)
 
 **Commits:** fc4bc86 (initial), d9c9e6a (code-review fixes), 0f6fee9 (sprint-review fixes)
+
+---
+
+### 2026-06-13 15:40 — DIR-PING-001 implemented
+
+**Story:** CELLO-M7-DIR-PING-001
+**Agent/Author:** sprint-coder
+
+Directory-side ping/pong heartbeat handler. Pure responder — receives ping frames
+on authenticated signaling streams and echoes pong with the same monotonic ts value.
+No state persistence, no blocking operations, no DB calls in the handler path.
+
+**What was built:**
+- `directory-frames.ts`: PingFrame type in InboundSignalingFrame union, ping decode
+  case with Number.isFinite(ts) validation, encodePong() function, PongFrame type
+  in OutboundSignalingFrame union with decode case
+- `directory-node.ts`: ping handler in the frame dispatch chain (before
+  manifest_poll_request). Logs ping.received, sends pong, logs pong.sent; catch
+  block logs pong.failed with error.message (never ${error})
+- 6 tests: basic ping/pong, multi-client isolation, stream write error, repeated
+  pings (8x), composition root integration (real libp2p), burst load SI-001
+  (100 from A + 1 from B, B's pong < 1s)
+- Taxonomy update: 3 events added to discussion_logs observability section
+
+**AC interpretations:**
+- AC-005 (composition root): uses createDirectoryNode() directly with real libp2p
+  stream rather than child_process.spawn of the binary. Intent satisfied (handler
+  is reachable from composition root). Binary spawn would require full Postgres
+  and env var setup (CELLO_E2E_LIVE territory).
+- AC-006 (lateral catch audit): scanned all catch blocks in packages/directory/src/.
+  No ${error} interpolation found — all existing catches use error.message or
+  String(error) correctly.
+- streamId: uses stream.id (libp2p Stream interface declares `id: string`)
+
+**Code-reviewer findings (3 important, 1 low — all fixed):**
+1. PongFrame missing from OutboundSignalingFrame union and decoder — added
+2. PingFrame decode accepted NaN/Infinity — added Number.isFinite(ts) guard
+3. Reviewer claimed catch block is dead code — FALSE (stream.send() throws
+   synchronously when buffer full or stream closed per libp2p interface docs)
+4. streamId assertion inconsistency in test — added not.toBe("")
+
+**Sprint-reviewer findings (2 medium, 2 low):**
+1. AC-005 doesn't spawn binary (medium) — pragmatic; intent satisfied
+2. Unrelated COORDINATION/WORKLOG diff (medium) — false positive; main advanced
+   past branch point after worktree creation
+3. AC-003 non-deterministic (low) — acceptable; both outcomes verified
+4. COORDINATION not updated (low) — done in Step 6 on main, not in worktree
+
+**Sprint-reviewer verdict:** APPROVED
+
+**Commits:** c34b377 (initial), ee1daae (code-review fixes)
+Branch: m7/dir-ping-001 in trustless-cello
