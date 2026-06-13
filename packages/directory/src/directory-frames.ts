@@ -56,6 +56,13 @@ export function encodeSignalingAuthOk(frame: SignalingAuthOk): Uint8Array {
   return ENC.encode(obj);
 }
 
+// ─── M7-DIR-PING-001: Pong frame encoder (directory → client) ────────────────
+
+/** Encode a pong frame: { type: "pong", ts: number }. Echoes back the client's ts value. */
+export function encodePong(ts: number): Uint8Array {
+  return ENC.encode({ type: "pong", ts });
+}
+
 // ─── M7-MANIFEST-002: Manifest poll frame encoders (directory → client) ──────
 
 /** Encode a manifest_poll_response frame from directory → client. */
@@ -253,7 +260,10 @@ import type { RegisterRequest, DkgComplete, ConnectionRequest, ConnectionRespons
 
 import type { SealAttempt, SealRejectedTreeMismatch, SealAttemptAck, SealUnilateral, SealUnilateralTooEarly, SealUnilateralConfirmed, SealUnilateralNotification, ManifestPollRequest } from "./directory-types.js";
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | ManifestPollRequest;
+/** M7-DIR-PING-001: client heartbeat frame. */
+export type PingFrame = { type: "ping"; ts: number };
+
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | ManifestPollRequest | PingFrame;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -375,6 +385,13 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     if (!reported_root || reported_root.length !== 32) return null;
     if (reported_seq === null) return null;
     return { type: "seal_unilateral", session_id, reported_root, reported_seq };
+  }
+
+  // M7-DIR-PING-001: heartbeat ping from client → directory
+  if (o["type"] === "ping") {
+    const ts = typeof o["ts"] === "number" ? o["ts"] : null;
+    if (ts === null) return null;
+    return { type: "ping", ts };
   }
 
   // M7-MANIFEST-002: manifest poll request from client → directory
