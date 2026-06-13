@@ -56,6 +56,13 @@ export function encodeSignalingAuthOk(frame: SignalingAuthOk): Uint8Array {
   return ENC.encode(obj);
 }
 
+// ─── M7-DIR-PING-001: Pong frame encoder (directory → client) ────────────────
+
+/** Encode a pong frame: { type: "pong", ts: number }. Echoes back the client's ts value. */
+export function encodePong(ts: number): Uint8Array {
+  return ENC.encode({ type: "pong", ts });
+}
+
 // ─── M7-MANIFEST-002: Manifest poll frame encoders (directory → client) ──────
 
 /** Encode a manifest_poll_response frame from directory → client. */
@@ -253,7 +260,11 @@ import type { RegisterRequest, DkgComplete, ConnectionRequest, ConnectionRespons
 
 import type { SealAttempt, SealRejectedTreeMismatch, SealAttemptAck, SealUnilateral, SealUnilateralTooEarly, SealUnilateralConfirmed, SealUnilateralNotification, ManifestPollRequest } from "./directory-types.js";
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | ManifestPollRequest;
+/** M7-DIR-PING-001: client heartbeat frame. */
+export type PingFrame = { type: "ping"; ts: number };
+export type PongFrame = { type: "pong"; ts: number };
+
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | ManifestPollRequest | PingFrame;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -377,6 +388,14 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     return { type: "seal_unilateral", session_id, reported_root, reported_seq };
   }
 
+  // M7-DIR-PING-001: heartbeat ping from client → directory
+  if (o["type"] === "ping") {
+    const tsRaw = o["ts"];
+    const ts = typeof tsRaw === "number" ? tsRaw : typeof tsRaw === "bigint" ? Number(tsRaw) : null;
+    if (ts === null || !Number.isFinite(ts)) return null;
+    return { type: "ping", ts };
+  }
+
   // M7-MANIFEST-002: manifest poll request from client → directory
   if (o["type"] === "manifest_poll_request") {
     return { type: "manifest_poll_request" };
@@ -461,7 +480,8 @@ export type OutboundSignalingFrame =
   | SealUnilateralTooEarly
   | SealUnilateralConfirmed
   | SealUnilateralNotification
-  | ManifestPollResponse;
+  | ManifestPollResponse
+  | PongFrame;
 
 /** Decode a frame sent by the directory (used in tests to inspect what was sent). */
 export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignalingFrame | null {
@@ -809,6 +829,14 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     if (typeof manifest !== "object" || manifest === null) return null;
     // Trust the manifest shape — full validation happens in the client's verifyManifest()
     return { type: "manifest_poll_response", manifest: manifest as ManifestPollResponse["manifest"] };
+  }
+
+  // M7-DIR-PING-001: heartbeat pong (directory → client)
+  if (o["type"] === "pong") {
+    const tsRaw = o["ts"];
+    const ts = typeof tsRaw === "number" ? tsRaw : typeof tsRaw === "bigint" ? Number(tsRaw) : null;
+    if (ts === null || !Number.isFinite(ts)) return null;
+    return { type: "pong", ts };
   }
 
   return null;

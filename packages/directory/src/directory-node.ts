@@ -153,6 +153,7 @@ import {
   encodeSealUnilateralConfirmed,
   encodeSealUnilateralNotification,
   encodeManifestPollResponse,
+  encodePong,
   decodeInboundSignalingFrame,
 } from "./directory-frames.js";
 import { ed25519_FROST } from "@noble/curves/ed25519.js";
@@ -1419,6 +1420,25 @@ export class CelloDirectoryNode {
         } else if (parsed.type === "seal_unilateral") {
           // PERSIST-015: process unilateral seal request
           this.#processSealUnilateral(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "ping") {
+          // M7-DIR-PING-001: heartbeat ping/pong — no state, no blocking
+          this.#logger?.debug("directory.signaling.ping.received", {
+            clientPubkey: authedPubkeyHex!,
+            streamId: stream.id,
+          });
+          try {
+            this.#sendFrame(stream, encodePong(parsed.ts));
+            this.#logger?.debug("directory.signaling.pong.sent", {
+              clientPubkey: authedPubkeyHex!,
+              streamId: stream.id,
+            });
+          } catch (pongErr) {
+            this.#logger?.debug("directory.signaling.pong.failed", {
+              clientPubkey: authedPubkeyHex!,
+              streamId: stream.id,
+              error: pongErr instanceof Error ? pongErr.message : String(pongErr),
+            });
+          }
         } else if (parsed.type === "manifest_poll_request") {
           // M7-MANIFEST-002: client requests a fresh copy of the consortium manifest.
           // Respond immediately if a DirectoryManifestStore is configured.
