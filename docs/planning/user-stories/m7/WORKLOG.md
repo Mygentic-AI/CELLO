@@ -477,3 +477,42 @@ Round 2 (4 findings, all fixed):
 Merged to main: 7f80441
 
 **Unblocks:** M7-DIR-PING-001 (trustless-cello only; can start immediately)
+
+---
+
+### 2026-06-13 — MCP-002 implemented
+
+**Story:** CELLO-M7-MCP-002
+**Agent/Author:** sprint-coder + orchestrator
+
+Implemented agent-aware notifications with per-connection routing for the CELLO daemon. Three commits on branch m7/mcp-002 in cello-client (worktree at /Users/andrep/Documents/code/cello-client-m7-mcp-002).
+
+**What was built:**
+- `core/daemon/src/notification-dispatcher.ts` (NEW): `NotificationDispatcher` class with a routing table (Map<connectionId, currentAgent>). Three dispatch methods: `dispatchAgentStateChanged` (broadcast to all), `dispatchAgentCurrentChanged` (single connection only), `dispatchSessionStateChanged` (filter by currentAgent === agentName). `#safeSend` logs `notification.dispatch.failed` at DEBUG on write failure; never propagates exceptions.
+- `core/daemon/src/ipc-server.ts` (extended): `sendNotification(connectionId, notification)` and `getConnectionIds()` added to the `IpcServer` interface and implementation. `sendNotification` catch block logs `daemon.ipc.notification.write.failed` at DEBUG.
+- `core/daemon/src/daemon.ts` (extended): NotificationDispatcher instantiated in composition root; `registerConnection` on `ipc.connect`; `unregisterConnection` in `onDisconnect`; `dispatchAgentStateChanged` in `cello_start_agent` and `cello_stop_agent`; `dispatchAgentCurrentChanged` in `cello_use_agent` AND `cello_stop_agent` (when force-clearing current agent); `setCurrentAgent` kept in sync with `perConnectionState`. `__test_emit_session_event` handler guarded by `CELLO_ENV=test`.
+- `core/daemon/src/__tests__/mcp-002-notifications.test.ts` (NEW): 20 integration + unit tests covering AC-001 through AC-012, SI-001, SI-002 (grep), and `notification.dispatch.failed` (deterministic unit tests using injected throwingSender/falseSender).
+
+**Test counts:** 175 daemon tests, 835 full workspace tests. All passing.
+
+**Code-reviewer findings (6 total, all fixed):**
+1. CRITICAL: `__test_emit_session_event` exposed in production — guarded by `CELLO_ENV=test`
+2. HIGH: `cello_stop_agent` didn't dispatch `agent_current_changed` when force-clearing current — added dispatch
+3. HIGH: `notification.dispatch.failed` test vacuously conditional — replaced with deterministic unit tests using injected fakes
+4. MEDIUM: bare `catch {}` in `sendNotification` — now logs `error.message` at DEBUG
+5. MEDIUM: `#safeSend` message clarified (`"sendNotification returned false"` vs `"write returned false"`)
+6. LOW: dead `broadcastNotification` method removed from interface and implementation
+
+**Sprint-reviewer findings (2 medium, 2 low, all addressed):**
+1. MEDIUM: SI-002 grep test added — scans daemon and adapter src for prohibited key field names in notification construction sites
+2. MEDIUM: AC-008 expanded — now verifies `agent` field on all three notification types
+3. LOW: IPC proxy ignores daemon notifications (noted; out of MCP-002 scope — E2E gate will wire this)
+4. LOW: AC-014 version bump deferred per user instruction (will be batched)
+
+**Sprint-reviewer verdict:** APPROVED
+
+**Intentional deferrals:**
+- AC-014 (version bump) — deferred per user instruction; will be batched with the next npm publish cycle
+- IPC proxy notification forwarding (not in MCP-002 scope; covered by E2E story)
+
+**Commits:** fc4bc86 (initial), d9c9e6a (code-review fixes), 0f6fee9 (sprint-review fixes)

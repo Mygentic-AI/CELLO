@@ -51,7 +51,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-TRANSPORT-001 — AutoNAT + direct P2P | — | written — not yet started | Blocked on M7-WIRE-001; cross-repo |
 | M7-SESSION-001 — Interrupted session handling | — | written — not yet started | Blocked on M7-DAEMON-002 + M7-WIRE-001; cross-repo; batch with M7-WIRE-001 + M7-MANIFEST-002 |
 | M7-DIR-PING-001 — Directory-side ping/pong handler | — | written — not yet started | Blocked on M7-SIGNAL-001; trustless-cello only |
-| M7-MCP-002 — Agent-aware notifications | — | written — not yet started | Blocked on M7-MCP-001 + M7-DAEMON-002 (done) + M7-DAEMON-003 (done) |
+| M7-MCP-002 — Agent-aware notifications | — | **implemented — PR ready** | branch m7/mcp-002 in cello-client; 175 daemon tests + 835 full suite; NotificationDispatcher with broadcast/single/filtered routing; 3 commits (fc4bc86, d9c9e6a, 0f6fee9) |
 | M7-CICD-001 — Cross-repo CI/CD | — | written — not yet started | Independent; no deps; can start any time |
 
 ### Migration Version Registry
