@@ -568,3 +568,16 @@ No state persistence, no blocking operations, no DB calls in the handler path.
 
 **Commits:** c34b377 (initial), ee1daae (code-review fixes)
 Branch: m7/dir-ping-001 in trustless-cello
+
+---
+
+### 2026-06-13 — MCP-002 merged to main
+
+**Story:** CELLO-M7-MCP-002
+**Agent/Author:** orchestrator
+
+Branch m7/mcp-002 merged to cello-client main (merge commit 16c474a).
+3 commits: fc4bc86 (initial), d9c9e6a (code-review fixes), 0f6fee9 (sprint-review fixes).
+
+NotificationDispatcher implemented with broadcast/single-connection/filtered routing.
+175 daemon tests + full workspace suite passing. Code-review and sprint-review complete, all findings fixed.
