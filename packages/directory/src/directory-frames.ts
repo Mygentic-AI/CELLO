@@ -262,6 +262,7 @@ import type { SealAttempt, SealRejectedTreeMismatch, SealAttemptAck, SealUnilate
 
 /** M7-DIR-PING-001: client heartbeat frame. */
 export type PingFrame = { type: "ping"; ts: number };
+export type PongFrame = { type: "pong"; ts: number };
 
 export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | ManifestPollRequest | PingFrame;
 
@@ -390,7 +391,7 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
   // M7-DIR-PING-001: heartbeat ping from client → directory
   if (o["type"] === "ping") {
     const ts = typeof o["ts"] === "number" ? o["ts"] : null;
-    if (ts === null) return null;
+    if (ts === null || !Number.isFinite(ts)) return null;
     return { type: "ping", ts };
   }
 
@@ -478,7 +479,8 @@ export type OutboundSignalingFrame =
   | SealUnilateralTooEarly
   | SealUnilateralConfirmed
   | SealUnilateralNotification
-  | ManifestPollResponse;
+  | ManifestPollResponse
+  | PongFrame;
 
 /** Decode a frame sent by the directory (used in tests to inspect what was sent). */
 export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignalingFrame | null {
@@ -826,6 +828,13 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     if (typeof manifest !== "object" || manifest === null) return null;
     // Trust the manifest shape — full validation happens in the client's verifyManifest()
     return { type: "manifest_poll_response", manifest: manifest as ManifestPollResponse["manifest"] };
+  }
+
+  // M7-DIR-PING-001: heartbeat pong (directory → client)
+  if (o["type"] === "pong") {
+    const ts = typeof o["ts"] === "number" ? o["ts"] : null;
+    if (ts === null || !Number.isFinite(ts)) return null;
+    return { type: "pong", ts };
   }
 
   return null;

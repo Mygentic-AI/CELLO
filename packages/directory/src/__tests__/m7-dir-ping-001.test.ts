@@ -302,6 +302,7 @@ describe("M7-DIR-PING-001: directory ping/pong handler", () => {
       const ctx = pongFailed.context as Record<string, unknown>;
       expect(ctx["clientPubkey"]).toBe(pubkeyHex);
       expect(ctx["streamId"]).toBeDefined();
+      expect(ctx["streamId"]).not.toBe("");
       // The error field must be a string (error.message), not [object Object]
       expect(typeof ctx["error"]).toBe("string");
       expect(ctx["error"]).not.toBe("[object Object]");
