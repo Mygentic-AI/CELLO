@@ -104,6 +104,12 @@ export interface SessionRequest {
    * Optional at parse level for backward compat with pre-M7 frames.
    */
   initiator_session_addrs?: string[];
+  /**
+   * M7-WIRE-001 AC-009: Client-requested transport mode.
+   * Defaults to 'relay' when absent. TRANSPORT-001 stub: directory currently
+   * honours this value directly; real AutoNAT probe will override in TRANSPORT-001.
+   */
+  transport_mode?: "direct" | "relay";
 }
 
 // ─── M7-WIRE-001: Session offer accept (target → directory) ─────────────────

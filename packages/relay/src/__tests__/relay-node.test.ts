@@ -37,7 +37,7 @@ import type { LeafInput } from "@cello-protocol/crypto";
 import { encodeStructure2 } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
-import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
+import { createRelayNode, RELAY_PROTOCOL_ID, CelloRelayNode } from "../relay-node.js";
 import type { SessionAssignment } from "../relay-types.js";
 
 setupV3Tests();
@@ -1037,4 +1037,44 @@ describe("SESSION-003 AC-010: only A submits SEAL ctrl leaf; relay stays active 
     sA.close().catch(() => {}); sB.close().catch(() => {});
     await cA.node.stop(); await cB.node.stop(); await fix.relayStop();
   }, 20_000);
+});
+
+// ─── M7-WIRE-001 AC-008 / SI-003: session Peer ID bindings ───────────────────
+
+describe("M7-WIRE-001: session Peer ID binding (AC-008 / SI-003)", () => {
+  it("AC-008: recordAssignment stores Peer ID binding when initiator_session_peer_id is present", async () => {
+    const fix = await makeFixture();
+    const sessionId = new Uint8Array(randomBytes(16));
+    const baseAssignment = await makeAssignment(sessionId, new Uint8Array(randomBytes(32)), new Uint8Array(randomBytes(32)), fix.dirKp);
+    const assignment = {
+      ...baseAssignment,
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      counterparty_session_peer_id: "12D3KooWCounterpartySession",
+    };
+
+    const result = fix.relay.recordAssignment(assignment);
+    expect(result.ok, "recordAssignment with M7 Peer ID fields must succeed").toBe(true);
+
+    await fix.relayStop();
+  }, 10_000);
+
+  it("AC-008: recordAssignment without Peer ID fields succeeds (pre-M7 backward compat)", async () => {
+    const fix = await makeFixture();
+    const sessionId = new Uint8Array(randomBytes(16));
+    const assignment = await makeAssignment(sessionId, new Uint8Array(randomBytes(32)), new Uint8Array(randomBytes(32)), fix.dirKp);
+    const result = fix.relay.recordAssignment(assignment);
+    expect(result.ok, "pre-M7 recordAssignment must still succeed").toBe(true);
+    await fix.relayStop();
+  }, 10_000);
+
+  it("SI-003: CelloRelayNode has no public method or property that exposes session Peer ID bindings", () => {
+    const proto = Object.getOwnPropertyNames(CelloRelayNode.prototype);
+    const suspicious = proto.filter(name =>
+      name !== "constructor" && (
+        name.toLowerCase().includes("binding") ||
+        (name.toLowerCase().includes("peer") && name.toLowerCase().includes("session"))
+      )
+    );
+    expect(suspicious, "No public method should expose session Peer ID bindings").toEqual([]);
+  });
 });

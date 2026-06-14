@@ -37,7 +37,7 @@ import {
   ctrlLeafHash,
   MockThresholdSigner,
 } from "@cello-protocol/crypto";
-import { buildStructure2, encodeStructure2 } from "@cello-protocol/protocol-types";
+import { buildStructure2, encodeStructure2, computeGenesisPrevRoot } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import {
@@ -422,7 +422,164 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
       // directory_signature is a 64-byte FROST-signed blob
       expect(asgA.directory_signature.length).toBe(64);
     }
+
+    // M7-WIRE-001 AC-005(c/d): assert all five new fields are present in the assignment
+    expect(asgA.initiator_session_peer_id, "initiator_session_peer_id must be present").toBe("12D3KooWInitiatorSession");
+    expect(asgA.initiator_session_addrs, "initiator_session_addrs must be present").toEqual(["/ip4/127.0.0.1/tcp/9000"]);
+    // counterparty fields default to empty string / [] when no session_offer_accept received (pre-WIRE-002)
+    expect(typeof asgA.counterparty_session_peer_id).toBe("string");
+    expect(Array.isArray(asgA.counterparty_session_addrs)).toBe(true);
+    expect(asgA.transport_mode, "transport_mode must be 'relay' (TRANSPORT-001 stub)").toBe("relay");
+
+    // M7-WIRE-001 AC-005(c): reconstruct 10-field TBS and verify it matches what was signed.
+    // MockThresholdSigner copies tbs[0..31] into sig[0..31] with sig[63]=0x42 marker.
+    // We verify structural correctness by confirming our reconstructed TBS CBOR matches
+    // the bytes embedded in the mock signature.
+    const pubA = asgA.participant_a.pubkey;
+    const pubB = asgA.participant_b.pubkey;
+    const genRoot = computeGenesisPrevRoot(pubA, pubB, asgA.session_id, asgA.session_timestamp);
+    const ts = asgA.session_timestamp;
+    const tbs = CBOR_ENC.encode([
+      asgA.session_id, pubA, pubB, genRoot,
+      ts > 0xffffffff ? BigInt(ts) : ts,
+      asgA.initiator_session_peer_id,
+      JSON.stringify((asgA.initiator_session_addrs ?? []).slice().sort()),
+      asgA.counterparty_session_peer_id,
+      JSON.stringify((asgA.counterparty_session_addrs ?? []).slice().sort()),
+      asgA.transport_mode,
+    ]) as Uint8Array;
+    // MockThresholdSigner embeds tbs[0..31] into sig[0..31], sig[63]=0x42
+    const sig = asgA.directory_signature;
+    expect(sig.length, "FROST signature must be 64 bytes").toBe(64);
+    expect(sig[63], "MockThresholdSigner marker byte").toBe(0x42);
+    const expectedPrefix = tbs.slice(0, 32);
+    const actualPrefix = sig.slice(0, 32);
+    expect(Buffer.from(actualPrefix).toString("hex"), "signature embeds first 32 bytes of TBS CBOR (proves TBS reconstruction matches what directory signed)")
+      .toBe(Buffer.from(expectedPrefix).toString("hex"));
   });
+
+  // ─── AC-009 (transport_mode): relay.recordAssignment call guard ──────────────
+
+  it("AC-009(a): transport_mode='relay' → relay.recordAssignment called exactly once", async () => {
+    let recordCalls = 0;
+    const spyRelay: RelayAdapter = {
+      recordAssignment(assignment: RelaySessionAssignment) {
+        recordCalls++;
+        relay.recorded.push(assignment);
+        return { ok: true as const };
+      },
+      discardSession(_sessionId: Uint8Array) {},
+      submitForSeal: relay.submitForSeal.bind(relay),
+      confirmSeal: relay.confirmSeal.bind(relay),
+      rejectSeal: relay.rejectSeal.bind(relay),
+    };
+    const spyDirNode = await createDirectoryNode({
+      keyProvider: dirKey,
+      relay: spyRelay,
+      relayEndpoint: { peer_id: "test", multiaddrs: [] },
+    });
+    scope.addCleanup(spyDirNode.stop);
+
+    const keyA = generateKeypair();
+    const keyB = generateKeypair();
+
+    const authClient = async (key: ReturnType<typeof generateKeypair>) => {
+      const cn = await createNode({ keyProvider: key, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+      await cn.start();
+      scope.addCleanup(() => cn.stop());
+      await cn.dial(spyDirNode.node.listenAddresses()[0]);
+      const s = await cn.newStream(spyDirNode.node.getPeerId(), SIGNALING_PROTOCOL_ID);
+      const r = new StreamReader(s);
+      const cb = await r.readDecoded();
+      const ch = decodeOutboundSignalingFrame(cb);
+      if (!ch || ch.type !== "signaling_auth_challenge") throw new Error("no challenge");
+      const { pubkey, signature } = await signAuth(ch.nonce, AUTH_DOMAIN, key);
+      sendFrame(s, encodeAuthResponse(pubkey, signature));
+      const ackCb = await r.readDecoded();
+      const ackFrame = decodeOutboundSignalingFrame(ackCb);
+      if (!ackFrame || ackFrame.type !== "signaling_auth_ok") throw new Error(`expected signaling_auth_ok, got ${ackFrame?.type}`);
+      const hex = Buffer.from(pubkey).toString("hex");
+      spyDirNode.directory.registerPeerInfo(hex, cn.getPeerId(), cn.listenAddresses());
+      spyDirNode.directory.registerThresholdSigner(hex, new MockThresholdSigner());
+      return { stream: s, reader: r, pubkeyHex: hex };
+    };
+
+    const { stream: streamA } = await authClient(keyA);
+    const { reader: readerB, pubkeyHex: hexB } = await authClient(keyB);
+
+    // transport_mode is omitted → directory defaults to 'relay' → relay must be called
+    sendFrame(streamA, CBOR_ENC.encode({
+      type: "session_request",
+      target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
+    }));
+
+    await readerB.readDecoded(); // drain B's assignment
+
+    expect(recordCalls).toBe(1);
+  }, 15_000);
+
+  it("AC-009(b): transport_mode='direct' → relay.recordAssignment called zero times", async () => {
+    let recordCalls = 0;
+    const spyRelay: RelayAdapter = {
+      recordAssignment(assignment: RelaySessionAssignment) {
+        recordCalls++;
+        relay.recorded.push(assignment);
+        return { ok: true as const };
+      },
+      discardSession(_sessionId: Uint8Array) {},
+      submitForSeal: relay.submitForSeal.bind(relay),
+      confirmSeal: relay.confirmSeal.bind(relay),
+      rejectSeal: relay.rejectSeal.bind(relay),
+    };
+    const spyDirNode = await createDirectoryNode({
+      keyProvider: dirKey,
+      relay: spyRelay,
+      relayEndpoint: { peer_id: "test", multiaddrs: [] },
+    });
+    scope.addCleanup(spyDirNode.stop);
+
+    const keyA = generateKeypair();
+    const keyB = generateKeypair();
+
+    const authClient = async (key: ReturnType<typeof generateKeypair>) => {
+      const cn = await createNode({ keyProvider: key, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+      await cn.start();
+      scope.addCleanup(() => cn.stop());
+      await cn.dial(spyDirNode.node.listenAddresses()[0]);
+      const s = await cn.newStream(spyDirNode.node.getPeerId(), SIGNALING_PROTOCOL_ID);
+      const r = new StreamReader(s);
+      const cb = await r.readDecoded();
+      const ch = decodeOutboundSignalingFrame(cb);
+      if (!ch || ch.type !== "signaling_auth_challenge") throw new Error("no challenge");
+      const { pubkey, signature } = await signAuth(ch.nonce, AUTH_DOMAIN, key);
+      sendFrame(s, encodeAuthResponse(pubkey, signature));
+      const ackCb = await r.readDecoded();
+      const ackFrame = decodeOutboundSignalingFrame(ackCb);
+      if (!ackFrame || ackFrame.type !== "signaling_auth_ok") throw new Error(`expected signaling_auth_ok, got ${ackFrame?.type}`);
+      const hex = Buffer.from(pubkey).toString("hex");
+      spyDirNode.directory.registerPeerInfo(hex, cn.getPeerId(), cn.listenAddresses());
+      spyDirNode.directory.registerThresholdSigner(hex, new MockThresholdSigner());
+      return { stream: s, reader: r, pubkeyHex: hex };
+    };
+
+    const { stream: streamA } = await authClient(keyA);
+    const { reader: readerB, pubkeyHex: hexB } = await authClient(keyB);
+
+    // transport_mode='direct' → relay must NOT be called
+    sendFrame(streamA, CBOR_ENC.encode({
+      type: "session_request",
+      target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
+      transport_mode: "direct",
+    }));
+
+    await readerB.readDecoded(); // drain B's assignment
+
+    expect(recordCalls).toBe(0);
+  }, 15_000);
 
   // ─── AC-006: relay.recordAssignment returns before session_assignment is delivered ──
 

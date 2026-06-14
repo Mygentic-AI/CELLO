@@ -678,14 +678,21 @@ Resources:
 
   # ── M7-WIRE-001 AC-022: assignment_tbs_verification_failed alarm ──────────
   # Fires ops-critical when TBS verification failures exceed 2 in 5 minutes.
-  # This indicates a client is receiving a tampered or replayed assignment.
-  # Custom metric: extracted from directory logs via MetricFilter.
+  # This indicates a client received a tampered or replayed assignment.
+  #
+  # NOTE: The session.assignment.verification.failed event is emitted by the
+  # client (cello-mcp process), not the directory ECS task. The filter targets
+  # the directory log group as a proxy — the directory emits session.assigned
+  # events, and anomaly detection for client-side failures will require a
+  # dedicated client telemetry pipeline (deferred to M8). The filter pattern
+  # below matches the canonical event name the client emits so it is correct
+  # once a client log group is wired; the log group is the directory's for now.
 
   AssignmentTbsVerificationFailedMetricFilter:
     Type: AWS::Logs::MetricFilter
     Properties:
       LogGroupName: !Sub "/ecs/cello-directory-${Environment}"
-      FilterPattern: '{ $.event = "assignment_tbs_verification_failed" }'
+      FilterPattern: '{ $.event = "session.assignment.verification.failed" && $.context.reason = "assignment_tbs_verification_failed" }'
       MetricTransformations:
         - MetricNamespace: CelloDirectory
           MetricName: AssignmentTbsVerificationFailed
@@ -699,7 +706,7 @@ Resources:
       AlarmDescription: !Sub >
         [${AWS::Region}] CELLO assignment TBS verification failed > 2 times in 5 minutes.
         Region: ${AWS::Region}. This is a security anomaly — a client received an assignment
-        whose TBS signature does not verify. Possible causes: directory key mismatch,
+        whose FROST TBS signature does not verify. Possible causes: directory key mismatch,
         replayed assignment, or wire-level tampering. Investigate immediately.
       MetricName: AssignmentTbsVerificationFailed
       Namespace: CelloDirectory
@@ -723,12 +730,14 @@ Resources:
   # Fires ops-critical immediately (>=1 in 1 minute) when a connecting peer's
   # libp2p Peer ID does not match the session assignment. This is a critical
   # security event — possible session hijack attempt.
+  #
+  # Same client-side telemetry caveat as AC-022 above.
 
   AssignmentPeerIdMismatchMetricFilter:
     Type: AWS::Logs::MetricFilter
     Properties:
       LogGroupName: !Sub "/ecs/cello-directory-${Environment}"
-      FilterPattern: '{ $.event = "assignment_peer_id_mismatch" }'
+      FilterPattern: '{ $.event = "session.assignment.verification.failed" && $.context.reason = "assignment_peer_id_mismatch" }'
       MetricTransformations:
         - MetricNamespace: CelloDirectory
           MetricName: AssignmentPeerIdMismatch

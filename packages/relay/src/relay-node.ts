@@ -225,6 +225,12 @@ export class CelloRelayNode {
   // per-session mutex: session_id_hex → Promise chain
   readonly #sessionLocks = new Map<string, Promise<void>>();
 
+  // M7-WIRE-001 AC-008 / SI-003: session_id_hex → bound session Peer IDs.
+  // Populated by recordAssignment() when initiator_session_peer_id is present.
+  // Used by #processHashSubmit to reject any stream whose authenticated pubkey's
+  // session Peer ID is not in the binding. Private — never exposed via public API.
+  readonly #sessionPeerIdBindings = new Map<string, { initiator: string; counterparty: string }>();
+
   constructor(opts: RelayNodeOptions) {
     this.#node = opts.node;
     this.#directoryPubkey = opts.directoryPubkey;
@@ -418,8 +424,19 @@ export class CelloRelayNode {
     );
     const recorded = this.#store.recordSession(assignment, genesisRoot);
     if (!recorded) return { ok: false, reason: "session_already_exists" };
+
+    // M7-WIRE-001 AC-008: bind session Peer IDs when provided by directory.
+    // Stored privately — never exposed via public API (SI-003).
+    const sessionKey = Buffer.from(assignment.session_id).toString("hex");
+    if (assignment.initiator_session_peer_id && assignment.counterparty_session_peer_id) {
+      this.#sessionPeerIdBindings.set(sessionKey, {
+        initiator: assignment.initiator_session_peer_id,
+        counterparty: assignment.counterparty_session_peer_id,
+      });
+    }
+
     // OBS-001 AC-010: session assigned
-    const sessionHex = truncHex(Buffer.from(assignment.session_id).toString("hex"));
+    const sessionHex = truncHex(sessionKey);
     protocolLog("RELAY", `Session assigned: ${sessionHex} → slot 1`);
     return { ok: true };
   }
@@ -427,6 +444,7 @@ export class CelloRelayNode {
   discardSession(sessionId: Uint8Array): void {
     const key = Buffer.from(sessionId).toString("hex");
     this.#store.destroySession(key);
+    this.#sessionPeerIdBindings.delete(key);
   }
 
   submitForSeal(sessionId: Uint8Array): { ok: true; data: SealData } | { ok: false; reason: string } {

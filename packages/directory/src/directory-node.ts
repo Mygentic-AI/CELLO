@@ -1432,14 +1432,14 @@ export class CelloDirectoryNode {
             continue;
           }
           // M7-WIRE-001 AC-002: Reject session_request missing initiator session Peer ID
-          const parsedReq = parsed as { connection_id?: string; relay_rtt?: Record<string, number>; initiator_session_peer_id?: string; initiator_session_addrs?: string[] };
+          const parsedReq = parsed as { connection_id?: string; relay_rtt?: Record<string, number>; initiator_session_peer_id?: string; initiator_session_addrs?: string[]; transport_mode?: "direct" | "relay" };
           if (!parsedReq.initiator_session_peer_id || !parsedReq.initiator_session_addrs) {
             this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "session_request_missing_peer_id" }));
             continue;
           }
           // Run concurrently — ceremony_result frames must be processed by this same loop
           // while #processSessionRequest is suspended awaiting the ceremony round-trip.
-          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), parsedReq.connection_id, parsedReq.relay_rtt, parsedReq.initiator_session_peer_id, parsedReq.initiator_session_addrs);
+          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), parsedReq.connection_id, parsedReq.relay_rtt, parsedReq.initiator_session_peer_id, parsedReq.initiator_session_addrs, parsedReq.transport_mode);
         } else if (parsed.type === "session_offer_accept") {
           // M7-WIRE-001 AC-003: handle session offer acceptance from target (Bob)
           const acceptFrame = parsed as { session_id?: Uint8Array; counterparty_session_peer_id?: string; counterparty_session_addrs?: string[] };
@@ -2126,6 +2126,7 @@ export class CelloDirectoryNode {
     relayRtt?: Record<string, number>,
     initiatorSessionPeerId?: string,
     initiatorSessionAddrs?: string[],
+    requestedTransportMode?: "direct" | "relay",
   ): Promise<void> {
     protocolLog("SESS", `Session request: ${truncHex(initiatorHex)} → ${truncHex(targetHex)}`);
     this.#logger?.info("frost.debug.session_request.enter", {
@@ -2236,9 +2237,10 @@ export class CelloDirectoryNode {
       // the full offer→accept round-trip will be added in WIRE-002.
     }
 
-    // TRANSPORT-001 stub: AutoNAT not yet wired — default to 'relay'
-    // TRANSPORT-001: replace with real AutoNAT probe
-    const transportMode: "direct" | "relay" = "relay";
+    // TRANSPORT-001 stub: real AutoNAT probe not yet wired.
+    // Honour client-requested transport_mode for testability; TRANSPORT-001 will
+    // override with the AutoNAT probe result. Defaults to 'relay' when absent.
+    const transportMode: "direct" | "relay" = requestedTransportMode ?? "relay";
 
     // SESSION-004 Step 3: Build TBS — single source of truth via protocol-types (HIGH-5)
     // M7-WIRE-001: Extended to 10 fields. Uses local buildSessionEstablishmentTbsM7

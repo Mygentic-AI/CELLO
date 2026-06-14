@@ -322,10 +322,14 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     // M7-WIRE-001 AC-001/AC-002: initiator session Peer ID and addrs (optional at parse level; handler validates)
     const initiator_session_peer_id = typeof o["initiator_session_peer_id"] === "string" ? o["initiator_session_peer_id"] : undefined;
     const initiator_session_addrs = toStringArray(o["initiator_session_addrs"]) ?? undefined;
+    const transport_mode_raw = o["transport_mode"];
+    const transport_mode: "direct" | "relay" | undefined =
+      transport_mode_raw === "direct" ? "direct" : transport_mode_raw === "relay" ? "relay" : undefined;
     const result: SessionRequest = { type: "session_request", target_pubkey };
     if (connection_id !== undefined) result.connection_id = connection_id;
     if (initiator_session_peer_id !== undefined) result.initiator_session_peer_id = initiator_session_peer_id;
     if (initiator_session_addrs !== undefined) result.initiator_session_addrs = initiator_session_addrs;
+    if (transport_mode !== undefined) result.transport_mode = transport_mode;
     return result;
   }
 
