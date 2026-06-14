@@ -491,6 +491,7 @@ export class CelloRelayNode {
     if (state) {
       this.#store.setSession(key, { ...state, status: "seal_rejected" });
     }
+    this.#sessionPeerIdBindings.delete(key);
     protocolLog("RELAY", `Seal rejected: ${truncHex(key)}, reason: ${_reason}`);
   }
 
@@ -992,7 +993,8 @@ export class CelloRelayNode {
    */
   startIdleSweep(intervalMs: number, maxIdleMs: number): void {
     const sweep = () => {
-      this.#store.sweepIdleSessions(maxIdleMs, this.#logger);
+      const swept = this.#store.sweepIdleSessions(maxIdleMs, this.#logger);
+      for (const key of swept) this.#sessionPeerIdBindings.delete(key);
     };
 
     // Run first sweep immediately to catch sessions that were idle before the relay process started.

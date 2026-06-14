@@ -106,7 +106,8 @@ describe("CELLO-M6B-009: Idle session sweep", () => {
     const maxIdleMs = 24 * 60 * 60 * 1000; // 24 hours
     const swept = store.sweepIdleSessions(maxIdleMs, logger);
 
-    expect(swept).toBe(1);
+    expect(swept).toHaveLength(1);
+    expect(swept[0]).toBe(sessionIdHex);
     expect(store.getSession(sessionIdHex)).toBeUndefined();
     // AC-006 specifies idleDurationMs >= 90_000_000 (25 hours in ms).
     // Capture the actual call to assert the numeric lower bound.
@@ -145,7 +146,7 @@ describe("CELLO-M6B-009: Idle session sweep", () => {
     const maxIdleMs = 24 * 60 * 60 * 1000;
     const swept = store.sweepIdleSessions(maxIdleMs, logger);
 
-    expect(swept).toBe(0);
+    expect(swept).toHaveLength(0);
     expect(store.getSession(sessionIdHex)).toBeDefined();
     expect(logger.info).toHaveBeenCalledWith("relay.session.sweep.complete", {
       sweptCount: 0,
@@ -173,7 +174,7 @@ describe("CELLO-M6B-009: Idle session sweep", () => {
     const maxIdleMs = 24 * 60 * 60 * 1000;
     const swept = store.sweepIdleSessions(maxIdleMs, logger);
 
-    expect(swept).toBe(0);
+    expect(swept).toHaveLength(0);
     expect(logger.info).toHaveBeenCalledWith("relay.session.sweep.complete", {
       sweptCount: 0,
       remainingCount: 0,
@@ -213,7 +214,8 @@ describe("CELLO-M6B-009: Idle session sweep", () => {
     const swept = store.sweepIdleSessions(maxIdleMs, logger);
 
     // Only the 'active' session should be swept
-    expect(swept).toBe(1);
+    expect(swept).toHaveLength(1);
+    expect(swept[0]).toBe(sessionIdHex1);
     expect(store.getSession(sessionIdHex1)).toBeUndefined();
     expect(store.getSession(sessionIdHex2)).toBeDefined(); // still present
     expect(store.getSession(sessionIdHex3)).toBeDefined(); // still present
@@ -239,7 +241,7 @@ describe("CELLO-M6B-009: Idle session sweep", () => {
     const swept = store.sweepIdleSessions(maxIdleMs, logger);
 
     // Session should NOT be swept because setSession refreshed lastActivityAt
-    expect(swept).toBe(0);
+    expect(swept).toHaveLength(0);
     expect(store.getSession(sessionIdHex)).toBeDefined();
   });
 });
