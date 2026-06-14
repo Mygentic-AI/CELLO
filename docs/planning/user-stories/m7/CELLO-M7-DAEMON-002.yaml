@@ -534,6 +534,61 @@ acceptance_criteria:
     test_type: integration
     component_under_test: daemon
 
+  - id: AC-018
+    given: "The full session establishment flow: directory constructs assignment with
+      all five WIRE-001 fields populated (initiator_session_peer_id, initiator_session_addrs,
+      counterparty_session_peer_id, counterparty_session_addrs, transport_mode),
+      Alice receives it as initiator, Bob receives it as target, Alice's session node
+      dials Bob's standing receiver using the counterparty fields from the assignment,
+      and Bob's connectionGater is configured with the initiator_session_peer_id"
+    when: "the integration test runs with opts.ephemeralSessionNodes: true and real
+      in-process libp2p nodes for the session nodes"
+    then: >
+      Alice's session node successfully dials Bob's standing receiver using
+      counterparty_session_peer_id and counterparty_session_addrs from the signed
+      assignment. Bob's connectionGater accepts Alice's connection (because
+      initiator_session_peer_id matches Alice's dialing Peer ID) and rejects a
+      third party dialing from a different Peer ID. session.assignment.received is
+      logged on both sides with matching sessionId, each party's counterpartyPubkey
+      (the other's K_local hex), the same transportMode, and a correlationId present
+      on both events. This is the "producer → both consumers" round-trip: one
+      integration test that chains WIRE-001 AC-005, AC-006, and AC-007 into a single
+      end-to-end assertion. The test goes through real libp2p dial/accept — not mocked
+      connection objects.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Moved from WIRE-001 AC-015. Belongs here because this AC requires
+      opts.ephemeralSessionNodes: true (AC-014) and the connectionGater enforcement
+      defined in AC-005. The circular dependency (WIRE-001 blocked_by DAEMON-002,
+      DAEMON-002 blocks WIRE-001) made it impossible to satisfy within WIRE-001's scope.
+      Addresses M7 lesson L7 (NODE_ENV=test shortcuts) — the connectionGater path
+      is only exercised when a real libp2p dial hits the gate.
+
+  - id: AC-019
+    given: "packages/e2e-tests/src/session-fixture.ts after AC-014 extends it with
+      opts.ephemeralSessionNodes: true"
+    when: "createSessionFixture() is called with opts.ephemeralSessionNodes: true
+      and a session assignment is produced during the fixture run"
+    then: >
+      The SessionAssignment produced by the fixture contains all five WIRE-001 fields
+      with non-empty values (initiator_session_peer_id, initiator_session_addrs,
+      counterparty_session_peer_id, counterparty_session_addrs, transport_mode).
+      The fixture's session establishment path uses the real FROST ceremony over the
+      extended 10-field TBS, not a stub that populates the new fields with empty strings.
+      Existing tests that use createSessionFixture() without opts.ephemeralSessionNodes
+      continue to pass unchanged (non-breaking defaults of false). The fixture is
+      extended with a verifyTbs(assignment) helper that calls buildSessionEstablishmentTbs
+      and asserts TBS verification succeeds — this helper is used by the integration
+      tests for WIRE-001 AC-005 and AC-018 to avoid duplicating TBS verification logic
+      in test code.
+    test_type: integration
+    component_under_test: e2e-tests
+    notes: >
+      Moved from WIRE-001 AC-019. Belongs here because the fixture extension
+      (opts.ephemeralSessionNodes, TBS verification helper) depends on the session node
+      infrastructure owned by DAEMON-002. AC-014 is the prerequisite.
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001

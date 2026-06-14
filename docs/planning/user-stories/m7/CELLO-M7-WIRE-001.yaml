@@ -648,30 +648,13 @@ acceptance_criteria:
       the queuing and reconnect logic; this AC verifies the WIRE-001 send path
       does not bypass it or silently discard the assignment.
 
-  - id: AC-015
-    given: "The full session establishment flow: directory constructs assignment,
-      Alice receives it as initiator, Bob receives it as target, Alice creates her
-      session node from counterparty addrs, Bob configures his connectionGater from
-      initiator Peer ID"
-    when: "the integration test runs with real in-process libp2p nodes for the
-      session nodes (using opts.ephemeralSessionNodes: true from DAEMON-002)"
-    then: >
-      Alice's session node successfully dials Bob's standing receiver using
-      counterparty_session_peer_id and counterparty_session_addrs from the
-      assignment. Bob's connectionGater accepts Alice's connection (because
-      initiator_session_peer_id matches Alice's dialing Peer ID) and rejects a
-      third party dialing from a different Peer ID.
-      session.assignment.received is logged on both sides with matching sessionId,
-      each party's counterpartyPubkey (the other's K_local hex), the same
-      transportMode, and a correlationId present on both events.
-      This is the "producer → both consumers" round-trip: one integration test
-      that chains AC-005, AC-006, and AC-007 into a single end-to-end assertion.
-      The test goes through real libp2p dial/accept — not mocked connection objects.
-    test_type: integration
-    component_under_test: client
-    notes: >
-      Addresses M7 lesson L7 (NODE_ENV=test shortcuts). The connectionGater
-      path is only exercised when a real libp2p dial hits the gate.
+  # AC-015 moved to CELLO-M7-DAEMON-002 as AC-018.
+  # Rationale: this AC requires opts.ephemeralSessionNodes: true (DAEMON-002 AC-014)
+  # and real session nodes for the dial/accept round-trip. It belongs in the story
+  # that owns session node creation and connectionGater enforcement, not WIRE-001
+  # which only defines the wire format. The circular dependency
+  # (WIRE-001 blocked_by DAEMON-002, DAEMON-002 blocks WIRE-001) made it impossible
+  # to satisfy this AC within WIRE-001's scope.
 
   - id: AC-016
     given: "All error paths in this story's scope: assignment_missing_session_peer_id,
@@ -735,22 +718,12 @@ acceptance_criteria:
       Addresses M7 lesson L3 — composition root never wired. The directory binary
       start is the only test of composition root wiring.
 
-  - id: AC-019
-    given: "packages/e2e-tests/src/session-fixture.ts"
-    when: "createSessionFixture() is called with opts.ephemeralSessionNodes: true
-      (from DAEMON-002) and a session assignment is produced during the fixture run"
-    then: >
-      The SessionAssignment produced by the fixture contains all five new fields.
-      The fixture's session establishment path uses the real FROST ceremony
-      over the extended 10-field TBS, not a stub that populates the new fields
-      with empty strings. Existing tests that use createSessionFixture() without
-      opts.ephemeralSessionNodes continue to pass unchanged (non-breaking). The
-      fixture is extended with a helper that calls buildSessionEstablishmentTbs
-      and asserts TBS verification succeeds — this helper is used by the integration
-      tests for AC-005 and AC-015 to avoid duplicating TBS verification logic in
-      test code.
-    test_type: integration
-    component_under_test: e2e-tests
+  # AC-019 moved to CELLO-M7-DAEMON-002 as AC-019.
+  # Rationale: the session-fixture.ts extension (opts.ephemeralSessionNodes,
+  # opts.standingReceiver, TBS verification helper) is owned by DAEMON-002 AC-014,
+  # which already covers fixture changes. Adding it here creates duplicate ownership.
+  # The circular dependency (WIRE-001 blocked_by DAEMON-002, DAEMON-002 blocks WIRE-001)
+  # made it impossible to satisfy this AC within WIRE-001's scope.
 
   - id: AC-020
     given: "All cello-client code changes for this story are implemented and tests
