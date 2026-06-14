@@ -225,10 +225,12 @@ export class CelloRelayNode {
   // per-session mutex: session_id_hex → Promise chain
   readonly #sessionLocks = new Map<string, Promise<void>>();
 
-  // M7-WIRE-001 AC-008 / SI-003: session_id_hex → bound session Peer IDs.
+  // M7-WIRE-001 SI-003: session_id_hex → bound session Peer IDs.
   // Populated by recordAssignment() when initiator_session_peer_id is present.
-  // Used by #processHashSubmit to reject any stream whose authenticated pubkey's
-  // session Peer ID is not in the binding. Private — never exposed via public API.
+  // Enforcement (rejecting streams whose transport Peer ID is not in this binding)
+  // belongs at the session-transport layer (DAEMON-002), not here — the relay only
+  // knows the signing pubkey of each stream, not the transport-layer libp2p Peer ID.
+  // Private — never exposed via public API.
   readonly #sessionPeerIdBindings = new Map<string, { initiator: string; counterparty: string }>();
 
   constructor(opts: RelayNodeOptions) {

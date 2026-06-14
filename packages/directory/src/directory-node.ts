@@ -1453,7 +1453,7 @@ export class CelloDirectoryNode {
           }
           // M7-WIRE-001 AC-002: Reject session_request missing initiator session Peer ID
           const parsedReq = parsed as { connection_id?: string; relay_rtt?: Record<string, number>; initiator_session_peer_id?: string; initiator_session_addrs?: string[]; transport_mode?: "direct" | "relay" };
-          if (!parsedReq.initiator_session_peer_id || !parsedReq.initiator_session_addrs) {
+          if (!parsedReq.initiator_session_peer_id || !parsedReq.initiator_session_addrs || parsedReq.initiator_session_addrs.length === 0) {
             this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "session_request_missing_peer_id" }));
             continue;
           }
@@ -1463,7 +1463,7 @@ export class CelloDirectoryNode {
         } else if (parsed.type === "session_offer_accept") {
           // M7-WIRE-001 AC-003: handle session offer acceptance from target (Bob)
           const acceptFrame = parsed as { session_id?: Uint8Array; counterparty_session_peer_id?: string; counterparty_session_addrs?: string[] };
-          if (acceptFrame.session_id && acceptFrame.counterparty_session_peer_id && acceptFrame.counterparty_session_addrs) {
+          if (acceptFrame.session_id && acceptFrame.counterparty_session_peer_id && acceptFrame.counterparty_session_addrs && acceptFrame.counterparty_session_addrs.length > 0) {
             const acceptSessionIdHex = Buffer.from(acceptFrame.session_id).toString("hex");
             // Validate sender: session must be registered AND sender must be its target
             const expectedTarget = this.#sessionOfferAcceptTargets.get(acceptSessionIdHex);
