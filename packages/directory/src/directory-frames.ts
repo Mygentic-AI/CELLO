@@ -116,7 +116,10 @@ export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Arr
   if (a.counterparty_session_addrs && a.counterparty_session_addrs.length > 0) {
     encodedAssignment["counterparty_session_addrs"] = a.counterparty_session_addrs;
   }
-  if (a.transport_mode) {
+  // Only encode transport_mode when both peer IDs are present (10-field TBS covers it).
+  // When counterparty is absent (5-field TBS), transport_mode is not signed and must
+  // not appear on the wire — otherwise a MITM could modify it without breaking verification.
+  if (a.transport_mode && a.initiator_session_peer_id && a.counterparty_session_peer_id) {
     encodedAssignment["transport_mode"] = a.transport_mode;
   }
   return ENC.encode({ type: frame.type, assignment: encodedAssignment });

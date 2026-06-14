@@ -429,8 +429,8 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     // counterparty fields are undefined when no session_offer_accept received (pre-WIRE-002)
     expect(asgA.counterparty_session_peer_id).toBeUndefined();
     expect(asgA.counterparty_session_addrs).toBeUndefined();
-    // transport_mode is still present (truthy "relay" → encoded on wire)
-    expect(asgA.transport_mode).toBe("relay");
+    // transport_mode not encoded when counterparty absent (not signed in 5-field TBS)
+    expect(asgA.transport_mode).toBeUndefined();
 
     // M7-WIRE-001 AC-005(c): reconstruct 5-field TBS (counterparty absent → legacy path)
     // and verify it matches what was signed. MockThresholdSigner copies tbs[0..31] into

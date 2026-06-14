@@ -1465,10 +1465,10 @@ export class CelloDirectoryNode {
           const acceptFrame = parsed as { session_id?: Uint8Array; counterparty_session_peer_id?: string; counterparty_session_addrs?: string[] };
           if (acceptFrame.session_id && acceptFrame.counterparty_session_peer_id && acceptFrame.counterparty_session_addrs) {
             const acceptSessionIdHex = Buffer.from(acceptFrame.session_id).toString("hex");
-            // Validate sender is the expected target for this session
+            // Validate sender: session must be registered AND sender must be its target
             const expectedTarget = this.#sessionOfferAcceptTargets.get(acceptSessionIdHex);
-            if (expectedTarget && expectedTarget !== authedPubkeyHex) {
-              continue; // silently drop — sender is not the session's target
+            if (!expectedTarget || expectedTarget !== authedPubkeyHex) {
+              continue; // drop — session unknown or sender is not the target
             }
             this.#pendingSessionOfferAccepts.set(acceptSessionIdHex, {
               counterpartySessionPeerId: acceptFrame.counterparty_session_peer_id,
