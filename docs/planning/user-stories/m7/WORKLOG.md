@@ -685,3 +685,19 @@ Key decisions:
 - Pre-existing lint error in cello-client (empty interface SignalingManagerConfig) fixed to type alias.
 
 Remaining: AC-020/AC-021 (npm publish of protocol-types@0.0.5 + client@0.0.33, trustless-cello dependency update).
+
+---
+
+### 2026-06-14 — WIRE-001 merged to main
+
+**Story:** CELLO-M7-WIRE-001
+**Agent/Author:** orchestrator
+
+Merged m7/wire-001 to main in both repos. Worktrees and branches removed.
+
+- cello-client: merged d5a8716 (m7/wire-001 → main); 859 insertions across 14 files; 2 new test files (wire-001-session-manager.test.ts, wire-001-tbs.test.ts)
+- trustless-cello: merged b219af1 + 639dd3f (AC-015/AC-019 YAML move committed post-merge); 1184 insertions across 17 files; new test file m7-wire-001-frames.test.ts
+
+AC-020/AC-021 (npm publish of protocol-types@0.0.5 + client@0.0.33 + connect@0.0.44) deferred to milestone close per cello-publish skill — version bump + tag must be the very last act after all cello-client stories land.
+
+Next: M7-SESSION-001 (unblocked; batch with MANIFEST-002 before pipeline push).

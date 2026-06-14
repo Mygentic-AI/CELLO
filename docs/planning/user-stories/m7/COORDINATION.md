@@ -47,9 +47,9 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-MANIFEST-002 — Client verification + polling | — | **merged to main** | cello-client main (both repos); 835 tests; adversarial review complete |
 | M7-MCP-001 — MCP adapter | — | **merged to main** | cello-client main |
 | M7-SIGNAL-001 — Signaling stream resilience | — | **merged to main** | cello-client main; 835 tests; two code-review rounds; nonce-cleared SI-003 fix |
-| M7-WIRE-001 — SessionAssignment wire format | — | **implemented — sprint review fixes committed** | Cross-repo; worktrees at cello-client-m7-wire-001 + trustless-cello-m7-wire-001; AC-020/AC-021 (npm publish) pending |
-| M7-TRANSPORT-001 — AutoNAT + direct P2P | — | written — not yet started | Blocked on M7-WIRE-001; cross-repo |
-| M7-SESSION-001 — Interrupted session handling | — | written — not yet started | Blocked on M7-DAEMON-002 + M7-WIRE-001; cross-repo; batch with M7-WIRE-001 + M7-MANIFEST-002 |
+| M7-WIRE-001 — SessionAssignment wire format | — | **merged to main** | Both repos merged; AC-020/AC-021 (npm publish) deferred to milestone close |
+| M7-TRANSPORT-001 — AutoNAT + direct P2P | — | written — not yet started | Unblocked (WIRE-001 merged); cross-repo |
+| M7-SESSION-001 — Interrupted session handling | — | written — not yet started | Unblocked (WIRE-001 + DAEMON-002 merged); cross-repo; batch with MANIFEST-002 before pipeline push |
 | M7-DIR-PING-001 — Directory-side ping/pong handler | — | **merged to main** | trustless-cello main; 6 tests (ping/pong, multi-client, burst load, composition root); PingFrame decode + encodePong + handler in dispatch chain |
 | M7-MCP-002 — Agent-aware notifications | — | **merged to main** | cello-client main; NotificationDispatcher with broadcast/single/filtered routing; 175 daemon tests + full suite |
 | M7-CICD-001 — Cross-repo CI/CD | — | **merged to main** | trustless-cello main + cello-client main; GitHubOidcRole, candidates/ lifecycle, pipeline-mappings sourceRepoMappings, buildspec bifurcated, ci.yml e2e gate |
@@ -86,8 +86,8 @@ S4, S6, and S12 all require directory/relay CloudFormation deploys (~25-30 min).
 directory or relay changes, ask: are S4, S6, and S12 all ready to batch?
 
 Current batch status:
-- M7-WIRE-001 ready to batch: **almost — AC-020/AC-021 version publish pending**
-- M7-SESSION-001 ready to batch: **no**
+- M7-WIRE-001 ready to batch: **merged to main**
+- M7-SESSION-001 ready to batch: **no — not yet started**
 - M7-MANIFEST-002 ready to batch: **merged — no longer in batch queue**
 
 ### Blocked / Waiting
@@ -433,3 +433,7 @@ Sprint review (7 blocking findings, all fixed):
 Remaining before merge: AC-020/AC-021 — publish @cello-protocol/protocol-types@0.0.5 + @cello-protocol/client@0.0.33 to npm beta, update trustless-cello package.json references, pnpm install.
 
 Commits: 4 in trustless-cello (36e0074, b62153d, cc1ea23, dae5f3e), 2 in cello-client (6be6da9, 47c51bb).
+
+### 2026-06-14 — WIRE-001 merged to main; worktrees removed
+
+Both repos merged and pushed. Worktrees (`cello-client-m7-wire-001`, `trustless-cello-m7-wire-001`) and branches removed. YAML AC-015/AC-019 move (tombstoned in WIRE-001, added as AC-018/AC-019 in DAEMON-002) committed post-merge (639dd3f). AC-020/AC-021 npm publish deferred to milestone close. SESSION-001 and TRANSPORT-001 now unblocked.
