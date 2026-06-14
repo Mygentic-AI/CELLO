@@ -601,13 +601,13 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     const signature_type = raw["signature_type"];
     if (signature_type !== "frost" && signature_type !== "single") return null;
 
-    // M7-WIRE-001: parse session Peer ID fields from the wire format.
-    const initiator_session_peer_id = typeof raw["initiator_session_peer_id"] === "string" ? raw["initiator_session_peer_id"] : "";
-    const initiator_session_addrs = toStringArray(raw["initiator_session_addrs"]) ?? [];
-    const counterparty_session_peer_id = typeof raw["counterparty_session_peer_id"] === "string" ? raw["counterparty_session_peer_id"] : "";
-    const counterparty_session_addrs = toStringArray(raw["counterparty_session_addrs"]) ?? [];
+    // M7-WIRE-001: parse session Peer ID fields from the wire format (undefined when absent for pre-M7 compat).
+    const initiator_session_peer_id = typeof raw["initiator_session_peer_id"] === "string" && raw["initiator_session_peer_id"] !== "" ? raw["initiator_session_peer_id"] : undefined;
+    const initiator_session_addrs = toStringArray(raw["initiator_session_addrs"]) ?? undefined;
+    const counterparty_session_peer_id = typeof raw["counterparty_session_peer_id"] === "string" && raw["counterparty_session_peer_id"] !== "" ? raw["counterparty_session_peer_id"] : undefined;
+    const counterparty_session_addrs = toStringArray(raw["counterparty_session_addrs"]) ?? undefined;
     const transport_mode_raw = raw["transport_mode"];
-    const transport_mode: "direct" | "relay" = transport_mode_raw === "direct" ? "direct" : "relay";
+    const transport_mode: "direct" | "relay" | undefined = transport_mode_raw === "direct" ? "direct" : transport_mode_raw === "relay" ? "relay" : undefined;
 
     const commonFields = {
       session_id,
@@ -625,13 +625,14 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       transport_mode,
     };
 
+    // Cast needed until @cello-protocol/protocol-types@0.0.5 makes M7 fields optional (AC-020).
     let assignment: SessionAssignment;
     if (signature_type === "frost") {
       const signer_pubkey = toUint8Array(raw["signer_pubkey"]);
       if (!signer_pubkey || signer_pubkey.length !== 32) return null;
-      assignment = { ...commonFields, signature_type: "frost", signer_pubkey };
+      assignment = { ...commonFields, signature_type: "frost", signer_pubkey } as SessionAssignment;
     } else {
-      assignment = { ...commonFields, signature_type: "single" };
+      assignment = { ...commonFields, signature_type: "single" } as SessionAssignment;
     }
 
     return { type: "session_assignment", assignment };

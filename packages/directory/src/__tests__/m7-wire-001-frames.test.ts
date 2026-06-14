@@ -282,10 +282,10 @@ describe("M7-WIRE-001: decodeOutboundSignalingFrame with M7 fields", () => {
     expect(decoded!.type).toBe("session_assignment");
 
     const sa = (decoded as unknown as { type: "session_assignment"; assignment: Record<string, unknown> }).assignment;
-    // When M7 fields are absent from wire, decoder defaults to empty string / "relay"
-    expect(sa["initiator_session_peer_id"]).toBe("");
-    expect(sa["counterparty_session_peer_id"]).toBe("");
-    expect(sa["transport_mode"]).toBe("relay");
+    // When M7 fields are absent from wire, decoder returns undefined (pre-M7 backward compat)
+    expect(sa["initiator_session_peer_id"]).toBeUndefined();
+    expect(sa["counterparty_session_peer_id"]).toBeUndefined();
+    expect(sa["transport_mode"]).toBeUndefined();
   });
 
   it("AC-009: decodes transport_mode 'direct' correctly", () => {
@@ -324,7 +324,7 @@ describe("M7-WIRE-001: decodeOutboundSignalingFrame with M7 fields", () => {
     const decoded = decodeOutboundSignalingFrame(raw);
     expect(decoded).not.toBeNull();
     const sa = (decoded as unknown as { type: "session_assignment"; assignment: Record<string, unknown> }).assignment;
-    expect(sa["transport_mode"]).toBe("relay");
+    expect(sa["transport_mode"]).toBeUndefined();
   });
 });
 
