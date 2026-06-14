@@ -180,8 +180,10 @@ const NONCE_TTL_MS = 30_000;
 
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
-// M7-WIRE-001: Local 10-field TBS builder. Identical to buildSessionEstablishmentTbs in
-// @cello-protocol/protocol-types ≥0.0.5 which is not yet published. Remove after AC-021.
+// M7-WIRE-001: Local TBS builder matching buildSessionEstablishmentTbs in
+// @cello-protocol/protocol-types ≥0.0.5 (not yet published). Remove after AC-021.
+// Uses 10-field path only when ALL M7 fields are non-empty; otherwise falls back to
+// 5-field legacy path so the client-side verifier reconstructs an identical TBS.
 function buildSessionEstablishmentTbsM7(
   sessionId: Uint8Array,
   pubA: Uint8Array,
@@ -195,17 +197,33 @@ function buildSessionEstablishmentTbsM7(
   transportMode: "direct" | "relay",
 ): Uint8Array {
   const tsEncoded = timestamp > 0xffffffff ? BigInt(timestamp) : timestamp;
+
+  if (
+    initiatorSessionPeerId &&
+    counterpartySessionPeerId &&
+    initiatorSessionAddrs.length > 0 &&
+    counterpartySessionAddrs.length > 0
+  ) {
+    return CBOR_ENC.encode([
+      sessionId,
+      pubA,
+      pubB,
+      genesisPrevRoot,
+      tsEncoded,
+      initiatorSessionPeerId,
+      JSON.stringify(initiatorSessionAddrs.slice().sort()),
+      counterpartySessionPeerId,
+      JSON.stringify(counterpartySessionAddrs.slice().sort()),
+      transportMode,
+    ]) as Uint8Array;
+  }
+
   return CBOR_ENC.encode([
     sessionId,
     pubA,
     pubB,
     genesisPrevRoot,
     tsEncoded,
-    initiatorSessionPeerId,
-    JSON.stringify(initiatorSessionAddrs.slice().sort()),
-    counterpartySessionPeerId,
-    JSON.stringify(counterpartySessionAddrs.slice().sort()),
-    transportMode,
   ]) as Uint8Array;
 }
 

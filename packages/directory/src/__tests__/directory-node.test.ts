@@ -426,15 +426,15 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     // M7-WIRE-001 AC-005(c/d): assert all five new fields are present in the assignment
     expect(asgA.initiator_session_peer_id, "initiator_session_peer_id must be present").toBe("12D3KooWInitiatorSession");
     expect(asgA.initiator_session_addrs, "initiator_session_addrs must be present").toEqual(["/ip4/127.0.0.1/tcp/9000"]);
-    // counterparty fields default to empty string / [] when no session_offer_accept received (pre-WIRE-002)
-    expect(typeof asgA.counterparty_session_peer_id).toBe("string");
-    expect(Array.isArray(asgA.counterparty_session_addrs)).toBe(true);
-    expect(asgA.transport_mode, "transport_mode must be 'relay' (TRANSPORT-001 stub)").toBe("relay");
+    // counterparty fields are undefined when no session_offer_accept received (pre-WIRE-002)
+    expect(asgA.counterparty_session_peer_id).toBeUndefined();
+    expect(asgA.counterparty_session_addrs).toBeUndefined();
+    // transport_mode is still present (truthy "relay" → encoded on wire)
+    expect(asgA.transport_mode).toBe("relay");
 
-    // M7-WIRE-001 AC-005(c): reconstruct 10-field TBS and verify it matches what was signed.
-    // MockThresholdSigner copies tbs[0..31] into sig[0..31] with sig[63]=0x42 marker.
-    // We verify structural correctness by confirming our reconstructed TBS CBOR matches
-    // the bytes embedded in the mock signature.
+    // M7-WIRE-001 AC-005(c): reconstruct 5-field TBS (counterparty absent → legacy path)
+    // and verify it matches what was signed. MockThresholdSigner copies tbs[0..31] into
+    // sig[0..31] with sig[63]=0x42 marker.
     const pubA = asgA.participant_a.pubkey;
     const pubB = asgA.participant_b.pubkey;
     const genRoot = computeGenesisPrevRoot(pubA, pubB, asgA.session_id, asgA.session_timestamp);
@@ -442,11 +442,6 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     const tbs = CBOR_ENC.encode([
       asgA.session_id, pubA, pubB, genRoot,
       ts > 0xffffffff ? BigInt(ts) : ts,
-      asgA.initiator_session_peer_id,
-      JSON.stringify((asgA.initiator_session_addrs ?? []).slice().sort()),
-      asgA.counterparty_session_peer_id,
-      JSON.stringify((asgA.counterparty_session_addrs ?? []).slice().sort()),
-      asgA.transport_mode,
     ]) as Uint8Array;
     // MockThresholdSigner embeds tbs[0..31] into sig[0..31], sig[63]=0x42
     const sig = asgA.directory_signature;
