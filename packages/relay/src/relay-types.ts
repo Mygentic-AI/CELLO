@@ -127,6 +127,22 @@ export interface SessionAssignment {
   participant_b: Uint8Array;      // 32-byte K_local pubkey
   session_timestamp: number;      // Unix ms
   directory_signature: Uint8Array; // 64-byte Ed25519 over canonical CBOR of assignment fields
+  /**
+   * M7-WIRE-001 AC-009: Initiator's ephemeral session Peer ID for relay binding.
+   * When present, the relay verifies the connecting peer's libp2p Peer ID matches.
+   */
+  initiator_session_peer_id?: string;
+  /**
+   * M7-WIRE-001 AC-009: Counterparty's ephemeral session Peer ID for relay binding.
+   * When present, the relay verifies the connecting peer's libp2p Peer ID matches.
+   */
+  counterparty_session_peer_id?: string;
+  /**
+   * M7-WIRE-001 AC-009: Transport mode for this session.
+   * 'direct' — clients attempt direct P2P; relay is fallback only.
+   * 'relay' — clients route all traffic through the relay.
+   */
+  transport_mode?: "direct" | "relay";
 }
 
 // ─── Internal relay session state ────────────────────────────────────────────

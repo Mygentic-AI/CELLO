@@ -225,6 +225,14 @@ export class CelloRelayNode {
   // per-session mutex: session_id_hex → Promise chain
   readonly #sessionLocks = new Map<string, Promise<void>>();
 
+  // M7-WIRE-001 SI-003: session_id_hex → bound session Peer IDs.
+  // Populated by recordAssignment() when initiator_session_peer_id is present.
+  // Enforcement (rejecting streams whose transport Peer ID is not in this binding)
+  // belongs at the session-transport layer (DAEMON-002), not here — the relay only
+  // knows the signing pubkey of each stream, not the transport-layer libp2p Peer ID.
+  // Private — never exposed via public API.
+  readonly #sessionPeerIdBindings = new Map<string, { initiator: string; counterparty: string }>();
+
   constructor(opts: RelayNodeOptions) {
     this.#node = opts.node;
     this.#directoryPubkey = opts.directoryPubkey;
@@ -418,8 +426,19 @@ export class CelloRelayNode {
     );
     const recorded = this.#store.recordSession(assignment, genesisRoot);
     if (!recorded) return { ok: false, reason: "session_already_exists" };
+
+    // M7-WIRE-001 AC-008: bind session Peer IDs when provided by directory.
+    // Stored privately — never exposed via public API (SI-003).
+    const sessionKey = Buffer.from(assignment.session_id).toString("hex");
+    if (assignment.initiator_session_peer_id && assignment.counterparty_session_peer_id) {
+      this.#sessionPeerIdBindings.set(sessionKey, {
+        initiator: assignment.initiator_session_peer_id,
+        counterparty: assignment.counterparty_session_peer_id,
+      });
+    }
+
     // OBS-001 AC-010: session assigned
-    const sessionHex = truncHex(Buffer.from(assignment.session_id).toString("hex"));
+    const sessionHex = truncHex(sessionKey);
     protocolLog("RELAY", `Session assigned: ${sessionHex} → slot 1`);
     return { ok: true };
   }
@@ -427,6 +446,7 @@ export class CelloRelayNode {
   discardSession(sessionId: Uint8Array): void {
     const key = Buffer.from(sessionId).toString("hex");
     this.#store.destroySession(key);
+    this.#sessionPeerIdBindings.delete(key);
   }
 
   submitForSeal(sessionId: Uint8Array): { ok: true; data: SealData } | { ok: false; reason: string } {
@@ -462,6 +482,7 @@ export class CelloRelayNode {
     const key = Buffer.from(sessionId).toString("hex");
     this.#store.destroySession(key);
     this.#sessionLocks.delete(key);
+    this.#sessionPeerIdBindings.delete(key);
     // OBS-001 AC-010: seal confirmed
     protocolLog("RELAY", `Seal confirmed: ${truncHex(key)}`);
   }
@@ -472,6 +493,7 @@ export class CelloRelayNode {
     if (state) {
       this.#store.setSession(key, { ...state, status: "seal_rejected" });
     }
+    this.#sessionPeerIdBindings.delete(key);
     protocolLog("RELAY", `Seal rejected: ${truncHex(key)}, reason: ${_reason}`);
   }
 
@@ -973,7 +995,8 @@ export class CelloRelayNode {
    */
   startIdleSweep(intervalMs: number, maxIdleMs: number): void {
     const sweep = () => {
-      this.#store.sweepIdleSessions(maxIdleMs, this.#logger);
+      const swept = this.#store.sweepIdleSessions(maxIdleMs, this.#logger);
+      for (const key of swept) this.#sessionPeerIdBindings.delete(key);
     };
 
     // Run first sweep immediately to catch sessions that were idle before the relay process started.

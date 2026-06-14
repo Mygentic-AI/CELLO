@@ -26,6 +26,7 @@ import type {
   SessionFrostSealed,
   PeerInfoAnnounce,
   ManifestPollResponse,
+  SessionOfferAccept,
 } from "./directory-types.js";
 
 const ENC = new Encoder({ tagUint8Array: false });
@@ -101,6 +102,25 @@ export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Arr
   };
   if (a.signature_type === "frost") {
     encodedAssignment["signer_pubkey"] = a.signer_pubkey;
+  }
+  // M7-WIRE-001: encode session Peer ID fields — now typed on SessionAssignmentCommon
+  if (a.initiator_session_peer_id) {
+    encodedAssignment["initiator_session_peer_id"] = a.initiator_session_peer_id;
+  }
+  if (a.initiator_session_addrs && a.initiator_session_addrs.length > 0) {
+    encodedAssignment["initiator_session_addrs"] = a.initiator_session_addrs;
+  }
+  if (a.counterparty_session_peer_id) {
+    encodedAssignment["counterparty_session_peer_id"] = a.counterparty_session_peer_id;
+  }
+  if (a.counterparty_session_addrs && a.counterparty_session_addrs.length > 0) {
+    encodedAssignment["counterparty_session_addrs"] = a.counterparty_session_addrs;
+  }
+  // Only encode transport_mode when both peer IDs are present (10-field TBS covers it).
+  // When counterparty is absent (5-field TBS), transport_mode is not signed and must
+  // not appear on the wire — otherwise a MITM could modify it without breaking verification.
+  if (a.transport_mode && a.initiator_session_peer_id && a.counterparty_session_peer_id) {
+    encodedAssignment["transport_mode"] = a.transport_mode;
   }
   return ENC.encode({ type: frame.type, assignment: encodedAssignment });
 }
@@ -264,7 +284,7 @@ import type { SealAttempt, SealRejectedTreeMismatch, SealAttemptAck, SealUnilate
 export type PingFrame = { type: "ping"; ts: number };
 export type PongFrame = { type: "pong"; ts: number };
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | ManifestPollRequest | PingFrame;
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | ManifestPollRequest | PingFrame | SessionOfferAccept;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -302,7 +322,18 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     if (!target_pubkey || target_pubkey.length !== 32) return null;
     // CONNREQ-002/SESSION-006: optional connection_id field (M3 adds it; M2 omits it)
     const connection_id = typeof o["connection_id"] === "string" ? o["connection_id"] : undefined;
-    return { type: "session_request", target_pubkey, ...(connection_id !== undefined ? { connection_id } : {}) };
+    // M7-WIRE-001 AC-001/AC-002: initiator session Peer ID and addrs (optional at parse level; handler validates)
+    const initiator_session_peer_id = typeof o["initiator_session_peer_id"] === "string" ? o["initiator_session_peer_id"] : undefined;
+    const initiator_session_addrs = toStringArray(o["initiator_session_addrs"]) ?? undefined;
+    const transport_mode_raw = o["transport_mode"];
+    const transport_mode: "direct" | "relay" | undefined =
+      transport_mode_raw === "direct" ? "direct" : transport_mode_raw === "relay" ? "relay" : undefined;
+    const result: SessionRequest = { type: "session_request", target_pubkey };
+    if (connection_id !== undefined) result.connection_id = connection_id;
+    if (initiator_session_peer_id !== undefined) result.initiator_session_peer_id = initiator_session_peer_id;
+    if (initiator_session_addrs !== undefined) result.initiator_session_addrs = initiator_session_addrs;
+    if (transport_mode !== undefined) result.transport_mode = transport_mode;
+    return result;
   }
 
   if (o["type"] === "connection_request") {
@@ -399,6 +430,16 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
   // M7-MANIFEST-002: manifest poll request from client → directory
   if (o["type"] === "manifest_poll_request") {
     return { type: "manifest_poll_request" };
+  }
+
+  // M7-WIRE-001 AC-003: session_offer_accept (target → directory)
+  if (o["type"] === "session_offer_accept") {
+    const session_id = toUint8Array(o["session_id"]);
+    if (!session_id || session_id.length !== 16) return null;
+    const counterparty_session_peer_id = typeof o["counterparty_session_peer_id"] === "string" ? o["counterparty_session_peer_id"] : null;
+    const counterparty_session_addrs = toStringArray(o["counterparty_session_addrs"]);
+    if (!counterparty_session_peer_id || !counterparty_session_addrs) return null;
+    return { type: "session_offer_accept", session_id, counterparty_session_peer_id, counterparty_session_addrs };
   }
 
   return null;
@@ -563,6 +604,14 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     const signature_type = raw["signature_type"];
     if (signature_type !== "frost" && signature_type !== "single") return null;
 
+    // M7-WIRE-001: parse session Peer ID fields from the wire format (undefined when absent for pre-M7 compat).
+    const initiator_session_peer_id = typeof raw["initiator_session_peer_id"] === "string" && raw["initiator_session_peer_id"] !== "" ? raw["initiator_session_peer_id"] : undefined;
+    const initiator_session_addrs = toStringArray(raw["initiator_session_addrs"]) ?? undefined;
+    const counterparty_session_peer_id = typeof raw["counterparty_session_peer_id"] === "string" && raw["counterparty_session_peer_id"] !== "" ? raw["counterparty_session_peer_id"] : undefined;
+    const counterparty_session_addrs = toStringArray(raw["counterparty_session_addrs"]) ?? undefined;
+    const transport_mode_raw = raw["transport_mode"];
+    const transport_mode: "direct" | "relay" | undefined = transport_mode_raw === "direct" ? "direct" : transport_mode_raw === "relay" ? "relay" : undefined;
+
     const commonFields = {
       session_id,
       participant_a: pa,
@@ -572,15 +621,21 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       session_timestamp,
       directory_pubkey,
       directory_signature,
+      initiator_session_peer_id,
+      initiator_session_addrs,
+      counterparty_session_peer_id,
+      counterparty_session_addrs,
+      transport_mode,
     };
 
+    // Cast needed until @cello-protocol/protocol-types@0.0.5 makes M7 fields optional (AC-020).
     let assignment: SessionAssignment;
     if (signature_type === "frost") {
       const signer_pubkey = toUint8Array(raw["signer_pubkey"]);
       if (!signer_pubkey || signer_pubkey.length !== 32) return null;
-      assignment = { ...commonFields, signature_type: "frost", signer_pubkey };
+      assignment = { ...commonFields, signature_type: "frost", signer_pubkey } as SessionAssignment;
     } else {
-      assignment = { ...commonFields, signature_type: "single" };
+      assignment = { ...commonFields, signature_type: "single" } as SessionAssignment;
     }
 
     return { type: "session_assignment", assignment };
@@ -680,7 +735,10 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       reason !== "peer_not_registered" &&
       reason !== "not_registered" &&
       reason !== "connection_id_required" &&
-      reason !== "no_connection"
+      reason !== "no_connection" &&
+      reason !== "session_request_missing_peer_id" &&
+      reason !== "ceremony_timeout" &&
+      reason !== "ceremony_exhausted"
     ) return null;
     return { type: "session_request_error", reason };
   }

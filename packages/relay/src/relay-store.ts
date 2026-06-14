@@ -33,9 +33,9 @@ export interface RelayStore {
   /**
    * CELLO-M6B-009 AC-006/AC-007: Sweep idle sessions.
    * Destroys sessions with lastActivityAt older than (Date.now() - maxIdleMs) and status 'active'.
-   * Returns the count of destroyed sessions.
+   * Returns the hex session IDs of destroyed sessions.
    */
-  sweepIdleSessions(maxIdleMs: number, logger: Logger): number;
+  sweepIdleSessions(maxIdleMs: number, logger: Logger): string[];
 
   /**
    * Test-only: back-date a session's lastActivityAt without going through setSession().
@@ -139,7 +139,7 @@ export class InMemoryRelayStore implements RelayStore {
    *
    * SI-001: Mutex-holding sessions have recent lastActivityAt (setSession refreshes it) — cannot be swept mid-write.
    */
-  sweepIdleSessions(maxIdleMs: number, logger: Logger): number {
+  sweepIdleSessions(maxIdleMs: number, logger: Logger): string[] {
     const now = Date.now();
     const cutoff = now - maxIdleMs;
 
@@ -168,6 +168,6 @@ export class InMemoryRelayStore implements RelayStore {
     const remainingCount = this.#sessions.size;
     logger.info("relay.session.sweep.complete", { sweptCount, remainingCount });
 
-    return sweptCount;
+    return toSweep.map((s) => s.sessionIdHex);
   }
 }
