@@ -480,6 +480,7 @@ export class CelloRelayNode {
     const key = Buffer.from(sessionId).toString("hex");
     this.#store.destroySession(key);
     this.#sessionLocks.delete(key);
+    this.#sessionPeerIdBindings.delete(key);
     // OBS-001 AC-010: seal confirmed
     protocolLog("RELAY", `Seal confirmed: ${truncHex(key)}`);
   }
