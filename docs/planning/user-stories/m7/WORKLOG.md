@@ -669,3 +669,19 @@ GitHubOidcRole (OIDC trust for Mygentic-AI/cello-client main), candidates/ lifec
 on ArtifactsBucket (7-day TTL), sourceRepoMappings in pipeline-mappings.json, pipeline-filter
 Lambda updated and redeployed, test_filter_handler.py cleaned to 5 pipelines, buildspec.yml
 bifurcated on CELLO_CANDIDATE_SHA, ci.yml pre-publish e2e gate added (pack → S3 → start pipeline → poll → publish).
+
+### 2026-06-14 05:00 — WIRE-001 sprint review fixes committed
+
+**Story:** CELLO-M7-WIRE-001
+**Agent/Author:** orchestrator
+
+All 7 blocking sprint-review findings fixed and committed in both worktrees.
+
+Key decisions:
+- MockThresholdSigner produces fake signatures (tbs[0..31] + 0x42 marker), not real Ed25519. AC-005 TBS verification adapted to check structural correctness via mock signature prefix match, not edVerify.
+- transport_mode plumbed from session_request wire frame through decoder → dispatch loop → #processSessionRequest parameter. Previously hardcoded to 'relay' (TRANSPORT-001 stub). Now: client-requested value honoured directly; defaults to 'relay' when absent. TRANSPORT-001 will override with AutoNAT probe when wired.
+- relay #sessionPeerIdBindings is a private Map (not exposed via public API — SI-003). Populated in recordAssignment when M7 fields present; cleaned in discardSession.
+- CloudWatch metric filters for client-side telemetry events (assignment_tbs_verification_failed, assignment_peer_id_mismatch) must filter on event name + context.reason because the canonical event name is session.assignment.verification.failed for both, distinguished only by reason field.
+- Pre-existing lint error in cello-client (empty interface SignalingManagerConfig) fixed to type alias.
+
+Remaining: AC-020/AC-021 (npm publish of protocol-types@0.0.5 + client@0.0.33, trustless-cello dependency update).

@@ -47,7 +47,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-MANIFEST-002 — Client verification + polling | — | **merged to main** | cello-client main (both repos); 835 tests; adversarial review complete |
 | M7-MCP-001 — MCP adapter | — | **merged to main** | cello-client main |
 | M7-SIGNAL-001 — Signaling stream resilience | — | **merged to main** | cello-client main; 835 tests; two code-review rounds; nonce-cleared SI-003 fix |
-| M7-WIRE-001 — SessionAssignment wire format | — | written — not yet started | Blocked on M7-DAEMON-002; cross-repo; batch with M7-SESSION-001 + M7-MANIFEST-002 |
+| M7-WIRE-001 — SessionAssignment wire format | — | **implemented — sprint review fixes committed** | Cross-repo; worktrees at cello-client-m7-wire-001 + trustless-cello-m7-wire-001; AC-020/AC-021 (npm publish) pending |
 | M7-TRANSPORT-001 — AutoNAT + direct P2P | — | written — not yet started | Blocked on M7-WIRE-001; cross-repo |
 | M7-SESSION-001 — Interrupted session handling | — | written — not yet started | Blocked on M7-DAEMON-002 + M7-WIRE-001; cross-repo; batch with M7-WIRE-001 + M7-MANIFEST-002 |
 | M7-DIR-PING-001 — Directory-side ping/pong handler | — | **merged to main** | trustless-cello main; 6 tests (ping/pong, multi-client, burst load, composition root); PingFrame decode + encodePong + handler in dispatch chain |
@@ -86,7 +86,7 @@ S4, S6, and S12 all require directory/relay CloudFormation deploys (~25-30 min).
 directory or relay changes, ask: are S4, S6, and S12 all ready to batch?
 
 Current batch status:
-- M7-WIRE-001 ready to batch: **no**
+- M7-WIRE-001 ready to batch: **almost — AC-020/AC-021 version publish pending**
 - M7-SESSION-001 ready to batch: **no**
 - M7-MANIFEST-002 ready to batch: **merged — no longer in batch queue**
 
@@ -413,3 +413,23 @@ catch audit (AC-007), CI/CD pipeline push (AC-008). 1 SI: no blocking in handler
 (burst load test with 100 pings). trustless-cello only — touches packages/directory;
 no cello-client package changes. Completes the end-to-end heartbeat path started by
 SIGNAL-001. Story marked written — review pending.
+
+### 2026-06-14 — M7-WIRE-001 implemented (sprint review fixes committed)
+
+Branches `m7/wire-001` in both repos. Worktrees: `/Users/andrep/Documents/code/cello-client-m7-wire-001` and `/Users/andrep/Documents/code/trustless-cello-m7-wire-001`.
+
+Implementation (feat commit): extended SessionAssignment with 5 M7 fields, extended FROST TBS from 5 to 10 positional CBOR fields, added M7 validation gate (session_request_missing_peer_id), 100ms opportunistic offer-accept wait (full handshake deferred to WIRE-002), backward-compat frame tests.
+
+Code review (4 findings, all fixed): type safety casts, TBS 5→10 field mismatch, import cleanup, test fixture M7 field coverage.
+
+Sprint review (7 blocking findings, all fixed):
+- B1: session.assignment.verification.failed event at ERROR (was wrong name at WARN)
+- B2: CloudWatch filter patterns use canonical event + reason field filter
+- B3: relay #sessionPeerIdBindings map for AC-008/SI-003
+- B4: 3 relay-node.test.ts tests (Peer ID binding, backward compat, SI-003 encapsulation)
+- B5: AC-005 TBS verification adapted for MockThresholdSigner (embeds tbs[0..31])
+- AC-009: transport_mode plumbed from wire frame → decoder → #processSessionRequest; two tests (relay spy: exactly 1 call for 'relay', 0 for 'direct')
+
+Remaining before merge: AC-020/AC-021 — publish @cello-protocol/protocol-types@0.0.5 + @cello-protocol/client@0.0.33 to npm beta, update trustless-cello package.json references, pnpm install.
+
+Commits: 4 in trustless-cello (36e0074, b62153d, cc1ea23, dae5f3e), 2 in cello-client (6be6da9, 47c51bb).
