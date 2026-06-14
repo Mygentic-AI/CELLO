@@ -474,6 +474,8 @@ export class CelloDirectoryNode {
   readonly #pendingSessionOfferAccepts = new Map<string, { counterpartySessionPeerId: string; counterpartySessionAddrs: string[] }>();
   // M7-WIRE-001: session_id_hex → resolve function for waiting on Bob's SessionOfferAccept
   readonly #sessionOfferAcceptWaiters = new Map<string, () => void>();
+  // M7-WIRE-001: session_id_hex → target pubkey hex (validates session_offer_accept sender)
+  readonly #sessionOfferAcceptTargets = new Map<string, string>();
 
   // session_id_hex → provisional session (relay registered, frames may not yet be delivered)
   // Entry remains until the stream's finally block processes it.
@@ -1463,6 +1465,11 @@ export class CelloDirectoryNode {
           const acceptFrame = parsed as { session_id?: Uint8Array; counterparty_session_peer_id?: string; counterparty_session_addrs?: string[] };
           if (acceptFrame.session_id && acceptFrame.counterparty_session_peer_id && acceptFrame.counterparty_session_addrs) {
             const acceptSessionIdHex = Buffer.from(acceptFrame.session_id).toString("hex");
+            // Validate sender is the expected target for this session
+            const expectedTarget = this.#sessionOfferAcceptTargets.get(acceptSessionIdHex);
+            if (expectedTarget && expectedTarget !== authedPubkeyHex) {
+              continue; // silently drop — sender is not the session's target
+            }
             this.#pendingSessionOfferAccepts.set(acceptSessionIdHex, {
               counterpartySessionPeerId: acceptFrame.counterparty_session_peer_id,
               counterpartySessionAddrs: acceptFrame.counterparty_session_addrs,
@@ -2229,6 +2236,8 @@ export class CelloDirectoryNode {
     // notification hasn't triggered yet. Full offer-accept handshake requires a
     // session_offer frame to be sent to the target first (wired in WIRE-002).
     const sessionIdHexForWait = Buffer.from(session_id).toString("hex");
+    // Register expected target so the dispatch loop can validate session_offer_accept sender
+    this.#sessionOfferAcceptTargets.set(sessionIdHexForWait, targetHex);
     let counterpartySessionPeerId = "";
     let counterpartySessionAddrs: string[] = [];
     const existingAccept = this.#pendingSessionOfferAccepts.get(sessionIdHexForWait);
@@ -2249,11 +2258,13 @@ export class CelloDirectoryNode {
         const acceptData = this.#pendingSessionOfferAccepts.get(sessionIdHexForWait)!;
         counterpartySessionPeerId = acceptData.counterpartySessionPeerId;
         counterpartySessionAddrs = acceptData.counterpartySessionAddrs;
-        this.#pendingSessionOfferAccepts.delete(sessionIdHexForWait);
       }
+      // Clean up regardless — prevents memory leak from late-arriving accepts
+      this.#pendingSessionOfferAccepts.delete(sessionIdHexForWait);
       // If not accepted, proceed with empty defaults — counterparty is pre-M7 or
       // the full offer→accept round-trip will be added in WIRE-002.
     }
+    this.#sessionOfferAcceptTargets.delete(sessionIdHexForWait);
 
     // TRANSPORT-001 stub: real AutoNAT probe not yet wired.
     // Honour client-requested transport_mode for testability; TRANSPORT-001 will
