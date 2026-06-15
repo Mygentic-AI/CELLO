@@ -136,8 +136,8 @@ behavior:
       counterpartyPubkey, messageCount (number of leaves in the Merkle tree at
       interruption), and interruptedAt (ISO timestamp). The operator sees this
       before any other operations. The daemon does NOT auto-seal or auto-discard —
-      it waits for explicit operator action via cello_close_session (MCP tool, in scope for this story).
-      A CLI 'cello seal <session-id>' command is aspirational and out of scope for SESSION-001.
+      it waits for explicit operator action via cello_close_session or
+      'cello seal <session-id>'.
 
   - trigger: "When the daemon stops gracefully (SIGTERM or cello logout) with active sessions"
     action: >
@@ -149,7 +149,8 @@ behavior:
       these fields, no schema change is needed — SESSION-001 verifies the data is
       present and surfaces it.
 
-  - trigger: "When the operator initiates seal on an interrupted session via cello_close_session"
+  - trigger: "When the operator initiates seal on an interrupted session via
+      cello_close_session or 'cello seal <session-id>'"
     action: >
       The daemon begins the seal-interrupted bilateral flow. It sends a
       SEAL-INTERRUPTED control frame to the counterparty's agent (via the directory
@@ -402,18 +403,12 @@ acceptance_criteria:
       SEAL-INTERRUPTED leaf) at the same seal verification step — no directory-side
       changes are needed.
 
-      Leaf count precision — two distinct fields that share a similar name:
-      (1) The SEAL-INTERRUPTED control leaf's own `leafCount` field records the
-      number of MESSAGE leaves at the moment of interruption (BEFORE the
-      SEAL-INTERRUPTED leaf is appended). This is the historical count preserved
-      in the leaf for audit purposes.
-      (2) The FROST TBS `leaf_count` field = leafCountAtInterruption + 1 (message
-      leaves + 1 SEAL-INTERRUPTED control leaf). This is computed AFTER appending
-      the SEAL-INTERRUPTED leaf and must match the `merkleRootAtInterruption`.
-      Both sides must agree on the exact same FROST TBS leaf_count and
-      merkleRootAtInterruption before proceeding to the FROST ceremony.
-      Do not pass the control leaf's `leafCount` directly into the FROST TBS —
-      the TBS value is always leafCount + 1.
+      Leaf count precision: the FROST TBS 'leaf_count' field equals
+      leafCountAtInterruption + 1 (message leaves + 1 SEAL-INTERRUPTED control leaf).
+      merkleRootAtInterruption is the root of the same tree (includes the
+      SEAL-INTERRUPTED leaf). Both values are computed after appending the
+      SEAL-INTERRUPTED leaf. Both sides must agree on the exact same leafCount
+      and merkleRoot before proceeding to the FROST ceremony.
 
   - id: AC-009
     given: "A directory node with authenticated signaling streams for agent A and agent B"
@@ -544,11 +539,10 @@ acceptance_criteria:
       The response includes both a machine-readable 'reason' field and a
       'guidance' field. The guidance field is a plain-English instruction for
       the LLM that names the specific next action to take. Verified for each
-      of the five failure paths: session_already_sealed, seal_interrupted_in_progress,
+      of the four error codes: session_already_sealed, seal_interrupted_in_progress,
       seal_interrupted_counterparty_unavailable,
-      seal_interrupted_rejected_by_counterparty, and signaling_reconnecting
-      (the DB-001 degraded-behavior path). A response with reason alone
-      and no guidance field does not satisfy this AC for any of the five paths.
+      seal_interrupted_rejected_by_counterparty. A response with reason alone
+      and no guidance field does not satisfy this AC.
     test_type: unit
     component_under_test: daemon
 
@@ -778,7 +772,7 @@ implementation_notes:
     session_interrupted frame type: add to packages/relay/src/ as a new control
     frame type alongside the existing seal-related frames. Wire the emit into the
     relay's participant disconnect handler. The frame schema:
-    { type: 'session_interrupted', sessionId: string (hex), reason: 'peer_disconnected' | 'timeout' }
+    { type: 'session_interrupted', sessionId: string, reason: 'peer_disconnected' | 'timeout' }
     No signature, no Merkle root — this is a relay notification, not a
     cryptographic commitment.
   - >
