@@ -723,3 +723,90 @@ Key decisions made during implementation:
 6. **Story YAML was incorrectly patched**: After first sprint review (story mode), 4 spec-gap findings were incorrectly applied to the story YAML. Reverted immediately after user flagged it. Story YAML is unchanged from original.
 
 Tests: 192 daemon (15 test files), 134 relay (12 test files). New test file: `core/daemon/src/__tests__/session-001.test.ts` (13 tests covering AC-004 through AC-016, SI-001, SI-002, DB-001, schema migration).
+
+---
+
+### 2026-06-15 — SESSION-001 + WIRE-001 cross-cutting crypto-protocol audit + fix pass
+
+**Story:** CELLO-M7-SESSION-001 (also touches WIRE-001 session-transport surface)
+**Agent/Author:** orchestrator (audit + reconciliation + M-4 review inline; fixes via subagent coders, verified by subagent reviewers)
+
+A senior cryptographic-protocol audit of the whole M7 session-transport layer —
+directory, relay, both client paths, and the daemon held in view simultaneously,
+judged against the sovereign-node invariants in CLAUDE.md rather than story ACs.
+Diagnostic discipline enforced (producer→consumer chains, hypotheses marked as
+hypotheses, "could not verify from code alone" called out). Two independent audits
+were run; this entry records the reconciliation and the fixes. **All findings fixed
+on branch `m7/session-001` in both worktrees; nothing merged.**
+
+**Reconciliation — the one finding I initially got wrong.** My first cross-cutting
+pass rated the relay `session_interrupted` frame attack as LOW ("the relay can
+already drop the stream, so the frame grants no new power"). The second audit
+flagged it HIGH (H-3), and the second audit was right. The frame path is a
+privilege escalation over stream-drop on two counts: (1) it skipped the
+`status='active'` guard the stream-close path has, so a late or forged frame could
+revert a *sealed* session back to interrupted; and (2) the daemon trusted
+`frame.session_id` from the frame body instead of the sessionId bound to the
+stream it arrived on — enabling cross-session targeting. Both are real. Fix: the
+daemon now marks the STREAM-BOUND sessionId and the SQLite UPDATE is guarded
+`AND status='active'`. Lesson recorded so it is not re-litigated: "the component
+can already do X via path A" does not mean path B granting X is harmless — if path
+B skips a guard A has, or trusts attacker-controlled selectors A doesn't, it is a
+new capability.
+
+**Orchestration model that worked.** Parallelism axis = the two repos (separate
+worktrees → zero file collision). Within cello-client the daemon findings were too
+coupled to parallelize, so one serial coder handled them. Coders fix → read-only
+reviewers verify. Subagents were used specifically to preserve the orchestrator's
+main-session context (this was an explicit constraint: no compaction, no new
+session).
+
+**M-4 reviewed inline (the background reviewer died).** The
+`feature-dev:code-reviewer` dispatched for M-4 ran ~20 min / 82 tool calls then hit
+a terminal socket error mid-investigation (it was still verifying `rejectSeal`) and
+returned no verdict. Rather than re-spawn a 20-min subagent, M-4 was reviewed inline
+— the change is small and local. Verified by producer/consumer trace:
+- Producer (`directory-node.ts` ~2463) and consumer (`relay-node.ts`
+  `recordAssignment`) build byte-identical relay TBS: same field order, same
+  presence gate (`both session Peer IDs truthy → append the two, else 4-field`).
+- The gate that populates `#sessionPeerIdBindings` is byte-identical to the TBS
+  gate, so the relay **never binds a Peer ID it did not authenticate** (bound ⊆
+  signed). This closes the residual "lone unsigned Peer ID bound" concern — it
+  cannot occur.
+- The directory ships the same Peer-ID values it signed (assignment object fields
+  = the TBS-push locals).
+- One-present-one-absent edge falls to 4-field on both sides and binds nothing —
+  safe. Non-blocking cosmetics noted: the `!` non-null assertion is TS-only; the
+  assignment sets both Peer-ID fields unconditionally even on the 4-field path
+  (shipped-but-ignored, never bound).
+- Empirical proof of cross-package CBOR byte-identity: `relay-node.test.ts` +
+  `m7-session-001.test.ts` = **42 tests green** (single worker, foreground), incl.
+  the four M-4 cases (6-field verifies+binds, altered Peer ID rejected, unsigned
+  Peer ID smuggled onto a 4-field sig rejected, legacy 4-field fallback verifies).
+**M-4 verdict: APPROVED.**
+
+**Deferred (documented in code, NOT faked):**
+- **Full FROST threshold seal for the seal-interrupted flow (H-1 deferral).** The
+  daemon writes `seal_interrupted_pending` and persists both signed leaves + the
+  agreed root + nonce, but the threshold seal over `merkleRootAtInterruption` is
+  not built — the daemon has no SealManager seam and no session Merkle tree. The
+  true root agreement happens at the FROST seal step against the directory-held
+  tree. Own future piece of work.
+- **Relay Peer-ID binding *enforcement*.** M-4 made the binding *authenticated*;
+  actually gating connections on it (rejecting a wrong-peer connection) is net-new
+  behavior, not a fix. Andre's call.
+
+**Commits — cello-client (branch m7/session-001):** `3092da2` (M-3, H-3, M-1, L-2,
+H-1 responder + persistence + non-terminal status, H-2 test), `fc7a082` (C-1 +
+H-1 empty-catch narrowed). **trustless-cello (branch m7/session-001):** `9026ddf`
+(L-1), `088f696` (M-2), `981e9cf` (H-2 drift-guard), `b4a8e85` (M-4), `e832a69`
+(rejectSeal teardown-parity test).
+
+**Durable handoff doc:** `trustless-cello/SESSION-001-FIX-HANDOFF.md` (created this
+session; delete after merge). Holds the full findings table, both worktree paths,
+all commit hashes, and the open-items list.
+
+**Still open before SESSION-001 closes:** AC-017/AC-018 (version bump + publish +
+trustless-cello dep update — protocol-types changed via M-3, so this is now
+required), the H-1 FROST seal, M-4 binding enforcement, and the completion gate +
+live multi-process smoke.

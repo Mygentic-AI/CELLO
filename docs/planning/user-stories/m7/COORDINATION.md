@@ -49,7 +49,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-SIGNAL-001 — Signaling stream resilience | — | **merged to main** | cello-client main; 835 tests; two code-review rounds; nonce-cleared SI-003 fix |
 | M7-WIRE-001 — SessionAssignment wire format | — | **merged to main** | Both repos merged; AC-020/AC-021 (npm publish) deferred to milestone close |
 | M7-TRANSPORT-001 — AutoNAT + direct P2P | — | written — not yet started | Unblocked (WIRE-001 merged); cross-repo |
-| M7-SESSION-001 — Interrupted session handling | — | **implemented — PR ready** | Worktrees: `cello-client-m7-session-001` (branch `m7/session-001`), `trustless-cello-m7-session-001` (branch `m7/session-001`); 192 daemon tests + 134 relay tests; AC-017/AC-018 (npm publish) deferred to milestone close |
+| M7-SESSION-001 — Interrupted session handling | — | **implemented + audit-fixed — PR ready** | Worktrees: `cello-client-m7-session-001` (branch `m7/session-001`), `trustless-cello-m7-session-001` (branch `m7/session-001`); 192 daemon tests + 134 relay tests. Cross-cutting crypto-protocol audit (2026-06-15) found 9 issues (H-1/H-2/H-3, M-1..M-4, L-1/L-2) + reviewer C-1 + a rejectSeal test gap — **all fixed and reviewed**. Still open: AC-017/AC-018 (npm publish + dep update), full FROST threshold seal for seal-interrupted (H-1 deferral), relay Peer-ID binding *enforcement* (M-4 made it authenticated-but-unused), completion gate + live smoke |
 | M7-DIR-PING-001 — Directory-side ping/pong handler | — | **merged to main** | trustless-cello main; 6 tests (ping/pong, multi-client, burst load, composition root); PingFrame decode + encodePong + handler in dispatch chain |
 | M7-MCP-002 — Agent-aware notifications | — | **merged to main** | cello-client main; NotificationDispatcher with broadcast/single/filtered routing; 175 daemon tests + full suite |
 | M7-CICD-001 — Cross-repo CI/CD | — | **merged to main** | trustless-cello main + cello-client main; GitHubOidcRole, candidates/ lifecycle, pipeline-mappings sourceRepoMappings, buildspec bifurcated, ci.yml e2e gate |
@@ -87,7 +87,7 @@ directory or relay changes, ask: are S4, S6, and S12 all ready to batch?
 
 Current batch status:
 - M7-WIRE-001 ready to batch: **merged to main**
-- M7-SESSION-001 ready to batch: **yes — implemented, PR ready (branch m7/session-001 in both repos)**
+- M7-SESSION-001 ready to batch: **yes — implemented + audit-fixed, PR ready (branch m7/session-001 in both repos); see 2026-06-15 audit log entry**
 - M7-MANIFEST-002 ready to batch: **merged — no longer in batch queue**
 
 ### Blocked / Waiting
@@ -457,3 +457,53 @@ AC-017/AC-018 (npm publish + trustless-cello dependency update) deferred to mile
 ### 2026-06-14 — WIRE-001 merged to main; worktrees removed
 
 Both repos merged and pushed. Worktrees (`cello-client-m7-wire-001`, `trustless-cello-m7-wire-001`) and branches removed. YAML AC-015/AC-019 move (tombstoned in WIRE-001, added as AC-018/AC-019 in DAEMON-002) committed post-merge (639dd3f). AC-020/AC-021 npm publish deferred to milestone close. SESSION-001 and TRANSPORT-001 now unblocked.
+
+### 2026-06-15 — SESSION-001 + WIRE-001 cross-cutting crypto-protocol audit + fixes
+
+A senior-auditor pass held directory + relay + both clients + daemon in view at
+once and judged the M7 session-transport layer against the sovereign-node
+invariants (CLAUDE.md), not just story ACs. Two independent audits were run and
+reconciled. **All findings fixed on branch `m7/session-001` in both worktrees,
+each verified by review. Nothing merged.** Detail (producer/consumer chains, test
+counts) is in WORKLOG.md under the same date; this entry is the structural record.
+
+Findings + disposition (all FIXED unless noted):
+- **H-1** False-`sealed` landmine — daemon now writes non-terminal
+  `seal_interrupted_pending` (never `sealed`) on bare leaf verify; real responder
+  handler built + registered; both signed leaves + agreed root + nonce persisted;
+  nonce verified (L-2). **DEFERRED (documented, not faked):** the full FROST
+  threshold seal — daemon has no SealManager seam / no session Merkle tree. Its
+  own future story.
+- **H-2** No real-crypto cross-boundary TBS test — added (client side real-FROST;
+  directory side byte-equality drift-guard, since published protocol-types@0.0.4
+  exports only the 5-field helper).
+- **H-3** SECURITY (the important catch): relay-frame interrupt path. The frame
+  path was a privilege escalation over stream-drop — it skipped the status guard
+  and trusted `frame.session_id` over the stream binding (cross-session targeting
+  + sealed-state regression). FIXED: mark the STREAM-BOUND sessionId; UPDATE
+  guarded `AND status='active'`. In the first cross-cutting pass this was
+  under-rated as "LOW / no new power" — that was WRONG; recorded so we don't
+  re-litigate.
+- **M-1** Live client blind to interruption — `cello_status` now includes
+  `interrupted_sessions` (pull) + `session_state_changed` push.
+- **M-2** Relay teardown leak — `#cleanupSessionTracking` is the single authority
+  (idle sweep calls it per key; peer-disconnect path unchanged so reconnect works).
+- **M-3** protocol-types `SealInterruptedAck`/`Rejection` now carry `initiatorPubkey`.
+- **M-4** Relay bound session Peer IDs its verified signature didn't cover —
+  directory + relay TBS extended to 6 fields when both Peer IDs present, byte-
+  identical, with 4-field fallback. **Review: APPROVED (inline 2026-06-15).**
+  NOT done: actually ENFORCING the binding (gating connections) = separate feature.
+- **L-1** snake_case `session_id` on relay wire documented as intentional.
+- **L-2** real nonce check in the responder.
+- **C-1** (reviewer-found) the H-1 Merkle-root cross-check was illusory (responder
+  echoed initiator's root); removed, language corrected; the meaningful leafCount
+  check kept.
+- rejectSeal teardown-parity test gap closed.
+
+Commits — cello-client: `3092da2`, `fc7a082`. trustless-cello: `9026ddf` (L-1),
+`088f696` (M-2), `981e9cf` (H-2 drift-guard), `b4a8e85` (M-4), `e832a69` (rejectSeal).
+
+Still open before SESSION-001 closes: AC-017/AC-018 (version bump + publish +
+trustless-cello dep update; protocol-types changed via M-3), the H-1 FROST seal,
+M-4 binding enforcement (Andre's call), and the completion gate + live multi-process
+smoke. Durable handoff: `trustless-cello/SESSION-001-FIX-HANDOFF.md` (delete after merge).
