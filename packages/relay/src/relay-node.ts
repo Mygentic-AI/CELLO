@@ -99,6 +99,7 @@ import {
   encodeLeafDeliver,
   encodeGapFillResponse,
   encodeGapFillError,
+  encodeSessionInterrupted,
   decodeInboundFrame,
 } from "./relay-frames.js";
 import { protocolLog, truncId, truncHex } from "./protocol-log.js";
@@ -200,6 +201,14 @@ export interface RelayNodeOptions {
    * Clients use this to look up the relay's public key from the directory.
    */
   relayId?: string;
+  /**
+   * M7-SESSION-001 AC-002: Configurable idle timeout in milliseconds.
+   * When a session has no activity for this duration, the relay emits
+   * session_interrupted with reason 'timeout' to the remaining participant.
+   * Set to a short value (e.g. 100ms) in tests. Default: no timeout (undefined).
+   * When undefined, idle timeout is disabled (only peer disconnect triggers session_interrupted).
+   */
+  sessionIdleTimeoutMs?: number;
 }
 
 export class CelloRelayNode {
@@ -233,6 +242,15 @@ export class CelloRelayNode {
   // Private — never exposed via public API.
   readonly #sessionPeerIdBindings = new Map<string, { initiator: string; counterparty: string }>();
 
+  /** M7-SESSION-001: configurable idle timeout in milliseconds. undefined = disabled. */
+  readonly #sessionIdleTimeoutMs: number | undefined;
+
+  /** M7-SESSION-001: per-session idle timeout timers. session_id_hex → timer handle. */
+  readonly #sessionIdleTimers = new Map<string, NodeJS.Timeout>();
+
+  /** M7-SESSION-001: pubkey_hex → set of session_id_hex where this pubkey is a participant. */
+  readonly #participantSessions = new Map<string, Set<string>>();
+
   constructor(opts: RelayNodeOptions) {
     this.#node = opts.node;
     this.#directoryPubkey = opts.directoryPubkey;
@@ -251,6 +269,7 @@ export class CelloRelayNode {
     this.#sessionWal = opts.sessionWal ?? null;
     this.#ackSigningKeyProvider = opts.ackSigningKeyProvider ?? null;
     this.#relayId = opts.relayId ?? null;
+    this.#sessionIdleTimeoutMs = opts.sessionIdleTimeoutMs;
   }
 
   async start(): Promise<void> {
@@ -437,6 +456,17 @@ export class CelloRelayNode {
       });
     }
 
+    // M7-SESSION-001: track participant → session mapping for interrupt emission
+    const aHex = Buffer.from(assignment.participant_a).toString("hex");
+    const bHex = Buffer.from(assignment.participant_b).toString("hex");
+    if (!this.#participantSessions.has(aHex)) this.#participantSessions.set(aHex, new Set());
+    if (!this.#participantSessions.has(bHex)) this.#participantSessions.set(bHex, new Set());
+    this.#participantSessions.get(aHex)!.add(sessionKey);
+    this.#participantSessions.get(bHex)!.add(sessionKey);
+
+    // M7-SESSION-001 AC-002: start idle timeout timer if configured
+    this.#startSessionIdleTimer(sessionKey);
+
     // OBS-001 AC-010: session assigned
     const sessionHex = truncHex(sessionKey);
     protocolLog("RELAY", `Session assigned: ${sessionHex} → slot 1`);
@@ -445,6 +475,7 @@ export class CelloRelayNode {
 
   discardSession(sessionId: Uint8Array): void {
     const key = Buffer.from(sessionId).toString("hex");
+    this.#cleanupSessionTracking(key);
     this.#store.destroySession(key);
     this.#sessionPeerIdBindings.delete(key);
   }
@@ -480,6 +511,7 @@ export class CelloRelayNode {
 
   confirmSeal(sessionId: Uint8Array): void {
     const key = Buffer.from(sessionId).toString("hex");
+    this.#cleanupSessionTracking(key);
     this.#store.destroySession(key);
     this.#sessionLocks.delete(key);
     this.#sessionPeerIdBindings.delete(key);
@@ -489,6 +521,7 @@ export class CelloRelayNode {
 
   rejectSeal(sessionId: Uint8Array, _reason: string): void {
     const key = Buffer.from(sessionId).toString("hex");
+    this.#cleanupSessionTracking(key);
     const state = this.#store.getSession(key);
     if (state) {
       this.#store.setSession(key, { ...state, status: "seal_rejected" });
@@ -569,6 +602,13 @@ export class CelloRelayNode {
           this.#streams.set(authedPubkeyHex, stream);
           authed = true;
 
+          // M7-SESSION-001 AC-002: reset idle timer when a participant connects or reconnects.
+          // The idle timeout measures inactivity from the last participant connection,
+          // not from recordAssignment (participants may join seconds after assignment).
+          for (const sessionIdHex of (this.#participantSessions.get(authedPubkeyHex) ?? [])) {
+            this.#resetSessionIdleTimer(sessionIdHex);
+          }
+
           // OBS-001 AC-010: client authenticated
           protocolLog("RELAY", `Client ${truncHex(authedPubkeyHex)} authenticated`);
 
@@ -611,6 +651,10 @@ export class CelloRelayNode {
     } finally {
       if (authedPubkeyHex && this.#streams.get(authedPubkeyHex) === stream) {
         this.#streams.delete(authedPubkeyHex);
+        // M7-SESSION-001 AC-001: emit session_interrupted to the remaining participant
+        // when a peer's stream drops. Best-effort delivery — if the remaining participant
+        // is also unreachable, the frame is discarded silently.
+        this.#emitSessionInterrupted(authedPubkeyHex, "peer_disconnected");
       }
     }
   }
@@ -693,6 +737,9 @@ export class CelloRelayNode {
     frame: import("./relay-types.js").HashSubmit
   ): Promise<void> {
     const sessionKey = Buffer.from(frame.session_id).toString("hex");
+
+    // M7-SESSION-001: reset idle timer on activity
+    this.#resetSessionIdleTimer(sessionKey);
 
     const reply = async (error: HashSubmitErrorReason) => {
       try {
@@ -1021,6 +1068,171 @@ export class CelloRelayNode {
     }
   }
 
+  // ─── M7-SESSION-001: session tracking cleanup ──────────────────────────────
+
+  /**
+   * Remove a session from participant tracking and clear its idle timer.
+   * Called on discardSession, confirmSeal, rejectSeal.
+   */
+  #cleanupSessionTracking(sessionIdHex: string): void {
+    // Clear idle timer
+    const timer = this.#sessionIdleTimers.get(sessionIdHex);
+    if (timer) {
+      clearTimeout(timer);
+      this.#sessionIdleTimers.delete(sessionIdHex);
+    }
+
+    // Remove from participant → session mapping
+    const session = this.#store.getSession(sessionIdHex);
+    if (session) {
+      const aHex = Buffer.from(session.assignment.participant_a).toString("hex");
+      const bHex = Buffer.from(session.assignment.participant_b).toString("hex");
+      this.#participantSessions.get(aHex)?.delete(sessionIdHex);
+      this.#participantSessions.get(bHex)?.delete(sessionIdHex);
+    }
+  }
+
+  // ─── M7-SESSION-001: session_interrupted emission ───────────────────────────
+
+  /**
+   * Emit session_interrupted frames to the remaining connected participant
+   * when a peer disconnects or a session times out.
+   *
+   * Finds all active sessions where `disconnectedPubkeyHex` is a participant,
+   * and sends a session_interrupted frame to the counterparty. Best-effort:
+   * if the counterparty is also unreachable, the frame is discarded silently.
+   *
+   * @param disconnectedPubkeyHex K_local pubkey hex of the disconnected participant
+   * @param reason 'peer_disconnected' or 'timeout'
+   */
+  #emitSessionInterrupted(disconnectedPubkeyHex: string, reason: "peer_disconnected" | "timeout"): void {
+    // Scan all sessions in the store to find ones where this pubkey is a participant.
+    // The relay knows participant pubkeys from the SessionAssignment recorded at session creation.
+    // We iterate all session entries to find matches.
+    const sessionsToNotify = this.#findSessionsForParticipant(disconnectedPubkeyHex);
+
+    for (const { sessionIdHex, counterpartyPubkeyHex } of sessionsToNotify) {
+      // Clear any idle timer for this session
+      const timer = this.#sessionIdleTimers.get(sessionIdHex);
+      if (timer) {
+        clearTimeout(timer);
+        this.#sessionIdleTimers.delete(sessionIdHex);
+      }
+
+      const counterpartyStream = this.#streams.get(counterpartyPubkeyHex);
+      if (!counterpartyStream) {
+        // Counterparty also unreachable — discard silently per spec
+        continue;
+      }
+
+      const frame = encodeSessionInterrupted({
+        type: "session_interrupted",
+        sessionId: sessionIdHex,
+        reason,
+      });
+
+      try {
+        this.#sendFrame(counterpartyStream, frame);
+        this.#logger.info("relay.session.interrupted.emitted", {
+          sessionId: sessionIdHex.slice(0, 16),
+          disconnectedPeer: disconnectedPubkeyHex.slice(0, 16),
+          counterparty: counterpartyPubkeyHex.slice(0, 16),
+          reason,
+        });
+      } catch (err: unknown) {
+        // Send failed — counterparty stream may have just closed too. Discard silently.
+        this.#logger.debug("relay.session.interrupted.send.failed", {
+          sessionId: sessionIdHex.slice(0, 16),
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  /**
+   * Find all active sessions where `pubkeyHex` is a participant.
+   * Returns the session ID and the counterparty's pubkey hex for each.
+   */
+  #findSessionsForParticipant(pubkeyHex: string): Array<{ sessionIdHex: string; counterpartyPubkeyHex: string }> {
+    const results: Array<{ sessionIdHex: string; counterpartyPubkeyHex: string }> = [];
+    // We need access to the store's sessions. Since RelayStore doesn't expose iteration,
+    // we use the getSession method with known session IDs. However, we track sessions
+    // in #sessionPeerIdBindings and can also scan via the store.
+    // For now, we'll use a different approach: maintain a mapping from pubkey to session IDs.
+    // Actually, the store's sessions are keyed by session_id_hex. We need to scan them.
+    // The InMemoryRelayStore doesn't expose iteration. Let's track participant → session mappings.
+    //
+    // Implementation: we maintain a #participantSessions map populated in recordAssignment.
+    for (const sessionIdHex of (this.#participantSessions.get(pubkeyHex) ?? [])) {
+      const session = this.#store.getSession(sessionIdHex);
+      if (!session || session.status !== "active") continue;
+
+      const aHex = Buffer.from(session.assignment.participant_a).toString("hex");
+      const bHex = Buffer.from(session.assignment.participant_b).toString("hex");
+      const counterpartyPubkeyHex = aHex === pubkeyHex ? bHex : aHex;
+      results.push({ sessionIdHex, counterpartyPubkeyHex });
+    }
+    return results;
+  }
+
+  /**
+   * M7-SESSION-001 AC-002: Start an idle timeout timer for a session.
+   * When the timer fires, emit session_interrupted with reason 'timeout'.
+   */
+  #startSessionIdleTimer(sessionIdHex: string): void {
+    if (this.#sessionIdleTimeoutMs === undefined) return;
+
+    // Clear any existing timer for this session
+    const existing = this.#sessionIdleTimers.get(sessionIdHex);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      this.#sessionIdleTimers.delete(sessionIdHex);
+      const session = this.#store.getSession(sessionIdHex);
+      if (!session || session.status !== "active") return;
+
+      const aHex = Buffer.from(session.assignment.participant_a).toString("hex");
+      const bHex = Buffer.from(session.assignment.participant_b).toString("hex");
+
+      // Emit timeout to both participants (whichever is still connected)
+      for (const participantHex of [aHex, bHex]) {
+        const participantStream = this.#streams.get(participantHex);
+        if (!participantStream) continue;
+
+        const frame = encodeSessionInterrupted({
+          type: "session_interrupted",
+          sessionId: sessionIdHex,
+          reason: "timeout",
+        });
+
+        try {
+          this.#sendFrame(participantStream, frame);
+          this.#logger.info("relay.session.interrupted.emitted", {
+            sessionId: sessionIdHex.slice(0, 16),
+            disconnectedPeer: "timeout",
+            counterparty: participantHex.slice(0, 16),
+            reason: "timeout",
+          });
+        } catch (err: unknown) {
+          this.#logger.debug("relay.session.interrupted.send.failed", {
+            sessionId: sessionIdHex.slice(0, 16),
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }, this.#sessionIdleTimeoutMs);
+
+    this.#sessionIdleTimers.set(sessionIdHex, timer);
+  }
+
+  /**
+   * M7-SESSION-001: Reset the idle timeout timer for a session (called on activity).
+   */
+  #resetSessionIdleTimer(sessionIdHex: string): void {
+    if (this.#sessionIdleTimeoutMs === undefined) return;
+    this.#startSessionIdleTimer(sessionIdHex);
+  }
+
   // ─── Transport helpers ───────────────────────────────────────────────────────
 
   async #sendFrame(stream: Stream, bytes: Uint8Array): Promise<void> {
@@ -1052,6 +1264,12 @@ export interface CreateRelayNodeOptions {
    * Required when ackSigningKeyProvider is set.
    */
   relayId?: string;
+  /**
+   * M7-SESSION-001 AC-002: Configurable idle timeout in milliseconds.
+   * When a session has no activity for this duration, the relay emits
+   * session_interrupted with reason 'timeout'. Default: no timeout (undefined).
+   */
+  sessionIdleTimeoutMs?: number;
 }
 
 /**
@@ -1088,6 +1306,7 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     logger: opts.logger,
     ackSigningKeyProvider: opts.ackSigningKeyProvider,
     relayId: opts.relayId,
+    sessionIdleTimeoutMs: opts.sessionIdleTimeoutMs,
   });
   await relay.start();
 

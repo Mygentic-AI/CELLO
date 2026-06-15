@@ -1531,6 +1531,77 @@ export class CelloDirectoryNode {
             this.#sendFrame(stream, encodeManifestPollResponse({ type: "manifest_poll_response", manifest }));
           }
           // When no store is configured, manifest_poll_request is silently ignored for backward compat.
+        } else if (parsed.type === "seal_interrupted_request") {
+          // M7-SESSION-001 AC-009: pass-through routing — forward to counterparty
+          const targetStream = this.#streams.get(parsed.counterpartyPubkey);
+          if (targetStream) {
+            try {
+              this.#sendFrame(targetStream, CBOR_ENC.encode(parsed));
+              this.#logger?.info("directory.signaling.seal_interrupted_request.forwarded", {
+                sessionId: parsed.sessionId,
+                initiator: parsed.initiatorPubkey.slice(0, 16),
+                target: parsed.counterpartyPubkey.slice(0, 16),
+              });
+            } catch (fwdErr) {
+              this.#logger?.warn("directory.signaling.seal_interrupted_request.forward_failed", {
+                sessionId: parsed.sessionId,
+                error: fwdErr instanceof Error ? fwdErr.message : String(fwdErr),
+              });
+            }
+          } else {
+            this.#logger?.info("directory.signaling.seal_interrupted_request.target_offline", {
+              sessionId: parsed.sessionId,
+              target: parsed.counterpartyPubkey.slice(0, 16),
+            });
+          }
+        } else if (parsed.type === "seal_interrupted_ack") {
+          // M7-SESSION-001 AC-009: pass-through routing — forward ack back to initiator.
+          // initiatorPubkey is included in the frame so the directory can route directly
+          // by looking up the initiator's authenticated stream in #streams.
+          const targetStream = this.#streams.get(parsed.initiatorPubkey);
+          if (targetStream) {
+            try {
+              this.#sendFrame(targetStream, CBOR_ENC.encode(parsed));
+              this.#logger?.info("directory.signaling.seal_interrupted_ack.forwarded", {
+                sessionId: parsed.sessionId,
+                target: parsed.initiatorPubkey.slice(0, 16),
+              });
+            } catch (fwdErr) {
+              this.#logger?.warn("directory.signaling.seal_interrupted_ack.forward_failed", {
+                sessionId: parsed.sessionId,
+                error: fwdErr instanceof Error ? fwdErr.message : String(fwdErr),
+              });
+            }
+          } else {
+            this.#logger?.info("directory.signaling.seal_interrupted_ack.initiator_offline", {
+              sessionId: parsed.sessionId,
+              initiator: parsed.initiatorPubkey.slice(0, 16),
+            });
+          }
+        } else if (parsed.type === "seal_interrupted_rejection") {
+          // M7-SESSION-001 AC-009: pass-through routing — forward rejection back to initiator.
+          // initiatorPubkey is included in the frame so the directory can route directly
+          // by looking up the initiator's authenticated stream in #streams.
+          const targetStream = this.#streams.get(parsed.initiatorPubkey);
+          if (targetStream) {
+            try {
+              this.#sendFrame(targetStream, CBOR_ENC.encode(parsed));
+              this.#logger?.info("directory.signaling.seal_interrupted_rejection.forwarded", {
+                sessionId: parsed.sessionId,
+                target: parsed.initiatorPubkey.slice(0, 16),
+              });
+            } catch (fwdErr) {
+              this.#logger?.warn("directory.signaling.seal_interrupted_rejection.forward_failed", {
+                sessionId: parsed.sessionId,
+                error: fwdErr instanceof Error ? fwdErr.message : String(fwdErr),
+              });
+            }
+          } else {
+            this.#logger?.info("directory.signaling.seal_interrupted_rejection.initiator_offline", {
+              sessionId: parsed.sessionId,
+              initiator: parsed.initiatorPubkey.slice(0, 16),
+            });
+          }
         } else {
           // Unknown frame type for authenticated state — ignore
         }

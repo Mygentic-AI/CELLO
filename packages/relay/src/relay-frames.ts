@@ -85,6 +85,17 @@ export function encodeGapFillError(frame: GapFillError): Uint8Array {
   return ENC.encode({ type: frame.type, reason: frame.reason });
 }
 
+// ─── M7-SESSION-001: session_interrupted control frame ────────────────────────
+
+/**
+ * Encode a session_interrupted control frame.
+ * Relay-originated — no Merkle root, no FROST signature.
+ * Best-effort delivery to remaining connected participant.
+ */
+export function encodeSessionInterrupted(frame: { type: "session_interrupted"; sessionId: string; reason: "peer_disconnected" | "timeout" }): Uint8Array {
+  return ENC.encode({ type: frame.type, session_id: frame.sessionId, reason: frame.reason });
+}
+
 // ─── Decode ───────────────────────────────────────────────────────────────────
 
 export type InboundRelayFrame = RelayAuthResponse | HashSubmit | GapFillRequest;

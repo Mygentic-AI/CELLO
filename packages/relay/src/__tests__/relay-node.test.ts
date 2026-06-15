@@ -634,7 +634,13 @@ describe("AC-012: queued leaf_deliver flushed on B reconnect", () => {
 
     await new Promise((r) => setTimeout(r, 200));
 
-    // A submits while B is offline
+    // M7-SESSION-001: when B's stream closes, the relay emits session_interrupted to A.
+    // Drain it before calling submitAndAck so the reader is on the correct frame.
+    const interruptedFrame = await rA.readDecoded();
+    expect(interruptedFrame["type"]).toBe("session_interrupted");
+    expect(interruptedFrame["reason"]).toBe("peer_disconnected");
+
+    // A submits while B is offline (session still active in relay store)
     await submitAndAck(rA, sA, sessionId, 0x00, cA.kp, 0);
 
     // B reconnects — reuse cB's keypair on a new stream
