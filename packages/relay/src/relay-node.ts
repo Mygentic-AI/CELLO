@@ -414,8 +414,11 @@ export class CelloRelayNode {
 
       // Unknown frame type — close without state mutation
       stream.abort(new Error("unknown_directory_relay_frame_type"));
-    } catch {
+    } catch (err: unknown) {
       // stream closed or reset — normal disconnect
+      this.#logger.debug("relay.directory.stream.closed", {
+        reason: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       stream.close().catch(() => {});
     }
@@ -646,8 +649,11 @@ export class CelloRelayNode {
           await this.#processGapFillRequest(stream, authedPubkeyHex!, parsed);
         }
       }
-    } catch {
+    } catch (err: unknown) {
       // stream closed or reset — normal disconnect
+      this.#logger.debug("relay.client.stream.closed", {
+        reason: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       if (authedPubkeyHex && this.#streams.get(authedPubkeyHex) === stream) {
         this.#streams.delete(authedPubkeyHex);
