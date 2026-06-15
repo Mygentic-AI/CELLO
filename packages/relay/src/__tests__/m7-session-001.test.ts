@@ -443,6 +443,28 @@ describe("M-2: session teardown clears every tracking map", () => {
     expect(after.hasIdleTimer).toBe(false);
   });
 
+  it("rejectSeal removes participant refs, binding, and idle timer", async () => {
+    const fix = await makeFixture({ sessionIdleTimeoutMs: 60_000 });
+    scope.addCleanup(fix.relayStop);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sessionHex = Buffer.from(sessionId).toString("hex");
+    const pubA = new Uint8Array(randomBytes(32));
+    const pubB = new Uint8Array(randomBytes(32));
+
+    fix.relay.recordAssignment(await makeBoundAssignment(sessionId, pubA, pubB, fix.dirKp));
+    expect(fix.relay.sessionTrackingEntryCount(sessionHex).participantRefs).toBe(2);
+
+    fix.relay.rejectSeal(sessionId, "test_reason");
+
+    // rejectSeal flips status → "seal_rejected" but does NOT destroy the store
+    // entry, so only the three tracking maps must be cleared (M-2).
+    const after = fix.relay.sessionTrackingEntryCount(sessionHex);
+    expect(after.participantRefs).toBe(0);
+    expect(after.hasBinding).toBe(false);
+    expect(after.hasIdleTimer).toBe(false);
+  });
+
   it("idle sweep removes participant refs, binding, and idle timer", async () => {
     const store = new InMemoryRelayStore();
     const fix = await makeFixture({ sessionIdleTimeoutMs: 60_000, store });
