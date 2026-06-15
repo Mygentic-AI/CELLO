@@ -91,6 +91,12 @@ export function encodeGapFillError(frame: GapFillError): Uint8Array {
  * Encode a session_interrupted control frame.
  * Relay-originated — no Merkle root, no FROST signature.
  * Best-effort delivery to remaining connected participant.
+ *
+ * WIRE CONVENTION (L-1): the on-wire field is INTENTIONALLY snake_case
+ * `session_id`, matching every other relay frame (leaf_deliver, hash_submit,
+ * gap_fill_*). The camelCase `sessionId` is the in-process TS field only; it is
+ * mapped to `session_id` here. Do NOT "fix" this to camelCase — doing so breaks
+ * the relay wire format and any decoder expecting `session_id`.
  */
 export function encodeSessionInterrupted(frame: { type: "session_interrupted"; sessionId: string; reason: "peer_disconnected" | "timeout" }): Uint8Array {
   return ENC.encode({ type: frame.type, session_id: frame.sessionId, reason: frame.reason });
