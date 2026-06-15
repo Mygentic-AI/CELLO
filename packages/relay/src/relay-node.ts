@@ -1131,21 +1131,20 @@ export class CelloRelayNode {
         reason,
       });
 
-      try {
-        this.#sendFrame(counterpartyStream, frame);
+      this.#sendFrame(counterpartyStream, frame).then(() => {
         this.#logger.info("relay.session.interrupted.emitted", {
           sessionId: sessionIdHex.slice(0, 16),
           disconnectedPeer: disconnectedPubkeyHex.slice(0, 16),
           counterparty: counterpartyPubkeyHex.slice(0, 16),
           reason,
         });
-      } catch (err: unknown) {
+      }).catch((err: unknown) => {
         // Send failed — counterparty stream may have just closed too. Discard silently.
         this.#logger.debug("relay.session.interrupted.send.failed", {
           sessionId: sessionIdHex.slice(0, 16),
           error: err instanceof Error ? err.message : String(err),
         });
-      }
+      });
     }
   }
 
@@ -1205,20 +1204,19 @@ export class CelloRelayNode {
           reason: "timeout",
         });
 
-        try {
-          this.#sendFrame(participantStream, frame);
+        this.#sendFrame(participantStream, frame).then(() => {
           this.#logger.info("relay.session.interrupted.emitted", {
             sessionId: sessionIdHex.slice(0, 16),
             disconnectedPeer: "timeout",
             counterparty: participantHex.slice(0, 16),
             reason: "timeout",
           });
-        } catch (err: unknown) {
+        }).catch((err: unknown) => {
           this.#logger.debug("relay.session.interrupted.send.failed", {
             sessionId: sessionIdHex.slice(0, 16),
             error: err instanceof Error ? err.message : String(err),
           });
-        }
+        });
       }
     }, this.#sessionIdleTimeoutMs);
 
