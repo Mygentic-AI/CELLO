@@ -35,6 +35,7 @@ import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
 import { encodeSessionInterrupted } from "../relay-frames.js";
+import { InMemoryRelayStore } from "../relay-store.js";
 import type { SessionAssignment } from "../relay-types.js";
 
 setupV3Tests();
@@ -135,18 +136,20 @@ interface Fixture {
   relayNode: Awaited<ReturnType<typeof createRelayNode>>["node"];
   relayStop: () => Promise<void>;
   dirKp: ReturnType<typeof generateKeypair>;
+  store?: InMemoryRelayStore;
 }
 
-async function makeFixture(opts?: { sessionIdleTimeoutMs?: number }): Promise<Fixture> {
+async function makeFixture(opts?: { sessionIdleTimeoutMs?: number; store?: InMemoryRelayStore }): Promise<Fixture> {
   const dirKp = generateKeypair();
   const dirPubkey = await dirKp.getPublicKey();
   const { relay, node, stop } = await createRelayNode({
     directoryPubkey: dirPubkey,
     ...(opts?.sessionIdleTimeoutMs !== undefined && { sessionIdleTimeoutMs: opts.sessionIdleTimeoutMs }),
+    ...(opts?.store !== undefined && { store: opts.store }),
   });
   const addrs = node.listenAddresses();
   expect(addrs.length).toBeGreaterThan(0);
-  return { relayAddr: addrs[0]!, relay, relayNode: node, relayStop: stop, dirKp };
+  return { relayAddr: addrs[0]!, relay, relayNode: node, relayStop: stop, dirKp, store: opts?.store };
 }
 
 async function makeClient(relayAddr: string): Promise<{
@@ -344,5 +347,104 @@ describe("AC-003: lateral catch audit — encodeSessionInterrupted smoke test", 
     const decoded = decode(encoded) as Record<string, unknown>;
     expect(decoded["type"]).toBe("session_interrupted");
     expect(decoded["reason"]).toBe("timeout");
+  });
+});
+
+// ─── M-2: teardown parity ─────────────────────────────────────────────────────
+// Every terminal path (confirmSeal, discardSession) AND the idle sweep must clean
+// ALL tracking maps — participant refs, the Peer ID binding, and the idle timer —
+// not just a subset. Before M-2, the sweep deleted only the binding and left
+// participant/timer entries leaking until process exit.
+
+describe("M-2: session teardown clears every tracking map", () => {
+  let scope = createTestScope();
+  beforeEach(() => { scope = createTestScope(); });
+  afterEach(() => scope.run(async () => {}));
+
+  /** Build an assignment carrying bound session Peer IDs so the binding map is populated. */
+  async function makeBoundAssignment(
+    sessionId: Uint8Array,
+    pubA: Uint8Array,
+    pubB: Uint8Array,
+    dirKp: ReturnType<typeof generateKeypair>,
+  ): Promise<SessionAssignment> {
+    const base = await makeAssignment(sessionId, pubA, pubB, dirKp);
+    return {
+      ...base,
+      initiator_session_peer_id: "12D3KooInitiator",
+      counterparty_session_peer_id: "12D3KooCounterparty",
+    };
+  }
+
+  it("confirmSeal removes participant refs, binding, and idle timer", async () => {
+    const fix = await makeFixture({ sessionIdleTimeoutMs: 60_000 });
+    scope.addCleanup(fix.relayStop);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sessionHex = Buffer.from(sessionId).toString("hex");
+    const pubA = new Uint8Array(randomBytes(32));
+    const pubB = new Uint8Array(randomBytes(32));
+
+    const rec = fix.relay.recordAssignment(await makeBoundAssignment(sessionId, pubA, pubB, fix.dirKp));
+    expect(rec.ok).toBe(true);
+
+    // Tracking is populated after recordAssignment.
+    const before = fix.relay.sessionTrackingEntryCount(sessionHex);
+    expect(before.participantRefs).toBe(2);
+    expect(before.hasBinding).toBe(true);
+    expect(before.hasIdleTimer).toBe(true);
+
+    fix.relay.confirmSeal(sessionId);
+
+    const after = fix.relay.sessionTrackingEntryCount(sessionHex);
+    expect(after.participantRefs).toBe(0);
+    expect(after.hasBinding).toBe(false);
+    expect(after.hasIdleTimer).toBe(false);
+  });
+
+  it("discardSession removes participant refs, binding, and idle timer", async () => {
+    const fix = await makeFixture({ sessionIdleTimeoutMs: 60_000 });
+    scope.addCleanup(fix.relayStop);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sessionHex = Buffer.from(sessionId).toString("hex");
+    const pubA = new Uint8Array(randomBytes(32));
+    const pubB = new Uint8Array(randomBytes(32));
+
+    fix.relay.recordAssignment(await makeBoundAssignment(sessionId, pubA, pubB, fix.dirKp));
+    expect(fix.relay.sessionTrackingEntryCount(sessionHex).hasBinding).toBe(true);
+
+    fix.relay.discardSession(sessionId);
+
+    const after = fix.relay.sessionTrackingEntryCount(sessionHex);
+    expect(after.participantRefs).toBe(0);
+    expect(after.hasBinding).toBe(false);
+    expect(after.hasIdleTimer).toBe(false);
+  });
+
+  it("idle sweep removes participant refs, binding, and idle timer", async () => {
+    const store = new InMemoryRelayStore();
+    const fix = await makeFixture({ sessionIdleTimeoutMs: 60_000, store });
+    scope.addCleanup(fix.relayStop);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sessionHex = Buffer.from(sessionId).toString("hex");
+    const pubA = new Uint8Array(randomBytes(32));
+    const pubB = new Uint8Array(randomBytes(32));
+
+    fix.relay.recordAssignment(await makeBoundAssignment(sessionId, pubA, pubB, fix.dirKp));
+    expect(fix.relay.sessionTrackingEntryCount(sessionHex).participantRefs).toBe(2);
+
+    // Back-date activity so the immediate sweep treats the session as idle.
+    store.__setLastActivityAtForTest(sessionHex, Date.now() - 10_000);
+
+    // startIdleSweep runs one sweep synchronously; maxIdleMs=1000 < 10_000 idle.
+    fix.relay.startIdleSweep(3_600_000, 1_000);
+    fix.relay.stopIdleSweep();
+
+    const after = fix.relay.sessionTrackingEntryCount(sessionHex);
+    expect(after.participantRefs).toBe(0);
+    expect(after.hasBinding).toBe(false);
+    expect(after.hasIdleTimer).toBe(false);
   });
 });

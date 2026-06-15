@@ -478,9 +478,11 @@ export class CelloRelayNode {
 
   discardSession(sessionId: Uint8Array): void {
     const key = Buffer.from(sessionId).toString("hex");
+    // #cleanupSessionTracking is store-independent, so it is safe to run before
+    // or after destroySession; it clears the idle timer, participant refs, and
+    // the Peer ID binding in one place (M-2).
     this.#cleanupSessionTracking(key);
     this.#store.destroySession(key);
-    this.#sessionPeerIdBindings.delete(key);
   }
 
   submitForSeal(sessionId: Uint8Array): { ok: true; data: SealData } | { ok: false; reason: string } {
@@ -517,7 +519,6 @@ export class CelloRelayNode {
     this.#cleanupSessionTracking(key);
     this.#store.destroySession(key);
     this.#sessionLocks.delete(key);
-    this.#sessionPeerIdBindings.delete(key);
     // OBS-001 AC-010: seal confirmed
     protocolLog("RELAY", `Seal confirmed: ${truncHex(key)}`);
   }
@@ -529,7 +530,6 @@ export class CelloRelayNode {
     if (state) {
       this.#store.setSession(key, { ...state, status: "seal_rejected" });
     }
-    this.#sessionPeerIdBindings.delete(key);
     protocolLog("RELAY", `Seal rejected: ${truncHex(key)}, reason: ${_reason}`);
   }
 
@@ -1049,7 +1049,11 @@ export class CelloRelayNode {
   startIdleSweep(intervalMs: number, maxIdleMs: number): void {
     const sweep = () => {
       const swept = this.#store.sweepIdleSessions(maxIdleMs, this.#logger);
-      for (const key of swept) this.#sessionPeerIdBindings.delete(key);
+      // M-2: a swept session is terminal — clean ALL tracking maps (participant
+      // refs, idle timer, Peer ID binding), not just the binding. The store entry
+      // is already destroyed by sweepIdleSessions, so #cleanupSessionTracking must
+      // be store-independent (it is) to avoid leaking participant/timer entries.
+      for (const key of swept) this.#cleanupSessionTracking(key);
     };
 
     // Run first sweep immediately to catch sessions that were idle before the relay process started.
@@ -1077,8 +1081,16 @@ export class CelloRelayNode {
   // ─── M7-SESSION-001: session tracking cleanup ──────────────────────────────
 
   /**
-   * Remove a session from participant tracking and clear its idle timer.
-   * Called on discardSession, confirmSeal, rejectSeal.
+   * Single authority for tearing down ALL in-memory tracking for a terminated
+   * session (M-2). Removes the idle timer, every participant→session reference,
+   * and the bound session Peer IDs together, so no terminal path can forget one
+   * map. Called on discardSession, confirmSeal, rejectSeal, and the idle sweep.
+   *
+   * Store-independent by design: it scans #participantSessions directly instead
+   * of reading the store. The idle sweep destroys the store entry before this
+   * runs, so a store-lookup approach would silently leak participant and timer
+   * entries for swept sessions. SI-003 is preserved — this only deletes the
+   * binding, it never exposes Peer ID values.
    */
   #cleanupSessionTracking(sessionIdHex: string): void {
     // Clear idle timer
@@ -1088,14 +1100,39 @@ export class CelloRelayNode {
       this.#sessionIdleTimers.delete(sessionIdHex);
     }
 
-    // Remove from participant → session mapping
-    const session = this.#store.getSession(sessionIdHex);
-    if (session) {
-      const aHex = Buffer.from(session.assignment.participant_a).toString("hex");
-      const bHex = Buffer.from(session.assignment.participant_b).toString("hex");
-      this.#participantSessions.get(aHex)?.delete(sessionIdHex);
-      this.#participantSessions.get(bHex)?.delete(sessionIdHex);
+    // Remove from participant → session mapping (store-independent scan).
+    // Drop participant entries whose session set becomes empty so the map
+    // does not accumulate empty Sets over the relay's lifetime.
+    for (const [pubkeyHex, sessions] of this.#participantSessions) {
+      if (sessions.delete(sessionIdHex) && sessions.size === 0) {
+        this.#participantSessions.delete(pubkeyHex);
+      }
     }
+
+    // Remove the bound session Peer IDs (M7-WIRE-001 SI-003).
+    this.#sessionPeerIdBindings.delete(sessionIdHex);
+  }
+
+  /**
+   * M-2 test/diagnostic helper. Reports how many internal tracking entries still
+   * reference a session, so tests can prove teardown parity (zero leaks after a
+   * terminal event or idle sweep). Returns COUNTS/booleans only — it never
+   * exposes Peer ID values, so SI-003 is preserved.
+   */
+  sessionTrackingEntryCount(sessionIdHex: string): {
+    participantRefs: number;
+    hasBinding: boolean;
+    hasIdleTimer: boolean;
+  } {
+    let participantRefs = 0;
+    for (const sessions of this.#participantSessions.values()) {
+      if (sessions.has(sessionIdHex)) participantRefs++;
+    }
+    return {
+      participantRefs,
+      hasBinding: this.#sessionPeerIdBindings.has(sessionIdHex),
+      hasIdleTimer: this.#sessionIdleTimers.has(sessionIdHex),
+    };
   }
 
   // ─── M7-SESSION-001: session_interrupted emission ───────────────────────────
