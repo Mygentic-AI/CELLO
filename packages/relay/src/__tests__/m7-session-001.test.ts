@@ -361,18 +361,39 @@ describe("M-2: session teardown clears every tracking map", () => {
   beforeEach(() => { scope = createTestScope(); });
   afterEach(() => scope.run(async () => {}));
 
-  /** Build an assignment carrying bound session Peer IDs so the binding map is populated. */
+  const BOUND_INITIATOR_PEER_ID = "12D3KooInitiator";
+  const BOUND_COUNTERPARTY_PEER_ID = "12D3KooCounterparty";
+
+  /**
+   * Build an assignment carrying bound session Peer IDs so the binding map is
+   * populated. M-4: the directory signs a 6-field TBS covering the two Peer IDs,
+   * so the relay's recordAssignment authenticates them before binding. Field order
+   * mirrors the producer in directory-node.ts.
+   */
   async function makeBoundAssignment(
     sessionId: Uint8Array,
     pubA: Uint8Array,
     pubB: Uint8Array,
     dirKp: ReturnType<typeof generateKeypair>,
   ): Promise<SessionAssignment> {
-    const base = await makeAssignment(sessionId, pubA, pubB, dirKp);
+    const session_timestamp = Date.now();
+    const tbs = CBOR_ENC.encode([
+      sessionId,
+      pubA,
+      pubB,
+      session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
+      BOUND_INITIATOR_PEER_ID,
+      BOUND_COUNTERPARTY_PEER_ID,
+    ]) as Uint8Array;
+    const directory_signature = await dirKp.sign(tbs);
     return {
-      ...base,
-      initiator_session_peer_id: "12D3KooInitiator",
-      counterparty_session_peer_id: "12D3KooCounterparty",
+      session_id: sessionId,
+      participant_a: pubA,
+      participant_b: pubB,
+      session_timestamp,
+      directory_signature,
+      initiator_session_peer_id: BOUND_INITIATOR_PEER_ID,
+      counterparty_session_peer_id: BOUND_COUNTERPARTY_PEER_ID,
     };
   }
 

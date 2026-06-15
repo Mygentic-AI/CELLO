@@ -2460,12 +2460,24 @@ export class CelloDirectoryNode {
       // M7-WIRE-001 AC-009: only register with relay when transport_mode === 'relay'.
       // For direct P2P sessions, the relay has no role and must not hold session Peer IDs.
       if (transportMode === "relay") {
-        const relayTbs = CBOR_ENC.encode([
+        // M-4: the relay binds initiator_session_peer_id / counterparty_session_peer_id
+        // into #sessionPeerIdBindings. Those Peer IDs MUST be covered by the signature
+        // the relay verifies, or the relay binds data the directory never authenticated.
+        // Append the two Peer IDs after the original 4 fields when both are present,
+        // mirroring the presence gate used for the client-facing 10-field TBS. When
+        // either is absent (pre-M7 / initiator-only), fall back to the original 4-field
+        // layout so legacy assignments still verify. The relay's recordAssignment uses
+        // the identical gate and field order on the verification side.
+        const relayTbsFields: unknown[] = [
           session_id,
           new Uint8Array(initiatorPubkey),
           new Uint8Array(targetPubkey),
           session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
-        ]) as Uint8Array;
+        ];
+        if (initiatorSessionPeerId && counterpartySessionPeerId) {
+          relayTbsFields.push(initiatorSessionPeerId, counterpartySessionPeerId);
+        }
+        const relayTbs = CBOR_ENC.encode(relayTbsFields) as Uint8Array;
         const relayDirSig = new Uint8Array(await this.#keyProvider.sign(relayTbs));
         const relayAssignment: RelaySessionAssignment = {
           session_id,

@@ -427,15 +427,28 @@ export class CelloRelayNode {
   // ─── In-process directory calls ─────────────────────────────────────────────
 
   recordAssignment(assignment: SessionAssignment): { ok: true } | { ok: false; reason: string } {
-    // Verify directory signature over canonical CBOR of [session_id, participant_a, participant_b, session_timestamp]
-    const tbs = CBOR_ENC.encode([
+    // Verify directory signature over canonical CBOR of
+    //   [session_id, participant_a, participant_b, session_timestamp]
+    // plus, when both session Peer IDs are present (M-4),
+    //   initiator_session_peer_id, counterparty_session_peer_id.
+    // The relay binds those Peer IDs into #sessionPeerIdBindings below, so the
+    // signature must cover them — otherwise the relay would bind data it never
+    // authenticated. The presence gate and field order here are byte-identical to
+    // the directory's producer (directory-node.ts). When either Peer ID is absent
+    // (pre-M7 / initiator-only) BOTH sides fall back to the original 4-field layout
+    // so legacy assignments still verify.
+    const tbsFields: unknown[] = [
       assignment.session_id,
       assignment.participant_a,
       assignment.participant_b,
       assignment.session_timestamp > 0xffffffff
         ? BigInt(assignment.session_timestamp)
         : assignment.session_timestamp,
-    ]);
+    ];
+    if (assignment.initiator_session_peer_id && assignment.counterparty_session_peer_id) {
+      tbsFields.push(assignment.initiator_session_peer_id, assignment.counterparty_session_peer_id);
+    }
+    const tbs = CBOR_ENC.encode(tbsFields);
     if (!verify(this.#directoryPubkey, tbs, assignment.directory_signature)) {
       return { ok: false, reason: "directory_signature_invalid" };
     }
