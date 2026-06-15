@@ -49,7 +49,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-SIGNAL-001 — Signaling stream resilience | — | **merged to main** | cello-client main; 835 tests; two code-review rounds; nonce-cleared SI-003 fix |
 | M7-WIRE-001 — SessionAssignment wire format | — | **merged to main** | Both repos merged; AC-020/AC-021 (npm publish) deferred to milestone close |
 | M7-TRANSPORT-001 — AutoNAT + direct P2P | — | written — not yet started | Unblocked (WIRE-001 merged); cross-repo |
-| M7-SESSION-001 — Interrupted session handling | — | written — not yet started | Unblocked (WIRE-001 + DAEMON-002 merged); cross-repo; batch with MANIFEST-002 before pipeline push |
+| M7-SESSION-001 — Interrupted session handling | — | **implemented — PR ready** | Worktrees: `cello-client-m7-session-001` (branch `m7/session-001`), `trustless-cello-m7-session-001` (branch `m7/session-001`); 192 daemon tests + 134 relay tests; AC-017/AC-018 (npm publish) deferred to milestone close |
 | M7-DIR-PING-001 — Directory-side ping/pong handler | — | **merged to main** | trustless-cello main; 6 tests (ping/pong, multi-client, burst load, composition root); PingFrame decode + encodePong + handler in dispatch chain |
 | M7-MCP-002 — Agent-aware notifications | — | **merged to main** | cello-client main; NotificationDispatcher with broadcast/single/filtered routing; 175 daemon tests + full suite |
 | M7-CICD-001 — Cross-repo CI/CD | — | **merged to main** | trustless-cello main + cello-client main; GitHubOidcRole, candidates/ lifecycle, pipeline-mappings sourceRepoMappings, buildspec bifurcated, ci.yml e2e gate |
@@ -87,7 +87,7 @@ directory or relay changes, ask: are S4, S6, and S12 all ready to batch?
 
 Current batch status:
 - M7-WIRE-001 ready to batch: **merged to main**
-- M7-SESSION-001 ready to batch: **no — not yet started**
+- M7-SESSION-001 ready to batch: **yes — implemented, PR ready (branch m7/session-001 in both repos)**
 - M7-MANIFEST-002 ready to batch: **merged — no longer in batch queue**
 
 ### Blocked / Waiting
@@ -433,6 +433,26 @@ Sprint review (7 blocking findings, all fixed):
 Remaining before merge: AC-020/AC-021 — publish @cello-protocol/protocol-types@0.0.5 + @cello-protocol/client@0.0.33 to npm beta, update trustless-cello package.json references, pnpm install.
 
 Commits: 4 in trustless-cello (36e0074, b62153d, cc1ea23, dae5f3e), 2 in cello-client (6be6da9, 47c51bb).
+
+### 2026-06-15 — M7-SESSION-001 implemented
+
+Branches `m7/session-001` in both repos. Worktrees: `/Users/andrep/Documents/code/cello-client-m7-session-001` and `/Users/andrep/Documents/code/trustless-cello-m7-session-001`.
+
+Implementation (feat commits): relay `session_interrupted` control frame (encode + idle timer + peer-disconnect emit); daemon `#watchRelayStream` relay stream monitor (marks session `interrupted` on frame receipt or stream close); `markInterruptedWithDetails()` with SQLite schema migration (idempotent `ALTER TABLE ADD COLUMN IF NOT EXISTS` for `message_count`, `interrupted_at`); `interrupted_sessions` array in `cello status` response (always present); `cello_close_session` MCP tool handler with 4 error codes + `signaling_reconnecting` DB-001 path; `handleSealInterruptedFlow` bilateral SEAL-INTERRUPTED signaling + SI-002 Ed25519 leaf signature verification; directory pass-through routing for `seal_interrupted_request/ack/rejection`; `SealInterruptedLeaf`, `SealInterruptedRequest`, `SealInterruptedAck`, `SealInterruptedRejection`, `SessionInterruptedFrame` types in protocol-types.
+
+Code review (3 findings, all fixed): CRITICAL FakeCelloNode typecheck failure; IMPORTANT dead try/catch on unawaited async sendFrame in relay; IMPORTANT SI-002 missing signature verification.
+
+Sprint review (6 blocking, all fixed):
+- B1/B2: AC-012/AC-013 — async fire-and-forget changed to synchronous await; handleSealInterruptedFlow returns result object
+- B3: AC-011 — named test added for seal_interrupted_in_progress guard
+- B4: SI-002 — adversarial test added (tampered zero-signature leaf rejected, session stays interrupted)
+- B5: AC-016 — composition root integration test added (getSessionNodeManager() getter, full daemon start)
+- B6: AC-003 — bare catch blocks in relay-node.ts fixed to extract error.message + log at DEBUG
+
+High findings fixed: AC-004/AC-005 L7-guard comment added; medium findings fixed: event name typo `session.interrupt.` → `session.interrupted.`, AC-015 additional guidance path assertions.
+
+Tests: 192 daemon (cello-client) + 134 relay (trustless-cello). Typecheck + lint clean in both worktrees.
+AC-017/AC-018 (npm publish + trustless-cello dependency update) deferred to milestone close per SESSION-001 kickoff instructions.
 
 ### 2026-06-14 — WIRE-001 merged to main; worktrees removed
 

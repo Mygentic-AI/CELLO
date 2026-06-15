@@ -701,3 +701,25 @@ Merged m7/wire-001 to main in both repos. Worktrees and branches removed.
 AC-020/AC-021 (npm publish of protocol-types@0.0.5 + client@0.0.33 + connect@0.0.44) deferred to milestone close per cello-publish skill — version bump + tag must be the very last act after all cello-client stories land.
 
 Next: M7-SESSION-001 (unblocked; batch with MANIFEST-002 before pipeline push).
+
+### 2026-06-15 09:52 — M7-SESSION-001 implemented
+
+**Story:** CELLO-M7-SESSION-001
+
+Implementation complete. Branches `m7/session-001` in both repos. 192 daemon tests + 134 relay tests passing. Typecheck + lint clean.
+
+Key decisions made during implementation:
+
+1. **FROST ceremony deferred in handleSealInterruptedFlow**: The full FROST seal ceremony (step 5-6 of the bilateral flow) is deferred — the SealManager in `core/client` is not accessible from `daemon.ts`. The bilateral SEAL-INTERRUPTED leaf exchange + Ed25519 verification is the implemented commitment; FROST ceremony integration is a future story. The deferred comment is explicit in code.
+
+2. **cello_close_session awaits synchronously**: Initially implemented with fire-and-forget (`void async IIFE`), which made AC-012/AC-013 impossible to test (they require synchronous `ok: false` responses). Fixed by making `handleSealInterruptedFlow` return a result object and awaiting it in the handler. The `sealInterruptedInProgress` Set still guards concurrent calls correctly.
+
+3. **getSessionNodeManager() test hook added**: AC-016 composition root test requires calling `registerRelayStream` through the daemon's session node manager rather than a standalone instance. Added `getSessionNodeManager()` to `DaemonHandle` — minimal, clearly labelled as a test hook, not production API surface.
+
+4. **AC-011 timer leak**: The AC-011 test fires a `cello_close_session` without awaiting (to create in-progress state), which leaves a 30s timeout running. Vitest does not fail on this with current configuration. A comment documents this in the test.
+
+5. **Sprint reviewer ran in story mode twice**: First two sprint reviewer invocations found no implementation commits (worktrees aren't on main). Fixed by explicitly listing worktree paths in the third invocation prompt.
+
+6. **Story YAML was incorrectly patched**: After first sprint review (story mode), 4 spec-gap findings were incorrectly applied to the story YAML. Reverted immediately after user flagged it. Story YAML is unchanged from original.
+
+Tests: 192 daemon (15 test files), 134 relay (12 test files). New test file: `core/daemon/src/__tests__/session-001.test.ts` (13 tests covering AC-004 through AC-016, SI-001, SI-002, DB-001, schema migration).
