@@ -490,4 +490,73 @@ describe("M-2: session teardown clears every tracking map", () => {
     expect(after.hasBinding).toBe(false);
     expect(after.hasIdleTimer).toBe(false);
   });
+
+  // M-2 (STRUCTURAL outcome): of the two SESSION-001 interrupt exits, only the
+  // idle-timeout timer is terminal — it now applies the full #cleanupSessionTracking
+  // teardown AND destroys the store entry. The peer-disconnect exit
+  // (#emitSessionInterrupted) is deliberately NON-terminal: the queued-delivery /
+  // reconnect path (relay-node AC-012) needs the session to survive a participant
+  // dropping, so it must NOT tear down. These two tests pin both behaviors.
+
+  it("peer-disconnect is non-terminal — session survives for reconnect (no teardown, no destroy)", async () => {
+    const store = new InMemoryRelayStore();
+    const fix = await makeFixture({ sessionIdleTimeoutMs: 60_000, store });
+    scope.addCleanup(fix.relayStop);
+
+    const cA = await makeClient(fix.relayAddr);
+    const cB = await makeClient(fix.relayAddr);
+    scope.addCleanup(async () => { await cA.node.stop().catch(() => {}); });
+    scope.addCleanup(async () => { await cB.node.stop().catch(() => {}); });
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sessionHex = Buffer.from(sessionId).toString("hex");
+
+    fix.relay.recordAssignment(await makeBoundAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp));
+    expect(fix.relay.sessionTrackingEntryCount(sessionHex).participantRefs).toBe(2);
+    expect(store.getSession(sessionHex)?.status).toBe("active");
+
+    const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
+    const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
+    await performAuth(rA, sA, cA.kp);
+    await performAuth(rB, sB, cB.kp);
+
+    // B disconnects → relay emits session_interrupted to A as a notification, but
+    // the session is NOT destroyed: B can reconnect and resume.
+    sB.abort(new Error("test_disconnect"));
+    const frame = await rA.readDecodedWithTimeout(3000);
+    expect(frame["type"]).toBe("session_interrupted");
+
+    // Session and its tracking survive — proving reconnect-resume is preserved.
+    const after = fix.relay.sessionTrackingEntryCount(sessionHex);
+    expect(after.participantRefs).toBe(2);
+    expect(after.hasBinding).toBe(true);
+    expect(store.getSession(sessionHex)?.status).toBe("active");
+
+    sA.close().catch(() => {});
+  });
+
+  it("idle-timeout interrupt clears refs/binding/timer AND destroys the store entry", async () => {
+    const store = new InMemoryRelayStore();
+    const fix = await makeFixture({ sessionIdleTimeoutMs: 100, store });
+    scope.addCleanup(fix.relayStop);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sessionHex = Buffer.from(sessionId).toString("hex");
+    const pubA = new Uint8Array(randomBytes(32));
+    const pubB = new Uint8Array(randomBytes(32));
+
+    fix.relay.recordAssignment(await makeBoundAssignment(sessionId, pubA, pubB, fix.dirKp));
+    expect(fix.relay.sessionTrackingEntryCount(sessionHex).hasIdleTimer).toBe(true);
+    expect(store.getSession(sessionHex)?.status).toBe("active");
+
+    // No participant ever connects — the 100ms idle timer fires, emits timeout
+    // (to nobody), and must still tear down + destroy the store entry.
+    await new Promise<void>((resolve) => setTimeout(resolve, 300));
+
+    const after = fix.relay.sessionTrackingEntryCount(sessionHex);
+    expect(after.participantRefs).toBe(0);
+    expect(after.hasBinding).toBe(false);
+    expect(after.hasIdleTimer).toBe(false);
+    expect(store.getSession(sessionHex)).toBeUndefined();
+  });
 });

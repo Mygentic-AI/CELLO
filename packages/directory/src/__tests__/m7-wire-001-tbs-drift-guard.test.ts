@@ -94,6 +94,19 @@ describe("H-2: session-establishment TBS drift guard", () => {
   });
 
   it("10-field M7 path matches the pinned canonical CBOR layout", () => {
+    // PROVISIONAL until the milestone-close publish (AC-021). Unlike the 5-field
+    // tests above — which compare the directory's real buildSessionEstablishmentTbsM7
+    // against the REAL published protocol-types buildSessionEstablishmentTbs — this
+    // 10-field check compares the directory builder against a HAND-PINNED reference
+    // array, because the published @cello-protocol/protocol-types (currently
+    // pre-WIRE-001) exposes no 10-field helper to import. So this is a
+    // self-consistency pin, NOT a true cross-repo guard: a coordinated edit to BOTH
+    // the directory builder and this pinned array would pass while still drifting
+    // from the client verifier. The real cross-boundary verification today is the
+    // cello-client h2-directory-client-tbs-agreement test (real-FROST produce→verify
+    // over all 10 fields). The cross-repo half goes live only after the publish bumps
+    // protocol-types to a 10-field helper — at which point import it directly here,
+    // compare against it, and delete this pinned array.
     const timestamp = 1_700_000_000_000; // > 0xffffffff → BigInt
     const initiatorPeerId = "12D3KooWInitiatorPeerId";
     const counterpartyPeerId = "12D3KooWCounterpartyPeerId";

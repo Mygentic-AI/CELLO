@@ -1175,6 +1175,15 @@ export class CelloRelayNode {
         this.#sessionIdleTimers.delete(sessionIdHex);
       }
 
+      // M-2 / reconnect (STRUCTURAL): a peer disconnect is NOT terminal at the
+      // relay. The queued-delivery + reconnect path (MSG-004 / relay-node AC-012)
+      // requires the session to survive a participant dropping — A keeps
+      // submitting while B is offline, and B drains the queue on reconnect. So we
+      // do NOT call #cleanupSessionTracking or destroy the store entry here; the
+      // session stays 'active' and discoverable. Terminal teardown belongs to the
+      // seal paths (confirm/reject/discard) and the idle-timeout timer below —
+      // NOT to a transient disconnect. session_interrupted is a best-effort
+      // notification to the remaining participant, not a session kill.
       const counterpartyStream = this.#streams.get(counterpartyPubkeyHex);
       if (!counterpartyStream) {
         // Counterparty also unreachable — discard silently per spec
@@ -1274,6 +1283,13 @@ export class CelloRelayNode {
           });
         });
       }
+
+      // M-2: timeout interruption is terminal. Tear down all in-memory tracking
+      // and destroy the store entry so the session is no longer served as
+      // active. (The idle timer entry was already removed above;
+      // #cleanupSessionTracking also clears participant refs and the binding.)
+      this.#cleanupSessionTracking(sessionIdHex);
+      this.#store.destroySession(sessionIdHex);
     }, this.#sessionIdleTimeoutMs);
 
     this.#sessionIdleTimers.set(sessionIdHex, timer);
