@@ -180,11 +180,22 @@ const NONCE_TTL_MS = 30_000;
 
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
-// M7-WIRE-001: Local TBS builder matching buildSessionEstablishmentTbs in
-// @cello-protocol/protocol-types ≥0.0.5 (not yet published). Remove after AC-021.
+// M7-WIRE-001: Local TBS builder for the 10-field session-establishment TBS.
+//
+// SINGLE-SOURCE-OF-TRUTH NOTE (H-2): the canonical 5-field builder is
+// `buildSessionEstablishmentTbs` exported from @cello-protocol/protocol-types.
+// The published version (0.0.4) only supports the 5-field legacy layout — the
+// 10-field M7 extension is NOT yet published — so this local copy cannot simply
+// import and delegate for the 10-field path. It MUST stay byte-for-byte
+// compatible with the protocol-types helper for the 5-field path and with the
+// client-side verifier for the 10-field path. Drift is guarded by
+// `__tests__/m7-wire-001-tbs-drift-guard.test.ts`, which fails if either layout
+// diverges. Remove this copy and delegate to protocol-types after the 10-field
+// helper is published (AC-021).
+//
 // Uses 10-field path only when ALL M7 fields are non-empty; otherwise falls back to
 // 5-field legacy path so the client-side verifier reconstructs an identical TBS.
-function buildSessionEstablishmentTbsM7(
+export function buildSessionEstablishmentTbsM7(
   sessionId: Uint8Array,
   pubA: Uint8Array,
   pubB: Uint8Array,
