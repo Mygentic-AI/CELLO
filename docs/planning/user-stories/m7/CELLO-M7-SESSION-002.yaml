@@ -1,0 +1,741 @@
+---
+name: CELLO-M7-SESSION-002
+type: user-story
+date: 2026-06-16
+topics: [session, unilateral-seal, frost-notarization, seal-certificate, append-only, counterparty-absent, directory, m7]
+status: draft
+description: >
+  Turns the unilateral seal from an unsigned bookkeeping note into a real FROST
+  notarization. The directory reconstructs and VERIFIES the submitter's reported
+  root against the session's authenticated signed-leaf chain (it no longer trusts
+  reported_root), runs the FROST notarization ceremony (seal initiator + directory
+  threshold; the absent counterparty is never a signer), records the counterparty
+  ABSENT, and persists a signed, append-only, upgrade-ready SealNotarization
+  distinguished as UNILATERAL. The SealUnilateralConfirmed (present party) and
+  SealUnilateralNotification (absent party) frames carry the verifiable certificate;
+  the absent party verifies the signature over the canonical seal TBS WITHOUT
+  trusting the channel. Finally satisfies PERSIST-015's spec'd "write
+  conversation_seals with seal_type=UNILATERAL".
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-SESSION-002
+domain: Session
+milestone: M7
+actor: DIR
+priority: P1
+components:
+  - directory
+  - relay
+  - client
+  - protocol-types
+  - crypto
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the directory,
+  I want a unilateral seal to verify the submitter's reported transcript root
+  against the session's authenticated signed-leaf chain, run a real FROST
+  notarization ceremony (with the counterparty recorded ABSENT and never a
+  signer), and persist a signed, append-only, upgrade-ready notarization whose
+  certificate both the present and the absent party can verify without trusting
+  the channel —
+  so that a party who seals while the counterparty is gone (or maliciously
+  silent) walks away with portable, chain-verified cryptographic proof of the
+  transcript's composition, ordering, and submission, instead of the directory's
+  unsigned word over an authenticated channel on a root it never checked.
+
+# ─── Context ────────────────────────────────────────────────
+# Remediation source: POSTMORTEM-seal-and-content-delivery-gaps.md.
+#   - Gap 1 (Part 1): #processSealUnilateral
+#     (packages/directory/src/directory-node.ts ~2585-2707) stores
+#     frame.reported_root UNVERIFIED, runs NO FROST, writes NO SealNotarization,
+#     and the absent party's SealUnilateralNotification + the present party's
+#     SealUnilateralConfirmed (directory-types.ts ~293-309) carry UNSIGNED
+#     metadata only. By contrast the bilateral processSeal (~2714+) rebuilds and
+#     verifies the entire signed Merkle chain (2722-2797) and persists a signed
+#     SealNotarization (frost_signature MANDATORY — interfaces/src/directory-store.ts
+#     ~46-53), either via the FROST branch (seal_verified → initiator runs FROST →
+#     seal_frost_signature → recordNotarization, ~2870-2905) or the M1 single-key
+#     fallback (~2826-2868).
+#   - Part 4, Workstream A (D-2 RESOLVED): the notarization signer set is the seal
+#     INITIATOR + the directory FROST threshold; the counterparty is NEVER a
+#     notarization signer (its only possible contribution is its own Ed25519 ack
+#     leaf). Therefore a unilateral seal CAN produce a real FROST notarization with
+#     the counterparty absent: the present party is the initiator and already holds
+#     both parties' signed message leaves.
+#   - Part 3, C-1 / C-2 / C-6: what a seal attests is UNCHANGED — receipt + integrity
+#     + ordering of the transcript, NOT assent. This story produces stronger PROOF of
+#     exactly that; it does not change the meaning.
+#
+# This story implements Part 4 story-slate row A only:
+#   verify reported root vs chain; FROST notarize; persist signed SealNotarization
+#   (append-only, upgrade-ready); counterparty ABSENT; cert fields on confirm/notify.
+# OUT OF SCOPE (later workstreams, do NOT implement here):
+#   - Content recovery / deliver-plaintext-on-reconnect (Workstream B / D-1 spine).
+#   - The unilateral→bilateral UPGRADE and the reversal of PERSIST-015 SI-002
+#     (Workstream C). This story must only ensure the persisted unilateral row is
+#     append-only and discriminated so a future bilateral row can SUPERSEDE it —
+#     it must never mutate the row, and it does not relax any UNIQUE constraint.
+#   - Certificate legibility extras: per-party content frontier, live-vs-recovered
+#     marker, "final message unanswered" indicator (Workstream F).
+#
+# Sovereign node constraint: the FROST notarization is produced by the directory
+# threshold coordinated by the seal initiator. This is the EXISTING seal ceremony
+# (SESSION-004/005) reused unchanged — no single node can complete it alone, no new
+# cross-node shared state is introduced, and the single-key fallback path is the
+# pre-DKG/local path that M2 clients already reject. No story logic assumes node
+# co-location or a single provider.
+#
+# Schema finding (verified 2026-06-16 — NO new migration in this story):
+#   conversation_seals.close_type already permits 'SEAL_UNILATERAL'
+#   (V2__directory_schema.sql CHECK constraint), and
+#   conversation_attestations.attestation already permits 'ABSENT'
+#   (same migration CHECK constraint). The UNILATERAL discriminator and the ABSENT
+#   counterparty record therefore REUSE existing columns. See implementation_notes
+#   for the one genuine schema tension (the append-only UNIQUE constraint vs. a
+#   future superseding bilateral row) and why it is deferred to Workstream C.
+#
+# Cross-repo constraint: this story modifies packages/directory (trustless-cello)
+# and core/client + core/protocol-types (+ core/crypto if a verify helper is added)
+# in cello-client. The cello-client packages must be version-bumped and published
+# (AC-017), and packages/directory/package.json (+ packages/relay if it imports the
+# certificate type) updated to pinned semver (AC-018). Directory changes require a
+# 25-30 min pipeline deploy — batch with any other pending directory/relay changes
+# per COORDINATION.md before pushing. Never push directory changes alone.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the directory receives a seal_unilateral frame for a session whose
+      delivery_grace_seconds has elapsed (the existing grace gate in
+      #processSealUnilateral is preserved unchanged)"
+    action: >
+      The directory reconstructs the session's Merkle root from the session's
+      authenticated signed-leaf chain — the same per-session signed-leaf record the
+      bilateral processSeal path consumes via the relay — applying the same rebuild
+      and verification machinery: per-leaf Structure 1 signature verification,
+      prev_root chain verification, and last_seen_seq causal-chain verification. It
+      then compares the recomputed root to frame.reported_root. The directory NEVER
+      seals on frame.reported_root directly.
+
+  - trigger: "When the recomputed root does not equal frame.reported_root"
+    action: >
+      The directory rejects the unilateral seal with reason
+      'unilateral_root_unverifiable', persists NO SealNotarization, writes NO
+      conversation_seals row, and sends NEITHER seal_unilateral_confirmed NOR
+      seal_unilateral_notification. It logs session.unilateral.verification.failed
+      at ERROR with sessionId, reason, and correlationId.
+
+  - trigger: "When the directory cannot obtain the session's signed-leaf chain to
+      reproduce the root (the relay/WAL record for the session is unavailable or
+      evicted)"
+    action: >
+      The directory rejects the unilateral seal with reason
+      'unilateral_leaves_unavailable' and does NOT seal on the unverified
+      reported_root. It logs session.unilateral.verification.failed at ERROR. The
+      present party may retry later; the session remains unsealed.
+
+  - trigger: "When the reproduced chain does not contain a valid SEAL control leaf
+      (kind 0x02) from the submitting (present) party"
+    action: >
+      The directory rejects with reason 'unilateral_seal_leaf_invalid' — a
+      unilateral seal requires the present party to have committed exactly one SEAL
+      control leaf; the absent party has none. No notarization is persisted.
+
+  - trigger: "When the recomputed root matches frame.reported_root, a valid SEAL
+      control leaf from the present party is present, and the initiator's
+      primary_pubkey is registered"
+    action: >
+      The directory identifies the submitting (present) party as the seal initiator
+      and FROST coordinator, records the counterparty as the ABSENT participant, and
+      runs the FROST notarization ceremony exactly as the bilateral processSeal FROST
+      branch does: it pushes seal_verified to the INITIATOR ONLY (never to the absent
+      counterparty), waits for seal_frost_signature, verifies it against the
+      initiator's primary_pubkey over the canonical seal TBS, and persists a
+      SealNotarization with a valid frost_signature. The counterparty is NEVER sent
+      seal_verified and contributes NO signature.
+
+  - trigger: "When the recomputed root matches but no primary_pubkey is registered
+      for the initiator (pre-DKG / local environment)"
+    action: >
+      The directory falls back to M1 single-key notarization, signing the
+      notarization TBS with its node key (signature_type 'single'), identical to the
+      bilateral single-key fallback. The single-key certificate is rejected by M2
+      clients, consistent with the bilateral path.
+
+  - trigger: "When a unilateral SealNotarization is persisted"
+    action: >
+      The directory writes the notarization append-only: one conversation_seals row
+      with close_type='SEAL_UNILATERAL', one conversation_attestations row recording
+      the absent counterparty as 'ABSENT', and one seal_notarizations row carrying
+      the frost_signature — atomically (the existing PERSIST-018 SI-002 transactional
+      write). It logs session.unilateral.notarized at INFO with sessionId,
+      signatureType, presentPartyPubkey, absentPartyPubkey, leafCount, and
+      correlationId. The directory never UPDATEs or DELETEs an existing notarization
+      row.
+
+  - trigger: "When the unilateral notarization is complete"
+    action: >
+      The directory sends seal_unilateral_confirmed to the present party and
+      enqueues seal_unilateral_notification for the absent party (delivered on
+      reconnect). Both frames carry the verifiable certificate: sealed_root,
+      leaf_count, close_timestamp, frost_signature, signature_type
+      ('frost' | 'single'), the present-party and absent-party pubkeys, and
+      seal_type 'UNILATERAL' — sufficient for the recipient to rebuild the canonical
+      seal TBS and verify the signature against an independently-trusted key.
+
+  - trigger: "When a client receives a seal_unilateral_notification or
+      seal_unilateral_confirmed carrying a certificate"
+    action: >
+      The client rebuilds the canonical seal TBS from the certificate fields and
+      verifies the signature against the key it trusts independently of the channel
+      (the session's primary_pubkey for 'frost', the directory node key from the
+      consortium manifest for 'single'). Only on a valid signature does it transition
+      the session to sealed with seal_type 'unilateral'. If the signature does not
+      verify, it logs session.unilateral.certificate.invalid and does NOT mark the
+      session sealed.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+
+  # ── Directory verification + FROST notarization ──────────
+
+  - id: AC-001
+    given: "An active session whose signed-leaf chain (including the present party's
+      SEAL control leaf) is available to the directory, where the present party
+      submits a seal_unilateral frame after delivery_grace_seconds has elapsed and
+      frame.reported_root equals the directory's recomputed root, and the initiator's
+      primary_pubkey is registered"
+    when: "the directory processes the unilateral seal"
+    then: >
+      The directory rebuilds the Merkle tree from the signed-leaf chain, verifies all
+      per-leaf Structure 1 signatures, the prev_root chain, and the causal chain;
+      confirms the recomputed root equals frame.reported_root; runs the FROST
+      ceremony (seal_verified to initiator → seal_frost_signature → verify); and
+      persists a SealNotarization whose frost_signature verifies over the canonical
+      seal TBS. A conversation_seals row exists with close_type='SEAL_UNILATERAL',
+      and a conversation_attestations row records the counterparty as 'ABSENT'.
+      Verified by an integration test that drives the full submit→verify→FROST→persist
+      path (not by pre-populating the notarization) and asserts getNotarization
+      returns a row whose frost_signature verifies.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "An active session whose signed-leaf chain is available, where the present
+      party submits a seal_unilateral frame whose reported_root does NOT match the
+      directory's recomputed root (the submitter reports a root the directory cannot
+      reproduce — e.g. a root advanced past the chain it submitted)"
+    when: "the directory processes the unilateral seal"
+    then: >
+      The directory rejects with reason 'unilateral_root_unverifiable'. No
+      SealNotarization is persisted (getNotarization returns undefined), no
+      conversation_seals row is written, and NEITHER seal_unilateral_confirmed NOR
+      seal_unilateral_notification is sent. session.unilateral.verification.failed is
+      logged at ERROR with reason 'unilateral_root_unverifiable' and correlationId.
+      This is the headline behavior change: the directory stops trusting
+      reported_root.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A seal_unilateral frame for a session whose signed-leaf chain the
+      directory/relay cannot retrieve (the per-session leaf record is unavailable or
+      evicted)"
+    when: "the directory attempts to reproduce the root"
+    then: >
+      The directory rejects with reason 'unilateral_leaves_unavailable' and does NOT
+      seal on the unverified reported_root. No notarization is persisted. The reason
+      is distinct from 'unilateral_root_unverifiable' (cannot-fetch vs.
+      reproduced-but-mismatched are different causes with different operator actions).
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "A reproduced signed-leaf chain that does NOT contain a valid SEAL control
+      leaf (kind 0x02) from the submitting present party"
+    when: "the directory processes the unilateral seal"
+    then: >
+      The directory rejects with reason 'unilateral_seal_leaf_invalid'. No
+      notarization is persisted. The unilateral path requires exactly one SEAL control
+      leaf from the present party; the absent party has none.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "A unilateral seal that passes verification and where the initiator's
+      primary_pubkey is registered"
+    when: "the FROST notarization ceremony runs"
+    then: >
+      seal_verified is delivered to the INITIATOR (the present/submitting party) only.
+      The absent counterparty NEVER receives seal_verified and contributes no
+      signature to the notarization. The persisted SealNotarization's frost_signature
+      verifies against the initiator's primary_pubkey over the canonical seal TBS.
+      Verified by an integration test that asserts (a) the counterparty stream
+      receives no seal_verified frame, and (b) the FROST signature verifies. (D-2:
+      signer set = initiator + directory threshold; counterparty never a signer.)
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "A unilateral seal that passes verification where NO primary_pubkey is
+      registered for the initiator (pre-DKG / local environment)"
+    when: "the directory notarizes"
+    then: >
+      The directory falls back to M1 single-key notarization: it signs the
+      notarization TBS with its node key, persists a SealNotarization with
+      signature_type 'single', and the certificate carries signature_type 'single'.
+      Behavior is identical to the bilateral single-key fallback. The signature
+      verifies against the directory node key.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "A unilateral SealNotarization persisted by one DirectoryNode instance to
+      Postgres"
+    when: "a SEPARATE, freshly-constructed DirectoryNode instance pointed at the same
+      Postgres queries it via getNotarization"
+    then: >
+      getNotarization returns the notarization with a non-empty frost_signature that
+      verifies; the conversation_seals row shows close_type='SEAL_UNILATERAL'; and the
+      conversation_attestations row shows the counterparty 'ABSENT'. This proves the
+      notarization is durable, cross-instance queryable, and signature-valid (L2 +
+      stub-resistance: the proof must survive process boundaries, not live in an
+      in-memory map).
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "A session that already has a persisted unilateral SealNotarization"
+    when: "a second seal_unilateral frame arrives for the same session"
+    then: >
+      The directory does NOT mutate, UPDATE, or duplicate the existing row (the
+      existing PERSIST-015 duplicate guard and the seal_notarizations UNIQUE(session_id)
+      constraint are preserved). The unilateral row carries close_type='SEAL_UNILATERAL'
+      so it is distinguishable from a future bilateral row — i.e. the write is
+      append-only and upgrade-ready. Reversing PERSIST-015 SI-002 and writing a
+      superseding bilateral row are explicitly out of scope (Workstream C); this AC
+      only asserts no mutation occurs and the discriminator is present.
+    test_type: integration
+    component_under_test: directory
+
+  # ── Certificate on frames + verification without trusting channel ──
+
+  - id: AC-009
+    given: "A completed unilateral notarization for the present (submitting) party"
+    when: "the directory sends seal_unilateral_confirmed"
+    then: >
+      The frame carries the full certificate: sealed_root, leaf_count,
+      close_timestamp, frost_signature, signature_type ('frost' | 'single'),
+      present-party pubkey, absent-party pubkey, and seal_type 'UNILATERAL'. The
+      present party rebuilds the canonical seal TBS from these fields, verifies the
+      signature, and only then records the session sealed with seal_type 'unilateral'.
+      A confirmed frame that lacks frost_signature does not satisfy this AC.
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-010
+    given: "An absent party reconnecting and receiving a seal_unilateral_notification
+      carrying the certificate, where the absent party has no local leaves for the
+      tail (it was offline)"
+    when: "the absent party processes the notification"
+    then: >
+      The absent party rebuilds the canonical seal TBS from the certificate fields and
+      verifies the signature against an independently-trusted key (the session's
+      primary_pubkey for 'frost', the directory node key from the consortium manifest
+      for 'single') — WITHOUT trusting that the channel-delivered sealed_root is
+      correct. On a valid signature it records the session sealed (seal_type
+      'unilateral') and logs session.unilateral.certificate.verified. Verified by an
+      integration test delivering the notification over a real signaling stream.
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-011
+    given: "An adversary on the signaling channel that swaps the sealed_root in a
+      seal_unilateral_notification while leaving the frost_signature unchanged"
+    when: "the absent party verifies the certificate"
+    then: >
+      The signature no longer verifies over the rebuilt TBS (the TBS binds the
+      sealed_root), the absent party REJECTS the notification, the session does NOT
+      transition to sealed, and session.unilateral.certificate.invalid is logged. This
+      is the stub-resistant cross-instance observable: a swapped channel value is
+      caught by signature verification, not by trusting the frame.
+    test_type: integration
+    component_under_test: client
+
+  # ── M7 error discipline + composition root + observability ──
+
+  - id: AC-012
+    given: "All error paths introduced by this story in packages/directory and the
+      cello-client seal path"
+    when: "each distinct failure cause is triggered independently"
+    then: >
+      'unilateral_root_unverifiable', 'unilateral_leaves_unavailable', and
+      'unilateral_seal_leaf_invalid' are each a unique error code distinguishable from
+      one another and from existing codes (including the existing
+      'seal_unilateral_too_early' grace-period rejection). No catch block returns a
+      hardcoded reason without logging the actual exception message
+      (error instanceof Error ? error.message : String(error)). The operator can
+      determine from the error alone which cause fired.
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-013
+    given: "packages/directory/src/ and the cello-client seal path
+      (core/client/src/seal-manager.ts and any file it newly touches)"
+    when: "the implementer adds the unilateral notarization code"
+    then: >
+      The implementer scans EVERY catch block in packages/directory/src/ and in the
+      touched cello-client seal files and either fixes or reports any that return a
+      hardcoded reason string without logging error.message, or that interpolate an
+      error object into a template string (e.g. `${error}`). Every catch extracts
+      error.message explicitly before logging. This is the lateral catch audit for
+      both packages (M6/M6B lesson L6).
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-014
+    given: "The present party's unilateral seal attempt is rejected by the directory
+      ('unilateral_root_unverifiable' or 'unilateral_leaves_unavailable')"
+    when: "the rejection surfaces to the daemon/MCP caller that invoked the close"
+    then: >
+      The response includes both a machine-readable 'reason' and a plain-English
+      'guidance' field naming the next action — e.g. for 'unilateral_root_unverifiable':
+      "The directory could not reproduce your transcript root, so the session was not
+      sealed unilaterally. This means the directory's record of your messages differs
+      from your local tree — do not retry blindly; verify your messages reached the
+      relay (cello_list_sessions) before attempting to seal again." A response with
+      reason alone does not satisfy this AC (M7 error discipline Rule 2).
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-015
+    given: "The directory binary entrypoint (composition root) and the rewritten
+      #processSealUnilateral"
+    when: "a real seal_unilateral frame arrives over a real authenticated stream and
+      passes verification"
+    then: >
+      The verify→FROST→persist path is reached from the composition root and produces
+      a persisted, signature-valid SealNotarization — it is not dead code. Verified by
+      an integration test that starts the directory, delivers the seal_unilateral frame
+      over a real stream (not by calling #processSealUnilateral directly), and asserts
+      getNotarization returns a verifying notarization. A unit test that invokes the
+      handler directly does NOT satisfy this AC (L3 + L7).
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-016
+    given: "The observability events declared for this story"
+    when: "the happy path and each error path execute"
+    then: >
+      session.unilateral.notarized fires at INFO with sessionId, signatureType,
+      presentPartyPubkey, absentPartyPubkey, leafCount, correlationId;
+      session.unilateral.verification.failed fires at ERROR with sessionId, reason,
+      correlationId on each rejection; session.unilateral.certificate.verified (INFO)
+      and session.unilateral.certificate.invalid (ERROR/WARN) fire on the client
+      verification paths. correlationId equals the session-id hex and is threaded
+      through every event in the flow. No console.log — all output via the injected
+      Logger. Verified by asserting event names and context fields, not just that the
+      flow completed.
+    test_type: integration
+    component_under_test: directory
+
+  # ── Cross-repo version bump ──────────────────────────────
+
+  - id: AC-017
+    given: "All cello-client code changes for this story are implemented and tests pass"
+    when: "the implementer runs the version bump procedure in cello-client CLAUDE.md"
+    then: >
+      - core/protocol-types (new/extended SealCertificate type + canonical seal-TBS
+        builder shared by both repos), core/client (seal-manager certificate
+        verification), and core/crypto (if a verify helper is added) have their
+        versions incremented in package.json
+      - every dependent package's dependency version is updated to match
+      - @cello-protocol/connect is bumped to reflect the net change
+      - pnpm install is run; pnpm-lock.yaml updated
+      - git tag v{connect-version} pushed; CI publishes to npm beta
+      - `npm view @cello-protocol/connect@beta dependencies --json` shows real semver
+        versions, NEVER workspace:*
+    test_type: integration
+    component_under_test: cello-client CI
+    notes: >
+      Hard gate. Check COORDINATION.md batching before pushing any tag — the directory
+      changes require a 25-30 min pipeline deploy and must be batched with any other
+      pending directory/relay changes (e.g. M7-SESSION-001). Never push directory
+      changes alone.
+
+  - id: AC-018
+    given: "The new @cello-protocol/connect version is live on npm beta"
+    when: "trustless-cello package.json files are updated"
+    then: >
+      - packages/directory/package.json references the new pinned semver ranges for
+        @cello-protocol/protocol-types, @cello-protocol/client, and @cello-protocol/crypto
+        (the SealCertificate type + canonical seal-TBS builder), and packages/relay
+        is updated too if it imports the certificate type
+      - NO workspace:* references to @cello-protocol/crypto, transport, protocol-types,
+        or client remain in either package.json (@cello-protocol/interfaces stays
+        workspace:* — it is local)
+      - pnpm install is run; pnpm-lock.yaml updated in trustless-cello
+      - pnpm run typecheck passes in trustless-cello
+      - Commit pushed to trustless-cello main only after confirming the batch in
+        COORDINATION.md (directory/relay pipeline is 25-30 min)
+    test_type: integration
+    component_under_test: directory
+    notes: >
+      workspace:* resolves to stale local copies post-REPOSPLIT-002 — directory would
+      silently run old code with no type error. This AC pins the published versions
+      carrying the verifiable SealCertificate.
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The directory shall never persist a SealNotarization, write a conversation_seals
+      row, or send a seal_unilateral_confirmed / seal_unilateral_notification for a
+      unilateral seal whose reported_root it cannot independently reproduce from the
+      session's authenticated signed-leaf chain.
+    adversarial_condition: >
+      even when the submitter reports a root the directory cannot reproduce — a forged
+      root, a root advanced past the chain actually submitted, or a root for a session
+      whose leaves are unavailable. The directory must reject (unilateral_root_unverifiable
+      or unilateral_leaves_unavailable) and seal nothing. Verified by submitting a
+      mismatched reported_root and asserting getNotarization returns undefined and no
+      confirm/notification frame is emitted. (Closes Gap 1: the old code stored
+      frame.reported_root on faith.)
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: >
+      The absent counterparty shall never be a signer of the unilateral notarization.
+      The notarization signature is produced solely by the seal initiator + the
+      directory FROST threshold (or the directory single-key fallback).
+    adversarial_condition: >
+      even though the counterparty's own signed message leaves are present in the
+      reproduced tree, the directory must never send seal_verified to the counterparty,
+      never request a FROST share or any signature from it, and never treat its
+      message-leaf signatures as a notarization signature. Verified by asserting the
+      counterparty stream receives no seal_verified frame and the persisted
+      frost_signature is verifiable using only the initiator's primary_pubkey
+      (or the directory key for single). (D-2 invariant.)
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: >
+      A client shall never accept a unilateral seal certificate as a valid seal without
+      verifying its signature over the canonical seal TBS against a key it trusts
+      independently of the delivering channel.
+    adversarial_condition: >
+      even when the seal_unilateral_notification / seal_unilateral_confirmed arrives
+      over the authenticated signaling channel and an attacker has swapped the
+      sealed_root (or any TBS-bound field) in transit. The rebuilt-TBS signature check
+      must fail and the session must NOT transition to sealed. Verified by tampering
+      with the certificate's sealed_root and asserting verification fails and the
+      session stays unsealed. (Closes the "unsigned word over an authenticated
+      channel" half of Gap 1 on the client side.)
+    test_type: integration
+    component_under_test: client
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the directory/relay cannot retrieve the session's signed-leaf
+      chain (the relay WAL is unavailable or the per-session leaf record has been
+      evicted)"
+    fallback: >
+      the directory shall reject the unilateral seal with
+      'unilateral_leaves_unavailable' and leave the session unsealed, instead of
+      sealing on the unverified reported_root as the old #processSealUnilateral did.
+      The present party may retry once the leaf chain is recoverable. No partial or
+      unsigned seal is ever written.
+    test_type: integration
+    component_under_test: directory
+    notes: >
+      Relay WAL durability is load-bearing here and is the subject of POSTMORTEM
+      Workstream D (verify storage backend, retention, and that the WAL is wired in
+      every deployment). This story does not build the WAL; it specifies the honest
+      failure when the chain is unavailable.
+
+  - id: DB-002
+    condition: "While the initiator's signaling stream is unavailable at the FROST step
+      (the initiator submitted seal_unilateral then disconnected before returning
+      seal_frost_signature)"
+    fallback: >
+      the directory shall enqueue the seal_verified event for deferred delivery
+      (reusing the existing processSeal deferred-delivery path) and complete the
+      notarization when the initiator reconnects and returns the FROST signature,
+      instead of failing the seal. No notarization is persisted until a valid
+      frost_signature is received.
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: session.unilateral.notarized
+      level: info
+      trigger: "When a signed unilateral SealNotarization is persisted (FROST or
+        single-key), the counterparty recorded ABSENT"
+      context_fields: [sessionId, signatureType, presentPartyPubkey, absentPartyPubkey, leafCount]
+      correlationId: true
+      notes: >
+        signatureType is exactly 'frost' or 'single'. Replaces the old
+        session.unilateral.sealed (which fired on an unverified, unsigned bookkeeping
+        entry). correlationId equals the session-id hex, consistent with the existing
+        seal flow.
+    - name: session.unilateral.certificate.verified
+      level: info
+      trigger: "When a client (present or absent party) verifies the unilateral
+        certificate signature over the canonical seal TBS and records the session sealed"
+      context_fields: [sessionId, signatureType, party]
+      correlationId: true
+  error_events:
+    - name: session.unilateral.verification.failed
+      level: error
+      trigger: "When the directory rejects a unilateral seal: reported_root not
+        reproducible, signed-leaf chain unavailable, or the present party's SEAL
+        control leaf invalid"
+      context_fields: [sessionId, reason, correlationId]
+    - name: session.unilateral.certificate.invalid
+      level: error
+      trigger: "When a client receives a unilateral certificate whose signature does
+        not verify over the rebuilt TBS (e.g. a channel-swapped sealed_root)"
+      context_fields: [sessionId, reason, signatureType]
+  alarms:
+    - condition: "session.unilateral.verification.failed fires at a rate > 5% of
+        seal_unilateral submissions over 5 minutes on a directory node, OR more than
+        N occurrences with reason 'unilateral_root_unverifiable' in 5 minutes"
+      fires_to: "directory ops alert channel (CloudWatch metric filter on the directory
+        ECS log group). A spike in 'unilateral_root_unverifiable' indicates clients
+        submitting roots the directory cannot reproduce (client/relay desync or an
+        attempted forgery); a spike in 'unilateral_leaves_unavailable' indicates relay
+        WAL loss (Workstream D regression)."
+    - condition: "session.unilateral.certificate.invalid fires on any client more than
+        once for distinct sessions in a short window"
+      fires_to: "surfaced as ERROR in the client/daemon log; indicates possible
+        channel tampering on signaling — operator should investigate the directory
+        connection. Fires in the local daemon process, not CloudWatch."
+  notes: >
+    These events extend the existing session.unilateral.* taxonomy (the prior code
+    emitted session.unilateral.sealed and session.unilateral.mismatch). The
+    implementer must register session.unilateral.notarized,
+    session.unilateral.verification.failed, session.unilateral.certificate.verified,
+    and session.unilateral.certificate.invalid in the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+    The existing notarization.recorded / notarization.write.failed /
+    notarization.duplicate.rejected events from DirectoryStore are reused unchanged.
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    NO Flyway migration in this story. Verified 2026-06-16:
+    conversation_seals.close_type (V2__directory_schema.sql) already permits
+    'SEAL_UNILATERAL' in its CHECK constraint, and
+    conversation_attestations.attestation already permits 'ABSENT'. The UNILATERAL
+    discriminator and the ABSENT counterparty record therefore REUSE existing columns
+    — no new column, no migration. This is the preferred (column-reuse) outcome the
+    cross-repo schema rule asks for. If implementation discovers an unavoidable new
+    column, STOP: M7 has no Flyway migrations per outline.md; a version V{N} must be
+    claimed in COORDINATION.md's Migration Version Registry first, and a migration
+    integration-gate AC (Flyway reports zero checksum errors on V1..V[N-1]) must be
+    added — do not silently introduce a migration.
+  - >
+    CONSTRAINT-CONFLICT (upgrade-readiness, deferred to Workstream C): both
+    conversation_seals.conversation_id UNIQUE and seal_notarizations.session_id UNIQUE
+    enforce one row per session. A FUTURE bilateral upgrade (Workstream C) that
+    SUPERSEDES the unilateral row without mutating it will require relaxing this (e.g.
+    a partial unique index keyed on close_type, or a 'superseded' flag) — that schema
+    change, and its migration version, belong to Workstream C, NOT this story. This
+    story must (a) write the unilateral row append-only with the close_type
+    discriminator so the future superseding row is distinguishable, and (b) never
+    UPDATE/DELETE the row. It must not relax any UNIQUE constraint. PERSIST-015 SI-002
+    ("a unilateral seal shall not be supplemented by a bilateral seal") remains in
+    force here and is reversed only in Workstream C.
+  - >
+    Root reproduction: reuse the bilateral processSeal rebuild+verify machinery
+    (directory-node.ts ~2722-2804 — buildMerkleTree, per-leaf Structure 1 signature
+    verify against structure1_cbor, prev_root chain, last_seen_seq causal chain,
+    verifySealLeaves). The bilateral path requires TWO distinct SEAL control leaves;
+    the unilateral path requires EXACTLY ONE, from the present (submitting) party. Do
+    not reuse verifySealLeaves unchanged — factor a unilateral variant (or a
+    parameter) that requires one SEAL leaf and records the other party ABSENT.
+  - >
+    Leaf-chain source: the bilateral processSeal is called in-process by the relay
+    with sealData.leaves. The unilateral seal_unilateral frame arrives client→directory
+    on the signaling stream and carries only reported_root + reported_seq — it has NO
+    leaves. The directory must obtain the session's signed-leaf chain from the relay's
+    per-session record (the same source the bilateral path consumes). The preferred
+    wiring is to route unilateral notarization through the relay (which already holds
+    the leaves) via a new directory method analogous to processSeal — keeping the
+    grace-period gate from #processSealUnilateral. The unavailable-chain case is
+    DB-001 / 'unilateral_leaves_unavailable'. This is the load-bearing dependency on
+    relay WAL durability (Workstream D) — confirm the WAL retention covers the
+    delivery_grace_seconds window before relying on it.
+  - >
+    Certificate shape + canonical TBS: extend SealUnilateralConfirmed and
+    SealUnilateralNotification (directory-types.ts ~293-309) to carry the certificate:
+    sealed_root, leaf_count, close_timestamp, frost_signature, signature_type
+    ('frost' | 'single'), present-party pubkey, absent-party pubkey, seal_type
+    'UNILATERAL'. Define a shared SealCertificate type and a single canonical seal-TBS
+    builder in cello-client core/protocol-types so both repos verify against ONE
+    definition (avoid the WIRE-001-style 5-vs-10-field drift). The FROST TBS is the
+    same buildSealTbs(sessionId, sealedRoot, leafCount, closeTimestamp) used by the
+    bilateral notarization; the single-key TBS is the same
+    CBOR_ENC.encode([sessionId, sealedRoot, closeTimestamp]) fallback. Context string
+    'cello-frost-seal-v1' (CONTEXT.md FROST TBS arrays) unchanged.
+  - >
+    Client verification (seal-manager.ts handleSealUnilateralConfirmed ~687 and
+    handleSealUnilateralNotification ~732): today these read sealed_root/sealed_at
+    generically and, for the absent party with NO local leaves, accept the
+    channel-delivered root on faith. Change both to rebuild the canonical TBS from the
+    certificate and verify the signature against an independently-trusted key (session
+    primary_pubkey for 'frost'; directory node key from the consortium manifest for
+    'single') BEFORE marking sealed. Keep the existing local-root cross-check
+    (session.unilateral.mismatch) when local leaves ARE present — it remains valuable —
+    but the signature check is the primary gate and is what defeats a channel swap
+    (SI-003 / AC-011).
+  - >
+    Cross-repo batching: this story changes packages/directory (trustless-cello) and
+    core/protocol-types + core/client (+ core/crypto) in cello-client. Bump and publish
+    cello-client (AC-017), update directory/relay package.json to pinned semver
+    (AC-018), and batch the directory deploy with any other pending directory/relay
+    changes per COORDINATION.md. Never push directory changes alone — the pipeline is
+    25-30 minutes.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-PERSIST-015   # introduced the seal_unilateral frame, grace gate, and the (unsigned) confirm/notification frames this story upgrades
+    - CELLO-M7-SESSION-001 # interrupted-session + seal foundation; this story builds on the M7 seal/interrupted surface
+  blocks:
+    - CELLO-M7-E2E-001    # the unilateral-seal adversarial journey (one side seals while the other is absent) must produce a verifiable certificate in the integration gate
+  notes: >
+    This is POSTMORTEM Workstream A (D-2 RESOLVED — unblocked). Workstream B/D-1
+    (content recovery) is the spine for the FUTURE bilateral upgrade (Workstream C),
+    but is NOT a dependency of THIS story: a unilateral notarization is valuable on its
+    own (it proves composition + submission + ordering of the present party's
+    transcript). Relay WAL durability (Workstream D) is the source of the signed-leaf
+    chain and gates the DB-001 success-vs-reject behavior — confirm it before live
+    smoke.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Session Lifecycle, Merkle Trees"
+  end_to_end_flow: "§5.7 Session Establishment, §6.1 Hash Relay Mechanics, §6 Session Termination (SEAL)"
+  milestone: M7
+  discussion_logs:
+    - "2026-04-08_1530_message-delivery-and-termination"
+    - "2026-06-11_1030_daemon-transport-architecture"
+  related_docs:
+    - "[[POSTMORTEM-seal-and-content-delivery-gaps]]"
+    - "[[CELLO-M7-SESSION-001]]"
+    - "[[CELLO-PERSIST-015]]"
+  notes: >
+    Canonical decisions (SETTLED — do not re-open): POSTMORTEM Part 3 C-1/C-2/C-6
+    (what a seal attests — receipt + integrity + ordering, NOT assent), Part 3 D-2
+    RESOLVED (signer set = initiator + directory threshold; counterparty never a
+    signer), and Part 4 Workstream A / story-slate row A (verify reported root vs
+    chain; FROST notarize; persist signed append-only upgrade-ready SealNotarization;
+    counterparty ABSENT; cert fields on confirm/notify). FROST seal context string:
+    CONTEXT.md §FROST TBS arrays — 'cello-frost-seal-v1'.
