@@ -14,11 +14,11 @@
 //                      trustless-cello; everything else → cello-client. Pass the server-side
 //                      package(s) for any story that touches the directory or relay, or the
 //                      gate runs green while server code is never tested/typechecked.
-//   model              coder + fix model. Default: INHERIT the parent/session model (omit).
-//                      Only set to force a tier (e.g. "opus"). Never defaults to "sonnet".
-//   reviewModel        code reviewer + sprint reviewer model. Default: INHERIT parent/session.
-//                      Only set to force a tier. Never defaults to "sonnet" — that alias is
-//                      Sonnet 4.6, which we are deliberately avoiding for real work.
+//   model              coder + fix model. Default "opus" (set explicitly — omitting does
+//                      NOT inherit the session model for agentType agents). Override to force a tier.
+//   reviewModel        code reviewer + sprint reviewer model. Default "opus" (set explicitly
+//                      to OVERRIDE feature-dev:code-reviewer's pinned `model: sonnet` = Sonnet 4.6,
+//                      which we are deliberately avoiding for real work). Override per run if needed.
 //   utilityModel       preflight / worktree / severity-gate model. Default "haiku" (these are
 //                      trivial file-exists / yes-no tasks — a deliberate cheap tier, overridable).
 //   reviewAndFixOnly   true → skip setup + initial implementation; run review+fix rounds only.
@@ -70,11 +70,13 @@ if (!A.storyId) {
 
 const RAW_ID = A.storyId
 const STORY_ID = RAW_ID.startsWith('CELLO-') ? RAW_ID : `CELLO-${RAW_ID}`
-// Model selection: omit `model` entirely unless the caller forces a tier, so the agent
-// inherits the parent/session model (Opus 4.8 today). NEVER default to 'sonnet' (= Sonnet 4.6).
+// Model selection — MUST be explicit. Omitting `model` does NOT inherit the session model
+// for agentType agents: it falls to the agent DEFINITION's own frontmatter, and
+// feature-dev:code-reviewer pins `model: sonnet` (= Sonnet 4.6). So we force 'opus' by
+// default to override that. Override per-run via args.model / args.reviewModel.
 // Spread these into agent opts: `{ ...CODER_MODEL_OPT, label, agentType, ... }`.
-const CODER_MODEL_OPT = A.model ? { model: A.model } : {}
-const REVIEW_MODEL_OPT = A.reviewModel ? { model: A.reviewModel } : {}
+const CODER_MODEL_OPT = { model: A.model || 'opus' }
+const REVIEW_MODEL_OPT = { model: A.reviewModel || 'opus' }
 const UTILITY_MODEL = A.utilityModel || 'haiku'
 const REVIEW_ONLY = A.reviewAndFixOnly === true
 const SKIP_CODE_REVIEW = A.skipCodeReview === true
