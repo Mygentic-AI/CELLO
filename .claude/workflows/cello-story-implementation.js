@@ -43,7 +43,21 @@ export const meta = {
 }
 
 // ─── ARGS NORMALIZATION ──────────────────────────────────────────────────────
-const A = args || {}
+// IMPORTANT: in this runtime `args` arrives as a JSON STRING, not a parsed object.
+// Accessing `args.storyId` directly yields undefined — which is the historical bug
+// that made every `args.X ? args.X : DEFAULT` fall through to its hardcoded default
+// (the "arg slots that never fill"). Parse it here so the real arguments take effect.
+let A = {}
+if (args && typeof args === 'object') {
+  A = args
+} else if (typeof args === 'string' && args.trim()) {
+  try {
+    A = JSON.parse(args)
+  } catch (e) {
+    log(`ABORT: args was a string but not valid JSON: ${e.message}`)
+    return { status: 'aborted', reason: 'args is not valid JSON' }
+  }
+}
 
 if (!A.storyId) {
   log('ABORT: no storyId provided. Pass args.storyId, e.g. { storyId: "CELLO-M7-SESSION-002" }.')
