@@ -1,0 +1,639 @@
+---
+name: CELLO-M7-SESSION-004
+type: user-story
+date: 2026-06-16
+topics: [seal, seal-certificate, receipt-not-assent, content-frontier, last-seen-seq, attestation, legibility, malicious-tail, live-vs-recovered, notarization, m7]
+status: draft
+description: >
+  Makes the seal certificate honest and legible about what it attests. The
+  certificate gains four first-class, machine-readable properties: (1) a
+  "receipt, not assent" property stating that a signature attests faithful
+  receipt + integrity + ordering of the transcript and NEVER agreement to its
+  contents; (2) a per-party content-frontier (the highest counterparty sequence
+  number each party provably received, derived from the signed last_seen_seq);
+  (3) a per-attestation live-vs-recovered marker; and (4) a "final message
+  unanswered" indicator. Net effect: any reader — human, agent, or arbitrator —
+  can determine from the certificate alone exactly what each party provably
+  received versus merely had delivered, and that no signature implies agreement.
+  This holds across full-bilateral, present-party-sealed-tail,
+  absent-party-recovered, and never-returned cases.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-SESSION-004
+domain: Session
+milestone: M7
+actor: DIR
+priority: P1
+components:
+  - directory
+  - client
+  - protocol-types
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the directory (the bookend authority that builds the seal certificate) and
+  the client (which renders and verifies it),
+  I want the seal certificate to state, as first-class machine-readable
+  properties, that its signatures attest receipt — not assent — and to publish
+  each party's content-frontier, a live-vs-recovered marker per attestation, and
+  whether the final message was answered,
+  so that any reader — human, agent, or arbitrator — can determine from the
+  certificate alone exactly what each party provably received versus what was
+  merely sent/committed, and can never misread a signature as agreement (the
+  malicious "…you agreed to send me $1000" final message must read as
+  delivered-but-unanswered, never agreed).
+
+# ─── Context ────────────────────────────────────────────────
+# This story is Workstream F from POSTMORTEM-seal-and-content-delivery-gaps.md
+# Part 3 (C-1 receipt-not-assent; C-2 acknowledgement frontier and the tail;
+# C-6 malicious-tail / legibility). Those conclusions are SETTLED; this story
+# specs to them.
+#
+# What a seal means (POSTMORTEM C-1, canonical): a signature over a hash chain
+# can prove exactly three things — these bytes existed, in this order,
+# delivered to/from me. It is cryptographically incapable of proving agreement,
+# intent-to-be-bound, or agent cognition. Therefore a seal attests
+# RECEIPT + INTEGRITY + ORDERING of the transcript — NOT assent, and NOT that
+# the receiving agent ever processed the content. Agreement is always a separate
+# explicit act (a reply message, its own signed leaf). "Sealed" must never be
+# read, anywhere in protocol or UX, as "agreed."
+#
+# The acknowledgement frontier (POSTMORTEM C-2): each party has an
+# acknowledgement frontier — the highest counterparty sequence number it has
+# signed an ack for. This already exists in `last_seen_seq`
+# (multi-party design log §3 / §9; CONTEXT.md Structure 1 TBS:
+# [protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq,
+# timestamp]). It is simply never surfaced. The conversation is fully mutually
+# acknowledged iff each frontier reaches the other party's last message.
+# Everything hard about an interrupted seal lives in the TAIL — messages one
+# side sent AFTER the other side's frontier. The certificate should publish
+# frontiers, not collapse to a single "agreed" root.
+#
+# Delivery is verifiable; processing is not (multi-party §9): the attestation
+# enum is CLEAN | FLAGGED | PENDING | DELIVERED | ABSENT. `last_seen_seq` is the
+# only natural engagement signal (a byproduct of responding); periodic agent
+# heartbeats were considered and rejected. A frontier is therefore a claim about
+# RECEIPT (what bytes reached the party), never about processing or assent.
+#
+# The malicious tail (POSTMORTEM C-6): A sneaks "…you agreed to send me $1000"
+# in as the final message. B is NOT bound — B's seal attests delivery, not
+# assent. The transcript shows A asserting it and NO B reply after it, which is
+# itself the evidence B never agreed. Sealing is protective: it pins an
+# immutable, ordered record proving A's claim was unilateral and unanswered. The
+# risk is misreading, not cryptography — so the protocol must make
+# "receipt, not assent" a legible, first-class property of the certificate and
+# surface that the final message had no counterparty response.
+#
+# Where the legibility lives — DERIVE + CARRY, do NOT persist on the directory:
+#   The reader-facing certificate is the `session_sealed` wire frame
+#   (SessionSealed in protocol-types), built by the directory at seal time and
+#   pushed to both clients, who store it in local SQLite. All four legibility
+#   properties are DERIVABLE at seal time from data the directory already holds
+#   in processSeal: the per-leaf signed `last_seen_seq` (decoded for the existing
+#   causal-chain check), the per-leaf sender pubkeys, and the sequence numbers.
+#   The receipt-not-assent property is a constant. Therefore the directory
+#   computes these fields transiently and carries them on the certificate frame;
+#   no new persisted directory column is added. See implementation_notes for the
+#   M7-no-Flyway-migration constraint-conflict and its resolution.
+#
+# Scope boundary with sibling Workstreams A and C:
+#   This story (F) defines the certificate's legibility schema and the
+#   directory's derivation logic, and fully implements the full-bilateral
+#   (both attestations 'live') and present-party-sealed-tail cases. The
+#   attestation_mode VALUES for the absent party ('absent') and the returning
+#   party ('recovered') are POPULATED by the unilateral-notarization story
+#   (Workstream A) and the bilateral-upgrade story (Workstream C) when those
+#   flows run. F specifies the contract so that whatever A/C produce is legible;
+#   F's ACs exercise all four cases by constructing the corresponding leaf sets
+#   and attestation states, so F is testable independent of A/C landing.
+
+# ─── Sovereign Node Constraint ──────────────────────────────
+# Directory nodes are independent and sovereign. The seal certificate is built
+# by the single directory node coordinating the seal (the one that ran
+# processSeal for this session) — no cross-node state, no replication, no
+# shared frontier table. The frontier is derived from the leaves that node
+# verified during the FROST seal ceremony it already coordinates. No new
+# directory coupling and no assumption of node co-location is introduced.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the directory builds a seal certificate (during processSeal, after the chain is verified and before/while the SessionSealed frame is constructed)"
+    action: >
+      The directory shall attach a `legibility` object to the SessionSealed
+      certificate frame carrying: (a) `attests: 'receipt'` and
+      `implies_assent: false` — explicit, machine-readable statements that the
+      signatures attest faithful receipt, integrity, and ordering of the
+      transcript and that NO signature implies agreement to its contents; (b) a
+      human-readable `disclaimer` string conveying the same in plain language;
+      (c) a `participants` array with one entry per participant carrying
+      `pubkey`, `content_frontier_seq`, `last_authored_seq`, and
+      `attestation_mode`; and (d) a `final_message` object carrying
+      `sender_pubkey`, `seq`, and `answered`. The directory never emits any
+      field that asserts, implies, or can be read as agreement.
+
+  - trigger: "When the directory computes a participant's content_frontier_seq"
+    action: >
+      The directory shall set `content_frontier_seq` to the maximum
+      `last_seen_seq` across that participant's OWN signed leaves (the value is
+      carried in the signed Structure 1 TBS and already decoded for the
+      causal-chain check). It is derived ONLY from leaves whose signature that
+      participant produced — never from a self-asserted or counterparty-supplied
+      value. `content_frontier_seq` is the highest counterparty sequence number
+      that party provably received; sequence numbers in the tree greater than a
+      party's `content_frontier_seq` were merely sent/committed, not provably
+      received by that party.
+
+  - trigger: "When the directory computes the final_message indicator"
+    action: >
+      The directory shall identify the message (non-control) leaf with the
+      highest sequence number as `final_message`, set `sender_pubkey` and `seq`
+      from it, and set `answered: true` iff there exists a leaf authored by a
+      DIFFERENT participant with a sequence number strictly greater than
+      `final_message.seq`; otherwise `answered: false` (the
+      final-message-unanswered case — composition + submission is proven, receipt
+      by the counterparty is not).
+
+  - trigger: "When the directory sets a participant's attestation_mode"
+    action: >
+      The directory shall set `attestation_mode` to 'live' for a participant
+      whose SEAL acknowledgement leaf was produced contemporaneously in this
+      seal ceremony (the full-bilateral and present-party cases), 'absent' for a
+      participant who produced no acknowledgement (counterparty ABSENT — value
+      populated by the unilateral-notarization flow, Workstream A), and
+      'recovered' for a participant whose acknowledgement was added post-hoc on
+      return (value populated by the bilateral-upgrade flow, Workstream C). The
+      field is always present and is exactly one of these three values.
+
+  - trigger: "When the client receives or loads a SessionSealed certificate frame"
+    action: >
+      The client shall persist the full `legibility` object alongside the sealed
+      record in local SQLite and expose it intact when the certificate is read
+      (rendered to the operator, returned to the agent, or handed to an
+      arbitrator). The client shall additionally be able to re-derive each
+      party's `content_frontier_seq` from its own local copy of the session
+      leaves and shall flag a mismatch between the certificate's published
+      frontier and the locally re-derived frontier.
+
+  - trigger: "If the certificate's published content_frontier for a party exceeds the maximum last_seen_seq in that party's signed leaves"
+    action: >
+      The directory shall never publish such a value — the frontier is clamped
+      to the signed maximum (upward causal claims are detectable and rejected per
+      multi-party design log §3). A client that nonetheless observes a published
+      frontier exceeding the locally re-derived signed maximum shall reject the
+      certificate as `certificate_frontier_unverifiable` rather than render it.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+
+  # ── Receipt-not-assent ───────────────────────────────────
+  - id: AC-001
+    given: "A verified bilateral seal over a session transcript"
+    when: "the directory builds the SessionSealed certificate frame"
+    then: >
+      The frame's `legibility` object contains `attests: 'receipt'`,
+      `implies_assent: false`, and a non-empty `disclaimer` string that states
+      in plain language that signatures attest faithful receipt, integrity, and
+      ordering of the transcript and that no signature implies agreement. No
+      field anywhere in the certificate asserts, implies, or can be parsed as
+      agreement/consent/assent. Verified by a unit test that builds a certificate
+      from a real verified leaf set and asserts the three fields are present with
+      these exact values, and that the serialized certificate contains no
+      agreement-bearing field.
+    test_type: unit
+    component_under_test: directory
+
+  # ── Per-party content-frontier ───────────────────────────
+  - id: AC-002
+    given: >
+      A verified transcript where participant A's signed leaves carry a maximum
+      last_seen_seq of 6 and participant B's signed leaves carry a maximum
+      last_seen_seq of 4 (B never acknowledged A's later messages)
+    when: "the directory derives the per-party content-frontier"
+    then: >
+      `legibility.participants` contains an entry for A with
+      `content_frontier_seq: 6` and an entry for B with `content_frontier_seq: 4`,
+      each derived solely from that participant's own signed leaves. Each entry
+      also carries `last_authored_seq` (the highest sequence number that
+      participant authored). A reader can compute, for each party, the set of
+      sequence numbers that were merely sent/committed but not provably received
+      (any tree sequence > that party's content_frontier_seq). Verified by a unit
+      test that constructs the asymmetric leaf set and asserts both frontiers and
+      both last_authored_seq values.
+    test_type: unit
+    component_under_test: directory
+
+  # ── Live-vs-recovered marker ──────────────────────────────
+  - id: AC-003
+    given: "A full-bilateral seal where both participants produced their SEAL acknowledgement leaf contemporaneously in this ceremony"
+    when: "the directory builds the certificate"
+    then: >
+      Both participants' `attestation_mode` equals 'live'. The field is always
+      present and is exactly one of 'live' | 'recovered' | 'absent'. Verified by
+      a unit test asserting both modes are 'live' for the contemporaneous
+      bilateral case, and a schema test asserting the field rejects any value
+      outside the three-value enum.
+    test_type: unit
+    component_under_test: directory
+
+  # ── Final-message-unanswered ──────────────────────────────
+  - id: AC-004
+    given: >
+      A transcript whose highest-sequence message leaf was authored by A and
+      where B authored no leaf with a higher sequence number (the malicious-tail
+      shape: A's final message is unanswered)
+    when: "the directory computes the final_message indicator"
+    then: >
+      `legibility.final_message` has `sender_pubkey` = A, `seq` = A's final
+      message sequence number, and `answered: false`. In a contrasting case where
+      B authored a later leaf, `answered: true`. Verified by a unit test
+      exercising both shapes and asserting the indicator.
+    test_type: unit
+    component_under_test: directory
+
+  # ── Client renders + independently verifies frontier ──────
+  - id: AC-005
+    given: "A client that holds its own local copy of the session leaves and receives a SessionSealed certificate frame for that session"
+    when: "the client persists and then reads the certificate"
+    then: >
+      The full `legibility` object (receipt-not-assent fields, per-party
+      frontiers, attestation modes, final_message) is persisted in local SQLite
+      and returned intact on read. The client independently re-derives each
+      party's content_frontier_seq from its local leaves and confirms it equals
+      the certificate's published value. The client SQLite columns are added via
+      idempotent inline migration (ALTER TABLE ... ADD COLUMN guarded), NOT a
+      Flyway migration. Verified by an integration test that stores a certificate,
+      restarts the client process, reloads it, and asserts the legibility object
+      round-trips and the re-derived frontier matches.
+    test_type: integration
+    component_under_test: client
+
+  # ── Cross-process, stub-resistant: the headline reader AC ──
+  - id: AC-006
+    given: >
+      A full live multi-process seal (real directory process; two real client
+      processes A and B) over a transcript whose tail — A's last message — was
+      never received by B (B's signed last_seen_seq does not cover it)
+    when: "the sealed certificate is read from a DIFFERENT process than the one that built it (e.g. B's client process reads the certificate the directory built)"
+    then: >
+      The reader can determine, with NO external context, all of: (a) the
+      receipt-not-assent property (`implies_assent: false`); (b) each party's
+      content_frontier_seq, and therefore exactly what each party provably
+      received versus what was merely delivered/committed; (c) that B's frontier
+      EXCLUDES A's tail message; and (d) `final_message.answered: false` for A's
+      tail. Verified by an e2e test against real processes (relay + directory +
+      two client processes — not in-process stubs) that reads the certificate on
+      the receiving side and asserts all four observables. A test that injects the
+      certificate via an internal method call does NOT satisfy this AC.
+    test_type: e2e
+    component_under_test: client
+
+  # ── All four interruption cases legible ──────────────────
+  - id: AC-007
+    given: >
+      Four certificates, one per case: (1) full-bilateral (both frontiers reach
+      the other's last message; both modes 'live'); (2) present-party-sealed-tail
+      (the present party received and sealed the absent party's last message —
+      present frontier covers it); (3) absent-party-recovered (the returning
+      party added its ack on return; its mode is 'recovered'); (4) never-returned
+      (counterparty produced no ack; its mode is 'absent' and its content_frontier
+      reflects only what it signed before leaving)
+    when: "a reader inspects each certificate"
+    then: >
+      In every case the reader can determine, from the certificate alone: what
+      each party provably received (per-party content_frontier_seq), which
+      attestations are live vs recovered vs absent (attestation_mode), whether the
+      final message was answered (final_message.answered), and that no signature
+      implies agreement (implies_assent: false). No case collapses to a single
+      "agreed" root or hides the tail. Verified by a parameterised test that
+      constructs the leaf set + attestation states for each of the four cases and
+      asserts the certificate's legibility fields are correct and complete for
+      each.
+    test_type: integration
+    component_under_test: directory
+
+  # ── Observability ─────────────────────────────────────────
+  - id: AC-008
+    given: "The directory builds a seal certificate with the legibility object"
+    when: "the certificate is issued (pushed/enqueued as SessionSealed)"
+    then: >
+      `seal.certificate.legibility.built` is logged at INFO with context fields
+      sessionId, participantCount, finalMessageAnswered (boolean), and
+      correlationId (the seal-ceremony correlationId, sessionIdHex). The event
+      does NOT log the frontier sequence numbers' associated content and never
+      logs anything that could be read as assent. All events go through the
+      injected Logger — no console.log. Verified by asserting the event fires
+      once per certificate with the named fields and threaded correlationId.
+    test_type: integration
+    component_under_test: directory
+
+  # ── Error distinctness + lateral catch audit (M7 Rule 1) ──
+  - id: AC-009
+    given: "All error paths introduced by this story across packages/directory (trustless-cello) and packages/client + packages/protocol-types (cello-client)"
+    when: "each distinct failure cause is triggered independently"
+    then: >
+      Each produces a unique error code distinguishable from all others —
+      specifically `certificate_frontier_unverifiable` (client observed a
+      published frontier exceeding the locally re-derived signed maximum) is
+      distinct from any existing seal error code and does not collide with
+      `merkle_root_mismatch`, `leaf_signature_invalid`, `prev_root_chain_broken`,
+      `causal_chain_violated`, or `seal_leaves_invalid`. No catch block in the
+      touched files returns a hardcoded reason string without logging
+      error.message, and none interpolates an error object into a template string
+      (the required pattern is
+      `error instanceof Error ? error.message : String(error)`). The implementer
+      scans ALL catch blocks in the seal-building path in packages/directory/src/
+      and the seal-rendering path in cello-client packages/client/src/ and fixes
+      or reports any that swallow exceptions silently or produce '[object Object]'.
+    test_type: unit
+    component_under_test: directory
+
+  # ── Composition root wiring (L3) ──────────────────────────
+  - id: AC-010
+    given: "The directory's real processSeal path and the client's real SessionSealed handler path (seal-manager)"
+    when: "a seal completes end to end"
+    then: >
+      The legibility object is produced inside the real processSeal certificate
+      construction (not a separate helper that nothing calls) and is consumed by
+      the real client seal handler (the legibility object is persisted and
+      readable through the client's normal certificate-read surface). Verified by
+      an integration test that drives a seal through the real processSeal entry
+      and asserts the legibility object is observable on the client read path — a
+      unit test that calls the certificate-builder directly does NOT satisfy this
+      AC.
+    test_type: integration
+    component_under_test: directory
+
+  # ── No-Flyway-migration guard (M7 outline constraint) ─────
+  - id: AC-011
+    given: "M7 has no Flyway migrations (outline.md Scope Boundaries: NOT in scope — new Flyway directory schema migrations)"
+    when: "this story is implemented"
+    then: >
+      No Flyway migration is added in trustless-cello and the persisted
+      directory SealNotarization schema (packages/interfaces SealNotarization and
+      its Postgres-backed store) is UNCHANGED — the legibility fields live on the
+      SessionSealed wire frame and in client-side SQLite (inline idempotent
+      migration), never in a new directory column. Verified by asserting no new
+      file under the directory Flyway migrations path and that SealNotarization's
+      TypeScript shape is byte-for-byte unchanged. If a reviewer determines
+      directory-side persistence of legibility is genuinely required (e.g. for
+      post-hoc getNotarization retrieval), that is a SEPARATE story that must
+      claim a Flyway version V{N} in COORDINATION.md — it must not be added
+      silently here.
+    test_type: unit
+    component_under_test: directory
+
+  # ── Cross-repo version bump (cello-client) ────────────────
+  - id: AC-012
+    given: "All cello-client code changes for this story are implemented and tests pass"
+    when: "the implementer runs the version bump procedure in cello-client CLAUDE.md"
+    then: >
+      - packages/protocol-types has its version incremented (SessionSealed gains
+        the `legibility` object)
+      - packages/client has its version incremented (renders/verifies/persists
+        the legibility object)
+      - every package that depends on a modified package has its dependency
+        version updated
+      - @cello-protocol/connect is bumped to reflect the net change
+      - pnpm install is run and pnpm-lock.yaml is updated
+      - git tag v{connect-version} is pushed; CI publishes to npm beta
+      - `npm view @cello-protocol/connect@beta dependencies --json` shows real
+        semver versions (never workspace:*)
+    test_type: integration
+    component_under_test: cello-client CI
+    notes: >
+      Hard gate. Check COORDINATION.md batching section before pushing any tag —
+      this story's directory change in trustless-cello must be batched with any
+      other pending directory/relay changes (the directory/relay pipeline is
+      25-30 min). Never push a directory change alone.
+
+  # ── trustless-cello dependency update ─────────────────────
+  - id: AC-013
+    given: "The new @cello-protocol/connect version is live on npm beta"
+    when: "packages/directory/package.json in trustless-cello is updated"
+    then: >
+      - packages/directory/package.json references the new semver range for
+        @cello-protocol/protocol-types (the SessionSealed legibility fields)
+      - no workspace:* references to @cello-protocol/crypto, transport,
+        protocol-types, or client remain in packages/directory/package.json
+      - pnpm install is run and pnpm-lock.yaml is updated in trustless-cello
+      - pnpm run typecheck passes in trustless-cello
+      - commit pushed to trustless-cello main only after confirming with
+        COORDINATION.md that any co-pending directory/relay changes are batched
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The certificate must never permit a reader to infer assent from a
+      signature. No field may assert, imply, or be parseable as agreement;
+      `implies_assent` is always false; a delivered-but-unanswered final message
+      must read as exactly that.
+    adversarial_condition: >
+      Party A composes a malicious final message ("…you agreed to send me
+      $1000") and seals. The certificate must show: A is the sender of the final
+      message, B's content_frontier does NOT cover it (or, if delivered, B still
+      produced no reply), `final_message.answered: false`, and `implies_assent:
+      false`. There must be no value anywhere in the certificate that a reader
+      (or a downstream parser) could interpret as B agreeing. Verified by: (a)
+      constructing the malicious-tail transcript; (b) building the certificate;
+      (c) asserting B is never represented as having agreed, the unanswered
+      indicator is set, and the receipt-not-assent property is present. A
+      certificate that omits the unanswered indicator, or that exposes any
+      agreement-bearing field, fails this invariant.
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: >
+      The published per-party content_frontier_seq must equal the maximum
+      last_seen_seq across that party's OWN signed leaves. A party must never be
+      able to claim a higher frontier than it actually signed.
+    adversarial_condition: >
+      A party attempts to inflate its frontier — e.g. by supplying a SEAL
+      acknowledgement leaf or out-of-band value asserting last_seen_seq = 15 when
+      its highest SIGNED last_seen_seq across verified leaves is 5 (an upward
+      causal claim, detectable per multi-party design log §3). The directory must
+      derive the frontier from the signed leaves only and publish 5, never 15. A
+      client that observes a published frontier exceeding the maximum it can
+      re-derive from the party's signed local leaves must reject the certificate
+      with `certificate_frontier_unverifiable`. Verified by: (a) presenting a
+      leaf set whose signed last_seen_seq maxes at 5 alongside an inflated
+      asserted value of 15; (b) asserting the published frontier is 5; (c)
+      asserting the client rejects a tampered certificate whose published
+      frontier exceeds the signed maximum.
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While a participant is offline at seal time (the SessionSealed certificate is enqueued for deferred delivery rather than pushed live)"
+    fallback: >
+      The enqueued certificate shall carry the full `legibility` object intact,
+      identical to the live-push case — so the offline party, on reconnect,
+      reads the same receipt-not-assent property, per-party frontiers,
+      attestation modes, and final_message indicator. The legibility content is
+      computed once at seal time and is independent of delivery timing. Verified
+      by enqueueing a certificate, delivering it after a simulated reconnect, and
+      asserting the legibility object matches what a live push would carry.
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: seal.certificate.legibility.built
+      level: info
+      trigger: "When the directory finishes building the legibility object on a SessionSealed certificate (once per seal certificate)"
+      context_fields: [sessionId, participantCount, finalMessageAnswered, correlationId]
+      correlationId: true
+      notes: >
+        correlationId is the seal-ceremony correlationId (sessionIdHex), threaded
+        through from processSeal. The event must NOT log message content, the
+        disclaimer text, or anything that could be read as assent. Frontier
+        sequence numbers are integers and are safe to log; their associated
+        content is never logged.
+  error_events:
+    - name: seal.certificate.frontier.unverifiable
+      level: error
+      trigger: "When a client observes a published content_frontier exceeding the maximum last_seen_seq it can re-derive from the party's signed local leaves (SI-002 client guard)"
+      context_fields: [sessionId, party, publishedFrontier, derivedFrontier, correlationId]
+  notes: >
+    Add seal.certificate.legibility.built and seal.certificate.frontier.unverifiable
+    to the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+    No console.log in implementation code — all events go through the injected
+    Logger interface.
+  alarms:
+    - condition: "seal.certificate.frontier.unverifiable fires for any session"
+      fires_to: "surfaced as persistent ERROR in directory/client logs; a single
+        occurrence indicates either a directory derivation bug or a tampered
+        certificate in transit and warrants investigation — it is never expected
+        in normal operation."
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    SETTLED design authority: POSTMORTEM-seal-and-content-delivery-gaps.md
+    Part 3 — C-1 (receipt, not assent — the canonical seal semantic), C-2 (the
+    acknowledgement frontier and the tail), C-6 (the seal protects against the
+    malicious tail; legibility is the requirement), and Part 4 story slate row
+    "Seal certificate legibility". Multi-party design log §3 (last_seen_seq, its
+    upward/downward enforcement asymmetry) and §9 (delivery is verifiable;
+    processing is not; the CLEAN/FLAGGED/PENDING/DELIVERED/ABSENT enum) are the
+    supporting authorities.
+  - >
+    Certificate frame schema (packages/protocol-types, cello-client). Add a
+    `legibility` object to the SessionSealed frame (both SessionSealedFrost and,
+    for completeness, SessionSealedSingle in protocol-types/src/session.ts):
+      legibility: {
+        attests: "receipt";                 // literal — the only permitted value
+        implies_assent: false;              // literal false
+        disclaimer: string;                 // human-readable receipt-not-assent text
+        participants: Array<{
+          pubkey: Uint8Array;               // 32 bytes
+          content_frontier_seq: number;     // max signed last_seen_seq for THIS party
+          last_authored_seq: number;        // highest seq this party authored
+          attestation_mode: "live" | "recovered" | "absent";
+        }>;
+        final_message: {
+          sender_pubkey: Uint8Array;        // 32 bytes
+          seq: number;                      // highest-seq message (non-ctrl) leaf
+          answered: boolean;                // false => final-message-unanswered
+        };
+      }
+    Each piece of information gets its own named field — never overload an
+    existing field to carry it (API-parsimony rule). Canonical CBOR encoding per
+    RFC 8949 §4.2.1, consistent with the rest of the frame.
+  - >
+    Directory derivation (packages/directory/src/directory-node.ts, in
+    processSeal — both the FROST path and the single-key fallback path build a
+    SessionSealed event). The directory already decodes each leaf's Structure 1
+    fields (decodeStructure1Fields → s1Fields.last_seen_seq) for the causal-chain
+    check (step d). Reuse that: for each participant pubkey, content_frontier_seq
+    = max last_seen_seq across leaves that participant SIGNED; last_authored_seq =
+    max s2.sequence_number across leaves that participant authored;
+    final_message = the highest-sequence non-control leaf; answered = exists a
+    leaf from a different sender with a higher sequence number. attestation_mode
+    is 'live' for participants who produced a contemporaneous SEAL ctrl leaf in
+    this ceremony. Compute transiently — do NOT persist on the directory.
+  - >
+    M7 NO-FLYWAY-MIGRATION CONSTRAINT-CONFLICT (flagged, resolved by design — do
+    NOT silently add a migration). outline.md Scope Boundaries lists "New Flyway
+    directory schema migrations (none in M7)" as explicitly NOT in scope, and
+    COORDINATION.md Migration Version Registry is empty. Persisting the four
+    legibility properties on the directory's SealNotarization (Postgres
+    conversation_seals / seal_notarizations) WOULD require a Flyway migration.
+    Resolution: the legibility properties are all DERIVABLE at seal time from the
+    leaves the directory already verifies and the receipt-not-assent constant, so
+    they are carried on the SessionSealed wire frame and persisted CLIENT-SIDE in
+    SQLite (inline idempotent ALTER TABLE ... ADD COLUMN, the same client-side
+    migration pattern SESSION-001 uses — not Flyway). The directory persists
+    nothing new. If a future requirement genuinely needs directory-side persisted
+    legibility (e.g. post-hoc getNotarization retrieval by an arbitrator who is
+    not one of the two parties), that is a SEPARATE story that must claim a
+    Flyway version V{N} in COORDINATION.md before writing the migration.
+  - >
+    Client rendering + verification (cello-client packages/client/src/
+    seal-manager.ts and wherever the sealed record is surfaced to the operator/
+    agent/arbitrator). Persist the legibility object with the sealed record;
+    return it intact on read. Independently re-derive content_frontier_seq from
+    the client's own local session leaves and compare to the published value;
+    on a published value exceeding the locally re-derived signed maximum, reject
+    with `certificate_frontier_unverifiable` and emit
+    seal.certificate.frontier.unverifiable (SI-002 client guard).
+  - >
+    Scope handoff to Workstreams A and C. This story defines the schema and the
+    directory derivation and fully implements the full-bilateral and
+    present-party-sealed-tail cases (attestation_mode 'live'). The 'absent' value
+    (counterparty never acknowledged) is populated by the unilateral-seal-
+    notarization story (Workstream A); the 'recovered' value (returning party's
+    post-hoc ack) is populated by the bilateral-upgrade story (Workstream C). F's
+    parameterised tests (AC-007) construct those leaf/attestation states directly
+    so F is verifiable before A/C land. When A/C are implemented, they set the
+    attestation_mode value but reuse F's certificate-building code unchanged.
+  - >
+    Cross-repo batching: this story touches packages/protocol-types +
+    packages/client (cello-client) and packages/directory (trustless-cello). The
+    directory change must be batched with any other pending directory/relay
+    changes before a pipeline push (pipeline is 25-30 min). Check COORDINATION.md
+    batching section before triggering the push.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-WIRE-001    # SessionAssignment/seal wire plumbing context; merged
+  blocks:
+    - CELLO-M7-E2E-001     # the integration gate reads sealed certificates; legibility must be present
+  related:
+    - "Workstream A (unilateral seal → notarization) — populates attestation_mode 'absent'"
+    - "Workstream C (bilateral upgrade) — populates attestation_mode 'recovered'; reverses PERSIST-015 SI-002"
+  notes: >
+    This story (Workstream F) may be implemented independently of A and C: it
+    defines the certificate's legibility schema and the directory derivation and
+    fully implements the bilateral-live and present-party-sealed-tail cases. A
+    and C reuse F's certificate-building code and only set the attestation_mode
+    value for the absent/recovered cases. Do not block F on A/C — F's tests
+    construct those leaf/attestation states directly.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Session Lifecycle, Multi-Party Conversations"
+  end_to_end_flow: "§6.1 Hash Relay Mechanics, §6.2 Leaf Format, Conversation Seal"
+  milestone: M7
+  discussion_logs:
+    - "2026-04-13_1500_multi-party-conversation-design"   # §3 last_seen_seq, §9 attestation enum + delivery-verifiable-processing-not
+  related_docs:
+    - "[[POSTMORTEM-seal-and-content-delivery-gaps]]"      # Part 3 C-1/C-2/C-6 (SETTLED); Part 4 story slate
+    - "[[CELLO-M7-SESSION-001]]"                            # structural template + seal context + client-side inline migration pattern
+    - "[[CELLO-M7-E2E-001]]"
+  notes: >
+    Canonical design authority for this story: POSTMORTEM Part 3 C-1
+    (receipt-not-assent), C-2 (acknowledgement frontier and the tail), C-6
+    (malicious tail / legibility is the requirement), and Part 4's "Seal
+    certificate legibility" story row. The frontier signal is `last_seen_seq`
+    (multi-party §3 / §9; CONTEXT.md Structure 1 TBS). A seal attests receipt +
+    integrity + ordering — never assent.
