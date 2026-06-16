@@ -2,7 +2,8 @@
 name: M7 — Seal & Content-Delivery Gaps — Problem & Remediation Plan
 type: remediation-plan
 date: 2026-06-15
-topics: [unilateral-seal, content-delivery, desync, message-recovery, frost-notarization, process, postmortem, remediation, m7]
+updated: 2026-06-16
+topics: [unilateral-seal, content-delivery, desync, message-recovery, frost-notarization, seal-semantics, acknowledgement-frontier, auto-acknowledge, receipt-not-assent, process, postmortem, remediation, m7]
 status: open
 description: >
   Actionable. Three verified system-level gaps surfaced while tracing interrupted-session
@@ -10,10 +11,12 @@ description: >
   certificate, (2) missed message content is never resent — the session is killed
   instead, and (3) the intended unilateral→bilateral upgrade depends on recovery that
   is only half-built. None is a bug in a single story; each lives BETWEEN stories. This
-  document is BOTH the postmortem (evidence + the two process root causes that let all
-  three pass every gate) AND the remediation plan: the decisions to make first, four
-  workstreams each specified enough to write a story from, their dependency order, and
-  two process actions.
+  document is the postmortem (evidence + the two process root causes that let all
+  three pass every gate), the remediation plan (decisions, workstreams, dependency
+  order, process actions), AND — appended 2026-06-16 — Part 3, the design conclusions
+  from a working session that traced the actual close-and-seal code and reasoned the
+  seal's meaning from first principles: what a seal attests, why content is a
+  precondition not a feature, and the auto-acknowledge simplification.
 ---
 
 # M7 — Seal & Content-Delivery Gaps — Problem & Remediation Plan
@@ -298,4 +301,211 @@ D-3 (upgrade dispute) ───────┘                  ├─► C (upg
 D-1 ──────────────────────────► B (recovery) ───┘
 D (WAL) feeds B + C.
 P-1, P-2 run in parallel, independent of everything above.
+```
+
+---
+
+---
+
+# Part 3 — Design Conclusions (working session, 2026-06-16)
+
+Part 2 left three decisions open and treated content recovery as one workstream among
+four. A working session then did two things the earlier pass had not: it **traced the
+actual close-and-seal code path end to end**, and it **reasoned the meaning of a seal
+from first principles** rather than from the code. The result resolves two of the three
+open decisions, confirms the third as the *spine* of the whole effort, and adds one new
+design change plus one new requirement. These conclusions supersede the corresponding
+parts of Part 2 where they conflict.
+
+## C-0 — Verified happy-path mechanics (ground truth)
+
+Both parties online, A closes. The exact sequence, with anchors:
+
+1. **A** calls `cello_close_session` → `initiateSessionSeal(...,"initiator")`
+   (`cello-client/core/client/src/seal-manager.ts:237`). A builds a **SEAL ctrl leaf**
+   (kind `0x02`) over its current tree root, Ed25519-signs it with `last_seen_seq` =
+   the last thing A saw from B, submits the hash to the relay (`#submitSealLeaf`,
+   348-444), **pushes the seal payload to B as content** for cross-check (432-436), then
+   blocks on the FROST ceremony.
+2. **B** receives A's SEAL leaf on the relay stream
+   (`relay-stream-manager.ts:783-789`): flips `status → "sealing"` (B can no longer
+   send) and enqueues a **`counterparty_closing`** event. **B does nothing else
+   automatically** — it neither co-signs nor requests anything.
+3. **B's agent must call `cello_close_session`** (guidance literally instructs it:
+   `mcp-server.ts:651-655, 720-724`) → `initiateSessionSeal(...,"responder")` (134-200)
+   → B submits **its own** SEAL ctrl leaf, `last_seen_seq` now covering A's close.
+4. **The relay forwards only when two SEAL leaves from distinct senders exist**
+   (`relay-node.ts:957-983`, `#maybeProcessSeal`) → `directory.processSeal`.
+5. **Directory notarizes** (`directory-node.ts:2714+`): rebuilds + verifies the whole
+   chain, identifies the **initiator** (A, sender of the first SEAL leaf) as FROST
+   coordinator, pushes `seal_verified` **to A only** (2870-2905) → A runs the FROST
+   ceremony → directory persists the `SealNotarization` and **pushes `session_sealed`
+   to both**.
+6. **Both parties auto-database it** (`seal-manager.ts:449-475, 625-635`). The
+   notarization is *pushed*, never requested.
+
+**The seam this exposes:** step 3 is **agent-volition-gated.** B is online and able to
+co-sign instantly, but the bilateral seal completes only if B's *agent* chooses to call
+close. If that agent is slow, busy, or crashed, A's ceremony times out → `seal_deferred`
+→ eventually **unilateral** — despite B sitting right there with everything it needs.
+See C-5.
+
+## C-1 — What a seal means (canonical semantic)
+
+A signature over a hash chain can prove exactly three things: these bytes existed, in
+this order, delivered to/from me. It is **cryptographically incapable** of proving
+agreement, intent-to-be-bound, or agent cognition — those are not properties of bytes.
+Therefore:
+
+- **A seal attests receipt + integrity + ordering of the transcript — NOT assent, and
+  NOT that the receiving agent ever processed the content.** Receipt is byte-level
+  delivery into the node's store, decoupled from the agent reasoning about it.
+- **Agreement is always a separate, explicit act** — a reply *message* (its own signed
+  leaf). The seal can never manufacture assent. "Sealed" must never be read, anywhere in
+  protocol or UX, as "agreed."
+
+The structure that realizes this is three-part and already partly built:
+- **A's acknowledgement** = A's Ed25519 SEAL leaf.
+- **B's acknowledgement** = B's Ed25519 SEAL leaf.
+- **The notarization** = FROST (directory threshold, coordinated by the initiator).
+  The counterparty is *not* a FROST signer; its sole contribution is the ack leaf.
+
+## C-2 — The acknowledgement frontier and the tail
+
+Each party has an **acknowledgement frontier**: the highest counterparty sequence number
+it has signed an ack for (its `last_seen_seq` in its latest signed leaf). The
+conversation is fully mutually acknowledged iff each frontier reaches the other party's
+last message. Everything hard about an interrupted seal lives in the **tail** — messages
+one side sent *after* the other side's frontier.
+
+Two consequences:
+- **Who sent the last message decides a unilateral seal's strength.** If the *absent*
+  party sent it, the *present* party (its receiver) seals over it and the record is
+  near-complete. If the *present* party sent it, the absent party never acked it and the
+  tail is unacknowledged — the irreducible Two-Generals limit; no protocol fixes it
+  unilaterally.
+- **The certificate should publish frontiers, not collapse to a single "agreed" root.**
+  "What each party provably received" is the load-bearing claim, and it already exists in
+  `last_seen_seq` — it is simply never surfaced. See C-6.
+
+## C-3 — The returning party signs; it does not passively receive
+
+A returning absent party's **only possible contribution is an acknowledgement, and an
+acknowledgement is a signature.** Merely receiving the directory's signed unilateral
+notarization adds nothing (its frontier never moves) and forecloses dispute. So the
+upgrade is the returning party **signing one new ack leaf over the sealed root** — not
+re-signing the conversation, and not a passive download. This is why a unilateral seal
+must be *upgradeable* (Workstream C) rather than terminal.
+
+## C-4 — Content is a PRECONDITION, not a parallel feature (the spine)
+
+The honest test for whether a party may seal a tail: **it holds the actual plaintext
+behind every leaf in the sealed tree** — not just the hash.
+
+- Recovers **content** → "it is in my store, available to look at" is *true* → it can
+  honestly seal. ✅
+- Recovers only the **hash** (relay queue / WAL) → the message is *not* in its store and
+  *not* available to look at → sealing would attest to an opaque blob, which is **not**
+  the meaning of a seal → it must **not** seal that tail; those leaves stay
+  unconfirmed / counterparty-ABSENT.
+
+This collapses Part 2's framing: **content recovery (Gap 2 / D-1) is not a workstream
+beside the seal work — it is the precondition that makes the bilateral upgrade
+*semantically possible at all*.** Hash-only recovery enables only a hollow ack. D-1 is
+the spine; Workstream C cannot mean anything without it.
+
+## C-5 — Auto-acknowledge replaces agent-mediated close (NEW design change)
+
+Once A has submitted its SEAL leaf, B **cannot send anything further** — so in the happy
+path there is nothing for B's agent to deliberate. The agent round-trip in C-0 step 3 is
+pure ceremony and a robustness seam. Change it:
+
+- **B's node auto-co-signs** the responder SEAL leaf the moment it ingests A's SEAL ctrl
+  leaf **and has verified the content** — without waiting for the agent.
+- `counterparty_closing` becomes a **notification** ("this session has closed"), not an
+  instruction ("you must call close"). The agent's later processing of the final message
+  is asynchronous and irrelevant to the seal.
+- **Non-negotiable boundary:** "automatic" means **B's own local node signs without an
+  agent prompt** — it does **NOT** mean the directory, the peer, or anyone else produces
+  B's acknowledgement. Delegating or synthesizing B's ack would forge an attestation and
+  violate the no-single-party-can-forge invariant. We remove the *prompt*, never the
+  *signer*.
+- **Verifiability gate:** auto-co-sign only what B can verify. If B is desynced, or the
+  content cross-check fails (`relay-stream-manager.ts:461-478`), do **not** auto-sign —
+  surface to the agent. That is the only case where `counterparty_closing` is a genuine
+  decision point.
+
+## C-6 — The seal protects against the malicious tail; legibility is the requirement
+
+The adversarial case: A sneaks "…you agreed to send me $1000" in as the final message.
+
+- **B is not bound.** B's seal attests delivery, not assent (C-1). The message shows A
+  *asserting* it; the transcript shows **no B reply after it** — which is itself the
+  evidence B never agreed. Sealing is therefore **protective**: it pins an immutable,
+  ordered record proving A's claim was unilateral and unanswered. *Refusing* to seal
+  would be worse — it leaves the record ambiguous.
+- **The risk is misreading, not cryptography.** So the protocol must make
+  **"receipt, not assent" a legible, first-class property of the certificate**, and
+  ideally surface that the final message had no counterparty response. (Same mechanism as
+  C-2: expose the ack frontier and a live-vs-recovered marker.)
+- **Guardrail for C-5's gate:** the decision is *"can I verify the content's
+  integrity?"* — **never** *"do I agree with what it says?"* Disagreement is **not** a
+  reason to refuse; B seals anyway and the transcript speaks for it. B refuses **only**
+  on unverifiability (content unrecoverable, or `content_hash` mismatch = genuine
+  tamper). Refusing on disagreement is a category error that conflates seal with assent
+  and weakens B's own position.
+
+## Decision resolutions (updating Part 2)
+
+- **D-1 — CONFIRMED as the spine.** Content recovery is the precondition for the
+  bilateral upgrade (C-4), not a parallel workstream. The architecture fork (pure-P2P vs.
+  encrypted mailbox vs. hybrid) is unchanged and still needs a focused session — but its
+  *importance* is upgraded: nothing in Workstream C is meaningful until it is resolved.
+- **D-2 — RESOLVED.** The notarization is signed by the **seal initiator + the directory
+  FROST threshold**, coordinated by the present/closing party; the counterparty is
+  **never** a FROST signer (its contribution is an Ed25519 ack leaf). Verified:
+  `processSeal` → `seal_verified` to the initiator → FROST → `recordNotarization`
+  (`directory-node.ts:2714+, 2870-2905`). **Consequence:** a unilateral seal *can*
+  produce a real FROST notarization with the counterparty absent — the present party is
+  the initiator and already holds both parties' signed message leaves. **Workstream A is
+  unblocked.**
+- **D-3 — REFINED.** On the returning party's upgrade (or B's live co-sign), refuse
+  **only** on unverifiability: content unrecoverable → cannot honestly seal (stay
+  ABSENT/unconfirmed); recovered content's hash ≠ committed `content_hash` → genuine
+  tamper → dispute with cryptographic proof. **Disagreement with the message's claims is
+  never grounds to refuse** (C-6).
+
+## Workstream updates (updating Part 2)
+
+- **Workstream A (notarize) — unblocked (D-2).** Additionally: design the persisted
+  `SealNotarization` for C's promotion **now** — an append-only superseding row referencing
+  the unilateral one, never a mutation (respects the M5 migration-integrity rule).
+- **Workstream B (recovery) — re-scoped as the spine (C-4).** Not merely "stop
+  desyncing": it must **deliver plaintext** on reconnect, and the tail-seal must be
+  **gated on content possession**. Hash-only recovery is explicitly insufficient for an
+  honest seal.
+- **NEW Workstream E — Auto-acknowledge close (C-5).** Replace the agent-mediated
+  responder seal with verifiability-gated **node auto-co-sign**; `counterparty_closing`
+  becomes informational in the happy path and a decision point only when the content is
+  unverifiable. Removes the C-0 robustness seam. AC sketch: (1) B online + content
+  verified → bilateral seal completes with no agent action; (2) B desynced or
+  cross-check fails → no auto-sign, agent notified; (3) B's signature is always produced
+  by B's own node — assert no path lets another party synthesize it.
+- **NEW Workstream F — Certificate legibility (C-1, C-2, C-6).** The seal certificate
+  states **"receipt, not assent"** as a first-class property, and exposes each party's
+  acknowledgement **frontier**, a **live-vs-recovered** marker per attestation, and a
+  **"final message unanswered"** indicator. May fold into A (it shares the notarization
+  write) or stand alone. AC sketch: a reader of the certificate can determine, without
+  external context, exactly what each party provably received vs. merely had delivered,
+  and that no signature implies agreement.
+
+## Updated dependency order
+```
+D-1 (content architecture, now the spine) ─► B (recovery = deliver plaintext) ─┐
+D-2 (RESOLVED) ─► A (notarize) ──────────────────────────────────────────────┐ │
+D-3 (refined: refuse only on unverifiability) ───────────────────────────────┼─┼─► C (upgrade)
+                                                                              │ │
+E (auto-acknowledge close) depends on the C-6 verifiability gate ────────────┘ │
+F (certificate legibility) folds into / follows A ─────────────────────────────┘
+D (WAL) feeds B + C.   P-1, P-2 run in parallel, independent of everything above.
 ```
