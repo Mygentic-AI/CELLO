@@ -509,3 +509,116 @@ E (auto-acknowledge close) depends on the C-6 verifiability gate ─────
 F (certificate legibility) folds into / follows A ─────────────────────────────┘
 D (WAL) feeds B + C.   P-1, P-2 run in parallel, independent of everything above.
 ```
+
+---
+
+---
+
+# Part 4 — Content-Delivery & Liveness: Decisions and Story Slate (2026-06-16)
+
+A working session resolved the content-delivery and peer-liveness design end to
+end. **All architecture decisions are closed.** What remains is parameters
+(proposed below, adjust freely) and writing the stories. This supersedes Part 2's
+open "D-1" and the later "Option A vs B" framing. **All of this is M7 work** — the
+application-level delivery receipt in particular is M7, not deferred (see the
+correction in `outline.md`).
+
+## Verified current state (the gap)
+
+- Content send is **fire-and-forget with a silent catch**; no delivery ACK exists
+  (`session-manager.ts:592, 604-624`).
+- **libp2p provides no application-level delivery receipt** — transport flush ≠
+  app receipt (confirmed against `it-length-prefixed` + circuit-relay-v2 source).
+- **No NAT traversal today:** no relay reservations, no AutoNAT, content dials
+  direct only → only directly-reachable peers work. This is the pre-TRANSPORT-001
+  state, not a new regression.
+- **Topology matrix:** works when ≥1 peer is reachable (incl. the common
+  NATed-peer→public-AWS case); **both-NATed-different-networks is broken.**
+  First-message reliability depends on the *dialed* side being reachable.
+- **Content size:** 4 MB `it-length-prefixed` default — undeliberate; no app cap.
+  Oversize → silent decode failure → desync.
+- **Circuit-relay** (when TRANSPORT-001 lands) is bounded by **128 KB-combined /
+  2-minute** library defaults — library-enforced, connection-reset (not
+  truncation), cumulative across the connection.
+- **Peer↔peer session liveness:** decided *in principle* (multi-party §9 +
+  peer-reconnect doc) but **never storied**; the directory-facing node and the
+  ephemeral session node are decoupled.
+
+## Decisions (closed)
+
+**D-a — Queue for everything.** When direct P2P fails (NAT / hole-punch) *or* the
+peer is offline, content goes through the **app-relay store-and-forward queue**
+(deposit → notify-if-online → pull), **never live libp2p circuit-relay**.
+Circuit-relay stays only the short **DCUtR bridge** (its 128 KB / 2 min defaults
+are fine there). Content never rides a relayed live stream, so those limits never
+bind content. Direct P2P remains the default; the queue is the single fallback for
+every can't-connect-directly and offline case.
+
+**D-b — Session-path liveness; never the directory.** "Is the counterparty alive?"
+is measured on the component actually carrying the session: the **relay** for
+queue sessions (it holds the recipient's standing connection for notify/pull), the
+**peer↔peer connection** for direct sessions (`onPeerDisconnect` + transport
+keepalive). The directory is **rejected** as the authority — it is a passive pong
+responder (DIR-PING-001), and its connection is **decoupled** from the ephemeral
+session node, producing both false-positives and false-negatives. Liveness gates
+the unilateral-seal **ABSENT** decision: connection-alive-but-silent =
+**DELIVERED/busy** (never sealed ABSENT); connection-gone = **ABSENT**. Honest
+limit: proves the *node* is up, not that the *agent* will respond (DELIVERED vs
+Active) — irreducible; periodic agent heartbeats were considered and **rejected**
+(multi-party §9), `last_seen_seq` carries engagement as a byproduct of responding.
+
+**D-c — Unsigned ACK.** The delivery receipt (`received → persisted`) is an
+**unsigned, transport-authenticated** frame. Sole job: tell the sender whether to
+park (no ACK by TTF → park at relay). It is **not** an input to the seal — proof
+of receipt lives in the seal / `last_seen_seq`. The session channel is
+Noise-authenticated, so the ACK provably comes from the peer's node without an app
+signature.
+
+**D-d — WAL-backed durable queue; extend, not greenfield.** The relay-side content
+park is **durable** (survives relay restart). It extends two proven mechanisms:
+- **Sender side:** DAEMON-003's `retry_queue` already holds `content_blob`
+  durably (SQLCipher) and drains on reconnect. Add the **TTF trigger** and a
+  **park-to-relay drain target** (today it only retries P2P).
+- **Relay side:** reuse the **FileSessionWal adapter pattern + `WAL_DIR` wiring +
+  fsync durability** and the delivery queue's **recipient-keying**. Two deltas
+  from the existing WAL: (1) recipient-keyed and **survives session teardown** +
+  **TTL** (vs session-scoped / delete-on-seal); (2) **encrypted content blobs at
+  rest** (vs hash leaves) — a privacy surface already accepted (the relay sees the
+  metadata graph at the hash layer regardless).
+
+## Flush model — TTF, not close
+
+Flush-on-close is wrong (no graceful close event for lid-close / drop / crash).
+Replaced by:
+1. **On TTF** (time-to-flush) without a persisted-ACK → **park at the relay**
+   (timer-driven, shutdown-independent — collapses with "park on no-ACK").
+2. **On startup** → flush any locally-persisted un-acked content (crash backstop).
+3. **Irreducible:** permanent device loss before any flush. But the **hash reached
+   the relay first** (reliable channel), so the message is hash-committed; the
+   receiver seals with that hash and a content-frontier that excludes it → honest
+   **"sent, not received."** The receiver's seal timing bounds recovery; a
+   straggler that resurfaces post-seal cannot re-enter a sealed session. **The seal
+   is always honest; the content layer is best-effort on top of it.**
+
+## Proposed parameters (adjust freely)
+
+| Parameter | Proposed | Note |
+|---|---|---|
+| TTF (no persisted-ACK → park) | 10–30 s | shorter = smaller loss window, more relay exposure |
+| Queue TTL (parked-content retention) | 7 days, delete-on-pickup | = the bilateral-upgrade window |
+| Content size cap (messages) | 1 MB, clear `content_too_large` error | replaces the 4 MB accident; files use a separate large-object path |
+| Circuit-relay bridge limits | leave defaults (128 KB / 2 min) | only the DCUtR bridge uses it now |
+
+## Story slate (all M7)
+
+| Story | Scope | Repos |
+|---|---|---|
+| **A — unilateral seal → notarization** | verify reported root vs chain; FROST notarize; persist signed `SealNotarization` (append-only, upgrade-ready); counterparty ABSENT; cert fields on confirm/notify | both |
+| **Content-delivery (ACK + queue)** | unsigned delivery ACK; TTF park + startup flush; relay-side durable recipient-keyed encrypted content store (extend FileSessionWal pattern); sender extends DAEMON-003 `retry_queue`; resend-vs-replay dedup; content size cap | both |
+| **Peer↔peer session liveness** | session-path liveness (relay for queue, direct connection for direct); feed the attestation enum; gate the unilateral-seal ABSENT decision | both |
+| **Seal certificate legibility** | "receipt, not assent" as first-class; publish per-party content-frontier; live-vs-recovered marker; "final message unanswered" indicator | client + directory |
+| **C — bilateral upgrade** | returning party signs ack leaf over recovered+verified content; reverse SI-002 (invert its test); D-3 dispute = refuse only on unverifiability | both |
+| **TRANSPORT-001 additions** | (fold in) content-size-cap enforcement + confirm circuit-relay is bridge-only, never content | both |
+
+**Process (still recommended):** P-1 deferral/open-question register; P-2 E2E
+behavioral-walkthrough as a milestone-close gate.
