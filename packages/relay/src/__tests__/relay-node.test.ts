@@ -177,17 +177,35 @@ async function makeAssignment(
   sessionId: Uint8Array,
   pubA: Uint8Array,
   pubB: Uint8Array,
-  dirKp: ReturnType<typeof generateKeypair>
+  dirKp: ReturnType<typeof generateKeypair>,
+  peerIds?: { initiator: string; counterparty: string }
 ): Promise<SessionAssignment> {
   const session_timestamp = Date.now();
-  const tbs = CBOR_ENC.encode([
+  // M-4: when both session Peer IDs are present the directory signs a 6-field TBS
+  // covering them, so the relay's recordAssignment can authenticate the binding.
+  // Otherwise it signs the original 4-field TBS. Field order mirrors the producer.
+  const tbsFields: unknown[] = [
     sessionId,
     pubA,
     pubB,
     session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
-  ]) as Uint8Array;
+  ];
+  if (peerIds) {
+    tbsFields.push(peerIds.initiator, peerIds.counterparty);
+  }
+  const tbs = CBOR_ENC.encode(tbsFields) as Uint8Array;
   const directory_signature = await dirKp.sign(tbs);
-  return { session_id: sessionId, participant_a: pubA, participant_b: pubB, session_timestamp, directory_signature };
+  return {
+    session_id: sessionId,
+    participant_a: pubA,
+    participant_b: pubB,
+    session_timestamp,
+    directory_signature,
+    ...(peerIds && {
+      initiator_session_peer_id: peerIds.initiator,
+      counterparty_session_peer_id: peerIds.counterparty,
+    }),
+  };
 }
 
 interface Fixture {
@@ -634,7 +652,13 @@ describe("AC-012: queued leaf_deliver flushed on B reconnect", () => {
 
     await new Promise((r) => setTimeout(r, 200));
 
-    // A submits while B is offline
+    // M7-SESSION-001: when B's stream closes, the relay emits session_interrupted to A.
+    // Drain it before calling submitAndAck so the reader is on the correct frame.
+    const interruptedFrame = await rA.readDecoded();
+    expect(interruptedFrame["type"]).toBe("session_interrupted");
+    expect(interruptedFrame["reason"]).toBe("peer_disconnected");
+
+    // A submits while B is offline (session still active in relay store)
     await submitAndAck(rA, sA, sessionId, 0x00, cA.kp, 0);
 
     // B reconnects — reuse cB's keypair on a new stream
@@ -1042,18 +1066,71 @@ describe("SESSION-003 AC-010: only A submits SEAL ctrl leaf; relay stays active 
 // ─── M7-WIRE-001 AC-008 / SI-003: session Peer ID bindings ───────────────────
 
 describe("M7-WIRE-001: session Peer ID binding (AC-008 / SI-003)", () => {
-  it("AC-008: recordAssignment stores Peer ID binding when initiator_session_peer_id is present", async () => {
+  it("AC-008 / M-4: a correctly-signed assignment WITH session Peer IDs verifies and binds", async () => {
     const fix = await makeFixture();
     const sessionId = new Uint8Array(randomBytes(16));
-    const baseAssignment = await makeAssignment(sessionId, new Uint8Array(randomBytes(32)), new Uint8Array(randomBytes(32)), fix.dirKp);
-    const assignment = {
-      ...baseAssignment,
+    const sessionHex = Buffer.from(sessionId).toString("hex");
+    // 6-field signature covering the two session Peer IDs (M-4).
+    const assignment = await makeAssignment(
+      sessionId,
+      new Uint8Array(randomBytes(32)),
+      new Uint8Array(randomBytes(32)),
+      fix.dirKp,
+      { initiator: "12D3KooWInitiatorSession", counterparty: "12D3KooWCounterpartySession" },
+    );
+
+    const result = fix.relay.recordAssignment(assignment);
+    expect(result.ok, "recordAssignment with signed M7 Peer ID fields must succeed").toBe(true);
+    // The binding is authenticated AND populated.
+    expect(fix.relay.sessionTrackingEntryCount(sessionHex).hasBinding).toBe(true);
+
+    await fix.relayStop();
+  }, 10_000);
+
+  it("M-4: an assignment whose session Peer IDs were altered after signing is REJECTED", async () => {
+    const fix = await makeFixture();
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sessionHex = Buffer.from(sessionId).toString("hex");
+    // Sign over one set of Peer IDs, then tamper with them after signing.
+    const signed = await makeAssignment(
+      sessionId,
+      new Uint8Array(randomBytes(32)),
+      new Uint8Array(randomBytes(32)),
+      fix.dirKp,
+      { initiator: "12D3KooWInitiatorSession", counterparty: "12D3KooWCounterpartySession" },
+    );
+    const tampered = {
+      ...signed,
+      counterparty_session_peer_id: "12D3KooWAttackerSubstitutedPeerId",
+    };
+
+    const result = fix.relay.recordAssignment(tampered);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("directory_signature_invalid");
+    }
+    // Nothing was bound for a rejected assignment.
+    expect(fix.relay.sessionTrackingEntryCount(sessionHex).hasBinding).toBe(false);
+
+    await fix.relayStop();
+  }, 10_000);
+
+  it("M-4: a peer ID present but NOT covered by the signature is REJECTED", async () => {
+    const fix = await makeFixture();
+    const sessionId = new Uint8Array(randomBytes(16));
+    // 4-field signature (no peer IDs signed), but peer IDs attached afterward.
+    const base = await makeAssignment(sessionId, new Uint8Array(randomBytes(32)), new Uint8Array(randomBytes(32)), fix.dirKp);
+    const smuggled = {
+      ...base,
       initiator_session_peer_id: "12D3KooWInitiatorSession",
       counterparty_session_peer_id: "12D3KooWCounterpartySession",
     };
 
-    const result = fix.relay.recordAssignment(assignment);
-    expect(result.ok, "recordAssignment with M7 Peer ID fields must succeed").toBe(true);
+    const result = fix.relay.recordAssignment(smuggled);
+    expect(result.ok, "unsigned peer IDs must not authenticate via the 4-field fallback").toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("directory_signature_invalid");
+    }
 
     await fix.relayStop();
   }, 10_000);

@@ -180,11 +180,22 @@ const NONCE_TTL_MS = 30_000;
 
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
-// M7-WIRE-001: Local TBS builder matching buildSessionEstablishmentTbs in
-// @cello-protocol/protocol-types ≥0.0.5 (not yet published). Remove after AC-021.
+// M7-WIRE-001: Local TBS builder for the 10-field session-establishment TBS.
+//
+// SINGLE-SOURCE-OF-TRUTH NOTE (H-2): the canonical 5-field builder is
+// `buildSessionEstablishmentTbs` exported from @cello-protocol/protocol-types.
+// The published version (0.0.4) only supports the 5-field legacy layout — the
+// 10-field M7 extension is NOT yet published — so this local copy cannot simply
+// import and delegate for the 10-field path. It MUST stay byte-for-byte
+// compatible with the protocol-types helper for the 5-field path and with the
+// client-side verifier for the 10-field path. Drift is guarded by
+// `__tests__/m7-wire-001-tbs-drift-guard.test.ts`, which fails if either layout
+// diverges. Remove this copy and delegate to protocol-types after the 10-field
+// helper is published (AC-021).
+//
 // Uses 10-field path only when ALL M7 fields are non-empty; otherwise falls back to
 // 5-field legacy path so the client-side verifier reconstructs an identical TBS.
-function buildSessionEstablishmentTbsM7(
+export function buildSessionEstablishmentTbsM7(
   sessionId: Uint8Array,
   pubA: Uint8Array,
   pubB: Uint8Array,
@@ -1531,6 +1542,77 @@ export class CelloDirectoryNode {
             this.#sendFrame(stream, encodeManifestPollResponse({ type: "manifest_poll_response", manifest }));
           }
           // When no store is configured, manifest_poll_request is silently ignored for backward compat.
+        } else if (parsed.type === "seal_interrupted_request") {
+          // M7-SESSION-001 AC-009: pass-through routing — forward to counterparty
+          const targetStream = this.#streams.get(parsed.counterpartyPubkey);
+          if (targetStream) {
+            try {
+              this.#sendFrame(targetStream, CBOR_ENC.encode(parsed));
+              this.#logger?.info("directory.signaling.seal_interrupted_request.forwarded", {
+                sessionId: parsed.sessionId,
+                initiator: parsed.initiatorPubkey.slice(0, 16),
+                target: parsed.counterpartyPubkey.slice(0, 16),
+              });
+            } catch (fwdErr) {
+              this.#logger?.warn("directory.signaling.seal_interrupted_request.forward_failed", {
+                sessionId: parsed.sessionId,
+                error: fwdErr instanceof Error ? fwdErr.message : String(fwdErr),
+              });
+            }
+          } else {
+            this.#logger?.info("directory.signaling.seal_interrupted_request.target_offline", {
+              sessionId: parsed.sessionId,
+              target: parsed.counterpartyPubkey.slice(0, 16),
+            });
+          }
+        } else if (parsed.type === "seal_interrupted_ack") {
+          // M7-SESSION-001 AC-009: pass-through routing — forward ack back to initiator.
+          // initiatorPubkey is included in the frame so the directory can route directly
+          // by looking up the initiator's authenticated stream in #streams.
+          const targetStream = this.#streams.get(parsed.initiatorPubkey);
+          if (targetStream) {
+            try {
+              this.#sendFrame(targetStream, CBOR_ENC.encode(parsed));
+              this.#logger?.info("directory.signaling.seal_interrupted_ack.forwarded", {
+                sessionId: parsed.sessionId,
+                target: parsed.initiatorPubkey.slice(0, 16),
+              });
+            } catch (fwdErr) {
+              this.#logger?.warn("directory.signaling.seal_interrupted_ack.forward_failed", {
+                sessionId: parsed.sessionId,
+                error: fwdErr instanceof Error ? fwdErr.message : String(fwdErr),
+              });
+            }
+          } else {
+            this.#logger?.info("directory.signaling.seal_interrupted_ack.initiator_offline", {
+              sessionId: parsed.sessionId,
+              initiator: parsed.initiatorPubkey.slice(0, 16),
+            });
+          }
+        } else if (parsed.type === "seal_interrupted_rejection") {
+          // M7-SESSION-001 AC-009: pass-through routing — forward rejection back to initiator.
+          // initiatorPubkey is included in the frame so the directory can route directly
+          // by looking up the initiator's authenticated stream in #streams.
+          const targetStream = this.#streams.get(parsed.initiatorPubkey);
+          if (targetStream) {
+            try {
+              this.#sendFrame(targetStream, CBOR_ENC.encode(parsed));
+              this.#logger?.info("directory.signaling.seal_interrupted_rejection.forwarded", {
+                sessionId: parsed.sessionId,
+                target: parsed.initiatorPubkey.slice(0, 16),
+              });
+            } catch (fwdErr) {
+              this.#logger?.warn("directory.signaling.seal_interrupted_rejection.forward_failed", {
+                sessionId: parsed.sessionId,
+                error: fwdErr instanceof Error ? fwdErr.message : String(fwdErr),
+              });
+            }
+          } else {
+            this.#logger?.info("directory.signaling.seal_interrupted_rejection.initiator_offline", {
+              sessionId: parsed.sessionId,
+              initiator: parsed.initiatorPubkey.slice(0, 16),
+            });
+          }
         } else {
           // Unknown frame type for authenticated state — ignore
         }
@@ -2378,12 +2460,24 @@ export class CelloDirectoryNode {
       // M7-WIRE-001 AC-009: only register with relay when transport_mode === 'relay'.
       // For direct P2P sessions, the relay has no role and must not hold session Peer IDs.
       if (transportMode === "relay") {
-        const relayTbs = CBOR_ENC.encode([
+        // M-4: the relay binds initiator_session_peer_id / counterparty_session_peer_id
+        // into #sessionPeerIdBindings. Those Peer IDs MUST be covered by the signature
+        // the relay verifies, or the relay binds data the directory never authenticated.
+        // Append the two Peer IDs after the original 4 fields when both are present,
+        // mirroring the presence gate used for the client-facing 10-field TBS. When
+        // either is absent (pre-M7 / initiator-only), fall back to the original 4-field
+        // layout so legacy assignments still verify. The relay's recordAssignment uses
+        // the identical gate and field order on the verification side.
+        const relayTbsFields: unknown[] = [
           session_id,
           new Uint8Array(initiatorPubkey),
           new Uint8Array(targetPubkey),
           session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
-        ]) as Uint8Array;
+        ];
+        if (initiatorSessionPeerId && counterpartySessionPeerId) {
+          relayTbsFields.push(initiatorSessionPeerId, counterpartySessionPeerId);
+        }
+        const relayTbs = CBOR_ENC.encode(relayTbsFields) as Uint8Array;
         const relayDirSig = new Uint8Array(await this.#keyProvider.sign(relayTbs));
         const relayAssignment: RelaySessionAssignment = {
           session_id,

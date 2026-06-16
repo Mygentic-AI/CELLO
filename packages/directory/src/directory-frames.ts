@@ -284,7 +284,14 @@ import type { SealAttempt, SealRejectedTreeMismatch, SealAttemptAck, SealUnilate
 export type PingFrame = { type: "ping"; ts: number };
 export type PongFrame = { type: "pong"; ts: number };
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | ManifestPollRequest | PingFrame | SessionOfferAccept;
+/** M7-SESSION-001 AC-009: seal-interrupted signaling frame types (pass-through routing). */
+export type SealInterruptedRequestFrame = { type: "seal_interrupted_request"; sessionId: string; initiatorPubkey: string; counterpartyPubkey: string; leafCountAtInterruption: number; nonce: string };
+/** initiatorPubkey is included so the directory can route the ack back to the initiator by direct lookup in #streams. */
+export type SealInterruptedAckFrame = { type: "seal_interrupted_ack"; sessionId: string; initiatorPubkey: string; sealInterruptedLeaf: Record<string, unknown> };
+/** initiatorPubkey is included so the directory can route the rejection back to the initiator by direct lookup in #streams. */
+export type SealInterruptedRejectionFrame = { type: "seal_interrupted_rejection"; sessionId: string; initiatorPubkey: string; reason: string };
+
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | ManifestPollRequest | PingFrame | SessionOfferAccept | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -440,6 +447,35 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     const counterparty_session_addrs = toStringArray(o["counterparty_session_addrs"]);
     if (!counterparty_session_peer_id || !counterparty_session_addrs) return null;
     return { type: "session_offer_accept", session_id, counterparty_session_peer_id, counterparty_session_addrs };
+  }
+
+  // M7-SESSION-001 AC-009: seal_interrupted signaling frames (pass-through routing)
+  if (o["type"] === "seal_interrupted_request") {
+    const sessionId = typeof o["sessionId"] === "string" ? o["sessionId"] : null;
+    const initiatorPubkey = typeof o["initiatorPubkey"] === "string" ? o["initiatorPubkey"] : null;
+    const counterpartyPubkey = typeof o["counterpartyPubkey"] === "string" ? o["counterpartyPubkey"] : null;
+    const leafCountAtInterruption = typeof o["leafCountAtInterruption"] === "number" ? o["leafCountAtInterruption"] : null;
+    const nonce = typeof o["nonce"] === "string" ? o["nonce"] : null;
+    if (!sessionId || !initiatorPubkey || !counterpartyPubkey || leafCountAtInterruption === null || !nonce) return null;
+    return { type: "seal_interrupted_request", sessionId, initiatorPubkey, counterpartyPubkey, leafCountAtInterruption, nonce };
+  }
+
+  if (o["type"] === "seal_interrupted_ack") {
+    const sessionId = typeof o["sessionId"] === "string" ? o["sessionId"] : null;
+    const initiatorPubkey = typeof o["initiatorPubkey"] === "string" ? o["initiatorPubkey"] : null;
+    const sealInterruptedLeaf = typeof o["sealInterruptedLeaf"] === "object" && o["sealInterruptedLeaf"] !== null
+      ? o["sealInterruptedLeaf"] as Record<string, unknown>
+      : null;
+    if (!sessionId || !initiatorPubkey || !sealInterruptedLeaf) return null;
+    return { type: "seal_interrupted_ack", sessionId, initiatorPubkey, sealInterruptedLeaf };
+  }
+
+  if (o["type"] === "seal_interrupted_rejection") {
+    const sessionId = typeof o["sessionId"] === "string" ? o["sessionId"] : null;
+    const initiatorPubkey = typeof o["initiatorPubkey"] === "string" ? o["initiatorPubkey"] : null;
+    const reason = typeof o["reason"] === "string" ? o["reason"] : null;
+    if (!sessionId || !initiatorPubkey) return null;
+    return { type: "seal_interrupted_rejection", sessionId, initiatorPubkey, reason: reason ?? "unknown" };
   }
 
   return null;
