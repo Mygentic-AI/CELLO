@@ -1,0 +1,827 @@
+---
+name: CELLO-M7-SESSION-003
+type: user-story
+date: 2026-06-16
+topics: [session, liveness, attestation-enum, delivered-vs-absent, unilateral-seal, peer-disconnect, relay-standing-connection, keepalive, no-agent-heartbeat, m7]
+status: draft
+description: >
+  Measures peer↔peer SESSION-PATH liveness — "is the counterparty alive?" — on
+  the component that actually carries the session, NEVER the directory. For a
+  queue/relay-fallback session the relay is the authority (it holds the
+  recipient's standing connection for content-queue notify/pull and observes
+  connect/disconnect directly); for a direct session the peer↔peer session-node
+  connection is the authority (the client must finally ACT on onPeerDisconnect,
+  plus a transport keepalive so silent death is detected). The observed liveness
+  maps to the attestation enum — connection-alive-but-silent = DELIVERED (busy,
+  never sealed ABSENT); connection-gone = ABSENT — and that verdict GATES the
+  unilateral-seal ABSENT decision: a peer that is alive-but-busy must never be
+  sealed ABSENT. Honest limit, specced explicitly: liveness proves the
+  NODE/software is up, not that the agent is engaging or will respond (DELIVERED
+  vs Active). NO periodic agent heartbeat is introduced — that mechanism was
+  considered and rejected (multi-party §9); last_seen_seq carries engagement as
+  a byproduct of responding.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-SESSION-003
+domain: Session
+milestone: M7
+actor: CLIENT
+priority: P1
+components:
+  - relay
+  - daemon
+  - client
+  - transport
+  - protocol-types
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CLIENT (the present, sealing party) and the relay,
+  I want to measure whether the counterparty is alive on the component that
+  actually carries the session — the relay for queue/fallback sessions, the
+  peer↔peer session-node connection for direct sessions — and map that liveness
+  to the attestation enum (alive-but-silent = DELIVERED, connection-gone =
+  ABSENT),
+  so that the unilateral-seal ABSENT decision is gated on real session-path
+  liveness — a busy peer that is sitting right there producing no output is
+  recorded DELIVERED and is never falsely sealed ABSENT, and a peer whose
+  session connection has genuinely dropped is correctly recorded ABSENT —
+  without ever trusting the directory's decoupled connection as a liveness
+  signal and without introducing any periodic agent heartbeat.
+
+# ─── Context ────────────────────────────────────────────────
+# Design authority: POSTMORTEM-seal-and-content-delivery-gaps.md Part 4 decision
+# D-b (SETTLED — "session-path liveness; never the directory") and the §9
+# "Participant liveness and delivery verification" section of
+# 2026-04-13_1500_multi-party-conversation-design.md (the three observable
+# states Active/Delivered/Offline, the attestation enum
+# CLEAN/FLAGGED/PENDING/DELIVERED/ABSENT, and the EXPLICIT REJECTION of periodic
+# agent heartbeats: "only output proves engagement; last_seen_seq carries it").
+#
+# Why this story exists — the verified gap:
+#   The unilateral-seal ABSENT decision currently consults nothing about the
+#   counterparty's session-path liveness. The directory enforces only the
+#   delivery-grace FLOOR (seal-manager.ts initiateUnilateralSeal ~280 returns
+#   'too_early' before the floor; the directory is the timer). After the floor,
+#   nothing checks whether the counterparty is actually gone vs. merely busy.
+#   The directory cannot supply this signal: per DIR-PING-001 it is a passive
+#   pong responder, and the directory-facing node is DECOUPLED from the
+#   ephemeral session node (outline.md: ephemeral per-session nodes; the
+#   directory connection is separate and shared). Reading the directory link as
+#   "alive" produces both false positives (directory up, session node dead) and
+#   false negatives. So liveness MUST be measured on the session-carrying
+#   component.
+#
+#   Two transport paths, two authorities (transport_mode from WIRE-001 is the
+#   sole disambiguator — never infer from address format):
+#     - transport_mode = 'relay'  → the RELAY is the liveness authority. It
+#       holds the recipient's standing connection (delivery queue keyed by
+#       recipient pubkey, relay-store.ts) and observes onPeerConnect /
+#       onPeerDisconnect (relay-node.ts ~272-276 — currently LOG-ONLY; this
+#       story makes it act). The initiator queries the relay for the
+#       counterparty's liveness.
+#     - transport_mode = 'direct' → the peer↔peer SESSION-NODE connection is the
+#       authority. The transport already exposes onPeerConnect/onPeerDisconnect
+#       (transport/src/node.ts ~183-190) and both fire — but the client acts on
+#       NEITHER today (peer-reconnect-libp2p-primitives.md: "they fire, they
+#       just aren't acted upon"). This story wires the session node's
+#       onPeerDisconnect into a per-session liveness flag and enables a transport
+#       keepalive so a peer that vanished without a clean close is still detected.
+#
+#   NOTE — the peer-reconnect doc's "three relationships" keepalive design
+#   (relay↔dir, client↔dir, client↔relay) did NOT include the peer↔peer SESSION
+#   connection. This story adds exactly that fourth relationship, scoped to
+#   session-path liveness for the seal decision. SIGNAL-001 (client↔directory
+#   heartbeat) and DIR-PING-001 (directory pong responder) are a DIFFERENT layer
+#   and must NOT be used as the liveness authority here.
+#
+# What this story owns vs. what it feeds:
+#   OWNS — (1) relay-side per-recipient session-path liveness tracking + a
+#   liveness query/response frame on the relay protocol; (2) client-side
+#   direct-session liveness via session-node onPeerDisconnect + keepalive;
+#   (3) the liveness→attestation mapping (alive→DELIVERED, gone→ABSENT,
+#   unknown→DELIVERED fail-safe); (4) the GATE — the unilateral-seal path
+#   consults the verdict and only records ABSENT on a positive connection-gone
+#   observation.
+#   FEEDS — the persisted, FROST-signed SealNotarization with the counterparty
+#   attestation is owned by the unilateral-seal-notarization workstream
+#   (POSTMORTEM Part 4 story "A — unilateral seal → notarization"). This story
+#   produces the verdict, carries it on the seal_unilateral frame, and asserts it
+#   is honored; it does not itself write the notarization row.
+#
+# Honest limit (specced, not hidden): liveness proves the NODE/software is up,
+# not that the AGENT is engaging or will respond. DELIVERED is exactly WhatsApp's
+# double-grey tick — received, not read, certainly not processed. Liveness can
+# NEVER upgrade a counterparty to Active/CLEAN/FLAGGED — those require the
+# counterparty's own signed output. NO periodic agent heartbeat is introduced.
+#
+# Sovereign node constraint: directory nodes are independent and the directory
+# is explicitly NOT the liveness authority. This story adds NO directory-side
+# liveness logic. The directory's only new responsibility is to consume the
+# counterparty_liveness verdict carried on the seal_unilateral frame when it sets
+# the attestation (the integration seam with workstream A) — it never DERIVES
+# liveness from its own connection state.
+#
+# Cross-repo: touches packages/relay (trustless-cello), packages/protocol-types
+# + packages/transport + packages/daemon + packages/client (cello-client). The
+# relay change and the cello-client changes must be batched per COORDINATION.md
+# before any pipeline push — never pushed alone (directory/relay pipeline is
+# 25-30 min).
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the relay's standing connection to a session recipient is established (onPeerConnect for a peer that is a known session recipient)"
+    action: >
+      The relay records that recipient's session-path liveness as 'alive', keyed
+      by the recipient's pubkey (the same key as the content delivery queue). The
+      relay no longer treats onPeerConnect as log-only — it updates tracked
+      liveness state. It emits session.liveness.changed at INFO with
+      counterpartyPubkey, transportPath: 'relay', liveness: 'alive', observedBy:
+      'relay'.
+
+  - trigger: "When the relay observes onPeerDisconnect for a recipient that holds a tracked session-path liveness entry"
+    action: >
+      The relay marks that recipient's session-path liveness as 'gone' (and
+      records observedAt). It emits session.liveness.changed at WARN with
+      liveness: 'gone', observedBy: 'relay'. If the same recipient later
+      reconnects, the relay flips the entry back to 'alive' — a 'gone' verdict is
+      never sticky across a genuine reconnect (delivery-queue cleanup parity).
+
+  - trigger: "When a client sends a session_liveness_query frame to the relay over the relay protocol (carrying sessionId and counterparty_pubkey)"
+    action: >
+      The relay responds with a session_liveness_response frame carrying
+      sessionId, counterparty_pubkey, liveness, and observedAt. liveness is
+      'alive' iff the relay currently holds that recipient's standing connection;
+      'gone' iff it has positively observed onPeerDisconnect for that recipient
+      and no subsequent reconnect; 'unknown' iff the relay has no tracked entry
+      for that recipient. The relay never fabricates 'gone' from the absence of
+      an entry — no observation is 'unknown', not 'gone'.
+
+  - trigger: "While a direct session's peer↔peer session node holds the counterparty connection"
+    action: >
+      The client tracks per-session counterparty_liveness = 'alive', updated from
+      the session node's onPeerConnect. The client enables a transport keepalive
+      on the session node so that a counterparty that vanishes without a clean
+      stream close is detected and surfaces as a libp2p peer:disconnect within a
+      bounded window. The client ACTS on the session node's onPeerDisconnect
+      (today it acts on neither hook): on disconnect it sets counterparty_liveness
+      = 'gone' for that session and emits session.liveness.changed at WARN with
+      transportPath: 'direct', observedBy: 'session_node'.
+
+  - trigger: "When the present party initiates a unilateral seal (cello_close_session resolves to the unilateral path after the directory-enforced delivery-grace floor passes)"
+    action: >
+      The client obtains the counterparty's session-path liveness verdict from
+      the authority for that session's transport_mode (WIRE-001): 'direct' → the
+      local per-session counterparty_liveness flag; 'relay' → a
+      session_liveness_query to the relay. It maps the verdict to a counterparty
+      attestation: liveness 'gone' → ABSENT; liveness 'alive' → DELIVERED;
+      liveness 'unknown' (no positive signal) → DELIVERED (fail-safe — ABSENT is
+      NEVER chosen without a positive connection-gone observation). The verdict
+      and the resulting attestation travel on the seal_unilateral frame as
+      counterparty_liveness and counterparty_attestation. The client emits
+      session.seal.attestation.determined at INFO with the attestation, liveness,
+      and the authority that produced it.
+
+  - trigger: "When transport_mode is 'relay' and the relay liveness query cannot be answered (relay unreachable, query times out, or response is 'unknown')"
+    action: >
+      The client does NOT record ABSENT. It defaults to DELIVERED (alive-but-
+      uncertain) so that a busy or merely-unobservable peer is never falsely
+      sealed ABSENT, and emits session.liveness.query.failed at WARN with reason
+      and the extracted error.message. ABSENT requires a positive 'gone'
+      observation from the session-path authority — never the mere absence of a
+      signal.
+
+  - trigger: "If the present client is the ONLY observer (a direct session) and attempts to self-assert that a relay-path counterparty is 'gone'"
+    action: >
+      The client shall not be able to set ABSENT for a relay-path session from
+      its own state — the ABSENT verdict for a relay-path session must originate
+      from the relay's session_liveness_response. There is no code path by which
+      the initiator manufactures a relay-path ABSENT from local information.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+
+  # ── Relay: session-path liveness authority (queue/relay sessions) ──
+  - id: AC-001
+    given: "A relay holding a standing connection to a session recipient B (the
+      connection used for content-queue notify/pull, keyed by B's pubkey), and a
+      second connection to the present party A"
+    when: "the relay observes B's onPeerConnect, then B's onPeerDisconnect (B's
+      TCP connection to the relay is closed from a separate process)"
+    then: >
+      The relay's tracked session-path liveness for B transitions 'alive' →
+      'gone'. session.liveness.changed fires at INFO (alive, observedBy: 'relay')
+      then at WARN (gone, observedBy: 'relay'), both carrying counterpartyPubkey
+      and transportPath: 'relay'. The relay no longer treats the disconnect hook
+      as log-only — the tracked state is observably updated. Verified by an
+      integration test using real in-process libp2p nodes with a real relay
+      process between them: connect B, assert liveness 'alive'; close B's
+      connection; assert liveness 'gone'. No in-process stub that bypasses the
+      relay's peer-event wiring satisfies this AC.
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-002
+    given: "A relay tracking session-path liveness for recipient B (B currently
+      connected), and present party A connected on a real relay stream"
+    when: "A sends a session_liveness_query frame (sessionId, counterparty_pubkey:
+      B) over the relay protocol stream"
+    then: >
+      The relay replies with a session_liveness_response carrying the same
+      sessionId and counterparty_pubkey, liveness: 'alive', and observedAt. After
+      B disconnects, the same query returns liveness: 'gone'. For a recipient the
+      relay has never tracked, the query returns liveness: 'unknown' (never
+      'gone'). Verified by an integration test over a real libp2p relay stream
+      (not a direct internal method call) asserting all three liveness values
+      under the three conditions. This is the L7-guard AC for the relay liveness
+      query — a unit test that calls the relay's internal liveness lookup without
+      going through a real stream does NOT satisfy it.
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-003
+    given: "A relay that has marked recipient B 'gone' after a disconnect"
+    when: "B reconnects (re-establishes its standing connection to the relay)"
+    then: >
+      The relay flips B's tracked liveness back to 'alive' — the 'gone' verdict is
+      not sticky across a genuine reconnect. A subsequent session_liveness_query
+      for B returns 'alive'. Verified by an integration test: connect → disconnect
+      (assert 'gone') → reconnect (assert 'alive'). This prevents a transient drop
+      from permanently poisoning the liveness signal and is consistent with the
+      delivery queue surviving teardown keyed by recipient pubkey.
+    test_type: integration
+    component_under_test: relay
+
+  # ── Client: direct-session liveness authority ──
+  - id: AC-004
+    given: "A direct (transport_mode: 'direct') session whose peer↔peer
+      session-node connection between A and B is established and live"
+    when: "B's session node connection drops (B's process is killed in a separate
+      OS process), causing libp2p peer:disconnect on A's session node"
+    then: >
+      A's client sets per-session counterparty_liveness = 'gone' for that
+      sessionId and emits session.liveness.changed at WARN with transportPath:
+      'direct', observedBy: 'session_node', liveness: 'gone'. The client ACTS on
+      the session node's onPeerDisconnect — verified by an integration test using
+      two real session-node libp2p nodes in separate processes (or separate
+      in-process nodes on distinct ports) where B is forcibly terminated and A's
+      tracked liveness is asserted to flip to 'gone'. A test that flips the flag
+      by calling the handler directly without a real transport disconnect does
+      NOT satisfy this AC (L7 guard; this is the hook the client did not act on
+      before).
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-005
+    given: "A direct session whose counterparty vanishes WITHOUT a clean stream
+      close (e.g. network cable pulled / process SIGKILL with no FIN)"
+    when: "the transport keepalive on the session node runs"
+    then: >
+      The keepalive detects the dead connection and surfaces a libp2p
+      peer:disconnect within a bounded detection window, driving
+      counterparty_liveness to 'gone'. Verified by an integration test that
+      establishes a direct session, severs B's connection ungracefully, and
+      asserts A's counterparty_liveness transitions to 'gone' within the bounded
+      window (no indefinite hang on 'alive'). The keepalive is configured on the
+      session node's createNode options (adapter pattern; injectable interval for
+      tests — no synthetic clock manipulation required to assert the transition).
+    test_type: integration
+    component_under_test: transport
+
+  # ── Liveness → attestation mapping (pure) ──
+  - id: AC-006
+    given: "The liveness→attestation mapping function used by the unilateral-seal
+      path"
+    when: "it is given each liveness value"
+    then: >
+      'gone' → ABSENT; 'alive' → DELIVERED; 'unknown' → DELIVERED (fail-safe). The
+      function NEVER returns CLEAN or FLAGGED (those require the counterparty's own
+      signed attestation, which by definition is absent in a unilateral seal) and
+      NEVER returns ABSENT for any input other than a positive 'gone'. Verified by
+      a unit test exercising all three inputs and asserting CLEAN/FLAGGED are
+      unreachable from this function.
+    test_type: unit
+    component_under_test: client
+
+  # ── THE GATE: alive-but-silent never sealed ABSENT ──
+  - id: AC-007
+    given: "A direct session where B's session-node connection is ALIVE but B's
+      agent has produced no output for the entire delivery-grace window (B is busy
+      / mid-inference, never disconnected)"
+    when: "A calls cello_close_session and the directory-enforced delivery-grace
+      floor has passed, resolving to the unilateral-seal path"
+    then: >
+      A's client reads counterparty_liveness 'alive' from its session node and
+      records the counterparty attestation as DELIVERED — NOT ABSENT. The
+      seal_unilateral frame carries counterparty_liveness: 'alive' and
+      counterparty_attestation: 'DELIVERED'. session.seal.attestation.determined
+      fires at INFO with attestation: 'DELIVERED'. Verified by a cross-process
+      e2e test (CELLO_E2E_LIVE): two real daemons, a real direct session; B stays
+      connected and silent for the whole grace window; A unilaterally seals;
+      assert the recorded counterparty attestation is DELIVERED and that NO ABSENT
+      is recorded anywhere on either side. This is the headline gate — a busy
+      peer sitting right there is never sealed ABSENT.
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-008
+    given: "A relay-path (transport_mode: 'relay') session where B's standing
+      connection to the relay has genuinely dropped (B's process is killed in a
+      separate OS process), and A remains connected"
+    when: "A calls cello_close_session, the grace floor passes, and the unilateral
+      path queries the relay for B's liveness"
+    then: >
+      The relay reports liveness: 'gone' (it positively observed B's
+      onPeerDisconnect), A records the counterparty attestation as ABSENT, and the
+      seal_unilateral frame carries counterparty_liveness: 'gone' and
+      counterparty_attestation: 'ABSENT'. Verified by a cross-process e2e test:
+      real relay process, B killed in a separate process, A unilaterally seals;
+      assert the relay's session_liveness_response was 'gone' (observed over a real
+      stream) AND that A's recorded attestation is ABSENT. Cross-process
+      observable — not a result-only assertion.
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-009
+    given: "A relay-path session where the relay's liveness for B is 'unknown' (no
+      tracked entry) at the moment A initiates a unilateral seal"
+    when: "A queries the relay and receives liveness: 'unknown'"
+    then: >
+      A records the counterparty attestation as DELIVERED (fail-safe) — never
+      ABSENT. The absence of a positive 'gone' observation is treated as 'busy /
+      unobservable', not 'gone'. Verified by an integration test asserting that an
+      'unknown' liveness response yields DELIVERED and that ABSENT is not recorded.
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-010
+    given: "The seal_unilateral frame emitted by the unilateral-seal path
+      (initiateUnilateralSeal) and the directory's consumption of it"
+    when: "the client adds counterparty_liveness and counterparty_attestation to
+      the frame and the directory processes a unilateral seal"
+    then: >
+      The seal_unilateral frame carries both fields; the directory sets the
+      counterparty attestation in its unilateral-seal handling FROM the frame's
+      counterparty_attestation value, never deriving liveness from the directory's
+      own connection state. Verified by an integration test asserting the
+      directory-recorded attestation equals the frame-supplied value for both
+      DELIVERED and ABSENT cases, and a code-path assertion that the directory's
+      unilateral handler reads no directory-side connection/presence signal to
+      decide the attestation.
+    test_type: integration
+    component_under_test: directory
+    notes: >
+      The PERSISTED, FROST-signed SealNotarization write is owned by the
+      unilateral-seal-notarization workstream (POSTMORTEM Part 4 story "A"). This
+      AC asserts the integration seam only: the verdict produced here is the input
+      to that attestation, and the directory does not override it with a
+      self-derived liveness signal.
+
+  # ── Honest limit: no agent heartbeat; node up != agent engaging ──
+  - id: AC-011
+    given: "The full liveness implementation across packages/relay,
+      packages/transport, packages/daemon, and packages/client"
+    when: "the implementer completes the story"
+    then: >
+      A grep-verifiable audit confirms NO periodic agent-level heartbeat or
+      'I have seen through seq N' receipt mechanism is introduced: liveness
+      derives SOLELY from connection/node-level signals (relay standing-connection
+      peer events; session-node onPeerConnect/onPeerDisconnect; transport
+      keepalive). last_seen_seq is unchanged and remains the only engagement
+      signal. The DELIVERED attestation produced by liveness is NEVER promoted to
+      Active/CLEAN/FLAGGED by any liveness signal — only a counterparty's own
+      signed output can do that. Verified by (a) a documented grep over the four
+      packages showing no new timer-driven agent receipt emitter, and (b) a unit
+      test asserting the mapping never yields CLEAN/FLAGGED (cross-refs AC-006).
+    test_type: unit
+    component_under_test: client
+    notes: >
+      multi-party §9 EXPLICITLY rejected periodic agent heartbeats: "LLM agents
+      are receive-and-respond systems... only output proves engagement... the
+      last_seen_seq in each response already provides this signal as a natural
+      byproduct of participation." Re-introducing an agent heartbeat is a
+      blocking finding.
+
+  # ── Directory is NEVER the liveness authority ──
+  - id: AC-012
+    given: "A unilateral-seal decision where the directory signaling connection
+      between A and the directory is fully up and healthy, but the counterparty
+      B's session-path component (relay standing connection for relay sessions, or
+      session-node connection for direct sessions) is DEAD"
+    when: "A determines the counterparty attestation"
+    then: >
+      The liveness verdict is taken from the session-path authority and reads
+      'gone' (or 'unknown' if unobservable) — the healthy directory link is NEVER
+      read as evidence that B is alive. There is no code path in which the
+      directory's connection state, a directory pong (DIR-PING-001), or the
+      directory signaling status contributes to the counterparty liveness verdict.
+      Verified by an integration test that holds the directory link up while the
+      session-path component is dead and asserts the verdict is not 'alive', plus
+      a code-path/grep assertion that no directory-connection signal feeds the
+      liveness determination.
+    test_type: integration
+    component_under_test: client
+
+  # ── Send-path / dead channel ──
+  - id: AC-013
+    given: "A relay-path session where the relay is unreachable at the moment A
+      needs B's liveness (the relay stream is dead or the query times out)"
+    when: "A initiates the unilateral seal and the liveness query fails"
+    then: >
+      The client returns the liveness query failure as a distinct outcome
+      (session.liveness.query.failed at WARN with reason and error.message
+      extracted via error instanceof Error ? error.message : String(error)),
+      defaults the counterparty attestation to DELIVERED (fail-safe — NEVER
+      ABSENT), and the seal proceeds with DELIVERED. The dead channel never causes
+      a silent crash and never causes a false ABSENT. Verified by an integration
+      test that kills the relay stream before the query and asserts DELIVERED is
+      recorded and the failure event fires.
+    test_type: integration
+    component_under_test: client
+
+  # ── Error distinctness + lateral catch audit ──
+  - id: AC-014
+    given: "All error paths introduced by this story across packages/relay,
+      packages/transport, packages/daemon, and packages/client"
+    when: "each distinct failure cause is triggered independently"
+    then: >
+      Each produces a unique error code distinguishable from all others —
+      specifically 'liveness_query_unreachable', 'liveness_query_timeout', and
+      'liveness_unknown' are distinct from each other and from any existing code.
+      No catch block in the touched files of packages/relay/src/,
+      packages/transport/src/, packages/daemon/src/, or packages/client/src/
+      returns a hardcoded reason string without logging error.message, and none
+      interpolates an error object directly into a template string (the required
+      pattern is error instanceof Error ? error.message : String(error)). The
+      implementer scans ALL catch blocks in each touched file — not only new code
+      — and fixes or reports any that swallow exceptions or produce
+      '[object Object]'. This is the lateral catch audit (M6/M6B lesson L6).
+    test_type: unit
+    component_under_test: client
+
+  # ── MCP guidance ──
+  - id: AC-015
+    given: "Every failure response path in the cello_close_session unilateral path
+      that is introduced or modified by this story"
+    when: "each failure path is triggered (e.g. liveness query unreachable)"
+    then: >
+      The response includes both a machine-readable 'reason' field and a
+      'guidance' field naming the specific next action — e.g. for a liveness query
+      that could not reach the relay: guidance explaining that the seal recorded
+      the counterparty as DELIVERED because liveness could not be confirmed, and
+      that the operator may retry to obtain a more precise verdict when the relay
+      is reachable. A response with reason alone and no guidance does not satisfy
+      this AC (M7 error discipline Rule 2).
+    test_type: unit
+    component_under_test: daemon
+
+  # ── Observability ──
+  - id: AC-016
+    given: "The liveness and attestation events specified in the observability
+      block"
+    when: "liveness transitions occur and a unilateral-seal attestation is
+      determined"
+    then: >
+      session.liveness.changed fires on every alive↔gone transition (relay-side
+      and client-side) with the specified context_fields;
+      session.seal.attestation.determined fires once per unilateral-seal
+      determination carrying attestation, liveness, and the authority; and
+      session.liveness.query.failed fires on query failure. All
+      seal-determination events carry the correlationId minted at
+      cello_close_session invocation and threaded through the determination.
+      Verified by tests asserting each event name, level, and required fields, and
+      that no console.log is used (all output via the injected Logger).
+    test_type: integration
+    component_under_test: client
+
+  # ── Composition root wiring ──
+  - id: AC-017
+    given: "The relay composition root (relay-node startup) and the daemon
+      composition root (packages/daemon/src/server.ts)"
+    when: "the relay binary and the daemon binary start"
+    then: >
+      The relay wires its peer-event handlers to update tracked session-path
+      liveness and registers the session_liveness_query handler in its protocol
+      dispatch — not as dead code, reachable from a real relay stream. The daemon
+      wires the liveness consumer into the unilateral-seal / ABSENT path so the
+      attestation determination runs at the entrypoint. Verified by an integration
+      test that starts the real binaries and observes: (a) a real
+      session_liveness_query over a relay stream returns a live verdict, and (b) a
+      cello_close_session unilateral path records DELIVERED-vs-ABSENT driven by
+      that verdict. A unit test that constructs the consumer directly without
+      going through the composition root does NOT satisfy this AC (M6/M6B lesson
+      L3).
+    test_type: integration
+    component_under_test: daemon
+
+  # ── Cross-repo version bump ──
+  - id: AC-018
+    given: "All cello-client code changes for this story are implemented and tests
+      pass"
+    when: "the implementer runs the version bump procedure in cello-client
+      CLAUDE.md"
+    then: >
+      - packages/protocol-types (new session_liveness_query / response frame types
+        and counterparty_liveness / counterparty_attestation fields), packages/
+        transport, packages/client, and packages/daemon each have their version
+        incremented in package.json
+      - every package that depends on a modified package has its dependency
+        version updated
+      - @cello-protocol/connect is bumped to reflect the net change
+      - pnpm install is run and pnpm-lock.yaml is updated
+      - git tag v{connect-version} is pushed; CI publishes to npm beta
+      - `npm view @cello-protocol/connect@beta dependencies --json` shows real
+        semver versions (never workspace:*)
+    test_type: integration
+    component_under_test: cello-client CI
+    notes: >
+      Hard gate. Check COORDINATION.md batching section before pushing any tag —
+      the relay changes in packages/relay (trustless-cello) and the cello-client
+      changes must be batched with the other pending directory/relay M7 stories
+      into a single pipeline push. Never push this story's relay changes alone
+      (pipeline is 25-30 min).
+
+  - id: AC-019
+    given: "The new @cello-protocol/connect version is live on npm beta"
+    when: "packages/relay/package.json and packages/directory/package.json in
+      trustless-cello are updated"
+    then: >
+      - packages/relay/package.json references the new pinned semver ranges for
+        @cello-protocol/protocol-types and any other modified cello-client packages
+        (for the session_liveness frame types)
+      - packages/directory/package.json references the new semver range for
+        @cello-protocol/protocol-types (for the counterparty_liveness /
+        counterparty_attestation fields on the seal_unilateral frame)
+      - No workspace:* references to @cello-protocol/crypto, transport,
+        protocol-types, or client remain in either package.json
+      - pnpm install is run and pnpm-lock.yaml is updated in trustless-cello
+      - pnpm run typecheck passes in trustless-cello
+      - Commit pushed to trustless-cello main only after confirming with
+        COORDINATION.md that the batch of pending directory/relay M7 changes is
+        ready (never push relay/directory changes alone)
+    test_type: integration
+    component_under_test: relay
+    notes: >
+      workspace:* resolves to stale local copies post-REPOSPLIT-002. This AC
+      ensures the relay and directory run against the published version with the
+      session_liveness frame types and the new seal_unilateral fields.
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      A counterparty whose session-path connection is alive must NEVER be recorded
+      ABSENT in a unilateral seal — an alive-but-silent peer is DELIVERED.
+    adversarial_condition: >
+      The counterparty B is alive on the session path (relay standing connection
+      up, or peer↔peer session-node connection up) but produces NO output for the
+      entire delivery-grace window — indistinguishable, at the byte level, from a
+      busy or stalled agent. A malicious or impatient present party wants B
+      recorded ABSENT (the weaker, more adverse standing). The gate must read
+      'alive' and record DELIVERED regardless of B's silence. Verified by: (a)
+      keeping B connected and silent for the whole grace window on both a direct
+      and a relay-path session; (b) initiating the unilateral seal; (c) asserting
+      the recorded counterparty attestation is DELIVERED and that ABSENT is
+      recorded nowhere. A determination that seals ABSENT on silence alone fails
+      this invariant.
+    test_type: e2e
+    component_under_test: client
+
+  - id: SI-002
+    statement: >
+      The directory's connection state must NEVER be used as the counterparty
+      liveness authority. The liveness verdict must originate solely from the
+      session-path component (relay standing connection for relay sessions,
+      session-node connection for direct sessions).
+    adversarial_condition: >
+      The directory signaling link between the present party and the directory is
+      fully up and healthy (and the directory answers DIR-PING-001 pongs), while
+      the counterparty's actual session-path component is DEAD. A naive
+      implementation reads "directory says I'm connected" as "counterparty alive"
+      (false positive) — or, symmetrically, a flaky directory link as
+      "counterparty gone" (false negative). The directory-facing node is decoupled
+      from the ephemeral session node, so either reading is wrong. Verified by:
+      (a) holding the directory link up while the session-path component is dead
+      and asserting the verdict is NOT 'alive'; (b) a code-path/grep assertion
+      that no directory connection signal, pong, or directory_signaling status
+      feeds the liveness determination.
+    test_type: integration
+    component_under_test: client
+
+  - id: SI-003
+    statement: >
+      ABSENT must require a POSITIVE connection-gone observation from the
+      session-path authority. The mere absence, timeout, or unavailability of a
+      liveness signal must NEVER be recorded as ABSENT.
+    adversarial_condition: >
+      The relay is unreachable, the liveness query times out, or the relay returns
+      'unknown' — there is no positive evidence that the counterparty's connection
+      dropped. An implementation that treats "no signal" as "gone" would let any
+      transient relay/network fault manufacture a false ABSENT against a peer that
+      is actually alive. The gate must fail SAFE to DELIVERED. Verified by:
+      (a) making the relay unreachable / forcing a timeout / forcing an 'unknown'
+      response; (b) initiating the unilateral seal; (c) asserting DELIVERED is
+      recorded and ABSENT is not.
+    test_type: integration
+    component_under_test: client
+
+  - id: SI-004
+    statement: >
+      For a relay-path (transport_mode: 'relay') session, an ABSENT verdict must
+      originate from the relay's session_liveness_response — the present party must
+      not be able to manufacture a relay-path ABSENT from its own local state.
+    adversarial_condition: >
+      A malicious present party wants the counterparty recorded ABSENT on a
+      relay-path session (where it is NOT the session-path observer) by
+      self-asserting 'gone' from local information. Because the relay holds the
+      recipient's standing connection and is the only honest observer for that
+      transport mode, the implementation must source the relay-path ABSENT verdict
+      from the relay's response and have no fallback path that lets the initiator
+      assert it locally. Verified by: (a) attempting to drive a relay-path ABSENT
+      while the relay reports 'alive'/'unknown'; (b) asserting the recorded
+      attestation is NOT ABSENT — the relay's verdict governs.
+    test_type: integration
+    component_under_test: client
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the relay is unreachable when a relay-path liveness query is
+      needed for a unilateral-seal ABSENT determination"
+    fallback: >
+      The client records the counterparty attestation as DELIVERED (alive-but-
+      uncertain) instead of ABSENT, emits session.liveness.query.failed with a
+      distinct reason, and proceeds with the unilateral seal. This replaces the
+      normal behavior of consulting the relay and recording the relay's positive
+      verdict. ABSENT is never produced from a missing signal.
+    test_type: integration
+    component_under_test: client
+
+  - id: DB-002
+    condition: "While the directory signaling stream is in 'reconnecting' state
+      when the operator calls cello_close_session on the unilateral path"
+    fallback: >
+      The unilateral seal returns the SESSION-001 'signaling_reconnecting' outcome
+      with guidance to wait for directory_signaling to show connected — the
+      liveness determination is deferred until the seal can be submitted. The
+      session state is unchanged; the operator retries. This story does not change
+      SESSION-001's signaling-reconnecting handling; it only ensures the liveness
+      step does not run against a dead signaling channel.
+    test_type: unit
+    component_under_test: client
+    notes: >
+      Addresses M7 lesson L5 (send-path dead channel). The liveness query and the
+      seal submission must both check channel state before sending; a send over a
+      dead channel must fail with a distinct error, never hang or silently fail.
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: session.liveness.changed
+      level: info
+      trigger: "When a session-path liveness entry transitions to 'alive' (relay
+        standing connection established, or direct session-node onPeerConnect).
+        Fires at WARN instead of INFO when transitioning to 'gone'."
+      context_fields: [sessionId, counterpartyPubkey, transportPath, liveness, observedBy]
+      correlationId: false
+      notes: >
+        transportPath is exactly 'direct' | 'relay'. observedBy is exactly
+        'relay' | 'session_node'. liveness is exactly 'alive' | 'gone'. The
+        'gone' transition is logged at WARN. Relay-side events fire in the relay
+        ECS task (CloudWatch-observable); client/session-node events fire in the
+        local daemon process (local log only).
+    - name: session.seal.attestation.determined
+      level: info
+      trigger: "When the unilateral-seal path determines the counterparty
+        attestation from the session-path liveness verdict"
+      context_fields: [sessionId, counterpartyPubkey, attestation, liveness, authority, correlationId]
+      correlationId: true
+      notes: >
+        attestation is exactly 'DELIVERED' | 'ABSENT' for this path (never
+        CLEAN/FLAGGED). authority is exactly 'relay' | 'session_node'.
+        correlationId is minted at cello_close_session invocation and threaded
+        through the liveness query and the determination.
+  error_events:
+    - name: session.liveness.query.failed
+      level: warn
+      trigger: "When a relay-path liveness query cannot be answered (relay
+        unreachable, query timeout, or response 'unknown' treated as a
+        non-determinative failure for ABSENT purposes)"
+      context_fields: [sessionId, counterpartyPubkey, reason, error]
+      correlationId: true
+      notes: >
+        reason is one of 'liveness_query_unreachable', 'liveness_query_timeout',
+        'liveness_unknown'. error carries the extracted error.message string,
+        never the raw error object.
+  alarms:
+    - condition: "session.liveness.changed with liveness: 'gone' and observedBy:
+        'relay' fires more than 20 times in 5 minutes on a single relay task
+        across all recipients — indicates relay-side connection churn /
+        instability rather than normal session teardown"
+      fires_to: "CloudWatch metric filter on the relay log group → relay
+        instability alarm; relay-side events ARE CloudWatch-observable (the relay
+        runs in ECS)"
+    - condition: "session.liveness.query.failed fires more than 10 times in 10
+        minutes for relay-path sessions on a single daemon — indicates the daemon
+        cannot reach the relay to determine liveness"
+      fires_to: "surfaced as persistent WARN in the local daemon log; the daemon
+        is a local operator process, not an ECS task, so CloudWatch cannot observe
+        it — the threshold is implementer guidance for local monitoring"
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Relay session-path liveness: extend relay-store.ts to track per-recipient
+    liveness keyed by recipient pubkey (the same key as #deliveryQueues). Replace
+    the log-only onPeerConnect/onPeerDisconnect handlers in relay-node.ts
+    (~272-276) with handlers that update this state. 'gone' must flip back to
+    'alive' on reconnect (delivery-queue cleanup parity — cross-ref the M-2
+    teardown-leak fix from SESSION-001: a single cleanup authority, idle sweep
+    safe). The relay never fabricates 'gone' from a missing entry — no entry is
+    'unknown'.
+  - >
+    Relay liveness frame: add session_liveness_query and session_liveness_response
+    to the relay protocol (/cello/relay/1.0.0) and to packages/protocol-types.
+    Query: { type: 'session_liveness_query', session_id, counterparty_pubkey }.
+    Response: { type: 'session_liveness_response', session_id, counterparty_pubkey,
+    liveness: 'alive' | 'gone' | 'unknown', observed_at }. snake_case on the relay
+    wire is intentional (cross-ref SESSION-001 L-1).
+  - >
+    Direct-session liveness: the transport already exposes
+    onPeerConnect/onPeerDisconnect (transport/src/node.ts ~183-190) and both fire
+    but the client acts on neither (peer-reconnect-libp2p-primitives.md). Wire the
+    session node's onPeerDisconnect to a per-session counterparty_liveness flag in
+    the session record / session-node manager. Enable a transport keepalive on the
+    session node's createNode options so a peer that vanished without a clean close
+    is detected (libp2p connection keepalive / ping). The keepalive interval must
+    be injectable for tests (adapter pattern) so AC-005 does not require synthetic
+    clock manipulation.
+  - >
+    transport_mode authority: read transport_mode from the session's
+    SessionAssignment (WIRE-001) to pick the liveness authority — 'direct' → local
+    session-node flag; 'relay' → query the relay. NEVER infer the authority from
+    the address format (WIRE-001 SI: transport_mode is the sole authority).
+  - >
+    The gate: in initiateUnilateralSeal (seal-manager.ts ~280), after the
+    directory-enforced grace floor passes (the directory still owns the 'too_early'
+    timer), obtain the liveness verdict and map it (alive→DELIVERED, gone→ABSENT,
+    unknown→DELIVERED). Add counterparty_liveness and counterparty_attestation to
+    the seal_unilateral frame. The PERSISTED FROST-signed SealNotarization with
+    the attestation is the unilateral-seal-notarization workstream's job
+    (POSTMORTEM Part 4 "A"); this story produces and carries the verdict and
+    asserts the directory honors it without self-deriving liveness.
+  - >
+    Honest limit / no agent heartbeat: do NOT add any timer-driven agent receipt
+    emitter. Liveness is connection/node-level only. last_seen_seq is unchanged.
+    The DELIVERED attestation is NEVER promotable to Active/CLEAN/FLAGGED by a
+    liveness signal — only the counterparty's own signed output (the bilateral
+    path) can do that. multi-party §9 rejected periodic agent heartbeats; the
+    grep audit (AC-011) enforces this.
+  - >
+    Cross-repo batching: this story touches packages/relay (trustless-cello) and
+    packages/protocol-types + packages/transport + packages/daemon +
+    packages/client (cello-client). Batch the relay change with the other pending
+    directory/relay M7 changes per COORDINATION.md before any pipeline push. Never
+    push relay changes alone — the directory/relay pipeline is 25-30 minutes.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-DAEMON-002  # ephemeral session nodes — the peer↔peer session-node connection whose onPeerDisconnect this story acts on; SessionNodeManager seam
+    - CELLO-M7-WIRE-001    # transport_mode field on SessionAssignment — the sole disambiguator for which liveness authority to consult
+  related:
+    - CELLO-M7-SESSION-001 # interrupted-session + unilateral/seal-interrupted context; relay frame + signaling patterns reused
+    - CELLO-M7-SESSION-004 # seal certificate legibility — consumes the attestation enum this story feeds (DELIVERED vs ABSENT, live-vs-recovered marker)
+  feeds:
+    - "CELLO-M7-SESSION-002 (unilateral seal → notarization) — this story's
+       counterparty_liveness verdict and DELIVERED/ABSENT determination is the
+       input to SESSION-002's persisted FROST-signed SealNotarization attestation.
+       SESSION-002 owns the notarization write; SESSION-003 owns the verdict and the gate."
+  notes: >
+    The relay liveness change and the cello-client changes must be batched before
+    any pipeline push (COORDINATION.md). This story adds the fourth keepalive
+    relationship (peer↔peer session connection) that the peer-reconnect doc's
+    three relationships (relay↔dir, client↔dir, client↔relay) did not cover.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Session Lifecycle, Multi-Party Conversations"
+  end_to_end_flow: "§5.7 Session Establishment, §6.1 Hash Relay Mechanics"
+  milestone: M7
+  discussion_logs:
+    - "2026-04-13_1500_multi-party-conversation-design"
+    - "2026-06-10_2000_peer-reconnect-libp2p-primitives"
+  related_docs:
+    - "[[POSTMORTEM-seal-and-content-delivery-gaps]]"
+    - "[[CELLO-M7-SESSION-001]]"
+    - "[[CELLO-M7-SESSION-004]]"
+    - "[[CELLO-M7-WIRE-001]]"
+    - "[[CELLO-M7-DAEMON-002]]"
+  notes: >
+    Design authority: POSTMORTEM Part 4 decision D-b (SETTLED — session-path
+    liveness; never the directory) and multi-party §9 (the three states
+    Active/Delivered/Offline, the CLEAN/FLAGGED/PENDING/DELIVERED/ABSENT enum, and
+    the explicit rejection of periodic agent heartbeats). The directory is a
+    passive pong responder per DIR-PING-001 and its connection is decoupled from
+    the ephemeral session node — it is rejected as the liveness authority.
