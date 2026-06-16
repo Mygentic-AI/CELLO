@@ -132,6 +132,7 @@ surfaced at next `cello login`.
 - Ephemeral session node lifecycle (create, connectionGater, standing receiver, teardown)
 - SessionAssignment wire format change (cross-repo: directory + relay + client)
 - AutoNAT in `createNode`; direct P2P default; dcutr upgrade path; relay fallback
+- **Application-level delivery receipt — M7 SCOPE (see correction note near the end of this doc).** Receiver-side ACK (content `received → persisted`), the sender-side park/forward decision it gates, a deliberate content-size cap, and configuration of the circuit-relay fallback's data/duration limits. The forcing function is the verified content-delivery gap: content is sent fire-and-forget with a silent catch, the sender gets no delivery signal, missing content triggers a terminal desync, and the circuit-relay fallback is bounded by libp2p's 128 KB / 2-minute defaults.
 - Interrupted session handling (relay `session_interrupted` frame, DB status, login surfacing)
 - Signaling stream resilience — heartbeat/keepalive, automatic reconnect with exponential backoff, `directory_signaling` status observable
 - Nonce dedup + retry queue rehoused in daemon
@@ -144,7 +145,6 @@ surfaced at next `cello login`.
 - M7 integration gate
 
 **NOT in scope:**
-- Application-level delivery receipt (separate future story — protocol design question with Merkle implications; no forcing function from current architecture gaps)
 - Portal or web UI changes
 - New Flyway directory schema migrations (none in M7)
 
@@ -928,13 +928,37 @@ triggering the directory/relay pipeline. Batch all three before pushing.
 
 ---
 
-## Post-M7 Known Gaps
+## Correction — Application-level delivery receipt IS M7 work
 
-### Application-level delivery receipt
-Small ACK frame from receiver after dequeuing. Adds a round-trip to every
-message; Merkle implications need design. Deferred — retry queue with
-TCP-level detection is sufficient for M7. Needs its own design session before
-a story can be written.
+**The application-level delivery receipt is M7 SCOPE. Any text — here, in story
+files, or anywhere else — that calls it "deferred," "Post-M7," a "separate future
+story," or claims there is "no forcing function" is WRONG and is struck. IT IS
+M7.** This has been re-introduced in error multiple times (the likely source is
+the misspecced `m7-archived/` outline, which still carries the old framing — do
+not read or cite it).
+
+**It does not belong to any other milestone.** It is inseparable from M7's
+content transport (direct-P2P with relay fallback), ephemeral session nodes, and
+interrupted-session flow. There is no coherent M8/M9/M10 home for it; placing it
+later just leaves M7's content path non-functional.
+
+**The "no forcing function" premise is false.** Verified 2026-06-16: session
+content is sent fire-and-forget with a silent catch; the sender receives no
+delivery signal of any kind; missing content triggers a terminal desync; and
+there is no durable fallback when direct P2P fails (the circuit-relay fallback is
+bounded by libp2p's **128 KB-combined / 2-minute** defaults, currently
+unconfigured). A retry queue plus TCP detection is **not** sufficient — TCP
+delivery is not application receipt, and there is no receiver→sender signal at
+all. The seal layer depends on it too: a bilateral seal upgrade requires the
+returning party to have actually received and persisted the content, which only
+a real delivery receipt establishes.
+
+**Design is in progress now** — the ACK ladder (`received → persisted`, with
+room to extend to higher levels), the sender-side park/forward decision it gates,
+the deliberate content-size cap, and circuit-relay limit configuration. See
+`POSTMORTEM-seal-and-content-delivery-gaps.md` (Workstream B). This still needs a
+story slot in the breakdown above — it is M7 work that has not yet been written
+as a story, not work that belongs to a future milestone.
 
 ---
 

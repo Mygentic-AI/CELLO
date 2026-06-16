@@ -96,8 +96,9 @@ story: >
 #   (packages/adapter-claude-code) is unchanged — it already routes all tool
 #   calls through the daemon IPC socket (MCP-001's scope).
 #
-# NOT in scope:
-#   Application-level delivery receipts (separate future story).
+# NOT in scope for DAEMON-003 itself (but IS M7 work — addressed in the M7
+# content-delivery / delivery-receipt work; NOT deferred to a future milestone):
+#   Application-level delivery receipts.
 #   Per-session retry backoff scheduling (retry is triggered by peer reconnect,
 #   not by a timer — M7's retry model is reconnect-driven, not interval-driven).
 #   Relay-mediated retry (M7 session transport is direct P2P first; relay fallback
