@@ -14,9 +14,13 @@
 //                      trustless-cello; everything else → cello-client. Pass the server-side
 //                      package(s) for any story that touches the directory or relay, or the
 //                      gate runs green while server code is never tested/typechecked.
-//   model              coder model. Default "opus".
-//   reviewModel        code reviewer + sprint reviewer model. Default "sonnet".
-//   utilityModel       preflight / worktree / severity-gate model. Default "haiku".
+//   model              coder + fix model. Default: INHERIT the parent/session model (omit).
+//                      Only set to force a tier (e.g. "opus"). Never defaults to "sonnet".
+//   reviewModel        code reviewer + sprint reviewer model. Default: INHERIT parent/session.
+//                      Only set to force a tier. Never defaults to "sonnet" — that alias is
+//                      Sonnet 4.6, which we are deliberately avoiding for real work.
+//   utilityModel       preflight / worktree / severity-gate model. Default "haiku" (these are
+//                      trivial file-exists / yes-no tasks — a deliberate cheap tier, overridable).
 //   reviewAndFixOnly   true → skip setup + initial implementation; run review+fix rounds only.
 //                      If a worktree branch exists, diffs main...STORY_ID; else diffs by story ID in git log.
 //   skipCodeReview     true → run sprint reviewer only.
@@ -66,8 +70,11 @@ if (!A.storyId) {
 
 const RAW_ID = A.storyId
 const STORY_ID = RAW_ID.startsWith('CELLO-') ? RAW_ID : `CELLO-${RAW_ID}`
-const CODER_MODEL = A.model || 'opus'
-const REVIEW_MODEL = A.reviewModel || 'sonnet'
+// Model selection: omit `model` entirely unless the caller forces a tier, so the agent
+// inherits the parent/session model (Opus 4.8 today). NEVER default to 'sonnet' (= Sonnet 4.6).
+// Spread these into agent opts: `{ ...CODER_MODEL_OPT, label, agentType, ... }`.
+const CODER_MODEL_OPT = A.model ? { model: A.model } : {}
+const REVIEW_MODEL_OPT = A.reviewModel ? { model: A.reviewModel } : {}
 const UTILITY_MODEL = A.utilityModel || 'haiku'
 const REVIEW_ONLY = A.reviewAndFixOnly === true
 const SKIP_CODE_REVIEW = A.skipCodeReview === true
@@ -277,7 +284,7 @@ ${GATE_INSTRUCTIONS}
 Final commit when complete: "feat(${STORY_ID}): <one-line summary>"
 
 Return: files changed, gate results, ALL commit hashes (incremental + final), assumptions made.`,
-    { label: 'sprint-coder-initial', phase: 'Implement', model: CODER_MODEL, agentType: 'cello-sprint-coder' }
+    { label: 'sprint-coder-initial', phase: 'Implement', ...CODER_MODEL_OPT, agentType: 'cello-sprint-coder' }
   )
 }
 
@@ -303,8 +310,16 @@ Report ALL issues with confidence >= 80. Group: Critical → Important → Mediu
 Include file path and line number for every issue.
 Check that every AC and SI in the story YAML has a corresponding implementation and test.
 Do not summarize or truncate.`,
-    { label: `code-reviewer-r${roundNum}`, phase: 'Review', model: REVIEW_MODEL, agentType: 'feature-dev:code-reviewer' }
+    { label: `code-reviewer-r${roundNum}`, phase: 'Review', ...REVIEW_MODEL_OPT, agentType: 'feature-dev:code-reviewer' }
   )
+
+  // A null result means the reviewer agent DIED (e.g. API 500 after retries). That is NOT
+  // convergence — do not run the fix agent on phantom findings, and do not let the severity
+  // gate read "no findings" as "all clear". Report it as a failure so status reflects reality.
+  if (result == null) {
+    log(`Round ${roundNum}: ⚠️ CODE REVIEW AGENT FAILED (returned null — likely API error). Not converged, not fixed.`)
+    return { result: null, converged: false, failed: true }
+  }
 
   log(`Round ${roundNum} code review complete.`)
 
@@ -322,7 +337,7 @@ ${COMMIT_DISCIPLINE}
 
 ${GATE_INSTRUCTIONS}
 Final commit for this round: "fix(${STORY_ID}): address code review findings round ${roundNum}"`,
-    { label: `fix-code-r${roundNum}`, phase: 'Review', model: REVIEW_MODEL, agentType: 'cello-sprint-coder' }
+    { label: `fix-code-r${roundNum}`, phase: 'Review', ...CODER_MODEL_OPT, agentType: 'cello-sprint-coder' }
   )
 
   const gate = await agent(
@@ -339,7 +354,7 @@ Rules:
     { label: `gate-code-r${roundNum}`, phase: 'Review', model: UTILITY_MODEL, schema: { type: 'object', properties: { allLow: { type: 'boolean' } }, required: ['allLow'] } }
   )
 
-  return { result, converged: gate && gate.allLow === true }
+  return { result, converged: gate && gate.allLow === true, failed: false }
 }
 
 async function runSprintReview(roundNum) {
@@ -359,8 +374,13 @@ ${DIFF_INSTRUCTIONS}
 
 DO NOT summarize or truncate. Report every finding at every severity (blocking → high → medium → low).
 End with APPROVED or BLOCKED.`,
-    { label: `sprint-reviewer-r${roundNum}`, phase: 'Review', model: REVIEW_MODEL, agentType: 'cello-sprint-reviewer' }
+    { label: `sprint-reviewer-r${roundNum}`, phase: 'Review', ...REVIEW_MODEL_OPT, agentType: 'cello-sprint-reviewer' }
   )
+
+  if (result == null) {
+    log(`Round ${roundNum}: ⚠️ SPRINT REVIEW AGENT FAILED (returned null — likely API error). Not converged, not fixed.`)
+    return { result: null, converged: false, failed: true }
+  }
 
   log(`Round ${roundNum} sprint review complete.`)
 
@@ -378,7 +398,7 @@ ${COMMIT_DISCIPLINE}
 
 ${GATE_INSTRUCTIONS}
 Final commit for this round: "fix(${STORY_ID}): address sprint review findings round ${roundNum}"`,
-    { label: `fix-sprint-r${roundNum}`, phase: 'Review', model: REVIEW_MODEL, agentType: 'cello-sprint-coder' }
+    { label: `fix-sprint-r${roundNum}`, phase: 'Review', ...CODER_MODEL_OPT, agentType: 'cello-sprint-coder' }
   )
 
   const gate = await agent(
@@ -395,7 +415,7 @@ Rules:
     { label: `gate-sprint-r${roundNum}`, phase: 'Review', model: UTILITY_MODEL, schema: { type: 'object', properties: { allLow: { type: 'boolean' } }, required: ['allLow'] } }
   )
 
-  return { result, converged: gate && gate.allLow === true }
+  return { result, converged: gate && gate.allLow === true, failed: false }
 }
 
 // Independent convergence state — a converged reviewer is never re-run.
@@ -407,26 +427,30 @@ let codeConverged = SKIP_CODE_REVIEW
 let sprintConverged = SKIP_SPRINT_REVIEW
 let lastCodeReview = null
 let lastSprintReview = null
+let codeFailed = false
+let sprintFailed = false
 const rounds = []
 
 for (let i = 1; i <= MAX_ROUNDS; i++) {
   const roundData = { round: i }
 
   if (!codeConverged) {
-    const { result, converged } = await runCodeReview(i)
+    const { result, converged, failed } = await runCodeReview(i)
     roundData.codeReview = result
     lastCodeReview = result
     codeConverged = converged
+    codeFailed = failed === true // tracks the LAST round's outcome
     if (converged) log(`Round ${i}: code reviewer converged (all findings low). Will not re-run.`)
   } else {
     log(`Round ${i}: code reviewer already converged — skipping.`)
   }
 
   if (!sprintConverged) {
-    const { result, converged } = await runSprintReview(i)
+    const { result, converged, failed } = await runSprintReview(i)
     roundData.sprintReview = result
     lastSprintReview = result
     sprintConverged = converged
+    sprintFailed = failed === true
     if (converged) log(`Round ${i}: sprint reviewer converged (all findings low). Will not re-run.`)
   } else {
     log(`Round ${i}: sprint reviewer already converged — skipping.`)
@@ -453,9 +477,22 @@ if (!sprintConverged) {
   unresolved.push({ reviewer: 'sprint-reviewer', finalFindings: typeof lastSprintReview === 'string' ? lastSprintReview : JSON.stringify(lastSprintReview) })
 }
 
-if (unresolved.length) {
+// A review that DIED (API error) is a different failure than unresolved findings:
+// the review never produced a verdict, so the story's quality is simply unknown.
+// This must NEVER be reported as "done".
+const reviewFailures = []
+if (codeFailed) reviewFailures.push('code-reviewer')
+if (sprintFailed) reviewFailures.push('sprint-reviewer')
+
+let status
+if (reviewFailures.length) {
+  status = 'review-failed'
+  log(`⚠️ REVIEW FAILED: ${reviewFailures.join(', ')} could not complete (agent error, e.g. API 500) on the final round. The implementation may be unreviewed AND/OR incomplete. Status is "review-failed" — do NOT treat as done, do NOT merge. Re-run once the API is healthy.`)
+} else if (unresolved.length) {
+  status = 'needs-attention'
   log(`⚠️ NEEDS ATTENTION: reached max rounds (${MAX_ROUNDS}) with above-low findings still on the final review from: ${unresolved.map((u) => u.reviewer).join(', ')}. The final fix pass was NOT re-reviewed. Findings are returned in \`unresolved\` — review them; do NOT merge.`)
 } else {
+  status = 'done'
   log(`Done — ${rounds.length} round(s) completed. Both reviewers converged (all findings low).`)
 }
 
@@ -465,5 +502,6 @@ return {
   worktrees: { trustlessCello: WORKTREE_PATH, celloClient: CLIENT_WORKTREE },
   rounds,
   unresolved,
-  status: unresolved.length ? 'needs-attention' : 'done',
+  reviewFailures,
+  status,
 }
