@@ -1,0 +1,998 @@
+---
+name: CELLO-M7-MSG-001
+type: user-story
+date: 2026-06-16
+topics: [content-delivery, delivery-ack, store-and-forward, park, ttf, dedup, content-size-cap, recovery, desync, relay, daemon, retry-queue, m7]
+status: draft
+description: >
+  Closes the M7 content-delivery gap (POSTMORTEM Part 4). Adds an unsigned,
+  transport-authenticated delivery ACK (received → persisted ladder; the protocol
+  acts on `persisted` only); a TTF-driven park-at-relay flush model plus a
+  startup flush of locally-persisted un-acked content; a durable, recipient-keyed,
+  WAL-backed relay-side store-and-forward queue holding ENCRYPTED content the relay
+  cannot read (TTL 7 days, delete-on-pickup); resend-vs-replay dedup so a recovered
+  or duplicated message is never double-counted in the Merkle tree; a deliberate
+  1 MB content-size cap with a clear `content_too_large` error replacing the silent
+  4 MB decode-failure → desync; and replacement of desync-on-missing-content with
+  active recovery (ACK-driven resend from the sender, then pull from the relay
+  queue). Desync now occurs ONLY on genuine tamper (content_hash mismatch).
+  Cross-repo: cello-client (protocol-types, transport, client, daemon) and
+  trustless-cello (relay, interfaces). The sender side EXTENDS DAEMON-003's durable
+  `retry_queue`; the relay side EXTENDS the FileSessionWal adapter pattern + WAL_DIR.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-MSG-001
+domain: Message Exchange
+milestone: M7
+actor: CLIENT
+priority: P1
+components:
+  - client
+  - daemon
+  - relay
+  - transport
+  - protocol-types
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO client and relay,
+  I want content delivery to be observable, durable, and recoverable — the sender
+  learns whether the recipient durably persisted the content, parks encrypted
+  content at the relay when the direct channel fails or the peer is offline, and a
+  recipient that misses content recovers it (from the sender, then from the relay
+  queue) instead of the session dying — so that missed content is delivered as a
+  best-effort layer on top of the always-honest hash/seal layer, the relay never
+  sees plaintext, a duplicated or resent message is never double-counted, and
+  oversize content is rejected with a clear error rather than a silent desync.
+
+# ─── Context ────────────────────────────────────────────────
+# Authority: POSTMORTEM-seal-and-content-delivery-gaps.md Part 4 (decisions D-a..D-d,
+# the TTF flush model, proposed parameters). All architecture is CLOSED there; this
+# story specs to those decisions. Part 3 C-4 establishes WHY this matters: content
+# possession is the precondition that makes a bilateral seal upgrade semantically
+# possible. This story delivers the content layer; it does NOT implement the seal
+# upgrade (Workstream C — its own story).
+#
+# Verified current state (the gap), with anchors:
+#   - cello-client/core/client/src/session-manager.ts:589-593 — after the relay ACKs
+#     the hash and assigns a sequence number, content is sent with `void
+#     sendContentFrame(...)` — fire-and-forget, no delivery signal.
+#   - session-manager.ts:604-624 — sendContentFrame() has a silent catch ("Content
+#     path failure is silent; 30s grace timer fires"). The send caller never learns
+#     whether the peer received the content.
+#   - cello-client/core/client/src/relay-stream-manager.ts:683-689 — a hash
+#     (leaf_deliver) that arrives with no matching content starts a grace timer; on
+#     expiry the callback calls #desync(sessionIdHex, "content_missing").
+#   - relay-stream-manager.ts:805-839 — #desync() sets session.desynchronized = true
+#     and KILLS the session (drops pending state, fails acks). Once desynchronized the
+#     session stops processing frames (line 442). TERMINAL. This story REPLACES the
+#     content_missing → #desync path with recovery. The content_hash_mismatch →
+#     #desync path (relay-stream-manager.ts:466) is KEPT — that is genuine tamper.
+#   - trustless-cello/packages/relay/src/relay-store.ts:56-116 — #deliveryQueues is
+#     in-memory, recipient-pubkey-keyed, bounded DELIVERY_QUEUE_BOUND=256, and holds
+#     LEAF frames (Structure2), NOT content. The new content store is a SEPARATE,
+#     durable, recipient-keyed store for ENCRYPTED content blobs.
+#   - trustless-cello/packages/relay/src/adapters/file-session-wal.ts — FileSessionWal:
+#     per-session WAL_DIR/{sessionId}.wal, fsync-durable, validateConfig() gate, used
+#     in dev/production; stores leaf metadata (NOT content). REUSE this adapter
+#     pattern, the WAL_DIR wiring (bin/relay.ts:63,89-101), and the delivery queue's
+#     recipient-keying for the new content store.
+#   - cello-client/core/transport/src/node.ts — content uses bare lp.decode(stream)
+#     (it-length-prefixed default maxDataLength = 4 MB); no application size cap.
+#     Oversize → silent decode failure → desync today.
+#
+# Decisions specced from Part 4 (do not re-open):
+#   D-a — Queue for everything. When direct P2P fails (NAT / hole-punch) OR the peer
+#         is offline, content goes through the app-relay store-and-forward queue
+#         (deposit → notify-if-online → pull). Content NEVER rides a live libp2p
+#         circuit-relay stream; circuit relay stays only the DCUtR bridge. Direct P2P
+#         remains the default; the queue is the single fallback for every
+#         can't-connect-directly and offline case.
+#   D-c — Unsigned, transport-authenticated delivery ACK. Levels: received → persisted
+#         (extensible ladder — leave room for future levels; the protocol acts on
+#         `persisted` ONLY). Emitted by the receiver AFTER it durably persists and
+#         cross-checks the content. The session channel is Noise-authenticated, so the
+#         ACK provably comes from the peer's node without an app signature. The ACK is
+#         NOT signed and is NOT an input to the seal — proof of receipt lives in the
+#         seal / last_seen_seq. Sole job: tell the sender whether to park (no
+#         persisted-ACK by TTF → park).
+#   D-d — WAL-backed durable park; extend, not greenfield:
+#         - Sender side: EXTEND DAEMON-003's retry_queue (already durable content_blob
+#           in SQLCipher, drains on reconnect) by adding the TTF trigger and a
+#           park-to-relay drain target (today it only retries direct P2P).
+#         - Relay side: REUSE the FileSessionWal adapter pattern + WAL_DIR + fsync
+#           durability + recipient-keying. Two deltas from the existing session WAL:
+#           (1) recipient-keyed and survives session teardown + TTL (vs session-scoped
+#           / delete-on-seal); (2) ENCRYPTED content blobs at rest (vs hash leaves).
+#
+# Flush model — TTF, not close (D-d). Flush-on-close is wrong (no graceful close
+# event for lid-close / drop / crash):
+#   1. On TTF (time-to-flush, proposed 10-30s) without a persisted-ACK → park at the
+#      relay (timer-driven, shutdown-independent).
+#   2. On startup → flush any locally-persisted un-acked content (crash backstop).
+#   3. Irreducible: permanent device loss before any flush. But the hash reached the
+#      relay first (reliable channel) so the message is hash-committed; the receiver
+#      seals with that hash and a content-frontier that excludes it → honest "sent,
+#      not received." A straggler that resurfaces post-seal cannot re-enter a sealed
+#      session. The seal is always honest; the content layer is best-effort on top.
+#
+# Recovery (replaces desync-on-absence): a hash-without-content past grace triggers
+# recovery, NOT terminal desync. Recovery order: (a) request resend from the sender
+# (the persisted-ACK channel runs in reverse — the receiver asks for the content
+# behind a known content_hash); (b) if the sender is unreachable, pull from the relay
+# store-and-forward queue. The recovered content is cross-checked against the
+# already-committed content_hash. Match → accepted at the already-assigned sequence
+# number (no new leaf, no double-count). Mismatch → genuine tamper → #desync.
+#
+# Resend vs replay (dedup): the hash leaf already carries a relay-assigned sequence
+# number; content recovery FILLS an existing pending leaf, it does NOT create a new
+# leaf. A legitimate resend satisfies a pending content_hash exactly once. A replay
+# (the same content re-delivered after the leaf is already satisfied) is recognized
+# by content_hash against the already-satisfied set and dropped — never appended to
+# the Merkle tree a second time. This composes with DAEMON-003's NonceDedupStore
+# (which dedups inbound message nonces); MSG-001's dedup is at the content_hash /
+# pending-leaf layer.
+#
+# Files are a SEPARATE large-object path and are OUT OF SCOPE here. The 1 MB cap is
+# for messages; large objects get their own transfer mechanism in a later story.
+
+# ─── Sovereign Node Constraint ──────────────────────────────
+# The relay store-and-forward content store is a per-relay-node concern; it holds only
+# ciphertext keyed to the recipient and adds NO cross-node state, NO replication, and
+# NO directory dependency. Relay nodes remain independent and sovereign — a recipient
+# pulls parked content from whichever relay holds it; if that relay is down the content
+# is recovered from the sender (resend) or is treated as never-delivered and the seal
+# remains honest. No story logic assumes co-located relays or a shared content store.
+# The relay never holds plaintext, so it cannot read the metadata graph beyond what it
+# already sees at the hash layer (an already-accepted privacy surface, Part 4 D-d).
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the client sends content for a message whose hash the relay has
+      already ACKed and sequenced"
+    action: >
+      The client transmits the content frame to the counterparty on
+      /cello/content/1.0.0 (direct P2P) and arms a TTF timer (configurable, proposed
+      10-30s) awaiting a `persisted`-level delivery ACK for that content_hash. The
+      content send is no longer fire-and-forget: its outcome is tracked by the TTF
+      timer and the ACK channel.
+
+  - trigger: "When the receiver durably persists a content frame AND its content_hash
+      cross-check against the relayed hash leaf succeeds"
+    action: >
+      The receiver emits an unsigned, transport-authenticated delivery ACK to the
+      sender over the Noise-authenticated session channel, carrying { sessionId,
+      content_hash, level: 'persisted' }. The ACK ladder is extensible (level may
+      take future values beyond received/persisted), but the protocol acts on
+      `persisted` ONLY. The ACK is never signed and is never an input to the seal.
+
+  - trigger: "When the sender receives a `persisted` delivery ACK for a content_hash
+      before its TTF timer fires"
+    action: >
+      The sender cancels the TTF timer, removes the content from the local retry_queue
+      (if present), and emits content.delivery.acked. No park occurs.
+
+  - trigger: "When the sender's TTF timer fires for a content_hash with no `persisted`
+      delivery ACK received"
+    action: >
+      The sender parks the content at the relay store-and-forward queue: it deposits
+      the content ENCRYPTED to the recipient's identity key (the relay holds only
+      ciphertext it cannot decrypt), keyed by the recipient pubkey, and records the
+      un-acked content in the local retry_queue (DAEMON-003) so a crash before the
+      deposit confirms is recoverable at startup. content.park.deposited is emitted on
+      relay deposit confirmation. The session is NOT killed and the operator is not
+      interrupted — parking is best-effort durability.
+
+  - trigger: "When a recipient pubkey with parked content reconnects to the relay (or
+      is already online at deposit time)"
+    action: >
+      The relay notifies the recipient that parked content is available
+      (content.park.notified). The recipient pulls the parked ciphertext, decrypts it
+      locally, cross-checks it against the committed content_hash, and on success the
+      relay deletes the entry (delete-on-pickup). content.park.pulled is emitted.
+
+  - trigger: "When the daemon starts (server.ts startup sequence)"
+    action: >
+      The daemon flushes locally-persisted un-acked content: it drains the retry_queue
+      entries that are still awaiting a `persisted` ACK and re-parks them to the relay
+      store-and-forward queue (the crash backstop). This runs before the IPC socket
+      opens, consistent with DAEMON-003 startup loading.
+
+  - trigger: "When a relayed hash leaf (leaf_deliver) has no matching content by the
+      content grace deadline"
+    action: >
+      The client attempts RECOVERY instead of desync: (1) it requests a resend from
+      the sender over the session channel for the known content_hash; (2) if the
+      sender is unreachable, it pulls the content from the relay store-and-forward
+      queue. The recovered content is cross-checked against the committed content_hash.
+      On match the content is accepted at the already-assigned sequence number — no new
+      leaf is created, the Merkle tree is unchanged in structure, and
+      content.recovery.succeeded is emitted with the source. The session stays alive.
+
+  - trigger: "When recovered, resent, or duplicated content arrives whose content_hash
+      already satisfies a known (delivered or pending-then-filled) leaf"
+    action: >
+      The client treats it as a duplicate: it does NOT append a second leaf to the
+      Merkle tree and does NOT increment any sequence counter. content.dedup.hit is
+      emitted. A legitimate resend that fills a still-pending leaf is accepted exactly
+      once; any further delivery of the same content_hash is a dedup hit.
+
+  - trigger: "If content offered for send exceeds the 1 MB message content cap, OR an
+      inbound content frame exceeds the cap on decode"
+    action: >
+      The client rejects it with a distinct `content_too_large` error and guidance
+      naming the large-object path as the correct mechanism; it does NOT attempt the
+      send, does NOT desync the session, and does NOT fall through to the bare 4 MB
+      it-length-prefixed decode failure. The application size cap is enforced
+      explicitly before the transport-level decode limit can fire.
+
+  - trigger: "If a recovered content frame's content_hash does NOT match the committed
+      hash leaf (genuine tamper)"
+    action: >
+      The client desyncs the session via #desync(sessionId, 'content_hash_mismatch').
+      This is the ONLY remaining desync trigger on the content path — mere absence
+      never desyncs.
+
+  - trigger: "While the relay store-and-forward content store is at its byte cap, entry
+      count cap, or holds entries older than the TTL (proposed 7 days)"
+    action: >
+      The relay evicts: TTL-expired entries are deleted; at the byte/count cap the
+      oldest entry for the affected recipient is evicted before the new deposit.
+      content.store.full is emitted on cap-driven eviction. Eviction never blocks
+      live delivery and never exposes plaintext.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+
+  # ── Delivery ACK (D-c) ───────────────────────────────────
+  - id: AC-001
+    given: "An active direct-P2P session where the relay has ACKed and sequenced the
+      hash for content C (content_hash H); the direct content channel is healthy"
+    when: "the sender transmits C and the receiver durably persists it and cross-checks
+      H successfully"
+    then: >
+      The receiver emits an unsigned delivery ACK { sessionId, content_hash: H,
+      level: 'persisted' } over the Noise-authenticated session channel. The sender
+      receives it, cancels its TTF timer, and emits content.delivery.acked with
+      sessionId, contentHash (hex = H), level: 'persisted', and the correlationId
+      minted at send. The ACK carries NO signature field. No park occurs (no
+      content.park.deposited fires). Verified by an integration test across two
+      separate processes (sender and receiver as distinct daemons): the receiver's ACK
+      travels over a real session stream, and the sender observably transitions from
+      "awaiting persisted ACK" to acked. A test that injects the ACK via an internal
+      method call does NOT satisfy this AC.
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-002
+    given: "The delivery ACK ladder is implemented with levels received → persisted"
+    when: "the receiver has decoded but not yet durably persisted/cross-checked the
+      content, then later completes persistence + cross-check"
+    then: >
+      Any `received`-level signal does NOT cause the sender to cancel its TTF timer or
+      treat the content as delivered — the protocol acts on `persisted` ONLY. Only the
+      `persisted` ACK (emitted after durable persistence + successful cross-check)
+      cancels the TTF timer. The level field is an open enum (future levels can be
+      added without a wire break). Verified by a unit test asserting that a `received`
+      ACK leaves the TTF timer armed and the content still pending park, while a
+      `persisted` ACK clears it.
+    test_type: unit
+    component_under_test: client
+
+  # ── TTF park + send-path liveness (D-a, D-d, flush model) ─
+  - id: AC-003
+    given: "An active session where the direct content channel is DEAD at send time
+      (the counterparty's content stream cannot be established — simulated by closing
+      the underlying stream / failing the dial at the network level, not by stubbing
+      sendContentFrame)"
+    when: "the sender sends content C (content_hash H) and the TTF deadline passes with
+      no `persisted` ACK"
+    then: >
+      The content is PARKED at the relay store-and-forward queue (encrypted to the
+      recipient), keyed by the recipient pubkey — it is NOT silently dropped (the
+      current silent-catch behavior). content.park.deposited fires with sessionId,
+      recipientPubkey (hex), contentHash (hex = H), and the send correlationId. The
+      send path exposes a distinct observable for "parked because direct channel was
+      dead" (content.park.deposited) — never the old silent return. The session is NOT
+      desynced. Verified by an integration test that kills the content stream at the
+      network level before send and asserts content.park.deposited fires and the
+      relay's content store contains an entry for the recipient. The kill must be at
+      the transport boundary (L7) — not a mock of the send method.
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-004
+    given: "A sender daemon with one un-acked content entry recorded in the local
+      retry_queue (DAEMON-003 table, extended by this story with the awaiting-ACK
+      state) that was never confirmed parked because the daemon crashed before the
+      relay deposit completed"
+    when: "the daemon binary restarts and runs its startup flush"
+    then: >
+      The startup flush drains the retry_queue, finds the un-acked content, and
+      re-parks it to the relay store-and-forward queue. content.park.deposited fires
+      after restart for that content_hash. The flush runs BEFORE the IPC socket opens
+      (consistent with DAEMON-003 startup loading). Verified by an integration test
+      that: (a) writes an un-acked retry_queue entry to SQLCipher; (b) starts the
+      daemon binary; (c) asserts the relay content store receives the parked entry
+      after startup and content.park.deposited fires. The restart must use a real
+      daemon binary restart, not an in-memory reset.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-005
+    given: "DAEMON-003's retry_queue (durable content_blob, FIFO, reconnect-driven
+      drain) before this story"
+    when: "this story extends it"
+    then: >
+      The retry_queue gains (a) a TTF-trigger path that enqueues an un-acked content
+      entry when the TTF timer fires, and (b) a park-to-relay drain target in addition
+      to the existing direct-P2P resend-on-reconnect target. No new table is created
+      for the sender side — the extension reuses the retry_queue table and its typed
+      serializer. The DAEMON-003 FIFO ordering and 1,000-entry cap semantics are
+      preserved. Verified by a unit test asserting the TTF trigger enqueues to
+      retry_queue and the drain dispatches to the park-to-relay target when direct
+      delivery is unavailable.
+    test_type: unit
+    component_under_test: daemon
+
+  # ── Relay store-and-forward queue (D-a, D-d) ─────────────
+  - id: AC-006
+    given: "A relay running with WAL_DIR configured (CELLO_ENV=dev), and a recipient B
+      that is OFFLINE; sender A parks content C (content_hash H) encrypted to B"
+    when: "A deposits C, then B (a SEPARATE process) later comes online and pulls"
+    then: >
+      The relay stores the ciphertext keyed by B's pubkey, durably (fsync) under
+      WAL_DIR using the FileSessionWal adapter pattern. On B's reconnect the relay
+      emits content.park.notified; B pulls the parked ciphertext, decrypts it locally,
+      cross-checks it against H, and on success the relay DELETES the entry
+      (delete-on-pickup) and emits content.park.pulled. The relay at no point held
+      plaintext. Verified by a cross-process integration test: A and B are distinct
+      daemons; B pulls the parked ciphertext from the relay and decrypts it; the test
+      asserts the relay's on-the-wire and at-rest blob is ciphertext (not equal to the
+      plaintext), B's decrypted content equals the original, and the entry is gone from
+      the store after pickup. Real libp2p streams to the relay — no in-process stubs.
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-007
+    given: "A relay with parked content for recipient B in its store-and-forward queue"
+    when: "the relay process is stopped and restarted (WAL_DIR persists on disk)"
+    then: >
+      After restart the parked content for B is still retrievable: B pulls it,
+      decrypts it, and cross-checks it against the committed content_hash successfully.
+      The reconstructed entry is byte-usable (decrypts and cross-checks), not merely
+      byte-present. Verified by an integration test that deposits, restarts the relay
+      binary, then has B (separate process) pull and decrypt — asserting the decrypted
+      plaintext matches the original and the cross-check passes.
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-008
+    given: "The relay store-and-forward content store as a new adapter (interface in
+      packages/interfaces/, FileContentStore for dev/production, in-memory stub for
+      local/test), and the relay entrypoint packages/relay/src/bin/relay.ts"
+    when: "the relay binary starts in CELLO_ENV=dev with WAL_DIR set"
+    then: >
+      The composition root in bin/relay.ts instantiates the content store adapter
+      (FileContentStore under WAL_DIR, mirroring the FileSessionWal validateConfig +
+      WAL_DIR wiring at relay.ts:63,89-101) and wires it into the relay node's deposit
+      / notify / pull handlers. The store is reachable end-to-end FROM THE ENTRYPOINT:
+      verified by an integration test that starts the actual relay binary (not a
+      directly-constructed store) and exercises deposit → pull through real streams,
+      asserting observable behavior. A test that constructs the store directly does NOT
+      satisfy this AC (L3 composition-root lesson). For CELLO_ENV=dev/production a
+      missing WAL_DIR fails startup with a distinct adapter.config.missing-style error,
+      exactly as FileSessionWal does today.
+    test_type: integration
+    component_under_test: relay
+
+  # ── Recovery instead of desync (Workstream B spine) ──────
+  - id: AC-009
+    given: "A receiver that drained a hash leaf (leaf_deliver, sequence N, content_hash
+      H) from the relay but never received the matching content directly, and the
+      content grace deadline has passed; the SENDER is still reachable"
+    when: "the content-grace path fires"
+    then: >
+      The receiver attempts recovery — NOT #desync. It requests a resend from the
+      sender for content_hash H over the session channel; the sender resends C; the
+      receiver cross-checks C against H, accepts it at the already-assigned sequence
+      number N (no new leaf, no sequence change), and emits content.recovery.succeeded
+      with sessionId, contentHash (hex = H), and source: 'sender_resend'. The session
+      stays alive (session.desynchronized remains false; the session continues
+      processing frames). Verified by an integration test that delivers the hash leaf
+      without content, lets the grace fire, and asserts the resend round-trip recovers
+      the content with no desync event. Replaces the relay-stream-manager.ts:683-689
+      content_missing → #desync path.
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-010
+    given: "The same hash-without-content situation, but the SENDER is unreachable
+      (offline / dropped) AND the sender previously parked C at the relay store-and-
+      forward queue"
+    when: "the receiver's resend request to the sender fails"
+    then: >
+      The receiver falls back to pulling C from the relay store-and-forward queue,
+      decrypts it, cross-checks it against H, accepts it at sequence N, and emits
+      content.recovery.succeeded with source: 'relay_queue'. The session stays alive.
+      Verified by a cross-process integration test where the sender parks then goes
+      offline and the receiver recovers from the relay queue. The relay delivers
+      ciphertext only; the receiver decrypts locally.
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-011
+    given: "A hash leaf with content_hash H whose content can be recovered from neither
+      the sender (unreachable) nor the relay queue (never parked / TTL-expired)"
+    when: "all recovery avenues are exhausted"
+    then: >
+      The session is NOT killed. Recovery fails with a distinct, observable outcome:
+      content.recovery.failed fires with sessionId, contentHash (hex), and a reason
+      distinguishing sender-unreachable + relay-empty. The leaf remains content-missing
+      (the message is hash-committed but content-unrecovered); the seal layer treats it
+      as "sent, not received" — the receiver may still seal honestly excluding it from
+      its content frontier. A straggler that resurfaces after the receiver has sealed
+      is rejected (dedup / sealed-session guard), never re-entering a sealed session.
+      Verified by an integration test asserting no #desync, content.recovery.failed
+      fires, and the session continues to function.
+    test_type: integration
+    component_under_test: client
+
+  # ── Dedup: resend vs replay ──────────────────────────────
+  - id: AC-012
+    given: "A receiver that has already accepted content C (content_hash H) at sequence
+      N (whether by direct delivery or recovery)"
+    when: "C is delivered AGAIN (a duplicate resend, a second relay-queue pull, or a
+      replayed content frame from an attacker carrying the same content_hash H)"
+    then: >
+      The receiver recognizes H against its satisfied-content set and does NOT append a
+      second leaf to the Merkle tree, does NOT change any sequence number, and does NOT
+      re-emit the message to the agent. content.dedup.hit fires with sessionId and
+      contentHash (hex = H). The Merkle tree leaf count is identical before and after
+      the duplicate delivery. Verified by a unit test that accepts C once, re-delivers
+      C, and asserts (a) leaf count unchanged, (b) content.dedup.hit fired, (c) the
+      message is not double-surfaced.
+    test_type: unit
+    component_under_test: client
+
+  # ── Content-size cap ─────────────────────────────────────
+  - id: AC-013
+    given: "Content offered to cello_send that exceeds the 1 MB message content cap"
+    when: "the client validates the content size before transmission"
+    then: >
+      The send is rejected with { ok: false, reason: 'content_too_large', guidance:
+      <names the large-object path as the correct mechanism for content over the cap> }.
+      No content frame is transmitted, no hash is submitted to the relay, and the
+      session is NOT desynced. content.rejected.too_large fires with sessionId,
+      contentSize (bytes), and cap (bytes). Verified by a unit test asserting the
+      rejection, the distinct reason code, the guidance field, and that no relay
+      submission or desync occurs.
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-014
+    given: "An inbound content frame on /cello/content/1.0.0 whose payload exceeds the
+      1 MB application cap (but is under the 4 MB it-length-prefixed transport default)"
+    when: "the receiver decodes the inbound content stream"
+    then: >
+      The application size cap is enforced explicitly BEFORE the bare lp.decode 4 MB
+      transport limit can fire. The frame is rejected with content_too_large and the
+      stream is closed cleanly. The session is NOT desynced (this replaces the silent
+      4 MB decode-failure → desync described in transport node.ts). content.rejected.too_large
+      fires with the inbound size and cap. Verified by an integration test that sends
+      an oversize content frame over a real content stream and asserts the receiver
+      rejects it with content_too_large and the session stays alive (not desynchronized).
+    test_type: integration
+    component_under_test: transport
+
+  # ── Tamper is the ONLY desync ────────────────────────────
+  - id: AC-015
+    given: "A recovered (resent or relay-pulled) content frame whose bytes do NOT hash
+      to the committed content_hash H (genuine tamper)"
+    when: "the receiver cross-checks the recovered content against H"
+    then: >
+      The cross-check fails and the receiver desyncs via #desync(sessionId,
+      'content_hash_mismatch'). content.tamper.desync fires with sessionId and
+      contentHash (hex = H). This is the ONLY desync trigger left on the content path —
+      mere absence, recovery failure, and oversize all keep the session alive. Verified
+      by a unit test that feeds a tampered recovered frame and asserts #desync fires
+      with reason content_hash_mismatch, AND a complementary test that feeds a
+      content-missing scenario and asserts #desync does NOT fire.
+    test_type: unit
+    component_under_test: client
+
+  # ── Serialization round-trip (L1) ────────────────────────
+  - id: AC-016
+    given: "A parked-content store entry (encrypted blob + recipientPubkey + contentHash
+      + depositedAt) and an extended retry_queue entry (awaiting-ACK content), both
+      constructed via the normal send/park path with real Uint8Array fields (the
+      encrypted blob, content_hash from SHA-256 of real content, recipient pubkey)"
+    when: "each is serialized via its typed serializer, persisted (relay WAL for the
+      park entry, SQLCipher for the retry_queue entry), the process/relay is restarted,
+      and the entry is loaded and deserialized"
+    then: >
+      Every Uint8Array field round-trips with TYPE intact (Uint8Array, not a plain
+      {"0":..} object, not a mis-prototyped Buffer, not a string) — JSON.stringify on a
+      Uint8Array is forbidden; the typed serializer stores bytes as base64/hex/BLOB and
+      restores them as bytes. The deserialized park entry is USABLE in production: the
+      ciphertext decrypts to the original plaintext and the plaintext cross-checks
+      against the stored content_hash (returns match, not a type error). Byte equality
+      alone does NOT satisfy this AC (L1 lesson) — the decrypt + cross-check must run.
+    test_type: integration
+    component_under_test: relay
+
+  # ── Resource caps + graceful degradation ─────────────────
+  - id: AC-017
+    given: "A relay store-and-forward content store at one of its caps: (a) total bytes
+      cap, (b) total entry-count cap, or (c) an entry older than the TTL (proposed 7
+      days)"
+    when: "a deposit arrives at the byte/count cap, or the TTL sweep runs"
+    then: >
+      (a/b) the oldest entry for the affected recipient is evicted before the new
+      deposit is written; content.store.full fires with recipientPubkey and the
+      evicted count/bytes; the new deposit succeeds; (c) TTL-expired entries are
+      deleted on sweep and on next access; an expired entry is never delivered. Each
+      cap has a defined degradation (eviction, never a crash, never plaintext exposure,
+      never a blocked live delivery) and a named event. delete-on-pickup is enforced:
+      a pulled entry is removed regardless of TTL. Verified by unit tests for each cap
+      and a test that a TTL-expired entry is not pulled.
+    test_type: unit
+    component_under_test: relay
+
+  - id: AC-018
+    given: "The 1 MB message content-size cap and its enforcement points (send-side
+      AC-013 and receive-side AC-014)"
+    when: "the cap value is referenced in code"
+    then: >
+      The cap is a single named constant (not a magic number duplicated at two sites),
+      its degradation is the content_too_large rejection with guidance, and the named
+      event content.rejected.too_large carries contentSize and cap. Verified by a unit
+      test asserting both enforcement points read the same constant and that the cap is
+      strictly below the 4 MB it-length-prefixed transport default so the application
+      cap always fires first.
+    test_type: unit
+    component_under_test: client
+
+  # ── Degraded: relay content store unavailable ────────────
+  - id: AC-019
+    given: "A sender whose TTF timer fires for content C, but the relay store-and-forward
+      queue is unavailable at park time (relay down, or WAL_DIR not writable)"
+    when: "the park deposit fails"
+    then: >
+      content.park.failed fires at WARN with sessionId, recipientPubkey, reason, and
+      error.message (never the raw error object, never [object Object]). C remains in
+      the local retry_queue and is re-parked on the next reconnect or at next startup
+      flush (AC-004). The session is NOT killed and the operator is not interrupted.
+      Verified by an integration test that makes the relay deposit fail and asserts
+      content.park.failed fires, the retry_queue retains C, and a subsequent successful
+      park drains it.
+    test_type: integration
+    component_under_test: daemon
+
+  # ── Error distinctness (M7 Rule 1) ───────────────────────
+  - id: AC-020
+    given: "All error paths in this story's scope: content_too_large (send + receive),
+      content_park_failed, content_recovery_failed, content_store_full / eviction,
+      relay content-store WAL corrupt/unrecoverable, encrypt/decrypt failure"
+    when: "each distinct failure cause is triggered independently"
+    then: >
+      Each produces a unique error code or named event distinguishable from all others
+      in packages/client, packages/daemon, packages/transport (cello-client) and
+      packages/relay (trustless-cello); the actual exception message is preserved
+      (error instanceof Error ? error.message : String(error)); no catch block returns
+      a hardcoded reason string without logging the actual exception. The operator can
+      tell from the error alone which cause fired and which component produced it.
+      Verified by unit tests triggering each cause and asserting distinct codes.
+    test_type: unit
+    component_under_test: client
+
+  # ── Actionable guidance (M7 Rule 2) ──────────────────────
+  - id: AC-021
+    given: "Every failure response path in MCP tools introduced or modified by this
+      story (specifically cello_send returning content_too_large)"
+    when: "each failure path is triggered"
+    then: >
+      The response includes a `guidance` field that names the specific next action the
+      calling LLM should take (for content_too_large: use the large-object/file path,
+      or split the message under the cap). The guidance is sufficient for an LLM with
+      no code access to recover. A response with reason alone and no guidance does NOT
+      satisfy this AC.
+    test_type: unit
+    component_under_test: client
+
+  # ── Lateral catch audit ──────────────────────────────────
+  - id: AC-022
+    given: "packages/client/src/, packages/daemon/src/, packages/transport/src/
+      (cello-client) and packages/relay/src/ (trustless-cello) — ALL catch blocks, not
+      only files changed by this story"
+    when: "the implementer audits every catch block in these packages"
+    then: >
+      The implementer scans every catch block in all four packages and fixes or reports
+      any that (a) return a hardcoded reason string without logging error.message, (b)
+      interpolate an error object into a template string (${error}), or (c) swallow an
+      exception silently. The required pattern is
+      error instanceof Error ? error.message : String(error). The pre-existing silent
+      catch at session-manager.ts:621-623 ("Content path failure is silent") is
+      specifically replaced by this story's park/observe path and must not survive as a
+      silent catch. Any remaining swallow is a blocking finding regardless of which
+      story introduced it.
+    test_type: unit
+    component_under_test: client
+
+  # ── Cross-repo version bump ──────────────────────────────
+  - id: AC-023
+    given: "All cello-client code changes for this story are implemented and tests pass"
+    when: "the version bump procedure in cello-client CLAUDE.md is followed"
+    then: >
+      - packages/protocol-types is bumped (new delivery-ACK frame + park/deposit/notify/
+        pull frame types + content-size constant)
+      - packages/transport is bumped (content-size cap in the content decode path)
+      - packages/client is bumped (delivery ACK, recovery, dedup, size cap)
+      - packages/daemon is bumped (retry_queue TTF trigger + park-to-relay drain target,
+        startup flush)
+      - every dependent package's dependency versions are updated to the new semver
+      - @cello-protocol/connect is bumped to reflect the net change
+      - pnpm install is run and pnpm-lock.yaml is updated
+      - git tag v{connect-version} is pushed; CI publishes to npm beta
+      - `npm view @cello-protocol/connect@beta dependencies --json` shows real semver
+        versions, never workspace:*
+    test_type: integration
+    component_under_test: cello-client CI
+    notes: >
+      Hard gate. Check COORDINATION.md batching before pushing any tag — this story's
+      trustless-cello relay changes must batch with any other pending directory/relay
+      changes (pipeline is 25-30 min). Never push relay changes alone.
+
+  - id: AC-024
+    given: "The new @cello-protocol/connect version is live on npm beta"
+    when: "trustless-cello package.json references are updated"
+    then: >
+      - packages/relay/package.json references the new semver ranges for
+        @cello-protocol/protocol-types, @cello-protocol/client, @cello-protocol/crypto
+        (for the recipient-encryption primitive), and any other modified cello-client
+        package
+      - @cello-protocol/interfaces remains workspace:* (it is maintained in
+        trustless-cello — the new ContentStore interface lives there)
+      - NO workspace:* references to @cello-protocol/crypto, transport, protocol-types,
+        or client remain in packages/relay/package.json
+      - pnpm install is run, pnpm-lock.yaml updated, pnpm run typecheck passes in
+        trustless-cello
+      - commit pushed to trustless-cello main only after COORDINATION.md confirms the
+        directory/relay batch is ready
+    test_type: integration
+    component_under_test: relay
+
+  # ── E2E fixture extension ────────────────────────────────
+  - id: AC-025
+    given: "packages/e2e-tests/src/session-fixture.ts"
+    when: "createSessionFixture is called with opts.contentDelivery: true"
+    then: >
+      The fixture (extending session-fixture.ts — never a from-scratch makeFixture)
+      provides helpers to: deliver content with the direct channel dead (forcing park),
+      restart the relay process (testing park durability), and pull parked content from
+      a separate recipient process. All existing tests that do not pass
+      opts.contentDelivery: true continue to work unchanged (non-breaking default of
+      false).
+    test_type: integration
+    component_under_test: e2e-tests
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The relay must never hold or be able to read plaintext content. Parked content
+      in the store-and-forward queue must be ciphertext encrypted to the recipient's
+      identity key — the relay holds only ciphertext it cannot decrypt.
+    adversarial_condition: >
+      A malicious or compromised relay operator inspects the store-and-forward queue
+      both on the wire (deposit frame) and at rest (WAL_DIR files). Verified by an
+      adversarial integration test: park content with known ASCII plaintext, then
+      assert the plaintext does NOT appear as a substring in (a) the deposited frame
+      bytes the relay receives, (b) the raw WAL file bytes, and that the relay has no
+      decryption key; only the recipient (separate process, holding its identity key)
+      can decrypt the pulled blob.
+    test_type: integration
+    component_under_test: relay
+
+  - id: SI-002
+    statement: >
+      A replayed or duplicated content frame must never be double-counted in the
+      Merkle tree. The same content_hash satisfies at most one leaf, exactly once.
+    adversarial_condition: >
+      An attacker captures a valid content frame (content_hash H) and re-delivers it
+      after the leaf for H is already satisfied — by replaying the direct frame, by a
+      second relay-queue pull, or by re-parking. Verified by an adversarial test:
+      accept H once, replay it via each avenue, and assert the Merkle tree leaf count
+      and root are unchanged after every replay and content.dedup.hit fires. A design
+      where a recovered frame appends a fresh leaf fails this invariant.
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-003
+    statement: >
+      Oversize content must be rejected with a clear, distinct error and must never
+      cause a silent desync.
+    adversarial_condition: >
+      A peer (or attacker) sends a content frame larger than the 1 MB application cap,
+      including a frame crafted to sit between the 1 MB app cap and the 4 MB
+      transport default to probe the old silent-decode-failure → desync path. Verified
+      by an adversarial test that sends such a frame and asserts the receiver rejects
+      it with content_too_large, the session is NOT desynchronized, and no leaf is
+      created. The old path (transport node.ts bare lp.decode → silent failure →
+      desync) must be unreachable for content under 4 MB because the app cap fires first.
+    test_type: integration
+    component_under_test: transport
+
+  - id: SI-004
+    statement: >
+      The delivery ACK must never be treated as cryptographic proof of receipt and must
+      never be an input to the seal, the Merkle root, or last_seen_seq.
+    adversarial_condition: >
+      An attacker forges or suppresses delivery ACKs (the ACK is intentionally unsigned;
+      its only authentication is the Noise session channel). A forged `persisted` ACK
+      can at most cause the sender to skip parking (a liveness/best-effort effect); a
+      suppressed ACK can at most cause an unnecessary park. Verified by a test asserting
+      that no delivery ACK value flows into the seal TBS, the Merkle tree, or
+      last_seen_seq — the seal computed with and without any ACK is byte-identical.
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-005
+    statement: >
+      Mere absence of content must never desync a session; only a content_hash mismatch
+      (genuine tamper) may desync.
+    adversarial_condition: >
+      A peer drops content (never sends it), or the relay queue is empty, or recovery
+      times out. Verified by tests that each of these keeps session.desynchronized =
+      false and the session continues processing frames, while a content_hash mismatch
+      desyncs. This is the explicit reversal of the relay-stream-manager.ts:683-689
+      content_missing → #desync behavior.
+    test_type: integration
+    component_under_test: client
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the relay store-and-forward queue is unavailable (relay down or
+      WAL_DIR not writable) when the sender's TTF timer fires"
+    fallback: >
+      The content stays in the local retry_queue (DAEMON-003) and is re-parked on the
+      next relay reconnect or at the next startup flush; content.park.failed is logged
+      at WARN with error.message. The session is not killed. This replaces the prior
+      silent drop of content on direct-channel failure.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: DB-002
+    condition: "While the recipient is offline at park time"
+    fallback: >
+      The relay holds the encrypted content until the recipient reconnects (then
+      content.park.notified → pull, delete-on-pickup) or until the TTL (proposed 7
+      days) expires. Notification is deferred to reconnect rather than failing the
+      deposit. This replaces the prior behavior where offline recipients simply never
+      received content.
+    test_type: integration
+    component_under_test: relay
+
+  - id: DB-003
+    condition: "While the sender suffers permanent device loss before any flush parks
+      the content (the irreducible case)"
+    fallback: >
+      No fallback can recover the content — but the hash already reached the relay over
+      the reliable channel, so the message is hash-committed. The receiver seals with
+      that hash and a content frontier that excludes the unrecovered message → an
+      honest 'sent, not received' record. A straggler that resurfaces after the seal is
+      rejected and cannot re-enter a sealed session. The seal is always honest; the
+      content layer is best-effort on top.
+    notes: >
+      No new test obligation beyond AC-011 (recovery-exhausted keeps session alive) and
+      the dedup/sealed-session guard in AC-012/AC-011. This DB documents the
+      irreducible-loss narrative from Part 4.
+    test_type: integration
+    component_under_test: client
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: content.delivery.acked
+      level: info
+      trigger: "When the sender receives a `persisted` delivery ACK for a content_hash
+        before its TTF timer fires"
+      context_fields: [sessionId, contentHash, level, correlationId]
+      correlationId: true
+    - name: content.park.deposited
+      level: info
+      trigger: "When the sender successfully parks encrypted content at the relay
+        store-and-forward queue (TTF fired or startup flush)"
+      context_fields: [sessionId, recipientPubkey, contentHash, correlationId]
+      correlationId: true
+    - name: content.park.notified
+      level: info
+      trigger: "When the relay notifies an online (or newly-reconnected) recipient that
+        parked content is available"
+      context_fields: [recipientPubkey, contentHash]
+      correlationId: false
+    - name: content.park.pulled
+      level: info
+      trigger: "When the recipient pulls parked ciphertext and the relay deletes the
+        entry (delete-on-pickup)"
+      context_fields: [sessionId, recipientPubkey, contentHash]
+      correlationId: false
+    - name: content.recovery.succeeded
+      level: info
+      trigger: "When missing content is recovered and cross-checked, accepted at the
+        already-assigned sequence number"
+      context_fields: [sessionId, contentHash, source, correlationId]
+      correlationId: true
+      notes: "source ∈ { 'sender_resend', 'relay_queue' }."
+    - name: content.dedup.hit
+      level: debug
+      trigger: "When a recovered/resent/replayed content frame matches an already-
+        satisfied content_hash and is dropped without appending a leaf"
+      context_fields: [sessionId, contentHash]
+      correlationId: false
+  error_events:
+    - name: content.rejected.too_large
+      level: warn
+      trigger: "When content exceeds the 1 MB application cap at send or on inbound
+        decode"
+      context_fields: [sessionId, contentSize, cap]
+    - name: content.recovery.failed
+      level: error
+      trigger: "When content cannot be recovered from the sender (unreachable) nor the
+        relay queue (empty / TTL-expired)"
+      context_fields: [sessionId, contentHash, reason]
+    - name: content.park.failed
+      level: warn
+      trigger: "When the relay deposit fails at park time (relay down / WAL_DIR not
+        writable)"
+      context_fields: [sessionId, recipientPubkey, reason, error]
+    - name: content.store.full
+      level: warn
+      trigger: "When the relay content store evicts an entry at its byte or count cap"
+      context_fields: [recipientPubkey, evictedCount, evictedBytes]
+    - name: content.tamper.desync
+      level: error
+      trigger: "When recovered content's content_hash does not match the committed hash
+        leaf — the only remaining content-path desync"
+      context_fields: [sessionId, contentHash]
+  notes: >
+    All events are new and follow the domain.noun.verb taxonomy. The implementer adds
+    content.delivery.acked, content.park.deposited, content.park.notified,
+    content.park.pulled, content.recovery.succeeded, content.dedup.hit,
+    content.rejected.too_large, content.recovery.failed, content.park.failed,
+    content.store.full, and content.tamper.desync to the canonical taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+    No console.log in implementation code — all events go through the injected Logger.
+    correlationId is minted at cello_send and threaded through the delivery-ACK, park,
+    and recovery events for that message (a multi-step async flow). Relay-side events
+    (notify, pull, store.full) fire in the relay process; client/daemon events fire in
+    the operator's local daemon.
+  alarms:
+    - condition: "content.recovery.failed fires more than 5 times in 5 minutes for the
+        same session"
+      fires_to: "surfaced as ERROR in daemon logs; sustained recovery failure indicates
+        a persistently unreachable sender with no parked content — the operator may
+        decide to seal honestly excluding the unrecovered messages"
+    - condition: "content.store.full fires repeatedly for the same recipient (relay-side
+        metric)"
+      fires_to: "relay logs / CloudWatch (relay is an ECS service); sustained eviction
+        for one recipient indicates an offline recipient accumulating parked content
+        near the cap — capacity/abuse signal"
+    - condition: "content.park.failed fires more than 3 times in 5 minutes"
+      fires_to: "daemon logs; repeated park failures indicate relay unreachability or a
+        WAL_DIR problem — investigate relay health / disk"
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Delivery ACK wire type (protocol-types): a new frame on the session channel,
+    { type: 'content_delivery_ack', session_id, content_hash, level: 'received' |
+    'persisted' (open enum) }. UNSIGNED — authentication is the Noise session channel.
+    The receiver emits the 'persisted' ACK ONLY after durable persistence + a successful
+    content_hash cross-check. The protocol acts on 'persisted' exclusively; 'received'
+    (and any future level) is informational. The ACK is NOT added to any seal TBS, the
+    Merkle tree, or last_seen_seq (SI-004).
+  - >
+    Park / store-and-forward frames (protocol-types): content deposit, notify, and pull
+    frames on the relay channel. The deposit carries the ciphertext, recipientPubkey,
+    and content_hash (plaintext hash is fine — the relay already sees the hash layer).
+    Each frame field gets its own named slot; never bury the ciphertext or recipient
+    inside an unrelated field (API parsimony rule).
+  - >
+    Recipient encryption: the parked blob must be E2E-encrypted to the recipient's
+    stable identity key (NOT the ephemeral session key — the session may be torn down
+    and the recipient may be offline for days). The natural construction is an
+    Ed25519→X25519 conversion + a sealed-box / ephemeral-static ECDH + AEAD; the exact
+    primitive is the implementer's choice but MUST be E2E with no relay-readable
+    plaintext (SI-001) and live in @cello-protocol/crypto so both repos can use it.
+  - >
+    Relay content store adapter: new interface ContentStore in
+    packages/interfaces/src/ (e.g. content-store.ts) with an in-memory stub in
+    packages/interfaces/stubs/ (CELLO_ENV=local/test) and a FileContentStore adapter in
+    packages/relay/src/adapters/ for dev/production. FileContentStore REUSES the
+    FileSessionWal pattern: WAL_DIR-rooted, fsync-durable, validateConfig(env, walDir)
+    gate, recipient-keyed files (e.g. WAL_DIR/content/{recipientPubkey}/...). Two
+    deltas from session WAL: recipient-keyed + survives session teardown + TTL eviction;
+    encrypted content blobs at rest. The composition root in
+    packages/relay/src/bin/relay.ts instantiates it next to FileSessionWal
+    (relay.ts:63,89-101 wiring is the template).
+  - >
+    Sender retry_queue extension (DAEMON-003): do NOT create a new sender-side table.
+    Add an awaiting-ACK state and a TTF timer to the existing retry_queue flow. TTF
+    fire → enqueue/mark un-acked → drain target becomes "park to relay" when direct
+    delivery is unavailable, in addition to the existing direct-P2P resend-on-reconnect.
+    Startup flush drains un-acked entries to the relay (crash backstop). The DAEMON-003
+    typed serializer (hex/BLOB, never JSON.stringify on Uint8Array) is reused.
+  - >
+    Recovery path: replace relay-stream-manager.ts:683-689 (content_missing → #desync)
+    with: on grace expiry, request resend from the sender for the known content_hash;
+    on sender-unreachable, pull from the relay content store; cross-check the recovered
+    content against the committed content_hash; accept at the already-assigned sequence
+    number. KEEP relay-stream-manager.ts:466 (content_hash_mismatch → #desync) — that is
+    genuine tamper and the only remaining content-path desync.
+  - >
+    Dedup layer: track satisfied content_hashes per session (the hash leaf already
+    carries the relay-assigned seq; content fills the leaf). A second delivery of a
+    satisfied content_hash is a dedup hit — never a new leaf. This is distinct from
+    DAEMON-003's NonceDedupStore (inbound message nonces); MSG-001 dedup is at the
+    content_hash / pending-leaf layer. Define the satisfied-set lifetime so it covers
+    the recovery and TTL windows.
+  - >
+    Content-size cap: a single named constant (proposed 1 MB), strictly below the 4 MB
+    it-length-prefixed transport default so the app cap always fires first. Enforce at
+    cello_send (before relay submission) AND on the inbound content decode in
+    packages/transport (before/around the bare lp.decode at the content protocol
+    handler). Files / large objects are a SEPARATE path — out of scope here; the
+    content_too_large guidance points to it.
+  - >
+    Circuit-relay stays the DCUtR bridge ONLY (Part 4 D-a). Content NEVER rides a live
+    relayed libp2p stream — it goes direct P2P or through the app-relay store-and-forward
+    queue. Confirm no code path routes content over circuit-relay. (TRANSPORT-001 folds
+    in the bridge-only confirmation + the size-cap enforcement coordination — coordinate
+    via COORDINATION.md.)
+  - >
+    Proposed parameters (Part 4, adjust freely): TTF 10-30s; queue TTL 7 days,
+    delete-on-pickup; content cap 1 MB. The TTL == the bilateral-upgrade window
+    (Workstream C, separate story).
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-DAEMON-003  # sender side EXTENDS retry_queue (TTF trigger + park drain target + startup flush)
+    - CELLO-M7-WIRE-001    # session transport / SessionAssignment (direct P2P content path)
+    - CELLO-M7-SESSION-001 # relay control-frame + interrupted-session plumbing the recovery/park paths build alongside
+  blocks:
+    - CELLO-M7-E2E-001     # integration gate exercises content delivery, park, and recovery
+  notes: >
+    Cross-repo. cello-client: packages/protocol-types, packages/transport,
+    packages/client, packages/daemon. trustless-cello: packages/relay,
+    packages/interfaces (new ContentStore interface stays workspace:* local).
+    Must batch the trustless-cello relay change with any other pending directory/relay
+    changes before any pipeline push (25-30 min). This story delivers the content layer
+    that the bilateral-seal upgrade (Workstream C, POSTMORTEM Part 3 C-4) depends on,
+    but does NOT itself implement the upgrade.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Message Exchange"
+  end_to_end_flow: "§6.1 Hash Relay Mechanics — Dual-Path Architecture"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-11_1030_daemon-transport-architecture"
+  related_docs:
+    - "[[POSTMORTEM-seal-and-content-delivery-gaps]]"
+    - "[[CELLO-M7-DAEMON-003]]"
+    - "[[CELLO-M7-SESSION-001]]"
+    - "[[CELLO-M7-E2E-001]]"
+  notes: >
+    Authority: POSTMORTEM-seal-and-content-delivery-gaps.md Part 4 (D-a/D-c/D-d, the
+    TTF flush model, proposed parameters) — CLOSED decisions. Part 3 C-4 establishes
+    content possession as the precondition for the seal upgrade. outline.md §Correction
+    (application-level delivery receipt IS M7 scope), §Resource Caps and Graceful
+    Degradation, §M7 Error Discipline (Rule 1 + Rule 2 + lateral catch audit),
+    §M6/M6B Lessons (L1 serialization, L2 startup loading, L3 composition root, L6
+    error.message, L7 real transport boundary). Code anchors: session-manager.ts:589-624;
+    relay-stream-manager.ts:461-478, 683-689, 805-839; relay-store.ts:56-116;
+    adapters/file-session-wal.ts; bin/relay.ts:63,89-101; transport node.ts content decode.
