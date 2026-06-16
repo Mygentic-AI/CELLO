@@ -810,3 +810,29 @@ all commit hashes, and the open-items list.
 trustless-cello dep update — protocol-types changed via M-3, so this is now
 required), the H-1 FROST seal, M-4 binding enforcement, and the completion gate +
 live multi-process smoke.
+
+### 2026-06-16 — M7-SESSION-001 merged to main (both repos), NOT pushed
+
+Merge-tree conflict probe run first in both repos — exit 0, zero conflict
+markers. Merged `m7/session-001` → main with `--no-ff`:
+- **trustless-cello:** merge `3b6570b` (was `db894f5`). 8 files, +1605/-26 — relay
+  `session_interrupted` frame + idle timer + peer-disconnect emit; directory
+  seal-interrupted pass-through; relay/directory audit fixes; m7-session-001 +
+  tbs-drift-guard test suites.
+- **cello-client:** merge `9fcb2bf` (was `d5a8716`). 12 files, +2974/-17 — daemon
+  `#watchRelayStream`, `markInterruptedWithDetails` schema migration,
+  `cello_close_session` handler, `handleSealInterruptedFlow` + SI-002 verification,
+  `SealInterrupted*` types, h2 TBS-agreement test.
+
+Working trees clean post-merge. Branches `m7/session-001` and both worktrees left
+in place pending operator confirmation (not deleted yet).
+
+**NOT pushed to origin.** trustless-cello push triggers the ~25-30 min
+directory/relay pipeline (live ECS deploy) — gated on operator go. cello-client
+push carries no publish (AC-017/AC-018 deferred to milestone close). The
+`SESSION-001-FIX-HANDOFF.md` scratch doc was already gone (untracked) — no cleanup
+needed.
+
+Open (none merge-blocking): AC-017/AC-018, H-1 full FROST threshold seal (now
+SESSION-002's scope), M-4 relay Peer-ID binding enforcement, completion gate +
+live multi-process smoke.
