@@ -121,7 +121,7 @@ timezone-proof and cross-platform (macOS + Linux both support `date +%s`).**
 
 ```
 STATUS: IN_PROGRESS
-LAST_UPDATE: 1781723850   # epoch seconds — 2026-06-17 21:17 CAT
+LAST_UPDATE: 1781724467   # epoch seconds — 2026-06-17 21:27 CAT
 ```
 
 STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
@@ -166,6 +166,23 @@ failures — show the output.
     register` CLI (core/cli exists). Persist agent under `~/.cello/agents/<name>/`; capture agent→user link.
   - Next concrete step: do that signaling-connect refactor FIRST (small), then port RegistrationManager +
     NetworkDirectoryNode into the daemon behind a daemon-built RegistrationContext. Reviewer + gate per unit.
+- 2026-06-17 21:27 CAT — ✅ **node-exposure unblocker DONE** (commit `3796e3e` on `CELLO-M7-REGISTRATION`).
+  Chose the additive `publishNode` callback (not "daemon mints node") — cleaner, keeps keystone's
+  fresh-node-per-connect intact. signaling-connect publishes the live node on connect / null on close;
+  daemon holds it and exposes `DaemonHandle.getDirectoryNode()` (null unless signaling connected). 222
+  daemon tests pass, lint+typecheck green. **NEXT (the big port, not yet started):**
+  1. Copy `core/client/src/registration-manager.ts` + `network-directory-node.ts` into `core/daemon/src/`
+     (adapt imports; `Logger` from daemon types; node from `getDirectoryNode()`).
+  2. Build a daemon `RegistrationContext`: `node` = `getDirectoryNode()` (require signaling connected);
+     `keyProvider` = the registering agent's K_local; signaling frames (register_request/dkg_complete)
+     via `signalingManager.sendRaw`; route inbound `dkg_ready`/`register_success` via
+     `signalingManager.registerInboundHandler` to the pending resolvers; `persistence` = daemon SQLite;
+     `getDirectoryEndpoint` = the bootstrap resolver's last value; `mlDsaKeyFile` per agent.
+  3. Expose `cello_register` IPC tool (ipc-server) + `cello register` CLI (core/cli). Persist agent under
+     `~/.cello/agents/<name>/`; capture agent→user link (capture-now-or-lose-it).
+  4. Tests (red-first ideally) + reviewer (model:'opus') + gate. Commit per unit.
+  Verify-don't-trust: READ `network-directory-node.ts` before porting — confirm runNetworkDkg's node
+  usage + preAuthToken path; it may need adaptation to the daemon's single shared node.
 
 ## 6. WATCHDOG PROTOCOL (for the 23:00–04:00 every-30-min cron)
 <!-- Extended through 04:xx: the 22:10 run's quota window resets ~03:10, so the
