@@ -121,7 +121,7 @@ timezone-proof and cross-platform (macOS + Linux both support `date +%s`).**
 
 ```
 STATUS: IN_PROGRESS
-LAST_UPDATE: 1781725459   # epoch seconds — 2026-06-17 21:44 CAT (post-compaction; step a committed)
+LAST_UPDATE: 1781725831   # epoch seconds — 2026-06-17 21:50 CAT (steps a+b committed; reviewer running)
 ```
 
 STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
