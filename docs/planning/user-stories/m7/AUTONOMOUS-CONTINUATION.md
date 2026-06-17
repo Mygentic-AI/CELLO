@@ -121,7 +121,7 @@ timezone-proof and cross-platform (macOS + Linux both support `date +%s`).**
 
 ```
 STATUS: IN_PROGRESS
-LAST_UPDATE: 1781725183   # epoch seconds — 2026-06-17 21:39 CAT (refreshed pre-compaction)
+LAST_UPDATE: 1781725459   # epoch seconds — 2026-06-17 21:44 CAT (post-compaction; step a committed)
 ```
 
 STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
@@ -218,6 +218,13 @@ failures — show the output.
     registration_state, or per-agent files) + tests; (c) port registration-manager.ts onto that + a daemon
     RegistrationContext; (d) cello_register IPC tool + cello register CLI (core/cli); (e) reviewer + gate.
     Each (a)-(e) is its own commit. This is one focused unit — best started with a fresh quota window.
+- 2026-06-17 21:44 CAT — ✅ **Step (a) DONE** (commit `ae907ee` on `CELLO-M7-REGISTRATION`). Copied
+  `network-directory-node.ts` into `core/daemon/src/`. Confirmed self-contained: every import resolves
+  against the daemon's existing deps; only the `Logger` import needed retargeting (`@cello-protocol/interfaces`
+  → `./types.js`, identical shape). Daemon `tsc --build` + `eslint` both clean. **NEXT = step (b):** design +
+  implement the daemon registration-persistence interface (persistMlDsaKeypair / persistRegistrationState /
+  persistFrostKeyShare + load-on-restart), backed by per-agent storage under `~/.cello/agents/<name>/`. Do
+  NOT drag in the client's `ClientStatePersistence`. Then (c) port registration-manager.ts onto it.
 
 ## 6. WATCHDOG PROTOCOL (for the 23:00–04:00 every-30-min cron)
 <!-- Extended through 04:xx: the 22:10 run's quota window resets ~03:10, so the
