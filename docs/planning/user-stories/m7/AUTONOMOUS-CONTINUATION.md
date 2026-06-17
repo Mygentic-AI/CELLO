@@ -121,7 +121,7 @@ timezone-proof and cross-platform (macOS + Linux both support `date +%s`).**
 
 ```
 STATUS: IN_PROGRESS
-LAST_UPDATE: 1781724848   # epoch seconds — 2026-06-17 21:34 CAT
+LAST_UPDATE: 1781725010   # epoch seconds — 2026-06-17 21:36 CAT
 ```
 
 STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
@@ -199,6 +199,25 @@ failures — show the output.
   MUST null-check it**, don't assume non-null. 222 tests green. `CELLO-M7-REGISTRATION` now has 2 commits
   on top of keystone (`3796e3e`, `1f27efb`). The big RegistrationManager port is the next unit — start it
   fresh per the steps two entries above.
+- 2026-06-17 21:36 CAT — **Port adaptation requirements (verified by reading imports — do this right):**
+  - `network-directory-node.ts` (751 lines): imports are ALL packages (crypto, transport, protocol-types,
+    interfaces) + NO local relative imports → copies into `core/daemon/src/` cleanly. ONLY adaptation:
+    `import type { Logger } from "@cello-protocol/interfaces"` → `from "./types.js"` (daemon does NOT depend
+    on @cello-protocol/interfaces; its own Logger has the same shape). Then it's a leaf module awaiting its
+    importer (registration-manager).
+  - `registration-manager.ts` (302 lines): depends on **`ClientStatePersistence`** (the CLIENT's SQLite layer)
+    for `persistMlDsaKeypair` / `persistRegistrationState` / `persistFrostKeyShare`. The daemon has its OWN
+    persistence (SessionNodeManager's SQLite, `sessions.db`). **This is the real design work:** define a
+    narrow daemon-side persistence interface for exactly those three operations (+ load on restart) and
+    implement it against the daemon's SQLite under `~/.cello/agents/<name>/` (per-agent key material) — do
+    NOT drag ClientStatePersistence in. Also: `RegistrationContext.node` = `getDirectoryNode()` and MUST
+    null-check it (see contract above); frames via `signalingManager.sendRaw` + inbound via
+    `registerInboundHandler`. NetworkDirectoryNode constructed with `{ node: getDirectoryNode()!, ... }`.
+  - Recommended port order: (a) copy network-directory-node.ts + Logger fix + typecheck + commit; (b) design
+    the daemon registration-persistence interface + impl (schema for frost_shares / ml_dsa_keypairs /
+    registration_state, or per-agent files) + tests; (c) port registration-manager.ts onto that + a daemon
+    RegistrationContext; (d) cello_register IPC tool + cello register CLI (core/cli); (e) reviewer + gate.
+    Each (a)-(e) is its own commit. This is one focused unit — best started with a fresh quota window.
 
 ## 6. WATCHDOG PROTOCOL (for the 23:00–04:00 every-30-min cron)
 <!-- Extended through 04:xx: the 22:10 run's quota window resets ~03:10, so the
