@@ -121,7 +121,7 @@ timezone-proof and cross-platform (macOS + Linux both support `date +%s`).**
 
 ```
 STATUS: IN_PROGRESS
-LAST_UPDATE: 1781724467   # epoch seconds — 2026-06-17 21:27 CAT
+LAST_UPDATE: 1781724900   # epoch seconds — 2026-06-17 21:35 CAT
 ```
 
 STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
@@ -183,6 +183,15 @@ failures — show the output.
   4. Tests (red-first ideally) + reviewer (model:'opus') + gate. Commit per unit.
   Verify-don't-trust: READ `network-directory-node.ts` before porting — confirm runNetworkDkg's node
   usage + preAuthToken path; it may need adaptation to the daemon's single shared node.
+- 2026-06-17 21:35 CAT — ✅ **network-directory-node.ts verified (751 lines).** Design holds end-to-end:
+  `NetworkDirectoryNode` takes the libp2p node via its CONSTRUCTOR (`opts.node`, line 68) and opens
+  `/cello/frost/1.0.0` streams on it (newStream/dial); `runNetworkDkg(agentPubkeyHex, {threshold,
+  participants, directoryNodes:[NetworkDirectoryNode], preAuthToken})` runs 3 rounds, threading
+  `preAuthToken` into round 1 (OPS-AGENT-001, mandatory M6+). PORT PLUGS STRAIGHT IN: construct
+  `NetworkDirectoryNode({ node: getDirectoryNode()!, directoryPeerId, directoryMultiaddrs, logger })`.
+  No node-sharing adaptation needed beyond getDirectoryNode(). The remaining port (copy 2 files in,
+  build RegistrationContext, cello_register IPC+CLI, tests) is one focused unit — ideal for the
+  overnight run or a fresh quota window. Checkpoint is clean: everything committed, branches stacked.
 
 ## 6. WATCHDOG PROTOCOL (for the 23:00–04:00 every-30-min cron)
 <!-- Extended through 04:xx: the 22:10 run's quota window resets ~03:10, so the
