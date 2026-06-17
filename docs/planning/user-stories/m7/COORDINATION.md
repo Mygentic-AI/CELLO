@@ -53,6 +53,11 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-DIR-PING-001 — Directory-side ping/pong handler | — | **merged to main** | trustless-cello main; 6 tests (ping/pong, multi-client, burst load, composition root); PingFrame decode + encodePong + handler in dispatch chain |
 | M7-MCP-002 — Agent-aware notifications | — | **merged to main** | cello-client main; NotificationDispatcher with broadcast/single/filtered routing; 175 daemon tests + full suite |
 | M7-CICD-001 — Cross-repo CI/CD | — | **merged to main** | trustless-cello main + cello-client main; GitHubOidcRole, candidates/ lifecycle, pipeline-mappings sourceRepoMappings, buildspec bifurcated, ci.yml e2e gate |
+| **M7-DAEMON-004 — Daemon session-core foundation (Option A)** | — | **written 2026-06-17 — not started** | NEW. Daemon owns the per-session Merkle tree + active-session send/receive + active-session seal. Re-homes content/seal/tree out of the dead `CelloClient` stack (`session-manager.ts`/`seal-manager.ts`), which no production binary instantiates. Closes `daemon.ts:583-588` (active-close stub) + `daemon.ts:568-571` (caller-supplied root). Exercised by E2E-001 AC-005; **blocks MSG-001 + SESSION-002/003/004.** Commit `0d86b9e`. |
+| M7-MSG-001 — Content delivery (ACK + queue) | — | **on branch (NOT merged) — stack-correction pending** | 15 commits (`CELLO-M7-MSG-001`, both repos). LIVE halves correct (relay content store, daemon `retry_queue`, crypto, size cap). CLIENT half (send/ACK/park) was built on dead `session-manager.ts` → re-home onto DAEMON-004. `STACK CORRECTION` block added. blocked_by: DAEMON-004. |
+| M7-SESSION-002 — Unilateral seal → notarization | — | **not started — stack-correction noted** | Directory notarization half (17 ACs) LIVE & correct. 5 client ACs anchored on dead `seal-manager.ts` → re-home onto DAEMON-004. `STACK CORRECTION` block added. blocked_by: DAEMON-004. |
+| M7-SESSION-003 — Peer↔peer session liveness | — | **in flight (died mid-run) — SPLIT stack** | Liveness on live `session-node-manager.ts` (daemon) = KEEP. Also created dead-stack files (`session-liveness.ts` new, `seal-manager.ts`, `relay-stream-manager.ts`); ABSENT gate in `seal-manager.ts:280` → re-home onto DAEMON-004, discard dead-stack edits. `STACK CORRECTION` block added. blocked_by: DAEMON-004. |
+| M7-SESSION-004 — Seal certificate legibility | — | **on branch (NOT merged) — stack-correction pending** | Directory legibility half (13 ACs) LIVE & correct. ALL client work on dead stack (`seal-legibility-client.ts` new, `seal-manager.ts`); touches no daemon → re-home onto DAEMON-004. `STACK CORRECTION` block added. blocked_by: DAEMON-004. |
 
 ### Migration Version Registry
 
@@ -92,7 +97,13 @@ Current batch status:
 
 ### Blocked / Waiting
 
-_(empty — no current blockers)_
+- **MSG-001, SESSION-002, SESSION-003, SESSION-004 — blocked on M7-DAEMON-004.**
+  Their CLIENT-side halves were spec'd against the dead `CelloClient` stack
+  (`session-manager.ts` / `seal-manager.ts`), which no production binary runs.
+  DAEMON-004 (Option A: daemon owns the session core) must land first; then each
+  story's client half re-homes onto the daemon seal/send path. Their LIVE halves
+  (relay store + retry_queue / directory notarization / daemon-side liveness) are
+  unaffected. See the 2026-06-17 log entry.
 
 ---
 
@@ -507,3 +518,43 @@ Still open before SESSION-001 closes: AC-017/AC-018 (version bump + publish +
 trustless-cello dep update; protocol-types changed via M-3), the H-1 FROST seal,
 M-4 binding enforcement (Andre's call), and the completion gate + live multi-process
 smoke. Durable handoff: `trustless-cello/SESSION-001-FIX-HANDOFF.md` (delete after merge).
+
+### 2026-06-17 — Dead-stack discovery + Option A foundation (DAEMON-004); 4 postmortem stories stack-corrected
+
+**What happened.** Tracing MSG-001 (which was implemented but flagged needs-attention)
+surfaced a systemic issue: the four postmortem stories (MSG-001, SESSION-002/003/004)
+were each spec'd against `core/client` — `session-manager.ts` and `seal-manager.ts`.
+That is the legacy **in-process `CelloClient`** stack. In M7 it is **dead in
+production**: no production binary constructs `CelloClient`; the only shipped bin is
+`cello-mcp` (thin IPC proxy); the daemon does not import `@cello-protocol/client`.
+Concretely, on `main`:
+- `cello_send` / `cello_receive` / `cello_initiate_session` → `not_implemented` stubs.
+- `cello_close_session` for an **active** session → `not_implemented` (`daemon.ts:583-588`);
+  only the SESSION-001 *interrupted*-seal flow is wired.
+- the daemon "does not maintain the session Merkle tree — the client supplies it"
+  (`daemon.ts:568-571`), but no production client exists to supply it.
+
+So content delivery + the active-session seal — the whole subject of the postmortem —
+run only through dead code. This is the postmortem's own **RC-2** ("behavior between
+stories is invisible to a per-story process") recurring one layer down. The protocol
+design is sound; the stack placement was wrong.
+
+**Decision — Option A (confirmed by Andre 2026-06-17).** The **daemon owns the session
+core**. The per-session Merkle tree, content send/receive, and active-session seal live
+in the daemon's `SessionNodeManager` layer — NOT in a hosted `CelloClient` object
+(Option B, rejected: two session managers in one process). Rationale: the tree is the
+running hash of every message and the daemon sends/receives every message, so the
+transcript belongs where the messages flow. Consistent with M7's existing direction —
+DAEMON-003 already REMOVED RetryQueue/NonceDedup from `core/client`.
+
+**Done this session (commit `0d86b9e`, main, spec-only — no code, nothing merged):**
+- Wrote **CELLO-M7-DAEMON-004** — the daemon session-core foundation. Stub-resistant ACs
+  (two processes, real IPC, real session streams, cross-process tree-root agreement, real
+  daemon-binary restart). SI-002 = CI grep gate retiring the dead stack; SI-003 = "B's
+  ack is always B's own node" carried into the daemon. Exercised by E2E-001 AC-005.
+- Added a `STACK CORRECTION` block + `blocked_by: CELLO-M7-DAEMON-004` to all four stories.
+  Their **live halves stay** (relay store + retry_queue / directory notarization /
+  daemon-side liveness); their **client halves re-home** onto the DAEMON-004 daemon path.
+
+**Next:** implement DAEMON-004 (TDD, two-process E2E as the gate), then re-home the four's
+client halves and salvage their live halves. The four are NOT to be merged as-is.

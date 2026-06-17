@@ -836,3 +836,38 @@ needed.
 Open (none merge-blocking): AC-017/AC-018, H-1 full FROST threshold seal (now
 SESSION-002's scope), M-4 relay Peer-ID binding enforcement, completion gate +
 live multi-process smoke.
+
+### 2026-06-17 — DAEMON-004 foundation written; 4 postmortem stories stack-corrected
+
+**Trigger.** Investigating MSG-001 (implemented, needs-attention) found its content
+send/ACK/park was built on `core/client/session-manager.ts` — the dead in-process
+`CelloClient` stack that no production binary runs. Audit of the other three postmortem
+stories showed the same: SESSION-002 (5 client ACs on `seal-manager.ts`), SESSION-003
+(in-flight; created `session-liveness.ts`, edited `seal-manager.ts`/`relay-stream-manager.ts`
+on the dead stack alongside correct daemon liveness), SESSION-004 (all client work on
+`seal-legibility-client.ts`/`seal-manager.ts`, touches no daemon). Root cause confirmed
+in code: daemon `cello_send`/`cello_receive`/active `cello_close_session` are
+`not_implemented` stubs (`daemon.ts:583-588`); daemon "does not maintain the session
+Merkle tree — the client supplies it" (`daemon.ts:568-571`), with no live client to
+supply it.
+
+**Decision.** Option A (Andre confirmed) — daemon owns the session core (tree + send/
+receive + active-session seal), not a hosted `CelloClient`.
+
+**Work (commit `0d86b9e`, main — spec-only, no code, nothing merged):**
+- Created `CELLO-M7-DAEMON-004.yaml` — daemon session-core foundation. 7 ACs (cross-process
+  send+receive, cross-process tree-root agreement, active-session seal over daemon-owned
+  root, dead-channel contract, composition-root wiring + dead-stack grep gate, SQLCipher
+  tree restart). 3 SIs (no caller-supplied root, dead-stack retired, counterparty ack
+  always its own node). blocked_by DAEMON-002/003/WIRE-001/SESSION-001; blocks MSG-001 +
+  SESSION-002/003/004 + E2E-001.
+- Added `STACK CORRECTION (2026-06-17)` blocks + `blocked_by: CELLO-M7-DAEMON-004` to
+  MSG-001, SESSION-002, SESSION-003, SESSION-004. Each names its live half (keep) and
+  client half (re-home).
+- All 5 YAMLs validated. COORDINATION.md table + Blocked + Log updated.
+
+**Files:** 1 new story, 4 edited stories, COORDINATION.md, WORKLOG.md.
+
+**Next:** implement DAEMON-004 (TDD; two-process live E2E as the gate). Then re-home the
+four's client halves and preserve their live halves. The four branches are NOT merged and
+must not be merged as-is.
