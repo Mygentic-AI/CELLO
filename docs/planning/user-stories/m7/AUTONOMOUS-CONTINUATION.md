@@ -121,7 +121,7 @@ timezone-proof and cross-platform (macOS + Linux both support `date +%s`).**
 
 ```
 STATUS: IN_PROGRESS
-LAST_UPDATE: 1781726517   # epoch seconds — 2026-06-17 22:01 CAT (step c part 1 committed; Andre asleep; cron/watchdog drives from here)
+LAST_UPDATE: 1781727198   # epoch seconds — 2026-06-17 22:13 CAT (step c DONE — manager+context+14 tests; starting step d IPC+CLI)
 ```
 
 STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
@@ -218,6 +218,12 @@ failures — show the output.
     registration_state, or per-agent files) + tests; (c) port registration-manager.ts onto that + a daemon
     RegistrationContext; (d) cello_register IPC tool + cello register CLI (core/cli); (e) reviewer + gate.
     Each (a)-(e) is its own commit. This is one focused unit — best started with a fresh quota window.
+- 2026-06-17 22:13 CAT — ✅ **Step (c) DONE** (commits `4c48fbb` c1 manager port, `5b63aae` c2 context+tests).
+  `DaemonRegistrationContext` (signaling bridge: sendRaw + one inbound handler routing dkg_ready/register_success/
+  register_error to the armed resolver) + 14 tests (9 context routing, 5 manager seam paths). Daemon typecheck +
+  eslint clean. Branch `CELLO-M7-REGISTRATION` now: `ae907ee`→`78edcc6`→`ec68020`→`4c48fbb`→`5b63aae`.
+  **NEXT = step (d):** `cello_register` IPC handler + `cello register` CLI + agent→user link capture (see the
+  checkpoint entry below for the exact composition-root wiring). Then step (e) reviewer + gate over the whole unit.
 - 2026-06-17 22:01 CAT — ⏸️ **CHECKPOINT (Andre asleep, ~1% quota left in this window; cron/watchdog resumes).**
   ✅ **Step (c) part 1 DONE** (commit `4c48fbb`): `registration-manager.ts` ported into `core/daemon/src/` +
   adapted to the daemon signaling seam exactly per the "Step (c) DESIGN" entry below. Daemon typecheck + eslint
