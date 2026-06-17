@@ -113,16 +113,21 @@ why. Co-author trailer: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@a
 
 ## 5. STATUS + MORNING REPORT (Andre reads this first)
 
-**Machine-readable status — keep these two lines current; the watchdog (§6) greps them:**
+**All human-readable times in this doc are LOCAL (Andre's timezone = CAT, UTC+2). The cron
+schedules are also local. The heartbeat below uses EPOCH SECONDS for the staleness math so it is
+timezone-proof and cross-platform (macOS + Linux both support `date +%s`).**
+
+**Machine-readable status — keep these lines current; the watchdog (§6) greps them:**
 
 ```
 STATUS: IN_PROGRESS
-LAST_UPDATE: 2026-06-17T19:12:25Z
+LAST_UPDATE: 1781723671   # epoch seconds — 2026-06-17 21:14 CAT
 ```
 
 STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
-- Set `IN_PROGRESS` when you begin work; refresh `LAST_UPDATE` (run `date -u +%Y-%m-%dT%H:%M:%SZ`)
-  on every commit and at the start/end of each task — this is your heartbeat.
+- Set `IN_PROGRESS` when you begin work; refresh `LAST_UPDATE` to `$(date +%s)` (epoch seconds)
+  on every commit and at the start/end of each task — this is your heartbeat. Append a
+  `# ... CAT` comment with the local time for human readers.
 - Set `BLOCKED` if you stop on something needing a human/deploy (and record why below).
 - Set `COMPLETE` only when ALL of §2's tasks are done (or done-or-blocked with nothing left to
   attempt). Once COMPLETE, every later watchdog fire is a cheap no-op.
@@ -132,7 +137,7 @@ what's done, what's blocked and WHY, and any decision needed from Andre. Be hone
 failures — show the output.
 
 ### Run log
-- 2026-06-17T19:12Z — Interactive session (Andre present) started **Action 2 — registration in the
+- 2026-06-17 21:14 CAT — Interactive session (Andre present) started **Action 2 — registration in the
   daemon**. Branch/worktree `CELLO-M7-REGISTRATION` to be created off cello-client main. Beginning
   with verify-don't-trust scoping of `core/client/src/registration-manager.ts` +
   `network-directory-node.ts`. If this session stops (quota), resume from here.
@@ -148,10 +153,11 @@ happy path. When fired by the watchdog:
 1. `grep -E "^(STATUS|LAST_UPDATE):" docs/planning/user-stories/m7/AUTONOMOUS-CONTINUATION.md` — one cheap read.
 2. If `STATUS: COMPLETE` → reply exactly `watchdog: complete, nothing to do` and STOP. Do not read
    anything else, do not run tools.
-3. If `STATUS: IN_PROGRESS` AND `LAST_UPDATE` is < ~20 minutes ago (compare to `date -u`) → the main
-   run is probably alive and mid-flight (cron only fires when idle, e.g. waiting on a reviewer
-   subagent). Reply `watchdog: run active, standing by` and STOP — do NOT start a second driver.
-4. Otherwise (`BLOCKED`, or `IN_PROGRESS` but stale ≥20 min, or `NOT_STARTED`) → the run stalled or
+3. If `STATUS: IN_PROGRESS` AND fresh — `LAST_UPDATE` (epoch) is < 1200s before now: compute
+   `now=$(date +%s)`, stale if `now - LAST_UPDATE > 1200` — then the main run is probably alive and
+   mid-flight (cron only fires when idle, e.g. waiting on a reviewer subagent). Reply
+   `watchdog: run active, standing by` and STOP — do NOT start a second driver.
+4. Otherwise (`BLOCKED`, or `IN_PROGRESS` but stale ≥1200s, or `NOT_STARTED`) → the run stalled or
    never started. RESUME: read this doc fully, set `STATUS: IN_PROGRESS`, refresh `LAST_UPDATE`, and
    continue §2's tasks from where the run log shows you left off, within §3's hard limits. (If it was
    `BLOCKED` on a true human/deploy blocker, leave it blocked and move to the next attemptable task.)
