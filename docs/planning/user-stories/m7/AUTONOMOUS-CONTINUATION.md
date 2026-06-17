@@ -134,7 +134,10 @@ failures — show the output.
 ### Run log
 - (autonomous session: append entries here, newest last)
 
-## 6. WATCHDOG PROTOCOL (for the 23:00–03:00 every-30-min cron)
+## 6. WATCHDOG PROTOCOL (for the 23:00–04:00 every-30-min cron)
+<!-- Extended through 04:xx: the 22:10 run's quota window resets ~03:10, so the
+     watchdog must keep firing past that to catch the reset and resume. -->
+
 You may be fired by the watchdog cron whose only job is to recover the run if it was stopped by
 an Anthropic API block, quota exhaustion, or any other halt. Spend MINIMAL tokens on the
 happy path. When fired by the watchdog:
