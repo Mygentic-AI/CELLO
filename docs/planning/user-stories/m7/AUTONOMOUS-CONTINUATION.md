@@ -116,8 +116,8 @@ why. Co-author trailer: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@a
 **Machine-readable status — keep these two lines current; the watchdog (§6) greps them:**
 
 ```
-STATUS: NOT_STARTED
-LAST_UPDATE: (none yet)
+STATUS: IN_PROGRESS
+LAST_UPDATE: 2026-06-17T19:12:25Z
 ```
 
 STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
@@ -132,7 +132,10 @@ what's done, what's blocked and WHY, and any decision needed from Andre. Be hone
 failures — show the output.
 
 ### Run log
-- (autonomous session: append entries here, newest last)
+- 2026-06-17T19:12Z — Interactive session (Andre present) started **Action 2 — registration in the
+  daemon**. Branch/worktree `CELLO-M7-REGISTRATION` to be created off cello-client main. Beginning
+  with verify-don't-trust scoping of `core/client/src/registration-manager.ts` +
+  `network-directory-node.ts`. If this session stops (quota), resume from here.
 
 ## 6. WATCHDOG PROTOCOL (for the 23:00–04:00 every-30-min cron)
 <!-- Extended through 04:xx: the 22:10 run's quota window resets ~03:10, so the
