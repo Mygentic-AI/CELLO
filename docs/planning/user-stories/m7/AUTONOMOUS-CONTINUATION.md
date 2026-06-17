@@ -121,7 +121,7 @@ timezone-proof and cross-platform (macOS + Linux both support `date +%s`).**
 
 ```
 STATUS: IN_PROGRESS
-LAST_UPDATE: 1781725831   # epoch seconds — 2026-06-17 21:50 CAT (steps a+b committed; reviewer running)
+LAST_UPDATE: 1781726171   # epoch seconds — 2026-06-17 21:56 CAT (steps a+b reviewed+fixed; starting step c)
 ```
 
 STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
@@ -218,6 +218,37 @@ failures — show the output.
     registration_state, or per-agent files) + tests; (c) port registration-manager.ts onto that + a daemon
     RegistrationContext; (d) cello_register IPC tool + cello register CLI (core/cli); (e) reviewer + gate.
     Each (a)-(e) is its own commit. This is one focused unit — best started with a fresh quota window.
+- 2026-06-17 21:56 CAT — ✅ **Steps (a)+(b) REVIEWED + FIXED** (commit `ec68020`). Opus code-reviewer verdict on
+  `ae907ee`+`78edcc6`: NO blocking/high. Explicitly confirmed: (i) network-directory-node port is byte-identical
+  to the client except the Logger import retarget, which is correct/necessary; (ii) `DaemonRegistrationPersistence`
+  signatures match every `RegistrationManager` call site → the step-(c) port will compile with only an import
+  change; (iii) SI-001/SI-002 logging clean. Fixed all 4 LOWs (tmp-litter unlink, fsync, randomized tmp suffix,
+  loud corrupt-file validation + new test). 9 tests green, typecheck+eslint clean. Persistence foundation is DONE.
+  **NEXT = step (c):** port registration-manager.ts + build daemon RegistrationContext per the design below.
+- 2026-06-17 21:55 CAT — **Step (c) DESIGN (reverse-engineered from the real daemon code; ready to implement
+  once the a+b reviewer returns):** The ported `registration-manager.ts` talks to a raw persistent signaling
+  `Stream` (`getPersistentSignalingStream()!.send(lp.encode.single(frame))` + pending resolvers). The daemon
+  has NO raw persistent stream to expose — signaling lives behind `SignalingManager` (core/transport). So the
+  daemon `RegistrationContext` ADAPTS the seam (legit per "adapt a dirty seam, don't rebuild"):
+  - **Send:** `SignalingManager.sendRaw(frameObject): Promise<OperationResult>` encodes CBOR+lp internally and
+    sends on the live stream (returns `{ok:false, reason:'signaling_reconnecting'|'signaling_lost'}` if down).
+    So in the daemon copy, replace the two send sites (register_request, dkg_complete) — pass the PLAIN OBJECT
+    to `sendRaw`, drop the local `CBOR_ENC.encode` + `lp.encode.single` for those two frames. Check `.ok`.
+  - **Inbound:** `SignalingManager.registerInboundHandler((frame)=>{...}): ()=>unregister` — frames arrive
+    already CBOR-decoded. Route `dkg_ready` → pending dkgReady resolver; `register_success`/`register_error`
+    → pending register resolver. Reference implementation to mirror EXACTLY: the seal-interrupted send-then-await
+    at `daemon.ts:957-1014` (sendRaw → register handler → match frame.type → resolve/timeout → unregister).
+  - **Stream accessors:** replace `openPersistentSignalingStream()` → returns `signalingManager.status==="connected"`;
+    DROP `getPersistentSignalingStream()` (no raw stream). The pending-resolver setters stay but are driven by the
+    daemon's single registered inbound handler, not a client read-loop.
+  - **node:** `RegistrationContext.node = getDirectoryNode()` — MUST null-check (null even when status==connected,
+    brief stream-death window). If null → return `{error:"directory_unreachable"}`.
+  - **persistence:** the new `FileRegistrationPersistence` (step b), typed as `DaemonRegistrationPersistence`.
+    Use the PERSISTENCE path (mlDsaKeyFile=undefined) so all three persist methods are exercised; ML-DSA secret
+    reloads via `new InMemoryMlDsaKeyProvider(pubkey, secretKeyBlob)` on restart.
+  - **getDirectoryEndpoint():** the bootstrap resolver's last-resolved `{peer_id, multiaddrs}` (directory-bootstrap.ts).
+  Then step (d): `cello_register` IPC handler (ipc-server `handlers` Map keyed by method) + `register` CLI command
+  (core/cli/src/commands.ts has login/logout/status — add register). Step (e): reviewer + full gate.
 - 2026-06-17 21:44 CAT — ✅ **Step (a) DONE** (commit `ae907ee` on `CELLO-M7-REGISTRATION`). Copied
   `network-directory-node.ts` into `core/daemon/src/`. Confirmed self-contained: every import resolves
   against the daemon's existing deps; only the `Logger` import needed retargeting (`@cello-protocol/interfaces`
