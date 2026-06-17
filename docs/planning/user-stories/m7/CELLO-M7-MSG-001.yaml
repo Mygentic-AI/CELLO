@@ -47,6 +47,21 @@ story: >
   oversize content is rejected with a clear error rather than a silent desync.
 
 # ─── Context ────────────────────────────────────────────────
+# ─── STACK CORRECTION (2026-06-17) — READ BEFORE IMPLEMENTING ──────────────
+# This story was spec'd against core/client/session-manager.ts and relay-stream-manager.ts
+# (anchors :589-624, :683-689, :805-839). That is the legacy in-process CelloClient stack,
+# which NO production binary instantiates — the daemon's cello_send is a not_implemented
+# stub and CelloClient is never constructed. So the content SEND / ACK / PARK orchestration
+# here, as written, would land on DEAD code (see CELLO-M7-DAEMON-004 Context + POSTMORTEM
+# Part 3/4). Per Option A (confirmed 2026-06-17), the live session send path and the
+# per-session Merkle tree move into the daemon in CELLO-M7-DAEMON-004 (new blocked_by).
+#   KEEP (live, stack-neutral): relay-side durable content store, sender-side retry_queue
+#     extension (DAEMON-003), recipient-seal crypto, content wire types, size cap.
+#   RE-HOME: every AC currently component_under_test: client whose anchor is
+#     session-manager.ts / relay-stream-manager.ts is implemented against the DAEMON-004
+#     daemon send path (a SessionNodeManager session + the daemon-owned tree), NOT the
+#     client files. relay / transport / crypto ACs are unaffected.
+# ───────────────────────────────────────────────────────────────────────────
 # Authority: POSTMORTEM-seal-and-content-delivery-gaps.md Part 4 (decisions D-a..D-d,
 # the TTF flush model, proposed parameters). All architecture is CLOSED there; this
 # story specs to those decisions. Part 3 C-4 establishes WHY this matters: content
@@ -960,6 +975,7 @@ implementation_notes:
 # ─── Dependencies ────────────────────────────────────────────
 dependencies:
   blocked_by:
+    - CELLO-M7-DAEMON-004  # FOUNDATION (Option A): daemon owns the live send path + per-session Merkle tree this story's ACK/park layers on
     - CELLO-M7-DAEMON-003  # sender side EXTENDS retry_queue (TTF trigger + park drain target + startup flush)
     - CELLO-M7-WIRE-001    # session transport / SessionAssignment (direct P2P content path)
     - CELLO-M7-SESSION-001 # relay control-frame + interrupted-session plumbing the recovery/park paths build alongside

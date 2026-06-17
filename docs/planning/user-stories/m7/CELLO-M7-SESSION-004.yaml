@@ -45,6 +45,18 @@ story: >
   delivered-but-unanswered, never agreed).
 
 # ─── Context ────────────────────────────────────────────────
+# ─── STACK CORRECTION (2026-06-17) — READ BEFORE IMPLEMENTING ──────────────
+# LIVE half (correct, unaffected): the directory-side certificate legibility — the
+# directory ACs (content-frontier, live-vs-recovered marker, "final message unanswered").
+# DEAD half: this story's client-side surfacing is entirely on the legacy CelloClient
+# stack — the in-flight branch created core/client/src/seal-legibility-client.ts [new]
+# and edited seal-manager.ts, and touches NO daemon code, so the operator-facing
+# certificate surface would never run in production (see CELLO-M7-DAEMON-004 + POSTMORTEM
+# Part 3/4). Per Option A, the client surfacing of the seal certificate lives in the
+# daemon. Implement the client-side legibility ACs against the DAEMON-004 daemon
+# seal/transcript path, NOT seal-legibility-client.ts / seal-manager.ts.
+# New blocked_by: CELLO-M7-DAEMON-004.
+# ───────────────────────────────────────────────────────────────────────────
 # This story is Workstream F from POSTMORTEM-seal-and-content-delivery-gaps.md
 # Part 3 (C-1 receipt-not-assent; C-2 acknowledgement frontier and the tail;
 # C-6 malicious-tail / legibility). Those conclusions are SETTLED; this story
@@ -605,6 +617,7 @@ implementation_notes:
 # ─── Dependencies ────────────────────────────────────────────
 dependencies:
   blocked_by:
+    - CELLO-M7-DAEMON-004  # FOUNDATION (Option A): daemon owns the active-session seal + transcript this story surfaces to the operator
     - CELLO-M7-WIRE-001    # SessionAssignment/seal wire plumbing context; merged
   blocks:
     - CELLO-M7-E2E-001     # the integration gate reads sealed certificates; legibility must be present

@@ -51,6 +51,18 @@ story: >
   signal and without introducing any periodic agent heartbeat.
 
 # ─── Context ────────────────────────────────────────────────
+# ─── STACK CORRECTION (2026-06-17) — IN FLIGHT — READ BEFORE CONTINUING ─────
+# This story is SPLIT across stacks. Its core liveness work correctly lands on the LIVE
+# daemon (core/daemon/src/session-node-manager.ts) — KEEP that. But the in-flight branch
+# also created/edited DEAD client-stack files (core/client/src/session-liveness.ts [new],
+# seal-manager.ts, relay-stream-manager.ts), and the unilateral-seal ABSENT gate it adds
+# sits in seal-manager.ts (~:280) — the legacy CelloClient stack that no production binary
+# runs (see CELLO-M7-DAEMON-004 + POSTMORTEM Part 3/4). Per Option A: the active-session
+# seal and its ABSENT gate live in the daemon. RE-HOME the seal-ABSENT gate and any
+# client-side liveness onto the DAEMON-004 daemon seal path; KEEP the session-node-manager
+# liveness; DISCARD the dead-stack client edits rather than carrying them.
+# New blocked_by: CELLO-M7-DAEMON-004.
+# ───────────────────────────────────────────────────────────────────────────
 # Design authority: POSTMORTEM-seal-and-content-delivery-gaps.md Part 4 decision
 # D-b (SETTLED — "session-path liveness; never the directory") and the §9
 # "Participant liveness and delivery verification" section of
@@ -788,6 +800,7 @@ implementation_notes:
 # ─── Dependencies ────────────────────────────────────────────
 dependencies:
   blocked_by:
+    - CELLO-M7-DAEMON-004  # FOUNDATION (Option A): daemon owns the active-session seal whose ABSENT decision this story's liveness gates
     - CELLO-M7-DAEMON-002  # ephemeral session nodes — the peer↔peer session-node connection whose onPeerDisconnect this story acts on; SessionNodeManager seam
     - CELLO-M7-WIRE-001    # transport_mode field on SessionAssignment — the sole disambiguator for which liveness authority to consult
   related:

@@ -1,0 +1,465 @@
+---
+name: CELLO-M7-DAEMON-004
+type: user-story
+date: 2026-06-17
+topics: [daemon, session-core, merkle-tree, content-send, active-session-seal, ipc, option-a-consolidation, stack-correction, m7]
+status: draft
+description: >
+  The production foundation the four postmortem stories were silently built on top of.
+  Today the daemon's session-tool routing (cello_send / cello_receive) and the
+  active-session seal (cello_close_session for active sessions) both return
+  not_implemented, and the daemon "does not maintain the session Merkle tree — the
+  client supplies it" (daemon.ts:568). The live send + tree + active-seal logic exists
+  ONLY in core/client (session-manager.ts, seal-manager.ts) — the legacy in-process
+  CelloClient stack, which NO production binary instantiates. This story implements
+  Option A: the daemon becomes the live session node that OWNS the per-session Merkle
+  tree, sends and receives content through its own SessionNodeManager sessions, and
+  initiates the active-session seal over its own tree root. It re-homes the
+  content/seal/tree orchestration out of the dead CelloClient stack into the daemon.
+  Every client-side AC in MSG-001 / SESSION-002 / SESSION-003 / SESSION-004 depends on
+  this foundation; without it those stories build on code that never runs in production.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-DAEMON-004
+domain: Session Lifecycle
+milestone: M7
+actor: CLIENT
+priority: P0
+components:
+  - daemon
+  - client
+  - transport
+  - relay
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client (the daemon — the heavy local node),
+  I want to own the session Merkle tree, send and receive content through my own
+  ephemeral session nodes, and initiate the active-session seal over a tree root I
+  built myself,
+  so that content delivery and sealing actually work in production — not only inside
+  the legacy in-process CelloClient that no production binary ever constructs.
+
+# ─── Context ────────────────────────────────────────────────
+# WHY THIS STORY EXISTS — read POSTMORTEM-seal-and-content-delivery-gaps.md first.
+#
+# The four stories that came out of that postmortem (MSG-001, SESSION-002, SESSION-003,
+# SESSION-004) were each spec'd against `core/client/src/session-manager.ts` and
+# `core/client/src/seal-manager.ts` — because that is where the visible "fire-and-forget
+# content send" and "initiateSessionSeal" code lives. But that code is the M6-era
+# in-process CelloClient stack, and in M7 the daemon split made it DEAD:
+#
+#   - No production binary constructs `CelloClient`. The only shipped bin is `cello-mcp`,
+#     a thin stdio→IPC proxy that holds no keys and opens no DB. The daemon
+#     (`core/daemon`) does not import `@cello-protocol/client` at all.
+#   - `cello_send` / `cello_receive` / `cello_initiate_session` are STUBS in the daemon:
+#     `daemon.ts` SESSION_TOOLS loop returns `not_implemented` ("Session tool routing is
+#     not yet implemented in the daemon. This will be available after the session node
+#     manager is wired to the IPC layer.").
+#   - `cello_close_session` for an ACTIVE session returns `not_implemented`
+#     (`daemon.ts:583-588`); only the SESSION-001 interrupted-seal flow is wired.
+#   - The daemon explicitly delegates the transcript to a client that isn't running:
+#     `daemon.ts:568-571` — "the Merkle root at interruption is held by the client (the
+#     daemon does not maintain the session Merkle tree). The client supplies it here."
+#     No production component exists to supply it.
+#
+# So the production daemon cannot send content, cannot maintain a transcript, and cannot
+# seal an active session. The postmortem's whole subject — "A closes the laptop, the
+# session seals, what does A have?" — runs only through dead code. MSG-001's deferral
+# comment named a phantom follow-up (`CELLO-M7-DAEMON-CONTENT-WIRING`) that was never
+# written. THIS story is that foundation, correctly scoped to include the tree and the
+# active-session seal, not just content.
+#
+# DECISION — Option A (confirmed 2026-06-17). The daemon OWNS the session core. The
+# session Merkle tree, the content send/receive path, and the active-session seal
+# initiation all live in the daemon's `SessionNodeManager` session layer — NOT in a
+# CelloClient object the daemon hosts (Option B, rejected). Rationale: the tree is the
+# running hash of every message, and the daemon is the component that sends and receives
+# every message, so the transcript belongs where the messages flow. Option B would put
+# two session managers (SessionNodeManager + CelloClient.session-manager) in one process
+# and force a reconciliation of who owns the streams and the tree — the exact split that
+# produced this gap. M7's direction was already Option A: DAEMON-003 explicitly REMOVED
+# the RetryQueue/NonceDedup classes from `core/client`. This story finishes that move.
+#
+# RE-HOMING, not greenfield. The content/seal/tree LOGIC already exists and is tested in
+# `session-manager.ts` (#trackAndSendContent, TTF park hooks, tree append, cross-check)
+# and `seal-manager.ts` (initiateSessionSeal, initiateUnilateralSeal,
+# handleSealUnilateralConfirmed). Lift it into the daemon's session layer rather than
+# rewriting it. The stack-NEUTRAL pieces already correctly placed STAY: the relay
+# content-park protocol + store, the daemon `retry_queue`, the recipient-seal crypto, the
+# content wire types and size cap, the directory-side notarization.
+#
+# This story is exercised by E2E-001 AC-005 (Alice cello_send → Bob cello_receive) and is
+# a prerequisite for it. It blocks MSG-001 / SESSION-002 / SESSION-003 / SESSION-004.
+
+# ─── Sovereign Node Constraint ──────────────────────────────
+# The daemon-owned Merkle tree is local client-side state on the operator's machine.
+# The seal NOTARIZATION is produced by the directory FROST threshold (D-2, postmortem
+# Part 3), coordinated by the initiator — the daemon never produces the notarization
+# signature itself, and no single directory node can complete the ceremony alone. The
+# counterparty contributes only its own Ed25519 ack leaf; its signature is ALWAYS
+# produced by its own node (SI-003). This story adds no cross-node shared state, no
+# replication, and no dependency on a specific directory node — the active-seal ceremony
+# routes through whichever directory node the signaling stream is connected to, exactly
+# as the interrupted-seal flow (SESSION-001) already does.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When cello_send is called for an active session and the agent's current
+      session node has a live stream to the counterparty"
+    action: >
+      the daemon shall send the content over the session node's direct P2P stream,
+      submit the signed content_hash leaf to the relay on /cello/relay/1.0.0, and
+      append the leaf to the DAEMON-OWNED per-session Merkle tree — advancing the tree
+      root — then return { ok: true, sequence_number } once the relay assigns the
+      sequence. cello_send no longer returns not_implemented. (The delivery-ACK / TTF
+      park behavior on top of this is MSG-001's scope; this story provides the live send
+      path and the tree append it parks against.)
+
+  - trigger: "When content arrives on an active session node's content stream AND the
+      matching content_hash leaf arrives on the relay stream"
+    action: >
+      the daemon shall cross-check the content against the hash, append the verified
+      leaf to the daemon-owned per-session Merkle tree, and make the content available
+      to cello_receive. cello_receive no longer returns not_implemented and returns the
+      received content from the daemon's own buffer.
+
+  - trigger: "While an active session is established"
+    action: >
+      the daemon shall maintain the session's Merkle tree as the authoritative
+      transcript — every sent and received leaf is appended in order, the root is
+      recomputed, and the tree is persisted to the session's SQLCipher state so it
+      survives a daemon restart. The daemon does NOT depend on any external party to
+      supply the tree or the root (closing daemon.ts:568-571).
+
+  - trigger: "When cello_close_session is called for an ACTIVE (non-interrupted) session"
+    action: >
+      the daemon shall initiate the active-session seal: build a SEAL ctrl leaf over its
+      own current tree root, Ed25519-sign it with last_seen_seq, submit it to the relay,
+      push the seal payload to the counterparty for cross-check, and coordinate the FROST
+      notarization with the directory (initiator = the closing party). cello_close_session
+      for active sessions no longer returns not_implemented. On the counterparty's ack
+      leaf the seal completes BILATERAL; if the counterparty is ABSENT per session-path
+      liveness, it completes UNILATERAL (the ABSENT decision and certificate are
+      SESSION-003 / SESSION-002 scope — this story provides the active-seal initiation
+      and the daemon-owned root it signs).
+
+  - trigger: "If cello_send is called while the session node's stream to the counterparty
+      is dead (closed, timed out, or never established)"
+    action: >
+      the daemon shall NOT silently drop the content and shall NOT desync the session on
+      mere absence; it surfaces a distinct, diagnosable outcome (the TTF park path is
+      MSG-001's scope — this story's requirement is that a dead stream produces a named
+      failure, never the old silent `void sendContentFrame(...)` catch).
+
+  - trigger: "Where the production composition root constructs the daemon"
+    action: >
+      the daemon's session send/receive/tree/seal capability shall be instantiated and
+      wired from the daemon binary entrypoint (`core/daemon/src/bin/cello-daemon.ts` →
+      startDaemon), reachable via the real IPC tool handlers — NOT only constructable in
+      tests. No production code path constructs CelloClient or calls
+      session-manager.ts / seal-manager.ts.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Two daemons in two separate OS processes, agent Alice in daemon-1 and agent
+      Bob in daemon-2, with an active session established between them over real
+      ephemeral session nodes (real libp2p streams, not in-process fakes)"
+    when: "Alice's agent calls cello_send('hello') via daemon-1's IPC socket and Bob's
+      agent calls cello_receive via daemon-2's IPC socket"
+    then: >
+      cello_send returns { ok: true } with a sequence_number (NOT
+      { reason: 'not_implemented' }). cello_receive on daemon-2 returns the content
+      'hello'. The relay log shows a hash_submit from Alice's SESSION node Peer ID and a
+      leaf_deliver to Bob's SESSION node Peer ID (not their directory-facing Peer IDs) —
+      proving the content rode the real session transport, not in-process dispatch.
+      session.content.sent fires on daemon-1 and session.content.received on daemon-2,
+      sharing one correlationId.
+    test_type: e2e
+    component_under_test: daemon
+    notes: >
+      Requires CELLO_E2E_LIVE; describe.skipIf(!process.env.CELLO_E2E_LIVE). This is the
+      stub-resistant gate: two separate processes, real IPC sockets, real session
+      streams. A test using in-process method dispatch satisfies neither the IPC boundary
+      nor the session-Peer-ID transport evidence. This AC is E2E-001 AC-005 scoped to the
+      daemon send path that makes it pass.
+
+  - id: AC-002
+    given: "An active session in daemon-1 (Alice) and daemon-2 (Bob); Alice sends 3
+      messages and receives 2 from Bob, all over real session streams"
+    when: "the daemon-owned Merkle tree root is read from each daemon after the 5
+      messages settle (via cello_status or a debug accessor)"
+    then: >
+      Both daemons' trees contain the same 5 leaves in the same order and report the
+      SAME root hash — the daemon built the transcript itself from sent + received
+      leaves. Neither daemon was supplied the root by an external client param. Verified
+      by asserting the two root hex strings are equal and that no IPC frame carried a
+      caller-supplied merkleRoot for these sends. session.tree.appended fires once per
+      leaf with sessionId, leafIndex, newRootHex.
+    test_type: e2e
+    component_under_test: daemon
+    notes: >
+      Requires CELLO_E2E_LIVE. Cross-process root agreement is the observable that proves
+      the daemon OWNS the tree (Option A). It cannot pass if either side relies on a
+      CelloClient that isn't running or on a caller-supplied root (the daemon.ts:568 gap).
+
+  - id: AC-003
+    given: "An active (non-interrupted) session in daemon-1 with content sent and a
+      daemon-owned tree with a non-empty root"
+    when: "Alice's agent calls cello_close_session(sessionId) via IPC"
+    then: >
+      The call does NOT return { reason: 'not_implemented' }. The daemon builds a SEAL
+      ctrl leaf over ITS OWN current tree root, signs it, submits it to the relay, and
+      session.seal.initiated fires at INFO with sessionId, rootHex (matching the daemon's
+      tree root), role: 'initiator', correlationId. The seal proceeds to the FROST
+      notarization path (same path the interrupted-seal flow uses). Verified end to end
+      in AC-004; here the assertion is that active-session close initiates a real seal
+      over the daemon's own root.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Closes daemon.ts:583-588 (active-session close not_implemented) and daemon.ts:568
+      (root supplied by an absent client). The rootHex in session.seal.initiated MUST
+      equal the daemon's own tree root from AC-002 — not a value passed in params.
+
+  - id: AC-004
+    given: "An active Alice↔Bob session across daemon-1 and daemon-2 with a mutually
+      acknowledged transcript (both trees at the same root, AC-002)"
+    when: "Alice calls cello_close_session and Bob's node receives the SEAL leaf"
+    then: >
+      A signed SealNotarization is persisted by the directory (frost_signature present),
+      both daemons receive session_sealed, both auto-database the notarization, and each
+      session transitions to status 'sealed'. The notarization root equals the
+      daemon-owned tree root both sides computed. Verified across two real processes and
+      the live directory.
+    test_type: e2e
+    component_under_test: daemon
+    notes: >
+      Requires CELLO_E2E_LIVE. This is the active-session happy-path seal — the exact
+      scenario the postmortem traced (C-0) but routed through dead client code. It now
+      runs through the daemon. The auto-co-sign refinement (C-5) is SESSION work; this AC
+      requires only that an active close produces a real bilateral notarization over the
+      daemon's root.
+
+  - id: AC-005
+    given: "An active session where the counterparty's session-node stream is DEAD at
+      send time (killed at the transport boundary — stream closed / dial failed — NOT a
+      stubbed send method)"
+    when: "cello_send is called for content C"
+    then: >
+      cello_send does NOT silently succeed and does NOT desync the session. It returns a
+      distinct, diagnosable outcome with a guidance field, and session.content.send.failed
+      (or the MSG-001 park event, once that lands) fires with sessionId, recipientPubkey,
+      reason, error.message — never [object Object], never the old silent return at
+      session-manager.ts:621-623. The session remains usable.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      The kill must be at L7 (close the libp2p stream), not a mock of the send method.
+      This AC encodes the dead-channel contract; MSG-001 then layers the TTF park on top.
+
+  - id: AC-006
+    given: "The daemon binary as shipped (cello-daemon.ts → startDaemon)"
+    when: "the daemon starts and an active session sends content via IPC"
+    then: >
+      The send/receive/tree/seal capability is instantiated by the composition root and
+      reachable through the real IPC tool handlers — verified by an integration test that
+      starts the daemon via its entrypoint and triggers cello_send through the IPC socket,
+      asserting it routes to a SessionNodeManager session (not a direct method call). A
+      grep over the built daemon and adapter production code for `new CelloClient`,
+      `session-manager`, or `seal-manager` returns zero matches outside __tests__.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Catches the M6/PERSIST-024 pattern (implemented but never wired) AND the inverse
+      (still wired to the dead stack). The grep assertion is the stack-retirement check.
+
+  - id: AC-007
+    given: "An active session with a daemon-owned tree holding N leaves"
+    when: "the daemon process is killed (SIGKILL) and restarted via cello login"
+    then: >
+      The session's Merkle tree is reloaded from SQLCipher with the same N leaves and the
+      same root — the transcript survives the restart boundary. A subsequent
+      cello_close_session seals over that reloaded root. Verified with a real daemon
+      binary restart, not an in-memory reset.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      The tree is authoritative transcript state; losing it on restart would make the
+      post-restart seal attest to a truncated transcript. Mirrors DAEMON-003's
+      load-before-IPC discipline.
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The daemon shall never sign or submit a SEAL leaf over a Merkle root it did not
+      itself construct from the session's appended leaves.
+    adversarial_condition: >
+      even when an IPC caller supplies a merkleRoot / reported_root parameter — the
+      daemon ignores any caller-supplied root for active-session seals and uses only its
+      own tree. (This closes the daemon.ts:568 "the client supplies the root" trust hole
+      and mirrors the directory-side "stop trusting reported_root" fix in Workstream A.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: SI-002
+    statement: >
+      No production code path shall construct CelloClient or route an active session's
+      send / receive / seal through core/client/session-manager.ts or seal-manager.ts.
+    adversarial_condition: >
+      even though those files remain in the tree during the M7 transition — verified by a
+      CI grep asserting the daemon and adapter production bundles reference neither the
+      CelloClient constructor nor the legacy session/seal managers. The dead stack is
+      retired, not merely bypassed.
+    test_type: unit
+    component_under_test: daemon
+
+  - id: SI-003
+    statement: >
+      A counterparty's seal acknowledgement signature shall always be produced by the
+      counterparty's own node — never synthesized by the directory, the relay, the
+      closing party, or anyone else.
+    adversarial_condition: >
+      even when the counterparty is online and able to co-sign instantly (the C-5
+      auto-acknowledge case) — "automatic" means the counterparty's OWN node signs without
+      an agent prompt, never that another party produces its ack. Verified by asserting no
+      code path lets a non-counterparty produce the counterparty's SEAL leaf signature.
+    test_type: integration
+    component_under_test: daemon
+    notes: >
+      Carries the postmortem C-5 non-negotiable boundary into the active-seal path so the
+      no-single-party-can-forge invariant holds when the seal logic moves into the daemon.
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the relay is unavailable at cello_send time (hash channel down)"
+    fallback: >
+      the daemon shall queue the content in the durable retry_queue (DAEMON-003) and
+      surface a non-fatal outcome rather than desyncing the session; the send is retried
+      on reconnect. (The relay-side durable content park is MSG-001's scope; this story
+      requires only that a relay outage does not lose the leaf or kill the session.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: DB-002
+    condition: "While the directory signaling stream is reconnecting at
+      cello_close_session time"
+    fallback: >
+      the daemon shall return { ok: false, reason: 'signaling_reconnecting', guidance:
+      'The directory signaling stream is reconnecting. Wait for directory_signaling to
+      show connected in cello status before retrying the close. The daemon reconnects
+      automatically.' } and shall NOT initiate a partial seal that cannot be notarized.
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: "session.content.sent"
+      level: info
+      trigger: "Active-session content sent over the session stream + hash submitted"
+      context_fields: [sessionId, recipientPubkey, contentHashHex, sequenceNumber]
+      correlationId: true
+    - name: "session.content.received"
+      level: info
+      trigger: "Content received and cross-checked against its hash, appended to the tree"
+      context_fields: [sessionId, senderPubkey, contentHashHex, sequenceNumber]
+      correlationId: true
+    - name: "session.tree.appended"
+      level: info
+      trigger: "A leaf is appended to the daemon-owned session Merkle tree"
+      context_fields: [sessionId, leafIndex, newRootHex]
+      correlationId: true
+    - name: "session.seal.initiated"
+      level: info
+      trigger: "cello_close_session for an active session builds and submits a SEAL leaf"
+      context_fields: [sessionId, rootHex, role, correlationId]
+      correlationId: true
+  error_events:
+    - name: "session.content.send.failed"
+      level: warn
+      trigger: "cello_send cannot deliver over a dead session stream"
+      context_fields: [sessionId, recipientPubkey, reason, errorMessage]
+    - name: "session.seal.initiate.failed"
+      level: error
+      trigger: "Active-session seal cannot be initiated (no tree root, signing failure)"
+      context_fields: [sessionId, reason, errorMessage]
+  alarms:
+    - condition: "session.content.send.failed rate > 10% of sends over 5 min"
+      fires_to: "the M7 daemon CloudWatch alarm topic"
+    - condition: "session.seal.initiate.failed fires at all (any occurrence)"
+      fires_to: "the M7 daemon CloudWatch alarm topic"
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    RE-HOMING MAP (lift, do not rewrite). Source → destination:
+      - session-manager.ts #trackAndSendContent / sendContentFrame → daemon session send
+        handler operating on a SessionNodeManager session's stream.
+      - session-manager.ts tree append + cross-check → a daemon-owned SessionTree per
+        session, persisted in the session's SQLCipher state (extends DAEMON-002 records).
+      - seal-manager.ts initiateSessionSeal / initiateUnilateralSeal → daemon
+        cello_close_session active-path, reusing the SESSION-001 interrupted-seal FROST
+        coordination plumbing (it already routes initiator → directory → notarization).
+      - relay-stream-manager.ts cross-check (461-478) → daemon receive path; KEEP the
+        content_hash_mismatch → desync (genuine tamper), drop the content_missing → desync
+        (MSG-001 replaces it with recovery).
+    Prefer extracting the pure framing/tree/seal-leaf logic into shared functions the
+    daemon calls, rather than copying — so the dead files can be deleted, not duplicated.
+  - >
+    The daemon already has the FROST seal coordination for INTERRUPTED sessions
+    (handleSealInterruptedFlow, daemon.ts:577). The active-session seal should reuse that
+    machinery with the active tree root instead of the supplied merkleRootAtInterruption.
+    The merkleRootAtInterruption param on cello_close_session (daemon.ts:572) becomes
+    vestigial for active sessions — the daemon supplies its own root (SI-001).
+  - >
+    Decomposition: if the implementer finds send/receive+tree and the active-seal too
+    large for one red→green cycle, stage them (tree+send first, active-seal second) but
+    keep them in this one story — they share the daemon SessionTree and splitting the
+    spec would recreate the seam this story removes.
+  - >
+    E2E-001 cohesion: after this lands, E2E-001 AC-005 should be tightened to assert the
+    daemon-owned tree root agreement (AC-002 here) — that is a story-writing cohesion task
+    on E2E-001, not part of this story.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-DAEMON-002    # ephemeral session nodes + session records (the tree extends these)
+    - CELLO-M7-DAEMON-003    # retry_queue (DB-001 reuse) + nonce dedup
+    - CELLO-M7-WIRE-001      # SessionAssignment (session node Peer IDs the send path uses)
+    - CELLO-M7-SESSION-001   # interrupted-seal FROST coordination plumbing the active seal reuses
+  blocks:
+    - CELLO-M7-MSG-001       # content ACK/park layers on top of this live send path + tree
+    - CELLO-M7-SESSION-002   # unilateral notarization (client verification) seals via this path
+    - CELLO-M7-SESSION-003   # liveness gates the ABSENT decision of this active seal
+    - CELLO-M7-SESSION-004   # certificate legibility surfaces this seal's frontier/root
+    - CELLO-M7-E2E-001       # AC-005 (cello_send → cello_receive) is made to pass by this story
+  notes: >
+    This is the Option-A foundation. It re-homes the active-session send + tree + seal
+    out of the dead CelloClient stack into the daemon. The four postmortem stories keep
+    their LIVE halves (relay store + retry_queue for MSG-001; directory notarization for
+    SESSION-002/004; daemon-side liveness for SESSION-003) and re-home their client halves
+    onto this foundation. Do not implement the four's client-side ACs against
+    session-manager.ts / seal-manager.ts after this lands.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Session Lifecycle, Message Exchange, Merkle Trees"
+  end_to_end_flow: "§5.7 Session Establishment, §6.1 Hash Relay Mechanics, §7 Session Termination & Seal"
+  milestone: M7
+  remediation_plan: "user-stories/m7/POSTMORTEM-seal-and-content-delivery-gaps.md (Part 3 C-0/C-4/C-5, Part 4 D-a/D-b/D-d)"
+  discussion_logs:
+    - "2026-06-10_2000_peer-reconnect-libp2p-primitives"
+    - "2026-06-11_1030_daemon-transport-architecture"
+  related_docs:
+    - "[[daemon-transport-architecture]]"
+  notes: >
+    Stack-correction foundation. The architectural decision (Option A — daemon owns the
+    session core) and the dead-stack evidence are recorded in the Context block above and
+    in the postmortem. The active-session seal closes daemon.ts:583-588; the daemon-owned
+    tree closes daemon.ts:568-571.

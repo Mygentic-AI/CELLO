@@ -46,6 +46,16 @@ story: >
   unsigned word over an authenticated channel on a root it never checked.
 
 # ─── Context ────────────────────────────────────────────────
+# ─── STACK CORRECTION (2026-06-17) — READ BEFORE IMPLEMENTING ──────────────
+# LIVE half (correct, unaffected): the directory-side unilateral-seal notarization — the
+# directory ACs. The directory is a real production node; keep these as-is.
+# DEAD half: the client-side ACs anchored on core/client/src/seal-manager.ts (e.g.
+# handleSealUnilateralConfirmed ~687) target the legacy in-process CelloClient stack,
+# which no production binary runs (see CELLO-M7-DAEMON-004 + POSTMORTEM Part 3/4). Per
+# Option A, the active-session seal — including client-side verification of the
+# unilateral certificate — lives in the daemon. Implement those client ACs against the
+# DAEMON-004 daemon seal path, NOT seal-manager.ts. New blocked_by: CELLO-M7-DAEMON-004.
+# ───────────────────────────────────────────────────────────────────────────
 # Remediation source: POSTMORTEM-seal-and-content-delivery-gaps.md.
 #   - Gap 1 (Part 1): #processSealUnilateral
 #     (packages/directory/src/directory-node.ts ~2585-2707) stores
@@ -706,6 +716,7 @@ implementation_notes:
 # ─── Dependencies ────────────────────────────────────────────
 dependencies:
   blocked_by:
+    - CELLO-M7-DAEMON-004  # FOUNDATION (Option A): daemon owns the active-session seal; client-side cert verification re-homes here
     - CELLO-PERSIST-015   # introduced the seal_unilateral frame, grace gate, and the (unsigned) confirm/notification frames this story upgrades
     - CELLO-M7-SESSION-001 # interrupted-session + seal foundation; this story builds on the M7 seal/interrupted surface
   blocks:
