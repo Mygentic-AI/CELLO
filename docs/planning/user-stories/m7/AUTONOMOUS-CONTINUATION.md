@@ -121,7 +121,7 @@ timezone-proof and cross-platform (macOS + Linux both support `date +%s`).**
 
 ```
 STATUS: IN_PROGRESS
-LAST_UPDATE: 1781726171   # epoch seconds — 2026-06-17 21:56 CAT (steps a+b reviewed+fixed; starting step c)
+LAST_UPDATE: 1781726517   # epoch seconds — 2026-06-17 22:01 CAT (step c part 1 committed; Andre asleep; cron/watchdog drives from here)
 ```
 
 STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
@@ -218,6 +218,40 @@ failures — show the output.
     registration_state, or per-agent files) + tests; (c) port registration-manager.ts onto that + a daemon
     RegistrationContext; (d) cello_register IPC tool + cello register CLI (core/cli); (e) reviewer + gate.
     Each (a)-(e) is its own commit. This is one focused unit — best started with a fresh quota window.
+- 2026-06-17 22:01 CAT — ⏸️ **CHECKPOINT (Andre asleep, ~1% quota left in this window; cron/watchdog resumes).**
+  ✅ **Step (c) part 1 DONE** (commit `4c48fbb`): `registration-manager.ts` ported into `core/daemon/src/` +
+  adapted to the daemon signaling seam exactly per the "Step (c) DESIGN" entry below. Daemon typecheck + eslint
+  clean. **NOT YET TESTED.** Branch `CELLO-M7-REGISTRATION` commits so far: a=`ae907ee`, b=`78edcc6`,
+  b-fixes=`ec68020`, c1=`4c48fbb`. Nothing merged/pushed/deployed.
+  **EXACT REMAINING WORK (resume here — do NOT re-derive; design is in the entry below):**
+  - **Step (c) part 2:** create `core/daemon/src/registration-context.ts` = `DaemonRegistrationContext implements
+    RegistrationContext`. Wraps a structural `SignalingSeam` (`{ status; sendRaw(frame); registerInboundHandler }`
+    — the real `SignalingManager` satisfies it structurally), `getDirectoryNode`, `persistence`
+    (`FileRegistrationPersistence`), `keyProvider`, `logger`, `getDirectoryEndpoint`, `mlDsaKeyFile=undefined`.
+    Holds in-memory: myPubkeyHex / thresholdSigner / myPrimaryPubkey / `#pendingDkgReady` / `#pendingRegister`.
+    `isSignalingConnected()` = `status==="connected"`; `sendSignalingFrame(f)` = `sendRaw(f)`; `getNode()` =
+    `getDirectoryNode()`. On construction, register ONE inbound handler that filters to
+    `{dkg_ready, register_success, register_error}`: `dkg_ready`→call+clear `#pendingDkgReady`;
+    `register_success`→call+clear `#pendingRegister`; `register_error`→whichever resolver is currently set (stages
+    are sequential, only one set at a time). Provide `dispose()` to unregister.
+  - **Manager unit test** (`__tests__/registration-manager.test.ts`) with a FAKE context (no live DKG) — 5 paths:
+    (1) already_registered (setRegistrationState first) → `{error:"already_registered"}`; (2) `isSignalingConnected=false`
+    → `directory_unreachable`; (3) `sendSignalingFrame`→`{ok:false,reason:"signaling_lost"}` → `{error:"signaling_lost"}`;
+    (4) deliver a `dkg_ready` frame but `getNode()=null` (endpoint non-null) → `directory_unreachable` (tests the new
+    null-check); (5) deliver `{type:"register_error",reason:"already_registered",agent_id,primary_pubkey}` to the
+    pending dkgReady resolver → persists (persistMlDsaKeypair+persistRegistrationState) + returns state. Use the
+    persistence path (mlDsaKeyFile=undefined → real `mlDsaKeygenWithBytes`, fine in tests). Deliver frames via a fake
+    that captures the resolver; `await vi.waitFor(() => pendingDkg !== null)` before delivering. Also a small test for
+    the DaemonRegistrationContext inbound routing (feed frames to the registered handler, assert resolver fired).
+  - **Step (d):** `cello_register` IPC handler — add to the `handlers` Map in `ipc-server` wiring (daemon.ts
+    composition root builds a `DaemonRegistrationContext` per agent from `signalingManager`+`getDirectoryNode`+a
+    `FileRegistrationPersistence({agentDir: ~/.cello/agents/<name>/})`+the agent's `keyProvider`, calls
+    `new RegistrationManager(ctx).register(phoneStub, preAuthToken)`). Then `cello register` CLI in
+    `core/cli/src/commands.ts` (has login/logout/status — mirror them; add bin wiring). Capture agent→user link
+    (capture-now-or-lose-it): persist the preAuthToken's user binding at registration.
+  - **Step (e):** reviewer (feature-dev:code-reviewer, model:'opus') over the whole registration unit + full gate;
+    fix ALL findings; commit. Then Action 2 is DONE → move to Action 3 (DAEMON-004 seal fix, §2).
+  NOTE next quota reset ~03:10 CAT; watchdog fires :13/:43 through 04:xx to catch it.
 - 2026-06-17 21:56 CAT — ✅ **Steps (a)+(b) REVIEWED + FIXED** (commit `ec68020`). Opus code-reviewer verdict on
   `ae907ee`+`78edcc6`: NO blocking/high. Explicitly confirmed: (i) network-directory-node port is byte-identical
   to the client except the Logger import retarget, which is correct/necessary; (ii) `DaemonRegistrationPersistence`
