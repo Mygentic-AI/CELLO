@@ -121,7 +121,7 @@ timezone-proof and cross-platform (macOS + Linux both support `date +%s`).**
 
 ```
 STATUS: IN_PROGRESS
-LAST_UPDATE: 1781723671   # epoch seconds — 2026-06-17 21:14 CAT
+LAST_UPDATE: 1781723850   # epoch seconds — 2026-06-17 21:17 CAT
 ```
 
 STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
@@ -138,9 +138,34 @@ failures — show the output.
 
 ### Run log
 - 2026-06-17 21:14 CAT — Interactive session (Andre present) started **Action 2 — registration in the
-  daemon**. Branch/worktree `CELLO-M7-REGISTRATION` to be created off cello-client main. Beginning
-  with verify-don't-trust scoping of `core/client/src/registration-manager.ts` +
-  `network-directory-node.ts`. If this session stops (quota), resume from here.
+  daemon**. Worktree: `.claude/worktrees/CELLO-M7-REGISTRATION`, branched off **`CELLO-M7-KEYSTONE`**
+  (@ 903433d), NOT main — registration depends on the keystone (`signaling-connect.ts` etc. live only on
+  the keystone branch). **STACKING RULE: Actions 2/3/4 that build on the keystone must branch off
+  `CELLO-M7-KEYSTONE`, not main, until Andre merges the keystone.**
+- 2026-06-17 21:17 CAT — **Action 2 scoping (verified against real source — READ THIS before porting):**
+  - Port source: `core/client/src/registration-manager.ts` (302 lines, clean). The `register()` flow:
+    ML-DSA keygen → `openPersistentSignalingStream` → `register_request {phone_stub, k_local_pubkey,
+    ml_dsa_pubkey}` → await `dkg_ready {epochId, participants, threshold}` → `runNetworkDkg(kLocalBytes,
+    {threshold, participants, directoryNodes:[NetworkDirectoryNode], preAuthToken})` → `dkg_complete
+    {primary_pubkey}` → await `register_success {agent_id, primary_pubkey}` → persist FROST share +
+    ML-DSA keypair + RegistrationState. Also handles `already_registered` short-circuits.
+  - Seam = `RegistrationContext` (lines 26-43). Frames map onto the transport `SignalingManager`:
+    use `sendRaw(frame)` for register_request/dkg_complete; route inbound `dkg_ready`/`register_success`
+    via `registerInboundHandler` to the pending resolvers (setPendingDkgReadyResolve/RegisterResolve).
+  - **DESIGN WRINKLE (the real work): `RegistrationContext.node` (the libp2p node) is needed by
+    `runNetworkDkg` → `NetworkDirectoryNode` to open FROST streams to the directory. But keystone Part 2
+    creates the directory-facing node PRIVATELY inside `signaling-connect.ts` connect() — it is NOT
+    exposed.** M6 had one node shared by signaling + DKG; the daemon split signaling behind the transport
+    manager with a private node.
+  - **RECOMMENDED APPROACH (Andre steered toward this; confirm if he left a different note):** make the
+    daemon own the "current directory-facing node". Refactor signaling-connect so the daemon mints a fresh
+    node, passes it INTO connect() (instead of connect creating it), and retains the reference; on each
+    reconnect it mints a fresh node and updates the reference. Result: one-node-per-daemon (exposed to
+    registration/FROST/seal) AND fresh-key-per-connect (Peer-ID rotation per the 2026-06-11 architecture).
+    `RegistrationContext.node` returns the daemon's current node. Build `cello_register` IPC tool + `cello
+    register` CLI (core/cli exists). Persist agent under `~/.cello/agents/<name>/`; capture agent→user link.
+  - Next concrete step: do that signaling-connect refactor FIRST (small), then port RegistrationManager +
+    NetworkDirectoryNode into the daemon behind a daemon-built RegistrationContext. Reviewer + gate per unit.
 
 ## 6. WATCHDOG PROTOCOL (for the 23:00–04:00 every-30-min cron)
 <!-- Extended through 04:xx: the 22:10 run's quota window resets ~03:10, so the
