@@ -121,7 +121,7 @@ timezone-proof and cross-platform (macOS + Linux both support `date +%s`).**
 
 ```
 STATUS: IN_PROGRESS
-LAST_UPDATE: 1781730437   # epoch seconds — 2026-06-17 23:07 CAT (step d DONE — IPC+CLI+link; step e reviewer next)
+LAST_UPDATE: 1781731726   # epoch seconds — 2026-06-17 23:28 CAT (✅ ACTION 2 COMPLETE — registration reviewed+fixed; assessing Action 3)
 ```
 
 STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
@@ -218,6 +218,18 @@ failures — show the output.
     registration_state, or per-agent files) + tests; (c) port registration-manager.ts onto that + a daemon
     RegistrationContext; (d) cello_register IPC tool + cello register CLI (core/cli); (e) reviewer + gate.
     Each (a)-(e) is its own commit. This is one focused unit — best started with a fresh quota window.
+- 2026-06-17 23:28 CAT — ✅✅ **ACTION 2 COMPLETE** (review fixes `e1b5e26`). Opus reviewer over the whole
+  registration unit: NO blocking/high. Fixed all findings: M1 (daemon-wide single-flight guard for
+  cello_register — reply frames aren't agent-tagged, so concurrent registrations would cross-wire; +
+  deterministic concurrency test), L1 (post-success link-write failure now returns ok:true +
+  warning:"agent_user_link_not_captured" instead of a false registration failure), L2 (test logger debug),
+  L3 (stderr warning when pre-auth token passed via argv). Daemon suite **249 green**, CLI **7 green**,
+  typecheck+eslint clean. Branch `CELLO-M7-REGISTRATION` final:
+  `ae907ee`→`78edcc6`→`ec68020`→`4c48fbb`→`5b63aae`→`de76b29`→`38446b6`→`c53ebf9`→`e1b5e26`. Stacks on
+  `CELLO-M7-KEYSTONE`. NOT merged/pushed/deployed — ready for Andre's review + merge.
+  **Registration is END-TO-END WIRED**: `cello register <agent>` CLI → `cello_register` IPC →
+  RegistrationManager (ML-DSA keygen → register_request → FROST DKG → register_success) → per-agent files
+  under ~/.cello/agents/<name>/ + agent→user link. Happy-path DKG verified by the morning live two-agent test.
 - 2026-06-17 23:07 CAT — ✅ **Step (d) DONE** (commits `de76b29` d1 link, `38446b6` d2 IPC handler, `c53ebf9`
   d3 CLI). `cello_register` IPC handler wired into the daemon composition root (resolves directory endpoint via
   the async resolver → captured sync getDirectoryEndpoint; builds DaemonRegistrationContext over the live
