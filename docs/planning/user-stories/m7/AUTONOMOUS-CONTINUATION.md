@@ -111,10 +111,41 @@ deploy, which is forbidden tonight (§3). You MAY write Part-3 CODE on a branch 
 constantly (before tests, after each unit, after each fix). Commit messages explain what +
 why. Co-author trailer: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
 
-## 5. MORNING REPORT (append below as you go — this is what Andre reads first)
-Keep a running log here: each task → branch, commits (hashes), gate status, reviewer outcome,
-what's done, what's blocked and WHY, and any decision you need from Andre. Be honest about
-failures — show the output. If you finished a unit and ran the reviewer, record the verdict.
+## 5. STATUS + MORNING REPORT (Andre reads this first)
+
+**Machine-readable status — keep these two lines current; the watchdog (§6) greps them:**
+
+```
+STATUS: NOT_STARTED
+LAST_UPDATE: (none yet)
+```
+
+STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
+- Set `IN_PROGRESS` when you begin work; refresh `LAST_UPDATE` (run `date -u +%Y-%m-%dT%H:%M:%SZ`)
+  on every commit and at the start/end of each task — this is your heartbeat.
+- Set `BLOCKED` if you stop on something needing a human/deploy (and record why below).
+- Set `COMPLETE` only when ALL of §2's tasks are done (or done-or-blocked with nothing left to
+  attempt). Once COMPLETE, every later watchdog fire is a cheap no-op.
+
+Keep a running log below: each task → branch, commits (hashes), gate status, reviewer outcome,
+what's done, what's blocked and WHY, and any decision needed from Andre. Be honest about
+failures — show the output.
 
 ### Run log
 - (autonomous session: append entries here, newest last)
+
+## 6. WATCHDOG PROTOCOL (for the 23:00–03:00 every-30-min cron)
+You may be fired by the watchdog cron whose only job is to recover the run if it was stopped by
+an Anthropic API block, quota exhaustion, or any other halt. Spend MINIMAL tokens on the
+happy path. When fired by the watchdog:
+
+1. `grep -E "^(STATUS|LAST_UPDATE):" docs/planning/user-stories/m7/AUTONOMOUS-CONTINUATION.md` — one cheap read.
+2. If `STATUS: COMPLETE` → reply exactly `watchdog: complete, nothing to do` and STOP. Do not read
+   anything else, do not run tools.
+3. If `STATUS: IN_PROGRESS` AND `LAST_UPDATE` is < ~20 minutes ago (compare to `date -u`) → the main
+   run is probably alive and mid-flight (cron only fires when idle, e.g. waiting on a reviewer
+   subagent). Reply `watchdog: run active, standing by` and STOP — do NOT start a second driver.
+4. Otherwise (`BLOCKED`, or `IN_PROGRESS` but stale ≥20 min, or `NOT_STARTED`) → the run stalled or
+   never started. RESUME: read this doc fully, set `STATUS: IN_PROGRESS`, refresh `LAST_UPDATE`, and
+   continue §2's tasks from where the run log shows you left off, within §3's hard limits. (If it was
+   `BLOCKED` on a true human/deploy blocker, leave it blocked and move to the next attemptable task.)
