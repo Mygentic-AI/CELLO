@@ -121,7 +121,7 @@ timezone-proof and cross-platform (macOS + Linux both support `date +%s`).**
 
 ```
 STATUS: IN_PROGRESS
-LAST_UPDATE: 1781727198   # epoch seconds — 2026-06-17 22:13 CAT (step c DONE — manager+context+14 tests; starting step d IPC+CLI)
+LAST_UPDATE: 1781730437   # epoch seconds — 2026-06-17 23:07 CAT (step d DONE — IPC+CLI+link; step e reviewer next)
 ```
 
 STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
@@ -218,6 +218,20 @@ failures — show the output.
     registration_state, or per-agent files) + tests; (c) port registration-manager.ts onto that + a daemon
     RegistrationContext; (d) cello_register IPC tool + cello register CLI (core/cli); (e) reviewer + gate.
     Each (a)-(e) is its own commit. This is one focused unit — best started with a fresh quota window.
+- 2026-06-17 23:07 CAT — ✅ **Step (d) DONE** (commits `de76b29` d1 link, `38446b6` d2 IPC handler, `c53ebf9`
+  d3 CLI). `cello_register` IPC handler wired into the daemon composition root (resolves directory endpoint via
+  the async resolver → captured sync getDirectoryEndpoint; builds DaemonRegistrationContext over the live
+  SignalingManager + getDirectoryNode + per-agent FileRegistrationPersistence; runs RegistrationManager.register();
+  persists agent→user link; dispose() in finally). `cello register <agent> [preAuthToken]` CLI (token via
+  CELLO_PREAUTH_TOKEN fallback). Agent→user link capture (capture-now-or-lose-it). Also fixed a latent missing-
+  `debug` Logger bug in the cello bin. Full daemon suite 247 green; CLI suite 7 green; typecheck+eslint clean
+  across daemon+cli. Branch `CELLO-M7-REGISTRATION`: …→`4c48fbb`→`5b63aae`→`de76b29`→`38446b6`→`c53ebf9`.
+  **NEXT = step (e):** reviewer (feature-dev:code-reviewer, model:'opus') over the whole registration unit
+  (everything since `ec68020`: c1 manager, c2 context+tests, d1 link, d2 handler, d3 CLI), fix ALL findings,
+  commit. Then **Action 2 is DONE** → Action 3 (DAEMON-004 seal fix, §2).
+  KNOWN LIMITATION to note (not a blocker): the keystone authenticates signaling as the PRIMARY agent computed
+  once at startup; an agent whose key is created at runtime won't auto-connect signaling until daemon restart
+  (the "first identity" bootstrap). Out of registration scope; flag for the demo runbook.
 - 2026-06-17 22:13 CAT — ✅ **Step (c) DONE** (commits `4c48fbb` c1 manager port, `5b63aae` c2 context+tests).
   `DaemonRegistrationContext` (signaling bridge: sendRaw + one inbound handler routing dkg_ready/register_success/
   register_error to the armed resolver) + 14 tests (9 context routing, 5 manager seam paths). Daemon typecheck +
