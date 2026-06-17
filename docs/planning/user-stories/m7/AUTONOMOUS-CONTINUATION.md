@@ -121,7 +121,7 @@ timezone-proof and cross-platform (macOS + Linux both support `date +%s`).**
 
 ```
 STATUS: IN_PROGRESS
-LAST_UPDATE: 1781724900   # epoch seconds — 2026-06-17 21:35 CAT
+LAST_UPDATE: 1781724848   # epoch seconds — 2026-06-17 21:34 CAT
 ```
 
 STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
@@ -192,6 +192,13 @@ failures — show the output.
   No node-sharing adaptation needed beyond getDirectoryNode(). The remaining port (copy 2 files in,
   build RegistrationContext, cello_register IPC+CLI, tests) is one focused unit — ideal for the
   overnight run or a fresh quota window. Checkpoint is clean: everything committed, branches stacked.
+- 2026-06-17 21:34 CAT — ✅ **node-exposure unit REVIEWED + finalized** (commit `1f27efb`). Opus
+  code-reviewer verdict on `3796e3e`: CLEAN (no blocking/high/medium). Fixed the one LOW (catch-path
+  `publishNode?.(null)` symmetry) + documented the consumer contract: `getDirectoryNode()` may return
+  null even when status=="connected" (brief stream-death window) — **registration's NetworkDirectoryNode
+  MUST null-check it**, don't assume non-null. 222 tests green. `CELLO-M7-REGISTRATION` now has 2 commits
+  on top of keystone (`3796e3e`, `1f27efb`). The big RegistrationManager port is the next unit — start it
+  fresh per the steps two entries above.
 
 ## 6. WATCHDOG PROTOCOL (for the 23:00–04:00 every-30-min cron)
 <!-- Extended through 04:xx: the 22:10 run's quota window resets ~03:10, so the
