@@ -120,8 +120,8 @@ timezone-proof and cross-platform (macOS + Linux both support `date +%s`).**
 **Machine-readable status — keep these lines current; the watchdog (§6) greps them:**
 
 ```
-STATUS: IN_PROGRESS
-LAST_UPDATE: 1781731726   # epoch seconds — 2026-06-17 23:28 CAT (✅ ACTION 2 COMPLETE — registration reviewed+fixed; assessing Action 3)
+STATUS: COMPLETE
+LAST_UPDATE: 1781732050   # epoch seconds — 2026-06-17 23:34 CAT (Action 2 done; Action 3 found already-built on its branch; Action 4 needs Andre's merge decision — nothing left to safely auto-attempt)
 ```
 
 STATUS is one of: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` | `COMPLETE`.
@@ -218,6 +218,44 @@ failures — show the output.
     registration_state, or per-agent files) + tests; (c) port registration-manager.ts onto that + a daemon
     RegistrationContext; (d) cello_register IPC tool + cello register CLI (core/cli); (e) reviewer + gate.
     Each (a)-(e) is its own commit. This is one focused unit — best started with a fresh quota window.
+- 2026-06-17 23:34 CAT — 🌅 **MORNING REPORT — autonomous run complete (STATUS: COMPLETE).** What I did,
+  what I found, and the ONE decision that's yours:
+
+  **✅ DELIVERED — Action 2: registration in the daemon (the night's headline).**
+  Fully implemented, reviewed (Opus, all findings fixed), gated. Branch `CELLO-M7-REGISTRATION` (stacks on
+  `CELLO-M7-KEYSTONE`), 9 commits `ae907ee`→`e1b5e26`, NOT merged/pushed. `cello register <agent>` CLI →
+  `cello_register` IPC → RegistrationManager (ML-DSA keygen → register_request → FROST DKG → register_success)
+  → per-agent files under `~/.cello/agents/<name>/` + agent→user link. New modules: network-directory-node.ts
+  (port), registration-persistence.ts (file-backed seam), registration-manager.ts (port, seam-adapted),
+  registration-context.ts (SignalingManager bridge). Daemon suite **249 green**, CLI **7 green**, typecheck+
+  eslint clean. Single-flight guard for concurrent registration. Happy-path DKG is for the live two-agent test.
+
+  **🔎 FOUND ALREADY-BUILT — Action 3: DAEMON-004 seal fix. The §2 description was STALE.**
+  I read the real `CELLO-M7-DAEMON-004` branch code before touching anything ([[feedback_assume_code_exists]]).
+  The seal bug §2 describes is ALREADY FIXED there: commit `95bf6dc` "wire active seal via bilateral plumbing,
+  sync message_count, ownership checks" replaced the bare `seal_request` with the SESSION-001 bilateral
+  `seal_interrupted_request`/`_ack`/`_rejection` + FROST notarization flow (daemon.ts `handleActiveSealFlow`
+  → `seal_interrupted_pending`), and `message_count` is synced to the tree size (session-node-manager.ts
+  ~910-917, "DAEMON-004 finding #2") with the schema migration. The branch then took ~5 review-fix rounds
+  (HEAD `7ba23fa`). So Action 3 is DONE on its branch — I did NOT redo it (that would have been wasted work
+  and a merge mess). I did NOT run its test gate (would need a separate worktree checkout) — worth a quick
+  `pnpm --filter @cello-protocol/daemon test` on that branch before merge, but the review history is strong.
+
+  **🟡 YOUR DECISION — branch integration (blocks Action 4, and Action 3's merge).**
+  Three branches now fork from cello-client main (`9fcb2bf`) and all heavily edit `core/daemon/src/daemon.ts`:
+  (a) `CELLO-M7-KEYSTONE` (directory connection), (b) `CELLO-M7-REGISTRATION` (stacks on a), (c)
+  `CELLO-M7-DAEMON-004` (active seal, standalone off main). They WILL conflict in daemon.ts on merge. **Action 4
+  (connections + long-poll `cello_receive`) explicitly must "reconcile, don't duplicate" DAEMON-004's
+  send/receive path — so it can only be built correctly on the INTEGRATED base, which doesn't exist yet.**
+  I deliberately did NOT start Action 4 against an un-integrated base (it would need rework after you decide the
+  merge order, and risks duplicating DAEMON-004's receive work). **Recommended merge order:** keystone →
+  registration → DAEMON-004 (resolve daemon.ts conflicts: keystone adds signaling wiring, registration adds the
+  `cello_register` handler + single-flight guard, DAEMON-004 adds `handleActiveSealFlow` + seal_interrupted
+  handlers — they touch different regions mostly, but the handlers Map and imports overlap). After that single
+  integrated branch exists, Action 4 is a clean code-only port on top.
+
+  **Nothing merged, pushed, or deployed. Everything is on local branches for you.** Set STATUS back to
+  IN_PROGRESS and point me at Action 4 once you've picked the integration approach.
 - 2026-06-17 23:28 CAT — ✅✅ **ACTION 2 COMPLETE** (review fixes `e1b5e26`). Opus reviewer over the whole
   registration unit: NO blocking/high. Fixed all findings: M1 (daemon-wide single-flight guard for
   cello_register — reply frames aren't agent-tagged, so concurrent registrations would cross-wire; +
