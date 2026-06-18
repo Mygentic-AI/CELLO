@@ -53,11 +53,13 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-DIR-PING-001 — Directory-side ping/pong handler | — | **merged to main** | trustless-cello main; 6 tests (ping/pong, multi-client, burst load, composition root); PingFrame decode + encodePong + handler in dispatch chain |
 | M7-MCP-002 — Agent-aware notifications | — | **merged to main** | cello-client main; NotificationDispatcher with broadcast/single/filtered routing; 175 daemon tests + full suite |
 | M7-CICD-001 — Cross-repo CI/CD | — | **merged to main** | trustless-cello main + cello-client main; GitHubOidcRole, candidates/ lifecycle, pipeline-mappings sourceRepoMappings, buildspec bifurcated, ci.yml e2e gate |
-| **M7-DAEMON-004 — Daemon session-core foundation (Option A)** | — | **written 2026-06-17 — not started** | NEW. Daemon owns the per-session Merkle tree + active-session send/receive + active-session seal. Re-homes content/seal/tree out of the dead `CelloClient` stack (`session-manager.ts`/`seal-manager.ts`), which no production binary instantiates. Closes `daemon.ts:583-588` (active-close stub) + `daemon.ts:568-571` (caller-supplied root). Exercised by E2E-001 AC-005; **blocks MSG-001 + SESSION-002/003/004.** Commit `0d86b9e`. |
+| **M7-DAEMON-004 — Daemon session-core foundation (Option A)** | — | **IMPLEMENTED + reviewed — on branch (NOT merged). [prior "not started" was STALE — corrected 2026-06-18]** | NEW. Daemon owns the per-session Merkle tree + active-session send/receive + active-session seal. Re-homes content/seal/tree out of the dead `CelloClient` stack (`session-manager.ts`/`seal-manager.ts`). **Branch `CELLO-M7-DAEMON-004` both repos, HEAD `7ba23fa`, 13 commits, 2 sprint-review rounds.** Verified 2026-06-18: clean-merges onto `CELLO-M7-REGISTRATION` (only 2 additive conflicts — `daemon.ts`/`types.ts` config fields; merged tree typechecks + **282 daemon tests green** with registration tests). **Blocks MSG-001 + SESSION-002/003/004** (unblocks on merge of the foundation). |
 | M7-MSG-001 — Content delivery (ACK + queue) | — | **on branch (NOT merged) — stack-correction pending** | 15 commits (`CELLO-M7-MSG-001`, both repos). LIVE halves correct (relay content store, daemon `retry_queue`, crypto, size cap). CLIENT half (send/ACK/park) was built on dead `session-manager.ts` → re-home onto DAEMON-004. `STACK CORRECTION` block added. blocked_by: DAEMON-004. |
-| M7-SESSION-002 — Unilateral seal → notarization | — | **not started — stack-correction noted** | Directory notarization half (17 ACs) LIVE & correct. 5 client ACs anchored on dead `seal-manager.ts` → re-home onto DAEMON-004. `STACK CORRECTION` block added. blocked_by: DAEMON-004. |
+| M7-SESSION-002 — Unilateral seal → notarization | — | **CONFIRMED NOT STARTED (greenfield) — verified 2026-06-18 across all refs/stashes/worktrees, both repos: only the YAML exists, NO branch, NO commits.** | Directory notarization half is **already LIVE** — NOT from a 002 effort, but because the directory already has FROST seal-notarization (`directory-node.ts` seal processing → `seal_frost_signature` → `recordNotarization` ~2870-2905, M1 single-key fallback ~2921, `seal_notarizations` table). So 002's server side needs nothing new; **ALL real work is the client/daemon half** (reconstruct+verify root client-side, send `seal_unilateral`, run FROST as lone signer with counterparty ABSENT) — built from scratch on DAEMON-004. This is the one from-scratch story. blocked_by: DAEMON-004. |
 | M7-SESSION-003 — Peer↔peer session liveness | — | **in flight (died mid-run) — SPLIT stack** | Liveness on live `session-node-manager.ts` (daemon) = KEEP. Also created dead-stack files (`session-liveness.ts` new, `seal-manager.ts`, `relay-stream-manager.ts`); ABSENT gate in `seal-manager.ts:280` → re-home onto DAEMON-004, discard dead-stack edits. `STACK CORRECTION` block added. blocked_by: DAEMON-004. |
 | M7-SESSION-004 — Seal certificate legibility | — | **on branch (NOT merged) — stack-correction pending** | Directory legibility half (13 ACs) LIVE & correct. ALL client work on dead stack (`seal-legibility-client.ts` new, `seal-manager.ts`); touches no daemon → re-home onto DAEMON-004. `STACK CORRECTION` block added. blocked_by: DAEMON-004. |
+| **KEYSTONE — daemon↔directory connection** | — | **IMPLEMENTED + reviewed — on branch (NOT merged)** | NEW foundation (2026-06-17), not in the original slate. The daemon was reimplementing the world and leaving the proven M6B client behind — the shipped binary booted without dialing the directory (`defaultConnect` threw). Keystone builds the real `signalingConnect` from `/bootstrap` + the primary loaded-agent identity (M6-faithful; step-6 verify OFF). Branch `CELLO-M7-KEYSTONE`, 4 commits (`758e0eb`→`903433d`), 222 tests. Foundation under Registration + the four. |
+| **REGISTRATION — multi-agent registration in the daemon** | — | **IMPLEMENTED + reviewed (all findings fixed) — on branch (NOT merged)** | NEW foundation (2026-06-17/18). `cello register <agent>` CLI → `cello_register` IPC → RegistrationManager (ML-DSA keygen → register_request → FROST DKG → register_success) → per-agent files under `~/.cello/agents/<name>/` + agent→user link. Branch `CELLO-M7-REGISTRATION` (stacks on KEYSTONE), 9 commits (`ae907ee`→`e1b5e26`), 249 daemon + 7 CLI tests. Live-DKG happy path is for the live two-agent test. |
 
 ### Migration Version Registry
 
@@ -104,6 +106,12 @@ Current batch status:
   story's client half re-homes onto the daemon seal/send path. Their LIVE halves
   (relay store + retry_queue / directory notarization / daemon-side liveness) are
   unaffected. See the 2026-06-17 log entry.
+  **UPDATE 2026-06-18: DAEMON-004 is now BUILT (implemented + reviewed on its branch).**
+  The blocker is no longer "implement DAEMON-004" — it is "MERGE the foundation
+  (Keystone + Registration + DAEMON-004) into one integrated base," after which the
+  four's client halves re-home onto it. Merge verified feasible (282 tests green;
+  2 trivial additive conflicts). SESSION-002 is greenfield (only its YAML exists);
+  MSG-001/SESSION-003/SESSION-004 are re-home/salvage from existing branches.
 
 ---
 
@@ -558,3 +566,42 @@ DAEMON-003 already REMOVED RetryQueue/NonceDedup from `core/client`.
 
 **Next:** implement DAEMON-004 (TDD, two-process E2E as the gate), then re-home the four's
 client halves and salvage their live halves. The four are NOT to be merged as-is.
+
+### 2026-06-18 — Status verification + merge-feasibility proof (pre-compaction snapshot)
+
+Andre asked for a thorough, certain status of the four postmortem stories before compacting.
+Scanned ALL refs / reflog / stashes / worktrees in BOTH repos (not just main) for the last
+two days. Findings locked into the Claims table above. Summary:
+
+**Three reconnection foundations (all IMPLEMENTED + reviewed, on branches, NOT merged):**
+- **Keystone** (`CELLO-M7-KEYSTONE`, 4 commits) — daemon↔directory connection (the daemon had
+  been leaving the proven M6B client behind; Keystone dials the directory the M6 way).
+- **Registration** (`CELLO-M7-REGISTRATION`, stacks on Keystone, 9 commits) — multi-agent
+  registration end-to-end (CLI → IPC → ML-DSA + FROST DKG → per-agent persistence + user link).
+- **DAEMON-004** (`CELLO-M7-DAEMON-004`, 13 commits) — daemon session-core (Merkle tree +
+  send/receive + active seal + message_count). **COORDINATION previously said "not started" — that
+  was STALE; it is done and reviewed.** The §2 audit-doc "has a seal bug" framing was also stale.
+
+**The four postmortem stories — the reason for all of this. Each = a LIVE half (done/correct) +
+a CLIENT half on the dead stack that must re-home onto DAEMON-004:**
+- **MSG-001** — started (both repos, 16 commits). Live half done (relay store + retry_queue).
+  Client half (send/ACK/park) re-homes onto DAEMON-004. Furthest along.
+- **SESSION-003** — started (3 commits), died mid-run, SPLIT stack: keep the live daemon liveness,
+  discard the dead-stack files, re-home the gate.
+- **SESSION-004** — started (6 commits). Directory legibility half done; ALL client work on dead
+  stack → re-home onto DAEMON-004.
+- **SESSION-002** — **CONFIRMED greenfield. Only the YAML exists — NO branch/commits/stash in
+  either repo.** Its directory notarization half is already live via PRE-EXISTING directory FROST
+  seal-notarization (not a 002 effort). All real work is the client/daemon half, from scratch.
+
+**Merge feasibility — PROVEN 2026-06-18.** Trial-merged DAEMON-004 onto the Keystone+Registration
+stack: exactly 2 conflicts (`daemon.ts` + `types.ts`), both purely ADDITIVE config-field collisions
+(Keystone's `directoryEndpointResolver` + DAEMON-004's `sessionNodeFactory`). `session-node-manager.ts`
+(+378) and `session-tree.ts` (+110, the Merkle hash-chain) auto-merge 100% clean. Resolved (union both),
+merged tree typechecks, **282 daemon tests green (registration + DAEMON-004 together).** Verdict:
+**MERGE, do not recode** — DAEMON-004 wasn't done improperly, it was done before Keystone existed.
+
+**Agreed plan:** (1) create `CELLO-M7-INTEGRATION` = Keystone + Registration + DAEMON-004 (the merge
+above); (2) then finish the four stories' client halves on that integrated base — SESSION-002 from
+scratch, the others re-home/salvage; (3) live two-agent test only AFTER the four are finished (cannot
+run it now — unfinished stories). Merge to main + push are Andre's call.
