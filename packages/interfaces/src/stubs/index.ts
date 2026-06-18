@@ -5,6 +5,8 @@ export { LocalClientStore } from "./local-client-store.js";
 export { InMemoryRelayWal } from "./in-memory-relay-wal.js";
 export { LocalJobScheduler } from "./local-job-scheduler.js";
 export { InMemorySessionWal } from "./in-memory-session-wal.js";
+export { InMemoryContentStore } from "./in-memory-content-store.js";
+export type { InMemoryContentStoreOptions } from "./in-memory-content-store.js";
 export { LocalAuditLogShipper } from "./local-audit-log-shipper.js";
 export { LocalCloudStorageProvider } from "./local-cloud-storage-provider.js";
 export { InMemoryNotificationQueue } from "./in-memory-notification-queue.js";

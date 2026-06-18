@@ -1,6 +1,11 @@
 export { CelloRelayNode, createRelayNode, RELAY_PROTOCOL_ID, DIRECTORY_RELAY_PROTOCOL_ID } from "./relay-node.js";
 export type { RelayNodeOptions, CreateRelayNodeOptions, DirectoryAdapter } from "./relay-node.js";
 
+// M7-MSG-001: durable recipient-keyed store-and-forward content store
+export { FileContentStore } from "./adapters/file-content-store.js";
+export type { FileContentStoreOptions } from "./adapters/file-content-store.js";
+export { CONTENT_PARK_PROTOCOL_ID } from "./content-park.js";
+
 import { createLibp2p } from "libp2p";
 import { tcp } from "@libp2p/tcp";
 import { noise } from "@chainsafe/libp2p-noise";

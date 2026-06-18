@@ -50,6 +50,8 @@ import { StdoutLogger } from "@cello-protocol/interfaces/stubs";
 import { createRelayNode } from "../index.js";
 import { NetworkDirectoryAdapter } from "../network-directory-adapter.js";
 import { FileSessionWal, InMemorySessionWal } from "../adapters/file-session-wal.js";
+import { FileContentStore } from "../adapters/file-content-store.js";
+import { InMemoryContentStore } from "@cello-protocol/interfaces/stubs";
 import {
   logRelayServiceStarted,
   logRelayServiceStopped,
@@ -99,6 +101,20 @@ if (!FileSessionWal.validateConfig(celloEnv, walDir)) {
 const sessionWal = celloEnv === "local"
   ? new InMemorySessionWal({ logger })
   : new FileSessionWal({ walDir, logger });
+
+// M7-MSG-001 (AC-008): validate WAL_DIR for the content store at startup — exits 1
+// if missing in dev/staging/production, exactly as FileSessionWal does.
+if (!FileContentStore.validateConfig(celloEnv, walDir)) {
+  logRelayServiceStartFailed(logger, { reason: "WAL_DIR is required for the content store in CELLO_ENV=dev/staging/production", region: awsRegion });
+  process.exit(1);
+}
+
+// M7-MSG-001: select the store-and-forward content store based on CELLO_ENV.
+// CELLO_ENV=local → InMemoryContentStore (no file I/O).
+// CELLO_ENV=dev/staging/production → FileContentStore rooted under WAL_DIR.
+const contentStore = celloEnv === "local"
+  ? new InMemoryContentStore({ logger })
+  : new FileContentStore({ walDir, logger });
 
 // ─── Directory pubkey validation ───────────────────────────────────────────────
 
@@ -344,6 +360,7 @@ try {
     directory: directoryAdapter,
     ackSigningKeyProvider: kp,
     relayId,
+    contentStore,
     logger,
   });
 } catch (err: unknown) {
@@ -450,6 +467,13 @@ const parsedIdleMs = parseInt(process.env["RELAY_SESSION_MAX_IDLE_MS"] ?? "86400
 // and `lastActivityAt < NaN` is always false (IEEE 754), so no session would ever be swept.
 const maxIdleMs = Number.isFinite(parsedIdleMs) && parsedIdleMs > 0 ? parsedIdleMs : 86_400_000;
 relayResult.relay.startIdleSweep(sweepIntervalMs, maxIdleMs);
+
+// ─── M7-MSG-001 (AC-017c): store-and-forward content-store TTL sweep ────────────
+// Proactively reclaims TTL-expired parked entries (CONTENT_STORE_TTL_MS, 7 days) even
+// when the recipient never reconnects — on-access reclamation alone would leave such
+// entries on disk bounded only by cap eviction. No-op when the store is not configured.
+const contentSweepIntervalMs = 3_600_000; // 1 hour, mirroring the idle sweep cadence
+relayResult.relay.startContentSweep(contentSweepIntervalMs);
 
 // ─── Shutdown handlers ──────────────────────────────────────────────────────────
 
