@@ -685,3 +685,69 @@ it is the **3b** unit below.
   in the daemon under Option A — guided line-by-line by the tested client spine. Option A
   forbids hosting the client / the stack-retirement gate blocks importing
   `relay-stream-manager`, so it is a native reimplementation, not a lift.
+
+### 2026-06-18 — Integration-first pivot: dead-code gate + 7-branch assembly + seam-by-seam (Andre-directed)
+
+**Strategic pivot (Andre).** Two course-corrections steered the work off "finish MSG-001 in
+isolation" onto **integration-first**:
+1. I twice claimed capabilities were "missing / must build" (the MSG-001 recovery spine; then
+   live session establishment) — both were WRONG: the code existed, scattered across unmerged
+   branches. Root cause = the **branch sprawl** (7 unmerged cello-client branches), and me
+   reasoning from one branch's vantage. Rule now: **no "missing/build" claim is valid until
+   checked across EVERY branch** (read commit messages + YAML, not just grep one tree).
+2. The two real problems Andre named: (a) **dead code that confuses AI coders** (grep finds
+   disconnected old-stack code, can't tell it's unwired) — the hard one; (b) assuming-works —
+   the easy one (code review catches it).
+
+**Dead-code gate — DONE (`scripts/reachability.mjs` + `docs/reachability-baseline.json`,
+cello-client).** Mechanical import-graph walk from the LIVE binaries (cello-daemon / cello-mcp
+/ cello). Replaces grep-and-guess with an authoritative map. Findings: **`core/client` = 26
+dead files** (the entire old in-process stack, reachable only via its own index.ts +
+trustless-cello's E2E fixture); the **old adapter `server.ts`/`createMcpServer` entry is dead**
+(the live cello-mcp bin doesn't reach it); orphans (encrypted-file-signing-key-provider,
+adapter/lock-file, crypto/frost/stubs). **Big finding:** the E2E suite's `session-fixture.ts`
+uses `createClient` (the OLD client) — so "E2E green" has been validating the DEAD stack, not
+the daemon. To become a CI gate (dead set may only shrink); endgame = delete `core/client` once
+the daemon is the proven live path.
+
+**Structural merge rule.** Option A invariant (daemon never imports `@cello-protocol/client`)
+⇒ every branch's `core/client` changes are dead-by-definition ⇒ at merge, take only the
+daemon/transport/protocol-types/crypto/interfaces halves, EXCLUDE `core/client`. No dead code
+enters the assembled base; missing capability fails loudly (re-home TODO) instead of faking
+green via dead code.
+
+**7-branch assembly — DONE (branch `CELLO-M7-MSG-001-REHOME`, cello-client; name is now a
+misnomer — it is the full assembly, rename pending).** Built on the Keystone+Registration+
+DAEMON-004 integration (`fd89747`), then:
+- MSG-001 Phase 1/2/3a (KEEP packages, daemon retry_queue + startup flush, send cap +
+  delivery-ACK round-trip) + the relay store-and-forward (`CELLO-M7-MSG-001-RELAY`, trustless-cello).
+- **TRANSPORT-001** merged whole (12 additive conflicts; zero core/client) — live
+  `cello_initiate_session` + transport selector + AutoNAT.
+- **SESSION-003** live half (session-path liveness: protocol-types codec + transport keepalive
+  + daemon `#sessionLiveness`); 7 dead core/client files excluded.
+- **SESSION-004** live half (protocol-types `SealLegibility` schema only); 8 dead core/client
+  files excluded.
+Reachability re-checked after each merge: client dead = 26, UNCHANGED (exclusion held). Gate:
+workspace typecheck + lint clean; daemon 328 / transport 86 / protocol-types 123 / crypto 242.
+The 5 pre-existing fake CelloNodes gained no-op AutoNAT methods (NodeAutoNatService contract).
+
+**Seam-by-seam verification — STARTED (Andre's call: NO live E2E / NO infra now).** The E2E
+live multi-process test is the milestone-close gate, not a discovery tool. Instead: in-process,
+adapter-STUBBED (directory negotiator + relay), real local libp2p only for the hop that matters
+— trace each seam, find the break, fix, test, commit. No deploys.
+- **Seam 1a — DONE (`0537dfe`).** `cello_initiate_session` established transport but never
+  created a session in the session-core (the two halves wired in sequence, not connected) →
+  a later cello_send would hit session_not_found. Fixed: initiate now calls `createSessionNode`
+  after transport selection. Proven in `transport-composition.test.ts` (stub negotiator →
+  queryable active session-core record). daemon 328 green.
+- **Seam 1b — NEXT.** The dialer/session-node reconciliation: `transportSelector.dial` dials on
+  the `transportDialer`'s node, but the session node N_A is a separate ephemeral node — so N_A's
+  content `newStream` can't ride that connection. Route the dial THROUGH N_A (per-session dialer
+  bound to N_A; the selector drives strategy). Test: N_A connects to a listening counterparty.
+- **Seam 2:** inbound `acceptSession` wired to inbound signaling (counterparty side).
+- **Seam 3:** two-daemon content round-trip (initiate→send→ACK over real local libp2p) — wires
+  3a delivery-ACK to a live session.
+- **Then the deferred re-homes:** MSG-001 **3b** (recovery/canonical-sequence relay content-leaf
+  path), SESSION-003 daemon-liveness test, SESSION-004 client legibility, SESSION-002 greenfield.
+
+Nothing merged to main, nothing pushed.
