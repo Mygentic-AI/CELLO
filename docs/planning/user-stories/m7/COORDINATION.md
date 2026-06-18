@@ -747,9 +747,21 @@ adapter-STUBBED (directory negotiator + relay), real local libp2p only for the h
   for direct mode (tears the session down on failure). Proven by a real-libp2p test: N_A dials a
   listening counterparty and the counterparty observes the inbound connection from N_A. daemon
   330 green. Relay-circuit + dcutr dial via N_A = a later seam.
-- **Seam 2 — NEXT.** inbound `acceptSession` wired to inbound signaling (counterparty side).
-- **Seam 3:** two-daemon content round-trip (initiate→send→ACK over real local libp2p) — wires
-  3a delivery-ACK to a live session.
+- **Seam 2 — DONE (`c72968e`; review fixes `96af667`).** Inbound counterparty side: a persistent
+  `registerInboundHandler` for the directory's pushed `session_assignment` → resolve `participant_b`
+  → `acceptSession` (standing receiver handed off, bound to A) → enqueue a per-agent inbound event
+  → real `cello_await_session` returns it (`new_session`/`timeout`, dead-adapter-contract shape).
+  Native Option-A re-home of the dead `frame-dispatch.ts` + adapter `server.ts`. `feature-dev:code-reviewer`
+  (opus) raised 9 findings, ALL fixed: canonical `computeGenesisPrevRoot` not empty-tree root (H1);
+  disconnect evicts waiters (H2); retransmit idempotency (M1); serialized accepts + bounded
+  standing-receiver-rebuild wait so bursts aren't dropped (M2); non-empty initiator peer id required
+  (M3); correlationId threaded (M4); single-key refused (L1); hex lowercased (L2). `seam-2-inbound-session.test.ts`
+  = 9 cases; daemon **339 green**; workspace typecheck + lint clean; reachability client-dead=26 unchanged.
+  **Deferred:** inbound-assignment FROST signature verification = SESSION-004 re-home (accepted-on-trust,
+  logged `session.inbound.assignment.unverified`, never silent).
+- **Seam 3 — NEXT.** two-daemon content round-trip (initiate→send→ACK over real local libp2p) — wires
+  3a delivery-ACK to a live session. Needs a composition-root local `SessionNegotiator` stub producing
+  matching A/B assignments (none exists yet).
 - **Then the deferred re-homes:** MSG-001 **3b** (recovery/canonical-sequence relay content-leaf
   path), SESSION-003 daemon-liveness test, SESSION-004 client legibility, SESSION-002 greenfield.
 

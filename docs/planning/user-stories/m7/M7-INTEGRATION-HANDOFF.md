@@ -30,13 +30,14 @@ rebuilding that capability in the daemon). "Brutal and ruthless" — fastest cor
 that is green; a **mechanical dead-code gate** is in place; and we are walking the
 session lifecycle **seam by seam, in-process, with stub adapters and NO infra** — tracing
 each connection point, finding the break, fixing it, testing it, committing. Seams **1a**
-(initiate creates the session-core session) and **1b** (the session node is the dialer)
-are done.
+(initiate creates the session-core session), **1b** (the session node is the dialer), and
+**2** (inbound `session_assignment` → `acceptSession` → `cello_await_session`) are done.
 
-**EXACT NEXT ACTION: Seam 2 — wire inbound `acceptSession` to inbound signaling** (the
-counterparty side: receive an inbound session offer/assignment → `acceptSession` →
-session node), then **Seam 3** (two-daemon in-process content round-trip:
-initiate→send→ACK over real local libp2p with a stub negotiator). No infra. No live E2E.
+**EXACT NEXT ACTION: Seam 3 — two-daemon in-process content round-trip** (daemon A
+initiate → daemon B accept → A `cello_send` → B ingest → B delivery-ACK → A resolves, over
+real local libp2p with a stub negotiator producing matching assignments for both sides).
+This is the first time content flows daemon-to-daemon in-process and wires the MSG-001 3a
+delivery-ACK to a live session. No infra. No live E2E.
 
 ---
 
@@ -174,16 +175,31 @@ stub relay; real local libp2p only where two nodes must talk. **No infra.**
   **Still pending under 1b:** relay-circuit + dcutr dial via N_A (a later seam) — only
   direct mode routes through N_A today.
 
-- **Seam 2 — NEXT.** Inbound: wire `acceptSession` to inbound signaling. Today
-  `acceptSession`/`createSessionNode` have ZERO live callers except seam-1a's initiate path;
-  the inbound side (counterparty receives a session offer/assignment via signaling and
-  creates its node) is not wired. The daemon's signaling inbound handler (daemon.ts ~1177)
-  routes only registration + seal-interrupted, never session establishment.
-- **Seam 3 — after 2.** Two-daemon in-process content round-trip: daemon A initiate → daemon
+- **Seam 2 — DONE (`c72968e` + review fixes `96af667`).** Inbound counterparty side wired.
+  A persistent `registerInboundHandler` for `session_assignment` (the directory's unsolicited
+  push to B) parses the assignment, resolves `participant_b` → local agent (by K_local pubkey),
+  and calls `SessionNodeManager.acceptSession` (hands off the standing receiver bound to A's
+  session peer id). On success it enqueues a per-agent inbound event; the real
+  `cello_await_session` handler (replacing the `not_implemented` stub) returns it
+  (`{type:"new_session", session_id, counterparty_pubkey, genesis_prev_root}` | `{type:"timeout"}`
+  — matches the dead adapter contract for drop-in E2E migration). Native Option-A re-home of
+  the dead `frame-dispatch.ts` + adapter `server.ts` paths. **Hardened via review:**
+  genesis_prev_root is the canonical `computeGenesisPrevRoot(pubA,pubB,sid,ts)` (H1, NOT the
+  empty-tree root); waiters carry connectionId and are evicted on disconnect (H2); retransmit
+  idempotency via getSessionRecord + in-flight set (M1); inbound accepts SERIALIZED through a
+  promise chain + bounded standing-receiver-rebuild wait so a burst isn't dropped (M2);
+  non-empty `initiator_session_peer_id` required (M3); correlationId threaded through every
+  event (M4); `signature_type:"single"` refused (L1); hex lowercased (L2). Tests:
+  `seam-2-inbound-session.test.ts` (9 cases). **Still deferred:** the FROST threshold-signature
+  verification of the inbound assignment is the **SESSION-004 re-home** — accepted-on-trust here
+  (in-process tests inject trusted frames), logged loudly as `session.inbound.assignment.unverified`,
+  never silent. SESSION-004 must also re-home the M1 single-key hard-refusal context.
+- **Seam 3 — NEXT.** Two-daemon in-process content round-trip: daemon A initiate → daemon
   B accept → A `cello_send` → B ingest → B delivery-ACK → A resolves, over real local libp2p
   with a stub negotiator that produces matching assignments for both sides. This is the first
   time content flows daemon-to-daemon in-process, and it wires the 3a delivery-ACK to a live
-  session.
+  session. Needs a composition-root local `SessionNegotiator` stub (none exists — see §6) that
+  produces matching A/B assignments so initiate (A) and the inbound push (B) line up.
 
 **Deferred re-homes (the original four postmortem stories' remaining halves):**
 - **MSG-001 3b** — recovery / canonical sequence: the daemon **relay content-leaf path**
@@ -262,7 +278,8 @@ stub relay; real local libp2p only where two nodes must talk. **No infra.**
 
 ## 9. Commit trail (assembly branch, newest first)
 
-`ea83982` seam 1b (session node is the dialer) · `0537dfe` seam 1a (initiate→session-core) ·
+`96af667` seam 2 review fixes (H1/H2/M1-M4/L1-L2) · `c72968e` seam 2 (inbound session_assignment
+→ acceptSession → cello_await_session) · `ea83982` seam 1b (session node is the dialer) · `0537dfe` seam 1a (initiate→session-core) ·
 `fd2a607` assemble SESSION-004 · `8a9c183` assemble SESSION-003 · `2100b69` assemble
 TRANSPORT-001 · `2b5b2ff` reachability tool + baseline · `3bf3f10` MSG-001 3a-ii (delivery-ACK)
 · `e1bfd5f` MSG-001 3a-i (send cap + IPC buffer fix) · `f004c22` MSG-001 Phase 2 (retry_queue) ·
