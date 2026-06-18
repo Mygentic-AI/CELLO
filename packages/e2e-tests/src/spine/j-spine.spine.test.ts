@@ -14,13 +14,15 @@
  * (trustless-cello directory+relay, cello-client daemon+mcp+cli).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startSpineCluster, startDaemon, provisionAgent, cello, type Proc, type SpineCluster } from "./live-harness.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
+const agentDirs: string[] = [];
 
 beforeAll(async () => {
   cluster = await startSpineCluster();
@@ -30,61 +32,94 @@ afterAll(async () => {
   // The harness owns each daemon — stop them, then the cluster. No orphans.
   for (const d of daemons) await d.stop();
   await cluster?.stop();
+  // L5: remove each agent's CELLO_DIR (holds the Ed25519 seed + SQLite DB).
+  for (const dir of agentDirs) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  }
 });
 
 /** A fresh CELLO_DIR with a provisioned agent identity and its own harness-owned daemon. */
-async function startAgent(label: string, agentName: string): Promise<{ celloDir: string; daemon: Proc }> {
+async function startAgent(
+  label: string,
+  agentName: string,
+): Promise<{ celloDir: string; daemon: Proc; pubkeyHex: string }> {
   const celloDir = mkdtempSync(join(tmpdir(), `cello-${label}-`));
+  agentDirs.push(celloDir);
   // Provision the agent identity BEFORE the daemon starts — the daemon loads it at boot.
-  await provisionAgent(celloDir, agentName);
+  const pubkeyHex = await provisionAgent(celloDir, agentName);
   const daemon = await startDaemon(celloDir, cluster.directoryUrl, label);
   daemons.push(daemon);
-  return { celloDir, daemon };
+  return { celloDir, daemon, pubkeyHex };
 }
 
 describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binaries)", () => {
-  it("DOD-SPINE-1 — daemon up: daemon started, `cello login` connects, `cello status` reports directory_signaling connected", async () => {
-    const { celloDir, daemon } = await startAgent("agentA", "agentA");
+  it("DOD-SPINE-1 — daemon up: started, `cello login` connects within 5s, signaling connected (directory-corroborated)", async () => {
+    const { celloDir, daemon, pubkeyHex } = await startAgent("agentA", "agentA");
     const env = { CELLO_DIR: celloDir };
 
-    // `cello login` connects to the running daemon (the DoD "connects to" branch).
+    // `cello login` connects to the running daemon (the DoD "connects to" branch),
+    // within the 5s budget.
+    const t0 = Date.now();
     const login = cello(["login"], env);
+    const loginMs = Date.now() - t0;
     expect(login.status, `cello login failed:\n${login.stdout}`).toBe(0);
+    expect(loginMs, "cello login must connect within 5s").toBeLessThan(5_000);
 
-    // directory_signaling is gated on a registered agent identity (daemon.ts:411-412),
-    // so SPINE-1's "directory_signaling: connected, ≥1 agent" requires a registration
-    // (real DKG — also the SPINE-4 step). DevTokenValidator accepts any DEV- token.
-    const reg = cello(["register", "agentA"], { ...env, CELLO_PREAUTH_TOKEN: "DEV-spine-agentA" });
-    expect(
-      reg.status,
-      `cello register failed:\n${reg.stdout}\n--- daemon log ---\n${daemon.output}\n` +
-        `--- directory log (last 40) ---\n${cluster.directory.output.split("\n").slice(-40).join("\n")}`,
-    ).toBe(0);
-
-    // Now directory_signaling should reach "connected" and ≥1 agent appear.
-    let signaling = "unknown";
-    let agentCount = 0;
+    // Poll `cello status` (with a delay between polls — no tight CLI spawn loop) until
+    // the daemon reports connected with >=1 agent AND the directory has corroborated by
+    // authenticating this agent's signaling stream. Both sides must agree — the directory
+    // log lags the daemon's status flip by a few ms, so corroboration is part of the wait.
+    const pubkeyShort = pubkeyHex.slice(0, 16);
+    let status: { daemon?: string; directory_signaling?: string; agents?: unknown[]; connections?: unknown[] } = {};
     let lastRaw = "";
-    const deadline = Date.now() + 15_000;
+    let dirCorroborated = false;
+    const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
       const res = cello(["status"], env);
       lastRaw = res.stdout;
       try {
-        const parsed = JSON.parse(res.stdout.trim()) as { directory_signaling?: string; agents?: unknown[] };
-        signaling = parsed.directory_signaling ?? "unknown";
-        agentCount = parsed.agents?.length ?? 0;
-        if (signaling === "connected" && agentCount >= 1) break;
+        status = JSON.parse(res.stdout.trim());
       } catch {
         /* status not JSON yet — keep polling */
       }
+      dirCorroborated = cluster.directory.output.includes(pubkeyShort);
+      if (status.directory_signaling === "connected" && (status.agents?.length ?? 0) >= 1 && dirCorroborated) break;
+      await sleep(250);
     }
+
+    const diag =
+      `\n--- raw cello status ---\n${lastRaw}\n` +
+      `--- daemon log ---\n${daemon.output}\n` +
+      `--- directory log (last 60) ---\n${cluster.directory.output.split("\n").slice(-60).join("\n")}`;
+
+    // Daemon-side: running, signaling connected, agent loaded, connections list present.
+    expect(status.daemon, `daemon should be running${diag}`).toBe("running");
+    expect(status.directory_signaling, `directory_signaling should be 'connected'${diag}`).toBe("connected");
+    expect(status.agents?.length ?? 0, `status should list >=1 agent${diag}`).toBeGreaterThanOrEqual(1);
+    expect(Array.isArray(status.connections), `status must carry a connections list${diag}`).toBe(true);
+
+    // Required startup log events (DOD-SPINE-1).
+    expect(daemon.output, `daemon.started must be logged${diag}`).toMatch(/"event":"daemon\.started"/);
+    expect(daemon.output, `daemon.login.validation.complete must be logged${diag}`).toMatch(
+      /"event":"daemon\.login\.validation\.complete"/,
+    );
+    // NOTE: daemon.ipc.connected is emitted ONLY on an `ipc.connect` frame, which only
+    // cello-mcp sends (clientType "mcp"); the bare CLI never sends it. So that event
+    // is asserted in DOD-SPINE-2 (the IPC/MCP connection surface), not here. The DoD's
+    // "daemon.ipc.connected (clientType: cli)" wording is corrected accordingly.
+
+    // Directory-side CORROBORATION (anti-tautology, reviewer H1): directory_signaling
+    // "connected" is only trustworthy if the directory ITSELF authenticated THIS agent's
+    // signaling stream. The directory logs the authed pubkey (first 16 hex) only after
+    // verifying the Ed25519 proof-of-possession. A daemon optimistically self-reporting
+    // "connected" cannot fake the directory's log.
     expect(
-      signaling,
-      `directory_signaling should be 'connected' after registration.\n` +
-        `--- raw cello status ---\n${lastRaw}\n` +
-        `--- FULL daemon log ---\n${daemon.output}\n` +
-        `--- directory log (last 50) ---\n${cluster.directory.output.split("\n").slice(-50).join("\n")}`,
-    ).toBe("connected");
-    expect(agentCount, "status should list ≥1 agent after registration").toBeGreaterThanOrEqual(1);
+      dirCorroborated,
+      `directory must have authenticated agentA's signaling stream (pubkey ${pubkeyShort}…)${diag}`,
+    ).toBe(true);
   }, 30_000);
 });

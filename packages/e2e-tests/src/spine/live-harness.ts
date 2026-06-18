@@ -66,7 +66,8 @@ export class Proc {
   readonly name: string;
   private child: ChildProcess;
   private lines: string[] = [];
-  private waiters: Array<{ re: RegExp; resolve: (l: string) => void; timer: NodeJS.Timeout }> = [];
+  private waiters: Array<{ re: RegExp; resolve: (l: string) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }> = [];
+  private exited: { code: number | null; signal: NodeJS.Signals | null } | null = null;
 
   constructor(name: string, binPath: string, env: Record<string, string>, args: string[] = []) {
     this.name = name;
@@ -74,8 +75,34 @@ export class Proc {
       env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const onData = (buf: Buffer): void => {
-      for (const raw of buf.toString().split("\n")) {
+    // Per-stream partial-line carry (M2): a JSON log line split across two chunks must
+    // not be torn into two "lines" — keep the trailing partial until its newline arrives.
+    this.attachStream(this.child.stdout);
+    this.attachStream(this.child.stderr);
+    this.child.on("error", (err: Error) => {
+      this.failWaiters(new Error(`[${this.name}] spawn error: ${err.message}`));
+    });
+    // M3: a binary that exits before emitting the awaited line must surface as an exit,
+    // not a slow timeout. Reject any pending waiters with the code/signal + log tail.
+    this.child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+      this.exited = { code, signal };
+      this.failWaiters(
+        new Error(
+          `[${this.name}] exited (code=${code}, signal=${signal}) before the awaited line.\n` +
+            `--- last 20 lines ---\n${this.lines.slice(-20).join("\n")}`,
+        ),
+      );
+    });
+  }
+
+  private attachStream(stream: NodeJS.ReadableStream | null): void {
+    if (!stream) return;
+    let carry = "";
+    stream.on("data", (buf: Buffer) => {
+      carry += buf.toString();
+      const parts = carry.split("\n");
+      carry = parts.pop() ?? ""; // retain trailing partial for the next chunk
+      for (const raw of parts) {
         if (!raw.trim()) continue;
         this.lines.push(raw);
         for (const w of [...this.waiters]) {
@@ -86,15 +113,30 @@ export class Proc {
           }
         }
       }
-    };
-    this.child.stdout?.on("data", onData);
-    this.child.stderr?.on("data", onData);
+    });
+  }
+
+  private failWaiters(err: Error): void {
+    const pending = this.waiters;
+    this.waiters = [];
+    for (const w of pending) {
+      clearTimeout(w.timer);
+      w.reject(err);
+    }
   }
 
   /** Resolve with the first stdout/stderr line matching `re` (scans backlog first). */
   waitForLine(re: RegExp, timeoutMs: number): Promise<string> {
     const existing = this.lines.find((l) => re.test(l));
     if (existing) return Promise.resolve(existing);
+    if (this.exited) {
+      return Promise.reject(
+        new Error(
+          `[${this.name}] already exited (code=${this.exited.code}, signal=${this.exited.signal}); cannot match ${re}.\n` +
+            `--- last 20 lines ---\n${this.lines.slice(-20).join("\n")}`,
+        ),
+      );
+    }
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.waiters = this.waiters.filter((w) => w.timer !== timer);
@@ -105,7 +147,7 @@ export class Proc {
           ),
         );
       }, timeoutMs);
-      this.waiters.push({ re, resolve, timer });
+      this.waiters.push({ re, resolve, reject, timer });
     });
   }
 
@@ -220,55 +262,80 @@ export async function startSpineCluster(): Promise<SpineCluster> {
   const auditLog = join(tmpDir, "audit.jsonl");
   writeFileSync(auditLog, "");
   const devEnvelopeKey = randomBytes(32).toString("hex");
-  const healthPort = await freePort();
 
-  // ── Relay (starts first; self-generates its own signing + transport keys) ──
-  const relay = new Proc("relay", BINS.relay, {
-    NODE_ENV: "test",
-    CELLO_ENV: "local",
-    CELLO_DIRECTORY_PUBKEY: dirPubkeyHex,
-    CELLO_RELAY_KEY_FILE: join(tmpDir, "relay-key"),
-    CELLO_RELAY_TRANSPORT_KEY_FILE: join(tmpDir, "relay-transport-key"),
-    CELLO_RELAY_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0",
-    CELLO_RELAY_HEALTH_PORT: String(await freePort()),
-  });
-  await relay.waitForLine(/"adapterName":"ListenAddr"/, 20_000);
-  const relayMultiaddr = listenMultiaddr(relay, { ws: false });
-
-  // ── Directory (needs the relay multiaddr; loads the key we provisioned) ──
-  const directory = new Proc("directory", BINS.directory, {
-    CELLO_ENV: "local",
-    DATABASE_URL,
-    DEV_ENVELOPE_KEY: devEnvelopeKey,
-    AUDIT_LOG_PATH: auditLog,
-    CELLO_RELAY_MULTIADDR: relayMultiaddr,
-    CELLO_DIRECTORY_KEY_FILE: dirKeyFile,
-    CELLO_DIRECTORY_TRANSPORT_KEY_FILE: join(tmpDir, "directory-transport-key"),
-    CELLO_DIRECTORY_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0",
-    CELLO_DIRECTORY_WS_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0/ws",
-    HEALTH_PORT: String(healthPort),
-  });
-  // BootstrapEndpoint line means /bootstrap is live — the daemon can discover us.
-  await directory.waitForLine(/"adapterName":"BootstrapEndpoint"/, 30_000);
-
-  const stop = async (): Promise<void> => {
-    await directory.stop();
-    await relay.stop();
+  // L7: if any step throws after a child is spawned, stop the already-running
+  // children (and remove tmpDir) so we never orphan a relay/directory/Postgres — an
+  // orphaned node holds ports/locks and corrupts the next run.
+  let relay: Proc | undefined;
+  let directory: Proc | undefined;
+  const abort = async (err: unknown): Promise<never> => {
+    if (directory) await directory.stop();
+    if (relay) await relay.stop();
     try {
       rmSync(tmpDir, { recursive: true, force: true });
     } catch {
       /* best-effort */
     }
+    throw err;
   };
 
-  return {
-    tmpDir,
-    relay,
-    directory,
-    relayMultiaddr,
-    directoryUrl: `http://127.0.0.1:${healthPort}`,
-    stop,
-  };
+  try {
+    // ── Relay (starts first; self-generates its own signing + transport keys) ──
+    // M4: allocate the relay health port immediately before spawn to shrink the
+    // freePort() bind/use TOCTOU window.
+    relay = new Proc("relay", BINS.relay, {
+      NODE_ENV: "test",
+      CELLO_ENV: "local",
+      CELLO_DIRECTORY_PUBKEY: dirPubkeyHex,
+      CELLO_RELAY_KEY_FILE: join(tmpDir, "relay-key"),
+      CELLO_RELAY_TRANSPORT_KEY_FILE: join(tmpDir, "relay-transport-key"),
+      CELLO_RELAY_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0",
+      CELLO_RELAY_HEALTH_PORT: String(await freePort()),
+    });
+    await relay.waitForLine(/"adapterName":"ListenAddr"/, 20_000);
+    const relayMultiaddr = listenMultiaddr(relay, { ws: false });
+
+    // ── Directory (needs the relay multiaddr; loads the key we provisioned) ──
+    // M4: allocate the directory health port here (just before spawn), not earlier.
+    const healthPort = await freePort();
+    directory = new Proc("directory", BINS.directory, {
+      CELLO_ENV: "local",
+      DATABASE_URL,
+      DEV_ENVELOPE_KEY: devEnvelopeKey,
+      AUDIT_LOG_PATH: auditLog,
+      CELLO_RELAY_MULTIADDR: relayMultiaddr,
+      CELLO_DIRECTORY_KEY_FILE: dirKeyFile,
+      CELLO_DIRECTORY_TRANSPORT_KEY_FILE: join(tmpDir, "directory-transport-key"),
+      CELLO_DIRECTORY_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0",
+      CELLO_DIRECTORY_WS_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0/ws",
+      HEALTH_PORT: String(healthPort),
+    });
+    // BootstrapEndpoint line means /bootstrap is live — the daemon can discover us.
+    await directory.waitForLine(/"adapterName":"BootstrapEndpoint"/, 30_000);
+
+    const relayRef = relay;
+    const directoryRef = directory;
+    const stop = async (): Promise<void> => {
+      await directoryRef.stop();
+      await relayRef.stop();
+      try {
+        rmSync(tmpDir, { recursive: true, force: true });
+      } catch {
+        /* best-effort */
+      }
+    };
+
+    return {
+      tmpDir,
+      relay: relayRef,
+      directory: directoryRef,
+      relayMultiaddr,
+      directoryUrl: `http://127.0.0.1:${healthPort}`,
+      stop,
+    };
+  } catch (err) {
+    return abort(err);
+  }
 }
 
 // ─── Daemon: spawn the real binary directly so the harness owns + observes it ───
@@ -282,8 +349,9 @@ export async function startSpineCluster(): Promise<SpineCluster> {
 // The daemon's agent-loader reads it at startup; the protocol-significant DKG still
 // runs for real via `cello register`. FileKeyProvider.load generates+persists the key
 // in the daemon's expected format (and creates the parent dirs).
-export async function provisionAgent(celloDir: string, name: string): Promise<void> {
-  await FileKeyProvider.load(join(celloDir, "agents", name, "key"));
+export async function provisionAgent(celloDir: string, name: string): Promise<string> {
+  const kp = await FileKeyProvider.load(join(celloDir, "agents", name, "key"));
+  return Buffer.from(await kp.getPublicKey()).toString("hex");
 }
 
 export async function startDaemon(celloDir: string, directoryUrl: string, label: string): Promise<Proc> {
