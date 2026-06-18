@@ -114,9 +114,18 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
 
     // Directory-side CORROBORATION (anti-tautology, reviewer H1): directory_signaling
     // "connected" is only trustworthy if the directory ITSELF authenticated THIS agent's
-    // signaling stream. The directory logs the authed pubkey (first 16 hex) only after
-    // verifying the Ed25519 proof-of-possession. A daemon optimistically self-reporting
-    // "connected" cannot fake the directory's log.
+    // signaling stream. The directory emits the authed pubkey (first 16 hex) ONLY after
+    // verifying the Ed25519 proof-of-possession (directory-node.ts: verify() before any
+    // authedPubkeyHex emission). A daemon optimistically self-reporting "connected"
+    // cannot fake the directory's log — it cannot make the directory log a pubkey whose
+    // private key it does not hold.
+    //
+    // The load-bearing match is the DURABLE observability event `directory.auth.challenge
+    // .signed` (MANIFEST-002), which logs `slice(0,16)` of the authed pubkey whenever the
+    // directory key is configured (the harness always sets CELLO_DIRECTORY_KEY_FILE). Do
+    // NOT rely on the `[AUTH]` protocol-log line — it truncates to 8 hex and can never
+    // satisfy this 16-char match — nor on the `frost.debug.auth.setStreams` diagnostic
+    // line, which a maintainer may remove.
     expect(
       dirCorroborated,
       `directory must have authenticated agentA's signaling stream (pubkey ${pubkeyShort}…)${diag}`,

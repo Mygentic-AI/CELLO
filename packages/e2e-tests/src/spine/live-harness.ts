@@ -29,6 +29,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 import { FileKeyProvider } from "@cello-protocol/crypto";
 
 // ─── Repo + binary locations ────────────────────────────────────────────────
@@ -97,9 +98,12 @@ export class Proc {
 
   private attachStream(stream: NodeJS.ReadableStream | null): void {
     if (!stream) return;
+    // StringDecoder (not buf.toString()) so a multibyte UTF-8 sequence split across two
+    // chunks is reassembled rather than mangled; carry holds the partial trailing LINE.
+    const decoder = new StringDecoder("utf8");
     let carry = "";
     stream.on("data", (buf: Buffer) => {
-      carry += buf.toString();
+      carry += decoder.write(buf);
       const parts = carry.split("\n");
       carry = parts.pop() ?? ""; // retain trailing partial for the next chunk
       for (const raw of parts) {
