@@ -378,3 +378,87 @@ state (two agent_profiles rows / `register_success`). The MCP harness (`connectM
 CLI driver (`cello`) are both available to drive it.
 
 **Cron.** `*/30` self-audit drift-check still running (job `babafea8`).
+
+---
+
+## 2026-06-18 — DOD-SPINE-4 design note (post-compaction; foundation read in full before any code)
+
+**DoD-ID / unit.** DOD-SPINE-4 — register two agents via real FROST DKG against the
+directory; assert directory-side DB state (two `agent_profiles` rows / one deduped
+`user_accounts` row / shared `account_id`) + per-agent local files + agent→user link.
+Status is 🟡 (built + 249 tests; live DKG never run in the daemon era). This is a
+VERIFY-the-built-code unit, not greenfield — but it is design-significant enough to
+warrant a note because the pre-auth/account model has a non-obvious live path.
+
+**How I read it (per Andre, before writing code).** Read all three M7 docs end-to-end,
+then traced the registration flow across BOTH repos against the actual source — no
+delegation, no assumptions:
+- `cello register <agent> <preAuthToken>` (cli/commands.ts:85) → daemon `cello_register`
+  handler (daemon.ts:757) → `RegistrationManager.register()` (registration-manager.ts:98):
+  ML-DSA keygen → `register_request` → `dkg_ready` → **real FROST DKG** (`runNetworkDkg`,
+  carrying `preAuthToken` into DKG Round 1) → `dkg_complete` → `register_success`.
+- Directory side (directory-node.ts:~1758–1951): DKG Round 1 validates+consumes the
+  token, runs DKG, then Step 6 creates the `AgentProfile` (`#store.setProfile`), emits
+  `register_success {agent_id, primary_pubkey}`, and fire-and-forget calls
+  `linkAgentToAccount` (pre-auth-token-repository.ts:387).
+
+**The pre-auth crux — solved without Telegram.** Production needs a token issued by the
+Operations Agent. But the J-SPINE directory runs `CELLO_ENV=local`, which composes the
+`DevTokenValidator` stub (interfaces/stubs): it accepts ANY `DEV-`-prefixed token and
+returns a FIXED principal (`dev-phone-stub-hash-0000…`). No Telegram, no DB row, no Ops
+Agent. So `cello register agentX DEV-<rand>` drives a real DKG locally.
+
+**Two agents under ONE account — the live path (3 facts, each verified in code):**
+1. `DevTokenValidator` returns a FIXED `phone_stub_hash` for both agents → both dedup to
+   the SAME `user_accounts` row (UNIQUE phone_stub_hash) via `linkAgentToAccount`.
+2. The directory's `phone_already_claimed` gate (directory-node.ts:1899) would normally
+   reject the 2nd same-phone agent — BUT under the PG store it never fires:
+   `PgDirectoryStore.hasPhoneStubHash()` is a hardcoded `return false` (pg-directory-store
+   .ts:763, "backing store read in PERSIST-003+", never implemented). Phone-uniqueness/
+   dedup is delegated entirely to the `user_accounts` table. (The in-memory store's real
+   gate is a UNIT-TEST-only artifact; the live binary uses PG.) NOTE/FLAG: this is a
+   latent inconsistency — a dead gate — but it is NOT a SPINE-4 blocker and I am NOT
+   changing directory registration semantics here.
+3. Lynchpin: `CELLO_ENV=local` + `DATABASE_URL` wires BOTH `pgPool = new pg.Pool(...)`
+   AND `store = new PgDirectoryStore(pgPool,…)` (directory.ts:152–155). So `pgPool` is
+   present (→ `linkAgentToAccount` runs, writes `user_accounts`) AND the phone gate is the
+   no-op. Both conditions hold at once. Confirmed by reading the composition root.
+
+**Model chosen: ONE home, ONE daemon, TWO agents.** `loadAgents` enumerates every
+`${CELLO_DIR}/agents/*/` subdir at boot (agent-loader.ts:70–81), so provisioning
+`agents/agentA/key` + `agents/agentB/key` before daemon start loads both. Registration is
+single-flight per daemon (`registrationInProgress`, daemon.ts:776) and `cello` is a
+synchronous CLI — so two `cello register` calls serialize naturally. This models "two
+agents under one operator/account on one machine" (CONTEXT.md also allows different
+machines; one-home is the simpler faithful case and exercises multi-agent load + the
+single-flight serializer). Each `cello_register` builds a fresh `RegistrationManager` +
+per-agent `FileRegistrationPersistence(agentDir=agents/<name>)` — no shared registration
+state across agents.
+
+**Producer/consumer for the assertions (directory-side = non-tautological, per H1):**
+- PRODUCER (directory, PG): `agent_profiles` row per agent (k_local_pubkey, primary_pubkey
+  from DKG, phone_stub_hash=dev fixed); `user_accounts` row (one, deduped); `account_id`
+  written onto both agent_profiles by `linkAgentToAccount`. The daemon CANNOT fabricate
+  these — they are the directory's own DB writes after a real DKG it co-ran.
+- PRODUCER (daemon, local files): `agents/<name>/{registration-state,ml-dsa-keypair,
+  frost-share,agent-user-link}.json` (registration-persistence.ts; agent-user-link written
+  by the handler at daemon.ts:815).
+- CONSUMER (test): query `cello_spine` via `docker compose exec -T postgres psql` (the
+  harness already owns this DB) + stat the per-agent files.
+- RACE: `linkAgentToAccount` is fire-and-forget (`void …catch`), so `register_success`
+  precedes the `user_accounts`/`account_id` write. The test POLLS the DB for the link
+  (same flush-race discipline SPINE-1's corroboration used), not a one-shot read.
+
+**Woven invariant — DOD-INV-2 (no single party forges).** Each agent's `primary_pubkey`
+is a real DKG product (distinct per agent); the client holds its FROST signing share
+(`frost-share.json`) while the directory holds its K_server_X share — neither alone can
+sign. SPINE-4 asserts: two DISTINCT primary_pubkeys + a persisted client-side frost-share,
+evidencing the split-key outcome of a genuine ceremony (not a stub returning a fixed key).
+
+**Harness additions planned (live-harness.ts):** `psqlSpine(sql)` (query the spine DB);
+a two-agent provisioning helper (provision N keys in one home, start one daemon). Reuse
+`cello()` for `register`. No forbidden imports; anchored to the binary.
+
+**Next step.** Red-first: add the DOD-SPINE-4 it-block + helpers; confirm red for the
+right reason (e.g. zero agent_profiles before registration, or link absent), then drive
+green. Branch `m7-rehome`, nothing pushed/merged.
