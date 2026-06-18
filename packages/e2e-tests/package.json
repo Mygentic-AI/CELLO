@@ -19,7 +19,8 @@
   "scripts": {
     "typecheck": "tsc --build",
     "test": "vitest run",
-    "test:cross-machine": "vitest run --config vitest.cross-machine.config.ts"
+    "test:cross-machine": "vitest run --config vitest.cross-machine.config.ts",
+    "test:spine": "vitest run --config vitest.spine.config.ts"
   },
   "dependencies": {
     "@cello-protocol/connect": "^0.0.30",
