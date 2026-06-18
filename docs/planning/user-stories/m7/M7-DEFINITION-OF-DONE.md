@@ -96,10 +96,16 @@ Source: outline Milestone Close Gate + E2E-001 AC-001–012. Mostly built/merged
 - **DOD-SPINE-1 — Daemon up.** `cello login` starts (or connects to) the daemon
   within 5s; `cello status` shows daemon running, `directory_signaling: connected`,
   ≥1 agent, connections list; `daemon.started` + `daemon.login.validation.complete`
-  + `daemon.ipc.connected (clientType: cli)` logged. — 🟡 **CORE PROVEN LIVE** by
-  J-SPINE (2026-06-18, commit `92f82e3`): real relay+directory+daemon+cli on localhost,
-  `directory_signaling: connected` + ≥1 agent after real DKG. Remaining sub-clauses
-  not yet asserted: 5s login budget, `connections` list, `daemon.ipc.connected` event.
+  + `daemon.ipc.connected (clientType: cli)` logged. — ✅ **PROVEN LIVE (daemon-up)** by
+  J-SPINE (2026-06-18, commits `92f82e3` → `034e487`): real relay+directory+daemon+cli
+  on localhost; daemon running, `cello login` connects <5s, `directory_signaling:
+  connected` **directory-corroborated** (the directory's own `[AUTH]` log shows it
+  authenticated this agent's signaling stream — not the daemon's self-report), ≥1 agent,
+  `connections` list, `daemon.started` + `daemon.login.validation.complete`. **Two-sided,
+  non-tautological** (reviewer H1 fix). CORRECTION: `daemon.ipc.connected` fires only on
+  an `ipc.connect` frame, which only `cello-mcp` sends (`clientType: "mcp"`, NOT "cli");
+  the bare CLI never sends it → that event is asserted in **DOD-SPINE-2** (the IPC/MCP
+  surface), not here.
 - **DOD-SPINE-2 — Two IPC sessions, independent current-agent.** Two distinct
   socket connections; switching current in one does not affect the other;
   `agent.current.switched` fires only for the switching connection. — ✅ (MCP-001/002)

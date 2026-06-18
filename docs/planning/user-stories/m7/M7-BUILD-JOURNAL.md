@@ -222,3 +222,62 @@ log event. These remaining sub-clauses are the finish of this unit (after review
 model) → SPINE-4 (register two agents — registration is already partially exercised).
 
 **Cron.** `*/30` self-audit drift-check running this session (job `babafea8`).
+
+---
+
+## 2026-06-18 — SPINE-1 review: BLOCKED → fixed, now directory-corroborated (commit `034e487`)
+
+**DoD-ID / unit.** DOD-SPINE-1 (continued). Reviewer outcome + fixes.
+
+**Reviewer outcome: BLOCKED.** `feature-dev:code-reviewer` (opus) cross-checked the
+test's assumptions against the real daemon/directory code and caught a HIGH finding
+(H1) plus M2-M4 + L5-L7. H1 was correct and important:
+
+**H1 — my SPINE-1 assertions were tautological (the exact false-confidence J-SPINE
+exists to prevent).** I had misread `daemon.ts:411`: signaling is gated on a *loaded*
+agent, not a *registered* one. `provisionAgent` writes the K_local key BEFORE the
+daemon boots, so the agent is loaded at boot; the directory accepts the signaling
+stream on Ed25519 proof-of-possession alone (no DB-registration check,
+`directory-node.ts:1177-1188`); and `cello status` reports loaded agents as
+`state:"registered"` regardless. So `directory_signaling=connected` + `agentCount>=1`
+were both true at boot, and the `cello register` DKG I added had ZERO effect on what
+the test asserted. I had relocated the false confidence from a dead library symbol to
+daemon-side loaded-agent state.
+
+**Fix (and the diagnostic journey behind it — producer/consumer, not guessing):**
+- Removed registration from SPINE-1 (real DKG verification → SPINE-4, with
+  directory-side state). Added DIRECTORY-SIDE corroboration: the test waits for the
+  directory's OWN log to show it authenticated this agent's signaling stream
+  (`authedShort` = agent pubkey). The green condition now depends on directory state
+  the daemon cannot fake.
+- Chasing why corroboration first FAILED revealed a real diagnostic lesson: the
+  daemon's status said `connected` but neither side's captured log showed the auth.
+  Hypothesis-as-fact was tempting ("daemon reports connected without connecting"). The
+  evidence (raw-stdout tee, independent of line buffering) proved the opposite: the
+  daemon DID connect (`directory.bootstrap.resolved` → `directory.signaling.connected
+  {agentPubkey}`), the directory DID authenticate (`[AUTH] authedShort{same pubkey}`),
+  and the failure was a **race** — the directory's auth log flushes a few ms AFTER the
+  daemon flips its status. The `reader.error/signaling_closed` lines were just teardown
+  SIGTERM, not a break. Fix: fold corroboration into the poll loop (race-free; stable
+  across repeated runs).
+- M2 (Proc partial-line carry buffer), M3 (reject waiters on child exit — no
+  crash-as-timeout), M4 (late health-port alloc), L5 (agent-dir cleanup), L6 (poll
+  delay), L7 (stop spawned children on partial cluster bring-up). All applied.
+
+**DoD correction (PROCEDURE §8).** `daemon.ipc.connected` fires ONLY on an
+`ipc.connect` frame, which only `cello-mcp` sends (`clientType: "mcp"`); the bare CLI
+never sends it. The DoD's "daemon.ipc.connected (clientType: cli)" is inaccurate — that
+event moves to DOD-SPINE-2 (the IPC/MCP connection surface). Reflected in the DoD.
+
+**SPINE-1 status: now fully green for daemon-up** — daemon running, `cello login`
+connects <5s, `directory_signaling: connected` (directory-corroborated, two-sided),
+`>=1 agent`, `connections` list, `daemon.started` + `daemon.login.validation.complete`.
+The only deferred sub-clause is `daemon.ipc.connected`, correctly re-homed to SPINE-2.
+
+**Commits.** `034e487` (review fixes). Floor: typecheck 0, lint 0, two consecutive
+green runs.
+
+**Next red.** A focused re-review of the H1 fix (confirm the corroboration is itself
+sound, not a new tautology), then DOD-SPINE-2 (two IPC sessions, independent
+current-agent) — which is where the MCP/IPC client connection gets built and
+`daemon.ipc.connected` is asserted.
