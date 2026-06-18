@@ -636,3 +636,52 @@ so there is no trustless-cello integration step. **Not merged to main, not pushe
 
 Next: finish the four postmortem stories' client halves on `CELLO-M7-INTEGRATION` —
 SESSION-002 from scratch, MSG-001/SESSION-003/SESSION-004 re-home/salvage.
+
+### 2026-06-18 — MSG-001 re-home underway; scope corrected after reading the commits (NOT just grep)
+
+Started the MSG-001 re-home onto `CELLO-M7-INTEGRATION`. Done + committed so far:
+- **Phase 1** (`89dd791`, cello-client) — stack-neutral KEEP packages brought onto the
+  integration base: crypto `content-seal.ts`, protocol-types `content-delivery.ts`,
+  transport `content-cap.ts`. Gate: crypto 242 / protocol-types 113 / transport 67 green.
+- **Phase 2** (`f004c22`, cello-client) — daemon retry_queue awaiting-ACK extension +
+  startup flush + `enqueue_awaiting_content`/`mark_content_acked` IPC; `contentParkFn` seam.
+  Doc-comment corrected to Option A (park target is daemon-native, not a hosted CelloClient).
+  Gate: daemon 289 green; daemon-004-stack-retirement still clean.
+- **Phase 4** (`f7924b4`, trustless-cello branch `CELLO-M7-MSG-001-RELAY` off main) — relay
+  store-and-forward (ContentStore + FileContentStore + ContentParkHandler + bin wiring).
+  **Bug fixed** (the kind that flagged MSG-001 needs-attention): `content-store.test.ts`
+  asserted last-writer-wins; the round-1 stub + interface decided first-writer-wins
+  (denial-of-delivery defense) — corrected the test. Gate: interfaces 59 / relay MSG-001
+  suites 15 / relay-node 32 green. NOTE: the full relay suite hangs under single-worker on
+  `m7-session-001` ordering — **REPRODUCED IDENTICALLY ON CLEAN MAIN** (pre-existing libp2p
+  cross-file leak, orthogonal to MSG-001; flagged for a separate fix).
+
+**Scope correction (Andre stopped an over-confident grep-based claim — rightly).** I had
+claimed MSG-001's recovery/canonical-sequence half "doesn't exist, needs a new
+sub-foundation," based on a narrow daemon source grep. Reading the 16 MSG-001 commit
+messages corrected it: the FULL content spine (delivery-ACK, TTF park, recovery
+sender_resend+relay_queue, multiset dedup, tamper-desync, notify→pull) is **BUILT AND
+TESTED** over real libp2p streams — in `core/client/relay-stream-manager.ts` (1261 lines) +
+`session-manager.ts`, i.e. the **dead in-process stack**. So it is "built, wrong stack →
+re-home," not "never built." The daemon today has the direct P2P content path (DAEMON-004)
+plus a SESSION-001 relay-stream watcher that handles ONLY `session_interrupted` (not a
+content-leaf path).
+
+**Previously-untracked follow-on, now recorded.** The earlier MSG-001 author named the
+daemon wiring **`CELLO-M7-DAEMON-CONTENT-WIRING`** and escalated it to BLOCKING (commits
+`7fdbc44`/`3b21271`) — but as **Option B (instantiate a CelloClient in the daemon)**, which
+Andre's Option-A decision (2026-06-17) **supersedes**. It was tracked NOWHERE in
+COORDINATION/WORKLOG — only in commit messages + the DAEMON-004 yaml. Recording it here:
+it is the **3b** unit below.
+
+**Agreed packaging (Andre, 2026-06-18): "3a now, then 3b re-home as next increment."**
+- **3a (relay-independent, in progress on `CELLO-M7-MSG-001-REHOME`):** size cap (AC-13/14/18),
+  delivery-ACK emit+handle over the session channel (AC-1/2), content_hash dedup (AC-12),
+  tamper-only-desync naming (AC-15). Adapts onto the daemon's existing direct content path —
+  no relay needed.
+- **3b (the DAEMON-CONTENT-WIRING re-home, next increment):** reimplement the relay
+  content-leaf exchange (Structure2 submit/receive + relay-assigned canonical sequence),
+  receiver-side recovery (AC-9/10/11), and the production park deposit (AC-3/4/19) NATIVELY
+  in the daemon under Option A — guided line-by-line by the tested client spine. Option A
+  forbids hosting the client / the stack-retirement gate blocks importing
+  `relay-stream-manager`, so it is a native reimplementation, not a lift.
