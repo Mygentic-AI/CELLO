@@ -777,11 +777,21 @@ adapter-STUBBED (directory negotiator + relay), real local libp2p only for the h
   CELLO_ENV), L1 (docstring: behavioral parity, NOT the multi-process gate), L2-L4 (test hygiene).
   daemon **342 green**; workspace typecheck+lint clean; client-dead=26 unchanged.
   → The whole direct-path session lifecycle is proven in-process at the IPC level.
-- **Seam 5 — NEXT.** WIRE-001 initiate-ordering restructure: create N_A before the assignment is
-  finalized so a SINGLE-round negotiator produces the complete assignment (it knows N_A's peer id),
-  then collapse seam 4's two-phase test into one round — the production negotiator shape.
-- **Then deferred re-homes:** SESSION-003 daemon-liveness test, SESSION-004 client legibility,
-  MSG-001 3b (relay content-leaf path + recovery). Greenfield SESSION-002 left for Andre.
+- **Seam 5 — PAUSED, needs a design decision.** The WIRE-001 initiate restructure is not a
+  mechanical reorder: N_A is keyed by session_id, but the directory generates session_id, so
+  "create N_A before negotiate" needs a pre-session-id keying / session_offer-round design whose
+  correct shape depends on the WIRE-001 directory side (does not exist yet). Best done WITH that
+  work. Seam 4 already proves the full direct path (test supplies N_A's peer id on the push).
+
+**Bounded low-risk seam work is COMPLETE (seams 1a–4, all reviewed + green, daemon 342). Remaining
+items all need Andre's scoping/design and were deliberately NOT built blind:**
+- **MSG-001 3b (DAEMON-CONTENT-WIRING)** — relay content-leaf path + recovery; largest piece,
+  multi-part native reimplementation. (Task #44.)
+- **SESSION-004** — legibility: GREENFIELD (verified: no construction in core/client; schema only;
+  status draft; directory+client+seal-flow). Left for Andre.
+- **SESSION-002** — greenfield. Left for Andre.
+- **SESSION-003** — daemon-liveness ALREADY COVERED (session-003-direct-liveness.test.ts, 2 tests,
+  real libp2p); the earlier "untested" note was stale. No work needed.
 - **Then the deferred re-homes:** MSG-001 **3b** (recovery/canonical-sequence relay content-leaf
   path), SESSION-003 daemon-liveness test, SESSION-004 client legibility, SESSION-002 greenfield.
 
