@@ -740,11 +740,14 @@ adapter-STUBBED (directory negotiator + relay), real local libp2p only for the h
   a later cello_send would hit session_not_found. Fixed: initiate now calls `createSessionNode`
   after transport selection. Proven in `transport-composition.test.ts` (stub negotiator →
   queryable active session-core record). daemon 328 green.
-- **Seam 1b — NEXT.** The dialer/session-node reconciliation: `transportSelector.dial` dials on
-  the `transportDialer`'s node, but the session node N_A is a separate ephemeral node — so N_A's
-  content `newStream` can't ride that connection. Route the dial THROUGH N_A (per-session dialer
-  bound to N_A; the selector drives strategy). Test: N_A connects to a listening counterparty.
-- **Seam 2:** inbound `acceptSession` wired to inbound signaling (counterparty side).
+- **Seam 1b — DONE (`ea83982`).** The dialer/session-node reconciliation. Added
+  `SessionNodeManager.connectToCounterparty(sessionId, addrs)` — the session node N_A dials the
+  counterparty itself (direct mode), so it holds the connection its content `newStream` rides
+  (TRANSPORT-001 dialed on a separate node N_A couldn't use). `cello_initiate_session` calls it
+  for direct mode (tears the session down on failure). Proven by a real-libp2p test: N_A dials a
+  listening counterparty and the counterparty observes the inbound connection from N_A. daemon
+  330 green. Relay-circuit + dcutr dial via N_A = a later seam.
+- **Seam 2 — NEXT.** inbound `acceptSession` wired to inbound signaling (counterparty side).
 - **Seam 3:** two-daemon content round-trip (initiate→send→ACK over real local libp2p) — wires
   3a delivery-ACK to a live session.
 - **Then the deferred re-homes:** MSG-001 **3b** (recovery/canonical-sequence relay content-leaf
