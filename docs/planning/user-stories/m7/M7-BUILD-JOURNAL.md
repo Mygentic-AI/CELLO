@@ -319,3 +319,43 @@ switch on one does not change the other. Plan:
   SPINE-4 territory — let the red run show what SPINE-2 minimally needs.
 
 **Cron.** `*/30` self-audit drift-check still running (job `babafea8`).
+
+---
+
+## 2026-06-18 — DOD-SPINE-2/3 GREEN; another real cello-client bug caught
+
+**DoD-ID / unit.** DOD-SPINE-2 + DOD-SPINE-3 (a tight cluster — same MCP/IPC surface).
+Green + stable across 3 consecutive runs. Reviewer dispatched (outcome pending).
+
+**What was red → green.** Built the MCP-client harness piece `connectMcp` (spawns the
+real `cello-mcp` via the MCP SDK `StdioClientTransport`; each connection = one daemon
+IPC connection — anchored to the binary, no in-process MCP server). Asserted against two
+live MCP connections to ONE daemon:
+- `daemon.ipc.connected{clientType:"mcp"}` logged (the sub-clause re-homed from SPINE-1).
+- SPINE-3 three-state, observed in sequence: `registered` (loaded) → `online`
+  (`cello_start_agent`) → `current` (`cello_use_agent`); login does not auto-start.
+- SPINE-2 independence: conn1's `cello_use_agent` makes agentA `current` on conn1 ONLY;
+  conn2 (same daemon, same agent) still reports `online`. Per-connection state confirmed
+  against `perConnectionState` / `getAgentsForConnection` (daemon.ts).
+- `agent.current.switched{toAgent:"agentA"}` logged for the switching connection.
+
+**Real bug caught (J-SPINE's purpose).** `cello-mcp` hardcoded the daemon socket at
+`~/.cello/daemon.sock`, IGNORING `CELLO_DIR` — while `cello-daemon` and the `cello` CLI
+both honor `process.env.CELLO_DIR || ~/.cello`. So cello-mcp could not find a daemon
+running under a non-default home → `MCP error -32000: Connection closed`. This would also
+break any operator who sets `CELLO_DIR` in production. Fix: cello-mcp resolves CELLO_DIR
+identically (cello-client `m7-rehome` commit `e31b646`). Producer/consumer: daemon
+PRODUCES the socket at `CELLO_DIR/daemon.sock`; cello-mcp (CONSUMER) was looking elsewhere.
+
+**Useful finding (no bug).** `cello_start_agent` only needs the agent LOADED, not real
+DKG — so SPINE-2/3 run on a provisioned agent, before SPINE-4.
+
+**Commits.** trustless-cello `e1592dc` (test) + DoD/journal; cello-client `e31b646`
+(cello-mcp CELLO_DIR fix). Floor: typecheck 0, lint 0, 3/3 green runs.
+
+**Next red — DOD-SPINE-4** (register two agents, real DKG against the directory). SPINE-1
+already exercised one real `cello register`; SPINE-4 is the two-agent DKG + the per-agent
+files + agent→user link. NOTE: per Andre, this is a planned COMPACTION boundary — stop
+after SPINE-2/3 review clears and compact (protocol requires Andre).
+
+**Cron.** `*/30` self-audit drift-check still running (job `babafea8`).

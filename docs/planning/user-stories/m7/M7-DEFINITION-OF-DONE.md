@@ -108,9 +108,16 @@ Source: outline Milestone Close Gate + E2E-001 AC-001–012. Mostly built/merged
   surface), not here.
 - **DOD-SPINE-2 — Two IPC sessions, independent current-agent.** Two distinct
   socket connections; switching current in one does not affect the other;
-  `agent.current.switched` fires only for the switching connection. — ✅ (MCP-001/002)
+  `agent.current.switched` fires only for the switching connection. — ✅ **PROVEN LIVE**
+  by J-SPINE (2026-06-18, commit `e1592dc`): two real `cello-mcp` processes (SDK
+  `StdioClientTransport`) on one daemon; `daemon.ipc.connected{clientType:"mcp"}` logged;
+  conn1's `cello_use_agent` makes agentA `current` on conn1 while conn2 still sees
+  `online`; `agent.current.switched` logged for the switch. Caught + fixed a real
+  cello-mcp bug (ignored `CELLO_DIR`, cello-client `e31b646`).
 - **DOD-SPINE-3 — Three-state model.** `registered → online → current` observable
-  in sequence via `cello_list_agents`; login does NOT auto-start agents. — ✅
+  in sequence via `cello_list_agents`; login does NOT auto-start agents. — ✅ **PROVEN
+  LIVE** by J-SPINE (commit `e1592dc`): registered (loaded) → online (`cello_start_agent`)
+  → current (`cello_use_agent`), each state observed via real `cello_list_agents`.
 - **DOD-SPINE-4 — Register two agents (real DKG).** `cello register <agent>` →
   pre-auth token → `register_request` → FROST DKG against the directory →
   `register_success` → per-agent files under `~/.cello/agents/<name>/` + agent→user
