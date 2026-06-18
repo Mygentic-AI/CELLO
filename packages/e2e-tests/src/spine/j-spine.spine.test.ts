@@ -257,41 +257,44 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     expect(regA.agentId).not.toBe(regB.agentId);
     expect(regA.primaryPubkey).not.toBe(regB.primaryPubkey);
 
-    // Two distinct agents — distinct directory-issued agent_id AND distinct DKG primary_pubkey
-    // (each primary_pubkey is the product of a SEPARATE real ceremony, not a fixed stub value).
-    expect(regA.agentId).not.toBe(regB.agentId);
-    expect(regA.primaryPubkey).not.toBe(regB.primaryPubkey);
-
     // ── Directory-side corroboration (non-tautological, reviewer H1): assert the
-    // directory's OWN DB writes in cello_spine — the daemon cannot fabricate these.
-    // (1) Exactly the two agent_profiles rows for THESE agents' K_local keys, carrying
-    //     the DKG primary_pubkeys the CLI reported back.
-    const profRows = psqlSpine(
-      `SELECT k_local_pubkey || '|' || primary_pubkey || '|' || coalesce(account_id::text,'NULL') ` +
-        `FROM agent_profiles WHERE k_local_pubkey IN ('${pubA}','${pubB}') ORDER BY k_local_pubkey`,
-    );
-    const profLines = profRows.split("\n").filter((l) => l.length > 0);
-    expect(profLines.length, `expected 2 agent_profiles rows for the two agents, got:\n${profRows}`).toBe(2);
-    const byLocal = new Map(profLines.map((l) => [l.split("|")[0]!, { primary: l.split("|")[1]!, account: l.split("|")[2]! }]));
-    expect(byLocal.get(pubA)?.primary, "directory agent_profiles[agentA].primary_pubkey matches the DKG result").toBe(regA.primaryPubkey);
-    expect(byLocal.get(pubB)?.primary, "directory agent_profiles[agentB].primary_pubkey matches the DKG result").toBe(regB.primaryPubkey);
-
-    // (2) The agent→user link: linkAgentToAccount is fire-and-forget (register_success is
-    //     sent BEFORE the user_accounts write), so POLL until both rows carry the SAME
-    //     non-null account_id and exactly one user_accounts row backs it.
+    // directory's OWN DB writes in cello_spine — the daemon cannot fabricate these. Both
+    // the profile INSERT and the account_id are committed asynchronously (setProfile is a
+    // fire-and-forget `void pool.query`, and register_success is sent BEFORE that INSERT
+    // commits), so POLL the whole corroboration until it settles: 2 agent_profiles rows
+    // for these agents' K_local keys, carrying the DKG primary_pubkeys the CLI reported,
+    // both pointing at the SAME non-null account_id. (One unified poll — the profile rows
+    // and the account link land asynchronously together; a one-shot read of either races
+    // the commit. Reviewer Q6.)
     let sharedAccount = "";
-    const linkDeadline = Date.now() + 10_000;
+    const corroborateDeadline = Date.now() + 10_000;
+    let lastSeen = "";
     for (;;) {
-      const accs = psqlSpine(
-        `SELECT coalesce(account_id::text,'NULL') FROM agent_profiles ` +
-          `WHERE k_local_pubkey IN ('${pubA}','${pubB}')`,
-      ).split("\n").filter((l) => l.length > 0);
-      if (accs.length === 2 && accs[0] !== "NULL" && accs[0] === accs[1]) {
-        sharedAccount = accs[0]!;
-        break;
+      const rows = psqlSpine(
+        `SELECT k_local_pubkey || '|' || primary_pubkey || '|' || coalesce(account_id::text,'NULL') ` +
+          `FROM agent_profiles WHERE k_local_pubkey IN ('${pubA}','${pubB}') ORDER BY k_local_pubkey`,
+      );
+      lastSeen = rows;
+      const lines = rows.split("\n").filter((l) => l.length > 0);
+      if (lines.length === 2) {
+        const byLocal = new Map(lines.map((l) => [l.split("|")[0]!, { primary: l.split("|")[1]!, account: l.split("|")[2]! }]));
+        const a = byLocal.get(pubA);
+        const b = byLocal.get(pubB);
+        if (
+          a?.primary === regA.primaryPubkey &&
+          b?.primary === regB.primaryPubkey &&
+          a.account !== "NULL" &&
+          a.account === b!.account
+        ) {
+          sharedAccount = a.account;
+          break;
+        }
       }
-      if (Date.now() > linkDeadline) {
-        throw new Error(`agent→account link never settled (both rows, same non-null account_id). Last: ${JSON.stringify(accs)}`);
+      if (Date.now() > corroborateDeadline) {
+        throw new Error(
+          `directory agent_profiles never settled to 2 rows with matching DKG primary_pubkeys and a shared ` +
+            `non-null account_id. Last: ${JSON.stringify(lastSeen)} (expected ${pubA}→${regA.primaryPubkey}, ${pubB}→${regB.primaryPubkey})`,
+        );
       }
       await sleep(250);
     }
