@@ -31,6 +31,8 @@ import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import { FileKeyProvider } from "@cello-protocol/crypto";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 // ─── Repo + binary locations ────────────────────────────────────────────────
 // This file: packages/e2e-tests/src/spine/live-harness.ts → repo root is 4 up.
@@ -385,4 +387,44 @@ export function cello(args: string[], env: Record<string, string>): CliResult {
     const e = err as { stdout?: string; stderr?: string; status?: number };
     return { stdout: (e.stdout ?? "") + (e.stderr ?? ""), status: e.status ?? 1 };
   }
+}
+
+// ─── MCP connection: a real cello-mcp process driven via the MCP SDK client ─────
+// Each connection spawns the shipped `cello-mcp` binary (StdioClientTransport), which
+// connects to the running daemon over IPC and sends `ipc.connect {clientType:"mcp"}`.
+// Two McpConns to one daemon = two distinct IPC connections (DOD-SPINE-2). This is the
+// real agent tool surface — anchored to the binary, no in-process MCP server.
+export interface McpConn {
+  client: Client;
+  /** Call a cello_* tool and return its unwrapped JSON result. */
+  call: (name: string, args?: Record<string, unknown>) => Promise<unknown>;
+  close: () => Promise<void>;
+}
+
+export async function connectMcp(celloDir: string, label: string): Promise<McpConn> {
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [BINS.mcp],
+    env: { ...process.env, CELLO_DIR: celloDir },
+  });
+  const client = new Client({ name: `jspine-${label}`, version: "0.0.1" });
+  await client.connect(transport);
+  return {
+    client,
+    call: async (name, args = {}) => {
+      const res = (await client.callTool({ name, arguments: args })) as {
+        content?: Array<{ type: string; text?: string }>;
+      };
+      // cello-mcp wraps results as content:[{type:"text", text: JSON.stringify(value)}].
+      const text = res.content?.find((c) => c.type === "text")?.text;
+      return text !== undefined ? JSON.parse(text) : res;
+    },
+    close: async () => {
+      try {
+        await client.close();
+      } catch {
+        /* best-effort — also kills the spawned cello-mcp */
+      }
+    },
+  };
 }

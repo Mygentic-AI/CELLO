@@ -18,17 +18,29 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startSpineCluster, startDaemon, provisionAgent, cello, type Proc, type SpineCluster } from "./live-harness.js";
+import {
+  startSpineCluster,
+  startDaemon,
+  provisionAgent,
+  connectMcp,
+  cello,
+  type McpConn,
+  type Proc,
+  type SpineCluster,
+} from "./live-harness.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
 const agentDirs: string[] = [];
+const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
   cluster = await startSpineCluster();
 }, 180_000);
 
 afterAll(async () => {
+  // Close MCP connections (kills their cello-mcp procs) before stopping daemons.
+  for (const c of mcpConns) await c.close();
   // The harness owns each daemon — stop them, then the cluster. No orphans.
   for (const d of daemons) await d.stop();
   await cluster?.stop();
@@ -41,6 +53,12 @@ afterAll(async () => {
     }
   }
 });
+
+/** State of a named agent from a `cello_list_agents` result ({ agents: [...] }). */
+function agentState(listResult: unknown, name: string): string | undefined {
+  const agents = (listResult as { agents?: Array<{ name: string; state: string }> }).agents ?? [];
+  return agents.find((a) => a.name === name)?.state;
+}
 
 /** A fresh CELLO_DIR with a provisioned agent identity and its own harness-owned daemon. */
 async function startAgent(
@@ -130,5 +148,51 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
       dirCorroborated,
       `directory must have authenticated agentA's signaling stream (pubkey ${pubkeyShort}…)${diag}`,
     ).toBe(true);
+  }, 30_000);
+
+  it("DOD-SPINE-2/3 — two IPC sessions: three-state model + independent current-agent", async () => {
+    const { celloDir, daemon } = await startAgent("agent23", "agentA");
+
+    // Two distinct MCP/IPC connections to ONE daemon (each spawns a real cello-mcp).
+    const conn1 = await connectMcp(celloDir, "conn1");
+    mcpConns.push(conn1);
+    const conn2 = await connectMcp(celloDir, "conn2");
+    mcpConns.push(conn2);
+
+    const diag = (): string => `\n--- daemon log ---\n${daemon.output.split("\n").slice(-30).join("\n")}`;
+
+    // DOD-SPINE-2: two MCP connections → daemon.ipc.connected{clientType:"mcp"} (the
+    // sub-clause re-homed from SPINE-1; the bare CLI never emits this).
+    expect(daemon.output, `daemon.ipc.connected(mcp) must be logged${diag()}`).toMatch(
+      /"event":"daemon\.ipc\.connected"[^}]*"clientType":"mcp"/,
+    );
+
+    // DOD-SPINE-3: three-state model, observed in sequence. login does NOT auto-start
+    // agents, so a freshly-loaded agent is "registered".
+    expect(agentState(await conn1.call("cello_list_agents"), "agentA"), "agentA starts registered").toBe(
+      "registered",
+    );
+
+    // registered → online (cello_start_agent; daemon-wide set).
+    const started = (await conn1.call("cello_start_agent", { name: "agentA" })) as { ok?: boolean };
+    expect(started.ok, `cello_start_agent failed: ${JSON.stringify(started)}`).toBe(true);
+    expect(agentState(await conn1.call("cello_list_agents"), "agentA"), "agentA online after start").toBe(
+      "online",
+    );
+
+    // online → current, but ONLY on conn1 (DOD-SPINE-2 independence).
+    const used = (await conn1.call("cello_use_agent", { name: "agentA" })) as { ok?: boolean };
+    expect(used.ok, `cello_use_agent failed: ${JSON.stringify(used)}`).toBe(true);
+
+    const list1 = await conn1.call("cello_list_agents");
+    const list2 = await conn2.call("cello_list_agents");
+    // conn1 sees agentA as current; conn2 — same daemon, same agent — sees it only online.
+    expect(agentState(list1, "agentA"), "conn1: agentA is current").toBe("current");
+    expect(agentState(list2, "agentA"), "conn2 must be unaffected by conn1's switch").toBe("online");
+
+    // agent.current.switched fired for the switching connection (toAgent: agentA).
+    expect(daemon.output, `agent.current.switched must be logged for the switch${diag()}`).toMatch(
+      /"event":"agent\.current\.switched"[^}]*"toAgent":"agentA"/,
+    );
   }, 30_000);
 });
