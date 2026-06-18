@@ -159,13 +159,12 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     const conn2 = await connectMcp(celloDir, "conn2");
     mcpConns.push(conn2);
 
-    const diag = (): string => `\n--- daemon log ---\n${daemon.output.split("\n").slice(-30).join("\n")}`;
-
     // DOD-SPINE-2: two MCP connections → daemon.ipc.connected{clientType:"mcp"} (the
-    // sub-clause re-homed from SPINE-1; the bare CLI never emits this).
-    expect(daemon.output, `daemon.ipc.connected(mcp) must be logged${diag()}`).toMatch(
-      /"event":"daemon\.ipc\.connected"[^}]*"clientType":"mcp"/,
-    );
+    // sub-clause re-homed from SPINE-1; the bare CLI never emits this). Use waitForLine
+    // (polls the backlog then waits) — the daemon's stdout pipe and the IPC socket are
+    // independent fds with no happens-before, so a one-shot read of daemon.output would
+    // race the flush (the same race SPINE-1's corroboration fixed).
+    await daemon.waitForLine(/"event":"daemon\.ipc\.connected"[^}]*"clientType":"mcp"/, 5_000);
 
     // DOD-SPINE-3: three-state model, observed in sequence. login does NOT auto-start
     // agents, so a freshly-loaded agent is "registered".
@@ -191,8 +190,7 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     expect(agentState(list2, "agentA"), "conn2 must be unaffected by conn1's switch").toBe("online");
 
     // agent.current.switched fired for the switching connection (toAgent: agentA).
-    expect(daemon.output, `agent.current.switched must be logged for the switch${diag()}`).toMatch(
-      /"event":"agent\.current\.switched"[^}]*"toAgent":"agentA"/,
-    );
+    // waitForLine, not a one-shot read — same stdout/IPC flush-race avoidance as above.
+    await daemon.waitForLine(/"event":"agent\.current\.switched"[^}]*"toAgent":"agentA"/, 5_000);
   }, 30_000);
 });

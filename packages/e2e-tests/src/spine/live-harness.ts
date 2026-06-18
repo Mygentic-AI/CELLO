@@ -408,7 +408,18 @@ export async function connectMcp(celloDir: string, label: string): Promise<McpCo
     env: { ...process.env, CELLO_DIR: celloDir },
   });
   const client = new Client({ name: `jspine-${label}`, version: "0.0.1" });
-  await client.connect(transport);
+  try {
+    await client.connect(transport);
+  } catch (err) {
+    // StdioClientTransport spawned cello-mcp during connect — close it so a failed
+    // handshake doesn't orphan the child (harness orphan-avoidance discipline).
+    try {
+      await transport.close();
+    } catch {
+      /* best-effort */
+    }
+    throw err;
+  }
   return {
     client,
     call: async (name, args = {}) => {
