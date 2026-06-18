@@ -796,3 +796,25 @@ items all need Andre's scoping/design and were deliberately NOT built blind:**
   path), SESSION-003 daemon-liveness test, SESSION-004 client legibility, SESSION-002 greenfield.
 
 Nothing merged to main, nothing pushed.
+
+### 2026-06-18 — CODE-REVIEW GAP: work after we left the formal story process is largely un-reviewed
+
+Flagging for the pick-through, honestly: **once the work left the formal per-story process
+(SPARC + sprint-coder + code-reviewer + sprint-reviewer), code review was inconsistent and
+mostly absent.** The merged M7 stories (DAEMON-001/002/003, MANIFEST-001/002, MCP-001/002,
+SIGNAL-001, WIRE-001, SESSION-001, DIR-PING-001, CICD-001) went through review rounds per this
+log. Everything after that did NOT receive the same treatment:
+
+- **Reviewed (feature-dev:code-reviewer, opus, all findings fixed):** seam 2 (`c72968e`→`96af667`),
+  seam 3 (`659745e`→`9ffbe33`), seam 4 (`ba7984a`→`c7210c4`).
+- **NOT reviewed:** seam 1a/1b; the Keystone / Registration / DAEMON-004 re-home and the
+  7-branch assembly merges as assembled (their original branches may have been reviewed, but the
+  integrated result was not re-reviewed); the four stories' re-home/salvage work; the collapse
+  merge + prune (git ops, not code, but the merged result is unverified beyond typecheck/lint).
+- **Cannot attest:** the pre-compaction foundation work — this session has no first-hand record
+  of reviews on it beyond what this log claims.
+
+**Consequence for the audit:** the code now in `main` beyond the formally-merged stories must be
+treated as **not necessarily code-reviewed**. A review pass is part of picking up the pieces, not
+something already banked. Verified-green (daemon 342 tests, typecheck, lint, dead-code gate) is
+NOT the same as reviewed.
