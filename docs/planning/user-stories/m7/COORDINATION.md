@@ -60,6 +60,7 @@ The log entry stays as history. The rule must not live only in the log.
 | M7-SESSION-004 — Seal certificate legibility | — | **on branch (NOT merged) — stack-correction pending** | Directory legibility half (13 ACs) LIVE & correct. ALL client work on dead stack (`seal-legibility-client.ts` new, `seal-manager.ts`); touches no daemon → re-home onto DAEMON-004. `STACK CORRECTION` block added. blocked_by: DAEMON-004. |
 | **KEYSTONE — daemon↔directory connection** | — | **IMPLEMENTED + reviewed — on branch (NOT merged)** | NEW foundation (2026-06-17), not in the original slate. The daemon was reimplementing the world and leaving the proven M6B client behind — the shipped binary booted without dialing the directory (`defaultConnect` threw). Keystone builds the real `signalingConnect` from `/bootstrap` + the primary loaded-agent identity (M6-faithful; step-6 verify OFF). Branch `CELLO-M7-KEYSTONE`, 4 commits (`758e0eb`→`903433d`), 222 tests. Foundation under Registration + the four. |
 | **REGISTRATION — multi-agent registration in the daemon** | — | **IMPLEMENTED + reviewed (all findings fixed) — on branch (NOT merged)** | NEW foundation (2026-06-17/18). `cello register <agent>` CLI → `cello_register` IPC → RegistrationManager (ML-DSA keygen → register_request → FROST DKG → register_success) → per-agent files under `~/.cello/agents/<name>/` + agent→user link. Branch `CELLO-M7-REGISTRATION` (stacks on KEYSTONE), 9 commits (`ae907ee`→`e1b5e26`), 249 daemon + 7 CLI tests. Live-DKG happy path is for the live two-agent test. |
+| **CELLO-M7-INTEGRATION — Keystone + Registration + DAEMON-004 (the integrated base)** | — | **LANDED on branch (NOT merged to main) — 2026-06-18** | The merge of the three foundations. Branch `CELLO-M7-INTEGRATION` (cello-client) `@ fd89747`, branched from `CELLO-M7-REGISTRATION` (which already stacks on Keystone) with `CELLO-M7-DAEMON-004` merged in. Exactly the 2 predicted additive conflicts (`daemon.ts` destructure + `types.ts` DaemonConfig), both resolved by union; `session-node-manager.ts`/`session-tree.ts` auto-merged clean. **Gate: workspace typecheck clean (8 projects), lint clean, daemon 282 / crypto 234 / adapter 100(+5 skip) tests green, single-worker foreground.** DAEMON-004's trustless-cello half is the story YAML ONLY (no code) — no trustless-cello integration needed. **This is the base the four postmortem stories' client halves re-home onto.** |
 
 ### Migration Version Registry
 
@@ -112,6 +113,9 @@ Current batch status:
   four's client halves re-home onto it. Merge verified feasible (282 tests green;
   2 trivial additive conflicts). SESSION-002 is greenfield (only its YAML exists);
   MSG-001/SESSION-003/SESSION-004 are re-home/salvage from existing branches.
+  **UPDATE 2026-06-18 (later): the integration is LANDED — `CELLO-M7-INTEGRATION @ fd89747`
+  (cello-client), full gate green (see Claims row + log entry). The four now re-home onto
+  THIS branch. The blocker is fully cleared; remaining work is the four stories' client halves.**
 
 ---
 
@@ -605,3 +609,30 @@ merged tree typechecks, **282 daemon tests green (registration + DAEMON-004 toge
 above); (2) then finish the four stories' client halves on that integrated base — SESSION-002 from
 scratch, the others re-home/salvage; (3) live two-agent test only AFTER the four are finished (cannot
 run it now — unfinished stories). Merge to main + push are Andre's call.
+
+### 2026-06-18 — CELLO-M7-INTEGRATION landed (step 1 of the plan)
+
+Created `CELLO-M7-INTEGRATION` (cello-client) from `CELLO-M7-REGISTRATION` and merged
+`CELLO-M7-DAEMON-004` in. The merge probe's prediction held **exactly**: two conflicts,
+both purely additive config-field collisions, nothing else.
+
+- `core/daemon/src/types.ts` — `DaemonConfig`: kept BOTH optional fields (Keystone's
+  `directoryEndpointResolver` + DAEMON-004's `sessionNodeFactory`); gave DAEMON-004's
+  field its own `/**` opener (the shared opener went to Keystone's field).
+- `core/daemon/src/daemon.ts` — `startDaemon` destructure: unioned both fields on one
+  line. Verified both are consumed downstream on the merged tree: `directoryEndpointResolver`
+  → signalingConnect builder (daemon.ts ~401/659/673), `sessionNodeFactory` →
+  `ProductionSessionNodeFactory` fallback (~444).
+- `session-node-manager.ts` (+378) and `session-tree.ts` (+110, the Merkle hash-chain)
+  auto-merged 100% clean — zero conflicts.
+
+**Gate (single-worker foreground, `--pool=threads --poolOptions.threads.maxThreads=1`):**
+- workspace typecheck clean (8 projects) · root lint clean
+- daemon **282 / 25 files** green (registration + DAEMON-004 tree/IPC/stack-retirement coexisting)
+- crypto **234** green · adapter-claude-code **100 (+5 skip)** green
+
+Merge commit `fd89747`. DAEMON-004's trustless-cello half is the story YAML only (no code),
+so there is no trustless-cello integration step. **Not merged to main, not pushed — Andre's call.**
+
+Next: finish the four postmortem stories' client halves on `CELLO-M7-INTEGRATION` —
+SESSION-002 from scratch, MSG-001/SESSION-003/SESSION-004 re-home/salvage.
