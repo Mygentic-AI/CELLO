@@ -768,10 +768,20 @@ adapter-STUBBED (directory negotiator + relay), real local libp2p only for the h
   `#registerContentHandler` awaited → acceptSession async (L4). `seam-3-content-roundtrip.test.ts`
   (happy + tamper); daemon **341 green**; workspace typecheck+lint clean; client-dead=26 unchanged.
   → The three core lifecycle seams (establish → accept → content+ACK) are proven over real libp2p.
-- **Seam 4 — NEXT.** Full daemon-IPC two-daemon local orchestration (cello_initiate ↔ push ↔
-  acceptSession ↔ cello_send ↔ cello_receive ↔ ACK). Needs a composition-root local SessionNegotiator
-  stub + restructuring cello_initiate_session to create N_A before the assignment is finalized (WIRE-001
-  ordering, so the push to B carries N_A's peer id). End-to-end M6B-parity proof for the direct path.
+- **Seam 4 — DONE (`ba7984a`; review fixes `c7210c4`).** Full daemon-IPC two-daemon orchestration:
+  two real daemons drive a session through their PUBLIC IPC handlers — cello_initiate_session (stub
+  negotiator) → push to B (carrying N_A's peer id) → seam-2 acceptSession → cello_await_session →
+  cello_send → cello_receive → A's awaiting-ACK resolves — over real Noise/yamux TCP. CELLO_ENV forced
+  'local' (stub selector; real dial = connectToCounterparty). New read-only getSessionNodePeerId.
+  Reviewer (opus): faithful + stub-resistant, no blocking/high; fixes M1 (await 5s→30s), M2 (hermetic
+  CELLO_ENV), L1 (docstring: behavioral parity, NOT the multi-process gate), L2-L4 (test hygiene).
+  daemon **342 green**; workspace typecheck+lint clean; client-dead=26 unchanged.
+  → The whole direct-path session lifecycle is proven in-process at the IPC level.
+- **Seam 5 — NEXT.** WIRE-001 initiate-ordering restructure: create N_A before the assignment is
+  finalized so a SINGLE-round negotiator produces the complete assignment (it knows N_A's peer id),
+  then collapse seam 4's two-phase test into one round — the production negotiator shape.
+- **Then deferred re-homes:** SESSION-003 daemon-liveness test, SESSION-004 client legibility,
+  MSG-001 3b (relay content-leaf path + recovery). Greenfield SESSION-002 left for Andre.
 - **Then the deferred re-homes:** MSG-001 **3b** (recovery/canonical-sequence relay content-leaf
   path), SESSION-003 daemon-liveness test, SESSION-004 client legibility, SESSION-002 greenfield.
 
