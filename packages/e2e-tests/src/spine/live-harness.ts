@@ -236,6 +236,24 @@ export function ensurePostgres(): void {
   );
 }
 
+// ─── Spine DB query (directory-side corroboration the daemon cannot fabricate) ──
+// Runs a read-only SQL statement against the harness-owned `cello_spine` Postgres
+// via the same `docker compose exec` path used to provision it. `-tAc` = tuples-only,
+// unaligned, single command → the raw scalar/row text with no decoration. This is how
+// SPINE-4 asserts the directory's OWN writes (agent_profiles / user_accounts) rather
+// than trusting the daemon's self-report (reviewer H1 discipline).
+export function psqlSpine(sql: string): string {
+  const out = execFileSync(
+    "docker",
+    [
+      "compose", "exec", "-T", "postgres",
+      "psql", "-U", "postgres", "-d", SPINE_DB, "-tAc", sql,
+    ],
+    { cwd: TRUSTLESS_ROOT, encoding: "utf8" },
+  );
+  return out.trim();
+}
+
 // ─── The spine cluster: relay + directory, real binaries ────────────────────────
 export interface SpineCluster {
   tmpDir: string;

@@ -14,8 +14,9 @@
  * (trustless-cello directory+relay, cello-client daemon+mcp+cli).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
+import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -24,6 +25,7 @@ import {
   provisionAgent,
   connectMcp,
   cello,
+  psqlSpine,
   type McpConn,
   type Proc,
   type SpineCluster,
@@ -193,4 +195,120 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     // waitForLine, not a one-shot read — same stdout/IPC flush-race avoidance as above.
     await daemon.waitForLine(/"event":"agent\.current\.switched"[^}]*"toAgent":"agentA"/, 5_000);
   }, 30_000);
+
+  it("DOD-SPINE-4 — register two agents (real DKG): register_success, directory agent_profiles + one deduped account, per-agent files", async () => {
+    // ── One home, one daemon, TWO loaded agents (agent-loader enumerates agents/*/).
+    // Two agents under one operator on one machine — the live "two agents, one account"
+    // shape. Provision BOTH K_local keys before the daemon boots so it loads both.
+    const celloDir = mkdtempSync(join(tmpdir(), "cello-spine4-"));
+    agentDirs.push(celloDir);
+    const pubA = await provisionAgent(celloDir, "agentA");
+    const pubB = await provisionAgent(celloDir, "agentB");
+    expect(pubA).not.toBe(pubB);
+    const daemon = await startDaemon(celloDir, cluster.directoryUrl, "spine4");
+    daemons.push(daemon);
+    const env = { CELLO_DIR: celloDir };
+
+    // Registration needs the directory signaling stream up (RegistrationManager step 3
+    // returns directory_unreachable otherwise). Wait for it, exactly as SPINE-1 does.
+    let connected = false;
+    const sigDeadline = Date.now() + 10_000;
+    while (Date.now() < sigDeadline) {
+      const res = cello(["status"], env);
+      try {
+        if ((JSON.parse(res.stdout.trim()) as { directory_signaling?: string }).directory_signaling === "connected") {
+          connected = true;
+          break;
+        }
+      } catch {
+        /* not JSON yet */
+      }
+      await sleep(250);
+    }
+    expect(connected, `directory_signaling never connected\n${daemon.output.split("\n").slice(-40).join("\n")}`).toBe(
+      true,
+    );
+
+    // ── Register both agents (real FROST DKG against the directory). DEV- tokens are
+    // accepted by the directory's DevTokenValidator under CELLO_ENV=local — no Telegram.
+    // Each agent registers over its OWN directory signaling stream (per-agent signaling),
+    // so the directory routes each agent's dkg_complete/register_success back to it.
+    // The CLI is synchronous and the daemon serializes registration, so these run one at
+    // a time. Each returns register_success {agent_id, primary_pubkey}.
+    function registerAgent(name: string): { agentId: string; primaryPubkey: string } {
+      const token = `DEV-spine4-${name}-${randomBytes(6).toString("hex")}`;
+      const res = cello(["register", name, token], env);
+      const diag =
+        `\n--- cello register ${name} stdout ---\n${res.stdout}\n` +
+        `--- daemon log (last 60) ---\n${daemon.output.split("\n").slice(-60).join("\n")}\n` +
+        `--- directory log (last 60) ---\n${cluster.directory.output.split("\n").slice(-60).join("\n")}`;
+      expect(res.status, `cello register ${name} failed:${diag}`).toBe(0);
+      const parsed = JSON.parse(res.stdout.trim()) as { ok?: boolean; agent_id?: string; primary_pubkey?: string };
+      expect(parsed.ok, `register ${name} not ok: ${res.stdout}`).toBe(true);
+      expect(typeof parsed.agent_id, `register ${name} missing agent_id`).toBe("string");
+      expect(parsed.primary_pubkey, `register ${name} missing primary_pubkey`).toMatch(/^[0-9a-f]{64}$/);
+      return { agentId: parsed.agent_id!, primaryPubkey: parsed.primary_pubkey! };
+    }
+    const regA = registerAgent("agentA");
+    const regB = registerAgent("agentB");
+
+    // Two distinct agents — distinct directory-issued agent_id AND distinct DKG primary_pubkey
+    // (each primary_pubkey is the product of a SEPARATE real ceremony, not a fixed stub value).
+    expect(regA.agentId).not.toBe(regB.agentId);
+    expect(regA.primaryPubkey).not.toBe(regB.primaryPubkey);
+
+    // Two distinct agents — distinct directory-issued agent_id AND distinct DKG primary_pubkey
+    // (each primary_pubkey is the product of a SEPARATE real ceremony, not a fixed stub value).
+    expect(regA.agentId).not.toBe(regB.agentId);
+    expect(regA.primaryPubkey).not.toBe(regB.primaryPubkey);
+
+    // ── Directory-side corroboration (non-tautological, reviewer H1): assert the
+    // directory's OWN DB writes in cello_spine — the daemon cannot fabricate these.
+    // (1) Exactly the two agent_profiles rows for THESE agents' K_local keys, carrying
+    //     the DKG primary_pubkeys the CLI reported back.
+    const profRows = psqlSpine(
+      `SELECT k_local_pubkey || '|' || primary_pubkey || '|' || coalesce(account_id::text,'NULL') ` +
+        `FROM agent_profiles WHERE k_local_pubkey IN ('${pubA}','${pubB}') ORDER BY k_local_pubkey`,
+    );
+    const profLines = profRows.split("\n").filter((l) => l.length > 0);
+    expect(profLines.length, `expected 2 agent_profiles rows for the two agents, got:\n${profRows}`).toBe(2);
+    const byLocal = new Map(profLines.map((l) => [l.split("|")[0]!, { primary: l.split("|")[1]!, account: l.split("|")[2]! }]));
+    expect(byLocal.get(pubA)?.primary, "directory agent_profiles[agentA].primary_pubkey matches the DKG result").toBe(regA.primaryPubkey);
+    expect(byLocal.get(pubB)?.primary, "directory agent_profiles[agentB].primary_pubkey matches the DKG result").toBe(regB.primaryPubkey);
+
+    // (2) The agent→user link: linkAgentToAccount is fire-and-forget (register_success is
+    //     sent BEFORE the user_accounts write), so POLL until both rows carry the SAME
+    //     non-null account_id and exactly one user_accounts row backs it.
+    let sharedAccount = "";
+    const linkDeadline = Date.now() + 10_000;
+    for (;;) {
+      const accs = psqlSpine(
+        `SELECT coalesce(account_id::text,'NULL') FROM agent_profiles ` +
+          `WHERE k_local_pubkey IN ('${pubA}','${pubB}')`,
+      ).split("\n").filter((l) => l.length > 0);
+      if (accs.length === 2 && accs[0] !== "NULL" && accs[0] === accs[1]) {
+        sharedAccount = accs[0]!;
+        break;
+      }
+      if (Date.now() > linkDeadline) {
+        throw new Error(`agent→account link never settled (both rows, same non-null account_id). Last: ${JSON.stringify(accs)}`);
+      }
+      await sleep(250);
+    }
+    // Exactly ONE account dedups the two agents (DevTokenValidator's fixed phone_stub_hash
+    // → one user_accounts row keyed UNIQUE on phone_stub_hash). This IS "two agents, one account".
+    const accountCount = psqlSpine(`SELECT count(*) FROM user_accounts WHERE account_id = '${sharedAccount}'`);
+    expect(accountCount, "exactly one user_accounts row backs the shared account_id").toBe("1");
+
+    // ── Per-agent local files under ${CELLO_DIR}/agents/<name>/ (daemon-side persistence,
+    // including the agent→user link captured at registration). DOD-INV-2: the persisted
+    // client-side frost-share is the agent's HALF of the split key — neither it nor the
+    // directory's K_server_X share can sign alone.
+    for (const name of ["agentA", "agentB"]) {
+      const dir = join(celloDir, "agents", name);
+      for (const file of ["key", "registration-state.json", "ml-dsa-keypair.json", "frost-share.json", "agent-user-link.json"]) {
+        expect(existsSync(join(dir, file)), `missing per-agent file ${name}/${file}`).toBe(true);
+      }
+    }
+  }, 60_000);
 });

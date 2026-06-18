@@ -170,7 +170,7 @@ import {
   encodeFrostDkgRound3Response,
 } from "./frost-dkg-frames.js";
 import { protocolLog, truncId, truncHex } from "./protocol-log.js";
-import { linkAgentToAccount } from "./pre-auth-token-repository.js";
+import { resolveAccountId } from "./pre-auth-token-repository.js";
 import type { MmrStore } from "./mmr-store.js";
 import type { RelayPoolManager } from "./relay-pool-manager.js";
 
@@ -1908,7 +1908,30 @@ export class CelloDirectoryNode {
     // SI-002: only reached after successful FROST DKG
     // SI-003: DKG shares not in profile
     const agentId = Buffer.from(randomBytes(16)).toString("hex");
-    const profile: AgentProfile = {
+
+    // OPS-AGENT-001 AC-005b: Account deduplication. Resolve the account_id FIRST
+    // (lookup-or-create by phone_stub_hash) so the agent_profiles row is INSERTed WITH
+    // account_id atomically — the prior "insert without account_id then UPDATE it"
+    // raced the fire-and-forget profile INSERT and could leave account_id permanently
+    // NULL (the UPDATE matched 0 rows when it ran before the INSERT committed). Account
+    // resolution failure must NOT block registration, so on error we proceed with a
+    // null account_id (the profile is still created; the link is repairable later).
+    this.#pendingPreAuthData.delete(frame.k_local_pubkey);
+    let accountId: string | null = null;
+    if (this.#pgPool && preAuthDataForHash) {
+      try {
+        accountId = await resolveAccountId(
+          this.#pgPool,
+          preAuthDataForHash.phoneStubHash,
+          preAuthDataForHash.emailStubHash,
+        );
+      } catch (err: unknown) {
+        const reason = err instanceof Error ? err.message : String(err);
+        this.#logger?.error("preauth.account.link.failed", { agentId, reason });
+      }
+    }
+
+    const profile = {
       k_local_pubkey: frame.k_local_pubkey,
       primary_pubkey: primaryPubkeyFromDkg,
       ml_dsa_pubkey: frame.ml_dsa_pubkey,
@@ -1917,28 +1940,10 @@ export class CelloDirectoryNode {
       registered_at: this.#clock.now(),
       status: "active",
       agent_id: agentId,
-    };
+      // setProfile inserts WITH account_id when non-null (atomic), else the no-account path.
+      account_id: accountId,
+    } as AgentProfile & { account_id: string | null };
     this.#store.setProfile(profile);
-
-    // OPS-AGENT-001 AC-005b: Account deduplication — link agent_profile to account.
-    // This runs fire-and-forget: account linking failure does not block registration.
-    // Note: preAuthDataForHash was fetched above in Step 3b; use it here to avoid a second
-    // map lookup. Also delete the entry from #pendingPreAuthData (cleanup on success path).
-    this.#pendingPreAuthData.delete(frame.k_local_pubkey);
-    if (this.#pgPool && preAuthDataForHash) {
-      void linkAgentToAccount(this.#pgPool, {
-        agentProfileId: agentId,
-        kLocalPubkey: frame.k_local_pubkey,
-        phoneStubHash: preAuthDataForHash.phoneStubHash,
-        emailStubHash: preAuthDataForHash.emailStubHash,
-      }).catch((err: unknown) => {
-        const reason = err instanceof Error ? err.message : String(err);
-        this.#logger?.error("preauth.account.link.failed", {
-          agentId,
-          reason,
-        });
-      });
-    }
 
     // OBS-001 AC-004: agent registered log
     protocolLog("REG", `Agent ${truncHex(frame.k_local_pubkey)} registered — primary_pubkey ${truncHex(primaryPubkeyFromDkg)}`);
