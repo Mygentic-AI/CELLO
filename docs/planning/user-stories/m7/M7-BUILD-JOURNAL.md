@@ -350,12 +350,31 @@ PRODUCES the socket at `CELLO_DIR/daemon.sock`; cello-mcp (CONSUMER) was looking
 **Useful finding (no bug).** `cello_start_agent` only needs the agent LOADED, not real
 DKG — so SPINE-2/3 run on a provisioned agent, before SPINE-4.
 
-**Commits.** trustless-cello `e1592dc` (test) + DoD/journal; cello-client `e31b646`
-(cello-mcp CELLO_DIR fix). Floor: typecheck 0, lint 0, 3/3 green runs.
+**Useful finding (no bug).** `cello_start_agent` only needs the agent LOADED, not real
+DKG — so SPINE-2/3 run on a provisioned agent, before SPINE-4.
+
+**Reviewer outcome: APPROVED.** The re-review confirmed the independence/three-state
+assertions are adversarially sound (genuine per-connection state, traced through
+`perConnectionState`/`getAgentsForConnection`). Two MEDIUM + one LOW fixed:
+- M1: the two log-grep assertions now use `daemon.waitForLine` (polling) instead of a
+  one-shot `daemon.output.toMatch` — the daemon stdout pipe and the IPC socket are
+  independent fds with no happens-before, so the one-shot read raced the flush (same race
+  SPINE-1 fixed). Restores the polling discipline.
+- M2: `connectMcp` closes the transport if `client.connect()` rejects (no orphan cello-mcp).
+- L1: `cello-mcp` stderr diagnostics log relocated from the global `/tmp/cello-mcp-stderr.log`
+  to `${CELLO_DIR}/cello-mcp-stderr.log` (completes per-home isolation; mkdir-guarded).
+
+**Commits.** trustless-cello `e1592dc` (test), `82bd1da` (docs), `69ad28d` (M1/M2 fixes);
+cello-client `e31b646` (socket CELLO_DIR), `2d46f49` (stderr-log CELLO_DIR). Floor:
+typecheck 0, lint 0, 5/5 green runs across the unit.
+
+**STATUS: DOD-SPINE-1/2/3 CLOSED + APPROVED. This is the planned COMPACTION boundary
+(per Andre — protocol requires his assistance).**
 
 **Next red — DOD-SPINE-4** (register two agents, real DKG against the directory). SPINE-1
 already exercised one real `cello register`; SPINE-4 is the two-agent DKG + the per-agent
-files + agent→user link. NOTE: per Andre, this is a planned COMPACTION boundary — stop
-after SPINE-2/3 review clears and compact (protocol requires Andre).
+files under `${CELLO_DIR}/agents/<name>/` + the agent→user link, asserted against directory
+state (two agent_profiles rows / `register_success`). The MCP harness (`connectMcp`) and the
+CLI driver (`cello`) are both available to drive it.
 
 **Cron.** `*/30` self-audit drift-check still running (job `babafea8`).
