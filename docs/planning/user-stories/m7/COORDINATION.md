@@ -759,9 +759,19 @@ adapter-STUBBED (directory negotiator + relay), real local libp2p only for the h
   = 9 cases; daemon **339 green**; workspace typecheck + lint clean; reachability client-dead=26 unchanged.
   **Deferred:** inbound-assignment FROST signature verification = SESSION-004 re-home (accepted-on-trust,
   logged `session.inbound.assignment.unverified`, never silent).
-- **Seam 3 — NEXT.** two-daemon content round-trip (initiate→send→ACK over real local libp2p) — wires
-  3a delivery-ACK to a live session. Needs a composition-root local `SessionNegotiator` stub producing
-  matching A/B assignments (none exists yet).
+- **Seam 3 — DONE (`659745e`; review fixes `9ffbe33`).** Content + tree + delivery-ACK round-trip
+  between two REAL session nodes over loopback Noise/yamux, composing seams 1a/1b/2: A.sendContent →
+  B cross-check + tree append + buffer + delivery-ACK → A resolves awaiting-ACK. Reviewer (opus)
+  confirmed faithful + stub-resistant (B has no multiaddr for A → ACK can only ride N_A's connection);
+  no blocking/high. New read-only `getStandingReceiverInfo()`. Fixes: gracefulShutdown clears
+  awaiting-ACK timers (M1) + closes DB (L5) + `#shuttingDown` stops orphan standing-receiver (M2);
+  `#registerContentHandler` awaited → acceptSession async (L4). `seam-3-content-roundtrip.test.ts`
+  (happy + tamper); daemon **341 green**; workspace typecheck+lint clean; client-dead=26 unchanged.
+  → The three core lifecycle seams (establish → accept → content+ACK) are proven over real libp2p.
+- **Seam 4 — NEXT.** Full daemon-IPC two-daemon local orchestration (cello_initiate ↔ push ↔
+  acceptSession ↔ cello_send ↔ cello_receive ↔ ACK). Needs a composition-root local SessionNegotiator
+  stub + restructuring cello_initiate_session to create N_A before the assignment is finalized (WIRE-001
+  ordering, so the push to B carries N_A's peer id). End-to-end M6B-parity proof for the direct path.
 - **Then the deferred re-homes:** MSG-001 **3b** (recovery/canonical-sequence relay content-leaf
   path), SESSION-003 daemon-liveness test, SESSION-004 client legibility, SESSION-002 greenfield.
 

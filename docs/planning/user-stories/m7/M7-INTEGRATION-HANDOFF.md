@@ -30,14 +30,20 @@ rebuilding that capability in the daemon). "Brutal and ruthless" — fastest cor
 that is green; a **mechanical dead-code gate** is in place; and we are walking the
 session lifecycle **seam by seam, in-process, with stub adapters and NO infra** — tracing
 each connection point, finding the break, fixing it, testing it, committing. Seams **1a**
-(initiate creates the session-core session), **1b** (the session node is the dialer), and
-**2** (inbound `session_assignment` → `acceptSession` → `cello_await_session`) are done.
+(initiate creates the session-core session), **1b** (the session node is the dialer),
+**2** (inbound `session_assignment` → `acceptSession` → `cello_await_session`), and **3**
+(content + tree + delivery-ACK round-trip between two real session nodes) are done. The
+three core lifecycle seams (establish → accept → content+ACK) are proven over real libp2p.
 
-**EXACT NEXT ACTION: Seam 3 — two-daemon in-process content round-trip** (daemon A
-initiate → daemon B accept → A `cello_send` → B ingest → B delivery-ACK → A resolves, over
-real local libp2p with a stub negotiator producing matching assignments for both sides).
-This is the first time content flows daemon-to-daemon in-process and wires the MSG-001 3a
-delivery-ACK to a live session. No infra. No live E2E.
+**EXACT NEXT ACTION: Seam 4 — full daemon-IPC two-daemon local orchestration.** Wire the
+whole stack end-to-end through two real daemons: `cello_initiate_session` (A) → assignment
+pushed to B over a shared in-process signaling hub → seam-2 `acceptSession` (B) → `cello_send`
+(A) → `cello_receive` (B) → delivery-ACK. This needs (a) a composition-root local
+`SessionNegotiator` stub producing matching A/B assignments, and (b) restructuring
+`cello_initiate_session` to create N_A **before** the assignment is finalized so the push to
+B can carry `initiator_session_peer_id` = N_A's peer id (the protocol-faithful WIRE-001
+ordering — today initiate creates N_A after negotiate). In-process, real local libp2p, stub
+relay/directory. No infra. No live E2E. (Greenfield SESSION-002 is left for Andre.)
 
 ---
 
@@ -194,12 +200,23 @@ stub relay; real local libp2p only where two nodes must talk. **No infra.**
   verification of the inbound assignment is the **SESSION-004 re-home** — accepted-on-trust here
   (in-process tests inject trusted frames), logged loudly as `session.inbound.assignment.unverified`,
   never silent. SESSION-004 must also re-home the M1 single-key hard-refusal context.
-- **Seam 3 — NEXT.** Two-daemon in-process content round-trip: daemon A initiate → daemon
-  B accept → A `cello_send` → B ingest → B delivery-ACK → A resolves, over real local libp2p
-  with a stub negotiator that produces matching assignments for both sides. This is the first
-  time content flows daemon-to-daemon in-process, and it wires the 3a delivery-ACK to a live
-  session. Needs a composition-root local `SessionNegotiator` stub (none exists — see §6) that
-  produces matching A/B assignments so initiate (A) and the inbound push (B) line up.
+- **Seam 3 — DONE (`659745e` + review fixes `9ffbe33`).** Content + tree + delivery-ACK
+  round-trip between two REAL session nodes over loopback Noise/yamux TCP, composing seams
+  1a/1b/2: `A.createSessionNode` → `A.connectToCounterparty` (N_A dials B's standing receiver)
+  → `B.acceptSession` → `A.sendContent` → `B.#handleContentStream` (cross-check + tree append +
+  buffer + delivery-ACK) → `A.#handleContentStream` resolves the awaiting-ACK. The reviewer
+  confirmed it's a faithful stub-resistant proof: **B holds NO multiaddr for A**, so the
+  delivery-ACK can ONLY ride the muxed connection N_A opened (the "B never dials A" claim is
+  proven, not assumed). New `SessionNodeManager.getStandingReceiverInfo()` (read-only coords a
+  local negotiator advertises). Tests: `seam-3-content-roundtrip.test.ts` (happy path + tamper
+  rejection). **Review fixes:** gracefulShutdown clears awaiting-ACK timers (M1) + closes the DB
+  handle (L5) + `#shuttingDown` flag stops an orphan standing-receiver replacement (M2);
+  `#registerContentHandler` is now awaited (acceptSession → async; L4). daemon 341 green.
+- **Seam 4 — NEXT.** Full daemon-IPC two-daemon local orchestration (cello_initiate ↔ push ↔
+  acceptSession ↔ cello_send ↔ cello_receive ↔ ACK through two real daemons). Needs a
+  composition-root local `SessionNegotiator` stub + restructuring `cello_initiate_session` to
+  create N_A before the assignment is finalized (so the push to B carries N_A's peer id — the
+  WIRE-001 ordering). This is the end-to-end M6B-parity proof for the direct path.
 
 **Deferred re-homes (the original four postmortem stories' remaining halves):**
 - **MSG-001 3b** — recovery / canonical sequence: the daemon **relay content-leaf path**
@@ -278,7 +295,8 @@ stub relay; real local libp2p only where two nodes must talk. **No infra.**
 
 ## 9. Commit trail (assembly branch, newest first)
 
-`96af667` seam 2 review fixes (H1/H2/M1-M4/L1-L2) · `c72968e` seam 2 (inbound session_assignment
+`9ffbe33` seam 3 review fixes (M1/M2/L1-L5) · `659745e` seam 3 (two-node content round-trip over
+real libp2p) · `96af667` seam 2 review fixes (H1/H2/M1-M4/L1-L2) · `c72968e` seam 2 (inbound session_assignment
 → acceptSession → cello_await_session) · `ea83982` seam 1b (session node is the dialer) · `0537dfe` seam 1a (initiate→session-core) ·
 `fd2a607` assemble SESSION-004 · `8a9c183` assemble SESSION-003 · `2100b69` assemble
 TRANSPORT-001 · `2b5b2ff` reachability tool + baseline · `3bf3f10` MSG-001 3a-ii (delivery-ACK)
