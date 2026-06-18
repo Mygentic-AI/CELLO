@@ -281,3 +281,41 @@ green runs.
 sound, not a new tautology), then DOD-SPINE-2 (two IPC sessions, independent
 current-agent) — which is where the MCP/IPC client connection gets built and
 `daemon.ipc.connected` is asserted.
+
+---
+
+## 2026-06-18 — CHECKPOINT: DOD-SPINE-1 CLOSED (re-review APPROVED). Handoff to SPINE-2.
+
+**Green + reviewed.** DOD-SPINE-1 is proven live against the real binaries and
+APPROVED by an adversarial re-review (commit `d8d9da4`). The re-review traced the
+corroboration end-to-end through the directory's signaling-auth handler and confirmed
+it is genuinely non-tautological: the directory emits the agent pubkey to stdout ONLY
+after `verify(pubkey, SHA-256("CELLO-DIR-AUTH-v1"‖nonce‖pubkey), sig)` succeeds — a
+daemon without the matching private key cannot make the directory log it. Two LOW
+findings fixed: the corroboration comment now names the durable
+`directory.auth.challenge.signed` (MANIFEST-002) event as the load-bearing anchor (the
+`[AUTH]` line is only 8 hex; `frost.debug.*` is removable diagnostics); `Proc` now uses
+a `StringDecoder`. Both reviews have run on everything up to HEAD.
+
+**Branch / HEAD.** trustless-cello `m7-rehome` @ `d8d9da4`; cello-client `m7-rehome` @
+`19ba736` (daemon `./package.json` export fix). NOTHING pushed, NOTHING merged.
+
+**For Andre (merge is your call).** The cello-client fix (`19ba736`) is a real bug that
+likely affects PUBLISHED usage: `cello login` couldn't start the daemon at all
+(`ERR_PACKAGE_PATH_NOT_EXPORTED`) because the daemon package didn't export
+`./package.json`. Worth merging/publishing independent of the rest of M7.
+
+**Next red — DOD-SPINE-2** (two IPC sessions, independent current-agent;
+`agent.current.switched` fires only for the switching connection). One-sentence target:
+two distinct MCP/IPC connections to ONE daemon have independent "current agent", and a
+switch on one does not change the other. Plan:
+- Build the MCP-client-over-stdio harness piece: spawn `cello-mcp` (the real binary) per
+  connection via the MCP SDK `StdioClientTransport` (e2e-tests already depends on
+  `@modelcontextprotocol/sdk`), `CELLO_DIR` = the agent's home, so it connects to the
+  running harness-owned daemon and sends `ipc.connect {clientType:"mcp"}`.
+- This is also where the re-homed `daemon.ipc.connected (clientType "mcp")` assertion
+  lands (SPINE-1 correction).
+- Likely needs ≥1 agent (have agentA); a second agent for a meaningful current-switch is
+  SPINE-4 territory — let the red run show what SPINE-2 minimally needs.
+
+**Cron.** `*/30` self-audit drift-check still running (job `babafea8`).
