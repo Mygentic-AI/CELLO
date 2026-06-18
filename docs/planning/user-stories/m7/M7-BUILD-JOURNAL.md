@@ -554,3 +554,48 @@ it to the session send + inbound-handler path.
 
 **Next.** Incorporate the re-dispatched review (fix every finding), flip DOD-SPINE-4 to
 ✅ PROVEN LIVE, then SPINE-5.
+
+---
+
+## 2026-06-19 — DOD-SPINE-4 CLOSED: reviewer APPROVED + every finding fixed; DoD flipped ✅
+
+**Reviewer outcome: APPROVED** (`feature-dev:code-reviewer`, opus). First dispatch stalled
+on an infra watchdog (600s, no verdict); re-dispatched with a tighter scope → clean
+verdict. It confirmed both pre-verified points (resolveAccountId is a verbatim extraction;
+the non-chained `user_accounts` INSERT is pre-existing + dev-only → flag, not blocker) and
+the core claims (per-agent auth has no cross-agent leakage; the account-race fix is truly
+race-free — FK `agent_profiles.account_id → user_accounts` confirmed in V23, resolveAccountId
+commits the account row before setProfile's atomic INSERT).
+
+**Findings, all fixed (cello-client `17ea7b1`, trustless-cello `39a3619`):**
+- MEDIUM (test flake): the `agent_profiles` 2-row + primary_pubkey corroboration was a
+  one-shot read, but `setProfile`'s INSERT is fire-and-forget and `register_success` is sent
+  before it commits → could intermittently fail. Folded the profile rows + DKG primary_pubkeys
+  + shared account_id into ONE poll loop. Removed a verbatim-duplicated assertion block.
+- LOW (orphan manager): a terminally-failed registration left the lazily-created per-agent
+  SignalingManager reconnecting forever. New `dropAgentSignaling()` stops+removes it on both
+  failure paths (signaling timeout, DKG error); re-created on retry; no-op for the keystone.
+- LOW (error discipline): per-agent signaling-connect timeout now returns a distinct
+  `directory_signaling_timeout` (was `directory_unreachable`).
+- IMPORTANT (doc): explicit code comment that non-primary per-agent streams have no inbound
+  SESSION handler yet — the SPINE-5 follow-on (not a regression: before this, a non-primary
+  agent couldn't register at all).
+
+**Stability.** 3 consecutive clean live runs post-fix (9/9). A 4th run failed ONLY in the
+`beforeAll` Postgres/binary bring-up ("Hook timed out in 180000ms", 953s) under machine
+load from back-to-back heavy live runs — infra, not logic; the 3 tests were skipped, not
+failed. (Lesson: don't chain 4+ heavy live-binary suites back-to-back; the box saturates.)
+
+**Floor.** cello-client lint clean; daemon + directory + e2e typecheck clean; 342 daemon
+unit tests + 29 directory account/registration/preauth unit tests green.
+
+**DoD.** DOD-SPINE-4 flipped 🟡 → ✅ PROVEN LIVE.
+
+**Commits (all on `m7-rehome`, nothing pushed/merged):** cello-client `4195a3a` (per-agent
+signaling) + `17ea7b1` (review fixes). trustless-cello `fc48e04` (account-race + test) +
+`39a3619` (test review fix) + this doc.
+
+**Next red — DOD-SPINE-5** (initiate session, ephemeral nodes). This is where the per-agent
+signaling extends to the SESSION path: a non-primary agent's `session_request` /
+`session_assignment` and the daemon's inbound session handlers must run on the agent's OWN
+stream (the directory routes inbound session_request by authed pubkey, same as registration).

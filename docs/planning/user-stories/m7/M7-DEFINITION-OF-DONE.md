@@ -122,7 +122,17 @@ Source: outline Milestone Close Gate + E2E-001 AC-001–012. Mostly built/merged
   pre-auth token → `register_request` → FROST DKG against the directory →
   `register_success` → per-agent files under `~/.cello/agents/<name>/` + agent→user
   link. Two agents under one account (always via Telegram; no parent/child ceremony).
-  — 🟡 (Registration built + 249 tests; live DKG never run in daemon era)
+  — ✅ **PROVEN LIVE** by J-SPINE (2026-06-18/19, cello-client `17ea7b1` + trustless-cello
+  `39a3619`): TWO agents register on ONE daemon, each its OWN real FROST DKG, both deduped
+  to ONE account — corroborated against the directory's OWN `cello_spine` DB (2
+  `agent_profiles` rows carrying the DKG primary_pubkeys, 1 `user_accounts` row, shared
+  non-null `account_id`) + per-agent files (`registration-state`/`ml-dsa-keypair`/
+  `frost-share`/`agent-user-link`.json). Reviewer APPROVED. **Built the missing capability:**
+  per-agent directory signaling streams (each agent authenticates its own stream; the
+  directory routes by authed pubkey) — the multi-agent single-daemon registration M7
+  intended. **Fixed** a directory account-link race (insert-with-account_id atomically).
+  Note: non-primary agents' INBOUND session routing is the **SPINE-5** follow-on (their
+  per-agent stream has no session inbound handler yet — registration works; sessions next).
 - **DOD-SPINE-5 — Initiate session, ephemeral nodes.** `cello_initiate_session`
   creates an ephemeral session node (fresh key/Peer ID), reports it to the
   directory, receives a FROST-signed SessionAssignment carrying both session Peer
