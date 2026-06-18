@@ -462,3 +462,95 @@ a two-agent provisioning helper (provision N keys in one home, start one daemon)
 **Next step.** Red-first: add the DOD-SPINE-4 it-block + helpers; confirm red for the
 right reason (e.g. zero agent_profiles before registration, or link absent), then drive
 green. Branch `m7-rehome`, nothing pushed/merged.
+
+---
+
+## 2026-06-18 — DOD-SPINE-4 GREEN (two agents, real DKG) — built multi-agent single-daemon registration + fixed an account-link race
+
+**DoD-ID / unit.** DOD-SPINE-4. Green + stable across 3 consecutive live runs (9/9
+tests) against the real binaries. Review re-dispatched (first reviewer stalled on an
+infra watchdog, no verdict); DoD flip + final verdict appended below once it returns.
+
+**What was red.** Two agents registering on ONE daemon: the FIRST agent registered
+fully (real DKG → agent_profile → account link), the SECOND timed out — its DKG
+completed (FROST Round 1+3, share persisted both sides) but the directory never sent
+`register_success`.
+
+**Root cause (producer/consumer, from the live logs + DB, not a guess).** The directory
+routes every signaling frame by the pubkey that AUTHENTICATED the stream it arrived on
+(`#handleSignalingStream`: `dkg_complete` → `#pendingDkgComplete.get(authedPubkeyHex)`,
+directory-node.ts:1441). But the daemon opened ONE signaling stream, authed as the
+PRIMARY agent (keystone, daemon.ts:410 — explicitly noted "per-agent directory
+operations under distinct identities are out of keystone scope"). So agentB's
+`register_request` set `#pendingDkgComplete[agentB-k_local]` (keyed by frame), but
+agentB's `dkg_complete` rode the PRIMARY's stream → looked up `[primary-pubkey]` →
+no match → resolver never fired → directory's `#processRegisterRequest` awaited
+`dkg_complete` forever → daemon timed out. CONFIRMED: the directory's live signaling
+streams were agentA + two unrelated identities; agentB's registration pubkey was NOT
+among them (it had no signaling stream of its own).
+
+**Andre's intent (confirmed in-session).** One user runs 2+ agents on ONE daemon, each
+with its OWN one-time key (M6 pre-auth) and its OWN DKG; clean separation. "Registration
+of 2+ agents via Telegram already works" — but the per-agent *signaling* it relies on
+was NOT built in the daemon (empty grep; `cello_start_agent` only flips an in-memory
+set; git shows registration was ported onto the single keystone seam). Architecture
+decision (confirmed): **per-agent directory signaling streams** — each agent opens its
+own stream authed as itself; the directory routes by authed pubkey as it already does
+(NO directory change).
+
+**The build (cello-client `4195a3a`, core/daemon/src/daemon.ts).** Added a
+`perAgentSignaling` registry + `getAgentSignaling(name, kp, pubkeyHex)`: the primary
+reuses the keystone manager + its node; every other agent gets a dedicated
+`SignalingManager` via `createSignalingConnect({ getAuthIdentity: () => that agent })`,
+created lazily, kept connected for directory presence, stopped on shutdown.
+`cello_register` now resolves the agent's OWN signaling stream (and waits for it to
+connect, `waitForSignalingConnected`, 10s) before the DKG. Falls back to the keystone
+manager when no production bootstrap resolver is configured (in-process tests). 342
+daemon unit tests still green; no regression.
+
+**Second bug, surfaced by two-agent registration (directory account-link race; fixed
+in trustless-cello `fc48e04`).** Registration INSERTed the `agent_profiles` row WITHOUT
+account_id (`setProfile` → fire-and-forget `void pool.query`) then UPDATEd it via a
+separate fire-and-forget `linkAgentToAccount`. The UPDATE could run on a different pool
+connection before the INSERT committed → match 0 rows → `account_id` permanently NULL
+(the flake: one agent linked, the other NULL after a 10s poll). Fix: extracted
+`resolveAccountId()` (lookup-or-create the account FIRST) and the registration path now
+INSERTs the profile WITH account_id atomically (`setProfile`'s existing account_id
+branch). `linkAgentToAccount` refactored to reuse `resolveAccountId` (kept for callers
+linking an already-persisted profile). Account-resolution failure still never blocks
+registration. Stable across 3 runs.
+
+**FLAG (pre-existing, not introduced here; not a SPINE-4 blocker).** `user_accounts` is
+a hash-chained table (hash-chain.ts:244) but the repository INSERT writes a NAIVE
+`chain_hash = SHA-256(account_id‖phone_stub_hash)` that does NOT link the prior row's
+chain (it bypasses `insertWithChain`). This is verbatim-inherited from the original
+`linkAgentToAccount` and only fires in dev/local: in production the Operations Agent
+creates the account first (proper path), so `resolveAccountId`'s SELECT finds it and
+never INSERTs. Tamper-evidence of `user_accounts` rows created via the registration
+dedup path is therefore unverifiable — worth a follow-on, tracked here so it doesn't
+evaporate (postmortem RC-1 discipline).
+
+**The assertions (non-tautological, reviewer H1 discipline).** `psqlSpine()` queries the
+directory's OWN `cello_spine` DB — the daemon cannot fabricate it: 2 `agent_profiles`
+rows carrying the DKG primary_pubkeys the CLI reported, 1 deduped `user_accounts` row,
+both profiles sharing one non-null `account_id` (polled — the link is async). Per-agent
+local files asserted under each `agents/<name>/`. INV-2 (no single party forges): two
+DISTINCT primary_pubkeys from two separate real ceremonies + persisted client-side
+frost-shares.
+
+**Floor.** cello-client lint clean; daemon + directory typecheck clean; 342 daemon unit
+tests + 29 directory account/registration/preauth unit tests green; spine 3/3 green.
+
+**Commits.** cello-client `4195a3a` (per-agent signaling). trustless-cello `fc48e04`
+(account-race fix + DOD-SPINE-4 test + `psqlSpine` harness) and `3101d36` (design note).
+NOTHING pushed/merged.
+
+**Scope finding for SPINE-5+.** Sessions (`cello_initiate_session`, `cello_await_session`,
+inbound `session_assignment` handler, daemon.ts) all still use the PRIMARY
+`signalingManager`. A non-primary agent's session_request/session_assignment will need
+the same per-agent signaling treatment (directory routes inbound session_request by
+authed pubkey too). The per-agent registry built here is the foundation; SPINE-5 extends
+it to the session send + inbound-handler path.
+
+**Next.** Incorporate the re-dispatched review (fix every finding), flip DOD-SPINE-4 to
+✅ PROVEN LIVE, then SPINE-5.
