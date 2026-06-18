@@ -150,7 +150,15 @@ export function listenMultiaddr(proc: Proc, opts: { ws?: boolean } = {}): string
 }
 
 // ─── Postgres bring-up (the directory exits 1 without applied migrations) ───────
-// Images are expected to be cached locally; this never pushes anything anywhere.
+// J-SPINE provisions its OWN database (cello_spine), dropped + recreated fresh each
+// run, so the test never depends on the mutable, drift-prone local `cello_dev` and
+// every run applies V1→V{N} from scratch (matching CI / a brand-new region — the
+// canonical fresh-migrate). Roles are cluster-level and guarded in the migrations
+// (DO/pg_roles), so a fresh DB in the existing cluster migrates cleanly. This never
+// pushes anything anywhere; images are cached locally.
+const SPINE_DB = "cello_spine";
+export const DATABASE_URL = `postgresql://postgres:dev@localhost:5433/${SPINE_DB}`;
+
 export function ensurePostgres(): void {
   try {
     execFileSync("docker", ["info"], { stdio: "ignore" });
@@ -160,12 +168,25 @@ export function ensurePostgres(): void {
         "(docker-compose `postgres` + `flyway`). Start Docker Desktop and retry.",
     );
   }
-  execFileSync("docker", ["compose", "up", "-d", "postgres"], { cwd: TRUSTLESS_ROOT, stdio: "inherit" });
-  // Flyway migrate — idempotent; brings the dev DB to the latest V{N}.
-  execFileSync("docker", ["compose", "run", "--rm", "flyway"], { cwd: TRUSTLESS_ROOT, stdio: "inherit" });
+  execFileSync("docker", ["compose", "up", "-d", "--wait", "postgres"], { cwd: TRUSTLESS_ROOT, stdio: "inherit" });
+  // Fresh, isolated test DB: drop + recreate so the migration history is always clean.
+  execFileSync(
+    "docker",
+    [
+      "compose", "exec", "-T", "postgres",
+      "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1",
+      "-c", `DROP DATABASE IF EXISTS ${SPINE_DB} WITH (FORCE);`,
+      "-c", `CREATE DATABASE ${SPINE_DB};`,
+    ],
+    { cwd: TRUSTLESS_ROOT, stdio: "inherit" },
+  );
+  // Migrate the fresh DB from V1 — no repair needed (clean history).
+  execFileSync(
+    "docker",
+    ["compose", "run", "--rm", "-e", `FLYWAY_URL=jdbc:postgresql://postgres:5432/${SPINE_DB}`, "flyway"],
+    { cwd: TRUSTLESS_ROOT, stdio: "inherit" },
+  );
 }
-
-export const DATABASE_URL = "postgresql://postgres:dev@localhost:5433/cello_dev";
 
 // ─── The spine cluster: relay + directory, real binaries ────────────────────────
 export interface SpineCluster {
@@ -248,6 +269,30 @@ export async function startSpineCluster(): Promise<SpineCluster> {
     directoryUrl: `http://127.0.0.1:${healthPort}`,
     stop,
   };
+}
+
+// ─── Daemon: spawn the real binary directly so the harness owns + observes it ───
+// `cello login` spawns the daemon detached + unref'd (stdio stdout piped to the
+// short-lived login process), which orphans it from the test — we can't capture its
+// logs or tear it down deterministically. The DoD allows "starts OR connects to",
+// so the harness starts the real cello-daemon binary itself (logs captured), and the
+// CLI then CONNECTS to it. Each agent gets its own CELLO_DIR (socket + DB + lock).
+// Provision an agent's K_local identity at ${celloDir}/agents/<name>/key — the local
+// identity that onboarding (the Telegram Operations Agent) creates on a real machine.
+// The daemon's agent-loader reads it at startup; the protocol-significant DKG still
+// runs for real via `cello register`. FileKeyProvider.load generates+persists the key
+// in the daemon's expected format (and creates the parent dirs).
+export async function provisionAgent(celloDir: string, name: string): Promise<void> {
+  await FileKeyProvider.load(join(celloDir, "agents", name, "key"));
+}
+
+export async function startDaemon(celloDir: string, directoryUrl: string, label: string): Promise<Proc> {
+  const daemon = new Proc(`daemon-${label}`, BINS.daemon, {
+    CELLO_DIR: celloDir,
+    CELLO_DIRECTORY_URL: directoryUrl,
+  });
+  await daemon.waitForLine(/"event":"daemon\.started"/, 15_000);
+  return daemon;
 }
 
 // ─── CLI driver: run `cello <args>` against a daemon home, capture output ───────
