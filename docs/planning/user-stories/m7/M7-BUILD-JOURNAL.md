@@ -146,3 +146,79 @@ toward the dead stack.
 
 **Reviewer outcome / blockers.** N/A (design note only). No harness code yet; next
 commit starts the spawn primitive + Postgres bring-up.
+
+---
+
+## 2026-06-18 — DOD-SPINE-1 GREEN against the real binaries (first live daemon-era run)
+
+**DoD-ID / unit.** DOD-SPINE-1 (daemon up). First time any spine line has been proven
+against the real `cello-relay` + `cello-directory` + `cello-daemon` + `cello` CLI in
+the daemon era. The DoD said this "has NEVER happened" — it has now.
+
+**What was red → green.** `pnpm --filter @cello-protocol/e2e-tests test:spine`:
+fresh isolated Postgres (`cello_spine`, clean V1→V30), real relay + directory spawned,
+agent identity provisioned, daemon started, `cello login` connects, `cello register
+agentA` runs **real FROST DKG**, `cello status` → `directory_signaling: "connected"`,
+`agents.length >= 1`. Test green in ~24s wall (assertion loop 1.2s).
+
+**The chain of real findings (each a producer/consumer fact only a binary test
+surfaces — session-fixture never spawns these programs):**
+1. **`cello login` could not start the daemon at all** — the cli does
+   `require.resolve("@cello-protocol/daemon/package.json")`, but the daemon's
+   `exports` map only exposed `"."`, so Node's exports encapsulation refused the
+   subpath → `ERR_PACKAGE_PATH_NOT_EXPORTED`. Producer: `core/daemon/package.json`.
+   Fix: add `"./package.json": "./package.json"` (cello-client `m7-rehome`, commit
+   `19ba736`). Likely affects real published usage too.
+2. **Key provisioning format.** `FileKeyProvider.load` generate-on-ENOENT writes a
+   custom MAGIC+version+seed file; the directory/relay bins self-generate their
+   signing keys this way. `loadOrGenerateRelayKey` writes libp2p protobuf —
+   INCOMPATIBLE (`key_file_corrupt: invalid magic bytes`). Harness provisions the
+   directory key via `FileKeyProvider.load` to read its pubkey before the relay
+   (relay needs `CELLO_DIRECTORY_PUBKEY`; relay starts first).
+3. **Local dev DB drift.** `cello_dev` was half-migrated (registrations.email_stub_hash
+   present, V30 unrecorded) after the collapse renumbered migrations. V22 adds the
+   column to `user_accounts`, V30 to `registrations` (different tables) — so the
+   migration files are CORRECT; the DB had drifted. Resolved by giving J-SPINE its
+   own `cello_spine` DB dropped+recreated each run (hermetic; never touches
+   `cello_dev`; proves migrations sound on a clean DB — matches CI / a new region).
+4. **`directory_signaling: connected` is GATED on a registered agent identity**
+   (`daemon.ts:411-412`: "stays reconnecting until one exists"). This is BY DESIGN,
+   not a bug — and is exactly why SPINE-1's DoD couples "connected" with ">=1 agent."
+   Zero-agent daemon stays `reconnecting` correctly.
+5. **Agent K_local key must pre-exist** at `${CELLO_DIR}/agents/<name>/key` before
+   `cello register` (`agent_not_found` otherwise). The daemon loads agents at boot;
+   nothing in cli/MCP creates the key (onboarding / the Telegram Operations Agent
+   provisions it on a real machine). Harness provisions it via `FileKeyProvider.load`,
+   then the **real DKG** runs via `cello register`.
+6. **Harness owns the daemon.** `cello login` spawns the daemon detached + unref'd
+   with stdout piped to the short-lived login process — orphaning it from the test
+   (no log capture, nondeterministic teardown). The DoD allows "starts OR connects
+   to," so the harness spawns the `cello-daemon` binary directly (logs captured,
+   clean SIGTERM/SIGKILL teardown) and the CLI connects to it.
+   **FLAG (verify later):** does standalone `cello login` leave a *surviving* daemon,
+   or does the stdout-pipe close on login-exit kill it? Not on SPINE-1's path; check
+   when a SPINE assertion needs the `cello login` spawn branch.
+
+**Anchoring proof.** `grep -E '^import .*(createClient|createMcpSessionServer|
+createDirectoryNode|createRelayNode|session-fixture)' spine/*.ts` → zero. Only
+non-builtin imports: vitest, the harness's own module, and `FileKeyProvider`
+(documented credential provisioning — generates on-disk key files the binaries read;
+not node construction).
+
+**Commits.** trustless-cello `m7-rehome`: `76e2cf5` (design note), `52edc0d`
+(harness + SPINE-1 scaffold), `92f82e3` (SPINE-1 green). cello-client `m7-rehome`:
+`19ba736` (daemon export fix). Floor: e2e-tests typecheck 0, lint 0.
+
+**Status — SPINE-1 is PARTIAL-green, not fully ✅ (honest).** Asserted live: daemon
+running, `directory_signaling: connected`, `>=1 agent`. NOT yet asserted: the 5s
+login budget, the `connections` list, and the `daemon.ipc.connected (clientType: cli)`
+log event. These remaining sub-clauses are the finish of this unit (after review).
+
+**Reviewer.** `feature-dev:code-reviewer` (model opus) dispatched on the unit diff
+(both repos). Outcome pending — findings to be fixed at every severity before moving on.
+
+**Next red.** Finish SPINE-1's remaining sub-clauses (5s budget, connections list,
+`daemon.ipc.connected` event), then DOD-SPINE-2/3 (two IPC sessions, three-state
+model) → SPINE-4 (register two agents — registration is already partially exercised).
+
+**Cron.** `*/30` self-audit drift-check running this session (job `babafea8`).
