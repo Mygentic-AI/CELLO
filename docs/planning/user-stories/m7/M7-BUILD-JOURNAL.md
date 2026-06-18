@@ -599,3 +599,64 @@ signaling) + `17ea7b1` (review fixes). trustless-cello `fc48e04` (account-race +
 signaling extends to the SESSION path: a non-primary agent's `session_request` /
 `session_assignment` and the daemon's inbound session handlers must run on the agent's OWN
 stream (the directory routes inbound session_request by authed pubkey, same as registration).
+
+---
+
+## 2026-06-19 — DOD-SPINE-5 design note (scoping: locate-and-adapt; build not yet started)
+
+**DoD-ID / unit.** DOD-SPINE-5 — initiate session, ephemeral nodes. `cello_initiate_session`
+creates an ephemeral session node (fresh key/Peer ID ≠ directory-facing), reports it to the
+directory, receives a FROST-signed SessionAssignment (both session Peer IDs + multiaddrs);
+standing receiver pre-exists. DoD status 🟡 (in-process seams 1a/1b/2 proven; never live).
+
+**The live gap (read, not guessed).** The daemon binary (`core/daemon/src/bin/cello-daemon.ts`)
+passes ONLY `directoryEndpointResolver` to `startDaemon` — NOT `sessionNegotiator`,
+`transportDialer`, `sessionNodeFactory`, or `transportSelector`. So live
+`cello_initiate_session` hits `if (!sessionNegotiator) return directory_signaling_not_configured`
+(daemon.ts:1040) — the real session path is unwired in the binary. The seam tests proved the
+LOGIC with a FAKE negotiator/dialer injected; the binary has neither.
+
+**What EXISTS (locate-and-adapt, per "assume code exists"):**
+- DIRECTORY brokering is LIVE: `#processSessionRequest` embeds a FROST-signed
+  SessionAssignment with both session Peer IDs + multiaddrs + transport_mode
+  (directory-node.ts:18, handler at :1452). NO directory build needed.
+- CLIENT-side session-request/assignment logic exists in the DEAD `core/client` stack:
+  `core/client/src/signaling-manager.ts` (sends `session_request`), `frame-dispatch.ts`
+  (routes `session_assignment`), `session-assignment-parser.ts` (parses + verifies the
+  FROST sig). This is the proven logic to ADAPT onto the daemon's per-agent signaling —
+  NOT a from-scratch build. (Do NOT import core/client; port the logic, like
+  RegistrationManager was ported.)
+- Daemon already has: the inbound `session_assignment` handler (daemon.ts:1723, on the
+  PRIMARY signalingManager), `transportSelector` (transport-selector.ts), session-node-manager
+  (ephemeral nodes + standing receiver), and the `SessionNegotiator`/`TransportDialer`
+  interfaces (transport-selector.ts:138/149).
+
+**The build (gaps to close):**
+1. A real `SessionNegotiator` (new daemon file): on `negotiate()`, send `session_request`
+   over the CURRENT agent's signaling stream (per-agent — reuse the SPINE-4 `getAgentSignaling`
+   registry, NOT just the keystone), await the FROST-signed `session_assignment`, parse +
+   verify it (port session-assignment-parser logic), return it. This is the inbound mirror
+   the registration context already models (pending-resolver on the per-agent stream).
+2. Per-agent SESSION inbound handlers: the daemon's `session_assignment` inbound handler
+   (daemon.ts:1723) is on the keystone manager only — a non-primary agent's assignment
+   arrives on ITS stream. The negotiator's own per-agent inbound handler (like
+   DaemonRegistrationContext) covers the initiator side; the await/receive side (SPINE-6)
+   needs the inbound session_request handler per-agent too. (SPINE-4 close-note follow-on.)
+3. A real `TransportDialer` + wire `transportSelector`/`sessionNodeFactory` into the binary
+   composition root (cello-daemon.ts) for `CELLO_ENV=local`. For two same-daemon agents the
+   direct localhost dial should succeed; relay fallback exists.
+4. Decide SPINE-5 boundary vs SPINE-6: SPINE-5 = assignment received + ephemeral node
+   distinct Peer ID. The handler couples negotiate→dial→createSessionNode, so the dial must
+   at least not falsely fail; assert the FROST-signed assignment (directory-corroborated:
+   the directory's signed-assignment log / the parsed signer) + session node Peer ID ≠
+   directory-facing Peer ID + standing receiver pre-exists.
+
+**Red (to confirm live first).** Two agents registered+online on one daemon (SPINE-4 setup),
+agentA current on an MCP conn, `cello_initiate_session{counterparty_pubkey: agentB}` →
+expect `directory_signaling_not_configured` (the wired-out red), then build to a FROST-signed
+assignment.
+
+**Status.** Design/scoping only — NO SPINE-5 code yet. SPINE-1..4 green+closed. This is a
+large multi-component unit (port negotiator + transport dialer + binary wiring + per-agent
+session signaling); building incrementally next, red-first. Branch `m7-rehome`, nothing
+pushed/merged.
