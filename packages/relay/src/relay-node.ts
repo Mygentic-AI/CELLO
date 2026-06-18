@@ -79,8 +79,9 @@ import { buildStructure2, encodeStructure2, computeGenesisPrevRoot } from "@cell
 import { createNode } from "@cello-protocol/transport";
 import type { CelloNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
-import type { Logger, SessionWal } from "@cello-protocol/interfaces";
+import type { Logger, SessionWal, ContentStore } from "@cello-protocol/interfaces";
 import { RELAY_SESSION_UNRECOVERABLE } from "@cello-protocol/interfaces";
+import { ContentParkHandler } from "./content-park.js";
 import type {
   SessionAssignment,
   RelaySessionState,
@@ -187,6 +188,12 @@ export interface RelayNodeOptions {
   /** PERSIST-014: SessionWal for gap-fill leaf serving. */
   sessionWal?: SessionWal;
   /**
+   * M7-MSG-001: durable store-and-forward content store. When present, the relay
+   * registers the content-park protocol (deposit/pull/confirm) and notifies a
+   * (re)connecting recipient that has parked content.
+   */
+  contentStore?: ContentStore;
+  /**
    * PERSIST-012: Signing key provider for signed relay ACKs.
    * When present, the relay signs every hash_submit_ack with this key and
    * includes relay_id, relay_signature, and timestamp in the ACK frame.
@@ -218,6 +225,13 @@ export class CelloRelayNode {
   readonly #store: RelayStore;
   readonly #logger: Logger;
   readonly #sessionWal: SessionWal | null;
+
+  /** M7-MSG-001: content-park handler (store-and-forward). null when no contentStore. */
+  readonly #contentParkHandler: ContentParkHandler | null;
+  /** M7-MSG-001 (AC-017c): store-and-forward content store, for the TTL sweep scheduler. null when not configured. */
+  readonly #contentStore: ContentStore | null;
+  /** M7-MSG-001 (AC-017c): content-store TTL sweep interval timer. */
+  #contentSweepInterval: NodeJS.Timeout | null = null;
   /** PERSIST-012: signing key for hash_submit_ack signatures. Null = unsigned ACKs. */
   readonly #ackSigningKeyProvider: KeyProvider | null;
   /** PERSIST-012: stable relay identifier included in signed ACKs. */
@@ -267,6 +281,10 @@ export class CelloRelayNode {
     // are routed through the injected logger instead of console.warn.
     this.#store = opts.store ?? new InMemoryRelayStore({ logger: this.#logger });
     this.#sessionWal = opts.sessionWal ?? null;
+    this.#contentParkHandler = opts.contentStore
+      ? new ContentParkHandler({ node: this.#node, store: opts.contentStore, logger: this.#logger })
+      : null;
+    this.#contentStore = opts.contentStore ?? null;
     this.#ackSigningKeyProvider = opts.ackSigningKeyProvider ?? null;
     this.#relayId = opts.relayId ?? null;
     this.#sessionIdleTimeoutMs = opts.sessionIdleTimeoutMs;
@@ -280,6 +298,8 @@ export class CelloRelayNode {
     await this.#node.handle(DIRECTORY_RELAY_PROTOCOL_ID, (stream) => {
       void this.#handleDirectoryRelayStream(stream);
     }, { maxInboundStreams: 128 });
+    // M7-MSG-001: register the content-park (store-and-forward) protocol when enabled.
+    await this.#contentParkHandler?.start();
     // OBS-001 AC-001: relay startup log
     const peerId = truncId(this.#node.getPeerId());
     const addrs = this.#node.listenAddresses();
@@ -649,6 +669,37 @@ export class CelloRelayNode {
           }
           for (const d of queued.slice(sentCount)) {
             this.#store.enqueueDelivery(authedPubkeyHex, d);
+          }
+
+          // M7-MSG-001: notify a (re)connecting recipient that has parked content.
+          // The notify rides the authenticated relay stream; the recipient then pulls
+          // the ciphertext over the content-park protocol. Best-effort — a failure here
+          // never affects the auth/delivery path.
+          if (this.#contentParkHandler) {
+            try {
+              // F6 (review round 1): notify ONCE PER parked content_hash so each notify
+              // frame carries the required content_hash field and the observability event
+              // matches the spec ([recipientPubkey, contentHash]). The recipient pulls all
+              // entries on the first notify; subsequent notifies for hashes already pulled
+              // are harmless (the pull request is content-hash-scoped or pulls-all).
+              const parkedHashes = await this.#contentParkHandler.listContentFor(authedPubkeyHex);
+              for (const contentHashHex of parkedHashes) {
+                await this.#sendFrame(stream, CBOR_ENC.encode({
+                  type: "content_park_notify",
+                  recipient_pubkey: resp.pubkey,
+                  content_hash: Buffer.from(contentHashHex, "hex"),
+                }) as Uint8Array);
+                this.#logger.info("content.park.notified", {
+                  recipientPubkey: authedPubkeyHex,
+                  contentHash: contentHashHex,
+                });
+              }
+            } catch (err: unknown) {
+              this.#logger.warn("content.park.failed", {
+                recipientPubkey: authedPubkeyHex,
+                reason: err instanceof Error ? err.message : String(err),
+              });
+            }
           }
           continue;
         }
@@ -1091,6 +1142,55 @@ export class CelloRelayNode {
     }
   }
 
+  // ─── Content-store TTL sweep (M7-MSG-001 AC-017c) ─────────────────────────────
+
+  /**
+   * Start the store-and-forward content-store TTL sweep.
+   *
+   * Runs immediately, then every `intervalMs` milliseconds. Each run reclaims
+   * TTL-expired parked entries (CONTENT_STORE_TTL_MS) regardless of whether the
+   * recipient ever reconnects. Without this, expired entries are reclaimed only on
+   * next access (hasContent/pull/pullOne) — a recipient that parks content and never
+   * comes back would otherwise leave entries on disk bounded only by cap eviction.
+   * AC-017(c) lists "the TTL sweep runs" as an explicit reclamation trigger.
+   *
+   * No-op when no content store is configured (CELLO_ENV with store-and-forward off).
+   * Mirrors the CELLO-M6B-009 idle-session sweep scheduler (startIdleSweep).
+   *
+   * @param intervalMs How often to run the sweep (production: 1 hour).
+   */
+  startContentSweep(intervalMs: number): void {
+    const store = this.#contentStore;
+    if (!store) return;
+    const sweep = (): void => {
+      // sweepExpired is async; the interval callback cannot await, so observe the
+      // result via the logger and never let a rejection escape the timer.
+      void store
+        .sweepExpired()
+        .then((deletedCount) => {
+          this.#logger.debug("content.store.sweep.complete", { deletedCount });
+        })
+        .catch((err: unknown) => {
+          const reason = err instanceof Error ? err.message : String(err);
+          this.#logger.error("content.store.sweep.failed", { reason });
+        });
+    };
+    // Immediate sweep catches entries that expired while the relay was down (restart).
+    sweep();
+    this.#contentSweepInterval = setInterval(sweep, intervalMs);
+  }
+
+  /**
+   * Stop the content-store TTL sweep. Called during shutdown. Safe to call when
+   * startContentSweep() was never called (no-op).
+   */
+  stopContentSweep(): void {
+    if (this.#contentSweepInterval) {
+      clearInterval(this.#contentSweepInterval);
+      this.#contentSweepInterval = null;
+    }
+  }
+
   // ─── M7-SESSION-001: session tracking cleanup ──────────────────────────────
 
   /**
@@ -1322,6 +1422,8 @@ export interface CreateRelayNodeOptions {
   transportPrivateKey?: Uint8Array;
   /** PERSIST-014: WAL for serving gap-fill leaves. Required for reconciliation support. */
   sessionWal?: SessionWal;
+  /** M7-MSG-001: durable store-and-forward content store (enables the content-park protocol). */
+  contentStore?: ContentStore;
   /** Structured logger injected at the composition root */
   logger?: Logger;
   /**
@@ -1373,6 +1475,7 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     directory: opts.directory,
     store: opts.store,
     sessionWal: opts.sessionWal,
+    contentStore: opts.contentStore,
     logger: opts.logger,
     ackSigningKeyProvider: opts.ackSigningKeyProvider,
     relayId: opts.relayId,
@@ -1388,6 +1491,7 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     // It is safe to call when startIdleSweep() was never called.
     stop: async () => {
       relay.stopIdleSweep();
+      relay.stopContentSweep();
       await node.stop();
     },
   };

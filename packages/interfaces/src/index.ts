@@ -9,6 +9,8 @@ export type { RelayWal } from "./relay-wal.js";
 export type { JobScheduler, ScheduledJob } from "./job-scheduler.js";
 export type { SessionWal, Leaf } from "./session-wal.js";
 export { RELAY_SESSION_UNRECOVERABLE } from "./session-wal.js";
+export type { ContentStore, ContentStoreEntry } from "./content-store.js";
+export { CONTENT_STORE_TTL_MS, CONTENT_STORE_MAX_BYTES, CONTENT_STORE_MAX_ENTRIES } from "./content-store.js";
 export type { AuditLogShipper, AuditLogEntry } from "./audit-log-shipper.js";
 export type { CheckpointStatusProvider, SealStagingStatus } from "./checkpoint-status-provider.js";
 export type { NotificationQueue, QueuedNotification } from "./notification-queue.js";
