@@ -762,3 +762,28 @@ The dial (no transportDialer in the binary) remains SPINE-6.
 **State.** Branch `m7-rehome` both repos, nothing pushed/merged. Floor: lint + typechecks
 clean, 342 daemon tests green, J-SPINE suite green (SPINE-5 green test skipped with the finding).
 Lowest non-green DoD line stays DOD-SPINE-5 (increment 3: the ceremony handler).
+
+---
+
+## 2026-06-19 — DOD-SPINE-5 increment 3 precise scoping (the ceremony participation handler)
+
+Refined the `ceremony_timeout` root cause to an exact build. The session-signing FROST
+ceremony is **directory-initiated, client-coordinated**:
+1. The directory's `ClientDelegatedSigner.participateInCeremony` (directory-node.ts) sends a
+   "participate" request to the INITIATOR (agentA) over agentA's signaling stream.
+2. agentA's daemon must RECEIVE that request, then drive the ceremony as coordinator using its
+   EXISTING `core/daemon/src/network-directory-node.ts` (the `frost_commit_request` /
+   `frost_sign_request` path over `/cello/frost/1.0.0` — already proven for registration DKG),
+   and return the session signature to the directory.
+3. The directory assembles + returns the FROST-signed SessionAssignment.
+
+**The gap:** step 2's inbound handler — the daemon does not answer the directory's participate
+request on agentA's per-agent signaling stream (inbound handlers are keystone-only). The
+client-side participation logic lives in the dead `core/client/src/{frame-dispatch,
+network-directory-node,seal-manager}.ts`; port the participate-request handler onto each
+per-agent signaling stream (mirror the SPINE-4 `DaemonRegistrationContext` per-agent inbound
+bridge). The ceremony DRIVER (`network-directory-node.ts`) already exists in the daemon — this
+is wiring the inbound trigger + the coordinator glue, then returning the result frame.
+
+Increment 3 is the SPINE-5-green build; un-skip the green test when done. This is a substantial
+unit (FROST session-ceremony coordination over per-agent signaling) — the clean next focus.
