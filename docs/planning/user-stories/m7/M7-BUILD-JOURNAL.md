@@ -660,3 +660,62 @@ assignment.
 large multi-component unit (port negotiator + transport dialer + binary wiring + per-agent
 session signaling); building incrementally next, red-first. Branch `m7-rehome`, nothing
 pushed/merged.
+
+---
+
+## 2026-06-19 — CHECKPOINT / overnight handoff (SPINE-1..4 green+closed; SPINE-5 scoped + red)
+
+**Delivered this session.**
+- **DOD-SPINE-1/2/3** — green + closed (earlier entries).
+- **DOD-SPINE-4 — green + CLOSED + reviewer-APPROVED.** Built the missing capability the
+  milestone needed: **per-agent directory signaling streams** (one user, multiple agents,
+  each its own DKG, ONE daemon — Andre's confirmed intent). Each agent now authenticates
+  its own signaling stream so the directory routes its frames to it (the keystone-only
+  stream misrouted non-primary agents' dkg_complete). Also fixed a directory account-link
+  race (insert profile WITH account_id atomically). Every review finding fixed. Stable
+  across 3 consecutive live runs. Commits: cello-client `4195a3a`+`17ea7b1`; trustless-cello
+  `fc48e04`+`39a3619`+`1f9de2c`.
+- **DOD-SPINE-5 — scoped + RED boundary confirmed live.** `cello_initiate_session` returns
+  `directory_signaling_not_configured` (daemon binary wires no negotiator). Design note +
+  red test committed (`cfe792b`, `e9603ae`).
+
+**Why I stopped at the SPINE-5 red (honest).** SPINE-5 is a large multi-component build
+(port the real SessionNegotiator onto per-agent signaling + a real TransportDialer + wire
+the transport into the daemon binary composition root + per-agent session inbound handlers).
+Two factors made a clean handoff the right call over a rushed half-build: (1) it deserves
+fresh context to do red→green→review at the SPINE-4 bar; (2) the machine became heavily
+load/throttled overnight (live suites went from ~40s to 17+ min, with timeout-flakes) —
+repeated heavy live iteration risks the documented battery/thermal problem. Nothing is
+half-wired; the tree is clean and all committed.
+
+**Exact next steps for SPINE-5 (locate-and-adapt — DO NOT rebuild from scratch):**
+1. The DIRECTORY already brokers `session_request` → FROST-signed `SessionAssignment` LIVE
+   (directory-node.ts:18, handler :1452). NO directory work.
+2. Port the CLIENT logic from the dead `core/client` stack (`signaling-manager.ts` sends
+   `session_request`; `frame-dispatch.ts` routes `session_assignment`; `session-assignment-
+   parser.ts` parses + verifies the FROST sig) into a new daemon `SessionNegotiator` that
+   sends over the CURRENT agent's per-agent signaling stream (reuse SPINE-4 `getAgentSignaling`)
+   and awaits the signed assignment — mirroring how `DaemonRegistrationContext` bridges the
+   registration reply frames (pending-resolver on the per-agent stream).
+3. Build a real `TransportDialer` + wire `sessionNegotiator`/`transportSelector`/
+   `sessionNodeFactory` into `core/daemon/src/bin/cello-daemon.ts` for `CELLO_ENV=local`
+   (today it passes ONLY `directoryEndpointResolver`).
+4. Attach the daemon's inbound session handlers (session_assignment/session_request,
+   daemon.ts:1723 — currently keystone-only) to each per-agent manager (the SPINE-4
+   close-note follow-on; needed for the await/receive side, SPINE-6).
+5. BUG to fix on the green path: cello-mcp's `cello_initiate_session` passes `{ target_pubkey }`
+   to the daemon, but the handler reads `params?.counterparty_pubkey` (daemon.ts:1086) →
+   the counterparty is dropped. Reconcile the param name across cello-mcp ↔ daemon.
+6. Then flip the SPINE-5 test (j-spine.spine.test.ts) to assert a FROST-signed SessionAssignment
+   (directory-corroborated) + ephemeral session-node Peer ID ≠ directory-facing Peer ID +
+   standing receiver pre-exists. Run red → green → floor → review → flip DoD.
+
+**State.** Branch `m7-rehome` BOTH repos. NOTHING pushed, NOTHING merged (Andre's call).
+Floor at handoff: lint clean, all typechecks clean, 342 daemon + 29 directory unit tests
+green, J-SPINE 4/4 green (SPINE-5 asserts the documented gap). Drift-check cron `babafea8`
+still running.
+
+**Post-handoff kickoff (next context):** Read M7-PROCEDURE → M7-DEFINITION-OF-DONE → this
+entry. Lowest non-green DoD line = DOD-SPINE-5. Start at step 2 above (port the negotiator).
+`pnpm --filter @cello-protocol/e2e-tests test:spine` (or `-t "DOD-SPINE-5"`). Anchor to the
+binary; one branch `m7-rehome` both repos; don't push/merge.
