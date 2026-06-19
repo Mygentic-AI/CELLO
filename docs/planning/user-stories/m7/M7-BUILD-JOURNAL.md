@@ -868,3 +868,42 @@ the ASSIGNMENT received, which is green. Reviewer dispatched on the SPINE-5 buil
 **Next — DOD-SPINE-6** (send/receive): wire a real `TransportDialer` into the binary so the
 session node actually connects, then `cello_send`→`cello_receive` with the relay showing
 hash_submit/leaf_deliver from session Peer IDs (content never in relay logs, INV-3).
+
+---
+
+## 2026-06-19 — DOD-SPINE-6 design note (scoping: the relay content path)
+
+DoD: A `cello_send` → B `cello_receive`; relay log shows `hash_submit` from A's *session*
+Peer ID + `leaf_deliver` to B's *session* Peer ID; content never in relay logs (INV-3).
+
+**Live path traced (read):**
+- `cello_initiate_session` (post-SPINE-5): negotiate → FROST assignment (green) →
+  `transportSelector.dial` (in local = `LocalTransportSelectorStub`, a NO-OP returning
+  `mode:"relay"`, so it does NOT block) → `createSessionNode` (N_A, gater bound to
+  counterparty) → seam-1b `connectToCounterparty` runs ONLY for `transport_mode==="direct"`
+  (daemon.ts:1228). In local, AutoNAT is unavailable (standing receiver reports the
+  conservative default), so the advertised address + assignment are **relay** → the direct
+  connect is SKIPPED and the session is left active "for the relay path (a later seam)".
+- So SPINE-6 is the RELAY content path, NOT direct P2P. `cello_send` (daemon.ts:2430) and
+  `cello_receive` (daemon.ts:2521) exist (DAEMON-004) but the relay store-and-forward content
+  flow (A → relay `hash_submit` → relay `leaf_deliver` → B) is the unbuilt/parked seam.
+
+**Overlap with Tier 3 (MSG-001):** this is the content-delivery substrate the DoD lists as
+partly NOT built — DOD-MSG-3 (relay store-and-forward: ContentStore merged on the relay; the
+DAEMON side that deposits/pulls = MSG-001-3b, NOT built) and DOD-MSG-4 (recovery). SPINE-6's
+"relay shows hash_submit/leaf_deliver" is the M1 hash layer (Structure 2), which IS built; the
+daemon-side content deposit/pull over the session in relay mode is the gap.
+
+**Build (incremental, next):**
+1. Bring up the relay in the J-SPINE cluster WIRED to the directory (currently
+   `startSpineCluster` starts the relay WITHOUT `CELLO_DIRECTORY_MULTIADDR`, journal
+   2026-06-18 open-Q#1) so the relay registers + the session can route through it.
+2. Establish the relay-mode session connect (the skipped seam-1b-relay): N_A dials the
+   counterparty via the relay circuit address from the assignment.
+3. Drive `cello_send` (A) → relay `hash_submit` → `leaf_deliver` → B `cello_receive`; assert
+   the relay log shows hash_submit/leaf_deliver from/to the SESSION Peer IDs and content never
+   appears in relay logs (INV-3). The two agents are on one daemon (B accepts via the inbound
+   session_assignment — wire per-agent for non-primary B, the SPINE-4/5 follow-on).
+
+This is a substantial build (relay content path + bidirectional accept). SPINE-5 reviewer
+findings get incorporated first.
