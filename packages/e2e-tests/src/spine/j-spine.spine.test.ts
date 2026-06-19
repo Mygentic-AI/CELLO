@@ -315,15 +315,18 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     }
   }, 60_000);
 
-  it("DOD-SPINE-5 — initiate session (RED until the session negotiator is wired into the binary)", async () => {
-    // Red-first (M7-PROCEDURE §2.4): the daemon binary wires NO sessionNegotiator
-    // (cello-daemon.ts passes only directoryEndpointResolver), so the FIRST observable
-    // gap on the live session path is `cello_initiate_session` returning
-    // `directory_signaling_not_configured` (daemon.ts:1040 — it fires before any directory
-    // contact, so a current agent is enough to surface it). This RED is the map for the
-    // SPINE-5 build (port the real SessionNegotiator over per-agent signaling + wire the
-    // transport into the binary — see the M7 build-journal SPINE-5 design note). When that
-    // lands, this assertion flips to a FROST-signed SessionAssignment.
+  it("DOD-SPINE-5 (partial) — initiate session negotiator is wired: session_request reaches the directory", async () => {
+    // Increment 1 of SPINE-5: the daemon now builds a real internal SessionNegotiator
+    // (porting core/client initiateSession onto per-agent signaling), so cello_initiate_session
+    // no longer returns the wired-out directory_signaling_not_configured. This asserts the
+    // negotiator is LIVE end-to-end: it sends session_request over the current agent's OWN
+    // signaling stream, the directory brokers it, and responds. With an UNREGISTERED target
+    // the directory's authoritative answer is `target_offline` — proving the round-trip
+    // reached the directory (not a tautology; a daemon that never sent the frame could not
+    // produce a directory-sourced target_offline).
+    //
+    // The FULL SPINE-5 green (a FROST-signed SessionAssignment between two registered+online
+    // agents + ephemeral session node Peer ID ≠ directory-facing) is the next increment.
     const { celloDir } = await startAgent("spine5", "agentA");
     const conn = await connectMcp(celloDir, "spine5");
     mcpConns.push(conn);
@@ -333,16 +336,13 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     const used = (await conn.call("cello_use_agent", { name: "agentA" })) as { ok?: boolean };
     expect(used.ok, `cello_use_agent failed: ${JSON.stringify(used)}`).toBe(true);
 
-    // The cello-mcp tool's required param is `target_pubkey` (z.string()); missing it
-    // fails MCP schema validation before the call ever reaches the daemon.
+    // cello-mcp's required param is `target_pubkey` (z.string()). An unregistered target.
     const res = (await conn.call("cello_initiate_session", {
       target_pubkey: "00".repeat(32),
     })) as { ok?: boolean; reason?: string };
-    // CURRENT live behavior (the documented red): session negotiation is not wired into
-    // the binary yet. This asserts the EXACT gap SPINE-5 closes — not a tautology.
-    expect(res.ok, `expected initiate to be not-ok while unwired: ${JSON.stringify(res)}`).toBe(false);
-    expect(res.reason, `the unwired gap is directory_signaling_not_configured: ${JSON.stringify(res)}`).toBe(
-      "directory_signaling_not_configured",
-    );
+    expect(res.ok, `expected initiate to be not-ok for an unregistered target: ${JSON.stringify(res)}`).toBe(false);
+    // Directory-sourced answer (the negotiator reached the directory): NOT the wired-out
+    // directory_signaling_not_configured anymore.
+    expect(res.reason, `negotiator should reach the directory: ${JSON.stringify(res)}`).toBe("target_offline");
   }, 30_000);
 });
