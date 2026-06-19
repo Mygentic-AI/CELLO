@@ -137,7 +137,17 @@ Source: outline Milestone Close Gate + E2E-001 AC-001–012. Mostly built/merged
   creates an ephemeral session node (fresh key/Peer ID), reports it to the
   directory, receives a FROST-signed SessionAssignment carrying both session Peer
   IDs + multiaddrs; session node Peer ID ≠ directory-facing Peer ID; standing
-  receiver pre-exists. — 🟡 (proven in-process seams 1a/1b/2; never live)
+  receiver pre-exists. — ✅ **PROVEN LIVE** by J-SPINE (2026-06-19, cello-client `c0b806b`
+  + `8e8a189`, trustless-cello `d28c42e`): two agents registered on ONE daemon, agentA
+  online+current initiates to agentB → the directory brokers + **FROST-signs** a
+  SessionAssignment (parsed: requires both participants' session Peer IDs + multiaddrs)
+  and the daemon receives it; directory-corroborated (`[SESS] Session request` broker log).
+  **Built two missing capabilities:** (1) a real client-side `SessionNegotiator` (was
+  `directory_signaling_not_configured`), and (2) the **session FROST ceremony participation**
+  handler over per-agent signaling — the directory delegates signing to the initiator
+  (`ceremony_request`→`ceremony_result`); the daemon reconstructs the agent's threshold
+  signer from `frost-share.json` and answers (was `ceremony_timeout`). The actual P2P **dial**
+  (no `transportDialer` wired in the binary) is **DOD-SPINE-6**.
 - **DOD-SPINE-6 — Send / receive.** A `cello_send` → B `cello_receive`; relay log
   shows `hash_submit` from A's *session* Peer ID and `leaf_deliver` to B's *session*
   Peer ID; content never in relay logs. — 🟡 (proven in-process seam 3/4; never live)

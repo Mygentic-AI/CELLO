@@ -834,3 +834,37 @@ the agent's directory-connected CelloNode = `getAgentSignaling(agent).getNode()`
 increments 2-3 = the ceremony handler, now fully specified. Branch `m7-rehome` both repos,
 nothing pushed/merged, floor green (J-SPINE suite green; SPINE-5 ceremony green test skipped).
 Increment 3 is a substantial FROST-ceremony-coordination build — the clean next focus.
+
+---
+
+## 2026-06-19 — DOD-SPINE-5 GREEN (full session initiation, FROST-signed assignment received)
+
+Increment 3 landed. `cello_initiate_session` between two agents registered on ONE daemon now
+receives a FROST-signed SessionAssignment — the `ceremony_timeout` is closed.
+
+**Built (cello-client `8e8a189`, trustless-cello `d28c42e`).** New `session-ceremony.ts`:
+- `reconstructThresholdSigner` — rebuilds the agent's FROST `FrostThresholdSigner` from the
+  persisted `frost-share.json` (`loadActiveFrostKeyShare` → `frostSecret`/`frostPublic` →
+  `storeDkgResult` → `new FrostThresholdSigner(... directoryNodeStubs:[NetworkDirectoryNode on
+  the agent's directory node])`). Ported from core/client `client-startup`; the daemon held no
+  signer after registration (it was on the disposed RegistrationContext).
+- `wireSessionCeremonyHandler` — on each per-agent signaling stream (+ keystone for the primary):
+  answers the directory's `ceremony_request{ceremony_id,tbs,context}` by running
+  `participateInCeremony` and replying `ceremony_result{ceremony_id,signature}`. Ported from
+  core/client `SealManager.handleCeremonyRequest`. Lazy signer reconstruction, cached per agent.
+
+**Proof.** J-SPINE 5/5 green (no regression): SPINE-1, 2/3, 4, 5-partial (negotiator reaches
+directory), 5-full (FROST-signed assignment received, directory-corroborated). The whole live
+session-establishment chain works: per-agent signaling → session_request → directory broker →
+delegated FROST ceremony (directory ↔ initiator's reconstructed signer over per-agent signaling)
+→ SessionAssignment received + parsed (both participants' session Peer IDs + multiaddrs).
+
+**Floor.** lint + typecheck clean (both repos), 342 daemon unit tests green, J-SPINE 5/5.
+
+**Scope boundary.** The actual P2P dial/connection (`transportSelector.dial` — no real
+`transportDialer` wired into `cello-daemon.ts`) is DOD-SPINE-6 (send/receive). SPINE-5's DoD is
+the ASSIGNMENT received, which is green. Reviewer dispatched on the SPINE-5 build.
+
+**Next — DOD-SPINE-6** (send/receive): wire a real `TransportDialer` into the binary so the
+session node actually connects, then `cello_send`→`cello_receive` with the relay showing
+hash_submit/leaf_deliver from session Peer IDs (content never in relay logs, INV-3).
