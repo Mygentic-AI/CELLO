@@ -719,3 +719,46 @@ still running.
 entry. Lowest non-green DoD line = DOD-SPINE-5. Start at step 2 above (port the negotiator).
 `pnpm --filter @cello-protocol/e2e-tests test:spine` (or `-t "DOD-SPINE-5"`). Anchor to the
 binary; one branch `m7-rehome` both repos; don't push/merge.
+
+---
+
+## 2026-06-19 — DOD-SPINE-5 increment 1 GREEN (negotiator wired); increment 2 bug surfaced (ceremony_timeout)
+
+**Increment 1 — DONE + committed (cello-client `c0b806b`, trustless-cello `c5f9129`).**
+Built a real internal `SessionNegotiator` in the daemon (ported `parseSessionAssignment` +
+session_request error mapping from the dead `core/client` into a new daemon
+`session-assignment-parser.ts` — NOT imported). It sends `session_request` over the CURRENT
+agent's OWN per-agent signaling stream, advertising the standing receiver's session endpoint
+(WIRE-001), awaits + parses the directory's `session_assignment`. `cello_initiate_session` no
+longer returns `directory_signaling_not_configured`; proven live — it reaches the directory
+(returns directory-sourced `target_offline` for an unregistered target). 342 daemon tests green.
+
+**Increment 2 — bug surfaced by J-SPINE (test written + SKIPPED, trustless-cello `<this commit>`).**
+With TWO agents registered on ONE daemon, the full green path gets far:
+- agentA (initiator) + agentB (target) both registered → both per-agent signaling streams up.
+- agentA online+current initiates to agentB: directory `[SESS] Session request: agentA → agentB`,
+  `target_stream FOUND` (agentB online), `signer_lookup signerFound:true` (ClientDelegatedSigner,
+  `delegatedSignerStreamsNull:"SET"`), `[FROST] Ceremony begin`.
+- THEN: `[SESS] Request failed — reason: ceremony_timeout` after 30s.
+
+**Root cause (precise, from the live logs).** The directory's session-signing FROST ceremony
+(the `ClientDelegatedSigner` delegates signing of the SessionAssignment back to the initiator
+agentA) sends participate-in-ceremony frames to agentA over signaling and awaits agentA's
+responses — but agentA's daemon does not answer them on its per-agent signaling stream, so the
+ceremony times out. This is the SAME per-agent-signaling routing gap SPINE-4 fixed for
+registration (`dkg_complete` was misrouted), now for the SESSION ceremony: the daemon's
+delegated-signing handler is not attached to per-agent streams (the daemon's inbound handlers
+are keystone-only, daemon.ts:1446/1723/1843).
+
+**Next build (increment 3 → SPINE-5 green).** Wire the daemon's session-signing ceremony
+participation handler onto EACH per-agent signaling stream (mirror SPINE-4: the registration
+reply frames were routed via the per-agent DaemonRegistrationContext handler; the session
+ceremony frames need the same per-agent routing). Locate the client-side ceremony participation
+logic in the dead `core/client` (the counterpart to `ClientDelegatedSigner.participateInCeremony`)
+and port it onto per-agent signaling. Then un-skip the green test (`j-spine.spine.test.ts`
+"FROST-signed SessionAssignment received between two registered agents") and drive red→green.
+The dial (no transportDialer in the binary) remains SPINE-6.
+
+**State.** Branch `m7-rehome` both repos, nothing pushed/merged. Floor: lint + typechecks
+clean, 342 daemon tests green, J-SPINE suite green (SPINE-5 green test skipped with the finding).
+Lowest non-green DoD line stays DOD-SPINE-5 (increment 3: the ceremony handler).
