@@ -787,3 +787,50 @@ is wiring the inbound trigger + the coordinator glue, then returning the result 
 
 Increment 3 is the SPINE-5-green build; un-skip the green test when done. This is a substantial
 unit (FROST session-ceremony coordination over per-agent signaling) — the clean next focus.
+
+---
+
+## 2026-06-19 — DOD-SPINE-5 increment 3 COMPLETE SPEC (exact ceremony protocol + handler + the key dependency)
+
+Read the exact protocol end-to-end. This is everything increment 3 needs.
+
+**The frame protocol (directory ↔ initiator over signaling):**
+- Directory (`ClientDelegatedSigner.participateInCeremony`, directory-node.ts:3490) sends over
+  the initiator's authenticated SIGNALING stream:
+  `{ type: "ceremony_request", ceremony_id, tbs: Uint8Array, context }`
+  then awaits, resolving on the client's `ceremony_result` via `resolveFromClient` (30s timeout
+  → CEREMONY_TIMEOUT — exactly what we hit).
+- Client must reply on the SAME stream:
+  `{ type: "ceremony_result", ceremony_id, signature: Uint8Array | null }`.
+
+**The client handler to port (core/client/src/seal-manager.ts:907 `handleCeremonyRequest`):**
+1. Get the agent's FROST `thresholdSigner`; if null → reply `ceremony_result{ signature: null }`.
+2. Extract ceremony_id, tbs, context.
+3. `const result = await thresholdSigner.participateInCeremony(ceremonyId, tbs, context)`.
+4. Reply `ceremony_result{ ceremony_id, signature: result.ok ? result.signature : null }`.
+(frame-dispatch.ts:103 routes `ceremony_request` → this handler.)
+
+**The KEY dependency (the real work of increment 3):** the daemon must have each registered
+agent's FROST `thresholdSigner` available + a per-agent directory node to drive the ceremony's
+`/cello/frost/1.0.0` round-trips. At registration the signer was `dkgResult.signer` on the
+(disposed) RegistrationContext. So increment 3 must RECONSTRUCT the threshold signer from the
+persisted `frost-share.json` (signingShare, identifier, commitmentsCbor, verifyingSharesCbor,
+threshold, participants — see registration-persistence.ts `loadActiveFrostKeyShare`) into a FROST
+signer whose `participateInCeremony` opens frost streams on THAT agent's per-agent directory node
+(the daemon's `network-directory-node.ts` already implements the coordinator round-trips; it needs
+the agent's directory-connected CelloNode = `getAgentSignaling(agent).getNode()`).
+
+**Build steps (increment 3):**
+1. FIRST verify whether the daemon already reconstructs threshold signers at boot/on-demand
+   (grep loadActiveFrostKeyShare usage) — if a path exists, adapt it; else build the
+   share→signer reconstruction (crypto has `storeDkgResult`/`bootstrapKeyShares`).
+2. Add a per-agent signaling inbound handler for `ceremony_request` → run the agent's signer's
+   participateInCeremony (driven over that agent's per-agent directory node) → send ceremony_result.
+   Mirror the SPINE-4 DaemonRegistrationContext per-agent inbound bridge.
+3. Un-skip the green test ("FROST-signed SessionAssignment received between two registered
+   agents") → red→green. Floor + review. The dial (no transportDialer) stays SPINE-6.
+
+**Checkpoint state.** SPINE-1..4 closed; SPINE-5 increment 1 (negotiator) green+committed;
+increments 2-3 = the ceremony handler, now fully specified. Branch `m7-rehome` both repos,
+nothing pushed/merged, floor green (J-SPINE suite green; SPINE-5 ceremony green test skipped).
+Increment 3 is a substantial FROST-ceremony-coordination build — the clean next focus.
