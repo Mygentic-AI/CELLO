@@ -345,4 +345,64 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     // directory_signaling_not_configured anymore.
     expect(res.reason, `negotiator should reach the directory: ${JSON.stringify(res)}`).toBe("target_offline");
   }, 30_000);
+
+  // SKIPPED — documents the next SPINE-5 bug (J-SPINE surfaced it live, 2026-06-19).
+  // The negotiator (increment 1) works: with two agents registered on one daemon, agentA→
+  // agentB session_request is ACCEPTED by the directory (target online ✓, ClientDelegatedSigner
+  // found, streams SET ✓) and `[FROST] Ceremony begin` fires — but the session-signing FROST
+  // ceremony (directory's ClientDelegatedSigner asking agentA's daemon to co-sign the
+  // SessionAssignment over signaling) never completes → `ceremony_timeout` after 30s. The
+  // delegated-signing round-trip frames aren't handled/answered on agentA's per-agent
+  // signaling stream — the same per-agent routing gap SPINE-4 fixed for registration, now for
+  // the session ceremony. NEXT BUILD: wire the daemon's delegated-signing ceremony handler
+  // onto each per-agent signaling stream so the directory's participate-in-ceremony frames are
+  // answered. Un-skip when fixed. (Setup below is correct and reused as the green when ready.)
+  it.skip("DOD-SPINE-5 — FROST-signed SessionAssignment received between two registered agents (one daemon)", async () => {
+    // Two agents registered on ONE daemon (each its own DKG → agentB's signaling stream is up
+    // = a valid target; agentA has a FROST signer = a valid initiator). agentA online+current
+    // initiates to agentB → the directory brokers + FROST-signs a SessionAssignment and returns
+    // it; the daemon receives + parses it.
+    const celloDir = mkdtempSync(join(tmpdir(), "cello-spine5b-"));
+    agentDirs.push(celloDir);
+    await provisionAgent(celloDir, "agentA");
+    const pubB = await provisionAgent(celloDir, "agentB");
+    const daemon = await startDaemon(celloDir, cluster.directoryUrl, "spine5b");
+    daemons.push(daemon);
+    const env = { CELLO_DIR: celloDir };
+
+    // Register both (DEV tokens). Registration brings each agent's per-agent signaling
+    // stream up — that is what makes agentB a reachable target at the directory.
+    for (const name of ["agentA", "agentB"]) {
+      const r = cello(["register", name, `DEV-spine5-${name}-${randomBytes(6).toString("hex")}`], env);
+      expect(r.status, `cello register ${name} failed:\n${r.stdout}`).toBe(0);
+    }
+
+    const conn = await connectMcp(celloDir, "spine5b");
+    mcpConns.push(conn);
+    expect(((await conn.call("cello_start_agent", { name: "agentA" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await conn.call("cello_use_agent", { name: "agentA" })) as { ok?: boolean }).ok).toBe(true);
+
+    // Initiate to the registered agentB. The MCP result may be a dial error (no transportDialer
+    // is wired — that is SPINE-6), so SPINE-5's assertion is the ASSIGNMENT RECEIVED, proven by
+    // the daemon log AND corroborated by the directory having brokered the request.
+    const res = (await conn.call("cello_initiate_session", { target_pubkey: pubB })) as {
+      ok?: boolean;
+      reason?: string;
+    };
+
+    let line = "";
+    try {
+      line = await daemon.waitForLine(/"event":"session\.negotiate\.assignment\.received"/, 15_000);
+    } catch (err) {
+      throw new Error(
+        `SPINE-5: no FROST-signed assignment received.\ninitiate result: ${JSON.stringify(res)}\n` +
+          `--- daemon (last 50) ---\n${daemon.output.split("\n").slice(-50).join("\n")}\n` +
+          `--- directory [SESS]/[FROST] ---\n${cluster.directory.output.split("\n").filter((l) => /\[SESS\]|\[FROST\]|frost\.debug\.session/.test(l)).slice(-30).join("\n")}\n(${String(err)})`,
+      );
+    }
+    // FROST-signed assignment received + parsed by the daemon.
+    expect(line, `assignment signatureType in: ${line}`).toMatch(/"signatureType":"(frost|single)"/);
+    // Directory-side corroboration (non-tautological): the directory brokered THIS request.
+    expect(cluster.directory.output, "directory must log the session-request broker").toMatch(/\[SESS\]\s+Session request/);
+  }, 60_000);
 });
