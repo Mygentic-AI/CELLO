@@ -357,7 +357,7 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
   // the session ceremony. NEXT BUILD: wire the daemon's delegated-signing ceremony handler
   // onto each per-agent signaling stream so the directory's participate-in-ceremony frames are
   // answered. Un-skip when fixed. (Setup below is correct and reused as the green when ready.)
-  it.skip("DOD-SPINE-5 — FROST-signed SessionAssignment received between two registered agents (one daemon)", async () => {
+  it("DOD-SPINE-5 — FROST-signed SessionAssignment received between two registered agents (one daemon)", async () => {
     // Two agents registered on ONE daemon (each its own DKG → agentB's signaling stream is up
     // = a valid target; agentA has a FROST signer = a valid initiator). agentA online+current
     // initiates to agentB → the directory brokers + FROST-signs a SessionAssignment and returns
