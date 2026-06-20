@@ -1009,3 +1009,47 @@ are the offer SEND (directory→B) and B's daemon replying with its session endp
 **State.** SPINE-1..5 green+closed+reviewed; SPINE-6 transport-connect proven, WIRE-002 is the
 remaining build. 342 daemon + J-SPINE 5/5 green (SPINE-6 skipped with the finding). cello-client
 `d945c77`. Branch `m7-rehome` both repos, nothing pushed/merged.
+
+---
+
+## 2026-06-20 — DOD-SPINE-6: machinery built (WIRE-002 + gater alignment); 2 precise gaps remain
+
+Built all the session-content machinery and proved each piece works live at least once; SPINE-6 is
+NOT green yet — two precise gaps remain. Test stays skipped with this finding.
+
+**Built + committed:**
+- WIRE-002 offer→accept (opt-in): daemon sets `wants_session_offer` on session_request + answers
+  the directory's `session_offer` with its standing-receiver session endpoint; directory folds it
+  into the FROST-signed assignment. Opt-in gated so existing directory tests are untouched (584
+  green). cello-client `4dd49c6`, trustless-cello `e4e16f0`.
+- Initiator N_A = standing receiver (gater alignment): `createSessionNode(reuseStandingReceiver)`
+  hands off the standing receiver so N_A's peer id equals the advertised endpoint → the
+  counterparty's gater admits the dial. Mirrors acceptSession. 342 daemon tests green. `95ae255`.
+- connect-by-addrs (not the relay-mode label) + real sendContent error message (`4dd49c6`/`d945c77`).
+
+**Live progression proven:** register → online → cello_await_session → cello_initiate_session →
+B receives inbound session → FROST assignment received → **A's N_A connected to B's session node**
+(`session.transport.connected`) → on one run B advertised its endpoint via WIRE-002 and A reached it.
+
+**GAP 1 — opt-in flag not reaching the directory's offer branch (the active blocker).** The daemon
+SENDS `wants_session_offer: true` (verified in dist) and the directory CHECKS
+`parsedReq.wants_session_offer === true` (verified in dist), but the offer branch does not fire
+(`session.offer.accepted` never logs; assignment counterparty endpoint comes back empty →
+`cello_send` fails `Invalid peer ID`). NOTE: the UNCONDITIONAL offer (gated only on
+initiator_session_peer_id) DID fire + populate the endpoint in an earlier run — so the offer-send /
+B-reply / assignment-population all work; only the opt-in flag's wire propagation is suspect. NEXT:
+add a directory-side log of `parsedReq` keys at session_request receipt to see whether
+`wants_session_offer` arrives; if the field is being dropped, send it inside an already-propagating
+sub-object or revert the opt-in to the initiator_session_peer_id gate (and update the ~7
+directory tests that read the target stream to skip the `session_offer` frame, e.g. session004 — a
+helper would do it once).
+
+**GAP 2 — relay leaf path (`hash_submit`/`leaf_deliver`).** Once content flows A→B (GAP 1 fixed),
+the test also asserts the relay witnessed the message leaf hash. Confirm `cello_send`/
+`appendSessionLeaf` submits the leaf to the relay (hash_submit) and the relay forwards it
+(leaf_deliver) to B's session Peer ID; content never in relay logs (INV-3 — already satisfied since
+content is peer-to-peer).
+
+**State.** SPINE-1..5 green+closed+reviewed. SPINE-6 machinery built; GAP 1 (opt-in propagation)
+then GAP 2 (relay leaf) → un-skip the test → green. Branch `m7-rehome` both repos, nothing
+pushed/merged. J-SPINE 5/5 green (SPINE-6 skipped). Best finished with fresh context.
