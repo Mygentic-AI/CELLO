@@ -400,9 +400,19 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
           `--- directory [SESS]/[FROST] ---\n${cluster.directory.output.split("\n").filter((l) => /\[SESS\]|\[FROST\]|frost\.debug\.session/.test(l)).slice(-30).join("\n")}\n(${String(err)})`,
       );
     }
-    // FROST-signed assignment received + parsed by the daemon.
-    expect(line, `assignment signatureType in: ${line}`).toMatch(/"signatureType":"(frost|single)"/);
-    // Directory-side corroboration (non-tautological): the directory brokered THIS request.
-    expect(cluster.directory.output, "directory must log the session-request broker").toMatch(/\[SESS\]\s+Session request/);
+    // M2: require FROST (not single) — DOD-INV-2 is that no single node signs alone, so a
+    // single-key assignment must NOT pass as green.
+    expect(line, `assignment must be FROST-signed: ${line}`).toMatch(/"signatureType":"frost"/);
+    // The initiator actually RAN the delegated FROST ceremony (durable event). A single-sig
+    // assignment would never trigger participateInCeremony — so this proves the split-key path
+    // genuinely executed, not a stub returning a fixed signature.
+    expect(daemon.output, "initiator ran the FROST session ceremony").toMatch(
+      /"event":"session\.ceremony\.participated"/,
+    );
+    // Directory-side corroboration (non-tautological, FROST-specific): the directory began the
+    // delegated ceremony for this session — the daemon cannot fabricate the directory's log.
+    expect(cluster.directory.output, "directory must run the delegated FROST ceremony").toMatch(
+      /\[FROST\]\s+Ceremony begin/,
+    );
   }, 60_000);
 });
