@@ -498,4 +498,65 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     expect(cluster.relay.output, "relay must forward the witnessed leaf (leaf_deliver)").toMatch(/leaf_deliver/);
     expect(cluster.relay.output, "plaintext must NEVER appear in relay logs (INV-3)").not.toContain(plaintext);
   }, 90_000);
+
+  // DOD-SPINE-7 — bilateral seal (relay-mediated notarization). Design note: journal
+  // 2026-06-20. RED until built: today cello_close_session uses the directory-mediated
+  // SEAL-INTERRUPTED bilateral-ack path and the daemon has NO session_sealed listener / no
+  // ctrl-leaf relay submit. The build (per the design note): the daemon submits a SEAL ctrl
+  // leaf (0x02) via the SPINE-6 AgentRelayClient → relay #maybeProcessSeal sees two
+  // distinct-sender ctrl leaves → directory processSeal rebuilds + verifies the signed chain
+  // → FROST notarization → session_sealed back to both daemons with a byte-identical
+  // sealed_root. Skipped during the build (keeps SPINE-1..6 green); un-skip at green.
+  it.skip("DOD-SPINE-7 — bilateral seal: both close → directory FROST-notarizes → byte-identical sealed_root", async () => {
+    // Two parties = two daemons (the SPINE-6 topology). Establish a session + one message,
+    // then BOTH cello_close_session → both submit SEAL ctrl leaves → relay-mediated directory
+    // notarization → both observe session_sealed with the SAME sealed_root (INV-2: B's
+    // co-signature is B's own node's, never forged by A or the directory).
+    const celloDirA = mkdtempSync(join(tmpdir(), "cello-spine7A-"));
+    const celloDirB = mkdtempSync(join(tmpdir(), "cello-spine7B-"));
+    agentDirs.push(celloDirA, celloDirB);
+    await provisionAgent(celloDirA, "agentA");
+    const pubB = await provisionAgent(celloDirB, "agentB");
+    const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "spine7A");
+    const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "spine7B");
+    daemons.push(daemonA, daemonB);
+    expect(cello(["register", "agentA", `DEV-spine7-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirA }).status).toBe(0);
+    expect(cello(["register", "agentB", `DEV-spine7-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirB }).status).toBe(0);
+
+    const connA = await connectMcp(celloDirA, "spine7-A");
+    mcpConns.push(connA);
+    const connB = await connectMcp(celloDirB, "spine7-B");
+    mcpConns.push(connB);
+    expect(((await connA.call("cello_start_agent", { name: "agentA" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connA.call("cello_use_agent", { name: "agentA" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_start_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_use_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok, `cello_initiate_session failed: ${JSON.stringify(init)}`).toBe(true);
+    const sessionIdA = init.sessionId!;
+    const inbound = (await awaitP) as { type?: string; session_id?: string };
+    expect(inbound.type).toBe("new_session");
+    const sessionIdB = inbound.session_id!;
+
+    // One message so the sealed tree is non-trivial.
+    expect(((await connA.call("cello_send", { session_id: sessionIdA, content: "spine7 sealed message" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_receive", { session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("spine7 sealed message");
+
+    // BOTH parties close → both submit SEAL ctrl leaves → relay-mediated directory FROST seal.
+    const closeA = (await connA.call("cello_close_session", { session_id: sessionIdA })) as { ok?: boolean; sealed_root?: string; reason?: string };
+    const closeB = (await connB.call("cello_close_session", { session_id: sessionIdB })) as { ok?: boolean; sealed_root?: string; reason?: string };
+    const closeDiag = `\ncloseA: ${JSON.stringify(closeA)}\ncloseB: ${JSON.stringify(closeB)}`;
+    expect(closeA.ok, `A close failed:${closeDiag}`).toBe(true);
+    expect(closeB.ok, `B close failed:${closeDiag}`).toBe(true);
+
+    // The directory rebuilt + FROST-notarized the signed chain; both sides observe the SAME root.
+    expect(closeA.sealed_root, `A must surface a sealed_root:${closeDiag}`).toMatch(/^[0-9a-f]{64}$/);
+    expect(closeB.sealed_root, `B must surface a sealed_root:${closeDiag}`).toMatch(/^[0-9a-f]{64}$/);
+    expect(closeA.sealed_root, "both parties' sealed_root must be BYTE-IDENTICAL").toBe(closeB.sealed_root);
+
+    // Directory-corroborated: the relay witnessed two ctrl-leaf submissions (the SEAL leaves).
+    expect(cluster.relay.output, "relay must witness both SEAL ctrl leaves").toMatch(/hash_submit/);
+  }, 120_000);
 });
