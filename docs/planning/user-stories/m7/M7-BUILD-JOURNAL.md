@@ -1379,3 +1379,40 @@ in the relay-mediated path needs tracing (PERSIST-014/015).
 **State.** SPINE-1..6 closed; SPINE-7 = relay-mediated bilateral seal, design fixed, server side
 exists, daemon ctrl-leaf submit + session_sealed listener is the build. Branch `m7-rehome` both
 repos, nothing pushed/merged.
+
+---
+
+## 2026-06-20 — DOD-SPINE-7 open question RESOLVED + red target locked
+
+The design-note open question (where `session_sealed` returns to the daemon in the
+relay-mediated path) is resolved by tracing the directory: `processSeal` → notarize →
+the directory delivers a **`session_sealed` frame (`encodeSessionSealed`) over the
+participant's DIRECTORY SIGNALING STREAM** (directory-node.ts:1280; also queued +
+drained on reconnect for an offline party). That stream is the SAME per-agent signaling
+stream the daemon already handles `ceremony_request` / `session_offer` /
+`session_assignment` on (SPINE-4/5/6 wiring) — so the seal listener is an inbound handler
+on the existing per-agent signaling, not new transport.
+
+Red target locked: `j-spine.spine.test.ts` DOD-SPINE-7 (it.skip during build) — two daemons,
+session + one message, BOTH `cello_close_session` → both submit SEAL ctrl leaves → directory
+FROST-notarizes → both surface a BYTE-IDENTICAL `sealed_root`.
+
+**The daemon build (4 steps, fully unblocked):**
+1. `AgentRelayClient`: submit a **ctrl** leaf (0x02), not just msg (0x00) — small generalization
+   (the relay already accepts leaf_kind ∈ {0x00,0x02}).
+2. Build the SEAL ctrl leaf in the daemon: the SEAL payload + its content_hash, K_local-signed
+   Structure 1 (reuse the seal-payload shape from `handleActiveSealFlow`).
+3. `cello_close_session` (relay-mediated branch): submit the SEAL ctrl leaf via the session's
+   `AgentRelayClient`. Both parties closing → relay `#maybeProcessSeal` (2 distinct-sender ctrl
+   leaves) → directory `processSeal` → FROST notarize.
+4. Daemon: add a `session_sealed` inbound handler on the per-agent signaling stream → mark the
+   session sealed + surface `sealed_root` in the session record and the `cello_close_session`
+   result. Then un-skip the SPINE-7 test → green.
+
+Decision to confirm during build: whether `cello_close_session` switches to the relay-mediated
+path or runs both (the existing directory-mediated SEAL-INTERRUPTED ack path stays for
+direct/interrupted seals). SPINE-7 needs the relay-mediated path; the cleanest is a relay-mediated
+close branch when the session has an active relay client, falling back to the existing path.
+
+**State.** SPINE-1..6 closed; SPINE-7 design + channel + red target locked; the 4-step daemon
+build is the next unit. Branch `m7-rehome` both repos, nothing pushed/merged.
