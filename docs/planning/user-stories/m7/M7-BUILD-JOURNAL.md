@@ -1233,3 +1233,56 @@ J-SPINE 6/6.
 
 **State.** SPINE-1..6 GREEN; SPINE-6 first review fixed + re-verified live; second review
 pending. Branch `m7-rehome` both repos, nothing pushed/merged. NEXT RED: DOD-SPINE-7.
+
+---
+
+## 2026-06-20 — DOD-SPINE-6 second review: BLOCKING bug in my own H1 fix, fixed + regression-tested
+
+The second opus review (dispatched on the H1 per-agent refactor) found a real BLOCKING
+regression I had introduced — and it was right. Fixed in cello-client `45c383e`; daemon
+350/350; live re-verify in progress.
+
+- **BLOCKING — per-agent `#lastSeen` used as per-session `last_seen_seq`.** The H1 refactor
+  collapsed the witness high-water mark to ONE agent-global counter, bumped by every
+  session's ack + leaf_deliver, and sent as the `last_seen_seq` of EVERY session's
+  Structure-1 submit. But the relay's `seq_counter` is strictly per session and rejects
+  `last_seen_seq > seq_counter`. So once any of an agent's sessions advanced, a NEWER
+  session's first submit looked ahead → `last_seen_seq_ahead` rejection — defeating the very
+  multi-session multiplexing H1 exists to enable. The single-session spine (6/6) passed only
+  because with one session the global counter is incidentally correct. **Fix:** `#lastSeen`
+  is a `Map<session_id_hex, seq>`; the ack (which carries NO session_id) updates the
+  in-flight submit's session via `#pendingAckSessionHex`, and `leaf_deliver` (which DOES
+  carry session_id) updates by its own. `#doSubmit` sends that session's own high-water mark.
+  Regression test decodes the actual wire frames and asserts session B's first submit carries
+  `last_seen_seq 0`, not session A's 5.
+
+- **HIGH — submit timeout desynced FIFO ack matching.** Because `hash_submit_ack` carries no
+  session_id, ack↔submit is purely FIFO; a timed-out submit left the stream open, so a LATE
+  ack would settle the NEXT submit's resolver and shift every subsequent ack by one. **Fix:**
+  reset (close) the stream on `relay_submit_timeout` so the desynced queue can't persist — the
+  relay re-auths + re-drains on reconnect.
+
+- **MEDIUM — client keyed by agentName only (federation).** A second session for the same
+  agent may be assigned a DIFFERENT relay; the map now keys by `(agentName, relayPeerId)` so
+  each relay gets its own client (the H1 collision is per relay node).
+
+- **LOW — detach not identity-guarded.** `#detachSessionRelay` now clears `entry.relayClient`
+  (idempotent) and only deletes/closes the map entry when it still holds THIS client (a racing
+  sibling teardown can't close a freshly-created replacement for the same key).
+
+- **LOW — receiver-only reconnect.** `registerSession` now stores a live node per session, so
+  if the node that owns the shared stream is torn down, a pure-receiver session re-dials from
+  any still-registered session node (it never issues a submit to trigger it otherwise).
+
+Reviewer re-confirmed sound: INV-3, INV-5 (gater inbound untouched), M1 (no await between
+guard and send), L1 (extractErrorMessage). Inner-loop unit tests now 7 (added the BLOCKING
+per-session regression). Floor: daemon 350/350, typecheck + lint clean, dead-stack gate green.
+
+**Lesson (RC-class).** The H1 fix introduced a multi-session bug while fixing a multi-session
+bug — because the single-session J-SPINE test can't catch per-session-counter errors. The
+reviewer's call stands: a two-concurrent-sessions-per-agent live assertion belongs in J-SPINE
+before the multi-session property is declared done (carried as a follow-up; the unit
+regression locks the specific defect now).
+
+**State.** SPINE-1..6 GREEN; SPINE-6 two review rounds fixed; live re-verify pending. Branch
+`m7-rehome` both repos, nothing pushed/merged. Third review dispatched.
