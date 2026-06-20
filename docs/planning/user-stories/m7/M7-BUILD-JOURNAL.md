@@ -1471,3 +1471,54 @@ surface a byte-identical `sealed_root`.
 **State.** SPINE-1..6 closed + green; SPINE-7 daemon side built + committed (correct to the relay,
 re-skipped to keep J-SPINE green); the last step is the relay→directory harness wiring. Branch
 `m7-rehome` both repos, nothing pushed/merged.
+
+---
+
+## 2026-06-20 — DOD-SPINE-7: seal cryptographically VERIFIES live; final piece = daemon SEAL FROST ceremony
+
+Drove SPINE-7 through three more real gaps to the point where the directory CRYPTOGRAPHICALLY
+VERIFIES the bilateral seal live. One precise piece remains: the daemon-side SEAL FROST
+ceremony. Each fix moved the seal one concrete step further:
+
+1. **Harness relay→directory wiring** (trustless-cello `1c59feb`): the relay had no
+   DirectoryAdapter (`#maybeProcessSeal` gated on `this.#directory`), because the harness started
+   it without `CELLO_DIRECTORY_MULTIADDR`. Local mode is a startup cycle (directory needs the relay
+   addr, relay needs the directory addr w/ /p2p/). Broke it by pre-deriving the relay PeerID from a
+   fixed transport seed (new relay export `peerIdFromTransportSeed`, pure key crypto) + fixed port,
+   and reordering to directory-first. Result: `[RELAY] Seal submitted — session ... (3 leaves)` —
+   the relay now calls directory processSeal.
+
+2. **Causal-chain fix** (cello-client `0afce25`): directory rejected with `causal_chain_violated`.
+   The relay client advanced `#lastSeen` on its OWN `hash_submit_ack`, so after a sent message the
+   agent's SEAL leaf declared `last_seen_seq=1` while it had seen NO counterparty leaf
+   (effective_seen=0) → SESSION-003 SI-003 violation. Fix: advance `#lastSeen` only on a
+   `leaf_deliver` from the COUNTERPARTY (own echo suppressed via `#isOwnLeaf`). Result:
+   `[RELAY] Seal confirmed` — **the directory rebuilds + verifies the signed 3-leaf chain and
+   FROST-notarizes.** The hard cryptographic core works.
+
+3. **The final gap (precise): the daemon doesn't co-sign the SEAL FROST ceremony.** Instrumented
+   both sides: the daemon's `session.sealed.frame.arrived` NEVER fires — the directory never sends
+   `session_sealed`. Root cause: `processSeal` has TWO paths (directory-node.ts:2958-3001 single-key
+   vs :3004+ FROST). Because our agents registered via real DKG (SPINE-4), the initiator's
+   `primary_pubkey` IS in `#primaryPubkeys`, so processSeal takes the **FROST path**: it sends
+   `seal_verified` to the INITIATOR and stores pending frost state, then WAITS for the initiator to
+   coordinate the seal FROST ceremony and return `seal_frost_signature` (#processSealFrostSignature)
+   — only THEN does it emit `session_sealed`. The daemon has **no `seal_verified` handler** and no
+   seal FROST ceremony, so it never co-signs → the seal never completes → both closes time out
+   (`seal_counterparty_pending`).
+
+**Remaining build (well-scoped, reuses SPINE-5 infra):** port the dead-stack
+`core/client/seal-manager.ts handleSealVerified` (line 834) to the daemon — a `seal_verified`
+inbound handler on the (keystone + per-agent) signaling that: reconstructs the agent's threshold
+signer (the `reconstructThresholdSigner` already built for SPINE-5/the session ceremony), builds
+`buildSealTbs(session_id, sealed_root, leaf_count, close_timestamp)`, runs the FROST ceremony with
+context `"cello-frost-seal-v1"`, and sends `seal_frost_signature{session_id, frost_signature}` to
+the directory. The directory's `#processSealFrostSignature` (directory-node.ts:1496) then completes
+notarization and delivers `session_sealed` to both → the existing daemon `session_sealed` listener
+(built this session) resolves the close waiters with the byte-identical `sealed_root`.
+
+**State.** SPINE-1..6 closed + green. SPINE-7: SEAL leaf submit + relay witness + directory
+verification + FROST notarization-START all proven live; the seal FROST ceremony co-signing is the
+last unit. Test re-skipped (J-SPINE 6/6 green). A temporary `session.sealed.frame.arrived` diag log
++ a directory-output diag in the test remain (remove at green). Branch `m7-rehome` both repos,
+nothing pushed/merged. Daemon dirty (the diag log) + e2e (re-skip) — committing now.
