@@ -415,4 +415,79 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
       /\[FROST\]\s+Ceremony begin/,
     );
   }, 60_000);
+
+  // SKIPPED — J-SPINE proved (2026-06-20) how far the live session path gets and pinpointed
+  // the next build. Between TWO parties on TWO daemons: register → online → B cello_await_session
+  // → A cello_initiate_session → **B receives the inbound session live** (`type:"new_session"`,
+  // directory-brokered, B accepted) → A cello_send → **`session_stream_unavailable`** (content
+  // queued to the durable retry queue). So session ESTABLISHMENT between two parties works; the
+  // gap is the CONTENT CONNECTION: in local the session is relay-mode (AutoNAT unavailable on
+  // localhost), and the relay-circuit content connect (N_A↔N_B via the relay) + leaf forwarding
+  // (hash_submit/leaf_deliver) is the unwired "later seam" = DOD-MSG-3/MSG-001-3b, the DoD's
+  // explicitly-NOT-BUILT biggest gap. NEXT BUILD: the relay content path (circuit-relay session
+  // connect + leaf submit/deliver), then un-skip. The setup below is correct + reused as the green.
+  it.skip("DOD-SPINE-6 — send/receive: A cello_send → B cello_receive (relay hash_submit/leaf_deliver, no content in relay logs)", async () => {
+    // Full A→B exchange between TWO parties = TWO daemons (the production topology: a session
+    // is between two parties on two machines; one daemon per party = its own session-core DB).
+    // agentA on daemonA, agentB on daemonB, both against the same directory+relay. B awaits an
+    // inbound session; A initiates to B; A sends; B receives. Asserts the relay witnessed the
+    // message HASH (hash_submit) and that the plaintext NEVER appears in the relay logs (INV-3).
+    const celloDirA = mkdtempSync(join(tmpdir(), "cello-spine6A-"));
+    const celloDirB = mkdtempSync(join(tmpdir(), "cello-spine6B-"));
+    agentDirs.push(celloDirA, celloDirB);
+    await provisionAgent(celloDirA, "agentA");
+    const pubB = await provisionAgent(celloDirB, "agentB");
+    const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "spine6A");
+    const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "spine6B");
+    daemons.push(daemonA, daemonB);
+    const rA = cello(["register", "agentA", `DEV-spine6-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirA });
+    expect(rA.status, `register agentA failed:\n${rA.stdout}`).toBe(0);
+    const rB = cello(["register", "agentB", `DEV-spine6-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirB });
+    expect(rB.status, `register agentB failed:\n${rB.stdout}`).toBe(0);
+
+    const connA = await connectMcp(celloDirA, "spine6-A");
+    mcpConns.push(connA);
+    const connB = await connectMcp(celloDirB, "spine6-B");
+    mcpConns.push(connB);
+    expect(((await connA.call("cello_start_agent", { name: "agentA" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connA.call("cello_use_agent", { name: "agentA" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_start_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_use_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+
+    // B blocks on an inbound session; A initiates to B (pubB = agentB's K_local).
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as {
+      ok?: boolean;
+      reason?: string;
+      sessionId?: string;
+    };
+    const diag = `\ninit: ${JSON.stringify(init)}\n--- daemonA (last 50) ---\n${daemonA.output.split("\n").slice(-50).join("\n")}\n--- daemonB (last 30) ---\n${daemonB.output.split("\n").slice(-30).join("\n")}`;
+    expect(init.ok, `cello_initiate_session failed:${diag}`).toBe(true);
+    const sessionId = init.sessionId!;
+
+    // cello_await_session resolves with the inbound session frame: {type:"new_session",
+    // session_id, counterparty_pubkey, genesis_prev_root} (NOT {ok}).
+    const inbound = (await awaitP) as { type?: string; session_id?: string; reason?: string };
+    expect(inbound.type, `B cello_await_session did not yield a new session: ${JSON.stringify(inbound)}`).toBe(
+      "new_session",
+    );
+    expect(inbound.session_id, "inbound session_id present").toBeTruthy();
+
+    // A sends; B receives the same plaintext.
+    const plaintext = "spine6 hello over the wire";
+    const sent = (await connA.call("cello_send", { session_id: sessionId, content: plaintext })) as {
+      ok?: boolean;
+      reason?: string;
+    };
+    expect(sent.ok, `cello_send failed: ${JSON.stringify(sent)}`).toBe(true);
+    const recv = (await connB.call("cello_receive", { session_id: inbound.session_id, timeout_ms: 15_000 })) as {
+      ok?: boolean;
+      content?: string | null;
+    };
+    expect(recv.content, `B should receive A's plaintext: ${JSON.stringify(recv)}`).toBe(plaintext);
+
+    // Relay witnessed the HASH (Structure 2), and the plaintext never touched the relay (INV-3).
+    expect(cluster.relay.output, "relay must log hash_submit").toMatch(/hash_submit/);
+    expect(cluster.relay.output, "plaintext must NEVER appear in relay logs (INV-3)").not.toContain(plaintext);
+  }, 90_000);
 });
