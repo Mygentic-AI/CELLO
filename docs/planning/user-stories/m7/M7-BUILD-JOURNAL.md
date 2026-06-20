@@ -1613,3 +1613,69 @@ adversarial nodes. Read the MANIFEST-001/002 SI blocks before the adversarial as
 
 **State.** SPINE-1..7 GREEN + closed (SPINE-7 review running). J-AUTH design fixed; build is wiring
 + harness manifest + adversarial test. Branch `m7-rehome` both repos, nothing pushed/merged.
+
+---
+
+## 2026-06-20 — SPEC SESSION (separate from the impl thread): M7 gap-filling — stories + decisions authored
+
+A parallel **specification-only** session (per `M7-GAP-FILLING-BRIEF.md`) filled the M7 spec gaps
+so the implementation thread has something to drive Tier-4/5/6 against. **No implementation code,
+no live test, no merge/push** — docs only. Everything verified against the **m7-rehome** branch
+(not main).
+
+**4 stories written** (hand-authored to the SESSION-002 template — STACK-CORRECTION block, SI block,
+observability + error-discipline ACs, cross-repo version-bump ACs):
+- **CELLO-M7-UPGRADE-001** (Workstream C — unilateral→bilateral upgrade). Returning ABSENT party
+  recovers + verifies CONTENT (precondition, C-4), signs its own ack leaf over the sealed root,
+  directory writes an append-only SUPERSEDING SealNotarization (BILATERAL), reverses PERSIST-015
+  SI-002, refuses only on unverifiability (D-3). **Owns the directory Flyway migration** SESSION-002
+  deferred (relax the one-row-per-session constraint) — needs a V{N} claim in COORDINATION.md + ssm
+  param bump. blocked_by DAEMON-004 + SESSION-002 + MSG-001 + PERSIST-015. **Cannot be implemented
+  until MSG-001-3b lands** (content precondition).
+- **CELLO-M7-UPGRADE-002** (Workstream E — auto-acknowledge close). B's node auto-co-signs the
+  responder SEAL leaf on ingesting A's SEAL leaf + verified content, no agent prompt;
+  `counterparty_closing` informational; verifiability-gated; B's sig always B's own node. Reuses the
+  SPINE-7 submitSealLeaf path. Implementable on DAEMON-004 + SPINE-7; does NOT need MSG-001-3b.
+- **CELLO-M7-PERSIST-LOG-001** (J-PERSIST / DOD-LOG-1 — client data custody). Durable, **encrypted-at-rest**
+  readable transcript in the daemon (sent+received plaintext, joined to the hash chain, readable after
+  restart). cello-client only; INV-3 preserved + asserted. blocked_by DAEMON-004.
+- **CELLO-M7-SESSION-CORE-REKEY-001** (J-LOOPBACK / DOD-LOOP-1). Re-key the session core from
+  `session_id` → `(agent, session_id)` so two K_locals converse on ONE daemon. Daemon-DB migration +
+  the five maps + ownership check + double-accept guard. cello-client only; no wire/directory change;
+  INV-2 unchanged. blocked_by DAEMON-004.
+
+**3 decision logs written** (`discussion_logs/2026-06-20_2217/2220/2225`): client data custody +
+encryption-at-rest (D-B1..4); Tier-5 disposition (REC-1/2/3); local loopback re-key + agent default
+(D-D1, D-E1).
+
+**Verified findings (m7-rehome, HEAD 0afce25 — corrected against actual code):**
+- **Encryption at rest is ABSENT in the live daemon.** Every DB open is plain `node:sqlite`
+  `DatabaseSync` (`session-node-manager.ts:280`); no sqlcipher dep in `core/daemon/package.json`; key
+  material is plaintext files. `registration-persistence.ts:13` states it verbatim: *"Encryption-at-rest
+  for the daemon is a separate future concern and is intentionally NOT introduced piecemeal here."*
+  SQLCipher (`@signalapp/sqlcipher`) is real but only in the DEAD `core/client` stack. The "SQLCipher
+  table" comments in retry-queue/nonce-dedup/session-tree are aspirational; `retry_queue.content_blob`
+  is plaintext content at rest. → a deferral-with-no-home (RC-1); J-PERSIST closes it.
+- **Readable transcript is NOT durable.** `session_tree_leaves` stores only `leaf_hash_hex`; plaintext
+  lives in `#receivedContent` (in-memory) and is cleared on shutdown (:1000). → J-PERSIST.
+- **One daemon cannot host both ends of one session.** session_id-only keying everywhere
+  (`sessions` PK :283, five maps, ownership check `daemon.ts:1355`, double-accept guard `:1966`). Two
+  local agents talking currently needs TWO daemons (the SPINE-6 workaround) = the "unnecessary process
+  spawning" Andre rejects. → SESSION-CORE-REKEY-001.
+
+**DoD updated:** DOD-UP-1/2 ⬜→❌ (storied); Tier-5 REC-1/2/3 ❓→✅ (satisfied/subsumed/absorbed); new
+Tier-6 (DOD-LOG-1 ❌ storied, DOD-LOG-2/3 ⬜ follow-ons, DOD-LOOP-1 ❌ storied); harness journeys 8–10
+(J-UPGRADE/J-PERSIST/J-LOOPBACK) added; bottom line refreshed.
+
+**Note for the implementation thread (D-E1, contained fix, NOT a story):** on a new connection
+`currentAgent` is null (`daemon.ts:919`); auto-select the sole ONLINE agent on the first session tool
+(log `agent.current.switched` fromAgent:null); if the one agent is registered-but-not-online, do NOT
+auto-start — return `no_current_agent` + guidance to `cello_start_agent`.
+
+**Decisions confirmed by Andre (2026-06-20):** J-PERSIST as a journey; encryption-at-rest in scope of
+the persistence story (SQLCipher OR envelope+sqlite); REC-2 subsumed; re-key the session core for M7.
+
+**State.** 4 stories + 3 decision logs + DoD edits + this journal entry committed on `m7-rehome`
+(trustless-cello), nothing pushed/merged. The impl thread can now drive Tier-4/5/6. **Sequencing note:**
+UPGRADE-001 implementation is gated on MSG-001-3b (content recovery); the other three are unblocked once
+their DAEMON-004 foundation is in place.

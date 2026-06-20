@@ -432,7 +432,13 @@ each must stay green once passed:
    busy-silent → ABSENT vs DELIVERED → verifiable cert.
 7. **J-LEGIBILITY** → DOD-LEG-1..4. Malicious-tail transcript → cert reads
    delivered-but-unanswered; four interruption cases legible.
-8. **J-UPGRADE** → DOD-UP-1/2 (after stories written).
+8. **J-UPGRADE** → DOD-UP-1/2 (storied 2026-06-20; UP-1 gated on MSG-001-3b). Absent
+   party returns → recovers + verifies content → signs ack leaf → bilateral
+   (superseding row); B online + verified → auto-co-sign with no agent action.
+9. **J-PERSIST** → DOD-LOG-1. A sends + receives → daemon restart → the readable
+   transcript is recoverable (encrypted at rest); relay/directory show only hashes.
+10. **J-LOOPBACK** → DOD-LOOP-1. Two agents (two K_locals) on ONE daemon converse +
+    bilateral seal; each end signs with its own K_local; no second daemon process.
 
 The adversarial SIs (every story's SI block) are journey assertions, not extras:
 ephemeral-Peer-ID-dies (INV-5), third-party-dial-rejected (INV-5), relay-can't-read
@@ -447,10 +453,14 @@ no-double-count (DOD-MSG-5), no-assent-field (DOD-LEG-4).
 - **Tier 2** is built but step-6 auth is OFF and none of it has touched a real cluster.
 - **Tier 3** is the real remaining work: **MSG-001-3b, SESSION-002, SESSION-004
   client, the SESSION-003 ABSENT gate** are NOT built (or are parked/dead-stack-homed).
-- **Tier 4** isn't even storied.
-- **Tier 5** has 2–3 items that may have been dropped between the old logs and the
-  four stories — decide them in or out, don't let them evaporate again.
+- **Tier 4** is now STORIED (UPGRADE-001/002, 2026-06-20) — ❌ NOT BUILT; UP-1 is
+  gated on the MSG-001-3b content-recovery precondition.
+- **Tier 5** is DECIDED (2026-06-20): REC-1 satisfied (PERSIST-012), REC-2 subsumed,
+  REC-3 absorbed — no silent deferral remains.
+- **Tier 6** is new 2026-06-20 scope, STORIED: J-PERSIST (PERSIST-LOG-001 — durable
+  encrypted transcript; closes the daemon at-rest encryption gap) and J-LOOPBACK
+  (SESSION-CORE-REKEY-001 — two agents on one daemon). Both ❌ NOT BUILT.
 
-M7 is done when journeys J-SPINE through J-LEGIBILITY are green against the real
-binaries, every Tier-0 invariant holds, and Tier-4 is either built or explicitly
-moved to a named future milestone (not silently deferred — that is RC-1).
+M7 is done when journeys J-SPINE through J-LOOPBACK are green against the real
+binaries, every Tier-0 invariant holds, and every Tier-4/5/6 item is built or
+explicitly moved to a named future milestone (not silently deferred — that is RC-1).
