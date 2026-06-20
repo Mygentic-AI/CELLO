@@ -1679,3 +1679,41 @@ the persistence story (SQLCipher OR envelope+sqlite); REC-2 subsumed; re-key the
 (trustless-cello), nothing pushed/merged. The impl thread can now drive Tier-4/5/6. **Sequencing note:**
 UPGRADE-001 implementation is gated on MSG-001-3b (content recovery); the other three are unblocked once
 their DAEMON-004 foundation is in place.
+
+---
+
+## 2026-06-20 — DOD-SPINE-7 review CLOSED (APPROVED); per-agent seal listener fixed; 2 hardening items tracked
+
+Opus review of the SPINE-7 implementation: **APPROVED, no BLOCKING.** Confirmed sound: INV-2
+(the seal co-signature is the agent's OWN node's threshold output from its own frost-share;
+counterparty zero-involvement; directory can't notarize without the initiator's
+seal_frost_signature), fresh-per-ceremony reconstruction, error paths never emit a bogus
+signature, SI-001 (tbs/signature never logged), waiter-before-submit race-free, single-flight
+guard, the last_seen_seq counterparty-seen fix (can only ever over-count toward a real
+relay-assigned seq, never trips the relay check).
+
+**Fixed (HIGH-confidence advisory, cello-client `20e0668`):** the `session_sealed` completion
+listener was keystone-only while `wireSealCeremonyHandler` is per-agent + keystone — a
+non-primary agent's seal completion would never resolve (its session_sealed routes to its
+per-agent stream). Extracted `registerSessionSealedListener` and wired it per-agent too. J-SPINE
+7/7 still green. (Aligns with the multi-agent-single-daemon intent.)
+
+**Tracked hardening items (NOT SPINE-7 regressions — both pre-exist / are faithful ports):**
+- **[INV-2 hardening] Client co-signs the directory-provided `sealed_root` blind.**
+  `wireSealCeremonyHandler` builds `buildSealTbs` from the directory's `seal_verified` frame and
+  co-signs WITHOUT comparing `sealed_root` to its own `getSessionTreeRootHex`. A compromised
+  directory could induce a valid threshold co-signature over a root the client never computed.
+  This is CONSISTENT with the thrice-reviewed session-assignment ceremony (`wireSessionCeremonyHandler`
+  also signs directory-provided tbs blind) and is a faithful port of the dead-stack SealManager —
+  so it is not a SPINE-7 regression, but it means seal integrity currently reduces to trusting the
+  directory. Hardening (a SEPARATE unit, applies to BOTH ceremonies): thread the daemon-owned
+  SessionTree into the seal/ceremony handlers and assert the directory-provided root relates to the
+  local root before signing. → add to the DoD as a named hardening line (J-AUTH/INV-2 territory).
+- **[LOW] `submitSealLeaf` returning `session_node_unavailable`** (active DB row, no in-memory node)
+  is not `relay_unavailable`, so cello_close_session does not fall back to the directory-mediated
+  seal — returns a generic error. Harmless (active ⇒ live node) but inconsistent. Cheap follow-up.
+- **[LOW] harness:** `peerIdFromTransportSeed` must match the relay binary's seed→peerId derivation
+  (confirmed by green); `freePort()`→fixed-bind TOCTOU acceptable in test.
+
+**State.** SPINE-1..7 GREEN + closed + reviewer-APPROVED. The full happy spine is done. Branch
+`m7-rehome` both repos, nothing pushed/merged. Next: J-AUTH build (design note above).
