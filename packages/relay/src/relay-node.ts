@@ -987,6 +987,22 @@ export class CelloRelayNode {
     };
     this.#store.setSession(sessionKey, newState);
 
+    // OBS / DOD-SPINE-6 + DOD-INV-8: the relay witnessing + sequencing a leaf is a
+    // load-bearing, observable event — the relay is the Structure-2 ordering authority.
+    // Structured event for log pipelines; protocolLog line names the wire frame so the
+    // witness is greppable as "hash_submit" (the DoD line: "relay log shows a hash_submit").
+    // Content never appears here — only the signed hash leaf (INV-3).
+    this.#logger.info("relay.hash.submitted", {
+      sessionId: sessionKey,
+      sequenceNumber: seq,
+      senderPubkey: senderPubkeyHex,
+      leafKind,
+    });
+    protocolLog(
+      "RELAY",
+      `hash_submit witnessed — session ${truncHex(sessionKey)} seq ${seq} from ${truncHex(senderPubkeyHex)} (${leafKind})`,
+    );
+
     // PERSIST-012: Build signed ACK when a signing key is configured.
     // TBS = SHA-256(hash_bytes || seq_BE4 || ts_BE8) per RFC 8032, FIPS 180-4.
     const ackTimestamp = Date.now();
@@ -1051,6 +1067,18 @@ export class CelloRelayNode {
     if (counterpartyStream) {
       try {
         await this.#sendFrame(counterpartyStream, deliveryFrame);
+        // OBS / DOD-SPINE-6: the witnessed leaf was forwarded to the connected
+        // counterparty (the DoD line: "leaf_deliver to B's session Peer ID").
+        this.#logger.info("relay.leaf.delivered", {
+          sessionId: sessionKey,
+          sequenceNumber: seq,
+          recipientPubkey: counterpartyHex,
+          leafKind,
+        });
+        protocolLog(
+          "RELAY",
+          `leaf_deliver — session ${truncHex(sessionKey)} seq ${seq} to ${truncHex(counterpartyHex)}`,
+        );
       } catch {
         this.#streams.delete(counterpartyHex);
         this.#store.enqueueDelivery(counterpartyHex, {

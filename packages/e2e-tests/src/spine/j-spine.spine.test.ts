@@ -491,8 +491,11 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     };
     expect(recv.content, `B should receive A's plaintext: ${JSON.stringify(recv)}`).toBe(plaintext);
 
-    // Relay witnessed the HASH (Structure 2), and the plaintext never touched the relay (INV-3).
-    expect(cluster.relay.output, "relay must log hash_submit").toMatch(/hash_submit/);
+    // Relay witnessed the HASH (Structure 2): hash_submit from A's session node, then
+    // leaf_deliver forwarded to B's connected session node. The plaintext never touched
+    // the relay — content is peer↔peer (INV-3).
+    expect(cluster.relay.output, "relay must witness the leaf (hash_submit)").toMatch(/hash_submit/);
+    expect(cluster.relay.output, "relay must forward the witnessed leaf (leaf_deliver)").toMatch(/leaf_deliver/);
     expect(cluster.relay.output, "plaintext must NEVER appear in relay logs (INV-3)").not.toContain(plaintext);
   }, 90_000);
 });
