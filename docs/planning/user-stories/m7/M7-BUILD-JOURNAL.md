@@ -930,3 +930,41 @@ own pubkey; reply on the same per-agent seam — no cross-agent confusion). All 
   `directory_signaling_not_configured`). 342 daemon tests + J-SPINE 5/5 green.
 
 DoD already ✅ for SPINE-5. Proceeding to DOD-SPINE-6 (relay content path).
+
+---
+
+## 2026-06-20 — DOD-SPINE-6: live session ESTABLISHMENT between two parties proven; content delivery = next seam
+
+J-SPINE drove the full two-party live session path and pinpointed exactly where the protocol
+currently stops. Topology: TWO parties = TWO daemons (production model — a session is between two
+machines; one session-core DB per party). First attempt used ONE daemon (two agents talking to
+each other) and hit `session_not_owned` — the session-core keys records by session_id alone
+(daemon.ts:1299/1309), so B's accept overwrote A's record. That is NOT a real scenario (Andre's
+intent is each agent in its OWN session with an EXTERNAL party, not two agents on one daemon
+conversing), so the test moved to two daemons — the faithful topology.
+
+**What works LIVE (two daemons):** register agentA@daemonA + agentB@daemonB → both online →
+B `cello_await_session` (blocks) → A `cello_initiate_session(target=agentB)` → **B receives the
+inbound session** (`{type:"new_session", session_id, counterparty_pubkey, genesis_prev_root}` —
+directory brokered it, B accepted). So bidirectional session establishment across two daemons +
+one directory is GREEN (the FROST-signed assignment, the inbound delivery, the accept).
+
+**The gap (precise):** A `cello_send` → `session_stream_unavailable` (content queued to the durable
+retry queue). The session is established on both sides but the CONTENT connection N_A↔N_B is not
+wired: in local the session is relay-mode (AutoNAT unavailable on localhost → relay advertised),
+and the relay-circuit content connect + leaf forwarding (relay `hash_submit` / `leaf_deliver`,
+Structure 2) is the "later seam" the initiate handler explicitly skips (daemon.ts:1226). This is
+DOD-MSG-3 / MSG-001-3b — the DoD's explicitly-NOT-BUILT biggest gap (Tier 3).
+
+**Next build (DOD-SPINE-6 = DOD-MSG-3/4 territory):** the relay content path —
+1. The relay in the J-SPINE cluster wired as a libp2p circuit relay; the session nodes connect
+   N_A↔N_B via the relay circuit (the skipped relay-mode connect), OR force direct-mode advertise
+   on localhost so the BUILT direct connect (seam-1b) carries content while the relay still
+   witnesses the leaf.
+2. `cello_send` submits the message leaf hash to the relay (`hash_submit` from A's SESSION Peer
+   ID) → relay `leaf_deliver` to B's SESSION Peer ID; content peer-to-peer, NEVER in relay logs
+   (INV-3).
+3. Un-skip the SPINE-6 test (already written + correct) → red→green.
+
+This is a substantial unit (relay content path); SPINE-1..5 remain green + closed. J-SPINE suite
+green (SPINE-6 skipped with the finding).
