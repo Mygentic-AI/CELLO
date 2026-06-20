@@ -968,3 +968,44 @@ DOD-MSG-3 / MSG-001-3b — the DoD's explicitly-NOT-BUILT biggest gap (Tier 3).
 
 This is a substantial unit (relay content path); SPINE-1..5 remain green + closed. J-SPINE suite
 green (SPINE-6 skipped with the finding).
+
+---
+
+## 2026-06-20 — DOD-SPINE-6 deep progress: transport connect proven live; remaining gap is WIRE-002
+
+Drove SPINE-6 content delivery much further and pinpointed the exact remaining protocol gap.
+
+**What now works LIVE (two daemons):** session establishment (SPINE-5) + B accepts + **A's
+ephemeral session node N_A CONNECTS to the counterparty at the transport layer**
+(`session.transport.connected` to a localhost `/ip4/127.0.0.1/.../p2p/<peer>` addr). Fixed two
+real things to get here:
+1. initiate handler now dials the counterparty THROUGH N_A whenever the assignment carries
+   counterparty session addrs (the addrs are the dialability truth — the local
+   `LocalTransportSelectorStub` labels everything `transport_mode:"relay"` even for directly-
+   dialable localhost addrs, so the old `if (mode==="direct")` gate wrongly skipped the dial).
+   Failure is non-fatal now (content queues per the dead-channel contract), not session-destroy.
+2. `sendContent` error extraction handles cross-package libp2p errors (not `instanceof Error`
+   in this realm) — surfaced the REAL reason instead of `[object Object]`.
+
+**The precise remaining gap (WIRE-002):** `cello_send` → `newStream(/cello/content/1.0.0)` →
+**"Protocol selection failed - could not negotiate /cello/content/1.0.0."** Root cause: A must
+reach B's SESSION node (B's standing receiver, which `acceptSession` reuses as N_B and where the
+content handler is registered), but A only has B's ANNOUNCED `peer_info` = agentB's per-agent
+DIRECTORY node (announced by the SPINE-4 signaling, not the standing receiver). The directory
+populates the assignment's `counterparty_session_peer_id/addrs` ONLY from a `session_offer_accept`
+handshake (directory-node.ts:2319-2353), and the `session_offer→accept` round-trip that would
+carry B's session endpoint is **WIRE-002 — explicitly NOT WIRED** (the directory even comments
+this). Using the announced directory-node endpoint fails (no content handler there — verified).
+
+**Next build (WIRE-002 → SPINE-6 green):** wire the session_offer→session_offer_accept round-trip
+so the directory sends B a session_offer (with A's session endpoint) BEFORE building the
+assignment, B replies session_offer_accept advertising its standing-receiver session endpoint,
+and the directory folds B's session endpoint into the FROST-signed assignment. Then A's existing
+connect (now correct) reaches N_B, `newStream(/cello/content)` negotiates, A cello_send → B
+cello_receive; the leaf goes to the relay (hash_submit/leaf_deliver). The directory already has
+the accept-side infrastructure (#pendingSessionOfferAccepts + the 100ms wait); the missing pieces
+are the offer SEND (directory→B) and B's daemon replying with its session endpoint.
+
+**State.** SPINE-1..5 green+closed+reviewed; SPINE-6 transport-connect proven, WIRE-002 is the
+remaining build. 342 daemon + J-SPINE 5/5 green (SPINE-6 skipped with the finding). cello-client
+`d945c77`. Branch `m7-rehome` both repos, nothing pushed/merged.
