@@ -1463,14 +1463,14 @@ export class CelloDirectoryNode {
             continue;
           }
           // M7-WIRE-001 AC-002: Reject session_request missing initiator session Peer ID
-          const parsedReq = parsed as { connection_id?: string; relay_rtt?: Record<string, number>; initiator_session_peer_id?: string; initiator_session_addrs?: string[]; transport_mode?: "direct" | "relay" };
+          const parsedReq = parsed as { connection_id?: string; relay_rtt?: Record<string, number>; initiator_session_peer_id?: string; initiator_session_addrs?: string[]; transport_mode?: "direct" | "relay"; wants_session_offer?: boolean };
           if (!parsedReq.initiator_session_peer_id || !parsedReq.initiator_session_addrs || parsedReq.initiator_session_addrs.length === 0) {
             this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "session_request_missing_peer_id" }));
             continue;
           }
           // Run concurrently — ceremony_result frames must be processed by this same loop
           // while #processSessionRequest is suspended awaiting the ceremony round-trip.
-          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), parsedReq.connection_id, parsedReq.relay_rtt, parsedReq.initiator_session_peer_id, parsedReq.initiator_session_addrs, parsedReq.transport_mode);
+          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), parsedReq.connection_id, parsedReq.relay_rtt, parsedReq.initiator_session_peer_id, parsedReq.initiator_session_addrs, parsedReq.transport_mode, parsedReq.wants_session_offer === true);
         } else if (parsed.type === "session_offer_accept") {
           // M7-WIRE-001 AC-003: handle session offer acceptance from target (Bob)
           const acceptFrame = parsed as { session_id?: Uint8Array; counterparty_session_peer_id?: string; counterparty_session_addrs?: string[] };
@@ -2239,6 +2239,7 @@ export class CelloDirectoryNode {
     initiatorSessionPeerId?: string,
     initiatorSessionAddrs?: string[],
     requestedTransportMode?: "direct" | "relay",
+    requestWantsOffer = false,
   ): Promise<void> {
     protocolLog("SESS", `Session request: ${truncHex(initiatorHex)} → ${truncHex(targetHex)}`);
     this.#logger?.info("frost.debug.session_request.enter", {
@@ -2332,8 +2333,38 @@ export class CelloDirectoryNode {
       counterpartySessionPeerId = existingAccept.counterpartySessionPeerId;
       counterpartySessionAddrs = existingAccept.counterpartySessionAddrs;
       this.#pendingSessionOfferAccepts.delete(sessionIdHexForWait);
+    } else if (requestWantsOffer && this.#streams.get(targetHex)) {
+      // M7-WIRE-002: when the initiator EXPLICITLY opts in (session_request.wants_session_offer
+      // — the daemon's real session path does), and the target is connected, send it a
+      // session_offer carrying the initiator's session endpoint, then wait for the target's
+      // session_offer_accept (the dispatch loop resolves the waiter) so the assignment carries a
+      // reachable counterparty endpoint. The opt-in keeps pre-WIRE-002 callers (and the existing
+      // directory tests) on the original no-offer path — no extra frame, no wait.
+      const targetStream = this.#streams.get(targetHex)!;
+      this.#sendFrame(
+        targetStream,
+        CBOR_ENC.encode({
+          type: "session_offer",
+          session_id,
+          initiator_session_peer_id: initiatorSessionPeerId ?? "",
+          initiator_session_addrs: initiatorSessionAddrs ?? [],
+        }),
+      );
+      const accepted = await Promise.race([
+        new Promise<boolean>((resolve) => {
+          this.#sessionOfferAcceptWaiters.set(sessionIdHexForWait, () => resolve(true));
+        }),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000)),
+      ]);
+      this.#sessionOfferAcceptWaiters.delete(sessionIdHexForWait);
+      if (accepted) {
+        const acceptData = this.#pendingSessionOfferAccepts.get(sessionIdHexForWait)!;
+        counterpartySessionPeerId = acceptData.counterpartySessionPeerId;
+        counterpartySessionAddrs = acceptData.counterpartySessionAddrs;
+      }
+      this.#pendingSessionOfferAccepts.delete(sessionIdHexForWait);
     } else {
-      // Brief wait (100ms) for a session_offer_accept that arrived concurrently
+      // Brief wait (100ms) for a session_offer_accept that arrived concurrently (original path).
       const accepted = await Promise.race([
         new Promise<boolean>((resolve) => {
           this.#sessionOfferAcceptWaiters.set(sessionIdHexForWait, () => resolve(true));
@@ -2346,10 +2377,7 @@ export class CelloDirectoryNode {
         counterpartySessionPeerId = acceptData.counterpartySessionPeerId;
         counterpartySessionAddrs = acceptData.counterpartySessionAddrs;
       }
-      // Clean up regardless — prevents memory leak from late-arriving accepts
       this.#pendingSessionOfferAccepts.delete(sessionIdHexForWait);
-      // If not accepted, proceed with empty defaults — counterparty is pre-M7 or
-      // the full offer→accept round-trip will be added in WIRE-002.
     }
     this.#sessionOfferAcceptTargets.delete(sessionIdHexForWait);
 
