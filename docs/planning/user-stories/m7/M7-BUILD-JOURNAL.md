@@ -1122,3 +1122,68 @@ the live J-SPINE assertion.
 
 **State.** SPINE-1..5 green+closed+reviewed; GAP 1 closed + committed (`6d7b5b1`); GAP 2 = the relay
 client build, now fully specified. Branch `m7-rehome` both repos, nothing pushed/merged.
+
+---
+
+## 2026-06-20 — DOD-SPINE-6 GREEN (live two-party send/receive + relay witness)
+
+J-SPINE DOD-SPINE-6 is GREEN against the real binaries (6/6). The full happy spine runs
+live: two daemons (two parties) → register (real DKG) → initiate → FROST-signed assignment
+→ **A `cello_send` → B `cello_receive` with byte-identical plaintext** over the direct
+`/cello/content/1.0.0` stream, with the relay witnessing `hash_submit` and forwarding
+`leaf_deliver`, and no plaintext in the relay logs (INV-3, non-tautological).
+
+**Three capabilities built to close the two gaps from the prior entry:**
+
+- **GAP 1 (directory, `6d7b5b1`).** Root cause found by producer/consumer code-read (no
+  logging needed): `decodeInboundSignalingFrame` is a TYPED ALLOWLIST decoder — it rebuilt
+  `SessionRequest` from only the known fields and silently dropped `wants_session_offer`.
+  The daemon sent it (CBOR) and the directory checked `parsedReq.wants_session_offer ===
+  true`, but the field never survived decode → the `session_offer` branch never fired →
+  empty counterparty endpoint → `cello_send` "Invalid peer ID". (The earlier "unconditional
+  offer DID fire" note was the tell: `#streams.get(targetHex)` was truthy; only
+  `requestWantsOffer` differed.) Fix: carry the field through the decoder + add it to the
+  `SessionRequest` type. Opt-in preserved → 584 directory tests untouched. This alone made
+  the direct P2P send/receive green (relay witness was the remaining red).
+
+- **GAP 2 (daemon relay client, `cccae5c`; gater `cbd2b9f`; relay obs `4731417`).** The
+  daemon had NO relay-submit path (DAEMON-004 deferred it to MSG-001; `registerRelayStream`
+  read only `session_interrupted` and had no caller; no `/cello/relay/1.0.0` client existed).
+  Built `core/daemon/src/session-relay-client.ts` (FOCUSED, not a port of the 983-line dead
+  `relay-stream-manager.ts`): the SESSION node opens the relay stream (relay sees the session
+  peer id), Ed25519 challenge-response auths as the agent K_local (relay routes `leaf_deliver`
+  by K_local), submits signed Structure-1 message-leaf hashes, reads `hash_submit_ack` /
+  `leaf_deliver` on ONE shared iterator. Wired into createSessionNode/acceptSession (connect),
+  sendContent (submit AFTER the direct send — best-effort, INV-3, a relay miss never fails an
+  already-delivered send), and all teardown paths (close).
+
+- **Gater (`cbd2b9f`).** Root cause of the first live failure (`session.relay.dial.failed`,
+  `[object Object]`): the session node's `SessionConnectionGater` allows only the counterparty
+  (INV-5), so `denyOutboundEncryptedConnection` DENIED the dial to the relay (a third peer).
+  Fix: `setAllowedOutboundPeer(relayPeerId)` — OUTBOUND-only; INBOUND stays counterparty-only,
+  so INV-5 third-party-dial-rejected is fully preserved. The relay peer id comes from the
+  FROST-signed assignment. Also fixed `[object Object]` → real libp2p error extraction.
+
+**Relay observability (DOD-INV-8).** The relay had no success-path log for a witnessed leaf
+(only error logs), so the witness was invisible. Added `relay.hash.submitted` /
+`relay.leaf.delivered` structured events + greppable protocolLog lines. The SPINE-6 test
+asserts BOTH `hash_submit` AND `leaf_deliver` in the relay log + no plaintext.
+
+**Diagnostic method (for the record).** The first live run failed only on the relay assertion
+(`cello_send` + `cello_receive` already passed). Attaching the daemon's `session.relay.*`
+events to the assertion surfaced `dial.failed [object Object]`; fixing the error extraction +
+reasoning the gater produces/consumes the dial denial (the gater is the producer of the deny;
+the relay dial is the consumer) pinpointed the gater. One targeted fix, green next run.
+
+**Floor.** typecheck + lint clean both repos; daemon 346/346; directory 586; dead-stack
+reachability gate green; J-SPINE 6/6 (SPINE-6 un-skipped). Inner-loop tests added:
+`session-relay-client.test.ts` (+3, real Ed25519 vs the relay contract), the gater
+outbound/inbound test, and 2 GAP-1 decoder tests.
+
+**Scope boundary (named, not silent).** The relay assigns the canonical `sequence_number`
+(witnessed live), but the receiver's full canonical-sequence RECONCILIATION against its local
+tree (the direct-content path appends at a LOCAL index) is MSG-001-3b / DOD-MSG-4 recovery
+scope (J-CONTENT) — out of the SPINE happy path, already homed in Tier 3.
+
+**State.** SPINE-1..6 GREEN + closed; SPINE-5 reviewer-approved; SPINE-6 reviewer dispatched.
+Branch `m7-rehome` both repos, nothing pushed/merged. NEXT RED: DOD-SPINE-7 (bilateral seal).

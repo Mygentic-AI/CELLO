@@ -150,7 +150,27 @@ Source: outline Milestone Close Gate + E2E-001 AC-001–012. Mostly built/merged
   (no `transportDialer` wired in the binary) is **DOD-SPINE-6**.
 - **DOD-SPINE-6 — Send / receive.** A `cello_send` → B `cello_receive`; relay log
   shows `hash_submit` from A's *session* Peer ID and `leaf_deliver` to B's *session*
-  Peer ID; content never in relay logs. — 🟡 (proven in-process seam 3/4; never live)
+  Peer ID; content never in relay logs. — ✅ **PROVEN LIVE** by J-SPINE (2026-06-20,
+  cello-client `cbd2b9f` + trustless-cello `4731417`): TWO daemons (two parties),
+  agentA@daemonA + agentB@daemonB → B `cello_await_session` → A `cello_initiate_session`
+  → **A `cello_send` → B `cello_receive` with byte-identical plaintext** over the direct
+  `/cello/content/1.0.0` P2P stream, AND the relay witnessed the leaf: relay log shows
+  `hash_submit witnessed … from <A session pubkey>` then `leaf_deliver … to <B session
+  pubkey>`; plaintext NEVER appears in the relay logs (INV-3 — non-tautological: the relay
+  IS in the witness path). **Built three missing capabilities:** (1) GAP 1 — the WIRE-002
+  `wants_session_offer` opt-in is now carried through the directory's typed allowlist
+  decoder (was silently dropped → empty counterparty endpoint), so the
+  `session_offer→accept` round-trip folds B's standing-receiver endpoint into the
+  FROST-signed assignment and A's dial reaches N_B; (2) GAP 2 — the daemon-side relay
+  witness client (`session-relay-client.ts`): each session node connects + Ed25519
+  challenge-response auths to the relay over `/cello/relay/1.0.0` and submits signed
+  Structure-1 message-leaf hashes; the relay assigns the canonical sequence + forwards
+  `leaf_deliver`; (3) the session gater now admits the relay OUTBOUND-only (the session
+  node must reach the relay; INBOUND stays counterparty-only, INV-5 preserved). Relay
+  gained observable `relay.hash.submitted` / `relay.leaf.delivered` events (DOD-INV-8).
+  Note: the relay-assigned canonical sequence is witnessed, but the receiver's full
+  canonical-sequence reconciliation against its local tree (vs the direct-content local
+  index) is MSG-001-3b's recovery scope (J-CONTENT) — the SPINE happy path is green.
 - **DOD-SPINE-7 — Bilateral seal.** Both parties submit SEAL ctrl leaves →
   directory rebuilds + verifies the whole signed Merkle chain → FROST notarization
   → `session_sealed` to both with byte-identical `sealed_root`. — 🟡 (DAEMON-004
