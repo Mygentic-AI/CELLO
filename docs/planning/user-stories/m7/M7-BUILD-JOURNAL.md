@@ -1286,3 +1286,37 @@ regression locks the specific defect now).
 
 **State.** SPINE-1..6 GREEN; SPINE-6 two review rounds fixed; live re-verify pending. Branch
 `m7-rehome` both repos, nothing pushed/merged. Third review dispatched.
+
+---
+
+## 2026-06-20 — DOD-SPINE-6 CLOSED (third review APPROVED; residual LOW hardened)
+
+Third opus review of the review-2 fixes returned **APPROVED** — all five prior findings
+(BLOCKING per-session last_seen_seq + HIGH timeout-reset + MEDIUM federation key + 2×LOW)
+confirmed really fixed and coherent end-to-end, key-alignment traced across registerSession
+→ signed Structure-1 session_id → relay per-session seq_counter → leaf_deliver. INV-3 + INV-5
+re-confirmed. One residual LOW hardened (cello-client `93bda95`): the relay reader checked
+stream identity only at the loop top, so a frame read from a STALE stream after a timeout
+`#resetStream()` could be dispatched and bump/settle the wrong session — now re-checks
+`this.#stream === stream` after `iter.next()` before dispatch (fully robust, not reliant on
+`stream.close()` ending the iterator promptly).
+
+**DOD-SPINE-6 is CLOSED.** Proven live (J-SPINE 6/6, re-verified after every change), three
+adversarial review rounds, all findings at all severities fixed. The full happy spine now
+runs end-to-end against the real binaries for the first time in the daemon era — two daemons,
+register (real DKG) → initiate → FROST-signed assignment → A cello_send → B cello_receive
+over direct P2P → relay witnesses hash_submit + forwards leaf_deliver, no plaintext in relay
+(INV-3, non-tautological). The relay witness client is per-agent multiplexed (correct for the
+first-class multi-session property), with per-session sequencing, FIFO ack matching, federation-
+safe keying, and reconnect resilience.
+
+**Carried follow-up (named, not silent):** a two-concurrent-sessions-per-agent LIVE assertion
+in J-SPINE (the single-session spine can't catch per-session-counter regressions — exactly the
+class of bug review-2 found). Locked by a unit regression now; the live assertion lands when the
+multi-session property is formally exercised (J-CONTENT / MSG-001-3b territory).
+
+**State.** SPINE-1..6 GREEN + closed + reviewer-APPROVED. Branch `m7-rehome` both repos,
+nothing pushed/merged. Daemon 350/350, typecheck + lint clean, dead-stack gate green.
+**NEXT RED: DOD-SPINE-7 (bilateral seal)** — design-significant (directory-mediated via
+handleActiveSealFlow vs relay-mediated via #maybeProcessSeal; needs a design note + likely
+extends the relay client to ctrl/0x02 leaves). J-SPINE has no SPINE-7 assertion yet.
