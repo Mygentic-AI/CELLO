@@ -507,7 +507,7 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
   // distinct-sender ctrl leaves → directory processSeal rebuilds + verifies the signed chain
   // → FROST notarization → session_sealed back to both daemons with a byte-identical
   // sealed_root. Skipped during the build (keeps SPINE-1..6 green); un-skip at green.
-  it.skip("DOD-SPINE-7 — bilateral seal: both close → directory FROST-notarizes → byte-identical sealed_root", async () => {
+  it("DOD-SPINE-7 — bilateral seal: both close → directory FROST-notarizes → byte-identical sealed_root", async () => {
     // Two parties = two daemons (the SPINE-6 topology). Establish a session + one message,
     // then BOTH cello_close_session → both submit SEAL ctrl leaves → relay-mediated directory
     // notarization → both observe session_sealed with the SAME sealed_root (INV-2: B's
@@ -545,9 +545,17 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     expect(((await connB.call("cello_receive", { session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("spine7 sealed message");
 
     // BOTH parties close → both submit SEAL ctrl leaves → relay-mediated directory FROST seal.
-    const closeA = (await connA.call("cello_close_session", { session_id: sessionIdA })) as { ok?: boolean; sealed_root?: string; reason?: string };
-    const closeB = (await connB.call("cello_close_session", { session_id: sessionIdB })) as { ok?: boolean; sealed_root?: string; reason?: string };
-    const closeDiag = `\ncloseA: ${JSON.stringify(closeA)}\ncloseB: ${JSON.stringify(closeB)}`;
+    // The seal only notarizes once BOTH have closed, so each close blocks awaiting
+    // session_sealed — they MUST run concurrently (a sequential await would deadlock the
+    // first on the second).
+    const [closeA, closeB] = (await Promise.all([
+      connA.call("cello_close_session", { session_id: sessionIdA }),
+      connB.call("cello_close_session", { session_id: sessionIdB }),
+    ])) as Array<{ ok?: boolean; sealed_root?: string; reason?: string }>;
+    const closeDiag = `\ncloseA: ${JSON.stringify(closeA)}\ncloseB: ${JSON.stringify(closeB)}` +
+      `\n--- daemonA seal/relay ---\n${daemonA.output.split("\n").filter((l) => /seal|relay|hash_submit/.test(l)).slice(-15).join("\n")}` +
+      `\n--- daemonB seal/relay ---\n${daemonB.output.split("\n").filter((l) => /seal|relay|hash_submit/.test(l)).slice(-15).join("\n")}` +
+      `\n--- relay ---\n${cluster.relay.output.split("\n").slice(-20).join("\n")}`;
     expect(closeA.ok, `A close failed:${closeDiag}`).toBe(true);
     expect(closeB.ok, `B close failed:${closeDiag}`).toBe(true);
 
