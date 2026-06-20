@@ -173,8 +173,23 @@ Source: outline Milestone Close Gate + E2E-001 AC-001–012. Mostly built/merged
   index) is MSG-001-3b's recovery scope (J-CONTENT) — the SPINE happy path is green.
 - **DOD-SPINE-7 — Bilateral seal.** Both parties submit SEAL ctrl leaves →
   directory rebuilds + verifies the whole signed Merkle chain → FROST notarization
-  → `session_sealed` to both with byte-identical `sealed_root`. — 🟡 (DAEMON-004
-  active-seal wired via interrupted plumbing; never run live)
+  → `session_sealed` to both with byte-identical `sealed_root`. — ✅ **PROVEN LIVE**
+  by J-SPINE (2026-06-20, cello-client `fecb22a` + trustless-cello harness `1c59feb`):
+  two daemons, a message, then BOTH `cello_close_session` → each daemon submits a SEAL
+  **ctrl** leaf (0x02) via the relay witness → relay `#maybeProcessSeal` (two
+  distinct-sender ctrl leaves) → directory `processSeal` rebuilds + verifies the signed
+  3-leaf chain → **FROST notarization** (the initiator coordinates the seal FROST ceremony,
+  `cello-frost-seal-v1`, the daemon's reconstructed threshold signer co-signs with the
+  directory's K_server shares) → `session_sealed` delivered to BOTH parties with a
+  **byte-identical `sealed_root`**. **Built (relay-mediated path):** (1) the daemon SEAL
+  ctrl leaf + `submitLeaf`; (2) `cello_close_session` relay-mediated branch (submit + await
+  `session_sealed`, directory-mediated fallback); (3) the `session_sealed` listener; (4) the
+  harness relay→directory wiring (pre-derived relay peer id + fixed port, directory-first);
+  (5) the `last_seen_seq` counterparty-seen fix (the SI-003 causal-chain correctness bug);
+  (6) the **daemon SEAL FROST ceremony** (`wireSealCeremonyHandler` — `seal_verified` →
+  reconstruct signer → `participateInCeremony` → `seal_frost_signature`). The full happy
+  spine (SPINE-1→7) now runs end-to-end against the real binaries — the FIRST time in the
+  daemon era.
 
 ---
 

@@ -1,0 +1,549 @@
+---
+name: CELLO-M7-UPGRADE-001
+type: user-story
+date: 2026-06-20
+topics: [seal, unilateral-to-bilateral, upgrade, returning-party, ack-leaf, append-only, superseding-row, content-precondition, frost-notarization, directory, daemon, m7]
+status: draft
+description: >
+  Promotes a unilateral seal to bilateral when the previously-ABSENT party
+  returns. The returning party recovers AND verifies the content behind every
+  leaf in the sealed tree (content possession is the precondition — a party may
+  not co-sign a tree it cannot read), signs ONE new Ed25519 ack/SEAL leaf over the
+  already-sealed root with its own node's key, and the directory records its
+  attestation and writes an APPEND-ONLY SUPERSEDING SealNotarization row marking
+  the seal BILATERAL — never mutating the unilateral row. Reverses
+  PERSIST-015 SI-002 (a unilateral seal MAY now be supplemented) and inverts its
+  test. Disagreement is handled per POSTMORTEM D-3: refuse ONLY on unverifiability
+  (content unrecoverable, or recovered content's hash ≠ committed content_hash =
+  tamper) — never on disagreement with the message's claims. This is POSTMORTEM
+  Workstream C.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-UPGRADE-001
+domain: Session
+milestone: M7
+actor: DIR
+priority: P1
+components:
+  - directory
+  - daemon
+  - client
+  - protocol-types
+  - crypto
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the directory and the returning (previously-ABSENT) party's daemon,
+  I want a unilateral seal to be promotable to bilateral when the absent party
+  returns, recovers and verifies the content behind the sealed root, and signs its
+  own ack leaf over that root — recorded as an append-only superseding notarization
+  that never mutates the unilateral row —
+  so that a conversation sealed while one side was gone becomes a fully mutually
+  acknowledged record once that side comes back and can honestly attest to what it
+  received, without ever forging the returning party's signature, without trusting
+  a tree it cannot read, and without rewriting the original unilateral proof.
+
+# ─── Context ────────────────────────────────────────────────
+# ─── STACK CORRECTION (2026-06-20) — READ BEFORE IMPLEMENTING ──────────────
+# LIVE half (correct): the directory-side promotion — verify the returning party's
+# ack leaf, write the append-only superseding SealNotarization, the schema change that
+# permits it. The directory is a real production node; these ACs are stack-neutral.
+# DEAD half: any client-side AC anchored on core/client/src/seal-manager.ts
+# (handleSealUnilateralConfirmed / handleSealUnilateralNotification, the absent-party
+# return path) targets the legacy in-process CelloClient stack, which NO production
+# binary runs (see CELLO-M7-DAEMON-004 + POSTMORTEM Part 3/4). Per Option A the
+# active-session seal — including the returning party's content recovery + ack-leaf
+# signing + certificate update — lives in the DAEMON. Implement every client-side AC
+# against the DAEMON-004 daemon seal/transcript path (SessionNodeManager + the
+# daemon-owned tree), NOT seal-manager.ts. blocked_by: CELLO-M7-DAEMON-004.
+# ───────────────────────────────────────────────────────────────────────────
+# Authority: POSTMORTEM-seal-and-content-delivery-gaps.md — Part 2 Workstream C,
+# Part 3 C-3 / C-4 / D-3 (SETTLED), Part 4 story-slate row C. Decision log:
+# 2026-06-20_2217 is NOT this; the canonical design is the POSTMORTEM. Key settled points:
+#   - C-3: the returning party's ONLY contribution is an acknowledgement, and an
+#     acknowledgement is a SIGNATURE. The upgrade is the returning party signing ONE
+#     new ack leaf over the sealed root — NOT re-signing the conversation, NOT a passive
+#     download of the directory's notarization (which would move no frontier and
+#     foreclose dispute).
+#   - C-4 (the spine): content is a PRECONDITION, not a parallel feature. The honest
+#     test for whether a party may co-sign a tail is that it holds the actual PLAINTEXT
+#     behind every leaf in the sealed tree — not just the hash. Recovers content → may
+#     co-sign. Recovers only the hash → must NOT co-sign (it would attest to an opaque
+#     blob, which is not what a seal means). Content recovery is CELLO-M7-MSG-001
+#     (DOD-MSG-4) — a hard blocked_by, because without it the upgrade is semantically
+#     impossible.
+#   - D-3 (refined): on the returning party's reconstructed root disagreeing with the
+#     sealed root — refuse ONLY on unverifiability. Content unrecoverable → cannot
+#     honestly seal, stay ABSENT/unconfirmed. Recovered content's hash ≠ committed
+#     content_hash → genuine tamper → dispute with cryptographic proof. Disagreement
+#     with the message's CLAIMS is NEVER grounds to refuse (POSTMORTEM C-6).
+#   - D-2: the notarization signer set is the seal initiator + the directory FROST
+#     threshold; the counterparty is NEVER a FROST signer. The returning party's
+#     contribution is its own Ed25519 ack/SEAL leaf (INV-2). The bilateral notarization
+#     runs the existing two-SEAL-leaf processSeal path once B's SEAL leaf exists.
+#
+# What this upgrades FROM: CELLO-M7-SESSION-002 persists the unilateral
+# SealNotarization append-only, close_type='SEAL_UNILATERAL', counterparty 'ABSENT',
+# discriminated so a future bilateral row can SUPERSEDE it. SESSION-002
+# implementation_notes (CONSTRAINT-CONFLICT) explicitly DEFERS the schema relaxation to
+# THIS story: conversation_seals.conversation_id UNIQUE and seal_notarizations.session_id
+# UNIQUE each enforce one row per session; the append-only superseding bilateral row
+# requires relaxing this (a partial unique index keyed on close_type / a 'superseded'
+# flag), and that schema change + its Flyway migration version belong HERE.
+#
+# MIGRATION TENSION (must be handled, not ignored): outline.md says "NOT in scope: New
+# Flyway directory schema migrations (none in M7)." This story is the explicit exception
+# SESSION-002 named. Therefore this story DOES introduce a directory Flyway migration
+# V{N}: (a) claim V{N} in COORDINATION.md's Migration Version Registry BEFORE
+# implementation; (b) update infra/cloudformation/cello-ssm-parameters.yaml
+# OpsAgentExpectedMigrationVersion default to {N} (CLAUDE.md migration rule — failing this
+# crash-loops the ops-agent on fresh deploy); (c) add the migration integration-gate AC
+# (Flyway reports zero checksum errors on V1..V[N-1]); (d) NEVER modify an applied
+# migration — the superseding row is a NEW row under a relaxed constraint, the unilateral
+# row is never mutated (M5 migration-integrity rule).
+#
+# Sovereign node constraint: the bilateral notarization is the EXISTING FROST seal
+# ceremony (directory threshold coordinated by the initiator), unchanged — no single node
+# completes it alone, no new cross-node shared state. The returning party's ack leaf is
+# produced by ITS OWN node only. The append-only superseding row is owned by the directory
+# node that processes the upgrade (owning_node_id semantics preserved); no replication or
+# co-location is assumed.
+#
+# Cross-repo: modifies packages/directory (trustless-cello) + core/daemon, core/client,
+# core/protocol-types (+ core/crypto if a verify helper) in cello-client. Version-bump
+# (AC) + trustless-cello dependency-update (AC). Batch the directory deploy per
+# COORDINATION.md — never push directory changes alone (25-30 min pipeline).
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a previously-ABSENT party reconnects to a session that holds a
+      persisted unilateral SealNotarization (close_type='SEAL_UNILATERAL')"
+    action: >
+      the returning party's daemon shall attempt to recover the content behind every
+      leaf in the sealed tree via CELLO-M7-MSG-001 recovery (request resend from the
+      sender, then pull from the relay store-and-forward queue), cross-check each
+      recovered content against the committed content_hash, and rebuild the sealed root
+      from the recovered, verified leaves. Content possession (plaintext, not just hash)
+      is the precondition for any co-sign.
+
+  - trigger: "When the returning party has recovered and verified the content behind
+      every leaf AND its rebuilt root equals the sealed root in the unilateral certificate"
+    action: >
+      the returning party's daemon shall sign ONE new Ed25519 ack/SEAL control leaf over
+      the sealed root with its own K_local (its own node's signature — never the present
+      party's, never the directory's), and submit it to complete the bilateral seal. The
+      directory runs the existing two-SEAL-leaf processSeal notarization (D-2 signer set)
+      and persists an append-only SUPERSEDING SealNotarization marking the seal BILATERAL.
+
+  - trigger: "When the directory persists the bilateral superseding notarization"
+    action: >
+      the directory shall write a NEW seal_notarizations / conversation_seals row
+      (close_type bilateral) that references and SUPERSEDES the unilateral row via an
+      explicit supersedes link, and update the counterparty's conversation_attestations
+      row from 'ABSENT' to its present, signed attestation. The unilateral row is NEVER
+      UPDATEd or DELETEd. It logs session.upgrade.promoted at INFO with sessionId,
+      supersededNotarizationId, returningPartyPubkey, leafCount, correlationId.
+
+  - trigger: "When the returning party CANNOT recover the content behind one or more
+      leaves in the sealed tree (sender unreachable AND relay queue expired/empty)"
+    action: >
+      the directory shall NOT promote the seal; the returning party stays ABSENT and the
+      tail stays unconfirmed (D-3: refuse only on unverifiability). The daemon returns
+      reason 'upgrade_content_unrecoverable' with guidance, and logs
+      session.upgrade.refused at WARN with reason 'content_unrecoverable'. The unilateral
+      seal remains valid and unchanged.
+
+  - trigger: "When the returning party recovers content whose hash does NOT match the
+      committed content_hash for that leaf (genuine tamper)"
+    action: >
+      the directory shall NOT promote the seal; the daemon raises a dispute with
+      cryptographic proof (the committed content_hash vs. the recovered content), returns
+      reason 'upgrade_content_tamper', and logs session.upgrade.tamper.detected at ERROR
+      with sessionId, leafIndex, correlationId. This is the ONLY mismatch case that is an
+      alarmable security event — distinct from mere unrecoverability.
+
+  - trigger: "When a client (present or returning party) receives the updated bilateral
+      certificate after a successful promotion"
+    action: >
+      the client rebuilds the canonical seal TBS from the certificate fields and verifies
+      BOTH attestations (the present party's and the returning party's ack leaf) against
+      keys it trusts independently of the channel, and only then records the session
+      sealed with seal_type 'bilateral'. A certificate whose returning-party signature
+      does not verify does not satisfy the upgrade.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+
+  - id: AC-001
+    given: "A session with a persisted unilateral SealNotarization (SESSION-002:
+      close_type='SEAL_UNILATERAL', counterparty 'ABSENT'), where the previously-absent
+      party returns, recovers and verifies (via MSG-001) the content behind every leaf,
+      and its rebuilt root equals the sealed root"
+    when: "the returning party signs its ack leaf over the sealed root and submits it"
+    then: >
+      The directory runs the two-SEAL-leaf processSeal notarization, persists an
+      append-only SUPERSEDING SealNotarization marking the seal BILATERAL with an explicit
+      supersedes reference to the unilateral row, and updates the counterparty's
+      conversation_attestations row from 'ABSENT' to its signed attestation. getNotarization
+      returns the bilateral row; the unilateral row still exists, unmutated. Verified by an
+      integration test driving the full recover→verify→sign→submit→promote path (not by
+      pre-populating the bilateral row).
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "A returning party that can recover only the HASH (relay queue / WAL) but NOT
+      the plaintext content behind one or more sealed leaves"
+    when: "it attempts to upgrade"
+    then: >
+      The upgrade is refused: no bilateral row is written, the returning party stays
+      ABSENT, the unilateral seal is unchanged. reason is 'upgrade_content_unrecoverable'
+      with actionable guidance. session.upgrade.refused fires at WARN with reason
+      'content_unrecoverable'. (C-4: hash-only is insufficient for an honest co-sign.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-003
+    given: "A returning party whose recovered content for a leaf hashes to a value that
+      does NOT equal the committed content_hash for that leaf (tamper)"
+    when: "it cross-checks before signing"
+    then: >
+      The upgrade is refused with reason 'upgrade_content_tamper'; the daemon surfaces a
+      dispute carrying the committed content_hash and the mismatching recovered content as
+      cryptographic proof; session.upgrade.tamper.detected fires at ERROR. This is distinct
+      from 'upgrade_content_unrecoverable' (tamper vs. absence are different causes with
+      different operator actions — D-3).
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-004
+    given: "A returning party whose recovered+verified content reconstructs a root that
+      DISAGREES with the sealed root, but where every recovered content's hash matches its
+      committed content_hash (no tamper — e.g. the returning party is missing a leaf the
+      present party legitimately sealed over)"
+    when: "it attempts to upgrade"
+    then: >
+      The daemon continues recovery to obtain the missing leaf/content via MSG-001; only
+      if a leaf's content is genuinely unrecoverable does it fall to AC-002
+      ('upgrade_content_unrecoverable'). Disagreement with the message's CLAIMS is never a
+      refusal cause (C-6). The seal is promoted iff the returning party can rebuild and
+      verify the exact sealed root from content it holds.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-005
+    given: "PERSIST-015 SI-002 ('a unilateral seal shall not be supplemented by a bilateral
+      seal') and its test"
+    when: "this story reverses the invariant"
+    then: >
+      PERSIST-015 SI-002 is updated to permit the append-only superseding bilateral row,
+      and its test is INVERTED: the test that previously asserted a bilateral seal is
+      REJECTED for a session with a unilateral seal now asserts the superseding bilateral
+      row is ACCEPTED and the unilateral row is preserved unmutated. The reversal is
+      explicit and documented (M5 rule: never silently change an invariant).
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "The append-only superseding write"
+    when: "a bilateral SealNotarization supersedes a unilateral one"
+    then: >
+      A NEW row is written under the relaxed constraint (partial unique index on close_type
+      or a 'superseded' flag — see implementation_notes); the unilateral row is never
+      UPDATEd or DELETEd; the supersedes link is queryable so a reader can find the current
+      (bilateral) notarization AND the original unilateral one. Verified by a separate,
+      freshly-constructed DirectoryNode instance pointed at the same Postgres returning BOTH
+      rows with the supersedes relationship intact (L2 + stub-resistance — survives process
+      boundaries).
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "The returning party's ack leaf"
+    when: "the bilateral notarization is produced"
+    then: >
+      The returning party's attestation is verifiable using ONLY the returning party's own
+      primary_pubkey / K_local over the canonical seal TBS — it is NOT produced by the
+      present party, the directory, or any other node. Verified by asserting (a) no path
+      lets another party synthesize the returning party's signature, and (b) the persisted
+      bilateral notarization's returning-party attestation verifies against the returning
+      party's key alone. (INV-2 / SI below.)
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "A successfully promoted bilateral certificate delivered to both clients over a
+      real signaling stream, including an adversary that swaps the sealed_root or the
+      returning-party signature in transit"
+    when: "a client verifies the updated certificate"
+    then: >
+      The client rebuilds the canonical seal TBS and verifies BOTH attestations against
+      independently-trusted keys; a swapped sealed_root or forged returning-party signature
+      fails verification and the session does NOT transition to bilateral
+      (session.upgrade.certificate.invalid logged). Only a fully-verifying bilateral
+      certificate records seal_type 'bilateral'.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-009
+    given: "The directory Flyway migration that relaxes the one-row-per-session constraint"
+    when: "the migration is applied to a database that already has migrations V1..V[N-1]"
+    then: >
+      Flyway reports ZERO checksum errors on all prior migrations; the new V{N} adds the
+      superseding-row mechanism without modifying any applied migration;
+      OpsAgentExpectedMigrationVersion in cello-ssm-parameters.yaml is updated to {N}; the
+      version is registered in COORDINATION.md's Migration Version Registry. (M5
+      migration-integrity rule.)
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-010
+    given: "All error paths introduced by this story (directory promotion + daemon upgrade
+      orchestration)"
+    when: "each distinct failure cause is triggered independently"
+    then: >
+      'upgrade_content_unrecoverable', 'upgrade_content_tamper',
+      'upgrade_root_unverifiable', and 'upgrade_returning_sig_invalid' are each a unique
+      code distinguishable from one another and from existing seal codes. No catch returns a
+      hardcoded reason without logging error.message. The lateral catch audit covers
+      packages/directory and the touched daemon seal files (L6). Each MCP/daemon failure
+      response carries a guidance field naming the next action (Rule 2).
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-011
+    given: "The observability events declared for this story"
+    when: "the happy path and each error path execute"
+    then: >
+      session.upgrade.promoted (INFO), session.upgrade.refused (WARN),
+      session.upgrade.tamper.detected (ERROR), and session.upgrade.certificate.invalid
+      (ERROR) fire with their declared context fields; correlationId equals the session-id
+      hex and threads every event in the flow; no console.log; registered in the canonical
+      taxonomy. Verified by asserting event names + context fields.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-012
+    given: "The directory composition root and the daemon seal path"
+    when: "a real returning-party ack leaf is submitted over a real stream and passes
+      verification"
+    then: >
+      The recover→verify→sign→promote path is reached from the composition root and
+      produces a persisted, signature-valid bilateral superseding notarization — not dead
+      code. Verified by an integration test that drives the daemon seal path and the
+      directory over real streams (not by calling the handler directly) (L3 + L7).
+    test_type: integration
+    component_under_test: directory
+
+  # ── Cross-repo version bump ──────────────────────────────
+  - id: AC-013
+    given: "All cello-client code changes for this story are implemented and tests pass"
+    when: "the implementer runs the cello-client version bump procedure"
+    then: >
+      core/protocol-types (bilateral cert + supersedes fields), core/daemon (returning-party
+      recover/sign/promote on the DAEMON-004 seal path), core/client (cert verification),
+      and core/crypto (if a verify helper) are bumped; dependents updated;
+      @cello-protocol/connect bumped; pnpm-lock updated; tag pushed; CI publishes to beta;
+      `npm view @cello-protocol/connect@beta dependencies --json` shows real semver, never
+      workspace:*.
+    test_type: integration
+    component_under_test: cello-client CI
+
+  - id: AC-014
+    given: "The new @cello-protocol/connect version is live on beta"
+    when: "trustless-cello package.json files are updated"
+    then: >
+      packages/directory/package.json (and packages/relay if it imports the bilateral cert
+      type) reference the new pinned semver; no workspace:* references to cello-client
+      packages remain; pnpm install run; typecheck passes; pushed only after confirming the
+      batch in COORDINATION.md (directory/relay pipeline 25-30 min). Batches with the
+      Flyway migration deploy.
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The returning party's acknowledgement in a bilateral upgrade shall ALWAYS be the
+      returning party's own node's Ed25519 signature over the canonical seal TBS. No code
+      path shall let the present party, the directory, or any other node synthesize,
+      delegate, or forge it.
+    adversarial_condition: >
+      even when the present party is online and holds both parties' message leaves, and even
+      when the directory could trivially construct a leaf. The persisted bilateral
+      notarization's returning-party attestation must verify using ONLY the returning
+      party's key; any attempt to promote without a genuine returning-party signature must
+      fail. (INV-2; postmortem C-3/C-5 non-negotiable boundary.)
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: >
+      The directory shall never promote a unilateral seal to bilateral unless the returning
+      party demonstrably holds the PLAINTEXT content behind every leaf in the sealed tree,
+      each content cross-checked against its committed content_hash.
+    adversarial_condition: >
+      even when the returning party can recover the hashes (relay queue / WAL) and could
+      reconstruct the root from hashes alone. Hash-only possession must NOT promote
+      ('upgrade_content_unrecoverable'); only verified plaintext possession may. (C-4 — the
+      spine: a seal attests to content the party can actually read, not an opaque blob.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: SI-003
+    statement: >
+      The append-only superseding write shall never mutate or delete the original unilateral
+      SealNotarization; the unilateral proof remains independently verifiable after promotion.
+    adversarial_condition: >
+      even under a second concurrent upgrade attempt or a replayed ack leaf. The unilateral
+      row is preserved byte-for-byte; the supersedes link points forward; a reader can always
+      reconstruct the original unilateral certificate. (Append-only / M5 migration-integrity.)
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the relay store-and-forward queue has expired (TTL 7d elapsed) and the
+      sender is permanently offline, so the returning party can recover neither content nor,
+      for some leaves, the hash"
+    fallback: >
+      the upgrade is refused with 'upgrade_content_unrecoverable'; the unilateral seal
+      remains the final, valid record; the returning party's attestation stays ABSENT. The
+      seal is always honest — an un-upgradeable seal is a correct outcome, not a failure.
+      (POSTMORTEM: irreducible loss is honest; the content layer is best-effort on top of
+      the always-honest seal.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: DB-002
+    condition: "While the directory signaling stream is unavailable at the moment the
+      returning party submits its ack leaf"
+    fallback: >
+      the ack-leaf submission queues (SIGNAL-001 outbound queue) and the promotion completes
+      after reconnect; or returns 'signaling_reconnecting' + guidance. Never a silent failure
+      that leaves the seal half-promoted. (L5.)
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: session.upgrade.promoted
+      level: info
+      trigger: "When a bilateral superseding SealNotarization is persisted"
+      context_fields: [sessionId, supersededNotarizationId, returningPartyPubkey, leafCount]
+      correlationId: true
+    - name: session.upgrade.certificate.verified
+      level: info
+      trigger: "When a client verifies the updated bilateral certificate (both attestations)
+        and records the session bilateral"
+      context_fields: [sessionId, party]
+      correlationId: true
+  error_events:
+    - name: session.upgrade.refused
+      level: warn
+      trigger: "When the upgrade is refused on unrecoverable content (not tamper)"
+      context_fields: [sessionId, reason, correlationId]
+    - name: session.upgrade.tamper.detected
+      level: error
+      trigger: "When recovered content's hash != committed content_hash during an upgrade"
+      context_fields: [sessionId, leafIndex, correlationId]
+    - name: session.upgrade.certificate.invalid
+      level: error
+      trigger: "When a client receives a bilateral certificate whose attestation signatures
+        do not verify (e.g. channel-swapped root or forged returning-party sig)"
+      context_fields: [sessionId, reason]
+  alarms:
+    - condition: "session.upgrade.tamper.detected fires on any client/daemon"
+      fires_to: "client/daemon ERROR log — genuine tamper is a security event; the operator
+        should preserve the dispute proof. Fires locally, not CloudWatch (client-side)."
+    - condition: "session.upgrade.refused with reason 'content_unrecoverable' exceeds a
+        threshold over 5 min on a directory node"
+      fires_to: "directory ops alert — a spike indicates relay WAL / store-and-forward loss
+        (Workstream D regression), since recovery is failing systemically."
+  notes: >
+    Register session.upgrade.promoted / .refused / .tamper.detected /
+    .certificate.verified / .certificate.invalid in the canonical event taxonomy
+    (2026-05-16_0753_development-pipeline-and-local-iteration.md). Reuses the existing
+    notarization.recorded / notarization.write.failed events from DirectoryStore.
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Schema relaxation (this story owns it — SESSION-002 deferred it here). Relax the
+    one-row-per-session constraint to permit an append-only superseding bilateral row.
+    Preferred: a partial unique index keyed on (session_id, close_type) plus a 'superseded'
+    boolean (or a supersedes_notarization_id FK), so exactly one CURRENT row per session
+    exists while the unilateral row is retained. Flyway V{N} — claim the version in
+    COORDINATION.md FIRST, update OpsAgentExpectedMigrationVersion to {N} in
+    cello-ssm-parameters.yaml, add AC-009's integration gate. Do NOT modify V2 or any applied
+    migration.
+  - >
+    Content precondition (C-4) is delivered by CELLO-M7-MSG-001 recovery (DOD-MSG-4), a hard
+    blocked_by. The returning party's daemon calls the MSG-001 recover path (request resend →
+    pull from relay queue → cross-check) for every leaf in the sealed tree before signing. If
+    MSG-001-3b is not yet built, this story CANNOT be implemented — it is storied now so the
+    spec exists, but its implementation waits on MSG-001-3b (note in the build journal).
+  - >
+    The bilateral notarization itself is the EXISTING two-SEAL-leaf processSeal path: once the
+    returning party's SEAL/ack leaf exists alongside the present party's, the directory has two
+    distinct-sender SEAL leaves and the normal bilateral FROST notarization runs (D-2 signer
+    set). Do not invent a new ceremony — supply the second SEAL leaf and reuse processSeal,
+    then write the superseding row instead of a first-time row.
+  - >
+    Returning-party ack leaf is built on the DAEMON-004 seal path (SessionNodeManager + the
+    daemon-owned tree), NOT seal-manager.ts. The leaf is an Ed25519 SEAL control leaf (kind
+    0x02) over the sealed root with last_seen_seq covering the present party's tail, signed
+    with the returning party's K_local. Reuse the seal-payload shape from
+    handleActiveSealFlow / submitSealLeaf (SPINE-7).
+  - >
+    Certificate update: extend the SealCertificate (SESSION-002's shared protocol-types type)
+    with the returning-party attestation + a supersedes reference + seal_type 'bilateral'. The
+    client rebuilds the canonical TBS and verifies BOTH attestations (SI / AC-008). Reuse the
+    SESSION-004 frontier fields so the upgraded certificate also shows the returning party's
+    now-advanced content frontier (legibility).
+  - >
+    Cross-repo batching: batch the directory deploy (schema migration + promotion logic) with
+    any other pending directory/relay changes per COORDINATION.md. Never push directory changes
+    alone (25-30 min).
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-DAEMON-004   # FOUNDATION (Option A): daemon owns the active-session seal/tree; the returning-party recover+sign+promote re-homes here
+    - CELLO-M7-SESSION-002  # the unilateral seal this story upgrades FROM (append-only, discriminated, upgrade-ready)
+    - CELLO-M7-MSG-001      # content recovery (DOD-MSG-4) — the C-4 precondition; without verified-plaintext possession the upgrade is semantically impossible
+    - CELLO-PERSIST-015     # SI-002 ("no bilateral supplement") is REVERSED here; its test is inverted
+  related:
+    - CELLO-M7-SESSION-004  # the certificate legibility / frontier fields the upgraded cert reuses
+  blocks:
+    - CELLO-M7-E2E-001      # the J-UPGRADE journey (absent party returns → bilateral) runs in the integration gate
+  notes: >
+    This is POSTMORTEM Workstream C. It cannot be IMPLEMENTED before MSG-001-3b (content
+    recovery) lands — content possession is the precondition (C-4). It is STORIED now so the
+    spec exists and DOD-UP-1 has a home (no silent deferral, RC-1). Relay WAL durability
+    (POSTMORTEM Workstream D) gates whether recovery succeeds and therefore whether an upgrade
+    is possible — confirm WAL retention covers the queue TTL before live smoke.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Session Lifecycle, Merkle Trees, Seal Notarization"
+  end_to_end_flow: "§6 Session Termination (SEAL), §6.1 Hash Relay Mechanics"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-16 POSTMORTEM Part 3/4 (C-3, C-4, D-3, Workstream C)"
+    - "2026-04-08_1530_message-delivery-and-termination"
+  related_docs:
+    - "[[POSTMORTEM-seal-and-content-delivery-gaps]]"
+    - "[[CELLO-M7-SESSION-002]]"
+    - "[[CELLO-M7-MSG-001]]"
+    - "[[CELLO-M7-DAEMON-004]]"
+    - "[[CELLO-PERSIST-015]]"
+  notes: >
+    SETTLED (do not re-open): C-3 (returning party signs one ack leaf), C-4 (content is the
+    precondition), D-3 (refuse only on unverifiability), D-2 (signer set = initiator +
+    directory threshold; counterparty never a FROST signer). FROST seal context string
+    'cello-frost-seal-v1' (CONTEXT.md §FROST TBS arrays) unchanged.

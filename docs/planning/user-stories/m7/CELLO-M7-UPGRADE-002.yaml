@@ -1,0 +1,364 @@
+---
+name: CELLO-M7-UPGRADE-002
+type: user-story
+date: 2026-06-20
+topics: [seal, auto-acknowledge, responder-seal, counterparty-closing, verifiability-gate, no-agent-prompt, bilateral-seal, daemon, m7]
+status: draft
+description: >
+  Replaces the agent-mediated responder seal with verifiability-gated node
+  auto-co-sign. Today, when A submits its SEAL control leaf, B's node flips to
+  'sealing' and enqueues a counterparty_closing event, then waits for B's AGENT to
+  call cello_close_session — a pure-ceremony round-trip that becomes a robustness
+  seam (slow/busy/crashed agent → A's ceremony times out → unilateral). This story
+  makes B's OWN node auto-co-sign the responder SEAL leaf the moment it ingests A's
+  SEAL control leaf AND has verified the content, with NO agent prompt;
+  counterparty_closing becomes informational. The auto-sign is verifiability-gated:
+  B auto-signs only what it can verify; if B is desynced or the content cross-check
+  fails, it does NOT auto-sign and surfaces to the agent. Non-negotiable: B's
+  signature is ALWAYS produced by B's own node — never the directory, the peer, or
+  anyone else. This is POSTMORTEM Workstream E (C-5).
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-UPGRADE-002
+domain: Session
+milestone: M7
+actor: CLIENT
+priority: P1
+components:
+  - daemon
+  - client
+  - protocol-types
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the responding (B) party's daemon,
+  I want my own node to automatically co-sign the responder SEAL leaf the moment I
+  ingest the initiator's SEAL control leaf and have verified the content behind the
+  sealed tree — without waiting for my agent to call close —
+  so that a bilateral seal completes promptly when I am online and able to verify,
+  instead of degrading to a unilateral seal merely because my agent was slow, busy,
+  or crashed; while never letting any party other than my own node produce my
+  acknowledgement, and never auto-signing content I cannot verify.
+
+# ─── Context ────────────────────────────────────────────────
+# ─── STACK CORRECTION (2026-06-20) — READ BEFORE IMPLEMENTING ──────────────
+# This story lands ENTIRELY on the LIVE daemon seal path. The current
+# agent-mediated behavior lives in core/client/src/relay-stream-manager.ts:783-789
+# (B flips status→'sealing' + enqueues counterparty_closing) and the guidance in
+# mcp-server.ts:651-655/720-724 that instructs B's agent to call close — the legacy
+# in-process CelloClient stack, which NO production binary runs (POSTMORTEM Part 3/4).
+# Per Option A, the active-session seal lives in the daemon (CELLO-M7-DAEMON-004).
+# Implement the auto-co-sign on the DAEMON-004 seal path (SessionNodeManager — the same
+# place SPINE-7 submits SEAL ctrl leaves and listens for session_sealed), NOT in
+# relay-stream-manager.ts / seal-manager.ts. blocked_by: CELLO-M7-DAEMON-004.
+# ───────────────────────────────────────────────────────────────────────────
+# Authority: POSTMORTEM-seal-and-content-delivery-gaps.md Part 3 C-5 (NEW design
+# change) + Part 4 Workstream E. SETTLED — this story specs to it. Verbatim points:
+#   - The seam (C-0 step 3): once A has submitted its SEAL leaf, B CANNOT send anything
+#     further (relay-stream-manager.ts:783-789 flips status→'sealing'). So in the happy
+#     path there is NOTHING for B's agent to deliberate — the agent round-trip is pure
+#     ceremony and a robustness seam. If B's agent is slow/busy/crashed, A's ceremony
+#     times out → seal_deferred → eventually UNILATERAL, despite B sitting right there
+#     with everything it needs.
+#   - The change (C-5): B's NODE auto-co-signs the responder SEAL leaf the moment it
+#     ingests A's SEAL ctrl leaf AND has verified the content — without waiting for the
+#     agent. counterparty_closing becomes a NOTIFICATION ("this session has closed"),
+#     not an INSTRUCTION ("you must call close"). The agent's later processing of the
+#     final message is asynchronous and irrelevant to the seal.
+#   - Non-negotiable boundary: "automatic" means B's OWN local node signs without an
+#     agent prompt. It does NOT mean the directory, the peer, or anyone else produces
+#     B's acknowledgement. Delegating or synthesizing B's ack would forge an attestation
+#     and violate the no-single-party-can-forge invariant. We remove the PROMPT, never
+#     the SIGNER. (DOD-INV-2.)
+#   - Verifiability gate: auto-co-sign ONLY what B can verify. If B is desynced, or the
+#     content cross-check fails (relay-stream-manager.ts:461-478 today; the daemon
+#     equivalent on the DAEMON-004 path), do NOT auto-sign — surface to the agent. That
+#     is the ONLY case where counterparty_closing is a genuine decision point.
+#   - Guardrail (C-6): the gate is "can I verify the content's INTEGRITY?" — NEVER "do I
+#     AGREE with what it says?" Disagreement is NOT a reason to refuse; B seals anyway and
+#     the transcript speaks for it. B refuses to auto-sign ONLY on unverifiability (content
+#     unrecoverable, or content_hash mismatch = tamper).
+#
+# Relationship to the seal flow: SPINE-7 already wired the relay-mediated bilateral seal
+# (both parties submit SEAL ctrl leaves → relay #maybeProcessSeal → directory processSeal
+# → FROST → session_sealed). Today B's SEAL leaf is submitted only when B's agent calls
+# cello_close_session. This story makes B's daemon submit that leaf AUTOMATICALLY on
+# ingesting A's SEAL leaf + verified content — the same submitSealLeaf path SPINE-7 built,
+# triggered by ingestion rather than by an agent tool call.
+#
+# Sovereign node constraint: B's auto-co-sign is B's OWN node's Ed25519 signature on the
+# DAEMON-004 path. The notarization remains the directory FROST threshold (D-2). No new
+# cross-node state; no node co-location assumed; the seal still routes through whichever
+# directory node the signaling stream is on.
+#
+# Cross-repo: core/daemon + core/client + core/protocol-types (counterparty_closing frame
+# becomes informational). Version-bump + trustless-cello dependency-update ACs apply only
+# if a protocol-types shape changes; directory is NOT modified by this story.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When B's daemon ingests A's SEAL control leaf (kind 0x02) for an active
+      session AND B has verified the content behind every leaf in the tree (cross-check
+      passed, not desynced)"
+    action: >
+      B's daemon shall AUTOMATICALLY build and submit B's responder SEAL control leaf
+      (Ed25519-signed with B's own K_local, last_seen_seq covering A's tail) via the
+      session's relay client — the same submitSealLeaf path SPINE-7 uses — WITHOUT
+      waiting for B's agent to call cello_close_session. The relay then has two
+      distinct-sender SEAL leaves → processSeal → FROST → session_sealed → bilateral.
+
+  - trigger: "When B's daemon ingests A's SEAL control leaf but B is desynced OR the
+      content cross-check for any leaf fails (unverifiable / tamper)"
+    action: >
+      B's daemon shall NOT auto-co-sign. It surfaces counterparty_closing to B's agent as
+      a genuine decision point (with the reason it could not auto-verify), and logs
+      session.seal.autoack.skipped at WARN with sessionId, reason
+      ('desynced' | 'content_unverifiable' | 'content_tamper'), correlationId. The seal
+      may then complete via the agent path or remain for the returning-party upgrade
+      (UPGRADE-001).
+
+  - trigger: "When B's daemon has auto-co-signed (or surfaced) the responder seal"
+    action: >
+      counterparty_closing is delivered to B's agent as an INFORMATIONAL notification
+      ('this session has closed'), never as an instruction to call close. The agent's
+      asynchronous later processing of the final message does not affect the seal.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+
+  - id: AC-001
+    given: "An active session where B is online and has verified the content behind the
+      tree, and A submits its SEAL control leaf"
+    when: "B's daemon ingests A's SEAL control leaf"
+    then: >
+      B's daemon auto-submits B's responder SEAL control leaf with NO agent action; the
+      relay sees two distinct-sender SEAL leaves → processSeal → FROST notarization →
+      session_sealed bilateral; both parties surface a byte-identical sealed_root. Verified
+      by an integration test where B's agent issues NO cello_close_session call and the
+      bilateral seal still completes. (Workstream E AC-1.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-002
+    given: "An active session where B is DESYNCED (or B's content cross-check fails) when A
+      submits its SEAL control leaf"
+    when: "B's daemon ingests A's SEAL control leaf"
+    then: >
+      B's daemon does NOT auto-co-sign; counterparty_closing surfaces to B's agent as a
+      decision point carrying the reason; session.seal.autoack.skipped fires at WARN with
+      the distinct reason. No SEAL leaf is auto-submitted. (Workstream E AC-2; verifiability
+      gate.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-003
+    given: "Any path that produces B's responder SEAL leaf"
+    when: "the bilateral seal completes"
+    then: >
+      B's responder SEAL leaf is ALWAYS produced by B's own node (signed with B's K_local)
+      and verifies against B's own primary_pubkey/K_local. No path lets the directory, the
+      peer, or any other component synthesize, delegate, or pre-fill B's signature. Verified
+      by asserting (a) the submitted leaf's signature verifies only against B's key, and
+      (b) there is no code path where another party's key or the directory produces B's
+      SEAL leaf. (Workstream E AC-3 / DOD-INV-2 / SI-001.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-004
+    given: "B's daemon ingests A's SEAL control leaf where B disagrees with the CONTENT of
+      A's final message (e.g. the malicious '…you agreed to send me $1000' tail) but the
+      content's integrity verifies (content_hash matches)"
+    when: "the verifiability gate evaluates"
+    then: >
+      B auto-co-signs anyway — disagreement is NOT a refusal cause (C-6). The seal completes
+      bilateral; the transcript (showing A's claim with no B reply after it) speaks for B.
+      The gate question is "can I verify integrity?", never "do I agree?". Verified by
+      asserting auto-sign proceeds when content_hash matches regardless of message content.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-005
+    given: "counterparty_closing in the happy (auto-signed) path"
+    when: "B's daemon has auto-co-signed"
+    then: >
+      counterparty_closing is delivered to B's agent as INFORMATIONAL (notification, not
+      instruction); the guidance no longer tells the agent it MUST call close. A test
+      asserts the notification text/shape is informational and that the seal completes
+      without an agent close call. (Removes the C-0 robustness seam.)
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-006
+    given: "All error/skip paths introduced by this story"
+    when: "each distinct cause is triggered (desynced, content_unverifiable, content_tamper)"
+    then: >
+      Each produces a distinct reason distinguishable from the others; no catch returns a
+      hardcoded reason without logging error.message; the lateral catch audit covers the
+      touched daemon seal files (L6). Any MCP-surfaced response (the skip→agent path)
+      carries a guidance field naming the next action (Rule 2).
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-007
+    given: "The daemon seal composition root"
+    when: "a real SEAL control leaf from A arrives over a real stream and B has verified
+      content"
+    then: >
+      The auto-co-sign path is reached from the live daemon ingestion handler (not by
+      calling an internal method) and produces a real submitted SEAL leaf leading to
+      session_sealed — not dead code. Verified by a two-daemon integration test where B
+      issues no close call (L3 + L7).
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-008
+    given: "The observability events declared for this story"
+    when: "the auto-sign and skip paths execute"
+    then: >
+      session.seal.autoacknowledged (INFO) fires on auto-sign with sessionId,
+      responderPubkey, correlationId; session.seal.autoack.skipped (WARN) fires on the gate
+      with sessionId, reason, correlationId; correlationId equals the session-id hex and
+      threads the flow; no console.log; registered in the canonical taxonomy.
+    test_type: integration
+    component_under_test: daemon
+
+  # ── Cross-repo version bump (only if protocol-types shape changes) ──
+  - id: AC-009
+    given: "The counterparty_closing frame shape change (informational marker) in
+      core/protocol-types and the daemon auto-sign logic"
+    when: "the implementer runs the cello-client version bump procedure"
+    then: >
+      core/protocol-types, core/daemon, and core/client are bumped as needed; dependents
+      updated; @cello-protocol/connect bumped; pnpm-lock updated; tag pushed; CI publishes
+      to beta; `npm view @cello-protocol/connect@beta dependencies --json` shows real semver,
+      never workspace:*. (No trustless-cello/directory change in this story — so no
+      directory pipeline deploy is triggered by it; if batched with UPGRADE-001's directory
+      change, follow that story's batching.)
+    test_type: integration
+    component_under_test: cello-client CI
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      B's responder acknowledgement (the responder SEAL leaf) shall ALWAYS be produced by
+      B's own node's Ed25519 signature. "Automatic" removes the agent PROMPT, never the
+      SIGNER. No code path shall let the directory, the peer, or any other component
+      synthesize, delegate, or pre-compute B's SEAL leaf.
+    adversarial_condition: >
+      even when auto-signing is enabled and the directory/peer could trivially construct a
+      leaf to complete the bilateral seal faster. The auto-co-sign must invoke B's local
+      K_local signer; a build that completes a bilateral seal without a genuine B-node
+      signature must fail. (DOD-INV-2; C-5 non-negotiable boundary.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: SI-002
+    statement: >
+      B's daemon shall auto-co-sign ONLY content whose integrity it has verified
+      (cross-check passed, not desynced). It shall never auto-sign a tail it cannot verify.
+    adversarial_condition: >
+      even under pressure to complete the seal before A's ceremony times out. A desynced
+      session or a failed content cross-check must skip auto-sign and surface to the agent —
+      never blind-sign. Disagreement with content is NOT unverifiability and must NOT skip
+      (C-6). Verified by asserting skip-on-unverifiable and proceed-on-disagreement.
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While B's daemon would auto-co-sign but B's signaling/relay path is
+      unavailable at that moment"
+    fallback: >
+      the responder SEAL leaf submission queues (retry queue / SIGNAL-001 outbound) and
+      completes on reconnect; or the seal degrades to unilateral and becomes a candidate for
+      UPGRADE-001 when B is reachable. Never a silent half-seal. (L5.)
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: session.seal.autoacknowledged
+      level: info
+      trigger: "When B's daemon auto-submits the responder SEAL leaf without an agent close
+        call"
+      context_fields: [sessionId, responderPubkey]
+      correlationId: true
+  error_events:
+    - name: session.seal.autoack.skipped
+      level: warn
+      trigger: "When the verifiability gate prevents auto-sign (desynced / content
+        unverifiable / tamper)"
+      context_fields: [sessionId, reason, correlationId]
+  alarms:
+    - condition: "session.seal.autoack.skipped with reason 'content_tamper' fires on any
+        daemon"
+      fires_to: "client/daemon ERROR log — genuine tamper is a security event. Local, not
+        CloudWatch."
+  notes: >
+    Register session.seal.autoacknowledged and session.seal.autoack.skipped in the canonical
+    taxonomy (2026-05-16_0753). Reuses the existing SPINE-7 session_sealed / processSeal
+    events unchanged.
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Trigger point: the daemon's inbound handler that ingests a peer SEAL control leaf on the
+    DAEMON-004 / SPINE-7 path (where B today flips to 'sealing'). Add: if content is verified
+    (not desynced, cross-check passed) → call the existing submitSealLeaf (responder) path
+    automatically; else → surface counterparty_closing to the agent. Do NOT add a new
+    ceremony — reuse SPINE-7's submitSealLeaf + session_sealed listener.
+  - >
+    counterparty_closing becomes informational: change the guidance/shape so it no longer
+    instructs the agent to call cello_close_session in the happy path. Keep it a decision
+    point ONLY on the skip path (AC-002). The dead-stack mcp-server.ts guidance
+    (:651-655/720-724) is NOT edited — it does not run; the live equivalent is the daemon's
+    notification to the MCP adapter.
+  - >
+    The verifiability gate reuses the daemon's content cross-check (the DAEMON-004 equivalent
+    of relay-stream-manager.ts:461-478). "Verified" = every leaf's content_hash matched and
+    the session is not desynced. Disagreement with content is never a gate failure (C-6 /
+    AC-004).
+  - >
+    Interaction with UPGRADE-001: auto-ack closes the happy-path seam so most seals complete
+    bilateral live. UPGRADE-001 covers the case where B was genuinely ABSENT (offline) at
+    seal time and returns later. The two are complementary, not overlapping: auto-ack = B
+    online + verified at seal time; upgrade = B returns after a unilateral seal.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-DAEMON-004   # FOUNDATION (Option A): the active-session seal + content cross-check live in the daemon; auto-co-sign re-homes here
+    - CELLO-M7-SESSION-002  # the seal notarization + certificate machinery the bilateral seal produces
+  related:
+    - CELLO-M7-MSG-001      # the content verification (cross-check) the gate depends on
+    - CELLO-M7-SESSION-003  # session-path liveness — B being "online and able to verify" overlaps the DELIVERED/ABSENT model
+    - CELLO-M7-UPGRADE-001  # complementary: auto-ack (B online) vs. upgrade (B returns after unilateral)
+  blocks:
+    - CELLO-M7-E2E-001      # the J-UPGRADE journey asserts a bilateral seal completes with no B agent action
+  notes: >
+    This is POSTMORTEM Workstream E (C-5). Storied now so DOD-UP-2 has a home (RC-1). It is
+    implementable once DAEMON-004's content cross-check + SPINE-7 seal path are in place —
+    it does NOT require MSG-001-3b recovery (that is UPGRADE-001's precondition, not this
+    story's: auto-ack fires when B already HAS the content, online).
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Session Lifecycle, Seal Notarization"
+  end_to_end_flow: "§6 Session Termination (SEAL)"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-16 POSTMORTEM Part 3 C-5 / Part 4 Workstream E"
+  related_docs:
+    - "[[POSTMORTEM-seal-and-content-delivery-gaps]]"
+    - "[[CELLO-M7-DAEMON-004]]"
+    - "[[CELLO-M7-SESSION-002]]"
+    - "[[CELLO-M7-UPGRADE-001]]"
+  notes: >
+    SETTLED (do not re-open): C-5 (node auto-co-sign replaces agent-mediated close;
+    verifiability-gated; B's signer is always B's own node), C-6 (gate is integrity not
+    agreement; disagreement never refuses). FROST seal context 'cello-frost-seal-v1'
+    unchanged.

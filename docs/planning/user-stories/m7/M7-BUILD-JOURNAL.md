@@ -1522,3 +1522,45 @@ verification + FROST notarization-START all proven live; the seal FROST ceremony
 last unit. Test re-skipped (J-SPINE 6/6 green). A temporary `session.sealed.frame.arrived` diag log
 + a directory-output diag in the test remain (remove at green). Branch `m7-rehome` both repos,
 nothing pushed/merged. Daemon dirty (the diag log) + e2e (re-skip) — committing now.
+
+---
+
+## 2026-06-20 — DOD-SPINE-7 GREEN — THE FULL HAPPY SPINE (SPINE-1→7) RUNS LIVE
+
+DOD-SPINE-7 is GREEN. J-SPINE 7/7 against the real binaries. **The entire happy spine now runs
+end-to-end for the first time in the daemon era** — the milestone the DoD's STATE-OF-THE-UNION
+said had NEVER happened.
+
+**The final piece (cello-client `fecb22a`):** the daemon SEAL FROST ceremony.
+`wireSealCeremonyHandler` (session-ceremony.ts) — on the directory's `seal_verified` {session_id,
+sealed_root, leaf_count, timestamp}, reconstruct the agent's threshold signer (reusing
+`reconstructThresholdSigner` from SPINE-5), build `buildSealTbs`, `participateInCeremony` with
+context `cello-frost-seal-v1` (the initiator COORDINATES the seal FROST with the directory's
+K_server shares via the signer's directoryNodeStubs), reply `seal_frost_signature` {session_id,
+frost_signature}. Wired on keystone (primary agent) + per-agent. Faithful port of the dead-stack
+`seal-manager.handleSealVerified`. The directory's `#processSealFrostSignature` then completes
+notarization and delivers `session_sealed` (byte-identical `sealed_root`) to both daemons, which
+the SPINE-7 close waiters resolve.
+
+**The full SPINE-7 chain proven live:** A sends a message (SPINE-6) → both `cello_close_session`
+→ each daemon submits a SEAL ctrl leaf (0x02) via the relay witness → relay `#maybeProcessSeal`
+(two distinct-sender ctrl leaves) → directory `processSeal` rebuilds + verifies the signed
+3-leaf chain → FROST notarization (initiator-coordinated seal ceremony) → `session_sealed` to
+BOTH with a byte-identical `sealed_root`. INV-2 holds: each party's co-signature is its own
+node's threshold output, never forged.
+
+**The five gaps closed to get here (all this session):** (1) WIRE-002 decoder drop [GAP 1];
+(2) the daemon relay witness client [GAP 2]; (3) the gater outbound-relay allowance; (4) the
+harness relay→directory wiring [the SPINE-6 open-Q, now closed]; (5) the `last_seen_seq`
+counterparty-seen causal-chain fix; (6) the seal FROST ceremony. Three opus review rounds on
+the relay client (one caught a real BLOCKING per-session-counter bug I introduced).
+
+**Floor.** J-SPINE 7/7; daemon 350/350; typecheck + lint clean; dead-stack gate green. Temporary
+diag log removed.
+
+**Milestone state.** TIER 1 (the happy spine, DOD-SPINE-1..7) is **DONE + PROVEN LIVE**. Branch
+`m7-rehome` both repos, nothing pushed/merged. NEXT: the resilience/adversarial journeys —
+**J-AUTH** (DOD-AUTH-1 step-6 auth is OFF — highest-risk; MANIFEST-001/002 storied), then J-SIG,
+J-INT, J-CONTENT (MSG-001-3b, the big one). Per the design-decision session: GAP-B persistence
+= J-PERSIST in M7 (foundational line), encryption-at-rest = separate security precondition story,
+REC-2 subsumed, loopback deferred.
