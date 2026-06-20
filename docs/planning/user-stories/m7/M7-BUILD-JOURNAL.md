@@ -1187,3 +1187,49 @@ scope (J-CONTENT) — out of the SPINE happy path, already homed in Tier 3.
 
 **State.** SPINE-1..6 GREEN + closed; SPINE-5 reviewer-approved; SPINE-6 reviewer dispatched.
 Branch `m7-rehome` both repos, nothing pushed/merged. NEXT RED: DOD-SPINE-7 (bilateral seal).
+
+---
+
+## 2026-06-20 — DOD-SPINE-6 review CLOSED (BLOCKED→fixed; per-agent relay client) — re-review dispatched
+
+Reviewer (`feature-dev:code-reviewer`, opus) on the SPINE-6 GAP-1/GAP-2 diff returned BLOCKED
+with one structural finding (H1) + M1/L1/L2. All fixed (cello-client `f8a630a`); DOD-SPINE-6
+RE-VERIFIED GREEN live (J-SPINE 6/6) after the fix; daemon 349/349.
+
+- **H1 (structural, the real one).** Each session node opened its OWN relay stream but
+  authenticated with the AGENT's K_local pubkey — and the relay keys its delivery `#streams`
+  map + queue by pubkey. So a second concurrent session for the same agent OVERWROTE the
+  first's delivery stream and drained its queued `leaf_deliver`s (the relay treats it as a
+  reconnect). Harmless for single-session SPINE-6, but corrupts CELLO's first-class
+  multi-session property the moment an agent runs ≥2 sessions (Andre's explicit intent: one
+  daemon, multiple agents/sessions). **Fix:** ONE `AgentRelayClient` per AGENT
+  (`SessionNodeManager.#relayClients` keyed by agentName), multiplexing all the agent's
+  sessions over a single authenticated stream — every wire frame already carries `session_id`,
+  matching the relay's per-pubkey model. Submits are globally FIFO single-in-flight on the
+  stream (`hash_submit_ack` carries NO session_id, so one outstanding at a time, chained via
+  `#submitChain`); inbound `leaf_deliver` (which DOES carry `session_id`) routes by it to the
+  owning session's handler. The stream re-dials from whichever live session node is current,
+  surviving per-session teardown. Reference-counted: `registerSession`/`unregisterSession`;
+  `#detachSessionRelay` closes + drops the client only when its last session detaches (wired
+  into all four teardown paths incl. gracefulShutdown — L2).
+
+- **M1 (race).** The single-in-flight guard previously straddled an `await` (sign) between the
+  `pendingAck` check and its assignment, so two concurrent same-session sends could both pass
+  and the second orphan the first (10s hang). Now `#doSubmit` is serialized by `#submitChain`
+  and sets `#pendingAck` with no concurrent submit and no await before `stream.send`.
+
+- **L1.** Reader + submit-send catches now use `extractErrorMessage` (no `[object Object]`).
+- **L2.** `gracefulShutdown` detaches relay clients like the other three teardown paths.
+
+Reviewer confirmed sound (no counter-evidence): INV-3 (only the hash to the relay), INV-2 (no
+cross-agent key confusion; relay re-checks `s1.sender_pubkey === authed pubkey` + participant
+membership), INV-5 (gater OUTBOUND-only allowance; inbound untouched), `last_seen_seq`
+monotonicity, GAP-1 decoder opt-in default, single-iterator auth/reader discipline.
+
+A SECOND opus review was dispatched on the H1 fix itself (submit-chain correctness, reconnect
+races, ref-counting idempotency, leaf routing). Pending. Inner-loop unit tests +3 (per-agent
+session bookkeeping). Floor: daemon 349/349, typecheck + lint clean, dead-stack gate green,
+J-SPINE 6/6.
+
+**State.** SPINE-1..6 GREEN; SPINE-6 first review fixed + re-verified live; second review
+pending. Branch `m7-rehome` both repos, nothing pushed/merged. NEXT RED: DOD-SPINE-7.
