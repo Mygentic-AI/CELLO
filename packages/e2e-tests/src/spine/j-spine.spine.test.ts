@@ -426,7 +426,7 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
   // (hash_submit/leaf_deliver) is the unwired "later seam" = DOD-MSG-3/MSG-001-3b, the DoD's
   // explicitly-NOT-BUILT biggest gap. NEXT BUILD: the relay content path (circuit-relay session
   // connect + leaf submit/deliver), then un-skip. The setup below is correct + reused as the green.
-  it.skip("DOD-SPINE-6 — send/receive: A cello_send → B cello_receive (relay hash_submit/leaf_deliver, no content in relay logs)", async () => {
+  it("DOD-SPINE-6 — send/receive: A cello_send → B cello_receive (relay hash_submit/leaf_deliver, no content in relay logs)", async () => {
     // Full A→B exchange between TWO parties = TWO daemons (the production topology: a session
     // is between two parties on two machines; one daemon per party = its own session-core DB).
     // agentA on daemonA, agentB on daemonB, both against the same directory+relay. B awaits an

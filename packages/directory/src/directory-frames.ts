@@ -335,11 +335,16 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     const transport_mode_raw = o["transport_mode"];
     const transport_mode: "direct" | "relay" | undefined =
       transport_mode_raw === "direct" ? "direct" : transport_mode_raw === "relay" ? "relay" : undefined;
+    // M7-WIRE-002: opt-in flag for the session_offer→accept round-trip. Must be
+    // carried through this typed allowlist decoder or the directory's offer branch
+    // (which reads parsedReq.wants_session_offer) never fires.
+    const wants_session_offer = o["wants_session_offer"] === true ? true : undefined;
     const result: SessionRequest = { type: "session_request", target_pubkey };
     if (connection_id !== undefined) result.connection_id = connection_id;
     if (initiator_session_peer_id !== undefined) result.initiator_session_peer_id = initiator_session_peer_id;
     if (initiator_session_addrs !== undefined) result.initiator_session_addrs = initiator_session_addrs;
     if (transport_mode !== undefined) result.transport_mode = transport_mode;
+    if (wants_session_offer !== undefined) result.wants_session_offer = wants_session_offer;
     return result;
   }
 

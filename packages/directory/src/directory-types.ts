@@ -110,6 +110,13 @@ export interface SessionRequest {
    * honours this value directly; real AutoNAT probe will override in TRANSPORT-001.
    */
   transport_mode?: "direct" | "relay";
+  /**
+   * M7-WIRE-002: Initiator opts in to the session_offer→session_offer_accept
+   * round-trip so the SessionAssignment carries the counterparty's reachable
+   * SESSION endpoint (its standing-receiver node, not its directory node).
+   * Absent/false keeps pre-WIRE-002 callers on the original no-offer path.
+   */
+  wants_session_offer?: boolean;
 }
 
 // ─── M7-WIRE-001: Session offer accept (target → directory) ─────────────────
