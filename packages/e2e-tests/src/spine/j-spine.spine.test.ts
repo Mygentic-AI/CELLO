@@ -515,7 +515,7 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
   // NOT provide (live-harness.ts:273). So the relay can't call directory processSeal → no FROST
   // notarization → no session_sealed → both closes time out (seal_counterparty_pending). FIX is
   // in the harness (wire the relay to the directory). Un-skip once that lands. See journal.
-  it.skip("DOD-SPINE-7 — bilateral seal: both close → directory FROST-notarizes → byte-identical sealed_root", async () => {
+  it("DOD-SPINE-7 — bilateral seal: both close → directory FROST-notarizes → byte-identical sealed_root", async () => {
     // Two parties = two daemons (the SPINE-6 topology). Establish a session + one message,
     // then BOTH cello_close_session → both submit SEAL ctrl leaves → relay-mediated directory
     // notarization → both observe session_sealed with the SAME sealed_root (INV-2: B's

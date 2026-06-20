@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import { FileKeyProvider } from "@cello-protocol/crypto";
+import { peerIdFromTransportSeed } from "@cello-protocol/relay";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
@@ -304,23 +305,23 @@ export async function startSpineCluster(): Promise<SpineCluster> {
   };
 
   try {
-    // ── Relay (starts first; self-generates its own signing + transport keys) ──
-    // M4: allocate the relay health port immediately before spawn to shrink the
-    // freePort() bind/use TOCTOU window.
-    relay = new Proc("relay", BINS.relay, {
-      NODE_ENV: "test",
-      CELLO_ENV: "local",
-      CELLO_DIRECTORY_PUBKEY: dirPubkeyHex,
-      CELLO_RELAY_KEY_FILE: join(tmpDir, "relay-key"),
-      CELLO_RELAY_TRANSPORT_KEY_FILE: join(tmpDir, "relay-transport-key"),
-      CELLO_RELAY_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0",
-      CELLO_RELAY_HEALTH_PORT: String(await freePort()),
-    });
-    await relay.waitForLine(/"adapterName":"ListenAddr"/, 20_000);
-    const relayMultiaddr = listenMultiaddr(relay, { ws: false });
+    // ── Break the relay↔directory startup cycle (DOD-SPINE-7) ───────────────────
+    // In CELLO_ENV=local the directory REQUIRES CELLO_RELAY_MULTIADDR at startup AND the
+    // relay REQUIRES CELLO_DIRECTORY_MULTIADDR (with /p2p/<peer-id>) so it can wire its
+    // NetworkDirectoryAdapter and call processSeal (the bilateral-seal trigger). Each needs
+    // the other's address — a cycle. We break it by PRE-DERIVING the relay's PeerID from a
+    // fixed transport SEED (pure key crypto, not node construction) and binding the relay to
+    // a FIXED port, so the relay's multiaddr is known BEFORE either process starts. Then we
+    // start the directory FIRST (it dials the relay lazily, at recordAssignment/seal time, by
+    // which point the relay is up), read its real multiaddr, and start the relay second with
+    // CELLO_DIRECTORY_MULTIADDR set — so #maybeProcessSeal → directory processSeal works.
+    const relaySeed = new Uint8Array(randomBytes(32));
+    const relaySeedHex = Buffer.from(relaySeed).toString("hex");
+    const relayPeerId = await peerIdFromTransportSeed(relaySeed);
+    const relayPort = await freePort();
+    const relayMultiaddr = `/ip4/127.0.0.1/tcp/${relayPort}/p2p/${relayPeerId}`;
 
-    // ── Directory (needs the relay multiaddr; loads the key we provisioned) ──
-    // M4: allocate the directory health port here (just before spawn), not earlier.
+    // ── Directory (starts FIRST now; loads the signing key we provisioned) ──
     const healthPort = await freePort();
     directory = new Proc("directory", BINS.directory, {
       CELLO_ENV: "local",
@@ -336,6 +337,22 @@ export async function startSpineCluster(): Promise<SpineCluster> {
     });
     // BootstrapEndpoint line means /bootstrap is live — the daemon can discover us.
     await directory.waitForLine(/"adapterName":"BootstrapEndpoint"/, 30_000);
+    const directoryMultiaddr = listenMultiaddr(directory, { ws: false });
+
+    // ── Relay (starts SECOND; bound to the fixed port + pre-derived seed so its real
+    // multiaddr equals relayMultiaddr. Given CELLO_DIRECTORY_MULTIADDR it wires the
+    // NetworkDirectoryAdapter + registers with the now-running directory). ──
+    relay = new Proc("relay", BINS.relay, {
+      NODE_ENV: "test",
+      CELLO_ENV: "local",
+      CELLO_DIRECTORY_PUBKEY: dirPubkeyHex,
+      CELLO_DIRECTORY_MULTIADDR: directoryMultiaddr,
+      CELLO_RELAY_KEY_FILE: join(tmpDir, "relay-key"),
+      CELLO_RELAY_TRANSPORT_KEY_HEX: relaySeedHex,
+      CELLO_RELAY_LISTEN_ADDR: `/ip4/127.0.0.1/tcp/${relayPort}`,
+      CELLO_RELAY_HEALTH_PORT: String(await freePort()),
+    });
+    await relay.waitForLine(/"adapterName":"ListenAddr"/, 20_000);
 
     const relayRef = relay;
     const directoryRef = directory;
