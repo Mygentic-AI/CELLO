@@ -907,3 +907,26 @@ daemon-side content deposit/pull over the session in relay mode is the gap.
 
 This is a substantial build (relay content path + bidirectional accept). SPINE-5 reviewer
 findings get incorporated first.
+
+---
+
+## 2026-06-20 — DOD-SPINE-5 review CLOSED (APPROVED; all findings fixed)
+
+Reviewer (`feature-dev:code-reviewer`, opus) APPROVED the SPINE-5 session build; security model
+confirmed sound (per-agent share isolation: `storeDkgResult` keys `_localShares` by the agent's
+own pubkey; reply on the same per-agent seam — no cross-agent confusion). All findings fixed
+(cello-client `5af5f6b`+`1d4ead1`, trustless-cello `ba45d33`):
+- H1/M1 + concurrency: reconstruct the FROST signer FRESH per `ceremony_request` (fresh directory
+  endpoint + NetworkDirectoryNode) — no caching of stale endpoints, failed reconstructions, or
+  shared FROST state. Restores the failover invariant for the session ceremony.
+- M3: per-agent single-flight guard on negotiation (the assignment carries no echoed request id;
+  overlapping same-agent initiations could cross-resolve). Misleading comment corrected.
+- M2/L4 (test): require `signatureType:"frost"` (not single — DOD-INV-2), and corroborate the
+  FROST path actually ran via the durable `session.ceremony.participated` event + the directory's
+  `[FROST] Ceremony begin` (directory-side, FROST-specific).
+- L1/L2/L3: reply-without-id dropped+logged; catch blocks log `err.message`; reply send guarded.
+- Regression: updated daemon AC-010 unit test (the daemon now always wires a real internal
+  negotiator, so empty params → `invalid_target_pubkey`, not the removed
+  `directory_signaling_not_configured`). 342 daemon tests + J-SPINE 5/5 green.
+
+DoD already ✅ for SPINE-5. Proceeding to DOD-SPINE-6 (relay content path).
