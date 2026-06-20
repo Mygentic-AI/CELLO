@@ -1053,3 +1053,72 @@ content is peer-to-peer).
 **State.** SPINE-1..5 green+closed+reviewed. SPINE-6 machinery built; GAP 1 (opt-in propagation)
 then GAP 2 (relay leaf) → un-skip the test → green. Branch `m7-rehome` both repos, nothing
 pushed/merged. J-SPINE 5/5 green (SPINE-6 skipped). Best finished with fresh context.
+
+---
+
+## 2026-06-20 — DOD-SPINE-6 GAP 1 CLOSED (live P2P send/receive) + GAP 2 design note (daemon relay client)
+
+**GAP 1 — CLOSED (cello-client unchanged; trustless-cello `6d7b5b1`).** Root cause found by
+producer/consumer code-read, no logging needed: `decodeInboundSignalingFrame` (directory-frames.ts)
+is a TYPED ALLOWLIST decoder — for `session_request` it rebuilt `SessionRequest` carrying only the
+known fields and silently dropped `wants_session_offer`. The daemon sent it over CBOR and the
+directory checked `parsedReq.wants_session_offer === true`, but the field never survived decode, so
+the `else if (requestWantsOffer && #streams.get(targetHex))` offer branch never fired → empty
+counterparty endpoint → `cello_send` "Invalid peer ID". (The journal's earlier "unconditional offer
+DID fire" observation was the tell: `#streams.get(targetHex)` was truthy; only `requestWantsOffer`
+differed → the flag was being dropped, not the offer machinery.) Fix: add `wants_session_offer` to
+the `SessionRequest` type + carry it through the decoder beside the other WIRE-001 optional fields.
+Opt-in preserved (pre-WIRE-002 frames omit it → no-offer path; 584 directory tests untouched).
+Inner-loop test `m7-wire-001-frames.test.ts` +2 (carries flag / undefined pre-WIRE-002), red→green.
+
+**PROVEN LIVE:** J-SPINE two-daemon DOD-SPINE-6 now delivers **A `cello_send` → B `cello_receive`
+with matching plaintext** over the direct P2P `/cello/content/1.0.0` stream (`session_offer→accept`
+now folds B's standing-receiver endpoint into the FROST-signed assignment; A dials N_B; stream
+negotiates). The ONLY remaining red is `expect(relay.output).toMatch(/hash_submit/)` — GAP 2.
+
+**GAP 2 — design note (daemon-side relay witness = MSG-001-3b / DOD-MSG-3).** Evidence: the daemon
+has NO relay-submit path — `sendContent` (DAEMON-004) explicitly defers it ("relay hash-submit is
+MSG-001's scope"), `registerRelayStream`/`#watchRelayStream` exist but only read `session_interrupted`
+and have NO caller in the live binary, and there is no `/cello/relay/1.0.0` client anywhere in
+core/transport|daemon. So the session nodes never connect to the relay; content goes direct and the
+relay only ever sees the directory's slot assignment. INV-3 ("plaintext never in relay logs") is
+therefore currently VACUOUS — the relay isn't in the path — which is exactly the tautological green
+the postmortem warns against. The relay witness is load-bearing: in CELLO the relay is the
+ordering/witness authority (Structure 2 — it sees hashes, not content), assigning the canonical
+`sequence_number`. A "send" the relay never witnessed has no canonical sequence and isn't a complete
+CELLO message. So GAP 2 is in-scope for a faithful SPINE-6, not deferrable.
+
+Approach — a FOCUSED daemon relay client (new `core/daemon/src/session-relay-client.ts`), NOT a port
+of the 983-line dead-stack `relay-stream-manager.ts` (that drags the dead client context in, against
+the anchor discipline). Reuse only the proven wire shapes from the dead stack + the relay server
+contract (read directly from `packages/relay/src/relay-node.ts`):
+- **Connect+auth** (per `relay-stream-manager.#performRelayAuth`, proven against this relay): the
+  SESSION node N opens `/cello/relay/1.0.0` (so the relay sees N's SESSION peer id — satisfies the
+  DoD "hash_submit from A's session Peer ID"); relay sends `relay_auth_challenge{nonce:32}`; client
+  signs `SHA-256("CELLO-RELAY-AUTH-v1" || nonce || pubkey)` with the AGENT's K_local
+  (`agent.keyProvider`, held in daemon.ts `keyProviders`); replies `relay_auth_response{pubkey,
+  signature}`; awaits `relay_auth_ok`. ONE shared `lp.decode` iterator for the whole stream
+  (splitting breaks the relay reader). Routing is by authed K_local pubkey, so N authenticates as the
+  agent identity while its libp2p peer is the session node — both invariants hold.
+- **Submit** (per `seal-manager.#submitSealLeaf`): Structure 1 = `CBOR([1, content_hash(32),
+  sender_pubkey(32), session_id(16), last_seen_seq, timestamp])`; `sig = keyProvider.sign(structure1_cbor)`
+  (Ed25519 over the RAW cbor bytes — relay calls `verify(pubkey, structure1_cbor, sig)`); frame
+  `{type:"hash_submit", session_id, leaf_kind:0x00, structure1_cbor, sender_signature}`; await
+  `hash_submit_ack{sequence_number}` (single in-flight, FIFO). Relay validates: session active,
+  sender ∈ {participant_a, participant_b}, leaf_kind∈{0x00,0x02}, S1 sender==authed, sig valid,
+  `last_seen_seq ≤ seq_counter`.
+- **Reader**: dispatch `hash_submit_ack` (resolve pending submit), `leaf_deliver`
+  {sequence_number, structure2_cbor, structure1_cbor} (counterparty's witnessed leaf → canonical
+  seq), `hash_submit_error` (reject pending), `session_interrupted` (existing path).
+
+Wiring: connect+auth the relay for BOTH session nodes at establishment (initiator `createSessionNode`
+reuse-standing-receiver, responder `acceptSession`) using the assignment's `relay_endpoint` +
+`agent.keyProvider` + `session_id`; `sendContent` submits the message-leaf hash AFTER the direct
+content send; the relay delivers `leaf_deliver` to B (B connected → not queued). Then strengthen the
+SPINE-6 test to assert BOTH `hash_submit` AND `leaf_deliver` in the relay log (faithful to the DoD
+line) + no plaintext (INV-3 now meaningful). Build red-first: a focused
+`session-relay-client.test.ts` (Structure-1 determinism, auth-msg construction, frame shapes), then
+the live J-SPINE assertion.
+
+**State.** SPINE-1..5 green+closed+reviewed; GAP 1 closed + committed (`6d7b5b1`); GAP 2 = the relay
+client build, now fully specified. Branch `m7-rehome` both repos, nothing pushed/merged.
