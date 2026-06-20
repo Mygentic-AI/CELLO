@@ -1416,3 +1416,58 @@ close branch when the session has an active relay client, falling back to the ex
 
 **State.** SPINE-1..6 closed; SPINE-7 design + channel + red target locked; the 4-step daemon
 build is the next unit. Branch `m7-rehome` both repos, nothing pushed/merged.
+
+---
+
+## 2026-06-20 — DOD-SPINE-7 daemon side GREEN; blocked on relay→directory harness wiring
+
+SPINE-7 daemon implementation (steps 1-4) is built + committed and PROVEN CORRECT live up to
+the relay; the remaining blocker is a HARNESS wiring gap, not a daemon bug.
+
+**Built (cello-client `beabe65`, `3b5509c`, `eff2436`; trustless-cello test `b5fbe38`):**
+1. `AgentRelayClient.submitLeaf(..., leafKind)` — submits ctrl (0x02) leaves (`LEAF_KIND_CTRL`).
+2. `SessionNodeManager.submitSealLeaf` — builds the SEAL ctrl leaf (`content_hash = SHA-256(0x02
+   || encodeSealPayload({session_id, final_root=own tree root, close_timestamp, "PENDING"}))`)
+   and submits it via the relay client.
+3. `cello_close_session` relay-mediated branch — registers a seal waiter, submits our SEAL ctrl
+   leaf, awaits `session_sealed`; falls back to the directory-mediated `handleActiveSealFlow`
+   when `relay_unavailable`.
+4. `session_sealed` listener on the keystone signaling stream — resolves the waiter with
+   `sealed_root` + marks the session sealed.
+
+**Live proof the daemon side works (relay log, two daemons):**
+- seq 1 `hash_submit witnessed ... (msg)` — A's SPINE-6 content.
+- seq 2 `hash_submit witnessed ... (ctrl) from c567c0c2` — A's SEAL leaf.
+- seq 3 `hash_submit witnessed ... (ctrl) from 12ad7f71` — B's SEAL leaf.
+Both SEAL ctrl leaves reached the relay from DISTINCT senders — exactly the `#maybeProcessSeal`
+trigger condition. Both `cello_close_session` returned `seal_counterparty_pending` (30s timeout).
+
+**Root cause (producer/consumer): the relay has NO DirectoryAdapter.** `#maybeProcessSeal`
+(relay-node.ts:1104) is gated `leafKind === "ctrl" && this.#directory`. The relay binary
+(`relay.ts`) only constructs a `NetworkDirectoryAdapter` when `CELLO_DIRECTORY_MULTIADDR` is set
+(`relay.ts:67`). `startSpineCluster` starts the relay WITHOUT `CELLO_DIRECTORY_MULTIADDR`
+(`live-harness.ts:273`, with a comment saying exactly this) — so `this.#directory` is null, the
+ctrl leaves are witnessed + delivered but the seal is NEVER triggered → no `processSeal` → no
+FROST → no `session_sealed`. **This is the relay↔directory wiring gap flagged in the SPINE-6
+design note (open-Q#1), now load-bearing for SPINE-7.**
+
+**The fix (harness — `startSpineCluster`), two options:**
+- **Option A (preferred, production-like):** start the **directory first**, then the relay with
+  `CELLO_DIRECTORY_MULTIADDR` (so the relay wires the adapter + registers via `relay_register`).
+  Requires confirming the directory can start WITHOUT `CELLO_RELAY_MULTIADDR` and learn the relay
+  via `relay_register` (currently the order is relay→directory because the relay needs the
+  directory IDENTITY pubkey, which is already provisioned via `dirKeyFile` before either starts —
+  so the reversal is feasible).
+- **Option B:** keep relay→directory order but pre-provision the directory TRANSPORT key, derive
+  its libp2p peer id, allocate a FIXED directory listen port, and pass the relay a constructed
+  `CELLO_DIRECTORY_MULTIADDR=/ip4/127.0.0.1/tcp/<fixed>/p2p/<dirPeerId>`. Needs a
+  transport-key→peerId helper (none exists yet).
+
+Recommendation: **Option A.** Verify the directory↔relay registration handshake (relay_register
++ recordAssignment dial-back), reverse the cluster start order, give the relay the directory
+multiaddr. Then un-skip SPINE-7 → directory processSeal → FROST → `session_sealed` → both daemons
+surface a byte-identical `sealed_root`.
+
+**State.** SPINE-1..6 closed + green; SPINE-7 daemon side built + committed (correct to the relay,
+re-skipped to keep J-SPINE green); the last step is the relay→directory harness wiring. Branch
+`m7-rehome` both repos, nothing pushed/merged.
