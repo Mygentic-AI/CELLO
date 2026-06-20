@@ -323,37 +323,93 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
 
 ---
 
-## Tier 4 — Designed, NOT yet storied (must be written before claimed done)
+## Tier 4 — Designed + STORIED, NOT yet built (J-UPGRADE)
+
+Storied 2026-06-20 (CELLO-M7-UPGRADE-001 / -002) — no longer NOT STORIED; now ❌
+NOT BUILT (real story machinery applied; awaiting implementation).
 
 - **DOD-UP-1 — Unilateral → bilateral upgrade (Workstream C).** Returning absent
   party recovers + verifies content, signs an ack leaf over the sealed root →
   promote to bilateral (append-only superseding row); reverse PERSIST-015 SI-002;
   refuse only on unverifiability (D-3). Content possession is the precondition.
-  *(postmortem C-3/C-4, Part 4 row C)* — ⬜ NOT STORIED
+  *(postmortem C-3/C-4, Part 4 row C; **CELLO-M7-UPGRADE-001**)* — ❌ NOT BUILT
+  (storied). Owns the directory Flyway migration that relaxes the
+  one-row-per-session constraint for the superseding row (SESSION-002 deferred it
+  here). Cannot be IMPLEMENTED until MSG-001-3b content recovery lands (the C-4
+  precondition).
 - **DOD-UP-2 — Auto-acknowledge close (Workstream E).** B's node auto-co-signs the
   responder SEAL leaf on ingesting A's SEAL ctrl leaf + verified content, no agent
   prompt; `counterparty_closing` becomes informational; verifiability-gated; B's
-  signature always from B's own node. *(postmortem C-5)* — ⬜ NOT STORIED
+  signature always from B's own node. *(postmortem C-5; **CELLO-M7-UPGRADE-002**)*
+  — ❌ NOT BUILT (storied). Implementable once DAEMON-004 content cross-check +
+  SPINE-7 seal path exist; does NOT require MSG-001-3b.
 
 ---
 
-## Tier 5 — Recovery substrate flagged in the old logs (verify carried or drop)
+## Tier 5 — Recovery substrate from the old logs (DECIDED 2026-06-20)
 
-These appear in the April-8 and May-14 design logs and underpin Tier 3. Confirm
-they are either captured by the four stories or explicitly decided out.
+These appeared in the April-8 and May-14 design logs and underpin Tier 3. All three
+are now decided (disposition: `discussion_logs/2026-06-20_2220_tier5-recovery-substrate-disposition.md`)
+so M7 carries no silent Tier-5 deferral (RC-1). None needs a new story.
 
 - **DOD-REC-1 — Signed relay ACK as a cryptographic receipt.** The relay's ACK
   over `(H || seq || timestamp)` as evidence a hash entered the record. *(May-14 log
-  §"Signed Relay ACKs")* — ❓ NOT clearly carried into the four stories. FLAG.
+  §"Signed Relay ACKs")* — ✅ **SATISFIED by CELLO-PERSIST-012** (M4): relay signs
+  `(H || seq || timestamp)`, client stores it, used in disputes + relay reassignment;
+  `__tests__/persist-012-relay-signed-ack.test.js` passes. Caveat for the impl thread
+  (not a story): confirm the daemon-side `session-relay-client.ts` (SPINE-6) STORES the
+  signed ACK durably — the M4 storage was in the now-dead ClientStore.
 - **DOD-REC-2 — Pre-seal reconciliation / gap-fill.** Both parties exchange last
   confirmed seq before CLOSE; on divergence the relay serves missing leaves from WAL
   (relay-authoritative, not counterparty). *(May-14 log §"Pre-Seal Reconciliation")*
-  — ❓ Partially implied by MSG-001 recovery, but the bilateral pre-seal handshake
-  is not explicitly storied. FLAG.
+  — ✅ **SUBSUMED** by the M7 directory-authoritative seal model: the directory rebuilds
+  the canonical root from the relay's witnessed leaf chain (SESSION-002 AC-001) + MSG-001
+  leaf recovery is the gap-fill + POSTMORTEM D-3 is the disagreement outcome. The distinct
+  bilateral pre-CLOSE handshake is not needed. (Reopens only if a live journey shows a
+  divergence the directory rebuild + MSG-001 cannot resolve — recorded.)
 - **DOD-REC-3 — Delivery-failure tree coverage.** The A/B/C/D branches + time
   dimension (within-grace / after-grace-active / after-dead / never). *(April-8 log)*
-  — partially absorbed by MSG-001 (recovery) + SESSION-004 (post-session straggler).
-  Confirm each adversarial branch has a defined outcome. FLAG.
+  — ✅ **ABSORBED** by MSG-001 (B-branches: recovery + tamper-desync), SESSION-004
+  (B4/straggler/frontier), PERSIST-012 (C-branch hash queue), DAEMON-003 (D-branch retry).
+  Every branch has a defined, non-silent outcome — branch-by-branch map in the disposition
+  log. (Each runs live in J-CONTENT / J-UNILATERAL / J-LEGIBILITY.)
+
+---
+
+## Tier 6 — Data custody & local loopback (2026-06-20 scope additions)
+
+New M7 scope decided with Andre 2026-06-20 (not in the original outline gate).
+Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-rest.md`,
+`discussion_logs/2026-06-20_2225_local-loopback-session-core-rekey-and-agent-default.md`.
+
+### Client data custody (J-PERSIST)
+
+- **DOD-LOG-1 — Durable, encrypted readable transcript survives restart.** The daemon
+  durably stores sent + received plaintext per session, encrypted at rest (SQLCipher OR
+  envelope+sqlite — the live daemon uses plain node:sqlite today; encryption-at-rest is
+  absent and deferred-with-no-home), joined to the hash chain; readable after a restart via
+  a read surface; relay/directory still see only hashes (INV-3). *(**CELLO-M7-PERSIST-LOG-001**)*
+  — ❌ NOT BUILT (storied). Closes the at-rest encryption gap (broader than the transcript:
+  retry_queue content blob, key files).
+- **DOD-LOG-2 — Dispute-export bundle.** A verifiable bundle (transcript + certificate +
+  hash chain) the operator can export for dispute resolution. *(J-PERSIST follow-on; design
+  in the data-custody log)* — ⬜ NOT STORIED (builds on DOD-LOG-1; story when J-PERSIST is built).
+- **DOD-LOG-3 — Abuse-report bundle.** A bundle for reporting malicious counterparty
+  behaviour. *(J-PERSIST follow-on)* — ⬜ NOT STORIED (builds on DOD-LOG-1).
+
+### Local loopback (J-LOOPBACK)
+
+- **DOD-LOOP-1 — Two agents converse on ONE daemon.** Two of the operator's own K_locals
+  (agents A and B) are the two ends of one session on a single daemon — no unnecessary
+  process spawning. Re-key the session core from `session_id` to `(agent, session_id)`
+  (sessions/session_tree_leaves PKs, the five in-memory maps, the ownership check, the
+  inbound double-accept guard) + a daemon-DB migration; each end signs with its own K_local
+  (INV-2). No wire/directory/relay change. *(**CELLO-M7-SESSION-CORE-REKEY-001**)* — ❌ NOT
+  BUILT (storied).
+
+> Agent-designation default (D-E1): auto-select the sole online agent on first session
+> tool — a contained fix recorded as a note for the implementation thread (not a story).
+> See the loopback decision log + the build journal.
 
 ---
 

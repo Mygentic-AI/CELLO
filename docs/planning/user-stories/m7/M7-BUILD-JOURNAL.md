@@ -1564,3 +1564,52 @@ diag log removed.
 J-INT, J-CONTENT (MSG-001-3b, the big one). Per the design-decision session: GAP-B persistence
 = J-PERSIST in M7 (foundational line), encryption-at-rest = separate security precondition story,
 REC-2 subsumed, loopback deferred.
+
+---
+
+## 2026-06-20 — J-AUTH design note (directory bidirectional auth step 6 + manifest enforcement)
+
+The happy spine is closed; J-AUTH is the next journey (DoD harness order; DOD-AUTH-1 step-6 is
+shipped OFF — the highest-risk trust gap). Source stories: CELLO-M7-MANIFEST-001 (root-key
+constants + threshold-sig manifest verification) + MANIFEST-002 (client-side verification at
+startup + handshake step 6 — verify the directory's step-5 challenge response with its per-node
+Ed25519 key so a rogue node can't impersonate a directory) + the bidirectional-auth design log.
+
+**Current state (the OFF).** The daemon's signaling step-6 verify is OPTIONAL: it runs only when
+a `challengeVerifier` is supplied (`signaling-connect.ts:208`, "M6 ran without one"). The
+composition root accepts `manifestProvider, manifestRootKeys, manifestThreshold,
+manifestVersionStore, challengeVerifier` (daemon.ts:256) but the live binary / J-SPINE cluster
+passes none → `verifiedManifestVersion` stays 0, step-6 is skipped, ANY node that completes the
+handshake is trusted (MANIFEST-002 threat).
+
+**Implementations EXIST (wire, don't rebuild):** `verifyManifest` + `canonicalManifestBody`
+(core/crypto/manifest.ts), a REAL `verifyChallenge` (core/transport/manifest-stubs.ts:118 — the
+non-stub one), the signaling-manager step-6 call (`_challengeVerifier.verifyChallenge`, :472) +
+manifest verify (`verifyManifest`, :498), and `core/daemon/manifest-loader.ts`. So J-AUTH is
+WIRING + harness + the adversarial test, not new crypto.
+
+**The build:**
+1. **Harness (the big piece):** generate a signed ConsortiumManifest — root keypair(s), threshold
+   sig over the body, listing the directory's NODE key (its signing pubkey) + multiaddr + version
+   + not_before/expires. Pass the daemon the manifest (manifestProvider/manifestRootKeys/threshold
+   + challengeVerifier) and ensure the DIRECTORY signs its step-5 challenge response with its node
+   key (confirm the directory binary already does the step-5 sign; if gated, enable it). The
+   directory's node signing key = the `dirKeyFile` identity (already provisioned in the harness).
+2. **Daemon live wiring:** construct the real manifestProvider + challengeVerifier from the
+   manifest in the daemon composition root (CELLO_ENV=local reads the manifest path/contents),
+   replacing the null/stub. So step-6 runs live.
+3. **J-AUTH live test (new spine test file or block):**
+   - **Happy:** daemon verifies the directory's signed challenge against the manifest → connects
+     (turns DOD-AUTH-1 from OFF to on).
+   - **Rogue (SI):** a second directory node whose node key is NOT in the manifest → step-6
+     `directory_challenge_failed: key_not_in_manifest` → the daemon falls back to a manifest node.
+   - **Expired (SI):** a manifest past `expires` → the daemon refuses ALL connections.
+   - **TUF (DOD-AUTH-2):** reject `version ≤ trusted`; persist trusted version (never downgrade).
+
+**Dependency/risk:** the rogue-node test needs a SECOND directory binary in the harness (a node
+with a key absent from the manifest) — a harness extension. The fallback test needs ≥2 manifest
+nodes. Start with the happy-path step-6 (wire + verify a legit signed challenge), then layer the
+adversarial nodes. Read the MANIFEST-001/002 SI blocks before the adversarial assertions.
+
+**State.** SPINE-1..7 GREEN + closed (SPINE-7 review running). J-AUTH design fixed; build is wiring
++ harness manifest + adversarial test. Branch `m7-rehome` both repos, nothing pushed/merged.
