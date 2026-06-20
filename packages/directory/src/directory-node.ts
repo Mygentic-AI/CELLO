@@ -2353,6 +2353,13 @@ export class CelloDirectoryNode {
     }
     this.#sessionOfferAcceptTargets.delete(sessionIdHexForWait);
 
+    // NOTE (DOD-SPINE-6 / WIRE-002): when no session_offer_accept handshake supplies the
+    // counterparty's SESSION endpoint, it is left empty. The target's announced peer_info
+    // (`targetInfo`) is its per-agent DIRECTORY node, NOT its standing-receiver session node,
+    // so it is NOT a valid content endpoint (using it yields "could not negotiate
+    // /cello/content"). Communicating B's session endpoint to A requires the WIRE-002
+    // session_offer→session_offer_accept round-trip — tracked as the SPINE-6 build.
+
     // TRANSPORT-001 stub: real AutoNAT probe not yet wired.
     // Honour client-requested transport_mode for testability; TRANSPORT-001 will
     // override with the AutoNAT probe result. Defaults to 'relay' when absent.

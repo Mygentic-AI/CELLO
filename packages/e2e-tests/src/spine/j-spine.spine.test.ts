@@ -479,7 +479,12 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
       ok?: boolean;
       reason?: string;
     };
-    expect(sent.ok, `cello_send failed: ${JSON.stringify(sent)}`).toBe(true);
+    const sendDiag =
+      `\nsent: ${JSON.stringify(sent)}\n--- daemonA session/transport ---\n` +
+      daemonA.output.split("\n").filter((l) => /session\.|transport\.|connect|counterparty|dial/.test(l)).slice(-25).join("\n") +
+      `\n--- daemonB session/transport ---\n` +
+      daemonB.output.split("\n").filter((l) => /session\.|transport\.|connect|counterparty|dial/.test(l)).slice(-25).join("\n");
+    expect(sent.ok, `cello_send failed:${sendDiag}`).toBe(true);
     const recv = (await connB.call("cello_receive", { session_id: inbound.session_id, timeout_ms: 15_000 })) as {
       ok?: boolean;
       content?: string | null;
