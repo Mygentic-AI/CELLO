@@ -1320,3 +1320,62 @@ nothing pushed/merged. Daemon 350/350, typecheck + lint clean, dead-stack gate g
 **NEXT RED: DOD-SPINE-7 (bilateral seal)** — design-significant (directory-mediated via
 handleActiveSealFlow vs relay-mediated via #maybeProcessSeal; needs a design note + likely
 extends the relay client to ctrl/0x02 leaves). J-SPINE has no SPINE-7 assertion yet.
+
+---
+
+## 2026-06-20 — DOD-SPINE-7 design note (bilateral seal: relay-mediated notarization)
+
+DoD: both parties submit SEAL ctrl leaves → directory rebuilds + verifies the whole signed
+Merkle chain → FROST notarization → `session_sealed` to both with a byte-identical
+`sealed_root`. Spec source: DAEMON-004 (active-seal initiation) + E2E-001 (seal lifecycle) +
+PERSIST-014/015 (directory notarization). No new story needed.
+
+**Two seal mechanisms exist in the code — SPINE-7 is the relay-mediated one.**
+
+1. **Directory-mediated bilateral ack** (BUILT, daemon `handleActiveSealFlow`, daemon.ts:2332+).
+   `cello_close_session` signs the agent's own SEAL leaf over its root and sends
+   `seal_interrupted_request` over the DIRECTORY signaling pass-through (reusing the
+   SESSION-001 interrupted-seal exchange); awaits the counterparty's own-signed ack leaf and
+   verifies it (`verifyCounterpartySealLeaf`). This is a peer-to-peer-via-directory bilateral
+   AGREEMENT — it does NOT rebuild the chain from relay leaves or FROST-notarize. It's the path
+   for direct/interrupted seals.
+
+2. **Relay-mediated notarization** (server side BUILT, daemon side NOT). When a ctrl leaf
+   (0x02) is submitted via `hash_submit`, the relay's `#maybeProcessSeal` (relay-node.ts:1104,
+   :1109) checks its leaf log for TWO ctrl leaves from DISTINCT senders; on the second it calls
+   `submitForSeal` → the directory's `processSeal` rebuilds + verifies the whole signed chain,
+   FROST-notarizes, and emits `session_sealed` with the `sealed_root`. **This is exactly the
+   DoD-SPINE-7 text** ("both submit SEAL ctrl leaves → directory rebuilds the chain → FROST
+   notarization → session_sealed, byte-identical root").
+
+**Decision: SPINE-7 drives the relay-mediated path (mechanism 2).** It matches the DoD line,
+its server half (relay `#maybeProcessSeal` + directory `processSeal` + FROST) already exists,
+and it builds directly on the SPINE-6 relay witness client — the missing piece is the DAEMON
+submitting its SEAL **ctrl** leaf (0x02) through that client, where SPINE-6 only submits **msg**
+leaves (0x00). Producer/consumer: producer = each party's daemon submits a signed SEAL ctrl
+leaf via `AgentRelayClient`; consumer = relay `#maybeProcessSeal` (needs 2 distinct-sender ctrl
+leaves) → directory `processSeal` → FROST notarize → `session_sealed` delivered back over the
+relay/directory to both daemons, which assert a byte-identical `sealed_root`.
+
+**Build (incremental, next):**
+1. Generalize `AgentRelayClient.submitMessageHash` (or add `submitLeaf`) to take a `leaf_kind`
+   so it can submit a SEAL ctrl leaf (0x02) with the SEAL payload's content_hash. The relay
+   already validates leaf_kind ∈ {0x00, 0x02}.
+2. Build the SEAL ctrl leaf in the daemon (the SEAL payload + its content_hash, K_local-signed
+   Structure 1) — reuse the seal-payload shape from `handleActiveSealFlow`/the retired client's
+   seal submit; submit it via the relay client on `cello_close_session`.
+3. Wire the daemon to receive `session_sealed` (it arrives via the relay leaf stream or the
+   directory signaling stream — confirm which) and surface the `sealed_root` to the session
+   record + `cello_close_session` result.
+4. J-SPINE: add DOD-SPINE-7 — A and B (two daemons) exchange a message, BOTH `cello_close_session`
+   → both submit SEAL ctrl leaves → directory notarizes → both daemons observe `session_sealed`
+   with a BYTE-IDENTICAL `sealed_root` (INV-2: B's co-signature is B's own node's, never forged).
+
+**Open question for step 3:** confirm the live delivery channel for `session_sealed` (relay
+`leaf_deliver`-style frame vs directory signaling `session_sealed` frame) before wiring the
+daemon listener — the directory's `processSeal` emits it, but the transport back to the daemon
+in the relay-mediated path needs tracing (PERSIST-014/015).
+
+**State.** SPINE-1..6 closed; SPINE-7 = relay-mediated bilateral seal, design fixed, server side
+exists, daemon ctrl-leaf submit + session_sealed listener is the build. Branch `m7-rehome` both
+repos, nothing pushed/merged.
