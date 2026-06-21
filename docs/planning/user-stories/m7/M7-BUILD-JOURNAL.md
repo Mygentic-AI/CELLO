@@ -1963,3 +1963,51 @@ The directory nonce fix broke nothing (SPINE-7 seal still green).
 **State — Tier 2 essentially closed.** AUTH-1 ✅, AUTH-2 🟡 (only the 6–12h poll), SIG-1 🟢,
 INT-1 ✅, INT-2 ✅, RETRY-1 ✅. Next: Tier 3 — DOD-MSG-* content delivery (the big one, MSG-001-3b
 relay store-and-forward), the postmortem's central gap.
+
+---
+
+## 2026-06-21 — J-CONTENT / MSG-001-3b — build plan (Tier 3, the biggest gap)
+
+**DoD-IDs:** DOD-MSG-3 (daemon side), DOD-MSG-4 (❌ biggest gap), DOD-MSG-5, DOD-MSG-1/2/7
+(partial → full), DOD-MSG-8 (depends on SESSION-004 frontier). DOD-MSG-6 already ✅.
+
+**Scope established (read of the code, not the docs).**
+- RELAY side is DONE + tested: `packages/relay/src/content-park.ts` (`ContentParkHandler`,
+  protocol `/cello/content-park/1.0.0`) + `adapters/file-content-store.ts` (fsync-durable,
+  recipient-pubkey-keyed, TTL 7d, delete-on-pickup). Frames: `content_park_deposit`→
+  `content_park_deposit_ack`; `content_park_pull_request`→challenge→auth→`0..N responses`→
+  `content_park_confirm`. Auth = Ed25519 over `buildContentParkAuthMsg(nonce, recipientPubkey)`
+  = SHA-256(`CELLO-CONTENT-PARK-AUTH-v1` || nonce || recipientPubkey). Caps + I1 auth gate done.
+- DAEMON side is the gap. daemon.ts:824 says verbatim "the park deposit itself is added in 3b".
+  The per-agent relay client (`session-relay-client.ts`) exists for the SPINE-6 hash WITNESS
+  (leaf submit/deliver) but does NOT deposit/pull CONTENT. The content seal exists in crypto
+  (`sealToRecipient`/`openSealed`/`CONTENT_SEAL_OVERHEAD_BYTES`).
+
+**Build plan (SPARC — execute in a FRESH context for full headroom; multi-round like SPINE-7).**
+1. **Content-park CLIENT (new, core/daemon)** — the counterpart to `ContentParkHandler`:
+   - `deposit(relayAddr, recipientPubkey, contentHash, ciphertext) → ack` (open stream on
+     CONTENT_PARK_PROTOCOL_ID, send `content_park_deposit`, await ack).
+   - `pull(relayAddr, recipientKeyProvider) → entries[]` (send `content_park_pull_request`,
+     receive challenge nonce, sign `buildContentParkAuthMsg`, send auth, read 0..N responses,
+     `content_park_confirm` each). Reuse the relay connection the agent already holds.
+2. **Send-path wiring (DOD-MSG-2/3)** — when `cello_send` cannot deliver direct/relay-witness
+   (B offline) OR the TTF timer fires with no `persisted` ACK: `sealToRecipient` the content →
+   `deposit` to the relay park. The retry_queue awaiting-ACK entries (already persisted) are the
+   crash backstop; flush-to-park on startup (`getAwaitingSessions` already wired, the park target
+   was the missing piece).
+3. **Receive-path wiring (DOD-MSG-3/4)** — on agent online (or a park notify): `pull` parked
+   entries → `openSealed` → verify content_hash → accept at the already-assigned sequence (NO new
+   leaf if the hash was already witnessed; recovery-not-desync, DOD-MSG-4) → deliver to B.
+4. **Dedup (DOD-MSG-5)** — a content_hash satisfies at most one Merkle leaf; reuse the nonce/
+   content dedup so a resend+park+direct double-delivery never double-counts.
+5. **J-CONTENT live test** — A sends while B is OFFLINE (B daemon down or not online) → content
+   parks (relay `content.park.deposited`) → B comes online → B pulls + decrypts the SAME plaintext
+   → relay logs show CIPHERTEXT only (INV-3) → no desync. Then DOD-MSG-4 recovery + DOD-MSG-5 dedup
+   + DOD-MSG-7 (desync ONLY on content_hash tamper).
+
+**Why fresh context.** This session already closed Tier 1 (SPINE-1..7) + Tier 2 (AUTH-1, AUTH-2
+sig/expiry/rollback, SIG-1, INT-1/2, RETRY-1) with 3 production bugs fixed and 16/16 spine green.
+MSG-001-3b is a multi-part feature build (new client + 4 wiring points + recovery/dedup) that will
+need several debug rounds; it deserves full headroom rather than the tail of a long session.
+
+**State.** Branch `m7-rehome` both repos, all pushed. Spine 16/16. Tier 1 + Tier 2 green.
