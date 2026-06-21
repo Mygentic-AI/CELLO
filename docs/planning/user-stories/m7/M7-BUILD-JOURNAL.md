@@ -2479,3 +2479,27 @@ session. Proven live, end-to-end, against the real binaries.
 Tier-3 MSG-001-3b: MSG-3 ✅, MSG-4 🟡-core, MSG-6 ✅, MSG-7 ✅. Remaining: MSG-5 (dedup / full
 witness-then-fill reconciliation), MSG-8 (irreducible loss / SESSION-004 frontier), the startup-flush
 park (relay-endpoint schema), the post-recovery bilateral seal (CELLO-M7-UPGRADE-001, now unblocked).
+
+---
+
+## 2026-06-21 — DOD-MSG-5 GREEN — content_hash dedup (at most one leaf)
+
+**DoD-ID:** DOD-MSG-5 (✅).
+
+**What was built.** `ingestReceivedContent` checks `getSessionTree(sessionId).leaves()` for the
+`content_hash` BEFORE appending; if it is already a leaf it logs `session.content.deduplicated` at
+the existing sequence and returns WITHOUT appending a second leaf or double-buffering. In the normal
+single-delivery case the find is -1, so the live + recover append paths are unchanged (and SPINE-6/7
+stayed green). cello-client `73e4b55`.
+
+**Test (`j-content.spine.test.ts`, GREEN).** A delivers a message DIRECTLY (B appends leaf 0); the
+SAME message also shows up via the relay park (the direct+park overlap — the real DOD-MSG-5
+scenario); B recovers it → `session.content.deduplicated` at sequence 0, and exactly ONE
+`session.content.received` exists for the hash. trustless `e62109e`. J-CONTENT 5/5. Full regression
+**21/21**.
+
+**State.** Branch `m7-rehome`. cello-client `73e4b55`, trustless `e62109e`+this. Tier-3 MSG-001-3b:
+MSG-3 ✅, MSG-4 🟡-core, MSG-5 ✅, MSG-6 ✅, MSG-7 ✅. Remaining: MSG-4 full witness-then-fill
+reconciliation (make `onLeafDeliver` append so B's root tracks canonical before content), MSG-8
+(irreducible loss / SESSION-004 frontier), startup-flush park (relay-endpoint schema), the
+post-recovery bilateral seal (CELLO-M7-UPGRADE-001, unblocked).
