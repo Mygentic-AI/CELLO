@@ -185,6 +185,18 @@ export class Proc {
       });
     });
   }
+
+  /**
+   * Abrupt kill (SIGKILL) — no graceful shutdown. Models a crash / power loss, so the
+   * process never runs its shutdown handlers (e.g. the daemon does NOT mark its active
+   * sessions interrupted on the way out — that detection must happen on the NEXT start).
+   * This is what J-INT needs to exercise the `source: daemon_restart` path.
+   */
+  async kill(): Promise<void> {
+    if (this.child.exitCode !== null || this.child.signalCode !== null) return;
+    this.child.kill("SIGKILL");
+    await new Promise<void>((r) => this.child.once("exit", () => r()));
+  }
 }
 
 /** Extract the first `adapter.initialised / ListenAddr` multiaddr (with /p2p/) from a proc. */
