@@ -26,12 +26,10 @@ everything usable; sequence later. (See memory `feedback_comprehensive_not_minim
 |---|---|
 | 1. gitleaks — full ruleset + engine | ✅ COMPLETE (below, §1) |
 | 2. Guardrail field — OUTBOUND | ✅ COMPLETE (below, §2; from the 2026-06-21 outbound scan) |
-| 3. Guardrail field — INBOUND | ❌ PENDING — cut off by session limit; resume after reset |
-| 4. Infisical — whole-repo governance mining | ❌ PENDING — cut off by session limit; resume after reset |
+| 3. Guardrail field — INBOUND | ✅ COMPLETE (below, §3) |
+| 4. Infisical — whole-repo governance mining | ✅ COMPLETE (below, §4) |
 
-**Resume plan (after the limit resets):** re-dispatch the two pending sweeps with the
-same exhaustive prompts (recorded in §3/§4 stubs below), then write §5 (the mapping of
-all harvested capability onto CELLO's six layers + governance tier).
+**All four sweeps complete.** §5 maps everything onto CELLO's six layers + governance tier.
 
 ---
 
@@ -112,46 +110,121 @@ LLM02/05/06 2025.
 
 ---
 
-## §3 — Guardrail field: INBOUND techniques & controls (❌ PENDING)
+## §3 — Guardrail field: INBOUND techniques & controls (✅)
 
-**Cut off by the account session limit. Re-run after reset.** Exhaustive prompt: catalog
-ALL inbound techniques — every LLM Guard INPUT scanner; NeMo input rails; Guardrails AI
-input validators; the full prompt-injection/jailbreak technique catalog (direct/indirect,
-role-play/DAN, payload splitting, obfuscation/encoding, multi-turn/crescendo,
-invisible-Unicode/ASCII-smuggling, many-shot, system-override markers, tool/RAG poisoning),
-each with mechanism + control; the COMPLETE Microsoft Presidio entity list (~50, named);
-model-based classifiers (Llama Guard, ShieldGemma); red-team tooling (garak, promptfoo).
-Output organized as INBOUND techniques & controls, to map onto CELLO Layers 1–2.
+Defenses applied to content ARRIVING at an agent (Layers 1–2). Bring all of it in.
+
+### §3a — Input scanners by library (the reference sets to mirror)
+
+**LLM Guard — 16 input scanners:** Anonymize (Presidio+DeBERTa NER PII redact+vault), BanCode, BanCompetitors, BanSubstrings, BanTopics (zero-shot NLI), Code (per-language), EmotionDetection, Gibberish, **InvisibleText** (zero-width/tag chars — no model), Language (allowlist), **PromptInjection** (`protectai/deberta-v3-base-prompt-injection-v2`), Regex, **Secrets** (Yelp detect-secrets), Sentiment (VADER), TokenLimit (tiktoken), Toxicity.
+
+**NeMo Guardrails — input side:** input rails (mask/reject/pass, `parallel:True`); `self_check_input` (main LLM judges, yes=block, fail-closed); **jailbreak heuristics** — Length/Perplexity (threshold 89.79) + Prefix/Suffix Perplexity (1845.65, catches GCG suffixes); model-based jailbreak (random-forest on arctic-embed + NemoGuard JailbreakDetect NIM); Presidio detect/mask on input. Shipped integrations: Llama Guard 3 / ShieldGemma / Nemotron Content Safety, ActiveFence, AutoAlign, Fiddler, Prompt Security, Cisco AI Defense, Pangea, CrowdStrike, GCP Text Moderation, Clavata, GLiNER-PII, Private AI, Regex, HF classifier.
+
+**Guardrails AI Hub — input validators:** DetectJailbreak (MiniLM embeddings + RoBERTa + saturation detector), DetectPromptInjection (wraps Rebuff), Arize Dataset Embeddings, UnusualPrompt (LLM-judge); ToxicLanguage/ToxicLanguageLLM, ProfanityFree, NSFWText, GibberishText; DetectPII/GuardrailsPII/SecretsPresent; RestrictToTopic, SensitiveTopics, BanList; hosted LlamaGuard 7B / ShieldGemma 2B.
+
+**Rebuff — 4 layers (canonical injection defense):** (1) heuristics (verb×adjective×object combinatorial, SequenceMatcher, thr 0.75); (2) dedicated detection LLM (thr 0.90); (3) **vector DB of prior attacks** (Pinecone, top_k=20, thr 0.90); (4) **canary tokens** (8-hex in invisible HTML comment; appearance in output = injection confirmed; `log_leakage` feeds the vector DB → self-hardening).
+
+**Vigil:** YARA signatures, vector-DB similarity (ChromaDB), transformer injection scanner (deberta), prompt-response similarity (goal-hijack), 16-char canary tokens, relevance, sentiment.
+
+### §3b — Injection / jailbreak technique catalog (25, each with its control)
+
+Taxonomies: HackAPrompt (2311.16119), Greshake indirect (2302.12173), Spotlighting (2403.14720), Instruction Hierarchy (2404.13208), OWASP GenAI, MITRE ATLAS.
+
+1. **Direct injection** ("ignore previous…") → instruction-hierarchy, spotlighting, input classifier. 2. **Context-termination** (fake end-delimiter) → datamarking, randomized/secret delimiters. 3. **Prefix/repetition/style injection** → hierarchy, repetition heuristics. 4. **Indirect injection via retrieved content** (RAG/web/email/docs/tool output/image-alt — can "worm") → segregate+mark untrusted, dual-LLM/quarantine+CaMeL, output-action gating, lethal-trifecta rule. 5. **Confused-deputy / RAG poisoning** → provenance/authorization, permission-aware retrieval, source allowlist. 6. **DAN/persona** → persona-robust refusal, DAN-corpus classifiers. 7. **Virtualization/story framing** → intent-level classification, output filter. 8. **Crescendo** (multi-turn escalation) → conversation-level monitoring, cumulative-trajectory filter. 9. **Many-shot** (long-context faux dialogues) → context-length-aware safety, scrub demonstration blocks. 10. **Skeleton Key** (augment-not-replace) → output filter regardless of "warning" framing. 11. **Context overflow/saturation** → length limits, truncation. 12. **Payload splitting/Defined-Dictionary** → evaluate fully-resolved prompt, output filter, dual-LLM. 13. **Encoding/cipher** (base64/hex/ROT13/Morse/leetspeak) → decode-then-filter, refuse high-entropy non-NL input, classify decoded result. 14. **Translation/low-resource-language** → multilingual classifiers, translate-then-filter, flag mismatch. 15. **Typos/glitch tokens** → normalization, tokenizer-aware filter, semantic classifier. 16. **ASCII smuggling / Unicode Tags (U+E0000–E007F) / zero-width / homoglyph / bidi** → **Unicode normalization + stripping before the model**, char-range allowlist, homoglyph canonicalization. 17. **Special-token / chat-template spoofing** (`[SYSTEM]`, `<|im_start|>`, `### Instruction`) → strip/escape reserved tokens at serialization, spotlighting. 18. **Instruction-in-data ("data as code")** → dual-LLM/quarantine, CaMeL, provenance. 19. **Tool/function-call/MCP poisoning** (description+schema+return-value) → least-privilege tool allowlist, app-holds-tokens, human-in-loop, sign/pin MCP servers. 20. **Multimodal injection** (image text/OCR/white-on-white/EXIF/audio) → OCR+same filters+spotlighting on extracted content. 21. **Refusal suppression / affirmative priming** → output classifiers on content not phrasing. 22. **Prompt leaking / system-prompt extraction** → never put secrets in system prompt, output filter for echo, canary tokens. 23. **GCG adversarial suffixes** → **perplexity filters** (canonical), paraphrasing/retokenization, SmoothLLM. 24. **Best-of-N / random augmentation** → rate limiting / repeated-query monitoring, input normalization. 25. **Competing-objectives / mismatched-generalization / recursive** → robust alignment, intent classification, output gating.
+
+### §3c — Microsoft Presidio: the FULL entity set (~95, doubles the docs' ~50)
+
+Authoritative source = `predefined_recognizers/` (docs lag). **Global:** CREDIT_CARD (Luhn), CRYPTO (BTC), DATE_TIME, EMAIL_ADDRESS, IBAN_CODE (mod-97), IP_ADDRESS, MAC_ADDRESS, NRP, LOCATION, PERSON, PHONE_NUMBER, MEDICAL_LICENSE (DEA), URL. **USA:** ABA_ROUTING_NUMBER, US_BANK_NUMBER, US_DRIVER_LICENSE, US_ITIN, US_MBI, US_NPI, US_PASSPORT, US_SSN. **UK:** UK_NHS (mod-11), UK_NINO, UK_PASSPORT, UK_POSTCODE, UK_VEHICLE_REGISTRATION, UK_DRIVING_LICENCE. **ES:** ES_NIF, ES_NIE, ES_PASSPORT. **IT:** IT_FISCAL_CODE, IT_DRIVER_LICENSE, IT_VAT_CODE, IT_PASSPORT, IT_IDENTITY_CARD. **DE:** BSNR, FUEHRERSCHEIN, HANDELSREGISTER, HEALTH_INSURANCE, ID_CARD, KFZ, LANR, PASSPORT, PLZ, SOCIAL_SECURITY, TAX_ID, TAX_NUMBER, VAT_ID. **PL:** PESEL. **SG:** NRIC_FIN, UEN. **AU:** ABN, ACN, TFN, MEDICARE. **IN:** PAN, AADHAAR (Verhoeff), VEHICLE_REGISTRATION, VOTER, PASSPORT, GSTIN. **FI:** PERSONAL_IDENTITY_CODE. **CA:** SIN (Luhn). **KR:** RRN, FRN, BRN, DRIVER_LICENSE, PASSPORT. **NG:** NIN, VEHICLE_REGISTRATION. **TH:** TNIN. **TR:** NATIONAL_ID, LICENSE_PLATE. **PH:** TIN. **ZA:** ID_NUMBER (Luhn). **SE:** PERSONNUMMER, ORGANISATIONSNUMMER. **Medical NER:** DISEASE_DISORDER, MEDICATION, THERAPEUTIC_PROCEDURE, CLINICAL_EVENT, BIOLOGICAL_ATTRIBUTE/STRUCTURE, FAMILY_HISTORY, HISTORY.
+**Architecture to adopt:** AnalyzerEngine → RecognizerRegistry → NlpEngine (spaCy/Stanza/Transformers NER); PatternRecognizer (regex) + `validate_result()` **checksum hooks** (Luhn / mod-97 / mod-11 / Verhoeff); **LemmaContextAwareEnhancer** (boosts score on nearby context words like "SSN:", "card"); deny-list recognizers; extensible via subclass / ad-hoc / RemoteRecognizer / GLiNER zero-shot.
+
+### §3d — Model-based classifiers (4 distinct types — not substitutes)
+
+- **Meta Prompt Guard (the inbound-relevant one):** Prompt-Guard-86M v1 (mDeBERTa, **3 labels BENIGN/INJECTION/JAILBREAK** — INJECTION=untrusted third-party content, JAILBREAK=direct user → maps exactly onto CELLO's relayed-vs-direct trust split); Llama-Prompt-Guard-2-86M (multilingual, ~92ms, binary); **Llama-Prompt-Guard-2-22M (DeBERTa-xsmall, ~19ms, CPU — lowest-overhead inline)**.
+- **Meta Llama Guard** (harm taxonomy, NOT injection): v3 14 categories S1–S14 (⚠️ S-codes shift across versions — pin the model). **Google ShieldGemma** (harm: dangerous/harassment/hate/sexual; v2 image).
+- **deepset/deberta-v3-base-injection** (INJECTION/LEGIT), **protectai/deberta-v3-base-prompt-injection v1/v2** (SAFE/INJECTION — LLM Guard's default), fmops DistilBERT, Epivolis Hyperion, Vijil ModernBERT.
+- **Attack generators (CI gate, NOT runtime):** garak (probes: promptinject, dan, encoding, latentinjection, suffix, gcg, sysprompt_extraction, leakreplay, xss, smuggling…); promptfoo red-team (plugins + strategies: base64/hex/rot13/homoglyph/best-of-n/crescendo/citation…). **Commercial guards:** Lakera Guard (+ Gandalf/PINT), Azure Prompt Shields, AWS Bedrock Guardrails PROMPT_ATTACK, GCP Model Armor, HiddenLayer, Cisco/Robust Intelligence.
+
+**Directly applicable to CELLO Layers 1–2 (per-message, inline, no-LLM-friendly):** the small encoder classifiers — **Llama Prompt Guard 2 22M (DeBERTa-xsmall, ~19ms, CPU)** + protectai/deepset DeBERTa — align with the existing M8/M9 DeBERTa-v3-small INT8 Layer-2 design. Prompt Guard v1's INJECTION-vs-JAILBREAK split = "untrusted relayed content vs direct operator input." Llama Guard / ShieldGemma add an orthogonal harm-category axis.
 
 ---
 
-## §4 — Infisical: whole-repo governance mining (❌ PENDING)
+## §4 — Infisical: governance architecture (✅)
 
-**Cut off by the account session limit. Re-run after reset.** Repo
-`/Users/andrep/Documents/code/infisical`. Exhaustive prompt: mine the ENTIRE codebase for
-every security/governance concept CELLO could adopt — PII lib (have it: `backend/src/lib/pii/`),
-secret-scanning architecture (data-source/resource/findings model, gitleaks/CLI integration,
-fingerprinting, dedup, ignore/allowlist, scan lifecycle), audit-logging design (taxonomy,
-retention, tamper-evidence, streaming), access control (RBAC/ABAC, permissions, scoping),
-approval/change-request workflows (M-of-N, time-bound access), secret lifecycle (rotation,
-dynamic secrets, leasing, versioning), encryption-at-rest/KMS/envelope patterns, rate
-limiting, input sanitization patterns, webhook HMAC, IP allowlisting, MFA/session. Each with
-file path + what it does + how CELLO uses it. Output exhaustive, grouped by theme.
+The secret RULES live in gitleaks (§1; Infisical shells out via `execFile("infisical","scan")`).
+This is the ARCHITECTURE harvest — patterns, with file path + CELLO use.
 
-> NOTE: Infisical delegates actual secret *rules* to the `infisical` CLI (which wraps
-> gitleaks) via `execFile("infisical", …)` in `secret-scanning-v2-fns.ts` — so the
-> rule dictionary is §1 (gitleaks), not the Infisical backend. The Infisical mining is for
-> ARCHITECTURE (audit, RBAC, approvals, scan lifecycle, encryption), not the detector list.
+1. **Secret-scanning lifecycle** (`ee/services/secret-scanning-v2/`) — `DataSource→Resource→Scan→Finding` model; status enum `unresolved/resolved/false-positive/ignore`; `execFile` (no shell — injection-safe), exit-77 = "found" treated as success; **the secret value is stripped before persistence** (store rule+offset+fingerprint+location, never the payload); fingerprint = natural-key dedup that **preserves triage status across re-scans**; BullMQ queue + per-source distributed lock; full-scan vs diff-scan; provider-factory map. *CELLO:* governance findings as `agent→session→scan→violation`; store rule+offset of an injection finding, NEVER the malicious prompt; full-vs-diff = periodic agent re-eval vs per-message hook; per-node lock (sovereignty); severity (rule) vs disposition (4-state) separated.
+
+2. **Audit logging + SIEM** (`ee/services/audit-log*`) — **~606-member typed event enum**, each event with a strongly-typed metadata interface (compile-time "required context fields"); table partitioned by `createdAt`; actor model; retention TTL + batched prune. **GAP: NOT hash-chained or signed — trust-the-database.** Pluggable SIEM streaming factory (Splunk/Datadog/Azure/Cribl/custom; KMS-encrypted creds; SSRF + CRLF-injection guards; `allSettled`; 5s never-throw); Redis-buffered ClickHouse micro-batch. *CELLO:* copy the typed taxonomy (turns observability ACs into compile-time guarantees) + the streaming factory; **CELLO improvement = chain+sign the stream so the SIEM is a verifying party**; never let an event vanish without a chain entry/tombstone. This unsigned-audit gap is exactly what CELLO's directory hash chain closes.
+
+3. **Access control — CASL ABAC** (`ee/services/permission/`, `lib/casl/`) — `{action, subject, conditions}`; per-subject action enums (even `DescribeSecret` vs `ReadValue` split); packed rules in DB, concatenated **deny-last** (explicit deny wins); Handlebars `{{identity.metadata.x}}` interpolation = ABAC; two-level scope (org vs project = separate ability objects); **`validatePermissionBoundary` = a CASL-subset prover: you cannot grant a privilege you don't hold** (escalation-proof delegation, ~318 lines); assume-privilege (re-auth every request). *CELLO:* the authorization primitive for connection-policy / "who may request what of a peer"; packed CASL connection policies in local SQLite, deny-last so a revoked-trust signal overrides any allow; **the boundary-prover is a drop-in escalation-proof check for agent→sub-agent delegation**; assume-privilege re-done with FROST/Ed25519 signing, not a shared secret.
+
+4. **Approval workflows** (`services/approval-policy/`) — three enums `Request/Step/Grant` (the request is the workflow; the **Grant is the authorization, carrying `expiresAt`+status**); M-of-N + sequential steps (parallel within a step); secret change-requests = **git-PR semantics** (staged diff, **three-way conflict detection on merge**, edit resets prior reviews); break-glass = bypasser allowlist + mandatory reason + loud fan-out audit; `Soft/Hard` enforcement; most-specific-wins policy scoping (deterministic score → all nodes resolve the same policy without coordination). *CELLO:* the workflow scaffolding around the existing FROST crypto; `PolicyChangeRequest→Grant`; keep FROST `t` (crypto) decoupled from `requiredApprovals` (governance); **staged-changeset + conflict-on-merge directly answers CELLO's known policy-change-approval-gate need**; Soft/Hard separates root-key governance (Hard/TUF) from operational policy; mutation-invalidates-partial-signatures defeats sign-benign-then-swap.
+
+5. **Secret lifecycle** (`ee/services/secret-rotation-v2/`, `dynamic-secret/`, `folder-commit/`) — rotation: **two-slot make-before-break** (`activeIndex` flip → no signing gap) + callback-inversion transactionality; **delayed-queue-job AS the TTL timer** (`jobId=leaseId`, `delay=expiry`); versioning (monotonic rows; restore = new forward version); **point-in-time = a git-style commit graph** (commits + change-rows + periodic materialized checkpoints + delta-replay; `revertCommit` never rewrites history); RE2 reference resolver with **permission-check during resolution**. *CELLO:* rotation-factory for FROST-share/transport/signing-key rotation; two-slot = share rotation without a signing gap (per-node, sovereign); job-as-TTL = time-bound grants/sessions without polling; **the commit-graph + signed-checkpoints + delta-replay is the near-perfect tamper-evident state-history template — upgrade the plain `commitId` to a hash-chained, node-signed id; `reconstructState` proves an agent's past share-state for disputes.**
+
+6. **Encryption & key hierarchy** (`lib/crypto/`, `services/kms/`) — 4-level envelope (env→root→org/project KMS→DEK); **closure-bound DEK** (plaintext key never escapes the encrypt/decrypt closure); blob `[IV(12)|ct|tag(16)|version(3)]`; FIPS singleton-swap **keeping the wire format** (mixed-FIPS federation interop); PQC **signatures** (ML-DSA/SLH-DSA via side-OpenSSL, graceful fallback) — **no ML-KEM (gap)**; external-KMS 4-method provider (AWS+GCP, **no Azure — gap**); HSM root-wrap + encrypt-then-HMAC + `CKR_PIN_INCORRECT` bail; KMIP. *CELLO:* closure-bound DEK for `EnvelopeKeyProvider`; version as a named parsed field; copy the external-KMS provider and **add the Azure provider** (Choice invariant); FIPS swap behind `SigningKeyProvider`; **extend PQC to ML-KEM (FIPS 203) for transport — CELLO's real quantum exposure is key-agreement (harvest-now-decrypt-later), which Infisical hasn't addressed**; do NOT copy the 128-bit utf8 legacy key.
+
+7. **Abuse / webhooks / MFA / IP / sharing / honey tokens** — rate limiting (named presets, Redis-shared cross-region, per-plan dynamic `max`, **key on token not IP**); **RE2 everywhere + `sanitizeString(tokens)` error-redaction (~40 sites) + AST-allowlist for templates + DNS-resolve-every-hop SSRF**; webhook HMAC **`t=<ts>,v1=<sig>` over `ts.body` + `timingSafeEqual` + 5-min window** (the repo's strongest scheme); **version-counter revocation** (increment invalidates all outstanding JWTs — no denylist); `setItemWithExpiryNX` single-use nonce/OTP claim; `DUMMY_HASH` constant-time (no existence oracle); IP allowlist via kernel `net.BlockList`; secret-sharing (256-bit opaque id, encrypt-at-rest, expiry + **atomic view-count decrement**, password); **honey tokens** (`ee/services/honey-token/` — a decoy zero-privilege credential planted as a real-looking secret; detection via CloudTrail→subscription-filter→trigger; **one-alert-per-24h cooldown**; `t=,v1=` signed trigger). *CELLO:* rate-limit keyed on peer-id/agent-identity, limits signed into the manifest; `sanitizeString` before ANY error reaches an MCP `guidance` field or the ops agent; standardize ALL signed callbacks on `t=,v1=`; **version-counter revocation = "Not Me"/rotation/succession as one increment, instant across regions, no shared denylist**; `setItemWithExpiryNX` extends the existing nonce-dedup; **honey tokens answer the known CELLO story need — a decoy identity/share, the directory/relay IS the tripwire (no central phone-home), trigger = a hash-chain event + ops-agent alert, federated so no SPOF.**
+
+8. **Bonus — the AI-MCP governance gateway** (`ee/services/ai-mcp-endpoint/`) — Infisical already proxies agent/MCP traffic through a governed endpoint that enforces: **tool allowlisting (default-deny)**, **RE2 PII request/response redaction** (`lib/pii/index.ts` — the exact EMAIL/PHONE/SSN/CREDIT_CARD/IP_ADDRESS set; **validates CELLO's Layer 1/4 plan directly**), per-call activity log, generic-error-to-client (no leakage), OAuth+PKCE. **This is almost exactly CELLO's M9 gateway shape.** Plus gateway/relay **mTLS** (per-org ephemeral CA hierarchy, KMS-wrapped TTL'd per-identity relay creds) → directly reusable for CELLO relay-node security.
+
+**Cross-cutting primitives (clean drop-ins):** RE2 everywhere untrusted input is parsed; `timingSafeEqual` + `DUMMY_HASH`; `setItemWithExpiryNX`; version-counter revocation; enum→factory dispatch maps (scanning/rotation/KMS/SIEM/honey); closure-bound key material; job-as-TTL + signed-checkpoint+delta-replay state history; the `t=,v1=` signing scheme for all callbacks. **The one categorical CELLO win:** Infisical's audit log is unsigned — CELLO's directory hash chain is strictly better.
 
 ---
 
-## §5 — Mapping onto CELLO's six layers + governance (❌ PENDING §3/§4)
+## §5 — The prune pass: what we actually keep (decision framework)
 
-To be written once §3 and §4 land. Will map every harvested capability onto: Layer 1
-(sanitization — incl. inbound+outbound invisible-Unicode), Layer 2 (scan), Layer 3
-(outbound gate — full gitleaks dictionary + generic/entropy + structured-channel scanning +
-canary tokens), Layer 4 (redaction — full secret set + Presidio entity expansion), Layer 5
-(governor — volume/scope), Layer 6 (deny-all), and the governance/audit/extensibility tier
-(Infisical audit/RBAC/approval patterns). Flags which existing M9 stories absorb each
-capability and which need NEW stories (invisible-Unicode both directions, canary tokens,
-full secret dictionary, expanded entity set, governance workflows).
+§1–§4 are the **laundry list** (gather-everything, done). This section is the **decision
+layer** — read through and keep only what we truly want or need. It is NOT a "bring it all
+in" mapping. Decisions are made WITH Andre, capability by capability, story by story.
+Seeded below with Andre's stated principles + early calls (2026-06-21); the rest is filled
+in during the collaborative read-through.
+
+### Design principles (Andre)
+
+1. **Not onerous.** A normal message must go out with near-zero customization. If guardrails
+   force the operator to configure exceptions just to talk to a peer, that's a failure.
+2. **Balanced default posture.** The most obvious / lowest-harm checks are ALLOWED by
+   default; the most onerous / highest-harm are OFF by default (opt-in).
+3. **Every block is legible + recoverable.** When anything is blocked or redacted, the
+   sender is told WHAT, WHY, and given an explicit option + instructions to unblock/override.
+4. **Inbound ≠ outbound.** Inbound (protect THIS agent from injection) can be stricter and
+   more automatic; outbound (govern what leaves) must not mangle legitimate messages.
+
+### Early prune calls (Andre)
+
+- **Tool allowlists → OUT / N/A.** By the time `cello_send` runs, the LLM has already
+  decided and called the tool — CELLO is not an MCP tool-mediating proxy, so Infisical's
+  tool-allowlist (and the field's "tool governance") doesn't map to the send path. *(A
+  distinct "what a peer may request of you" capability model belongs to connection-policy /
+  Layer 6 — a different mechanism, not this.)*
+- **Path detection → detect-and-NOTE, default-allow.** Sending a colleague a shared-folder
+  path is a legitimate everyday message; blunt path-blocking breaks real use. Heuristically
+  distinguish internal-secret paths (`/var/secrets/...`) but default to allow + note, not
+  block. (Nitty-gritty to work out.)
+- **KEEP (core, non-negotiable):** outbound PII + secret protection; inbound injection
+  defense. These are the spine; everything else is weighed against principles 1–2.
+
+### Open decisions for the read-through (each a real choice, with options)
+
+- **A. Outbound response model — per detected category, pick:** (a) block whole message;
+  (b) full redact → `[REDACTED_SECRET]`; (c) partial mask (first4/last4); (d) pass + warn.
+  *Andre's question: redact-and-indicate? first4/last4? does it ever block the whole
+  message?* — Proposed starting point: redact-and-indicate for PII/secrets (full placeholder
+  in the DELIVERED text; first4/last4 surfaced to the SENDER as a note so they know which
+  item was caught — not in the delivered message); block-whole-message reserved for the
+  narrow case where the message is primarily an exfiltration/attack and redaction can't make
+  it safe; always with unblock instructions. Decide per category.
+- **B. Block vs redact for secrets.** CELLO's current SCAN-003 BLOCKS on a secret while
+  REDACT-001 also redacts it (SI-003 says redaction ≠ blocking). Reconcile: which categories
+  block, which redact?
+- **C. Default-on vs default-off per capability.** Tag every §1–§4 capability: on-by-default
+  / opt-in / out — against principles 1–2.
+- **D. Partial-reveal safety.** first4/last4 is safe for long high-entropy keys but leaks
+  short/low-entropy secrets. Decide the reveal policy per category (probably: type label +
+  last4 only, never first chars for short secrets).
+- **E. Inbound strictness.** How automatic/strict on inbound (where onerousness matters less
+  because it protects the operator, and the sender — not the operator — bears any friction).
+
+> This section is intentionally undecided. It is the agenda for the prune, not its outcome.
