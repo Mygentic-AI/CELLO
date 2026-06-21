@@ -33,6 +33,7 @@ import {
   type Proc,
   type McpConn,
 } from "./live-harness.js";
+import { sealToRecipient, contentHashHex } from "./content-seal-fixture.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -214,5 +215,69 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     const recv = (await connB.call("cello_receive", { session_id: sessionId })) as { ok?: boolean; content?: string | null };
     expect(recv.ok).toBe(true);
     expect(recv.content, "B reads the exact parked plaintext it had missed").toBe(PARKED);
+  }, 120_000);
+
+  it("DOD-MSG-7 (desync only on tamper) — tampered parked content is the ONLY desync; recovery-failure keeps the session alive", async () => {
+    const dirA = mkdtempSync(join(tmpdir(), "cello-tamperA-"));
+    const dirB = mkdtempSync(join(tmpdir(), "cello-tamperB-"));
+    dirs.push(dirA, dirB);
+    await provisionAgent(dirA, "agentA");
+    const pubB = await provisionAgent(dirB, "agentB");
+    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "tamperA");
+    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "tamperB");
+    daemons.push(daemonA, daemonB);
+    expect(cello(["register", "agentA", `DEV-tp-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
+    expect(cello(["register", "agentB", `DEV-tp-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    const connA = await connectMcp(dirA, "tp-A");
+    const connB = await connectMcp(dirB, "tp-B");
+    mcpConns.push(connA, connB);
+    for (const [c, n] of [[connA, "agentA"], [connB, "agentB"]] as const) {
+      expect(((await c.call("cello_start_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+    }
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok).toBe(true);
+    const sessionId = init.sessionId!;
+    expect(((await awaitP) as { type?: string }).type).toBe("new_session");
+
+    const pubBBytes = Buffer.from(pubB, "hex");
+    const dep = (cipher: Uint8Array, hashHex: string) =>
+      ipcCall(dirA, "content_park_deposit", {
+        relayMultiaddr: cluster.relayMultiaddr,
+        recipientPubkey: pubB,
+        contentHash: hashHex,
+        sessionId,
+        ciphertext: Buffer.from(cipher).toString("hex"),
+      });
+
+    // (1) HONEST — sealed content whose hash MATCHES. Must be accepted (round-trip proof too).
+    const honest = Buffer.from("honest recovered message");
+    await dep(sealToRecipient(pubBBytes, honest), contentHashHex(honest));
+    // (2) TAMPER — a VALID seal of real content, deposited with the hash of DIFFERENT content.
+    //     Decrypts fine, but the cross-check fails → content_hash_mismatch (the ONE desync).
+    const realContent = Buffer.from("the actual sealed bytes");
+    await dep(sealToRecipient(pubBBytes, realContent), contentHashHex(Buffer.from("a different message entirely")));
+    // (3) RECOVERY-FAILURE — not a valid seal at all. openContentSeal fails → skipped, NOT a desync.
+    await dep(new Uint8Array(randomBytes(160)), contentHashHex(Buffer.from("whatever")));
+
+    const rec = (await ipcCall(dirB, "content_park_recover", { relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB })) as { ok?: boolean; recovered?: number; pulled?: number };
+    expect(rec.ok).toBe(true);
+    expect(rec.pulled, "all three parked entries pulled").toBe(3);
+    // ONLY the honest one is recovered — tamper + corrupt are rejected, neither lands.
+    expect(rec.recovered, "only the honest entry is accepted").toBe(1);
+
+    const tail = daemonB.output;
+    // Tamper → the ONE content-path desync signal.
+    expect(tail, "tampered content → content_hash_mismatch").toMatch(/content_hash_mismatch/);
+    // Recovery-failure → distinct, NON-desync outcome (skipped).
+    expect(tail, "unsealable content → recovery-failure, not desync").toMatch(/"event":"content\.recover\.unseal_failed"/);
+    // Honest → accepted (proves the harness seal round-trips through the daemon's openContentSeal).
+    expect(tail, "honest content recovered").toMatch(/"event":"content\.recovered"/);
+
+    // The session stays ALIVE despite tamper+corrupt: B still reads the honest message.
+    const recv = (await connB.call("cello_receive", { session_id: sessionId })) as { ok?: boolean; content?: string | null };
+    expect(recv.ok).toBe(true);
+    expect(recv.content, "session alive — the honest message is readable").toBe(honest.toString("utf8"));
   }, 120_000);
 });
