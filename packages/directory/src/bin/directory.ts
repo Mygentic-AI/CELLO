@@ -855,6 +855,11 @@ try {
     tokenValidator,
     directoryKeyProvider,
     pgPool: pgPool ?? undefined,
+    // Deployment tunable: the delivery-grace window before a unilateral seal is
+    // accepted (default 600s in CelloDirectoryNode). Lets test/dev shrink it.
+    deliveryGraceSeconds: process.env.CELLO_DELIVERY_GRACE_SECONDS
+      ? Number(process.env.CELLO_DELIVERY_GRACE_SECONDS)
+      : undefined,
     logger,
   });
 } catch (err: unknown) {

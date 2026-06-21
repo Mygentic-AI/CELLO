@@ -249,6 +249,39 @@ export class NetworkRelayAdapter implements RelayAdapter {
   }
 
   /**
+   * SESSION-002: fetch a session's signed-leaf chain from the relay so the directory
+   * can rebuild + verify the root for a unilateral seal. Read-only on the relay side.
+   * Returns the leaf chain + relay-recomputed root, or null when unavailable (the
+   * directory then rejects unilateral_leaves_unavailable).
+   */
+  async getSealLeaves(sessionId: Uint8Array): Promise<RelaySealData | null> {
+    if (!this.#node) return null;
+
+    const body: Record<string, unknown> = { type: "get_seal_leaves", session_id: sessionId };
+    const directory_signature = await this.#keyProvider.sign(CBOR_ENC.encode(body) as Uint8Array);
+    const frame = CBOR_ENC.encode({ ...body, directory_signature }) as Uint8Array;
+
+    try {
+      const response = await this.#sendAndReceive(frame);
+      if (response["type"] !== "seal_leaves") {
+        this.#logger?.warn("relay.get_seal_leaves.unavailable", {
+          reason: (response["reason"] as string) ?? (response["type"] as string) ?? "unknown",
+        });
+        return null;
+      }
+      return {
+        leaves: response["leaves"] as RelaySealData["leaves"],
+        merkle_root: response["merkle_root"] as Uint8Array,
+        seq_count: response["seq_count"] as number,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.#logger?.error("relay.get_seal_leaves.transport_error", { error: msg });
+      return null;
+    }
+  }
+
+  /**
    * Open a stream to the relay, send one frame, read one response frame, close.
    * One request/response per stream open — same pattern as /cello/frost/1.0.0.
    * If the connection dropped since startup (idle timeout), re-dial once before giving up.

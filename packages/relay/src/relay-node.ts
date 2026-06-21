@@ -432,6 +432,27 @@ export class CelloRelayNode {
         return;
       }
 
+      // SESSION-002 (unilateral seal): the directory requests a session's signed-leaf
+      // chain on demand so it can rebuild + verify the root for a unilateral seal (the
+      // seal_unilateral frame carries no leaves). Read-only — no state mutation.
+      if (frameType === "get_seal_leaves") {
+        const session_id = req["session_id"] as Uint8Array;
+        const sid = session_id instanceof Uint8Array ? session_id : new Uint8Array(session_id as unknown as ArrayBuffer);
+        const result = this.getSealLeaves(sid);
+        if (result.ok) {
+          stream.send(lp.encode.single(CBOR_ENC.encode({
+            type: "seal_leaves",
+            leaves: result.data.leaves,
+            merkle_root: result.data.merkle_root,
+            seq_count: result.data.seq_count,
+          })));
+        } else {
+          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "seal_leaves_unavailable", reason: result.reason })));
+        }
+        await stream.close();
+        return;
+      }
+
       // Unknown frame type — close without state mutation
       stream.abort(new Error("unknown_directory_relay_frame_type"));
     } catch (err: unknown) {
@@ -544,6 +565,37 @@ export class CelloRelayNode {
         seq_count: state.seq_counter,
         merkle_root: root,
       },
+    };
+  }
+
+  /**
+   * SESSION-002: read-only leaf-chain fetch for a unilateral seal. Unlike
+   * submitForSeal it does NOT flip the session to "sealing" — the directory may
+   * fetch, find a root mismatch, and reject the unilateral seal, in which case the
+   * session must remain active (the present party may retry). Returns the full
+   * signed-leaf chain + the relay's recomputed root, exactly as submitForSeal packages
+   * it, so the directory verifies against the same encoding the bilateral path uses.
+   */
+  getSealLeaves(sessionId: Uint8Array): { ok: true; data: SealData } | { ok: false; reason: string } {
+    const key = Buffer.from(sessionId).toString("hex");
+    const state = this.#store.getSession(key);
+    if (!state) return { ok: false, reason: "session_not_found" };
+    // Accept "active" (the common unilateral case: one SEAL ctrl leaf present) or
+    // "sealing" (a bilateral attempt already in flight). Anything else (sealed/
+    // rejected/destroyed) has no recoverable chain.
+    if (state.status !== "active" && state.status !== "sealing") {
+      return { ok: false, reason: "session_not_active" };
+    }
+    const leaves = state.leaf_log.slice();
+    const leafInputs: LeafInput[] = leaves.map((l) => ({
+      kind: l.kind,
+      data: encodeStructure2(l.s2),
+    }));
+    const tree = buildMerkleTree(leafInputs);
+    const root = merkleRoot(tree);
+    return {
+      ok: true,
+      data: { leaves, seq_count: state.seq_counter, merkle_root: root },
     };
   }
 

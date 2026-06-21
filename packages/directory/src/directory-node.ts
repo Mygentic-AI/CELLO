@@ -260,6 +260,15 @@ export interface RelayAdapter {
   submitForSeal(sessionId: Uint8Array): Promise<{ ok: true; data: RelaySealData } | { ok: false; reason: string }> | { ok: true; data: RelaySealData } | { ok: false; reason: string };
   confirmSeal(sessionId: Uint8Array): Promise<void> | void;
   rejectSeal(sessionId: Uint8Array, reason: string): Promise<void> | void;
+  /**
+   * SESSION-002: fetch a session's signed-leaf chain on demand so the directory can
+   * rebuild + verify the root for a UNILATERAL seal (the seal_unilateral frame carries
+   * no leaves). Read-only — never mutates relay session state. Resolves to the leaf
+   * chain + relay-recomputed root, or null when the chain is unavailable (the directory
+   * then rejects unilateral_leaves_unavailable). Optional so in-process stubs that never
+   * exercise the unilateral path need not implement it.
+   */
+  getSealLeaves?(sessionId: Uint8Array): Promise<RelaySealData | null> | RelaySealData | null;
 }
 
 // ─── CelloDirectoryNode ────────────────────────────────────────────────────────
