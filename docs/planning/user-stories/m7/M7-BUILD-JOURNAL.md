@@ -2262,3 +2262,42 @@ sends to an offline B → witness assigns a sequence + content parks → relay l
 
 **State.** Branch `m7-rehome`. cello-client `05c4e68`, trustless-cello bc047c7→this. Spine 17/17.
 Increment 1 (transport) green; increment 2 blocked on the R1/R2 decision above.
+
+---
+
+## 2026-06-21 — MSG-001-3b increment 2 GREEN (R1) — offline sends auto-park
+
+**DoD-IDs:** DOD-MSG-3 (send half) + DOD-MSG-2 (live TTF park) proven live. Design R1 (approved).
+
+**What was built (R1, in two sub-increments):**
+- **2a — witness reorder** (`sendContent`, session-node-manager.ts): the message-leaf HASH is now
+  submitted to the relay BEFORE direct delivery, so the relay assigns the canonical sequence
+  whether or not the counterparty is reachable. Previously the witness ran only after a successful
+  direct send → an offline recipient's content got no sequence (broke DOD-MSG-4). Commit cello-client
+  `f002710`.
+- **2b — live park** (session-node-manager + daemon.ts): on a not-confirmed send (direct-fail catch
+  in `sendContent`, OR `#handleTtfExpiry`), `#parkContent` resolves the recipient (session
+  counterparty) + the session's relay endpoint (now held on the ActiveSessionEntry) and calls a
+  daemon-injected hook that `sealToRecipient`s the content (INV-3) + deposits to that relay's
+  store-and-forward via `ContentParkClient` + the standing-receiver node → `content.park.deposited`.
+  Commit cello-client `35f8c47`.
+
+**Test (`j-content.spine.test.ts`, GREEN):** establish A↔B (relay endpoint captured), B goes
+OFFLINE (daemon stop), A sends again → direct delivery fails → R1 witness still assigns the sequence
++ 2b seals & deposits → `content.park.deposited` + relay `content.park.received`. trustless `e53fc88`.
+
+**Result.** Full spine regression GREEN: **18/18** (added J-CONTENT 2). SPINE-6/7 unaffected by the
+two load-bearing `sendContent` reorders.
+
+**Scope notes that stand:** the STARTUP-flush park (crash backstop) still needs the per-session
+relay-endpoint persisted (schema) — the LIVE park (this increment) has it in-memory. The durable
+awaiting entry is still recorded on TTF as the crash backstop.
+
+**Next — increment 3 (receive path, the M9-locked seam).** B pulls parked entries → `openSealed`
+INSIDE the daemon → route plaintext through `ingestReceivedContent` (the single inbound chokepoint —
+M9 AC, recorded above) → accept at the ALREADY-ASSIGNED sequence (R1) with the dedup-aware leaf
+refinement (DOD-MSG-4/5) → surfaces via `cello_receive`. Test asserts `session.content.received` for
+the pulled content (proving it traversed the funnel) + plaintext via `cello_receive`.
+
+**State.** Branch `m7-rehome`. cello-client `35f8c47`, trustless `e53fc88` (+ this). Spine 18/18.
+Tier 1 + Tier 2 green; Tier 3 MSG-001-3b increments 1+2 green; increment 3 next.
