@@ -350,18 +350,31 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
 - **DOD-SEAL-1 — Verify reported root.** Directory rebuilds + verifies the root
   from the signed-leaf chain; rejects `unilateral_root_unverifiable` /
   `unilateral_leaves_unavailable` / `unilateral_seal_leaf_invalid`. Stops trusting
-  `reported_root`. *(SESSION-002 AC-001..004, SI-001)* — ❌ **GREENFIELD** (only YAML;
-  directory bilateral notarization exists to reuse)
+  `reported_root`. *(SESSION-002 AC-001..004, SI-001)* — 🟢 **PROVEN LIVE** (J-UNILATERAL,
+  happy path): directory fetches the leaf chain via the new `get_seal_leaves` RPC,
+  rebuilds the **content-hash root** (the client-verifiable root — see journal "two roots")
+  + verifies the encodeStructure2 chain (sigs/prev_root/causal) + requires exactly one SEAL
+  ctrl leaf, then `session.unilateral.leaves.fetched` → `notarized`. The three reject paths
+  are implemented + logged but the LIVE adversarial assertions (forged root, etc.) are the
+  next increment.
 - **DOD-SEAL-2 — FROST notarization, counterparty ABSENT.** Signer = initiator +
   directory threshold; counterparty NEVER a signer, never receives `seal_verified`;
   single-key fallback pre-DKG; persisted signed append-only upgrade-ready
   `SealNotarization`, `close_type SEAL_UNILATERAL`, counterparty `ABSENT`. *(SESSION-002
-  AC-005..008, SI-002)* — ❌
+  AC-005..008, SI-002)* — 🟡 FROST-with-B-ABSENT + signed durable `SealNotarization` +
+  `session.unilateral.notarized` (present/absent pubkeys) PROVEN LIVE; B never signs/never
+  gets `seal_verified`. The `close_type='SEAL_UNILATERAL'` + `conversation_attestations`
+  'ABSENT' discriminator rows are NOT yet written — that 3-table write does not exist for
+  bilateral either; it is upgrade-readiness coupled to DOD-UP-1 (Tier-4, deferred).
 - **DOD-SEAL-3 — Verifiable certificate, channel-independent.** Confirm/notify
   frames carry the full cert; client rebuilds the canonical TBS and verifies the
   signature against an independently-trusted key; a channel-swapped `sealed_root`
-  is rejected. *(SESSION-002 AC-009/010/011, SI-003)* — ❌ (client side; re-home onto
-  daemon seal path)
+  is rejected. *(SESSION-002 AC-009/010/011, SI-003)* — 🟢 PROVEN LIVE (present-party half):
+  `seal_unilateral_confirmed` carries the full `SealCertificate`; the daemon's
+  `verifyUnilateralCertificate` rebuilds `buildSealTbs` + verifies the FROST sig vs the
+  agent's own primary_pubkey BEFORE sealing (`session.unilateral.certificate.verified`).
+  The adversarial channel-swap REJECT (SI-003 / AC-011) + the absent-party notification
+  half are the next increment.
 
 ### Session-path liveness (SESSION-003)
 
