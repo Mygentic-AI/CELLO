@@ -294,12 +294,24 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
 - **DOD-MSG-3 — Relay store-and-forward (durable, encrypted, recipient-keyed).**
   WAL-backed, fsync-durable, recipient-pubkey-keyed; holds CIPHERTEXT the relay
   cannot read; TTL 7d, delete-on-pickup; survives relay restart. *(MSG-001
-  AC-006/007/008/016, SI-001)* — 🟠 (relay ContentStore/FileContentStore/handler
-  merged in trustless-cello main; the daemon side that deposits/pulls = 3b, NOT built)
+  AC-006/007/008/016, SI-001)* — ✅ **PROVEN LIVE** (J-CONTENT, 2026-06-21). The daemon
+  side (3b) is built: `ContentParkClient` (deposit + auth-gated pull), the live
+  send-path auto-park on a not-confirmed send (R1 — `content.park.deposited`), and the
+  receive-path recover (`content_park_recover`). A→relay→B round-trip through the real
+  relay binary, ciphertext only (INV-3). Relay side (ContentStore/FileContentStore) was
+  already merged + tested.
 - **DOD-MSG-4 — Recovery instead of desync.** Hash-without-content past grace →
   request resend from sender → if unreachable, pull from relay queue → cross-check
   → accept at the already-assigned sequence (no new leaf). Session stays alive.
-  *(MSG-001 AC-009/010/011, SI-005)* — ❌ **NOT BUILT (MSG-001-3b)** — biggest gap.
+  *(MSG-001 AC-009/010/011, SI-005)* — 🟡 **CORE PROVEN LIVE** (J-CONTENT, 2026-06-21):
+  pull from relay → `openContentSeal` in-daemon → cross-check → accept (the recipient
+  recovers the parked message it missed while offline, into its interrupted session, and
+  the session stays alive). REMAINING for the FULL line: the "request resend from sender
+  first" preamble, and "no new leaf / accept at the already-assigned sequence" — empirically
+  `onLeafDeliver` is a no-op today, so recovery APPENDS the missed tail (B's root grows to
+  the canonical/complete one before any seal). For the real case (crash → miss the tail →
+  append in order) this reproduces the sender's exact tree; the general witness-then-fill
+  reconciliation (so B's root tracks canonical before content, with dedup) is DOD-MSG-5.
 - **DOD-MSG-5 — Resend vs replay dedup.** A `content_hash` satisfies at most one
   Merkle leaf, exactly once; duplicates/replays never double-count. *(MSG-001
   AC-012, SI-002)* — ❌ (part of 3b)
@@ -309,7 +321,11 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
   — ✅ (3a; size cap + IPC-buffer fix in main)
 - **DOD-MSG-7 — Desync ONLY on tamper.** The only content-path desync is
   `content_hash_mismatch`; mere absence / recovery-failure / oversize keep the
-  session alive. *(MSG-001 AC-015, SI-005)* — 🟠 (naming in 3a; full behavior needs 3b)
+  session alive. *(MSG-001 AC-015, SI-005)* — ✅ **PROVEN LIVE** (J-CONTENT, 2026-06-21).
+  Three parked entries recovered: HONEST (hash matches → accepted), TAMPER (valid seal,
+  mismatched hash → `content_hash_mismatch` — the one desync signal — rejected), CORRUPT
+  (unsealable → `content.recover.unseal_failed`, skipped, NOT a desync). recovered=1/3,
+  the session stays alive, the honest message is read. Oversize is DOD-MSG-6 (✅).
 - **DOD-MSG-8 — Irreducible loss is honest.** Device loss before any flush → hash
   already committed → receiver seals "sent, not received" (content frontier excludes
   it); a straggler post-seal is rejected, never re-enters a sealed session. *(MSG-001

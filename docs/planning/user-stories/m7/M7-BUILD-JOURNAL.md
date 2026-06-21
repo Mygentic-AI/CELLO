@@ -2449,3 +2449,33 @@ counterparty's exact tree (matching leafCount + root → the bilateral seal will
 
 **State.** Branch `m7-rehome`. cello-client `27b8372`, trustless `039e356`+this. Spine 19/19. Tier 1
 + Tier 2 green; Tier 3 MSG-001-3b transport + send-park + recover (core) green.
+
+---
+
+## 2026-06-21 — DOD-MSG-7 GREEN — desync only on tamper (+ harness sealing unblocked)
+
+**DoD-IDs:** DOD-MSG-7 (✅), and DoD flips for DOD-MSG-3 (✅ — daemon 3b built) + DOD-MSG-4 (🟡 core).
+
+**What was built.** A harness content-seal fixture (`content-seal-fixture.ts`) reproducing
+`sealToRecipient` byte-for-byte via @noble (x25519 + HKDF-SHA256 + AES-256-GCM + the Edwards→
+Montgomery map) — the published crypto e2e resolves predates content-seal (same skew as the manifest
+fixtures), added `@noble/hashes` as an e2e dep. This unblocks seeding SEALED parked content for any
+receive-side test, and self-validates: the HONEST entry round-trips through the daemon's real
+`openContentSeal`, so the harness seal is provably identical to the daemon's.
+
+**Test (`j-content.spine.test.ts`, GREEN — no binary change).** Deposit three parked entries for B:
+HONEST (sealed, hash matches → accepted), TAMPER (a VALID seal of real content deposited with the
+hash of DIFFERENT content → decrypts fine but the cross-check fails → `content_hash_mismatch`, the
+ONE content-path desync), CORRUPT (random bytes → `openContentSeal` fails → `content.recover.unseal_
+failed`, skipped, NOT a desync). recovered=1/3; the session stays ALIVE; B reads the honest message.
+trustless `7f8abcc`. J-CONTENT 4/4.
+
+**Significance.** DOD-MSG-7's invariant is the security crux: a tampered message is the only thing
+that desyncs (the transcripts genuinely disagree), while absence / recovery-failure / oversize never
+take the session down — so a flaky network or a relay hiccup cannot be weaponized into a denial-of-
+session. Proven live, end-to-end, against the real binaries.
+
+**State.** Branch `m7-rehome`. cello-client `27b8372`, trustless `7f8abcc`+this. J-CONTENT 4/4;
+Tier-3 MSG-001-3b: MSG-3 ✅, MSG-4 🟡-core, MSG-6 ✅, MSG-7 ✅. Remaining: MSG-5 (dedup / full
+witness-then-fill reconciliation), MSG-8 (irreducible loss / SESSION-004 frontier), the startup-flush
+park (relay-endpoint schema), the post-recovery bilateral seal (CELLO-M7-UPGRADE-001, now unblocked).
