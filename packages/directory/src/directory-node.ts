@@ -121,6 +121,7 @@ import type {
   SealFrostSignature,
   SessionFrostSealed,
   SessionRequestErrorReason,
+  SealUnilateralNotification,
 } from "./directory-types.js";
 import { WALL_CLOCK } from "./directory-types.js";
 import type { DirectoryStore } from "@cello-protocol/interfaces";
@@ -473,7 +474,7 @@ export class CelloDirectoryNode {
   // PERSIST-015: session_id_hex → unilateral seal record
   readonly #unilateralSeals = new Map<string, { sealed_root: Uint8Array; sealed_at: number; submitter_hex: string }>();
   // PERSIST-015: pubkey_hex → pending notifications for absent party
-  readonly #pendingNotifications = new Map<string, Array<{ type: "seal_unilateral_notification"; session_id: Uint8Array; sealed_root: Uint8Array; sealed_at: number }>>();
+  readonly #pendingNotifications = new Map<string, Array<SealUnilateralNotification>>();
   // PERSIST-015: session participant map preserved beyond stream closure, so SEAL_UNILATERAL
   // can identify the absent party after the stream cleanup has removed the pendingSessions entry.
   readonly #sessionParticipants = new Map<string, { initiatorHex: string; targetHex: string }>();
@@ -488,6 +489,11 @@ export class CelloDirectoryNode {
     timestamp: number;
     tbs: Uint8Array;
     correlationId: string;
+    // SESSION-002: when true this is a UNILATERAL seal — participantA is the present
+    // (submitting) party, participantB is the ABSENT counterparty (never a signer). On
+    // completion the directory sends seal_unilateral_confirmed + notification (cert),
+    // not session_sealed.
+    unilateral?: boolean;
   }>();
 
   // M7-WIRE-001: session_id_hex → counterparty session info from SessionOfferAccept
@@ -1311,10 +1317,8 @@ export class CelloDirectoryNode {
           const deliveredInMemoryIds = new Set<string>();
           for (const notif of unilateralNotifs) {
             try {
-              this.#sendFrame(stream, encodeSealUnilateralNotification({
-                ...notif,
-                seal_type: "UNILATERAL",
-              }));
+              // notif is the full certificate frame (SESSION-002).
+              this.#sendFrame(stream, encodeSealUnilateralNotification(notif));
               deliveredInMemoryIds.add(Buffer.from(notif.session_id).toString("hex"));
             } catch { break; }
           }
@@ -1340,14 +1344,15 @@ export class CelloDirectoryNode {
                   void this.#notificationQueue!.acknowledge(pgNotif.notificationId).catch(() => {});
                   continue;
                 }
+                // SESSION-002: reconstruct the full certificate. Pre-cert rows (no signature
+                // fields) cannot be delivered as a verifiable cert — ack without delivery.
+                const certNotif = unilateralNotificationFromPayload(pgNotif.payload as Record<string, unknown>);
+                if (!certNotif) {
+                  void this.#notificationQueue!.acknowledge(pgNotif.notificationId).catch(() => {});
+                  continue;
+                }
                 try {
-                  this.#sendFrame(stream, encodeSealUnilateralNotification({
-                    type: "seal_unilateral_notification",
-                    session_id: Buffer.from(p.session_id_hex, "hex"),
-                    sealed_root: Buffer.from(p.sealed_root_hex, "hex"),
-                    sealed_at: p.sealed_at ?? 0,
-                    seal_type: "UNILATERAL",
-                  }));
+                  this.#sendFrame(stream, encodeSealUnilateralNotification(certNotif));
                   // Acknowledge on successful delivery
                   void this.#notificationQueue!.acknowledge(pgNotif.notificationId).catch(() => {});
                 } catch {
@@ -1520,7 +1525,7 @@ export class CelloDirectoryNode {
           this.#processSealAttempt(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "seal_unilateral") {
           // PERSIST-015: process unilateral seal request
-          this.#processSealUnilateral(stream, authedPubkeyHex!, parsed);
+          void this.#processSealUnilateral(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "ping") {
           // M7-DIR-PING-001: heartbeat ping/pong — no state, no blocking
           this.#logger?.debug("directory.signaling.ping.received", {
@@ -2721,16 +2726,19 @@ export class CelloDirectoryNode {
   }
 
   /**
-   * PERSIST-015: Process a unilateral seal request from a client.
-   * Validates that delivery_grace_seconds has elapsed since last activity,
-   * then seals on the submitter's root and records the counterparty as ABSENT.
+   * SESSION-002: Process a unilateral seal request from a client. Validates that
+   * delivery_grace_seconds has elapsed, FETCHES the signed-leaf chain from the relay,
+   * REBUILDS + VERIFIES the root against frame.reported_root (it never trusts the reported
+   * root), runs a real FROST notarization with the counterparty ABSENT, and delivers a
+   * verifiable certificate. Supersedes the PERSIST-015 faith-based bookkeeping (Gap 1).
    */
-  #processSealUnilateral(
+  async #processSealUnilateral(
     stream: import("@libp2p/interface").Stream,
     senderHex: string,
     frame: import("./directory-types.js").SealUnilateral,
-  ): void {
+  ): Promise<void> {
     const sessionIdHex = Buffer.from(frame.session_id).toString("hex");
+    const correlationId = sessionIdHex;
 
     // SI-002: reject if session already has a unilateral seal
     if (this.#unilateralSeals.has(sessionIdHex)) {
@@ -2765,88 +2773,332 @@ export class CelloDirectoryNode {
       return;
     }
 
-    // Seal is allowed — record the unilateral seal
-    const sealedAt = now;
-    this.#unilateralSeals.set(sessionIdHex, {
-      sealed_root: frame.reported_root,
-      sealed_at: sealedAt,
-      submitter_hex: senderHex,
-    });
+    // ── SESSION-002: verify the reported root, then FROST-notarize with B ABSENT ──
+    // (Gap 1 fix — the directory no longer stores frame.reported_root on faith.)
 
-    // Determine the absent party — use #sessionParticipants which persists beyond stream closure,
-    // since #pendingSessions is cleaned up when streams close (AC-011).
+    // Identify the present (submitting) party and the ABSENT counterparty. #sessionParticipants
+    // persists beyond stream closure (set when the session was established); fall back to the
+    // pending-session record if the stream is still open.
     const participants = this.#sessionParticipants.get(sessionIdHex)
       ?? (() => {
         const p = this.#pendingSessions.get(sessionIdHex);
         return p ? { initiatorHex: p.initiatorHex, targetHex: p.targetHex } : null;
       })();
-    let absentPartyHex: string | null = null;
-    if (participants) {
-      absentPartyHex = participants.initiatorHex === senderHex
-        ? participants.targetHex
-        : participants.initiatorHex;
-    }
-
-    // AC-003: Queue notification for absent party (delivered on reconnect)
-    if (absentPartyHex) {
-      // In-memory queue for CELLO_ENV=local (PERSIST-015 M4 path — InMemoryNotificationQueue)
-      let notifications = this.#pendingNotifications.get(absentPartyHex);
-      if (!notifications) {
-        notifications = [];
-        this.#pendingNotifications.set(absentPartyHex, notifications);
-      }
-      notifications.push({
-        type: "seal_unilateral_notification",
-        session_id: frame.session_id,
-        sealed_root: frame.reported_root,
-        sealed_at: sealedAt,
+    if (!participants) {
+      this.#logger?.error("session.unilateral.verification.failed", {
+        sessionId: sessionIdHex,
+        reason: "unilateral_participants_unknown",
+        correlationId,
       });
+      return;
+    }
+    const absentPartyHex = participants.initiatorHex === senderHex
+      ? participants.targetHex
+      : participants.initiatorHex;
 
-      // PERSIST-023: also enqueue to the injected NotificationQueue (PgNotificationQueue for
-      // dev/staging/production — notifications survive directory restarts per AC-002).
-      // Fire-and-forget: if the DB enqueue fails, the in-memory queue above is the fallback.
-      if (this.#notificationQueue) {
-        const notificationId = randomUUID();
-        this.#notificationQueue.enqueue(absentPartyHex, {
-          notificationId,
-          notificationType: "seal_unilateral",
-          payload: {
-            session_id_hex: Buffer.from(frame.session_id).toString("hex"),
-            sealed_root_hex: Buffer.from(frame.reported_root).toString("hex"),
-            sealed_at: sealedAt,
-          },
-        }).catch((err: unknown) => {
-          const reason = err instanceof Error ? err.message : String(err);
-          this.#logger?.warn("pending_notification.enqueue.failed", {
-            notificationId,
-            recipientAgentId: absentPartyHex,
-            reason,
-          });
-        });
-      }
+    // DOD-SEAL-1: fetch the session's signed-leaf chain from the relay (the seal_unilateral
+    // frame carries no leaves). DB-001: if the chain is unavailable, reject — never seal on
+    // the unverified reported_root.
+    let leafData: RelaySealData | null = null;
+    try {
+      leafData = this.#relay.getSealLeaves
+        ? (await this.#relay.getSealLeaves(frame.session_id)) ?? null
+        : null;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.#logger?.error("session.unilateral.verification.failed", {
+        sessionId: sessionIdHex,
+        reason: "unilateral_leaves_unavailable",
+        error: msg,
+        correlationId,
+      });
+      return;
+    }
+    if (!leafData || !leafData.leaves || leafData.leaves.length === 0) {
+      this.#logger?.error("session.unilateral.verification.failed", {
+        sessionId: sessionIdHex,
+        reason: "unilateral_leaves_unavailable",
+        correlationId,
+      });
+      return;
     }
 
-    // Send confirmation to the submitting party
+    // DOD-SEAL-1: rebuild + verify the chain and compare to frame.reported_root. Rejects
+    // unilateral_root_unverifiable (mismatch / bad chain) or unilateral_seal_leaf_invalid
+    // (not exactly one SEAL ctrl leaf from the present party).
+    const verifyResult = this.#verifyUnilateralChain(leafData.leaves, frame.reported_root, senderHex);
+    if (!verifyResult.ok) {
+      this.#logger?.error("session.unilateral.verification.failed", {
+        sessionId: sessionIdHex,
+        reason: verifyResult.reason,
+        correlationId,
+      });
+      return;
+    }
+    const recomputedRoot = verifyResult.recomputedRoot;
+    const leafCount = leafData.leaves.length;
+    const close_timestamp = now;
+    const presentPubkey = Buffer.from(senderHex, "hex");
+    const absentPubkey = Buffer.from(absentPartyHex, "hex");
+
+    // In-flight guard: set now that verification passed so a concurrent duplicate
+    // seal_unilateral frame is rejected (top of method) rather than double-FROST'd. The
+    // durable dedup is the seal_notarizations UNIQUE(session_id) constraint (AC-008).
+    this.#unilateralSeals.set(sessionIdHex, {
+      sealed_root: recomputedRoot,
+      sealed_at: now,
+      submitter_hex: senderHex,
+    });
+
+    // DOD-SEAL-2: notarize with the counterparty ABSENT.
+    const initiatorPrimaryPubkey = this.#primaryPubkeys.get(senderHex);
+    if (!initiatorPrimaryPubkey) {
+      // Single-key fallback (pre-DKG / local): sign the notarization TBS with the node key.
+      // The single-key certificate is rejected by M2 clients, identical to the bilateral path.
+      const notarizationTbs = CBOR_ENC.encode([
+        frame.session_id,
+        recomputedRoot,
+        close_timestamp > 0xffffffff ? BigInt(close_timestamp) : close_timestamp,
+      ]);
+      const notarizationSig = new Uint8Array(await this.#keyProvider.sign(notarizationTbs));
+      await this.#completeUnilateralNotarization({
+        sessionId: frame.session_id,
+        sessionIdHex,
+        sealedRoot: recomputedRoot,
+        presentPubkey,
+        absentPubkey,
+        presentHex: senderHex,
+        absentHex: absentPartyHex,
+        closeTimestamp: close_timestamp,
+        leafCount,
+        frostSignature: notarizationSig,
+        signatureType: "single",
+        correlationId,
+      });
+      return;
+    }
+
+    // FROST path (D-2): the present party is the seal initiator + FROST coordinator. Push
+    // seal_verified to the INITIATOR ONLY (SI-002: never to the absent counterparty), and
+    // complete the notarization when the initiator returns seal_frost_signature.
+    const tbs = buildSealTbs(frame.session_id, recomputedRoot, leafCount, close_timestamp);
+    this.#pendingFrostSeals.set(sessionIdHex, {
+      initiatorHex: senderHex,
+      participantAHex: senderHex,
+      participantBHex: absentPartyHex,
+      sealedRoot: recomputedRoot,
+      leafCount,
+      timestamp: close_timestamp,
+      tbs,
+      correlationId,
+      unilateral: true,
+    });
+
+    const sealVerifiedEvent: SealVerified = {
+      type: "seal_verified",
+      session_id: frame.session_id,
+      sealed_root: recomputedRoot,
+      leaf_count: leafCount,
+      timestamp: close_timestamp,
+    };
+    const presentStream = this.#streams.get(senderHex);
+    if (presentStream) {
+      try {
+        this.#sendFrame(presentStream, encodeSealVerified(sealVerifiedEvent));
+      } catch {
+        this.#store.enqueueNotification(senderHex, sealVerifiedEvent, sessionIdHex);
+      }
+    } else {
+      // DB-002: initiator disconnected before FROST — enqueue for reconnect.
+      this.#store.enqueueNotification(senderHex, sealVerifiedEvent, sessionIdHex);
+    }
+    // SI-002: the absent counterparty is NEVER sent seal_verified.
+  }
+
+  /**
+   * SESSION-002: rebuild the Merkle root from the signed-leaf chain and verify it against
+   * the present party's reported_root, mirroring the bilateral processSeal machinery but
+   * requiring EXACTLY ONE SEAL control leaf (kind "ctrl") from the present party (the absent
+   * party has none). Read-only; no state mutation.
+   */
+  #verifyUnilateralChain(
+    leaves: RelaySealData["leaves"],
+    reportedRoot: Uint8Array,
+    presentHex: string,
+  ): { ok: true; recomputedRoot: Uint8Array } | { ok: false; reason: string } {
+    // (a) Rebuild the full tree and compare to the reported root.
+    const fullInputs: LeafInput[] = leaves.map((l) => ({ kind: l.kind, data: encodeStructure2(l.s2) }));
+    const recomputedRoot = merkleRoot(buildMerkleTree(fullInputs));
+    if (!bufEqual(recomputedRoot, reportedRoot)) {
+      return { ok: false, reason: "unilateral_root_unverifiable" };
+    }
+
+    // (b–d) Per-leaf Structure 1 signature, prev_root chain, and causal-chain verification.
+    let runningRoot = leaves.length > 0 ? leaves[0].s2.prev_root : new Uint8Array(32);
+    for (let i = 0; i < leaves.length; i++) {
+      const leaf = leaves[i];
+      if (!verify(leaf.s2.sender_pubkey, leaf.structure1_cbor, leaf.s2.sender_signature)) {
+        return { ok: false, reason: "unilateral_root_unverifiable" };
+      }
+      const s1Fields = decodeStructure1Fields(leaf.structure1_cbor);
+      if (!s1Fields) return { ok: false, reason: "unilateral_root_unverifiable" };
+      if (!bufEqual(leaf.s2.prev_root, runningRoot)) {
+        return { ok: false, reason: "unilateral_root_unverifiable" };
+      }
+      const senderHex = Buffer.from(leaf.s2.sender_pubkey).toString("hex");
+      let effectiveSeen = 0;
+      for (let j = 0; j < i; j++) {
+        const otherHex = Buffer.from(leaves[j].s2.sender_pubkey).toString("hex");
+        if (otherHex !== senderHex && leaves[j].s2.sequence_number > effectiveSeen) {
+          effectiveSeen = leaves[j].s2.sequence_number;
+        }
+      }
+      if (s1Fields.last_seen_seq > effectiveSeen) {
+        return { ok: false, reason: "unilateral_root_unverifiable" };
+      }
+      const partialInputs: LeafInput[] = leaves.slice(0, i + 1).map((l) => ({ kind: l.kind, data: encodeStructure2(l.s2) }));
+      runningRoot = merkleRoot(buildMerkleTree(partialInputs));
+    }
+
+    // (e) Exactly ONE SEAL control leaf (kind "ctrl"), from the present (submitting) party.
+    const ctrlLeaves = leaves.filter((l) => l.kind === "ctrl");
+    if (ctrlLeaves.length !== 1) {
+      return { ok: false, reason: "unilateral_seal_leaf_invalid" };
+    }
+    const sealLeafSender = Buffer.from(ctrlLeaves[0].s2.sender_pubkey).toString("hex");
+    if (sealLeafSender !== presentHex) {
+      return { ok: false, reason: "unilateral_seal_leaf_invalid" };
+    }
+
+    return { ok: true, recomputedRoot };
+  }
+
+  /**
+   * SESSION-002: persist the signed unilateral SealNotarization (counterparty ABSENT) and
+   * deliver the verifiable certificate to the present party (seal_unilateral_confirmed) and
+   * the absent party (seal_unilateral_notification, on reconnect). Used by both the FROST
+   * path (from #processSealFrostSignature) and the single-key fallback.
+   */
+  async #completeUnilateralNotarization(args: {
+    sessionId: Uint8Array;
+    sessionIdHex: string;
+    sealedRoot: Uint8Array;
+    presentPubkey: Uint8Array;
+    absentPubkey: Uint8Array;
+    presentHex: string;
+    absentHex: string;
+    closeTimestamp: number;
+    leafCount: number;
+    frostSignature: Uint8Array;
+    signatureType: "frost" | "single";
+    correlationId: string;
+  }): Promise<void> {
+    const {
+      sessionId, sessionIdHex, sealedRoot, presentPubkey, absentPubkey, presentHex, absentHex,
+      closeTimestamp, leafCount, frostSignature, signatureType, correlationId,
+    } = args;
+
+    // Persist the notarization (participant_a = present, participant_b = ABSENT). The
+    // seal_notarizations UNIQUE(session_id) constraint is the durable dedup (AC-008).
+    const notarization: SealNotarization = {
+      session_id: sessionId,
+      sealed_root: sealedRoot,
+      participant_a_pubkey: presentPubkey,
+      participant_b_pubkey: absentPubkey,
+      close_timestamp: closeTimestamp,
+      frost_signature: frostSignature,
+    };
+    await this.#store.recordNotarization(notarization, { correlationId }).catch(() => { /* logged inside */ });
+
+    // PERSIST-017: stage sealed_root in the MMR (fire-and-forget; never blocks the seal).
+    if (this.#mmrStore) {
+      const sealedRootHex = Buffer.from(sealedRoot).toString("hex");
+      this.#mmrStore.appendSeal(sessionIdHex, sealedRootHex, sessionIdHex).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.#logger?.warn("mmr.staging.failed", { sessionId: sessionIdHex, reason: msg });
+      });
+    }
+
+    this.#logger?.info("session.unilateral.notarized", {
+      sessionId: sessionIdHex,
+      signatureType,
+      presentPartyPubkey: truncHex(presentHex),
+      absentPartyPubkey: truncHex(absentHex),
+      leafCount,
+      correlationId,
+    });
+    protocolLog("SEAL", `Unilateral sealed — session ${truncHex(sessionIdHex)}, root ${truncHex(Buffer.from(sealedRoot).toString("hex"))} (counterparty ABSENT)`);
+
+    // The verifiable certificate carried on both frames.
+    const cert = {
+      sealed_root: sealedRoot,
+      leaf_count: leafCount,
+      close_timestamp: closeTimestamp,
+      frost_signature: frostSignature,
+      signature_type: signatureType,
+      present_pubkey: presentPubkey,
+      absent_pubkey: absentPubkey,
+      seal_type: "UNILATERAL" as const,
+    };
+
+    // Confirm to the present (submitting) party.
     const confirmFrame = encodeSealUnilateralConfirmed({
       type: "seal_unilateral_confirmed",
-      session_id: frame.session_id,
-      sealed_root: frame.reported_root,
-      sealed_at: sealedAt,
+      session_id: sessionId,
+      sealed_at: closeTimestamp,
+      ...cert,
     });
-    try { this.#sendFrame(stream, confirmFrame); } catch { /* */ }
+    const presentStream = this.#streams.get(presentHex);
+    if (presentStream) {
+      try { this.#sendFrame(presentStream, confirmFrame); } catch { /* enqueued below if needed */ }
+    }
 
-    // Evict per-session maps to prevent unbounded growth in long-running ECS directory nodes.
-    // #unilateralSeals is retained briefly for SI-002 duplicate rejection; cleared here since
-    // the confirmation has been sent and no further seal attempts are valid for this session.
+    // Enqueue the notification (cert) for the absent party — delivered on reconnect.
+    const notification: SealUnilateralNotification = {
+      type: "seal_unilateral_notification",
+      session_id: sessionId,
+      sealed_at: closeTimestamp,
+      ...cert,
+    };
+    let notifications = this.#pendingNotifications.get(absentHex);
+    if (!notifications) {
+      notifications = [];
+      this.#pendingNotifications.set(absentHex, notifications);
+    }
+    notifications.push(notification);
+    if (this.#notificationQueue) {
+      const notificationId = randomUUID();
+      this.#notificationQueue.enqueue(absentHex, {
+        notificationId,
+        notificationType: "seal_unilateral",
+        payload: {
+          session_id_hex: Buffer.from(sessionId).toString("hex"),
+          sealed_root_hex: Buffer.from(sealedRoot).toString("hex"),
+          sealed_at: closeTimestamp,
+          leaf_count: leafCount,
+          close_timestamp: closeTimestamp,
+          frost_signature_hex: Buffer.from(frostSignature).toString("hex"),
+          signature_type: signatureType,
+          present_pubkey_hex: Buffer.from(presentPubkey).toString("hex"),
+          absent_pubkey_hex: Buffer.from(absentPubkey).toString("hex"),
+        },
+      }).catch((err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        this.#logger?.warn("pending_notification.enqueue.failed", {
+          notificationId,
+          recipientAgentId: absentHex,
+          reason,
+        });
+      });
+    }
+
+    // Clean up the relay's per-session state — the seal is final.
+    void this.#relay.confirmSeal(sessionId);
+
+    // Evict per-session maps (bounded growth on long-running nodes). #unilateralSeals is
+    // retained as the in-process duplicate guard (durable dedup is the DB constraint).
     this.#sessionParticipants.delete(sessionIdHex);
     this.#sessionLastActivity.delete(sessionIdHex);
-    this.#unilateralSeals.delete(sessionIdHex);
-
-    this.#logger?.info("session.unilateral.sealed", {
-      sessionId: sessionIdHex,
-      submitterHex: truncHex(senderHex),
-      correlationId: sessionIdHex,
-    });
   }
 
   /**
@@ -3095,6 +3347,27 @@ export class CelloDirectoryNode {
       return;
     }
 
+    // SESSION-002: a UNILATERAL seal completes via the certificate path — persist the
+    // notarization (counterparty ABSENT) and deliver seal_unilateral_confirmed / notification,
+    // NOT session_sealed. participantA is the present party, participantB the absent one.
+    if (pending.unilateral) {
+      await this.#completeUnilateralNotarization({
+        sessionId: frame.session_id,
+        sessionIdHex,
+        sealedRoot: pending.sealedRoot,
+        presentPubkey: new Uint8Array(Buffer.from(pending.participantAHex, "hex")),
+        absentPubkey: new Uint8Array(Buffer.from(pending.participantBHex, "hex")),
+        presentHex: pending.participantAHex,
+        absentHex: pending.participantBHex,
+        closeTimestamp: pending.timestamp,
+        leafCount: pending.leafCount,
+        frostSignature: new Uint8Array(frame.frost_signature),
+        signatureType: "frost",
+        correlationId: pending.correlationId,
+      });
+      return;
+    }
+
     // Build SealNotarization with frost signature
     const pA = Buffer.from(pending.participantAHex, "hex");
     const pB = Buffer.from(pending.participantBHex, "hex");
@@ -3224,7 +3497,7 @@ export class CelloDirectoryNode {
     // Pre-seed session state: last activity far enough in the past to pass the grace period
     this.#sessionLastActivity.set(sessionIdHex, this.#clock.now() - (this.#deliveryGraceSeconds + 1) * 1000);
     this.#sessionParticipants.set(sessionIdHex, { initiatorHex: senderHex, targetHex: absentPartyHex });
-    this.#processSealUnilateral(mockStream, senderHex, {
+    void this.#processSealUnilateral(mockStream, senderHex, {
       type: "seal_unilateral",
       session_id: sessionId,
       reported_root: reportedRoot,
@@ -3252,7 +3525,7 @@ export class CelloDirectoryNode {
     mockStream: Stream,
   ): void {
     if (process.env["NODE_ENV"] !== "test") throw new Error("test-only");
-    this.#processSealUnilateral(mockStream, senderHex, {
+    void this.#processSealUnilateral(mockStream, senderHex, {
       type: "seal_unilateral",
       session_id: sessionId,
       reported_root: reportedRoot,
@@ -3405,14 +3678,13 @@ export class CelloDirectoryNode {
           void this.#notificationQueue.acknowledge(pgNotif.notificationId).catch(() => {});
           continue;
         }
+        const certNotif = unilateralNotificationFromPayload(pgNotif.payload as Record<string, unknown>);
+        if (!certNotif) {
+          void this.#notificationQueue.acknowledge(pgNotif.notificationId).catch(() => {});
+          continue;
+        }
         try {
-          this.#sendFrame(mockStream, encodeSealUnilateralNotification({
-            type: "seal_unilateral_notification",
-            session_id: Buffer.from(p.session_id_hex, "hex"),
-            sealed_root: Buffer.from(p.sealed_root_hex, "hex"),
-            sealed_at: p.sealed_at ?? 0,
-            seal_type: "UNILATERAL",
-          }));
+          this.#sendFrame(mockStream, encodeSealUnilateralNotification(certNotif));
           void this.#notificationQueue.acknowledge(pgNotif.notificationId).catch(() => {});
         } catch {
           this.#logger?.warn("notification.delivery.failed", {
@@ -3458,6 +3730,42 @@ function decodeStructure1Fields(cbor: Uint8Array): Structure1Fields | null {
   if (typeof _lss !== "number") return null;
   if (typeof _ts !== "number" && typeof _ts !== "bigint") return null;
   return { session_id: sidBytes, last_seen_seq: _lss, timestamp: _ts };
+}
+
+/**
+ * SESSION-002: reconstruct a full unilateral-seal certificate frame from a persisted
+ * NotificationQueue payload (the absent-party notification that survived a directory
+ * restart). Returns null if the payload predates the certificate fields — such a row
+ * cannot be delivered as a verifiable cert and is acknowledged without delivery.
+ */
+function unilateralNotificationFromPayload(
+  p: Record<string, unknown>,
+): SealUnilateralNotification | null {
+  const sessionIdHex = p["session_id_hex"];
+  const sealedRootHex = p["sealed_root_hex"];
+  const frostSigHex = p["frost_signature_hex"];
+  const sigType = p["signature_type"];
+  const presentHex = p["present_pubkey_hex"];
+  const absentHex = p["absent_pubkey_hex"];
+  const leafCount = p["leaf_count"];
+  const closeTs = p["close_timestamp"];
+  if (typeof sessionIdHex !== "string" || typeof sealedRootHex !== "string") return null;
+  if (typeof frostSigHex !== "string" || (sigType !== "frost" && sigType !== "single")) return null;
+  if (typeof presentHex !== "string" || typeof absentHex !== "string") return null;
+  if (typeof leafCount !== "number" || typeof closeTs !== "number") return null;
+  return {
+    type: "seal_unilateral_notification",
+    session_id: new Uint8Array(Buffer.from(sessionIdHex, "hex")),
+    sealed_at: typeof p["sealed_at"] === "number" ? (p["sealed_at"] as number) : closeTs,
+    sealed_root: new Uint8Array(Buffer.from(sealedRootHex, "hex")),
+    leaf_count: leafCount,
+    close_timestamp: closeTs,
+    frost_signature: new Uint8Array(Buffer.from(frostSigHex, "hex")),
+    signature_type: sigType,
+    present_pubkey: new Uint8Array(Buffer.from(presentHex, "hex")),
+    absent_pubkey: new Uint8Array(Buffer.from(absentHex, "hex")),
+    seal_type: "UNILATERAL",
+  };
 }
 
 function verifySealLeaves(

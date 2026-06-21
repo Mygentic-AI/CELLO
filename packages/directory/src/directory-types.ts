@@ -295,24 +295,43 @@ export interface SealUnilateralTooEarly {
 }
 
 /**
- * seal_unilateral_confirmed: directory → submitting client, when unilateral seal succeeds.
+ * SESSION-002 unilateral seal certificate. Carried on both seal_unilateral_confirmed
+ * (present party) and seal_unilateral_notification (absent party). It is sufficient for
+ * the recipient to rebuild the canonical seal TBS and verify the signature against a key
+ * it trusts INDEPENDENTLY of the delivering channel (SI-003) — a channel-swapped
+ * sealed_root fails the signature check.
  */
-export interface SealUnilateralConfirmed {
+export interface SealCertificateFields {
+  sealed_root: Uint8Array;            // 32-byte sealed Merkle root (TBS-bound)
+  leaf_count: number;                 // number of leaves in the sealed chain (TBS-bound)
+  close_timestamp: number;            // Unix ms (TBS-bound)
+  frost_signature: Uint8Array;        // 64-byte FROST (or single-key) signature over the seal TBS
+  signature_type: "frost" | "single"; // 'frost' verifies vs the session primary_pubkey; 'single' vs the directory node key
+  present_pubkey: Uint8Array;         // 32-byte present (submitting) party
+  absent_pubkey: Uint8Array;          // 32-byte absent counterparty (ABSENT — never a signer)
+  seal_type: "UNILATERAL";
+}
+
+/**
+ * seal_unilateral_confirmed: directory → submitting client, when unilateral seal succeeds.
+ * Carries the full certificate (SESSION-002) so the present party verifies the signature
+ * over the rebuilt TBS before recording the session sealed.
+ */
+export interface SealUnilateralConfirmed extends SealCertificateFields {
   type: "seal_unilateral_confirmed";
   session_id: Uint8Array;
-  sealed_root: Uint8Array;   // 32-byte sealed Merkle root
-  sealed_at: number;         // Unix timestamp ms
+  sealed_at: number;         // Unix timestamp ms (== close_timestamp; kept for back-compat)
 }
 
 /**
  * seal_unilateral_notification: directory → absent party, delivered on reconnect.
+ * Carries the full certificate so the absent party (which has no local tail) verifies the
+ * signature against an independently-trusted key WITHOUT trusting the channel.
  */
-export interface SealUnilateralNotification {
+export interface SealUnilateralNotification extends SealCertificateFields {
   type: "seal_unilateral_notification";
   session_id: Uint8Array;
-  sealed_root: Uint8Array;
   sealed_at: number;
-  seal_type: "UNILATERAL";
 }
 
 // ─── Internal directory session state ─────────────────────────────────────────

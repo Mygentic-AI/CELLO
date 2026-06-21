@@ -525,6 +525,14 @@ export function encodeSealUnilateralConfirmed(frame: SealUnilateralConfirmed): U
     session_id: frame.session_id,
     sealed_root: frame.sealed_root,
     sealed_at: frame.sealed_at,
+    // SESSION-002 certificate
+    leaf_count: frame.leaf_count,
+    close_timestamp: frame.close_timestamp,
+    frost_signature: frame.frost_signature,
+    signature_type: frame.signature_type,
+    present_pubkey: frame.present_pubkey,
+    absent_pubkey: frame.absent_pubkey,
+    seal_type: frame.seal_type,
   });
 }
 
@@ -534,8 +542,47 @@ export function encodeSealUnilateralNotification(frame: SealUnilateralNotificati
     session_id: frame.session_id,
     sealed_root: frame.sealed_root,
     sealed_at: frame.sealed_at,
+    // SESSION-002 certificate
+    leaf_count: frame.leaf_count,
+    close_timestamp: frame.close_timestamp,
+    frost_signature: frame.frost_signature,
+    signature_type: frame.signature_type,
+    present_pubkey: frame.present_pubkey,
+    absent_pubkey: frame.absent_pubkey,
     seal_type: frame.seal_type,
   });
+}
+
+/**
+ * SESSION-002: decode + validate the shared seal-certificate fields from a
+ * seal_unilateral_confirmed / seal_unilateral_notification frame. `sealed_root` is
+ * already decoded by the caller and threaded in. Returns null on any malformed field.
+ */
+function decodeSealCertFields(
+  o: Record<string, unknown>,
+  sealed_root: Uint8Array,
+): import("./directory-types.js").SealCertificateFields | null {
+  const leaf_count = typeof o["leaf_count"] === "number" ? o["leaf_count"] : null;
+  const close_timestamp = typeof o["close_timestamp"] === "number" ? o["close_timestamp"] : null;
+  const frost_signature = toUint8Array(o["frost_signature"]);
+  const signature_type = o["signature_type"];
+  const present_pubkey = toUint8Array(o["present_pubkey"]);
+  const absent_pubkey = toUint8Array(o["absent_pubkey"]);
+  if (leaf_count === null || close_timestamp === null) return null;
+  if (!frost_signature || frost_signature.length !== 64) return null;
+  if (signature_type !== "frost" && signature_type !== "single") return null;
+  if (!present_pubkey || present_pubkey.length !== 32) return null;
+  if (!absent_pubkey || absent_pubkey.length !== 32) return null;
+  return {
+    sealed_root,
+    leaf_count,
+    close_timestamp,
+    frost_signature,
+    signature_type,
+    present_pubkey,
+    absent_pubkey,
+    seal_type: "UNILATERAL",
+  };
 }
 
 // ─── Decode outbound frames (for test helpers) ────────────────────────────────
@@ -914,7 +961,9 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     if (!session_id || session_id.length !== 16) return null;
     if (!sealed_root || sealed_root.length !== 32) return null;
     if (sealed_at === null) return null;
-    return { type: "seal_unilateral_confirmed", session_id, sealed_root, sealed_at };
+    const cert = decodeSealCertFields(o, sealed_root);
+    if (!cert) return null;
+    return { type: "seal_unilateral_confirmed", session_id, sealed_at, ...cert };
   }
 
   if (o["type"] === "seal_unilateral_notification") {
@@ -924,7 +973,9 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     if (!session_id || session_id.length !== 16) return null;
     if (!sealed_root || sealed_root.length !== 32) return null;
     if (sealed_at === null) return null;
-    return { type: "seal_unilateral_notification", session_id, sealed_root, sealed_at, seal_type: "UNILATERAL" };
+    const cert = decodeSealCertFields(o, sealed_root);
+    if (!cert) return null;
+    return { type: "seal_unilateral_notification", session_id, sealed_at, ...cert };
   }
 
   // M7-MANIFEST-002: manifest poll response (directory → client)
