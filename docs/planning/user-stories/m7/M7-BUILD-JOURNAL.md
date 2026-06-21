@@ -1782,3 +1782,31 @@ hardening (tracked 2026-06-20) still open.
 
 **State.** Branch `m7-rehome` both repos. Per Andre's instruction this entry is committed and
 BOTH repos pushed to `origin/m7-rehome` (NOT main, no merge).
+
+---
+
+## 2026-06-21 — DOD-AUTH-2 anti-rollback GREEN (J-AUTH increment)
+
+**DoD-ID:** DOD-AUTH-2 (🟡 → mostly proven; only the periodic poll remains).
+
+**What was red.** DOD-AUTH-2 had threshold-sig + expiry proven, but `version ≤ trusted`
+rollback rejection + persist-trusted-version were not wired in the binary.
+
+**What was found.** `FileManifestVersionStore` (atomic temp+rename, file-backed) ALREADY
+existed in `core/daemon` and `startDaemon` ALREADY does the monotonicity check when a
+`manifestVersionStore` is supplied (`getLastSeenVersion()` → reject if `manifest.version <
+lastSeen` with `directory.auth.manifest.version.rollback`; `persistVersion()` on success).
+Pure wiring — no new logic.
+
+**What was built.** cello-daemon binary: `buildManifestDeps` now constructs
+`new FileManifestVersionStore(join(celloDir, "manifest-version.json"))` and passes it into
+`startDaemon`. J-AUTH test: a two-start, one-CELLO_DIR rollback case — v2 persists trusted=2,
+then v1 (valid officer sigs) across a restart is refused (`version.rollback`,
+`lastSeenVersion:2`).
+
+**Commits.** cello-client `abdff0a` (version-store wiring); trustless-cello `2e4e982`
+(rollback test). DoD AUTH-2 updated.
+
+**Result.** J-AUTH 4/4 (happy, rogue, expired, rollback). Only the 6–12h `manifest_poll`
+background refresh remains for full DOD-AUTH-2 (time-based; lower priority for the live test).
+Next: J-SIG (DOD-SIG-1, signaling resilience).

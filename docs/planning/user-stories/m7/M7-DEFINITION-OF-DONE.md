@@ -213,13 +213,15 @@ Source: outline Milestone Close Gate + E2E-001 AC-001–012. Mostly built/merged
 - **DOD-AUTH-2 — Manifest enforcement (TUF).** Schema `version / not_before /
   expires` + threshold sig over N root keys; reject `version ≤ trusted`; reject
   expired (refuse ALL connections); persist trusted version (never downgrade);
-  poll every 6–12h. *(MANIFEST-001/002)* — 🟡 **PARTIAL — PROVEN LIVE** (J-AUTH,
-  2026-06-21): threshold officer-sig verification (3-of-5 over the canonical body)
-  + expiry refusal are live — an expired manifest emits
-  `directory.auth.manifest.expired` and the daemon refuses to start (ADV-002, no
-  silent downgrade). REMAINING (not yet wired in the binary): `version ≤ trusted`
-  rollback rejection + persist-trusted-version need a `manifestVersionStore`, and the
-  6–12h `manifest_poll` is not yet exercised live. Next J-AUTH increment.
+  poll every 6–12h. *(MANIFEST-001/002)* — 🟡 **MOSTLY PROVEN LIVE** (J-AUTH,
+  2026-06-21): threshold officer-sig verification (3-of-5 over the canonical body),
+  expiry refusal, AND anti-rollback are all live. Expired manifest →
+  `directory.auth.manifest.expired` + daemon refuses to start (ADV-002, no silent
+  downgrade). A regressed version (v1 after a trusted v2, across a restart, valid
+  sigs) → `directory.auth.manifest.version.rollback` + refusal — the binary now wires
+  `FileManifestVersionStore` under `CELLO_DIR` (persist-trusted-version). REMAINING:
+  only the periodic 6–12h `manifest_poll` background refresh is not yet exercised
+  live (time-based; the daemon has the poll path + `manifestPollScheduler`).
 - **DOD-SIG-1 — Signaling resilience.** Heartbeat (DIR-PING-001 pong) → on kill,
   `directory_signaling: reconnecting`, exponential backoff, reconnect to a
   **different** directory node from the manifest, drain queued outbound ops; tool
