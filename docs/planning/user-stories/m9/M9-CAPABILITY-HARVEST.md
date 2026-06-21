@@ -228,3 +228,73 @@ in during the collaborative read-through.
   because it protects the operator, and the sender — not the operator — bears any friction).
 
 > This section is intentionally undecided. It is the agenda for the prune, not its outcome.
+
+---
+
+## §6 — The governance feedback channel (decision, Andre 2026-06-21)
+
+**Decision:** the governance layer is not silent. Every action it takes on a message is
+reported back to the calling LLM, so the LLM always knows the delta between *what it sent*
+and *what actually left*. The mechanism is a **publish channel, structurally like the
+injected Logger** — any outbound stage (base layer or hook) can publish a governance event;
+each event is **blocking or non-blocking**.
+
+### The publish primitive (parallel to `Logger`)
+
+An injected `GovernanceChannel` (sender-side). Each stage calls `publish(event)`; the
+pipeline driver aggregates, decides control flow by disposition, and renders the result.
+**One publish, three consumers:** (1) control flow, (2) the `cello_send` result to the LLM,
+(3) the security pass record / hash chain (audit). This is why it mirrors logging — producers
+are decoupled; they don't know how the event is consumed.
+
+```
+GovernanceEvent {
+  stage:       string         // 'layer4.redact.secret', 'hook:acme-dlp'
+  disposition: 'observe' | 'redact' | 'block'   // non-blocking | non-blocking-mutating | blocking
+  category:    string         // 'secret:openai_api_key', 'pii:email', 'exfil:image_url', 'path'
+  reason:      string         // LLM-readable why
+  senderDetail?: string       // e.g. type label + last-4 fingerprint (sender's view only)
+  guidance:    string         // what the LLM can do next, incl. how to override
+  override?:   string         // per-item handle the LLM passes on retry to force THIS item
+}
+```
+
+### Disposition → behavior
+
+- **`observe`** (non-blocking) — advisory note; message unaffected. (paths, dollar amounts,
+  lone entropy hits — Tier 3.)
+- **`redact`** (non-blocking, mutating) — message altered; the event records what/why; the
+  delivered message carries a typed placeholder. (PII, secrets — Tier 1.)
+- **`block`** (blocking) — first block short-circuits the pipeline; message never leaves.
+  (primary-exfiltration / compromised-output — Tier 2.)
+
+### What the LLM receives from `cello_send`
+
+- **Blocked:** `{ ok: false, reason: 'blocked_by_governance', blocks: GovernanceEvent[], guidance }`
+  — "this message was NOT sent; blocked for these reasons …"; it never left the LLM, so the
+  LLM knows it failed and why, and how to override.
+- **Redacted (delivered):** `{ ok: true, delivered: true, modified: true, transformations: GovernanceEvent[], guidance }`
+  — message went out in ALTERED form; the LLM knows the exact delta, so it can adapt future
+  behavior and explain to the counterparty ("sending this, but the system redacted the API
+  key"). *(Specifics to the SENDER — not just a count. V3's receiver envelope gives the
+  receiver a count + notes; this is the sender-side surface V3 under-specifies.)*
+- **Clean:** `{ ok: true, delivered: true, modified: false }`.
+
+### Relationship to V3
+
+V3's `SecurityResponse {verdict, content, notes, record_hash}` is the gateway→client
+contract; the `GovernanceChannel` is the **internal publish primitive that produces it**, and
+the `cello_send` tool result is the **client→LLM surface** V3 leaves thin on the sender side.
+This fills that gap and gives the pipeline the same producer/consumer decoupling logging has.
+**General mechanism, both directions:** inbound governance reports to the receiving LLM via
+the `cello_receive` `security_context` (already in V3); this §6 is the outbound mirror.
+
+### Sub-decisions still open
+
+- **Counterparty-visible redaction marker?** The AGENT can narrate the redaction itself (from
+  the feedback); should the SYSTEM also leave a minimal marker (`[redacted by sender policy]`)
+  so the receiver isn't confused by a gap? (Lean yes, minimal.)
+- **Override granularity:** per-item `override` handle (force just the false positive, keep
+  other redactions) vs whole-message `force:true`. (Lean per-item.)
+- **One bus or two?** Governance events are a typed subset that ALSO route to the caller +
+  hash chain; likely one publish primitive, governance-tagged, not a separate Logger.
