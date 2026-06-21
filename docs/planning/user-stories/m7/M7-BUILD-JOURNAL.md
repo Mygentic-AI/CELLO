@@ -3217,3 +3217,54 @@ test), fix every finding, flip the DoD tags (LEG-1/2/3/4), add the AC-008 taxono
 pipeline discussion log. DOD-LEG-2's client-side SI-002 re-derive guard (`certificate_frontier_
 unverifiable` on an inflated published frontier) is the one remaining distinct LEG-2 sub-line — its
 DERIVATION ships, the anti-tamper client guard is a focused follow-on increment.
+
+---
+
+## 2026-06-21 — Tier 3 CLOSED → Tier 4 design note: DOD-UP-2 auto-acknowledge (UPGRADE-002, J-UPGRADE)
+
+**Tier 3 status.** J-LEGIBILITY green (DOD-LEG-1/3/4 live, LEG-2 surfacing-proven), full spine
+zero-regression, pushed (trustless `51edafd`, cello-client `3ff685b`). Reviewer dispatched on the unit.
+Andre authorised moving to Tier 4 once Tier 3 lands. DOD-UP-2 is the right start: pure daemon, NO
+Flyway, NO MSG-001-3b dependency (that's UPGRADE-001's precondition), reuses SPINE-7's submitSealLeaf.
+
+**Target (one sentence).** B's daemon AUTO-co-signs + submits its responder SEAL leaf the moment it
+ingests A's SEAL ctrl leaf AND has verified content — no `cello_close_session` agent call — so a
+bilateral seal completes promptly when B is online, instead of degrading to unilateral on a slow agent.
+
+**Falsification / producer-consumer (read-only investigation done; story CELLO-M7-UPGRADE-002).**
+- TRIGGER (the consumer): `session-node-manager.ts:704` — the `onLeafDeliver` callback registered on
+  the relay client. Today it ONLY logs `session.relay.leaf.delivered` (the seal "no-op"). The relay
+  delivers A's witnessed SEAL ctrl leaf to B here. `LeafDeliverFrame` carries `leaf_kind` (0x02=ctrl)
+  — so B can detect A's SEAL ctrl leaf. STACK CORRECT: this IS the live DAEMON-004/SPINE-7 path (NOT
+  the dead relay-stream-manager.ts:783-789 that flips status→'sealing').
+- ACTION (the producer of B's ack): reuse the EXISTING `submitSealLeaf(sessionId)` (SPINE-7's
+  responder path) — it signs B's Structure-1 SEAL leaf with B's OWN K_local via the relay client. So
+  SI-001 (B's own node always signs; never the directory/peer) is satisfied BY CONSTRUCTION — we
+  remove the agent PROMPT, never the SIGNER. The relay then has two distinct-sender ctrl leaves →
+  #maybeProcessSeal → directory processSeal → FROST → session_sealed (the path SPINE-7 + J-LEGIBILITY
+  already exercise).
+- GATE (SI-002): auto-sign ONLY if B has verified the content (session is `active`, not desynced,
+  every leaf's content cross-check passed). Else SKIP → surface counterparty_closing as a real
+  decision point + log `session.seal.autoack.skipped{reason: desynced|content_unverifiable|content_
+  tamper}`. Disagreement with content is NEVER a gate failure (C-6 / AC-004) — integrity, not assent.
+
+**CRITICAL GUARDS (falsification — what breaks if naive).**
+1. SELF-ECHO: the relay echoes B's OWN submitted ctrl leaf back as a leaf_deliver (relay-client.ts:262
+   notes this). B must NOT auto-ack its own ctrl leaf → infinite submit loop. Guard: only auto-ack a
+   ctrl leaf NOT authored by us (the relay-client has `#isAuthoredByUs`, l.231 — verify onLeafDeliver
+   is filtered, or filter in the handler by sender_pubkey ≠ our K_local).
+2. DOUBLE-ACK / IDEMPOTENT: if A's ctrl leaf is delivered more than once, or B already submitted via
+   cello_close_session, B must auto-ack at most once. Guard on session status (already sealing/sealed
+   → skip) and/or a per-session "responder seal submitted" flag.
+3. ASYNC in a sync callback: onLeafDeliver is sync (logs); submitSealLeaf is async. Fire-and-forget
+   with a `.catch` that logs — never throw out of the callback. DB-001: if relay path is down at that
+   moment, the submission queues / degrades to unilateral (UPGRADE-001 candidate), never a silent half-seal.
+
+**Plan.** (1) Live red test first (J-UPGRADE): A+B bilateral, A `cello_close_session`, B issues NO
+close → assert bilateral session_sealed completes with byte-identical root + B never called close +
+`session.seal.autoacknowledged` fired. (2) Implement the auto-ack in onLeafDeliver (ctrl + not-ours +
+verified + not-already-sealing → submitSealLeaf; else skip+log). (3) counterparty_closing informational
+(AC-005 — the live notification, not the dead mcp-server guidance). (4) AC-006 lateral-catch + distinct
+reasons. (5) taxonomy events. Full regression (touches the SPINE-7 seal path). Reviewer per unit.
+NOTE: BLOCKED on the J-LEGIBILITY reviewer returning first (it's reading these same daemon files).
+
