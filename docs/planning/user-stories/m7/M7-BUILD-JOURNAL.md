@@ -3013,3 +3013,82 @@ absent-party AC-010 (needs counterparty-primary distribution — design), attest
 nod), MSG-8 (blocked on SESSION-004 frontier — UNBLOCKS once DOD-LEG-2 lands!), UPGRADE-001 (storied),
 connect publish (user-gated, task #19), AUTH-2 poll (task #16). NOTE: **DOD-MSG-8 becomes unblocked
 when DOD-LEG-2's content frontier lands** — revisit it after J-LEGIBILITY.
+
+---
+
+## 2026-06-21 — J-LEGIBILITY design note (DOD-LEG-1..4; PROCEDURE §6 — design-significant unit)
+
+**DoD-ID / unit.** DOD-LEG-1 is the lowest non-green line (🟠: protocol-types schema in main;
+directory derivation PARKED at `f466946`; client surfacing GREENFIELD). DOD-LEG-2/3/4 (❌) ride the
+same journey. Source AC: CELLO-M7-SESSION-004 (re-read this session). PROCEDURE §6 design note FIRST,
+then the red-driven loop against the live test.
+
+**Target (one sentence).** The BILATERAL `session_sealed` certificate must carry a machine-readable
+`legibility` object — receipt-not-assent (`attests:'receipt'`, `implies_assent:false`, disclaimer),
+per-party `content_frontier_seq`+`last_authored_seq`, per-party `attestation_mode`, and
+`final_message{sender_pubkey,seq,answered}` — and a SECOND process (B's daemon) reading the cert it
+did not build must be able to determine, with no external context, that A's malicious tail is
+delivered-but-unanswered and never agreed.
+
+**Falsification (PROCEDURE §2.3) — done before any code:**
+- Consumer seam EXISTS and is reachable: `registerSessionSealedListener` (daemon.ts:1245, registered
+  on both the keystone and per-agent signaling streams) is the REAL session_sealed handler — Option A
+  (the daemon, NOT the dead `seal-manager.ts`/`seal-legibility-client.ts`). It currently extracts only
+  `session_id`+`sealed_root` and DROPS `legibility` → that drop is the greenfield surfacing work.
+- protocol-types ALREADY ships `SealLegibility`/`AttestationMode`/`SEAL_RECEIPT_DISCLAIMER` +
+  `legibility?` on both SessionSealed frames (cello-client session.ts:322,338). The PARKED directory
+  mirrors the type locally (directory-types.ts) because the PUBLISHED beta (^0.0.x) doesn't carry it
+  yet and AC-012/013 (publish + dep-bump) are deferred to milestone close. **Decision: keep the local
+  mirror** for now — same pattern directory-types.ts already uses for RelaySealData; revisit at the
+  publish gate. (Risk if I dropped the mirror: directory typecheck breaks against the published dep.)
+- GAP-1 watch: the daemon's typed session_sealed DECODER must carry the nested `legibility` through
+  (the exact failure mode that bit DOD-INT-2's nonce + SPINE-6's allowlist). Verify the decode before
+  trusting the handler — a typed decoder that omits the field silently yields `undefined`.
+
+**Producer/consumer chain.**
+- PRODUCER: directory `processSeal` (both single-key + FROST paths) builds `legibility` from the
+  leaves it already verifies — `buildSealLegibility(leaves)` (parked seal-legibility.ts, ~245 LoC):
+  `content_frontier_seq[P]`=max signed `last_seen_seq` over leaves P SIGNED; `last_authored_seq[P]`=max
+  s2.sequence over leaves P AUTHORED; `final_message`=highest-seq NON-ctrl leaf, `answered` iff a
+  DIFFERENT author has a strictly-higher seq (excluding the trailing SEAL-ceremony ctrl pair);
+  `attestation_mode`='live' for authors in the contiguous trailing SEAL-ctrl run. Carried on the
+  SessionSealed frame via `#pendingFrostSeals` (FROST) / inline (single). Nothing new persisted on the
+  directory (AC-011, no Flyway). Logs `seal.certificate.legibility.built`.
+- CONSUMER: daemon `registerSessionSealedListener` extracts `legibility`, persists it with the sealed
+  record in client SQLite (inline idempotent `ALTER TABLE ... ADD COLUMN` — NOT Flyway, AC-005), and
+  re-derives each party's `content_frontier_seq` from its OWN local session-tree leaves; on a published
+  frontier EXCEEDING the locally-re-derived signed max → reject `certificate_frontier_unverifiable`
+  (SI-002 client guard) + emit `seal.certificate.frontier.unverifiable`. Exposed intact on the
+  transcript/cert read surface.
+
+**Graft method (NOT an 11-commit cherry-pick).** The parked range `04e3dea..f466946` is 11 commits,
+mostly review-fix churn; directory-node.ts is touched twice (04e3dea +29, 7458778 +81) so a serial
+cherry-pick resolves the same region twice. The additions are ADDITIVE to my SESSION-002/DOD-LIVE
+edits (`#pendingFrostSeals` gained `unilateral?`/`attestation?`; the sealed-event builders). So:
+file-by-file graft — NEW files (`seal-legibility.ts` + 3 tests) verbatim via `git show f466946:<path>`;
+the 3 shared source files (directory-node.ts, directory-types.ts, directory-frames.ts) merged by hand
+keeping BOTH my code AND the legibility derivation. Net result == f466946's tree for these files,
+integrated with HEAD. Full regression after (the graft touches processSeal — SPINE-7's bilateral path).
+
+**KEY RECONCILIATION (the flagged fork — DECIDED).** DOD-LEG-3's `attestation_mode` is 3-valued
+(`live|recovered|absent`) on the BILATERAL `session_sealed` cert. My SESSION-002 unilateral attestation
+is 2-valued (`ABSENT|DELIVERED`) on a DIFFERENT frame (`seal_unilateral_confirmed` / `SealCertificate`).
+**These do not merge into one field.** F's bilateral cert uses the 3-valued enum; the parked
+`buildSealLegibility` already derives 'live' from the trailing-ctrl run and leaves 'absent' for a party
+with no ctrl leaf (the never-returned shape) and 'recovered' for Workstream-C post-hoc acks. The
+unilateral path keeps its own 2-valued ABSENT/DELIVERED on its own frame. Mapping when the unilateral
+flow later adopts the legibility object: relay-observed-gone ABSENT → `attestation_mode:'absent'`;
+DELIVERED (alive/unknown) → 'live'. That wiring is a LATER increment (the unilateral cert doesn't carry
+`legibility` yet); DOD-LEG-1..4 are scoped to the BILATERAL cert. Documented so A/C reuse F's builder
+unchanged (story scope-handoff).
+
+**SIs this unit must assert (PROCEDURE §7 — journey assertions, not assumed).** SI-001 no-assent-field
+(the malicious tail reads `answered:false`, `implies_assent:false`, no agreement-bearing field anywhere)
+— this IS DOD-INV-7 made live. SI-002 frontier-clamp (published frontier == signed max; client rejects
+an inflated published frontier). The live malicious-tail cross-process read (AC-006) is the headline.
+
+**Plan.** (1) graft directory derivation → in-process green (parked tests + processSeal test); commit.
+(2) daemon consumer surfacing + inline SQLite migration + frontier re-derive guard; in-process green;
+commit. (3) write `j-legibility.spine.test.ts` — A+B bilateral, A sends malicious tail B never acks,
+both seal, B's daemon reads the cert, assert AC-006's four observables + AC-007's four cases; commit.
+Reviewer (feature-dev:code-reviewer, model:opus) per unit. Flip DOD-LEG tags as each proves green.
