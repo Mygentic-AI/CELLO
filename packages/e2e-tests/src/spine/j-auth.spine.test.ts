@@ -155,4 +155,36 @@ describe("J-AUTH — directory bidirectional auth, live (DOD-AUTH-1 / DOD-AUTH-2
     expect(daemon.output).not.toMatch(/"event":"directory\.auth\.manifest\.verified"/);
     expect(daemon.output).not.toMatch(/"event":"directory\.auth\.challenge\.verified"/);
   }, 60_000);
+
+  it("DOD-AUTH-2 (rollback) — a lower manifest version is rejected across restarts (anti-rollback)", async () => {
+    // Anti-rollback (TUF): the daemon persists the last-verified manifest version under
+    // its CELLO_DIR (FileManifestVersionStore). A later manifest whose version REGRESSED
+    // must be refused even though its officer signatures are valid — otherwise a revoked
+    // consortium snapshot could be replayed. One CELLO_DIR, two daemon starts.
+    const celloDir = mkdtempSync(join(tmpdir(), "cello-auth-rollback-"));
+    dirs.push(celloDir);
+    await provisionAgent(celloDir, "auth-rollback");
+
+    // Start 1 — manifest version 2. loadAndVerify succeeds → persist trusted=2 at startup.
+    const envV2 = writeConsortiumManifest(celloDir, "v2", [trustedDirectoryNode()], { version: 2 });
+    const d2 = await startDaemon(celloDir, cluster.directoryUrl, "rollback-v2", { manifestEnv: envV2 });
+    daemons.push(d2);
+    expect(d2.output).toMatch(/"event":"directory\.auth\.manifest\.verified"[^\n]*"manifestVersion":2/);
+    await d2.stop(); // release the lock + version file persisted to disk
+
+    // Start 2 — same CELLO_DIR, manifest version 1 (a rollback). The officer signatures
+    // are valid, but version 1 < trusted 2 → refused, daemon will not operate.
+    const envV1 = writeConsortiumManifest(celloDir, "v1", [trustedDirectoryNode()], { version: 1 });
+    const d1 = await startDaemon(celloDir, cluster.directoryUrl, "rollback-v1", {
+      manifestEnv: envV1,
+      waitForStarted: false,
+    });
+    daemons.push(d1);
+
+    const rollback = await d1.waitForLine(/"event":"directory\.auth\.manifest\.version\.rollback"/, 15_000);
+    expect(rollback).toMatch(/"manifestVersion":1/);
+    expect(rollback).toMatch(/"lastSeenVersion":2/);
+    // The rolled-back manifest is never accepted as verified.
+    expect(d1.output).not.toMatch(/"event":"directory\.auth\.manifest\.verified"/);
+  }, 90_000);
 });
