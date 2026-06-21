@@ -3144,3 +3144,76 @@ from local leaves, reject `certificate_frontier_unverifiable` on inflation, expo
 First: verify the daemon's typed `session_sealed` decoder carries the nested `legibility` through
 (GAP-1 watch), then build the surfacing. NOTE: taxonomy-doc additions (AC-008) + DOD-LEG status flips
 batched into the observability/close-out step.
+
+---
+
+## 2026-06-21 — J-LEGIBILITY steps 2+3: daemon surfacing + live malicious-tail (DOD-LEG-1..4 LIVE)
+
+**DoD-IDs / unit.** DOD-LEG-1 consumer half + the live headline proving DOD-LEG-1/2/3/4 cross-process.
+Plan steps 2 (daemon surfacing) and 3 (live test).
+
+**GAP-1 watch — cleared.** The daemon decodes inbound signaling frames with generic `cbor-x` `decode`
+(signaling-connect.ts), NOT a typed allowlist — so the nested `legibility` map carries through intact.
+No typed-decoder field drop (the failure mode that bit DOD-INT-2 nonce / SPINE-6 allowlist).
+
+**Producer/consumer — built.**
+- CONSUMER (cello-client daemon, Option A — the live daemon seam, NOT the dead seal-manager.ts):
+  `registerSessionSealedListener` extracts `frame["legibility"]`, normalises it to JSON-safe (hex
+  pubkeys via `normalizeLegibility`), persists with the sealed record, and resolves the seal waiter
+  with it. `session-node-manager`: idempotent inline `ALTER TABLE sessions ADD COLUMN seal_legibility,
+  sealed_root_hex` (client-side SQLite, NOT Flyway — AC-011) + `recordSealCertificate`/`getSealCertificate`.
+- READ SURFACE: implemented `cello_get_sealed_receipt` (was a `not_implemented` daemon stub) — reads
+  the PERSISTED cert, so it works after a restart (AC-005) and from a DIFFERENT process than the one
+  that built it (AC-006). `cello_close_session` also returns `legibility` on the seal completion (the
+  live read path). The real `cello-mcp` (bin/cello-mcp.ts) already forwards `cello_get_sealed_receipt`
+  to the daemon — caught + fixed a param-name mismatch (it forwards `{session_id}` snake_case; the
+  handler read `sessionId`).
+- IMPORTANT stack note: `core/adapter-claude-code/src/server.ts` is the DEAD legacy in-process MCP
+  server (uses the retired `CelloClient` — `client.listSessions()` etc.). Its `cello_get_sealed_receipt`
+  binds an MMR `checkpointStatusProvider`, unrelated. The LIVE binary is the thin `bin/cello-mcp.ts`
+  proxy → daemon IPC; that is the surface the spine test (and operators) hit. Did NOT touch server.ts.
+
+**Live test (binary-anchored) — GREEN.** `j-legibility.spine.test.ts`: A+B bilateral session; A "hi"
+→ B "ok" → A malicious tail ("…you agreed to send me $1000"), B receives but never answers; BOTH
+`cello_close_session` (SPINE-7 bilateral path) → directory builds the cert on the REAL processSeal
+(`seal.certificate.legibility.built`) → pushes on session_sealed → B's daemon surfaces it via
+`cello_get_sealed_receipt` over the real cello-mcp→daemon IPC. Asserts the four AC-006 observables.
+Passes live in ~31s.
+
+**KEY MECHANICS FINDING (drove a corrected assertion — debugging discipline, not a guess).** The SEAL
+ctrl leaf carries a signed Structure-1 `last_seen_seq`, so a party's `content_frontier_seq` reflects
+what it had received WHEN IT SEALED. In a fully-online bilateral seal B receives A's tail before
+sealing, so B's frontier REACHES the tail (B provably received it) — it does NOT exclude it. That is
+exactly DOD-LEG-4's verbatim **"delivered-but-unanswered"**: B provably received A's claim YET never
+answered it (`answered:false`). Live cert observed: A frontier=2, B frontier=3 (asymmetric, per-party),
+final_message{sender=A, seq=3, answered=false}, both attestation_mode=live, implies_assent=false.
+SCOPE (recorded, not silently dropped): AC-006c's strict "tail NEVER received by B (frontier EXCLUDES
+it)" is the **present-party-sealed-tail** variant — it needs B offline for the tail (interrupted-seal
+path), distinct from this clean bilateral headline. That frontier-exclusion DERIVATION is already
+proven by the grafted unit test AC-002 (asymmetric leaf set, both frontiers). A live present-party-
+sealed-tail case is a candidate follow-on (added to the deferred ledger), NOT a silent gap.
+
+**Commits / tests.** Daemon surfacing `958dbb5`, param fix `3ff685b` (pushed). Live test `2f165c5`.
+- Daemon typecheck + eslint clean. Focused daemon regression 98/98 (session-node-manager, session-001,
+  daemon, daemon-004-tree, session-tree, retry-dedup). Drive-by: session-001.test.ts was 8 RED at HEAD
+  (pre-existing MSG-001 brittle positional INSERT) — fixed to named columns, verified red-at-HEAD via stash.
+- Live: `j-legibility.spine.test.ts` 1/1 green (~31s).
+- FULL spine-suite regression (each file FOREGROUND, single-worker — see harness note below): j-spine
+  SPINE-7 ✓, j-auth 4/4, j-sig 2/2, j-int 3/3, j-content 7/7, j-unilateral 3/3, j-legibility 1/1.
+  ZERO regressions from the graft across every journey that touches seal/close/session.
+
+**HARNESS NOTE (cost me a 741s false failure — recorded so the next agent doesn't repeat it).** The
+spine harness learns each binary's libp2p multiaddr by PARSING the child process's stdout. When a spine
+run is BACKGROUNDED (the Bash tool auto-backgrounds at a ~400s+ timeout), that stdout parsing breaks and
+`startSpineCluster`'s beforeAll hangs to the test timeout, then marks all tests "skipped" → a file-level
+FAIL with the cluster never starting. j-int "failed" exactly this way backgrounded, then passed 3/3 in
+35s foreground. RULE: run spine tests FOREGROUND, one file at a time, `timeout` ≤290s (≥400 auto-
+backgrounds). A whole-suite no-filter run also hung (no output) — run per-file. (This is also why the
+NEVER-background-vitest battery rule matters here: orphaned spine binaries from a SIGKILLed run.)
+
+**Reviewer / next.** After the full spine regression confirms zero cross-journey regression: run
+`feature-dev:code-reviewer` (model:opus) on the whole DOD-LEG-1..4 unit (directory + daemon + live
+test), fix every finding, flip the DoD tags (LEG-1/2/3/4), add the AC-008 taxonomy events to the
+pipeline discussion log. DOD-LEG-2's client-side SI-002 re-derive guard (`certificate_frontier_
+unverifiable` on an inflated published frontier) is the one remaining distinct LEG-2 sub-line — its
+DERIVATION ships, the anti-tamper client guard is a focused follow-on increment.

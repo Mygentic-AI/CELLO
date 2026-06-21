@@ -79,7 +79,11 @@ These are not a journey; they are properties every line below must preserve.
   — 🟡 (per-story in built code; un-audited across the assembly)
 - **DOD-INV-7 — Receipt, not assent.** "Sealed" never means "agreed," anywhere in
   protocol or UX. The seal attests receipt + integrity + ordering only. *(postmortem
-  C-1; SESSION-004)* — ❌ (legibility client side not built)
+  C-1; SESSION-004)* — 🟢 **PROVEN LIVE** (J-LEGIBILITY, 2026-06-21): the seal certificate carries
+  `attests:'receipt'` + `implies_assent:false` + a plain disclaimer as first-class machine-readable
+  fields, surfaced cross-process on B's daemon read; a malicious "…you agreed to send me $1000" tail
+  reads as delivered-but-unanswered (`answered:false`), never agreed. Client surfacing IS built (the
+  DAEMON seam, not the dead seal-manager).
 - **DOD-INV-8 — No console.log; injected Logger; correlationId threaded per async
   flow.** *(outline; M4+ rules)* — 🟡
 - **DOD-INV-9 — Transport mode is explicit.** Direct vs relay is read from the
@@ -410,18 +414,33 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
 
 - **DOD-LEG-1 — Receipt-not-assent, first-class.** Cert carries `attests:'receipt'`,
   `implies_assent:false`, plain-language disclaimer; no field parseable as agreement.
-  *(SESSION-004 AC-001, SI-001)* — 🟠 (protocol-types schema in main; directory
-  derivation half PARKED at `f466946`; client surfacing GREENFIELD)
+  *(SESSION-004 AC-001, SI-001)* — 🟢 **PROVEN LIVE** (J-LEGIBILITY, 2026-06-21). The directory
+  derivation grafted onto the REAL processSeal (single + FROST paths), carried on the
+  `session_sealed` frame; the daemon (Option A — `registerSessionSealedListener`, NOT the dead
+  seal-manager) surfaces + persists it (inline SQLite ALTER, no Flyway) and exposes it via
+  `cello_get_sealed_receipt`. Live malicious-tail bilateral seal → B's daemon reads the cert from a
+  DIFFERENT process: `attests:'receipt'`, `implies_assent:false`, disclaimer present, no content echo.
 - **DOD-LEG-2 — Per-party content frontier.** `content_frontier_seq` (max signed
   `last_seen_seq`) + `last_authored_seq` per party, derived only from that party's
   signed leaves; client re-derives and rejects `certificate_frontier_unverifiable`
-  on an inflated published frontier. *(SESSION-004 AC-002/005, SI-002)* — ❌
+  on an inflated published frontier. *(SESSION-004 AC-002/005, SI-002)* — 🟡 **DERIVATION + SURFACING
+  PROVEN LIVE** (J-LEGIBILITY): per-party `content_frontier_seq` + `last_authored_seq` derived from each
+  party's OWN signed leaves (directory), carried on the cert, surfaced by B's daemon — live cert shows
+  DISTINCT per-party frontiers (A=2, B=3). REMAINING: the client-side SI-002 re-derive guard (reject
+  `certificate_frontier_unverifiable` on an inflated published frontier) is the one distinct sub-line not
+  yet built — a focused follow-on. (The asymmetric-frontier DERIVATION is unit-proven, AC-002.)
 - **DOD-LEG-3 — Live/recovered/absent marker.** `attestation_mode` per party,
-  always exactly one of the three. *(SESSION-004 AC-003)* — ❌
+  always exactly one of the three. *(SESSION-004 AC-003)* — 🟢 **PROVEN LIVE** (J-LEGIBILITY): both
+  parties' `attestation_mode` = 'live' in the contemporaneous bilateral seal, surfaced on B's cert read.
+  ('absent' is set by the SESSION-002 unilateral path on its own cert; 'recovered' by Workstream C.)
 - **DOD-LEG-4 — Final-message-answered.** The malicious tail ("…you agreed to send
   me $1000") reads as `final_message.answered:false`, delivered-but-unanswered,
   never agreed. All four interruption cases legible. *(SESSION-004 AC-004/006/007, SI-001)*
-  — ❌
+  — 🟢 **PROVEN LIVE** (J-LEGIBILITY): live malicious tail → cert `final_message{sender=A, answered:false}`,
+  B's frontier REACHES the tail (delivered) yet answered stays false — the DELIVERED-BUT-UNANSWERED
+  shape, read cross-process. AC-007's four interruption cases are unit-proven (parameterised); AC-006c's
+  strict "tail NEVER received" frontier-exclusion is the present-party-sealed-tail variant (unit-proven
+  AC-002; a live present-party-sealed-tail case is a candidate follow-on — see journal deferred ledger).
 
 ---
 
