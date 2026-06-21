@@ -2503,3 +2503,20 @@ MSG-3 ✅, MSG-4 🟡-core, MSG-5 ✅, MSG-6 ✅, MSG-7 ✅. Remaining: MSG-4 fu
 reconciliation (make `onLeafDeliver` append so B's root tracks canonical before content), MSG-8
 (irreducible loss / SESSION-004 frontier), startup-flush park (relay-endpoint schema), the
 post-recovery bilateral seal (CELLO-M7-UPGRADE-001, unblocked).
+
+---
+
+## 2026-06-21 — DOD-MSG-1 GREEN — persisted-ACK ladder
+
+**DoD-ID:** DOD-MSG-1 (✅). No binary change — asserts existing behavior live.
+
+**Test (`j-content.spine.test.ts`, GREEN).** A→online-B: B's unsigned, transport-authenticated
+`persisted` delivery ACK resolves A's awaiting-ACK timer (`content.delivery.acked` level
+`persisted`); because delivery was confirmed persisted, the content is NOT handed to the park
+backstop (no `content.park.deposited` for that hash). The ACK handler (`#resolveAwaitingAck`) only
+clears the timer + the durable crash-backstop entry + logs — it never appends a leaf, touches the
+root, or advances `last_seen_seq` (the SI-004 invariant, verified by inspection). trustless `476f203`.
+
+**State.** J-CONTENT 6/6 (MSG-1 ✅, MSG-3 ✅, MSG-5 ✅, MSG-6 ✅, MSG-7 ✅, MSG-4 🟡-core). Remaining:
+MSG-4 full reconciliation (holds for Andre's nod — load-bearing core path), MSG-8 (blocked on the
+unbuilt SESSION-004 frontier), startup-flush park (relay-endpoint schema), CELLO-M7-UPGRADE-001.
