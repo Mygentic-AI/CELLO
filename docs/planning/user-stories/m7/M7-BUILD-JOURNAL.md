@@ -1810,3 +1810,41 @@ then v1 (valid officer sigs) across a restart is refused (`version.rollback`,
 **Result.** J-AUTH 4/4 (happy, rogue, expired, rollback). Only the 6–12h `manifest_poll`
 background refresh remains for full DOD-AUTH-2 (time-based; lower priority for the live test).
 Next: J-SIG (DOD-SIG-1, signaling resilience).
+
+---
+
+## 2026-06-21 — J-SIG degradation GREEN (DOD-SIG-1 first increment)
+
+**DoD-ID:** DOD-SIG-1 (🟡 → degradation half proven; recovery half remaining).
+
+**What was red.** DOD-SIG-1 (signaling resilience) was 🟡 — the machinery existed but was
+never verified live against the binary.
+
+**What was found.** All the resilience machinery is already in `SignalingManager` (heartbeat
+ping/pong, `reconnecting` status, backoff, `drain()` of queued ops, `signaling_reconnecting`
+guidance). `cello status` exposes `directory_signaling: signalingManager.status`. So DOD-SIG-1
+is a pure LIVE TEST, no binary changes.
+
+**What was built.** `j-sig.spine.test.ts` (new): provision + login → connected; bring sigA
+online+current on an MCP connection; kill the directory; poll `cello status` until
+`directory_signaling: reconnecting`; then a `cello_initiate_session` tool call must degrade with
+a distinct reason + guidance, bounded (no hang).
+
+**Binary-anchored correction (debugging discipline — did NOT assume the DoD's reason).** The
+DoD example reason is `signaling_reconnecting`, but the real binary returns
+`directory_signaling_timeout` on the per-agent initiate path: the per-agent signaling stream is
+mid-reconnect, so initiate waits ≤10s then returns a bounded timeout (rather than the keystone's
+synchronous reconnecting status). Both satisfy the DOD-SIG-1 invariant — distinct
+signaling-degradation reason + actionable guidance, returned within a bounded window, never
+silent / never an unbounded hang. The test asserts the invariant (reason ∈ {signaling_reconnecting,
+directory_signaling_timeout} + guidance + elapsed < 20s), not the assumed literal.
+
+**Commit.** trustless-cello (J-SIG test + DoD + journal). No binary changes.
+
+**Result.** J-SIG degradation 1/1 green. The kill→reconnecting detection + bounded-tool-call
+degradation are proven live.
+
+**Blockers / next.** RECOVERY half of DOD-SIG-1 (directory returns → daemon re-auths → status
+back to connected → queued ops drain) needs a directory-RESTART harness helper (start the
+directory binary again on the same key/port so the daemon's resolver re-discovers it). That is
+the next J-SIG increment. Multi-node failover stays out of scope (single-directory harness).
