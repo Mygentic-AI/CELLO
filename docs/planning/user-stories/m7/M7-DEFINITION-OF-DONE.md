@@ -185,7 +185,12 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
   *(MSG-001 AC-009/010/011, SI-005)* — ❌ **NOT BUILT (MSG-001-3b)** — biggest gap.
 - **DOD-MSG-5 — Resend vs replay dedup.** A `content_hash` satisfies at most one
   Merkle leaf, exactly once; duplicates/replays never double-count. *(MSG-001
-  AC-012, SI-002)* — ❌ (part of 3b)
+  AC-012, SI-002)* — ✅ **PROVEN LIVE** (J-CONTENT, 2026-06-21). `ingestReceivedContent`
+  checks whether the `content_hash` is already a leaf before appending; if so it logs
+  `session.content.deduplicated` at the existing sequence and does NOT append a second
+  leaf. Test: a message delivered BOTH directly (leaf 0) AND via the relay park →
+  recovered → deduplicated, exactly one `session.content.received` for the hash. Normal
+  single-delivery is unchanged (the find is -1).
 - **DOD-MSG-6 — Content size cap.** Single named 1 MB constant enforced at send
   AND inbound decode, strictly below the 4 MB transport default; `content_too_large`
   + guidance; replaces the silent 4 MB decode→desync. *(MSG-001 AC-013/014/018, SI-003)*
