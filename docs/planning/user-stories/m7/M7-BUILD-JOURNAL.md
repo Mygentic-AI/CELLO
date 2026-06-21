@@ -2119,3 +2119,47 @@ direct/relay-witness because B is offline (or the TTF timer fires with no `persi
 (already persisted) are the crash backstop; flush-to-park on startup (`getAwaitingSessions` is wired,
 the park target was the missing piece). Then increment 3: receive-path pull+verify+accept on online;
 then recovery (MSG-4) + dedup (MSG-5).
+
+---
+
+## 2026-06-21 — MSG-001-3b increments 2–3 scope + a key architectural finding
+
+Increment 1 (the daemon↔relay content-park TRANSPORT) is GREEN + pushed + regression 17/17. The
+hardest UNKNOWN — does the deposit/pull round-trip work end-to-end through the real relay binary
+including the auth challenge — is answered YES (first try). What remains is INTEGRATION into the
+send/receive paths. Scoped below so the next session starts informed.
+
+**Increment 2 — send-path park.** `config.contentParkFn` is the hook; the live TTF path and the
+startup flush already CALL it (`drainAwaitingToPark(sid, parkFn)`); it's just never supplied. Wire
+it to `ContentParkClient.deposit`. BUT `ParkFn` receives only `AwaitingContentEntry = {sessionId,
+contentHashHex, contentBlob, queuedAt, position}` — so contentParkFn must RESOLVE the recipient
+pubkey (= session's `counterparty_pubkey`, in the sessions row) AND the relay endpoint.
+
+**KEY FINDING (the gap that shapes increment 2).** The per-session relay endpoint
+(`relayPeerId`/`relayAddrs`, `RelayConnectParams`) comes from the FROST assignment at
+session-creation time and is held IN-MEMORY by the per-agent `AgentRelayClient` — it is NOT a
+column in the `sessions` table. Consequence:
+- **Live TTF park** (sender still running): the relay endpoint is in-memory → contentParkFn can
+  deposit directly. Tractable first.
+- **Startup-flush park** (DOD-MSG-2 crash backstop — sender crashed + restarted): the relay
+  endpoint is GONE (not persisted). The startup flush therefore CANNOT park without first
+  persisting the relay endpoint per session — a SCHEMA addition (new column(s) on `sessions`, an
+  inline migration like the retry_queue/nonce tables). Do this before wiring the startup-flush park.
+
+Also: decide whether `contentBlob` is plaintext or already-sealed at enqueue time — contentParkFn
+must ensure the deposited bytes are `sealToRecipient(content, recipientPubkey)` ciphertext (INV-3 /
+SI-001), sealing here if the blob is plaintext.
+
+**Increment 3 — receive-path pull + accept.** On agent online (or a relay park-notify), pull parked
+entries → `openSealed` with the recipient K_local → verify `content_hash` → accept at the
+ALREADY-ASSIGNED sequence (no NEW leaf if the hash was already witnessed — recovery-not-desync,
+DOD-MSG-4) → deliver. Then dedup (DOD-MSG-5: a content_hash satisfies at most one leaf) and
+DOD-MSG-7 (desync ONLY on content_hash tamper).
+
+**Recommendation.** Increments 2–3 are multi-round integration entangled with the session lifecycle
++ a schema migration — a focused effort, ideally a fresh context. Increment 1 (the transport) is the
+de-risked foundation they build on; the IPC handlers (`content_park_deposit`/`content_park_pull`)
+and `ContentParkClient` are reusable as-is.
+
+**State.** Branch `m7-rehome` both repos. cello-client `05c4e68`, trustless-cello `b435f0a`. Spine
+17/17. Tier 1 + Tier 2 green; Tier 3 MSG-001-3b transport (increment 1) green.
