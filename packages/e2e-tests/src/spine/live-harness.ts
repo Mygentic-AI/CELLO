@@ -23,7 +23,7 @@
  * `key_file_corrupt: invalid magic bytes`.
  */
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { createServer } from "node:net";
+import { createServer, createConnection } from "node:net";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -522,6 +522,59 @@ export async function startDaemon(
     await daemon.waitForLine(/"event":"daemon\.started"/, 15_000);
   }
   return daemon;
+}
+
+// ─── Raw IPC client: call a daemon IPC handler directly over its Unix socket ────
+// The daemon's IPC is newline-delimited JSON: request {id, method, params} → response
+// {id, result} | {id, error} (ipc-server.ts). cello-mcp only forwards the cello_* tool
+// subset; the DAEMON-003 handlers (queue_failed_send / check_nonce / drain_session) that
+// drive the durable retry queue + nonce-dedup store are reachable ONLY over raw IPC.
+// They take no current-agent precondition, so a one-shot socket call suffices. This is
+// still binary-anchored — it talks to the real running daemon over its real socket.
+export function ipcCall(
+  celloDir: string,
+  method: string,
+  params: Record<string, unknown>,
+  timeoutMs = 5_000,
+): Promise<Record<string, unknown>> {
+  const socketPath = join(celloDir, "daemon.sock");
+  return new Promise((resolve, reject) => {
+    const socket = createConnection(socketPath);
+    const id = `harness-${method}-${randomBytes(4).toString("hex")}`;
+    let buffer = "";
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`ipcCall ${method} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    socket.on("connect", () => {
+      socket.write(JSON.stringify({ id, method, params }) + "\n");
+    });
+    socket.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString("utf8");
+      let nl: number;
+      while ((nl = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        if (!line.trim()) continue;
+        let resp: { id?: string; result?: Record<string, unknown>; error?: unknown };
+        try {
+          resp = JSON.parse(line) as typeof resp;
+        } catch {
+          continue;
+        }
+        if (resp.id !== id) continue;
+        clearTimeout(timer);
+        socket.end();
+        if (resp.error) reject(new Error(`ipcCall ${method} error: ${JSON.stringify(resp.error)}`));
+        else resolve(resp.result ?? {});
+        return;
+      }
+    });
+    socket.on("error", (err: Error) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
 }
 
 // ─── CLI driver: run `cello <args>` against a daemon home, capture output ───────

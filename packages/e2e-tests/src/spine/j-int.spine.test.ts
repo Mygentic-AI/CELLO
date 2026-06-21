@@ -25,6 +25,7 @@ import {
   provisionAgent,
   connectMcp,
   cello,
+  ipcCall,
   type SpineCluster,
   type Proc,
   type McpConn,
@@ -57,7 +58,7 @@ interface CelloStatus {
   interrupted_sessions?: Array<{ sessionId: string; counterpartyPubkey: string; messageCount: number }>;
 }
 
-describe("J-INT — interrupted session, live (DOD-INT-1)", () => {
+describe("J-INT — interrupted + retry survival, live (DOD-INT-1 / DOD-RETRY-1)", () => {
   it("DOD-INT-1 — kill daemon mid-session → next start marks it interrupted, surfaced at login with source: daemon_restart", async () => {
     const celloDirA = mkdtempSync(join(tmpdir(), "cello-intA-"));
     const celloDirB = mkdtempSync(join(tmpdir(), "cello-intB-"));
@@ -135,4 +136,50 @@ describe("J-INT — interrupted session, live (DOD-INT-1)", () => {
     expect(typeof interrupted!.messageCount, "interrupted session carries a messageCount").toBe("number");
     expect(interrupted!.messageCount, "the message sent before the crash is counted").toBeGreaterThanOrEqual(1);
   }, 120_000);
+
+  it("DOD-RETRY-1 — retry queue (FIFO) + nonce dedup survive a real daemon restart (SQLCipher)", async () => {
+    const celloDir = mkdtempSync(join(tmpdir(), "cello-retry-"));
+    dirs.push(celloDir);
+    await provisionAgent(celloDir, "retryA");
+    let daemon = await startDaemon(celloDir, cluster.directoryUrl, "retryA");
+    daemons.push(daemon);
+
+    const sessionId = randomBytes(16).toString("hex");
+    const nonce1 = randomBytes(12).toString("hex");
+    const nonce2 = randomBytes(12).toString("hex");
+    const senderPubkey = randomBytes(32).toString("hex");
+    const content1 = Buffer.from("retry message one").toString("hex");
+    const content2 = Buffer.from("retry message two").toString("hex");
+
+    // Enqueue two messages (FIFO order) and mark nonce1 as seen — all BEFORE the crash.
+    expect((await ipcCall(celloDir, "queue_failed_send", { sessionId, nonce: nonce1, content: content1 })).queued).toBe(true);
+    const q2 = await ipcCall(celloDir, "queue_failed_send", { sessionId, nonce: nonce2, content: content2 });
+    expect(q2.queueDepth, "two messages queued").toBe(2);
+    const firstSeen = await ipcCall(celloDir, "check_nonce", { sessionId, nonce: nonce1, senderPubkey });
+    expect(firstSeen.duplicate, "nonce1 is fresh the first time").toBe(false);
+
+    // ── Crash + restart on the SAME CELLO_DIR. SQLCipher must restore both. ──
+    await daemon.kill();
+    for (const f of ["daemon.sock", "daemon.lock"]) {
+      try {
+        rmSync(join(celloDir, f), { force: true });
+      } catch {
+        /* best-effort */
+      }
+    }
+    daemon = await startDaemon(celloDir, cluster.directoryUrl, "retryA-restart");
+    daemons.push(daemon);
+
+    // Retry queue survived: both entries present, in FIFO order (M2 must not jump M1).
+    const drained = await ipcCall(celloDir, "drain_session", { sessionId });
+    expect(drained.pendingCount, "both queued messages survived the restart").toBe(2);
+    expect(drained.nonces, "FIFO order preserved across the restart").toEqual([nonce1, nonce2]);
+
+    // Nonce dedup survived: nonce1 (seen before the crash) is STILL a duplicate; a fresh
+    // nonce is not. So a replay after a restart is still rejected.
+    const stillSeen = await ipcCall(celloDir, "check_nonce", { sessionId, nonce: nonce1, senderPubkey });
+    expect(stillSeen.duplicate, "the pre-crash nonce is still rejected after restart").toBe(true);
+    const fresh = await ipcCall(celloDir, "check_nonce", { sessionId, nonce: randomBytes(12).toString("hex"), senderPubkey });
+    expect(fresh.duplicate, "a never-seen nonce is not a duplicate").toBe(false);
+  }, 90_000);
 });
