@@ -167,6 +167,43 @@ export type {
   SessionSealRejected,
   SealVerified,
 } from "@cello-protocol/protocol-types";
+import type { SessionSealed as SessionSealedBase } from "@cello-protocol/protocol-types";
+
+// ─── M7-SESSION-004: Seal certificate legibility wire shape ────────────────────
+// Local mirror of @cello-protocol/protocol-types SealLegibility. The published
+// protocol-types predates this story's bump (deferred to milestone close per
+// COORDINATION batching), so the wire shape is defined here — the same local-mirror
+// pattern used for RelaySealData below. After the protocol-types dep bump (AC-013)
+// this can switch to the canonical type.
+export type AttestationMode = "live" | "recovered" | "absent";
+
+export interface SealLegibilityParticipant {
+  pubkey: Uint8Array;
+  content_frontier_seq: number;
+  last_authored_seq: number;
+  attestation_mode: AttestationMode;
+}
+
+export interface SealLegibilityFinalMessage {
+  sender_pubkey: Uint8Array;
+  seq: number;
+  answered: boolean;
+}
+
+export interface SealLegibility {
+  attests: "receipt";
+  implies_assent: false;
+  disclaimer: string;
+  participants: SealLegibilityParticipant[];
+  final_message: SealLegibilityFinalMessage;
+}
+
+/**
+ * SessionSealed wire frame carrying the M7-SESSION-004 legibility certificate.
+ * The directory always attaches `legibility` for new seals; the field is optional
+ * for backward-compatible decode of pre-M7 frames.
+ */
+export type SessionSealedWithLegibility = SessionSealedBase & { legibility?: SealLegibility };
 
 // ─── SESSION-005: New signaling frames ────────────────────────────────────────
 
@@ -192,6 +229,14 @@ export interface SessionFrostSealed {
   sealed_root: Uint8Array;    // 32-byte final Merkle root
   frost_signature: Uint8Array; // 64-byte combined FROST signature
   signer_pubkey: Uint8Array;  // 32-byte initiator primary_pubkey
+  /**
+   * M7-SESSION-004 (review finding #3): the receipt-not-assent legibility certificate,
+   * derived once at seal time. Carried here so a session that completes via the deferred
+   * seal_deferred → session_frost_sealed path ends with the SAME legibility as a live
+   * push — legibility is independent of delivery timing. Optional for backward-compatible
+   * decode of pre-M7 frames.
+   */
+  legibility?: SealLegibility;
 }
 
 // ─── Error frame types ─────────────────────────────────────────────────────────

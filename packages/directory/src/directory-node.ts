@@ -122,7 +122,10 @@ import type {
   SessionFrostSealed,
   SessionRequestErrorReason,
   SealUnilateralNotification,
+  SessionSealedWithLegibility,
+  SealLegibility,
 } from "./directory-types.js";
+import { buildSealLegibility } from "./seal-legibility.js";
 import { WALL_CLOCK } from "./directory-types.js";
 import type { DirectoryStore } from "@cello-protocol/interfaces";
 import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
@@ -496,6 +499,11 @@ export class CelloDirectoryNode {
     timestamp: number;
     tbs: Uint8Array;
     correlationId: string;
+    // M7-SESSION-004: legibility certificate derived at processSeal time (leaves are
+    // verified there); attached to the SessionSealed frame when the FROST ceremony completes.
+    // Present on the BILATERAL path; absent on the SESSION-002 unilateral path (whose
+    // seal_unilateral_confirmed cert is a different frame that does not carry legibility yet).
+    legibility?: SealLegibility;
     // SESSION-002: when true this is a UNILATERAL seal — participantA is the present
     // (submitting) party, participantB is the ABSENT counterparty (never a signer). On
     // completion the directory sends seal_unilateral_confirmed + notification (cert),
@@ -3247,6 +3255,19 @@ export class CelloDirectoryNode {
       return { ok: false, reason: "seal_leaves_invalid" };
     }
 
+    // M7-SESSION-004: derive the receipt-not-assent legibility certificate from the
+    // verified leaves (signed last_seen_seq, sender pubkeys, sequence numbers). Computed
+    // transiently — nothing new is persisted on the directory (no Flyway migration). For
+    // the FROST path this is carried in #pendingFrostSeals and attached when the ceremony
+    // completes; for the single-key path it is attached to the sealed event below.
+    const legibility = buildSealLegibility(leaves);
+    this.#logger?.info("seal.certificate.legibility.built", {
+      sessionId: sessionIdHex,
+      participantCount: legibility.participants.length,
+      finalMessageAnswered: legibility.final_message.answered,
+      correlationId: sessionIdHex,
+    });
+
     // Collect participants and identify the seal initiator.
     // The seal initiator is the participant who submitted the first SEAL ctrl leaf
     // (the second-to-last leaf if both are ctrl leaves — per verifySealLeaves, the
@@ -3298,13 +3319,14 @@ export class CelloDirectoryNode {
       }
       // OBS-001 AC-009: sealed (single-key path)
       protocolLog("SEAL", `Sealed — session ${truncHex(sessionIdHex)}, root ${truncHex(Buffer.from(recomputedRoot).toString("hex"))}`);
-      const sealedEvent: SessionSealed = {
+      const sealedEvent: SessionSealedWithLegibility = {
         type: "session_sealed",
         signature_type: "single",
         session_id: sessionId,
         sealed_root: recomputedRoot,
         directory_signature: notarizationSig,
         close_timestamp,
+        legibility,
       };
       this.#deliverOrEnqueue(participants[0] ?? "", sealedEvent, sessionIdHex);
       if (participants.length >= 2) this.#deliverOrEnqueue(participants[1], sealedEvent, sessionIdHex);
@@ -3330,6 +3352,7 @@ export class CelloDirectoryNode {
       timestamp: close_timestamp,
       tbs,
       correlationId: sessionIdHex,
+      legibility,
     });
 
     // OBS-001 AC-009: FROST seal ceremony log
@@ -3340,7 +3363,15 @@ export class CelloDirectoryNode {
     if (initiatorStream) {
       try {
         this.#sendFrame(initiatorStream, encodeSealVerified(sealVerifiedEvent));
-      } catch {
+      } catch (error) {
+        // M7-SESSION-004 AC-009 lateral catch audit: log the send failure rather than
+        // swallowing it before falling back to the deferred-delivery queue.
+        this.#logger?.warn("seal.certificate.delivery.stream_dead", {
+          sessionId: sessionIdHex,
+          pubkeyHex: initiatorHex,
+          eventType: sealVerifiedEvent.type,
+          reason: error instanceof Error ? error.message : String(error),
+        });
         this.#store.enqueueNotification(initiatorHex, sealVerifiedEvent, sessionIdHex);
       }
     } else {
@@ -3449,7 +3480,8 @@ export class CelloDirectoryNode {
     protocolLog("SEAL", `Sealed — session ${truncHex(sessionIdHex)}, root ${truncHex(Buffer.from(pending.sealedRoot).toString("hex"))}`);
 
     // Notify both clients with session_sealed (frost variant; includes leaf_count for H-003)
-    const sealedEvent: SessionSealed = {
+    // M7-SESSION-004: carry the legibility certificate derived at processSeal time.
+    const sealedEvent: SessionSealedWithLegibility = {
       type: "session_sealed",
       signature_type: "frost",
       session_id: frame.session_id,
@@ -3458,6 +3490,7 @@ export class CelloDirectoryNode {
       signer_pubkey: primaryPubkey,
       close_timestamp: pending.timestamp,
       leaf_count: pending.leafCount,
+      legibility: pending.legibility,
     };
     this.#deliverOrEnqueue(pending.participantAHex, sealedEvent, sessionIdHex);
     if (pending.participantBHex) this.#deliverOrEnqueue(pending.participantBHex, sealedEvent, sessionIdHex);
@@ -3470,25 +3503,54 @@ export class CelloDirectoryNode {
     for (const [pubkeyHex, stream] of this.#streams) {
       try {
         this.#sendFrame(stream, encodeSessionSealRejected(rejectedEvent));
-      } catch {
+      } catch (error) {
+        // M7-SESSION-004 AC-009 lateral catch audit: log the send failure rather than
+        // swallowing it before falling back to the deferred-delivery queue.
+        this.#logger?.warn("seal.certificate.delivery.stream_dead", {
+          sessionId: sessionIdHex,
+          pubkeyHex,
+          eventType: rejectedEvent.type,
+          reason: error instanceof Error ? error.message : String(error),
+        });
         this.#store.enqueueNotification(pubkeyHex, rejectedEvent, sessionIdHex);
       }
     }
   }
 
-  #deliverOrEnqueue(pubkeyHex: string, event: SessionSealed | SessionSealRejected, correlationId: string): void {
+  #deliverOrEnqueue(pubkeyHex: string, event: SessionSealedWithLegibility | SessionSealRejected, correlationId: string): void {
+    // M7-SESSION-004 AC-009: encode-failure and send-failure are distinct causes and must
+    // never be conflated under one silent catch. An encode failure (e.g. a malformed
+    // `legibility` field) will re-fail on every retry — it is a derivation bug, logged loudly,
+    // and is NOT a reason to drop the live stream. Only a send failure means the stream is dead
+    // and warrants the enqueue fallback.
+    let encoded: Uint8Array;
+    try {
+      if (event.type === "session_sealed") {
+        encoded = encodeSessionSealed(event);
+      } else {
+        encoded = encodeSessionSealRejected(event as SessionSealRejected);
+      }
+    } catch (error) {
+      this.#logger?.error("seal.certificate.delivery.encode_failed", {
+        sessionId: correlationId,
+        pubkeyHex,
+        eventType: event.type,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
     const stream = this.#streams.get(pubkeyHex);
     if (stream) {
       try {
-        let encoded: Uint8Array;
-        if (event.type === "session_sealed") {
-          encoded = encodeSessionSealed(event);
-        } else {
-          encoded = encodeSessionSealRejected(event as SessionSealRejected);
-        }
         this.#sendFrame(stream, encoded);
         return;
-      } catch {
+      } catch (error) {
+        this.#logger?.warn("seal.certificate.delivery.stream_dead", {
+          sessionId: correlationId,
+          pubkeyHex,
+          eventType: event.type,
+          reason: error instanceof Error ? error.message : String(error),
+        });
         this.#streams.delete(pubkeyHex);
       }
     }
@@ -3500,12 +3562,34 @@ export class CelloDirectoryNode {
    * SESSION-005 DB-001/DB-002/DB-003.
    */
   #deliverFrostSealed(pubkeyHex: string, event: SessionFrostSealed): void {
+    // M7-SESSION-004 AC-009: same encode-vs-send distinction as #deliverOrEnqueue. An encode
+    // failure is a derivation bug that re-fails on every retry and is logged loudly; a send
+    // failure means the stream is dead.
+    const sessionIdHex = Buffer.from(event.session_id).toString("hex");
+    let encoded: Uint8Array;
+    try {
+      encoded = encodeSessionFrostSealed(event);
+    } catch (error) {
+      this.#logger?.error("seal.certificate.delivery.encode_failed", {
+        sessionId: sessionIdHex,
+        pubkeyHex,
+        eventType: event.type,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
     const stream = this.#streams.get(pubkeyHex);
     if (stream) {
       try {
-        this.#sendFrame(stream, encodeSessionFrostSealed(event));
+        this.#sendFrame(stream, encoded);
         return;
-      } catch {
+      } catch (error) {
+        this.#logger?.warn("seal.certificate.delivery.stream_dead", {
+          sessionId: sessionIdHex,
+          pubkeyHex,
+          eventType: event.type,
+          reason: error instanceof Error ? error.message : String(error),
+        });
         this.#streams.delete(pubkeyHex);
       }
     }

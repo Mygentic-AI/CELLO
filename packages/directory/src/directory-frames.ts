@@ -18,6 +18,7 @@ import type {
   SessionSealedSingle,
   SessionSealedFrost,
   SessionSealed,
+  SessionSealedWithLegibility,
   SessionSealRejected,
   SessionRequestError,
   NotAuthenticated,
@@ -129,7 +130,10 @@ export function encodeSessionAbandoned(frame: SessionAbandoned): Uint8Array {
   return ENC.encode({ type: frame.type, session_id: frame.session_id });
 }
 
-export function encodeSessionSealed(frame: SessionSealed): Uint8Array {
+export function encodeSessionSealed(frame: SessionSealedWithLegibility): Uint8Array {
+  // M7-SESSION-004: the receipt-not-assent legibility certificate, when present,
+  // is carried verbatim on the frame (canonical CBOR per RFC 8949 §4.2.1).
+  const legibility = frame.legibility;
   if (frame.signature_type === "frost") {
     const encoded: Record<string, unknown> = {
       type: frame.type,
@@ -145,11 +149,12 @@ export function encodeSessionSealed(frame: SessionSealed): Uint8Array {
     if (frame.leaf_count !== undefined) {
       encoded["leaf_count"] = frame.leaf_count;
     }
+    if (legibility !== undefined) encoded["legibility"] = legibility;
     return ENC.encode(encoded);
   }
   // signature_type === "single" (deprecated M1 format)
   const f = frame as SessionSealedSingle;
-  return ENC.encode({
+  const encodedSingle: Record<string, unknown> = {
     type: f.type,
     signature_type: "single",
     session_id: f.session_id,
@@ -158,7 +163,9 @@ export function encodeSessionSealed(frame: SessionSealed): Uint8Array {
     close_timestamp: f.close_timestamp > 0xffffffff
       ? BigInt(f.close_timestamp)
       : f.close_timestamp,
-  });
+  };
+  if (legibility !== undefined) encodedSingle["legibility"] = legibility;
+  return ENC.encode(encodedSingle);
 }
 
 export function encodeSealVerified(frame: SealVerified): Uint8Array {
@@ -174,13 +181,18 @@ export function encodeSealVerified(frame: SealVerified): Uint8Array {
 }
 
 export function encodeSessionFrostSealed(frame: SessionFrostSealed): Uint8Array {
-  return ENC.encode({
+  // M7-SESSION-004 (review finding #3): carry the legibility certificate verbatim when
+  // present, so a deferred seal completion ends with the same receipt-not-assent
+  // legibility as a live push (canonical CBOR per RFC 8949 §4.2.1).
+  const encoded: Record<string, unknown> = {
     type: frame.type,
     session_id: frame.session_id,
     sealed_root: frame.sealed_root,
     frost_signature: frame.frost_signature,
     signer_pubkey: frame.signer_pubkey,
-  });
+  };
+  if (frame.legibility !== undefined) encoded["legibility"] = frame.legibility;
+  return ENC.encode(encoded);
 }
 
 
@@ -748,6 +760,14 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     const close_timestamp = typeof _ct === "number" ? _ct : typeof _ct === "bigint" ? Number(_ct) : null;
     if (close_timestamp === null) return null;
 
+    // M7-SESSION-004 (review finding #2): preserve the legibility certificate on the
+    // session_sealed frame (both frost and single sub-branches) so a directory-side
+    // decode round-trips it symmetrically with session_frost_sealed — no silent field loss.
+    const legRaw = o["legibility"];
+    const legibility = legRaw !== null && typeof legRaw === "object"
+      ? (legRaw as import("./directory-types.js").SealLegibility)
+      : undefined;
+
     const sig_type = o["signature_type"];
     if (sig_type === "frost") {
       const frost_signature = toUint8Array(o["frost_signature"]);
@@ -757,7 +777,7 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       // H-003: parse leaf_count if present (optional for backward compat)
       const leafCountRaw = o["leaf_count"];
       const leaf_count = typeof leafCountRaw === "number" ? leafCountRaw : undefined;
-      const result: SessionSealedFrost = {
+      const result: SessionSealedFrost & { legibility?: import("./directory-types.js").SealLegibility } = {
         type: "session_sealed" as const,
         signature_type: "frost" as const,
         session_id,
@@ -767,12 +787,14 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
         close_timestamp,
       };
       if (leaf_count !== undefined) result.leaf_count = leaf_count;
+      if (legibility !== undefined) result.legibility = legibility;
       return result;
     }
     // Legacy M1 or explicit "single"
     const directory_signature = toUint8Array(o["directory_signature"]);
     if (!directory_signature || directory_signature.length !== 64) return null;
-    const s: SessionSealedSingle = { type: "session_sealed", signature_type: "single", session_id, sealed_root, directory_signature, close_timestamp };
+    const s: SessionSealedSingle & { legibility?: import("./directory-types.js").SealLegibility } = { type: "session_sealed", signature_type: "single", session_id, sealed_root, directory_signature, close_timestamp };
+    if (legibility !== undefined) s.legibility = legibility;
     return s;
   }
 
@@ -813,7 +835,13 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     if (!sealed_root || sealed_root.length !== 32) return null;
     if (!frost_signature || frost_signature.length !== 64) return null;
     if (!signer_pubkey || signer_pubkey.length !== 32) return null;
-    return { type: "session_frost_sealed", session_id, sealed_root, frost_signature, signer_pubkey };
+    const result: SessionFrostSealed = { type: "session_frost_sealed", session_id, sealed_root, frost_signature, signer_pubkey };
+    // M7-SESSION-004 (review finding #3): preserve the legibility certificate when present.
+    const legRaw = o["legibility"];
+    if (legRaw !== null && typeof legRaw === "object") {
+      result.legibility = legRaw as import("./directory-types.js").SealLegibility;
+    }
+    return result;
   }
 
   if (o["type"] === "session_abandoned") {
