@@ -1717,3 +1717,68 @@ per-agent stream). Extracted `registerSessionSealedListener` and wired it per-ag
 
 **State.** SPINE-1..7 GREEN + closed + reviewer-APPROVED. The full happy spine is done. Branch
 `m7-rehome` both repos, nothing pushed/merged. Next: J-AUTH build (design note above).
+
+---
+
+## 2026-06-21 — J-AUTH GREEN — DOD-AUTH-1 (full) + DOD-AUTH-2 (partial) proven live
+
+**DoD-IDs:** DOD-AUTH-1 (✅ PROVEN LIVE), DOD-AUTH-2 (🟡 partial — expiry+threshold-sig live).
+
+**What was red.** Step-6 directory bidirectional auth shipped OFF (the highest-risk trust gap
+in the DoD). The cello-daemon binary intentionally omitted `challengeVerifier`
+(`cello-daemon.ts`: "consortium-manifest hardening layers on later, opt-in"); the directory
+binary never wired a `DirectoryKeyProvider`, so it never signed step-5.
+
+**What was found (producer/consumer trace — most of the machinery already existed).**
+- The daemon LIBRARY is fully wired: `StartDaemonDeps` already accepts
+  `manifestProvider/manifestRootKeys/manifestThreshold/challengeVerifier`, calls
+  `manifestProvider.loadAndVerify()` at startup (ADV-002: refuses to start if a configured
+  manifest fails to verify), and threads `challengeVerifier` to BOTH dialers (keystone +
+  per-agent). The real step-6 verification lives in the **dialer** (`createSignalingConnect`),
+  NOT in `SignalingManager.processStep5Frame` (that method is DEAD in the daemon — a comment
+  in daemon.ts:489 says so). **Falsification caught a wrong fix location**: the J-AUTH design
+  note had said "wire the SignalingManager constructor" — that would have been dead code.
+- `ManifestDirectoryChallengeVerifier` (real, production) + `TestManifestProvider` are exported
+  from `@cello-protocol/transport`. The directory step-5 TBS + step-6 verify TBS already agree
+  (`cello-directory-auth-challenge-v1\n` + nodeId + agentPubkey + nonce + timestamp).
+- `makeTestManifest`, `TEST_CONSORTIUM_ROOT_KEYS/THRESHOLD`, `TEST_DIRECTORY_NODE_KEYPAIR` all
+  exist in core/crypto. So J-AUTH was WIRING + harness, not new crypto.
+
+**What was built (3 binaries + harness, all opt-in so J-SPINE stays green).**
+1. cello-client `FileManifestProvider` (new, `core/daemon/src/file-manifest-provider.ts`): the
+   production `IManifestProvider` — reads manifest JSON, verifies threshold officer sigs via
+   `verifyManifest`. SCOPE FIX (producer/consumer): it verifies signatures+structure ONLY; the
+   daemon owns expiry/version policy + emits the named events. An earlier draft checked expiry in
+   the provider — that **preempted** `directory.auth.manifest.expired` (daemon would only see
+   `manifest.load.failed`) and made the daemon's policy dead code. Removed.
+2. cello-daemon binary: `buildManifestDeps()` — when `CELLO_CONSORTIUM_MANIFEST` (+ROOT_KEYS
+   +THRESHOLD) is set, construct `FileManifestProvider` + `ManifestDirectoryChallengeVerifier`,
+   pass into `startDaemon`. Unset → `{}` → M6 compat.
+3. directory binary: when `CELLO_DIRECTORY_NODE_KEY_HEX` is set, build a `DirectoryKeyProvider`
+   (`getNodeId`/`sign` via `@noble/curves` ed25519) and pass to `createDirectoryNode` → signs step-5.
+4. harness: `auth-manifest.ts` (self-contained signed-manifest generator) + `writeConsortiumManifest`
+   / `trustedDirectoryNode` + `directoryNodeKeyHex` (cluster) + `manifestEnv` (daemon).
+
+**Cross-repo crypto skew (the one real snag).** e2e-tests resolves PUBLISHED
+`@cello-protocol/crypto@0.0.7`, which predates the manifest fixtures — the running daemon binary
+has them (workspace build) but the harness cannot import them, and publishing/pushing was
+forbidden. Resolved by reproducing `makeTestManifest` + `canonicalManifestBody` byte-for-byte in
+`auth-manifest.ts` via `@noble/curves` (added as an e2e dep). Verified before the live run:
+directory keypair self-consistent, all 3 officer sigs valid over the canonical body. The harness
+is the single source of truth for both the manifest sigs AND the root keys it hands the daemon.
+
+**Commits.** cello-client: `1e4b254` (daemon wiring), `2bcf823` (provider scope fix).
+trustless-cello: `90ad0ba` (directory step-5), `720d7af` (harness), `ca322cf` (happy test),
+`b3afa95` (rogue+expired tests). DoD AUTH-1/2 flipped.
+
+**Result.** Full spine suite GREEN: **J-SPINE 7/7 + J-AUTH 3/3 = 10/10**, no regression (binary
+changes are opt-in; J-SPINE sets no manifest env → M6 path unchanged). First-ever live run of the
+consortium-manifest handshake against the real binaries.
+
+**Blockers / next.** DOD-AUTH-2 remainder: version-rollback rejection + persist-trusted-version
+(need `manifestVersionStore` in the binary) + the 6–12h `manifest_poll` are NOT yet live —
+next J-AUTH increment. Then J-SIG (DOD-SIG-1, signaling resilience). The INV-2 blind-co-sign
+hardening (tracked 2026-06-20) still open.
+
+**State.** Branch `m7-rehome` both repos. Per Andre's instruction this entry is committed and
+BOTH repos pushed to `origin/m7-rehome` (NOT main, no merge).

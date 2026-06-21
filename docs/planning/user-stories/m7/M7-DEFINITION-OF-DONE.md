@@ -199,14 +199,27 @@ Source: outline Milestone Close Gate + E2E-001 AC-001–012. Mostly built/merged
   challenge response; client verifies against pinned node keys from the manifest;
   a rogue node (key not in manifest) is rejected at step 6 with
   `directory_challenge_failed`; daemon falls back to another manifest node.
-  *(MANIFEST-002; bidirectional-auth log)* — 🟡 **STEP 6 IS OFF** (Keystone shipped
-  with verify off; inbound-assignment FROST verify also deferred). Highest-risk
-  trust gap.
+  *(MANIFEST-002; bidirectional-auth log)* — ✅ **PROVEN LIVE** (J-AUTH, 2026-06-21).
+  Step-6 is now ON as an opt-in: the directory binary signs step-5 with a per-node
+  Ed25519 key (`CELLO_DIRECTORY_NODE_KEY_HEX` → `DirectoryKeyProvider`), and a
+  manifest-configured daemon (`CELLO_CONSORTIUM_MANIFEST` + root keys/threshold →
+  `FileManifestProvider` + `ManifestDirectoryChallengeVerifier`) verifies it at
+  step-6 (`directory.auth.challenge.verified`, `verified:true`). Rogue node (nodeId
+  not in the manifest) → `directory.auth.challenge.failed` `key_not_in_manifest`,
+  never connects. Unset env = M6 backward-compat (verify off) — J-SPINE still green.
+  SCOPE: multi-node *failover* is not modelled by the single-directory harness
+  (REJECTION is the proven security property); the separate inbound-assignment FROST
+  verify is tracked under the session path, not here.
 - **DOD-AUTH-2 — Manifest enforcement (TUF).** Schema `version / not_before /
   expires` + threshold sig over N root keys; reject `version ≤ trusted`; reject
   expired (refuse ALL connections); persist trusted version (never downgrade);
-  poll every 6–12h. *(MANIFEST-001/002)* — 🟡 (built; never polled/verified live;
-  directory-side production key/manifest wiring uncertain)
+  poll every 6–12h. *(MANIFEST-001/002)* — 🟡 **PARTIAL — PROVEN LIVE** (J-AUTH,
+  2026-06-21): threshold officer-sig verification (3-of-5 over the canonical body)
+  + expiry refusal are live — an expired manifest emits
+  `directory.auth.manifest.expired` and the daemon refuses to start (ADV-002, no
+  silent downgrade). REMAINING (not yet wired in the binary): `version ≤ trusted`
+  rollback rejection + persist-trusted-version need a `manifestVersionStore`, and the
+  6–12h `manifest_poll` is not yet exercised live. Next J-AUTH increment.
 - **DOD-SIG-1 — Signaling resilience.** Heartbeat (DIR-PING-001 pong) → on kill,
   `directory_signaling: reconnecting`, exponential backoff, reconnect to a
   **different** directory node from the manifest, drain queued outbound ops; tool
