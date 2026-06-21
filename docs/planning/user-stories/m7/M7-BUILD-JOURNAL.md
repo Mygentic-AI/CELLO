@@ -1882,3 +1882,47 @@ harness refactor (directory getter + restartDirectory) broke nothing.
 public surface (the internal `drain()` is unit-covered); multi-node failover stays out of scope
 (single-directory harness). Next lowest non-green line: **J-INT** (DOD-INT-1/2, DOD-RETRY-1 —
 interrupted-session + seal-interrupted; DOD-INT-1 is ✅ merged but not re-verified live post-collapse).
+
+---
+
+## 2026-06-21 — J-INT DOD-INT-1 GREEN + a real bug found & fixed
+
+**DoD-ID:** DOD-INT-1 (✅ merged-but-never-live-verified → re-verified live).
+
+**What was red.** DOD-INT-1 (interrupted-session detection) was marked ✅ from a pre-collapse
+merge but had never run live in the daemon era.
+
+**What was found (producer/consumer trace).** Two detection paths in `SessionNodeManager`:
+graceful shutdown marks active→interrupted ON THE WAY OUT; a CRASH leaves the row `active`, and
+the NEXT `initialize()` detects it and logs `session.interrupted.detected source:daemon_restart`
+BEFORE the IPC socket opens. So the `daemon_restart` source requires an ABRUPT kill, not a
+graceful stop. `acquireLock` overwrites blindly (no stale-PID failure), so the daemon binary
+tolerates a stale lock; `interrupted_sessions` (sessionId/agentName/counterpartyPubkey/
+messageCount) surfaces via both `cello status` and the login response.
+
+**What was built.** Harness `Proc.kill()` (SIGKILL, no graceful shutdown). `j-int.spine.test.ts`:
+two parties establish a session + A sends a message → SIGKILL daemonA → remove stale sock/lock
+(what connect-or-start does) → restart on the same `CELLO_DIR` → assert
+`session.interrupted.detected source:daemon_restart` + sessionId, then `cello login` →
+`cello status` surfaces the interrupted session with counterparty + messageCount≥1.
+
+**REAL BUG found by the live test (and fixed).** The interrupted session surfaced an EMPTY
+counterparty. Root cause: `cello_initiate_session`'s row-insertion read `params.counterparty_pubkey`,
+but the public tool param is `target_pubkey` (the negotiator reads it correctly; the row insertion
+did not) — so EVERY initiator session persisted an empty counterparty. Fixed in cello-client
+(`daemon.ts` reads `target_pubkey` first, `counterparty_pubkey` as legacy fallback). This is the
+kind of gap a library-level test masks (it would pass `counterparty_pubkey` directly) and only a
+binary-anchored test through the real MCP tool surface exposes.
+
+**Commits.** cello-client `6c93b1a` (counterparty fix). trustless-cello `1d4c0fc` (Proc.kill +
+J-INT test) + this DoD/journal commit.
+
+**Result.** Full spine regression GREEN: **14/14** (J-SPINE 7 + J-AUTH 4 + J-SIG 2 + J-INT 1) —
+the daemon fix broke nothing.
+
+**Follow-up.** The counterparty fix is a daemon internal change → needs a `@cello-protocol/connect`
+publish to reach operators (the live test uses the local build). Tracked for the next publish.
+
+**Blockers / next.** DOD-INT-2 (seal-interrupted bilateral flow — remaining party seals solo at
+next contact) + DOD-RETRY-1 (retry queue + nonce dedup survive a real restart) are the remaining
+J-INT lines. Then Tier 3 (DOD-MSG-* content delivery — the big one, MSG-001-3b).

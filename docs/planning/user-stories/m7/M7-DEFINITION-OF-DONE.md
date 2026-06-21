@@ -243,7 +243,15 @@ Source: outline Milestone Close Gate + E2E-001 AC-001–012. Mostly built/merged
   row marked `interrupted` in SQLCipher; surfaced at next login BEFORE other ops
   with sessionId / counterparty / messageCount; `session.interrupted.detected` with
   `source: daemon_restart` (distinct from `relay_frame` / `stream_close`).
-  *(SESSION-001)* — ✅ (merged; not re-verified post-collapse)
+  *(SESSION-001)* — ✅ **RE-VERIFIED LIVE** (J-INT, 2026-06-21). Two parties establish
+  a session + send a message; daemonA is SIGKILLed (crash, no graceful shutdown);
+  restarted on the same `CELLO_DIR` → `SessionNodeManager.initialize()` finds the
+  `active` row, marks it `interrupted`, logs `session.interrupted.detected`
+  `source:daemon_restart` with the sessionId; `cello login` → `cello status` surfaces
+  it with sessionId / counterparty / messageCount≥1. BUG FOUND + FIXED: the initiator's
+  session row stored an EMPTY counterparty (handler read `counterparty_pubkey` but the
+  tool sends `target_pubkey`) — fixed in cello-client (daemon `6c93b1a`); needs a
+  `@cello-protocol/connect` publish to reach operators.
 - **DOD-INT-2 — Seal-interrupted flow.** Remaining party can run the bilateral
   seal-interrupted agreement at next contact (both sign SEAL ctrl leaves over the
   interruption state → FROST). *(SESSION-001; daemon-transport-arch §10.3)* — 🟡
