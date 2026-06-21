@@ -2574,3 +2574,79 @@ backstop. trustless `13c3507`. Full regression **23/23**.
 MSG-4 🟡-core. REMAINING in MSG: MSG-4 full witness-then-fill reconciliation (holds for Andre's nod —
 load-bearing core receive path), MSG-8 (irreducible loss — BLOCKED on the unbuilt SESSION-004
 content-frontier). Beyond MSG: the post-recovery bilateral seal = storied CELLO-M7-UPGRADE-001.
+
+---
+
+## 2026-06-21 — DECISION + DEFERRAL LEDGER + next journey (J-CONTENT closed → start DOD-SEAL)
+
+This entry is the COMPACTION HANDOFF. A fresh context resuming M7 should read THIS entry + the last
+few above it, then start where "NEXT JOURNEY" says. Written deliberately so nothing is lost.
+
+### DECISION (2026-06-21, Andre)
+J-CONTENT is complete (7/7 live; MSG-001-3b: MSG-1/2/3/5/6/7 ✅, MSG-4 🟡-core). The offline-delivery
+story — the postmortem's central gap — is closed + hardened. **Decision: START THE NEXT FRESH JOURNEY,
+DOD-SEAL (SESSION-002, the "J-UNILATERAL" journey), and DEFER the items in the ledger below.** Rationale
+captured so we remember WHY: the deferred items are edge-case hardening / blocked-on-unbuilt-deps /
+storied work — not gaps in the proven core. Moving to a fresh, unblocked journey is higher value than
+spending a load-bearing-change nod (MSG-4) on a corner case right now.
+
+### DEFERRAL LEDGER — deferred ≠ dropped. Each item: WHY deferred + HOW to resume.
+1. **DOD-MSG-4 full witness-then-fill reconciliation** (cello-client core receive path). WHY deferred:
+   load-bearing change (R1 risk class — touches `onLeafDeliver` + `ingestReceivedContent`, SPINE-6's
+   path) for an EDGE case (B sealing WITHOUT recovering first). The core recovery + the real
+   recover-then-seal flow are already proven. HOW to resume: make `onLeafDeliver`
+   (session-node-manager.ts:693, currently a no-op log) APPEND the witnessed leaf at the canonical
+   sequence so B's root tracks canonical before content arrives; then `ingestReceivedContent` becomes
+   content-FILL for an already-witnessed leaf (attach plaintext, no second append) — the dedup
+   primitive (`session.content.deduplicated`) is already in place. NEEDS ANDRE'S NOD before touching
+   SPINE-6's path. Tracked as a task.
+2. **DOD-MSG-8 irreducible loss**. WHY deferred: BLOCKED — depends on the SESSION-004 content-frontier,
+   which is not built. HOW to resume: build SESSION-004 (DOD-LEG / J-LEGIBILITY) first, then MSG-8.
+3. **CELLO-M7-UPGRADE-001 — post-recovery bilateral seal** (asymmetric: A active, B interrupted). WHY
+   deferred: storied work; its precondition (content possession) is now SATISFIABLE because recovery
+   works. HOW to resume: after the recipient recovers parked content, run the bilateral seal over the
+   COMPLETED transcript; the asymmetric (one-side-interrupted) seal is the upgrade vs DOD-INT-2's
+   both-interrupted seal. Story: CELLO-M7-UPGRADE-001.
+4. **DOD-AUTH-2 6–12h manifest poll** — time-based, parked as impractical for a live test (task #16).
+5. **@cello-protocol/connect publish** — ALL the daemon work this session (counterparty fix `6c93b1a`
+   + the entire MSG-001-3b daemon: ContentParkClient, sendContent R1 reorder, recover handler, dedup,
+   startup-flush) lives only in the LOCAL build the harness spawns. Operators need a connect publish to
+   get ANY of it. USER-GATED (task #19). Procedure: CLAUDE.md "npm Publishing".
+6. **DOD-INV-4** (client verifies sender == counterparty on the relay receive path) — ❓ never verified
+   live; was BROKEN 2026-06-11. Worth a J-CONTENT-style assertion someday.
+
+### NEXT JOURNEY — DOD-SEAL (SESSION-002 / "J-UNILATERAL"). All three lines are ❌ GREENFIELD.
+**Goal:** A seals a session while B is GONE (absent) → the directory does a REAL FROST notarization with
+the counterparty ABSENT (B is NEVER a signer), producing a verifiable, channel-independent certificate.
+- **DOD-SEAL-1** — directory REBUILDS + VERIFIES the root from the signed-leaf chain (stops trusting a
+  client-`reported_root`); rejects `unilateral_root_unverifiable` / `unilateral_leaves_unavailable` /
+  `unilateral_seal_leaf_invalid`. *(SESSION-002 AC-001..004)*
+- **DOD-SEAL-2** — FROST notarization with counterparty ABSENT: signer = initiator + directory threshold;
+  counterparty never signs, never gets `seal_verified`; persisted append-only `SealNotarization`,
+  `close_type SEAL_UNILATERAL`, counterparty `ABSENT`. *(AC-005..008)*
+- **DOD-SEAL-3** — verifiable cert, channel-independent: confirm/notify carry the full cert; the client
+  rebuilds the canonical TBS + verifies the signature against an independently-trusted key; a
+  channel-swapped `sealed_root` is rejected. *(AC-009/010/011)*
+
+**HOW TO START (concrete):**
+1. Read `docs/planning/user-stories/m7/CELLO-M7-SESSION-002.yaml` (the story, the ACs, the SIs) FIRST —
+   per the procedure, read the story before asserting against it (the spine drifted out of the stories;
+   DOD-SEAL is SI-heavy, so read them).
+2. REUSE what exists: the BILATERAL seal notarization is BUILT + PROVEN (SPINE-7, this session) — directory
+   `processSeal` FROST path (directory-node.ts ~2860+) + the daemon SEAL FROST ceremony
+   (`wireSealCeremonyHandler`, session-ceremony.ts). DOD-SEAL is the UNILATERAL variant: initiator + directory
+   threshold, NO counterparty. Find the existing unilateral plumbing (`SEAL_UNILATERAL`, `ABSENT`,
+   `unilateral_*` reasons) — much may exist from SESSION-002's prior merge; ASSUME CODE EXISTS, verify, adapt.
+3. Write the J-UNILATERAL live test (new `j-unilateral.spine.test.ts` or grow j-content): A registers, opens
+   a session to a B that is GONE (never accepts / offline), A `cello_close_session` → directory rebuilds +
+   verifies the root + FROST-notarizes with B ABSENT → A gets a verifiable cert; assert B never signed +
+   the cert verifies independently + a tampered/channel-swapped root is rejected.
+4. Same DISCIPLINE as all session: anchor to the BINARY (no createClient/createDirectoryNode in the test),
+   red-first, commit constantly, push to `m7-rehome` (Andre wants it pushed), reviewers only as subagents,
+   full regression after any load-bearing change, 30-min drift checks.
+
+### STATE AT HANDOFF
+Branch `m7-rehome` both repos. cello-client `7df4cfb`, trustless `1f72ab8` (+ this commit). **Spine 23/23**
+(J-SPINE 7 + J-AUTH 4 + J-SIG 2 + J-INT 3 + J-CONTENT 7). Tier 1 ✅, Tier 2 ✅, Tier 3 MSG-001-3b ✅ (bar
+the deferred MSG-4/MSG-8). Run all: `pnpm --filter @cello-protocol/e2e-tests test:spine` (needs Docker +
+both repos built). ~6 production bugs found+fixed this session. Everything pushed.
