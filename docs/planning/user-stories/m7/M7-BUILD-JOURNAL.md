@@ -2703,3 +2703,66 @@ RED live test `j-unilateral.spine.test.ts`: A+B establish a session + one messag
 verifiable cert; assert directory emits `session.unilateral.notarized` (NOT `.sealed`), B never
 signed, the FROST cert verifies independently, and a channel-swapped root is rejected (SI-003).
 Build until green; commit constantly; push m7-rehome; full regression after load-bearing changes.
+
+---
+
+## 2026-06-21 — J-UNILATERAL GREEN (DOD-SEAL-1/2/3 proven live)
+
+The unilateral-seal happy path is GREEN against the binaries: A establishes a session + one
+message, B is SIGKILL'd (GONE), A `cello_close_session` → `{ok:true, sealed_root, seal_type:
+"unilateral"}`. Directory: `session.unilateral.leaves.fetched` → `session.unilateral.notarized`
+(signatureType frost, presentPartyPubkey, absentPartyPubkey, leafCount 2). Daemon:
+`session.unilateral.certificate.verified`. Built in increments A–F (see commits).
+
+### THE LOAD-BEARING DESIGN FINDING — two roots (read before touching seal code)
+The system has **two different Merkle roots over the same leaves**, and they are NOT equal:
+- **Client local root** (`SessionTree`, session-tree.ts): each leaf hashed as its
+  `content_hash` via `buildMerkleTree(kind:"hash")` — the data IS the leaf hash, no prefix.
+- **Relay/directory root** (`processSeal` / relay `submitForSeal`): each leaf hashed as
+  `encodeStructure2(s2)` via `buildMerkleTree(kind:"msg"|"ctrl")` = SHA-256(prefix ||
+  encodeStructure2). encodeStructure2 binds seq, prev_root, sender, signature — fields the
+  client does NOT store locally (it only keeps `{kind, content_hash}` per leaf).
+
+The **bilateral** seal never reconciles them: the directory sends `session_sealed{sealed_root=
+encodeStructure2 root}` and the daemon ACCEPTS it on faith (no signature check) — this is exactly
+the "unsigned word over an authenticated channel" the unilateral story sets out to fix.
+
+For the **unilateral** seal to be CHANNEL-INDEPENDENTLY verifiable by A (DOD-SEAL-3, SI-003), the
+directory must sign a root A can reconstruct locally → the **content-hash root**. So:
+- Directory `#verifyUnilateralChain`: rebuilds the content-hash root from each leaf's
+  authenticated `s2.content_hash` (kind:"hash") and compares to `reported_root`; the
+  encodeStructure2 chain (per-leaf sig + prev_root chain + causal chain) still runs to prove
+  those content_hashes are AUTHENTIC + correctly ordered. The content-hash root is what gets
+  FROST-signed + put in the cert + the TBS.
+- Daemon `submitSealLeaf`: returns `reportedRootHex = SessionTree.rootWithAppendedHex(ctrlHash)`
+  — the content-hash root the local tree WOULD have with A's SEAL ctrl leaf appended, computed
+  WITHOUT mutating the durable tree / message_count (so bilateral + interrupted paths are
+  untouched). The relay records the identical content_hash for that ctrl leaf, so the directory's
+  rebuild matches. leafCount 2 = [A msg, A ctrl] (B's cello_receive submits no leaf).
+- Daemon `verifyUnilateralCertificate`: rebuilds `buildSealTbs` + verifies the FROST sig against
+  the agent's own primary_pubkey (commitments[0] of its share) — mirrors the directory exactly.
+
+This is why a channel-swapped sealed_root is caught: the TBS binds sealed_root, so the signature
+fails over a swapped root (the adversarial DOD-SEAL-3 / AC-011 case — to be asserted as the next
+increment).
+
+### Architecture (one-way leaf-fetch had to be built)
+The relay owned the leaf chain but exposed NO directory-facing fetch — bilateral leaves flow
+relay→directory only (relay calls processSeal). Added the reverse: `get_seal_leaves` RPC on
+`/cello/directory-relay/1.0.0` (relay read-only `getSealLeaves`, directory
+`NetworkRelayAdapter.getSealLeaves`). The daemon's existing `seal_verified`→FROST handler drives
+the ceremony unchanged for unilateral (only the directory's trigger + leaf source + ABSENT
+recording differ from bilateral).
+
+### STILL TO DO on this journey (not yet green)
+- DOD-SEAL-3 adversarial: channel-swapped sealed_root REJECTED live (SI-003 / AC-011).
+- DOD-SEAL-1 reject paths live: unilateral_root_unverifiable (forged root),
+  unilateral_seal_leaf_invalid, unilateral_leaves_unavailable.
+- DOD-LIVE-1/2/3 (the ABSENT gate: gone→ABSENT vs busy-silent→DELIVERED) — the rest of J-UNILATERAL.
+- Reconcile the directory persist-015/persist-023 UNIT tests (they assert the superseded Gap-1
+  faith-based behavior the rewrite replaces) — NOT in the spine config; must not be left red.
+- DOD-SEAL-2 close_type='SEAL_UNILATERAL' + conversation_attestations 'ABSENT' discriminator rows:
+  the 3-table write does NOT exist (bilateral doesn't write conversation_seals either). The
+  binary-observable proof (FROST + B ABSENT + signed durable notarization + notarized event) is
+  GREEN; the close_type discriminator is upgrade-readiness coupled to DOD-UP-1 (Tier-4, deferred).
+  DOD-SEAL-2 is therefore 🟡 not full ✅ until that persistence lands.
