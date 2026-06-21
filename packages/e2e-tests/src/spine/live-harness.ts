@@ -30,7 +30,15 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
-import { FileKeyProvider } from "@cello-protocol/crypto";
+import {
+  FileKeyProvider,
+  makeTestManifest,
+  TEST_CONSORTIUM_ROOT_KEYS,
+  TEST_CONSORTIUM_THRESHOLD,
+  TEST_DIRECTORY_NODE_KEYPAIR,
+  type TestConsortiumNode,
+  type MakeTestManifestOpts,
+} from "@cello-protocol/crypto";
 import { peerIdFromTransportSeed } from "@cello-protocol/relay";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -265,6 +273,64 @@ export interface SpineCluster {
   stop: () => Promise<void>;
 }
 
+// ─── J-AUTH (DOD-AUTH-1/2): consortium manifest + directory step-6 identity ──────
+// The directory's per-node signing key and the officer root keys are the DETERMINISTIC
+// test fixtures exported from @cello-protocol/crypto. The directory signs step-5 with
+// AUTH_DIRECTORY_NODE_KEY_HEX (private seed); a daemon configured with a manifest that
+// lists nodeId "local" → AUTH_DIRECTORY_NODE_PUBKEY verifies that proof at step-6.
+export const AUTH_DIRECTORY_NODE_ID = "local";
+export const AUTH_DIRECTORY_NODE_KEY_HEX = TEST_DIRECTORY_NODE_KEYPAIR.privateKeyHex;
+export const AUTH_DIRECTORY_NODE_PUBKEY = TEST_DIRECTORY_NODE_KEYPAIR.publicKeyHex;
+
+/** The daemon env vars that select + trust a consortium manifest (step-6 ON). */
+export interface ManifestEnv {
+  CELLO_CONSORTIUM_MANIFEST: string;
+  CELLO_CONSORTIUM_ROOT_KEYS: string;
+  CELLO_CONSORTIUM_THRESHOLD: string;
+}
+
+/**
+ * Build + write a threshold-signed consortium manifest, returning the daemon env
+ * that selects it. `nodes` is the manifest's node set — use trustedDirectoryNode()
+ * for the happy path, or a different/empty node set for the rogue case. `opts`
+ * overrides version / not_before / expires (use a past `expires` for the expiry case).
+ */
+export function writeConsortiumManifest(
+  tmpDir: string,
+  name: string,
+  nodes: TestConsortiumNode[],
+  opts?: MakeTestManifestOpts,
+): ManifestEnv {
+  const manifest = makeTestManifest(nodes, opts);
+  const manifestPath = join(tmpDir, `consortium-manifest-${name}.json`);
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  return {
+    CELLO_CONSORTIUM_MANIFEST: manifestPath,
+    CELLO_CONSORTIUM_ROOT_KEYS: TEST_CONSORTIUM_ROOT_KEYS.join(","),
+    CELLO_CONSORTIUM_THRESHOLD: String(TEST_CONSORTIUM_THRESHOLD),
+  };
+}
+
+/** The "this directory IS in the consortium" node entry (happy-path step-6). */
+export function trustedDirectoryNode(): TestConsortiumNode {
+  return {
+    nodeId: AUTH_DIRECTORY_NODE_ID,
+    pubkey: AUTH_DIRECTORY_NODE_PUBKEY,
+    region: "local",
+    provider: "aws",
+    endpoint: "/ip4/127.0.0.1/tcp/0",
+  };
+}
+
+export interface StartSpineClusterOpts {
+  /**
+   * J-AUTH: when set, the directory signs its step-5 challenge with this Ed25519 seed
+   * (64-hex), enabling step-6 verification by a manifest-configured daemon. Use
+   * AUTH_DIRECTORY_NODE_KEY_HEX so a manifest built from trustedDirectoryNode() verifies.
+   */
+  directoryNodeKeyHex?: string;
+}
+
 /**
  * Bring up the real relay + directory binaries on localhost and return the
  * coordinates a daemon needs. Order: provision dir signing key (for its pubkey) →
@@ -275,7 +341,7 @@ export interface SpineCluster {
  * yet call back for the bilateral seal. That is sufficient for SPINE-1..6; the
  * seal-callback wiring (SPINE-7) is resolved empirically when its assertion runs.
  */
-export async function startSpineCluster(): Promise<SpineCluster> {
+export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promise<SpineCluster> {
   ensurePostgres();
   const tmpDir = mkdtempSync(join(tmpdir(), "cello-jspine-"));
 
@@ -334,6 +400,11 @@ export async function startSpineCluster(): Promise<SpineCluster> {
       CELLO_DIRECTORY_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0",
       CELLO_DIRECTORY_WS_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0/ws",
       HEALTH_PORT: String(healthPort),
+      // J-AUTH: when a node signing key is supplied, the directory signs step-5 as
+      // nodeId "local" so a manifest-configured daemon can verify it at step-6.
+      ...(opts.directoryNodeKeyHex
+        ? { CELLO_DIRECTORY_NODE_KEY_HEX: opts.directoryNodeKeyHex, NODE_ID: AUTH_DIRECTORY_NODE_ID }
+        : {}),
     });
     // BootstrapEndpoint line means /bootstrap is live — the daemon can discover us.
     await directory.waitForLine(/"adapterName":"BootstrapEndpoint"/, 30_000);
@@ -395,12 +466,24 @@ export async function provisionAgent(celloDir: string, name: string): Promise<st
   return Buffer.from(await kp.getPublicKey()).toString("hex");
 }
 
-export async function startDaemon(celloDir: string, directoryUrl: string, label: string): Promise<Proc> {
+export async function startDaemon(
+  celloDir: string,
+  directoryUrl: string,
+  label: string,
+  opts: { manifestEnv?: ManifestEnv; waitForStarted?: boolean } = {},
+): Promise<Proc> {
   const daemon = new Proc(`daemon-${label}`, BINS.daemon, {
     CELLO_DIR: celloDir,
     CELLO_DIRECTORY_URL: directoryUrl,
+    // J-AUTH: when a manifest env is supplied, the daemon loads + verifies it and
+    // turns on step-6 directory-identity verification (challengeVerifier).
+    ...(opts.manifestEnv ?? {}),
   });
-  await daemon.waitForLine(/"event":"daemon\.started"/, 15_000);
+  // The expiry case wants to observe the daemon REFUSING to start (loadAndVerify
+  // throws manifest_expired); callers pass waitForStarted:false and assert the exit.
+  if (opts.waitForStarted !== false) {
+    await daemon.waitForLine(/"event":"daemon\.started"/, 15_000);
+  }
   return daemon;
 }
 
