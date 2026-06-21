@@ -2808,3 +2808,39 @@ rewrite, the two-roots content-hash fix, the daemon escalation + cert verify).
 **Lowest non-green line for the NEXT session:** DOD-LIVE-2 (the ABSENT gate) is the real code gap;
 the SEAL-3/SEAL-1 adversarials are test-reach work. Recommend: do the SI-003 adversarial proof
 (focused real-crypto verify test) first (cheap, high security value), then the DOD-LIVE ABSENT gate.
+
+---
+
+## 2026-06-21 — Blocking finding: absent-party cert verification needs the counterparty PRIMARY
+
+Investigated the absent-party half of DOD-SEAL-3 (AC-010: B reconnects → verifies the queued
+`seal_unilateral_notification` cert). Two hard blockers, both surfaced rather than guessed:
+
+1. **The daemon has NO `seal_unilateral_notification` handler.** `registerUnilateralConfirmedListener`
+   handles only `seal_unilateral_confirmed` (the PRESENT party). B (absent) reconnecting would
+   receive the cert and drop it. (Small to add — but blocked by #2.)
+2. **B cannot verify the FROST cert with what it stores.** B persists only the counterparty's
+   **K_local** (`counterpartyPubkey`, session-node-manager.ts) — NOT A's **primary_pubkey** (the
+   FROST group key = commitments[0] of A's share) that the seal signature verifies against. The
+   present-party path works because A verifies against its OWN share's commitments[0]; B has no
+   such thing for A. The cert carries `present_pubkey` = A's K_local, which is the WRONG key for
+   FROST verification, AND trusting a primary delivered IN the cert over the channel would defeat
+   channel-independence (an attacker swaps root + primary together). Per AC-010 the absent party
+   must verify against "the session's primary_pubkey" trusted INDEPENDENTLY of the channel — so
+   the directory's signed session assignment must DELIVER + B must PERSIST the counterparty's
+   primary_pubkey at establishment. That distribution does not exist today.
+
+**Decision needed (Andre):** the absent-party verification is a multi-part feature (distribute +
+persist the counterparty primary at session establishment, then add B's notification handler) —
+not a contained hotfix. Same class of "needs a go" as reviving the parked DOD-LIVE liveness half.
+
+**Remaining J-UNILATERAL lines, each with its real blocker (none are a quick green):**
+- DOD-SEAL-3 channel-swap adversarial (SI-003) — TEST-REACH: no MITM on the Noise stream live;
+  needs a focused real-crypto verify test (build valid cert → tamper sealed_root → assert reject).
+- DOD-SEAL-3 absent-party (AC-010) — DESIGN: counterparty-primary distribution (above).
+- DOD-LIVE-1/2/3 ABSENT gate — CODE GAP + parked-code revival (relay liveness half not in main);
+  today's ABSENT is purely the time-based grace gate, which DOD-LIVE-2 explicitly disallows
+  (busy-but-alive must never be sealed ABSENT on silence).
+
+The DOD-SEAL CORE (verify → FROST B-ABSENT → present-party verifiable cert) is GREEN + regression-
+clean + pushed. The above are the honest next steps, each gated on a decision.
