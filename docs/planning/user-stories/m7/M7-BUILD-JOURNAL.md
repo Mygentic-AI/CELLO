@@ -2212,3 +2212,53 @@ OUTBOUND startup-flush only (a restarted sender needs to know where to deposit �
 INBOUND pull uses B's live per-agent relay connection + the relay's reconnect notify, so it does NOT
 need the per-session endpoint persisted — separate, lighter. Confirm A and B target the SAME relay
 (the session's assigned relay; holds in the single-relay-per-region model).
+
+---
+
+## 2026-06-21 — Increment 2 — send-path failure-mode MAP + a design fork to resolve
+
+Reading `sendContent` (session-node-manager.ts:1406) before wiring the park revealed the send path
+has THREE failure modes, and the naive "B offline → park" model is wrong. This needs a decision
+before coding (recorded so it isn't lost / so whoever builds increment 2 starts from the real shape).
+
+**The three send outcomes:**
+1. **Delivered + `persisted` ACK** → confirmed. (SPINE-6 happy path.)
+2. **Delivered to the wire, NO `persisted` ACK** → `#trackAwaitingAck` stays armed; TTF expiry fires
+   `onTtf` → currently only `enqueueAwaitingContent` (durable backstop). This is DOD-MSG-2's "park"
+   trigger. The relay WITNESS (hash submission) DID run here (sequence assigned) because the stream
+   opened.
+3. **Stream-open FAILS (B fully offline)** → `#untrackAwaitingAck` + return `ok:false`. cello_send
+   then `retryQueue.enqueue`s for DIRECT retry. CRITICAL: the relay witness block is AFTER the
+   stream send, so on stream-open failure it is SKIPPED → **no canonical sequence is ever assigned
+   for this content.**
+
+**The fork.** DOD-MSG-4 says recovered/parked content is accepted "at the already-assigned
+sequence." That holds for outcome #2 (witness ran, sequence exists). It does NOT hold for outcome #3
+(the common "B offline" case) — the sequence was never assigned, because witness is gated behind
+successful direct delivery. So either:
+- **Option R1 (recommended): decouple the witness from direct delivery.** Submit the message-leaf
+  HASH to the relay witness REGARDLESS of whether the direct content stream opened — the relay
+  assigns the canonical sequence from the hash (it never needs the plaintext, INV-3). Then BOTH
+  failure outcomes (#2 TTF, #3 stream-open-fail) deposit the SEALED content to the relay park, and B
+  recovers it at the sequence the witness already assigned. This makes "sequence-then-content" (the
+  model the M9 reply + DOD-MSG-4 already assume) true for the offline case too. Cost: reorder
+  sendContent so the witness submission is not gated by the direct send, and add the park deposit on
+  both not-confirmed paths.
+- **Option R2: leave witness gated; assign the sequence at park/recovery time.** Messier — the
+  sequence would be assigned by whichever side first reconciles, risking divergence; fights the
+  "relay is the ordering authority (Structure 2)" invariant. Not recommended.
+
+**Recommendation: R1.** It aligns the offline case with the witnessed-sequence model the rest of 3b
+assumes, keeps the relay as the single ordering authority, and the witness already only ever sees
+the hash (no INV-3 impact). It is a real change to `sendContent`'s structure, so flagging for a
+decision rather than silently reordering a load-bearing path.
+
+**If R1: increment 2 becomes:** (a) reorder `sendContent` — submit witness hash independent of the
+direct-stream result; (b) on not-confirmed (TTF expiry AND stream-open-fail), `sealToRecipient` +
+deposit to the relay park via `ContentParkClient` (live trigger; relay endpoint via a new
+`getSessionRelayEndpoint(sessionId)` accessor — in-memory from the AgentRelayClient); (c) test: A
+sends to an offline B → witness assigns a sequence + content parks → relay logs
+`content.park.received`; then increment 3 pulls it and ingests at that sequence.
+
+**State.** Branch `m7-rehome`. cello-client `05c4e68`, trustless-cello bc047c7→this. Spine 17/17.
+Increment 1 (transport) green; increment 2 blocked on the R1/R2 decision above.
