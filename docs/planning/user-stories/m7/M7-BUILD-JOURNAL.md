@@ -2011,3 +2011,35 @@ MSG-001-3b is a multi-part feature build (new client + 4 wiring points + recover
 need several debug rounds; it deserves full headroom rather than the tail of a long session.
 
 **State.** Branch `m7-rehome` both repos, all pushed. Spine 16/16. Tier 1 + Tier 2 green.
+
+### MSG-001-3b wire contracts (reverse-engineered from the relay — de-risks the client build)
+
+Protocol `/cello/content-park/1.0.0`, CBOR frames, length-prefixed (`lp.encode/decode`), one
+libp2p stream per operation. Field names are snake_case; byte fields are raw Uint8Array.
+
+**Deposit (sender → relay):**
+- send `{ type:"content_park_deposit", recipient_pubkey, content_hash, session_id, ciphertext }`
+- recv `{ type:"content_park_deposit_ack", content_hash, ok, reason? }`
+
+**Pull (recipient → relay), auth-gated (I1):**
+- send `{ type:"content_park_pull_request", recipient_pubkey, content_hash? }` (omit content_hash = pull all)
+- relay runs `#authenticateCaller`: it sends a challenge (nonce); client signs
+  `buildContentParkAuthMsg(nonce, recipientPubkey)` = `Ed25519( SHA-256("CELLO-CONTENT-PARK-AUTH-v1" || nonce || recipientPubkey) )`
+  with the recipient's K_local and returns it. (Read `#authenticateCaller` for the exact challenge/
+  response frame field names before implementing — that's the one contract not captured here.)
+- recv `{ type:"content_park_pull_count", count }` then `count ×
+  { type:"content_park_pull_response", found, content_hash, session_id?, ciphertext? }`
+- then `content_park_confirm` per entry (delete-on-pickup).
+
+**Client model:** mirror `core/daemon/src/session-relay-client.ts` (it already does per-agent libp2p
+streams to the relay + CBOR framing for the hash witness). The content-park client opens a stream on
+CONTENT_PARK_PROTOCOL_ID instead of the witness protocol. Content sealing is
+`sealToRecipient(content, recipientPubkey)` / `openSealed(ciphertext, recipientKeyProvider)` from
+`@cello-protocol/crypto`.
+
+**First red test (J-CONTENT increment 1):** expose `content_park_deposit` + `content_park_pull` as
+daemon IPC handlers (like the DAEMON-003 handlers DOD-RETRY-1 used), then a live round-trip:
+ipcCall(A, deposit, {relayAddr, recipientPubkey=B, contentHash, ciphertext}) → ack;
+ipcCall(B, pull, {relayAddr}) → response carries the SAME ciphertext; assert the relay logs show
+`content.park.received`/`content.park.served` with CIPHERTEXT only (INV-3). That proves the daemon↔
+relay content-park transport before the send/receive-path integration (increments 2–3).
