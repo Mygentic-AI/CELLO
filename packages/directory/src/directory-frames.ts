@@ -287,7 +287,7 @@ export type PongFrame = { type: "pong"; ts: number };
 /** M7-SESSION-001 AC-009: seal-interrupted signaling frame types (pass-through routing). */
 export type SealInterruptedRequestFrame = { type: "seal_interrupted_request"; sessionId: string; initiatorPubkey: string; counterpartyPubkey: string; leafCountAtInterruption: number; nonce: string };
 /** initiatorPubkey is included so the directory can route the ack back to the initiator by direct lookup in #streams. */
-export type SealInterruptedAckFrame = { type: "seal_interrupted_ack"; sessionId: string; initiatorPubkey: string; sealInterruptedLeaf: Record<string, unknown> };
+export type SealInterruptedAckFrame = { type: "seal_interrupted_ack"; sessionId: string; initiatorPubkey: string; sealInterruptedLeaf: Record<string, unknown>; nonce: string };
 /** initiatorPubkey is included so the directory can route the rejection back to the initiator by direct lookup in #streams. */
 export type SealInterruptedRejectionFrame = { type: "seal_interrupted_rejection"; sessionId: string; initiatorPubkey: string; reason: string };
 
@@ -471,8 +471,13 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     const sealInterruptedLeaf = typeof o["sealInterruptedLeaf"] === "object" && o["sealInterruptedLeaf"] !== null
       ? o["sealInterruptedLeaf"] as Record<string, unknown>
       : null;
-    if (!sessionId || !initiatorPubkey || !sealInterruptedLeaf) return null;
-    return { type: "seal_interrupted_ack", sessionId, initiatorPubkey, sealInterruptedLeaf };
+    // The nonce is the initiator's L-2 replay guard: the ack MUST echo the request
+    // nonce or the initiator rejects it as seal_interrupted_nonce_mismatch. The typed
+    // relay decoder previously dropped it, breaking every bilateral seal-interrupted
+    // (DOD-INT-2). Carry it through.
+    const nonce = typeof o["nonce"] === "string" ? o["nonce"] : null;
+    if (!sessionId || !initiatorPubkey || !sealInterruptedLeaf || nonce === null) return null;
+    return { type: "seal_interrupted_ack", sessionId, initiatorPubkey, sealInterruptedLeaf, nonce };
   }
 
   if (o["type"] === "seal_interrupted_rejection") {
