@@ -2766,3 +2766,45 @@ recording differ from bilateral).
   binary-observable proof (FROST + B ABSENT + signed durable notarization + notarized event) is
   GREEN; the close_type discriminator is upgrade-readiness coupled to DOD-UP-1 (Tier-4, deferred).
   DOD-SEAL-2 is therefore 🟡 not full ✅ until that persistence lands.
+
+---
+
+## 2026-06-21 — J-UNILATERAL checkpoint: DOD-SEAL core green, remaining work assessed
+
+**State:** spine 24/24 (J-SPINE 7 + J-AUTH 4 + J-SIG 2 + J-INT 3 + J-CONTENT 7 + J-UNILATERAL 1).
+Directory unit tests reconciled (persist-015 green; persist-023 drain tests updated to the cert
+payload; the enqueue.failed test skipped — it drove the removed faith-based path, the catch is
+intact + the live path exercises enqueue). Both repos pushed to `m7-rehome`.
+
+**What is GREEN (proven live, binary-anchored):** the unilateral seal core — A seals while B is
+GONE → directory fetches the leaf chain (`get_seal_leaves`) → rebuilds + verifies the
+content-hash root + the encodeStructure2 authenticity chain → FROST-notarizes B ABSENT → A
+verifies the cert vs its own primary_pubkey → `seal_type:"unilateral"` with a sealed_root.
+~7 production-meaningful pieces built across both repos (the leaf-fetch RPC, the verify+FROST
+rewrite, the two-roots content-hash fix, the daemon escalation + cert verify).
+
+**REMAINING on this journey — honest gaps, none dropped:**
+1. **DOD-SEAL-3 adversarial (SI-003 / AC-011) — channel-swapped sealed_root REJECTED.** The
+   daemon's `verifyUnilateralCertificate` IS the gate (TBS binds sealed_root → a swapped root
+   fails the sig check), but asserting it LIVE needs a MITM on the Noise-encrypted signaling
+   stream, which the harness can't do. Options: (a) a focused daemon test that calls the real
+   verifyUnilateralCertificate with a valid-then-tampered cert (needs a real FROST share fixture
+   + a real seal signature to tamper); (b) a daemon test-hook that feeds a tampered confirmed
+   frame to the listener. (a) is the honest strong proof. NOT a code gap — a test-reach gap.
+2. **DOD-SEAL-1 reject paths LIVE** — forged reported_root → `unilateral_root_unverifiable`;
+   `unilateral_seal_leaf_invalid`; `unilateral_leaves_unavailable`. All implemented + logged;
+   live assertion needs a malicious client (forged root) — same test-reach constraint as #1.
+3. **DOD-LIVE-1/2/3 — the ABSENT gate (the rest of J-UNILATERAL).** REAL CODE GAP: today the
+   directory seals B ABSENT purely on the TIME-BASED grace gate (delivery_grace_seconds elapsed).
+   DOD-LIVE-2 requires ABSENT to come from a POSITIVE connection-gone observation (relay-path
+   ABSENT from the relay, not self-asserted) — a busy-but-alive counterparty must NEVER be sealed
+   ABSENT after mere silence. The relay/directory liveness half is PARKED (not in main, per the
+   DoD note at DOD-LIVE-1). This is the substantial next build: wire relay onPeerConnect/Disconnect
+   + session_liveness_query/response → the seal-ABSENT gate reads a connection-gone fact, not a timer.
+4. **DOD-SEAL-2 close_type discriminator** — `conversation_seals.close_type='SEAL_UNILATERAL'` +
+   `conversation_attestations` 'ABSENT' rows. The 3-table atomic write does not exist (bilateral
+   doesn't write conversation_seals either). Coupled to DOD-UP-1 (Tier-4 upgrade-readiness, deferred).
+
+**Lowest non-green line for the NEXT session:** DOD-LIVE-2 (the ABSENT gate) is the real code gap;
+the SEAL-3/SEAL-1 adversarials are test-reach work. Recommend: do the SI-003 adversarial proof
+(focused real-crypto verify test) first (cheap, high security value), then the DOD-LIVE ABSENT gate.
