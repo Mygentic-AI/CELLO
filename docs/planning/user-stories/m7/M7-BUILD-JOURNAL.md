@@ -2844,3 +2844,47 @@ not a contained hotfix. Same class of "needs a go" as reviving the parked DOD-LI
 
 The DOD-SEAL CORE (verify → FROST B-ABSENT → present-party verifiable cert) is GREEN + regression-
 clean + pushed. The above are the honest next steps, each gated on a decision.
+
+---
+
+## 2026-06-21 — DOD-LIVE model CONVERGED with Andre (pre-build; awaiting go)
+
+Andre corrected my framing of the unilateral seal + liveness. **The agreed model (canonical):**
+
+- A calls **`close_session`** (not "seal") → seals A's OWN side → begins the seal process.
+- We **await B** with a TIMEOUT. The timeout — NOT a discretionary A-side choice — drives the outcome.
+- On timeout (B didn't co-close), the **directory notarizes UNILATERALLY — the seal ALWAYS completes.**
+  There is no "A refuses to seal" branch (my earlier option (a) was WRONG).
+- Later, if B returns + picks up the content, **B can BILATERALLY seal** (the upgrade, DOD-UP-1, deferred).
+
+**The liveness gate sets the COUNTERPARTY ATTESTATION, not whether-to-seal:**
+- relay observed B **gone** (positive disconnect) → attestation **ABSENT**
+- relay says **alive**, or **unknown** (fail-safe) → **DELIVERED** (reachable / content delivered; just didn't co-close)
+
+**Precision (receipt-not-assent invariant):** the directory does NOT sign AS B and never forges B's
+assent. "Directory acts as counterparty" = it provides the authority that lets the seal complete
+without B; it is a directory NOTARIZATION recording B's liveness, not a stand-in signature. A seal
+attests receipt + integrity + ordering, NEVER agreement (postmortem C-1/C-2).
+
+**Resulting build (when Andre says go):**
+1. Graft the parked relay liveness authority `9832b1e` (relay-types/frames/store/node, ~162 LoC + a
+   298-line in-process test): `session_liveness_query/response`, `liveness: alive|gone|unknown`,
+   `recordRecipientGone` (positive-observation only, never fabricates 'gone').
+2. At seal time, query the relay for B's liveness; set counterparty attestation ABSENT (gone) vs
+   DELIVERED (alive/unknown). The unilateral seal completes either way.
+3. Carry the attestation in the cert/notarization (small new field; also feeds DOD-LEG-3
+   `attestation_mode`). Today #completeUnilateralNotarization hardcodes B ABSENT — this replaces the
+   timer-implies-absent with a relay-liveness-observed attestation.
+4. Live binary test: kill B → ABSENT; keep B alive-but-silent → DELIVERED; both complete the seal.
+
+**Pre-build prep findings (read-only):**
+- protocol-types `session-liveness.ts` is ALREADY in main (cello-client) — the canonical
+  SessionLivenessQuery/Response types + the daemon direct-half exist. Only the RELAY authority is
+  parked (`9832b1e`). So the revival is the relay half + the seal-time attestation wiring; the
+  protocol types + daemon query machinery are largely present.
+- The relay parked changes are in the relay's hash-submit/auth stream handler +
+  `#processSessionLivenessQuery`; my `get_seal_leaves` lives in the directory-relay handler — different
+  areas, low cherry-pick conflict risk.
+
+STATUS: model agreed; build NOT started (awaiting Andre's explicit go — "'ready to start?' is a
+question, not a trigger"). Everything green + pushed.
