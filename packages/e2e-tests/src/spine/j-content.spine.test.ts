@@ -149,4 +149,70 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // The relay received + stored the ciphertext (INV-3 — ciphertext only).
     expect(cluster.relay.output).toMatch(/content\.park\.received/);
   }, 90_000);
+
+  it("DOD-MSG-3/4 (recover) — offline recipient comes back, RECOVERS the parked message through the inbound funnel", async () => {
+    const dirA = mkdtempSync(join(tmpdir(), "cello-recA-"));
+    const dirB = mkdtempSync(join(tmpdir(), "cello-recB-"));
+    dirs.push(dirA, dirB);
+    await provisionAgent(dirA, "agentA");
+    const pubB = await provisionAgent(dirB, "agentB");
+    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "recA");
+    let daemonB = await startDaemon(dirB, cluster.directoryUrl, "recB");
+    daemons.push(daemonA, daemonB);
+    expect(cello(["register", "agentA", `DEV-rec-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
+    expect(cello(["register", "agentB", `DEV-rec-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+
+    let connA = await connectMcp(dirA, "rec-A");
+    let connB = await connectMcp(dirB, "rec-B");
+    mcpConns.push(connA, connB);
+    for (const [c, n] of [[connA, "agentA"], [connB, "agentB"]] as const) {
+      expect(((await c.call("cello_start_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+    }
+    // Establish + deliver one message directly (B's transcript = [msg1]).
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok, `initiate failed:\n${daemonA.output.split("\n").slice(-30).join("\n")}`).toBe(true);
+    const sessionId = init.sessionId!;
+    expect(((await awaitP) as { type?: string }).type).toBe("new_session");
+    expect(((await connA.call("cello_send", { session_id: sessionId, content: "msg1-online" })) as { ok?: boolean }).ok).toBe(true);
+
+    // ── B goes OFFLINE (abrupt crash — lid-shut/SIGKILL, so on restart the session is
+    // detected 'interrupted' with source daemon_restart); A sends the message that gets parked. ──
+    await connB.close();
+    mcpConns.splice(mcpConns.indexOf(connB), 1);
+    await daemonB.kill();
+    const PARKED = "msg2-while-offline — the message B must recover";
+    await connA.call("cello_send", { session_id: sessionId, content: PARKED });
+    await daemonA.waitForLine(/"event":"content\.park\.deposited"/, 25_000);
+
+    // ── B comes back: its session is now 'interrupted'; B recovers the parked content. ──
+    for (const f of ["daemon.sock", "daemon.lock"]) {
+      try { rmSync(join(dirB, f), { force: true }); } catch { /* best-effort */ }
+    }
+    daemonB = await startDaemon(dirB, cluster.directoryUrl, "recB-restart");
+    daemons.push(daemonB);
+    await daemonB.waitForLine(/"event":"session\.interrupted\.detected"/, 15_000);
+    expect(cello(["login"], { CELLO_DIR: dirB }).status).toBe(0);
+    connB = await connectMcp(dirB, "rec-B2");
+    mcpConns.push(connB);
+    expect(((await connB.call("cello_start_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_use_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+
+    const rec = (await ipcCall(dirB, "content_park_recover", { relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB })) as { ok?: boolean; recovered?: number };
+    expect(rec.ok, `recover failed: ${JSON.stringify(rec)}`).toBe(true);
+    expect(rec.recovered, "exactly the one parked message is recovered").toBe(1);
+
+    // M9 single-inbound-funnel AC: the recovered content traversed ingestReceivedContent (the SAME
+    // chokepoint as a direct receive), evidenced by session.content.received with its sequence.
+    expect(daemonB.output, "recovered content must traverse the inbound chokepoint").toMatch(
+      /"event":"session\.content\.received"/,
+    );
+    expect(daemonB.output).toMatch(/"event":"content\.recovered"/);
+
+    // And it surfaces as readable PLAINTEXT via cello_receive — not raw ciphertext around the funnel.
+    const recv = (await connB.call("cello_receive", { session_id: sessionId })) as { ok?: boolean; content?: string | null };
+    expect(recv.ok).toBe(true);
+    expect(recv.content, "B reads the exact parked plaintext it had missed").toBe(PARKED);
+  }, 120_000);
 });
