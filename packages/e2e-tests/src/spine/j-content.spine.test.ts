@@ -332,4 +332,43 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     const receivedCount = (daemonB.output.match(new RegExp(`"event":"session\\.content\\.received"[^\\n]*"${hashHex}"`, "g")) ?? []).length;
     expect(receivedCount, "the content_hash appended exactly one leaf").toBe(1);
   }, 120_000);
+
+  it("DOD-MSG-1 (ACK ladder) — a persisted delivery ACK resolves the send; the protocol acts on persisted", async () => {
+    const dirA = mkdtempSync(join(tmpdir(), "cello-ackA-"));
+    const dirB = mkdtempSync(join(tmpdir(), "cello-ackB-"));
+    dirs.push(dirA, dirB);
+    await provisionAgent(dirA, "agentA");
+    const pubB = await provisionAgent(dirB, "agentB");
+    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "ackA");
+    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "ackB");
+    daemons.push(daemonA, daemonB);
+    expect(cello(["register", "agentA", `DEV-ak-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
+    expect(cello(["register", "agentB", `DEV-ak-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    const connA = await connectMcp(dirA, "ak-A");
+    const connB = await connectMcp(dirB, "ak-B");
+    mcpConns.push(connA, connB);
+    for (const [c, n] of [[connA, "agentA"], [connB, "agentB"]] as const) {
+      expect(((await c.call("cello_start_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+    }
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok).toBe(true);
+    const sessionId = init.sessionId!;
+    expect(((await awaitP) as { type?: string }).type).toBe("new_session");
+
+    // A sends to an ONLINE B. B's unsigned, transport-authenticated `persisted` delivery ACK
+    // resolves A's awaiting-ACK timer.
+    const msg = `acked-${randomBytes(4).toString("hex")}`;
+    const hashHex = contentHashHex(Buffer.from(msg));
+    expect(((await connA.call("cello_send", { session_id: sessionId, content: msg })) as { ok?: boolean }).ok).toBe(true);
+
+    // The ladder reaches `persisted` and the sender acts on it (content.delivery.acked, level persisted).
+    const acked = await daemonA.waitForLine(new RegExp(`"event":"content\\.delivery\\.acked"[^\\n]*"contentHash":"${hashHex}"`), 12_000);
+    expect(acked, "the protocol acts on the persisted ACK").toMatch(/"level":"persisted"/);
+
+    // Because delivery was confirmed persisted, the content is NOT handed to the park backstop —
+    // the park is only for un-confirmed sends. (No content.park.deposited for this hash.)
+    expect(daemonA.output).not.toMatch(new RegExp(`"event":"content\\.park\\.deposited"[^\\n]*"contentHash":"${hashHex}"`));
+  }, 90_000);
 });

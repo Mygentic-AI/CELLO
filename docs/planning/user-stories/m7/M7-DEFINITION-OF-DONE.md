@@ -285,8 +285,12 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
 
 - **DOD-MSG-1 — Delivery ACK ladder.** Unsigned, Noise-authenticated ACK
   `received → persisted`; protocol acts on `persisted` ONLY; ACK is NEVER an input
-  to the seal / Merkle root / `last_seen_seq`. *(MSG-001 AC-001/002, SI-004)* — 🟡
-  (3a ACK round-trip in main; over the daemon path)
+  to the seal / Merkle root / `last_seen_seq`. *(MSG-001 AC-001/002, SI-004)* —
+  ✅ **PROVEN LIVE** (J-CONTENT, 2026-06-21). A→online-B: B's `persisted` delivery ACK
+  resolves A's awaiting timer (`content.delivery.acked` level `persisted`), and because
+  it is confirmed persisted the content is NOT handed to the park backstop. The ACK
+  handler (`#resolveAwaitingAck`) only clears the timer + durable entry + logs — it never
+  appends a leaf, touches the root, or advances `last_seen_seq` (verified by inspection).
 - **DOD-MSG-2 — TTF park model.** On TTF with no `persisted` ACK → park; on
   startup → flush locally-persisted un-acked content. NOT flush-on-close (no
   graceful close on lid-shut/crash). *(MSG-001 AC-003/004/005)* — 🟠 (retry_queue
