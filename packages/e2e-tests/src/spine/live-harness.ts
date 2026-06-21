@@ -519,7 +519,7 @@ export async function startDaemon(
   celloDir: string,
   directoryUrl: string,
   label: string,
-  opts: { manifestEnv?: ManifestEnv; waitForStarted?: boolean } = {},
+  opts: { manifestEnv?: ManifestEnv; waitForStarted?: boolean; extraEnv?: Record<string, string> } = {},
 ): Promise<Proc> {
   const daemon = new Proc(`daemon-${label}`, BINS.daemon, {
     CELLO_DIR: celloDir,
@@ -527,6 +527,8 @@ export async function startDaemon(
     // J-AUTH: when a manifest env is supplied, the daemon loads + verifies it and
     // turns on step-6 directory-identity verification (challengeVerifier).
     ...(opts.manifestEnv ?? {}),
+    // J-UNILATERAL: shrink the bilateral-seal wait before a close escalates to unilateral.
+    ...(opts.extraEnv ?? {}),
   });
   // The expiry case wants to observe the daemon REFUSING to start (loadAndVerify
   // throws manifest_expired); callers pass waitForStarted:false and assert the exit.

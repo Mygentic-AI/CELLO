@@ -2822,6 +2822,11 @@ export class CelloDirectoryNode {
       });
       return;
     }
+    this.#logger?.info("session.unilateral.leaves.fetched", {
+      sessionId: sessionIdHex,
+      leafCount: leafData.leaves.length,
+      correlationId,
+    });
 
     // DOD-SEAL-1: rebuild + verify the chain and compare to frame.reported_root. Rejects
     // unilateral_root_unverifiable (mismatch / bad chain) or unilateral_seal_leaf_invalid
@@ -2926,9 +2931,15 @@ export class CelloDirectoryNode {
     reportedRoot: Uint8Array,
     presentHex: string,
   ): { ok: true; recomputedRoot: Uint8Array } | { ok: false; reason: string } {
-    // (a) Rebuild the full tree and compare to the reported root.
-    const fullInputs: LeafInput[] = leaves.map((l) => ({ kind: l.kind, data: encodeStructure2(l.s2) }));
-    const recomputedRoot = merkleRoot(buildMerkleTree(fullInputs));
+    // (a) Rebuild the CLIENT-VERIFIABLE root and compare to the reported root. The client's
+    // local SessionTree hashes each leaf as its content_hash (kind "hash"), NOT as
+    // encodeStructure2(s2) — the latter is the relay/directory internal integrity root the
+    // client cannot reproduce (it lacks the relay-assigned Structure 2 fields). So the root the
+    // directory signs + the present party verifies is the content-hash root, rebuilt here from
+    // each leaf's authenticated s2.content_hash. The encodeStructure2 chain below proves those
+    // content_hashes are authentic + correctly ordered; this root is what the cert binds.
+    const contentInputs: LeafInput[] = leaves.map((l) => ({ kind: "hash" as const, data: l.s2.content_hash }));
+    const recomputedRoot = merkleRoot(buildMerkleTree(contentInputs));
     if (!bufEqual(recomputedRoot, reportedRoot)) {
       return { ok: false, reason: "unilateral_root_unverifiable" };
     }

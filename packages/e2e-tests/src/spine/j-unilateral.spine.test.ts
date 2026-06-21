@@ -76,7 +76,11 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
     dirs.push(celloDirA, celloDirB);
     await provisionAgent(celloDirA, "agentA");
     const pubB = await provisionAgent(celloDirB, "agentB");
-    const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "uniA");
+    // A's close should escalate to a unilateral seal quickly once B is gone — shrink the
+    // bilateral-wait window so the live test doesn't sit out the 30s default.
+    const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "uniA", {
+      extraEnv: { CELLO_SEAL_BILATERAL_TIMEOUT_MS: "3000" },
+    });
     const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "uniB");
     daemons.push(daemonA, daemonB);
     expect(cello(["register", "agentA", `DEV-uni-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirA }).status).toBe(0);
