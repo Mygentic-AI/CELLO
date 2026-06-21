@@ -293,8 +293,13 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
   appends a leaf, touches the root, or advances `last_seen_seq` (verified by inspection).
 - **DOD-MSG-2 — TTF park model.** On TTF with no `persisted` ACK → park; on
   startup → flush locally-persisted un-acked content. NOT flush-on-close (no
-  graceful close on lid-shut/crash). *(MSG-001 AC-003/004/005)* — 🟠 (retry_queue
-  TTF trigger + startup flush in main; the park *target* depends on 3b)
+  graceful close on lid-shut/crash). *(MSG-001 AC-003/004/005)* — ✅ **PROVEN LIVE**
+  (J-CONTENT, 2026-06-21). Both park triggers work: (a) LIVE park on a not-confirmed
+  send (TTF expiry or direct-fail → seal + deposit, increment 2); (b) STARTUP-FLUSH
+  park — a sender that recorded un-acked content then CRASHED re-parks it on restart
+  from PERSISTED session state (the per-session relay endpoint is now a `sessions`
+  column → `content.park.deposited source:startup_flush`), and the recipient recovers
+  it. Not flush-on-close — the SIGKILL-restart path is what re-parks.
 - **DOD-MSG-3 — Relay store-and-forward (durable, encrypted, recipient-keyed).**
   WAL-backed, fsync-durable, recipient-pubkey-keyed; holds CIPHERTEXT the relay
   cannot read; TTL 7d, delete-on-pickup; survives relay restart. *(MSG-001

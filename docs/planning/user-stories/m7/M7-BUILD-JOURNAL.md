@@ -2550,3 +2550,27 @@ flagged earlier) — so after a restart the flush has no endpoint to deposit to.
 
 **Current state at start:** branch `m7-rehome`. cello-client `73e4b55`, trustless `42993a1`. J-CONTENT
 6/6. Regression 21/21. Tier 1 + Tier 2 green; Tier-3 MSG-001-3b: 1/3/5/6/7 ✅, 4 core, 2 → this work.
+
+---
+
+## 2026-06-21 — DOD-MSG-2 startup-flush GREEN — crash backstop complete
+
+**DoD-ID:** DOD-MSG-2 (✅).
+
+**What was built.** Persist the per-session relay endpoint: `relay_peer_id` + `relay_addrs` columns
+on the daemon `sessions` table (guarded inline ALTER, the daemon-SQLite pattern), written when the
+relay connects. `getPersistedRelayEndpoint(sessionId)` reads it. A native `startupParkFn` in the
+daemon binary seals + deposits an un-acked awaiting entry sourced from PERSISTED state (endpoint +
+`counterparty_pubkey`), wired into the existing startup-flush (`drainAwaitingToPark`) which had the
+plumbing but no park target after a restart. cello-client `7df4cfb`.
+
+**Test (`j-content.spine.test.ts`, GREEN).** A establishes a session (endpoint persisted), records
+un-acked content (`enqueue_awaiting_content`), then CRASHES (SIGKILL); on restart the startup flush
+re-parks it from persisted state (`content.park.deposited source:startup_flush` +
+`content.park.flush.completed`); B then RECOVERS it and reads the exact content. End-to-end crash
+backstop. trustless `13c3507`. Full regression **23/23**.
+
+**State.** J-CONTENT 7/7. Tier-3 MSG-001-3b: MSG-1 ✅, MSG-2 ✅, MSG-3 ✅, MSG-5 ✅, MSG-6 ✅, MSG-7 ✅,
+MSG-4 🟡-core. REMAINING in MSG: MSG-4 full witness-then-fill reconciliation (holds for Andre's nod —
+load-bearing core receive path), MSG-8 (irreducible loss — BLOCKED on the unbuilt SESSION-004
+content-frontier). Beyond MSG: the post-recovery bilateral seal = storied CELLO-M7-UPGRADE-001.
