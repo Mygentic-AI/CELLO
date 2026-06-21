@@ -562,5 +562,6 @@ When a governance policy is active, hook additions and modifications enter a `pe
 - [[2026-05-09_1100_dashclaw-m4-competitive-review|DashClaw Competitive Review]] — mission distinction (inbound defense vs outbound governance), production pattern lists, and the two gaps (observe mode, per-peer overrides) that V3's hook mechanism closes
 - [[2026-05-21_1456_identity-as-governance-foundation|Identity as the Foundation of Governance]] — why governance with identity is a database row; the strategic frame for why V3's extensibility model is platform-appropriate
 - [[user-stories/m9/overview.md|M9 Overview]] — implementation scope; needs updating to reflect V3 architecture
+- [[2026-06-21_1600_m9-content-channel-seam-and-entry-plan|M9 Content-Channel Seam and Entry Plan]] — where this gateway's client-side calls attach to the M7 daemon content channel (`ingestReceivedContent` inbound / `sendContent` outbound), the MSG-001-3b co-design that keeps the inbound funnel unified, and the dependency gate for beginning M9
 - [[user-stories/m9/attack-corpus-reference.md|M9 Attack Corpus Reference]] — attack technique catalog; unchanged in V3
 - [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination]] — WebAuthn/2FA pattern that hook add/modify confirmation extends
