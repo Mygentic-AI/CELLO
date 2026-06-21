@@ -2043,3 +2043,53 @@ ipcCall(A, deposit, {relayAddr, recipientPubkey=B, contentHash, ciphertext}) →
 ipcCall(B, pull, {relayAddr}) → response carries the SAME ciphertext; assert the relay logs show
 `content.park.received`/`content.park.served` with CIPHERTEXT only (INV-3). That proves the daemon↔
 relay content-park transport before the send/receive-path integration (increments 2–3).
+
+---
+
+## 2026-06-21 — BEGINNING MSG-001-3b — increment 1 (daemon↔relay content-park transport)
+
+**This entry is written BEFORE coding so a compaction cannot lose the thread.** If you are a
+fresh context resuming mid-build: read this entry + the two above it (the build plan + the wire
+contracts), check `git log` / `git status` in BOTH repos, then run the J-CONTENT test to see where
+it stands.
+
+**Goal of increment 1.** Prove the daemon can DEPOSIT encrypted content into a recipient's relay
+mailbox and the recipient can PULL it back out — a direct round-trip through the REAL relay binary,
+no send/receive-path integration yet. This is DOD-MSG-3's daemon half in isolation. Increments 2–3
+(wire deposit into the send path when B is offline; wire pull into the receive path on online) +
+recovery/dedup (MSG-4/5) come after this transport is proven.
+
+**Why this increment first.** The relay side is done+tested; the unknown is the daemon↔relay
+content-park client (new code) + the auth challenge-response. Proving the round-trip in isolation
+(via IPC handlers, the same trick DOD-RETRY-1 used) de-risks everything downstream and gives a
+green checkpoint before the harder send/receive wiring.
+
+**Files (planned).**
+1. NEW `cello-client/core/daemon/src/content-park-client.ts` — the client. Model on
+   `session-relay-client.ts` (per-agent libp2p stream to the relay + CBOR framing). Two methods:
+   - `deposit(relayMultiaddr, {recipientPubkey, contentHash, sessionId, ciphertext}) → {ok,reason?}`
+   - `pull(relayMultiaddr, recipientPubkey, signChallenge) → entries[]` (handles the auth
+     challenge: relay sends nonce → sign `buildContentParkAuthMsg(nonce,recipientPubkey)` with
+     K_local → send → read count + responses → confirm).
+2. `cello-client/core/daemon/src/daemon.ts` — two IPC handlers `content_park_deposit` /
+   `content_park_pull` (like the DAEMON-003 handlers) that drive the client; the pull handler signs
+   the challenge with the recipient agent's keyProvider.
+3. NEW `trustless-cello/packages/e2e-tests/src/spine/j-content.spine.test.ts` — round-trip:
+   `ipcCall(A, content_park_deposit, {relayMultiaddr, recipientPubkey=B, contentHash, sessionId,
+   ciphertext})` → ok; `ipcCall(B, content_park_pull, {relayMultiaddr, recipientPubkey=B})` →
+   the SAME ciphertext; assert relay log has `content.park.received` + `content.park.served` and
+   NO plaintext (INV-3). Uses `cluster.relayMultiaddr` (already exposed by the harness).
+
+**Open unknowns to resolve while building (don't assume):**
+- `#authenticateCaller` exact challenge/response frame field names (read it before writing the
+  client's pull auth — the one contract not yet captured).
+- Whether the content-park client reuses the agent's existing relay node/connection or dials fresh.
+  Check `session-relay-client.ts` for the node + dial pattern.
+- Ciphertext over IPC: the IPC frames are newline-JSON; pass ciphertext as hex (like the
+  retry-queue handlers pass content as hex).
+
+**Definition of done for increment 1:** `j-content.spine.test.ts` green (deposit→pull round-trip,
+same ciphertext, relay logs ciphertext-only) + full spine regression still green + committed+pushed.
+
+**Current state at start:** branch `m7-rehome` both repos. cello-client HEAD `6c93b1a`,
+trustless-cello HEAD `9519e96`. Spine 16/16. Tier 1 + Tier 2 green. Nothing uncommitted.
