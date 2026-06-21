@@ -2093,3 +2093,29 @@ same ciphertext, relay logs ciphertext-only) + full spine regression still green
 
 **Current state at start:** branch `m7-rehome` both repos. cello-client HEAD `6c93b1a`,
 trustless-cello HEAD `9519e96`. Spine 16/16. Tier 1 + Tier 2 green. Nothing uncommitted.
+
+---
+
+## 2026-06-21 — MSG-001-3b increment 1 GREEN — daemon↔relay content-park transport
+
+**DoD-ID:** DOD-MSG-3 (daemon transport half) proven live.
+
+**What was built.** `cello-client/core/daemon/src/content-park-client.ts` (`ContentParkClient`:
+`deposit` + auth-gated `pull` over `/cello/content-park/1.0.0`, modeled on session-relay-client),
+two IPC handlers (`content_park_deposit`/`content_park_pull`) in daemon.ts, and
+`getStandingReceiverNode()` on SessionNodeManager (the open-gater node the handlers dial from).
+
+**Test.** `j-content.spine.test.ts`: A deposits ciphertext FOR B (B never connected — pure
+store-and-forward) → B pulls (proving ownership of pubB via the relay's Ed25519 auth challenge) →
+B gets the EXACT bytes A deposited + the session id; relay logs `content.park.received` (ciphertext
+only, INV-3). GREEN first run — the reverse-engineered wire contracts were accurate; no bug.
+
+**Commits.** cello-client `05c4e68` (client + handlers + accessor), trustless-cello (this test +
+journal). Daemon-side change → eventual `@cello-protocol/connect` publish (with the INT-1 fix, #19).
+
+**Next (increment 2).** Wire the deposit into the SEND path: when `cello_send` cannot deliver
+direct/relay-witness because B is offline (or the TTF timer fires with no `persisted` ACK),
+`sealToRecipient` the content and `deposit` it to the park. The retry_queue awaiting-ACK entries
+(already persisted) are the crash backstop; flush-to-park on startup (`getAwaitingSessions` is wired,
+the park target was the missing piece). Then increment 3: receive-path pull+verify+accept on online;
+then recovery (MSG-4) + dedup (MSG-5).
