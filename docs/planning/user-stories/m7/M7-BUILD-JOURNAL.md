@@ -2520,3 +2520,33 @@ root, or advances `last_seen_seq` (the SI-004 invariant, verified by inspection)
 **State.** J-CONTENT 6/6 (MSG-1 ✅, MSG-3 ✅, MSG-5 ✅, MSG-6 ✅, MSG-7 ✅, MSG-4 🟡-core). Remaining:
 MSG-4 full reconciliation (holds for Andre's nod — load-bearing core path), MSG-8 (blocked on the
 unbuilt SESSION-004 frontier), startup-flush park (relay-endpoint schema), CELLO-M7-UPGRADE-001.
+
+---
+
+## 2026-06-21 — BEGINNING MSG-2 startup-flush park (pre-build, compaction-safe)
+
+**Goal.** Complete DOD-MSG-2's crash backstop: if a sender had un-acked content recorded in the
+durable awaiting queue (onTtf → `enqueueAwaitingContent`) but CRASHED before the live park (increment
+2) deposited it, the next startup must flush those entries to the relay store-and-forward. The
+startup-flush plumbing already exists (daemon.ts ~848: `drainAwaitingToPark(sid, config.contentParkFn)`)
+but `contentParkFn` was never supplied AND the per-session relay endpoint is in-memory only (the gap
+flagged earlier) — so after a restart the flush has no endpoint to deposit to.
+
+**Build (additive, low-risk; no change to existing live paths):**
+1. PERSIST the per-session relay endpoint. Add `relay_peer_id TEXT` + `relay_addrs TEXT` (JSON array)
+   to the daemon `sessions` table (in CREATE TABLE + a guarded inline ALTER for existing DBs, the
+   daemon-SQLite pattern — NOT Flyway). Write them when the relay connects (#connectSessionRelay,
+   alongside the in-memory `entry.relayPeerId/relayAddrs` already set in 2b).
+2. `getPersistedRelayEndpoint(sessionId)` on SessionNodeManager → reads the row (the startup flush
+   runs BEFORE in-memory entries exist).
+3. Supply `config.contentParkFn` in the daemon binary: for an `AwaitingContentEntry {sessionId,
+   contentHashHex, content}`, resolve the persisted relay endpoint + the counterparty
+   (`record.counterparty_pubkey`), `sealToRecipient`, deposit via `ContentParkClient`. Same seal +
+   deposit as the live hook, just sourced from persisted state.
+4. Test (`j-content.spine.test.ts`): A↔B session (endpoint persisted) → `enqueue_awaiting_content`
+   IPC (durable awaiting entry, simulating the pre-crash state) → restart A → startup flush parks it
+   (`content.park.flush.completed` / `content.park.deposited`) → B pulls it. No need to construct a
+   real crash window; the durable entry + restart exercises the flush path directly.
+
+**Current state at start:** branch `m7-rehome`. cello-client `73e4b55`, trustless `42993a1`. J-CONTENT
+6/6. Regression 21/21. Tier 1 + Tier 2 green; Tier-3 MSG-001-3b: 1/3/5/6/7 ✅, 4 core, 2 → this work.
