@@ -371,4 +371,64 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // the park is only for un-confirmed sends. (No content.park.deposited for this hash.)
     expect(daemonA.output).not.toMatch(new RegExp(`"event":"content\\.park\\.deposited"[^\\n]*"contentHash":"${hashHex}"`));
   }, 90_000);
+
+  it("DOD-MSG-2 (startup-flush park) — a sender that crashed with un-acked content re-parks it on restart", async () => {
+    const dirA = mkdtempSync(join(tmpdir(), "cello-flushA-"));
+    const dirB = mkdtempSync(join(tmpdir(), "cello-flushB-"));
+    dirs.push(dirA, dirB);
+    await provisionAgent(dirA, "agentA");
+    const pubB = await provisionAgent(dirB, "agentB");
+    let daemonA = await startDaemon(dirA, cluster.directoryUrl, "flushA");
+    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "flushB");
+    daemons.push(daemonA, daemonB);
+    expect(cello(["register", "agentA", `DEV-fl-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
+    expect(cello(["register", "agentB", `DEV-fl-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    let connA = await connectMcp(dirA, "fl-A");
+    const connB = await connectMcp(dirB, "fl-B");
+    mcpConns.push(connA, connB);
+    for (const [c, n] of [[connA, "agentA"], [connB, "agentB"]] as const) {
+      expect(((await c.call("cello_start_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+    }
+    // Establish the session so A's relay endpoint is PERSISTED (the flush needs it after a restart).
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok).toBe(true);
+    const sessionId = init.sessionId!;
+    expect(((await awaitP) as { type?: string }).type).toBe("new_session");
+
+    // A records un-acked content in the durable awaiting queue (the state a sender is in after a
+    // TTF with no persisted ACK), then CRASHES before the live park completes.
+    const content = `crash-backstop ${randomBytes(4).toString("hex")}`;
+    const hashHex = contentHashHex(Buffer.from(content));
+    await ipcCall(dirA, "enqueue_awaiting_content", {
+      sessionId,
+      contentHash: hashHex,
+      content: Buffer.from(content).toString("hex"),
+    });
+    await connA.close();
+    mcpConns.splice(mcpConns.indexOf(connA), 1);
+    await daemonA.kill();
+    for (const f of ["daemon.sock", "daemon.lock"]) {
+      try { rmSync(join(dirA, f), { force: true }); } catch { /* best-effort */ }
+    }
+
+    // A restarts → the startup flush re-parks the un-acked content (from PERSISTED state) to the
+    // SAME relay, before the IPC socket opens.
+    daemonA = await startDaemon(dirA, cluster.directoryUrl, "flushA-restart");
+    daemons.push(daemonA);
+    const flushed = await daemonA.waitForLine(/"event":"content\.park\.deposited"[^\n]*"source":"startup_flush"/, 20_000);
+    expect(flushed, "the crashed sender re-parks its un-acked content on restart").toContain(hashHex);
+    expect(daemonA.output).toMatch(/"event":"content\.park\.flush\.completed"/);
+    expect(cluster.relay.output).toMatch(/content\.park\.received/);
+
+    // End-to-end: B recovers the re-parked content (proving the flush deposit is a real, pullable,
+    // recipient-decryptable entry — not just a log line).
+    const rec = (await ipcCall(dirB, "content_park_recover", { relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB })) as { ok?: boolean; recovered?: number };
+    expect(rec.ok).toBe(true);
+    expect(rec.recovered, "B recovers the startup-flushed message").toBeGreaterThanOrEqual(1);
+    const recv = (await connB.call("cello_receive", { session_id: sessionId })) as { ok?: boolean; content?: string | null };
+    expect(recv.ok).toBe(true);
+    expect(recv.content, "B reads the content the crashed sender re-parked").toBe(content);
+  }, 120_000);
 });
