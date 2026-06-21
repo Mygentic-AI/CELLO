@@ -141,4 +141,58 @@ describe("J-SIG — directory signaling resilience, live (DOD-SIG-1)", () => {
     // Bounded — never an unbounded hang (the per-agent signaling timeout is 10s).
     expect(elapsed, `tool call must return within a bounded window, not hang (took ${elapsed}ms)`).toBeLessThan(20_000);
   }, 90_000);
+
+  it("DOD-SIG-1 (recovery) — directory returns → daemon re-auths (no resume token) → directory_signaling back to connected", async () => {
+    // Test-order independence: the degradation test above kills the shared directory.
+    // Bring a fresh, identical directory up (same key + bootstrap URL) before we begin.
+    await cluster.restartDirectory();
+
+    const celloDir = mkdtempSync(join(tmpdir(), "cello-sig-rec-"));
+    dirs.push(celloDir);
+    await provisionAgent(celloDir, "sigB");
+    const daemon = await startDaemon(celloDir, cluster.directoryUrl, "sigB");
+    daemons.push(daemon);
+    const env = { CELLO_DIR: celloDir };
+
+    const countConnected = (): number =>
+      (daemon.output.match(/"event":"directory\.signaling\.connected"/g) ?? []).length;
+
+    // Connected baseline — the daemon has authenticated once. Wait for the connection
+    // log to FLUSH before counting: `cello status` reads live signaling state over IPC,
+    // which races ahead of the stdout log pipe (the SPINE-1 flush race).
+    cello(["login"], env);
+    const connected = await waitForSignaling(env, "connected", 12_000);
+    expect(connected.directory_signaling, `should reach connected first:\n${daemon.output}`).toBe("connected");
+    await daemon.waitForLine(/"event":"directory\.signaling\.connected"/, 12_000);
+    const connectsBeforeKill = countConnected();
+    expect(connectsBeforeKill, "should have authenticated at least once").toBeGreaterThanOrEqual(1);
+
+    // Outage: kill the directory → daemon degrades to reconnecting.
+    await cluster.directory.stop();
+    const down = await waitForSignaling(env, "reconnecting", 25_000);
+    expect(down.directory_signaling, `must degrade to reconnecting:\n${daemon.output.split("\n").slice(-30).join("\n")}`).toBe(
+      "reconnecting",
+    );
+
+    // Recovery: the directory returns on the same bootstrap URL. The daemon's resolver
+    // re-discovers it and the SignalingManager reconnects on its next backoff attempt.
+    await cluster.restartDirectory();
+    const recovered = await waitForSignaling(env, "connected", 40_000);
+    expect(
+      recovered.directory_signaling,
+      `directory_signaling must return to connected after the directory comes back:\n${daemon.output.split("\n").slice(-40).join("\n")}`,
+    ).toBe("connected");
+
+    // Full re-auth (no resume token): reconnect runs the whole handshake again, so a
+    // SECOND directory.signaling.connected is logged — not a silent resume. Poll for the
+    // flush (the status flip precedes the log line on the stdout pipe).
+    const reauthDeadline = Date.now() + 15_000;
+    while (Date.now() < reauthDeadline && countConnected() <= connectsBeforeKill) {
+      await sleep(250);
+    }
+    expect(
+      countConnected(),
+      `reconnect must perform a full re-auth (a new directory.signaling.connected):\n${daemon.output.split("\n").slice(-40).join("\n")}`,
+    ).toBeGreaterThan(connectsBeforeKill);
+  }, 120_000);
 });

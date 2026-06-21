@@ -268,7 +268,10 @@ export function psqlSpine(sql: string): string {
 export interface SpineCluster {
   tmpDir: string;
   relay: Proc;
+  /** The live directory proc. Follows restartDirectory() (getter-backed). */
   directory: Proc;
+  /** J-SIG recovery: re-spawn an identical directory on the same bootstrap URL. */
+  restartDirectory: () => Promise<Proc>;
   relayMultiaddr: string;
   directoryUrl: string; // http://127.0.0.1:<healthPort> — the daemon's CELLO_DIRECTORY_URL
   stop: () => Promise<void>;
@@ -389,8 +392,13 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
     const relayMultiaddr = `/ip4/127.0.0.1/tcp/${relayPort}/p2p/${relayPeerId}`;
 
     // ── Directory (starts FIRST now; loads the signing key we provisioned) ──
+    // The env is captured so restartDirectory() can re-spawn an IDENTICAL directory
+    // (same identity key, same transport key → same peer id, same HEALTH_PORT → same
+    // bootstrap URL the daemon polls). The libp2p listen port is tcp/0 (new on restart),
+    // but the daemon re-resolves the multiaddr via /bootstrap on each reconnect, so a
+    // fresh port is fine. This is what J-SIG's recovery half needs (directory returns).
     const healthPort = await freePort();
-    directory = new Proc("directory", BINS.directory, {
+    const directoryEnv: Record<string, string> = {
       CELLO_ENV: "local",
       DATABASE_URL,
       DEV_ENVELOPE_KEY: devEnvelopeKey,
@@ -406,7 +414,8 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
       ...(opts.directoryNodeKeyHex
         ? { CELLO_DIRECTORY_NODE_KEY_HEX: opts.directoryNodeKeyHex, NODE_ID: AUTH_DIRECTORY_NODE_ID }
         : {}),
-    });
+    };
+    directory = new Proc("directory", BINS.directory, directoryEnv);
     // BootstrapEndpoint line means /bootstrap is live — the daemon can discover us.
     await directory.waitForLine(/"adapterName":"BootstrapEndpoint"/, 30_000);
     const directoryMultiaddr = listenMultiaddr(directory, { ws: false });
@@ -427,9 +436,21 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
     await relay.waitForLine(/"adapterName":"ListenAddr"/, 20_000);
 
     const relayRef = relay;
-    const directoryRef = directory;
+    // The directory is replaceable (J-SIG recovery): currentDirectory always points at
+    // the live directory proc, so stop() and the `directory` getter follow a restart.
+    let currentDirectory = directory;
+
+    // J-SIG recovery: re-spawn an identical directory on the same bootstrap URL after a
+    // kill, so the daemon's resolver re-discovers it and reconnects. Returns the new proc.
+    const restartDirectory = async (): Promise<Proc> => {
+      const next = new Proc("directory", BINS.directory, directoryEnv);
+      await next.waitForLine(/"adapterName":"BootstrapEndpoint"/, 30_000);
+      currentDirectory = next;
+      return next;
+    };
+
     const stop = async (): Promise<void> => {
-      await directoryRef.stop();
+      await currentDirectory.stop();
       await relayRef.stop();
       try {
         rmSync(tmpDir, { recursive: true, force: true });
@@ -441,7 +462,10 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
     return {
       tmpDir,
       relay: relayRef,
-      directory: directoryRef,
+      get directory(): Proc {
+        return currentDirectory;
+      },
+      restartDirectory,
       relayMultiaddr,
       directoryUrl: `http://127.0.0.1:${healthPort}`,
       stop,

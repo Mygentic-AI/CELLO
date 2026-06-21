@@ -227,16 +227,18 @@ Source: outline Milestone Close Gate + E2E-001 AC-001–012. Mostly built/merged
   **different** directory node from the manifest, drain queued outbound ops; tool
   calls during the window return `signaling_reconnecting` + guidance (never silent,
   never hang); full re-auth on reconnect (no resume token). *(SIGNAL-001; Q5)* —
-  🟡 **DEGRADATION PROVEN LIVE** (J-SIG, 2026-06-21): kill the directory →
-  `cello status` flips `directory_signaling` to `reconnecting`, and a signaling-
-  dependent tool call (`cello_initiate_session`) returns a DISTINCT bounded reason +
-  actionable guidance — never silent, never an unbounded hang. BINARY NOTE: the
-  reason on the per-agent initiate path is `directory_signaling_timeout` (the per-agent
-  stream waits ≤10s then times out), not the DoD's example `signaling_reconnecting`;
-  both satisfy the invariant. REMAINING: the RECOVERY half — directory returns → daemon
-  re-auths (no resume token) → `directory_signaling` back to `connected` → queued ops
-  drain — needs a directory-restart harness helper (next J-SIG increment). Multi-node
-  *failover* is not modelled by the single-directory harness.
+  🟢 **DEGRADATION + RECOVERY PROVEN LIVE** (J-SIG, 2026-06-21). Degradation: kill the
+  directory → `cello status` flips `directory_signaling` to `reconnecting`, and a
+  signaling-dependent tool call (`cello_initiate_session`) returns a DISTINCT bounded
+  reason + actionable guidance — never silent, never an unbounded hang. (BINARY NOTE:
+  the reason on the per-agent initiate path is `directory_signaling_timeout` — the
+  per-agent stream waits ≤10s then times out — not the DoD's example
+  `signaling_reconnecting`; both satisfy the invariant.) Recovery: the directory returns
+  on the same bootstrap URL (harness `restartDirectory`) → the daemon re-discovers it
+  and reconnects → `directory_signaling` back to `connected` with a FULL re-auth (a
+  second `directory.signaling.connected`, no resume token). REMAINING (minor): an
+  explicit queued-op DRAIN assertion (the internal queue drain is unit-covered), and
+  multi-node *failover* (not modelled by the single-directory harness).
 - **DOD-INT-1 — Interrupted session.** Daemon stop while a session is active →
   row marked `interrupted` in SQLCipher; surfaced at next login BEFORE other ops
   with sessionId / counterparty / messageCount; `session.interrupted.detected` with

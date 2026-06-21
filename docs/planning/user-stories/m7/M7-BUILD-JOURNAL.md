@@ -1848,3 +1848,37 @@ degradation are proven live.
 back to connected → queued ops drain) needs a directory-RESTART harness helper (start the
 directory binary again on the same key/port so the daemon's resolver re-discovers it). That is
 the next J-SIG increment. Multi-node failover stays out of scope (single-directory harness).
+
+---
+
+## 2026-06-21 — J-SIG recovery GREEN (DOD-SIG-1 second increment)
+
+**DoD-ID:** DOD-SIG-1 (🟡 → 🟢 degradation + recovery proven; only explicit drain + multi-node failover remain).
+
+**What was red.** The recovery half of DOD-SIG-1 (directory returns → daemon re-auths →
+`connected`) was unproven; the harness had no way to bring a killed directory back.
+
+**What was built.** Harness `restartDirectory()`: the directory env is captured so an
+IDENTICAL directory can be re-spawned on the same identity key + transport key (stable peer id)
++ same `HEALTH_PORT` (same `/bootstrap` URL the daemon polls). The libp2p listen port is tcp/0
+(new on restart) — fine, because the daemon re-resolves the multiaddr via `/bootstrap` on each
+reconnect. `cluster.directory` is now getter-backed (`currentDirectory`) so `stop()` and the
+getter follow a restart. J-SIG recovery test: connect → kill → reconnecting → `restartDirectory`
+→ `directory_signaling` back to `connected` + a SECOND `directory.signaling.connected` (full
+re-auth, no resume token).
+
+**Snag (flush race, again).** First run: `countConnected()` returned 0 right after
+`cello status` showed connected — the IPC status read races ahead of the stdout log pipe (the
+SPINE-1 flush race). Fixed by `await daemon.waitForLine(/directory.signaling.connected/)` before
+counting, and polling for the second occurrence after recovery.
+
+**Commit.** trustless-cello (harness `restartDirectory` + J-SIG recovery test + DoD + journal).
+No binary changes.
+
+**Result.** Full spine regression GREEN: **13/13** (J-SPINE 7 + J-AUTH 4 + J-SIG 2) — the shared
+harness refactor (directory getter + restartDirectory) broke nothing.
+
+**Blockers / next.** DOD-SIG-1 remaining (minor): an explicit queued-op DRAIN assertion via the
+public surface (the internal `drain()` is unit-covered); multi-node failover stays out of scope
+(single-directory harness). Next lowest non-green line: **J-INT** (DOD-INT-1/2, DOD-RETRY-1 —
+interrupted-session + seal-interrupted; DOD-INT-1 is ✅ merged but not re-verified live post-collapse).
