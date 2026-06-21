@@ -382,6 +382,77 @@ The guardrail is a POLICY constraining WHEN override is allowed. Layered, **infe
 LLM-judge only as a last resort for a class that is neither expressible as a rule nor worth a
 human; and if used, isolated + narrow + attested.
 
+### The `warn` disposition + PII whitelist + stateless re-send (DECIDED 2026-06-21)
+
+A fourth disposition joins observe / redact / block: **`warn`** — "detected, not obviously
+malicious, *ask*." It is the legible, learning-enabled middle ground, designed first for PII
+but general to any detected-but-ambiguous category (paths, amounts, …).
+
+**PII model (replaces blanket redaction — blanket redaction failed "not onerous"; people
+share emails/phones constantly):**
+- A **PII whitelist** the operator can seed from day one, **pre-seeded from their registered
+  identity** (own email/phone known at registration) → "share my own number" works out of the
+  box, zero setup.
+- **Whitelisted value → passes silently.**
+- **Non-whitelisted PII → `warn`.**
+- The real threat is **bulk** exfiltration (a CRM dump), not individual contact-sharing — so a
+  bulk dump is just **one high-severity warning** ("about to share 50 contacts"); count drives
+  urgency (autonomous default for bulk leans redact/block, not allow). Bulk-detection is not a
+  separate feature — it is severity within `warn`.
+
+**Why the flow is re-send-based, not a synchronous prompt (the load-bearing constraint):** a
+tool call is one-shot request→response — there is NO loop inside the call to collect a choice.
+So `warn` resolves **terminally** on the `cello_send` call by returning **NOT SENT**, and the
+LLM **re-sends with a decision blob**. There is **no parked "awaiting the LLM's reply" state**
+— that state is exactly the limbo to avoid, and it cannot exist because the daemon holds
+nothing between calls (the re-send carries the full content; governance re-scans statelessly).
+
+**The API — one optional parameter, usable proactively OR reactively:** `cello_send` gains
+`governance_decisions`. An LLM that knows it's sharing a contact passes it on the FIRST call
+(no warning, no round-trip); otherwise it gets the warning and re-sends with it. With the
+pre-seeded whitelist + a default policy, the round-trip is the rare fallback, not the norm.
+
+First call, flagged → terminal NOT SENT:
+```json
+{ "ok": false, "sent": false, "reason": "governance_held",
+  "guidance": "NOT SENT. 2 item(s) need a decision. Re-send the SAME content plus
+    `governance_decisions` mapping each id to: \"redact\"|\"allow_once\"|\"allow_always\".
+    Omitted items default to redact.",
+  "flagged": [
+    { "id": "f1", "category": "pii:email", "excerpt": "…j***@acme.com…",
+      "default": "redact", "allow_always_requires": "operator_confirmation" },
+    { "id": "f2", "category": "pii:phone", "excerpt": "…555-***-4567…", "default": "redact" } ] }
+```
+Re-send (a NEW terminal call, full content again):
+```json
+cello_send({ "session_id":"...", "content":"...(same)...",
+             "governance_decisions": { "f1":"allow_once", "f2":"redact" } })
+```
+
+**Robustness:**
+- **Stateless / deterministic ids.** Flag `id`s are derived from (category + value + occurrence),
+  so the re-scan regenerates the same ids and decisions line up. Content changed → old ids
+  don't match → those items re-flag (re-warn), never mis-apply. No held-message object → no orphan.
+- **Gated decision verbs:**
+  - `redact` → always available; sends with a typed placeholder.
+  - `allow_once` → honored **only if `autonomous_override` is ON**. OFF (default) → rejected +
+    re-warned ("override is off; operator must whitelist this, here's how"); the LLM's only
+    autonomous lever is `redact`.
+  - `allow_always` → adds the value to the whitelist = a **config loosening → WebAuthn-confirmed
+    + attested** (inherently a human action). Autonomous mode degrades gracefully: behaves as
+    `allow_once` for THIS send **and** raises a whitelist-add request to the operator via the
+    ops-agent ("approve always-allowing j@acme.com?") — message flows now, persistence waits
+    for the human.
+- **Never breaks the blocking guarantee.** Every call is terminal (sent / not-sent-warned);
+  the re-send is just another terminal call. "The LLM never came back" is a non-event: the
+  message was simply never sent, the LLM was told synchronously, and (if a human was needed)
+  the ops-agent says so too.
+
+**"Never got sent, and why" travels on three channels, none depending on the LLM returning:**
+(1) the LLM — synchronous `cello_send` NOT-SENT return; (2) the operator — ops-agent alert if a
+human-needed warning lapsed; (3) the record/counterparty — block/hold = no Merkle leaf, so the
+seal's content frontier honestly shows only what was delivered (SESSION-004 receipt-not-assent).
+
 ---
 
 ## §7 — Pruned scope: decisions (the read-through)
