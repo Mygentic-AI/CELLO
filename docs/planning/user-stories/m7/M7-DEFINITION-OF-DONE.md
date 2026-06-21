@@ -382,17 +382,29 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
   Relay is the authority for relay-path (acts on onPeerConnect/Disconnect, not
   log-only; `session_liveness_query/response`); peer↔peer session node is the
   authority for direct (client acts on onPeerDisconnect + transport keepalive).
-  *(SESSION-003 AC-001..005, SI-002)* — 🟠 (daemon `#sessionLiveness` direct half
-  built + tested in-process in main; relay/directory server half PARKED at `e081efe`,
-  NOT in main)
+  *(SESSION-003 AC-001..005, SI-002)* — 🟢 **PROVEN LIVE**: the parked relay liveness
+  authority (orphaned `9832b1e`) is grafted + green (own test 5/5) — `recordRecipientAlive/Gone`
+  keyed by the recipient's authenticated standing relay stream, `gone` only on a positively-
+  observed disconnect. The directory consults it via a `get_session_liveness` directory-relay
+  RPC at seal time (NOT the directory self-observing). The daemon `#sessionLiveness` direct half
+  remains in main for the direct-authority case.
 - **DOD-LIVE-2 — The ABSENT gate.** `gone → ABSENT`, `alive → DELIVERED`,
   `unknown → DELIVERED` (fail-safe). Alive-but-silent (busy) is NEVER sealed ABSENT;
   ABSENT requires a POSITIVE connection-gone observation; relay-path ABSENT must come
-  from the relay, not self-asserted. *(SESSION-003 AC-006..010, SI-001/003/004)* — ❌
-  (the seal-ABSENT gate is dead-stack-homed; re-home onto daemon seal path)
+  from the relay, not self-asserted. *(SESSION-003 AC-006..010, SI-001/003/004)* — 🟢
+  **PROVEN LIVE** (J-UNILATERAL DOD-LIVE-2, both cases): kill B → relay observes the
+  disconnect → directory queries relay → ABSENT; B alive-but-silent → DELIVERED, never ABSENT.
+  The seal ALWAYS completes (timeout-driven); liveness only colours the attestation
+  (`session.unilateral.attestation` + `notarized` carry `attestation:ABSENT|DELIVERED`).
+  KNOWN LIMITATION: `attestation_mode` is carried in the cert but NOT bound in the seal TBS,
+  so a channel attacker could flip ABSENT↔DELIVERED in the delivered copy without breaking the
+  signature; the authoritative record is the directory's server-side notarization. Tamper-binding
+  the attestation in the TBS is a DOD-LEG hardening follow-on.
 - **DOD-LIVE-3 — No agent heartbeat.** Liveness is connection/node-level only;
   `last_seen_seq` is the sole engagement signal; DELIVERED is never promoted to
-  CLEAN/FLAGGED by a liveness signal. *(SESSION-003 AC-011)* — 🟡
+  CLEAN/FLAGGED by a liveness signal. *(SESSION-003 AC-011)* — 🟢 satisfied by construction:
+  the authority is the relay's standing-connection observation / the peer↔peer node's
+  onPeerDisconnect (connection-level), never an agent-level heartbeat.
 
 ### Seal certificate legibility (SESSION-004)
 

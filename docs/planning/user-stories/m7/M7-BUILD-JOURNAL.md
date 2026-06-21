@@ -2930,3 +2930,8 @@ event + DB); tamper-binding the attestation in the TBS is a DOD-LEG hardening fo
 
 Full regression running to confirm no journey regressed (was 24/24; expect 26/26 with the 2 new
 DOD-LIVE cases).
+
+**Regression confirmed: spine 26/26** (J-SPINE 7 + J-AUTH 4 + J-SIG 2 + J-INT 3 + J-CONTENT 7 +
+J-UNILATERAL 3). DOD-LIVE-1/2/3 green; zero regressions from the relay graft + attestation gate.
+DoD updated: DOD-LIVE-1 🟢, DOD-LIVE-2 🟢 (with the attestation-not-TBS-bound limitation noted),
+DOD-LIVE-3 🟢.
