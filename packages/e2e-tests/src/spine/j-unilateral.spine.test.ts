@@ -69,6 +69,50 @@ afterAll(async () => {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Bring two agents to a live session with one message exchanged (A msg + A SEAL ctrl leaf at
+ * close). Returns the handles the seal cases need. daemonA gets a short bilateral-wait so its
+ * close escalates to a unilateral seal quickly.
+ */
+async function setupAtoBSession(label: string): Promise<{
+  connA: McpConn; connB: McpConn; daemonA: Proc; daemonB: Proc; sessionIdA: string; pubB: string;
+}> {
+  const celloDirA = mkdtempSync(join(tmpdir(), `cello-${label}A-`));
+  const celloDirB = mkdtempSync(join(tmpdir(), `cello-${label}B-`));
+  dirs.push(celloDirA, celloDirB);
+  await provisionAgent(celloDirA, "agentA");
+  const pubB = await provisionAgent(celloDirB, "agentB");
+  const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, `${label}A`, {
+    extraEnv: { CELLO_SEAL_BILATERAL_TIMEOUT_MS: "3000" },
+  });
+  const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, `${label}B`);
+  daemons.push(daemonA, daemonB);
+  expect(cello(["register", "agentA", `DEV-${label}-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirA }).status).toBe(0);
+  expect(cello(["register", "agentB", `DEV-${label}-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirB }).status).toBe(0);
+
+  const connA = await connectMcp(celloDirA, `${label}-A`);
+  mcpConns.push(connA);
+  const connB = await connectMcp(celloDirB, `${label}-B`);
+  mcpConns.push(connB);
+  expect(((await connA.call("cello_start_agent", { name: "agentA" })) as { ok?: boolean }).ok).toBe(true);
+  expect(((await connA.call("cello_use_agent", { name: "agentA" })) as { ok?: boolean }).ok).toBe(true);
+  expect(((await connB.call("cello_start_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+  expect(((await connB.call("cello_use_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+
+  const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+  const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+  expect(init.ok, `cello_initiate_session failed: ${JSON.stringify(init)}`).toBe(true);
+  const sessionIdA = init.sessionId!;
+  const inbound = (await awaitP) as { type?: string; session_id?: string };
+  expect(inbound.type).toBe("new_session");
+  const sessionIdB = inbound.session_id!;
+
+  expect(((await connA.call("cello_send", { session_id: sessionIdA, content: `${label} sealed message` })) as { ok?: boolean }).ok).toBe(true);
+  expect(((await connB.call("cello_receive", { session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`${label} sealed message`);
+
+  return { connA, connB, daemonA, daemonB, sessionIdA, pubB };
+}
+
 describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL-1/2/3)", () => {
   it("A seals while B is GONE → directory rebuilds+verifies the root, FROST-notarizes with B ABSENT, A gets a verifiable unilateral certificate", async () => {
     const celloDirA = mkdtempSync(join(tmpdir(), "cello-uniA-"));
@@ -153,5 +197,62 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
     // SI-002 (D-2): B (the absent party, pubkey ${pubB}) is NEVER a signer — the notarized
     // event records it ABSENT, and the directory never delivered it seal_verified.
     expect(cluster.directory.output, `the notarized event must record B (${pubB.slice(0, 16)}…) ABSENT:${diag}`).toMatch(/absent/i);
+  }, 120_000);
+});
+
+describe("J-UNILATERAL — DOD-LIVE-2: the ABSENT gate (gone→ABSENT vs alive-but-silent→DELIVERED)", () => {
+  // gone → ABSENT. B is killed; the relay (the session-path liveness authority) POSITIVELY
+  // observes B's standing-connection drop. At A's unilateral close the directory queries the
+  // relay, gets 'gone', and records the counterparty ABSENT — never self-asserted by A.
+  it("B GONE (relay observed the disconnect) → counterparty recorded ABSENT", async () => {
+    const { connA, daemonA, daemonB, sessionIdA, pubB } = await setupAtoBSession("liveabs");
+
+    // B crashes (SIGKILL). Its standing relay stream drops.
+    await daemonB.kill();
+    // The seal's ABSENT verdict must come from a POSITIVE relay observation — wait for the
+    // relay to log the gone transition BEFORE A closes (otherwise the relay still reads 'alive').
+    await cluster.relay.waitForLine(/"liveness":"gone"/, 30_000);
+
+    const close = (await connA.call("cello_close_session", { session_id: sessionIdA })) as {
+      ok?: boolean; sealed_root?: string; seal_type?: string; reason?: string;
+    };
+    const diag =
+      `\nclose: ${JSON.stringify(close)}` +
+      `\n--- directory attestation/notarized ---\n${cluster.directory.output.split("\n").filter((l) => /attestation|notarized|liveness/i.test(l)).slice(-12).join("\n")}` +
+      `\n--- relay liveness ---\n${cluster.relay.output.split("\n").filter((l) => /liveness/i.test(l)).slice(-8).join("\n")}`;
+
+    expect(close.ok, `A unilateral close must succeed:${diag}`).toBe(true);
+    expect(close.seal_type, `seal_type must be unilateral:${diag}`).toBe("unilateral");
+    // The directory consulted the relay and got 'gone' → ABSENT (not self-asserted).
+    expect(cluster.directory.output, `directory must record liveness gone:${diag}`).toMatch(/"event":"session\.unilateral\.attestation"[^}]*"liveness":"gone"/);
+    expect(cluster.directory.output, `attestation must be ABSENT:${diag}`).toMatch(/"event":"session\.unilateral\.attestation"[^}]*"attestation":"ABSENT"/);
+    expect(cluster.directory.output, `notarized must record ABSENT:${diag}`).toMatch(/"event":"session\.unilateral\.notarized"[^}]*"attestation":"ABSENT"/);
+    // The relay positively observed B (${pubB}) gone — never fabricated.
+    expect(cluster.relay.output, `relay must have observed B gone:${diag}`).toMatch(/"liveness":"gone"/);
+  }, 120_000);
+
+  // alive-but-silent → DELIVERED. B stays up but never co-closes. At A's unilateral close the
+  // relay still holds B's standing connection → 'alive' → the counterparty is recorded
+  // DELIVERED, NOT ABSENT. The seal still completes (timeout-driven); liveness only colours it.
+  it("B ALIVE but silent (never closes) → counterparty recorded DELIVERED, never ABSENT", async () => {
+    const { connA, daemonB, sessionIdA, pubB } = await setupAtoBSession("livedel");
+
+    // B is alive the whole time — do NOT kill it. A closes; with no co-close it escalates to a
+    // unilateral seal after the bilateral wait. The relay reports B alive → DELIVERED.
+    expect(daemonB.output, "B daemon should be running (not killed)").toMatch(/daemon\.started/);
+
+    const close = (await connA.call("cello_close_session", { session_id: sessionIdA })) as {
+      ok?: boolean; sealed_root?: string; seal_type?: string; reason?: string;
+    };
+    const diag =
+      `\nclose: ${JSON.stringify(close)}` +
+      `\n--- directory attestation/notarized ---\n${cluster.directory.output.split("\n").filter((l) => /attestation|notarized|liveness/i.test(l)).slice(-12).join("\n")}`;
+
+    expect(close.ok, `A unilateral close must succeed (seal completes even when B is alive):${diag}`).toBe(true);
+    expect(close.seal_type, `seal_type must be unilateral:${diag}`).toBe("unilateral");
+    // B is alive (or at worst unknown) — the directory must NOT record ABSENT (DOD-LIVE-2:
+    // busy-but-alive is NEVER sealed ABSENT on silence). Attestation is DELIVERED.
+    expect(cluster.directory.output, `attestation must be DELIVERED for an alive/silent B:${diag}`).toMatch(/"event":"session\.unilateral\.notarized"[^}]*"attestation":"DELIVERED"/);
+    expect(cluster.directory.output, `this session's notarization must not mark B ABSENT:${diag}`).not.toMatch(new RegExp(`"event":"session\\.unilateral\\.notarized"[^}]*"absentPartyPubkey":"${pubB.slice(0, 8)}[^}]*"attestation":"ABSENT"`));
   }, 120_000);
 });
