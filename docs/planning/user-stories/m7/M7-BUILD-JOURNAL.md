@@ -2301,3 +2301,52 @@ the pulled content (proving it traversed the funnel) + plaintext via `cello_rece
 
 **State.** Branch `m7-rehome`. cello-client `35f8c47`, trustless `e53fc88` (+ this). Spine 18/18.
 Tier 1 + Tier 2 green; Tier 3 MSG-001-3b increments 1+2 green; increment 3 next.
+
+---
+
+## 2026-06-21 — Increment 3 (receive/recovery) — pieces confirmed + a design tension to resolve
+
+The send side (increments 1+2) is GREEN. Increment 3 is the receive/recovery path. Mapping it:
+
+**The pieces all exist.**
+- Pull: `ContentParkClient.pull` (built, increment 1).
+- Decrypt IN-DAEMON: `KeyProvider.openContentSeal(blob)` — already on the interface; FileKeyProvider
+  implements it via `openSealed(#seed, blob)`. No seed exposure. (Resolves the earlier open question.)
+- Route through the funnel: `ingestReceivedContent` (public; the M9-locked single inbound chokepoint).
+- Pull TRIGGER: the relay sends `content_park_notify` to a recipient with parked content on reconnect
+  (session-relay-client.ts:274 notes it's handled by the relay-stream watcher) — that is B's cue to pull.
+
+**THE DESIGN TENSION (needs a decision before building increment 3).**
+`ingestReceivedContent` REJECTS any session whose status != 'active' ("session_not_active",
+session-node-manager.ts:1548) — a frozen/sealed/interrupted transcript must not take a late leaf.
+BUT the realistic recovery scenario is: B was OFFLINE (so A parked) → B's daemon was down → on B's
+restart its session is marked **interrupted** (DOD-INT-1) → B reconnects, gets `content_park_notify`,
+pulls the parked content → and `ingestReceivedContent` would REJECT it because the session is
+'interrupted', not 'active'. So recovered content cannot land via the funnel for the exact case that
+produced it. The two features (interrupted-session detection; recovery-via-park) collide here.
+
+**Options:**
+- **D1: content-level offline only.** Recovery targets a session that stayed ACTIVE — i.e. "offline"
+  means the direct content connection failed while B's daemon kept running + the session stayed
+  active (a transient content-path failure, the relay-mode seam). Then `ingestReceivedContent`'s
+  active-gate is fine as-is. Clean, but it does NOT cover the daemon-restart case (which interrupts).
+- **D2: allow recovery into a non-sealed interrupted session.** Extend the gate: a leaf may be
+  ingested into an 'interrupted' (but NOT 'sealed'/'seal_interrupted_pending') session when it is a
+  RECOVERY of an already-witnessed hash (the sequence the relay assigned pre-interruption). This
+  covers the daemon-restart case but loosens the "interrupted transcript is frozen" invariant — needs
+  care that it only accepts hashes ≤ the interruption frontier, never new leaves.
+- **D3: recovery reactivates.** Pulling outstanding parked content as part of resuming a session
+  transitions it interrupted→active first (a deliberate "resume", not a silent ingest), then ingests.
+
+**My lean: D2, scoped tightly** (accept a recovered, already-witnessed hash into an interrupted
+session; reject anything sealed; never append beyond the witnessed frontier) — it covers the real
+case (daemon restart) and matches DOD-MSG-4's "recovery not desync, accept at the assigned sequence."
+But it touches the frozen-transcript invariant, so it is Andre's call, like the R1 fork was.
+
+**Everything else for increment 3 is mechanical once the gate decision is made:** a daemon
+pull→openContentSeal→ingestReceivedContent orchestration (triggered by `content_park_notify` or an
+IPC handler for the test), the dedup-aware leaf append (DOD-MSG-4/5; hinges on whether `onLeafDeliver`
+already recorded the leaf — to verify during build), and the M9 single-funnel AC test.
+
+**State.** Branch `m7-rehome`. cello-client `35f8c47`, trustless `f674121`+this. Spine 18/18. Send
+side (1+2) green; increment 3 blocked on the D1/D2/D3 gate decision.
