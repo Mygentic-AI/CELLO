@@ -2935,3 +2935,81 @@ DOD-LIVE cases).
 J-UNILATERAL 3). DOD-LIVE-1/2/3 green; zero regressions from the relay graft + attestation gate.
 DoD updated: DOD-LIVE-1 🟢, DOD-LIVE-2 🟢 (with the attestation-not-TBS-bound limitation noted),
 DOD-LIVE-3 🟢.
+
+---
+
+## 2026-06-21 — COMPACTION HANDOFF → J-LEGIBILITY (DOD-LEG-1..4). RUN AUTONOMOUSLY OVERNIGHT.
+
+Compacting at a clean boundary: J-UNILATERAL's live-testable scope is GREEN (DOD-SEAL-1/2/3 +
+DOD-LIVE-1/2/3), spine 26/26, both repos pushed. Andre approved starting **J-LEGIBILITY** and is
+asleep — **run autonomously through the night** (overnight + milestone + dev/staging = act without
+asking; make reasonable documented choices on forks, don't stop for routine decisions; flag genuine
+design forks in this journal for morning review but keep moving on a sensible default).
+
+### STATE AT HANDOFF
+Branch `m7-rehome` BOTH repos. trustless `3f5c4f5`(+this), cello-client `6df097f`. **Spine 26/26**
+(J-SPINE 7 + J-AUTH 4 + J-SIG 2 + J-INT 3 + J-CONTENT 7 + J-UNILATERAL 3). Run all:
+`cd packages/e2e-tests && pnpm --filter @cello-protocol/e2e-tests test:spine` (needs Docker + both
+repos built via `tsc --build`/typecheck). Single-worker foreground:
+`npx vitest run --config vitest.spine.config.ts --pool=threads --poolOptions.threads.maxThreads=1 --poolOptions.threads.minThreads=1 src/spine/<file>`.
+
+### THE JOURNEY — J-LEGIBILITY (verification harness journey 7); story CELLO-M7-SESSION-004.yaml
+Make the seal certificate honest + legible. Four first-class machine-readable properties on the
+**BILATERAL** `session_sealed` cert (NOT the unilateral cert — though they share derivation):
+- **DOD-LEG-1** — receipt-not-assent: `legibility.attests:'receipt'`, `implies_assent:false`,
+  plain `disclaimer`; NO field parseable as agreement. *(AC-001, SI-001)*
+- **DOD-LEG-2** — per-party content frontier: `content_frontier_seq` (max signed `last_seen_seq`
+  for that party) + `last_authored_seq`, derived ONLY from that party's signed leaves; client
+  re-derives + rejects `certificate_frontier_unverifiable` on an inflated frontier. *(AC-002/005, SI-002)*
+- **DOD-LEG-3** — live/recovered/absent marker: `attestation_mode` per party, exactly one of the
+  three. F implements 'live' (bilateral). 'absent' is populated by SESSION-002 (unilateral),
+  'recovered' by the upgrade (Workstream C). *(AC-003)*
+- **DOD-LEG-4** — final-message-answered: highest-seq message leaf → `final_message{sender_pubkey,
+  seq, answered}`; the malicious tail ("…you agreed to send me $1000") reads `answered:false`,
+  delivered-but-unanswered, never agreed. *(AC-004/006/007, SI-001)*
+
+### HOW TO START (concrete)
+1. **Read the story** `CELLO-M7-SESSION-004.yaml` (done this session — it's the spec; re-skim the
+   EARS + AC-006 headline). The legibility object schema is in implementation_notes (the
+   `legibility: {...}` literal) — protocol-types `SessionSealed`.
+2. **GRAFT the parked directory derivation** — like DOD-LIVE. The parked code is in commits
+   `04e3dea..f466946` (ancestors of `f466946`, NOT in HEAD): NEW `packages/directory/src/seal-legibility.ts`
+   (~245 LoC) + `directory-node.ts`(+112, processSeal wiring) + `directory-frames.ts`(+44) +
+   `directory-types.ts`(+45) + 3 tests (`m7-session-004-legibility.test.ts`,
+   `m7-session-004-processseal.test.ts`, e2e `m7-session-004-legibility-e2e.test.ts`). Try
+   `git cherry-pick 04e3dea..f466946`; directory-node.ts WILL conflict (heavy SESSION-002/DOD-LIVE
+   edits) — resolve by keeping BOTH (my unilateral/liveness code + the legibility derivation in the
+   BILATERAL processSeal path). For new files, `git show f466946:<path>` is the clean source.
+   ASSUME CODE EXISTS, verify, adapt.
+3. **Client/daemon surfacing** — STACK CORRECTION (story Context, READ IT): the parked client half
+   is on the DEAD seal-manager.ts/seal-legibility-client.ts (legacy CelloClient, never runs). Per
+   Option A, surface the legibility on the **DAEMON seal path** (the session_sealed listener in
+   daemon.ts ~registerSessionSealedListener / the transcript read surface), NOT seal-manager.ts.
+   The daemon persists the legibility with the sealed record (client-side SQLite, inline idempotent
+   ALTER TABLE — NOT Flyway) and re-derives content_frontier_seq from its local leaves.
+4. **Write the live J-LEGIBILITY test** (`j-legibility.spine.test.ts`): A+B BILATERAL session; A
+   sends a MALICIOUS-TAIL final message B never acks (B's last_seen_seq behind it); BOTH seal
+   (SPINE-7 bilateral path) → the session_sealed cert carries legibility → B's daemon surfaces it →
+   assert AC-006's four observables: implies_assent:false; per-party content_frontier_seq; B's
+   frontier EXCLUDES A's tail; final_message.answered:false. Then AC-007's four interruption cases.
+5. DISCIPLINE: anchor to the BINARY (no createDirectoryNode/session-fixture in the spine test),
+   red-first where it makes sense, commit constantly, push `m7-rehome`, FULL regression after any
+   load-bearing change (the graft touches processSeal — SPINE-7's bilateral path — so regress hard),
+   reviewers only as subagents, 30-min drift checks keep firing.
+
+### KEY RECONCILIATION (likely fork — decide + document)
+DOD-LEG-3's `attestation_mode` is **3-valued per-party** (live|recovered|absent). My SESSION-002
+unilateral attestation is **2-valued** (ABSENT|DELIVERED) on the UNILATERAL cert. These are DIFFERENT
+certs (bilateral session_sealed vs unilateral seal_unilateral_confirmed) and DIFFERENT field sets.
+F's legibility is on the BILATERAL cert; the unilateral cert's attestation_mode (ABSENT/DELIVERED)
+already exists from SESSION-002. Reconcile: the bilateral legibility uses live|recovered|absent;
+the unilateral path already sets ABSENT for the absent party (DOD-LEG-3's 'absent' value). Map
+DELIVERED→ (probably 'live' or a distinct state) when surfacing — DECIDE during the build, document here.
+
+### DEFERRED LEDGER (unchanged, still deferred ≠ dropped) — see prior COMPACTION HANDOFF entry
+J-UNILATERAL open tails: SI-003 channel-swap (test-reach/MITM), forged-root reject (test-reach),
+absent-party AC-010 (needs counterparty-primary distribution — design), attestation-mode TBS-binding
+(touches the shared seal_verified→FROST path; security hardening follow-on). MSG-4 (needs Andre's
+nod), MSG-8 (blocked on SESSION-004 frontier — UNBLOCKS once DOD-LEG-2 lands!), UPGRADE-001 (storied),
+connect publish (user-gated, task #19), AUTH-2 poll (task #16). NOTE: **DOD-MSG-8 becomes unblocked
+when DOD-LEG-2's content frontier lands** — revisit it after J-LEGIBILITY.
