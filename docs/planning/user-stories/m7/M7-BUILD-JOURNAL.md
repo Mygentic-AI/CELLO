@@ -2163,3 +2163,52 @@ and `ContentParkClient` are reusable as-is.
 
 **State.** Branch `m7-rehome` both repos. cello-client `05c4e68`, trustless-cello `b435f0a`. Spine
 17/17. Tier 1 + Tier 2 green; Tier 3 MSG-001-3b transport (increment 1) green.
+
+---
+
+## 2026-06-21 — Increment 3 — LOCKED AC: unified inbound funnel (M9 seam)
+
+Input from the M9 (security-pipeline) planning thread, agreed and recorded here so it drives
+increment 3 regardless of who builds it. (Full Q&A: /tmp/m9-seam-questions-for-3b-coder.md at the
+time; the load-bearing part is below.)
+
+**Context.** M9's inbound security layers (sanitization, injection scan) hook at the daemon's
+single inbound chokepoint, `ingestReceivedContent` (session-node-manager.ts:1548) — the public
+method the DIRECT receive path already uses (`#handleContentStream` :1769 calls it). It does the
+`content_hash` cross-check (DOD-MSG-7 tamper gate), the not-active rejection, the leaf/sequence
+assignment, and the push into `#receivedContent` (what `cello_receive` drains). If recovered/parked
+content reached the agent WITHOUT passing through it, a peer could park a poisoned message that B
+pulls and receives UNSCANNED.
+
+**LOCKED AC for increment 3 (DOD-MSG-3/4 receive path).** The park PULL path MUST decrypt INSIDE
+the daemon and route the plaintext back through `ingestReceivedContent` — the SAME funnel as direct
+receive — NOT hand ciphertext to the agent to decrypt itself. Concretely:
+`pull → openSealed (in-daemon) → ingestReceivedContent(plaintext, contentHash, correlationId)` →
+lands in `#receivedContent` at the canonical sequence → surfaces via `cello_receive`. This is
+already what DOD-MSG-4 wants ("pull → openSealed → verify content_hash → accept at the assigned
+sequence → deliver"); the AC only pins HOW it delivers — through the funnel, not around it.
+
+**Test (add to `j-content.spine.test.ts`, increment 3):** a parked message, once pulled, is
+observable at the same inbound chokepoint as a direct message BEFORE the agent sees it — assert B's
+daemon logs `session.content.received` for that content_hash (proving it traversed
+`ingestReceivedContent`) AND the plaintext surfaces via `cello_receive` (i.e. it did NOT arrive as
+raw ciphertext around the funnel). That single assertion secures the M9 inbound seam.
+
+**Required refinement (mine, committed).** `ingestReceivedContent` → `appendSessionLeaf` currently
+ALWAYS appends a new leaf (no content_hash dedup). The recovery case (hash already witnessed via the
+relay, content arrives later via park) must accept at the ALREADY-ASSIGNED sequence, not double-
+append. Make the leaf-assignment dedup-aware ("append if new, else reconcile to the existing
+index") — the chokepoint (scan/cross-check/buffer) stays unified; only the append becomes
+conditional. This IS the DOD-MSG-4/5 dedup work, now with a named call site.
+
+**Boundary accounting (confirmed with M9).** Content paths crossing the daemon: TWO inbound (direct
+stream; park pull → to be routed through the funnel above) and ONE outbound plaintext funnel
+(`sendContent`; the park DEPOSIT is a post-`sendContent` egress carrying ALREADY-SEALED ciphertext,
+so it needs no separate egress scan). `content_delivery_ack` is control, not content. The inbound
+fail-open/fail-closed policy hook (M9) also lands at `ingestReceivedContent` — one place, inbound.
+
+**Relay-endpoint persistence (re-confirmed scope).** The in-memory-only endpoint gap bites the
+OUTBOUND startup-flush only (a restarted sender needs to know where to deposit → schema work). The
+INBOUND pull uses B's live per-agent relay connection + the relay's reconnect notify, so it does NOT
+need the per-session endpoint persisted — separate, lighter. Confirm A and B target the SAME relay
+(the session's assigned relay; holds in the single-relay-per-region model).
