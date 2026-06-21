@@ -280,4 +280,56 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(recv.ok).toBe(true);
     expect(recv.content, "session alive — the honest message is readable").toBe(honest.toString("utf8"));
   }, 120_000);
+
+  it("DOD-MSG-5 (dedup) — a message arriving BOTH directly and via park yields exactly ONE leaf", async () => {
+    const dirA = mkdtempSync(join(tmpdir(), "cello-dedupA-"));
+    const dirB = mkdtempSync(join(tmpdir(), "cello-dedupB-"));
+    dirs.push(dirA, dirB);
+    await provisionAgent(dirA, "agentA");
+    const pubB = await provisionAgent(dirB, "agentB");
+    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "dedupA");
+    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "dedupB");
+    daemons.push(daemonA, daemonB);
+    expect(cello(["register", "agentA", `DEV-dd-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
+    expect(cello(["register", "agentB", `DEV-dd-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    const connA = await connectMcp(dirA, "dd-A");
+    const connB = await connectMcp(dirB, "dd-B");
+    mcpConns.push(connA, connB);
+    for (const [c, n] of [[connA, "agentA"], [connB, "agentB"]] as const) {
+      expect(((await c.call("cello_start_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+    }
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok).toBe(true);
+    const sessionId = init.sessionId!;
+    expect(((await awaitP) as { type?: string }).type).toBe("new_session");
+
+    // A delivers the message DIRECTLY → B appends it as leaf 0.
+    const msg = `dup-me-${randomBytes(4).toString("hex")}`;
+    const msgBytes = Buffer.from(msg);
+    const hashHex = contentHashHex(msgBytes);
+    expect(((await connA.call("cello_send", { session_id: sessionId, content: msg })) as { ok?: boolean }).ok).toBe(true);
+    const firstReceive = await daemonB.waitForLine(new RegExp(`"event":"session\\.content\\.received"[^\\n]*"contentHashHex":"${hashHex}"`), 15_000);
+    expect(firstReceive).toMatch(/"sequenceNumber":0/);
+
+    // Now the SAME message also shows up via the relay park (the direct+park overlap). B recovers it.
+    await ipcCall(dirA, "content_park_deposit", {
+      relayMultiaddr: cluster.relayMultiaddr,
+      recipientPubkey: pubB,
+      contentHash: hashHex,
+      sessionId,
+      ciphertext: Buffer.from(sealToRecipient(Buffer.from(pubB, "hex"), msgBytes)).toString("hex"),
+    });
+    const rec = (await ipcCall(dirB, "content_park_recover", { relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB })) as { ok?: boolean; pulled?: number };
+    expect(rec.ok).toBe(true);
+    expect(rec.pulled).toBe(1);
+
+    // DEDUP: the duplicate is recognized at the EXISTING sequence — NOT appended as a second leaf.
+    const dedup = await daemonB.waitForLine(new RegExp(`"event":"session\\.content\\.deduplicated"[^\\n]*"contentHashHex":"${hashHex}"`), 10_000);
+    expect(dedup).toMatch(/"sequenceNumber":0/);
+    // Exactly ONE leaf for this content_hash: only one session.content.received (the direct one).
+    const receivedCount = (daemonB.output.match(new RegExp(`"event":"session\\.content\\.received"[^\\n]*"${hashHex}"`, "g")) ?? []).length;
+    expect(receivedCount, "the content_hash appended exactly one leaf").toBe(1);
+  }, 120_000);
 });
