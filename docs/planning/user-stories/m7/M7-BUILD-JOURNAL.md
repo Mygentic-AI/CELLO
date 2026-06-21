@@ -2401,3 +2401,51 @@ plaintext surfaces via `cello_receive` at the witnessed sequence having traverse
 transcript.
 
 **State.** Branch `m7-rehome`. cello-client `35f8c47`, trustless `c777611`+this. Spine 18/18.
+
+---
+
+## 2026-06-21 — MSG-001-3b increment 3 GREEN — offline recovery through the inbound funnel
+
+**DoD-IDs:** DOD-MSG-3 (recover half) + DOD-MSG-4 (recovery-not-desync, core) proven live. The
+postmortem's central gap — a message surviving the recipient being offline without desync — is now
+functionally closed end-to-end.
+
+**What was built.**
+- `ingestReceivedContent` gate: freezes the transcript ONLY for COMMITTED states (`sealed` /
+  `seal_interrupted_pending`), allowing content into an `active` OR `interrupted` session. Rationale:
+  a merely-interrupted session's root was never committed/signed, so completing its (incomplete)
+  transcript before the bilateral seal is correct — not a frozen-transcript violation.
+- `content_park_recover` IPC handler (daemon.ts): pull parked entries → `openContentSeal` IN-DAEMON
+  (relay never sees plaintext) → route plaintext through `ingestReceivedContent` (the M9 single
+  inbound chokepoint) → `content.recovered`. cello-client `27b8372`.
+
+**Test (`j-content.spine.test.ts`, GREEN):** A↔B, A delivers msg1 (B's transcript = [msg1]); B
+CRASHES (SIGKILL — real lid-shut/offline); A sends msg2 → direct fails → auto-park (increment 2); B
+RESTARTS (session → interrupted, source daemon_restart); B `content_park_recover` → pulls + unseals +
+ingests msg2 → `session.content.received` (M9 funnel) + `content.recovered`; B's `cello_receive`
+returns the EXACT parked plaintext. trustless `039e356`. Full regression **19/19**.
+
+**HONEST REFINEMENT vs the content-fill model I described to Andre.** Empirically `onLeafDeliver`
+(session-node-manager.ts:693) is a NO-OP log today (the comment defers canonical-sequence
+reconciliation to this work). So B does NOT already hold the witnessed leaf when it recovers — there
+is nothing to "fill content into." Recovery therefore APPENDS the missing message, and B's root GROWS
+to incorporate the recovered tail. This still meets Andre's goal exactly (B completes its transcript,
+reads the message, can then bilaterally seal; NO resumption, NO re-accept; the session stays
+interrupted) — but the "no root change" property I claimed does not hold, because B's transcript was
+genuinely INCOMPLETE (not frozen-final), and recovery converges B's root to the canonical/complete
+one before any seal commitment. For the real case this is sound: B was online + receiving until it
+crashed, so it only ever misses the TAIL, and appending the parked tail in order reproduces the
+counterparty's exact tree (matching leafCount + root → the bilateral seal will agree).
+
+**Remaining (the harder GENERAL case, not the core):**
+- The full leaf_deliver reconciliation: make `onLeafDeliver` place the witnessed leaf in B's tree on
+  arrival (so B's root tracks canonical even before content), with content-fill + dedup so a message
+  arriving BOTH directly and via witness/park counts once (DOD-MSG-5). Only needed beyond the
+  missed-tail case.
+- DOD-MSG-7 (desync ONLY on content_hash tamper — the cross-check already rejects mismatches; needs
+  the assertion that absence/recovery keep the session alive). DOD-MSG-8 (irreducible loss).
+- The bilateral seal AFTER recovery (B seals over the completed transcript) = the storied
+  CELLO-M7-UPGRADE-001 (its precondition — content possession — is now satisfiable).
+
+**State.** Branch `m7-rehome`. cello-client `27b8372`, trustless `039e356`+this. Spine 19/19. Tier 1
++ Tier 2 green; Tier 3 MSG-001-3b transport + send-park + recover (core) green.
