@@ -1926,3 +1926,40 @@ publish to reach operators (the live test uses the local build). Tracked for the
 **Blockers / next.** DOD-INT-2 (seal-interrupted bilateral flow — remaining party seals solo at
 next contact) + DOD-RETRY-1 (retry queue + nonce dedup survive a real restart) are the remaining
 J-INT lines. Then Tier 3 (DOD-MSG-* content delivery — the big one, MSG-001-3b).
+
+---
+
+## 2026-06-21 — J-INT COMPLETE — DOD-INT-2 + DOD-RETRY-1 GREEN (2 more real bugs)
+
+**DoD-IDs:** DOD-INT-2 (🟡 → ✅), DOD-RETRY-1 (✅ → survival proven live). J-INT now 3/3.
+
+**DOD-RETRY-1 (retry/nonce survival).** New harness `ipcCall()` reaches the DAEMON-003 IPC
+handlers (`queue_failed_send` / `check_nonce` / `drain_session`) that cello-mcp does not forward
+— the only way to drive the durable retry queue + nonce-dedup store. Enqueue two messages + mark
+a nonce seen → SIGKILL + restart same `CELLO_DIR` → `drain_session` returns both in FIFO order,
+the pre-crash nonce is still a duplicate, a fresh nonce is not. SQLCipher persistence proven.
+
+**DOD-INT-2 (bilateral seal-interrupted) — the harder one + a real bug.** Both daemons SIGKILLed
+mid-session → both restart `interrupted` → A `cello_close_session` signs its SEAL-INTERRUPTED
+leaf + sends `seal_interrupted_request` → B's daemon auto-validates + co-signs its OWN leaf
+(`session.interrupted.responder.acked`) → A verifies (nonce L-2 + leafCount + Ed25519) → status
+`seal_interrupted_pending`. First run failed `seal_interrupted_nonce_mismatch`: B acked but A's
+verifier saw a null nonce. **Root cause (GAP-1 pattern, 3rd instance):** the directory's typed
+frame decoder (`directory-frames.ts`) reconstructed `seal_interrupted_ack` WITHOUT the `nonce`
+field (`SealInterruptedAckFrame` had no nonce) — the request kept it (B acked) but the ack relay
+back to A dropped it. Carried it through (decode + the forward already re-sends `parsed`). The
+terminal FROST notarization (`pending`→`sealed`) is the directory ceremony step, tracked separately.
+
+**Two bugs this journey only a binary-anchored test through the real directory relay exposes** —
+both are typed-allowlist field drops invisible to library-level tests.
+
+**Commits.** trustless-cello `9c1aec8` (ipcCall + DOD-RETRY-1), `89c9825` (directory nonce fix +
+DOD-INT-2 test) + this DoD/journal commit. No cello-client changes for INT-2/RETRY-1 (the INT-1
+counterparty fix `6c93b1a` from the prior entry still pending a connect publish, #19).
+
+**Result.** Full spine regression GREEN: **16/16** (J-SPINE 7 + J-AUTH 4 + J-SIG 2 + J-INT 3).
+The directory nonce fix broke nothing (SPINE-7 seal still green).
+
+**State — Tier 2 essentially closed.** AUTH-1 ✅, AUTH-2 🟡 (only the 6–12h poll), SIG-1 🟢,
+INT-1 ✅, INT-2 ✅, RETRY-1 ✅. Next: Tier 3 — DOD-MSG-* content delivery (the big one, MSG-001-3b
+relay store-and-forward), the postmortem's central gap.

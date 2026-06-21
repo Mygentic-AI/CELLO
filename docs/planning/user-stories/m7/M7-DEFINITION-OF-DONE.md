@@ -254,13 +254,25 @@ Source: outline Milestone Close Gate + E2E-001 AC-001–012. Mostly built/merged
   `@cello-protocol/connect` publish to reach operators.
 - **DOD-INT-2 — Seal-interrupted flow.** Remaining party can run the bilateral
   seal-interrupted agreement at next contact (both sign SEAL ctrl leaves over the
-  interruption state → FROST). *(SESSION-001; daemon-transport-arch §10.3)* — 🟡
-  (interrupted-seal plumbing exists; reused by DAEMON-004; not run live)
+  interruption state → FROST). *(SESSION-001; daemon-transport-arch §10.3)* —
+  ✅ **PROVEN LIVE** (J-INT, 2026-06-21). Both parties SIGKILLed mid-session →
+  both restart `interrupted` → A `cello_close_session` signs its SEAL-INTERRUPTED
+  leaf + sends `seal_interrupted_request` → B's daemon auto-validates + co-signs its
+  OWN leaf (`session.interrupted.responder.acked`) → A verifies (nonce L-2 + leafCount
+  + Ed25519) → bilateral commitment, status `seal_interrupted_pending`. BUG FOUND +
+  FIXED: the directory's typed frame decoder dropped the `nonce` on the
+  `seal_interrupted_ack` relay → every bilateral seal-interrupted failed
+  `seal_interrupted_nonce_mismatch` (the GAP-1 pattern); carried through (directory
+  `89c9825`). The terminal FROST notarization (`pending`→`sealed`) is the directory
+  ceremony step, tracked separately.
 - **DOD-RETRY-1 — Retry queue + nonce dedup survive restart.** Queue holds
   messages across disconnect, drains in FIFO order on reconnect; nonce dedup
   rejects duplicates; both survive a real daemon restart (SQLCipher). FIFO cap
-  1000; nonce set cap 10,000. *(DAEMON-003)* — ✅ (logic merged; the
-  reconnect-drain-and-actually-redeliver path overlaps the missing MSG-001-3b)
+  1000; nonce set cap 10,000. *(DAEMON-003)* — ✅ **SURVIVAL PROVEN LIVE** (J-INT,
+  2026-06-21): two messages queued + a nonce marked seen → SIGKILL + restart on the
+  same `CELLO_DIR` → `drain_session` shows both entries in FIFO order, the pre-crash
+  nonce is still a duplicate, a fresh nonce is not. (The reconnect-drain-and-actually-
+  redeliver path still overlaps the missing MSG-001-3b content path.)
 
 ---
 
