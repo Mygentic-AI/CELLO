@@ -381,3 +381,78 @@ The guardrail is a POLICY constraining WHEN override is allowed. Layered, **infe
 **Recommended posture:** deterministic-policy-first → human-approval for the rest →
 LLM-judge only as a last resort for a class that is neither expressible as a rule nor worth a
 human; and if used, isolated + narrow + attested.
+
+---
+
+## §7 — Pruned scope: decisions (the read-through)
+
+Going capability-by-capability through §1–§4, tagged **ON** (default) / **OPT-IN** (built,
+off by default) / **OUT** (not building) / **DEFER** (later milestone) against the §5
+principles. Decided WITH Andre.
+
+### Inbound — Layer 1 sanitize + Layer 2 scan — DECIDED 2026-06-21
+
+Principle: inbound can be strict + automatic because friction falls on the *sender*, not the
+operator — except the language allowlist, the one ON check whose friction can land on the
+operator.
+
+**ON (default):**
+- Unicode normalization + invisible/smuggling strip (Tags block, zero-width, variant
+  selectors, bidi, homoglyph).
+- The 11-step deterministic sanitization (RE2 patterns, entropy scoring, encoded-payload
+  decode-then-rescan, lookalike normalize).
+- Special-token / chat-template stripping (`[SYSTEM]`, `<|im_start|>`, `### Instruction`).
+- Token / length limit (generous default).
+- DeBERTa injection scan (Layer 2; protectai deberta-v3-base-prompt-injection-v2 or
+  Llama-Prompt-Guard-2-22M; INJECTION-vs-JAILBREAK split = relayed-vs-direct content).
+- Inbound secret detection → **NOTE** (inform the agent, do not block).
+- **Language allowlist → ON, default English only** (Andre). Detection via a small in-process
+  n-gram classifier (fastText `lid.176` / CLD3 / langid) — no LLM, no network, deterministic;
+  fits the no-LLM invariant like DeBERTa (local inference ≠ API call). For English-vs-not,
+  Unicode-script inspection covers most of it. **Flag only on a CONFIDENT non-English
+  detection; default to ALLOW on low-confidence / very short messages** (don't block "ok
+  thanks"). A flagged message is held with a legible note ("language not in your allowlist;
+  add `<lang>` to receive these") — recoverable.
+
+**OPT-IN (off by default):** toxicity / sentiment / bias / emotion; ban-topics / competitors
+/ code; harm classifiers (Llama Guard / ShieldGemma); gibberish.
+
+**DEFER:** vector-DB of known attacks (Rebuff/Vigil self-hardening loop); canary tokens
+(needs host system-prompt integration); multimodal / OCR injection.
+
+**Architectural (not a toggle):** treat all relayed peer content as untrusted (CELLO already
+does) — this is what feeds the INJECTION-vs-JAILBREAK distinction.
+
+### Config architecture — DECIDED 2026-06-21
+
+**Source of truth = a database, owned by the GATEWAY (never the daemon).** Config changes are
+security events that must be append-only, versioned, and attested — which a structured store
+does natively and a flat file does not. The gateway is the enforcer, so policy must live where
+it's enforced and where the party it governs can't reach it. (In enterprise the employee
+controls the daemon but must NOT control the policy → config cannot live in the client.)
+
+- **Storage:** the **same DB library (SQLCipher) as the daemon, but a SEPARATE DB file with
+  its own key** (e.g. `~/.cello/gateway/config.db`). No reinstall — a DB is just a file; the
+  loaded library opens any number. A distinct key reinforces gateway/daemon separation (a
+  compromised client holding the daemon key can't read/tamper gateway config). **Do NOT
+  `ATTACH` it to the daemon's connection** — separate connection/file/key keeps the trust
+  separation. The gateway is a separate process, so it carries its own SQLCipher binding
+  dependency (one-time packaging, not per-DB).
+- **Local / personal:** the gateway's own local SQLCipher file on the operator's machine.
+- **Enterprise:** the same logical store on the gateway's IT-controlled infra (SQLCipher on
+  the host, or Postgres if the gateway is shared/HA), behind the **adapter pattern** — engine
+  swaps by deployment, logical model (append-only, versioned, attested rows) is identical. The
+  daemon reaches it only over mTLS and never holds policy.
+- **Tamper-evident anchor = the directory** (constant across modes): config-change
+  attestations ride the same hash chain as security pass records, so policy can't be quietly
+  altered even locally without the directory attestation mismatching.
+- **Change discipline:** tightening (more redaction, remove a hook, shrink an allowlist) =
+  frictionless; loosening (disable a guard, enable autonomous override, add a hook, expand an
+  allowlist) = WebAuthn-confirmed + notified + attested.
+- **Surfaces:** portal (M8, primary) · CLI (`cello`, scriptable) · **file = import/export
+  only, NOT the source of truth** (gateway imports → validates → confirm-on-loosen → new
+  versioned row → attests). Ops Agent receives change alerts / out-of-band confirms.
+- **Two kinds of "config" kept separate:** operator **policy/settings** (toggles, allowlists,
+  override policy, hooks) → the versioned DB; **detector dictionaries** (the gitleaks 222
+  patterns, Presidio entity set, base-layer rules) → bundled with the gateway + Tier-1
+  extension files/URLs (V3) — these are the dictionaries the policy uses, not policy itself.
