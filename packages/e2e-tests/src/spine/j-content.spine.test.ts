@@ -26,20 +26,25 @@ import {
   startSpineCluster,
   startDaemon,
   provisionAgent,
+  connectMcp,
+  cello,
   ipcCall,
   type SpineCluster,
   type Proc,
+  type McpConn,
 } from "./live-harness.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
 const dirs: string[] = [];
+const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
   cluster = await startSpineCluster();
 }, 180_000);
 
 afterAll(async () => {
+  for (const c of mcpConns) await c.close();
   for (const d of daemons) await d.stop();
   await cluster?.stop();
   for (const dir of dirs) {
@@ -99,4 +104,49 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // (The round-trip itself proves the relay received+stored+served; this is corroboration.)
     expect(cluster.relay.output).toMatch(/"event":"content\.park\.received"|content\.park\.received/);
   }, 60_000);
+
+  it("DOD-MSG-3 (send park) — A sends to an offline recipient → hash witnessed + content auto-parked (R1)", async () => {
+    const dirA = mkdtempSync(join(tmpdir(), "cello-sendparkA-"));
+    const dirB = mkdtempSync(join(tmpdir(), "cello-sendparkB-"));
+    dirs.push(dirA, dirB);
+    await provisionAgent(dirA, "agentA");
+    const pubB = await provisionAgent(dirB, "agentB");
+    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "sendparkA");
+    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "sendparkB");
+    daemons.push(daemonA, daemonB);
+    expect(cello(["register", "agentA", `DEV-sp-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
+    expect(cello(["register", "agentB", `DEV-sp-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+
+    const connA = await connectMcp(dirA, "sp-A");
+    const connB = await connectMcp(dirB, "sp-B");
+    mcpConns.push(connA, connB);
+    for (const [c, n] of [[connA, "agentA"], [connB, "agentB"]] as const) {
+      expect(((await c.call("cello_start_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+    }
+
+    // Establish the session WHILE B is online (so A's session holds the relay endpoint), and
+    // confirm a normal message delivers.
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok, `initiate failed:\n${daemonA.output.split("\n").slice(-30).join("\n")}`).toBe(true);
+    const sessionId = init.sessionId!;
+    expect(((await awaitP) as { type?: string }).type).toBe("new_session");
+    expect(((await connA.call("cello_send", { session_id: sessionId, content: "while-online" })) as { ok?: boolean }).ok).toBe(true);
+
+    // ── B goes OFFLINE. ──
+    await connB.close();
+    mcpConns.splice(mcpConns.indexOf(connB), 1);
+    await daemonB.stop();
+
+    // A sends again — direct delivery now fails (B is down). R1: the hash is still witnessed
+    // (sequence assigned), and 2b deposits the SEALED content to the relay store-and-forward.
+    await connA.call("cello_send", { session_id: sessionId, content: "while-offline — must park" });
+
+    // The load-bearing assertion: the daemon auto-parked the un-deliverable content.
+    const deposited = await daemonA.waitForLine(/"event":"content\.park\.deposited"/, 25_000);
+    expect(deposited).toContain(sessionId);
+    // The relay received + stored the ciphertext (INV-3 — ciphertext only).
+    expect(cluster.relay.output).toMatch(/content\.park\.received/);
+  }, 90_000);
 });
