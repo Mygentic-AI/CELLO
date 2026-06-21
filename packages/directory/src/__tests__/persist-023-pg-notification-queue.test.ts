@@ -137,6 +137,7 @@ function certNotificationPayload(session_id_hex: string, sealed_root_hex: string
     signature_type: "single",
     present_pubkey_hex: randomBytes(32).toString("hex"),
     absent_pubkey_hex: randomBytes(32).toString("hex"),
+    attestation_mode: "ABSENT",
   };
 }
 

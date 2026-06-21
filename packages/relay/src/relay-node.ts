@@ -455,6 +455,19 @@ export class CelloRelayNode {
         return;
       }
 
+      // SESSION-003 / DOD-LIVE-2: the directory asks the relay (the session-path liveness
+      // AUTHORITY) whether a recipient is alive/gone/unknown, so the unilateral-seal ABSENT
+      // attestation comes FROM THE RELAY, never self-asserted. Read-only.
+      if (frameType === "get_session_liveness") {
+        const counterparty_pubkey = req["counterparty_pubkey"] as Uint8Array;
+        const cp = counterparty_pubkey instanceof Uint8Array ? counterparty_pubkey : new Uint8Array(counterparty_pubkey as unknown as ArrayBuffer);
+        const counterpartyHex = Buffer.from(cp).toString("hex");
+        const { liveness } = this.#store.getRecipientLiveness(counterpartyHex);
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "session_liveness", liveness })));
+        await stream.close();
+        return;
+      }
+
       // Unknown frame type — close without state mutation
       stream.abort(new Error("unknown_directory_relay_frame_type"));
     } catch (err: unknown) {

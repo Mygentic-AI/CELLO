@@ -532,6 +532,7 @@ export function encodeSealUnilateralConfirmed(frame: SealUnilateralConfirmed): U
     signature_type: frame.signature_type,
     present_pubkey: frame.present_pubkey,
     absent_pubkey: frame.absent_pubkey,
+    attestation_mode: frame.attestation_mode,
     seal_type: frame.seal_type,
   });
 }
@@ -549,6 +550,7 @@ export function encodeSealUnilateralNotification(frame: SealUnilateralNotificati
     signature_type: frame.signature_type,
     present_pubkey: frame.present_pubkey,
     absent_pubkey: frame.absent_pubkey,
+    attestation_mode: frame.attestation_mode,
     seal_type: frame.seal_type,
   });
 }
@@ -568,11 +570,13 @@ function decodeSealCertFields(
   const signature_type = o["signature_type"];
   const present_pubkey = toUint8Array(o["present_pubkey"]);
   const absent_pubkey = toUint8Array(o["absent_pubkey"]);
+  const attestation_mode = o["attestation_mode"];
   if (leaf_count === null || close_timestamp === null) return null;
   if (!frost_signature || frost_signature.length !== 64) return null;
   if (signature_type !== "frost" && signature_type !== "single") return null;
   if (!present_pubkey || present_pubkey.length !== 32) return null;
   if (!absent_pubkey || absent_pubkey.length !== 32) return null;
+  if (attestation_mode !== "ABSENT" && attestation_mode !== "DELIVERED") return null;
   return {
     sealed_root,
     leaf_count,
@@ -581,6 +585,7 @@ function decodeSealCertFields(
     signature_type,
     present_pubkey,
     absent_pubkey,
+    attestation_mode,
     seal_type: "UNILATERAL",
   };
 }

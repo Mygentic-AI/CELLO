@@ -270,6 +270,13 @@ export interface RelayAdapter {
    * exercise the unilateral path need not implement it.
    */
   getSealLeaves?(sessionId: Uint8Array): Promise<RelaySealData | null> | RelaySealData | null;
+  /**
+   * SESSION-003 / DOD-LIVE-2: ask the relay (the session-path liveness authority) whether a
+   * recipient is alive/gone/unknown. The unilateral-seal ABSENT attestation reads this from
+   * the relay, never self-asserted. 'unknown' (never tracked) is the fail-safe → DELIVERED.
+   * Optional so in-process stubs need not implement it (absence → 'unknown').
+   */
+  getSessionLiveness?(counterpartyPubkey: Uint8Array): Promise<"alive" | "gone" | "unknown"> | "alive" | "gone" | "unknown";
 }
 
 // ─── CelloDirectoryNode ────────────────────────────────────────────────────────
@@ -494,6 +501,9 @@ export class CelloDirectoryNode {
     // completion the directory sends seal_unilateral_confirmed + notification (cert),
     // not session_sealed.
     unilateral?: boolean;
+    // DOD-LIVE-2: how the counterparty is recorded — ABSENT (relay observed it gone) or
+    // DELIVERED (alive / unknown fail-safe). Determined from the relay liveness authority.
+    attestation?: "ABSENT" | "DELIVERED";
   }>();
 
   // M7-WIRE-001: session_id_hex → counterparty session info from SessionOfferAccept
@@ -2846,6 +2856,28 @@ export class CelloDirectoryNode {
     const presentPubkey = Buffer.from(senderHex, "hex");
     const absentPubkey = Buffer.from(absentPartyHex, "hex");
 
+    // DOD-LIVE-2: the counterparty attestation comes FROM THE RELAY (the session-path
+    // liveness authority), never self-asserted. gone → ABSENT (a positive disconnect was
+    // observed); alive or unknown → DELIVERED (reachable, or never-tracked fail-safe). The
+    // seal completes either way — this is a timeout-driven unilateral seal; the liveness
+    // only colours how the counterparty is recorded (never whether the seal happens).
+    let livenessState: "alive" | "gone" | "unknown" = "unknown";
+    try {
+      livenessState = this.#relay.getSessionLiveness
+        ? await this.#relay.getSessionLiveness(absentPubkey)
+        : "unknown";
+    } catch {
+      livenessState = "unknown";
+    }
+    const attestation: "ABSENT" | "DELIVERED" = livenessState === "gone" ? "ABSENT" : "DELIVERED";
+    this.#logger?.info("session.unilateral.attestation", {
+      sessionId: sessionIdHex,
+      absentPartyPubkey: truncHex(absentPartyHex),
+      liveness: livenessState,
+      attestation,
+      correlationId,
+    });
+
     // In-flight guard: set now that verification passed so a concurrent duplicate
     // seal_unilateral frame is rejected (top of method) rather than double-FROST'd. The
     // durable dedup is the seal_notarizations UNIQUE(session_id) constraint (AC-008).
@@ -2878,6 +2910,7 @@ export class CelloDirectoryNode {
         leafCount,
         frostSignature: notarizationSig,
         signatureType: "single",
+        attestation,
         correlationId,
       });
       return;
@@ -2897,6 +2930,7 @@ export class CelloDirectoryNode {
       tbs,
       correlationId,
       unilateral: true,
+      attestation,
     });
 
     const sealVerifiedEvent: SealVerified = {
@@ -3002,11 +3036,12 @@ export class CelloDirectoryNode {
     leafCount: number;
     frostSignature: Uint8Array;
     signatureType: "frost" | "single";
+    attestation: "ABSENT" | "DELIVERED";
     correlationId: string;
   }): Promise<void> {
     const {
       sessionId, sessionIdHex, sealedRoot, presentPubkey, absentPubkey, presentHex, absentHex,
-      closeTimestamp, leafCount, frostSignature, signatureType, correlationId,
+      closeTimestamp, leafCount, frostSignature, signatureType, attestation, correlationId,
     } = args;
 
     // Persist the notarization (participant_a = present, participant_b = ABSENT). The
@@ -3035,10 +3070,11 @@ export class CelloDirectoryNode {
       signatureType,
       presentPartyPubkey: truncHex(presentHex),
       absentPartyPubkey: truncHex(absentHex),
+      attestation,
       leafCount,
       correlationId,
     });
-    protocolLog("SEAL", `Unilateral sealed — session ${truncHex(sessionIdHex)}, root ${truncHex(Buffer.from(sealedRoot).toString("hex"))} (counterparty ABSENT)`);
+    protocolLog("SEAL", `Unilateral sealed — session ${truncHex(sessionIdHex)}, root ${truncHex(Buffer.from(sealedRoot).toString("hex"))} (counterparty ${attestation})`);
 
     // The verifiable certificate carried on both frames.
     const cert = {
@@ -3049,6 +3085,7 @@ export class CelloDirectoryNode {
       signature_type: signatureType,
       present_pubkey: presentPubkey,
       absent_pubkey: absentPubkey,
+      attestation_mode: attestation,
       seal_type: "UNILATERAL" as const,
     };
 
@@ -3092,6 +3129,7 @@ export class CelloDirectoryNode {
           signature_type: signatureType,
           present_pubkey_hex: Buffer.from(presentPubkey).toString("hex"),
           absent_pubkey_hex: Buffer.from(absentPubkey).toString("hex"),
+          attestation_mode: attestation,
         },
       }).catch((err: unknown) => {
         const reason = err instanceof Error ? err.message : String(err);
@@ -3374,6 +3412,7 @@ export class CelloDirectoryNode {
         leafCount: pending.leafCount,
         frostSignature: new Uint8Array(frame.frost_signature),
         signatureType: "frost",
+        attestation: pending.attestation ?? "ABSENT",
         correlationId: pending.correlationId,
       });
       return;
@@ -3760,10 +3799,12 @@ function unilateralNotificationFromPayload(
   const absentHex = p["absent_pubkey_hex"];
   const leafCount = p["leaf_count"];
   const closeTs = p["close_timestamp"];
+  const attestationMode = p["attestation_mode"];
   if (typeof sessionIdHex !== "string" || typeof sealedRootHex !== "string") return null;
   if (typeof frostSigHex !== "string" || (sigType !== "frost" && sigType !== "single")) return null;
   if (typeof presentHex !== "string" || typeof absentHex !== "string") return null;
   if (typeof leafCount !== "number" || typeof closeTs !== "number") return null;
+  if (attestationMode !== "ABSENT" && attestationMode !== "DELIVERED") return null;
   return {
     type: "seal_unilateral_notification",
     session_id: new Uint8Array(Buffer.from(sessionIdHex, "hex")),
@@ -3775,6 +3816,7 @@ function unilateralNotificationFromPayload(
     signature_type: sigType,
     present_pubkey: new Uint8Array(Buffer.from(presentHex, "hex")),
     absent_pubkey: new Uint8Array(Buffer.from(absentHex, "hex")),
+    attestation_mode: attestationMode,
     seal_type: "UNILATERAL",
   };
 }

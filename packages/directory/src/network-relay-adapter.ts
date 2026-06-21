@@ -282,6 +282,31 @@ export class NetworkRelayAdapter implements RelayAdapter {
   }
 
   /**
+   * SESSION-003 / DOD-LIVE-2: ask the relay whether a recipient is alive/gone/unknown. The
+   * relay is the session-path liveness authority (it holds the recipient's standing stream).
+   * On any transport error, return 'unknown' — the fail-safe that yields DELIVERED, never a
+   * fabricated ABSENT.
+   */
+  async getSessionLiveness(counterpartyPubkey: Uint8Array): Promise<"alive" | "gone" | "unknown"> {
+    if (!this.#node) return "unknown";
+
+    const body: Record<string, unknown> = { type: "get_session_liveness", counterparty_pubkey: counterpartyPubkey };
+    const directory_signature = await this.#keyProvider.sign(CBOR_ENC.encode(body) as Uint8Array);
+    const frame = CBOR_ENC.encode({ ...body, directory_signature }) as Uint8Array;
+
+    try {
+      const response = await this.#sendAndReceive(frame);
+      const liveness = response["liveness"];
+      if (liveness === "alive" || liveness === "gone" || liveness === "unknown") return liveness;
+      return "unknown";
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.#logger?.warn("relay.get_session_liveness.transport_error", { error: msg });
+      return "unknown";
+    }
+  }
+
+  /**
    * Open a stream to the relay, send one frame, read one response frame, close.
    * One request/response per stream open — same pattern as /cello/frost/1.0.0.
    * If the connection dropped since startup (idle timeout), re-dial once before giving up.

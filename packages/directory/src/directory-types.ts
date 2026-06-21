@@ -308,7 +308,10 @@ export interface SealCertificateFields {
   frost_signature: Uint8Array;        // 64-byte FROST (or single-key) signature over the seal TBS
   signature_type: "frost" | "single"; // 'frost' verifies vs the session primary_pubkey; 'single' vs the directory node key
   present_pubkey: Uint8Array;         // 32-byte present (submitting) party
-  absent_pubkey: Uint8Array;          // 32-byte absent counterparty (ABSENT — never a signer)
+  absent_pubkey: Uint8Array;          // 32-byte absent counterparty (never a signer)
+  // DOD-LIVE-2: how the counterparty is recorded — ABSENT (the relay observed it gone) or
+  // DELIVERED (alive / unknown fail-safe). Feeds DOD-LEG-3 attestation_mode in the cert.
+  attestation_mode: "ABSENT" | "DELIVERED";
   seal_type: "UNILATERAL";
 }
 
