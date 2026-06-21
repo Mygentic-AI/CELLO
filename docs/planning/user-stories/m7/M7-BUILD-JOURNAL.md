@@ -2650,3 +2650,56 @@ Branch `m7-rehome` both repos. cello-client `7df4cfb`, trustless `1f72ab8` (+ th
 (J-SPINE 7 + J-AUTH 4 + J-SIG 2 + J-INT 3 + J-CONTENT 7). Tier 1 ✅, Tier 2 ✅, Tier 3 MSG-001-3b ✅ (bar
 the deferred MSG-4/MSG-8). Run all: `pnpm --filter @cello-protocol/e2e-tests test:spine` (needs Docker +
 both repos built). ~6 production bugs found+fixed this session. Everything pushed.
+
+---
+
+## 2026-06-21 — J-UNILATERAL kickoff (DOD-SEAL-1, lowest non-green line)
+
+Resumed post-compaction. Read the story (`CELLO-M7-SESSION-002.yaml`), the bilateral seal
+path (`processSeal`, directory-node.ts:2848), and the Gap-1 unilateral handler
+(`#processSealUnilateral`, directory-node.ts:2719). **Architecture mapped before writing code:**
+
+### The Gap-1 truth (what's broken, verified in code)
+`#processSealUnilateral` (2719–2841) stores `frame.reported_root` ON FAITH: no leaf chain
+fetch, no Merkle rebuild, no signature verify, NO FROST, NO `SealNotarization` persisted. It
+emits `session.unilateral.sealed` over UNSIGNED confirm/notification frames. This is exactly the
+postmortem Gap 1. DOD-SEAL-1/2/3 replace it with the verified+notarized+signed-cert path.
+
+### Leaf-chain wiring — the crux (relay owns the leaves, directory needs them)
+- Bilateral `processSeal(sessionId, sealData)` gets leaves IN-PROCESS via `sealData.leaves` because
+  the RELAY calls it (relay-node.ts:1122, `#maybeProcessSeal` → `this.#directory.processSeal`, over
+  `/cello/directory-relay/1.0.0`, the NetworkDirectoryAdapter, relay→directory direction).
+- The unilateral `seal_unilateral` frame arrives client→DIRECTORY on the signaling stream
+  (directory-node.ts:1514) and carries ONLY `reported_root` + `reported_seq` — NO leaves.
+- The relay HOLDS the signed-leaf chain: `state.leaf_log` (relay-node.ts:527) + the WAL
+  (`#sessionWal.getLeaves`, relay-node.ts:779, used by gap-fill).
+- The directory holds `this.#relay: RelayAdapter` = `NetworkRelayAdapter` (directory→relay client,
+  network-relay-adapter.ts) which already does signed-CBOR RPCs over the SAME
+  `/cello/directory-relay/1.0.0` protocol (`record_assignment`/`confirm_seal`/`reject_seal`).
+- **PLAN (matches story implementation_notes "route unilateral notarization through the relay"):**
+  add a `getSealLeaves(sessionId) → RelaySealData | null` RPC: new method on the `RelayAdapter`
+  interface, implemented in `NetworkRelayAdapter` (sends `{type:"get_seal_leaves", session_id}`
+  signed frame), answered by the relay's directory-relay stream handler from `leaf_log`/WAL. The
+  directory then runs the SAME rebuild+verify machinery as `processSeal` (factored to require EXACTLY
+  ONE SEAL ctrl leaf from the present party, the other party ABSENT — per impl_note "do not reuse
+  verifySealLeaves unchanged"), then the SAME FROST branch (seal_verified→initiator only→
+  seal_frost_signature→recordNotarization) or single-key fallback.
+
+### Daemon side (greenfield — verified no unilateral close path today)
+`cello_close_session` (daemon.ts:1431) only does the BILATERAL path: submit SEAL ctrl leaf to relay,
+wait for `session_sealed`; if the counterparty hasn't closed it returns `seal_counterparty_pending`
+and the caller retries forever. There is NO path that, when the counterparty is GONE past
+grace, submits `seal_unilateral` to the directory and verifies the returned cert. That is the
+DOD-SEAL-3 client half ("re-home onto daemon seal path").
+
+### Grace timing for a live test
+`deliveryGraceSeconds` defaults to 600 (directory-node.ts:527). The directory binary does NOT read
+it from env. Adding `CELLO_DELIVERY_GRACE_SECONDS` (a legitimate deployment tunable) so the live
+harness can set it to ~2s — otherwise the J-UNILATERAL test would wait 10 minutes.
+
+### Journey shape (DOD-SEAL-1 first, lowest non-green)
+RED live test `j-unilateral.spine.test.ts`: A+B establish a session + one message; KILL daemon B
+(B GONE); wait past grace; A `cello_close_session` → A surfaces a unilateral `sealed_root` +
+verifiable cert; assert directory emits `session.unilateral.notarized` (NOT `.sealed`), B never
+signed, the FROST cert verifies independently, and a channel-swapped root is rejected (SI-003).
+Build until green; commit constantly; push m7-rehome; full regression after load-bearing changes.
