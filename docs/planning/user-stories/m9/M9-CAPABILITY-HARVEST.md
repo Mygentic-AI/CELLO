@@ -289,15 +289,34 @@ This fills that gap and gives the pipeline the same producer/consumer decoupling
 **General mechanism, both directions:** inbound governance reports to the receiving LLM via
 the `cello_receive` `security_context` (already in V3); this §6 is the outbound mirror.
 
-### Sub-decisions still open
+### Sub-decisions — RESOLVED (Andre 2026-06-21)
 
-- **Counterparty-visible redaction marker?** The AGENT can narrate the redaction itself (from
-  the feedback); should the SYSTEM also leave a minimal marker (`[redacted by sender policy]`)
-  so the receiver isn't confused by a gap? (Lean yes, minimal.)
-- **Override granularity:** per-item `override` handle (force just the false positive, keep
-  other redactions) vs whole-message `force:true`. (Lean per-item.)
-- **One bus or two?** Governance events are a typed subset that ALSO route to the caller +
-  hash chain; likely one publish primitive, governance-tagged, not a separate Logger.
+1. **Counterparty-visible redaction marker — YES, minimal.** The delivered message carries a
+   minimal system marker (e.g. `[redacted by sender policy]`) so the receiver isn't confused
+   by a gap. The sending agent may also narrate it from the §6 feedback, but the marker is the
+   guaranteed backstop.
+
+2. **The redaction decision model — gated by an `autonomous_override` setting (default OFF):**
+   - **Setting OFF (default):** the LLM has exactly TWO choices for the message —
+     **send redacted** or **abort**. It cannot restore original sensitive content on its own
+     authority. *(Considered and CUT: "hold for a human to redo it" and "send now + human
+     appends an explanation later" — both assume a human returns, which in autonomous
+     agent-to-agent may never happen and would strand the message. `abort` + a fresh resend
+     cover the intent without the stranding risk. Do not reintroduce them.)*
+   - **Setting ON (operator opt-in, per deployment/connection):** the LLM may selectively
+     override. It receives an **array of redactions**, each item `{ category, original,
+     redacted }`, and chooses **per item**: **send redacted** | **override** (restore the
+     original) | **edit** (supply a replacement value). Per-item, every choice recorded in the
+     hash chain.
+   - *Mechanical implication (to design, not re-decide):* a genuine send-vs-abort / per-item
+     choice means `cello_send` surfaces the redaction set for a decision rather than silently
+     auto-sending. Lean: default `send redacted` one-shot (non-onerous) when OFF; an explicit
+     review/decision pass when override is ON (or when the LLM requests a preview).
+
+3. **One bus or two — TWO.** Governance is its own dedicated channel (`GovernanceChannel`),
+   separate from the observability `Logger`. Different consumers (control flow + the
+   `cello_send` result + the hash chain) and different criticality (some events block). A
+   stage logs and publishes governance as two separate calls.
 
 ### Blocking vs non-blocking — RESOLVED (Andre 2026-06-21): BLOCKING
 
@@ -327,3 +346,38 @@ as DOD-SIG-1 ("distinct reason + guidance, bounded, never silent/hang") and SCAN
    (persistent gateway timeouts → short-circuit to fail disposition immediately + ops-agent
    alert "governance degraded") + operator-tunable degraded-mode policy per deployment
    (personal may fail-open low-harm checks; enterprise fails closed).
+
+### Future — override policy (forward-looking, Andre 2026-06-21)
+
+When `autonomous_override` is ON, "the LLM may override" is still too weak alone: **the actor
+must not be its own judge** — an injected agent will happily authorize its own exfiltration.
+The guardrail is a POLICY constraining WHEN override is allowed. Layered, **inference-last**:
+
+1. **Default OFF** — no override, no inference (strongest).
+2. **Deterministic policy FIRST (no LLM).** Express "override allowed in the following
+   circumstances" as CASL/ABAC rules (harvested §4.3) + CELLO trust signals: per-category
+   (e.g. NEVER credentials/keys; maybe paths), counterparty trust-tier, specific
+   connection/session, per-session rate cap. Inspectable, auditable, fast, fits the no-LLM
+   base invariant. Handles the large majority — most of "the circumstances" are rules, not
+   judgment.
+3. **Inference ONLY for the residual** cases rules can't express — structured safely:
+   it is a **hook** (the sanctioned LLM-call point), NOT a base layer; the judge runs
+   **isolated** — given ONLY `{ policy, structured override request: category/original/
+   redacted/counterparty/stated-reason }`, NEVER the conversation or the injected content
+   (this strips the injection vector and is what actually makes the judge independent of the
+   actor); the question is **narrow + structured** (per-condition yes/no), not open-ended "is
+   this safe?".
+4. **Where inference runs — match the model to the frequency.** Per-message scanning =
+   small/deterministic (the existing DeBERTa-v3-small INT8). Override is RARE + opt-in, so you
+   can afford the operator's **capable model in an isolated subagent** — the "tiny model can't
+   judge well" worry mostly evaporates because you are not forced to use the small one for a
+   rare path. So: isolated subagent of the main model > a dedicated tiny model for override
+   judgment.
+5. **Override is never silent regardless.** Every override is attested in the hash chain
+   (what / who / policy-decision), carries the counterparty marker, is rate-limited, and can
+   trip an ops-agent alert. Defense in depth: even an imperfect judge leaves non-repudiable
+   evidence.
+
+**Recommended posture:** deterministic-policy-first → human-approval for the rest →
+LLM-judge only as a last resort for a class that is neither expressible as a rule nor worth a
+human; and if used, isolated + narrow + attested.
