@@ -2888,3 +2888,45 @@ attests receipt + integrity + ordering, NEVER agreement (postmortem C-1/C-2).
 
 STATUS: model agreed; build NOT started (awaiting Andre's explicit go — "'ready to start?' is a
 question, not a trigger"). Everything green + pushed.
+
+---
+
+## 2026-06-21 — DOD-LIVE built (the ABSENT gate); regression in flight
+
+Built the DOD-LIVE ABSENT gate per the converged model. j-unilateral now 3/3 (the SEAL core +
+two DOD-LIVE-2 cases). Increments:
+
+1. **Grafted the parked relay liveness authority** (orphaned `9832b1e`, cherry-picked clean onto
+   the post-SESSION-002 relay — no conflict). `session_liveness_query/response`, `liveness:
+   alive|gone|unknown`, `recordRecipientAlive/Gone` keyed by the recipient's authenticated
+   STANDING relay stream; `gone` only on a positively-observed disconnect, never fabricated. Parked
+   test green (5/5).
+2. **The seal-time attestation gate** (no self-assertion): added a `get_session_liveness`
+   directory-relay RPC (`NetworkRelayAdapter.getSessionLiveness`; relay reads `getRecipientLiveness`).
+   At unilateral-seal time the DIRECTORY queries the relay → `gone`→ABSENT, `alive`/`unknown`→
+   DELIVERED (fail-safe). `session.unilateral.attestation` logs liveness + verdict. The seal
+   ALWAYS completes (timeout-driven) — liveness only colours the attestation.
+3. **Carried the attestation**: `SealCertificateFields.attestation_mode` (ABSENT|DELIVERED) threaded
+   through pending-frost → `#processSealFrostSignature` → `#completeUnilateralNotarization`, the
+   confirm/notification frames + encoders/decoders, the Pg notification payload +
+   `unilateralNotificationFromPayload`, and the `notarized` event. Feeds DOD-LEG-3.
+4. **Live test** (binary-anchored): B SIGKILL'd → wait for the relay to log `liveness:gone` → A
+   closes → directory queries relay → ABSENT. B alive-but-silent → A closes → DELIVERED, never
+   ABSENT. Relay detected the SIGKILL disconnect fast (~4.6s).
+
+**KEY ARCHITECTURE NOTE (two liveness authorities, both real):**
+- DIRECT sessions: the daemon's `#sessionLiveness` (session-node-manager, onPeerConnect/Disconnect)
+  is the authority — ALREADY in main, "the unilateral-seal gate reads" it (per its own comment).
+- RELAY-path: the relay is the authority (this graft). B holds ONE authenticated standing relay
+  stream regardless of session transport mode, so the relay observes B's liveness either way — which
+  is why the directory-queries-relay path works for the spine sessions and is non-self-asserted.
+  (The daemon direct-half is available if a future case needs the direct authority instead.)
+
+**Known limitation (honest, follow-on):** `attestation_mode` is carried in the cert but NOT bound
+in the seal TBS (`buildSealTbs` is the shared canonical builder over sessionId/root/leafCount/ts).
+So a channel attacker could flip ABSENT↔DELIVERED in the delivered cert without breaking the
+signature. The AUTHORITATIVE attestation is the directory's server-side record (the notarized
+event + DB); tamper-binding the attestation in the TBS is a DOD-LEG hardening follow-on.
+
+Full regression running to confirm no journey regressed (was 24/24; expect 26/26 with the 2 new
+DOD-LIVE cases).
