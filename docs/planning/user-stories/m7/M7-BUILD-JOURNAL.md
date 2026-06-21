@@ -3092,3 +3092,55 @@ an inflated published frontier). The live malicious-tail cross-process read (AC-
 commit. (3) write `j-legibility.spine.test.ts` — A+B bilateral, A sends malicious tail B never acks,
 both seal, B's daemon reads the cert, assert AC-006's four observables + AC-007's four cases; commit.
 Reviewer (feature-dev:code-reviewer, model:opus) per unit. Flip DOD-LEG tags as each proves green.
+
+---
+
+## 2026-06-21 — J-LEGIBILITY step 1: directory derivation grafted (DOD-LEG-1 directory half)
+
+**DoD-ID / unit.** DOD-LEG-1 directory-derivation half (the 🟠 PARKED part). Plan step (1).
+
+**What was red.** No `buildSealLegibility` on `m7-rehome`; `processSeal` built a bare `session_sealed`
+with no `legibility`. The derivation lived only in the parked `04e3dea..f466946` (off HEAD).
+
+**Graft method (per design note — NOT an 11-commit cherry-pick).** File-by-file:
+- NEW verbatim from `f466946`: `seal-legibility.ts` (245 LoC) + the 2 directory unit tests
+  (`m7-session-004-legibility.test.ts`, `m7-session-004-processseal.test.ts`).
+- SKIPPED the parked e2e test (`packages/e2e-tests/src/__tests__/m7-session-004-legibility-e2e.test.ts`)
+  — confirmed dead-stack (imports `createSessionFixture` + `CelloClient`, exactly what PROCEDURE/the
+  STACK CORRECTION forbid). The live binary test `j-legibility.spine.test.ts` replaces it (plan step 3).
+- HAND-MERGED the 3 shared source files keeping BOTH my SESSION-002/DOD-LIVE code AND the legibility
+  additions: `directory-types.ts` (SealLegibility/AttestationMode/SessionSealedWithLegibility local
+  mirror + `legibility?` on SessionFrostSealed; KEPT SealCertificateFields); `directory-frames.ts`
+  (encode/decode carry legibility on `session_sealed` both sub-branches + `session_frost_sealed`; KEPT
+  WIRE-002 `wants_session_offer`, the DOD-INT-2 nonce carry, SESSION-002 `decodeSealCertFields`);
+  `directory-node.ts` (`buildSealLegibility` in processSeal single+FROST; `seal.certificate.legibility.built`
+  log; `#pendingFrostSeals.legibility?` — OPTIONAL because the unilateral path produces none, its
+  seal_unilateral_confirmed cert being a different frame; the AC-009 encode-vs-send lateral-catch
+  hardening on all four delivery methods from 7458778).
+
+**Producer/consumer falsification confirmed.** Producer = processSeal (now builds legibility on BOTH
+paths). Consumer (daemon `registerSessionSealedListener`) currently DROPS it — that's plan step 2.
+
+**Decision recorded (the reconciliation fork — see prior design-note entry).** `#pendingFrostSeals`
+`legibility?` is optional: the BILATERAL `.set` (directory-node.ts ~3344) always provides it; the
+SESSION-002 unilateral `.set` (~2929) does not, and its FROST completion routes to
+`#completeUnilateralNotarization` which never reads `pending.legibility`. No behavioural coupling.
+
+**Commits / tests.** Graft `27b72b3`. Directory `typecheck` clean. Tests (single-worker foreground):
+- grafted derivation: `m7-session-004-legibility.test.ts` 16/16 + `m7-session-004-processseal.test.ts`
+  6/6 (processSeal builds the legibility on the REAL path) = 22/22.
+- regression on the touched surface: `m7-wire-001-frames` 21, `session004` 4, `directory-node`, 
+  `m6b-002-frost-error-propagation`, `persist-014-seal-mismatch` 7 → 61 passed/3 todo; and with
+  `CELLO_ENV=local` (Docker pg): `persist-023-pg-notification-queue` 27, `persist-018-seal-notarizations`
+  14, `persist-015-unilateral-seal` 8 → 47 passed. ZERO regressions from the graft.
+
+**Reviewer.** Deferred to after the daemon consumer + live test land (review the whole DOD-LEG-1 unit
+together — directory + daemon + live test — per per-unit review, since the directory half alone isn't
+operator-observable yet).
+
+**Next red (plan step 2).** Daemon `registerSessionSealedListener` must extract `legibility`, persist
+it with the sealed record (inline `ALTER TABLE`, NOT Flyway), re-derive each party's content_frontier
+from local leaves, reject `certificate_frontier_unverifiable` on inflation, expose on the read surface.
+First: verify the daemon's typed `session_sealed` decoder carries the nested `legibility` through
+(GAP-1 watch), then build the surfacing. NOTE: taxonomy-doc additions (AC-008) + DOD-LEG status flips
+batched into the observability/close-out step.
