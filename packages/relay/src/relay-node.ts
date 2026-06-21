@@ -88,6 +88,7 @@ import type {
   SealData,
   HashSubmitErrorReason,
   GapFillRequest,
+  SessionLivenessQuery,
 } from "./relay-types.js";
 import type { RelayStore } from "./relay-store.js";
 import { InMemoryRelayStore } from "./relay-store.js";
@@ -101,6 +102,7 @@ import {
   encodeGapFillResponse,
   encodeGapFillError,
   encodeSessionInterrupted,
+  encodeSessionLivenessResponse,
   decodeInboundFrame,
 } from "./relay-frames.js";
 import { protocolLog, truncId, truncHex } from "./protocol-log.js";
@@ -690,6 +692,19 @@ export class CelloRelayNode {
           this.#streams.set(authedPubkeyHex, stream);
           authed = true;
 
+          // M7-SESSION-003 AC-001/AC-003: the authenticated standing connection
+          // IS the session-path liveness signal for relay-mode sessions, keyed by
+          // recipient pubkey (the same key as the delivery queue). Record 'alive';
+          // a prior 'gone' flips back to 'alive' (never sticky across reconnect).
+          if (this.#store.recordRecipientAlive(authedPubkeyHex).changed) {
+            this.#logger.info("session.liveness.changed", {
+              counterpartyPubkey: authedPubkeyHex,
+              transportPath: "relay",
+              liveness: "alive",
+              observedBy: "relay",
+            });
+          }
+
           // M7-SESSION-001 AC-002: reset idle timer when a participant connects or reconnects.
           // The idle timeout measures inactivity from the last participant connection,
           // not from recordAssignment (participants may join seconds after assignment).
@@ -763,6 +778,8 @@ export class CelloRelayNode {
           await this.#processHashSubmit(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "gap_fill_request") {
           await this.#processGapFillRequest(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "session_liveness_query") {
+          await this.#processSessionLivenessQuery(stream, parsed);
         }
       }
     } catch (err: unknown) {
@@ -773,6 +790,18 @@ export class CelloRelayNode {
     } finally {
       if (authedPubkeyHex && this.#streams.get(authedPubkeyHex) === stream) {
         this.#streams.delete(authedPubkeyHex);
+        // M7-SESSION-003 AC-001: the standing connection dropped — record a
+        // POSITIVE session-path 'gone' observation, keyed by recipient pubkey.
+        // recordRecipientGone is a no-op for an untracked recipient (never
+        // fabricates 'gone'). Emit the WARN transition exactly once.
+        if (this.#store.recordRecipientGone(authedPubkeyHex).changed) {
+          this.#logger.warn("session.liveness.changed", {
+            counterpartyPubkey: authedPubkeyHex,
+            transportPath: "relay",
+            liveness: "gone",
+            observedBy: "relay",
+          });
+        }
         // M7-SESSION-001 AC-001: emit session_interrupted to the remaining participant
         // when a peer's stream drops. Best-effort delivery — if the remaining participant
         // is also unreachable, the frame is discarded silently.
@@ -851,6 +880,35 @@ export class CelloRelayNode {
         })),
       }));
     } catch { /* stream closed */ }
+  }
+
+  /**
+   * M7-SESSION-003 AC-002: answer a session_liveness_query over the relay stream.
+   * The relay is the session-path liveness authority for relay-mode sessions: it
+   * holds the recipient's standing connection. liveness is read straight from the
+   * tracked store state — 'alive' iff the standing connection is currently held,
+   * 'gone' iff a disconnect was positively observed, 'unknown' iff never tracked.
+   * The relay NEVER fabricates 'gone' from a missing entry.
+   */
+  async #processSessionLivenessQuery(stream: Stream, frame: SessionLivenessQuery): Promise<void> {
+    const counterpartyHex = Buffer.from(frame.counterparty_pubkey).toString("hex");
+    const { liveness, observedAt } = this.#store.getRecipientLiveness(counterpartyHex);
+    try {
+      await this.#sendFrame(stream, encodeSessionLivenessResponse({
+        type: "session_liveness_response",
+        session_id: frame.session_id,
+        counterparty_pubkey: frame.counterparty_pubkey,
+        liveness,
+        observed_at: observedAt,
+      }));
+    } catch (err: unknown) {
+      // Stream closed while responding — the querying client will time out and
+      // fail SAFE to DELIVERED. Surface the cause; never swallow it silently.
+      this.#logger.debug("relay.liveness.query.response.failed", {
+        counterpartyPubkey: counterpartyHex.slice(0, 16),
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   async #processHashSubmit(

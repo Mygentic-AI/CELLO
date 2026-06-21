@@ -210,3 +210,19 @@ export interface GapFillError {
   type: "gap_fill_error";
   reason: "session_not_found" | "wal_unavailable" | "not_a_participant";
 }
+
+// ─── CELLO-M7-SESSION-003: session-path liveness frames ────────────────────────
+
+export interface SessionLivenessQuery {
+  type: "session_liveness_query";
+  session_id: Uint8Array;          // 16 bytes
+  counterparty_pubkey: Uint8Array; // 32 bytes — recipient whose liveness is queried
+}
+
+export interface SessionLivenessResponse {
+  type: "session_liveness_response";
+  session_id: Uint8Array;
+  counterparty_pubkey: Uint8Array;
+  liveness: "alive" | "gone" | "unknown";
+  observed_at: number;
+}
