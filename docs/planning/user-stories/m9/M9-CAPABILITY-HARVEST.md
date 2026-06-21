@@ -298,3 +298,32 @@ the `cello_receive` `security_context` (already in V3); this §6 is the outbound
   other redactions) vs whole-message `force:true`. (Lean per-item.)
 - **One bus or two?** Governance events are a typed subset that ALSO route to the caller +
   hash chain; likely one publish primitive, governance-tagged, not a separate Logger.
+
+### Blocking vs non-blocking — RESOLVED (Andre 2026-06-21): BLOCKING
+
+`cello_send` blocks on the governance verdict (clean/redacted/blocked) and returns it inline.
+Network DELIVERY stays async (the existing ACK ladder / retry queue); a human-approval HOLD
+is the one async escape hatch (returns `held`+handle, resolved later).
+
+**The never-hang guarantee (what makes blocking safe).** A blocking call must always return a
+terminal result inside a hard deadline — a timeout is a *verdict*, not a hang. Same discipline
+as DOD-SIG-1 ("distinct reason + guidance, bounded, never silent/hang") and SCAN-003 SI-002
+("check failure → block, never pass"), applied to slowness as well as errors:
+
+1. **Per-stage bounds.** Sync hooks: `timeout_ms`+`on_timeout` (V3). Base layers: RE2
+   (linear-time — kills the ReDoS hang class) + bounded DeBERTa compute + per-stage watchdog.
+2. **One total-pipeline deadline** — a single wall-clock ceiling for the whole outbound pass;
+   no stage bug or input can exceed it.
+3. **CELLO's total deadline sits BELOW the agent host's tool-call timeout** — so CELLO always
+   answers first with an actionable verdict, never a generic host-level "tool timed out."
+4. **IPC/transport hops bounded** — cello-mcp→daemon→gateway each timed out →
+   `gateway_unavailable` / `daemon_timeout` + guidance.
+5. **Timeout/error → terminal §6 event** — `disposition: block`, `reason: governance_timeout`
+   (or `gateway_unavailable`) + guidance + override handle. The LLM always gets a structured
+   answer.
+6. **Fail-closed by default, made rare + loud.** Timeout → block (fail-open would enable a
+   DoS-to-bypass: induce a timeout to slip content past unscreened). Kept non-onerous via
+   rare timeouts (per-stage bounds + RE2 + fast deterministic base) + a **circuit breaker**
+   (persistent gateway timeouts → short-circuit to fail disposition immediately + ops-agent
+   alert "governance degraded") + operator-tunable degraded-mode policy per deployment
+   (personal may fail-open low-harm checks; enterprise fails closed).
