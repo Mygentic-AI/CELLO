@@ -2350,3 +2350,54 @@ already recorded the leaf — to verify during build), and the M9 single-funnel 
 
 **State.** Branch `m7-rehome`. cello-client `35f8c47`, trustless `f674121`+this. Spine 18/18. Send
 side (1+2) green; increment 3 blocked on the D1/D2/D3 gate decision.
+
+---
+
+## 2026-06-21 — Increment 3 — CORRECTED model: content-fill, not resume (supersedes D1/D2/D3)
+
+The previous entry's D1/D2/D3 framing was wrong — it conflated "recovery" with "resumption." Andre's
+steer (recorded so the build follows it): **recovered ≠ resumed.** Resumption reopens a session for
+NEW activity and would require the counterparty to accept a resumption handshake (no guarantee, and
+not the goal). We are NOT reopening anything.
+
+**The actual goal (one-directional):** the last PARKED message reaches B so B can SEE it — completing
+B's view of the already-frozen transcript — and then B bilaterally seals (the DOD-INT-2 flow already
+proven). Nothing new happens; we finish the record of what already happened.
+
+**The mechanic this implies — recovery is CONTENT-FILL, not leaf-append.**
+The parked message was ALREADY witnessed: the relay assigned its sequence, and B already has (or gets,
+via the relay re-delivering queued `leaf_deliver`s on reconnect) the LEAF at sequence N. What B lacks
+is the PLAINTEXT for that leaf. Recovery pulls the parked ciphertext → `openContentSeal` → verifies
+its hash matches the leaf already at sequence N → attaches the plaintext so B can read it. **No new
+leaf. No root change. No transcript mutation.** Therefore it does NOT violate the frozen-transcript
+invariant (the very reason `ingestReceivedContent`'s active-gate exists). No tension; no re-accept.
+
+**Corrected design (build increment 3 on THIS):**
+1. `ingestReceivedContent` gains a CONTENT-FILL path: given a `content_hash` that matches a leaf
+   ALREADY in the session tree, verify the plaintext against it and drop it into `#receivedContent`
+   at that leaf's sequence — do NOT `appendSessionLeaf`. (When the hash is NOT already a leaf —
+   normal live receive — append as today.)
+2. The active-gate is then correct as-is for what it guards: reject a GENUINELY NEW leaf into a
+   non-active session; ALLOW content-fill (existing leaf) into a non-`sealed` session (active OR
+   interrupted). A `sealed` session is terminal → reject everything.
+3. Orchestration: B reconnects → relay re-delivers queued `leaf_deliver`s (B has the leaves) →
+   relay `content_park_notify` → B pulls parked entries → `openContentSeal` (in-daemon) →
+   content-fill via `ingestReceivedContent` → B now has the complete transcript → B runs the
+   bilateral seal-interrupted flow (DOD-INT-2). The session STAYS interrupted throughout; B just
+   finishes reading it, then seals.
+4. M9 single-funnel AC holds: content-fill routes through `ingestReceivedContent`, so a recovered
+   message hits the same inbound chokepoint (scan/cross-check) as a direct one.
+
+**To verify empirically during build (mechanics, not a fork):** whether `onLeafDeliver` already
+places the leaf in B's tree on reconnect (so content-fill finds a leaf to attach to), or the content
+can arrive before its leaf (then content-fill must hold it until the leaf lands). session-relay-
+client.ts:266 calls `session.onLeafDeliver(...)` — trace what that does to the tree.
+
+**Build order:** (a) content-fill path in `ingestReceivedContent` + a `recoverParkedContent`
+orchestration (pull→openContentSeal→content-fill); (b) IPC trigger for the test (or wire to
+`content_park_notify`); (c) J-CONTENT increment-3 test — A parks for B, B recovers, asserts the
+plaintext surfaces via `cello_receive` at the witnessed sequence having traversed
+`ingestReceivedContent` (M9 AC), with NO root change; then B seals (DOD-INT-2) over the completed
+transcript.
+
+**State.** Branch `m7-rehome`. cello-client `35f8c47`, trustless `c777611`+this. Spine 18/18.
