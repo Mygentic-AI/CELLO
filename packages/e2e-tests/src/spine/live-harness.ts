@@ -345,6 +345,13 @@ export interface StartSpineClusterOpts {
    * AUTH_DIRECTORY_NODE_KEY_HEX so a manifest built from trustedDirectoryNode() verifies.
    */
   directoryNodeKeyHex?: string;
+  /**
+   * J-UNILATERAL: shrink the directory's delivery_grace_seconds (default 600 = 10 min)
+   * so a live unilateral-seal test does not have to wait out the real grace window. The
+   * directory binary reads CELLO_DELIVERY_GRACE_SECONDS; e.g. 2 → A can seal unilaterally
+   * ~2s after the counterparty goes silent.
+   */
+  deliveryGraceSeconds?: number;
 }
 
 /**
@@ -425,6 +432,11 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
       // nodeId "local" so a manifest-configured daemon can verify it at step-6.
       ...(opts.directoryNodeKeyHex
         ? { CELLO_DIRECTORY_NODE_KEY_HEX: opts.directoryNodeKeyHex, NODE_ID: AUTH_DIRECTORY_NODE_ID }
+        : {}),
+      // J-UNILATERAL: shrink the grace window so the unilateral-seal test can seal
+      // shortly after the counterparty goes silent (default is 600s).
+      ...(opts.deliveryGraceSeconds != null
+        ? { CELLO_DELIVERY_GRACE_SECONDS: String(opts.deliveryGraceSeconds) }
         : {}),
     };
     directory = new Proc("directory", BINS.directory, directoryEnv);
