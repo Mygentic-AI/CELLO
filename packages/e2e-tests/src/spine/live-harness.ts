@@ -30,16 +30,17 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
-import {
-  FileKeyProvider,
-  makeTestManifest,
-  TEST_CONSORTIUM_ROOT_KEYS,
-  TEST_CONSORTIUM_THRESHOLD,
-  TEST_DIRECTORY_NODE_KEYPAIR,
-  type TestConsortiumNode,
-  type MakeTestManifestOpts,
-} from "@cello-protocol/crypto";
+import { FileKeyProvider } from "@cello-protocol/crypto";
 import { peerIdFromTransportSeed } from "@cello-protocol/relay";
+import {
+  makeSignedManifest,
+  CONSORTIUM_ROOT_KEYS,
+  CONSORTIUM_THRESHOLD,
+  DIRECTORY_NODE_PRIVATE_KEY_HEX,
+  DIRECTORY_NODE_PUBLIC_KEY_HEX,
+  type ConsortiumNodeEntry,
+  type MakeManifestOpts,
+} from "./auth-manifest.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
@@ -279,8 +280,8 @@ export interface SpineCluster {
 // AUTH_DIRECTORY_NODE_KEY_HEX (private seed); a daemon configured with a manifest that
 // lists nodeId "local" → AUTH_DIRECTORY_NODE_PUBKEY verifies that proof at step-6.
 export const AUTH_DIRECTORY_NODE_ID = "local";
-export const AUTH_DIRECTORY_NODE_KEY_HEX = TEST_DIRECTORY_NODE_KEYPAIR.privateKeyHex;
-export const AUTH_DIRECTORY_NODE_PUBKEY = TEST_DIRECTORY_NODE_KEYPAIR.publicKeyHex;
+export const AUTH_DIRECTORY_NODE_KEY_HEX = DIRECTORY_NODE_PRIVATE_KEY_HEX;
+export const AUTH_DIRECTORY_NODE_PUBKEY = DIRECTORY_NODE_PUBLIC_KEY_HEX;
 
 /** The daemon env vars that select + trust a consortium manifest (step-6 ON). */
 export interface ManifestEnv {
@@ -298,21 +299,21 @@ export interface ManifestEnv {
 export function writeConsortiumManifest(
   tmpDir: string,
   name: string,
-  nodes: TestConsortiumNode[],
-  opts?: MakeTestManifestOpts,
+  nodes: ConsortiumNodeEntry[],
+  opts?: MakeManifestOpts,
 ): ManifestEnv {
-  const manifest = makeTestManifest(nodes, opts);
+  const manifest = makeSignedManifest(nodes, opts);
   const manifestPath = join(tmpDir, `consortium-manifest-${name}.json`);
   writeFileSync(manifestPath, JSON.stringify(manifest));
   return {
     CELLO_CONSORTIUM_MANIFEST: manifestPath,
-    CELLO_CONSORTIUM_ROOT_KEYS: TEST_CONSORTIUM_ROOT_KEYS.join(","),
-    CELLO_CONSORTIUM_THRESHOLD: String(TEST_CONSORTIUM_THRESHOLD),
+    CELLO_CONSORTIUM_ROOT_KEYS: CONSORTIUM_ROOT_KEYS.join(","),
+    CELLO_CONSORTIUM_THRESHOLD: String(CONSORTIUM_THRESHOLD),
   };
 }
 
 /** The "this directory IS in the consortium" node entry (happy-path step-6). */
-export function trustedDirectoryNode(): TestConsortiumNode {
+export function trustedDirectoryNode(): ConsortiumNodeEntry {
   return {
     nodeId: AUTH_DIRECTORY_NODE_ID,
     pubkey: AUTH_DIRECTORY_NODE_PUBKEY,
