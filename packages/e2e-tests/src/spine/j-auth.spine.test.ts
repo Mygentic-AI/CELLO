@@ -101,4 +101,58 @@ describe("J-AUTH — directory bidirectional auth, live (DOD-AUTH-1 / DOD-AUTH-2
     // No failure on the happy path.
     expect(daemon.output).not.toMatch(/"event":"directory\.auth\.challenge\.failed"/);
   }, 60_000);
+
+  it("DOD-AUTH-1 (rogue) — directory NOT in the manifest → step-6 fails (key_not_in_manifest), never connects", async () => {
+    // A validly-signed manifest that simply does NOT list this directory's nodeId
+    // ("local"). loadAndVerify succeeds (officer sigs valid) so the daemon starts, but
+    // when the directory presents its step-5 proof as "local", the verifier finds no
+    // matching node → key_not_in_manifest → the handshake is refused. This is a rogue/
+    // unlisted node being rejected — the security property. (Multi-node FAILOVER needs
+    // >1 directory, which this single-directory harness does not model; the invariant
+    // under test is REJECTION.)
+    const rogueNode = {
+      nodeId: "rogue-unlisted-region",
+      pubkey: AUTH_DIRECTORY_NODE_PUBKEY,
+      region: "eu-west-9",
+      provider: "gcp" as const,
+      endpoint: "/ip4/127.0.0.1/tcp/0",
+    };
+    const { celloDir, daemon } = await startAuthAgent("auth-rogue", [rogueNode]);
+    const env = { CELLO_DIR: celloDir };
+
+    // The manifest itself is valid (signed) so the daemon loads it and starts.
+    expect(daemon.output).toMatch(/"event":"directory\.auth\.manifest\.verified"/);
+
+    // login triggers the directory dial; step-6 must reject the unlisted node.
+    cello(["login"], env);
+    const failed = await daemon.waitForLine(
+      /"event":"directory\.auth\.challenge\.failed"[^\n]*"reason":"key_not_in_manifest"/,
+      15_000,
+    );
+    expect(failed).toMatch(/key_not_in_manifest/);
+
+    // The rejected node is never announced as a verified, connected directory.
+    expect(daemon.output).not.toMatch(/"event":"directory\.auth\.challenge\.verified"/);
+  }, 60_000);
+
+  it("DOD-AUTH-2 (expired) — expired manifest is refused → daemon will not operate (no silent downgrade)", async () => {
+    // An otherwise-valid manifest whose `expires` is in the past. loadAndVerify passes
+    // (officer sigs valid — expiry is the daemon's policy layer, not the provider's), the
+    // daemon detects the expired window and refuses to start with a manifest configured
+    // (ADV-002): it does NOT silently fall back to the unverified M6 path.
+    const { daemon } = await startAuthAgent(
+      "auth-expired",
+      [trustedDirectoryNode()],
+      { manifestOpts: { notBefore: "2020-01-01T00:00:00Z", expires: "2020-06-01T00:00:00Z" }, waitForStarted: false },
+    );
+
+    // The specific named event (DOD-INV-6: distinct cause → distinct event).
+    const expired = await daemon.waitForLine(/"event":"directory\.auth\.manifest\.expired"/, 15_000);
+    expect(expired).toMatch(/"expiresAt":"2020-06-01T00:00:00Z"/);
+
+    // Refusal to operate: the daemon never announces a verified manifest and never
+    // reaches a connected, step-6-verified directory.
+    expect(daemon.output).not.toMatch(/"event":"directory\.auth\.manifest\.verified"/);
+    expect(daemon.output).not.toMatch(/"event":"directory\.auth\.challenge\.verified"/);
+  }, 60_000);
 });
