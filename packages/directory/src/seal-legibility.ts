@@ -105,6 +105,12 @@ function sealCeremonyLeafIndices(leaves: RelaySealLeaf[]): Set<number> {
  * contrasting case) — the two questions intentionally use different leaf sets.
  */
 function trailingSealCtrlAuthors(leaves: RelaySealLeaf[]): Set<string> {
+  // INVARIANT (review finding, low): the protocol defines exactly ONE control-leaf kind —
+  // the SEAL ceremony leaf (LEAF_KIND_CTRL = 0x02). There is no other ctrl-leaf type, so every
+  // leaf with kind 'ctrl' in a verified seal IS a SEAL ceremony leaf and its author DID produce a
+  // contemporaneous SEAL acknowledgement ⇒ 'live'. If a future protocol adds a distinct ctrl-leaf
+  // kind, this walk must discriminate on that kind (verifySealLeaves would also need updating);
+  // until then the contiguous trailing ctrl run is exactly the closing ceremony.
   const authors = new Set<string>();
   for (let i = leaves.length - 1; i >= 0; i--) {
     if (leaves[i]!.kind !== "ctrl") break;
