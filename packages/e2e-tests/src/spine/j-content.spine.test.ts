@@ -217,11 +217,13 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // deterministically rather than racing it with the explicit IPC recover below.
     await daemonB.waitForLine(/"event":"content\.recover\.auto\.completed"/, 25_000);
 
-    // The explicit IPC recover is now IDEMPOTENT — auto already drained the mailbox, so it pulls 0.
-    // (delete-on-pickup: whichever path pulls first delivers; the content is recovered exactly once.)
-    const rec = (await ipcCall(dirB, "content_park_recover", { relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB })) as { ok?: boolean; recovered?: number };
+    // The explicit IPC recover finds an EMPTY mailbox — auto-recover confirm-DELETED the entry from
+    // the relay (delete-on-confirm), so there is nothing left to pull. pulled:0 proves the queue
+    // actually drained (not merely that a re-pull was deduped).
+    const rec = (await ipcCall(dirB, "content_park_recover", { relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB })) as { ok?: boolean; recovered?: number; pulled?: number };
     expect(rec.ok, `recover failed: ${JSON.stringify(rec)}`).toBe(true);
-    expect(rec.recovered, "auto-recover already drained the mailbox; explicit recover is idempotent").toBe(0);
+    expect(rec.pulled, "auto-recover confirm-deleted the entry; the mailbox is drained").toBe(0);
+    expect(rec.recovered, "nothing left to recover").toBe(0);
 
     // M9 single-inbound-funnel AC: the recovered content traversed ingestReceivedContent (the SAME
     // chokepoint as a direct receive), evidenced by session.content.received with its sequence.
