@@ -1,521 +1,123 @@
 ---
 name: cello-story
-description: Write new CELLO user stories following E2E-first ordering. Always write the E2E story before component stories.
+description: Write new CELLO user stories — few, critical, stub-resistant ACs, E2E-first. Write the E2E story before component stories.
 ---
 
 # /cello-story
 
-Use this command to write new CELLO user stories. It enforces E2E-first ordering — the process failure that led to the M1 peer info gap.
+Write new CELLO user stories. Two jobs: get the ACs **few and strong**, and keep **E2E-first** ordering (the M1 peer-info gap came from violating it).
 
-## The foundational rule — read this before writing a single AC
+## 1. The AC quality bar — read before writing a single AC
 
-**Stories must describe production behavior, not test-harness behavior.**
+**Write the fewest ACs that each pin a real behavior.** The failure mode to avoid is the kitchen sink — an AC for every category, each easy to satisfy, none clearly load-bearing. Three tests every AC must pass:
 
-This is the failure mode that surfaced in M2 and M3: implementation code routes through a `NODE_ENV=test` shortcut (e.g. `bootstrapKeyShares`, `MockRelayAdapter`, in-process stubs) and all ACs pass green — but the real multi-party protocol was never exercised. The live smoke test then fails because the production path was never implemented.
+1. **It traces to the done-condition or a named invariant.** If an AC ladders up to neither, cut it. The DoD done-condition is the anchor; ACs decompose it into the few checks that prove it — they do not enumerate every conceivable property.
+2. **It is stub-resistant** (see below). If an implementation could satisfy it while doing the wrong thing, it's a unit assertion wearing an integration label — rewrite it, don't pad three more beside it.
+3. **It is one authoritative behavior.** No restating the same property at a different altitude.
 
-**For every AC with `test_type: integration` or `test_type: e2e`:**
+**Prefer 5 ACs each hard to fake over 15 each easy to satisfy.** The test-attacker (`cello-test-attacker`) will expose the easy ones as hollow tests downstream — so you pay twice for a kitchen sink. Write them strong the first time.
 
-1. Ask: *"Would this AC pass if `NODE_ENV=test` routed around the real protocol?"* If yes, the AC is underspecified — it tests result, not behavior.
-2. Ask: *"Would this AC pass if the two participants were in different OS processes on different machines with no shared memory?"* If no, the AC is underspecified.
-3. For ACs describing a multi-party protocol (DKG ceremony, FROST rounds, stream handshake, libp2p dial): **the AC must assert the transport path was used** — not just that the final return value is correct. Assert that the protocol handler was invoked, the stream was opened, or the round-trip frame count is correct. A test that only checks the return value cannot satisfy an AC claiming real network ceremony.
+### Stub-resistance — how to write a `then` clause
 
-**How to write a stub-resistant `then` clause:**
+The deepest rule: **stories describe production behavior, not test-harness behavior.** The M2/M3 failure was implementation routing through a `NODE_ENV=test` shortcut (`bootstrapKeyShares`, in-process stubs) while every AC passed green — the real multi-party protocol was never exercised.
 
-The `then` clause determines whether a hollow test can satisfy the AC. Apply this rule when composing it:
+For every `integration` / `e2e` AC, the `then` clause must **name an observable only reachable via the real path.** Two categories work:
+- **Transport evidence** — a stream opened, a protocol handler invoked, a frame sent. A stub never touches the network stack.
+- **Cross-process state** — a value held by participant B (a *different* libp2p / DirectoryNode instance) that it could only hold if the wire protocol ran.
 
-> **Name an observable that is only reachable via the real protocol path.**
+Two questions to falsify an AC:
+- "Would this pass if `NODE_ENV=test` routed around the real protocol?" If yes → underspecified.
+- "Would this pass if the two participants were in different OS processes on different machines?" If no → underspecified.
 
-The two observable categories that work:
-- **Transport evidence** — a stream was opened, a protocol handler was invoked, a frame was sent over the wire. These cannot be faked by an in-process stub because the stub never touches the network stack.
-- **Cross-process state** — a value held by participant B (directory, relay, counterparty) that it could only have received via the protocol. If B is a separate libp2p instance, the only way it holds the value is if the wire protocol ran.
+Stub-resistant: *"...each of the 3 directory instances received a `/cello/frost/1.0.0` stream open from the agent"*; *"...the AgentProfile is queryable from a different DirectoryNode instance than the one that registered it."*
+Not stub-resistant: *"returns {registered:true, primary_pubkey}"*; *"DKG completes, primary_pubkey is 32 bytes"* — any in-process stub produces these.
 
-Examples of `then` clauses that are stub-resistant:
-> "...AND each of the 3 directory node instances received at least one `/cello/frost/1.0.0` stream open from the agent node (not from shared memory)"
+### Then prune
 
-> "...AND the directory's `AgentProfile` for this agent is queryable from a *different* `DirectoryNode` instance than the one that processed the registration (proving it was persisted, not held in-process)"
+After drafting the ACs, go back through them once:
+- **Fake test** — apply the test-attacker question to each: "could an implementation satisfy this while doing the wrong thing?" Weak ones get rewritten stub-resistant, or cut.
+- **Trace test** — does it prove the done-condition or guard a named invariant? If neither, cut it.
+- **Don't carry what the gate proves.** Production-faithfulness (real wiring, real transport) is proven by the **live gate** — it spawns the real binary and exercises the entrypoint. Do not add per-story boilerplate ACs for "is it wired in" / "did it use the wire" when a journey already covers it.
 
-> "...AND `bootstrapKeyShares` was NOT the code path taken — verified by the test running with `NODE_ENV` unset or by asserting stream open count > 0 on each directory node"
+Fewer, stronger ACs out the other side. That is the goal of this command.
 
-Examples of `then` clauses that are NOT stub-resistant (these allow hollow tests):
-> "Returns `{ registered: true, primary_pubkey }`" — any stub can return this shape.
+## 2. Before writing — homework
 
-> "The DKG ceremony completes and primary_pubkey is 32 bytes" — `trustedDealer` produces this in-process.
+A story written without the surrounding context misses constraints or duplicates behavior. Read:
+- `docs/planning/user-story-format.md` — the template + field reference.
+- `docs/planning/protocol-map.md` — confirm domain + milestone.
+- `docs/planning/user-stories/{milestone}/outline.md`, the existing stories, and `COORDINATION.md`.
+- `.claude/CLAUDE.md` (system invariants — every story is subject to them) and `CONTEXT.md` (glossary; use only terms defined there).
+- The discussion logs for your domain: `grep -rl "<keyword>" docs/planning/discussion_logs/`. Constraints often live only in a log.
+- The implementation files the story will change (real interface/type names — ACs written blind produce wrong names).
+- **If the story touches infra** (CloudFormation, `deploy.sh`, ECS, pipelines, SSM, Flyway versions, anything under `infra/`): read `infra/CLAUDE.md` first — its rules govern what the ACs must require.
 
-> "A subsequent FROST signature verifies against primary_pubkey" — also satisfiable in-process via `bootstrapKeyShares`.
+Then **ask the operator** any question whose answer materially changes what you write (genuine scope/design ambiguity) — but not things five minutes of reading would answer. If the operator is unavailable, make the assumption explicit at the top of `implementation_notes`.
 
-**The test that verifies a result-only `then` clause will always pass via a stub.** If you cannot name a transport-level or cross-instance observable in the `then` clause, the AC is not specifying integration behavior — it is specifying unit behavior with an inflated `test_type` label.
+## 3. E2E-first ordering
 
-This rule exists because: the test harness is hermetic and perfectly blind to real-world setup requirements. Unit/integration tests that pass in a single process tell you nothing about whether the protocol works between separate processes.
+**Is there an E2E story for this milestone?** (a story with `domain: End-to-End` or `e2e` ACs covering the scenario). If not, **write it first** — do not write component stories until it exists.
 
----
+The E2E story describes the full scenario from outside: real agents (MCP servers), real relay + directory processes, the complete flow from first tool call to final observable, every data dependency named ("A's peer ID must be known to the directory before step N"). If writing it reveals data that "must be known" with no protocol step that produces it — that's a spec gap; write the missing step as a behavior/AC first.
 
-## Before writing any story
+Then write **one component story per distinct behavior unit**, linking back to the E2E story in `references`. For every output field, name the protocol step that populates it.
 
-**Do your homework first.** A story written without understanding the surrounding codebase and design history will miss constraints, duplicate existing behavior, or specify something the implementation cannot satisfy. This is not optional prep — it is how you avoid writing a story that fails review.
+## 4. Shared interface completeness — the general rule
 
-1. Read `docs/planning/user-story-format.md` — the canonical template and field reference.
-2. Read `docs/planning/protocol-map.md` — confirm the domain and milestone for the story.
-3. Check `docs/planning/user-stories/{milestone}/` — see what stories already exist and what COORDINATION.md says about migration versions and parallel work.
-4. Read `.claude/CLAUDE.md` — the system-wide invariants. Any story you write is subject to every constraint in this file, whether or not the story mentions it.
-5. Read `CONTEXT.md` at the repo root — canonical glossary. Use only terms defined here.
-6. **If the story touches infrastructure in any way** — CloudFormation templates, `deploy.sh`, ECS task definitions, CI/CD pipelines, `pipeline-mappings.json`, AWS secrets/SSM parameters, Flyway migration versions, or any resource under `infra/` — **read `infra/CLAUDE.md` before writing a single AC.** It contains mandatory rules (migration version sync, pipeline mappings deployment, IaC-only resource creation, STATE.md updates) that directly govern what ACs must require and what the implementation must do. Violations of these rules have caused crash-loops and silent pipeline outages in the past.
-6. **Search the discussion logs for anything relevant to the domain you are writing about.** Run:
-   ```bash
-   grep -rl "<keyword>" docs/planning/discussion_logs/
-   ```
-   Read any log that covers the mechanism, component, or design decision your story touches. Constraints established in discussion logs often do not appear in CLAUDE.md — they live only in the log. A story author who skips this step will write stories that violate constraints the team already resolved.
-7. **Read the relevant implementation files** before writing behavior triggers and ACs. If the story touches `CelloClient`, read the parts of `packages/client/src/client.ts` that the story will change. If it touches the MCP server, read `packages/adapter-claude-code/src/bin/cello-mcp.ts`. ACs written without reading the implementation produce mismatched interface names, wrong type names, and behaviors that can't be tested the way you described.
-8. **Check the milestone outline** — read `docs/planning/user-stories/{milestone}/outline.md` for the design decisions and architecture choices that individual stories are expected to honor.
+**Before writing ACs for a story that introduces or modifies a shared interface** (DB table, persisted object, registration message, manifest, frame field, in-memory cache read by another component), enumerate **every producer and every consumer**. The recurring failure: the story is written from one participant's view, fixes the presenting consumer, never asks "who else reads this?", and the others break silently. Each producer and each consumer needs its own AC.
 
-## Ask before you write
+## 5. The trap lookup — apply only the rows your story triggers
 
-After doing your homework, stop and ask the operator any question where the answer will materially change what you write. Do not embed an assumption in an AC when you could ask instead — a wrong assumption baked into a story propagates into implementation and review before it surfaces.
+These are the hard-won incident patterns. **Don't add all of them.** Match your story to the trigger and add the one AC that catches that trap — and write that AC *for your story*, don't paste a generic template.
 
-**Questions worth asking before writing:**
-
-- **Scope boundaries** — "The outline says X is out of scope, but AC-003 in the previous story seems to require it. Should this story include it or stub it?"
-- **Design decisions not yet made** — "I found two approaches in the discussion logs and neither was chosen. Which one should I spec?"
-- **Deferred behavior from prior stories** — "PERSIST-024 left Y as a TODO. Should this story close it, or is it still deferred?"
-- **Conflicts between the outline and existing code** — "The outline says the DB path convention is X, but the current code does Y. Which is authoritative?"
-- **Test infrastructure gaps** — "This story needs the fixture to support Z. I don't see that in session-fixture.ts. Should I extend it here or write a separate story first?"
-- **Milestone close gate implications** — "Does this story need to pass the milestone close gate by itself, or is it only exercised via the E2E story?"
-
-**Do not ask about things you can determine yourself** by reading the code, discussion logs, or CLAUDE.md. The operator's time is for genuine ambiguity — not for questions that five minutes of reading would answer.
-
-**If the operator is not available:** make your assumption explicit at the top of the story's `implementation_notes` — "Assumed X because Y. If this is wrong, the behavior trigger and AC-003 need to change." This makes the assumption visible at review time rather than invisible at implementation time.
-
----
-
-## Step 1: Is there an E2E story for this milestone?
-
-Look for a story with `domain: End-to-End` or `test_type: e2e` ACs that cover the scenario you're about to specify.
-
-**If no E2E story exists for this milestone: write it first. Do not write component stories until it exists.**
-
-The E2E story describes the full scenario from the outside:
-- Two real agents (running as MCP servers)
-- Real relay and directory nodes (running as processes)
-- The complete protocol flow from first tool call to final observable outcome
-- Every data dependency named explicitly: "Agent A's peer ID and listen addresses must be known to the directory before step N"
-
-If writing the E2E story reveals data that "must be known" without a named protocol step that produces it — **that is a spec gap. Write the missing step as a behavior/AC before proceeding.**
-
-## Step 2: Write component stories
-
-For each protocol step or component behavior the E2E story requires:
-- Write one component story per distinct behavior unit
-- In the component story's `references`, link back to the E2E story that exercises it
-- For every data field in the story's output: name the protocol step that populates it in the behavior section
-
-**Red flag check before writing each component story:**
-- Does a method exist to store/produce this data? → Who calls it in the live flow? Name the caller explicitly.
-- Is a field described in the output shape? → Which AC describes how it gets populated, not just that it's present?
-
-## Shared Interface Completeness — the general rule
-
-**Before writing any AC for a story that introduces or modifies a shared interface, enumerate every producer and every consumer of that interface.** A shared interface is anything multiple components exchange: a database table, a persisted domain object, a registration message, a manifest, a message frame field, an in-memory cache populated by one component and read by another.
-
-The failure pattern is always the same: the story is written from one participant's perspective. The author fixes the presenting problem for the consumer they can see, never asks "who else reads this?", and the other consumers break silently. Stories that enumerate only the presenting consumer are incomplete by definition.
-
-**The question to ask before writing ACs:**
-> For every shared datum this story touches — who produces it, and who consumes it? Does each producer have an AC? Does each consumer have an AC?
-
-The sections below are known cases of this failure, each with its own mechanics. The general rule above applies to all of them and to any case not listed.
-
----
-
-### Known case 1: Database schema (M5+ rules)
-
-**Trigger:** story introduces or modifies database tables.
-
-**The risk:** a table designed for the story's immediate use cases missing constraints, indexes, or RLS policies that parallel or downstream stories require. Discovered late, after the migration is applied, forcing cascading version renumbers. *(FEDERATION-001/002 — missing UNIQUE constraint discovered only when FEDERATION-002 implemented coordinator logic; V18 already applied, parallel stories had claimed later numbers.)*
-
-**Architecture phase must enumerate:**
-1. Every operation the table supports — not just what this story needs
-2. Uniqueness constraints for all conflict scenarios
-3. Indexes for all query patterns
-4. Foreign key relationships with all related tables
-5. RLS policies for all access patterns (read-only observers, multi-tenant isolation, append-only)
-
-Document this reasoning in a comment block at the top of the migration file or in the story notes before writing ACs.
-
-**For parallel milestones with DB changes:** one P0 schema-design story reserves all migration version numbers and populates COORDINATION.md's Migration Version Registry before any parallel implementation begins. No downstream story may claim an unregistered version.
-
-**Integration gate AC (required on every migration story):**
-```yaml
-- id: AC-[N]-integration-gate
-  given: "All migration SQL files produced by this story"
-  when: "applied to a local PostgreSQL instance that already has all prior
-    M{N} migrations applied (V1 through V[N-1])"
-  then: "Flyway reports zero checksum errors on any migration; the new
-    migration(s) apply cleanly; all tables, indexes, constraints, and RLS
-    policies are created as specified"
-  test_type: integration
-  component_under_test: directory
-  notes: "Runs against prior-migrations-applied, not a fresh DB — catches
-    the FEDERATION-002 pattern where a previously-applied migration is modified."
-```
-
----
-
-### Known case 2: Persistence serialization (M4+ rules)
-
-**Trigger:** story persists any domain object via JSON, a database adapter, or any serialize/deserialize round-trip.
-
-**The risk:** serialization silently destroys typed fields. Bytes round-trip correctly; the type is gone; the bug surfaces only when a crypto or typed operation tries to use the deserialized value — by then the error is mapped to a generic code with no hint of the real cause. *(PERSIST-005 — `JSON.stringify` on `LocalShare.signingShare: Uint8Array` corrupted the type to a plain object. Byte equality passed. `@noble/curves` threw. The catch returned `directory_below_threshold`.)*
-
-**Every persistence story must include an AC that:**
-1. Uses a **real instance** of the domain type — not `randomBytes(N)` or a plain object literal
-2. Verifies the deserialized object works in its **actual production use** — for a FROST share: sign something; for a key: encrypt/decrypt; for a connection record: pass it to the handler
-3. If persistence survives restarts: **crosses a process restart boundary** — persist in process A, load in a fresh process B, use in process B
-
-```yaml
-- id: AC-[N]-serialization-round-trip
-  given: "A real [DomainObject] instance constructed via its normal production
-    path (e.g. the output of a DKG ceremony, not a plain object literal)"
-  when: "the object is serialized, persisted, the process is restarted,
-    the object is loaded and deserialized"
-  then: "the deserialized object can be passed to [the operation that consumes it]
-    and that operation succeeds — verified by [specific observable: a signature
-    verifies, a decryption succeeds, a handler returns without error]"
-  test_type: integration
-  component_under_test: [component]
-  notes: "Byte equality is also asserted, but is not sufficient alone —
-    type integrity must be verified by exercising the object in production use."
-```
-
-Before writing the story, enumerate every field of the domain object being persisted. Any `Uint8Array`, `Buffer`, `BigInt`, `Date`, `Map`, `Set`, or class instance field is a serialization hazard under bare `JSON.stringify/parse`.
-
----
-
-### Known case 3: Service registration and address propagation
-
-**Trigger:** story changes how a service registers, announces, or publishes its address — relay registration, manifest re-sign, any `relay_register` / `registerWithDirectory` / health-check update flow.
-
-**The risk:** a service has multiple consumers of its address. The story fixes the presenting consumer (the one that was recently broken) and never enumerates the others. Each unaddressed consumer breaks silently on the next address change. *(M6B-006 — fixed relay address propagation for the S3/manifest path. Never enumerated `NetworkRelayAdapter` in the directory as a second consumer. The close gate only verified the manifest path. The adapter broke on every ECS task replacement.)*
-
-**Before writing ACs, answer:** every component that needs to reach [service X] — list them all. For each consumer, the story must include an AC verifying it can reach the service after an address change. The close gate must name and verify each consumer's path independently.
-
-**API field rule:** registration/announcement message fields must name their intent explicitly. Do not reuse an existing field as a carrier for unrelated data. If the relay's current address needs to be known, add a `multiaddr` field — do not parse it out of `healthCheckUrl`. Fields are free; clarity is load-bearing.
-
----
-
-### Known case 4: Composition root wiring
-
-**Trigger:** story introduces a new class, adapter, handler, or service that must be instantiated at runtime.
-
-**The risk:** the component is fully implemented and all tests pass via direct construction in test files — but the composition root (`server.ts`, `daemon.ts`, or the equivalent entrypoint) never instantiates it. The component exists in source but is dead code in production. Tests exercise the component in isolation; no test exercises the path from entrypoint → component instantiation → real use. *(M6 — multiple components implemented and reviewed green, but `server.ts` never called `new X()`. The live smoke test was the first thing that tried the production path.)*
-
-**Every story that introduces a new runtime component must include an AC that:**
-1. Names the composition root file that must instantiate it
-2. Asserts the component is reachable from the entrypoint — not just importable, but actually constructed and wired into the request/event path
-3. Verifies via an integration test that exercises the entrypoint (not a unit test that constructs the component directly)
-
-```yaml
-- id: AC-[N]-composition-root
-  given: "The [component] is implemented with passing unit tests"
-  when: "the application starts via its normal entrypoint ([server.ts / daemon.ts])"
-  then: "the [component] is instantiated by the composition root AND
-    a request/event that should reach it actually does — verified by an
-    integration test that starts the application and triggers the path,
-    not by a unit test that constructs the component directly"
-  test_type: integration
-  component_under_test: [entrypoint package]
-  notes: "Unit tests proving the component works do not prove it is wired in.
-    This AC catches the pattern where everything compiles and tests pass
-    but the component is dead code in production."
-```
-
----
-
-### Known case 5: Send-path liveness
-
-**Trigger:** story sends data over a shared long-lived channel — a signaling stream, relay connection, IPC socket, database connection, or any resource that can be dead at the moment of use.
-
-**The risk:** the happy path works because the channel is established earlier and assumed alive. No test exercises the send with a dead channel. In production, channels die (TCP reset, idle timeout, process crash, ECS task replacement). The send throws or hangs, and the error surfaces far from the cause because the code never checked liveness before sending. *(M6B — signaling stream drops caused FROST ceremony failures that surfaced as `directory_below_threshold`. The stream was dead at send time; no code path handled this.)*
-
-**Every story that sends over a shared channel must include an AC where:**
-1. The channel is dead (closed, timed out, or unreachable) at the moment of send
-2. The send fails with a distinct, diagnosable error — not a generic timeout or catch-all
-3. If the channel supports reconnection: the story specifies the reconnect behavior and an AC verifies the send succeeds after automatic reconnection
-
-```yaml
-- id: AC-[N]-send-path-dead-channel
-  given: "A [channel type] was previously established and is now dead
-    (closed by remote, timed out, or network-partitioned)"
-  when: "[the operation] attempts to send over the dead channel"
-  then: "the operation fails within [timeout]ms with error code
-    '[specific_error_code]' (not a generic timeout or catch-all),
-    AND [reconnect behavior: either the channel is re-established
-    automatically and the send retries, OR the caller receives
-    the error with guidance on what to do next]"
-  test_type: integration
-  component_under_test: [component]
-  notes: "Tests must actually kill/close the channel before sending —
-    not mock the send method. The failure mode is 'channel looks alive
-    but is actually dead', which only surfaces with a real dead channel."
-```
-
----
-
-### Known case 6: Health semantics for long-running processes
-
-**Trigger:** story introduces or modifies a long-running process (daemon, ECS service, persistent server) that exposes a health endpoint or participates in health checks.
-
-**The risk:** a single `/health` returning 200 conflates multiple independent readiness conditions. The process is alive (liveness) but the transport is disconnected (not ready for traffic), or the transport is connected but the local state isn't loaded (not ready for operations). Load balancers, orchestrators, and clients each need different answers, and a single boolean health check gives them all the same wrong one. *(M6B — ECS health checks passed (process alive) while the relay had no active directory connection. Traffic routed to a relay that couldn't complete any operation.)*
-
-**Every story introducing a long-running process must distinguish at minimum:**
-
-| Check | Answers | Consumers |
+| If your story… | The trap (incident) | The AC it needs |
 |---|---|---|
-| **Liveness** | "Is the process alive and not deadlocked?" | Container orchestrator (ECS, k8s) — restart if no |
-| **Readiness** | "Can this instance accept new work right now?" | Load balancer — remove from rotation if no |
-| **Startup** | "Has initial setup completed?" | Orchestrator — don't kill during slow init |
+| introduces/modifies a **DB table** | constraints/indexes/RLS missing, found after the migration is applied → version-renumber cascade *(FEDERATION-001/002)* | Architecture-phase schema enumeration (all ops, uniqueness, indexes, FKs, RLS) in story notes; an integration-gate AC that applies the migration **against all prior migrations already applied** (not a fresh DB), zero Flyway checksum errors. Parallel milestone → reserve versions in COORDINATION.md first. |
+| **persists a domain object** (JSON / DB round-trip) | serialization silently destroys typed fields; bytes match, type is gone *(PERSIST-005: `JSON.stringify` on a `Uint8Array`)* | one AC using a **real** domain instance (not `randomBytes`), verifying it **works after load** (sign / decrypt / handle — not byte equality), crossing a **restart boundary** if persistence survives restarts. Flag any `Uint8Array` / `Buffer` / `BigInt` / `Date` / `Map` / `Set` field. |
+| touches a **DB adapter** with BIGINT columns | BIGINT read back as a string *(PERSIST-021 — hit twice under a "should")* | a live round-trip AC: write a known BIGINT, read it back, assert `typeof === 'number'` per declared column. |
+| changes how a service **registers / announces an address** | multiple consumers of the address; only the presenting one is fixed *(M6B-006: `NetworkRelayAdapter` uncovered)* | enumerate every component that dials the service; one AC per consumer; the close gate verifies each path independently. Name address fields explicitly — don't smuggle a multiaddr through `healthCheckUrl`. |
+| **sends over a shared long-lived channel** (signaling, relay, IPC, DB conn) | channel dead at send time; surfaces as a generic error far from the cause *(M6B signaling → `directory_below_threshold`)* | an AC that kills the channel before sending and asserts a **distinct** error code; if reconnectable, a second AC for send-after-reconnect. |
+| introduces a **long-running process** with health checks | a single `/health` 200 conflates liveness / readiness / startup *(M6B: ECS healthy while the relay had no directory connection)* | an AC distinguishing liveness / readiness / startup — name each precondition, its consumer, and the consumer's action on failure. |
+| holds **in-memory state derived from the DB** | lost on restart / stale after an external change *(M6B-010, M6B-008)* | an AC for reconstruction after restart; an AC for a refresh schedule if the data can change externally. |
+| introduces an **unbounded resource** (pool, map, queue, stream concurrency) | silent exhaustion *(M6B-009: pg pool of 10)* | the cap is specified, and an AC covers graceful degradation at the cap. |
+| introduces a **new runtime component** | implemented + unit-green but never instantiated by the composition root *(M6)* | usually covered by the **live gate** (it spawns the real entrypoint). Only add a wiring AC if no journey exercises this component's path. |
+| touches an **MCP tool** | `{ok:false}` with a bare reason the calling LLM can't act on *(M6-E2E-001: `session_not_active`)* | every failure response carries a `guidance` field: what happened, why, what to do next. |
+| has any **catch block** in a touched package | silent swallow, or `${error}` → `[object Object]`, or one code for many causes *(M6B-002: three FROST modes → `directory_below_threshold`)* | a **lateral catch audit** AC: scan ALL catch blocks in ALL files in the package (not just changed files); each distinct cause → a distinct code; extract `error.message`, never interpolate the object. |
+| needs **external live state** a test can't provide in-process (pre-registered identity, external directory/relay) | CI fails indistinguishably from a real regression *(mcp-002 / mcp-003)* | the ACs note that every top-level `describe` is wrapped `describe.skipIf(!process.env.CELLO_E2E_LIVE)`. In-process `createSessionFixture()` tests do **not** need this. |
+| changes **cello-client packages** | code ships without a version bump → operators run stale code | two blocking ACs — see §6. |
 
-**The story must include ACs that:**
-1. Define what each health level means for this specific process (not generic definitions — name the actual preconditions)
-2. Verify that a process which is live but not ready returns the correct distinct response for each check type
-3. Specify the consumer of each check and what action that consumer takes on failure
+## 6. Cross-repo (cello-client) stories — two mandatory ACs
 
-```yaml
-- id: AC-[N]-health-semantics
-  given: "The [process] is running but [specific precondition] is not yet met
-    (e.g. transport not connected, local state not loaded, DB not reachable)"
-  when: "the liveness check and readiness check are both called"
-  then: "liveness returns healthy (process is alive), readiness returns
-    unhealthy with reason '[specific_reason]' — AND the [consumer: ALB/ECS/client]
-    responds correctly (e.g. ALB removes from rotation, client retries another instance)"
-  test_type: integration
-  component_under_test: [process package]
-  notes: "A single boolean /health endpoint that returns 200 when the process
-    is alive but not ready is a production incident waiting to happen."
-```
+If the story modifies `core/crypto | transport | protocol-types | client | adapter-claude-code`:
+- **Version-bump AC:** every modified package bumped; every dependent's dependency version updated; `@cello-protocol/connect` bumped; `pnpm install`; tag `v{connect}` pushed; CI publishes to beta; `npm view @cello-protocol/connect@beta dependencies --json` shows real versions, never `workspace:*`.
+- **trustless-cello dep-update AC:** `directory` + `relay` package.json reference the new semver ranges; no `workspace:*` for the five cello-client packages; `pnpm install`; `typecheck` passes; committed to main.
 
----
+Without both, directory and relay compile green against stale local copies and silently run old code.
 
-## Send-Time Error Extraction (mandatory from M4)
+## 7. Observability ACs (M4+)
 
-**The anti-pattern:** a catch block interpolates an error object directly into a string — `` `Operation failed: ${error}` `` — which produces `[object Object]` for non-Error objects or loses the stack trace. This is invisible in tests (where errors are typically well-formed Error instances) and catastrophic in production (where errors may be plain objects, strings, or framework-specific types).
+Observability is a first-class AC, not metadata. For each significant state transition:
+- a **named event** in `domain.noun.verb` (`session.started`, not "something is logged"), with its **required `context_fields`**;
+- a **`correlationId`** asserted on every event in an async / multi-process flow;
+- every error path → a named error event with diagnostic context; **distinct cause → distinct event/code**;
+- new failure modes → an alarm-threshold AC (or a `notes` line saying why none is warranted).
 
-**The rule:** every catch block must extract `.message` explicitly or pass the error object to the structured Logger interface — never interpolate it into a template string.
+**Each event needs its own AC** — listing it in the `observability:` block is not a test; without an AC the implementer can drop the log call and every test still passes. Canonical YAML uses `context_fields` (not `fields` / `context`) and `correlationId: true` — wrong field names fail `/cello-review` Step 4c. New names go in the taxonomy in [[2026-05-16_0753_development-pipeline-and-local-iteration]].
 
-```typescript
-// WRONG — produces [object Object] for non-Error types
-catch (error) {
-  return { reason: `frost_ceremony_failed: ${error}` }
-}
+## 8. Security invariants
 
-// RIGHT — explicit extraction with fallback
-catch (error) {
-  const message = error instanceof Error ? error.message : String(error)
-  logger.error('frost.ceremony.failed', error instanceof Error ? error : new Error(message), { sessionId })
-  return { reason: 'frost_ceremony_failed', detail: message }
-}
-```
+Every SI pairs a `statement` with a **real `adversarial_condition`** — an attack, not a structural check. "assert alice's KeyProvider reference is unreachable from bob" only checks that two references differ. Instead: "a handler on alice's client calls `registry.getKeyProvider('bob')` — it returns alice's key or throws, never bob's." Name the attack, describe what success would look like, assert it does not happen.
 
-**This extends the existing lateral catch audit.** When the lateral catch audit AC fires (scanning all catch blocks in the package), the implementer must also fix any catch that interpolates an error object into a string. The two failure modes are:
-1. Swallowing the exception entirely (returning a hardcoded reason with no logging) — existing rule
-2. Logging/returning the error via interpolation, producing `[object Object]` — this rule
+## 9. Definition of Ready (the slim gate)
 
-Both are blocking findings.
+- [ ] Frontmatter present (`name`, `type`, `date`, `topics`, `status`, `description`) — needed for `/cello-link`.
+- [ ] ACs pass the §1 quality bar: few, each traces to the done-condition / an invariant, each stub-resistant, each one behavior. **You pruned.**
+- [ ] System-wide constraints that shaped any mechanism (sovereign nodes, cloud-agnostic transport, etc.) are restated **inline in story / behavior / ACs** — not only linked, and **not** in `implementation_notes`. *(FEDERATION-001 reached for VPC Peering because the multi-cloud constraint never made it into the implementation context.)*
+- [ ] Shared-interface producers and consumers each have an AC (§4).
+- [ ] Every trap your story triggers (§5) has its AC — and no trap it doesn't trigger is padded in.
+- [ ] Test infra comes from `createSessionFixture()` (extend with a non-breaking `opts` field) — no new `makeFixture()`.
+- [ ] Cross-repo ACs present if cello-client changed (§6).
 
----
+## File naming & after
 
-## Observability ACs (mandatory from M4)
-
-Every story that touches M4+ code must include explicit observability acceptance criteria. Observability is not an implementation detail — it is a first-class AC like any other.
-
-**For each significant state transition in the story, the ACs must specify:**
-
-1. **Named log event** — the exact event name in `domain.noun.verb` format. "Something is logged" is not an AC. `session.started` is.
-2. **Required context fields** — the minimum fields the log event must carry. Example: `session.started` requires `{ sessionId, agentId, relayId, principalType }`.
-3. **Correlation ID** — for any async or multi-process flow, the AC must assert that a `correlationId` minted at flow initiation is present on every log event in that flow.
-4. **Error path coverage** — every error path in the story has a named error event with enough context to diagnose without a debugger. Example: `session.relay.assignment.failed` with `{ sessionId, reason, relayId }`.
-5. **Alert thresholds** — for any new failure mode introduced by this story, an AC specifies the CloudWatch alarm condition. Example: "a `session.relay.assignment.failed` rate > 5% over 5 minutes fires the relay-health alarm."
-
-**Event naming convention:** `domain.noun.verb` — e.g. `frost.dkg.round1.complete`, `session.seal.failed`, `relay.health.degraded`. Check the event taxonomy in [[2026-05-16_0753_development-pipeline-and-local-iteration]] before inventing new names. Add new names to the taxonomy rather than using ad-hoc strings.
-
-**The Logger interface:**
-```typescript
-interface Logger {
-  info(event: string, context: Record<string, unknown>): void
-  warn(event: string, context: Record<string, unknown>): void
-  error(event: string, error: Error, context: Record<string, unknown>): void
-}
-```
-
-Events go through the `Logger` interface, not `console.log`. The implementation is injected via the composition root — never imported directly.
-
-**Canonical observability YAML format** — use exactly these field names. `fields` and `context` are wrong; they will fail the `/cello-review` Step 4c check.
-
-```yaml
-observability:
-  events:
-    - name: session.started
-      level: info
-      trigger: "When a session is established between two agents"
-      context_fields: [sessionId, agentId, relayId]
-      correlationId: true
-  error_events:
-    - name: session.relay.assignment.failed
-      level: warn
-      trigger: "When the relay assignment step fails during session setup"
-      context_fields: [sessionId, reason, availableRelayCount]
-      correlationId: true
-  notes: >
-    session.started and session.relay.assignment.failed must be added to
-    the canonical event taxonomy in
-    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
-    by the implementer of this story.
-  alarms:
-    - condition: "session.relay.assignment.failed rate > 5% over 5 minutes"
-      fires_to: "relay-health CloudWatch alarm"
-```
-
-If `alarms` is empty, it must include a `notes` field explaining why no alarm is warranted — a bare `alarms: []` is not acceptable. Example: `alarms: [] # no alarm: this is a synchronous startup op; failure is visible immediately in cello_start_agent return value`
-
-**Observability events must be verified by ACs, not just declared in the observability block.** Listing events in the `observability:` section is metadata for the implementer — it is not a test. For each significant event, there must be a corresponding entry in `acceptance_criteria` with a `then` clause that asserts the event fired with the correct name and context fields. Without an AC, the implementer can omit the log call entirely and every test will still pass.
-
-**What bad observability looks like:**
-- Events listed only in the `observability:` block with no AC verifying they fire
-- "Errors are logged" in an AC — no event name, no context fields
-- `fields: [sessionId]` — wrong field name; must be `context_fields`
-
-**What good observability looks like:**
-- An AC with `then: "... AND 'session.started' is logged at INFO with sessionId, agentId, and relayId fields"`
-- A separate AC for the error path: `then: "session.relay.assignment.failed is logged at WARN with sessionId, reason, and availableRelayCount"`
-- "All log events in the FROST DKG flow carry the same `correlationId` minted when the ceremony is initiated"
-
----
-
-## Writing Security Invariants
-
-Every SI must pair a `statement` with an `adversarial_condition` that describes a concrete attack or misuse scenario — not a structural assertion.
-
-**Wrong (structural assertion — does not test the invariant):**
-```yaml
-adversarial_condition: "verified by asserting that alice's KeyProvider reference
-  is unreachable from bob's client instance"
-```
-This just checks that two object references differ. A bug where both clients share the same Map but return different references would pass it.
-
-**Right (adversarial simulation — actually tests the invariant):**
-```yaml
-adversarial_condition: "a message handler executing on alice's CelloClient
-  attempts to retrieve a KeyProvider from the AgentRegistry by name — it can
-  only retrieve alice's KeyProvider, not bob's; verified by asserting that
-  calling registry.getKeyProvider('bob') from within alice's message handler
-  returns alice's key or throws, never bob's"
-```
-
-The test must actively trigger the adversarial condition and assert the system resists it. An SI whose adversarial condition is only verified by an absence check ("X is not accessible") is not a test — it is a wish. Name the attack, describe what happens when the attacker succeeds, and assert that it does not succeed.
-
----
-
-## Step 3: Validate before declaring ready
-
-For each story, run through the Definition of Ready checklist from `user-story-format.md`:
-
-- [ ] **Vault frontmatter is present.** The story YAML must include top-level fields `name`, `type`, `date`, `topics`, `status`, and `description`. These are required for `/cello-link` to index the file into the vault graph. Without them the story is invisible to vault navigation.
-- [ ] **System-wide invariants are restated inline, not just linked.** For every mechanism this story specifies, ask: was this mechanism shaped by a constraint in an earlier discussion log or in CLAUDE.md (e.g. cloud-agnostic transport, sovereign node independence, no AWS-specific networking, cross-provider compatibility)? If yes, restate the constraint explicitly in the story's `story`, `behavior`, or `acceptance_criteria` sections — not as a reference link, and **not in `implementation_notes`**. `implementation_notes` is implementer guidance; it is not part of the spec. An implementer who skips notes and reads only behavior + ACs must still encounter every load-bearing constraint. A story that is self-contained enough to implement from must carry the constraints that govern it, not rely on an implementer re-reading prior documents or notes. *Rationale: FEDERATION-001 read the April 11 persistence design document, found it self-contained, reached for VPC Peering as the obvious transport for Postgres replication, and never re-read the April 8 document that established the multi-cloud constraint. The mechanism (Postgres logical replication) was correct; the transport implementation was not. The April 11 document inherited the constraint through the live conversation that produced it — but that inheritance did not survive into the implementation context. One sentence in April 11 would have closed the gap entirely.*
-- [ ] Every data field has a named protocol step that produces it
-- [ ] At least one E2E story exercises this component's output
-- [ ] No AC says "something will call registerX later" — the caller is named
-- [ ] `test_type: e2e` ACs specify "real nodes, no mocks"
-- [ ] Every `test_type: integration` or `test_type: e2e` AC that describes a multi-party protocol asserts the transport path (stream opens, handler invocations, frame counts) — not only the final return value
-- [ ] No AC would pass if `NODE_ENV=test` routed through a stub shortcut instead of the real protocol
-- [ ] The story does NOT require implementing a new `makeFixture()` — test infrastructure comes from `packages/e2e-tests/src/session-fixture.ts`; if a new capability is needed, the fixture is extended with a new `opts` field (with a non-breaking default), not replaced or duplicated
-- [ ] **If any test in the story requires a pre-registered agent identity, persisted FROST shares in an external directory, or any resource that `createSessionFixture()` cannot provide in-process:** the story's ACs must note that every top-level `describe` block in that test file must be wrapped with `describe.skipIf(!process.env.CELLO_E2E_LIVE)` using the `liveOnly` pattern. Tests using only in-process `createSessionFixture()` nodes do not need this guard. *Rationale: mcp-002 and mcp-003-e2e failed in CI for months with errors indistinguishable from real regressions — masking any actual new failure in those files.*
-- [ ] **(M4+ persistence stories)** Real domain instance used in AC (not `randomBytes(N)`), deserialized object verified in production use (not just byte equality), restart boundary crossed if persistence survives restarts. *See "Known case 2: Persistence serialization" above.*
-- [ ] **(M4+ adapter stories)** If the story touches any adapter that calls `deserializeRow()` or adds to `BIGINT_COLUMNS`, at least one AC must be a live round-trip type test: write a known BIGINT value to the real database, read it back, and assert `typeof result === 'number'` for each declared column. PERSIST-021 AC-005 is the static map-completeness gate; this live test is the coercion-correctness gate. **Both are required.** *(BIGINT-as-string hit twice in M4 under a "should" policy — a class of bug that recurs under a recommendation will not self-enforce.)*
-- [ ] **(M4+)** Every significant state transition has a named log event in `domain.noun.verb` format
-- [ ] **(M4+)** Every named log event specifies its required context fields
-- [ ] **(M4+)** Async/multi-process flows assert `correlationId` threading through all events in the flow
-- [ ] **(M4+)** Every error path has a named error event with sufficient diagnostic context. **Each distinct failure cause must produce a distinct error code or event name** — never map multiple causes to the same error. A catch block that returns `directory_below_threshold` for timeout, exhausted, AND unavailable is a single undifferentiated error: the operator cannot act on it. *Rationale: M6B-002 — three FROST failure modes all surfaced as `directory_below_threshold`, making the error useless for diagnosis.*
-- [ ] **(M4+) Lateral catch audit AC required.** If this story touches any package that contains catch blocks with hardcoded reason strings, the story must include an explicit AC requiring the implementer to scan ALL catch blocks in ALL files in that package — not only the files the story changes — and fix any that silently swallow exceptions. The AC must read: "The implementer scans every catch block in `packages/{name}/src/` and either fixes or reports any pre-existing catch that returns a hardcoded reason string without logging the actual exception message." This AC makes the lateral audit mandatory and visible to the reviewer. *Rationale: M6B-002 fixed FROST paths in `directory-node.ts` but a silent swallowing catch in `network-relay-adapter.ts` — same package, untouched by the story — masked the real relay failure reason for months. Neither the story, the coder, nor the reviewer was required to look beyond the changed files.*
-- [ ] **(All stories introducing new runtime components)** Composition root wiring AC present. The AC names the entrypoint file, asserts the component is instantiated (not just importable), and is verified by an integration test that starts the application — not a unit test that constructs the component directly. *See "Known case 4: Composition root wiring" above.*
-- [ ] **(All stories that send over a shared channel)** Send-path liveness AC present. The AC kills/closes the channel before sending and asserts a distinct error code (not a generic timeout or catch-all). If the channel supports reconnection, a second AC verifies send-after-reconnect. *See "Known case 5: Send-path liveness" above.*
-- [ ] **(All stories introducing long-running processes)** Health semantics AC distinguishes liveness from readiness from startup. Names the preconditions for each level, the consumer of each check, and what action the consumer takes on failure. A single boolean `/health` is never acceptable. *See "Known case 6: Health semantics for long-running processes" above.*
-- [ ] **(M4+ lateral catch audit)** In addition to fixing swallowed exceptions, the audit must also fix any catch block that interpolates an error object into a template string (`` `...${error}` ``). Both failure modes — silent swallowing and `[object Object]` interpolation — are blocking. *See "Send-Time Error Extraction" above.*
-- [ ] **Shared interface completeness.** For every shared datum this story touches (registration message, manifest, DB table, persisted object, in-memory cache), all producers and consumers are enumerated and each has its own AC. See the known cases above; the general rule applies to any case not listed.
-  - Registration/address change: every consumer of the service's address has its own AC; close gate names each independently. *(M6B-006 — `NetworkRelayAdapter` uncovered.)*
-  - In-memory state derived from DB: AC verifies reconstruction after restart; AC specifies refresh schedule if data can change externally. *(M6B-010 — directory lost in-flight state; M6B-008 — manifest never refreshed.)*
-- [ ] **If the story introduces any unbounded resource** — DB connection pool, in-memory map, stream concurrency, queue depth — the story specifies the cap and includes an AC for graceful degradation at the cap. *(M6B-009 — pg pool of 10 exhausted silently.)*
-- [ ] **(M4+)** New failure modes introduced by this story have a corresponding alarm threshold AC
-- [ ] **(M4+)** All event names appear in (or are proposed additions to) the event taxonomy in [[2026-05-16_0753_development-pipeline-and-local-iteration]]
-- [ ] **(All stories touching MCP tools)** Every `{ok: false}` or failure response from an MCP tool includes actionable guidance — not just a reason code. The LLM calling this tool cannot read source code. It needs: what happened, why the operation failed, and what to do next. Example: `{delivered: false, reason: "counterparty_seal_initiated", guidance: "The other party has initiated session closure. Call cello_close_session to complete the bilateral seal ceremony."}`. A bare reason code with no next-step instruction is an incomplete error response. *(M6-E2E-001 — `session_not_active` told the agent nothing about what to do; the correct action was to call `cello_close_session` because the counterparty had already initiated the seal.)*
-- [ ] **(M5+ schema stories)** Architecture phase reasoning documented in story notes: all operations the table supports, uniqueness constraints, indexes, foreign keys, RLS policies. Integration gate AC present. For parallel milestones: migration version numbers reserved in COORDINATION.md by a P0 schema-design story before parallel work begins. *See "Known case 1: Database schema" above.*
-
-## What the shared fixture already covers
-
-Before writing test infrastructure into a story's ACs or notes, check whether `packages/e2e-tests/src/session-fixture.ts` already covers it. Current capabilities (as of M3):
-
-| Capability | How to request |
-|---|---|
-| Relay + directory + 2 agents + FROST for A | `createSessionFixture()` (default) |
-| MCP server+client pair for each agent | `opts.withMcp: true` |
-| FROST bootstrapped for B (B can initiate) | `opts.bootstrapB: true` |
-| Real DKG registration for both agents | `opts.register: true` |
-| Connection policy on A or B | `opts.policyA` / `opts.policyB` |
-| Directory connection gate (SESSION-006) | `opts.requireConnectionGate: true` |
-| Registration required on directory | `opts.requireRegistration: true` |
-| Round-2 disclosure timeout for B | `opts.round2TimeoutMs: N` |
-| B's evaluate call count (transport evidence) | `opts.trackEvaluateCount: true` |
-| B accepts a pubkey without policy eval | `opts.whitelist: [pubkeyHex]` |
-| Directory↔relay via /cello/directory-relay/1.0.0 (NODE-004) | `opts.networkRelay: true` |
-
-If a story needs infrastructure beyond this list, the implementer must extend the fixture with a new `opts` field — not write a new fixture function.
-
-## File naming
-
-```
-docs/planning/user-stories/{m0|m1|m2|...}/CELLO-{DOMAIN}-{number}.yaml
-```
-
-Use the next sequential number within the domain. Check existing files to avoid collisions.
-
-## Cross-Repo Dependency Stories (mandatory from M7)
-
-If the story modifies any code in `cello-client` packages (`core/crypto`, `core/transport`, `core/protocol-types`, `core/client`, `core/adapter-claude-code`), the story **must** include two additional blocking ACs:
-
-**AC-[N]-version-bump:**
-```yaml
-- id: AC-[N]-version-bump
-  given: "All cello-client code changes for this story are implemented and tests pass"
-  when: "the implementer runs the version bump procedure in cello-client CLAUDE.md"
-  then: |
-    - Every modified package has its version incremented in package.json
-    - Every package that depends on a modified package has its dependency version updated
-    - @cello-protocol/connect is bumped to reflect the net change
-    - pnpm install is run and pnpm-lock.yaml is updated
-    - git tag v{connect-version} is pushed to origin
-    - CI publishes the new version to npm beta dist-tag
-    - `npm view @cello-protocol/connect@beta dependencies --json` shows real semver versions (never workspace:*)
-  test_type: integration
-  component_under_test: cello-client CI
-  notes: "This is a hard gate. A story that changes cello-client code without publishing a new version breaks every operator on the stale version."
-```
-
-**AC-[N+1]-trustless-cello-dependency-update:**
-```yaml
-- id: AC-[N+1]-trustless-cello-dependency-update
-  given: "The new @cello-protocol/connect version is live on npm beta"
-  when: "packages/directory/package.json and packages/relay/package.json in trustless-cello are updated"
-  then: |
-    - Both package.json files reference the new semver ranges for all modified packages
-    - No workspace:* references to @cello-protocol/crypto, transport, protocol-types, or client remain
-    - pnpm install is run and pnpm-lock.yaml is updated
-    - pnpm run typecheck passes in trustless-cello
-    - Commit pushed to trustless-cello main
-  test_type: integration
-  component_under_test: directory
-  notes: "workspace:* resolves to stale local copies post-REPOSPLIT-002. This AC ensures directory and relay run against the published version."
-```
-
-**Do not write a cello-client story without both of these ACs.** A story that ships code changes without the version bump and the trustless-cello update creates invisible drift — directory and relay appear to work because they compile against the stale local copy, but they are not running the new code.
-
----
-
-## After writing stories
-
-Run `/cello-link` to wire the new story files into the vault graph.
+`docs/planning/user-stories/{milestone}/CELLO-{DOMAIN}-{number}.yaml` — next sequential number in the domain. Run `/cello-link` after writing to wire the file into the vault graph.

@@ -89,10 +89,13 @@ Three different jobs — keep them separate.
    unchanged (client-dead count must not rise — no new dead `core/client` code);
    `typecheck` clean; `lint` clean. Vitest: ONE worker, foreground, with timeout.
 7. **Commit.** (See §3 cadence — commit before tests too.)
-8. **Review.** Dispatch `feature-dev:code-reviewer` with `model:'opus'` (it pins
-   Sonnet otherwise) on the unit's diff. Fix EVERY finding at EVERY severity
-   (blocking/high/medium/low). Dispute only a finding that is provably wrong or a
-   recorded scope decision — and write the why in the journal. Commit the fixes.
+8. **Review.** Dispatch `feature-dev:code-reviewer` (`model:'opus'` — it pins
+   Sonnet otherwise) AND `cello-test-attacker` on the unit, in parallel: the
+   reviewer attacks the code, the attacker attacks the tests. Fix EVERY reviewer
+   finding at EVERY severity (blocking/high/medium/low), and treat every HOLLOW
+   TESTS finding as blocking — fix the test and re-run red → green. Dispute only a
+   finding that is provably wrong or a recorded scope decision — and write the why
+   in the journal. Commit the fixes.
 9. **Update the two docs.** Flip the DoD line's status tag. Append a journal entry.
 10. **Back to step 1.**
 
@@ -109,8 +112,35 @@ Three different jobs — keep them separate.
   the line is green and nothing regressed. Fast in-process tests are the inner
   loop between.
 - **Checkpoint / handoff: at every journey boundary** (J-SPINE green, J-AUTH
-  green, …) or whenever context is getting long. Write a journal summary, update
-  the DoD scorecard, commit. Then STOP and surface to Andre — merge is his call.
+  green, …) or whenever context is getting long. Before flipping any line to ✅, dispatch
+  `cello-done-auditor` on every line marked ✅ since the last checkpoint and apply
+  its verdicts (only EARNED stays ✅; OVERSTATED/UNPROVEN take the lower tag it
+  names). Then write a journal summary, update the DoD scorecard, commit. STOP and
+  surface to Andre — merge is his call; the auditor's non-EARNED lines go first.
+
+## 3a. The 30-minute drift check (the cron)
+
+A session cron fires every 30 minutes and forces a self-audit before any further
+work. It is the enforcer of this procedure between checkpoints — the cadence and
+the hard rules (§3, §5) are only real if something checks them on a clock. **This
+section is the source of truth; the cron prompt mirrors the checklist below and is
+just the trigger.** If the cron and this list ever disagree, this list wins —
+update the cron to match.
+
+When it fires: STOP, produce the checklist in chat, each item marked
+**✅ FOLLOWED** or **❌ DRIFTED**, with the COMMAND OUTPUT as evidence — no vibes.
+
+1. **Anchored to the binary.** Run `grep -nE 'createClient|createMcpSessionServer|createDirectoryNode|createRelayNode|session-fixture'` on the J-SPINE test file(s). Zero functional hits. Paste output. *(§4)*
+2. **Nothing pushed.** Run `git status -sb` in BOTH repos. On main is fine; nothing ahead in a way that means a push happened — Andre handles all pushing (trustless-cello push = the 25–30 min live deploy). Paste. *(§5)*
+3. **Read-only subagents only.** Reviewer / test-attacker / done-auditor / explorer only — no parallel implementers. State yes/no. *(§5)*
+4. **Working the lowest non-green DoD line.** Name the DoD-ID in progress; confirm not skipping ahead. *(§2)*
+5. **Committing constantly.** Run `git log --oneline -3`. A commit within ~the last unit? Paste. *(§3)*
+6. **No deploy / no AWS used.** State yes/no. *(§5)*
+7. **Every ✅ since the last check is earned, not rounded up.** Run `git log -p --since="35 minutes ago" -- docs/planning/user-stories/m7/M7-DEFINITION-OF-DONE.md` to list lines flipped to ✅ this window. For each, paste the exact passing assertion from the live-binary run that proves it — the real output line, not a description. Can't paste it → ❌: drop the line to the tag the evidence supports (🟡 unit-green, not ✅ proven-live). No flips this window → ✅, nothing to audit. *(The maker is too generous a grader. This is the one check allowed to fail routinely — if it is green for weeks, it is too soft, not perfect. The heavy version — `cello-done-auditor` reading the raw run cold — runs at journey checkpoints per §3; this is the light, every-30-min version.)*
+
+If ANY item is ❌: STOP, state the drift in one plain sentence ("oops, I went off:
+\<what\>"), correct it, then resume the lowest non-green DoD line. If all ✅: say so
+in one line and resume. Keep the loop running.
 
 ## 4. Building the live test itself (it doesn't exist yet)
 
@@ -135,7 +165,8 @@ spawns the real binaries. Until it exists, every other instruction is blind.
 
 - **One thread. One coder. Andre watching.** No parallel implementation agents.
   Parallel branches are what produced the sprawl that buried this milestone. Only
-  read-only subagents (the reviewer, and read-only explorers) may be dispatched.
+  read-only subagents (the reviewer, the test-attacker, the done-auditor, and
+  read-only explorers) may be dispatched.
 - **One branch. No sprawl.** Work on the assembly branch (or main once merged). Do
   not spin up new branches/worktrees per unit.
 - **Never merge to main. Never push.** Both are Andre's call. Commit locally,

@@ -26,8 +26,11 @@ description: >
 5. **The gateway internals** — `discussion_logs/2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway.md`.
 6. **The daemon seam** — `discussion_logs/2026-06-21_1600_m9-content-channel-seam-and-entry-plan.md`.
 
-Note: the old story YAMLs (SCAN-001 … MONITOR-001) are superseded. Do not build from them.
-The plan is the DoD; the overview maps the old files to the new stories.
+Note: the OLD story YAMLs (SCAN-001 … MONITOR-001) are superseded — do not build from them.
+The NEW per-unit stories are written (lean, critical ACs) before the build starts; when
+building a unit, read its new story YAML for the detailed ACs/SIs you write tests against. The
+DoD remains the yardstick and the status; the story is the detailed contract. Until a unit's
+story exists, its DoD done-condition is the spec.
 
 ## 1. The three artifacts
 
@@ -40,8 +43,8 @@ The plan is the DoD; the overview maps the old files to the new stories.
 ## 2. The core loop (one unit = one story, or a tight cluster)
 
 1. **Find the red.** Run the live test. Take the next unbuilt story in phase order.
-2. **State the target.** From the story's done-condition in the DoD. One sentence: what
-   observable behavior must become true.
+2. **State the target.** From the unit's story YAML ACs/SIs where written, else its DoD
+   done-condition. One sentence: what observable behavior must become true.
 3. **Falsify first (CLAUDE.md Debugging Discipline).** Does the call site have the method
    (check the interface, not the class)? Does responsibility live here? What else breaks?
    Only then write code.
@@ -52,9 +55,14 @@ The plan is the DoD; the overview maps the old files to the new stories.
 6. **Confirm the floor holds:** all existing tests green; `typecheck` clean; `lint` clean.
    Vitest: one worker, foreground, with a timeout. Never background a test process.
 7. **Commit.** (See §3 — commit before tests too.)
-8. **Review.** Dispatch `feature-dev:code-reviewer` with `model:'opus'` on the unit's diff.
-   Fix every finding at every severity. Dispute only a provably-wrong finding or a recorded
-   scope decision — write the why in the journal. Commit the fixes.
+8. **Review.** Dispatch `feature-dev:code-reviewer` (`model:'opus'`) AND `cello-test-attacker`
+   on the unit, in parallel — the reviewer attacks the code, the attacker attacks the tests
+   (it measures them against the spec of record — the story's ACs/SIs once the stories are
+   written, or the DoD done-condition where one isn't yet). Fix every reviewer finding at every
+   severity, and treat
+   every HOLLOW TESTS finding as blocking (fix the test, re-run red → green). Dispute only a
+   provably-wrong finding or a recorded scope decision — write the why in the journal. Commit
+   the fixes.
 9. **Update the docs.** Flip the story's status in the DoD. Append a journal entry.
 10. **Back to step 1.**
 
@@ -65,8 +73,33 @@ The plan is the DoD; the overview maps the old files to the new stories.
 - **Review every unit**, on its diff, right after it goes green. Do not batch.
 - **Live test at the start and end of every unit.** Fast in-process tests are the inner loop.
 - **Checkpoint at each story boundary and at each gate** (Gate 1, Gate 2), or when context
-  gets long. Journal summary, DoD status update, commit, then surface to Andre — merge and
-  any deploy are his call.
+  gets long. Before flipping any DoD status to ✅, dispatch `cello-done-auditor` on every line
+  marked ✅ since the last checkpoint and apply its verdicts (only EARNED stays ✅;
+  OVERSTATED/UNPROVEN take the lower tag — 🟡 built, gate not yet run). Then: journal summary,
+  DoD status update, commit, surface to Andre — merge and any deploy are his call; the
+  auditor's non-EARNED lines first.
+
+## 3a. The 30-minute drift check (the cron)
+
+When the build is open, a session cron fires every 30 minutes and forces a self-audit before
+any further work — the enforcer of this procedure between checkpoints. **This section is the
+source of truth; the cron prompt mirrors the checklist below and is just the trigger.** If the
+two ever disagree, this list wins — update the cron to match.
+
+When it fires: STOP, produce the checklist in chat, each item **✅ FOLLOWED** or **❌ DRIFTED**,
+with the COMMAND OUTPUT as evidence — no vibes.
+
+1. **Anchored to the program.** Run `grep -nE 'createClient|createMcpSessionServer|session-fixture'` plus a grep for any in-process gateway-pipeline construction on the M9 live-test file(s) — the test must drive the gateway as a spawned child through the daemon content path (`cello_send` / `cello_receive`), not call pipeline functions in-process. Zero in-process-pipeline hits. Paste output. *(§4. Add the gateway-pipeline symbol to the grep once M9-CORE-001 names it.)*
+2. **Nothing pushed.** Run `git status -sb` in BOTH repos. On main is fine; nothing ahead in a way that means a push happened — Andre handles all pushing (the Phase-2 directory migration push = the 25–30 min deploy). Paste. *(§5)*
+3. **Read-only subagents only.** Reviewer / test-attacker / done-auditor / explorer only — no parallel implementers. State yes/no. *(§5)*
+4. **Working the next unbuilt story in phase order.** Name the story-ID in progress (a DoD row — the DoD is ground truth, not the stale YAMLs); confirm not skipping ahead and not building a 🔒 story before its named dependency landed. *(§2, §8)*
+5. **Committing constantly.** Run `git log --oneline -3`. A commit within ~the last unit? Paste. *(§3)*
+6. **No deploy / no AWS used.** State yes/no. *(§5)*
+7. **Every ✅ since the last check is earned, not rounded up.** Run `git log -p --since="35 minutes ago" -- docs/planning/user-stories/m9/M9-DEFINITION-OF-DONE.md` to list stories flipped to ✅ this window. For each, paste the exact passing assertion from the live-gateway run that proves it — the real output line, not a description. Can't paste it → ❌: drop it to the tag the evidence supports (🟡 built, gate not yet run — not ✅). No flips this window → ✅, nothing to audit. *(The maker is too generous a grader. This is the one check allowed to fail routinely — green for weeks means too soft, not perfect. The heavy version — `cello-done-auditor` reading the raw run cold — runs at gate/story checkpoints per §3.)*
+
+If ANY item is ❌: STOP, state the drift in one plain sentence ("oops, I went off: \<what\>"),
+correct it, then resume the next unbuilt story. If all ✅: say so in one line and resume. Keep
+the loop running.
 
 ## 4. The live test
 
@@ -102,7 +135,8 @@ DeBERTa inference in-process. In Phase 2, real mTLS too.
   (the M7 dependency).
 - **The feedback channel never hangs** (INV-6). Every `cello_send` returns a terminal verdict
   within a deadline. A timeout is a verdict, not a hang.
-- **One thread. One coder. Andre watching.** Only read-only subagents (reviewer, explorers).
+- **One thread. One coder. Andre watching.** Only read-only subagents (reviewer,
+  test-attacker, done-auditor, explorers).
 - **Never merge to main or push without Andre.** The Phase-2 directory migration triggers the
   ~25-30 min directory deploy — batch all directory changes before any push.
 - **DeBERTa is pre-downloaded INT8 only** — no training pipeline.
