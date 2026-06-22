@@ -171,3 +171,80 @@ files on `main` (relay/e2e); stage only M9 files.
 **State.** trustless-cello `main` (local). cello-client `main` has the daemon. Nothing pushed.
 Drift-check cron (Procedure §3a) is NOT yet running — it starts when the build opens; create it
 as part of the first build step.
+
+---
+
+## 2026-06-22 — Build opened: M9-CORE-001 design note (§6) — the seam + the gateway program
+
+Build is open. Worktrees: code in `cello-client-m9` [m9-build], M9 docs in `trustless-cello-m9`
+[m9-build] (both off the same HEAD; M9 doc commits land in the docs worktree, code in the code
+worktree — nothing on `main`, nothing in the M7 thread's primary checkouts). Drift cron (§3a)
+running: job `504a0df8`, every 30 min.
+
+**Seam re-located (the cited line numbers had drifted — Procedure §2.3 falsify-first done).**
+- `cello_send` handler → `daemon.ts:3213`; it calls `sessionNodeManager.sendContent` at `daemon.ts:3262`.
+- `cello_receive` handler → `daemon.ts:3305` (drains via `takeReceivedContent`).
+- `sendContent` → `session-node-manager.ts:1721`; `ingestReceivedContent` → `session-node-manager.ts:2001`.
+- The agent-facing buffer `#receivedContent` is populated ONLY in `#appendVerifiedContent`
+  (`session-node-manager.ts:2145`, buffer write at :2160), called from `ingestReceivedContent`
+  (:2109) and `#releaseHeld` (:2188), drained by `takeReceivedContent` (:2201).
+
+**Seam placement (the design decision).**
+- **Outbound** → in the `cello_send` handler, after the 1 MB size cap, immediately before the
+  `sessionNodeManager.sendContent` call (`daemon.ts:3262`). Matches the documented seam ("at
+  cello_send, before sendContent") and AC-001 ("screenOutbound ran ahead of sendContent on the
+  wire"). On a non-allow verdict the handler returns WITHOUT calling sendContent — nothing on the
+  wire, session stays usable.
+- **Inbound** → inside `#appendVerifiedContent`, AFTER the transcript leaf append (`appendSessionLeaf`,
+  :2153) and BEFORE the `#receivedContent` buffer write (:2160). Rationale: `#appendVerifiedContent`
+  is the SINGLE point every delivered byte passes through, on every arrival path — direct stream,
+  held-then-released (ordering), and recovered-park (the M7 funnel, `daemon.ts:2038` →
+  `ingestReceivedContent` → here). Gating the outer `ingestReceivedContent` would MISS held content
+  (it early-returns at :2092 before reaching the append) — gating the buffer-write chokepoint cannot
+  be bypassed. This is exactly what AC-002 asks: "before the content enters the #receivedContent
+  buffer that cello_receive drains." The leaf (the tamper-evident record of what the peer actually
+  sent) is unaffected by screening; screening governs only what reaches the AGENT — which is the
+  correct split for later block/redact dispositions.
+
+**Architecture (the adapter, per the mandatory adapter pattern).**
+- New package **`core/gateway`** (`@cello-protocol/gateway`) — the SEPARATE gateway program. It owns:
+  the `SecurityGatewayClient` interface + verdict/wire types; `PassthroughGatewayClient` (in-process,
+  always-allow — the backward-compat default so the ~40 existing daemon/SNM tests keep passing); the
+  `LocalSidecarGatewayClient` (Unix-domain-socket framed-JSON client with a per-call deadline +
+  fail-closed); the gateway SERVER (`createGatewayServer`) + the `bin/cello-gateway` entry; and a
+  `spawnGatewaySidecar` helper for the composition root / tests. AC-003 (no security-PIPELINE logic
+  in `core/daemon`) holds — the daemon imports only the interface + the passthrough default + the
+  verdict types and calls the two seams; all detection (later stories) lives in `core/gateway`. The
+  interface/client/passthrough are not "pipeline logic," so they may live in `core/gateway` and be
+  imported — keeps the daemon clean. Dep direction: `core/daemon → core/gateway` (the gateway is a
+  leaf). Publish ripple (Andre pushes later): `core/gateway` becomes a dep of whatever bundles the
+  daemon into `@cello-protocol/connect` for local-sidecar mode — noted, not actioned.
+- **IPC = framed JSON-RPC over a Unix domain socket.** Chosen because it makes the Phase-2 remote
+  gateway a transport swap (socket → mTLS) behind the SAME `SecurityGatewayClient`, not a rewrite —
+  the story's stated goal. The client connects to a given UDS path (lifecycle — spawning the sidecar
+  — is a composition-root concern via `spawnGatewaySidecar`; the M9-CORE-001 test spawns the real
+  gateway bin and points the client at its socket, satisfying "the gateway PROCESS received the
+  content over the real channel, observed in the gateway's own request log").
+- **Injection.** `DaemonConfig.securityGateway?: SecurityGatewayClient` (`types.ts:138`), threaded to
+  the SNM constructor (`session-node-manager.ts:299`, used by the inbound seam) and held by the daemon
+  (outbound seam). Optional; defaults to `PassthroughGatewayClient`. SI-001 holds: a no-op pass-through
+  still RETURNS a verdict (allow) — backward-compat is "always-allow verdict," not "no verdict."
+  Fail-closed (SI-001/DB-001) is specifically a CONFIGURED gateway going unreachable → `gateway_unavailable`
+  + guidance (outbound returns, inbound holds — buffer not populated).
+
+**Never-hang (INV-6, foundation only here).** `LocalSidecarGatewayClient` carries a per-call deadline;
+a timeout or connect-failure resolves to a fail-closed verdict, never a hang. The full four-disposition
+contract + re-send is M9-FEED-001; M9-CORE-001 lays only the allow / fail-closed floor.
+
+**Test plan (red-first, Procedure §2/§4 — anchor to the program).** Model on
+`seam-4-daemon-orchestration.test.ts` (two real daemons over loopback libp2p, driven through the IPC
+`cello_send`/`cello_receive` path) + spawn the REAL `core/gateway` bin as a child on a temp UDS with a
+JSONL request log. AC-001: after `cello_send`, the gateway's request log shows the outbound screen and
+it preceded the wire send. AC-002: after delivery + `cello_receive`, the request log shows the inbound
+screen and the buffer was not drained before it. AC-003: a static scan asserts `core/daemon` holds no
+detector/scanner/redactor module. SI-001/DB-001: omit/kill the gateway → `cello_send` returns
+`gateway_unavailable`; inbound holds (no buffer populate).
+
+**Next.** Architecture phase: create `core/gateway` skeleton (package + interface + type stubs that
+compile but are unimplemented), so the integration test compiles and goes RED for the right reason.
+Then implement to green.
