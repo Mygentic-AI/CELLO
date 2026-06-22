@@ -349,3 +349,37 @@ M9-OUT-001 (outbound secret detection — gitleaks-style ANCHORED patterns, plai
 ReDoS/RE2 needed) is fully completable tonight. M9-FEED-001 (the verdict-return feedback channel) is
 also fork-free and completes CORE-001's stubbed outbound verdict handling. I'll do OUT-001 next; the
 inbound stories (IN-002/IN-003) wait on the decisions above.
+
+---
+
+## 2026-06-22 — M9-OUT-004 built (🟡, complete unit). OUT-001 reclassified as decision-coupled.
+
+**Reclassified OUT-001.** Doing M9-OUT-001 to the bar (the FULL 222-detector gitleaks dictionary,
+which is RE2-authored) couples it to BOTH the parked RE2-binding decision AND a large
+rule-port data task — so it is NOT cleanly fork-free tonight. Deferred with the other detectors.
+
+**Built M9-OUT-004 (cello-client `m9-build`, commit `e028b38`) — a complete, fork-free unit.**
+`core/gateway/src/detect/rate-limit.ts` — `OutboundRateLimiter`, a per-agent-identity sliding-window
+limiter (keyed on the agent identity, never a source IP), pure in-memory, deterministic via an
+injectable clock. AC-001 (N+1th throttled with a distinct `rate_limited` reason + retry-after; a
+throttled attempt consumes no slot) and AC-002 (under-cap never throttled/delayed) both green, plus
+window-slide and per-agent-isolation tests. 5 unit tests; gateway 20 tests + lint + typecheck green.
+The throttle verdict surfaces through CORE-001's outbound never-hang seam; the screen-fn assembly
+(detector chain → verdict) is M9-GATE-1's job.
+
+**Standing (all on `m9-build`, nothing pushed, nothing on `main`):**
+- M9-CORE-001 🟡 — complete + reviewed (the gateway package + daemon seam).
+- M9-IN-001 🟡½ — sanitizer built; AC-002 (RE2) parked; not yet wired into the screen fn.
+- M9-OUT-004 🟡 — complete.
+- Tests: daemon 378, gateway 20 — all green.
+
+**Decisions waiting on Andre (see the prior entry):** (1) RE2 binding, (2) DeBERTa runtime+model
+install-size strategy, (3) language detector. These gate the in-phase-order inbound detectors.
+
+**Recommended next (Andre's call in the morning):** resolve the 3 decisions → unblocks IN-002/IN-003
+and OUT-001 (full gitleaks). The remaining fork-free keystone is **M9-FEED-001** (the verdict-return
+feedback channel: the four dispositions, never-hang deadlines, the stateless re-send with
+`governance_decisions`) — it completes CORE-001's stubbed redact/warn handling and every detector's
+return path depends on it. It is intricate (it changes the `cello_send` contract), so it is the next
+thing I will take on if the autonomous window continues, building it red-first with the design note
+first per Procedure §6 and the full reviewer pass.
