@@ -1,0 +1,82 @@
+# ─── Identity ───────────────────────────────────────────────
+id: M9-OUT-002
+domain: Security Gateway
+actor: CLIENT
+priority: P0
+components:
+  - gateway
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the security gateway, I want to detect personal data in outbound messages, pass values on
+  the operator's whitelist silently, and warn on the rest, so that sharing your own contact
+  details is frictionless while a contact-list dump is caught — without blanket-redacting every
+  email and phone number.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When outbound content is screened"
+    action: "the gateway shall detect PII (email, phone, SSN, credit card, IP), and for each
+      match check it against the PII whitelist"
+  - trigger: "When a detected value is on the whitelist"
+    action: "the gateway shall pass it silently — no warn, no redaction"
+  - trigger: "When a detected value is not on the whitelist"
+    action: "the gateway shall produce a warn verdict for it (handled by M9-FEED-001)"
+  - trigger: "When many distinct PII values, or a structured contact list, are present in one
+      message"
+    action: "the gateway shall produce a single high-severity (bulk) warn, not one per value"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "a whitelist pre-seeded with the operator's own registered email and phone, and an
+      outbound message containing that own email"
+    when: "the gateway screens it"
+    then: "the value passes silently — no warn is produced and the value is not redacted; the
+      operator shared their own contact with zero setup"
+    test_type: unit
+    component_under_test: gateway
+
+  - id: AC-002
+    given: "an outbound message containing one non-whitelisted email address"
+    when: "the gateway screens it"
+    then: "a warn verdict is produced naming that value and its category — not a silent
+      redaction and not a pass"
+    test_type: unit
+    component_under_test: gateway
+
+  - id: AC-003
+    given: "an outbound message containing 30 distinct non-whitelisted contacts in a
+      list/table structure"
+    when: "the gateway screens it"
+    then: "a single high-severity bulk warn is produced (count carried), not 30 separate
+      warns — the contact-dump case is one escalated decision"
+    test_type: unit
+    component_under_test: gateway
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "the gateway shall not silently emit non-whitelisted PII as if it were clean"
+    adversarial_condition: "even when a contact dump is drip-fed one value per message to stay
+      under a bulk threshold — each non-whitelisted value still warns, and the per-session
+      cumulative view escalates a sustained drip"
+    test_type: unit
+    component_under_test: gateway
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  discussion_logs:
+    - "2026-05-16_1130_security-layer-improvements-from-production-reference"
+
+# ─── Implementation notes ──────────────────────────────────
+implementation_notes: >
+  Outbound PII (M9-DEFINITION-OF-DONE Phase 1). The PII model is whitelist + warn (NOT blanket
+  redaction — that failed "not onerous"; people share contacts constantly). Core set
+  email/phone/SSN/CC/IP via the Infisical RE2 patterns; the expanded Presidio set is opt-in
+  (Day-2). Bulk = severity within warn, not a separate feature. This story is the detector +
+  whitelist match + single/bulk classification; the warn UX (NOT-SENT, the allow-once/always
+  re-send, the WebAuthn whitelist add) is M9-FEED-001, and the warn round-trip across processes
+  is the gate (M9-GATE-1 AC-004).

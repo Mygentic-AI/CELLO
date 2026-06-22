@@ -1,0 +1,76 @@
+# ─── Identity ───────────────────────────────────────────────
+id: M9-IN-002
+domain: Security Gateway
+actor: CLIENT
+priority: P0
+components:
+  - gateway
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the security gateway, I want to classify each sanitized inbound message with an
+  in-process injection scanner, so that prompt-injection attempts that survive deterministic
+  sanitization are caught before the agent acts on them — with no external model call.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the gateway receives sanitized inbound text (from M9-IN-001)"
+    action: "the gateway shall classify it with the in-process DeBERTa-v3-small INT8 scanner
+      and produce a score, a verdict, and the matched categories"
+  - trigger: "When the score and the verdict disagree"
+    action: "the gateway shall let the score decide — score ≥ 70 blocks, ≥ 35 flags for
+      review, < 35 passes"
+  - trigger: "Always"
+    action: "the gateway shall run inference fully in-process — no network call"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "a sanitized message containing a known prompt-injection (e.g. an
+      ignore-previous-instructions + role-override attempt from the attack corpus)"
+    when: "the scanner classifies it"
+    then: "the score is at or above the block threshold and the verdict is block"
+    test_type: unit
+    component_under_test: gateway
+
+  - id: AC-002
+    given: "a sanitized, benign message"
+    when: "the scanner classifies it"
+    then: "the score is below the review threshold and the verdict is pass — the scanner does
+      not flag ordinary content"
+    test_type: unit
+    component_under_test: gateway
+
+  - id: AC-003
+    given: "a message the model scores high while a separate verdict field would say pass
+      (a deliberately contradictory case)"
+    when: "the gateway resolves the disagreement"
+    then: "the score governs — the message blocks at score ≥ 70, not passes"
+    test_type: unit
+    component_under_test: gateway
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "the scanner shall never make a network call during inference"
+    adversarial_condition: "even on an input crafted to resemble content a hosted model would
+      score better — the model is the pre-downloaded INT8 weights in process memory; the
+      gateway opens no socket during classification"
+    test_type: unit
+    component_under_test: gateway
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  discussion_logs:
+    - "2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway"
+  attack_corpus: "docs/planning/user-stories/m9/attack-corpus-reference.md"
+
+# ─── Implementation notes ──────────────────────────────────
+implementation_notes: >
+  Inbound Layer 2 (M9-DEFINITION-OF-DONE Phase 1). Pre-downloaded DeBERTa-v3-small INT8 only —
+  no training, no MLOps (project_m8_deberta_scope). Candidate models: protectai
+  deberta-v3-base-prompt-injection-v2 or Llama-Prompt-Guard-2-22M. A different scanner model is
+  an operator hook (Day 2), never a base-layer network call (INV-1). Consumes the sanitized text
+  from M9-IN-001. The block reaching the agent's receive path is the gate's job (M9-GATE-1).

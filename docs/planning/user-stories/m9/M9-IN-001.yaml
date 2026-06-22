@@ -1,0 +1,100 @@
+# ─── Identity ───────────────────────────────────────────────
+id: M9-IN-001
+domain: Security Gateway
+actor: CLIENT
+priority: P0
+components:
+  - gateway
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the security gateway, I want to deterministically sanitize every inbound message before
+  the injection scanner or the agent sees it, so that hidden, encoded, and oversized payloads
+  are neutralized at the entry point with no model and no network call.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When inbound content enters the gateway"
+    action: "the gateway shall run the deterministic sanitization steps in order — strip
+      invisible/smuggled Unicode, normalize lookalikes, decode-and-rescan encoded payloads,
+      score Shannon entropy, strip chat-template/special tokens, enforce the size cap — and
+      emit the sanitized text plus per-step detection notes"
+  - trigger: "If any sanitization step throws"
+    action: "the gateway shall treat the message as blocked, not pass partially-sanitized
+      content forward"
+  - trigger: "When the content exceeds the size cap"
+    action: "the gateway shall reject it with a distinct reason, before any further step"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+# Detector altitude: real adversarial input in → real verdict out. A hardcoded pass-through
+# fails every one of these because the malicious bytes survive.
+acceptance_criteria:
+  - id: AC-001
+    given: "an inbound string with data hidden in Unicode Tags-block codepoints
+      (U+E0000–E007F), zero-width characters, and a bidi override"
+    when: "the gateway sanitizes it"
+    then: "the output contains none of those codepoints, and a note records that
+      invisible/smuggled characters were stripped"
+    test_type: unit
+    component_under_test: gateway
+
+  - id: AC-002
+    given: "an input crafted to cause catastrophic backtracking in a naive injection-pattern
+      regex (the ReDoS class)"
+    when: "the gateway runs Step-9 pattern matching"
+    then: "it completes within a bounded time budget — the engine is RE2 (linear-time, no
+      backtracking); a native-RegExp implementation would exceed the budget"
+    test_type: unit
+    component_under_test: gateway
+
+  - id: AC-003
+    given: "a base64-encoded high-entropy payload embedded in otherwise normal prose"
+    when: "the gateway runs entropy scoring (Step 8)"
+    then: "the high-entropy segment raises the suspicion signal above the threshold, where the
+      same length of ordinary prose does not"
+    test_type: unit
+    component_under_test: gateway
+
+  - id: AC-004
+    given: "an input containing chat-template / special-token markers (`[SYSTEM]`,
+      `<|im_start|>`, `### Instruction`)"
+    when: "the gateway sanitizes it"
+    then: "those markers are stripped or escaped so they cannot be re-interpreted as a
+      privileged turn downstream"
+    test_type: unit
+    component_under_test: gateway
+
+  - id: AC-005
+    given: "an inbound message larger than the configured size cap"
+    when: "the gateway begins sanitization"
+    then: "it is rejected with a distinct `content_too_large` reason before any decode step
+      runs"
+    test_type: unit
+    component_under_test: gateway
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "the gateway shall never emit sanitized text that still contains invisible or
+      smuggled-Unicode payload"
+    adversarial_condition: "even when the payload is split across multiple Tags-block runs or
+      interleaved with visible text designed to look benign — the emitted text is checked to
+      contain zero codepoints in the smuggling ranges"
+    test_type: unit
+    component_under_test: gateway
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  discussion_logs:
+    - "2026-05-16_1130_security-layer-improvements-from-production-reference"
+  attack_corpus: "docs/planning/user-stories/m9/attack-corpus-reference.md"
+
+# ─── Implementation notes ──────────────────────────────────
+implementation_notes: >
+  Inbound Layer 1 (M9-DEFINITION-OF-DONE Phase 1). Deterministic only — no model, no network
+  (INV-1). RE2 is mandatory for all pattern matching (production-reference Finding 1); entropy
+  scoring is Finding 2. The cross-process delivery of the sanitized text + security_context to
+  the agent is proven by the gate (M9-GATE-1 AC-003), so this story stays at detector altitude
+  (unit). The injection scanner that consumes the sanitized text is M9-IN-002.

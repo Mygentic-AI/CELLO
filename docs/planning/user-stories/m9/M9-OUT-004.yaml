@@ -1,0 +1,54 @@
+# ─── Identity ───────────────────────────────────────────────
+id: M9-OUT-004
+domain: Security Gateway
+actor: CLIENT
+priority: P1
+components:
+  - gateway
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the security gateway, I want to rate-limit outbound messages per agent identity, so that a
+  compromised or runaway agent cannot flood a peer or use volume as an exfiltration channel —
+  while normal traffic is never throttled.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When an agent sends outbound messages"
+    action: "the gateway shall count them against a per-agent-identity rate limit"
+  - trigger: "When the rate exceeds the configured cap"
+    action: "the gateway shall throttle further sends with a distinct reason and a guidance
+      field, not a generic error"
+  - trigger: "While under the cap"
+    action: "the gateway shall not delay or throttle the message"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "a per-agent cap of N messages per window and an agent that exceeds it"
+    when: "the agent sends the N+1th message in the window"
+    then: "the send is throttled with a distinct `rate_limited` reason + guidance naming when
+      it may retry — keyed on the agent identity, not on the source IP"
+    test_type: unit
+    component_under_test: gateway
+
+  - id: AC-002
+    given: "an agent sending at a normal rate under the cap"
+    when: "it sends"
+    then: "no throttle or added delay is applied"
+    test_type: unit
+    component_under_test: gateway
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  discussion_logs:
+    - "2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway"
+
+# ─── Implementation notes ──────────────────────────────────
+implementation_notes: >
+  Outbound rate-limit (M9-DEFINITION-OF-DONE Phase 1). Adopt the Infisical named-preset pattern,
+  keyed on peer-id / agent identity (not IP). The cap is a configured value (M9-CFG-001); this
+  story specifies the cap and graceful throttle-with-guidance at the cap (the unbounded-resource
+  guard). In the company deployment the limits can later be signed into the manifest (Day-2).

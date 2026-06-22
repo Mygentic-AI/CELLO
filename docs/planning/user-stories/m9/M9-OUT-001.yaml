@@ -1,0 +1,83 @@
+# ─── Identity ───────────────────────────────────────────────
+id: M9-OUT-001
+domain: Security Gateway
+actor: CLIENT
+priority: P0
+components:
+  - gateway
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the security gateway, I want to detect credentials in outbound messages using the full
+  gitleaks dictionary plus a high-entropy catch-all, and redact them, so that an agent cannot
+  leak an API key or secret to a peer — including formats no one enumerated.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When outbound content is screened"
+    action: "the gateway shall match it against the configured secret dictionary (the gitleaks
+      detector set) and the generic high-entropy + keyword-proximity catch-all, and produce a
+      redact verdict naming each secret found and its category"
+  - trigger: "When a secret is found"
+    action: "the gateway shall redact it with a typed placeholder, never emit the secret value
+      in the delivered content"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "outbound text containing a real-format AWS access key, an Anthropic key
+      (sk-ant-…), a GitHub fine-grained PAT (github_pat_…), a Stripe live key, and a PEM
+      private-key block"
+    when: "the gateway screens it"
+    then: "every one is detected and replaced with a typed placeholder; none of the original
+      secret strings survives in the output"
+    test_type: unit
+    component_under_test: gateway
+
+  - id: AC-002
+    given: "outbound text containing a high-entropy credential for a service with NO dedicated
+      detector, sitting next to a keyword like `token=`"
+    when: "the gateway runs the generic catch-all"
+    then: "it is detected by entropy + keyword proximity and redacted — coverage is not limited
+      to the enumerated formats"
+    test_type: unit
+    component_under_test: gateway
+
+  - id: AC-003
+    given: "outbound text containing a high-entropy-looking but non-secret string the
+      stopword/allowlist layer excludes (e.g. a known placeholder, a UUID on the stoplist)"
+    when: "the gateway runs the catch-all"
+    then: "it is NOT redacted — the false-positive controls (stopwords, value allowlist) hold,
+      so clean traffic is not mangled"
+    test_type: unit
+    component_under_test: gateway
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "the gateway shall never emit delivered content that still contains a detected
+      secret value"
+    adversarial_condition: "even when the secret is base64- or hex-encoded inside otherwise
+      normal prose — the encoded-payload entropy path (shared with M9-OUT-003) catches it, and
+      the redacted output is checked to contain neither the raw nor the decoded secret"
+    test_type: unit
+    component_under_test: gateway
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  discussion_logs:
+    - "2026-05-16_1130_security-layer-improvements-from-production-reference"
+  external_sources:
+    - "https://github.com/gitleaks/gitleaks — the 222-detector ruleset (MIT) adopted as the secret dictionary; see M9-CAPABILITY-HARVEST §1"
+
+# ─── Implementation notes ──────────────────────────────────
+implementation_notes: >
+  Outbound secrets (M9-DEFINITION-OF-DONE Phase 1). Adopt the FULL gitleaks dictionary (all 222
+  detectors, MIT, RE2) as the configured secret pattern set, plus the generic-api-key entropy +
+  keyword catch-all and the stopword/allowlist false-positive layer (M9-CAPABILITY-HARVEST §1).
+  Secrets redact by DEFAULT (leaking a credential is essentially never intended); the rare
+  intentional send goes through the feedback channel's governance_decisions override (M9-FEED-001).
+  The redacted-form reaching the peer + the sender being told is the gate's job (M9-GATE-1 AC-001);
+  this story is the detector + redactor.

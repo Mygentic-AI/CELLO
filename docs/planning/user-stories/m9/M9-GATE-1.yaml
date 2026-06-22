@@ -1,0 +1,171 @@
+# ─── Identity ───────────────────────────────────────────────
+id: M9-GATE-1
+domain: End-to-End
+actor: AGENT
+priority: P0
+components:
+  - client        # the daemon (cello-client core/daemon)
+  - gateway       # the new local security gateway program
+  - transport
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the AGENT, I want every message I send and receive to pass through the local
+  security gateway — outbound screened before it leaves, inbound screened before I see
+  it — so that secrets and injections are caught on one machine, with no separate
+  infrastructure, before launch.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the agent calls cello_send"
+    action: "the daemon shall pass the content to the local gateway (screenOutbound) before
+      any content frame leaves; the gateway's verdict (clean / redact / block / warn)
+      decides what is sent and what cello_send returns"
+  - trigger: "When a content frame arrives at the receiving daemon"
+    action: "the daemon shall pass it to the local gateway (screenInbound) at
+      ingestReceivedContent before the agent's cello_receive can read it"
+  - trigger: "When the gateway redacts outbound content"
+    action: "the daemon shall send the redacted form and return to the sending agent the
+      list of what was redacted"
+  - trigger: "When the gateway blocks outbound content"
+    action: "the daemon shall send nothing and return NOT SENT with a distinct reason and a
+      guidance field"
+  - trigger: "If the gateway does not return a verdict within the screening deadline"
+    action: "the daemon shall treat it as a terminal block, never hang"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+# E2E: two real agents, each a separate daemon + gateway process, on localhost.
+# Every `then` names an observable only reachable if the gateway was really in the path
+# and the wire protocol really ran (cross-process state or transport evidence).
+acceptance_criteria:
+  - id: AC-001
+    given: "Agent A's outbound message contains an AWS-format secret key"
+    when: "A calls cello_send to B (a SEPARATE daemon+gateway process)"
+    then: "B's cello_receive returns the message with the secret replaced by a placeholder;
+      the original secret string appears nowhere in B's received content or B's gateway/daemon
+      logs; and A's cello_send return names the redacted item"
+    test_type: e2e
+    component_under_test: gateway
+
+  - id: AC-002
+    given: "A's outbound message carries an injection artifact in its body (a forged
+      `[SYSTEM]` instruction block)"
+    when: "A calls cello_send"
+    then: "cello_send returns {ok:false, reason, guidance} and B's daemon never receives a
+      content frame for that message — B's cello_receive yields nothing for it"
+    test_type: e2e
+    component_under_test: gateway
+
+  - id: AC-003
+    given: "A message bound for B contains invisible Unicode tag characters (U+E0000–E007F)"
+    when: "it arrives at B's daemon"
+    then: "B's gateway strips them at ingestReceivedContent and B's cello_receive returns the
+      cleaned text plus a security_context note recording the transformation"
+    test_type: e2e
+    component_under_test: gateway
+
+  - id: AC-004
+    given: "A's outbound message contains a non-whitelisted email address"
+    when: "A calls cello_send, then re-sends the same content with
+      governance_decisions {<flag-id>: redact}"
+    then: "the first call returns NOT SENT (warn) with the flagged item and guidance and B has
+      received nothing; the re-send delivers the message to B with the email redacted"
+    test_type: e2e
+    component_under_test: gateway
+
+  - id: AC-005
+    given: "A sends B a sequence of messages, one of which B receives via the relay
+      park-and-pull recovery path (B was offline, then pulled it)"
+    when: "the sequence completes"
+    then: "A's gateway recorded a screenOutbound for every message A sent, and B's gateway
+      recorded a screenInbound for every message B received INCLUDING the recovered one — no
+      content reached B's agent without a screenInbound"
+    test_type: e2e
+    component_under_test: gateway
+    # gated on MSG-001-3b increment 3 (the unified inbound funnel) — see implementation_notes
+
+  - id: AC-006
+    given: "A's gateway is forced to exceed the screening deadline on a message"
+    when: "A calls cello_send"
+    then: "cello_send returns a terminal block verdict with reason `governance_timeout` within
+      the deadline budget; A's call does not block beyond it"
+    test_type: e2e
+    component_under_test: gateway
+
+  - id: AC-007
+    given: "A's outbound message is legitimate — no secret, PII, injection artifact, or
+      invisible character"
+    when: "A calls cello_send to B"
+    then: "B's cello_receive returns the message content byte-identical to what A sent, with no
+      transformation applied (security_context transformations count is zero); cello_send
+      reports the message sent clean — the gateway does not mangle, drop, or delay clean traffic"
+    test_type: e2e
+    component_under_test: gateway
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "B's agent shall never read content via cello_receive that did not pass B's
+      gateway screenInbound"
+    adversarial_condition: "even when the content arrives via the relay park-and-pull recovery
+      path instead of the direct stream — the M7 bypass risk the single-inbound-funnel AC
+      (bc047c7) exists to close"
+    test_type: e2e
+    component_under_test: gateway
+
+  - id: SI-002
+    statement: "the gateway base pipeline shall never make a network call while screening a
+      message"
+    adversarial_condition: "even on an input crafted to look like content that would benefit
+      from external scoring — the only model is the in-process DeBERTa scanner; the gateway
+      process opens no socket other than the daemon IPC during a screen"
+    test_type: e2e
+    component_under_test: gateway
+
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the local gateway process is unreachable (crashed)"
+    fallback: "the daemon shall fail closed — cello_send returns a distinct
+      `gateway_unavailable` reason + guidance and sends nothing, and inbound content is held,
+      not delivered unscreened — instead of passing content through ungated"
+    test_type: e2e
+    component_under_test: client
+
+# ─── Observability (M4+) ───────────────────────────────────
+observability:
+  events:
+    - name: "security.screen.completed"
+      level: info
+      trigger: "the gateway returns a verdict for a message (inbound or outbound)"
+      context_fields: [direction, disposition, sessionId, correlationId]
+      correlationId: true
+  error_events:
+    - name: "security.gateway.timeout"
+      level: error
+      trigger: "the screening deadline is exceeded; the daemon converts it to a block verdict"
+      context_fields: [direction, sessionId, reason, correlationId]
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  discussion_logs:
+    - "2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway"
+    - "2026-06-21_1600_m9-content-channel-seam-and-entry-plan"
+  attack_corpus: "docs/planning/user-stories/m9/attack-corpus-reference.md"
+
+# ─── Implementation notes ──────────────────────────────────
+implementation_notes: >
+  This is the Phase-1 gate (M9-CAPABILITY-HARVEST.md §9). Phase 1 is local only — gateway as a
+  sidecar next to each daemon; NO directory attestation (that is Gate 2 / M9-ATTEST-001). The
+  gate spawns the real programs: extend the M7 J-SPINE harness (directory + relay + two daemons)
+  with a gateway sidecar per daemon. Every top-level describe is wrapped
+  `describe.skipIf(!process.env.CELLO_E2E_LIVE)`.
+  AC-005 and SI-001 are BLOCKED on MSG-001-3b increment 3 (M7) — until the recovered-park-content
+  path routes through ingestReceivedContent, the recovered-content screen cannot be honestly
+  green. The rest of the gate does not depend on it.
+  Component stories derive from this gate: M9-CORE-001 (skeleton + seam), M9-IN-001/002/003
+  (inbound), M9-OUT-001/002/003/004 (outbound), M9-FEED-001 (the feedback channel — AC-002/004/006
+  live here), M9-CFG-001 (config), M9-REC-001 (local records). Each names which of these ACs it
+  carries the load for.

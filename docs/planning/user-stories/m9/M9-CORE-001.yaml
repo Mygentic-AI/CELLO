@@ -1,0 +1,113 @@
+# ─── Identity ───────────────────────────────────────────────
+id: M9-CORE-001
+domain: Security Gateway
+actor: CLIENT
+priority: P0
+components:
+  - client        # core/daemon — the two seam call sites
+  - gateway       # the new security gateway program (separate package/repo)
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO CLIENT (daemon), I want to route every outbound and inbound message through
+  a separate local gateway program via one narrow interface, so that all later detection and
+  governance plugs into two fixed points and no message can reach the wire or the agent
+  without being screened.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the agent calls cello_send"
+    action: "the daemon shall call SecurityGatewayClient.screenOutbound with the content
+      before sessionNodeManager.sendContent, and act on the returned verdict"
+  - trigger: "When a content frame is ingested at ingestReceivedContent"
+    action: "the daemon shall call SecurityGatewayClient.screenInbound before the content
+      enters the #receivedContent buffer that cello_receive drains"
+  - trigger: "When CELLO_ENV is local"
+    action: "the daemon shall start/connect to the gateway as a local sidecar process and
+      reach it only through the SecurityGatewayClient interface — no pipeline code in the
+      daemon"
+  - trigger: "If the gateway returns no verdict (unreachable or timed out)"
+    action: "the daemon shall fail closed — never send or deliver the content ungated"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A daemon with a gateway sidecar, screening wired with a pass-through (no-op) gateway"
+    when: "the agent calls cello_send and the message is delivered to a peer"
+    then: "the gateway process received the content over the real daemon↔gateway channel
+      (observed in the gateway's own request log) BEFORE the peer received any content frame —
+      i.e. screenOutbound ran ahead of sendContent on the wire"
+    test_type: integration
+    component_under_test: gateway
+
+  - id: AC-002
+    given: "A daemon with a pass-through gateway sidecar"
+    when: "a content frame arrives and the agent later calls cello_receive"
+    then: "the gateway process received the inbound content (its request log shows the inbound
+      screen) and cello_receive returns the content only after that screen completed — the
+      receive buffer was not populated before screenInbound"
+    test_type: integration
+    component_under_test: gateway
+
+  - id: AC-003
+    given: "the cello-client core/daemon package source"
+    when: "the package is scanned for security-pipeline logic (detector/redactor/scanner code)"
+    then: "none is present in core/daemon — the daemon holds only the SecurityGatewayClient
+      interface and its call sites; all pipeline code lives in the separate gateway package"
+    test_type: unit
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "the daemon shall never put content on the wire, nor deliver content to the
+      agent, without a gateway verdict for that content"
+    adversarial_condition: "even when the gateway is unreachable or slow — the path fails
+      closed (distinct reason + guidance), it does not silently pass the content ungated"
+    test_type: integration
+    component_under_test: client
+
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the gateway sidecar is unreachable at a call site"
+    fallback: "the daemon shall return (outbound) or hold (inbound) with a distinct
+      `gateway_unavailable` reason + guidance, instead of sending/delivering ungated content"
+    test_type: integration
+    component_under_test: client
+
+# ─── Observability (M4+) ───────────────────────────────────
+observability:
+  events:
+    - name: "security.gateway.connected"
+      level: info
+      trigger: "the daemon establishes the SecurityGatewayClient connection at startup"
+      context_fields: [mode, correlationId]
+      correlationId: false
+  error_events:
+    - name: "security.gateway.unavailable"
+      level: error
+      trigger: "a screen call cannot reach the gateway"
+      context_fields: [direction, reason, correlationId]
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  discussion_logs:
+    - "2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway"
+    - "2026-06-21_1600_m9-content-channel-seam-and-entry-plan"
+
+# ─── Implementation notes ──────────────────────────────────
+implementation_notes: >
+  The DoD foundation story (M9-DEFINITION-OF-DONE Phase 1). Builds the gateway program skeleton
+  (separate package), the SecurityGatewayClient interface (per the mandatory adapter pattern,
+  with a local stub for CELLO_ENV=local), and the two daemon call sites: screenOutbound at
+  cello_send (daemon.ts:2616, before sessionNodeManager.sendContent at session-node-manager.ts:1406)
+  and screenInbound at ingestReceivedContent (session-node-manager.ts:1548). This story wires the
+  seam with a PASS-THROUGH gateway; the detectors and the verdict handling are later stories
+  (M9-IN-*, M9-OUT-*, M9-FEED-001).
+  Cross-repo: this modifies cello-client (core/daemon) — the build loop must follow the publish
+  procedure (bump the changed cello-client packages + @cello-protocol/connect; update the
+  trustless-cello directory/relay deps; no workspace:* for the five cello-client packages). The
+  gate (M9-GATE-1) proves the wiring live, so this story carries no separate composition-root AC.

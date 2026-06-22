@@ -1,0 +1,71 @@
+# ─── Identity ───────────────────────────────────────────────
+id: M9-IN-003
+domain: Security Gateway
+actor: CLIENT
+priority: P1
+components:
+  - gateway
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the security gateway, I want to detect the language of inbound messages and hold those
+  outside the operator's allowlist (default: English), so that low-resource-language jailbreak
+  attempts are caught — without blocking legitimate short messages on a guess, and with no
+  external call.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When inbound content is screened and the language allowlist is on"
+    action: "the gateway shall detect the language with an in-process n-gram classifier
+      (fastText lid.176 / CLD3 / langid) and, if it confidently detects a non-allowlisted
+      language, hold the message with a legible note naming the language and how to allow it"
+  - trigger: "When detection confidence is low, or the message is very short"
+    action: "the gateway shall allow the message — it shall not block on an uncertain guess"
+  - trigger: "Always"
+    action: "the gateway shall detect language in-process, with no network call"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "an allowlist of {English} and an inbound paragraph confidently detected as a
+      non-English language"
+    when: "the gateway screens it"
+    then: "the message is held with a note that names the detected language and tells the
+      operator how to add it to the allowlist"
+    test_type: unit
+    component_under_test: gateway
+
+  - id: AC-002
+    given: "an allowlist of {English} and a very short or ambiguous message (e.g. \"ok thanks\")
+      that the classifier cannot confidently place outside the allowlist"
+    when: "the gateway screens it"
+    then: "the message is allowed through — it is not held"
+    test_type: unit
+    component_under_test: gateway
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "the gateway shall not let a confidently-detected non-allowlisted language
+      bypass screening by virtue of its language"
+    adversarial_condition: "even when the message is a jailbreak phrased in a low-resource
+      language to dodge English-trained detection — a confident non-allowlisted detection holds
+      it; the injection scanner (M9-IN-002) is not the only gate on it"
+    test_type: unit
+    component_under_test: gateway
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  discussion_logs:
+    - "2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway"
+
+# ─── Implementation notes ──────────────────────────────────
+implementation_notes: >
+  Inbound language allowlist (M9-DEFINITION-OF-DONE Phase 1), default English, ON by default.
+  Detection is a small in-process n-gram classifier (fastText lid.176 ~917 KB, or CLD3 / langid)
+  — not an LLM, no network; fits INV-1 the same way DeBERTa does. For English-vs-not, Unicode
+  script inspection covers most of it. The confident-only / allow-on-uncertainty rule (AC-002) is
+  load-bearing for "not onerous." The held-message note reaching the operator is the feedback
+  channel's job (M9-FEED-001 / the gate); this story is the detector.
