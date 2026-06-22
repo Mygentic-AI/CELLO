@@ -3747,3 +3747,28 @@ createSessionNode; `#connectSessionRelay`; acceptSession; `#wireSessionLiveness(
 **Resumption method:** `pnpm typecheck` is the checklist for signature/caller mismatches (top-down); the two
 greps above list the in-memory body conversions and DB queries tsc won't flag. The live j-loopback is the
 final enforcer.
+
+**PROGRESS UPDATE (same session, further in):** ALL 7 in-memory maps are now fully converted — the grep
+`grep -nE '#(activeNodes|trees|receivedContent|sessionLiveness|contentDesynced|responderSealSubmitted|awaitingAck)\.(get|set|has|delete)\(sessionId' … | grep -v '#k('` returns EMPTY. Methods converted incl.
+`#parkContent`, getSessionNodePeerId, getSessionTree/RootHex, appendSessionLeaf (incl. its session_tree_leaves
+INSERT → now carries agent_name), connectToCounterparty, sendContent, submitSealLeaf, `#maybeAutoAcknowledgeSeal`,
+ingestReceivedContent, takeReceivedContent, `#trackAwaitingAck`/`#resolveAwaitingAck`/`#handleTtfExpiry`/
+`#untrackAwaitingAck`/`#clearAwaitingForSession`, `#sendDeliveryAck`, `#loadTreeFromDb` (→ WHERE agent_name AND
+session_id), getSessionRecord(agentName, sessionId), getPersistedRelayEndpoint(agentName, …),
+markInterruptedWithDetails(agentName, …). The awaiting-ACK CALLBACK signatures changed too:
+`#onAwaitingPersisted(agentName, sessionId, hashHex)` and `#onAwaitingTtf(agentName, sessionId, hashHex,
+content)` — their hook-setter type + the daemon.ts implementations must add agentName.
+
+**NEW SCOPE FINDING:** those two callbacks (and the `#contentParkHook`) write the daemon-side durable
+**retry_queue / awaiting-content** table keyed by session_id — which is ALSO ambiguous in loopback (A and B
+share the session_id). So retry_queue (and the **nonce-dedup** store) must be scoped by `(agent, session_id)`
+too — a 4th/5th table beyond the original 3. Decide: key those tables by `(agent_name, session_id)` as well.
+
+**STILL REMAINING (DB methods + migration + daemon.ts):** in session-node-manager.ts the queries listed by
+`grep -n 'WHERE session_id' core/daemon/src/session-node-manager.ts` — recordSealCertificate,
+recordCounterpartyPrimary, getSealCertificate, the seal_interrupted UPDATE + getSealInterruptedArtifacts,
+`#updateSessionStatus`, `#insertSessionRow` (INSERT + composite PK), the AC-010 orphan-detection UPDATE, the
+relay-endpoint persist UPDATE — each adds `agent_name = ? AND`. Plus registerRelayStream + `#registerContentHandler`
+signatures (thread agentName). Then: the migration (sessions/session_tree_leaves/seal_interrupted_artifacts +
+retry_queue/nonce). Then daemon.ts: thread connState.currentAgent / inbound agentName everywhere + the
+double-accept guard. `pnpm typecheck` drives it; live j-loopback proves it.
