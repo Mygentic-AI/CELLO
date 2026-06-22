@@ -4059,3 +4059,51 @@ on append. Finding #3 (recover-path ordering depends on relay pull order when B 
 parked hashes) is the SAME accepted next sub-increment (content-before-witness / catch-up) — tracked
 in the DoD MSG-4 line, no code change now. Re-verified after the fixes: daemon suite 364 passed,
 typecheck + lint clean, j-content 7/7 + j-loopback bilateral seal GREEN.
+
+---
+
+## 2026-06-22 — DOD-MSG-4 self-ordering content frame: DESIGN NOTE (before code, Procedure §6)
+
+**Decision (Andre):** the content frame carries the full signed relay ordering record, so B verifies +
+orders from the frame ALONE. The race is removed by design (nothing to wait for); the hold/release
+machinery (`#heldContent`) stays only for a GENUINE gap (an earlier message still parked), now fed by a
+frame-carried, verified sequence instead of the racy separate witness stream.
+
+**Producer/consumer flow.**
+- *Producer (sender A, `sendContent`).* A already submits the content hash to the relay FIRST
+  (`submitMessageHash` → the relay assigns `seq`, builds `Structure2`, today returns ONLY
+  `sequence_number`). Change: the relay returns the full record; A stamps it into the content frame AND
+  the parked entry. The record A needs = `structure1_cbor` (sender-signed: `[1, content_hash,
+  sender_pubkey, session_id, last_seen_seq, ts]`) + `structure2_cbor` (`{seq, sender_pubkey,
+  content_hash, sender_signature, scan_result, prev_root}`). A builds `structure1_cbor` itself (inside
+  the relay client's `#doSubmit`) — thread it out via `SubmitResult`; `structure2_cbor` comes from the
+  relay ack.
+- *Consumer (receiver B, `#handleContentStream` → `ingestReceivedContent`).* B reads `structure1_cbor`
+  + `structure2_cbor` from the frame, verifies `Ed25519.verify(sender_pubkey, structure1_cbor,
+  sender_signature)` (same check the relay does — relay-node line 1052), confirms the framed
+  `content_hash` matches the content, reads `seq` (normalize 1-based → 0-based), and feeds the gate the
+  canonical sequence directly. No dependence on `leaf_deliver` timing → the content-before-witness race
+  cannot occur. `recordWitnessedSequence` is now ALSO fed from the frame (not only `onLeafDeliver`).
+
+**Finding 1 (correctness requirement, not optional):** to verify `sender_signature`, B needs the EXACT
+signed bytes = `structure1_cbor`. `Structure2` alone omits `session_id`/`last_seen_seq`/`ts`, so it is
+NOT sufficient to verify the signature. The frame must carry `structure1_cbor` too. (The relay's
+`leaf_deliver` already carries BOTH — the content frame mirrors that pair.)
+
+**Finding 2 (trust nuance — Andre's stated goal):** `Structure2`'s only signature is the SENDER's
+(over `structure1_cbor`). The relay does NOT sign `Structure2`, so from the frame alone B can verify
+"A signed this content" but NOT "the RELAY assigned this sequence." To literally meet the stated goal —
+B verifies the *relay's committed position* — the relay must sign the `(content_hash, seq, ts)`
+assignment; the mechanism already exists (PERSIST-012 signed ACK, `relay_signature` /
+`buildRelayAckTbs`). Without it, a lying A can only mis-state its OWN message's sequence, which the
+bilateral seal's root cross-check catches (roots diverge → no seal = self-DoS, not a forgery) — so
+sender-signature-only is SAFE but weaker than the stated goal. This is the one decision to confirm with
+Andre; it is additive and reached last (the receiver verify step), so increments 1–3 proceed regardless.
+
+**Build (both repos, red-first, focused unit test per increment + a deterministic live proof last):**
+1. Relay returns `structure2_cbor` in `hash_submit_ack`; the daemon relay client returns
+   `{sequence_number, structure1_cbor, structure2_cbor}` in `SubmitResult`.
+2. Sender stamps `structure1_cbor`+`structure2_cbor` into the direct content frame AND the parked entry.
+3. Receiver verifies the sender signature, matches the content hash, feeds the gate the framed sequence.
+4. Deterministic live out-of-order proof (now possible — ordering no longer races on two streams).
+(Optional per Finding 2: relay signs the seq assignment; carry `relay_signature` in the frame; B verifies.)
