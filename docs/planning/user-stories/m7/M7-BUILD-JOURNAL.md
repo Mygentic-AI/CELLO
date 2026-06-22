@@ -3567,3 +3567,28 @@ row → double-accept reject / session_not_owned). Binary-anchored (no in-proces
 
 **Risk note (honest).** ~60 atomic access points + a 3-table DB migration, can't partial-land. Large for a
 single coherent push; the red test + design note are the safe foundation that tee it up cleanly.
+
+---
+
+## 2026-06-22 — J-LOOPBACK red test landed + a SCOPE FINDING (bigger than the story scoped)
+
+Wrote the binary-anchored red test `j-loopback.spine.test.ts` (ONE daemon, TWO agents, A→B converse +
+bilateral seal, byte-identical root, no 2nd daemon). Running it revealed J-LOOPBACK has TWO blockers,
+not the one the story (SESSION-CORE-REKEY-001) scoped:
+
+1. **Standing-receiver blocker (NEW finding, not in the story).** `cello_initiate_session` returns
+   `standing_receiver_unavailable` PERSISTENTLY (20 retries / 8.6s) when two agents share one daemon —
+   it never becomes ready. The standing receiver is ONE per daemon (sentinel agentName), created at
+   `SessionNodeManager.initialize()` (session-node-manager.ts:454). Why it isn't ready in the two-agent-
+   one-daemon scenario is not yet pinned down (needs daemon-log evidence) — but it surfaces BEFORE the
+   session-core collision, so it must be resolved too. This is a dimension the story did not anticipate.
+2. **Session-core collision (the story's scope).** The 60-point `(agent, session_id)` re-key + 3-table
+   daemon-DB migration (per the prior design note).
+
+**Status / honest call.** The red test is SKIPPED (suite stays green) as the teed-up target. J-LOOPBACK
+is confirmed all-or-nothing (a half-rekeyed daemon is broken) AND larger than scoped (standing receiver +
+re-key + migration). It was NOT implemented — a ~60-point atomic refactor plus an unresolved standing-
+receiver blocker is a large coherent push best done with fresh context (a saturated context risks subtle
+misses in the cascade). The design note + red test land it cleanly for that push. The story
+(SESSION-CORE-REKEY-001) should be UPDATED to add the standing-receiver blocker to its scope/ACs before
+implementation. Recorded for the next session.
