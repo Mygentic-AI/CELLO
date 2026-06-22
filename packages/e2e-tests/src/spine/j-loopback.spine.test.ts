@@ -94,7 +94,7 @@ describe.skip("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", (
       await new Promise((r) => setTimeout(r, 300));
       init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string; reason?: string };
     }
-    expect(init.ok, `A→B initiate on one daemon failed: ${JSON.stringify(init)}`).toBe(true);
+    expect(init.ok, `A→B initiate on one daemon failed: ${JSON.stringify(init)}\n--- daemon node/standing/dir logs ---\n${daemon.output.split("\n").filter((l) => /node|standing|receiver|directory_signaling|login|initialize|started/i.test(l)).slice(-30).join("\n")}`).toBe(true);
     const sessionIdA = init.sessionId!;
     const inbound = (await awaitP) as { type?: string; session_id?: string };
     expect(inbound.type, `B must accept A's session as its OWN end (not a collision): ${JSON.stringify(inbound)}`).toBe("new_session");

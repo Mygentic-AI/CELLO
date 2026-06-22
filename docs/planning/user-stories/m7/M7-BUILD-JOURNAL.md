@@ -3592,3 +3592,27 @@ receiver blocker is a large coherent push best done with fresh context (a satura
 misses in the cascade). The design note + red test land it cleanly for that push. The story
 (SESSION-CORE-REKEY-001) should be UPDATED to add the standing-receiver blocker to its scope/ACs before
 implementation. Recorded for the next session.
+
+---
+
+## 2026-06-22 — J-LOOPBACK standing-receiver blocker DIAGNOSED (evidence, not assumption)
+
+Corrected my earlier assumption-based "deep blocker" claim by getting real daemon-log evidence (ran the
+test un-skipped, dumped daemon.output at the initiate failure). The standing receiver IS created — but
+in a THRASH LOOP in the two-agent-one-daemon scenario. The captured daemon log shows the cycle repeating
+~10×: `session.node.created standing_receiver_<uuid>` (agentName `__standing_receiver__`) →
+`frost.directory.commitment.response` → `session.node.created agentName:agentB`. I.e. the SINGLE
+per-daemon standing receiver is repeatedly CONSUMED by an agentB session-node handoff (acceptSession reuses
+the standing receiver as the receiver's session node, session-node-manager.ts:579/586-598) and replaced —
+so when agentA's `cello_initiate_session` checks `#standingReceiverReady` it finds it null/false
+(consumed mid-cycle) → `standing_receiver_unavailable`, persistently. agentB is driving repeated
+FROST/session-node creation (the recurring `frost.directory.commitment.response`); the exact trigger of
+agentB's loop is the next dig for the implementer.
+
+ROOT SHAPE (solid): the standing-receiver model is ONE-per-daemon (a single `#standingReceiver` field,
+sentinel agentName). It cannot serve TWO agents on one daemon — exactly the loopback case. So DOD-LOOP-1
+needs the standing receiver re-architected as PER-AGENT (each agent its own standing receiver) IN ADDITION
+TO the (agent, session_id) session-core re-key + the 3-table DB migration. The story
+(SESSION-CORE-REKEY-001) scoped only the session-core keying; it must add the per-agent standing-receiver
+rework. This is a genuinely large, multi-part, all-or-nothing piece — confirmed by evidence, deferred to a
+fresh-context implementation push. The red test (skipped) + this diagnosis tee it up.
