@@ -1,132 +1,74 @@
 ---
-name: M9 Overview — Security Scanning, Redaction, Governance
+name: M9 Overview — Security and Governance Layer
 type: design
-date: 2026-05-16
-topics: [security-architecture, prompt-injection, scanning, redaction, layer-1, layer-2, layer-3, layer-4, layer-5, layer-6, audit-logging, continuous-verification, extensibility, hooks, gateway, split-process]
+date: 2026-06-22
+topics: [security-architecture, prompt-injection, redaction, gateway, governance, two-phase, hooks, directory-attestation]
 status: active
-description: Implementation scope, story structure, known gaps, and rewrite guidance for the M9 security milestone covering CELLO's six-layer prompt injection defense. V3 architecture (separate security gateway, hook extensibility, directory-backed hash chain) supersedes the original implementation target.
+description: Entry point for M9, the security and governance layer. Points at the current plan (the capability harvest and the Definition of Done). The earlier six-layer framing and the eight SCAN/REDACT/MONITOR story YAMLs are superseded; the mapping is below.
 ---
 
-# M9 Overview — Security Scanning, Redaction, and Governance
+# M9 Overview — Security and Governance Layer
 
-M9 implements CELLO's six-layer prompt injection defense as a **separate security gateway process**. When M9 is complete, every message processed by a CELLO client passes through an independently-deployed deterministic sanitization pipeline, an LLM-based scanner, an outbound gate, a redaction pipeline, an LLM call governor, and deny-all access control — with every blocking decision logged to an append-only audit record backed by directory attestation, and a nightly verification job watching for configuration drift and hash chain tampering.
+M9 is CELLO's security and governance layer. It runs as a **separate gateway program** that
+every message passes through. On the way in, it screens for prompt injection. On the way out,
+it stops secrets and personal data from leaking. It reports back to the agent what it did to
+each message.
 
-**⚠️ V3 architecture update (2026-05-28):** The security layer has been redesigned as a separate gateway package and repository. The pipeline no longer lives in the `client` package. Read the V3 design document before touching any implementation.
+## Read these, in order
 
-**Before implementing any story in this milestone, read in order:**
-1. `docs/planning/discussion_logs/2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway.md` — **V3 canonical design**; separate gateway, hook architecture, content hash chain, directory attestation, Day 1 vs Day 2 scope
-2. `docs/planning/prompt-injection-defense-layers-v2.md` — the six base layer spec; unchanged in V3, but the implementation home has moved to the gateway package
-3. `docs/planning/discussion_logs/2026-04-11_1400_security-architecture-layers-and-trust-signal-classes.md` — the four-layer system model and why each layer exists
-4. `docs/planning/discussion_logs/2026-05-16_1130_security-layer-improvements-from-production-reference.md` — six production gaps; Findings 1–3 and 6 are Day 1 in V3; Findings 4 and 5 remain deferred
+1. **`M9-CAPABILITY-HARVEST.md`** (this folder) — the decisions. What's in, what's out, the
+   governance feedback channel, the config design, and the two-phase build. This is where the
+   reasoning lives.
+2. **`M9-DEFINITION-OF-DONE.md`** (this folder) — the plan. The two phases, the two end-to-end
+   gates, and the full list of stories with a one-line done-condition each.
+3. **`discussion_logs/2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway.md`** —
+   the gateway internals (the interface contract, the hook design, the record/attestation model).
+4. **`discussion_logs/2026-06-21_1600_m9-content-channel-seam-and-entry-plan.md`** — where the
+   gateway attaches to the M7 daemon, and the build gate (MSG-001-3b).
 
----
+## The shape of the plan
 
-## Layer-to-Story Map
+- **Two phases.** Phase 1 runs everything locally and is launchable on its own. Phase 2 adds
+  the remote (company) gateway and the tamper-proof records. You can stop after Phase 1.
+- **Two gates.** Each phase ends with one end-to-end test against the real programs.
+- **Build is blocked on M7** (MSG-001-3b increment 3) for the live inbound screening. The
+  gateway skeleton and the design can start now.
 
-| Layer | What it does | Story |
+The story list and done-conditions are in the Definition of Done. Don't duplicate them here.
+
+## Superseded — the old six-layer framing and the eight story YAMLs
+
+The earlier design split M9 into six numbered layers and eight story files. The prune
+(2026-06-22) changed that. The eight YAMLs in this folder are **superseded by the Definition
+of Done's story list.** Mapping:
+
+| Old story | Old scope | Now |
 |---|---|---|
-| Layer 1 | 11-step deterministic sanitization (no API calls) | CELLO-SCAN-001 |
-| Layer 2 | LLM-based injection scanner (DeBERTa local; **no custom endpoint** — use an `after_sanitize` hook instead) | CELLO-SCAN-002 |
-| Layer 3 | Outbound gate — secrets, artifacts, exfiltration, ToS self-check | CELLO-SCAN-003 |
-| Layer 4 | Redaction pipeline — secrets then PII, in order | CELLO-REDACT-001 |
-| Layer 5 | LLM call governor — spend, volume, lifetime, dedup | CELLO-REDACT-002 |
-| Layer 6 | Deny-all filesystem + DNS rebind-safe URL validation | CELLO-REDACT-003 |
-| Audit & verification | Append-only logging + nightly checksum/drift verification | CELLO-REDACT-004 |
-| Continuous monitoring | Agent-scheduled audit script, independent of agent state | CELLO-MONITOR-001 |
+| CELLO-SCAN-001 | Layer 1 sanitization | → **M9-IN-001** (inbound sanitization) |
+| CELLO-SCAN-002 | Layer 2 DeBERTa scan | → **M9-IN-002** (inbound injection scan) |
+| CELLO-SCAN-003 | Layer 3 outbound gate | → split into **M9-OUT-001/002/003**; its moderation/ToS parts moved to Day 2 (LLM) |
+| CELLO-REDACT-001 | Layer 4 redaction | → **M9-OUT-001** (secrets) + **M9-OUT-002** (PII whitelist + warn) |
+| CELLO-REDACT-002 | Layer 5 LLM-call governor | **RETIRED** — cut in the prune (governs the agent's own LLM use, upstream of `cello_send`) |
+| CELLO-REDACT-003 | Layer 6 deny-all FS/URL | **RETIRED** — cut (upstream tool/sandbox concern) |
+| CELLO-REDACT-004 | Audit + verification | → local records **M9-REC-001** (Phase 1) + directory attestation **M9-ATTEST-001** (Phase 2) |
+| CELLO-MONITOR-001 | Continuous monitoring | → folded into the **M9-ATTEST-001** check job (Phase 2) |
 
----
+New stories with no old equivalent: **M9-CORE-001** (gateway skeleton + daemon seam),
+**M9-IN-003** (language allowlist), **M9-OUT-004** (rate-limit), **M9-FEED-001** (the
+governance feedback channel), **M9-CFG-001** (config storage), **M9-GATE-1** / **M9-REMOTE-001**
+/ **M9-GATE-2** (Phase 2).
 
-## Story Naming Problems
+The full per-story YAML specs are written when each story is picked up for build (the project's
+`/cello-story` flow), against the Definition of Done. The two retired YAMLs (REDACT-002,
+REDACT-003) describe cut work — do not build from them.
 
-The current story naming has drifted from the layer structure. **Before implementation, stories should be renamed:**
+`attack-corpus-reference.md` (this folder) stays as the attack catalog for writing tests.
 
-- **CELLO-REDACT-002** is Layer 5 (call governance) — not redaction. Rename to `CELLO-GOV-001`.
-- **CELLO-REDACT-003** is Layer 6 (access control) — not redaction. Rename to `CELLO-ACCESS-001`.
-- **CELLO-REDACT-004** is audit logging and continuous verification — not redaction. Rename to `CELLO-AUDIT-001`.
-- **CELLO-MONITOR-001** overlaps significantly with CELLO-REDACT-004's continuous verification section. The two stories should be reconciled: CELLO-AUDIT-001 specifies what the nightly job checks; CELLO-MONITOR-001 specifies how the agent schedules it. This separation is defensible but the overlap in AC should be cleaned up.
+## Related documents
 
-**Also:** All stories reference the attack corpus at `docs/planning/user-stories/m4/attack-corpus-reference.md`. The file lives at `docs/planning/user-stories/m9/attack-corpus-reference.md`. Every story references the wrong path.
-
----
-
-## Gaps Identified After Stories Were Written
-
-Six gaps were found by comparing the M9 stories against production security implementations. These gaps need to be incorporated into the stories before implementation. The full analysis is in:
-
-`docs/planning/discussion_logs/2026-05-16_1130_security-layer-improvements-from-production-reference.md`
-
-### Gap 1: ReDoS attack class not closed in CELLO-SCAN-001 (Layer 1)
-
-Layer 1 Step 9 pattern matching uses regex on attacker-controlled text. The current stories and design do not specify the regex engine. Node's built-in `RegExp` is vulnerable to ReDoS — a crafted payload can make pattern matching take seconds per message.
-
-**Required change:** Add a security invariant to CELLO-SCAN-001: all regex used in the sanitization pipeline shall use RE2 (the `re2` npm package), not native `RegExp`. RE2 guarantees linear-time execution regardless of input.
-
-### Gap 2: Step 8 misses encoded payload class in CELLO-SCAN-001 (Layer 1)
-
-Step 8's character-frequency baseline detects gross anomalies (80% punctuation) but misses high-entropy blobs (base64 encoded payloads have a normal-looking character distribution but very high Shannon entropy).
-
-**Required change:** Add Shannon entropy scoring as a supplementary check in Step 8's behavior. If entropy exceeds the configured threshold for the source type, increment the suspicion score. No API call, no model inference — it is a deterministic calculation over the text.
-
-### Gap 3: Three PII types missing from CELLO-REDACT-001 (Layer 4)
-
-The current redaction pipeline covers: personal email, phone numbers, dollar amounts. Missing: SSN, credit card numbers, and IP addresses.
-
-**The IP gap is the most important.** CELLO's own Layer 6 design lists "internal file paths and network topology" as protected assets. If an agent leaks an internal IP address in outbound content, that narrows future attack surface. The redaction layer should catch this before it leaves the system.
-
-**Required change:** Extend CELLO-REDACT-001 (will be renamed CELLO-GOV-001... correction: extend CELLO-REDACT-001 as written) to add SSN (`[REDACTED_SSN]`), credit card (`[REDACTED_CREDIT_CARD]`), and IP address (`[REDACTED_IP]`) to the PII redaction module. Add three new acceptance criteria.
-
-### Gap 4: Honey tokens — new deception primitive, no story exists
-
-CELLO has no active deception capability. A honey token layer would generate fake-but-structurally-valid credentials, embed them in agent context or conversation records, and detect their use via external service alerts (e.g., AWS CloudTrail for IAM-format decoys). This turns a successful exfiltration into an automatic detection event.
-
-**Not an M9 item.** This needs a design session before a story can be written. Flag for a separate milestone or as a Domain 5/6 extension. The gap should be tracked so it does not disappear.
-
-### Gap 5: Policy change approval gate — no story exists
-
-If an attacker compromises an agent, their first move is to lower the connection policy. The current design has no gate on policy mutation: changes take effect immediately. An approval gate requiring WebAuthn or CELLO Operations Agent phone confirmation before policy changes take effect would close this window.
-
-**Not an M9 item.** This is a protocol-level decision in Domains 3 (Connections) and 6 (Compromise & Recovery). It extends the "Not Me" WebAuthn/2FA pattern already designed for K_server revocation. Needs a story in those domains.
-
-### Gap 6: Audit log streaming is aspirational, not concrete in CELLO-REDACT-004
-
-CELLO-REDACT-004 (to be renamed CELLO-AUDIT-001) says logs go to "an append-only destination." For single-operator deployments this is a local file. For multi-operator or compliance deployments, logs need to reach a SIEM. The story does not specify how — or how the streaming credentials are secured.
-
-**Required change:** Add a production log destination section to CELLO-REDACT-004: (1) local append-only file as default, (2) external streaming target for operator deployments, with streaming credentials KMS-wrapped at rest and decrypted only at stream time. This does not need SIEM-specific integrations at M9 — it needs the architectural pattern to be specified.
-
----
-
-## Dependency Order
-
-Layer sequencing is an architectural invariant, not a preference: 1 → 2 → 3 → 4 → 5 (wraps all LLM calls including Layer 2 scanner) → 6. **Layer 5 must be implemented before Layer 2** because Layer 5 wraps every LLM call system-wide, including the scanner.
-
-Implementation order: CELLO-SCAN-001 → CELLO-REDACT-002 (Layer 5 governor) → CELLO-SCAN-002 (Layer 2 scanner) → CELLO-SCAN-003 (Layer 3 gate) → CELLO-REDACT-001 (Layer 4 redaction) → CELLO-REDACT-003 (Layer 6 access) → CELLO-REDACT-004 (audit/verification) → CELLO-MONITOR-001 (scheduling).
-
-The governor must exist before the scanner so that the scanner's LLM calls are governed from the start.
-
----
-
-## What E2E Looks Like When M9 Is Done
-
-A message arrives at the CELLO client from an external source:
-1. **Layer 1 (CELLO-SCAN-001)**: 11-step deterministic pipeline runs. Invisible Unicode stripped, wallet-drain checked, lookalikes normalized, encoded payloads decoded, injection patterns matched. Any step throws → block. All steps complete → sanitized text + detection stats.
-2. **Layer 2 (CELLO-SCAN-002)**: DeBERTa scanner classifies the sanitized text. Score + verdict returned. Score overrides verdict if contradictory. Score ≥ 70 → block. Score ≥ 35 → review flag. Score < 35 → pass.
-3. Message reaches the agent's LLM with scan_result embedded.
-4. Agent produces outbound response.
-5. **Layer 5 (CELLO-REDACT-002)**: Outbound passes through the call governor (already wrapped every LLM call).
-6. **Layer 3 (CELLO-SCAN-003)**: Outbound dispatcher checks secrets, injection artifacts, exfiltration patterns, financial data, ToS self-check. Any check fires → block.
-7. **Layer 4 (CELLO-REDACT-001)**: Secret redaction → PII redaction → delivery.
-8. Every blocking decision written to audit log (CELLO-REDACT-004). Nightly job verifies no drift.
-
-Throughout: **Layer 6 (CELLO-REDACT-003)** silently denies any filesystem or URL access outside the allow-list, independently of the message flow.
-
----
-
-## Related Documents
-
-- [[2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway|Security Layer V3 — Extensibility, Hook Architecture, and Split Gateway]] — **V3 canonical design**; read first; supersedes V2 as the implementation target for M9
-- [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture V2]] — six base layer spec; unchanged but implementation home is now the gateway package, not `client`
-- [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — why each layer exists; the four-layer security model that contains the six-layer prompt injection defense
-- [[2026-05-16_1130_security-layer-improvements-from-production-reference|Security Layer Improvements from Production Reference Analysis]] — six gaps; Findings 1–3 and 6 are Day 1 in V3
-- `attack-corpus-reference.md` — (same directory) the attack technique catalog stories reference; read before writing tests
-- [[2026-05-21_1456_identity-as-governance-foundation|Identity as the Foundation of Governance]] — positions M9's six layers in the broader governance landscape; identity-aware per-peer policy overrides are the mechanism that makes M9's content-level controls contextual rather than blunt
-- [[2026-06-21_1600_m9-content-channel-seam-and-entry-plan|M9 Content-Channel Seam and Entry Plan]] — where the gateway attaches to the M7 daemon (`ingestReceivedContent` inbound / `sendContent` outbound), the MSG-001-3b dependency gate, and the M9 doc/process apparatus; each story here needs its daemon seam noted, not the dead `client` package
+- [[M9-CAPABILITY-HARVEST]] — the decisions (harvest + prune + governance channel + two-phase build).
+- [[M9-DEFINITION-OF-DONE]] — the plan (phases, gates, story list).
+- [[2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway|Security Layer V3]] — gateway internals.
+- [[2026-06-21_1600_m9-content-channel-seam-and-entry-plan|M9 Content-Channel Seam and Entry Plan]] — the daemon seam + build gate.
+- [[2026-05-16_1130_security-layer-improvements-from-production-reference|Security Layer Improvements from Production Reference]] — the gitleaks/RE2/entropy/PII findings, now folded into the harvest.
+- [[2026-05-21_1456_identity-as-governance-foundation|Identity as the Foundation of Governance]] — where this sits in the broader governance picture.
