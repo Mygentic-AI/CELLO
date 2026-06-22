@@ -573,4 +573,90 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(recv.content, "B reads the parked message WITHOUT any explicit content_park_recover").toBe(PARKED);
   }, 120_000);
 
+  it("DOD-MSG-8 (irreducible loss is honest) — sealed session: honest frontier + a post-seal straggler is rejected (session_committed), never re-enters", async () => {
+    // The irreducible-loss invariant (MSG-001 DB-003): the seal is ALWAYS honest — its content
+    // frontier reflects only what the receiver actually signed for, so a message whose content never
+    // reached B can never inflate it — AND a straggler that resurfaces AFTER the seal is rejected and
+    // cannot re-enter a committed session. The frontier mechanism + the sealed-session guard already
+    // exist (SESSION-004 + ingestReceivedContent); this proves them live, end-to-end, across processes.
+    const dirA = mkdtempSync(join(tmpdir(), "cello-msg8A-"));
+    const dirB = mkdtempSync(join(tmpdir(), "cello-msg8B-"));
+    dirs.push(dirA, dirB);
+    await provisionAgent(dirA, "agentA");
+    const pubB = await provisionAgent(dirB, "agentB");
+    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "msg8A");
+    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "msg8B");
+    daemons.push(daemonA, daemonB);
+    expect(cello(["register", "agentA", `DEV-m8-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
+    expect(cello(["register", "agentB", `DEV-m8-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    const connA = await connectMcp(dirA, "m8-A");
+    const connB = await connectMcp(dirB, "m8-B");
+    mcpConns.push(connA, connB);
+    for (const [c, n] of [[connA, "agentA"], [connB, "agentB"]] as const) {
+      expect(((await c.call("cello_start_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+    }
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok, `initiate failed: ${JSON.stringify(init)}`).toBe(true);
+    const sessionId = init.sessionId!;
+    expect(((await awaitP) as { type?: string }).type).toBe("new_session");
+
+    // A sends exactly one message; B receives it → B's signed content frontier covers msg1.
+    expect(((await connA.call("cello_send", { session_id: sessionId, content: "msg1" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_receive", { session_id: sessionId, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("msg1");
+
+    // Both close → bilateral seal. The transcript is now COMMITTED + FROST-notarized.
+    const [closeA, closeB] = (await Promise.all([
+      connA.call("cello_close_session", { session_id: sessionId }),
+      connB.call("cello_close_session", { session_id: sessionId }),
+    ])) as Array<{ ok?: boolean; sealed_root?: string }>;
+    const diag =
+      `\ncloseA:${JSON.stringify(closeA)}\ncloseB:${JSON.stringify(closeB)}` +
+      `\n--- daemonB ---\n${daemonB.output.split("\n").filter((l) => /seal|recover|ingest|legib/i.test(l)).slice(-18).join("\n")}`;
+    expect(closeA.ok, `A close:${diag}`).toBe(true);
+    expect(closeB.ok, `B close:${diag}`).toBe(true);
+    expect(closeB.sealed_root, `both sealed_root identical:${diag}`).toBe(closeA.sealed_root);
+
+    // HONEST seal: B reads its certificate; the frontier reflects ONLY received content. The frontier
+    // is derived from B's SIGNED leaves, so a message whose content never reached B cannot appear in it.
+    const receipt = (await connB.call("cello_get_sealed_receipt", { session_id: sessionId })) as {
+      ok?: boolean; sealed_root?: string;
+    };
+    expect(receipt.ok, `B reads the sealed receipt:${diag}`).toBe(true);
+    expect(receipt.sealed_root, `receipt root matches the seal:${diag}`).toBe(closeB.sealed_root);
+
+    // ── The straggler: content for this session RESURFACES after the seal (a delayed delivery of a
+    // message whose content never made it before the seal — the irreducible-loss case). It is a VALID
+    // seal of real content (so it unseals cleanly — NOT a recovery-failure), parked for B; B recovers.
+    const straggler = Buffer.from("msg2-straggler — content resurfaces after the seal");
+    await ipcCall(dirA, "content_park_deposit", {
+      relayMultiaddr: cluster.relayMultiaddr,
+      recipientPubkey: pubB,
+      contentHash: contentHashHex(straggler),
+      sessionId,
+      ciphertext: Buffer.from(sealToRecipient(Buffer.from(pubB, "hex"), straggler)).toString("hex"),
+    });
+
+    const rec = (await ipcCall(dirB, "content_park_recover", {
+      relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB,
+    })) as { ok?: boolean; recovered?: number; pulled?: number };
+    expect(rec.ok, `recover ran:${JSON.stringify(rec)}`).toBe(true);
+    expect(rec.recovered, "the straggler is NOT recovered into the sealed session").toBe(0);
+
+    // It unsealed fine but was refused at the sealed-session guard — the distinct, honest reason
+    // (`session_committed`), NOT unseal_failed and NOT a content desync. A late leaf would diverge
+    // from the FROST-notarized root, so the committed transcript refuses it.
+    expect(daemonB.output, `straggler refused by the sealed-session guard:${diag}`).toMatch(
+      /"event":"content\.recover\.ingest_failed"[^\n]*"reason":"session_committed"/,
+    );
+
+    // The session is STILL sealed and byte-identical — the straggler never re-entered the transcript.
+    const receipt2 = (await connB.call("cello_get_sealed_receipt", { session_id: sessionId })) as {
+      ok?: boolean; sealed_root?: string;
+    };
+    expect(receipt2.ok, "session still sealed + readable after the straggler").toBe(true);
+    expect(receipt2.sealed_root, "sealed root unchanged — the straggler did not mutate the transcript").toBe(closeB.sealed_root);
+  }, 120_000);
+
 });
