@@ -217,15 +217,23 @@ Source: outline Milestone Close Gate + E2E-001 AC-001–012. Mostly built/merged
 - **DOD-AUTH-2 — Manifest enforcement (TUF).** Schema `version / not_before /
   expires` + threshold sig over N root keys; reject `version ≤ trusted`; reject
   expired (refuse ALL connections); persist trusted version (never downgrade);
-  poll every 6–12h. *(MANIFEST-001/002)* — 🟡 **MOSTLY PROVEN LIVE** (J-AUTH,
-  2026-06-21): threshold officer-sig verification (3-of-5 over the canonical body),
-  expiry refusal, AND anti-rollback are all live. Expired manifest →
-  `directory.auth.manifest.expired` + daemon refuses to start (ADV-002, no silent
-  downgrade). A regressed version (v1 after a trusted v2, across a restart, valid
-  sigs) → `directory.auth.manifest.version.rollback` + refusal — the binary now wires
-  `FileManifestVersionStore` under `CELLO_DIR` (persist-trusted-version). REMAINING:
-  only the periodic 6–12h `manifest_poll` background refresh is not yet exercised
-  live (time-based; the daemon has the poll path + `manifestPollScheduler`).
+  poll every 6–12h. *(MANIFEST-001/002)* — ✅ **PROVEN LIVE** (J-AUTH, 2026-06-22;
+  `cello-done-auditor` EARNED — ran j-auth 6/6 cold against the shipped binaries,
+  falsified four ways). Threshold officer-sig verification (3-of-5 over the canonical
+  body), expiry refusal, AND anti-rollback were already live (2026-06-21). The
+  remaining periodic poll is now ALSO proven live: the daemon's keystone signaling
+  manager re-polls the directory on the (env-injectable) 6–12h interval and adopts a
+  newer signed manifest end-to-end across REAL separate processes —
+  `directory.auth.manifest.poll.dispatched` → directory serves
+  (`directory.manifest.poll.response`) → `directory.auth.manifest.poll.success`
+  `oldVersion:1 newVersion:2` → `manifest-version.json lastSeenVersion:2`. And the
+  daemon does NOT trust the directory for content: a FORGED manifest the directory
+  serves (bad officer sigs, version 9 > trusted) → `directory.auth.manifest.signature.invalid`
+  → never adopted, trusted version held at 1. The poll loop is self-healing
+  (re-armed from the dispatch side, so a lost/ignored response can't stall it), mints
+  a per-cycle correlationId, and refuses adoption at `threshold < 1`. The producer
+  side is a file-re-reading `FileDirectoryManifestStore` wired from
+  `CELLO_DIRECTORY_CONSORTIUM_MANIFEST` (the production-faithful TUF roll-forward seam).
 - **DOD-SIG-1 — Signaling resilience.** Heartbeat (DIR-PING-001 pong) → on kill,
   `directory_signaling: reconnecting`, exponential backoff, reconnect to a
   **different** directory node from the manifest, drain queued outbound ops; tool

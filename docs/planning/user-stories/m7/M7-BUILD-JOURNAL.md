@@ -4384,3 +4384,10 @@ and the directory bin never wired a consortium `DirectoryManifestStore`. All clo
 
 Floor: transport 92, daemon manifest 15, reachability gate unchanged, typecheck + lint clean both repos.
 `cello-done-auditor` dispatched on the ✅ flip (runs j-auth cold) — DoD flip held pending its verdict.
+
+**`cello-done-auditor` VERDICT: EARNED ✅** — ran j-auth 6/6 cold against freshly-built shipped
+binaries (26.5s), confirmed binary-anchored (no createDirectoryNode/createClient/session-fixture;
+real dist/bin processes; postgres on 5433). Specifically falsified four ways and survived: the forged
+sig is real garbage not a flag; the version-9 forgery WOULD pass anti-rollback so the signature is the
+only gate; `waitForLine` fails on timeout/early-exit rather than silently passing; no fixture/factory
+bypasses the binaries. DOD-AUTH-2 flipped 🟡 → ✅ PROVEN LIVE. The J-AUTH journey is fully green.
