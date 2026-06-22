@@ -339,15 +339,35 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
   active — j-content 7/7, j-loopback bilateral seal byte-identical root (no regression). cello-client
   `4d8676c`. *(This pass also fixed three j-content fixture lags the DOD-LOOP-1 re-key had silently
   broken — MSG-2/MSG-3 standing-receiver + awaiting-queue agent scoping — caught by the live test.)*
-  **REMAINING (next sub-increment) to flip ✅:** (1) the **content-before-witness race** — when a
-  direct content frame beats its relay witness, the gate falls back to arrival-order append, so the
-  hold is non-deterministic; close it with a pending-witness buffer (hold un-witnessed content, then
-  re-evaluate when `onLeafDeliver` records the witness) plus a relay-degraded fallback (append on
-  arrival only when no witness is coming). (2) **catch-up-before-live on reconnect** — B fetches the
-  witnesses/content it missed while offline (using `last_seen_seq`, the relay high-water) before it
-  treats new direct arrivals as live, so recover-path messages are ordered too. (3) a DETERMINISTIC
-  live out-of-order proof (the first attempt was racy on exactly the content-before-witness timing
-  and was removed rather than left flaky).
+  **DESIGN CORRECTION — self-ordering content frame (Andre, 2026-06-22).** The remaining work is NOT
+  a hold/wait policy for a race; it is to RESTORE the intended design where the content stream is
+  self-ordering, so the race cannot exist. Today the content frame carries only
+  `{ session_id, content_hash, content_bytes, correlation_id }` — no ordering record — so B learns
+  the canonical position ONLY from the SEPARATE relay `leaf_deliver` witness stream, and a direct
+  frame that beats its witness has no sequence (the source of the content-before-witness race). The
+  fix: **the content frame carries the full signed `Structure2`** — the relay's committed ordering
+  record `{ sequence_number, sender_pubkey, content_hash, sender_signature, scan_result, prev_root }`.
+  B then verifies and orders from the content frame ALONE (the `sender_signature` over the content
+  hash is cryptographically verifiable from the frame; `sequence_number` + `prev_root` are the relay's
+  committed position), and the `leaf_deliver` witness stream becomes redundant corroboration. There is
+  nothing to wait for, so the race is removed BY DESIGN — the pending-witness-buffer / hold-wait
+  approach is DROPPED. **What to build (both repos, red-first):**
+  (1) **Relay** returns the full `Structure2` to the sender in `hash_submit_ack` (today it returns
+      ONLY `sequence_number` — line 259 of session-relay-client). *(Open implementation point: whether
+      to also carry the relay's PERSIST-012 signed-ACK `relay_signature` over `(content_hash, seq, ts)`
+      so the relay's sequence assignment — not just the sender's content signature — is itself
+      cryptographically verifiable from the frame; settle during the build.)*
+  (2) **Daemon (sender)** stamps that `Structure2` into the direct content frame AND into the parked
+      content entry — so BOTH the direct and the relay-park/recover paths are self-ordering (this also
+      closes review finding #3: recovery no longer depends on relay pull order).
+  (3) **Daemon (receiver)** reads `Structure2` from the frame, verifies `sender_signature` over the
+      content hash, and feeds the gate the canonical sequence directly (no dependence on `leaf_deliver`
+      timing). The existing `#heldContent` hold/release machinery stays — it still orders a genuine gap
+      (an earlier message still parked) — but it is now fed by a frame-carried, verified sequence.
+  (4) a DETERMINISTIC live out-of-order proof (now possible — ordering no longer races on two streams).
+  Catch-up-before-live on reconnect via `last_seen_seq` remains relevant only for the case where B
+  must know it has pulled everything before going live; with the parked entry self-ordering, recovered
+  messages already carry their sequence, so this reduces to a "have I drained the mailbox" gate.
 - **DOD-MSG-5 — Resend vs replay dedup.** A `content_hash` satisfies at most one
   Merkle leaf, exactly once; duplicates/replays never double-count. *(MSG-001
   AC-012, SI-002)* — ✅ **PROVEN LIVE** (J-CONTENT, 2026-06-21). `ingestReceivedContent`
