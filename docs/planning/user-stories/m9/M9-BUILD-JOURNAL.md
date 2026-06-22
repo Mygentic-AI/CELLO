@@ -123,3 +123,51 @@ from M7, which is the launch blocker.
 
 **Next.** When M7 unblocks, build Phase 1 starting with M9-CORE-001 (gateway skeleton + the
 daemon seam). Nothing to do in this journal until a build unit actually starts.
+
+---
+
+## 2026-06-22 — Story-authoring pass DONE; M7 unblocked; READY TO BUILD (pre-compaction handoff)
+
+This is the resume point. Read this entry first, then M9-PROCEDURE.md (top to bottom — note
+the REALITY-CHECK-style alpha discipline is M7's; M9's hard rules are §5) and the DoD.
+
+**Story pass complete.** All 15 new M9 stories written to the new `/cello-story` bar (few,
+strong, stub-resistant ACs; honest test_type per altitude — gate=cross-process, seam=integration,
+detectors=unit, storage=integration round-trip). Committed on `main` (local, NOT pushed):
+- Phase 1: M9-GATE-1 (E2E, 7 ACs), M9-CORE-001 (skeleton+seam), M9-IN-001/002/003 (sanitize/
+  DeBERTa/language), M9-OUT-001/002/003/004 (secrets/PII-warn/exfil/rate-limit), M9-FEED-001
+  (feedback channel), M9-CFG-001 (config), M9-REC-001 (records).
+- Phase 2: M9-GATE-2, M9-REMOTE-001 (mTLS), M9-ATTEST-001 (directory attestation + migration).
+- The 8 old SCAN/REDACT/MONITOR YAMLs were RETIRED (deleted; mapping in overview.md).
+Commits: `4ac57a1f`, `30c70ad0`, `a96e2f8d`, `092d21c7` (deletions). Story-pass only — no push.
+
+**M7 dependency LANDED — M9 is buildable.** The unified inbound funnel (MSG-001-3b) is
+live-proven: BOTH direct AND recovered/parked content route through `ingestReceivedContent`
+(recover path `source:park`, cello-client `a42b72d`; j-content 8/8 green). That is exactly the
+single-inbound-funnel M9-GATE-1 AC-005/SI-001 needed. The one open M7 item — Finding 2
+(relay-signed sequence, decision pending Andre) — is a content-path hardening, orthogonal to
+M9's screening seam; NOT an M9 blocker.
+
+**Seam line-number drift (verify at build time).** M9-CORE-001 cites
+`session-node-manager.ts:1406/1548` and `daemon.ts:2616` from earlier this week; the M7
+content-ordering work changed those files, so the lines have moved. The FUNCTIONS (the seam)
+still exist — the falsify-first step (Procedure §2.3) re-locates them.
+
+**WORKTREE REQUIREMENT (Andre, 2026-06-22).** Build M9 in its OWN worktree + branch, NEVER on
+`main` and NEVER in the M7 thread's checkout — M7 is being finished by a separate coder on
+`main` in the primary trustless-cello dir. (Procedure §5.) The other coder also has uncommitted
+files on `main` (relay/e2e); stage only M9 files.
+
+**FIRST BUILD STEP (post-compaction).**
+1. Create the M9 worktree + branch in **cello-client** (the first unit's home — daemon seam +
+   the new gateway package), e.g. `git worktree add ../cello-client-m9 -b m9-build`. Add a
+   trustless-cello M9 worktree later for the e2e gate.
+2. Build **M9-CORE-001** (gateway skeleton + the two seam call sites: `screenOutbound` at
+   `cello_send`, `screenInbound` at `ingestReceivedContent`) with a pass-through gateway — the
+   DoD's first Phase-1 story. Red-first against the live gate, per Procedure §2.
+3. Then down the Phase-1 list toward Gate 1 (M9-GATE-1). The M7-gated gate ACs (recovered-content
+   seam) are now unblocked.
+
+**State.** trustless-cello `main` (local). cello-client `main` has the daemon. Nothing pushed.
+Drift-check cron (Procedure §3a) is NOT yet running — it starts when the build opens; create it
+as part of the first build step.

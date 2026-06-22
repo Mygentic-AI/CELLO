@@ -137,6 +137,12 @@ DeBERTa inference in-process. In Phase 2, real mTLS too.
   within a deadline. A timeout is a verdict, not a hang.
 - **One thread. One coder. Andre watching.** Only read-only subagents (reviewer,
   test-attacker, done-auditor, explorers).
+- **M9 builds in its OWN git worktree + branch — never on `main`, never in the M7 thread's
+  worktree.** M7 is still being finished by a SEPARATE coder thread working on `main` in the
+  primary checkout. Do not interfere with it. Create a dedicated M9 worktree + branch in each
+  repo M9 touches: cello-client (the daemon seam + the new gateway package) and, for the e2e
+  gate and the Phase-2 directory work, trustless-cello. Stage only M9's own files when
+  committing; never commit the M7 thread's in-flight files.
 - **Never merge to main or push without Andre.** The Phase-2 directory migration triggers the
   ~25-30 min directory deploy — batch all directory changes before any push.
 - **DeBERTa is pre-downloaded INT8 only** — no training pipeline.
