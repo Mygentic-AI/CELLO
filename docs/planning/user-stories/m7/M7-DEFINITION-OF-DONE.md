@@ -412,6 +412,16 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
 
 ### Seal certificate legibility (SESSION-004)
 
+> ⚠️ **OPEN INTEGRITY DECISION (Andre's call) — see the 2026-06-22 SECURITY FINDING journal entry.**
+> The `legibility` object is currently carried OUTSIDE the FROST-signed seal TBS (`buildSealTbs` signs
+> only session_id/sealed_root/leaf_count/timestamp), so `final_message.answered`, `content_frontier_seq`,
+> and `attestation_mode` are tamperable by a MITM in transit (`implies_assent`/`attests` are safe — the
+> daemon re-asserts them). The 🟢 lines below are PROVEN LIVE for DERIVATION + cross-process SURFACING
+> (no MITM in test); the in-transit INTEGRITY of those three fields is NOT yet closed. Recommended fix:
+> bind legibility into the seal TBS (unifies the deferred attestation_mode-TBS-binding item) — a
+> coordinated protocol change to the signed seal path, pending Andre. DOD-LEG-2's client re-derive guard
+> becomes unnecessary if that lands.
+
 - **DOD-LEG-1 — Receipt-not-assent, first-class.** Cert carries `attests:'receipt'`,
   `implies_assent:false`, plain-language disclaimer; no field parseable as agreement.
   *(SESSION-004 AC-001, SI-001)* — 🟢 **PROVEN LIVE** (J-LEGIBILITY, 2026-06-21). The directory
