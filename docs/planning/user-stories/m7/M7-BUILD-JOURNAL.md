@@ -3268,3 +3268,22 @@ verified + not-already-sealing → submitSealLeaf; else skip+log). (3) counterpa
 reasons. (5) taxonomy events. Full regression (touches the SPINE-7 seal path). Reviewer per unit.
 NOTE: BLOCKED on the J-LEGIBILITY reviewer returning first (it's reading these same daemon files).
 
+
+---
+
+## 2026-06-22 — J-LEGIBILITY reviewer APPROVED + low-severity fixes (Tier 3 unit closed)
+
+Reviewer (feature-dev:code-reviewer, opus): **APPROVED — no blocking/high findings**, all 8 priority
+checks pass (SI-001 receipt-not-assent, SI-002 self-frontier integrity, answered exclusion, optional
+pending legibility, normalizeLegibility robustness, idempotent SQLite migration, AC-009 catches,
+cello_get_sealed_receipt snake_case). (The first reviewer dispatch stalled on an infra stream-watchdog
+at 600s with a positive partial read; re-dispatched fresh → clean verdict.) Three low-severity
+observations, all FIXED per the all-severities policy:
+- normalizeLegibility now validates attestation_mode against {live,recovered,absent} (rejects the
+  whole cert on an out-of-enum value) — cello-client `467e410`.
+- normalizeLegibility now rejects a non-string/empty disclaimer (returns undefined) rather than
+  surfacing a half-formed receipt-not-assent cert — same commit.
+- Documented the trailingSealCtrlAuthors ctrl-leaf invariant (one ctrl kind = SEAL) — trustless `80795bb`.
+J-LEGIBILITY (DOD-LEG-1/3/4 live, LEG-2 surfaced) is CLOSED. Remaining LEG-2 sub-line (client SI-002
+re-derive guard) needs richer local leaf storage (daemon stores leaf HASHES, not signed last_seen_seq)
+— a bounded follow-on, recorded.
