@@ -3406,3 +3406,53 @@ risks the quality bar; it's the right piece to pick up fresh.
 **Deferred ledger additions:** AC-002 live tamper-then-close test (needs tamper-injection harness the
 spine lacks — the desync SET is live-tested by DOD-MSG-7, the gate consumption is code+reviewer-verified);
 a live present-party-sealed-tail case for AC-006c strict frontier-exclusion (unit-proven via AC-002).
+
+---
+
+## 2026-06-22 — SECURITY FINDING (needs Andre's design call): seal legibility is OUTSIDE the signed TBS
+
+**While scoping the DOD-LEG-2 client re-derive guard, I traced the seal signature coverage and found a
+real integrity gap.** `buildSealTbs(sessionId, sealedRoot, leafCount, timestamp)` (protocol-types) is the
+ENTIRE FROST-signed payload (verified: session-ceremony.ts:218,270 — both the co-sign and the client
+verify rebuild exactly those four fields). **The `legibility` object is NOT in the TBS** — the directory
+attaches it to the SessionSealed wire frame alongside the signature, unsigned.
+
+**Consequence.** A man-in-the-middle between the directory and a client can tamper the legibility WITHOUT
+breaking the FROST signature:
+- flip `final_message.answered` false→true — making a malicious unanswered tail read as ANSWERED to the
+  reader (directly defeats the receipt-not-assent intent the cert exists to serve);
+- inflate a party's `content_frontier_seq` — a false claim of what that party provably received;
+- change a party's `attestation_mode`.
+SAFE (not tamperable on the read surface): `implies_assent` and `attests` — the daemon's
+`normalizeLegibility` re-asserts them as literal `false`/`"receipt"` regardless of the wire (reviewer-
+confirmed). So the receipt-not-assent CONSTANT holds, but the per-message/per-party FACTS do not.
+
+**What this means for the DOD-LEG "PROVEN LIVE" claims (honesty).** The directory DERIVATION is sound
+(SI-002 server-side clamp verified) and the cross-process SURFACING works (live tests green — no MITM in
+the test). What is NOT yet closed is the in-transit INTEGRITY of `answered` / `content_frontier_seq` /
+`attestation_mode`. The DoD lines are updated to state this explicitly.
+
+**The decision (Andre's call — two paths, both touch security-critical/shared code):**
+- **(A) Bind the legibility into the signed material** — add `legibility` (or its canonical hash) to the
+  seal TBS so the FROST signature covers it. Cleanest cryptographic fix; tamper-evident end to end. COST:
+  a protocol change to `buildSealTbs` (protocol-types) touching the directory build, the daemon co-sign,
+  AND the client verify (session-ceremony.ts) in lockstep — plus cross-version compatibility (an old
+  client/directory computes a different TBS). This also subsumes the deferred "attestation_mode
+  TBS-binding" item and the unilateral cert's same gap.
+- **(B) Client re-derives each property locally** and rejects/ignores the wire value on mismatch (the
+  SI-002 client guard, extended to `answered` + `attestation_mode`). COST: the daemon must store per-leaf
+  signed `last_seen_seq` + sender (today the tree stores only hashes; the data is fragmented across the
+  relay-client submit path for own-leaves and `leaf_deliver` for counterparty-leaves) + leaf authorship
+  for `answered`. Defense-in-depth, not tamper-evidence — and it cannot protect a party that has no local
+  copy of the leaves (an arbitrator).
+
+**Recommendation: (A).** Binding legibility into the TBS is the correct cryptographic guarantee, makes
+the cert verifiable by ANY holder (including an arbitrator with no leaves), and unifies three deferred
+items (legibility integrity, attestation_mode binding, unilateral-cert binding) into one change. It is a
+coordinated protocol change to the signed seal path, so it wants a deliberate session with Andre + the
+cross-repo version-bump/compat discipline — NOT a solo overnight edit. DOD-LEG-2's "client re-derive
+guard" (B) becomes unnecessary if (A) lands (the signature IS the verification).
+
+**Status.** Logged as the next design decision. I am NOT implementing either path solo overnight — both
+touch the shared FROST-signed seal path (directory + daemon + client in lockstep) and (A) is a protocol/
+compat change. This is the disciplined stop: a precise finding + a recommendation, surfaced for Andre.
