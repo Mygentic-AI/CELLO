@@ -110,6 +110,13 @@ export interface SessionRequest {
    * honours this value directly; real AutoNAT probe will override in TRANSPORT-001.
    */
   transport_mode?: "direct" | "relay";
+  /**
+   * M7-WIRE-002: Initiator opts in to the session_offer→session_offer_accept
+   * round-trip so the SessionAssignment carries the counterparty's reachable
+   * SESSION endpoint (its standing-receiver node, not its directory node).
+   * Absent/false keeps pre-WIRE-002 callers on the original no-offer path.
+   */
+  wants_session_offer?: boolean;
 }
 
 // ─── M7-WIRE-001: Session offer accept (target → directory) ─────────────────
@@ -160,6 +167,51 @@ export type {
   SessionSealRejected,
   SealVerified,
 } from "@cello-protocol/protocol-types";
+import type { SessionSealed as SessionSealedBase } from "@cello-protocol/protocol-types";
+
+// ─── M7-SESSION-004: Seal certificate legibility wire shape ────────────────────
+// Local mirror of @cello-protocol/protocol-types SealLegibility. The published
+// protocol-types predates this story's bump (deferred to milestone close per
+// COORDINATION batching), so the wire shape is defined here — the same local-mirror
+// pattern used for RelaySealData below. After the protocol-types dep bump (AC-013)
+// this can switch to the canonical type.
+export type AttestationMode = "live" | "recovered" | "absent";
+
+export interface SealLegibilityParticipant {
+  pubkey: Uint8Array;
+  content_frontier_seq: number;
+  last_authored_seq: number;
+  attestation_mode: AttestationMode;
+}
+
+export interface SealLegibilityFinalMessage {
+  sender_pubkey: Uint8Array;
+  seq: number;
+  answered: boolean;
+}
+
+export interface SealLegibility {
+  attests: "receipt";
+  implies_assent: false;
+  disclaimer: string;
+  participants: SealLegibilityParticipant[];
+  final_message: SealLegibilityFinalMessage;
+}
+
+/**
+ * SessionSealed wire frame carrying the M7-SESSION-004 legibility certificate.
+ * The directory always attaches `legibility` for new seals; the field is optional
+ * for backward-compatible decode of pre-M7 frames.
+ */
+export type SessionSealedWithLegibility = SessionSealedBase & { legibility?: SealLegibility };
+
+/**
+ * seal_verified frame carrying the legibility object (bilateral seal only). The directory sends
+ * legibility to the seal initiator so the initiator's daemon binds the SAME legibility hash into
+ * the TBS it co-signs — directory and daemon must agree on the bound TBS or the FROST seal fails.
+ * Absent on the unilateral seal (which carries no legibility).
+ */
+export type SealVerifiedWithLegibility = import("@cello-protocol/protocol-types").SealVerified & { legibility?: SealLegibility };
 
 // ─── SESSION-005: New signaling frames ────────────────────────────────────────
 
@@ -185,6 +237,14 @@ export interface SessionFrostSealed {
   sealed_root: Uint8Array;    // 32-byte final Merkle root
   frost_signature: Uint8Array; // 64-byte combined FROST signature
   signer_pubkey: Uint8Array;  // 32-byte initiator primary_pubkey
+  /**
+   * M7-SESSION-004 (review finding #3): the receipt-not-assent legibility certificate,
+   * derived once at seal time. Carried here so a session that completes via the deferred
+   * seal_deferred → session_frost_sealed path ends with the SAME legibility as a live
+   * push — legibility is independent of delivery timing. Optional for backward-compatible
+   * decode of pre-M7 frames.
+   */
+  legibility?: SealLegibility;
 }
 
 // ─── Error frame types ─────────────────────────────────────────────────────────
@@ -288,24 +348,46 @@ export interface SealUnilateralTooEarly {
 }
 
 /**
- * seal_unilateral_confirmed: directory → submitting client, when unilateral seal succeeds.
+ * SESSION-002 unilateral seal certificate. Carried on both seal_unilateral_confirmed
+ * (present party) and seal_unilateral_notification (absent party). It is sufficient for
+ * the recipient to rebuild the canonical seal TBS and verify the signature against a key
+ * it trusts INDEPENDENTLY of the delivering channel (SI-003) — a channel-swapped
+ * sealed_root fails the signature check.
  */
-export interface SealUnilateralConfirmed {
+export interface SealCertificateFields {
+  sealed_root: Uint8Array;            // 32-byte sealed Merkle root (TBS-bound)
+  leaf_count: number;                 // number of leaves in the sealed chain (TBS-bound)
+  close_timestamp: number;            // Unix ms (TBS-bound)
+  frost_signature: Uint8Array;        // 64-byte FROST (or single-key) signature over the seal TBS
+  signature_type: "frost" | "single"; // 'frost' verifies vs the session primary_pubkey; 'single' vs the directory node key
+  present_pubkey: Uint8Array;         // 32-byte present (submitting) party
+  absent_pubkey: Uint8Array;          // 32-byte absent counterparty (never a signer)
+  // DOD-LIVE-2: how the counterparty is recorded — ABSENT (the relay observed it gone) or
+  // DELIVERED (alive / unknown fail-safe). Feeds DOD-LEG-3 attestation_mode in the cert.
+  attestation_mode: "ABSENT" | "DELIVERED";
+  seal_type: "UNILATERAL";
+}
+
+/**
+ * seal_unilateral_confirmed: directory → submitting client, when unilateral seal succeeds.
+ * Carries the full certificate (SESSION-002) so the present party verifies the signature
+ * over the rebuilt TBS before recording the session sealed.
+ */
+export interface SealUnilateralConfirmed extends SealCertificateFields {
   type: "seal_unilateral_confirmed";
   session_id: Uint8Array;
-  sealed_root: Uint8Array;   // 32-byte sealed Merkle root
-  sealed_at: number;         // Unix timestamp ms
+  sealed_at: number;         // Unix timestamp ms (== close_timestamp; kept for back-compat)
 }
 
 /**
  * seal_unilateral_notification: directory → absent party, delivered on reconnect.
+ * Carries the full certificate so the absent party (which has no local tail) verifies the
+ * signature against an independently-trusted key WITHOUT trusting the channel.
  */
-export interface SealUnilateralNotification {
+export interface SealUnilateralNotification extends SealCertificateFields {
   type: "seal_unilateral_notification";
   session_id: Uint8Array;
-  sealed_root: Uint8Array;
   sealed_at: number;
-  seal_type: "UNILATERAL";
 }
 
 // ─── Internal directory session state ─────────────────────────────────────────

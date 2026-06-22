@@ -88,6 +88,7 @@ import type {
   SealData,
   HashSubmitErrorReason,
   GapFillRequest,
+  SessionLivenessQuery,
 } from "./relay-types.js";
 import type { RelayStore } from "./relay-store.js";
 import { InMemoryRelayStore } from "./relay-store.js";
@@ -101,6 +102,7 @@ import {
   encodeGapFillResponse,
   encodeGapFillError,
   encodeSessionInterrupted,
+  encodeSessionLivenessResponse,
   decodeInboundFrame,
 } from "./relay-frames.js";
 import { protocolLog, truncId, truncHex } from "./protocol-log.js";
@@ -432,6 +434,40 @@ export class CelloRelayNode {
         return;
       }
 
+      // SESSION-002 (unilateral seal): the directory requests a session's signed-leaf
+      // chain on demand so it can rebuild + verify the root for a unilateral seal (the
+      // seal_unilateral frame carries no leaves). Read-only — no state mutation.
+      if (frameType === "get_seal_leaves") {
+        const session_id = req["session_id"] as Uint8Array;
+        const sid = session_id instanceof Uint8Array ? session_id : new Uint8Array(session_id as unknown as ArrayBuffer);
+        const result = this.getSealLeaves(sid);
+        if (result.ok) {
+          stream.send(lp.encode.single(CBOR_ENC.encode({
+            type: "seal_leaves",
+            leaves: result.data.leaves,
+            merkle_root: result.data.merkle_root,
+            seq_count: result.data.seq_count,
+          })));
+        } else {
+          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "seal_leaves_unavailable", reason: result.reason })));
+        }
+        await stream.close();
+        return;
+      }
+
+      // SESSION-003 / DOD-LIVE-2: the directory asks the relay (the session-path liveness
+      // AUTHORITY) whether a recipient is alive/gone/unknown, so the unilateral-seal ABSENT
+      // attestation comes FROM THE RELAY, never self-asserted. Read-only.
+      if (frameType === "get_session_liveness") {
+        const counterparty_pubkey = req["counterparty_pubkey"] as Uint8Array;
+        const cp = counterparty_pubkey instanceof Uint8Array ? counterparty_pubkey : new Uint8Array(counterparty_pubkey as unknown as ArrayBuffer);
+        const counterpartyHex = Buffer.from(cp).toString("hex");
+        const { liveness } = this.#store.getRecipientLiveness(counterpartyHex);
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "session_liveness", liveness })));
+        await stream.close();
+        return;
+      }
+
       // Unknown frame type — close without state mutation
       stream.abort(new Error("unknown_directory_relay_frame_type"));
     } catch (err: unknown) {
@@ -547,6 +583,37 @@ export class CelloRelayNode {
     };
   }
 
+  /**
+   * SESSION-002: read-only leaf-chain fetch for a unilateral seal. Unlike
+   * submitForSeal it does NOT flip the session to "sealing" — the directory may
+   * fetch, find a root mismatch, and reject the unilateral seal, in which case the
+   * session must remain active (the present party may retry). Returns the full
+   * signed-leaf chain + the relay's recomputed root, exactly as submitForSeal packages
+   * it, so the directory verifies against the same encoding the bilateral path uses.
+   */
+  getSealLeaves(sessionId: Uint8Array): { ok: true; data: SealData } | { ok: false; reason: string } {
+    const key = Buffer.from(sessionId).toString("hex");
+    const state = this.#store.getSession(key);
+    if (!state) return { ok: false, reason: "session_not_found" };
+    // Accept "active" (the common unilateral case: one SEAL ctrl leaf present) or
+    // "sealing" (a bilateral attempt already in flight). Anything else (sealed/
+    // rejected/destroyed) has no recoverable chain.
+    if (state.status !== "active" && state.status !== "sealing") {
+      return { ok: false, reason: "session_not_active" };
+    }
+    const leaves = state.leaf_log.slice();
+    const leafInputs: LeafInput[] = leaves.map((l) => ({
+      kind: l.kind,
+      data: encodeStructure2(l.s2),
+    }));
+    const tree = buildMerkleTree(leafInputs);
+    const root = merkleRoot(tree);
+    return {
+      ok: true,
+      data: { leaves, seq_count: state.seq_counter, merkle_root: root },
+    };
+  }
+
   confirmSeal(sessionId: Uint8Array): void {
     const key = Buffer.from(sessionId).toString("hex");
     this.#cleanupSessionTracking(key);
@@ -638,6 +705,19 @@ export class CelloRelayNode {
           this.#streams.set(authedPubkeyHex, stream);
           authed = true;
 
+          // M7-SESSION-003 AC-001/AC-003: the authenticated standing connection
+          // IS the session-path liveness signal for relay-mode sessions, keyed by
+          // recipient pubkey (the same key as the delivery queue). Record 'alive';
+          // a prior 'gone' flips back to 'alive' (never sticky across reconnect).
+          if (this.#store.recordRecipientAlive(authedPubkeyHex).changed) {
+            this.#logger.info("session.liveness.changed", {
+              counterpartyPubkey: authedPubkeyHex,
+              transportPath: "relay",
+              liveness: "alive",
+              observedBy: "relay",
+            });
+          }
+
           // M7-SESSION-001 AC-002: reset idle timer when a participant connects or reconnects.
           // The idle timeout measures inactivity from the last participant connection,
           // not from recordAssignment (participants may join seconds after assignment).
@@ -711,6 +791,8 @@ export class CelloRelayNode {
           await this.#processHashSubmit(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "gap_fill_request") {
           await this.#processGapFillRequest(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "session_liveness_query") {
+          await this.#processSessionLivenessQuery(stream, parsed);
         }
       }
     } catch (err: unknown) {
@@ -721,6 +803,18 @@ export class CelloRelayNode {
     } finally {
       if (authedPubkeyHex && this.#streams.get(authedPubkeyHex) === stream) {
         this.#streams.delete(authedPubkeyHex);
+        // M7-SESSION-003 AC-001: the standing connection dropped — record a
+        // POSITIVE session-path 'gone' observation, keyed by recipient pubkey.
+        // recordRecipientGone is a no-op for an untracked recipient (never
+        // fabricates 'gone'). Emit the WARN transition exactly once.
+        if (this.#store.recordRecipientGone(authedPubkeyHex).changed) {
+          this.#logger.warn("session.liveness.changed", {
+            counterpartyPubkey: authedPubkeyHex,
+            transportPath: "relay",
+            liveness: "gone",
+            observedBy: "relay",
+          });
+        }
         // M7-SESSION-001 AC-001: emit session_interrupted to the remaining participant
         // when a peer's stream drops. Best-effort delivery — if the remaining participant
         // is also unreachable, the frame is discarded silently.
@@ -799,6 +893,35 @@ export class CelloRelayNode {
         })),
       }));
     } catch { /* stream closed */ }
+  }
+
+  /**
+   * M7-SESSION-003 AC-002: answer a session_liveness_query over the relay stream.
+   * The relay is the session-path liveness authority for relay-mode sessions: it
+   * holds the recipient's standing connection. liveness is read straight from the
+   * tracked store state — 'alive' iff the standing connection is currently held,
+   * 'gone' iff a disconnect was positively observed, 'unknown' iff never tracked.
+   * The relay NEVER fabricates 'gone' from a missing entry.
+   */
+  async #processSessionLivenessQuery(stream: Stream, frame: SessionLivenessQuery): Promise<void> {
+    const counterpartyHex = Buffer.from(frame.counterparty_pubkey).toString("hex");
+    const { liveness, observedAt } = this.#store.getRecipientLiveness(counterpartyHex);
+    try {
+      await this.#sendFrame(stream, encodeSessionLivenessResponse({
+        type: "session_liveness_response",
+        session_id: frame.session_id,
+        counterparty_pubkey: frame.counterparty_pubkey,
+        liveness,
+        observed_at: observedAt,
+      }));
+    } catch (err: unknown) {
+      // Stream closed while responding — the querying client will time out and
+      // fail SAFE to DELIVERED. Surface the cause; never swallow it silently.
+      this.#logger.debug("relay.liveness.query.response.failed", {
+        counterpartyPubkey: counterpartyHex.slice(0, 16),
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   async #processHashSubmit(
@@ -987,6 +1110,22 @@ export class CelloRelayNode {
     };
     this.#store.setSession(sessionKey, newState);
 
+    // OBS / DOD-SPINE-6 + DOD-INV-8: the relay witnessing + sequencing a leaf is a
+    // load-bearing, observable event — the relay is the Structure-2 ordering authority.
+    // Structured event for log pipelines; protocolLog line names the wire frame so the
+    // witness is greppable as "hash_submit" (the DoD line: "relay log shows a hash_submit").
+    // Content never appears here — only the signed hash leaf (INV-3).
+    this.#logger.info("relay.hash.submitted", {
+      sessionId: sessionKey,
+      sequenceNumber: seq,
+      senderPubkey: senderPubkeyHex,
+      leafKind,
+    });
+    protocolLog(
+      "RELAY",
+      `hash_submit witnessed — session ${truncHex(sessionKey)} seq ${seq} from ${truncHex(senderPubkeyHex)} (${leafKind})`,
+    );
+
     // PERSIST-012: Build signed ACK when a signing key is configured.
     // TBS = SHA-256(hash_bytes || seq_BE4 || ts_BE8) per RFC 8032, FIPS 180-4.
     const ackTimestamp = Date.now();
@@ -1051,6 +1190,18 @@ export class CelloRelayNode {
     if (counterpartyStream) {
       try {
         await this.#sendFrame(counterpartyStream, deliveryFrame);
+        // OBS / DOD-SPINE-6: the witnessed leaf was forwarded to the connected
+        // counterparty (the DoD line: "leaf_deliver to B's session Peer ID").
+        this.#logger.info("relay.leaf.delivered", {
+          sessionId: sessionKey,
+          sequenceNumber: seq,
+          recipientPubkey: counterpartyHex,
+          leafKind,
+        });
+        protocolLog(
+          "RELAY",
+          `leaf_deliver — session ${truncHex(sessionKey)} seq ${seq} to ${truncHex(counterpartyHex)}`,
+        );
       } catch {
         this.#streams.delete(counterpartyHex);
         this.#store.enqueueDelivery(counterpartyHex, {

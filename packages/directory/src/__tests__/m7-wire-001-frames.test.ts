@@ -114,6 +114,33 @@ describe("M7-WIRE-001: session_request with initiator session fields", () => {
     expect(decoded.initiator_session_peer_id).toBe("12D3KooWOnlyPeerId");
     expect(decoded.initiator_session_addrs).toBeUndefined();
   });
+
+  it("WIRE-002: carries wants_session_offer through the decoder when the initiator opts in", () => {
+    const frame = CBOR_ENC.encode({
+      type: "session_request",
+      target_pubkey: makePubkey(0x05),
+      initiator_session_peer_id: "12D3KooWOptInPeerId",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
+      wants_session_offer: true,
+    });
+    const decoded = decodeInboundSignalingFrame(frame) as SessionRequest;
+    expect(decoded).not.toBeNull();
+    // Regression guard: the typed allowlist decoder must propagate the WIRE-002
+    // opt-in flag, otherwise the directory's session_offer branch never fires.
+    expect(decoded.wants_session_offer).toBe(true);
+  });
+
+  it("WIRE-002: wants_session_offer is undefined for pre-WIRE-002 frames (no offer round-trip)", () => {
+    const frame = CBOR_ENC.encode({
+      type: "session_request",
+      target_pubkey: makePubkey(0x05),
+      initiator_session_peer_id: "12D3KooWNoOptInPeerId",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
+    });
+    const decoded = decodeInboundSignalingFrame(frame) as SessionRequest;
+    expect(decoded).not.toBeNull();
+    expect(decoded.wants_session_offer).toBeUndefined();
+  });
 });
 
 describe("M7-WIRE-001: session_offer_accept frame", () => {

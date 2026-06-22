@@ -1,0 +1,420 @@
+---
+name: CELLO-M7-PERSIST-LOG-001
+type: user-story
+date: 2026-06-20
+topics: [persistence, data-custody, conversation-history, readable-transcript, encryption-at-rest, sqlcipher, envelope-encryption, daemon, j-persist, m7]
+status: draft
+description: >
+  Makes the client the data custodian of its own readable conversation logs. The
+  daemon today persists only the cryptographic hash chain (session_tree_leaves =
+  SHA-256 leaf hashes); the readable plaintext lives in an in-memory buffer
+  (#receivedContent) that is evicted on shutdown — so after a restart the operator
+  can prove what the bytes were but cannot read a single message. This story adds a
+  durable, ENCRYPTED-at-rest, per-session readable transcript store in the daemon:
+  written on cello_send and cello_receive, joinable to the hash chain (each stored
+  message provably behind a committed leaf), readable after a daemon restart via a
+  read surface. Encryption at rest is established here (SQLCipher OR envelope
+  encryption + node:sqlite) — verified absent in the live daemon today and broader
+  than the transcript (the retry_queue content blob and key files are plaintext
+  too). The relay/directory still see only hashes (DOD-INV-3 preserved and
+  asserted). This is the substrate for the dispute-export (DOD-LOG-2) and
+  abuse-report (DOD-LOG-3) bundles. cello-client only — no directory/relay change.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-PERSIST-LOG-001
+domain: Persistence
+milestone: M7
+actor: CLIENT
+priority: P1
+components:
+  - daemon
+  - client
+  - protocol-types
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO daemon (the heavy local node and the operator's data custodian),
+  I want to durably store the readable conversation transcript — sent and received
+  plaintext, per session, encrypted at rest, joined to the committed hash chain —
+  so that the operator can read, dispute, and report their own conversations after
+  a restart, instead of holding only a chain of opaque hashes; while the relay and
+  directory continue to see only hashes, and the readable data never leaves the
+  operator's device unbidden.
+
+# ─── Context ────────────────────────────────────────────────
+# ─── STACK CORRECTION (2026-06-20) — READ BEFORE IMPLEMENTING ──────────────
+# This story lands on the LIVE daemon (core/daemon — the only stack that runs in
+# production). The dead core/client ClientStatePersistence (which DOES use SQLCipher)
+# is NOT the target; do not revive it. The durable store and its encryption live in the
+# daemon's session/persistence layer (the same DB opened at session-node-manager.ts:280).
+# Verify every claim below against the m7-rehome branch (NOT main), per the data-custody
+# decision log. blocked_by: CELLO-M7-DAEMON-004 (the daemon owns the session tree + the
+# content buffer this story makes durable).
+# ───────────────────────────────────────────────────────────────────────────
+# Design authority: docs/planning/discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-rest.md
+# (D-B1..D-B4 — SETTLED with Andre 2026-06-20) and CONTEXT.md (§Agent "Accumulates its
+# own conversation history and endorsements"; §Keys "identity_key … Backs … the local DB
+# key").
+#
+# Verified current state (m7-rehome, HEAD 0afce25) — the gap:
+#   - Hash chain IS durable: session-node-manager.ts:334 session_tree_leaves(session_id,
+#     leaf_index, leaf_kind, leaf_hash_hex, created_at) — only the SHA-256 leaf hash.
+#   - Readable plaintext is NOT durable: it lives in #receivedContent =
+#     new Map<...>() (:199), drained by cello_receive, and cleared on shutdown
+#     (#receivedContent.clear() :1000, "plaintext must not survive shutdown in memory";
+#     #evictSessionCaches :918). No messages table, no content store.
+#   - At-rest encryption is ABSENT in the live daemon: every DB open is plain node:sqlite
+#     DatabaseSync (:280); no sqlcipher dep in core/daemon/package.json; key material is
+#     plaintext files. registration-persistence.ts:13 states it verbatim:
+#     "Encryption-at-rest for the daemon is a separate future concern and is intentionally
+#     NOT introduced piecemeal here." The "SQLCipher table" comments in retry-queue.ts /
+#     nonce-dedup.ts / session-tree.ts are aspirational; the store is plain node:sqlite,
+#     and retry_queue.content_blob already holds plaintext content at rest.
+#
+# Decisions (from the design log — do not re-open):
+#   D-B1 — a JOURNEY (J-PERSIST). This story = DOD-LOG-1 (durable readable transcript). The
+#     dispute-export bundle (DOD-LOG-2) and abuse-report bundle (DOD-LOG-3) are J-PERSIST
+#     follow-ons that BUILD ON this substrate — recorded in the DoD + design log, storied
+#     when J-PERSIST is built (not silently deferred).
+#   D-B2 — store the READABLE TRANSCRIPT first (sent + received plaintext, per session,
+#     canonical-sequence ordered, joined to session_tree_leaves). Trust/endorsement records
+#     + the pseudonym/conversation-participation layer are SEPARATE later work.
+#   D-B3 — ENCRYPTION AT REST is delivered here. Mechanism is the implementer's choice with
+#     a recorded trade-off: (a) SQLCipher (@signalapp/sqlcipher already in the workspace;
+#     whole-DB; native dep) OR (b) envelope encryption of blob columns + node:sqlite, key
+#     derived from identity_key (CONTEXT.md:64; no native dep). It is NOT acceptable to add
+#     a readable plaintext store on an unencrypted DB. This closes a pre-existing deferred
+#     gap broader than the transcript (retry_queue content blob, session metadata).
+#   D-B4 — this does NOT reverse the in-memory eviction rule. "plaintext must not survive
+#     shutdown IN MEMORY" is RAM hygiene; the encrypted DISK store is a deliberate, separate
+#     thing. The in-memory buffer is still drained + cleared on teardown. DOD-INV-3 is
+#     preserved and asserted: the readable transcript is local-only; relay/directory see
+#     only hashes.
+#
+# Sovereign node constraint: this is purely LOCAL client-side state on the operator's
+# machine. No directory/relay change, no cross-node state, no wire/protocol change. INV-3 is
+# strengthened, never weakened.
+#
+# Cross-repo: cello-client ONLY (core/daemon, core/protocol-types if a read-surface type is
+# added). Version-bump AC applies; NO trustless-cello dependency change, NO directory/relay
+# pipeline deploy is triggered by this story.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the daemon sends a message via cello_send for an active session"
+    action: >
+      the daemon shall write the readable sent plaintext to a durable, encrypted-at-rest
+      transcript store, keyed by (session_id, leaf_index/sequence) so it joins to the
+      session_tree_leaves hash chain, recording direction='sent', the canonical sequence,
+      and a timestamp. The write is part of the same flow that appends the leaf to the tree.
+
+  - trigger: "When the daemon receives and cross-checks a message on an active session"
+    action: >
+      the daemon shall write the readable received plaintext to the durable encrypted
+      transcript store with direction='received', the canonical sequence, and a timestamp,
+      joined to the committed leaf — in addition to (not instead of) placing it in the
+      in-memory buffer for cello_receive.
+
+  - trigger: "When the daemon restarts and the operator queries a session's transcript"
+    action: >
+      the daemon shall read the durable transcript from the encrypted store and return the
+      readable messages in canonical-sequence order via a read surface (a daemon/CLI read
+      tool, e.g. cello_get_transcript / `cello transcript <session>`) — the conversation is
+      readable after a restart, not only the hashes.
+
+  - trigger: "When the daemon opens its database"
+    action: >
+      the daemon shall open it with encryption at rest established (SQLCipher key, or the
+      envelope-encryption key derived from identity_key applied to the transcript and
+      content-blob columns). A daemon that finds an existing UNENCRYPTED database shall
+      migrate it to encrypted at rest (one-time, atomic, backed-up) — never silently leave
+      operator data in plaintext.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+
+  - id: AC-001
+    given: "An active session over the live daemon send/receive path (DAEMON-004) where the
+      operator sends two messages and receives two messages"
+    when: "the messages flow"
+    then: >
+      Four rows exist in the durable transcript store — two direction='sent', two
+      direction='received' — each carrying the readable plaintext, the canonical sequence,
+      and a join to its session_tree_leaves leaf (the stored message's content_hash equals
+      the committed leaf's hash). Verified by reading the store after the exchange.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-002
+    given: "A session whose transcript was written, after which the daemon process is
+      stopped and a fresh daemon is started on the same DB"
+    when: "the operator queries the transcript via the read surface"
+    then: >
+      The readable messages are returned in canonical-sequence order, byte-identical to what
+      was sent/received — the conversation is readable after restart. Verified by an
+      integration test that exercises the END operation (read the actual text), not a
+      precondition ('rows exist'). The in-memory buffer is empty after restart (it was
+      cleared on shutdown) and the readable text comes from the durable store (L1 + L2 + L4).
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-003
+    given: "The durable transcript store and the daemon DB file on disk"
+    when: "the raw DB file is inspected outside the daemon (e.g. with a plain sqlite reader,
+      or by reading the file bytes)"
+    then: >
+      The readable plaintext is NOT recoverable from the raw file without the encryption key
+      — either the whole DB is SQLCipher-encrypted, or the transcript/content columns are
+      ciphertext (envelope). A test asserts that opening the file without the key fails to
+      yield plaintext, AND that the daemon with the key reads it correctly. (D-B3 — the store
+      is encrypted at rest.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-004
+    given: "An existing daemon database created BEFORE this story (unencrypted, possibly with
+      a retry_queue holding plaintext content blobs)"
+    when: "a daemon with this story's code opens it"
+    then: >
+      The daemon migrates the database to encrypted-at-rest atomically (write-new + rename,
+      with a backup), without losing existing rows; after migration the raw file no longer
+      yields plaintext (AC-003). The migration is idempotent (a second start does not
+      re-migrate). Verified by seeding an unencrypted DB, restarting with the new code, and
+      asserting both data preservation and encryption.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-005
+    given: "A full send/receive/transcript exchange driven over the live daemon path, with
+      the relay and directory in the path"
+    when: "the relay and directory logs are inspected"
+    then: >
+      No readable plaintext appears in any relay or directory log or store — they carry only
+      hashes (Structure 2 / Merkle). The durable transcript exists ONLY on the sending and
+      receiving daemons. DOD-INV-3 is asserted as a journey SI here (non-tautological: the
+      relay IS in the witness path). (D-B4.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-006
+    given: "The in-memory eviction rule (#receivedContent cleared on shutdown,
+      #evictSessionCaches on teardown)"
+    when: "a session is torn down / the daemon shuts down"
+    then: >
+      The in-memory #receivedContent buffer is still drained and cleared (RAM hygiene
+      unchanged); the durable ENCRYPTED transcript persists independently. A test asserts
+      both: the in-memory buffer is empty post-teardown AND the encrypted transcript is still
+      readable with the key. This story does not reverse the RAM-hygiene invariant — it adds
+      an encrypted disk store. (D-B4.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-007
+    given: "A real domain transcript (real messages with real content_hashes — not
+      randomBytes)"
+    when: "it is serialized → persisted → daemon restarted → loaded → read AND used to
+      cross-check against the committed leaf"
+    then: >
+      The round-trip preserves the readable text AND the join to the hash chain: each loaded
+      message's content_hash equals its session_tree_leaves leaf hash, proving the stored
+      message is the message behind the committed leaf. Byte equality of the text alone is
+      not sufficient — the cross-check must pass (L1 typed-round-trip rule).
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-008
+    given: "The daemon composition root and the read surface"
+    when: "a CLI/MCP transcript read is issued after a real exchange + restart"
+    then: >
+      The read surface is wired from the composition root and returns the durable transcript
+      — not dead code, not an internal-only method. Verified by driving the read via the
+      actual CLI/MCP entrypoint, asserting observable readable output (L3). A class-method
+      test does not satisfy this AC.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-009
+    given: "All error paths introduced by this story (write failure, encryption/key
+      unavailable, migration failure, read of a missing session)"
+    when: "each distinct cause is triggered"
+    then: >
+      Each produces a distinct code ('transcript_write_failed', 'transcript_db_locked',
+      'transcript_encryption_key_unavailable', 'transcript_migration_failed',
+      'transcript_session_not_found'); no catch returns a hardcoded reason without logging
+      error.message; the lateral catch audit covers the touched daemon persistence files
+      (L6). Any MCP-surfaced read failure carries a guidance field (Rule 2). A transcript
+      write failure must NOT fail the message send/receive — the hash layer is authoritative;
+      the transcript is best-effort on top (logged, not fatal).
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-010
+    given: "The observability events declared for this story"
+    when: "writes, reads, and the migration execute"
+    then: >
+      persist.transcript.written (debug/info), persist.transcript.read (info),
+      persist.transcript.encrypted.migrated (info), persist.transcript.write.failed (error)
+      fire with sessionId, sequence, direction (where applicable), correlationId; no
+      console.log; readable plaintext NEVER appears in any log event (only sequence/hash
+      metadata). Registered in the canonical taxonomy.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-011
+    given: "All cello-client code changes are implemented and tests pass"
+    when: "the implementer runs the cello-client version bump procedure"
+    then: >
+      core/daemon (and core/protocol-types if a read-surface type is added) are bumped;
+      dependents updated; @cello-protocol/connect bumped; pnpm-lock updated; tag pushed; CI
+      publishes to beta; dependencies show real semver, never workspace:*. NO trustless-cello
+      change — this story triggers no directory/relay pipeline deploy.
+    test_type: integration
+    component_under_test: cello-client CI
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The readable conversation transcript shall be stored ENCRYPTED at rest and shall never
+      leave the operator's device unbidden. No code path shall transmit the readable
+      transcript to the relay, the directory, or any peer.
+    adversarial_condition: >
+      even when a sync, backup, or telemetry path could plausibly carry it. The relay and
+      directory must see only hashes (AC-005); the raw DB file must not yield plaintext
+      without the key (AC-003). Verified by asserting no network egress of transcript text
+      and ciphertext-at-rest. (DOD-INV-3; D-B3/D-B4.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: SI-002
+    statement: >
+      A stored transcript message shall be bound to its committed Merkle leaf — the stored
+      content's hash equals the session_tree_leaves leaf hash for its sequence.
+    adversarial_condition: >
+      even if a write races the tree append or a corrupted row is present. A transcript
+      message whose hash does not match its leaf must be detectable (and is surfaced, not
+      silently trusted) — the durable transcript is provably the conversation behind the
+      hash chain, not an unanchored side-record. Verified by the AC-007 cross-check.
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the transcript store write fails (disk full, DB locked) during a
+      send/receive"
+    fallback: >
+      the message send/receive STILL succeeds (the hash layer is authoritative and
+      unaffected); the transcript write is logged as persist.transcript.write.failed and
+      retried/queued where possible. A transcript failure is never allowed to desync or fail
+      the protocol — it is best-effort custody on top of the always-honest hash/seal layer.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: DB-002
+    condition: "While the encryption key (identity_key-derived, or SQLCipher key) is
+      unavailable at daemon startup"
+    fallback: >
+      the daemon refuses to open the transcript store in plaintext — it returns
+      'transcript_encryption_key_unavailable' with guidance and does not write readable data
+      unencrypted. It never degrades to a plaintext store. (Fail closed on encryption.)
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: persist.transcript.written
+      level: debug
+      trigger: "When a transcript row is durably written on send/receive"
+      context_fields: [sessionId, sequence, direction]
+      correlationId: true
+    - name: persist.transcript.read
+      level: info
+      trigger: "When the operator reads a session transcript via the read surface"
+      context_fields: [sessionId, messageCount]
+      correlationId: true
+    - name: persist.transcript.encrypted.migrated
+      level: info
+      trigger: "When an existing unencrypted DB is migrated to encrypted at rest"
+      context_fields: [rowsMigrated]
+  error_events:
+    - name: persist.transcript.write.failed
+      level: error
+      trigger: "When a durable transcript write fails (non-fatal to the protocol)"
+      context_fields: [sessionId, sequence, error]
+  alarms:
+    - condition: "persist.transcript.write.failed fires repeatedly for one session"
+      fires_to: "local daemon ERROR log — indicates disk/DB trouble; the operator's custody
+        of that conversation is degraded though the protocol is unaffected. Local, not
+        CloudWatch."
+  notes: >
+    Register persist.transcript.* in the canonical taxonomy (2026-05-16_0753). Readable
+    plaintext MUST NEVER appear in a log event — only sequence/hash metadata (the
+    registration-persistence.ts SI-001/002 'never log the secret' discipline applies to
+    transcript text too).
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Schema: add a messages/transcript table in the daemon DB (CREATE TABLE IF NOT EXISTS,
+    idempotent — the daemon DB has NO Flyway; it evolves via in-code idempotent migrations,
+    see session-node-manager.ts:282-342). Columns at minimum: session_id, sequence (joins
+    session_tree_leaves.leaf_index), direction, content (encrypted if envelope), content_hash
+    (for the leaf join), created_at. PRIMARY KEY (session_id, sequence).
+  - >
+    Encryption mechanism — implementer's choice, record the trade-off in the PR:
+    (a) SQLCipher via @signalapp/sqlcipher (already a workspace dep): whole-DB encryption,
+    matches the dead stack's posture; cost is a native binding the daemon currently avoids
+    (install size/compile — heavy-local-node note in CLAUDE.md) and replacing node:sqlite.
+    (b) Envelope encryption + node:sqlite: derive a DB key from identity_key (CONTEXT.md:64),
+    encrypt the transcript content column (and, while here, the retry_queue content_blob) at
+    the application layer; keeps node:sqlite, no native dep. Either way: NO plaintext readable
+    content at rest. Whichever is chosen, ALSO encrypt the existing retry_queue.content_blob
+    (it is plaintext content today) so the gap is closed consistently, and migrate existing
+    DBs (AC-004).
+  - >
+    Read surface: a daemon read path exposed via the MCP adapter and the CLI (e.g.
+    cello_get_transcript(session_id) / `cello transcript <session>`). It returns the readable
+    messages in sequence order. This is also the substrate the dispute-export (DOD-LOG-2) and
+    abuse-report (DOD-LOG-3) bundles consume.
+  - >
+    Eviction rule (D-B4): keep #receivedContent.clear() on shutdown and #evictSessionCaches
+    on teardown EXACTLY as today — RAM hygiene is unchanged. The durable store is the
+    encrypted disk copy, written at send/receive time, independent of the in-memory buffer.
+  - >
+    DOD-LOG-2/3 are J-PERSIST follow-ons (dispute-export bundle, abuse-report bundle) that
+    BUILD ON this substrate. They are recorded in the DoD + the data-custody design log with
+    a home; story them when J-PERSIST is built. They are NOT in this story's scope.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-DAEMON-004   # FOUNDATION (Option A): the daemon owns the session tree + the #receivedContent buffer this story makes durable
+  related:
+    - CELLO-M7-MSG-001      # the content cross-check the leaf-join (SI-002) reuses; retry_queue.content_blob encryption overlaps
+  blocks:
+    - CELLO-M7-E2E-001      # the J-PERSIST journey (send/receive → restart → read the transcript) runs in the integration gate
+  notes: >
+    Establishes M7 J-PERSIST. New journey not in the original outline gate — added per the
+    2026-06-20 data-custody decision (Andre). DOD-LOG-1 is this story; DOD-LOG-2/3 are
+    follow-ons. Closes the at-rest-encryption deferral (RC-1) for the live daemon, broader
+    than the transcript (retry_queue content blob, session metadata).
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Client Persistence, Data Custody"
+  end_to_end_flow: "§Client-side records"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-20_2217_client-data-custody-and-encryption-at-rest"
+  related_docs:
+    - "[[CONTEXT]]"
+    - "[[CELLO-M7-DAEMON-004]]"
+    - "[[CELLO-M7-MSG-001]]"
+  notes: >
+    SETTLED (do not re-open): D-B1 (journey), D-B2 (transcript first), D-B3 (encrypted at
+    rest, SQLCipher or envelope), D-B4 (in-memory eviction unchanged; INV-3 preserved). The
+    product promise: data stays local — the client is the data custodian of its own logs; the
+    server is a hash custodian only.

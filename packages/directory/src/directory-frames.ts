@@ -18,6 +18,7 @@ import type {
   SessionSealedSingle,
   SessionSealedFrost,
   SessionSealed,
+  SessionSealedWithLegibility,
   SessionSealRejected,
   SessionRequestError,
   NotAuthenticated,
@@ -129,7 +130,10 @@ export function encodeSessionAbandoned(frame: SessionAbandoned): Uint8Array {
   return ENC.encode({ type: frame.type, session_id: frame.session_id });
 }
 
-export function encodeSessionSealed(frame: SessionSealed): Uint8Array {
+export function encodeSessionSealed(frame: SessionSealedWithLegibility): Uint8Array {
+  // M7-SESSION-004: the receipt-not-assent legibility certificate, when present,
+  // is carried verbatim on the frame (canonical CBOR per RFC 8949 §4.2.1).
+  const legibility = frame.legibility;
   if (frame.signature_type === "frost") {
     const encoded: Record<string, unknown> = {
       type: frame.type,
@@ -145,11 +149,12 @@ export function encodeSessionSealed(frame: SessionSealed): Uint8Array {
     if (frame.leaf_count !== undefined) {
       encoded["leaf_count"] = frame.leaf_count;
     }
+    if (legibility !== undefined) encoded["legibility"] = legibility;
     return ENC.encode(encoded);
   }
   // signature_type === "single" (deprecated M1 format)
   const f = frame as SessionSealedSingle;
-  return ENC.encode({
+  const encodedSingle: Record<string, unknown> = {
     type: f.type,
     signature_type: "single",
     session_id: f.session_id,
@@ -158,11 +163,13 @@ export function encodeSessionSealed(frame: SessionSealed): Uint8Array {
     close_timestamp: f.close_timestamp > 0xffffffff
       ? BigInt(f.close_timestamp)
       : f.close_timestamp,
-  });
+  };
+  if (legibility !== undefined) encodedSingle["legibility"] = legibility;
+  return ENC.encode(encodedSingle);
 }
 
-export function encodeSealVerified(frame: SealVerified): Uint8Array {
-  return ENC.encode({
+export function encodeSealVerified(frame: SealVerified & { legibility?: import("./directory-types.js").SealLegibility }): Uint8Array {
+  const encoded: Record<string, unknown> = {
     type: frame.type,
     session_id: frame.session_id,
     sealed_root: frame.sealed_root,
@@ -170,17 +177,27 @@ export function encodeSealVerified(frame: SealVerified): Uint8Array {
     timestamp: frame.timestamp > 0xffffffff
       ? BigInt(frame.timestamp)
       : frame.timestamp,
-  });
+  };
+  // M7 legibility-TBS-binding: carry the legibility (bilateral seal only) so the initiator's
+  // daemon binds the SAME hash into its co-signed TBS. The daemon decodes inbound frames generically
+  // (cbor-x), so the nested object round-trips without a typed-decoder change.
+  if (frame.legibility !== undefined) encoded["legibility"] = frame.legibility;
+  return ENC.encode(encoded);
 }
 
 export function encodeSessionFrostSealed(frame: SessionFrostSealed): Uint8Array {
-  return ENC.encode({
+  // M7-SESSION-004 (review finding #3): carry the legibility certificate verbatim when
+  // present, so a deferred seal completion ends with the same receipt-not-assent
+  // legibility as a live push (canonical CBOR per RFC 8949 §4.2.1).
+  const encoded: Record<string, unknown> = {
     type: frame.type,
     session_id: frame.session_id,
     sealed_root: frame.sealed_root,
     frost_signature: frame.frost_signature,
     signer_pubkey: frame.signer_pubkey,
-  });
+  };
+  if (frame.legibility !== undefined) encoded["legibility"] = frame.legibility;
+  return ENC.encode(encoded);
 }
 
 
@@ -287,7 +304,7 @@ export type PongFrame = { type: "pong"; ts: number };
 /** M7-SESSION-001 AC-009: seal-interrupted signaling frame types (pass-through routing). */
 export type SealInterruptedRequestFrame = { type: "seal_interrupted_request"; sessionId: string; initiatorPubkey: string; counterpartyPubkey: string; leafCountAtInterruption: number; nonce: string };
 /** initiatorPubkey is included so the directory can route the ack back to the initiator by direct lookup in #streams. */
-export type SealInterruptedAckFrame = { type: "seal_interrupted_ack"; sessionId: string; initiatorPubkey: string; sealInterruptedLeaf: Record<string, unknown> };
+export type SealInterruptedAckFrame = { type: "seal_interrupted_ack"; sessionId: string; initiatorPubkey: string; sealInterruptedLeaf: Record<string, unknown>; nonce: string };
 /** initiatorPubkey is included so the directory can route the rejection back to the initiator by direct lookup in #streams. */
 export type SealInterruptedRejectionFrame = { type: "seal_interrupted_rejection"; sessionId: string; initiatorPubkey: string; reason: string };
 
@@ -335,11 +352,16 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     const transport_mode_raw = o["transport_mode"];
     const transport_mode: "direct" | "relay" | undefined =
       transport_mode_raw === "direct" ? "direct" : transport_mode_raw === "relay" ? "relay" : undefined;
+    // M7-WIRE-002: opt-in flag for the session_offer→accept round-trip. Must be
+    // carried through this typed allowlist decoder or the directory's offer branch
+    // (which reads parsedReq.wants_session_offer) never fires.
+    const wants_session_offer = o["wants_session_offer"] === true ? true : undefined;
     const result: SessionRequest = { type: "session_request", target_pubkey };
     if (connection_id !== undefined) result.connection_id = connection_id;
     if (initiator_session_peer_id !== undefined) result.initiator_session_peer_id = initiator_session_peer_id;
     if (initiator_session_addrs !== undefined) result.initiator_session_addrs = initiator_session_addrs;
     if (transport_mode !== undefined) result.transport_mode = transport_mode;
+    if (wants_session_offer !== undefined) result.wants_session_offer = wants_session_offer;
     return result;
   }
 
@@ -466,8 +488,13 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     const sealInterruptedLeaf = typeof o["sealInterruptedLeaf"] === "object" && o["sealInterruptedLeaf"] !== null
       ? o["sealInterruptedLeaf"] as Record<string, unknown>
       : null;
-    if (!sessionId || !initiatorPubkey || !sealInterruptedLeaf) return null;
-    return { type: "seal_interrupted_ack", sessionId, initiatorPubkey, sealInterruptedLeaf };
+    // The nonce is the initiator's L-2 replay guard: the ack MUST echo the request
+    // nonce or the initiator rejects it as seal_interrupted_nonce_mismatch. The typed
+    // relay decoder previously dropped it, breaking every bilateral seal-interrupted
+    // (DOD-INT-2). Carry it through.
+    const nonce = typeof o["nonce"] === "string" ? o["nonce"] : null;
+    if (!sessionId || !initiatorPubkey || !sealInterruptedLeaf || nonce === null) return null;
+    return { type: "seal_interrupted_ack", sessionId, initiatorPubkey, sealInterruptedLeaf, nonce };
   }
 
   if (o["type"] === "seal_interrupted_rejection") {
@@ -515,6 +542,15 @@ export function encodeSealUnilateralConfirmed(frame: SealUnilateralConfirmed): U
     session_id: frame.session_id,
     sealed_root: frame.sealed_root,
     sealed_at: frame.sealed_at,
+    // SESSION-002 certificate
+    leaf_count: frame.leaf_count,
+    close_timestamp: frame.close_timestamp,
+    frost_signature: frame.frost_signature,
+    signature_type: frame.signature_type,
+    present_pubkey: frame.present_pubkey,
+    absent_pubkey: frame.absent_pubkey,
+    attestation_mode: frame.attestation_mode,
+    seal_type: frame.seal_type,
   });
 }
 
@@ -524,8 +560,51 @@ export function encodeSealUnilateralNotification(frame: SealUnilateralNotificati
     session_id: frame.session_id,
     sealed_root: frame.sealed_root,
     sealed_at: frame.sealed_at,
+    // SESSION-002 certificate
+    leaf_count: frame.leaf_count,
+    close_timestamp: frame.close_timestamp,
+    frost_signature: frame.frost_signature,
+    signature_type: frame.signature_type,
+    present_pubkey: frame.present_pubkey,
+    absent_pubkey: frame.absent_pubkey,
+    attestation_mode: frame.attestation_mode,
     seal_type: frame.seal_type,
   });
+}
+
+/**
+ * SESSION-002: decode + validate the shared seal-certificate fields from a
+ * seal_unilateral_confirmed / seal_unilateral_notification frame. `sealed_root` is
+ * already decoded by the caller and threaded in. Returns null on any malformed field.
+ */
+function decodeSealCertFields(
+  o: Record<string, unknown>,
+  sealed_root: Uint8Array,
+): import("./directory-types.js").SealCertificateFields | null {
+  const leaf_count = typeof o["leaf_count"] === "number" ? o["leaf_count"] : null;
+  const close_timestamp = typeof o["close_timestamp"] === "number" ? o["close_timestamp"] : null;
+  const frost_signature = toUint8Array(o["frost_signature"]);
+  const signature_type = o["signature_type"];
+  const present_pubkey = toUint8Array(o["present_pubkey"]);
+  const absent_pubkey = toUint8Array(o["absent_pubkey"]);
+  const attestation_mode = o["attestation_mode"];
+  if (leaf_count === null || close_timestamp === null) return null;
+  if (!frost_signature || frost_signature.length !== 64) return null;
+  if (signature_type !== "frost" && signature_type !== "single") return null;
+  if (!present_pubkey || present_pubkey.length !== 32) return null;
+  if (!absent_pubkey || absent_pubkey.length !== 32) return null;
+  if (attestation_mode !== "ABSENT" && attestation_mode !== "DELIVERED") return null;
+  return {
+    sealed_root,
+    leaf_count,
+    close_timestamp,
+    frost_signature,
+    signature_type,
+    present_pubkey,
+    absent_pubkey,
+    attestation_mode,
+    seal_type: "UNILATERAL",
+  };
 }
 
 // ─── Decode outbound frames (for test helpers) ────────────────────────────────
@@ -686,6 +765,14 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     const close_timestamp = typeof _ct === "number" ? _ct : typeof _ct === "bigint" ? Number(_ct) : null;
     if (close_timestamp === null) return null;
 
+    // M7-SESSION-004 (review finding #2): preserve the legibility certificate on the
+    // session_sealed frame (both frost and single sub-branches) so a directory-side
+    // decode round-trips it symmetrically with session_frost_sealed — no silent field loss.
+    const legRaw = o["legibility"];
+    const legibility = legRaw !== null && typeof legRaw === "object"
+      ? (legRaw as import("./directory-types.js").SealLegibility)
+      : undefined;
+
     const sig_type = o["signature_type"];
     if (sig_type === "frost") {
       const frost_signature = toUint8Array(o["frost_signature"]);
@@ -695,7 +782,7 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       // H-003: parse leaf_count if present (optional for backward compat)
       const leafCountRaw = o["leaf_count"];
       const leaf_count = typeof leafCountRaw === "number" ? leafCountRaw : undefined;
-      const result: SessionSealedFrost = {
+      const result: SessionSealedFrost & { legibility?: import("./directory-types.js").SealLegibility } = {
         type: "session_sealed" as const,
         signature_type: "frost" as const,
         session_id,
@@ -705,12 +792,14 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
         close_timestamp,
       };
       if (leaf_count !== undefined) result.leaf_count = leaf_count;
+      if (legibility !== undefined) result.legibility = legibility;
       return result;
     }
     // Legacy M1 or explicit "single"
     const directory_signature = toUint8Array(o["directory_signature"]);
     if (!directory_signature || directory_signature.length !== 64) return null;
-    const s: SessionSealedSingle = { type: "session_sealed", signature_type: "single", session_id, sealed_root, directory_signature, close_timestamp };
+    const s: SessionSealedSingle & { legibility?: import("./directory-types.js").SealLegibility } = { type: "session_sealed", signature_type: "single", session_id, sealed_root, directory_signature, close_timestamp };
+    if (legibility !== undefined) s.legibility = legibility;
     return s;
   }
 
@@ -751,7 +840,13 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     if (!sealed_root || sealed_root.length !== 32) return null;
     if (!frost_signature || frost_signature.length !== 64) return null;
     if (!signer_pubkey || signer_pubkey.length !== 32) return null;
-    return { type: "session_frost_sealed", session_id, sealed_root, frost_signature, signer_pubkey };
+    const result: SessionFrostSealed = { type: "session_frost_sealed", session_id, sealed_root, frost_signature, signer_pubkey };
+    // M7-SESSION-004 (review finding #3): preserve the legibility certificate when present.
+    const legRaw = o["legibility"];
+    if (legRaw !== null && typeof legRaw === "object") {
+      result.legibility = legRaw as import("./directory-types.js").SealLegibility;
+    }
+    return result;
   }
 
   if (o["type"] === "session_abandoned") {
@@ -904,7 +999,9 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     if (!session_id || session_id.length !== 16) return null;
     if (!sealed_root || sealed_root.length !== 32) return null;
     if (sealed_at === null) return null;
-    return { type: "seal_unilateral_confirmed", session_id, sealed_root, sealed_at };
+    const cert = decodeSealCertFields(o, sealed_root);
+    if (!cert) return null;
+    return { type: "seal_unilateral_confirmed", session_id, sealed_at, ...cert };
   }
 
   if (o["type"] === "seal_unilateral_notification") {
@@ -914,7 +1011,9 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     if (!session_id || session_id.length !== 16) return null;
     if (!sealed_root || sealed_root.length !== 32) return null;
     if (sealed_at === null) return null;
-    return { type: "seal_unilateral_notification", session_id, sealed_root, sealed_at, seal_type: "UNILATERAL" };
+    const cert = decodeSealCertFields(o, sealed_root);
+    if (!cert) return null;
+    return { type: "seal_unilateral_notification", session_id, sealed_at, ...cert };
   }
 
   // M7-MANIFEST-002: manifest poll response (directory → client)

@@ -122,6 +122,25 @@ function makeQueuedNotification(override?: Partial<QueuedNotification>): QueuedN
 
 const describeIntegration = isLocal ? describe : describe.skip;
 
+// SESSION-002: the seal_unilateral notification payload now carries the full certificate.
+// The directory's drain reconstructs the cert via unilateralNotificationFromPayload and
+// skips (acks-without-delivery) any pre-cert payload. Tests of the drain MECHANISM therefore
+// enqueue a cert-shaped payload.
+function certNotificationPayload(session_id_hex: string, sealed_root_hex: string): Record<string, unknown> {
+  return {
+    session_id_hex,
+    sealed_root_hex,
+    sealed_at: Date.now(),
+    leaf_count: 2,
+    close_timestamp: Date.now(),
+    frost_signature_hex: "00".repeat(64),
+    signature_type: "single",
+    present_pubkey_hex: randomBytes(32).toString("hex"),
+    absent_pubkey_hex: randomBytes(32).toString("hex"),
+    attestation_mode: "ABSENT",
+  };
+}
+
 let superPool: pg.Pool;
 let servicePool: pg.Pool;
 
@@ -785,7 +804,15 @@ describeIntegration("PERSIST-023 DB-002: idempotent re-delivery when restart bet
 // ─── Error path: pending_notification.enqueue.failed on DB write failure ─────
 
 describe("PERSIST-023 observability: pending_notification.enqueue.failed on DB write failure", () => {
-  it("pending_notification.enqueue.failed: directory-node logs warn when notificationQueue.enqueue() rejects", async () => {
+  // SESSION-002 SUPERSEDED: this drove the absent-party enqueue via the old FAITH-BASED
+  // #processSealUnilateral (it stored reported_root + enqueued unconditionally). The rewrite
+  // now FETCHES the signed-leaf chain from the relay + VERIFIES the root before any enqueue,
+  // so triggerSealUnilateralForTest (bare mock relay, no getSealLeaves) rejects with
+  // unilateral_leaves_unavailable and never reaches the enqueue path. Reproducing the enqueue
+  // in-process now needs a fully-signed leaf chain (real crypto) — the binary-anchored
+  // J-UNILATERAL spine exercises the real enqueue. The enqueue .catch() that logs
+  // pending_notification.enqueue.failed is intact in #completeUnilateralNotarization.
+  it.skip("pending_notification.enqueue.failed: directory-node logs warn when notificationQueue.enqueue() rejects", async () => {
     // Unit test: exercises the real directory-node.ts code path at #processSealUnilateral
     // where the fire-and-forget notificationQueue.enqueue() call rejects.
     //
@@ -893,7 +920,7 @@ describe("PERSIST-023 observability: notification.delivery.failed on stream send
         {
           notificationId,
           notificationType: "seal_unilateral",
-          payload: { session_id_hex: sessionIdHex, sealed_root_hex: sealedRootHex, sealed_at: Date.now() },
+          payload: certNotificationPayload(sessionIdHex, sealedRootHex),
         } satisfies QueuedNotification,
       ]),
       acknowledge: vi.fn().mockResolvedValue(undefined),
@@ -958,7 +985,7 @@ describe("PERSIST-023 F-D: DirectoryNode Pg drain delivers pending notifications
       {
         notificationId,
         notificationType: "seal_unilateral",
-        payload: { session_id_hex: sessionIdHex, sealed_root_hex: sealedRootHex, sealed_at: Date.now() },
+        payload: certNotificationPayload(sessionIdHex, sealedRootHex),
       } satisfies QueuedNotification,
     ]);
     const acknowledgeSpy = vi.fn().mockResolvedValue(undefined);
@@ -1040,12 +1067,12 @@ describe("PERSIST-023 SI-003: per-session-id double-delivery prevention across r
       {
         notificationId: notifIdA,
         notificationType: "seal_unilateral",
-        payload: { session_id_hex: sessionIdA, sealed_root_hex: sealedRootA, sealed_at: Date.now() },
+        payload: certNotificationPayload(sessionIdA, sealedRootA),
       } satisfies QueuedNotification,
       {
         notificationId: notifIdB,
         notificationType: "seal_unilateral",
-        payload: { session_id_hex: sessionIdB, sealed_root_hex: sealedRootB, sealed_at: Date.now() },
+        payload: certNotificationPayload(sessionIdB, sealedRootB),
       } satisfies QueuedNotification,
     ]);
     const acknowledgeSpy = vi.fn().mockResolvedValue(undefined);

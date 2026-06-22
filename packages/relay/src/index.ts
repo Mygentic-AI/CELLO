@@ -14,6 +14,7 @@ import { circuitRelayServer } from "@libp2p/circuit-relay-v2";
 import { identify } from "@libp2p/identify";
 import {
   generateKeyPair,
+  generateKeyPairFromSeed,
   privateKeyToProtobuf,
   privateKeyFromProtobuf,
 } from "@libp2p/crypto/keys";
@@ -25,6 +26,20 @@ import type { Libp2p } from "@libp2p/interface";
 export interface RelayNode {
   listenAddresses(): string[];
   stop(): Promise<void>;
+}
+
+/**
+ * Derive the relay's libp2p PeerID (`12D3Koo…`) from a 32-byte Ed25519 transport SEED —
+ * the SAME derivation the relay binary uses (`generateKeyPairFromSeed("Ed25519", seed)`,
+ * relay.ts via CELLO_RELAY_TRANSPORT_KEY_HEX). This lets a test harness pre-compute the
+ * relay's multiaddr (`/ip4/…/tcp/<port>/p2p/<peerId>`) BEFORE the relay process starts,
+ * which breaks the relay↔directory startup cycle (local mode requires the directory to
+ * have CELLO_RELAY_MULTIADDR at startup AND the relay to have CELLO_DIRECTORY_MULTIADDR).
+ * Pure key derivation — no node construction.
+ */
+export async function peerIdFromTransportSeed(seed: Uint8Array): Promise<string> {
+  const key = await generateKeyPairFromSeed("Ed25519", seed);
+  return key.publicKey.toString();
 }
 
 export interface StartRelayOptions {

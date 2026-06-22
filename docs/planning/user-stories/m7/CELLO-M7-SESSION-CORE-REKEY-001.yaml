@@ -1,0 +1,370 @@
+---
+name: CELLO-M7-SESSION-CORE-REKEY-001
+type: user-story
+date: 2026-06-20
+topics: [session-core, loopback, two-agents-one-daemon, agent-session-key, daemon-db-migration, ownership-check, inbound-accept, merkle-tree, m7]
+status: draft
+description: >
+  Re-keys the daemon's session core from session_id alone to (agent, session_id)
+  so ONE daemon can host BOTH ends of one session — two of the operator's own
+  K_locals (agents A and B) conversing on a single daemon, with no unnecessary
+  process spawning. Verified on m7-rehome that this is impossible today: the
+  sessions table PK, the session_tree_leaves PK, the in-memory #activeNodes /
+  #trees / #receivedContent / #sessionLiveness / #relayClients maps, the ownership
+  check (record.agent_name !== currentAgent → session_not_owned), and the inbound
+  double-accept guard are all keyed by session_id alone, so B's accept of a session
+  A already owns collides. This story scopes all of those to (agent, session_id).
+  It is purely local daemon bookkeeping — NO wire/protocol change (the session_id
+  on the wire is unchanged), NO directory/relay change. Each end still signs with
+  its own K_local (DOD-INV-2 unchanged — two nodes in one process). Includes a
+  daemon-DB schema migration. cello-client only.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-SESSION-CORE-REKEY-001
+domain: Session Lifecycle
+milestone: M7
+actor: CLIENT
+priority: P1
+components:
+  - daemon
+  - client
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO daemon (the operator's single local node),
+  I want to key the session core by (agent, session_id) instead of session_id
+  alone, so that two of my own agents (two K_locals) can be the two ends of one
+  session and converse on ONE daemon —
+  so that the operator can run two local agents that talk to each other without
+  spawning a second daemon process, while each end still signs with its own
+  K_local and no end can access the other's session state.
+
+# ─── Context ────────────────────────────────────────────────
+# ─── STACK CORRECTION (2026-06-20) ─────────────────────────────────────────
+# This story is ENTIRELY on the LIVE daemon (core/daemon). It touches no dead
+# core/client code, no directory, no relay, and NO wire format. Verify every anchor
+# below against the m7-rehome branch (NOT main). blocked_by: CELLO-M7-DAEMON-004 (the
+# daemon owns the session core this story re-keys).
+# ───────────────────────────────────────────────────────────────────────────
+# Design authority: docs/planning/discussion_logs/2026-06-20_2225_local-loopback-session-core-rekey-and-agent-default.md
+# (D-D1 — IN SCOPE for M7, CONFIRMED with Andre 2026-06-20).
+#
+# Andre's intent (the requirement): "run two sessions with two different K_locals on
+# the same machine and have them talk to each other … What I don't want to see is
+# multiple processes spawning unnecessarily." The outcome is two local agents
+# conversing with no unnecessary process spawning; the re-key is the means.
+#
+# Verified state (m7-rehome, HEAD 0afce25) — one daemon CANNOT host both ends of one
+# session today. Everything in the session core is keyed by session_id ALONE:
+#   - session-node-manager.ts:181/196/199/208/185 — #activeNodes / #trees /
+#     #receivedContent / #sessionLiveness / #relayClients are Map<sessionId, …>.
+#   - session-node-manager.ts:283-284 — sessions table PK is session_id; ownership is a
+#     single agent_name column.
+#   - session-node-manager.ts:334-340 — session_tree_leaves PK is (session_id, leaf_index)
+#     (no agent scoping → two local ends of one session would collide on the tree too).
+#   - session-node-manager.ts:317 — seal_interrupted_artifacts PK is session_id.
+#   - daemon.ts:1355 (and :2590) — ownership check
+#     `if (record.agent_name !== connState.currentAgent) → session_not_owned`.
+#   - daemon.ts:1966 — inbound double-accept guard
+#     `if (inboundInFlight.has(sessionId) || getSessionRecord(sessionId)) → reject`.
+# So if agent A initiates session S (writes a sessions row agent_name=A), agent B on the
+# SAME daemon trying to be S's other end collides: B's accept hits A's row (double-accept)
+# and the single-owner check denies B. That is why SPINE-6 used TWO daemons — a workaround
+# for the keying, exactly the "unnecessary process spawning" the intent rules out.
+# NOTE — what already works on one daemon (do NOT confuse): multiple identities
+# (DOD-SPINE-4) and one agent in multiple sessions with EXTERNAL counterparties (distinct
+# session_ids). Only both ends of the SAME session collide.
+#
+# Sovereign / trust nuance (recorded): when both ends are the same operator, CELLO's
+# no-single-forge guarantee is degenerate (you trust yourself) — but the COORDINATION value
+# (two of your agents over a structured, sealed channel) is real and is the use case. The
+# re-key changes only WHERE the session is hosted, never the crypto: each end signs with its
+# own K_local; the FROST notarization still routes through the directory threshold. DOD-INV-2
+# (B's acknowledgement is always B's own node's signature) holds unchanged — two nodes in one
+# process, each with its own K_local.
+#
+# Daemon-DB migration: the daemon DB has NO Flyway (it evolves via in-code idempotent
+# CREATE TABLE IF NOT EXISTS, session-node-manager.ts:282-342). Re-keying a PRIMARY KEY in
+# SQLite requires a table recreate (create new, copy, drop, rename) — a real one-time
+# migration of any existing daemon DB. This is NOT a directory Flyway migration; the
+# outline's "no M7 Flyway migrations" rule is about the DIRECTORY schema and does not apply
+# to the client-side daemon DB.
+#
+# Cross-repo: cello-client ONLY (core/daemon). Version-bump AC applies; NO trustless-cello
+# change, NO directory/relay pipeline deploy.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When agent A (online, current on connection 1) initiates a session to agent B
+      (online, current on connection 2) on the SAME daemon"
+    action: >
+      the daemon shall create agent A's session-end state keyed by (A, session_id) and, on
+      B accepting the inbound assignment, create agent B's session-end state keyed by
+      (B, session_id) — both coexisting for the same session_id without collision. Each end
+      gets its own session node, its own tree, and its own relay client, scoped by agent.
+
+  - trigger: "When the daemon checks session ownership for a tool call on connection C"
+    action: >
+      the daemon shall resolve the session record by (connState.currentAgent, session_id)
+      and authorize only the matching (agent, session_id) record — agent A's call never
+      reaches agent B's end of the same session_id, and vice versa.
+
+  - trigger: "When an inbound session assignment arrives for a session_id that another agent
+      on the same daemon already owns"
+    action: >
+      the daemon shall treat it as a NEW (agent, session_id) end (the local counterpart),
+      not a double-accept — the double-accept guard is scoped to (agent, session_id), so B's
+      accept of a session A initiated is admitted, while a genuine duplicate accept for the
+      SAME (agent, session_id) is still rejected.
+
+  - trigger: "When agents A and B (both on one daemon) exchange messages and both close"
+    action: >
+      content flows between the two local session nodes; each end maintains its own tree;
+      both submit SEAL leaves (each signed with its own K_local) → relay → directory FROST
+      notarization → both ends surface a byte-identical sealed_root — a full bilateral
+      conversation hosted on ONE daemon.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+
+  - id: AC-001
+    given: "One daemon with two online agents A and B (two K_locals), A current on
+      connection 1 and B current on connection 2"
+    when: "A initiates a session to B, B accepts, they exchange messages, and both close"
+    then: >
+      The full conversation completes on the SINGLE daemon: A cello_send → B cello_receive
+      with byte-identical plaintext, both close → bilateral seal → both ends surface a
+      byte-identical sealed_root. NO second daemon process is started. Verified by a live
+      in-process integration test driving two agents on one daemon end-to-end (the headline
+      capability). (D-D1.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-002
+    given: "The session core maps and DB after the re-key"
+    when: "agent A and agent B each hold an end of the same session_id"
+    then: >
+      #activeNodes, #trees, #receivedContent, #sessionLiveness, and #relayClients each hold
+      TWO distinct entries for the one session_id — one keyed (A, session_id), one
+      (B, session_id) — with no collision or overwrite; the sessions table holds two rows
+      (PK (agent_name, session_id)); session_tree_leaves holds each end's leaves separately
+      (PK (agent_name, session_id, leaf_index)). Verified by asserting both ends' state
+      coexists and is independently addressable.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-003
+    given: "Agent A's end and agent B's end of the same session_id on one daemon"
+    when: "a tool call on A's connection references the session"
+    then: >
+      The ownership check resolves (A, session_id) and authorizes A's end only; it never
+      returns or mutates B's end, and never returns session_not_owned for A's own end. A's
+      call cannot read B's received content or B's tree. Verified by asserting cross-end
+      isolation (A cannot reach B's state and vice versa). (Isolation SI.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-004
+    given: "An inbound assignment for a session_id that agent A already owns, arriving for
+      agent B on the same daemon"
+    when: "B's accept is processed"
+    then: >
+      B's accept is admitted as the (B, session_id) end (not rejected as a double-accept);
+      BUT a genuine duplicate accept for the SAME (agent, session_id) is STILL rejected (the
+      M2 double-accept race protection is preserved, just scoped by agent). Verified by both
+      a successful B-accept and a rejected duplicate-B-accept.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-005
+    given: "Existing single-agent behavior: one agent in multiple sessions with EXTERNAL
+      counterparties (distinct session_ids), and the two-daemon (one-agent-each) path"
+    when: "the re-key is applied"
+    then: >
+      Both existing behaviors are unchanged — no regression. One agent's many external
+      sessions still work; the two-daemon SPINE-6 path still works. The re-key only ADDS the
+      one-daemon-both-ends capability; it does not alter the external-counterparty path.
+      Verified by re-running the existing session tests green plus the new AC-001.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-006
+    given: "An existing daemon DB created before this story (sessions PK = session_id,
+      session_tree_leaves PK = (session_id, leaf_index))"
+    when: "a daemon with this story's code opens it"
+    then: >
+      The daemon migrates the schema to the (agent, session_id) keying via a one-time table
+      recreate (create new, copy rows with their existing agent_name, drop old, rename),
+      atomically and idempotently, preserving all rows. Existing sessions remain addressable
+      after migration. Verified by seeding an old-shape DB and asserting data preservation +
+      the new keys. (Daemon-DB migration — NOT directory Flyway.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-007
+    given: "Both ends of a one-daemon session"
+    when: "the bilateral seal completes"
+    then: >
+      Each end's SEAL leaf is signed with its OWN agent's K_local; the two leaves are from
+      distinct signers; the directory FROST notarization runs unchanged; both ends surface a
+      byte-identical sealed_root. No path lets one end produce the other's SEAL leaf.
+      (DOD-INV-2 preserved — two nodes, two K_locals, one process.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-008
+    given: "All error paths touched by the re-key"
+    when: "each distinct cause is triggered"
+    then: >
+      session_not_owned is now (agent, session_id)-scoped and distinguishable from a genuine
+      duplicate-accept; no catch returns a hardcoded reason without logging error.message
+      (lateral catch audit of the touched daemon session files, L6); any MCP-surfaced failure
+      carries guidance (Rule 2). The migration failure path has a distinct code
+      ('session_core_migration_failed').
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-009
+    given: "The daemon composition root"
+    when: "two agents on one daemon converse end-to-end"
+    then: >
+      The (agent, session_id)-keyed path is reached from the live daemon entrypoints (IPC →
+      daemon → session nodes), not by internal method calls; the two-agent-one-daemon
+      conversation is observable from the CLI/MCP surface (both ends report sealed). (L3 +
+      L7.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-010
+    given: "All cello-client code changes are implemented and tests pass"
+    when: "the implementer runs the cello-client version bump procedure"
+    then: >
+      core/daemon is bumped; dependents updated; @cello-protocol/connect bumped; pnpm-lock
+      updated; tag pushed; CI publishes to beta; dependencies show real semver, never
+      workspace:*. NO trustless-cello change; this story triggers no directory/relay deploy.
+    test_type: integration
+    component_under_test: cello-client CI
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      Each agent's end of a shared session shall sign with its OWN K_local. The re-key shall
+      not introduce any path where one end produces, reads, or mutates the other end's signing
+      material, tree, or received content.
+    adversarial_condition: >
+      even though both ends live in one process and share one DB file. Agent A's call must
+      never reach agent B's session state (AC-003), and B's SEAL leaf must verify only against
+      B's key (AC-007). Two nodes in one process remain cryptographically independent.
+      (DOD-INV-2.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: SI-002
+    statement: >
+      The inbound double-accept race protection shall be preserved, scoped to (agent,
+      session_id) — a duplicate accept for the same (agent, session_id) is still rejected.
+    adversarial_condition: >
+      even with two concurrent accepts for the same session_id from DIFFERENT agents (admit
+      both — they are different ends) AND two concurrent accepts for the SAME (agent,
+      session_id) (admit one, reject the duplicate — the M2 race fix). Verified by both cases.
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the one-time session-core schema migration fails partway"
+    fallback: >
+      the daemon aborts the migration atomically (the original tables are untouched until the
+      rename), returns 'session_core_migration_failed' with guidance, and does NOT open with a
+      half-migrated schema. The operator's existing sessions are never lost or corrupted. (M5
+      migration-integrity, daemon-DB analogue.)
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: session.core.rekey.migrated
+      level: info
+      trigger: "When an existing daemon DB is migrated to (agent, session_id) keying"
+      context_fields: [sessionsMigrated, leavesMigrated]
+    - name: session.node.created
+      level: info
+      trigger: "When a session-end node is created (existing event — now carries agentName as
+        part of the key)"
+      context_fields: [sessionId, agentName, sessionPeerId]
+      correlationId: true
+  error_events:
+    - name: session.core.migration.failed
+      level: error
+      trigger: "When the one-time re-key migration fails"
+      context_fields: [error]
+  notes: >
+    Reuses the existing session.node.created/destroyed events (outline taxonomy) — they
+    already carry agentName; this story makes agentName part of the actual key, not just a log
+    field. Register session.core.rekey.migrated / session.core.migration.failed.
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Re-key the five in-memory maps. Either a composite string key `${agentName} ${sessionId}`
+    or nested Map<agentName, Map<sessionId, …>>. Audit EVERY .get/.set/.delete on
+    #activeNodes / #trees / #receivedContent / #sessionLiveness / #relayClients (and any
+    #awaitingAck keyed by sessionId) — each must thread the agent. Missing one re-introduces
+    the collision for that structure (L2-style).
+  - >
+    DB migration (daemon DB, in-code — NOT Flyway): recreate sessions with PK
+    (agent_name, session_id); recreate session_tree_leaves with PK (agent_name, session_id,
+    leaf_index) (add agent_name column); recreate seal_interrupted_artifacts with PK
+    (agent_name, session_id). Check retry_queue and session_seen_nonces: if keyed by
+    session_id, scope them by agent too (a one-daemon loopback would otherwise share a nonce
+    set / retry queue across the two ends). Copy existing rows with their current agent_name.
+    Atomic create→copy→drop→rename; idempotent (detect already-migrated and skip). AC-006.
+  - >
+    Ownership check (daemon.ts:1355, :2590) and inbound double-accept guard (daemon.ts:1966):
+    scope both to (currentAgent, session_id). getSessionRecord(session_id) becomes
+    getSessionRecord(agent, session_id). The double-accept guard must distinguish "different
+    agent, same session_id" (admit — the local counterpart) from "same (agent, session_id)"
+    (reject — the M2 race). AC-004 / SI-002.
+  - >
+    No wire/protocol change: the session_id on the wire is identical; the (agent, session_id)
+    scoping is purely local daemon bookkeeping. The directory and relay are unchanged — they
+    already route by authed pubkey per agent (SPINE-4 per-agent signaling). A loopback session
+    still goes A's node → relay → directory → B's node, both nodes on one daemon.
+  - >
+    The agent-designation default (D-E1 from the same decision log) is a SEPARATE small note
+    for the implementation thread (auto-select the sole online agent on first session tool),
+    NOT part of this story. Recorded in the build journal.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-DAEMON-004   # FOUNDATION (Option A): the daemon owns the session core (tree, nodes, send/receive, seal) this story re-keys
+  related:
+    - CELLO-M7-DAEMON-002   # the session-node-manager + connectionGater this re-key threads agent through
+    - CELLO-M7-DAEMON-003   # retry_queue / nonce-dedup tables that may need agent scoping
+  blocks:
+    - CELLO-M7-E2E-001      # the J-LOOPBACK journey (two agents, one daemon, converse + seal) runs in the integration gate
+  notes: >
+    D-D1 IN SCOPE for M7 (Andre, 2026-06-20). Real story machinery (daemon-DB schema migration
+    + session-core re-key). Storied so DOD-LOOP-1 has a home. cello-client only; no directory
+    deploy.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Session Lifecycle, Ephemeral Session Nodes"
+  end_to_end_flow: "§5.7 Session Establishment"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-20_2225_local-loopback-session-core-rekey-and-agent-default"
+  related_docs:
+    - "[[CELLO-M7-DAEMON-004]]"
+    - "[[CELLO-M7-DAEMON-002]]"
+    - "[[outline]]"
+  notes: >
+    The requirement is Andre's: two K_locals on one machine talk to each other, no unnecessary
+    process spawning. The re-key is the means. DOD-INV-2 unchanged — two nodes in one process,
+    each with its own K_local.

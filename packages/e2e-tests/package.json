@@ -19,7 +19,8 @@
   "scripts": {
     "typecheck": "tsc --build",
     "test": "vitest run",
-    "test:cross-machine": "vitest run --config vitest.cross-machine.config.ts"
+    "test:cross-machine": "vitest run --config vitest.cross-machine.config.ts",
+    "test:spine": "vitest run --config vitest.spine.config.ts"
   },
   "dependencies": {
     "@cello-protocol/connect": "^0.0.30",
@@ -32,6 +33,8 @@
     "@cello-protocol/transport": "^0.0.4",
     "@claude-flow/testing": "3.0.0-alpha.6",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@noble/curves": "2.2.0",
+    "@noble/hashes": "2.2.0",
     "cbor-x": "^1.6.0",
     "zod": "^4.4.2"
   }

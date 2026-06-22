@@ -39,10 +39,11 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import pg from "pg";
 import { FileKeyProvider, InMemoryKeyProvider } from "@cello-protocol/crypto";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import { createDirectoryNode, ClientDelegatedSigner } from "../directory-node.js";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
 import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler, LocalAuditLogShipper, InMemoryNotificationQueue, DevTokenValidator } from "@cello-protocol/interfaces/stubs";
-import type { AuditLogShipper, NotificationQueue, TokenValidator } from "@cello-protocol/interfaces";
+import type { AuditLogShipper, NotificationQueue, TokenValidator, DirectoryKeyProvider } from "@cello-protocol/interfaces";
 // S3AuditLogShipper is imported dynamically below to avoid loading @aws-sdk/client-s3
 // in CELLO_ENV=local subprocesses where it causes tsx/esm resolution noise.
 import { createInternalApiServer } from "../internal-api-server.js";
@@ -810,6 +811,27 @@ if (internalApiKey && pgPool) {
 
 // ─── Node startup ─────────────────────────────────────────────────────────
 
+// M7 J-AUTH (DOD-AUTH-1 / MANIFEST-002 step 5): when this node's per-node Ed25519
+// signing key is configured, sign the step-5 challenge so authenticating clients can
+// verify the directory's identity against the consortium manifest (step 6). The seed
+// is the 32-byte Ed25519 private key (64 hex); its public key must be the `pubkey` for
+// this `nodeId` in the manifest the client trusts. When unset, the directory sends
+// signaling_auth_ok without MANIFEST-002 fields (M6 backward-compat).
+const nodeKeyHex = process.env["CELLO_DIRECTORY_NODE_KEY_HEX"];
+let directoryKeyProvider: DirectoryKeyProvider | undefined;
+if (nodeKeyHex) {
+  if (!/^[0-9a-fA-F]{64}$/.test(nodeKeyHex)) {
+    logger.error("directory.node_key.invalid", { nodeId, reason: "expected 64-hex Ed25519 seed" });
+    process.exit(1);
+  }
+  const nodeSeed = Buffer.from(nodeKeyHex, "hex");
+  directoryKeyProvider = {
+    getNodeId: () => nodeId,
+    sign: (tbsBytes: Uint8Array): Promise<Uint8Array> => Promise.resolve(ed25519.sign(tbsBytes, nodeSeed)),
+  };
+  logger.info("directory.node_key.configured", { nodeId });
+}
+
 let result: Awaited<ReturnType<typeof createDirectoryNode>>;
 try {
   // AC-007 (REPOSPLIT-001): include the WS listen address so the directory
@@ -831,7 +853,13 @@ try {
     relayPoolManager,
     checkpointTransport,
     tokenValidator,
+    directoryKeyProvider,
     pgPool: pgPool ?? undefined,
+    // Deployment tunable: the delivery-grace window before a unilateral seal is
+    // accepted (default 600s in CelloDirectoryNode). Lets test/dev shrink it.
+    deliveryGraceSeconds: process.env.CELLO_DELIVERY_GRACE_SECONDS
+      ? Number(process.env.CELLO_DELIVERY_GRACE_SECONDS)
+      : undefined,
     logger,
   });
 } catch (err: unknown) {

@@ -384,60 +384,72 @@ export interface LinkAgentToAccountParams {
  * This implements the INSERT OR IGNORE pattern for account deduplication.
  * The UPDATE in step 4 closes the gap where agent_profiles.account_id would stay NULL.
  */
-export async function linkAgentToAccount(
+/**
+ * Look up or create the account for a given phone_stub_hash and return its account_id.
+ * Steps 1–3 of AC-005b (the deduplication half), WITHOUT touching agent_profiles.
+ *
+ * Extracted so the registration path can resolve account_id BEFORE it inserts the
+ * agent_profiles row, and insert the row WITH account_id atomically. The prior design
+ * (insert profile without account_id, then UPDATE it) raced the fire-and-forget profile
+ * INSERT: the UPDATE could run on a separate pool connection before the INSERT committed,
+ * match 0 rows, and leave account_id permanently NULL. Resolving first removes the race.
+ */
+export async function resolveAccountId(
   pool: pg.Pool,
-  params: LinkAgentToAccountParams,
+  phoneStubHash: string,
+  emailStubHash?: string,
 ): Promise<string> {
-  const { phoneStubHash, kLocalPubkey } = params;
-
-  // Step 1: Try to find existing account
+  // Step 1: Try to find existing account (same phone → same account).
   const existing = await pool.query<{ account_id: string }>(
     "SELECT account_id FROM user_accounts WHERE phone_stub_hash = $1",
     [phoneStubHash],
   );
-
-  let accountId: string;
-
   if (existing.rows.length > 0) {
-    accountId = existing.rows[0]!.account_id;
-  } else {
-    // Step 2: No account — create one
-    accountId = randomUUID();
-    const chainHash = createHash("sha256")
-      .update(accountId)
-      .update(phoneStubHash)
-      .digest("hex");
-
-    try {
-      await pool.query(
-        `INSERT INTO user_accounts (account_id, phone_stub_hash, email_stub_hash, chain_hash)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (phone_stub_hash) DO NOTHING`,
-        [accountId, phoneStubHash, params.emailStubHash ?? null, chainHash],
-      );
-    } catch {
-      // Swallow errors — the subsequent SELECT will handle any race condition
-    }
-
-    // Step 3: Read back the canonical account_id (handles race conditions)
-    const readback = await pool.query<{ account_id: string }>(
-      "SELECT account_id FROM user_accounts WHERE phone_stub_hash = $1",
-      [phoneStubHash],
-    );
-
-    if (readback.rows.length === 0) {
-      throw new Error(`[pre-auth-token-repository] Failed to create or find account for phone_stub_hash ${phoneStubHash.slice(0, 8)}...`);
-    }
-
-    accountId = readback.rows[0]!.account_id;
+    return existing.rows[0]!.account_id;
   }
 
-  // Step 4: Link the agent_profile to the account by setting account_id.
-  // Uses k_local_pubkey (the agent's unique identifier in agent_profiles) as the WHERE clause.
-  // This is the core of AC-005b — without this UPDATE, agent_profiles.account_id stays NULL.
+  // Step 2: No account — create one (INSERT-OR-IGNORE on the UNIQUE phone_stub_hash).
+  const accountId = randomUUID();
+  const chainHash = createHash("sha256")
+    .update(accountId)
+    .update(phoneStubHash)
+    .digest("hex");
+  try {
+    await pool.query(
+      `INSERT INTO user_accounts (account_id, phone_stub_hash, email_stub_hash, chain_hash)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (phone_stub_hash) DO NOTHING`,
+      [accountId, phoneStubHash, emailStubHash ?? null, chainHash],
+    );
+  } catch {
+    // Swallow — the readback resolves any concurrent-insert race to the winner's id.
+  }
+
+  // Step 3: Read back the canonical account_id (handles two parallel inserts).
+  const readback = await pool.query<{ account_id: string }>(
+    "SELECT account_id FROM user_accounts WHERE phone_stub_hash = $1",
+    [phoneStubHash],
+  );
+  if (readback.rows.length === 0) {
+    throw new Error(`[pre-auth-token-repository] Failed to create or find account for phone_stub_hash ${phoneStubHash.slice(0, 8)}...`);
+  }
+  return readback.rows[0]!.account_id;
+}
+
+export async function linkAgentToAccount(
+  pool: pg.Pool,
+  params: LinkAgentToAccountParams,
+): Promise<string> {
+  const accountId = await resolveAccountId(pool, params.phoneStubHash, params.emailStubHash);
+
+  // Link the agent_profile to the account by setting account_id. Uses k_local_pubkey
+  // (the agent's unique identifier in agent_profiles) as the WHERE clause. NOTE: this
+  // UPDATE requires the agent_profiles row to already be committed — the registration
+  // path now inserts WITH account_id via resolveAccountId instead (race-free). This
+  // function remains for callers that link an already-persisted profile.
   await pool.query(
     "UPDATE agent_profiles SET account_id = $1 WHERE k_local_pubkey = $2",
-    [accountId, kLocalPubkey],
+    [accountId, params.kLocalPubkey],
   );
 
   return accountId;

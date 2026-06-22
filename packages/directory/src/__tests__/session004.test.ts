@@ -420,8 +420,12 @@ describe("Integration: Directory issues FROST-signed assignment when signer regi
     expect(Buffer.from(signerPubkeyBytes!).toString("hex"))
       .toBe(Buffer.from(aPrimaryPubkey).toString("hex"));
 
-    // B also receives session_assignment
-    const frameB = await readerB.readDecoded();
+    // B also receives session_assignment. M7-WIRE-002: the directory first sends B a
+    // `session_offer` (target advertises its session endpoint); skip it to reach the assignment.
+    let frameB = await readerB.readDecoded();
+    if (frameB["type"] === "session_offer") {
+      frameB = await readerB.readDecoded();
+    }
     expect(frameB["type"]).toBe("session_assignment");
     const assignmentRawB = frameB["assignment"] as Record<string, unknown>;
     expect(assignmentRawB["signature_type"]).toBe("frost");

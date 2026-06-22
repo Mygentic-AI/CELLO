@@ -18,6 +18,8 @@ import type {
   GapFillRequest,
   GapFillResponse,
   GapFillError,
+  SessionLivenessQuery,
+  SessionLivenessResponse,
 } from "./relay-types.js";
 
 const ENC = new Encoder({ tagUint8Array: false });
@@ -102,9 +104,30 @@ export function encodeSessionInterrupted(frame: { type: "session_interrupted"; s
   return ENC.encode({ type: frame.type, session_id: frame.sessionId, reason: frame.reason });
 }
 
+// ─── CELLO-M7-SESSION-003: session-path liveness frames ────────────────────────
+
+/**
+ * Encode a session_liveness_response frame.
+ *
+ * WIRE CONVENTION: snake_case keys, binary session_id (16 bytes) and
+ * counterparty_pubkey (32 bytes) — byte-identical to the codec in
+ * @cello-protocol/protocol-types (session-liveness.ts). The relay re-implements
+ * the codec here because it cannot import the unpublished client package; the two
+ * MUST stay in sync.
+ */
+export function encodeSessionLivenessResponse(frame: SessionLivenessResponse): Uint8Array {
+  return ENC.encode({
+    type: "session_liveness_response",
+    session_id: frame.session_id,
+    counterparty_pubkey: frame.counterparty_pubkey,
+    liveness: frame.liveness,
+    observed_at: frame.observed_at,
+  });
+}
+
 // ─── Decode ───────────────────────────────────────────────────────────────────
 
-export type InboundRelayFrame = RelayAuthResponse | HashSubmit | GapFillRequest;
+export type InboundRelayFrame = RelayAuthResponse | HashSubmit | GapFillRequest | SessionLivenessQuery;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -155,6 +178,15 @@ export function decodeInboundFrame(bytes: Uint8Array): InboundRelayFrame | null 
     if (!session_id || session_id.length !== 16) return null;
     if (from_seq === null || to_seq === null) return null;
     return { type: "gap_fill_request", session_id, from_seq, to_seq };
+  }
+
+  // CELLO-M7-SESSION-003: session_liveness_query
+  if (o["type"] === "session_liveness_query") {
+    const session_id = toUint8Array(o["session_id"]);
+    const counterparty_pubkey = toUint8Array(o["counterparty_pubkey"]);
+    if (!session_id || session_id.length !== 16) return null;
+    if (!counterparty_pubkey || counterparty_pubkey.length !== 32) return null;
+    return { type: "session_liveness_query", session_id, counterparty_pubkey };
   }
 
   return null;

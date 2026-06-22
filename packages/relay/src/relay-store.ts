@@ -31,6 +31,33 @@ export interface RelayStore {
   drainDeliveries(pubkeyHex: string): Array<{ session_id: Uint8Array; leaf_kind: number; sequence_number: number; structure2_cbor: Uint8Array; structure1_cbor: Uint8Array }>;
 
   /**
+   * CELLO-M7-SESSION-003: record that a session recipient's standing relay
+   * connection is established (recipient authenticated). Keyed by recipient
+   * pubkey — the same key as #deliveryQueues. Flips a prior 'gone' back to
+   * 'alive' (a 'gone' verdict is never sticky across a genuine reconnect).
+   * Returns { changed: true } only when the tracked state actually transitioned
+   * to 'alive' (so the caller emits session.liveness.changed exactly once).
+   */
+  recordRecipientAlive(pubkeyHex: string): { changed: boolean };
+
+  /**
+   * CELLO-M7-SESSION-003: record that a tracked recipient's standing connection
+   * has dropped (positive disconnect observation). No-op for an untracked
+   * recipient — the relay NEVER fabricates 'gone' from a missing entry. Returns
+   * { changed: true } only when an 'alive' entry transitioned to 'gone'.
+   */
+  recordRecipientGone(pubkeyHex: string): { changed: boolean };
+
+  /**
+   * CELLO-M7-SESSION-003: read a recipient's session-path liveness.
+   * 'alive' iff the relay currently holds the standing connection; 'gone' iff a
+   * disconnect was positively observed with no subsequent reconnect; 'unknown'
+   * iff the recipient was never tracked. observedAt is the Unix ms of the last
+   * transition (0 for 'unknown').
+   */
+  getRecipientLiveness(pubkeyHex: string): { liveness: "alive" | "gone" | "unknown"; observedAt: number };
+
+  /**
    * CELLO-M6B-009 AC-006/AC-007: Sweep idle sessions.
    * Destroys sessions with lastActivityAt older than (Date.now() - maxIdleMs) and status 'active'.
    * Returns the hex session IDs of destroyed sessions.
@@ -58,6 +85,9 @@ const DELIVERY_QUEUE_BOUND = 256;
 export class InMemoryRelayStore implements RelayStore {
   readonly #sessions = new Map<string, RelaySessionState>();
   readonly #deliveryQueues = new Map<string, Array<{ session_id: Uint8Array; leaf_kind: number; sequence_number: number; structure2_cbor: Uint8Array; structure1_cbor: Uint8Array }>>();
+  // CELLO-M7-SESSION-003: per-recipient session-path liveness, keyed by recipient
+  // pubkey (same key as #deliveryQueues). Absence of an entry means 'unknown'.
+  readonly #liveness = new Map<string, { liveness: "alive" | "gone"; observedAt: number }>();
   readonly #logger: Logger;
 
   constructor(opts?: { logger?: Logger }) {
@@ -113,6 +143,30 @@ export class InMemoryRelayStore implements RelayStore {
     if (!queue || queue.length === 0) return [];
     const items = queue.splice(0);
     return items;
+  }
+
+  // ─── CELLO-M7-SESSION-003: session-path liveness ────────────────────────────
+
+  recordRecipientAlive(pubkeyHex: string): { changed: boolean } {
+    const prior = this.#liveness.get(pubkeyHex);
+    const changed = prior?.liveness !== "alive";
+    this.#liveness.set(pubkeyHex, { liveness: "alive", observedAt: Date.now() });
+    return { changed };
+  }
+
+  recordRecipientGone(pubkeyHex: string): { changed: boolean } {
+    const prior = this.#liveness.get(pubkeyHex);
+    // Never fabricate 'gone' for an untracked recipient — absence is 'unknown'.
+    if (prior === undefined) return { changed: false };
+    const changed = prior.liveness !== "gone";
+    this.#liveness.set(pubkeyHex, { liveness: "gone", observedAt: Date.now() });
+    return { changed };
+  }
+
+  getRecipientLiveness(pubkeyHex: string): { liveness: "alive" | "gone" | "unknown"; observedAt: number } {
+    const entry = this.#liveness.get(pubkeyHex);
+    if (entry === undefined) return { liveness: "unknown", observedAt: 0 };
+    return { liveness: entry.liveness, observedAt: entry.observedAt };
   }
 
   /**
