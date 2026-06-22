@@ -419,11 +419,12 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
 > the hash and verifies it; the daemon co-signs the same bound TBS; the INITIATOR verifies the bound cert
 > live against its own primary (a tampered legibility → REJECT). A unit test proves the hash covers every
 > tamperable field; j-legibility + SPINE-7 prove valid seals verify and that the directory/daemon hashes
-> agree. REMAINING follow-on (not blocking — the live channel is Noise-authenticated): the NON-INITIATOR
-> (responder) cannot yet verify live because it does not hold the initiator's FROST group key — giving it
-> that key via the FROST-signed session establishment lets it (and any out-of-band arbitrator) verify
-> independently. This unified the deferred attestation_mode-TBS-binding item; DOD-LEG-2's client re-derive
-> guard is now superseded (the signature IS the verification).
+> agree. BOTH PARTIES now verify the bound legibility LIVE: the initiator against its own primary, and
+> the RESPONDER against the initiator's primary which it stores from the FROST-signed SessionAssignment's
+> `signer_pubkey` (j-legibility asserts the responder logs `signature.checked verified:true`). This
+> unified the deferred attestation_mode-TBS-binding item; DOD-LEG-2's client re-derive guard is now
+> superseded (the signature IS the verification). NO remaining follow-on — the integrity gap is fully
+> closed (live + out-of-band, both parties).
 
 - **DOD-LEG-1 — Receipt-not-assent, first-class.** Cert carries `attests:'receipt'`,
   `implies_assent:false`, plain-language disclaimer; no field parseable as agreement.
