@@ -534,6 +534,15 @@ controls the daemon but must NOT control the policy → config cannot live in th
 > toxicity, sentiment, bias, emotion, or topic policing, inbound or outbound. The security
 > layer defends identity/trust + injection/exfiltration; it does not police the tone or
 > subject of what an operator's agent says. This is identity-level scope, not a preference.
+>
+> **Refinement (Andre, 2026-06-22):** moderation also can't be done in the DETERMINISTIC base
+> layer — deterministic scanning either floods false positives or misses what matters;
+> moderation is inherently an **LLM-judgment** task. So if it's ever wanted it lives EITHER
+> upstream in the agent itself OR as a separate policy-only LLM doing a final scan via an
+> operator hook — and either way it is a **Day-2** feature. CELLO never ships moderation logic;
+> at most it exposes the hook seam an operator points their own policy-LLM at. This is the
+> general line: **deterministic security base (Day 1) vs LLM-judgment extensions (Day 2, via
+> hook or agent-upstream)** — the same line as the override-policy judge (§6 Future).
 
 Principle (outbound): be GENTLE — bias to redact / warn / note over block; never mangle the
 operator's own legitimate message.
@@ -554,23 +563,29 @@ operator's own legitimate message.
 **OPT-IN (off by default):**
 - **Expanded PII set** (full Presidio ~95 + country IDs + NER) — core set rides the ON warn model.
 - **Financial / dollar-amount redaction** — normal to send a price; off by default.
-- **ToS self-check** — only the security-relevant slice (manipulation-artifact judgment), NOT
-  general content moderation (per the invariant).
+- **ToS self-check** — its manipulation-artifact slice is already covered deterministically by
+  #6 (ON); its actual ToS/content-acceptability judgment is moderation → **Day 2 (LLM)**, not a
+  Day-1 opt-in. So nothing new ships here in Day 1.
 - **Output-volume / bulk-dump cap** (non-PII; bulk-PII is already #2 warn severity).
 - **Canary tokens** (system-prompt-leak detection) — moved DEFER→OPT-IN. **The opt-in setup
   instructions MUST tell the operator to insert the canary token into their OWN system prompt**
   (CELLO can't — the host owns the prompt); the outbound scan then blocks any message echoing it.
 
 **OUT:**
-- **Outbound toxicity / topic governance** — moved OPT-IN→OUT (not a moderation tool).
 - **Layer 5 — LLM-call governor** (agent's own LLM spend/rate) — upstream of `cello_send`.
 - **Layer 6 — deny-all FS/URL access** — upstream tool/sandbox territory.
 - **Tool allowlists** — upstream (already cut).
 
+**DAY 2 (LLM-judgment, never in the deterministic base):**
+- **Outbound toxicity / topic / content-policy** ("moderation") — LLM-only; home is
+  agent-upstream OR an operator-supplied policy-LLM hook; CELLO ships only the seam, never the
+  moderation logic. (Was briefly tagged OUT, then corrected to Day-2 per the refinement above.)
+
 **Internal (not a toggle):** SSRF-safe outbound (CELLO's own pipeline-hook calls only);
 counterparty-visible redaction marker (settled §6).
 
-**Consequence for INBOUND (flagged — pending Andre's confirm):** the "not a moderation tool"
-invariant implies the inbound OPT-IN moderation items (toxicity / sentiment / bias / emotion;
-ban-topics / competitors) should move OPT-IN→OUT for consistency. Inbound `gibberish` and
-`ban-code` are weak-signal, not moderation — keep as OPT-IN or drop, minor.
+**Consequence for INBOUND (RESOLVED 2026-06-22):** the inbound moderation items (toxicity /
+sentiment / bias / emotion; ban-topics / competitors) follow #12 — they leave Day-1 OPT-IN and
+become **Day 2 (LLM-judgment, not the deterministic base)**, not first-party CELLO logic.
+Inbound `gibberish` / `ban-code` are weak *security* signals, not moderation — keep OPT-IN or
+drop (minor). I'll update the §7 Inbound block to match unless you object.
