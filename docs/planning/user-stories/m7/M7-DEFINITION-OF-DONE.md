@@ -550,8 +550,16 @@ Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-res
   process spawning. Re-key the session core from `session_id` to `(agent, session_id)`
   (sessions/session_tree_leaves PKs, the five in-memory maps, the ownership check, the
   inbound double-accept guard) + a daemon-DB migration; each end signs with its own K_local
-  (INV-2). No wire/directory/relay change. *(**CELLO-M7-SESSION-CORE-REKEY-001**)* — ❌ NOT
-  BUILT (storied).
+  (INV-2). No wire/directory/relay change. *(**CELLO-M7-SESSION-CORE-REKEY-001**)* — ✅ DONE,
+  LIVE-PROVEN. j-loopback.spine.test.ts is GREEN against the real binaries: A↔B converse on ONE
+  daemon, exchange a message, BOTH close → bilateral FROST seal, byte-identical sealed_root, no
+  2nd daemon. The re-key covers the 7 in-memory maps + sessions/session_tree_leaves/
+  seal_interrupted_artifacts composite PKs + the retry-queue awaiting path + the daemon-level seal
+  bookkeeping (sealInterruptedInProgress, pendingSealWaiters) + the ownership/double-accept guards.
+  Daemon unit suite 361 green. (Follow-ons, non-blocking: the existing-DB rebuild migration for
+  upgrading an operator's old single-key DB — fresh DBs already use the composite schema; and
+  full `(agent, session_id)` scoping of the direct-retry queue + nonce-dedup store, not exercised
+  by the loopback happy path.)
 
 > Agent-designation default (D-E1): auto-select the sole online agent on first session
 > tool — a contained fix recorded as a note for the implementation thread (not a story).

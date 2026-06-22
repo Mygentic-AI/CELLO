@@ -57,16 +57,15 @@ afterAll(async () => {
   }
 });
 
-// SKIPPED until DOD-LOOP-1 is fully implemented — this is the RED target.
-// First run (2026-06-22) revealed TWO blockers, not one. Phase 1 (per-agent standing receiver,
-// cello-client b6c8d37) CLEARED the first: a live run now gets PAST cello_initiate_session
-// (no more persistent `standing_receiver_unavailable`), B's cello_await_session returns the
-// session as its OWN end, and both ends share the session_id. The remaining red is blocker (2),
-// the session-core collision: cello_send fails because the daemon keys the session core by
-// `session_id` alone, so B's accept on the same daemon clobbers A's row. CELLO-M7-SESSION-CORE-
-// REKEY-001 (Phase 2: re-key to `(agent, session_id)` + Phase 3: 3-table daemon-DB migration)
-// resolves it. Un-skip when implementing Phases 2/3.
-describe.skip("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => {
+// GREEN (2026-06-22) — DOD-LOOP-1 proven live against the real binaries. Two blockers were found
+// and both are now fixed: Phase 1 (per-agent standing receiver, cello-client b6c8d37) cleared the
+// standing_receiver_unavailable thrash; Phase 2 (CELLO-M7-SESSION-CORE-REKEY-001) re-keyed the
+// daemon session core — and the retry-queue awaiting path and the daemon-level seal bookkeeping —
+// from `session_id` to `(agentName, session_id)`, so two of the operator's agents hold both ends
+// of one session_id on ONE daemon without colliding. A live run now: A initiates to B on the same
+// daemon, they exchange a message, BOTH close → a bilateral FROST seal with a byte-identical
+// sealed_root, no second daemon process. Keep this test UN-skipped — it is the DOD-LOOP-1 proof.
+describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => {
   it("A initiates to B on the SAME daemon → exchange + bilateral seal, byte-identical root, no 2nd daemon", async () => {
     // ONE celloDir → ONE daemon hosting BOTH ends.
     const celloDir = mkdtempSync(join(tmpdir(), "cello-loop-"));

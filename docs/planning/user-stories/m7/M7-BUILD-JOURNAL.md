@@ -3828,3 +3828,48 @@ daemon.ts in a dwindling context (multiple half-done files = worse resumption, a
 cutoff can corrupt syntax). Resume order: retry-queue.ts awaiting-path re-key (compile prereq) →
 nonce-dedup → daemon.ts (run `pnpm typecheck`, fix the listed sites + double-accept guard) →
 existing-DB rebuild migration → typecheck/units/live-j-loopback → commit Phase 2 atomically.
+
+---
+
+## 2026-06-22 — J-LOOPBACK GREEN: DOD-LOOP-1 done + live-proven (Phase 2 complete)
+
+The whole session-core re-key landed and `j-loopback.spine.test.ts` is GREEN against the real binaries:
+A initiates to B on ONE daemon, they exchange a message (`cello_send`/`cello_receive`), BOTH close →
+a bilateral FROST seal with a byte-identical `sealed_root`, no second daemon. **DOD-LOOP-1 proven.**
+
+**What the re-key covered (all `session_id` → `(agentName, sessionId)`):**
+- session-node-manager.ts: the 7 in-memory maps (#activeNodes/#trees/#receivedContent/#sessionLiveness/
+  #contentDesynced/#responderSealSubmitted/#awaitingAck), every DB read/write (`WHERE agent_name = ? AND
+  session_id`), `getSessionRecord(agentName, sessionId)`, and the three table CREATE statements moved to
+  composite PKs (sessions, session_tree_leaves + an agent_name col, seal_interrupted_artifacts + an
+  agent_name col).
+- retry-queue.ts: the awaiting-ACK path (`AwaitingContentEntry.agentName`, an `agent_name` column, the
+  `#awaiting` map + enqueue/mark/depth/drain/getAwaitingSessions keyed by `(agent, session)`).
+- daemon.ts: every session-core caller threaded the owning agent (tool handlers → `connState.currentAgent`,
+  inbound handler → `localAgent.name`, seal flows → `record.agent_name`); the ownership check became the
+  agent-scoped lookup; and — found via the live test, NOT tsc — TWO more daemon-level `session_id`-keyed
+  structures had to be re-keyed: `sealInterruptedInProgress` (Set) and `pendingSealWaiters` (Map), via a
+  `sealKey(agent, session)` helper. Without that, A's close added the session_id and B's close saw it →
+  a false `seal_interrupted_in_progress`, and the seal waiters collided. Same-agent concurrent-close is
+  still guarded (same key); different-agent ends now seal independently.
+
+**Two silent misses tsc could not catch (caught by the live + unit tests):**
+1. `submitSealLeaf(sessionId, correlationId)` — both args strings, correlationId optional, so the old
+   2-arg call type-checked with `sessionId` landing in the new `agentName` slot. The IPC test caught it
+   (active close returned `session_node_unavailable`). Fixed to `submitSealLeaf(record.agent_name, …)`.
+2. The two daemon-level seal structures above — pure in-body key values, invisible to tsc; the live
+   j-loopback `closeB` failure surfaced them.
+
+**Verification:** workspace typecheck clean; daemon unit suite 361 passed (37 files); `j-loopback.spine`
+GREEN; no regression (the same-agent concurrent-close guard, AC-011, still holds). Test call sites across
+~13 unit files were threaded with the owning agent (per-test agent names matter — a blanket agent is wrong
+where a test uses bob/carol/eve/frank/grace). The j-loopback test is now kept UN-skipped as the proof.
+
+**Non-blocking follow-ons (recorded, not done):** (a) the existing-DB rebuild migration — fresh DBs already
+use the composite-PK CREATE statements, so this only matters for upgrading an operator's pre-existing
+single-key daemon DB; (b) full `(agent, session_id)` scoping of the direct-retry `#queues` + the
+nonce-dedup store — not exercised by the loopback happy path. Both belong to DOD-LOOP-1 completeness but
+do not block the live proof.
+
+Commits: cello-client `b31c5bd` (compiling WIP) → `c96e2c1`/test commits → seal-key fix (the GREEN commit).
+trustless-cello: DoD flipped to ✅, j-loopback un-skipped, this entry.
