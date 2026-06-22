@@ -23,6 +23,7 @@
  */
 
 import { decode as cborDecode } from "cbor-x";
+import { createHash } from "node:crypto";
 import type {
   RelaySealLeaf,
   AttestationMode,
@@ -248,4 +249,71 @@ export function buildSealLegibility(
     participants,
     final_message: finalMessage,
   };
+}
+
+// ─── Legibility ↔ seal-TBS binding (tamper-evidence) ───────────────────────────
+// Canonical hash of the legibility object, folded into the FROST-signed seal TBS so a MITM
+// cannot tamper `answered` / `content_frontier_seq` / `attestation_mode` in transit without
+// breaking the signature. MUST stay byte-for-byte identical to the daemon's copy
+// (`cello-client/core/daemon/src/seal-legibility-tbs.ts`) — the live bilateral seal SELF-CHECKS
+// agreement (the directory binds at processSeal, the daemon co-signs the same bytes, both verify;
+// any divergence makes the seal fail). EXPLICIT byte layout (not canonical CBOR). SHA-256 FIPS 180-4.
+
+interface LegibilityForHash {
+  participants: Array<{ pubkey: unknown; content_frontier_seq: unknown; last_authored_seq: unknown; attestation_mode: unknown }>;
+  final_message: { sender_pubkey: unknown; seq: unknown; answered: unknown };
+}
+
+const LEGIBILITY_HASH_DOMAIN = Buffer.from("CELLO-SEAL-LEGIBILITY-v1", "utf8");
+
+function legPubkey32(v: unknown): Buffer {
+  const out = Buffer.alloc(32);
+  if (v instanceof Uint8Array) Buffer.from(v).copy(out, 0, 0, 32);
+  else if (Buffer.isBuffer(v)) (v as Buffer).copy(out, 0, 0, 32);
+  else if (typeof v === "string" && /^[0-9a-fA-F]{64}$/.test(v)) Buffer.from(v, "hex").copy(out, 0, 0, 32);
+  return out;
+}
+
+function legU32(v: unknown): Buffer {
+  const n = typeof v === "bigint" ? Number(v) : typeof v === "number" ? v : 0;
+  const out = Buffer.alloc(4);
+  out.writeUInt32BE(n >>> 0, 0);
+  return out;
+}
+
+function legModeByte(v: unknown): Buffer {
+  const b = v === "live" ? 1 : v === "recovered" ? 2 : v === "absent" ? 3 : 0;
+  return Buffer.from([b]);
+}
+
+export function canonicalLegibilityBytes(legibility: LegibilityForHash): Buffer {
+  const parts: Buffer[] = [LEGIBILITY_HASH_DOMAIN];
+  const participants = Array.isArray(legibility.participants) ? legibility.participants : [];
+  const count = Buffer.alloc(4);
+  count.writeUInt32BE(participants.length >>> 0, 0);
+  parts.push(count);
+  for (const p of participants) {
+    parts.push(legPubkey32(p.pubkey), legU32(p.content_frontier_seq), legU32(p.last_authored_seq), legModeByte(p.attestation_mode));
+  }
+  const fm = legibility.final_message ?? { sender_pubkey: undefined, seq: 0, answered: false };
+  parts.push(legPubkey32(fm.sender_pubkey), legU32(fm.seq), Buffer.from([fm.answered === true ? 1 : 0]));
+  return Buffer.concat(parts);
+}
+
+export function canonicalLegibilityHash(legibility: LegibilityForHash): Uint8Array {
+  return new Uint8Array(createHash("sha256").update(canonicalLegibilityBytes(legibility)).digest());
+}
+
+/**
+ * Build the seal TBS WITH the legibility binding: the plain seal TBS concatenated with the
+ * 32-byte legibility hash. Absent legibility (the unilateral seal carries none) → plain TBS
+ * unchanged, so only the bilateral path is bound.
+ */
+export function bindLegibilityToTbs(tbs: Uint8Array, legibility: LegibilityForHash | null | undefined): Uint8Array {
+  if (!legibility) return tbs;
+  const h = canonicalLegibilityHash(legibility);
+  const out = new Uint8Array(tbs.length + h.length);
+  out.set(tbs, 0);
+  out.set(h, tbs.length);
+  return out;
 }

@@ -123,9 +123,10 @@ import type {
   SessionRequestErrorReason,
   SealUnilateralNotification,
   SessionSealedWithLegibility,
+  SealVerifiedWithLegibility,
   SealLegibility,
 } from "./directory-types.js";
-import { buildSealLegibility } from "./seal-legibility.js";
+import { buildSealLegibility, bindLegibilityToTbs } from "./seal-legibility.js";
 import { WALL_CLOCK } from "./directory-types.js";
 import type { DirectoryStore } from "@cello-protocol/interfaces";
 import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
@@ -3283,7 +3284,12 @@ export class CelloDirectoryNode {
 
     const close_timestamp = this.#clock.now();
     const leafCount = leaves.length;
-    const tbs = buildSealTbs(sessionId, recomputedRoot, leafCount, close_timestamp);
+    // M7 legibility-TBS-binding: fold the legibility hash into the FROST-signed TBS so a MITM
+    // cannot tamper answered / content_frontier_seq / attestation_mode in transit without breaking
+    // the signature. The daemon co-signs the SAME bound TBS (it receives `legibility` on seal_verified);
+    // the receiving client re-binds and verifies. This `tbs` is stored in #pendingFrostSeals and is what
+    // #processSealFrostSignature verifies the combined signature against (so directory + daemon agree).
+    const tbs = bindLegibilityToTbs(buildSealTbs(sessionId, recomputedRoot, leafCount, close_timestamp), legibility);
 
     // Look up the seal initiator's primary_pubkey (registered by SESSION-004 or test harness).
     const initiatorPrimaryPubkey = this.#primaryPubkeys.get(initiatorHex);
@@ -3334,12 +3340,15 @@ export class CelloDirectoryNode {
     }
 
     // SESSION-005: Push seal_verified to initiator; wait for seal_frost_signature.
-    const sealVerifiedEvent: SealVerified = {
+    // M7 legibility-TBS-binding: carry the legibility so the initiator's daemon binds the SAME
+    // legibility hash into the TBS it co-signs (directory + daemon must agree on the bound TBS).
+    const sealVerifiedEvent: SealVerifiedWithLegibility = {
       type: "seal_verified",
       session_id: sessionId,
       sealed_root: recomputedRoot,
       leaf_count: leafCount,
       timestamp: close_timestamp,
+      legibility,
     };
 
     // Store pending frost seal state for when the initiator returns the signature.

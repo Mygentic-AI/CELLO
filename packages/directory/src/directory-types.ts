@@ -205,6 +205,14 @@ export interface SealLegibility {
  */
 export type SessionSealedWithLegibility = SessionSealedBase & { legibility?: SealLegibility };
 
+/**
+ * seal_verified frame carrying the legibility object (bilateral seal only). The directory sends
+ * legibility to the seal initiator so the initiator's daemon binds the SAME legibility hash into
+ * the TBS it co-signs — directory and daemon must agree on the bound TBS or the FROST seal fails.
+ * Absent on the unilateral seal (which carries no legibility).
+ */
+export type SealVerifiedWithLegibility = import("@cello-protocol/protocol-types").SealVerified & { legibility?: SealLegibility };
+
 // ─── SESSION-005: New signaling frames ────────────────────────────────────────
 
 /**

@@ -168,8 +168,8 @@ export function encodeSessionSealed(frame: SessionSealedWithLegibility): Uint8Ar
   return ENC.encode(encodedSingle);
 }
 
-export function encodeSealVerified(frame: SealVerified): Uint8Array {
-  return ENC.encode({
+export function encodeSealVerified(frame: SealVerified & { legibility?: import("./directory-types.js").SealLegibility }): Uint8Array {
+  const encoded: Record<string, unknown> = {
     type: frame.type,
     session_id: frame.session_id,
     sealed_root: frame.sealed_root,
@@ -177,7 +177,12 @@ export function encodeSealVerified(frame: SealVerified): Uint8Array {
     timestamp: frame.timestamp > 0xffffffff
       ? BigInt(frame.timestamp)
       : frame.timestamp,
-  });
+  };
+  // M7 legibility-TBS-binding: carry the legibility (bilateral seal only) so the initiator's
+  // daemon binds the SAME hash into its co-signed TBS. The daemon decodes inbound frames generically
+  // (cbor-x), so the nested object round-trips without a typed-decoder change.
+  if (frame.legibility !== undefined) encoded["legibility"] = frame.legibility;
+  return ENC.encode(encoded);
 }
 
 export function encodeSessionFrostSealed(frame: SessionFrostSealed): Uint8Array {
