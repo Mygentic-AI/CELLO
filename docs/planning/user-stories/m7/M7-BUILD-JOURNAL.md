@@ -4298,3 +4298,52 @@ neutering the three checks → all three adversarial tests go RED (the exact byp
 `cello-done-auditor` (VERDICT EARNED — ran j-content 9/9 cold), `cello-test-attacker` (BLOCKING found →
 fixed, teeth proven). The maker grades too generously; three independent adversaries (code, tests,
 run-it-cold) are what makes the ✅ honest. MSG-4 is genuinely closed.
+
+---
+
+## 2026-06-22 — DOD-AUTH-2 remainder: DESIGN NOTE (activate the manifest poll, live-proven)
+
+Lowest non-green DoD line: **DOD-AUTH-2** (🟡). REMAINING per the DoD: "only the periodic 6–12h
+`manifest_poll` background refresh is not yet exercised live." Mapped the machinery (Explore agent +
+direct read). The DoD's own claim ("the daemon has the poll path + manifestPollScheduler") was
+**overstated** — the poll is built end-to-end but NEVER ACTIVATED. Producer/consumer chain:
+
+- **Consumer (cello-client/transport, BUILT):** `SignalingManager.startPolling()` → `#schedulePoll()`
+  → `scheduleNext(() => dispatchManifestPoll())`; on response, `handleManifestPollResponse()` verifies
+  (threshold sig / not_before / expires / version-rollback / dedup) → adopts (`provider.updateManifest`
+  + `versionStore.persistVersion`) → logs `directory.auth.manifest.poll.success {oldVersion,newVersion}`
+  → reschedules. ALL present.
+- **Producer (trustless-cello/directory, BUILT):** `directory-node.ts` answers `manifest_poll_request`
+  → `directoryManifestStore.getCurrentManifest()` → `encodeManifestPollResponse`. Frames present.
+
+**The four real gaps (pure wiring, no protocol design, no new frames, no npm publish):**
+
+1. **`startPolling()` has NO caller.** `runConnectedPhase` already calls `this.stopPolling()` on stream
+   death (line 697) but the symmetric `startPolling()` on connect is MISSING. Fix: add
+   `this.startPolling()` in `runConnectedPhase` right after `startHeartbeat()`. Poll lifecycle =
+   connection lifecycle; `#schedulePoll` already guards on `_pollScheduler` so it's a no-op when unset.
+2. **`dispatchManifestPoll()` sends into a dead `_outboundQueue`** that nothing drains (the only writer;
+   always `undefined` in production → early-returns). Every other frame goes out via
+   `_currentStream.send`. Fix: dispatch via the existing `sendRaw({type:"manifest_poll_request"})`.
+3. **The keystone `SignalingManager` (daemon.ts:492) is built WITHOUT the poll deps.** Fix: pass
+   `pollScheduler`, `manifestProvider`, `manifestVersionStore`, `rootKeys`, `threshold`, `correlationId`.
+   The same shared `FileManifestProvider` instance so `updateManifest` updates the cache the
+   `challengeVerifier` reads. Delete the stale `manifest.poll.deferred` block (3416).
+4. **The daemon bin never constructs a `RandomizedPollScheduler`** (so it arrives `undefined`). Fix:
+   build one in `buildManifestDeps`, interval env-injectable (`CELLO_MANIFEST_POLL_MIN_MS` /
+   `_MAX_MS`, default 6h/12h) so the live test uses a sub-second interval instead of waiting 6h.
+
+**Producer side (directory):** the directory bin never wires a consortium `directoryManifestStore`
+(only the RELAY-pool manifest is wired — a different manifest). The live directory therefore ignores
+`manifest_poll_request`. Fix: a file-re-reading `FileDirectoryManifestStore` (implements the
+`@cello-protocol/interfaces` `DirectoryManifestStore`; re-reads on each `getCurrentManifest()`, caches
+last-good, never throws) wired from a new `CELLO_DIRECTORY_CONSORTIUM_MANIFEST` env. Re-reading is the
+production-faithful TUF seam: an officer deploys a new signed manifest version beside the directory; the
+directory serves it; clients poll + adopt. It also gives the live test its rotation seam.
+
+**Live proof (J-AUTH):** short poll interval; directory serves manifest v1; daemon connects, persists
+trusted=1; rotate the directory's served file to v2 (valid sigs, version 2); assert daemon logs
+`poll.dispatched` then `poll.success {oldVersion:1,newVersion:2}` and the persisted version file is 2.
+Sender-signature/anti-rollback re-verified by the consumer independently (the directory is not trusted
+for content of the manifest — only as a transport for it). NOT a file-re-read by the daemon: the daemon
+re-fetches from the directory over signaling, exactly the production path.
