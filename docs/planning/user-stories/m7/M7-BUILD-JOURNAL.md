@@ -4230,3 +4230,20 @@ catch-up nicety; load-bearing for offline delivery.
 holds gaps, auto-recover delivers parked content in production). The ONLY thing between here and the ✅
 tag is Finding 2 (relay-signed sequence — Andre's decision, additive). Everything else is live-proven
 and reviewed.
+
+**Code review (feature-dev:code-reviewer, opus) — auto-recover.** Confirmed sound: hoisting/scope
+(forward `async function` is hoisted, called post-startup), concurrency idempotency (ingest dedup is
+synchronous check-then-append — no double-append), the `appendedCount: 0` dedup fix, and the
+swallowed-`{ok:false}` error path. One IMPORTANT + one medium + two low, fixed (cello-client `23df28f`):
+#1 (IMPORTANT — real) the relay is delete-on-CONFIRM not delete-on-pull, and ContentParkClient had no
+confirm method, so the mailbox NEVER drained — every reconnect re-pulled + re-unsealed the whole history
+(unbounded). Added `ContentParkClient.confirm` (mirrors pull's I1 auth); recover now confirm-deletes
+each durably-ingested entry (not held). #2 (medium) auto-recover logs each non-ok relay reason + emits
+`auto.completed` unconditionally with `failedRelays`. #4 (low) auto-recover has its own .catch label.
+#3 (low — no session-status filter) subsumed by #1 (drained mailbox → nothing to re-pull). The recover
+live test now asserts `pulled: 0` (the queue actually drains). daemon 366, j-content 9/9, j-loopback.
+
+**DOD-MSG-4 — COMPLETE on every path, THREE reviewer passes, all findings fixed.** Direct frame +
+parked entry (incl. TTF) self-order; gate holds gaps; parked content is delivered in production
+(auto-recover) and the mailbox drains (confirm-delete). The ONLY remaining item for the ✅ tag is
+Finding 2 (relay-signed sequence — Andre's decision, additive).
