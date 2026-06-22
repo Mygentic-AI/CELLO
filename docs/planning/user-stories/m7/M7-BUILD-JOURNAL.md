@@ -3998,3 +3998,52 @@ actual live AWS deploy (a deploy *operation*, never a code edit). The fake gate 
 
 No code change in this entry — docs only (procedure banner + this void record). Memory "alpha —
 no production-safety caution" sharpened to match.
+
+---
+
+## 2026-06-22 — DOD-MSG-4 strict-in-order: gate + witness LANDED (unit-proven, live suite green); content-before-witness race found
+
+**What landed (cello-client `97ffc27` gate, `4d8676c` witness wiring):**
+- The receiver gate in `ingestReceivedContent` (`core/daemon/src/session-node-manager.ts`): a content
+  frame whose relay-witnessed canonical sequence is AHEAD of the next expected leaf is HELD
+  (`#heldContent`) instead of appended out of order; `#releaseHeld` drains held entries in canonical
+  order once the gap fills. Leaf index === canonical sequence by construction. Held content is NOT
+  acked `persisted` (not durable) — the sender's TTF→park backstop + dedup cover it.
+- The ordering source is the RELAY (the ordering authority), NEVER a sender-stamped field
+  (sovereign-node). `onLeafDeliver` decodes structure1_cbor for the content_hash and feeds
+  `recordWitnessedSequence` with `sequence_number - 1` (relay seq is 1-based + global per session;
+  the daemon leaf index is 0-based — I am the first consumer to actually USE the relay seq for
+  ordering, so the base had to be reconciled).
+- Deterministic in-process proof: `msg-001-strict-in-order.test.ts` (3 tests — hold/release ordering,
+  in-order happy path unchanged, no-witness arrival-order fallback). Daemon suite 364 passed.
+- Live: j-content 7/7 and j-loopback (bilateral seal, byte-identical root) GREEN with the witness
+  active — no regression to the happy path or the bidirectional seal.
+
+**Three j-content fixture lags fixed (trustless-cello `06abec61`) — the live test caught what the DoD
+claimed.** The DOD-LOOP-1 per-agent re-key silently broke three spine assertions (the DoD marked
+MSG-2/MSG-3 ✅, but they no longer ran green on the re-keyed binary; nobody had re-run them live since
+the re-key). All three are TEST-side — production callers always supply agentName / run within a
+started agent:
+1. MSG-3 transport: deposit/pull need a standing receiver, now PER-AGENT (`cello_start_agent`) — the
+   test started no agent → `standing_receiver_unavailable`. Fix: start both agents first.
+2. MSG-2 startup-flush: `enqueue_awaiting_content` is keyed by the owning agent; a raw IPC call has no
+   current-agent → stored under "" → restart flush can't match the session. Fix: pass agentName.
+3. MSG-2 startup-flush: the re-park now fires when the owning agent comes ONLINE
+   (`cello_start_agent` → `flushAwaitingContent(name)`), NOT at the pre-IPC startup pass (no agent
+   online there). Fix: reconnect + start agentA after restart, then await the deposit.
+
+**The real finding — content-before-witness race (producer/consumer).** The live out-of-order proof
+(a later message delivered directly to a reconnected B before an earlier parked one) was
+NON-deterministic. Producer of order truth = the relay's `leaf_deliver` witness stream. Consumer =
+`ingestReceivedContent`. The direct content stream and the witness stream are TWO channels that race:
+when the direct frame (msg2) arrives BEFORE its witness (seq2), the gate's `canonicalSeq` is
+`undefined`, so it falls back to arrival-order append — no hold. The first live run happened to win
+the race (held appeared in the timeout tail); the retry lost it (no held in 60s). This is a real
+correctness gap, not a timing flake. The racy live test was REMOVED rather than left flaky (it would
+be a flaky enforcer); the deterministic unit test stays as the gate proof.
+
+**Named next sub-increment (in the DoD MSG-4 line):** (1) pending-witness buffer — hold un-witnessed
+content, re-evaluate when `onLeafDeliver` records its witness; plus a relay-degraded fallback (append
+on arrival only when no witness is coming). (2) catch-up-before-live on reconnect via `last_seen_seq`.
+(3) a deterministic live out-of-order proof. Deferred deliberately — closing the race needs careful
+adversarial testing of the content path, not a rushed end-of-context add. DOD-MSG-4 stays 🟡.

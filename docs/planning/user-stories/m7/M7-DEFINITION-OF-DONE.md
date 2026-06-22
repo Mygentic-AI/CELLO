@@ -324,12 +324,30 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
   accepts the next expected sequence; an out-of-order direct arrival is HELD, and the missing
   in-between message is fetched from the relay mailbox first, then appended in order. This is
   safe because the sender already knows whether each message landed (delivery ack, DOD-MSG-1)
-  and parks anything un-acked — so the next message is always fetchable. REMAINING to build:
-  (1) the next-expected-sequence gate on the receiver (hold-ahead + fetch-missing-first);
-  (2) catch-up-before-live on reconnect (the relay tells B "current as of sequence N"; B holds
-  live messages until it reaches N). The old "reserve a slot / request resend from sender"
-  machinery is DROPPED — strict in-order prevents the out-of-order arrival, so there is nothing
-  to repair. The only unfetchable case (sender crashed before ack OR park) is true loss → DOD-MSG-8.
+  and parks anything un-acked — so the next message is always fetchable. The old "reserve a slot /
+  request resend from sender" machinery is DROPPED — strict in-order prevents the out-of-order
+  arrival, so there is nothing to repair. The only unfetchable case (sender crashed before ack OR
+  park) is true loss → DOD-MSG-8.
+  **LANDED 2026-06-22 (gate + witness):** the receiver gate is built and UNIT-PROVEN
+  (`core/daemon/src/__tests__/msg-001-strict-in-order.test.ts`): `ingestReceivedContent` holds a
+  content frame whose relay-witnessed canonical sequence is ahead of the next expected leaf
+  (`#heldContent`), and `#releaseHeld` drains held entries in canonical order once the gap fills —
+  leaf index === canonical sequence by construction. The ordering authority is the RELAY, never a
+  sender-stamped field (sovereign-node): `onLeafDeliver` feeds `recordWitnessedSequence` the
+  `(content_hash → sequence)` binding (1-based relay seq normalized to the 0-based leaf index).
+  Held content is NOT acked `persisted` (not durable). The full live suite is GREEN with the witness
+  active — j-content 7/7, j-loopback bilateral seal byte-identical root (no regression). cello-client
+  `4d8676c`. *(This pass also fixed three j-content fixture lags the DOD-LOOP-1 re-key had silently
+  broken — MSG-2/MSG-3 standing-receiver + awaiting-queue agent scoping — caught by the live test.)*
+  **REMAINING (next sub-increment) to flip ✅:** (1) the **content-before-witness race** — when a
+  direct content frame beats its relay witness, the gate falls back to arrival-order append, so the
+  hold is non-deterministic; close it with a pending-witness buffer (hold un-witnessed content, then
+  re-evaluate when `onLeafDeliver` records the witness) plus a relay-degraded fallback (append on
+  arrival only when no witness is coming). (2) **catch-up-before-live on reconnect** — B fetches the
+  witnesses/content it missed while offline (using `last_seen_seq`, the relay high-water) before it
+  treats new direct arrivals as live, so recover-path messages are ordered too. (3) a DETERMINISTIC
+  live out-of-order proof (the first attempt was racy on exactly the content-before-witness timing
+  and was removed rather than left flaky).
 - **DOD-MSG-5 — Resend vs replay dedup.** A `content_hash` satisfies at most one
   Merkle leaf, exactly once; duplicates/replays never double-count. *(MSG-001
   AC-012, SI-002)* — ✅ **PROVEN LIVE** (J-CONTENT, 2026-06-21). `ingestReceivedContent`
