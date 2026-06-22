@@ -4185,3 +4185,20 @@ pull order. Daemon-only, no relay/interfaces/WAL schema change.
 **DOD-MSG-4 status:** ordering is now correct + live-proven on BOTH paths (direct frame + park/recover);
 the gate holds genuine gaps. REMAINING: Finding 2 (relay-signed sequence — pending Andre, additive) and
 auto-recover-on-reconnect (a trigger so B drains the mailbox before a held message starves — small).
+
+**Code review (feature-dev:code-reviewer, opus) — 2b.** Confirmed sound: hash binds to the EXTRACTED
+content (no tampered-envelope append path), startup-flush content-only path recovers correctly, and
+recordOrderingRecord has identical trust to the direct path (sender-sig verify, fail-closed counterparty
+cross-check, hash bind — only the `source` label differs). One IMPORTANT + two low, ALL fixed
+(cello-client `e782fb8`): #1 the TTF-expiry park path was dropping the ordering record (only the
+direct-dial-fail park carried it) — `#trackAwaitingAck` now retains structure1/2 so `#handleTtfExpiry`
+parks WITH the record; a TTF-parked entry (delivered-to-wire-but-unacked, a common trigger) now
+self-orders on recover. #2 tightened the envelope discriminator to `arr.length === 4`. #3
+`ingestReceivedContent` returns `appendedCount` so the recover tally counts released-held leaves too.
+#4 (new-envelope-recovered-by-old-daemon → false desync) accepted under alpha (lockstep bumps, no
+persisted relay data). Daemon suite 366, j-content 8/8 — green.
+
+**DOD-MSG-4 — self-ordering COMPLETE on both paths (direct frame + park/recover incl. TTF), reviewed
+twice, all findings fixed.** Only two items remain for the ✅ tag: Finding 2 (relay-signed sequence —
+Andre's decision, additive) and auto-recover-on-reconnect (a trigger so B drains the mailbox before a
+held message starves — small, not new ordering logic).
