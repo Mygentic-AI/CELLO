@@ -3689,3 +3689,61 @@ test lines 100/103/105 pass) and fails at `cello_send` (line 108). The B1/H1/L1 
 live behavior; the next red is unchanged — the session-core `session_id` collision (Phase 2). Re-skipped.
 
 Phase 1 is DONE and reviewed. Next: Phase 2/3 (SESSION-CORE-REKEY-001).
+
+---
+
+## 2026-06-22 — J-LOOPBACK Phase 2 IN PROGRESS (session-core re-key) — continuation handoff
+
+Both repos merged to local `main` (alpha; NOT pushed — pushing trustless-cello = the live deploy, still an
+explicit call). Phase 2 = re-key the daemon session core from `session_id` to `(agentName, session_id)` so
+two of the operator's agents hold both ends of one session_id on ONE daemon. **This is an ATOMIC refactor —
+the daemon does not compile/work until the whole cascade lands.** The WIP lives UNCOMMITTED in
+`cello-client/core/daemon/src/session-node-manager.ts` (recoverable; the dirty tree survives compaction).
+
+**DESIGN (decided).**
+- Composite in-memory key: `#k(agentName, sessionId)` = `` `${agentName}\x1f${sessionId}` `` (0x1f unit
+  separator, in neither an agent name nor a hex id). Applies to the 7 maps: `#activeNodes`, `#trees`,
+  `#receivedContent`, `#sessionLiveness`, `#contentDesynced`, `#responderSealSubmitted`, `#awaitingAck`
+  (outer key). `#relayClients` is already per-agent; standing receivers already per-agent.
+- `ActiveSessionEntry` gained a `sessionId` field — iteration/logging reads the real id from there (the
+  map key is now composite). Set in createSessionNode + acceptSession.
+- **DB ambiguity (the design-significant point):** `WHERE session_id = ?` returns TWO rows in loopback, so
+  EVERY DB read must take the agent and query `WHERE agent_name = ? AND session_id = ?`. `getSessionRecord`
+  becomes `getSessionRecord(agentName, sessionId)`. The 3 daemon-DB tables move to composite PKs via a
+  one-time in-code (NOT Flyway) idempotent migration: `sessions` PK `(agent_name, session_id)`;
+  `session_tree_leaves` PK `(agent_name, session_id, leaf_index)` (+ `agent_name` col);
+  `seal_interrupted_artifacts` PK `(agent_name, session_id)` (+ `agent_name` col). Recreate→copy(existing
+  rows keep their current agent_name)→drop→rename.
+
+**DONE in session-node-manager.ts (uncommitted WIP):** `#k` helper; `ActiveSessionEntry.sessionId`;
+createSessionNode; `#connectSessionRelay`; acceptSession; `#wireSessionLiveness(agentName,…)`;
+`getSessionLiveness(agentName,…)`; `destroySessionNode(agentName,…)`; `retireSessionNode(agentName,…)`;
+`#evictSessionCaches(agentName,…)`; gracefulShutdown loop (now `.values()`, logs `entry.sessionId`);
+`markInterruptedWithDetails(agentName,…)` (incl. its UPDATE → `WHERE agent_name = ? AND session_id = ?`).
+
+**REMAINING (the rest of the cascade) — resumption is tsc + grep driven:**
+1. In-memory body conversions still on bare `sessionId` — exact list:
+   `grep -nE '#(activeNodes|trees|receivedContent|sessionLiveness|contentDesynced|responderSealSubmitted|awaitingAck)\.(get|set|has|delete)\(sessionId' core/daemon/src/session-node-manager.ts | grep -v '#k('`
+   Methods involved: getSessionNodePeerId, getSessionTree, getSessionTreeRootHex, takeReceivedContent,
+   ingestReceivedContent, submitSealLeaf, `#maybeAutoAcknowledgeSeal`, registerRelayStream, the
+   `#awaitingAck` arm/resolve/clear methods, `#clearAwaitingForSession`, `#registerContentHandler`,
+   `#updateSessionStatus`. Each: add `agentName` param, key via `#k`.
+2. DB methods + every `grep -n 'WHERE session_id' core/daemon/src/session-node-manager.ts` → add
+   `agent_name = ? AND`: getSessionRecord(agentName,sid), getPersistedRelayEndpoint, recordSealCertificate,
+   recordCounterpartyPrimary, getSealCertificate, getSealInterruptedArtifacts, `#updateSessionStatus`,
+   `#insertSessionRow` (already has agentName — add to its INSERT/PK). Plus the AC-010 orphan-detection at
+   init (it iterates rows → already has agent_name per row).
+3. The 3-table in-code migration (above) in `initialize()` alongside the existing ALTERs.
+4. **daemon.ts:** thread `connState.currentAgent` (tool handlers) / inbound `agentName` (assignment handler)
+   / per-agent relay+stream callbacks into EVERY session-core call. `pnpm typecheck` enumerates all of them
+   once the SNM signatures are final. Plus the **double-accept guard + ownership check**: distinguish
+   "different agent, same session_id" (ADMIT — local counterpart) from "same (agent, session_id)" (REJECT —
+   the M2 replay race).
+5. Verify: `pnpm typecheck` (drives the caller fixes) → daemon unit suite (one worker, foreground; fix any
+   signature-touched tests) → un-skip `j-loopback.spine.test.ts` and run live; when `cello_send` +
+   bilateral byte-identical `sealed_root` go green, KEEP it un-skipped as the DOD-LOOP-1 proof. Then commit
+   the whole Phase 2 atomically and merge to main.
+
+**Resumption method:** `pnpm typecheck` is the checklist for signature/caller mismatches (top-down); the two
+greps above list the in-memory body conversions and DB queries tsc won't flag. The live j-loopback is the
+final enforcer.
