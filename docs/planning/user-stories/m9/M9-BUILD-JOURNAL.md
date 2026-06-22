@@ -80,3 +80,46 @@ inbound + the recovered-park-content seam assertion).
 
 **Reviewer outcome / blockers.** N/A (docs only this entry). No code, no tests run.
 Nothing merged, nothing pushed beyond the planning docs (Andre's call to open the build).
+
+---
+
+## 2026-06-22 — Correction: planning was NOT complete; full design pass done; still no build
+
+The entry above said "planning complete." That was premature. A full design pass happened
+after it, all of it design, none of it build. No code has been written for M9. This entry
+brings the journal current.
+
+**What happened (2026-06-21 → 06-22):**
+- **Capability harvest.** Gathered everything usable from gitleaks (all 222 secret detectors
+  + the engine), the whole Infisical repo (governance architecture), and the LLM-guardrail
+  field (inbound + outbound). In `M9-CAPABILITY-HARVEST.md` §1–§4.
+- **Prune.** Went capability by capability and decided what's in / opt-in / out / Day-2.
+  Cut: tool allowlists, Layer 5 (LLM-call governor), Layer 6 (deny-all FS/URL), all content
+  moderation. The scoping invariant: CELLO is not a moderation tool. In §5, §7.
+- **Governance feedback channel.** Designed how the gateway reports back to the LLM: the four
+  dispositions (observe / redact / block / warn), blocking `cello_send` with a never-hang
+  guarantee, the stateless re-send flow with `governance_decisions`, the PII whitelist + warn
+  model. In §6.
+- **Config architecture.** The gateway owns its own SQLCipher DB (separate file/key), versioned,
+  tighten-free / loosen-confirmed. In §7.
+- **Two-phase build.** Phase 1 = local, launchable, ends at Gate 1. Phase 2 = remote gateway +
+  tamper-proof records, ends at Gate 2. In §9.
+
+**Docs rewritten to match (committed to main):**
+- `M9-DEFINITION-OF-DONE.md` — rewritten to the two-phase plan with the full story list +
+  one-line done-conditions (commit `7725e2ab`). The old six-journey (J-SCREEN → J-ATTEST)
+  structure is gone.
+- `overview.md` — rewritten as a pointer to the harvest + DoD, with the mapping from the eight
+  old SCAN/REDACT/MONITOR YAMLs to the new stories (`7725e2ab`).
+- `M9-CAPABILITY-HARVEST.md` — §9 added (`14f966c8`).
+
+**State now.** M9 is design-complete. No build. The eight old story YAMLs are superseded at the
+plan level (mapped in the DoD/overview); the individual new-story YAMLs are written at build
+time, one at a time, not now.
+
+**Blocked on.** MSG-001-3b increment 3 (M7) for the live inbound screening. The gateway skeleton
+and the outbound/feedback slice do not depend on M7 and could start early, but that splits focus
+from M7, which is the launch blocker.
+
+**Next.** When M7 unblocks, build Phase 1 starting with M9-CORE-001 (gateway skeleton + the
+daemon seam). Nothing to do in this journal until a build unit actually starts.
