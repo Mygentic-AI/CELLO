@@ -3287,3 +3287,49 @@ observations, all FIXED per the all-severities policy:
 J-LEGIBILITY (DOD-LEG-1/3/4 live, LEG-2 surfaced) is CLOSED. Remaining LEG-2 sub-line (client SI-002
 re-derive guard) needs richer local leaf storage (daemon stores leaf HASHES, not signed last_seen_seq)
 — a bounded follow-on, recorded.
+
+---
+
+## 2026-06-22 — Tier 4 DOD-UP-2 PROVEN LIVE: auto-acknowledge close (UPGRADE-002)
+
+**DoD-ID / unit.** DOD-UP-2 (J-UPGRADE). Andre authorised Tier 4 after Tier 3 closed.
+
+**What was red.** `onLeafDeliver` only logged; an alive B whose AGENT was silent degraded the seal to
+unilateral after A's bilateral wait. J-UPGRADE red test caught it (A closes, B never closes → A escalates
+to unilateral). (The red-for-right-reason run was inconclusive backgrounded — see harness note prior entry
+— but green-after-impl is the real proof.)
+
+**Built (cello-client daemon, the live DAEMON-004/SPINE-7 seam — NOT the dead relay-stream-manager).**
+- `LeafDeliverFrame` gains an explicit `authored_by_us` field (set from `#isOwnLeaf` in the relay
+  client's `#dispatch`) so the gate never auto-acks B's own echoed SEAL ctrl leaf.
+- `onLeafDeliver`: on a ctrl leaf NOT authored by us → `#maybeAutoAcknowledgeSeal`.
+- `#maybeAutoAcknowledgeSeal`: gates on status `active` + verifiability (`#contentDesynced`, set on a
+  `content_hash_mismatch` tamper in `ingestReceivedContent`) → reuses `submitSealLeaf` (B's OWN
+  K_local signs — SI-001 by construction) → logs `session.seal.autoacknowledged`; skip →
+  `session.seal.autoack.skipped` (disagreement is NOT a gate failure — C-6).
+- IDEMPOTENCY (the both-close race fix): `submitSealLeaf` now check+sets `#responderSealSubmitted`
+  SYNCHRONOUSLY at its top (before any await); the first of {auto-ack, cello_close_session} wins, the
+  second gets `responder_seal_already_submitted`; cleared on relay failure for retry. `cello_close_session`
+  treats that reason as success (awaits session_sealed); a timeout in that path reports
+  `seal_pending_bilateral` rather than crash-escalating with no local root.
+- `AgentRelayClient.senderPubkeyHex` getter (the responderPubkey observability identity).
+- AC-005: `counterparty_closing` informational by construction — no daemon-side "must close" instruction
+  exists on the live path (it only lived in the dead mcp-server.ts).
+- Both auto-ack Sets cleaned up in `#evictSessionCaches` on teardown.
+
+**KEY INTERACTION (cross-story, decided + documented).** UPGRADE-002 SUPERSEDES the old DOD-LIVE-2
+"alive B + silent agent → unilateral DELIVERED" outcome: an alive+verified B now auto-acks → BILATERAL.
+The DOD-LIVE-2 invariant ("an alive B is NEVER sealed ABSENT") is preserved MORE strongly (B SIGNED).
+Updated the j-unilateral alive-but-silent test (`44953cb`) to assert auto-ack→bilateral + never-ABSENT.
+The two kill-B j-unilateral tests are unaffected (a dead B never auto-acks). DoD-LIVE-2 + UP-2 lines updated.
+
+**Commits / tests.** cello-client: `7abacc6` (auto-ack core), `467e410`+ idempotency `<this push>`;
+authored_by_us + senderPubkeyHex in the same. trustless: j-upgrade red `af98d96`, j-unilateral update
+`44953cb`, this doc. Daemon typecheck + eslint clean. FULL seal-path regression (each FOREGROUND,
+single-worker): **j-upgrade 1/1, j-legibility 1/1, j-spine SPINE-7, j-unilateral 3/3 (2 kill-B + updated
+alive-silent), j-int 3/3, j-content 7/7 — ZERO regressions.**
+
+**Reviewer / next.** Dispatch feature-dev:code-reviewer (opus) on the UPGRADE-002 diff (focus: SI-001
+B's-own-signer, SI-002 gate, the idempotency race, the cello_close_session fall-through). Then push.
+DOD-UP-1 (the returning-absent-party bilateral upgrade) remains — it owns a directory Flyway migration
+and is gated on MSG-001-3b content recovery; it is the heavier Tier-4 half.

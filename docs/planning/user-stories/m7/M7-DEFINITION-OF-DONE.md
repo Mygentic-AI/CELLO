@@ -462,8 +462,19 @@ NOT BUILT (real story machinery applied; awaiting implementation).
   responder SEAL leaf on ingesting A's SEAL ctrl leaf + verified content, no agent
   prompt; `counterparty_closing` becomes informational; verifiability-gated; B's
   signature always from B's own node. *(postmortem C-5; **CELLO-M7-UPGRADE-002**)*
-  — ❌ NOT BUILT (storied). Implementable once DAEMON-004 content cross-check +
-  SPINE-7 seal path exist; does NOT require MSG-001-3b.
+  — 🟢 **PROVEN LIVE** (J-UPGRADE, 2026-06-22). B's daemon auto-co-signs on ingesting the
+  counterparty's SEAL ctrl leaf (the live `onLeafDeliver` path) — A closes, B's agent issues NO
+  close call, B's NODE auto-acks (`session.seal.autoacknowledged`) → BILATERAL seal completes with a
+  byte-identical sealed_root (not a unilateral fallback). SI-001: B's leaf is signed by B's own
+  K_local (reuses `submitSealLeaf`); SI-002 verifiability gate: a `content_hash_mismatch` (tamper) →
+  `#contentDesynced` → skip + `session.seal.autoack.skipped` (disagreement is NOT a gate failure).
+  Idempotent (synchronous `#responderSealSubmitted` guard in submitSealLeaf — no double-submit in the
+  both-close race). `counterparty_closing` is informational by construction (no daemon-side
+  instruction exists on the live path). INTERACTION: this SUPERSEDES the old DOD-LIVE-2 "alive B +
+  silent agent → unilateral DELIVERED" outcome — an alive+verified B now auto-acks to bilateral; the
+  invariant "an alive B is never sealed ABSENT" is preserved more strongly (B SIGNED). The j-unilateral
+  alive-but-silent test was updated accordingly. The MSG-001-3b note is moot — UPGRADE-002 needs only
+  the cross-check (a tamper flag), not full canonical reconciliation.
 
 ---
 
