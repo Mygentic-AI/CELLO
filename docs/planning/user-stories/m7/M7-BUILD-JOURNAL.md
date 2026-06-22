@@ -3939,3 +3939,29 @@ park) is true loss → DOD-MSG-8.
 machine deterministically (hold-ahead → gap-recover → release, final leaf order == canonical).
 The live binary test (j-content) proves the OUTCOME: after an interleave where a later message
 arrives before an earlier parked one, B reads them in canonical order.
+
+---
+
+## 2026-06-22 — STATE CORRECTION: merged to main (supersedes all "branch m7-rehome" lines above)
+
+Bookkeeping fix — the entries above still read `branch m7-rehome` and list "merge to main" as a
+FUTURE step (e.g. the Phase-2 checkpoint and the resume-order lines). That is stale. Reality now:
+
+- **Both repos merged to `main`** (Andre's call — alpha, single user, no reason not to). All M7
+  work happens on `main` now, both repos. The `m7-rehome` branch is history.
+- **cello-client: `main` @ `1f23e8f`** — the J-LOOPBACK GREEN tip ("fix(m7): key seal bookkeeping
+  by (agent, session_id) — DOD-LOOP-1 live GREEN"). THIS is the seal-key fix the prior entry called
+  "the GREEN commit" without a hash. Re-key bulk landed `b31c5bd` (compiling WIP) → test-threading
+  commits → `1f23e8f`. Diff the whole re-key with `git diff b31c5bd~1..1f23e8f`.
+- **trustless-cello: `main` @ `881ab7c4`** — j-loopback un-skipped + DoD flipped + MSG-4 decision +
+  the MSG-4 design note.
+- **DOD-LOOP-1: ✅ done + live-proven.** `j-loopback.spine.test.ts` un-skipped and GREEN against the
+  real binaries; daemon unit suite 361 passed. Phases 2 (session-core re-key) and 3 (composite-PK
+  table CREATEs) both landed. The existing-DB rebuild migration + full direct-retry/nonce scoping
+  remain as the two recorded non-blocking follow-ons (fresh DBs already use the composite schema).
+- **Worktree note:** trustless-cello `main` is checked out at `/Users/andrep/Documents/code/trustless-cello-main`;
+  the primary dir `/Users/andrep/Documents/code/trustless-cello` is on the stale `m7-rehome` (already
+  merged) — do trustless-cello work in the `-main` worktree.
+
+Lowest non-green DoD line is now **DOD-MSG-4** (🟡 core proven; strict-in-order gate + catch-up
+remain) — design note appended above; red test next.
