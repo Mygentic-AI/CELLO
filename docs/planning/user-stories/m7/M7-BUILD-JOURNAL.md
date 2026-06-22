@@ -4272,3 +4272,29 @@ auto-created).
 **DOD-MSG-4 final:** direct frame + parked entry (incl. TTF) self-order; gate holds gaps; parked
 content delivered in production (auto-recover) + mailbox drains (confirm-delete). daemon 366, j-content
 9/9, j-loopback. cello-client `23df28f`, tc `7d3a4ad6`+docs.
+
+---
+
+## 2026-06-22 — Procedure re-read: cron updated to 7-item §3a; cello-test-attacker added (caught a hollow MSG-4 gap)
+
+Andre flagged the procedures file was redone. Re-read M7-PROCEDURE.md. Two changes I had to act on:
+- **Drift cron updated to the 7-item §3a version** (old `82791b7d` deleted, new `0ae58558`). New item 7:
+  every ✅ flipped in the window must be backed by the exact passing live-run assertion (the light
+  per-30-min done-audit); the test-attacker reminder added to the cron preamble.
+- **§2 step 8 now mandates TWO review agents per unit:** `feature-dev:code-reviewer` (code) AND
+  `cello-test-attacker` (tests). I had been running only the code-reviewer — a process gap. Ran the
+  test-attacker retroactively on the MSG-4 tests.
+
+**The test-attacker earned its keep — BLOCKING hollow-test finding, now fixed.** Every MSG-4 test fed
+only honest, correctly-signed ordering records, so an implementation that STRIPPED the
+verify()/counterparty/hash-bind checks in `#recordFrameOrdering` passed all 11 tests — the
+sovereign-node "B does not trust the counterparty for ordering" invariant was untested security code.
+Added 4 adversarial unit tests (bad signature → bad_signature; valid sig by a non-counterparty key →
+wrong_signer; record bound to a different hash → hash_mismatch; + a happy path). Proved teeth by
+neutering the three checks → all three adversarial tests go RED (the exact bypass), then restored →
+8/8 green. cello-client `dfb0c31`, daemon suite 370.
+
+**DOD-MSG-4 ✅ now passes ALL THREE enforcement gates:** code-reviewer (3 passes, every finding fixed),
+`cello-done-auditor` (VERDICT EARNED — ran j-content 9/9 cold), `cello-test-attacker` (BLOCKING found →
+fixed, teeth proven). The maker grades too generously; three independent adversaries (code, tests,
+run-it-cold) are what makes the ✅ honest. MSG-4 is genuinely closed.
