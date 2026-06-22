@@ -3524,3 +3524,46 @@ logs `session.sealed.signature.checked verified:true` + never `signature.invalid
 SPINE-7 green; daemon units 79/79 (daemon, session-001, seam-2-inbound, session-node-manager).
 Commits: cello-client `e323395`, trustless `<this>`. The legibility-TBS-binding security finding is now
 FULLY closed (live + out-of-band, both parties). No remaining responder-verify follow-on.
+
+---
+
+## 2026-06-22 — J-LOOPBACK design note (DOD-LOOP-1 / SESSION-CORE-REKEY-001) — Andre-directed
+
+**DoD-ID / unit.** DOD-LOOP-1 — two of the operator's own agents (two K_locals) converse on ONE daemon.
+Andre directed this next (Tier 6, daemon-only, no deploy/decision). PROCEDURE §6 design-significant unit.
+(Also recorded the OPEN DOD-MSG-4 decision to memory — return to it; it's the seal/content lynchpin.)
+
+**Target.** Re-key the daemon session core from `session_id` to `(agent, session_id)` so B's accept of a
+session A initiated on the SAME daemon is a NEW end, not a collision. Each end signs with its own K_local
+(INV-2 unchanged — two nodes, one process). NO wire/directory/relay change.
+
+**Audited re-key surface (m7-rehome HEAD).** In-memory maps keyed by sessionId, ALL must thread the agent
+(a miss re-introduces the collision): `#activeNodes` (18), `#sessionLiveness` (6), `#relayClients` (6),
+`#receivedContent` (4), `#responderSealSubmitted` (4), `#trees` (3), `#contentDesynced` (2). `#awaitingAck`
+is already nested `Map<sessionId, Map<...>>` — its outer key becomes the composite too. Plus ~19
+`getSessionRecord`/`WHERE session_id` queries, the ownership check (daemon.ts ~1355/2590), the inbound
+double-accept guard (daemon.ts ~1966), and retry_queue / nonce-dedup tables (scope by agent or a loopback
+shares one nonce set/retry queue across both ends).
+
+**Approach (impl-note option, lowest-risk).** A composite STRING key `sessionKey(agent, sessionId) =
+`${agentName}\x1f${sessionId}`` (0x1f unit separator — neither agent name nor hex session id contains it)
+for ALL in-memory maps. Thread `agentName` into every session-core method that today takes only
+`sessionId` (the callers know it: tool handlers have `connState.currentAgent`, the inbound handler has
+`agentName`, relay callbacks have it via the entry). SQLite: recreate `sessions` PK `(agent_name,
+session_id)`, `session_tree_leaves` PK `(agent_name, session_id, leaf_index)` (+ agent_name col),
+`seal_interrupted_artifacts` PK `(agent_name, session_id)` — a one-time in-code create→copy→drop→rename
+migration (NOT Flyway; the daemon DB has none), atomic + idempotent, copying existing rows with their
+current agent_name. `getSessionRecord(sessionId)` → `getSessionRecord(agentName, sessionId)`. The
+double-accept guard distinguishes "different agent, same session_id" (admit — local counterpart) from
+"same (agent, session_id)" (reject — the M2 race). This is ALL-OR-NOTHING: the daemon is broken until the
+whole cascade lands, so the impl is committed only when red→green + full regression passes; the design
+note + red test land first as a safe checkpoint.
+
+**Red test.** `j-loopback.spine.test.ts`: ONE real cello-daemon, TWO agents registered on it (two cello-mcp
+connections, each `cello_use_agent`), A `cello_initiate_session` → B's pubkey, B `cello_await_session`, A
+`cello_send` → B `cello_receive` (byte-identical), BOTH `cello_close_session` → bilateral seal → both ends
+a byte-identical `sealed_root` — NO second daemon. RED today (the collision: B's accept hits A's session
+row → double-accept reject / session_not_owned). Binary-anchored (no in-process node construction).
+
+**Risk note (honest).** ~60 atomic access points + a 3-table DB migration, can't partial-land. Large for a
+single coherent push; the red test + design note are the safe foundation that tee it up cleanly.
