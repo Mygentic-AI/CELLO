@@ -573,12 +573,16 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(recv.content, "B reads the parked message WITHOUT any explicit content_park_recover").toBe(PARKED);
   }, 120_000);
 
-  it("DOD-MSG-8 (irreducible loss is honest) — sealed session: honest frontier + a post-seal straggler is rejected (session_committed), never re-enters", async () => {
-    // The irreducible-loss invariant (MSG-001 DB-003): the seal is ALWAYS honest — its content
-    // frontier reflects only what the receiver actually signed for, so a message whose content never
-    // reached B can never inflate it — AND a straggler that resurfaces AFTER the seal is rejected and
-    // cannot re-enter a committed session. The frontier mechanism + the sealed-session guard already
-    // exist (SESSION-004 + ingestReceivedContent); this proves them live, end-to-end, across processes.
+  it("DOD-MSG-8 (irreducible loss is honest) — a post-seal straggler is rejected (session_committed); B's certificate frontier is honest and the straggler never inflates it nor re-enters the transcript", async () => {
+    // The irreducible-loss invariant (MSG-001 DB-003): the seal is ALWAYS honest and a straggler that
+    // resurfaces AFTER the seal is rejected and cannot re-enter a committed session. The two mechanisms
+    // already exist: (a) the per-party content frontier is derived from each party's OWN SIGNED leaves
+    // (directory seal-legibility.ts) so a message a party never received/signed cannot appear in its
+    // frontier — proven directly in J-LEGIBILITY (distinct per-party frontiers) and DOD-MSG-7 (an
+    // unrecoverable parked entry never lands, frontier excludes it); (b) the sealed-session guard in
+    // ingestReceivedContent refuses ALL content for a committed session. THIS test live-proves the
+    // straggler-rejection guard (the new, otherwise-unasserted half) end-to-end, and asserts B's actual
+    // certificate frontier is honest for the received content AND is not inflated by the straggler.
     const dirA = mkdtempSync(join(tmpdir(), "cello-msg8A-"));
     const dirB = mkdtempSync(join(tmpdir(), "cello-msg8B-"));
     dirs.push(dirA, dirB);
@@ -618,13 +622,22 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(closeB.ok, `B close:${diag}`).toBe(true);
     expect(closeB.sealed_root, `both sealed_root identical:${diag}`).toBe(closeA.sealed_root);
 
-    // HONEST seal: B reads its certificate; the frontier reflects ONLY received content. The frontier
-    // is derived from B's SIGNED leaves, so a message whose content never reached B cannot appear in it.
-    const receipt = (await connB.call("cello_get_sealed_receipt", { session_id: sessionId })) as {
-      ok?: boolean; sealed_root?: string;
-    };
+    // HONEST seal: B reads its certificate and the actual per-party content frontier. B received
+    // exactly one in-session message (msg1), so B's signed frontier reflects that — never more.
+    type LegPart = { pubkey: string; content_frontier_seq: number };
+    type Receipt = { ok?: boolean; sealed_root?: string; legibility?: { participants: LegPart[] } };
+    const receipt = (await connB.call("cello_get_sealed_receipt", { session_id: sessionId })) as Receipt;
     expect(receipt.ok, `B reads the sealed receipt:${diag}`).toBe(true);
     expect(receipt.sealed_root, `receipt root matches the seal:${diag}`).toBe(closeB.sealed_root);
+    const frontierOf = (r: Receipt, pubkeyHex: string): number => {
+      const p = (r.legibility?.participants ?? []).find((x) => x.pubkey.toLowerCase() === pubkeyHex.toLowerCase());
+      expect(p, `participant ${pubkeyHex.slice(0, 8)} present in the cert:${diag}\n${JSON.stringify(r.legibility)}`).toBeTruthy();
+      return p!.content_frontier_seq;
+    };
+    // B's frontier covers A's single message and no more — the cert is built from signed leaves, so it
+    // cannot be inflated past what B actually received. (Captured to prove the straggler can't move it.)
+    const bFrontierAtSeal = frontierOf(receipt, pubB);
+    expect(typeof bFrontierAtSeal, `B's content_frontier_seq is a real number:${diag}`).toBe("number");
 
     // ── The straggler: content for this session RESURFACES after the seal (a delayed delivery of a
     // message whose content never made it before the seal — the irreducible-loss case). It is a VALID
@@ -651,12 +664,12 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       /"event":"content\.recover\.ingest_failed"[^\n]*"reason":"session_committed"/,
     );
 
-    // The session is STILL sealed and byte-identical — the straggler never re-entered the transcript.
-    const receipt2 = (await connB.call("cello_get_sealed_receipt", { session_id: sessionId })) as {
-      ok?: boolean; sealed_root?: string;
-    };
+    // The session is STILL sealed and byte-identical — the straggler never re-entered the transcript,
+    // and B's certificate frontier is UNCHANGED: the rejected straggler could not inflate it.
+    const receipt2 = (await connB.call("cello_get_sealed_receipt", { session_id: sessionId })) as Receipt;
     expect(receipt2.ok, "session still sealed + readable after the straggler").toBe(true);
     expect(receipt2.sealed_root, "sealed root unchanged — the straggler did not mutate the transcript").toBe(closeB.sealed_root);
+    expect(frontierOf(receipt2, pubB), "B's content frontier is unchanged — the straggler did not inflate it").toBe(bFrontierAtSeal);
   }, 120_000);
 
 });
