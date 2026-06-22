@@ -3892,3 +3892,50 @@ MSG-4 (decided) and MSG-8 (unblocked) updated. The pending-decision memory is re
 **To build (next J-CONTENT increment):** (1) next-expected-sequence gate on the receiver
 (hold-ahead + fetch-missing-from-mailbox-first); (2) catch-up-before-live on reconnect (relay
 tells B "current as of sequence N"; B holds live until it reaches N). Then DOD-MSG-8 on the frontier.
+
+---
+
+## 2026-06-22 — DOD-MSG-4 strict-in-order: DESIGN NOTE (before code, per Procedure §6)
+
+**Target (one sentence):** B's content transcript ends in the same canonical order A sent,
+so the bilateral seal roots match even when direct delivery and relay-park recovery interleave;
+a message that arrives ahead of its turn is HELD, not appended out of order.
+
+**The producer/consumer chain (the key finding — no frame/relay change needed).**
+- *Order truth is produced by the RELAY* (Structure 2, the ordering authority — already in the
+  code, `sendContent` comment ~line 1653). For every counterparty message the relay already
+  delivers B a witnessed binding: the `leaf_deliver` frame carries `sequence_number` AND
+  `structure1_cbor = [1, content_hash(32), sender_pubkey, session_id, last_seen_seq, ts]` — i.e.
+  `(content_hash → canonical sequence)`. It also already advances B's `last_seen_seq` (the
+  high-water mark N) on each counterparty leaf (`#bumpLastSeen`, session-relay-client ~line 276).
+- *The consumer is B's `ingestReceivedContent`.* Today it appends at the LOCAL leaf index
+  (arrival order) and ignores the canonical sequence — THAT is the whole bug. Two direct sends
+  that race, or a direct arrival that beats a still-parked earlier message, append in the wrong
+  order → B's root diverges from A's → no byte-identical bilateral seal.
+
+**What to build (lands entirely in `core/daemon/src/session-node-manager.ts`).**
+1. Record the witnessed `hash→seq` map per `(agent, session)` from the existing `onLeafDeliver`
+   callback (createSessionNode ~line 771 — it already fires per counterparty leaf; decode
+   structure1_cbor for the content_hash).
+2. Strict-in-order gate in/around `ingestReceivedContent`: look up the arriving content's
+   CANONICAL sequence (from the witness map). Accept (append) only when canonicalSeq === current
+   leaf count (`nextExpected`). If canonicalSeq > nextExpected → HOLD it in a per-session pending
+   buffer and recover the missing in-between sequence(s) from the relay mailbox first; then drain
+   the held buffer in order. If canonicalSeq < nextExpected → dedup (existing `existingIdx` path).
+   The gate keeps leaf index === canonical sequence BY CONSTRUCTION.
+3. Catch-up-before-live on reconnect: B's `last_seen_seq` (the relay high-water N) is how many
+   leaves B must hold before going live. On resume, hold live direct arrivals until B's tree
+   reaches N (recovering parked entries to fill).
+
+**SIs this must satisfy.** INV-3 preserved — ordering uses only hashes the relay already sees, no
+plaintext. Sovereign-node / don't-trust-the-counterparty — B orders by the RELAY witness, NEVER a
+sender-stamped frame field (so a lying counterparty cannot misorder B's transcript; the worst a
+malicious relay can do is withhold/misorder, which diverges the root and degrades to an honest
+unilateral seal, not a forged one). MSG-5 dedup preserved (seq < nextExpected). MSG-7 — a
+recoverable gap keeps the session alive. The one unfetchable case (sender crashed before ack OR
+park) is true loss → DOD-MSG-8.
+
+**Tests (red first).** A focused in-process test on session-node-manager proves the gate state
+machine deterministically (hold-ahead → gap-recover → release, final leaf order == canonical).
+The live binary test (j-content) proves the OUTCOME: after an interleave where a later message
+arrives before an earlier parked one, B reads them in canonical order.
