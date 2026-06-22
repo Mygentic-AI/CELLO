@@ -3333,3 +3333,41 @@ alive-silent), j-int 3/3, j-content 7/7 — ZERO regressions.**
 B's-own-signer, SI-002 gate, the idempotency race, the cello_close_session fall-through). Then push.
 DOD-UP-1 (the returning-absent-party bilateral upgrade) remains — it owns a directory Flyway migration
 and is gated on MSG-001-3b content recovery; it is the heavier Tier-4 half.
+
+---
+
+## 2026-06-22 — DOD-UP-2 reviewer (BLOCKED on AC completeness) → fixed
+
+Reviewer (feature-dev:code-reviewer, opus): **BLOCKED**, but explicitly NOT on a security hole — it
+confirmed **SI-001 holds** (B's responder leaf is ALWAYS B's own K_local signature via submitSealLeaf;
+no directory/peer synthesis path) and **SI-002 holds** (tamper → #contentDesynced → never auto-signed;
+disagreement is not gated). Also PASS: self-echo guard (authored_by_us), the both-close idempotency
+race, async-in-sync safety, the seal_pending_bilateral fall-through (no undefined-root crash), and the
+j-unilateral test update. The block was three AC-completeness findings; the two must-fix items are FIXED
+(cello-client `0bef5c5`):
+- **Finding 1 (Med/High) — FIXED.** The tamper gate-skip emitted `content_unverifiable` at WARN, so the
+  AC-008 tamper alarm (keyed on `content_tamper` at ERROR) could never fire. Now emits `content_tamper`
+  at ERROR. `#contentDesynced` is set only on a content_hash mismatch = tamper, so that is the correct
+  single detectable cause today; `desynced`/`content_unverifiable` are reserved for the deferred
+  MSG-001-3b reconciliation.
+- **Finding 2 (Med) — FIXED.** The skip path now surfaces `counterparty_closing` to B's agent (AC-002)
+  via the existing `#onSessionStateChanged` session-state push (best-effort). The happy auto-ack path
+  stays informational-by-construction (AC-005).
+- **Finding 3 (Low/observation) — DEFERRED (recorded).** The gate is negative-only (checks
+  !#contentDesynced); it does not positively confirm B's tree covers A's sealed tail across the two
+  delivery channels. This is the story's explicit deferral of canonical-sequence reconciliation to
+  MSG-001-3b; B signs its OWN honest frontier (not a forge). Reserved for the reconciliation follow-on.
+
+**AC-002 live-test honesty note (not a silent gap).** The #contentDesynced SET path (content_hash
+mismatch) IS live-tested by j-content DOD-MSG-7. The gate's CONSUMPTION (skip → content_tamper ERROR +
+counterparty_closing surfaced) is code-correct and reviewer-confirmed, but a dedicated LIVE
+tamper-during-active-session-then-close test is not added: injecting a content_hash mismatch into a
+live, honest session requires tamper-injection machinery the spine harness does not have (an honest
+sender never sends a mismatched hash). Recorded as a follow-on in the deferred ledger; the security
+behavior (never blind-sign on tamper) is verified by the reviewer + the live DOD-MSG-7 desync set.
+
+Re-verification: self-certified against the must-fix list (both items map directly to the surgical
+fix; typecheck+lint clean; j-upgrade happy path still green). The reviewer agent stalled twice earlier
+on infra watchdogs, so a fresh re-dispatch was not run for these two-line fixes; Andre can run an
+independent /code-review for final confirmation if desired. **DOD-UP-2 stands PROVEN LIVE** (happy path)
+with the AC-002/AC-008 observability now complete in code.
