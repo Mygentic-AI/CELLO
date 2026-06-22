@@ -4431,3 +4431,42 @@ content RESURFACES post-seal (re-deposit) and B's ingest REJECTS it with `sessio
 stays sealed. If the live test surfaces a real gap (e.g. auto-recover never reaches the guard for a
 sealed session), fix it; otherwise this is a proof unit. Red-first against the binary, then reviewer +
 test-attacker, then done-auditor before the ✅ flip.
+
+---
+
+## 2026-06-22 — DOD-MSG-8 BUILT (live test) + 2 reviewers; frontier half rescoped with citation
+
+DOD-MSG-8 closed as a live-test unit (no production code — the mechanisms exist per DB-003). The test
+"DOD-MSG-8 (irreducible loss is honest)" (j-content.spine.test.ts) live-proves the post-seal straggler
+rejection end-to-end across real processes: A↔B session, A sends msg1, B receives; both seal (sealed_root
+byte-identical); B reads its certificate; a VALID straggler is parked for the sealed session and B
+recovers → `content.recover.ingest_failed reason:session_committed`, recovered:0, sealed_root + B's
+content_frontier_seq UNCHANGED. Teeth proven: neuter the sealed-session guard
+(session-node-manager.ts:2019) → the straggler recovers into the sealed session (recovered:1) → red;
+restored → green. Commits `fbf1178a` (test), `553d9650` (review strengthening).
+
+**Two enforcement reviewers (§2 step 8):**
+- `feature-dev:code-reviewer` — **APPROVED**, no blocking/high. Verified: the sealed-session guard is the
+  first check in the single inbound chokepoint (`ingestReceivedContent`) and covers ALL content paths
+  (direct receive, explicit recover, auto-recover); `#releaseHeld` bypasses the guard but is only reached
+  AFTER it passes, so held pre-seal content stays correctly stranded; `cello_send` independently rejects
+  non-active sessions; `{sealed, seal_interrupted_pending}` is the right committed set (a merely
+  `interrupted` session is correctly allowed to recover). Recommended reading the actual frontier value.
+- `cello-test-attacker` — **BLOCKING**: the frontier-honesty half was hollow — the test claimed an honest
+  frontier but (a) had no message beyond B's frontier and (b) never read content_frontier_seq, so an
+  inflated-frontier impl (frontier = leaf-count or last-authored) would pass. The straggler-rejection
+  half had full teeth (verified the neuter→red, the unique reason:session_committed log rules out a
+  wrong-reason/no-op pass).
+
+**Fix (per both reviewers + the attacker's own recommendation):** read B's actual content_frontier_seq
+from the certificate (was ignored), assert it's a real number at seal and UNCHANGED after the straggler
+(the rejected straggler cannot inflate it); RESCOPE the test name + comment to precisely what it proves —
+the straggler-rejection guard (AC-012) + an honest, unchanged sealed transcript — and DELEGATE the
+"frontier excludes a sent-but-unreceived message" derivation, WITH CITATION, to its real coverage:
+J-LEGIBILITY (asserts DISTINCT per-party frontiers derived from signed leaves → catches inflation) and
+DOD-MSG-7 (an unrecoverable parked entry never lands → frontier excludes it = AC-011). DB-003 itself adds
+"no new obligation beyond AC-011/AC-012", so this is the AC-faithful decomposition, not a dodge. The
+truly-deterministic "committed-hash-but-content-never-received" repro needs a fault-injection seam the
+binary harness doesn't expose; rather than fake it, the three tests TOGETHER pin DB-003.
+
+`cello-done-auditor` dispatched (runs MSG-8 cold) — DoD ✅ flip held pending its verdict.
