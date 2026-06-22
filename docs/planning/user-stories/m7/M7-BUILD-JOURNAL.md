@@ -4139,3 +4139,23 @@ live test proves the frame-carried verified ordering. Honest split, no flaky enf
 **REMAINING for ✅ (in the DoD MSG-4 line):** 2b (parked entry carries Structure2 → recover-path ordering,
 closes review finding #3); Finding 2 (relay-signed sequence — decision pending Andre); catch-up-before-live
 (a "mailbox drained?" gate once 2b lands).
+
+**Code review (feature-dev:code-reviewer, opus) — self-ordering frame, both repos.** No critical/important.
+All five focus areas verified sound: signature verification (verify over structure1_cbor; pubkey taken
+from the frame but the after-check rejects a non-counterparty signer BEFORE the sequence is recorded —
+no mis-order window), seq-1 normalization (consistent with onLeafDeliver), #pendingStructure1 lifecycle
+(set/read/cleared on every settle path, single-in-flight FIFO — no mispair), hostile Structure2
+non-fatal (content still ingests), and gate/tree structurally safe (canonicalSeq only selects
+hold-vs-append, never the leaf position). Relay side backward-compatible (optional field, both ack
+shapes, same s2Cbor to both parties). ONE actionable Low — FIXED (cello-client `ae83087`): the
+sovereign-node signer cross-check now FAILS CLOSED when the counterparty pubkey is unknown (drop the
+record, fall back to the witness) instead of accepting any self-signed Structure1. Two informational:
+(a) the accepted Finding 2 (relay doesn't yet sign the in-frame sequence → an untrusted frame seq can
+overwrite the trusted leaf_deliver seq; resolved when the relay signs the assignment — DECISION PENDING
+ANDRE); (b) a harmless bounded #witnessedSeq orphan if a frame's ordering records but ingest then fails
+the content-hash cross-check (never re-read, dedup catches replays).
+
+**Next increment (2b) is GATED on the Finding 2 decision:** both the parked-entry payload AND the
+content frame would carry the relay's `relay_signature` if Finding 2 = "yes, verify the relay's
+committed position". So 2b (park-carries-Structure2) + the relay-signature-in-frame share one payload
+shape — build them together AFTER Andre decides, to avoid reworking the payload twice.
