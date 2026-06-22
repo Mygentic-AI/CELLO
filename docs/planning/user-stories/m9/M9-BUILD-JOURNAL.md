@@ -305,3 +305,47 @@ nothing on `main`.
 **Next.** M9-IN-001 (inbound Layer-1 deterministic sanitization) — the first detector, plugs into
 `createGatewayServer`'s screen fn. Attack corpus present (`attack-corpus-reference.md`). Unit altitude:
 real malicious input → real verdict, RE2 mandatory, no network/model.
+
+---
+
+## 2026-06-22 — M9-IN-001 sanitizer built (partial, 🟡); 3 library/model decisions queued for Andre
+
+**Built (cello-client `m9-build`, commit `9878c8d`).** `core/gateway/src/detect/sanitize.ts` — the
+inbound Layer-1 sanitizer, a pure no-model/no-network function (INV-1) covering the dependency-free
+steps: size cap (AC-005), invisible/smuggled-Unicode strip (AC-001/SI-001 — Tags block, zero-width,
+BOM, soft hyphen, variation selectors, bidi controls; zero smuggled codepoints survive even split
+across runs), confusables (NFKC + Cyrillic/Greek map), encoded-payload decode (HTML/percent/\x/\u),
+Shannon-entropy scoring (AC-003), special-token strip (AC-004). 8 unit tests with real corpus
+payloads; gateway typecheck + lint + 15 tests green.
+
+**Status: M9-IN-001 is partial (🟡).** What's NOT done and why:
+- **AC-002 (RE2 injection-pattern match) — PARKED on a decision.** Needs a linear-time RE2 engine.
+- The sanitizer is **not yet wired** into the gateway inbound screen fn — that needs the inbound
+  verdict assembly (sanitize → scan → verdict) + the seam content-transform plumbing (deliver
+  sanitized text to the agent while the Merkle leaf keeps the original hash). Lands with M9-IN-002
+  and is proven by M9-GATE-1.
+
+### ⚠️ DECISIONS FOR ANDRE (morning) — the inbound detector library/model stack
+
+These three all touch the **install-size priority** in CLAUDE.md (the gateway ships bundled with the
+client for local-sidecar mode, so its deps hit `npm install`). I parked them rather than guess:
+
+1. **RE2 binding (M9-IN-001 AC-002).** `re2@1.25.0` — native (Google RE2 via node-gyp; maintained;
+   ships prebuilt binaries for common platforms, compile fallback otherwise) vs `re2-wasm@1.0.2` —
+   prebuilt WASM, **zero compile** (your install-size priority) but **unmaintained since ~2021**.
+   Tradeoff: maintenance/supply-chain (favors native) vs install size (favors WASM). My lean: native
+   `re2` for a security pattern engine, IF its prebuilts cover our targets so there's no compile.
+2. **DeBERTa scanner runtime + model (M9-IN-002).** Pre-downloaded DeBERTa-v3-small INT8 (per the
+   M8 scope memory) + an ONNX runtime (`onnxruntime-node`, native). The **model file is large**
+   (tens-to-hundreds of MB) — a real install-size question: bundle it in the client? lazy-download on
+   first use? ship it only with the remote/Phase-2 gateway and skip local inbound L2 for the
+   individual launch? This is the biggest install-size call in M9.
+3. **Language detector (M9-IN-003).** A small pure-JS n-gram detector (e.g. `franc`, ~tens of KB,
+   no native) for the English-allowlist. Low-risk; likely just pick `franc` — confirming it's
+   acceptable.
+
+**Plan while these are parked.** Keep building the dependency-free detectors in the same phase:
+M9-OUT-001 (outbound secret detection — gitleaks-style ANCHORED patterns, plain RegExp is safe, no
+ReDoS/RE2 needed) is fully completable tonight. M9-FEED-001 (the verdict-return feedback channel) is
+also fork-free and completes CORE-001's stubbed outbound verdict handling. I'll do OUT-001 next; the
+inbound stories (IN-002/IN-003) wait on the decisions above.
