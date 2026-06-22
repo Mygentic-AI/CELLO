@@ -3965,3 +3965,36 @@ FUTURE step (e.g. the Phase-2 checkpoint and the resume-order lines). That is st
 
 Lowest non-green DoD line is now **DOD-MSG-4** (🟡 core proven; strict-in-order gate + catch-up
 remain) — design note appended above; red test next.
+
+---
+
+## 2026-06-22 — VOIDING the fake "needs Andre's nod" gates (alpha; one user) — now landed on main
+
+Andre flagged that the autonomous run keeps manufacturing decisions for him and gating code
+work on production-grade caution that does not apply. Fixed at the source. (This was first
+written on the now-stale `m7-rehome`; it belongs on `main`, where the work lives — landing it
+here.)
+
+**The reality (now a REALITY CHECK banner at the top of M7-PROCEDURE.md, read first every
+session):** there is ONE user, Andre, who is also the only developer. CELLO is alpha. Nothing
+is in production. There are no operators and no real users to protect. The "operator," "deploy
+discipline," and "real users get it" language in these docs describes a FUTURE federated
+product, not the current world.
+
+**Gates VOIDED (never real — do not re-surface them):**
+- **"needs Andre's nod" on any code change** (e.g. the old DOD-MSG-4 ledger lines at journal
+  2601 / 3402). There is no nod to wait for. "Load-bearing / safety-critical / risky to touch"
+  is a reason to TEST well, never to stop. The answer to "should I do this code work?" is always
+  yes.
+- **"publish to reach operators / real users"** framing. There are no operators or real users.
+  Publishing only means Andre choosing to run the npm build instead of the local dev build — a
+  convenience, never a blocker, ignored unless he asks.
+
+**What DOES still warrant pausing for Andre:** (1) a GENUINE design fork — something truly
+buildable several materially different ways with divergent consequences, where Andre's intent is
+unclear (surface options + a recommendation and ask — the one decision worth his time); (2) an
+actual live AWS deploy (a deploy *operation*, never a code edit). The fake gate to kill is
+"this code is risky, may I proceed?" — never that.
+
+No code change in this entry — docs only (procedure banner + this void record). Memory "alpha —
+no production-safety caution" sharpened to match.
