@@ -456,4 +456,49 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(recv.ok).toBe(true);
     expect(recv.content, "B reads the content the crashed sender re-parked").toBe(content);
   }, 120_000);
+
+  it("DOD-MSG-4 (self-ordering frame) — the content frame carries the relay's signed Structure2; B verifies it and orders from the FRAME, not the witness stream", async () => {
+    const dirA = mkdtempSync(join(tmpdir(), "cello-soA-"));
+    const dirB = mkdtempSync(join(tmpdir(), "cello-soB-"));
+    dirs.push(dirA, dirB);
+    await provisionAgent(dirA, "agentA");
+    const pubB = await provisionAgent(dirB, "agentB");
+    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "soA");
+    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "soB");
+    daemons.push(daemonA, daemonB);
+    expect(cello(["register", "agentA", `DEV-so-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
+    expect(cello(["register", "agentB", `DEV-so-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    const connA = await connectMcp(dirA, "so-A");
+    const connB = await connectMcp(dirB, "so-B");
+    mcpConns.push(connA, connB);
+    for (const [c, n] of [[connA, "agentA"], [connB, "agentB"]] as const) {
+      expect(((await c.call("cello_start_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+    }
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok, `initiate failed:\n${daemonA.output.split("\n").slice(-30).join("\n")}`).toBe(true);
+    const sessionId = init.sessionId!;
+    expect(((await awaitP) as { type?: string }).type).toBe("new_session");
+
+    // A sends two messages directly to the online B. Each content frame carries the relay's signed
+    // Structure2 (sequence + sender signature). B VERIFIES the signature and records the canonical
+    // sequence FROM THE FRAME — proven by session.content.ordering.recorded with source:content_frame,
+    // independent of the separate leaf_deliver witness stream (which previously was the only ordering
+    // signal and the source of the content-before-witness race).
+    expect(((await connA.call("cello_send", { session_id: sessionId, content: "first" })) as { ok?: boolean }).ok).toBe(true);
+    const ord0 = await daemonB.waitForLine(/"event":"session\.content\.ordering\.recorded"[^\n]*"source":"content_frame"/, 15_000);
+    expect(ord0, "B records the canonical sequence from the content frame (idx 0)").toMatch(/"canonicalSeq":0/);
+    await daemonB.waitForLine(/"event":"session\.content\.received"[^\n]*"sequenceNumber":0/, 10_000);
+
+    expect(((await connA.call("cello_send", { session_id: sessionId, content: "second" })) as { ok?: boolean }).ok).toBe(true);
+    await daemonB.waitForLine(/"event":"session\.content\.ordering\.recorded"[^\n]*"canonicalSeq":1[^\n]*"source":"content_frame"/, 15_000);
+    await daemonB.waitForLine(/"event":"session\.content\.received"[^\n]*"sequenceNumber":1/, 10_000);
+
+    // B reads them in canonical order — leaf index === the relay-committed sequence the frame carried.
+    const read = async () => ((await connB.call("cello_receive", { session_id: sessionId })) as { ok?: boolean; content?: string | null }).content;
+    expect(await read()).toBe("first");
+    expect(await read()).toBe("second");
+  }, 120_000);
+
 });
