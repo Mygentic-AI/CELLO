@@ -4391,3 +4391,43 @@ real dist/bin processes; postgres on 5433). Specifically falsified four ways and
 sig is real garbage not a flag; the version-9 forgery WOULD pass anti-rollback so the signature is the
 only gate; `waitForLine` fails on timeout/early-exit rather than silently passing; no fixture/factory
 bypasses the binaries. DOD-AUTH-2 flipped 🟡 → ✅ PROVEN LIVE. The J-AUTH journey is fully green.
+
+---
+
+## 2026-06-22 — DOD-MSG-8 DESIGN NOTE (irreducible loss is honest — a live-test unit, code exists)
+
+Next lowest non-green: **DOD-MSG-8** (❌ NOT BUILT, unblocked by MSG-4). Mapped it (Explore agent).
+Key finding: the two observable behaviors are ALREADY BUILT, and the source AC says so explicitly.
+
+**Source AC — MSG-001 DB-003** (`CELLO-M7-MSG-001.yaml:793-808`): "the hash already reached the relay over
+the reliable channel, so the message is hash-committed. The receiver seals with that hash and a content
+frontier that excludes the unrecovered message → an honest 'sent, not received' record. A straggler that
+resurfaces after the seal is rejected and cannot re-enter a sealed session." And crucially:
+**"No new test obligation beyond AC-011 (recovery-exhausted keeps session alive) and the
+dedup/sealed-session guard in AC-012/AC-011. This DB documents the irreducible-loss narrative."**
+
+**The mechanisms that make it true (already in the code):**
+- **Honest frontier excludes lost N.** `buildSealLegibility` (directory `seal-legibility.ts:173-178`)
+  derives each party's `content_frontier_seq` from the MAX SIGNED `last_seen_seq` across the leaves THAT
+  PARTY SIGNED — never a self-asserted or hash-only value. If B never received content N, B never signs a
+  `last_seen_seq ≥ N`, so B's frontier is N-1 even though A's hash leaf N is committed in the chain. The
+  receipt is legible: "N sent [hash committed], content frontier N-1 [never received]." This is the SAME
+  SESSION-004 frontier already ✅ live-proven in J-LEGIBILITY (per-party asymmetric frontiers).
+- **Post-seal straggler rejected.** `ingestReceivedContent` (`session-node-manager.ts:2018-2027`) guards:
+  `status === "sealed" || "seal_interrupted_pending"` → `{ ok:false, reason:"session_committed" }`, no leaf
+  appended — for ALL content sources (direct, park-recover, auto-recover). The transcript is frozen once
+  committed+signed; a late leaf would diverge from the notarized root.
+- **Recovery-exhausted keeps session alive (AC-011).** Already ✅ in J-CONTENT MSG-7: a CORRUPT/unsealable
+  parked entry → `content.recover.unseal_failed`, skipped, session stays alive (NOT a desync).
+
+**Decision (design fork, picked the faithful/safe option overnight — Andre asleep):** DOD-MSG-8 is closed
+by a LIVE BINARY test that demonstrates the irreducible-loss narrative end-to-end, reusing J-CONTENT's
+park + corrupt-recover + seal machinery — NOT by new production code (the AC says no new obligation). The
+test (J-CONTENT or a focused J-MSG8): A↔B session; A sends msg1, B receives+acks (frontier→1); A sends
+msg2 while B offline → hash committed + content parked; the parked content is made unrecoverable (the
+MSG-7 CORRUPT seam) so B's recovery is exhausted (msg2 content never arrives, session alive); A+B SEAL →
+assert B's certificate `content_frontier_seq` EXCLUDES msg2 (honest "sent not received"); then the msg2
+content RESURFACES post-seal (re-deposit) and B's ingest REJECTS it with `session_committed`, session
+stays sealed. If the live test surfaces a real gap (e.g. auto-recover never reaches the guard for a
+sealed session), fix it; otherwise this is a proof unit. Red-first against the binary, then reviewer +
+test-attacker, then done-auditor before the ✅ flip.
