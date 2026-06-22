@@ -485,11 +485,17 @@ operator.
   thanks"). A flagged message is held with a legible note ("language not in your allowlist;
   add `<lang>` to receive these") — recoverable.
 
-**OPT-IN (off by default):** toxicity / sentiment / bias / emotion; ban-topics / competitors
-/ code; harm classifiers (Llama Guard / ShieldGemma); gibberish.
+**OPT-IN (off by default):** `gibberish` / `ban-code` only — weak *security* signals, not
+moderation (keep or drop, minor).
 
-**DEFER:** vector-DB of known attacks (Rebuff/Vigil self-hardening loop); canary tokens
-(needs host system-prompt integration); multimodal / OCR injection.
+**DAY 2 (LLM-judgment moderation, never the deterministic base — same as outbound #12):**
+toxicity / sentiment / bias / emotion; ban-topics / competitors; harm classifiers
+(Llama Guard / ShieldGemma). Home: agent-upstream OR an operator policy-LLM hook; CELLO ships
+the seam, never the logic. *(Harm classifiers are the borderline case — harm/safety vs pure
+moderation; revisit only if a legal floor like CSAM is ever in scope.)*
+
+**DEFER:** vector-DB of known attacks (Rebuff/Vigil self-hardening loop); multimodal / OCR
+injection. *(Canary tokens moved to outbound OPT-IN — see §7 Outbound.)*
 
 **Architectural (not a toggle):** treat all relayed peer content as untrusted (CELLO already
 does) — this is what feeds the INJECTION-vs-JAILBREAK distinction.
