@@ -3713,10 +3713,14 @@ product, not the current world.
   build instead of the local dev build — a convenience for him, never a blocker, ignored
   unless he asks.
 
-**The ONLY thing that still warrants pausing for Andre:** an actual live AWS deploy (the
-25–30 min directory pipeline). A deploy *operation* — never a code edit, never a decision
-invented from production caution. If a future entry says "blocked on a decision" about
-code, it is wrong by this entry + the procedure banner: delete it and do the work.
+**What still warrants pausing for Andre:** (1) a GENUINE design fork — something that can
+truly be built several materially different ways with divergent consequences, and which one
+Andre wants is unclear; surface the options + a recommendation and ask (that is the one kind
+of decision worth his time, NOT a manufactured one). (2) an actual live AWS deploy (the
+25–30 min directory pipeline) — a deploy *operation*, never a code edit. What does NOT
+warrant pausing: "this code is risky/load-bearing, may I proceed?" — the answer is always
+yes. If a future entry dresses up "should I proceed?" as a decision, it is wrong by this
+entry + the procedure banner: delete it and do the work.
 
 No code change in this entry — docs only (procedure banner + this void record). Memory
 "alpha — no production-safety caution" sharpened to match.

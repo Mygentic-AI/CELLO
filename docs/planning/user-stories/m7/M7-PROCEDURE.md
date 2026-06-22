@@ -29,9 +29,17 @@ Consequences, non-negotiable:
   There is no operator. Just make the change. Correctness and security fixes ship
   immediately. (Memory: alpha — no production-safety caution on code changes.)
 - **Do not invent decisions for Andre.** The answer to "should I do this code work?"
-  is always yes. Stopping to ask wastes his time. The ONLY thing that warrants
-  pausing for him is an actual live AWS deploy (the 25–30 min directory pipeline) —
-  a deploy *operation*, never a code edit.
+  is always yes — stopping to ask permission to proceed wastes his time. This is
+  different from a real design question (next bullet); the fake gate is "this is
+  risky/load-bearing, may I go ahead?" — there is no such gate.
+- **DO pause for a genuine design fork.** When something can truly be built in
+  several materially different ways and which one Andre wants is unclear — an
+  architecture/protocol/UX direction with real, divergent consequences — surface
+  it and ask for guidance. That is not manufacturing a decision; that is the one
+  kind of decision worth his time. State the options and your recommendation, then
+  ask. (Do NOT dress up "should I proceed?" as a design question.)
+- **Pause for an actual live AWS deploy** (the 25–30 min directory pipeline) — a
+  deploy *operation*, never a code edit.
 - **"Publish to real users" is not a concern.** Publishing only means Andre running
   the npm build instead of the local dev build. Ignore it unless he asks.
 
