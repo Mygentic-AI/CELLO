@@ -3371,3 +3371,38 @@ fix; typecheck+lint clean; j-upgrade happy path still green). The reviewer agent
 on infra watchdogs, so a fresh re-dispatch was not run for these two-line fixes; Andre can run an
 independent /code-review for final confirmation if desired. **DOD-UP-2 stands PROVEN LIVE** (happy path)
 with the AC-002/AC-008 observability now complete in code.
+
+---
+
+## 2026-06-22 — CHECKPOINT (journey boundary): Tier 3 closed + Tier 4 DOD-UP-2 done
+
+**Delivered this overnight session (all reviewed, all pushed to m7-rehome):**
+- **Tier 3 J-LEGIBILITY (DOD-LEG-1/2/3/4)** — directory derivation grafted onto real processSeal +
+  daemon surfacing/persistence (cello_get_sealed_receipt) + live cross-process malicious-tail test.
+  Reviewer APPROVED, 3 low findings fixed. DOD-LEG-1/3/4 + INV-7 🟢 PROVEN LIVE; LEG-2 surfacing proven.
+- **Tier 4 DOD-UP-2 (UPGRADE-002 auto-acknowledge)** — B's daemon auto-co-signs on the counterparty's
+  SEAL ctrl leaf (no agent close), verifiability-gated, idempotent. Reviewer confirmed SI-001+SI-002
+  hold; BLOCKED on 2 AC-completeness items (content_tamper ERROR + counterparty_closing surfacing) —
+  both FIXED. 🟢 PROVEN LIVE.
+- Full seal-path regression GREEN, zero regressions: j-upgrade, j-legibility, SPINE-7, j-unilateral 3/3,
+  j-int 3/3, j-content 7/7. HEADs: trustless `b26a09a`, cello-client `0bef5c5`.
+
+**Why stopping here (not drift — discipline).** The next lowest-non-green line is the **DOD-LEG-2 client
+re-derive guard** (reject `certificate_frontier_unverifiable` on an inflated published frontier). It
+requires threading the signed `last_seen_seq` + sender through the CORE tree-append path
+(`SessionTree.appendLeafHash` stores only the hash today) + a client SQLite schema add + re-derive logic.
+That refactor touches the most security-critical structure (the seal tree) for a DEFENSE-IN-DEPTH check
+(the server-side SI-002 clamp is already sound + reviewer-verified). Starting that at hour ~8 of autonomy
+risks the quality bar; it's the right piece to pick up fresh.
+
+**Remaining M7 (all either heavy/gated or need Andre):**
+- DOD-LEG-2 client guard — contained but a core-tree refactor (above). LOWEST non-green; do next, fresh.
+- DOD-UP-1 (returning-absent-party bilateral upgrade) — owns a directory FLYWAY MIGRATION + gated on
+  MSG-001-3b content recovery → needs Andre (deploy discipline, batching).
+- DOD-MSG-4 full witness-then-fill reconciliation — needs Andre's nod. Also unblocks DOD-MSG-8 + the
+  LEG-2 `desynced`/`content_unverifiable` skip reasons + the "B's frontier covers the tail" positive gate.
+- Tier 6 (J-PERSIST PERSIST-LOG-001, J-LOOPBACK SESSION-CORE-REKEY-001) — new scope, storied, not built.
+
+**Deferred ledger additions:** AC-002 live tamper-then-close test (needs tamper-injection harness the
+spine lacks — the desync SET is live-tested by DOD-MSG-7, the gate consumption is code+reviewer-verified);
+a live present-party-sealed-tail case for AC-006c strict frontier-exclusion (unit-proven via AC-002).
