@@ -4470,3 +4470,14 @@ truly-deterministic "committed-hash-but-content-never-received" repro needs a fa
 binary harness doesn't expose; rather than fake it, the three tests TOGETHER pin DB-003.
 
 `cello-done-auditor` dispatched (runs MSG-8 cold) — DoD ✅ flip held pending its verdict.
+
+**`cello-done-auditor` VERDICT: EARNED ✅** — ran DOD-MSG-8 cold (1 passed, 1728ms, fresh 30-migration
+Flyway bootstrap), confirmed binary-anchored (real dist/bin relay+directory+daemon+mcp; no
+createClient/createDirectoryNode/session-fixture). Verified the straggler-rejection has teeth (the
+coupled recovered:0 + unique `reason:"session_committed"` log rules out vacuous/wrong-reason passes), the
+root + frontier are READ and asserted unchanged (not assumed), and BOTH delegated citations resolve to
+real passing live tests in the same suite (DOD-MSG-7 @ j-content:247 = AC-011; J-LEGIBILITY @
+j-legibility:184-193 = per-party frontier). Ruled the scoping legitimate — DB-003 explicitly disclaims
+any obligation beyond AC-011/AC-012, so requiring MSG-8 to re-prove AC-011's exclusion would be
+duplication. Falsified four ways (vacuous pull, wrong-reason, stale-log, dangling-citation), survived all.
+DOD-MSG-8 flipped ❌ → ✅ PROVEN LIVE. The MSG journey (DOD-MSG-1..8) is fully green.

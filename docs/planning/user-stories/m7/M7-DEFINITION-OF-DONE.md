@@ -434,12 +434,25 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
 - **DOD-MSG-8 — Irreducible loss is honest.** Device loss before any flush → hash
   already committed → receiver seals "sent, not received" (content frontier excludes
   it); a straggler post-seal is rejected, never re-enters a sealed session. *(MSG-001
-  DB-003)* — ❌ NOT BUILT, now UNBLOCKED. This is the one case strict-in-order (DOD-MSG-4,
-  decided 2026-06-22) cannot recover: the sender crashed after sending message N but before
-  either getting B's ack OR parking N to the relay, so N is genuinely gone. Build on the
-  content frontier already delivered in J-LEGIBILITY / SESSION-004: B seals with its frontier
-  excluding N (the receipt says N was sent but never received), and a late N after the seal is
-  rejected (never re-enters a sealed session).
+  DB-003)* — ✅ **PROVEN LIVE** (J-CONTENT, 2026-06-22; `cello-done-auditor` EARNED —
+  ran the test cold against the shipped binaries, falsified four ways). DB-003 is the
+  irreducible case strict-in-order (DOD-MSG-4) cannot recover, and the AC states verbatim
+  "No new test obligation beyond AC-011 (recovery-exhausted keeps session alive) and the
+  dedup/sealed-session guard in AC-012/AC-011" — the mechanisms already exist, so this is a
+  live-test unit proven by THREE pillars:
+  (1) **post-seal straggler rejected (AC-012, the otherwise-unasserted half — proven here):**
+  A↔B seal bilaterally (sealed_root byte-identical); a VALID straggler parked for the sealed
+  session is recovered by B → `content.recover.ingest_failed reason:session_committed`,
+  recovered:0, and B's `content_frontier_seq` + the sealed root are READ from the certificate
+  and asserted UNCHANGED (the rejected straggler cannot inflate the frontier or re-enter the
+  transcript). Teeth: neuter the sealed-session guard → the straggler recovers (recovered:1) →
+  red. (2) **recovery-exhausted keeps the session alive (AC-011):** DOD-MSG-7 — an unrecoverable
+  parked entry never lands, session stays alive, frontier excludes it. (3) **honest per-party
+  frontier from signed leaves:** J-LEGIBILITY — DISTINCT per-party `content_frontier_seq`
+  derived only from each party's own signed leaves, so a message a party never signed for
+  cannot appear in its frontier. The truly-deterministic "committed-hash-but-content-never-
+  received" repro needs a fault-injection seam the binary harness doesn't expose; rather than
+  fake it, the three live tests together pin DB-003 (exactly the AC's AC-011 + AC-012).
 
 ### Unilateral seal → real notarization (SESSION-002)
 
