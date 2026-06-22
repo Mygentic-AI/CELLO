@@ -696,8 +696,9 @@ no-double-count (DOD-MSG-5), no-assent-field (DOD-LEG-4).
 - **Tier 5** is DECIDED (2026-06-20): REC-1 satisfied (PERSIST-012), REC-2 subsumed,
   REC-3 absorbed — no silent deferral remains.
 - **Tier 6** is new 2026-06-20 scope, STORIED: J-PERSIST (PERSIST-LOG-001 — durable
-  encrypted transcript; closes the daemon at-rest encryption gap) and J-LOOPBACK
-  (SESSION-CORE-REKEY-001 — two agents on one daemon). Both ❌ NOT BUILT.
+  encrypted transcript; closes the daemon at-rest encryption gap) — ❌ NOT BUILT; and J-LOOPBACK
+  (SESSION-CORE-REKEY-001 — two agents on one daemon) — ✅ DONE + LIVE-PROVEN 2026-06-22 (DOD-LOOP-1,
+  j-loopback GREEN; bilateral seal, byte-identical root, no 2nd daemon).
 
 ### Deferred hardening (RC-1: named target, not silent)
 
