@@ -213,9 +213,15 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(((await connB.call("cello_start_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
     expect(((await connB.call("cello_use_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
 
+    // cello_start_agent AUTO-recovers (the production path), so wait for that to drain the mailbox
+    // deterministically rather than racing it with the explicit IPC recover below.
+    await daemonB.waitForLine(/"event":"content\.recover\.auto\.completed"/, 25_000);
+
+    // The explicit IPC recover is now IDEMPOTENT — auto already drained the mailbox, so it pulls 0.
+    // (delete-on-pickup: whichever path pulls first delivers; the content is recovered exactly once.)
     const rec = (await ipcCall(dirB, "content_park_recover", { relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB })) as { ok?: boolean; recovered?: number };
     expect(rec.ok, `recover failed: ${JSON.stringify(rec)}`).toBe(true);
-    expect(rec.recovered, "exactly the one parked message is recovered").toBe(1);
+    expect(rec.recovered, "auto-recover already drained the mailbox; explicit recover is idempotent").toBe(0);
 
     // M9 single-inbound-funnel AC: the recovered content traversed ingestReceivedContent (the SAME
     // chokepoint as a direct receive), evidenced by session.content.received with its sequence.
@@ -505,6 +511,64 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     const read = async () => ((await connB.call("cello_receive", { session_id: sessionId })) as { ok?: boolean; content?: string | null }).content;
     expect(await read()).toBe("first");
     expect(await read()).toBe("second");
+  }, 120_000);
+
+  it("DOD-MSG-4 (auto-recover) — B drains its parked mailbox automatically on reconnect, with NO explicit recover call", async () => {
+    const dirA = mkdtempSync(join(tmpdir(), "cello-arA-"));
+    const dirB = mkdtempSync(join(tmpdir(), "cello-arB-"));
+    dirs.push(dirA, dirB);
+    await provisionAgent(dirA, "agentA");
+    const pubB = await provisionAgent(dirB, "agentB");
+    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "arA");
+    let daemonB = await startDaemon(dirB, cluster.directoryUrl, "arB");
+    daemons.push(daemonA, daemonB);
+    expect(cello(["register", "agentA", `DEV-ar-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
+    expect(cello(["register", "agentB", `DEV-ar-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    let connA = await connectMcp(dirA, "ar-A");
+    let connB = await connectMcp(dirB, "ar-B");
+    mcpConns.push(connA, connB);
+    for (const [c, n] of [[connA, "agentA"], [connB, "agentB"]] as const) {
+      expect(((await c.call("cello_start_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+    }
+    // Establish the session while B is online (so B's session persists the relay endpoint that
+    // auto-recover pulls from on reconnect).
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok, `initiate failed:\n${daemonA.output.split("\n").slice(-30).join("\n")}`).toBe(true);
+    const sessionId = init.sessionId!;
+    expect(((await awaitP) as { type?: string }).type).toBe("new_session");
+    expect(((await connA.call("cello_send", { session_id: sessionId, content: "online-first" })) as { ok?: boolean }).ok).toBe(true);
+
+    // ── B OFFLINE. A sends → parks (with the signed ordering record). ──
+    await connB.close();
+    mcpConns.splice(mcpConns.indexOf(connB), 1);
+    await daemonB.kill();
+    const PARKED = "parked-while-offline — B must AUTO-recover it";
+    await connA.call("cello_send", { session_id: sessionId, content: PARKED });
+    await daemonA.waitForLine(/"event":"content\.park\.deposited"/, 25_000);
+
+    // ── B comes back online. cello_start_agent must AUTO-drain the mailbox — NO content_park_recover. ──
+    for (const f of ["daemon.sock", "daemon.lock"]) {
+      try { rmSync(join(dirB, f), { force: true }); } catch { /* best-effort */ }
+    }
+    daemonB = await startDaemon(dirB, cluster.directoryUrl, "arB-restart");
+    daemons.push(daemonB);
+    await daemonB.waitForLine(/"event":"session\.interrupted\.detected"/, 15_000);
+    expect(cello(["login"], { CELLO_DIR: dirB }).status).toBe(0);
+    connB = await connectMcp(dirB, "ar-B2");
+    mcpConns.push(connB);
+    expect(((await connB.call("cello_start_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_use_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+
+    // The agent-online hook auto-recovers — no explicit recover IPC. Prove it fired and delivered.
+    const auto = await daemonB.waitForLine(/"event":"content\.recover\.auto\.completed"/, 25_000);
+    expect(auto).toMatch(/"recovered":1/);
+    expect(daemonB.output, "auto-recovered content traverses the inbound funnel").toMatch(/"event":"session\.content\.received"/);
+
+    const recv = (await connB.call("cello_receive", { session_id: sessionId })) as { ok?: boolean; content?: string | null };
+    expect(recv.ok).toBe(true);
+    expect(recv.content, "B reads the parked message WITHOUT any explicit content_park_recover").toBe(PARKED);
   }, 120_000);
 
 });
