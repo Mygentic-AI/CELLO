@@ -66,6 +66,7 @@ import { InMemoryCheckpointTransport } from "@cello-protocol/interfaces/stubs";
 import { resolvePoolMax } from "../pg-pool-config.js";
 import type { ICheckpointTransport, CloudStorageProvider } from "@cello-protocol/interfaces";
 import { LocalCloudStorageProvider } from "@cello-protocol/interfaces/stubs";
+import { FileDirectoryManifestStore } from "../file-directory-manifest-store.js";
 
 const env = process.env["CELLO_ENV"];
 const logger = new StdoutLogger();
@@ -832,6 +833,25 @@ if (nodeKeyHex) {
   logger.info("directory.node_key.configured", { nodeId });
 }
 
+// M7-MANIFEST-002 / DOD-AUTH-2: when a consortium manifest is deployed beside the
+// directory, serve it to clients that poll (manifest_poll_request → manifest_poll_response).
+// The store re-reads the file on each request, so deploying a newer signed version is
+// adopted by clients on their next poll. When unset, the directory ignores poll requests
+// (M6 backward-compat). The directory is only a transport — clients re-verify the manifest.
+const consortiumManifestPath = process.env["CELLO_DIRECTORY_CONSORTIUM_MANIFEST"];
+let directoryManifestStore: FileDirectoryManifestStore | undefined;
+if (consortiumManifestPath) {
+  try {
+    directoryManifestStore = new FileDirectoryManifestStore(consortiumManifestPath, logger);
+  } catch (err: unknown) {
+    logger.error("directory.manifest.store.load.failed", {
+      path: consortiumManifestPath,
+      reason: err instanceof Error ? err.message : String(err),
+    });
+    process.exit(1);
+  }
+}
+
 let result: Awaited<ReturnType<typeof createDirectoryNode>>;
 try {
   // AC-007 (REPOSPLIT-001): include the WS listen address so the directory
@@ -854,6 +874,7 @@ try {
     checkpointTransport,
     tokenValidator,
     directoryKeyProvider,
+    directoryManifestStore,
     pgPool: pgPool ?? undefined,
     // Deployment tunable: the delivery-grace window before a unilateral seal is
     // accepted (default 600s in CelloDirectoryNode). Lets test/dev shrink it.

@@ -327,6 +327,19 @@ export function writeConsortiumManifest(
   };
 }
 
+/**
+ * DOD-AUTH-2: write a freshly-signed consortium manifest to an EXACT path. The directory
+ * serves whatever this file currently contains, so calling this again with a higher
+ * `version` rotates the served manifest mid-run — the poll-refresh test's rotation seam.
+ */
+export function writeSignedManifestTo(
+  path: string,
+  nodes: ConsortiumNodeEntry[],
+  opts?: MakeManifestOpts,
+): void {
+  writeFileSync(path, JSON.stringify(makeSignedManifest(nodes, opts)));
+}
+
 /** The "this directory IS in the consortium" node entry (happy-path step-6). */
 export function trustedDirectoryNode(): ConsortiumNodeEntry {
   return {
@@ -352,6 +365,13 @@ export interface StartSpineClusterOpts {
    * ~2s after the counterparty goes silent.
    */
   deliveryGraceSeconds?: number;
+  /**
+   * DOD-AUTH-2: when set, the directory serves this consortium-manifest file to clients
+   * that poll (manifest_poll_request → manifest_poll_response). The directory re-reads the
+   * file on each request, so overwriting it mid-run (writeSignedManifestTo) rotates the
+   * served version and a polling daemon adopts it. Unset → the directory ignores polls.
+   */
+  directoryConsortiumManifestPath?: string;
 }
 
 /**
@@ -437,6 +457,10 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
       // shortly after the counterparty goes silent (default is 600s).
       ...(opts.deliveryGraceSeconds != null
         ? { CELLO_DELIVERY_GRACE_SECONDS: String(opts.deliveryGraceSeconds) }
+        : {}),
+      // DOD-AUTH-2: serve a consortium manifest to polling clients (rotatable on disk).
+      ...(opts.directoryConsortiumManifestPath
+        ? { CELLO_DIRECTORY_CONSORTIUM_MANIFEST: opts.directoryConsortiumManifestPath }
         : {}),
     };
     directory = new Proc("directory", BINS.directory, directoryEnv);
