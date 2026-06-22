@@ -351,23 +351,36 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
   hash is cryptographically verifiable from the frame; `sequence_number` + `prev_root` are the relay's
   committed position), and the `leaf_deliver` witness stream becomes redundant corroboration. There is
   nothing to wait for, so the race is removed BY DESIGN — the pending-witness-buffer / hold-wait
-  approach is DROPPED. **What to build (both repos, red-first):**
-  (1) **Relay** returns the full `Structure2` to the sender in `hash_submit_ack` (today it returns
-      ONLY `sequence_number` — line 259 of session-relay-client). *(Open implementation point: whether
-      to also carry the relay's PERSIST-012 signed-ACK `relay_signature` over `(content_hash, seq, ts)`
-      so the relay's sequence assignment — not just the sender's content signature — is itself
-      cryptographically verifiable from the frame; settle during the build.)*
-  (2) **Daemon (sender)** stamps that `Structure2` into the direct content frame AND into the parked
-      content entry — so BOTH the direct and the relay-park/recover paths are self-ordering (this also
-      closes review finding #3: recovery no longer depends on relay pull order).
-  (3) **Daemon (receiver)** reads `Structure2` from the frame, verifies `sender_signature` over the
-      content hash, and feeds the gate the canonical sequence directly (no dependence on `leaf_deliver`
-      timing). The existing `#heldContent` hold/release machinery stays — it still orders a genuine gap
-      (an earlier message still parked) — but it is now fed by a frame-carried, verified sequence.
-  (4) a DETERMINISTIC live out-of-order proof (now possible — ordering no longer races on two streams).
-  Catch-up-before-live on reconnect via `last_seen_seq` remains relevant only for the case where B
-  must know it has pulled everything before going live; with the parked entry self-ordering, recovered
-  messages already carry their sequence, so this reduces to a "have I drained the mailbox" gate.
+  approach is DROPPED.
+  **BUILT + LIVE-PROVEN 2026-06-22 (increments 1–4):**
+  (1) ✅ **Relay** returns the full `Structure2` in `hash_submit_ack` (unsigned + PERSIST-012 signed
+      shapes). trustless-cello `a6f38c2e`. (1b) ✅ the daemon relay client threads
+      `{sequence_number, structure1_cbor, structure2_cbor}` through `SubmitResult`. cello-client `c2d5941`.
+  (2) ✅ **Daemon (sender)** stamps `structure1_cbor`+`structure2_cbor` into the DIRECT content frame.
+      cello-client `00c4bd7`. *(2b — parked entry carries Structure2 — NOT yet done; see below.)*
+  (3) ✅ **Daemon (receiver)** `#recordFrameOrdering` decodes the record, verifies the sender's
+      Ed25519 signature over `structure1_cbor`, binds it to the content hash, cross-checks the signer
+      is the session counterparty, and feeds the gate the canonical sequence FROM THE FRAME before
+      ingest — `session.content.ordering.recorded source:content_frame`. cello-client `00c4bd7`.
+  (4) ✅ **Live-proven** (J-CONTENT, the new self-ordering test): A→online-B, B verifies + orders from
+      the frame, reads in order; deterministic, no witness-stream dependence. trustless-cello `1332acfd`.
+      The hold/release under a genuine gap is proven by the deterministic unit test
+      `msg-001-strict-in-order`. Daemon suite 365, j-content 8/8, j-loopback bilateral seal — all green.
+  **REMAINING to flip ✅:**
+  - **2b — parked entry carries Structure2.** The recover path currently appends recovered content in
+    arrival/pull order; correct for a SINGLE gap-filler, but multiple out-of-order parked messages need
+    the frame-carried sequence to order (closes review finding #3). Thread Structure2 through
+    `#parkContent` → `ContentParkClient.deposit` → the relay store → pull → recover ingest.
+  - **Finding 2 — relay-signed sequence (DECISION PENDING ANDRE).** Today B verifies the SENDER's
+    signature (proves A committed to this content). To verify the *relay's committed position* (the
+    stated goal), forward the relay's PERSIST-012 `relay_signature`/`relay_id`/`timestamp` in the frame
+    and have B verify it. Additive; the relay already signs the ack. Andre to confirm include vs.
+    sender-signature-only (safe but weaker — a lying A only self-DoSes via root divergence).
+  - **Catch-up-before-live** reduces to a "have I drained the mailbox before treating direct arrivals
+    as live" gate once 2b lands (recovered messages then carry their own sequence).
+  - The offline-gap-hold LIVE scenario stays UNIT-proven (deterministic); a live version is flaky
+    because direct redelivery to a freshly-RESTARTED peer depends on session reconnection timing, not
+    the gate — not worth a flaky enforcer.
 - **DOD-MSG-5 — Resend vs replay dedup.** A `content_hash` satisfies at most one
   Merkle leaf, exactly once; duplicates/replays never double-count. *(MSG-001
   AC-012, SI-002)* — ✅ **PROVEN LIVE** (J-CONTENT, 2026-06-21). `ingestReceivedContent`

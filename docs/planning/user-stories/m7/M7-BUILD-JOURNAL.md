@@ -4107,3 +4107,35 @@ Andre; it is additive and reached last (the receiver verify step), so increments
 3. Receiver verifies the sender signature, matches the content hash, feeds the gate the framed sequence.
 4. Deterministic live out-of-order proof (now possible — ordering no longer races on two streams).
 (Optional per Finding 2: relay signs the seq assignment; carry `relay_signature` in the frame; B verifies.)
+
+---
+
+## 2026-06-22 — DOD-MSG-4 self-ordering content frame: BUILT + LIVE-PROVEN (increments 1–4)
+
+The content stream is now self-ordering — the race is gone by design, not worked around.
+
+- **1a (relay, trustless `a6f38c2e`):** `hash_submit_ack` returns the committed `structure2_cbor`
+  (the SAME record delivered to the counterparty), in both the unsigned and PERSIST-012 signed shapes.
+- **1b (relay client, cello `c2d5941`):** `SubmitResult` now carries `{sequence_number, structure1_cbor,
+  structure2_cbor}` — structure1 captured in-flight (`#pendingStructure1`), structure2 from the ack.
+- **2+3 (daemon, cello `00c4bd7`):** sender stamps structure1+structure2 into the direct content frame;
+  receiver `#recordFrameOrdering` verifies the sender's Ed25519 sig over structure1_cbor (the same check
+  the relay does), binds it to the content hash, cross-checks the signer is the counterparty, and records
+  the canonical sequence FROM THE FRAME before ingest. The gate no longer depends on leaf_deliver timing.
+- **4 (live, trustless `1332acfd`):** the new J-CONTENT self-ordering test proves A→online-B delivers a
+  frame carrying the signed Structure2, B verifies + records `ordering.recorded source:content_frame`,
+  reads in order. Deterministic. Daemon suite 365, j-content 8/8, j-loopback bilateral seal — all green.
+
+**Verification finding (confirmed in code):** to verify the sender signature B needs `structure1_cbor`
+(Structure2 omits session_id/last_seen/ts), so the frame carries BOTH — mirroring `leaf_deliver`.
+
+**Why the offline-gap-hold live test was dropped (kept unit-only):** creating a gap by taking B offline
+also breaks the A↔B direct channel; getting msg2 delivered DIRECTLY to a freshly-restarted B depends on
+session reconnection, which doesn't complete in a deterministic window — so the direct frame (and thus the
+hold) didn't reliably fire. The hold itself is deterministic once a direct frame arrives; the flakiness is
+reconnection, not the gate. The deterministic unit test `msg-001-strict-in-order` proves hold/release; the
+live test proves the frame-carried verified ordering. Honest split, no flaky enforcer.
+
+**REMAINING for ✅ (in the DoD MSG-4 line):** 2b (parked entry carries Structure2 → recover-path ordering,
+closes review finding #3); Finding 2 (relay-signed sequence — decision pending Andre); catch-up-before-live
+(a "mailbox drained?" gate once 2b lands).
