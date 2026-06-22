@@ -3689,3 +3689,34 @@ test lines 100/103/105 pass) and fails at `cello_send` (line 108). The B1/H1/L1 
 live behavior; the next red is unchanged — the session-core `session_id` collision (Phase 2). Re-skipped.
 
 Phase 1 is DONE and reviewed. Next: Phase 2/3 (SESSION-CORE-REKEY-001).
+
+---
+
+## 2026-06-22 — VOIDING the fake "needs Andre's nod" gates (alpha; one user)
+
+Andre flagged that the autonomous run keeps manufacturing decisions for him and gating
+code work on production-grade caution that does not apply. Correcting it at the source.
+
+**The reality (now also a banner at the top of M7-PROCEDURE.md, read first every session):**
+there is ONE user, Andre, who is also the only developer. CELLO is alpha. Nothing is in
+production. There are no operators and no real users to protect. The "operator," "deploy
+discipline," and "real users get it" language in these docs describes a FUTURE federated
+product, not the current world.
+
+**Gates VOIDED (they were never real — do not re-surface them):**
+- **DOD-MSG-4 "needs Andre's nod"** (journal deferred ledgers at 2521 / 2574 / 2591 / 2601 /
+  3013 / 3402). There is no nod to wait for. The full witness-then-fill reconciliation
+  proceeds like any other code work — just build it. "Load-bearing / safety-critical / risky
+  to touch the seal path" is NOT a reason to stop in alpha; it is a reason to test well.
+- **The "@cello-protocol/connect publish to reach operators / real users"** framing. There
+  are no operators or real users. Publishing only ever means Andre choosing to run the npm
+  build instead of the local dev build — a convenience for him, never a blocker, ignored
+  unless he asks.
+
+**The ONLY thing that still warrants pausing for Andre:** an actual live AWS deploy (the
+25–30 min directory pipeline). A deploy *operation* — never a code edit, never a decision
+invented from production caution. If a future entry says "blocked on a decision" about
+code, it is wrong by this entry + the procedure banner: delete it and do the work.
+
+No code change in this entry — docs only (procedure banner + this void record). Memory
+"alpha — no production-safety caution" sharpened to match.

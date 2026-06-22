@@ -15,6 +15,29 @@ description: >
 
 # M7 Procedure — How to Work the Definition of Done
 
+## REALITY CHECK — read this before anything else
+
+There is **one user: Andre.** He is also the only developer. CELLO is **alpha.
+Nothing is in production. There are no operators and no real users to protect.**
+The production-grade voice in these docs ("operator," "deploy discipline," "real
+users get it") describes a future federated product — it is NOT the current world.
+
+Consequences, non-negotiable:
+
+- **Never gate, hedge, defer, or ask permission on a code change** because it is
+  "risky," "load-bearing," "safety-critical," or could "break it for the operator."
+  There is no operator. Just make the change. Correctness and security fixes ship
+  immediately. (Memory: alpha — no production-safety caution on code changes.)
+- **Do not invent decisions for Andre.** The answer to "should I do this code work?"
+  is always yes. Stopping to ask wastes his time. The ONLY thing that warrants
+  pausing for him is an actual live AWS deploy (the 25–30 min directory pipeline) —
+  a deploy *operation*, never a code edit.
+- **"Publish to real users" is not a concern.** Publishing only means Andre running
+  the npm build instead of the local dev build. Ignore it unless he asks.
+
+If you catch yourself writing "needs Andre's nod" or "blocked on a decision" about
+code, you are wrong — delete it and do the work.
+
 ## 0. Read order (every session, in order)
 
 1. **This document** — the procedure.
