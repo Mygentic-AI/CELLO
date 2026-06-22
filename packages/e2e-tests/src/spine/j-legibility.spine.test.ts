@@ -192,6 +192,15 @@ describe("J-LEGIBILITY — malicious-tail bilateral seal, cert read cross-proces
     expect(partB!.content_frontier_seq >= leg.final_message.seq,
       `B's frontier (${partB!.content_frontier_seq}) must reach A's tail (seq ${leg.final_message.seq}) — delivered — while answered stays false:${diag}\nlegibility: ${JSON.stringify(leg)}`).toBe(true);
 
+    // legibility-TBS-binding: the cert's legibility is bound into the FROST-signed seal TBS, and B
+    // (the RESPONDER) holds A's primary key from the FROST-signed SessionAssignment — so B VERIFIES
+    // the seal signature over the bound TBS locally (verified:true), not merely accepts it. A
+    // tampered answered/frontier/attestation_mode would change the hash → the signature would fail.
+    const bChecked = daemonB.output.split("\n").filter((l) => /session\.sealed\.signature\.checked/.test(l));
+    expect(bChecked.length, `B's daemon must verify the sealed signature:${diag}\n--- daemonB sig ---\n${daemonB.output.split("\n").filter((l) => /signature/.test(l)).slice(-6).join("\n")}`).toBeGreaterThan(0);
+    expect(bChecked.some((l) => /"verified":true/.test(l)), `B (responder) must VERIFY the bound seal signature (verified:true), not just accept it:\n${bChecked.slice(-3).join("\n")}`).toBe(true);
+    expect(daemonB.output, `B must never log a signature.invalid for this seal:${diag}`).not.toMatch(/session\.sealed\.signature\.invalid/);
+
     // The live read path (close return) carries the same legibility — same final_message verdict.
     expect(closeB.legibility?.final_message.answered, `B's close return must carry the legibility:${diag}`).toBe(false);
   }, 150_000);

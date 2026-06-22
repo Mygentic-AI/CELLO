@@ -3503,3 +3503,24 @@ Commits: cello-client `ddbcb27`+`9991e15`, trustless `0b882e1`. DoD legibility b
 the FROST-signed session establishment so it (and arbitrators) can verify live/out-of-band. The
 attestation_mode-TBS-binding deferred item is now SUBSUMED (the whole legibility is bound). The unilateral
 cert does not yet carry legibility (a separate field set) — binding it is the same pattern when it does.
+
+---
+
+## 2026-06-22 — responder-verify: BOTH parties verify the bound legibility live (TBS-binding completion)
+
+The follow-on flagged in the previous entry — turned out to be daemon-only and clean (the data already
+arrives). The FROST-signed SessionAssignment already embeds the initiator's primary as `signer_pubkey`
+("so the counterparty can verify", protocol-types session.ts). So the responder just needed to STORE +
+USE it:
+- `extractInboundSessionAssignment` pulls `signer_pubkey`; `acceptInboundAssignment` records it via
+  `recordCounterpartyPrimary` (idempotent `ALTER TABLE sessions ADD COLUMN counterparty_primary_pubkey`).
+- `verifyBilateralSealCertificate` verifies the FROST sig over the legibility-bound TBS against EITHER
+  the own primary (initiator) OR the stored counterparty primary (responder); an unknown signer when the
+  counterparty primary IS known → reject (SI-003); none recorded → accept-without-verify (back-compat).
+
+Result: BOTH parties now verify the bound legibility LIVE — a tampered answered/frontier/attestation_mode
+fails the signature on either side, not just the initiator's. j-legibility now ASSERTS B (responder)
+logs `session.sealed.signature.checked verified:true` + never `signature.invalid`. Tests: j-legibility +
+SPINE-7 green; daemon units 79/79 (daemon, session-001, seam-2-inbound, session-node-manager).
+Commits: cello-client `e323395`, trustless `<this>`. The legibility-TBS-binding security finding is now
+FULLY closed (live + out-of-band, both parties). No remaining responder-verify follow-on.
