@@ -595,3 +595,61 @@ sentiment / bias / emotion; ban-topics / competitors) follow #12 — they leave 
 become **Day 2 (LLM-judgment, not the deterministic base)**, not first-party CELLO logic.
 Inbound `gibberish` / `ban-code` are weak *security* signals, not moderation — keep OPT-IN or
 drop (minor). I'll update the §7 Inbound block to match unless you object.
+
+### Cross-cutting / governance — §4 Infisical architecture — DECIDED 2026-06-22
+
+These are build *patterns*, not user toggles: **ADOPT** (Day-1 gateway) / **ADAPT** (Day-1, CELLO
+changes) / **DEFER** (Day-2 / enterprise) / **SKIP→elsewhere** (M6 / crypto roadmap, not M9).
+
+**ADOPT (Day-1):**
+- Typed audit-event taxonomy (per-event typed metadata = compile-time required context fields).
+- Hash-chained attestation AS the audit (CELLO's differentiator over Infisical's unsigned log).
+- Finding model: strip-payload-before-persist (rule + offset + fingerprint, never raw content;
+  chain = hashes, diff-store is the access-controlled exception) + fingerprint dedup +
+  severity(rule)-vs-disposition(status) separation.
+- The PII lib (`lib/pii/index.ts`, RE2) — Layer 1/4 reference.
+- Per-call activity log → hash-chain event; generic-error-to-client (no leakage).
+- `t=,v1=` over `ts.body` + `timingSafeEqual` + 5-min window — standardize ALL signed callbacks.
+- `sanitizeString(tokens)` error-redaction before any error → MCP `guidance` / ops-agent.
+- `setItemWithExpiryNX` single-use nonce (extends nonce-dedup) + `DUMMY_HASH` constant-time compare.
+- Closure-bound DEK + versioned at-rest blob `[IV|ct|tag|version]` — gateway config SQLCipher.
+- enum→factory dispatch maps (the adapter-pattern shape CELLO already mandates).
+- CASL `{action, subject, conditions}` + `validatePermissionBoundary` — engine for the
+  deterministic override-policy (§6 Future) + escalation-proof agent→sub-agent delegation.
+
+**ADAPT (Day-1, CELLO changes):**
+- Config-as-commit-graph (append-only versioned rows + signed checkpoints + delta-replay);
+  upgrade plain `commitId` → hash-chained/node-signed. (Ties to the config-architecture decision.)
+- Change-request staging + conflict-on-merge + Soft/Hard enforcement (Soft/Hard separates
+  root-key governance Hard/TUF from operational policy; loosening = WebAuthn, already decided).
+- SSRF-safe outbound (DNS-resolve-every-hop) + AST-allowlist for operator policy/hook expressions.
+- Provider-factory scanning model (gateway multi-source scanning shape).
+
+**DEFER (Day-2 / enterprise):**
+- SIEM streaming — **spec Day-1** (event shape streaming-ready), **provider integrations Day-2**
+  (Splunk/Datadog/Azure/custom). Distinct from CELLO's own hash-chain audit (which is Day-1 core):
+  SIEM streaming = forwarding a copy to the enterprise's existing monitoring tooling.
+- Full M-of-N approval workflow engine (the config-change WebAuthn gate is Day-1).
+- **Honey tokens — own story, Day-2** (decoy identity/share, directory-as-tripwire, hash-chain
+  event, ops-agent alert, one-alert cooldown, `t=,v1=` signed trigger).
+- External-KMS + Azure provider; gateway/relay mTLS — enterprise split-deployment (V3 enterprise mode).
+- job-as-TTL grants; version-counter revocation for hooks/sessions; IP allowlist; secret-sharing
+  for invites; Redis/ClickHouse analytics.
+
+**SKIP → belongs elsewhere (note, don't build in M9):**
+- Two-slot key rotation, dynamic secrets, leasing → M6 key-management.
+- FIPS swap, PQC/ML-KEM, HSM, KMIP → CELLO crypto roadmap (the ML-KEM-for-transport quantum gap
+  is a CELLO-wide note, not M9).
+- assume-privilege → specific feature, not M9-core.
+
+---
+
+## §8 — Prune complete (2026-06-22)
+
+The capability harvest (§1–§4) and the prune read-through (§5–§7) are complete: inbound,
+outbound, config architecture, and cross-cutting/governance are all decided, and the §6
+governance feedback channel is fully designed. The next step is reconciliation: the M9 DoD and
+the eight story YAMLs (SCAN/REDACT/MONITOR) predate V3, the daemon, and these decisions, so they
+must be rewritten to match the pruned scope + the deterministic-vs-LLM-judgment line + the
+moderation-is-Day-2 + the warn disposition + the config architecture + the daemon seam (entry
+plan). The live build remains gated on MSG-001-3b increment 3 (the unified inbound funnel).
