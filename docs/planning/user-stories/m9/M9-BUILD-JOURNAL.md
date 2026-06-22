@@ -418,3 +418,52 @@ first per Procedure §6 and the full reviewer pass.
 **Recommended morning path:** resolve the 3 decisions, then FEED-001 (keystone) + the screen-fn
 assembly to make the detector set live, then the inbound detectors, then GATE-1. If the autonomous
 window continues before then, FEED-001 is the next build (design-note-first, incremental, reviewed).
+
+---
+
+## 2026-06-22 (late) — Screen-layer compositions built (gateway-side). FEED-001 design note + plan.
+
+**Built both screen compositions (cello-client `m9-build`):**
+- **OutboundScreener** (`f8e44d9`) — `core/gateway/src/screen/outbound.ts`: chains rate-limit + exfil
+  + PII into ONE §6 verdict (events + disposition; block > warn > redact > allow; block short-circuits;
+  redactions applied to content). 7 tests incl. precedence.
+- **InboundScreener** (`f12d051`) — `core/gateway/src/screen/inbound.ts`: runs the IN-001 sanitizer →
+  block(size) / redact(sanitized+notes) / observe(entropy) / allow. 5 tests.
+- Shared `GovernanceEvent` type (§6 shape) in `screen/outbound.ts`. Gateway suite now **44** green.
+
+**KEY INSIGHT — FEED-001 is the gate to going live.** The compositions are NOT yet wired into the
+spawned gateway (`createGatewayServer` still defaults to pass-through), and they MUST NOT be until
+the daemon can render the rich verdict — because CORE-001's seam treats any non-allow as block/hold,
+so a `redact` verdict (which must SEND the redacted content) would instead be blocked, and a `warn`
+(needs-decision) has no return path. Wiring the screen layer live therefore REQUIRES FEED-001's
+daemon-side rendering. That is the climax of M9 Phase 1.
+
+### FEED-001 build plan (the next major effort — design-note-first per §6)
+
+The §6 design is settled (Andre's decisions recorded in M9-CAPABILITY-HARVEST §6). Increments, each
+committed; full reviewer pass (code-reviewer + cello-test-attacker) at the end:
+
+1. **Wire-carry the rich verdict (additive, low risk).** Extend the gateway `ScreenVerdict` + the
+   wire protocol (`WireScreenResponse`) to carry `GovernanceEvent[]` (transformations / blocks /
+   flags + flagIds). The `LocalSidecarGatewayClient` parses them. No behavior change yet.
+2. **Daemon renders the four outcomes in `cello_send`** (the blast-radius change): allow → sent
+   `{ok:true,delivered:true,modified:false}`; redact → send `verdict.content` `{ok:true,modified:true,
+   transformations}`; block → `{ok:false,reason:'blocked_by_governance',blocks,guidance}`; warn →
+   `{ok:false,reason:'governance_warn',flags,guidance}` (NOT sent). Update the existing seam/daemon
+   tests that assert `{ok:true,sequence_number}` to the new shape (sequence_number stays for sent).
+3. **Wire the compositions into `createGatewayServer`** (the bin builds Inbound/OutboundScreener and
+   passes a real screen fn) — now the spawned gateway screens for real; #2 makes the daemon honor it.
+4. **Stateless re-send** (`governance_decisions {flagId: redact|allow_once|allow_always}`): re-send
+   carries full content, re-screened statelessly, deterministic flagIds bind; allow_once gated by
+   `autonomous_override` (OFF → reject + re-warn, AC-003); allow_always = WebAuthn whitelist-add,
+   autonomous-degrades to allow_once + ops-agent request (SI-002).
+5. **Never-hang total deadline** → `governance_timeout` terminal block (AC-005); fail-closed +
+   circuit breaker. (CORE-001 already has the per-call `LocalSidecarGatewayClient` deadline; this adds
+   the total-pipeline ceiling below the host tool timeout.)
+6. **Inbound mirror:** the daemon delivers the sanitized content + notes to the agent via
+   `cello_receive`'s `security_context` (the inbound seam applies `verdict.content` to the buffer
+   while the Merkle leaf keeps the ORIGINAL hash — the split CORE-001 already set up).
+
+**Whole-night standing:** daemon **378** + gateway **44** tests green; lint + typecheck clean; nothing
+pushed; nothing on `main`. CORE-001 🟡 complete+reviewed; IN-001 🟡½ (RE2 parked); OUT-002/003/004 🟡;
+both screen compositions built. 3 decisions queued for Andre. FEED-001 is the next build.
