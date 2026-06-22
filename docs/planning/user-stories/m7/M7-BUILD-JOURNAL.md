@@ -3809,3 +3809,22 @@ is `(agentName, sessionId)`.
 
 The hard part (the 2400-line session core) is DONE. The remainder is tsc-pinned daemon.ts threading + two
 small table scopings + a mechanical migration + tests.
+
+**RETRY-QUEUE FINDING (refines item 2 — it is NOT just "add a column"):** `retry-queue.ts` stores BOTH the
+direct-retry queue (`#queues`) AND the awaiting-ACK content (`#awaiting`) in the ONE `retry_queue` table,
+keyed by `session_id` (table PK/index on `(session_id, position)`; both in-memory maps keyed by sessionId).
+For loopback both ends share the session_id, so this collides too. The AWAITING path specifically is a
+COMPILE prerequisite for daemon.ts: `startupParkFn`/`flushAwaitingContent` (daemon.ts ~882/883/918) need
+`getSessionRecord(agentName, sessionId)`, but `AwaitingContentEntry` carries only `sessionId` — so
+`AwaitingContentEntry` must gain `agentName`, the awaiting INSERT/SELECT must carry an `agent_name` column,
+and `enqueueAwaitingContent`/`markContentAcked`/`getAwaitingSessions`/`getAwaitingDepth`/`drainAwaitingToPark`
++ the `#awaiting` map must key by `(agent, session_id)`. (The j-loopback HAPPY path may not exercise the
+direct-retry `#queues`, so re-keying that half may not be needed for GREEN — but it IS needed for full
+loopback correctness; decide whether to do it now or scope it.) Same shape for the nonce-dedup store.
+
+**STATUS at this session's end:** session core (session-node-manager.ts) fully re-keyed + internally
+tsc-clean — ONE modified file, coherent. Deliberately NOT fragmenting the WIP into retry-queue.ts +
+daemon.ts in a dwindling context (multiple half-done files = worse resumption, and an abrupt mid-file
+cutoff can corrupt syntax). Resume order: retry-queue.ts awaiting-path re-key (compile prereq) →
+nonce-dedup → daemon.ts (run `pnpm typecheck`, fix the listed sites + double-accept guard) →
+existing-DB rebuild migration → typecheck/units/live-j-loopback → commit Phase 2 atomically.
