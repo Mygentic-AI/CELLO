@@ -72,6 +72,19 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     const daemonA = await startDaemon(dirA, cluster.directoryUrl, "msgA");
     const daemonB = await startDaemon(dirB, cluster.directoryUrl, "msgB");
     daemons.push(daemonA, daemonB);
+    // DOD-LOOP-1: the standing receiver is now PER-AGENT (created by cello_start_agent) — there is
+    // no per-daemon standing receiver at initialize() anymore. The outbound deposit (A) and pull (B)
+    // each dial the relay from their own agent's standing-receiver node, so both agents must be
+    // started first. (Pre-re-key this test relied on the per-daemon receiver and started no agent.)
+    expect(cello(["register", "agentA", `DEV-tr-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
+    expect(cello(["register", "agentB", `DEV-tr-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    const connTA = await connectMcp(dirA, "tr-A");
+    const connTB = await connectMcp(dirB, "tr-B");
+    mcpConns.push(connTA, connTB);
+    for (const [c, n] of [[connTA, "agentA"], [connTB, "agentB"]] as const) {
+      expect(((await c.call("cello_start_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+    }
 
     const sessionId = randomBytes(16).toString("hex");
     const contentHash = randomBytes(32).toString("hex");
@@ -401,7 +414,12 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // TTF with no persisted ACK), then CRASHES before the live park completes.
     const content = `crash-backstop ${randomBytes(4).toString("hex")}`;
     const hashHex = contentHashHex(Buffer.from(content));
+    // DOD-LOOP-1: the awaiting queue is keyed by the OWNING agent. A raw IPC call has no
+    // current-agent context, so the agentName must be passed explicitly — otherwise the entry is
+    // stored under "" and the restart flush (which looks the session up by its real agent) can't
+    // find the relay endpoint, so it re-parks nothing.
     await ipcCall(dirA, "enqueue_awaiting_content", {
+      agentName: "agentA",
       sessionId,
       contentHash: hashHex,
       content: Buffer.from(content).toString("hex"),
@@ -413,12 +431,19 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       try { rmSync(join(dirA, f), { force: true }); } catch { /* best-effort */ }
     }
 
-    // A restarts → the startup flush re-parks the un-acked content (from PERSISTED state) to the
-    // SAME relay, before the IPC socket opens.
+    // A restarts → it re-parks the un-acked content from PERSISTED state. Post-DOD-LOOP-1 the
+    // re-park needs the OWNING agent's standing receiver, which exists only once that agent is
+    // online — so the deposit fires when agentA does cello_start_agent (which triggers the per-agent
+    // flushAwaitingContent), NOT at the pre-IPC startup pass (no agent online there yet).
     daemonA = await startDaemon(dirA, cluster.directoryUrl, "flushA-restart");
     daemons.push(daemonA);
+    expect(cello(["login"], { CELLO_DIR: dirA }).status).toBe(0);
+    connA = await connectMcp(dirA, "fl-A2");
+    mcpConns.push(connA);
+    expect(((await connA.call("cello_start_agent", { name: "agentA" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connA.call("cello_use_agent", { name: "agentA" })) as { ok?: boolean }).ok).toBe(true);
     const flushed = await daemonA.waitForLine(/"event":"content\.park\.deposited"[^\n]*"source":"startup_flush"/, 20_000);
-    expect(flushed, "the crashed sender re-parks its un-acked content on restart").toContain(hashHex);
+    expect(flushed, "the crashed sender re-parks its un-acked content when its agent comes online").toContain(hashHex);
     expect(daemonA.output).toMatch(/"event":"content\.park\.flush\.completed"/);
     expect(cluster.relay.output).toMatch(/content\.park\.received/);
 
