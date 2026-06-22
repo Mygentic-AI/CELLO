@@ -4347,3 +4347,40 @@ trusted=1; rotate the directory's served file to v2 (valid sigs, version 2); ass
 Sender-signature/anti-rollback re-verified by the consumer independently (the directory is not trusted
 for content of the manifest — only as a transport for it). NOT a file-re-read by the daemon: the daemon
 re-fetches from the directory over signaling, exactly the production path.
+
+---
+
+## 2026-06-22 — DOD-AUTH-2 remainder BUILT + LIVE-PROVEN (manifest poll activated); 2 reviewers, all findings fixed
+
+The background manifest poll is now ACTIVE end-to-end and live-proven. Per the design note above,
+the machinery existed but was never wired: `startPolling()` had no caller, `dispatchManifestPoll`
+sent into a dead `_outboundQueue`, the keystone manager had no poll deps, the bin built no scheduler,
+and the directory bin never wired a consortium `DirectoryManifestStore`. All closed.
+
+**Built (commits):** cello-client `d894879` (startPolling on connect + dispatch via live stream),
+`3392111` (keystone wiring + bin RandomizedPollScheduler, env-injectable interval). trustless-cello
+`0db040fb` (FileDirectoryManifestStore + directory bin wiring + harness rotation seam + live test).
+
+**Live proof — J-AUTH 6/6 (real cello-directory + cello-relay + cello-daemon binaries):**
+- `DOD-AUTH-2 (poll refresh)`: daemon trusts v1 → connects → `poll.dispatched` → directory's served
+  file rotated to v2 → daemon fetches + adopts (`poll.success oldVersion:1 newVersion:2`) → persists
+  `manifest-version.json lastSeenVersion:2`; directory logs `directory.manifest.poll.response`.
+- `DOD-AUTH-2 (poll rejects forged)`: directory serves a forged v9 → daemon re-verifies →
+  `directory.auth.manifest.signature.invalid manifestVersion:9` → never adopts → stays trusted=1.
+
+**Two enforcement reviewers (§2 step 8), every finding fixed (commits `18ca20e`, `ccfe45da`):**
+- `cello-test-attacker` — BLOCKING hollow tests: poll-path signature + validity-window re-verification
+  was untested (every poll test fed honest manifests; stripping `verifyManifest`/the window block from
+  `handleManifestPollResponse` passed all tests — the exact MSG-4 gap). Fixed: 3 adversarial transport
+  tests (forged-sig/expired/not-yet-valid → rejected, not adopted) + 1 live forged-rotation case. TEETH
+  PROVEN: neutered all verification → all 3 went red → restored → green.
+- `feature-dev:code-reviewer` — security core PASSED (rogue directory cannot forge/rollback; sovereign
+  invariant intact). Fixed: **HIGH** poll-loop stall (was reschedule-on-response-only → a lost/ignored
+  response killed polling for the session; now self-healing, re-armed from the dispatch side; unit test
+  proves polling continues with no response ever arriving). MEDIUM correlationId empty → per-poll-cycle
+  id threaded dispatch→response. LOW/MEDIUM threshold-0 → refuse `threshold < 1` (never adopt unsigned).
+  LOW dead `_outboundQueue` → removed. LOW env parsing → both-or-neither + positive + min<=max, fail
+  loud. LOW store shape check → `FileDirectoryManifestStore.#read` validates version/nodes/signatures.
+
+Floor: transport 92, daemon manifest 15, reachability gate unchanged, typecheck + lint clean both repos.
+`cello-done-auditor` dispatched on the ✅ flip (runs j-auth cold) — DoD flip held pending its verdict.
