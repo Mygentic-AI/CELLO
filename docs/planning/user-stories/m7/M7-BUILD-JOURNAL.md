@@ -4047,3 +4047,15 @@ content, re-evaluate when `onLeafDeliver` records its witness; plus a relay-degr
 on arrival only when no witness is coming). (2) catch-up-before-live on reconnect via `last_seen_seq`.
 (3) a deterministic live out-of-order proof. Deferred deliberately — closing the race needs careful
 adversarial testing of the content path, not a rushed end-of-context add. DOD-MSG-4 stays 🟡.
+
+**Code review (feature-dev:code-reviewer, opus) — gate diff.** No critical/high; the hold/release
+state machine, the 0/1-based normalization, the dedup-before-gate ordering, the no-ack-on-held wiring,
+and eviction all verified correct. 1 important + 5 minor, ALL fixed (cello-client `4f71001`):
+#1 #highWaterSeq comments downgraded (exposed for catch-up, not yet consumed); #2 detect-and-log
+`session.content.sequence_behind_tree` (append, never drop); #4 held entries excluded from the
+`recovered` tally (`content.recover.held`); #5 O(1) `SessionTree.indexOfHash` replaces the O(n) dedup
+scan (rebuilt in the constructor → survives the fromLeaves restart path); #6 prune the witness entry
+on append. Finding #3 (recover-path ordering depends on relay pull order when B has no witness for the
+parked hashes) is the SAME accepted next sub-increment (content-before-witness / catch-up) — tracked
+in the DoD MSG-4 line, no code change now. Re-verified after the fixes: daemon suite 364 passed,
+typecheck + lint clean, j-content 7/7 + j-loopback bilateral seal GREEN.
