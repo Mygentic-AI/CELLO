@@ -316,7 +316,15 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
 - **DOD-MSG-4 — Recovery instead of desync.** Hash-without-content past grace →
   request resend from sender → if unreachable, pull from relay queue → cross-check
   → accept at the already-assigned sequence (no new leaf). Session stays alive.
-  *(MSG-001 AC-009/010/011, SI-005)* — 🟡 **CORE PROVEN LIVE** (J-CONTENT, 2026-06-21):
+  *(MSG-001 AC-009/010/011, SI-005)* — ✅ **DONE + LIVE-PROVEN** (J-CONTENT, 2026-06-22; the AC —
+  recovery-not-desync, ordered, session-alive — is met on every path, 3× reviewed). One beyond-AC
+  hardening is DEFERRED (Andre 2026-06-22, "A now, C track"): **Finding 2 — relay-signed sequence
+  verification.** Today B verifies the SENDER's signature (safe: a lying sender only self-DoSes via
+  root divergence). Verifying the RELAY's committed sequence requires plumbing the relay's SIGNING
+  identity to the daemon (today it knows only the relay peer id) — the SAME relay-identity gap the
+  transport-security-audit flagged. **Named target:** the relay-identity hardening tracked in
+  `discussion_logs/2026-06-11_0822_transport-security-audit-and-libp2p-primitives.md` ("client trusts
+  relay for sender identity"); Finding 2 bundles there (see the deferral list at the bottom of this DoD).
   pull from relay → `openContentSeal` in-daemon → cross-check → accept (the recipient
   recovers the parked message it missed while offline, into its interrupted session, and
   the session stays alive). **DECIDED 2026-06-22 (Andre) — strict in-order, NOT gap-repair**
@@ -687,6 +695,20 @@ no-double-count (DOD-MSG-5), no-assent-field (DOD-LEG-4).
   encrypted transcript; closes the daemon at-rest encryption gap) and J-LOOPBACK
   (SESSION-CORE-REKEY-001 — two agents on one daemon). Both ❌ NOT BUILT.
 
+### Deferred hardening (RC-1: named target, not silent)
+
+- **DOD-MSG-4 Finding 2 — relay-signed sequence verification** — ❌ DEFERRED (Andre 2026-06-22).
+  MSG-4's AC is met with sender-signature ordering (safe — a lying sender only self-DoSes). Verifying
+  the RELAY's committed sequence (so a sender cannot mis-sequence at all) needs the relay's SIGNING
+  identity plumbed to the daemon and a relay-identity binding (B must know its session relay's expected
+  signing pubkey, not just its peer id). This is the SAME family as the transport-audit HIGH gap.
+  **Named target / home:** the relay-identity hardening scoped in
+  `discussion_logs/2026-06-11_0822_transport-security-audit-and-libp2p-primitives.md` ("client trusts
+  relay for sender identity" + the connectionGater/peer-allowlist story list). Finding 2 is appended to
+  that scope so the two are built together. A story is the next durable step when that hardening is
+  scheduled — to be written via `/cello-story` on Andre's go (do NOT auto-create). The
+  `cello-done-auditor` + the close gate below enforce that this line cannot be silently dropped.
+
 M7 is done when journeys J-SPINE through J-LOOPBACK are green against the real
-binaries, every Tier-0 invariant holds, and every Tier-4/5/6 item is built or
-explicitly moved to a named future milestone (not silently deferred — that is RC-1).
+binaries, every Tier-0 invariant holds, and every Tier-4/5/6 item AND every Deferred-hardening item is
+built or explicitly carried to a named future milestone/story (not silently deferred — that is RC-1).

@@ -4247,3 +4247,28 @@ live test now asserts `pulled: 0` (the queue actually drains). daemon 366, j-con
 parked entry (incl. TTF) self-order; gate holds gaps; parked content is delivered in production
 (auto-recover) and the mailbox drains (confirm-delete). The ONLY remaining item for the ✅ tag is
 Finding 2 (relay-signed sequence — Andre's decision, additive).
+
+---
+
+## 2026-06-22 — DOD-MSG-4 ✅ CLOSED (Option A); Finding 2 (C) deferred with a named home (RC-1)
+
+Andre's decision: "A now, C track" — ship sender-signature ordering (Option A: safe, a lying sender
+only self-DoSes), defer the relay-signed-sequence verification (Option C) as hardening. DOD-MSG-4
+flipped ✅ — its AC (recovery-not-desync, ordered, session-alive) is met on every path, live-proven,
+3× reviewed.
+
+**Anti-drop (Andre asked "how do we ensure deferred isn't dropped?"):** applied the procedure's RC-1
+rule — a deferral gets a DoD line with a status + a NAMED TARGET, never just a journal sentence, and the
+close gate + `cello-done-auditor` won't let a milestone close on a silent deferral. Concretely, Finding 2
+is now tracked from BOTH ends:
+- M7 DoD: the MSG-4 line carries it, and a new "Deferred hardening" roster entry names its home.
+- The transport-security-audit log (2026-06-11) — its relay-identity gap scope now explicitly carries
+  Finding 2's build (forward relay_signature/relay_id/timestamp; B verifies against its KNOWN relay).
+The two are cross-linked. Finding 2 is the SAME family as the audit's HIGH "client trusts relay for
+sender identity" gap (B doesn't know its session relay's signing identity, only its peer id), so they
+build together. A story is the next durable step, to be written via /cello-story on Andre's go (not
+auto-created).
+
+**DOD-MSG-4 final:** direct frame + parked entry (incl. TTF) self-order; gate holds gaps; parked
+content delivered in production (auto-recover) + mailbox drains (confirm-delete). daemon 366, j-content
+9/9, j-loopback. cello-client `23df28f`, tc `7d3a4ad6`+docs.

@@ -460,6 +460,18 @@ explicit instruction to distrust passing tests catches these gaps.
 - Session-scoped Peer ID ephemerality — daemon model with ephemeral per-session
   nodes; M7 redesigned on this foundation; DB persistence model addressed there
 
+**Appended 2026-06-22 — DOD-MSG-4 Finding 2 bundles into the relay-identity gap above.**
+The M7 self-ordering content frame made the receiver verify the SENDER's signature over the ordering
+record (safe — a lying sender only self-DoSes via root divergence). Verifying the RELAY's committed
+SEQUENCE (so the sender cannot mis-sequence at all) needs the relay's SIGNING identity (`relay_id`,
+which the relay already signs its acks with — PERSIST-012) plumbed to the daemon AND a relay-identity
+binding so B knows its session relay's expected signing pubkey (today the daemon holds only the relay
+PEER id). That binding is THIS gap ("client trusts relay for sender identity"). So the relay-identity
+hardening scoped here should ALSO carry: forward `relay_signature`/`relay_id`/`timestamp` in the content
+frame + park envelope, and have B verify `verify(relay_id, buildRelayAckTbs(content_hash, seq, ts),
+relay_signature)` against the session's KNOWN relay. Tracked from the M7 side at
+`user-stories/m7/M7-DEFINITION-OF-DONE.md` → "Deferred hardening".
+
 ---
 
 ## References
