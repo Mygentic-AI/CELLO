@@ -381,11 +381,14 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
     stated goal), forward the relay's PERSIST-012 `relay_signature`/`relay_id`/`timestamp` in the frame
     and have B verify it. Additive; the relay already signs the ack. Andre to confirm include vs.
     sender-signature-only (safe but weaker — a lying A only self-DoSes via root divergence).
-  - **Catch-up-before-live / auto-recover-on-reconnect.** Recovered messages now carry their own
-    sequence, and the gate HOLDS a live arrival that is ahead of un-recovered parked content — so the
-    only gap left is that B must TRIGGER recovery (today the tests call `content_park_recover`
-    explicitly). Remaining: auto-trigger recover on reconnect / on a held-gap, so B drains the mailbox
-    before a held message can starve. Small — a trigger, not new ordering logic.
+  - **Auto-recover-on-reconnect — ✅ DONE + LIVE-PROVEN (cello-client `2dd84bd`, tc `a74adbb2`).**
+    Found a real PRODUCTION GAP: `content_park_recover` had ZERO production callers — nothing pulled a
+    recipient's store-and-forward mailbox, so parked content was never delivered outside tests. Now the
+    agent-online hook (`cello_start_agent`) auto-drains the mailbox from every relay the agent has
+    sessions on (`getAgentRelayEndpoints` → `recoverParkedFromRelay`), symmetric to the SENDER's
+    `flushAwaitingContent`. Live-proven: B reads a parked message on reconnect with NO explicit recover
+    call (`content.recover.auto.completed`). Also fixed a dedup miscount (dedup now returns
+    `appendedCount: 0`). j-content 9/9, daemon 366.
   - The offline-gap-hold LIVE scenario stays UNIT-proven (deterministic); a live version is flaky
     because direct redelivery to a freshly-RESTARTED peer depends on session reconnection timing, not
     the gate — not worth a flaky enforcer.

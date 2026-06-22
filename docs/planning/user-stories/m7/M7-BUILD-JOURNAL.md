@@ -4202,3 +4202,31 @@ persisted relay data). Daemon suite 366, j-content 8/8 — green.
 twice, all findings fixed.** Only two items remain for the ✅ tag: Finding 2 (relay-signed sequence —
 Andre's decision, additive) and auto-recover-on-reconnect (a trigger so B drains the mailbox before a
 held message starves — small, not new ordering logic).
+
+---
+
+## 2026-06-22 — DOD-MSG-4 auto-recover-on-reconnect: closes a PRODUCTION GAP
+
+Found while wiring the last MSG-4 piece: `content_park_recover` had ZERO production callers (only the
+IPC handler def + tests). So in production NOTHING pulled a recipient's store-and-forward mailbox —
+parked content (the whole point of MSG-001-3b store-and-forward) would never be delivered. Not a
+catch-up nicety; load-bearing for offline delivery.
+
+- **Fix:** the agent-online hook (`cello_start_agent`) now auto-drains the agent's parked mailbox from
+  every relay it has sessions on. `getAgentRelayEndpoints(agentName)` lists the distinct relay
+  endpoints from the sessions rows; the recover loop is extracted into `recoverParkedFromRelay`
+  (shared by the IPC handler + `autoRecoverForAgent`); the agent-online chain is
+  `ensureStandingReceiverForAgent → flushAwaitingContent (sender re-park) → autoRecoverForAgent
+  (receiver drain)`. Symmetric sender/receiver recovery on reconnect.
+- **Bug surfaced + fixed:** the auto/explicit-recover race exposed a dedup miscount — the dedup path
+  in ingestReceivedContent returned no `appendedCount`, so the recover handler's `?? 1` counted a
+  re-pulled-already-ingested entry as a fresh recovery. Dedup now returns `appendedCount: 0`.
+- **Tests:** new live test — B reads a parked message on reconnect with NO explicit recover
+  (`content.recover.auto.completed`); the existing recover test now waits for auto then asserts the
+  explicit IPC recover is idempotent (`recovered: 0`), removing the race. j-content 9/9, daemon 366,
+  j-loopback — all green. cello-client `2dd84bd`, tc `a74adbb2`. Reviewer (opus) dispatched.
+
+**DOD-MSG-4 — now functionally COMPLETE on every path** (direct frame + park/recover incl. TTF, gate
+holds gaps, auto-recover delivers parked content in production). The ONLY thing between here and the ✅
+tag is Finding 2 (relay-signed sequence — Andre's decision, additive). Everything else is live-proven
+and reviewed.
