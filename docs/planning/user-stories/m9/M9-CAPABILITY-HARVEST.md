@@ -527,3 +527,50 @@ controls the daemon but must NOT control the policy → config cannot live in th
   override policy, hooks) → the versioned DB; **detector dictionaries** (the gitleaks 222
   patterns, Presidio entity set, base-layer rules) → bundled with the gateway + Tier-1
   extension files/URLs (V3) — these are the dictionaries the policy uses, not policy itself.
+
+### Outbound — Layer 3 gate + Layer 4 redact (L5/L6 assessed) — DECIDED 2026-06-22
+
+> **SCOPING INVARIANT (Andre, emphatic): CELLO is NOT a moderation tool — AT ALL.** No
+> toxicity, sentiment, bias, emotion, or topic policing, inbound or outbound. The security
+> layer defends identity/trust + injection/exfiltration; it does not police the tone or
+> subject of what an operator's agent says. This is identity-level scope, not a preference.
+
+Principle (outbound): be GENTLE — bias to redact / warn / note over block; never mangle the
+operator's own legitimate message.
+
+**ON (default):**
+- **Secrets** — full gitleaks dictionary (222) + generic-entropy catch-all → **redact-by-default**
+  (leaking a credential is essentially never intended); the §6 `governance_decisions` override
+  covers the rare intentional send. RESOLUTION of redact-vs-hold: **hold like PII (warn /
+  NOT-SENT) when `autonomous_override` is ON** (avoids double-send), **send-redacted terminally
+  when OFF** (allow is impossible, nothing to hold for).
+- **PII** — whitelist + warn (settled §6).
+- **Invisible-Unicode egress strip.**
+- **Encoded-payload (entropy) check.**
+- **Zero-click image-exfil pattern** (image + data-in-URL) → strip/note; ordinary links pass.
+- **Injection-artifacts-in-output** (`[SYSTEM]` / `<|im_start|>` / "ignore previous…") → **BLOCK**.
+- **Outbound message rate-limiting** (abuse, keyed on agent identity).
+
+**OPT-IN (off by default):**
+- **Expanded PII set** (full Presidio ~95 + country IDs + NER) — core set rides the ON warn model.
+- **Financial / dollar-amount redaction** — normal to send a price; off by default.
+- **ToS self-check** — only the security-relevant slice (manipulation-artifact judgment), NOT
+  general content moderation (per the invariant).
+- **Output-volume / bulk-dump cap** (non-PII; bulk-PII is already #2 warn severity).
+- **Canary tokens** (system-prompt-leak detection) — moved DEFER→OPT-IN. **The opt-in setup
+  instructions MUST tell the operator to insert the canary token into their OWN system prompt**
+  (CELLO can't — the host owns the prompt); the outbound scan then blocks any message echoing it.
+
+**OUT:**
+- **Outbound toxicity / topic governance** — moved OPT-IN→OUT (not a moderation tool).
+- **Layer 5 — LLM-call governor** (agent's own LLM spend/rate) — upstream of `cello_send`.
+- **Layer 6 — deny-all FS/URL access** — upstream tool/sandbox territory.
+- **Tool allowlists** — upstream (already cut).
+
+**Internal (not a toggle):** SSRF-safe outbound (CELLO's own pipeline-hook calls only);
+counterparty-visible redaction marker (settled §6).
+
+**Consequence for INBOUND (flagged — pending Andre's confirm):** the "not a moderation tool"
+invariant implies the inbound OPT-IN moderation items (toxicity / sentiment / bias / emotion;
+ban-topics / competitors) should move OPT-IN→OUT for consistency. Inbound `gibberish` and
+`ban-code` are weak-signal, not moderation — keep as OPT-IN or drop, minor.
