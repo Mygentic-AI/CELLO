@@ -3656,3 +3656,36 @@ only when both land. SESSION-CORE-REKEY-001 should be updated to record that Pha
 
 Commits: cello-client `b6c8d37` (Phase 1, code+tests). trustless-cello `<this>` (j-loopback comment +
 this journal entry).
+
+---
+
+## 2026-06-22 — J-LOOPBACK Phase 1 code review fixes (cello-client faa7b40)
+
+Ran `feature-dev:code-reviewer` (opus, read-only) on the Phase-1 diff `b6c8d37`. Verdict BLOCKED with
+three findings; all fixed in `faa7b40` (full daemon suite 361 passed, lint+typecheck clean).
+
+- **B1 (blocking) — `waitForStandingReceiver()` polled "any agent," not the owning one.**
+  `acceptInboundAssignment(…, agentName, …)` called the wait helper with no arg → `getStandingReceiverReady()`
+  (true if ANY agent has an SR). In the loopback case an inbound for bob during bob's SR rebuild — or
+  before bob's fire-and-forget SR finished — would see alice's SR, return true, and `acceptSession("bob")`
+  would then return `standing_receiver_unavailable` and DROP the session. Fix: thread `agentName` →
+  `getStandingReceiverReady(agentName)`. This is the exact accept path the live loopback exercises.
+- **H1 (high) — startup content-park flush became a guaranteed no-op in production.** With no daemon-global
+  SR at init, the native `startupParkFn`'s `getStandingReceiverNode()` was always null at the pre-IPC
+  flush, so a crashed sender's un-acked content was never re-parked on restart (invisible because tests
+  inject their own park target). Fix: `getStandingReceiverNode(agentName?)` resolves the OWNING agent's
+  node; the flush is extracted to `flushAwaitingContent(filterAgent?)` and re-run per-agent when each agent
+  comes online (chained onto `cello_start_agent`'s SR ensure). The depositor is the original sender, so the
+  owning agent's node is the correct one. Guarded by a rewritten msg-001-startup-flush test (which also
+  retired the obsolete "no park target → flush.deferred" case — `startupParkFn` is an unconditional
+  fallback, so that branch was dead; this resolves the pre-existing AC-005 failure flagged earlier).
+- **L1 (low) — `cello_stop_agent` could race an in-flight ensure** and leave an SR for an offline agent.
+  Fix: a `#standingReceiverRemoving` tombstone set on remove when a create is in flight, checked by
+  `#ensureStandingReceiver` after `start()`, cleared by a fresh ensure.
+
+**LIVE RE-VERIFY (post-fix).** Re-ran `j-loopback.spine.test.ts` against the rebuilt binaries: still
+advances PAST the SR blocker (init.ok, B's `cello_await_session` returns `new_session`, shared session_id —
+test lines 100/103/105 pass) and fails at `cello_send` (line 108). The B1/H1/L1 fixes did NOT regress the
+live behavior; the next red is unchanged — the session-core `session_id` collision (Phase 2). Re-skipped.
+
+Phase 1 is DONE and reviewed. Next: Phase 2/3 (SESSION-CORE-REKEY-001).
