@@ -3873,3 +3873,22 @@ do not block the live proof.
 
 Commits: cello-client `b31c5bd` (compiling WIP) → `c96e2c1`/test commits → seal-key fix (the GREEN commit).
 trustless-cello: DoD flipped to ✅, j-loopback un-skipped, this entry.
+
+---
+
+## 2026-06-22 — DOD-MSG-4 decided: strict in-order, not gap-repair (Andre)
+
+The lynchpin decision is made. Instead of building the gap-repair machinery (reserve-a-slot +
+ask-sender-to-resend), the receiver enforces **strict in-order**: only accept the next expected
+sequence; hold any out-of-order direct arrival; fetch the missing in-between message from the
+relay mailbox first; then release the held one. This is safe because the sender already knows
+whether each message landed (delivery ack, DOD-MSG-1) and parks anything un-acked — so the next
+message is always fetchable. The only unfetchable case (sender crashed before ack OR park) is
+true loss → DOD-MSG-8 (be honest: frontier excludes it, late straggler rejected; builds on the
+SESSION-004 frontier already shipped). Full reasoning + build plan in the discussion log
+`docs/planning/discussion_logs/2026-06-22_1745_strict-in-order-content-recovery.md`. DoD lines
+MSG-4 (decided) and MSG-8 (unblocked) updated. The pending-decision memory is removed (resolved).
+
+**To build (next J-CONTENT increment):** (1) next-expected-sequence gate on the receiver
+(hold-ahead + fetch-missing-from-mailbox-first); (2) catch-up-before-live on reconnect (relay
+tells B "current as of sequence N"; B holds live until it reaches N). Then DOD-MSG-8 on the frontier.

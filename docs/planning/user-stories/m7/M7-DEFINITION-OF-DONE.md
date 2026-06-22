@@ -319,12 +319,17 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
   *(MSG-001 AC-009/010/011, SI-005)* — 🟡 **CORE PROVEN LIVE** (J-CONTENT, 2026-06-21):
   pull from relay → `openContentSeal` in-daemon → cross-check → accept (the recipient
   recovers the parked message it missed while offline, into its interrupted session, and
-  the session stays alive). REMAINING for the FULL line: the "request resend from sender
-  first" preamble, and "no new leaf / accept at the already-assigned sequence" — empirically
-  `onLeafDeliver` is a no-op today, so recovery APPENDS the missed tail (B's root grows to
-  the canonical/complete one before any seal). For the real case (crash → miss the tail →
-  append in order) this reproduces the sender's exact tree; the general witness-then-fill
-  reconciliation (so B's root tracks canonical before content, with dedup) is DOD-MSG-5.
+  the session stays alive). **DECIDED 2026-06-22 (Andre) — strict in-order, NOT gap-repair**
+  (see discussion log `2026-06-22_1745_strict-in-order-content-recovery`): the receiver only
+  accepts the next expected sequence; an out-of-order direct arrival is HELD, and the missing
+  in-between message is fetched from the relay mailbox first, then appended in order. This is
+  safe because the sender already knows whether each message landed (delivery ack, DOD-MSG-1)
+  and parks anything un-acked — so the next message is always fetchable. REMAINING to build:
+  (1) the next-expected-sequence gate on the receiver (hold-ahead + fetch-missing-first);
+  (2) catch-up-before-live on reconnect (the relay tells B "current as of sequence N"; B holds
+  live messages until it reaches N). The old "reserve a slot / request resend from sender"
+  machinery is DROPPED — strict in-order prevents the out-of-order arrival, so there is nothing
+  to repair. The only unfetchable case (sender crashed before ack OR park) is true loss → DOD-MSG-8.
 - **DOD-MSG-5 — Resend vs replay dedup.** A `content_hash` satisfies at most one
   Merkle leaf, exactly once; duplicates/replays never double-count. *(MSG-001
   AC-012, SI-002)* — ✅ **PROVEN LIVE** (J-CONTENT, 2026-06-21). `ingestReceivedContent`
@@ -347,7 +352,12 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
 - **DOD-MSG-8 — Irreducible loss is honest.** Device loss before any flush → hash
   already committed → receiver seals "sent, not received" (content frontier excludes
   it); a straggler post-seal is rejected, never re-enters a sealed session. *(MSG-001
-  DB-003)* — ❌ (depends on 3b + SESSION-004 frontier)
+  DB-003)* — ❌ NOT BUILT, now UNBLOCKED. This is the one case strict-in-order (DOD-MSG-4,
+  decided 2026-06-22) cannot recover: the sender crashed after sending message N but before
+  either getting B's ack OR parking N to the relay, so N is genuinely gone. Build on the
+  content frontier already delivered in J-LEGIBILITY / SESSION-004: B seals with its frontier
+  excluding N (the receipt says N was sent but never received), and a late N after the seal is
+  rejected (never re-enters a sealed session).
 
 ### Unilateral seal → real notarization (SESSION-002)
 
