@@ -1,0 +1,80 @@
+# ─── Identity ───────────────────────────────────────────────
+id: M9-CFG-001
+domain: Security Gateway
+actor: CLIENT
+priority: P0
+components:
+  - gateway
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the security gateway, I want my configuration to live in my own versioned, encrypted
+  store, with loosening changes requiring confirmation and tightening free, so that policy is
+  auditable and a compromised client cannot quietly weaken the guards.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When a config setting changes"
+    action: "the gateway shall write it as a new append-only versioned row in its own
+      SQLCipher database (a separate file and key from the daemon's), preserving the prior
+      version; the active config is the latest row"
+  - trigger: "When the change loosens a guard (disable a check, enable autonomous_override,
+      add a hook, expand an allowlist)"
+    action: "the gateway shall require operator confirmation before applying it"
+  - trigger: "When the change tightens (more redaction, remove a hook, shrink an allowlist)"
+    action: "the gateway shall apply it without friction"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "an existing config at version N"
+    when: "a setting is changed"
+    then: "a new row at version N+1 is appended, version N is still present, and the gateway
+      reads N+1 as active — the change is versioned, not an in-place mutation"
+    test_type: integration
+    component_under_test: gateway
+
+  - id: AC-002
+    given: "a config with non-trivial typed fields (timestamps, the allowlist set) written and
+      the gateway restarted"
+    when: "the gateway reloads config after restart"
+    then: "the loaded config is the latest version and is USABLE in a real screen (a screen
+      run against it behaves per that config) — not merely present; the typed fields survived
+      the round-trip"
+    test_type: integration
+    component_under_test: gateway
+
+  - id: AC-003
+    given: "a loosening change (disable the secret check) and a tightening change (add a PII
+      type)"
+    when: "each is submitted"
+    then: "the loosening change is not applied until the confirmation gate is satisfied; the
+      tightening change applies immediately"
+    test_type: integration
+    component_under_test: gateway
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "the gateway config store shall not be readable or writable with the daemon's key"
+    adversarial_condition: "even when a compromised client holding the daemon's SQLCipher key
+      tries to open the gateway config DB — it is a separate file with a separate key and the
+      open fails"
+    test_type: integration
+    component_under_test: gateway
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  discussion_logs:
+    - "2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway"
+
+# ─── Implementation notes ──────────────────────────────────
+implementation_notes: >
+  Config storage (M9-CAPABILITY-HARVEST §7 config architecture). The gateway OWNS its config in
+  its own SQLCipher file (same library as the daemon, separate file + key — no ATTACH to the
+  daemon DB). Append-only versioned rows (a commit-graph shape; the Phase-2 attestation in
+  M9-ATTEST-001 signs these to the directory — out of scope here). Tighten-free / loosen-confirmed
+  (WebAuthn in the real flow). Surfaces: portal (M8) / CLI / file-import (file is import/export,
+  not the source of truth). Flag the timestamp/Set fields for serialization round-trip (AC-002).

@@ -1,0 +1,136 @@
+# ─── Identity ───────────────────────────────────────────────
+id: M9-FEED-001
+domain: Security Gateway
+actor: AGENT
+priority: P0
+components:
+  - client        # core/daemon — cello_send contract + verdict handling
+  - gateway
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the AGENT, I want the gateway's verdict on every message reported back to me through
+  cello_send — sent clean, sent redacted, blocked, or warned — so that I always know what
+  actually left versus what I wrote, and can resolve a warning by re-sending with a decision,
+  without ever being left waiting on a response that never comes.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the gateway returns a verdict for an outbound message"
+    action: "the daemon shall return a terminal cello_send result: clean → sent; redact →
+      sent with the list of what was redacted; block → NOT SENT with a distinct reason +
+      guidance; warn → NOT SENT with the flagged items + how to resolve them"
+  - trigger: "When the agent re-sends the same content with a governance_decisions map"
+    action: "the gateway shall apply each decision by flag id (redact / allow_once /
+      allow_always); the daemon holds no message between calls — the re-send carries the full
+      content and is re-screened statelessly"
+  - trigger: "When a governance_decisions entry is allow_once and autonomous_override is OFF"
+    action: "the gateway shall reject it and re-warn (the operator must whitelist it); when
+      ON, it shall honor it"
+  - trigger: "If the gateway does not return a verdict within the screening deadline"
+    action: "the daemon shall return a terminal block verdict (reason governance_timeout)
+      within the budget — never a hang, never a parked message awaiting the agent"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "four outbound messages that the gateway scores clean / redact / block / warn
+      respectively"
+    when: "the agent calls cello_send for each"
+    then: "cello_send returns, respectively: sent-clean; sent with a transformations list
+      naming each redaction; {ok:false, reason, guidance} NOT-SENT; and NOT-SENT (warn) with
+      the flagged items and a guidance field — every failure response carries guidance the
+      calling LLM can act on"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-002
+    given: "a warn result whose flagged item has id `f1` (a deterministic id over the content)"
+    when: "the agent re-sends the same content with governance_decisions {f1: redact}, then a
+      fresh content with {f1: allow_once} under autonomous_override ON"
+    then: "the first re-send is delivered with f1 redacted; the second is delivered with f1's
+      value intact; the flag ids regenerate identically on re-screen so the decisions bind"
+    test_type: integration
+    component_under_test: gateway
+
+  - id: AC-003
+    given: "autonomous_override is OFF and a warn on a non-whitelisted value"
+    when: "the agent re-sends with governance_decisions {<id>: allow_once}"
+    then: "the allow_once is rejected and the message is re-warned with guidance that the
+      operator must whitelist the value — the agent cannot self-authorize the override"
+    test_type: integration
+    component_under_test: gateway
+
+  - id: AC-004
+    given: "a message the agent sends, immediately followed by cello_close_session, where the
+      gateway BLOCKED the message"
+    when: "the sequence runs"
+    then: "cello_send returned NOT SENT synchronously (the agent knew before closing), the
+      daemon held no parked message, and the sealed session's content frontier simply omits the
+      unsent message — no orphaned/limbo message exists"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-005
+    given: "the gateway forced to exceed the total screening deadline"
+    when: "the agent calls cello_send"
+    then: "cello_send returns a terminal block (reason governance_timeout) within the deadline
+      budget — set below the host tool-call timeout — and the agent's call is not blocked beyond
+      it"
+    test_type: integration
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "the feedback channel shall never leave a message parked awaiting an agent reply"
+    adversarial_condition: "even when the agent never re-sends after a warn, or sends and
+      immediately disconnects — every cello_send is terminal (sent / not-sent), so there is no
+      state in which the daemon waits on the agent and hangs"
+    test_type: integration
+    component_under_test: client
+
+  - id: SI-002
+    statement: "the daemon shall never deliver original (un-redacted) sensitive content because
+      the agent asked"
+    adversarial_condition: "even when the agent passes allow_once / allow_always while
+      autonomous_override is OFF — those are rejected; allow_always additionally requires
+      operator WebAuthn (it adds to the whitelist), and in autonomous mode degrades to allow_once
+      plus an ops-agent whitelist-add request, never a silent persistent allow"
+    test_type: integration
+    component_under_test: gateway
+
+# ─── Observability (M4+) ───────────────────────────────────
+observability:
+  events:
+    - name: "security.verdict.returned"
+      level: info
+      trigger: "a verdict is returned to the agent via cello_send"
+      context_fields: [disposition, sessionId, transformations, correlationId]
+      correlationId: true
+  error_events:
+    - name: "security.gateway.timeout"
+      level: error
+      trigger: "the screening deadline is exceeded and the verdict is forced to block"
+      context_fields: [sessionId, reason, correlationId]
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  discussion_logs:
+    - "2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway"
+    - "2026-06-21_1600_m9-content-channel-seam-and-entry-plan"
+
+# ─── Implementation notes ──────────────────────────────────
+implementation_notes: >
+  The governance feedback channel (M9-CAPABILITY-HARVEST §6). Four dispositions
+  observe/redact/block/warn; blocking cello_send with the never-hang guarantee (per-stage +
+  total deadline below the host tool timeout, timeout-is-a-verdict, fail-closed + circuit
+  breaker); the stateless re-send flow with governance_decisions (deterministic flag ids over
+  content; redact / allow_once / allow_always; allow_once gated by autonomous_override;
+  allow_always = WebAuthn-gated whitelist add, autonomous-degrades to allow_once + ops-agent
+  request). This story owns the cello_send RETURN contract and the re-send mechanism; the
+  cross-process delivery of the redacted/blocked message to the peer is the gate
+  (M9-GATE-1 AC-001/002/004/006). Cross-repo: modifies cello-client core/daemon — follow the
+  publish procedure.
