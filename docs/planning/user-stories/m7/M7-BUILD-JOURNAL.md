@@ -3772,3 +3772,40 @@ relay-endpoint persist UPDATE — each adds `agent_name = ? AND`. Plus registerR
 signatures (thread agentName). Then: the migration (sessions/session_tree_leaves/seal_interrupted_artifacts +
 retry_queue/nonce). Then daemon.ts: thread connState.currentAgent / inbound agentName everywhere + the
 double-accept guard. `pnpm typecheck` drives it; live j-loopback proves it.
+
+---
+
+### CHECKPOINT (end of this session) — session-node-manager.ts is FULLY re-keyed + internally tsc-clean
+
+`core/daemon/src/session-node-manager.ts` is now **100% converted** (uncommitted WIP) and has ZERO internal
+typecheck errors. Every in-memory map, every DB read/write method (all `WHERE session_id` → `WHERE agent_name
+= ? AND session_id`), the seal-interrupted INSERT/SELECT (now carry agent_name), the content/relay stream
+handlers, the awaiting-ack callbacks + their hook-setter type, and the THREE CREATE TABLE statements
+(sessions / seal_interrupted_artifacts / session_tree_leaves — all composite PKs now) are done. `getSessionRecord`
+is `(agentName, sessionId)`.
+
+**EXACT REMAINING — `pnpm typecheck` lists it (31 errors at checkpoint, 30 in daemon.ts + 0 now in SNM):**
+1. **daemon.ts — 30 call sites**, all "Expected N args, got N-1" (or arg-shift type errors that are the same
+   root). Thread the agent. Agent source by handler: tool handlers (cello_send/receive/close_session/etc.) use
+   the per-connection current agent (`connState.currentAgent`); the inbound assignment handler has `agentName`;
+   the awaiting-ack hooks now RECEIVE `agentName` as their new first param — pass it on. The
+   `persistSealInterruptedCommitment({...})` call sites (≈3: lines ~2120/2859/3060) must add `agentName` to the
+   opts object. Plus the **double-accept guard / ownership check** in the inbound handler: admit
+   "different agent, same session_id" (local counterpart), reject "same (agent, session_id)" (M2 replay).
+2. **retry-queue.ts + nonce-dedup.ts (the 4th/5th tables):** `retryQueue.markContentAcked` /
+   `enqueueAwaitingContent` (called from the awaiting-ack hooks in daemon.ts ~831-835) and the nonce-dedup
+   store are keyed by session_id — ambiguous in loopback. Scope them by `(agent_name, session_id)` too (table
+   column + PK + the method signatures).
+3. **Existing-DB rebuild migration:** the new composite-PK CREATE statements handle FRESH DBs. An EXISTING
+   daemon DB (old single-key tables) needs an idempotent in-code rebuild: for each table, detect old shape
+   (PRAGMA table_info — e.g. session_tree_leaves lacks agent_name) → CREATE *_new with the composite PK →
+   copy (backfill child-table agent_name by joining sessions on session_id; existing data predates loopback so
+   session_id→one agent) → DROP old → RENAME. sessions column order for the rebuild: session_id, agent_name,
+   counterparty_pubkey, status, created_at, updated_at, message_count, interrupted_at, relay_peer_id,
+   relay_addrs, seal_legibility, sealed_root_hex, counterparty_primary_pubkey.
+4. **Verify:** typecheck green → daemon unit suite (fix signature-touched tests) → un-skip + run live
+   `j-loopback.spine.test.ts` (expect `cello_send` + bilateral byte-identical `sealed_root` GREEN; keep it
+   un-skipped as the DOD-LOOP-1 proof) → commit Phase 2 atomically → merge to main.
+
+The hard part (the 2400-line session core) is DONE. The remainder is tsc-pinned daemon.ts threading + two
+small table scopings + a mechanical migration + tests.
