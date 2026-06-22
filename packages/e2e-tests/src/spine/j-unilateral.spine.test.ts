@@ -231,14 +231,16 @@ describe("J-UNILATERAL — DOD-LIVE-2: the ABSENT gate (gone→ABSENT vs alive-b
     expect(cluster.relay.output, `relay must have observed B gone:${diag}`).toMatch(/"liveness":"gone"/);
   }, 120_000);
 
-  // alive-but-silent → DELIVERED. B stays up but never co-closes. At A's unilateral close the
-  // relay still holds B's standing connection → 'alive' → the counterparty is recorded
-  // DELIVERED, NOT ABSENT. The seal still completes (timeout-driven); liveness only colours it.
-  it("B ALIVE but silent (never closes) → counterparty recorded DELIVERED, never ABSENT", async () => {
+  // alive-but-silent AGENT → BILATERAL via auto-acknowledge (UPGRADE-002 supersedes the old
+  // unilateral-DELIVERED outcome). B stays up; its AGENT never calls close. Pre-UPGRADE-002 this
+  // degraded to a unilateral seal (B's liveness only colouring the attestation DELIVERED). NOW B's
+  // NODE auto-co-signs the responder SEAL leaf the moment it ingests A's SEAL ctrl leaf, so the
+  // seal completes BILATERAL — and the DOD-LIVE-2 invariant (an alive B is NEVER sealed ABSENT) is
+  // preserved even more strongly: B SIGNED, so there is no unilateral notarization marking it absent.
+  it("B ALIVE but its agent never closes → B's NODE auto-acks → BILATERAL seal, B never recorded ABSENT", async () => {
     const { connA, daemonB, sessionIdA, pubB } = await setupAtoBSession("livedel");
 
-    // B is alive the whole time — do NOT kill it. A closes; with no co-close it escalates to a
-    // unilateral seal after the bilateral wait. The relay reports B alive → DELIVERED.
+    // B is alive the whole time — do NOT kill it, and B's agent issues NO close call.
     expect(daemonB.output, "B daemon should be running (not killed)").toMatch(/daemon\.started/);
 
     const close = (await connA.call("cello_close_session", { session_id: sessionIdA })) as {
@@ -246,13 +248,17 @@ describe("J-UNILATERAL — DOD-LIVE-2: the ABSENT gate (gone→ABSENT vs alive-b
     };
     const diag =
       `\nclose: ${JSON.stringify(close)}` +
+      `\n--- daemonB autoack ---\n${daemonB.output.split("\n").filter((l) => /autoack|autoacknowledg|seal/i.test(l)).slice(-10).join("\n")}` +
       `\n--- directory attestation/notarized ---\n${cluster.directory.output.split("\n").filter((l) => /attestation|notarized|liveness/i.test(l)).slice(-12).join("\n")}`;
 
-    expect(close.ok, `A unilateral close must succeed (seal completes even when B is alive):${diag}`).toBe(true);
-    expect(close.seal_type, `seal_type must be unilateral:${diag}`).toBe("unilateral");
-    // B is alive (or at worst unknown) — the directory must NOT record ABSENT (DOD-LIVE-2:
-    // busy-but-alive is NEVER sealed ABSENT on silence). Attestation is DELIVERED.
-    expect(cluster.directory.output, `attestation must be DELIVERED for an alive/silent B:${diag}`).toMatch(/"event":"session\.unilateral\.notarized"[^}]*"attestation":"DELIVERED"/);
-    expect(cluster.directory.output, `this session's notarization must not mark B ABSENT:${diag}`).not.toMatch(new RegExp(`"event":"session\\.unilateral\\.notarized"[^}]*"absentPartyPubkey":"${pubB.slice(0, 8)}[^}]*"attestation":"ABSENT"`));
+    // UPGRADE-002: an alive, verified B no longer degrades to a unilateral seal on a silent agent —
+    // its node auto-co-signs, so the seal is BILATERAL (seal_type is NOT 'unilateral').
+    expect(close.ok, `A close must succeed (B auto-acks):${diag}`).toBe(true);
+    expect(close.sealed_root, `A must surface a sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
+    expect(close.seal_type, `alive B auto-acks → BILATERAL, never unilateral:${diag}`).not.toBe("unilateral");
+    expect(daemonB.output, `B's daemon must auto-acknowledge:${diag}`).toMatch(/session\.seal\.autoacknowledged/);
+    // DOD-LIVE-2 invariant PRESERVED: an alive B is NEVER sealed ABSENT — here it SIGNED (bilateral),
+    // so there is no unilateral notarization marking B absent for this session.
+    expect(cluster.directory.output, `alive B must never be marked ABSENT for this session:${diag}`).not.toMatch(new RegExp(`"absentPartyPubkey":"${pubB.slice(0, 8)}[^}]*"attestation":"ABSENT"`));
   }, 120_000);
 });
