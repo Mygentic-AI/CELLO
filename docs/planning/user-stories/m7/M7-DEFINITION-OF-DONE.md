@@ -383,12 +383,16 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
   change); backward-compatible (bare/old seals fall back to content-only). Live-proven: the J-CONTENT
   recover test asserts `ordering.recorded source:park`; envelope round-trip + fallback unit-tested;
   j-content 8/8, j-loopback, daemon 365 — green.
-  **REMAINING to flip ✅:**
-  - **Finding 2 — relay-signed sequence (DECISION PENDING ANDRE).** Today B verifies the SENDER's
-    signature (proves A committed to this content). To verify the *relay's committed position* (the
-    stated goal), forward the relay's PERSIST-012 `relay_signature`/`relay_id`/`timestamp` in the frame
-    and have B verify it. Additive; the relay already signs the ack. Andre to confirm include vs.
-    sender-signature-only (safe but weaker — a lying A only self-DoSes via root divergence).
+  **STATUS (all resolved — MSG-4 is ✅; nothing blocks the tag):**
+  - **Finding 2 — relay-signed sequence — ❌ DEFERRED (Andre 2026-06-22, "A now, C track").** RESOLVED:
+    ship sender-signature ordering (Option A — safe; a lying sender only self-DoSes via root
+    divergence), defer the relay-signed verification (Option C). Verifying the relay's committed
+    position needs the relay's SIGNING identity plumbed to the daemon + a relay-identity binding — the
+    same family as the transport-audit relay-identity gap. Tracked with a named home in the "Deferred
+    hardening" roster at the bottom of this DoD; do NOT read this as still-open. The verification that
+    IS shipped (sender signature + counterparty cross-check + hash-bind) is adversarially tested
+    (`msg-001-strict-in-order.test.ts` — bad_signature / wrong_signer / hash_mismatch; teeth proven by
+    neutering the checks → red).
   - **Auto-recover-on-reconnect — ✅ DONE + LIVE-PROVEN (cello-client `2dd84bd`, tc `a74adbb2`).**
     Found a real PRODUCTION GAP: `content_park_recover` had ZERO production callers — nothing pulled a
     recipient's store-and-forward mailbox, so parked content was never delivered outside tests. Now the
