@@ -4481,3 +4481,45 @@ j-legibility:184-193 = per-party frontier). Ruled the scoping legitimate — DB-
 any obligation beyond AC-011/AC-012, so requiring MSG-8 to re-prove AC-011's exclusion would be
 duplication. Falsified four ways (vacuous pull, wrong-reason, stale-log, dangling-citation), survived all.
 DOD-MSG-8 flipped ❌ → ✅ PROVEN LIVE. The MSG journey (DOD-MSG-1..8) is fully green.
+
+---
+
+## 2026-06-22 — CHECKPOINT / HANDOFF (overnight): J-AUTH + MSG journeys green; DOD-LEG-2 re-derive guard is a SURFACED DESIGN FORK
+
+**Closed this overnight stretch (both ✅ PROVEN LIVE, all three gates — code-reviewer + cello-test-attacker
++ cello-done-auditor EARNED):**
+- **DOD-AUTH-2** — activated the built-but-dormant background manifest poll end-to-end (J-AUTH 6/6 live:
+  poll refresh adopts a newer signed manifest; forged manifest rejected). Fixed a code-reviewer HIGH
+  (self-healing poll loop) and a test-attacker BLOCKING (poll-path verify was untested). The J-AUTH
+  journey is fully green.
+- **DOD-MSG-8** — irreducible loss is honest (post-seal straggler rejected `session_committed`; honest
+  unchanged transcript), a live-test unit per DB-003. The MSG journey (DOD-MSG-1..8) is fully green.
+
+**Next line worked: DOD-LEG-2 client re-derive guard → SURFACED AS A DESIGN FORK (deferred for Andre).**
+Mapped it (Explore agent) and falsified the "focused follow-on" assumption: `content_frontier_seq` is
+derived across ALL of a party's leaves INCLUDING the trailing SEAL ctrl leaf, but B's daemon never
+receives the COUNTERPARTY's seal-ctrl leaf — so the AC's literal "re-derive from local leaves" would
+false-positive on legitimate certs. This is a genuine protocol/semantics fork (deliver-leaves-to-B vs
+B-fetches-via-relay vs content-only-frontier vs upper-bound-check), recorded on the DoD-LEG-2 line
+(RC-1: status + named target + recommendation = option (b), B fetches via `get_seal_leaves` + verifies +
+re-derives — the safe/reversible additive option). It also needs a directory test seam to publish an
+inflated-but-signed frontier for the negative live test. Per the procedure, surfaced rather than guessed.
+
+**State of the remaining non-green DoD lines (for the next session):**
+- **🟡 DOD-SEAL-2** — remainder (the `close_type=SEAL_UNILATERAL` + `conversation_attestations='ABSENT'`
+  discriminator 3-table write) is COUPLED to DOD-UP-1 (Tier-4, deferred). Not independently advanceable.
+- **🟡 DOD-LEG-2** — re-derive guard: the design fork above. Needs Andre's nod on the approach.
+- **🟢 DOD-SIG-1 / SEAL-1 / SEAL-3 / LIVE-1/2/3 / LEG-1/3/4 / UP-2** — PROVEN LIVE with minor remainders;
+  several remainders (multi-node failover) are NOT modellable by the single-directory/single-relay
+  harness (need >1 node). DOD-SIG-1 has one harness-achievable bit (an explicit queued-op DRAIN
+  assertion; the drain is already unit-covered) — the cleanest small next unit if a no-fork win is wanted.
+- **❌ DOD-UP-1** (UPGRADE-001, storied, now unblocked) and **❌ DOD-LOG-1** (PERSIST-LOG-001, durable
+  transcript survives restart) — the two large storied units. UP-1 also unblocks the SEAL-2 remainder.
+
+**Recommended next unit (next session / Andre's pick):** either confirm DOD-LEG-2 option (b) and build the
+re-derive guard, OR take DOD-LOG-1 (durable transcript) / DOD-UP-1 (unilateral→bilateral upgrade) as the
+next storied unit. The easy harness wins (AUTH, MSG, INT, SIG, SEAL, LIVE, LEG, LOOP journeys) are done;
+what remains needs a design decision (LEG-2), a deferred dependency (SEAL-2/UP-1), multi-node infra
+(🟢 remainders), or a storied build (UP-1, LOG-1).
+
+Branch state: all on main, NOTHING pushed (Andre pushes). cello-client ahead 3, trustless-cello ahead ~12.

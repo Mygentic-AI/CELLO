@@ -547,7 +547,25 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
   party's OWN signed leaves (directory), carried on the cert, surfaced by B's daemon — live cert shows
   DISTINCT per-party frontiers (A=2, B=3). REMAINING: the client-side SI-002 re-derive guard (reject
   `certificate_frontier_unverifiable` on an inflated published frontier) is the one distinct sub-line not
-  yet built — a focused follow-on. (The asymmetric-frontier DERIVATION is unit-proven, AC-002.)
+  yet built. (The asymmetric-frontier DERIVATION is unit-proven, AC-002.)
+  **🔶 DESIGN FORK — NEEDS ANDRE (deferred 2026-06-22, RC-1):** the re-derive guard is NOT the
+  "focused follow-on" it was assumed to be. `buildSealLegibility` derives `content_frontier_seq` from
+  `decodeSignedLastSeenSeq` across ALL of a party's leaves — INCLUDING the trailing SEAL ctrl leaf
+  (seal-legibility.ts:174, no `kind==='msg'` filter). But B's daemon holds only the content/message
+  leaves it sent+received during the session; it does NOT hold the COUNTERPARTY's SEAL ctrl leaf (that
+  goes relay→directory at close, never to B). So the AC's literal "client re-derives from its LOCAL
+  leaves and confirms it equals the published value" (SESSION-004 AC-005) would FALSE-POSITIVE on a
+  legitimate cert whenever A's seal-ctrl `last_seen_seq` exceeds A's last content-leaf `last_seen_seq`
+  (e.g. A receives B's reply after A's last message, then closes). Resolving needs a choice between
+  materially different builds: (a) deliver the complete signed-leaf set to B on the `session_sealed`
+  frame; (b) B fetches the leaves via the relay's existing `get_seal_leaves` RPC, verifies the sender
+  signatures, and re-derives from that complete set (additive, no wire change to others — RECOMMENDED
+  as the safe/reversible option); (c) re-scope `content_frontier_seq` to msg-leaves only so B can
+  re-derive from what it has (changes the frontier semantics + the directory derivation); (d) a loose
+  upper-bound check (reject only frontier > total leaf count) — catches gross SI-002 inflation without
+  needing the counterparty's leaf, but weaker. NAMED TARGET: a SESSION-004 follow-on story (or a
+  direct build of option (b)) once Andre confirms the approach. Also needs a directory test seam to
+  publish an inflated-but-signed frontier for the negative live test (does not exist yet).
 - **DOD-LEG-3 — Live/recovered/absent marker.** `attestation_mode` per party,
   always exactly one of the three. *(SESSION-004 AC-003)* — 🟢 **PROVEN LIVE** (J-LEGIBILITY): both
   parties' `attestation_mode` = 'live' in the contemporaneous bilateral seal, surfaced on B's cert read.
