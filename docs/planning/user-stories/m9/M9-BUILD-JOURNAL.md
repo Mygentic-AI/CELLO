@@ -248,3 +248,60 @@ detector/scanner/redactor module. SI-001/DB-001: omit/kill the gateway → `cell
 **Next.** Architecture phase: create `core/gateway` skeleton (package + interface + type stubs that
 compile but are unimplemented), so the integration test compiles and goes RED for the right reason.
 Then implement to green.
+
+---
+
+## 2026-06-22 — M9-CORE-001 BUILT (🟡, gate not yet run) — reviewed, all findings fixed
+
+**What shipped (cello-client `m9-build`, commits `78d0191`, `62bf7a9`, `bfa905c`, `86050bc`, `24a1c25`).**
+- New `@cello-protocol/gateway` package — the separate gateway program: `SecurityGatewayClient`
+  interface + verdict types, `PassthroughGatewayClient` (always-allow default), length-prefixed-JSON
+  wire protocol + `FrameDecoder`, `createGatewayServer` (UDS + pluggable screen fn + request log),
+  `LocalSidecarGatewayClient` (per-call deadline, fail-closed), `spawnGatewaySidecar` + `bin/cello-gateway`.
+- Daemon seam: outbound screen in `cello_send` before `sendContent`; inbound screen inside
+  `ingestReceivedContent` (now async) at the single buffer chokepoint. Injection via
+  `DaemonConfig.securityGateway`, default passthrough (pre-M9 daemons unchanged).
+- Wired `core/gateway` into the workspace (root tsconfig refs, vitest workspace, daemon dep + project ref).
+
+**Gate (its own ACs, not the phase gate).** 378 daemon tests + 7 gateway tests green; lint, typecheck,
+build clean. The seam is proven against a REAL spawned gateway process (`m9-core-001-seam.test.ts`):
+AC-001/002 happy path with content-fingerprint proof; SI-001/DB-001 outbound fail-closed (nothing on
+the wire) and inbound fail-closed (nothing to the agent); AC-003 import-allowlist. INV-5 pinned at the
+SNM layer (`m9-core-001-inbound-funnel.test.ts`): direct/recover, held, and release paths all screen.
+
+**Review (feature-dev:code-reviewer opus + cello-test-attacker, both read-only). All resolved.**
+- **B1 [blocking]** — the inbound `await` reopened the previously-atomic dedup→append section: two
+  concurrent same-hash ingests (direct retry + park-recovery on reconnect) could double-append a leaf
+  → root divergence. Fixed with a post-await dedup re-check; deterministic regression test (slow gateway
+  forces the interleave, asserts one leaf).
+- **TA1 [blocking test]** — inbound funnel was only proven on the direct path. Added SNM-level
+  blocking/counting-gateway tests for recover + held + release (kills the screen-in-stream-handler-only
+  and screen-after-hold bypasses).
+- **TA2 [blocking test]** — AC-003 was a non-recursive class-name scan; replaced with a recursive
+  import-allowlist (forbids the daemon importing the gateway server/screen symbols).
+- **H1 [high]** — added the story's `security.gateway.connected` (startup, mode) and
+  `security.gateway.unavailable` (error, direction/reason/correlationId); asserted in the seam tests.
+- **M1 [medium]** — `server.stop()` hung with a live client connection; track + destroy sockets.
+- **M2 [medium] — reasoned scope decision (NOT silently dropped).** The reviewer's "always append the
+  leaf" would BREAK fail-closed redelivery: a TRANSIENT gateway outage must NOT commit a leaf, or dedup
+  swallows the sender's redelivery and the agent never gets the message. M9-CORE-001's only block is
+  transient fail-closed, so screen-before-append (no leaf) is correct. The terminal-block case (record
+  the leaf + ack so the sender stops, gate only the agent buffer) lands with the first real block
+  verdict — **owned by M9-IN-002**. Captured in a code comment at the inbound seam.
+- **L2** guidance wording (recovery is sender redelivery, not a local re-screen). **L4** spawn force-timer
+  cleared on early exit. **TA4** request log carries a `contentSha256` fingerprint (identity, not length).
+- **L1 / L3 (forward, noted):** L1 — the outbound allow path sends the original bytes; `redact` (which
+  sends `verdict.content`) is wired in **M9-FEED-001**. L3 — the retry-queue flush re-sends already-
+  screened-allow content without re-screening; a policy change between screen and flush won't re-apply —
+  revisit in **M9-FEED-001 / M9-OUT-***.
+
+**Deferred to the composition root / gate (not a CORE-001 gap):** the production daemon bin spawning the
+sidecar + eager-connect is proven by **M9-GATE-1** (the Phase-1 local E2E). M9-CORE-001 wired the seam +
+injection and proved it with a test-spawned gateway.
+
+**Status.** M9-CORE-001 → 🟡 (built, own ACs green; Phase-1 gate M9-GATE-1 not yet run). Nothing pushed;
+nothing on `main`.
+
+**Next.** M9-IN-001 (inbound Layer-1 deterministic sanitization) — the first detector, plugs into
+`createGatewayServer`'s screen fn. Attack corpus present (`attack-corpus-reference.md`). Unit altitude:
+real malicious input → real verdict, RE2 mandatory, no network/model.

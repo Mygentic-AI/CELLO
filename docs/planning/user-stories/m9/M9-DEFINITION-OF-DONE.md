@@ -30,13 +30,16 @@ description: >
 ## Status legend
 
 - ✅ done and gate-green · 🟡 built, gate not yet run · ❌ not built · 🔒 blocked on a named dependency.
-- Everything is ❌ today. M9 has not started building.
+- **M9-CORE-001 is 🟡** — built, and its own ACs (incl. fail-closed and the INV-5 inbound funnel)
+  proven against a real spawned gateway process. The Phase-1 end-to-end gate (M9-GATE-1) has not
+  run, so it is not yet ✅. Everything else is ❌. Build opened 2026-06-22.
 
-## The build gate (still holds)
+## The build gate (resolved)
 
-The live build is blocked on **MSG-001-3b increment 3** (M7) — the unified inbound funnel,
-so recovered/parked content passes the same inbound point as direct content. Design work and
-the gateway skeleton can start now; the inbound screening cannot be proven live until that lands.
+The live build was blocked on **MSG-001-3b increment 3** (M7) — the unified inbound funnel. That
+LANDED (cello-client `a42b72d`, j-content 8/8): direct AND recovered/parked content both pass
+`ingestReceivedContent`. M9 is buildable, and M9-CORE-001 screens all three inbound producers
+(direct, recovered-park, held-release) at that single funnel.
 
 ---
 
@@ -73,7 +76,7 @@ block/redact/warn handling run locally. Config and records are local. Ends at **
 
 | Story | What it builds | Done when | Replaces |
 |---|---|---|---|
-| **M9-CORE-001** | Gateway program skeleton + the `SecurityGatewayClient` interface + the daemon seam (`screenInbound` at `ingestReceivedContent`, `screenOutbound` at `cello_send`). Local sidecar mode. | A message round-trips through the gateway and back, with a no-op pass, across the real daemon↔gateway boundary. | new |
+| 🟡 **M9-CORE-001** | Gateway program skeleton + the `SecurityGatewayClient` interface + the daemon seam (`screenInbound` at `ingestReceivedContent`, `screenOutbound` at `cello_send`). Local sidecar mode. | A message round-trips through the gateway and back, with a no-op pass, across the real daemon↔gateway boundary. | new |
 | **M9-IN-001** | Inbound Layer 1 — deterministic sanitization: invisible-character strip, RE2 patterns, entropy scoring, encoded-payload decode, special-token strip, size/length cap. | Each check fires on a crafted input and the sanitized text + notes reach the agent via `cello_receive`. | SCAN-001 |
 | **M9-IN-002** | Inbound Layer 2 — DeBERTa injection scanner (pre-downloaded INT8, in-process). | A known injection is scored and blocked; a clean message passes; no network call. | SCAN-002 |
 | **M9-IN-003** | Inbound language allowlist (English default) via a small n-gram detector; confident-only, allow on short/low-confidence; flagged message held with a legible note. | A confident non-English message is held with guidance; "ok thanks" is not. | new |
