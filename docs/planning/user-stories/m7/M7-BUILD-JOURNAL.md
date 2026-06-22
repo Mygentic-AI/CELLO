@@ -3456,3 +3456,50 @@ guard" (B) becomes unnecessary if (A) lands (the signature IS the verification).
 **Status.** Logged as the next design decision. I am NOT implementing either path solo overnight — both
 touch the shared FROST-signed seal path (directory + daemon + client in lockstep) and (A) is a protocol/
 compat change. This is the disciplined stop: a precise finding + a recommendation, surfaced for Andre.
+
+---
+
+## 2026-06-22 — legibility-TBS-binding DONE (the SECURITY FINDING fix, Andre-approved option A)
+
+Andre approved option A (bind the legibility into the signed seal TBS) over the client re-derive guard.
+Implemented WITHOUT a protocol-types publish: the binding is at the call sites (the directory consumes
+published protocol-types@0.0.4's `buildSealTbs` unchanged; the hash is folded in locally), so it is
+locally testable now and avoids the version-bump/CI dance.
+
+**Mechanism.** Signed bytes = `buildSealTbs(session_id, sealed_root, leaf_count, timestamp) ‖
+SHA-256(canonicalLegibility)`. `canonicalLegibility` is an EXPLICIT byte layout (domain || u32 count ||
+per-participant pubkey/frontier/authored/mode || final_message sender/seq/answered) — NOT canonical CBOR,
+so there is zero CBOR-library-determinism dependence. Defined byte-for-byte identically in two places
+(`cello-client/core/daemon/src/seal-legibility-tbs.ts` and `trustless-cello/.../seal-legibility.ts`); the
+live FROST seal SELF-CHECKS agreement (the directory verifies the daemon's co-signed bound TBS at
+#processSealFrostSignature — a divergence makes the seal fail).
+
+**Producer/consumer.**
+- Directory `processSeal`: binds the hash into the TBS stored in #pendingFrostSeals (verified at :3410)
+  + carries `legibility` on the bilateral `seal_verified` so the initiator binds the SAME hash. Unilateral
+  seal_verified carries no legibility → plain TBS unchanged (`bindLegibilityToTbs` is a no-op).
+- Daemon co-sign (`wireSealCeremonyHandler`): binds the legibility from `seal_verified` into the TBS it
+  co-signs.
+- Client (`registerSessionSealedListener`, now async): the INITIATOR loads its OWN primary (DKG
+  commitments[0]) from its share, checks `signer_pubkey == own primary`, and verifies the FROST sig over
+  the bound TBS → tampered legibility REJECTS. The NON-INITIATOR accepts (`verified:false`) — it does not
+  hold the initiator's group key; the live frame arrived over the authenticated libp2p Noise channel, and
+  the binding lets any out-of-band holder of the initiator's primary verify an exported cert.
+
+**KEY STRUCTURE FINDING (drove the asymmetric verifier).** The seal signature is the INITIATOR's FROST
+group key (commitments[0]), DISTINCT from the agents' identity pubkeys and NOT held by the responder. My
+first attempt cross-checked the signer against `{agentPubkeyHex, counterparty_pubkey}` (identity keys) →
+rejected every valid seal (`signer_not_a_session_participant`). Corrected to: load own primary; the
+initiator verifies, the responder accepts.
+
+**Tests.** Live: j-legibility 1/1, SPINE-7, j-unilateral (GONE/ABSENT, plain TBS) — green; valid seals
+verify, directory+daemon hashes agree. Unit: `seal-legibility-tbs.test.ts` 11/11 — the hash CHANGES for
+answered / frontier / authored / mode / final-sender / final-seq / participant-reorder, is deterministic,
+treats Buffer≡Uint8Array (wire↔source). Regression: directory 47/47 (legibility/processseal/frames/
+session004), daemon 39/39 (daemon/session-001) — fixed a keystone-listener no-agent guard (14→0).
+Commits: cello-client `ddbcb27`+`9991e15`, trustless `0b882e1`. DoD legibility banner flipped to CLOSED.
+
+**Remaining follow-on (recorded, not blocking):** give the responder the initiator's FROST primary via
+the FROST-signed session establishment so it (and arbitrators) can verify live/out-of-band. The
+attestation_mode-TBS-binding deferred item is now SUBSUMED (the whole legibility is bound). The unilateral
+cert does not yet carry legibility (a separate field set) — binding it is the same pattern when it does.

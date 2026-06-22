@@ -412,15 +412,18 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
 
 ### Seal certificate legibility (SESSION-004)
 
-> ⚠️ **OPEN INTEGRITY DECISION (Andre's call) — see the 2026-06-22 SECURITY FINDING journal entry.**
-> The `legibility` object is currently carried OUTSIDE the FROST-signed seal TBS (`buildSealTbs` signs
-> only session_id/sealed_root/leaf_count/timestamp), so `final_message.answered`, `content_frontier_seq`,
-> and `attestation_mode` are tamperable by a MITM in transit (`implies_assent`/`attests` are safe — the
-> daemon re-asserts them). The 🟢 lines below are PROVEN LIVE for DERIVATION + cross-process SURFACING
-> (no MITM in test); the in-transit INTEGRITY of those three fields is NOT yet closed. Recommended fix:
-> bind legibility into the seal TBS (unifies the deferred attestation_mode-TBS-binding item) — a
-> coordinated protocol change to the signed seal path, pending Andre. DOD-LEG-2's client re-derive guard
-> becomes unnecessary if that lands.
+> ✅ **INTEGRITY CLOSED (legibility-TBS-binding, 2026-06-22, Andre-approved option A).** The legibility
+> object is now BOUND into the FROST-signed seal TBS: the signed bytes are `buildSealTbs(...) ‖
+> SHA-256(canonicalLegibility)`. So `final_message.answered`, `content_frontier_seq`, and
+> `attestation_mode` are covered by the signature — a MITM tampering them breaks it. The directory binds
+> the hash and verifies it; the daemon co-signs the same bound TBS; the INITIATOR verifies the bound cert
+> live against its own primary (a tampered legibility → REJECT). A unit test proves the hash covers every
+> tamperable field; j-legibility + SPINE-7 prove valid seals verify and that the directory/daemon hashes
+> agree. REMAINING follow-on (not blocking — the live channel is Noise-authenticated): the NON-INITIATOR
+> (responder) cannot yet verify live because it does not hold the initiator's FROST group key — giving it
+> that key via the FROST-signed session establishment lets it (and any out-of-band arbitrator) verify
+> independently. This unified the deferred attestation_mode-TBS-binding item; DOD-LEG-2's client re-derive
+> guard is now superseded (the signature IS the verification).
 
 - **DOD-LEG-1 — Receipt-not-assent, first-class.** Cert carries `attests:'receipt'`,
   `implies_assent:false`, plain-language disclaimer; no field parseable as agreement.
