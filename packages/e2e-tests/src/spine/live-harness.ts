@@ -340,6 +340,21 @@ export function writeSignedManifestTo(
   writeFileSync(path, JSON.stringify(makeSignedManifest(nodes, opts)));
 }
 
+/**
+ * DOD-AUTH-2 (adversarial): write a FORGED manifest — correct structure, valid version
+ * window, but officer signatures replaced with garbage (as a rogue/compromised directory
+ * would serve). A polling client must independently re-verify and REFUSE to adopt it.
+ */
+export function writeForgedManifestTo(
+  path: string,
+  nodes: ConsortiumNodeEntry[],
+  opts?: MakeManifestOpts,
+): void {
+  const manifest = makeSignedManifest(nodes, opts);
+  manifest.signatures = manifest.signatures.map((s) => ({ ...s, signature: "00".repeat(64) }));
+  writeFileSync(path, JSON.stringify(manifest));
+}
+
 /** The "this directory IS in the consortium" node entry (happy-path step-6). */
 export function trustedDirectoryNode(): ConsortiumNodeEntry {
   return {

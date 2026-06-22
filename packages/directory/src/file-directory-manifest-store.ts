@@ -68,6 +68,17 @@ export class FileDirectoryManifestStore implements DirectoryManifestStore {
 
   #read(): ConsortiumManifest {
     const raw = readFileSync(this.#path, "utf8");
-    return JSON.parse(raw) as ConsortiumManifest;
+    const parsed = JSON.parse(raw) as ConsortiumManifest;
+    // Minimal structural check: valid JSON of the wrong shape (e.g. {}, [], 42) must fail
+    // loudly at construction (the doc contract), not be cached + served as a junk manifest
+    // with version === undefined. Signature/validity are the polling client's job, not ours.
+    if (
+      typeof (parsed as { version?: unknown })?.version !== "number" ||
+      !Array.isArray((parsed as { nodes?: unknown })?.nodes) ||
+      !Array.isArray((parsed as { signatures?: unknown })?.signatures)
+    ) {
+      throw new Error(`consortium manifest at ${this.#path} is malformed (missing version/nodes/signatures)`);
+    }
+    return parsed;
   }
 }

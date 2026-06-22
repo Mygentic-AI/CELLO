@@ -32,6 +32,7 @@ import {
   cello,
   writeConsortiumManifest,
   writeSignedManifestTo,
+  writeForgedManifestTo,
   trustedDirectoryNode,
   AUTH_DIRECTORY_NODE_KEY_HEX,
   AUTH_DIRECTORY_NODE_PUBKEY,
@@ -249,5 +250,37 @@ describe("J-AUTH — directory bidirectional auth, live (DOD-AUTH-1 / DOD-AUTH-2
 
     // The directory observed serving the poll (producer side, its own log).
     expect(cluster.directory.output).toMatch(/"event":"directory\.manifest\.poll\.response"/);
+  }, 60_000);
+
+  it("DOD-AUTH-2 (poll rejects forged) — a FORGED manifest served by the directory is NOT adopted", async () => {
+    // Recovery-not-trust, adversarial: the directory is only a transport for the manifest.
+    // We rotate the directory's served file to a FORGED manifest (valid window + higher
+    // version, but garbage officer signatures — as a rogue/compromised directory would).
+    // The daemon polls, INDEPENDENTLY re-verifies, and must REFUSE to adopt: it logs
+    // signature.invalid, never poll.success, and never advances its trusted version.
+    writeForgedManifestTo(dirManifestPath, [trustedDirectoryNode()], { version: 9 });
+
+    const { celloDir, daemon } = await startAuthAgent("auth-poll-forged", [trustedDirectoryNode()], {
+      manifestOpts: { version: 1 },
+      extraEnv: { CELLO_MANIFEST_POLL_MIN_MS: "400", CELLO_MANIFEST_POLL_MAX_MS: "800" },
+    });
+    const env = { CELLO_DIR: celloDir };
+
+    expect(daemon.output).toMatch(/"event":"directory\.auth\.manifest\.verified"[^\n]*"manifestVersion":1/);
+    const login = cello(["login"], env);
+    expect(login.status, `cello login failed:\n${login.stdout}`).toBe(0);
+    await daemon.waitForLine(/"event":"directory\.auth\.challenge\.verified"/, 15_000);
+
+    // The poll fetches the forged manifest and the daemon rejects it on signature.
+    const invalid = await daemon.waitForLine(
+      /"event":"directory\.auth\.manifest\.signature\.invalid"/,
+      20_000,
+    );
+    expect(invalid).toMatch(/"manifestVersion":9/);
+
+    // It is NEVER adopted: no poll.success, and the persisted trusted version stays 1.
+    expect(daemon.output).not.toMatch(/"event":"directory\.auth\.manifest\.poll\.success"/);
+    const persisted = JSON.parse(readFileSync(join(celloDir, "manifest-version.json"), "utf8"));
+    expect(persisted.lastSeenVersion).toBe(1);
   }, 60_000);
 });
