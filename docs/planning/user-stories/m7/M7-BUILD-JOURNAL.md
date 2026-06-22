@@ -3616,3 +3616,43 @@ TO the (agent, session_id) session-core re-key + the 3-table DB migration. The s
 (SESSION-CORE-REKEY-001) scoped only the session-core keying; it must add the per-agent standing-receiver
 rework. This is a genuinely large, multi-part, all-or-nothing piece — confirmed by evidence, deferred to a
 fresh-context implementation push. The red test (skipped) + this diagnosis tee it up.
+
+---
+
+## 2026-06-22 — J-LOOPBACK Phase 1 DONE: per-agent standing receiver (cello-client b6c8d37)
+
+**DoD-ID / unit.** DOD-LOOP-1, blocker (1) of 2 — the per-agent standing-receiver rework diagnosed in
+the prior entry. Andre directed finishing the in-flight Phase 1 to green and committing.
+
+**What changed.** `session-node-manager.ts`: the single `#standingReceiver` field becomes
+`#standingReceivers: Map<agentName, {node, gater, autoNat}>`. `#ensureStandingReceiver(agentName)` is
+idempotent per-agent; `ensureStandingReceiverForAgent` / `removeStandingReceiverForAgent` are wired into
+`cello_start_agent` / `cello_stop_agent` (fire-and-forget — initiate/accept also ensure on demand).
+NO SR is created at `initialize()` anymore — each agent's SR comes up when it goes online.
+`getStandingReceiverReady(agentName?)` / `getStandingReceiverInfo(agentName)` are per-agent; daemon
+callers thread the owning agent; `gracefulShutdown` stops all per-agent SRs.
+
+**Tests migrated off the old SR-at-init model** (all green): session-node-manager AC-002/003/006/011/015,
+seam-2 inbound (+M1/M2 — bob brought online before his assignment is injected), seam-3/seam-4 (read the
+per-agent SR after the agent starts), transport-composition C2 (AutoNAT result fires when an agent comes
+online, not at daemon start). Daemon suite: **360 passed**. The single remaining unit failure
+(msg-001-startup-flush AC-005) is PRE-EXISTING on m7-rehome — verified by stashing these changes and
+running at HEAD e323395, where it still fails. Root: `startupParkFn` (daemon.ts:881) is unconditional,
+so the `content.park.flush.deferred` else-branch the test asserts is dead code. Unrelated to this change;
+flagged for separate follow-up.
+
+**LIVE BINARY VERIFICATION (the enforcer, not just vitest).** Un-skipped `j-loopback.spine.test.ts`,
+rebuilt cello-client dist, ran it foreground against the real binaries (ONE daemon, TWO agents). Result:
+the test now advances PAST the SR blocker — `cello_initiate_session` returns ok (no more persistent
+`standing_receiver_unavailable`), B's `cello_await_session` returns the session as its OWN end, and both
+ends share the session_id (assertions at test lines 97/100/102 all pass). The NEW red is `cello_send`
+(line 105): the session-core `session_id` collision — exactly blocker (2), Phase 2's scope. Re-skipped
+the test (Phases 2/3 not done) and updated its in-file comment to this accurate state.
+
+**Remaining for DOD-LOOP-1 green.** Phase 2: re-key the daemon session core from `session_id` to
+`(agent, session_id)` (~60 access points across 7 maps + getSessionRecord + ownership/double-accept
+guards). Phase 3: the 3-table daemon-DB in-code migration. All-or-nothing; the live test will go green
+only when both land. SESSION-CORE-REKEY-001 should be updated to record that Phase 1 is already done.
+
+Commits: cello-client `b6c8d37` (Phase 1, code+tests). trustless-cello `<this>` (j-loopback comment +
+this journal entry).

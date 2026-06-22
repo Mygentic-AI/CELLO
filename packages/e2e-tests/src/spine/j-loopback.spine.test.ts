@@ -57,12 +57,15 @@ afterAll(async () => {
   }
 });
 
-// SKIPPED until DOD-LOOP-1 (CELLO-M7-SESSION-CORE-REKEY-001) is implemented — this is the RED target.
-// First run (2026-06-22) revealed TWO blockers, not one: (1) cello_initiate_session returns
-// `standing_receiver_unavailable` PERSISTENTLY when two agents share one daemon (the single
-// per-daemon standing receiver is not ready in the loopback scenario — a dimension beyond the
-// session-core keying the story scoped); (2) the session-core collision (B's accept hits A's
-// session_id-keyed row). Un-skip when implementing; both must be resolved for this to pass.
+// SKIPPED until DOD-LOOP-1 is fully implemented — this is the RED target.
+// First run (2026-06-22) revealed TWO blockers, not one. Phase 1 (per-agent standing receiver,
+// cello-client b6c8d37) CLEARED the first: a live run now gets PAST cello_initiate_session
+// (no more persistent `standing_receiver_unavailable`), B's cello_await_session returns the
+// session as its OWN end, and both ends share the session_id. The remaining red is blocker (2),
+// the session-core collision: cello_send fails because the daemon keys the session core by
+// `session_id` alone, so B's accept on the same daemon clobbers A's row. CELLO-M7-SESSION-CORE-
+// REKEY-001 (Phase 2: re-key to `(agent, session_id)` + Phase 3: 3-table daemon-DB migration)
+// resolves it. Un-skip when implementing Phases 2/3.
 describe.skip("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => {
   it("A initiates to B on the SAME daemon → exchange + bilateral seal, byte-identical root, no 2nd daemon", async () => {
     // ONE celloDir → ONE daemon hosting BOTH ends.
