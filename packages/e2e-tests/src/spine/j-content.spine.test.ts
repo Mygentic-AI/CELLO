@@ -223,6 +223,12 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       /"event":"session\.content\.received"/,
     );
     expect(daemonB.output).toMatch(/"event":"content\.recovered"/);
+    // DOD-MSG-4 (2b): the parked entry carried the relay's signed Structure2 (sealed in the envelope),
+    // so recover VERIFIED it and recorded the canonical sequence — the recover path self-orders the
+    // same way a direct frame does, not by relay pull order.
+    expect(daemonB.output, "the parked entry self-orders on recover").toMatch(
+      /"event":"session\.content\.ordering\.recorded"[^\n]*"source":"park"/,
+    );
 
     // And it surfaces as readable PLAINTEXT via cello_receive — not raw ciphertext around the funnel.
     const recv = (await connB.call("cello_receive", { session_id: sessionId })) as { ok?: boolean; content?: string | null };
