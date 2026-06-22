@@ -653,3 +653,57 @@ the eight story YAMLs (SCAN/REDACT/MONITOR) predate V3, the daemon, and these de
 must be rewritten to match the pruned scope + the deterministic-vs-LLM-judgment line + the
 moderation-is-Day-2 + the warn disposition + the config architecture + the daemon seam (entry
 plan). The live build remains gated on MSG-001-3b increment 3 (the unified inbound funnel).
+
+---
+
+## §9 — Two-phase build, with two end-to-end gates (DECIDED 2026-06-22)
+
+Build M9 in two phases so you can stop after Phase 1, launch, and add Phase 2 later.
+
+The split is clean for one reason: in Phase 1 you build everything behind a clean interface
+(the adapter pattern V3 already requires). Phase 2 adds new pieces behind that same interface.
+You extend, you do not rewrite.
+
+### Phase 1 — local. The version you launch.
+
+- The gateway runs on the user's own machine, next to the daemon.
+- It does all the detection (secrets, PII, injection, invisible-character stripping, etc.) and
+  the block / redact / warn handling.
+- Config and records are stored locally (the gateway's own SQLCipher file).
+- The daemon talks to the gateway on the same machine.
+
+**Gate 1 (end-to-end, one machine):** send a message → it gets screened → secrets redacted /
+injection blocked / a warning handled → the LLM gets the right answer back. A message comes in
+→ it gets screened. Prove that whole loop on a single machine. No directory attestation needed.
+
+### Phase 2 — non-local. The part you add later.
+
+Two separate pieces, not one:
+- **(a) Remote gateway.** Run the gateway as a separate service; the daemon reaches it over the
+  network with mTLS. This is the company setup — the security layer sits on hardware the
+  employee cannot touch. Only companies need this.
+- **(b) #5 — tamper-proof records.** The gateway sends fingerprints of its records to the
+  directory, so they cannot be faked. This also helps individuals who want a record to hold up
+  as evidence in a dispute.
+
+(a) and (b) are separable and serve different people, so #5 can be built before the remote
+gateway if dispute evidence matters to early users.
+
+**Gate 2 (end-to-end, non-local):** the gateway runs on a separate machine, the daemon connects
+over mTLS, a message gets screened remotely, and a record gets sent to the directory and checked.
+
+### The rule for not over-splitting
+
+In Phase 1, build the interface and any cheap, harmless part. Defer only the parts that are
+truly remote or server-side.
+- **#5:** do the cheap part in Phase 1 — let the gateway compute the fingerprint of each record
+  (a few lines, harmless). Defer the real work to Phase 2 — sending it to the directory, the new
+  directory table, and the check job.
+- **Remote gateway:** build the interface in Phase 1 with the local version behind it. Defer
+  only the network/mTLS plumbing and running it as a standalone service.
+
+### What the story rewrite produces
+
+The DoD and the eight story YAMLs get rewritten into these two phases: a Phase-1 set ending in
+Gate 1, and a Phase-2 set ending in Gate 2. Most stories land in Phase 1. Phase 2 is small: the
+remote-gateway/mTLS story and the #5 attestation story, plus Gate 2.
