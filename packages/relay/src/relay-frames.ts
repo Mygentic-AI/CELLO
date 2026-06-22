@@ -40,6 +40,8 @@ export function encodeAuthOk(_frame: RelayAuthOk): Uint8Array {
 
 export function encodeHashSubmitAck(frame: HashSubmitAck): Uint8Array {
   // PERSIST-012: include relay_id, relay_signature, timestamp when present (signed ACK)
+  // DOD-MSG-4: include structure2_cbor (the committed ordering record) when present, in BOTH the
+  // signed and unsigned ACK shapes — the sender stamps it into its self-ordering content frame.
   if (frame.relay_id !== undefined && frame.relay_signature !== undefined && frame.timestamp !== undefined) {
     return ENC.encode({
       type: frame.type,
@@ -47,9 +49,10 @@ export function encodeHashSubmitAck(frame: HashSubmitAck): Uint8Array {
       relay_id: frame.relay_id,
       relay_signature: frame.relay_signature,
       timestamp: frame.timestamp,
+      structure2_cbor: frame.structure2_cbor,
     });
   }
-  return ENC.encode({ type: frame.type, sequence_number: frame.sequence_number });
+  return ENC.encode({ type: frame.type, sequence_number: frame.sequence_number, structure2_cbor: frame.structure2_cbor });
 }
 
 export function encodeHashSubmitError(frame: HashSubmitError): Uint8Array {

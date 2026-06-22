@@ -1129,7 +1129,9 @@ export class CelloRelayNode {
     // PERSIST-012: Build signed ACK when a signing key is configured.
     // TBS = SHA-256(hash_bytes || seq_BE4 || ts_BE8) per RFC 8032, FIPS 180-4.
     const ackTimestamp = Date.now();
-    let ackFrame: import("./relay-types.js").HashSubmitAck = { type: "hash_submit_ack", sequence_number: seq };
+    // DOD-MSG-4: return the committed Structure2 to the SENDER so it stamps the signed ordering
+    // record into its self-ordering content frame (the SAME s2Cbor delivered to the counterparty).
+    let ackFrame: import("./relay-types.js").HashSubmitAck = { type: "hash_submit_ack", sequence_number: seq, structure2_cbor: s2Cbor };
     if (this.#ackSigningKeyProvider !== null && this.#relayId !== null) {
       try {
         const tbs = buildRelayAckTbs(s1.content_hash, seq, ackTimestamp);
@@ -1140,6 +1142,7 @@ export class CelloRelayNode {
           relay_id: this.#relayId,
           relay_signature: relaySig,
           timestamp: ackTimestamp,
+          structure2_cbor: s2Cbor,
         };
       } catch (sigErr: unknown) {
         // Signing failed — fall back to unsigned ACK; log but do not reject the submission

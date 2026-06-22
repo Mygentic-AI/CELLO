@@ -117,6 +117,13 @@ export interface HashSubmitAck {
    * Absent when relay has no signing key configured.
    */
   timestamp?: number;
+  /**
+   * DOD-MSG-4 (self-ordering content frame): the full CBOR-encoded Structure2 the relay just
+   * committed for this leaf — the SAME record it delivers to the counterparty via leaf_deliver.
+   * Returned to the SENDER so it can stamp the signed ordering record into its content frame, so the
+   * receiver verifies + orders from the content frame alone (no dependence on the leaf_deliver stream).
+   */
+  structure2_cbor?: Uint8Array;
 }
 
 // ─── SessionAssignment (from directory, in-process call) ─────────────────────

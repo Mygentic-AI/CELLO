@@ -290,6 +290,13 @@ describe("AC-001: first hash_submit assigns seq=1 using genesis prev_root", () =
     const deliveredPrevRoot = decodePrevRoot(toU8(deliver["structure2_cbor"]));
     expect(Buffer.from(deliveredPrevRoot).toString("hex")).toBe(Buffer.from(expectedGenesis).toString("hex"));
 
+    // DOD-MSG-4 (self-ordering content frame): the ack now carries the SAME signed Structure2 the
+    // relay delivers to B — so the SENDER can stamp the committed ordering record into its content
+    // frame (previously it got back only the bare sequence number). Byte-identical to leaf_deliver's.
+    expect(ack["structure2_cbor"], "hash_submit_ack carries the full Structure2").toBeDefined();
+    expect(Buffer.from(toU8(ack["structure2_cbor"])).toString("hex"))
+      .toBe(Buffer.from(toU8(deliver["structure2_cbor"])).toString("hex"));
+
     sA.close().catch(() => {});
     sB.close().catch(() => {});
   }, 20_000);
