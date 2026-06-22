@@ -383,3 +383,38 @@ feedback channel: the four dispositions, never-hang deadlines, the stateless re-
 return path depends on it. It is intricate (it changes the `cello_send` contract), so it is the next
 thing I will take on if the autonomous window continues, building it red-first with the design note
 first per Procedure §6 and the full reviewer pass.
+
+---
+
+## 2026-06-22 (late) — OUT-002 + OUT-003 built. Outbound detector set substantially done.
+
+**Built two more fork-free detector units (cello-client `m9-build`):**
+- **M9-OUT-003** (`8f5f781`) — `screenOutboundExfil`: egress invisible-strip (symmetric w/ IN-001),
+  zero-click image-exfil URL neutralization, high-entropy encoded-blob redaction, and a BLOCK on
+  injection artifacts in the output (hijack signal). 5 tests. Also refined the shared entropy
+  detector to a base64/hex charset (excludes URLs — a false positive the clean-message test caught).
+- **M9-OUT-002** (`86dcd25`) — `OutboundPIIScreener`: email/phone/SSN/CC/IP detection with
+  cross-category overlap resolution + Luhn, whitelist (pass own contacts silently), single-vs-bulk
+  warn, deterministic flag ids, and per-session drip escalation (SI-001). 7 tests.
+
+**Whole-night standing (all on `m9-build`; nothing pushed; nothing on `main`):**
+- M9-CORE-001 🟡 — COMPLETE + reviewed (gateway package + daemon seam; B1 race fixed).
+- M9-IN-001 🟡½ — sanitizer built; AC-002 (RE2) parked; not wired.
+- M9-OUT-002 🟡 — PII detector built; warn UX is FEED-001.
+- M9-OUT-003 🟡 — exfil checks complete (unit).
+- M9-OUT-004 🟡 — rate limiter complete (unit).
+- M9-OUT-001 🔒, M9-IN-002 🔒, M9-IN-003 🔒 — decision-coupled (see the 3 decisions below).
+- Tests: daemon **378**, gateway **32** — all green; lint + typecheck clean throughout.
+
+**The cleanly-fork-free detector units are now ALL built.** What remains needs one of:
+1. **Andre's 3 library/model decisions** (RE2 binding · DeBERTa runtime+model install-size strategy
+   · language detector) → unblocks IN-002, IN-003, OUT-001.
+2. **M9-FEED-001 — the keystone** (the verdict-return contract + the stateless re-send + never-hang).
+   Fork-free; the §6 design is settled (Andre's decisions recorded). It changes the `cello_send`
+   contract and is where the built detectors get WIRED into the gateway screen fn and produce real
+   verdicts (the "screen-fn assembly"). Every detector's warn/redact/block surfacing depends on it.
+3. **CFG-001 / REC-001** — need the gateway's own SQLCipher store wired (a native-dep setup).
+
+**Recommended morning path:** resolve the 3 decisions, then FEED-001 (keystone) + the screen-fn
+assembly to make the detector set live, then the inbound detectors, then GATE-1. If the autonomous
+window continues before then, FEED-001 is the next build (design-note-first, incremental, reviewed).
