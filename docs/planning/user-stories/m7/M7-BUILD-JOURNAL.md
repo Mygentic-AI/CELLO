@@ -4159,3 +4159,29 @@ the content-hash cross-check (never re-read, dedup catches replays).
 content frame would carry the relay's `relay_signature` if Finding 2 = "yes, verify the relay's
 committed position". So 2b (park-carries-Structure2) + the relay-signature-in-frame share one payload
 shape — build them together AFTER Andre decides, to avoid reworking the payload twice.
+
+---
+
+## 2026-06-22 — DOD-MSG-4 2b: parked entry self-orders (recover orders by Structure2)
+
+The recover path now self-orders, closing review finding #3 — recovery no longer depends on relay
+pull order. Daemon-only, no relay/interfaces/WAL schema change.
+
+- **Approach:** the daemon seals an ORDERING ENVELOPE `CBOR([1, content, structure1_cbor|null,
+  structure2_cbor|null])` (`encodeParkEnvelope`) instead of bare content. The relay still holds only
+  ciphertext (INV-3). On recover, `decodeParkEnvelope` extracts content + the record; if present,
+  `recordOrderingRecord` runs the SAME verify-and-order path as a direct frame (sender-sig verify,
+  counterparty cross-check fail-closed, hash bind) and records the canonical sequence BEFORE ingest
+  (`source:park`). Bare/old seals fall back to content-only (backward-compatible). The startup-flush
+  crash-backstop seals the envelope with content only (the durable awaiting queue doesn't persist the
+  record → arrival-order recover, acceptable for that edge path).
+- **Chain:** sendContent (orderingS1/S2 from the relay hash submit) → `#parkContent` → content-park
+  hook → `encodeParkEnvelope` → seal. Recover → unseal → `decodeParkEnvelope` → verify+order → ingest.
+- **Proven:** envelope round-trip + fallback unit test; the J-CONTENT recover test asserts
+  `ordering.recorded source:park`; j-content 8/8 (tamper/dedup/startup-flush unaffected by the
+  envelope), j-loopback bilateral seal, daemon suite 365 — all green. cello-client `a42b72d`, tc
+  `c9ac8d8d`. Reviewer (opus) dispatched on the 2b diff.
+
+**DOD-MSG-4 status:** ordering is now correct + live-proven on BOTH paths (direct frame + park/recover);
+the gate holds genuine gaps. REMAINING: Finding 2 (relay-signed sequence — pending Andre, additive) and
+auto-recover-on-reconnect (a trigger so B drains the mailbox before a held message starves — small).

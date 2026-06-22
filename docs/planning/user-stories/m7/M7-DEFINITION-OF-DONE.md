@@ -366,18 +366,26 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
       the frame, reads in order; deterministic, no witness-stream dependence. trustless-cello `1332acfd`.
       The hold/release under a genuine gap is proven by the deterministic unit test
       `msg-001-strict-in-order`. Daemon suite 365, j-content 8/8, j-loopback bilateral seal — all green.
+  **2b — parked entry self-orders — ✅ DONE + LIVE-PROVEN (cello-client `a42b72d`, tc `c9ac8d8d`).**
+  The daemon seals an ORDERING ENVELOPE `[1, content, structure1_cbor|null, structure2_cbor|null]`
+  (`encodeParkEnvelope`) instead of bare content — the relay still holds only ciphertext (INV-3). On
+  recover, `decodeParkEnvelope` extracts the content + record; if present, `recordOrderingRecord`
+  verifies the sender signature and feeds the gate the canonical sequence BEFORE ingest (same path as a
+  direct frame, `source:park`) — closing review finding #3. Daemon-only (no relay/interfaces/WAL schema
+  change); backward-compatible (bare/old seals fall back to content-only). Live-proven: the J-CONTENT
+  recover test asserts `ordering.recorded source:park`; envelope round-trip + fallback unit-tested;
+  j-content 8/8, j-loopback, daemon 365 — green.
   **REMAINING to flip ✅:**
-  - **2b — parked entry carries Structure2.** The recover path currently appends recovered content in
-    arrival/pull order; correct for a SINGLE gap-filler, but multiple out-of-order parked messages need
-    the frame-carried sequence to order (closes review finding #3). Thread Structure2 through
-    `#parkContent` → `ContentParkClient.deposit` → the relay store → pull → recover ingest.
   - **Finding 2 — relay-signed sequence (DECISION PENDING ANDRE).** Today B verifies the SENDER's
     signature (proves A committed to this content). To verify the *relay's committed position* (the
     stated goal), forward the relay's PERSIST-012 `relay_signature`/`relay_id`/`timestamp` in the frame
     and have B verify it. Additive; the relay already signs the ack. Andre to confirm include vs.
     sender-signature-only (safe but weaker — a lying A only self-DoSes via root divergence).
-  - **Catch-up-before-live** reduces to a "have I drained the mailbox before treating direct arrivals
-    as live" gate once 2b lands (recovered messages then carry their own sequence).
+  - **Catch-up-before-live / auto-recover-on-reconnect.** Recovered messages now carry their own
+    sequence, and the gate HOLDS a live arrival that is ahead of un-recovered parked content — so the
+    only gap left is that B must TRIGGER recovery (today the tests call `content_park_recover`
+    explicitly). Remaining: auto-trigger recover on reconnect / on a held-gap, so B drains the mailbox
+    before a held message can starve. Small — a trigger, not new ordering logic.
   - The offline-gap-hold LIVE scenario stays UNIT-proven (deterministic); a live version is flaky
     because direct redelivery to a freshly-RESTARTED peer depends on session reconnection timing, not
     the gate — not worth a flaky enforcer.
