@@ -1,0 +1,80 @@
+# ─── Identity ───────────────────────────────────────────────
+id: M9-GATE-2
+domain: End-to-End
+actor: AGENT
+priority: P1
+components:
+  - client
+  - gateway
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the AGENT, I want the security layer to also work when the gateway runs on separate
+  infrastructure and writes tamper-proof records, so that a company can put the gateway where
+  the employee cannot touch it and prove that screening happened and was not faked.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the daemon is configured for a remote gateway"
+    action: "the daemon shall screen every message through the remote gateway over mTLS, the
+      same way it screens locally — same verdicts, same feedback channel"
+  - trigger: "When the gateway finishes screening"
+    action: "the gateway shall submit the record fingerprint to the directory directly, not
+      through the client"
+  - trigger: "When the verification check runs"
+    action: "it shall confirm each local record matches a directory attestation, and flag any
+      tamper, deletion, suppression, or gap"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+# Phase-2 E2E: gateway in a separate process reached over real mTLS; real directory.
+acceptance_criteria:
+  - id: AC-001
+    given: "a daemon and a gateway running as SEPARATE processes, connected over mTLS"
+    when: "agent A sends a message containing a secret"
+    then: "the secret is redacted by the REMOTE gateway and B receives the redacted form — the
+      mTLS connection carried the screen; no in-process gateway was used"
+    test_type: e2e
+    component_under_test: gateway
+
+  - id: AC-002
+    given: "a screened message whose gateway wrote a security-pass record"
+    when: "the gateway submits the record fingerprint to the directory"
+    then: "the fingerprint is queryable from a DIFFERENT directory instance than any the client
+      controls, and the client never performed that write"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-003
+    given: "a local record whose directory attestation exists"
+    when: "the local record is tampered, then the verification check runs"
+    then: "the check flags the mismatch — and equally flags a directory entry with no local
+      record (deletion) and a local record with no directory entry (suppression)"
+    test_type: e2e
+    component_under_test: directory
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "the client shall never be able to forge or suppress a gateway attestation"
+    adversarial_condition: "even when a compromised client tries to write a SecurityAttestation
+      directly to the directory or to drop the gateway's write — the directory accepts the
+      attestation only over the gateway's own authenticated path, and a suppressed write leaves
+      a detectable gap"
+    test_type: e2e
+    component_under_test: directory
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  discussion_logs:
+    - "2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway"
+
+# ─── Implementation notes ──────────────────────────────────
+implementation_notes: >
+  The Phase-2 gate (M9-CAPABILITY-HARVEST §9). Spawns the real programs incl. a gateway on a
+  separate process over mTLS and a real directory. Composes M9-REMOTE-001 (the mTLS remote
+  gateway) and M9-ATTEST-001 (the directory attestation + check). describe.skipIf(!CELLO_E2E_LIVE).
+  Phase 2 is added only when a company needs it; until M9-ATTEST-001 ships, do not market the
+  product as "tamper-proof."

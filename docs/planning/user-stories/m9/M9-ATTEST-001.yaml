@@ -1,0 +1,85 @@
+# ─── Identity ───────────────────────────────────────────────
+id: M9-ATTEST-001
+domain: Security Gateway
+actor: DIR
+priority: P1
+components:
+  - gateway
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the directory, I want to accept tamper-proof screening records written directly by the
+  gateway, and let a check job catch any tamper, so that screening cannot be faked or hidden —
+  not even by a client that controls its own machine.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the gateway submits a record fingerprint"
+    action: "the directory shall store it in the security_attestations table — a hash-chained,
+      RLS-enforced, region/provider-independent table — written over the gateway's own
+      authenticated path, never the client's"
+  - trigger: "When the verification check runs over a time window"
+    action: "it shall compare each directory attestation to the local gateway record and flag
+      tamper (hash mismatch), deletion (directory entry, no local record), suppression (local
+      record, no directory entry), and message-sequence gaps"
+  - trigger: "When the migration that creates the table is applied"
+    action: "it shall apply cleanly on top of all prior migrations already present, with zero
+      Flyway checksum errors"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "the gateway has screened a message and computed its record fingerprint"
+    when: "the gateway submits the fingerprint to the directory"
+    then: "a row exists in security_attestations carrying the fingerprint and the gateway
+      identity, queryable from a directory instance the client does not control"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "a database with all prior CELLO migrations (V1 … V[N-1]) already applied"
+    when: "the new security_attestations migration V[N] is applied against it (not a fresh DB)"
+    then: "it succeeds with zero Flyway checksum errors on any prior migration, and
+      OpsAgentExpectedMigrationVersion matches N"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "attestations on the directory and matching local records"
+    when: "a local record is altered, a different one is deleted, and a third never reached the
+      directory"
+    then: "the check flags exactly three findings — tamper, deletion, suppression — and a
+      sequence gap if any message has no attestation"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "the directory shall accept a security attestation only over the gateway's
+      authenticated write path — never from the client"
+    adversarial_condition: "even when a compromised client submits a well-formed
+      SecurityAttestation directly — it is rejected; the client holds no path to write one, so
+      it cannot forge what the gateway attested"
+    test_type: integration
+    component_under_test: directory
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  discussion_logs:
+    - "2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway"
+
+# ─── Implementation notes ──────────────────────────────────
+implementation_notes: >
+  Phase 2, #5 (M9-CAPABILITY-HARVEST §9). This is the FIRST new directory Flyway migration since
+  M5 — read infra/CLAUDE.md first. Architecture phase MUST enumerate the full schema up front
+  (all ops, uniqueness, indexes, FKs, RLS append-only, the hash-chain column) before writing the
+  migration, to avoid a version-renumber cascade (FEDERATION-001/002). Reserve the version in
+  COORDINATION.md; bump OpsAgentExpectedMigrationVersion; update cello-ssm-parameters.yaml. The
+  gateway-writes-directly invariant (SI-001 / INV-2 / INV-8) is the whole point of split-process
+  integrity. Cross-repo (directory in trustless-cello + the gateway). Pushing the directory
+  change triggers the 25-30 min deploy — batch with any other pending directory changes; Andre
+  pushes. The mTLS remote path is M9-REMOTE-001; the live proof is the gate M9-GATE-2.
