@@ -231,6 +231,32 @@ describe("DOD-UP-1: #processSealUpgradeRequest handler", () => {
     }
   });
 
+  it("AC-007 ISOLATED: a delegate on a third-party channel with B's REAL pubkey+ack is still rejected", async () => {
+    // Isolates the authenticated-sender check from the frame-body check: the frame claims B's true
+    // returning_pubkey and carries a VALID B-signed ack — only the authenticated senderHex differs.
+    // A pure frame-body check would accept this (delegation); the senderHex==absent check must reject.
+    const t = await setup();
+    try {
+      const ackTbs = t.directory.buildSealUpgradeAckTbsForTest(t.sessionId, t.sealedRoot);
+      const validBAck = new Uint8Array(await t.keyB.sign(ackTbs)); // genuinely B's signature
+      const thirdPartyHex = Buffer.from(new Uint8Array(await generateKeypair().getPublicKey())).toString("hex");
+      const { stream, sent } = makeCaptureStream();
+
+      await t.directory.triggerSealUpgradeForTest(
+        thirdPartyHex, // authenticated channel identity is NOT B
+        { type: "seal_upgrade_request", session_id: t.sessionId, returning_pubkey: t.bPub, ack_signature: validBAck, leaf_count: 3 },
+        stream,
+      );
+
+      expect((await t.store.getNotarization(t.sessionIdHex))?.seal_type).toBe("unilateral");
+      expect(await t.store.getNotarizationId(t.sessionIdHex, "bilateral")).toBeUndefined();
+      const decoded = decodeOutboundSignalingFrame(stripLpPrefix(sent[0]));
+      expect(decoded?.type === "seal_upgrade_rejected" && decoded.reason).toBe("not_absent_party");
+    } finally {
+      await t.stop();
+    }
+  });
+
   it("KERNEL: a forged ack signature is rejected (ack_signature_invalid), no bilateral row", async () => {
     const t = await setup();
     try {

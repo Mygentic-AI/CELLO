@@ -1367,8 +1367,33 @@ export class CelloDirectoryNode {
               const pgNotifs = await this.#notificationQueue.drainUndelivered(authedPubkeyHex);
               for (const pgNotif of pgNotifs) {
                 const p = pgNotif.payload as { session_id_hex?: string; sealed_root_hex?: string; sealed_at?: number };
-                if (!p.session_id_hex || !p.sealed_root_hex || pgNotif.notificationType !== "seal_unilateral") {
+                if (!p.session_id_hex || !p.sealed_root_hex) {
                   // Unrecognised payload — acknowledge to remove from queue without delivering
+                  void this.#notificationQueue!.acknowledge(pgNotif.notificationId).catch(() => {});
+                  continue;
+                }
+                // DOD-UP-1 (L2): durable seal upgrade confirmation — deliver to A so it converges to
+                // bilateral if it was offline during the upgrade. Additive; the seal_unilateral path
+                // below is unchanged.
+                if (pgNotif.notificationType === "seal_upgrade") {
+                  const conf = upgradeConfirmedFromPayload(pgNotif.payload as Record<string, unknown>);
+                  if (!conf) {
+                    void this.#notificationQueue!.acknowledge(pgNotif.notificationId).catch(() => {});
+                    continue;
+                  }
+                  try {
+                    this.#sendFrame(stream, encodeSealUpgradeConfirmed(conf));
+                    void this.#notificationQueue!.acknowledge(pgNotif.notificationId).catch(() => {});
+                  } catch {
+                    this.#logger?.warn("notification.delivery.failed", {
+                      notificationId: pgNotif.notificationId, recipientAgentId: authedPubkeyHex, reason: "stream_send_failed",
+                    });
+                    break;
+                  }
+                  continue;
+                }
+                if (pgNotif.notificationType !== "seal_unilateral") {
+                  // Unrecognised type — acknowledge without delivering
                   void this.#notificationQueue!.acknowledge(pgNotif.notificationId).catch(() => {});
                   continue;
                 }
@@ -3285,10 +3310,36 @@ export class CelloDirectoryNode {
     });
     // To B (the returning party) on this stream.
     try { this.#sendFrame(stream, confirmedFrame); } catch { /* best-effort */ }
-    // To A (the present party) if its signaling stream is live — best-effort; the durable record is
-    // the superseding row, and A re-derives bilateral on its next getNotarization / reconnect.
+    // To A (the present party) on its live stream if present...
     const presentStream = this.#streams.get(presentHex);
     if (presentStream) { try { this.#sendFrame(presentStream, confirmedFrame); } catch { /* best-effort */ } }
+    // ...and DURABLY, so A converges to bilateral even if it was offline during the upgrade (L2). The
+    // authoritative record is the superseding row; this queued cert lets A re-mark the seal bilateral
+    // on its next reconnect (mirrors the absent-party seal_unilateral durable notification).
+    if (this.#notificationQueue) {
+      const upgradeNotificationId = randomUUID();
+      this.#notificationQueue.enqueue(presentHex, {
+        notificationId: upgradeNotificationId,
+        notificationType: "seal_upgrade",
+        payload: {
+          session_id_hex: sessionIdHex,
+          sealed_root_hex: Buffer.from(existing.sealed_root).toString("hex"),
+          leaf_count: frame.leaf_count,
+          close_timestamp: existing.close_timestamp,
+          present_pubkey_hex: presentHex,
+          present_signature_hex: Buffer.from(existing.frost_signature).toString("hex"),
+          present_signature_type: presentSignatureType,
+          returning_pubkey_hex: absentHex,
+          returning_signature_hex: Buffer.from(frame.ack_signature).toString("hex"),
+        },
+      }).catch((err: unknown) => {
+        this.#logger?.warn("pending_notification.enqueue.failed", {
+          notificationId: upgradeNotificationId,
+          recipientAgentId: presentHex,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
   }
 
   /**
@@ -4089,6 +4140,39 @@ function unilateralNotificationFromPayload(
     absent_pubkey: new Uint8Array(Buffer.from(absentHex, "hex")),
     attestation_mode: attestationMode,
     seal_type: "UNILATERAL",
+  };
+}
+
+/** DOD-UP-1 (L2): reconstruct a queued seal_upgrade_confirmed cert for durable A-side convergence. */
+function upgradeConfirmedFromPayload(
+  p: Record<string, unknown>,
+): import("./directory-types.js").SealUpgradeConfirmed | null {
+  const sessionIdHex = p["session_id_hex"];
+  const sealedRootHex = p["sealed_root_hex"];
+  const leafCount = p["leaf_count"];
+  const closeTs = p["close_timestamp"];
+  const presentHex = p["present_pubkey_hex"];
+  const presentSigHex = p["present_signature_hex"];
+  const presentSigType = p["present_signature_type"];
+  const returningHex = p["returning_pubkey_hex"];
+  const returningSigHex = p["returning_signature_hex"];
+  if (typeof sessionIdHex !== "string" || typeof sealedRootHex !== "string") return null;
+  if (typeof leafCount !== "number" || typeof closeTs !== "number") return null;
+  if (typeof presentHex !== "string" || typeof presentSigHex !== "string") return null;
+  if (presentSigType !== "frost" && presentSigType !== "single") return null;
+  if (typeof returningHex !== "string" || typeof returningSigHex !== "string") return null;
+  return {
+    type: "seal_upgrade_confirmed",
+    session_id: new Uint8Array(Buffer.from(sessionIdHex, "hex")),
+    sealed_root: new Uint8Array(Buffer.from(sealedRootHex, "hex")),
+    leaf_count: leafCount,
+    close_timestamp: closeTs,
+    present_pubkey: new Uint8Array(Buffer.from(presentHex, "hex")),
+    present_signature: new Uint8Array(Buffer.from(presentSigHex, "hex")),
+    present_signature_type: presentSigType,
+    returning_pubkey: new Uint8Array(Buffer.from(returningHex, "hex")),
+    returning_signature: new Uint8Array(Buffer.from(returningSigHex, "hex")),
+    seal_type: "BILATERAL",
   };
 }
 
