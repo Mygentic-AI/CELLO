@@ -764,3 +764,28 @@ pushed; nothing on `main`.** GATE-1 checkpoint (§3): `cello-done-auditor` dispa
 flips (CORE-001, IN-001, IN-003, OUT-001/002/003, FEED-001, GATE-1) BEFORE flipping — only EARNED stays ✅.
 Explicitly NOT flipping: IN-002 (🟡½, no real model), OUT-004 (rate-limit not exercised in the live gate),
 CFG-001/REC-001 (❌). Remaining Phase-1: CFG-001 + REC-001; IN-002 part 2 (real model+runtime).
+
+---
+
+## 2026-06-23 — GATE-1 CHECKPOINT: done-auditor ruled 7 EARNED / 1 OVERSTATED / 0 UNPROVEN (DoD commit `d8d12b53`)
+
+`cello-done-auditor` ran the live-gateway suites cold (3 real-process files / 20 tests + 14 gateway files /
+101 tests, all green) and verified the spawned binary composes the REAL screeners (dist built 11:18, after
+every edit). Verdicts applied to the DoD:
+
+- **✅ EARNED → flipped:** M9-CORE-001, M9-IN-001, M9-IN-003, M9-OUT-001, M9-OUT-003, M9-FEED-001, M9-GATE-1.
+  Named breadth caveats (core path real-process; per-rule breadth still unit): IN-001 = only confusables-redact
+  is live (6 other sanitize checks unit); OUT-001 = only the AWS-key rule live (222-rule dict unit); FEED-001 =
+  `governance_timeout` proven in two real halves (real socket-client timeout + daemon fail-closed render), not
+  one full-loop test.
+- **🟡 OVERSTATED → HELD (not flipped):** M9-OUT-002 — only the non-whitelisted-email warn is live; the
+  whitelist-silent-pass + bulk-warn-once behaviors are unit-only AND the live gateway boots with an EMPTY
+  whitelist, so silent-pass is structurally unexercised by the gate. To earn ✅: a gate run with a seeded
+  `CELLO_GATEWAY_PII_WHITELIST` (silent pass) + a contact dump (bulk-warn-once).
+- **Held, confirmed correct:** IN-002 🟡½, OUT-004 🟡 (no rate cap in the live bin), CFG-001 ❌, REC-001 ❌.
+
+**Phase-1 status: 7/12 stories ✅ gate-green.** The directed follow-on (terminal-block seam → FEED-001 inc 4 →
+GATE-1) is COMPLETE, reviewed, and earned. **Remaining for Phase-1 launch:** M9-OUT-002 gate run (seeded
+whitelist + bulk), M9-IN-002 part 2 (real DeBERTa model + inference), M9-OUT-004 (wire a rate cap into the
+gate), M9-CFG-001 (config store), M9-REC-001 (local records). State: gateway 101 + daemon 390 green; nothing
+pushed; nothing on `main`.
