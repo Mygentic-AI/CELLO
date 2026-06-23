@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import {
   startSpineCluster,
   startDaemon,
@@ -26,6 +27,7 @@ import {
   type Proc,
   type McpConn,
 } from "./live-harness.js";
+import { contentHashHex } from "./content-seal-fixture.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -105,9 +107,37 @@ describe("J-PERSIST — durable encrypted transcript survives restart (DOD-LOG-1
     // B's transcript: received M1, sent M2, received M3 — three readable messages after a restart.
     const texts = msgs.map((m) => m.text);
     expect(texts, `B must recover all three messages after restart:\n${JSON.stringify(msgs, null, 2)}`).toEqual([M1, M2, M3]);
-    // Direction is honest, and ordered by the canonical leaf sequence (joins the hash chain).
+    // Direction is honest.
     expect(msgs.map((m) => m.direction)).toEqual(["received", "sent", "received"]);
-    expect(msgs.map((m) => m.sequence)).toEqual([...msgs.map((m) => m.sequence)].sort((a, b) => a - b));
+
+    // ── JOINED TO THE HASH CHAIN (the kernel, not a loose dump): each transcript row's `sequence`
+    // must be the COMMITTED leaf index of the very leaf that carries that message's content hash.
+    // We read session_tree_leaves straight from the daemon's on-disk DB and cross-check by hash —
+    // so an impl that keyed the transcript by a loose counter (decoupled from the Merkle chain)
+    // fails here, not just a sorted-order check. ──
+    const db = new DatabaseSync(join(dirB, "sessions.db"), { readOnly: true });
+    try {
+      const leafRows = db
+        .prepare(
+          `SELECT leaf_index, leaf_hash_hex FROM session_tree_leaves
+           WHERE agent_name = ? AND session_id = ? AND leaf_kind = 'msg' ORDER BY leaf_index ASC`,
+        )
+        .all("agentB", sessionId) as Array<{ leaf_index: number; leaf_hash_hex: string }>;
+      const leafIndexByHash = new Map(leafRows.map((r) => [r.leaf_hash_hex.toLowerCase(), r.leaf_index]));
+      // There is a committed msg leaf for each of the three messages.
+      expect(leafRows.length, `expected 3 committed msg leaves in B's tree, saw ${leafRows.length}`).toBe(3);
+      for (const m of msgs) {
+        const hashHex = contentHashHex(Buffer.from(m.text)).toLowerCase();
+        const committedLeafIndex = leafIndexByHash.get(hashHex);
+        expect(committedLeafIndex, `transcript message "${m.text.slice(0, 12)}…" must have a committed msg leaf`).toBeDefined();
+        expect(
+          m.sequence,
+          `transcript sequence for "${m.text.slice(0, 12)}…" must equal its COMMITTED leaf index (chain join)`,
+        ).toBe(committedLeafIndex);
+      }
+    } finally {
+      db.close();
+    }
 
     // ── INV-3: the relay + directory NEVER saw the plaintext (only hashes/ciphertext). ──
     for (const needle of [M1, M2, M3]) {
