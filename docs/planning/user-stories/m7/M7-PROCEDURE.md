@@ -46,6 +46,41 @@ Consequences, non-negotiable:
 If you catch yourself writing "needs Andre's nod" or "blocked on a decision" about
 code, you are wrong — delete it and do the work.
 
+## 0a. Severity triage — what to work, what to skip, what to NEVER skip
+
+The goal is a working prototype whose CORE jobs genuinely work and where no knowledgeable
+person would call a "done" feature broken. The hardest judgment in M7 is "what is enough."
+Rank every piece of work on this ladder; spend effort top-down, never invert it:
+
+1. **CORE JOB-TO-BE-DONE.** Two agents connect, hold a conversation, and seal it with real
+   identity/trust (FROST, the hash chain, the seal). If any of this is broken or missing,
+   it is the top priority — nothing else matters until it works.
+2. **SILENTLY-BROKEN CORE / SECURITY HOLE.** A feature that LOOKS done but an informed person
+   would say "you missed the key point" — e.g. signing only the latest message instead of
+   building the hash CHAIN; trusting a value you should verify; a real security hole. **This
+   category looks like minutiae and is the most dangerous thing in the codebase.** It is NOT
+   minor. Treat it as critical.
+3. **REAL non-core gaps.** Missing pieces that degrade but don't break the core job.
+4. **Hardening / edge cases / polish.** True minutiae.
+
+**The one test, applied before you call anything done OR move to the next feature — the
+informed-skeptic test:** *would someone who deeply understands this feature say it actually
+works, or that I missed the kernel?* If the kernel isn't there, the feature is in category 2,
+not "done."
+
+**The two failure modes to police in yourself:**
+- **Inflating #4 into #1** — agonizing, blocking, or asking the user about a minor edge case
+  or hardening detail. Do the obvious thing fast and move on. NEVER block on #4. (A reversible
+  redo costs minutes; a block costs hours — see the overnight rule in §3a.)
+- **Demoting #2 to #4** — dismissing a silently-broken core feature as "not important" and
+  walking away with the easy 80% done. Before moving from feature G to H, ask: is the
+  load-bearing kernel of G actually working? Partial completion of a CORE thing is worse than
+  not starting it, because nobody notices the missing piece until it bites in production.
+
+When unsure where something ranks: it is CORE/critical if breaking it means the product can't
+do its basic job, OR a knowledgeable user/attacker would call it broken. Everything else is
+minor — proceed fast, don't block, don't gold-plate.
+
 ## 0. Read order (every session, in order)
 
 1. **This document** — the procedure.
