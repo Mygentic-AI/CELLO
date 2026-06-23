@@ -5019,3 +5019,30 @@ J-AUTH, J-SIG(🟢), J-INT, J-CONTENT, J-UNILATERAL(🟢), J-LEGIBILITY, J-PERSI
 
 Nothing pushed (Andre pushes; trustless-cello push = the 25-30min live deploy). cello-client ahead 15,
 trustless-cello ahead 43.
+
+---
+
+## 2026-06-23 — Tier-0 invariant accuracy pass (post-UP-1): 3 stale statuses resolved
+With UP-1 (the last ❌ core line) closed, the lowest non-green lines were the Tier-0 cross-cutting
+invariants — several carried statuses WORSE than the built reality. Verified the code + ran the tests,
+then corrected:
+- **DOD-INV-4** ❓→🟢 — the 2026-06-11 transport-audit HIGH gap ("client trusts relay for sender
+  identity") is CLOSED. #recordFrameOrdering verifies sender sig + signer===counterparty fail-closed,
+  on every live J-CONTENT frame; bad-sig + wrong-signer rejections tested (msg-001-strict-in-order).
+- **DOD-INV-3** (❌ park-store half)→🟢 — encrypted park store IS built (E2E ciphertext to recipient);
+  J-PERSIST asserts relay+directory never see plaintext, live.
+- **DOD-INV-2** 🟡→🟢 — no-single-party-forges proven piecewise (unilateral receipt-not-assent live,
+  H1 directory-can't-forge tested, LEG-2 frontier co-sign-abort live, wrong-signer fail-closed, FROST).
+
+**Honestly LEFT at 🟡 (NOT flipped — accurate):**
+- INV-1 (sovereign nodes never against a REAL cluster) — needs multi-node infra (Andre's #2).
+- INV-5 (dial-after-teardown SI never run live) — gater built + unit-covered; a live edge test is
+  category-4 hardening.
+- INV-6 / INV-8 (error-discipline / no-console.log + correlationId across the WHOLE assembly) —
+  per-story-built but un-audited as an aggregate; resolving = a full-codebase audit (large, low-core).
+- INV-9 (transport_mode explicit) — built per WIRE-001, not specifically asserted.
+
+**TRUE M7 STATE:** every J-* journey green vs the real binaries; Tier-4 complete (UP-1 + UP-2). The
+ONLY open work is: multi-node infra (#2), the deferred relay-signed-sequence hardening (#3 / DOD-MSG-4
+F2), assembly-wide discipline audits (INV-6/8), and minor polish (SEAL-2 3-table write). No CORE work
+open. Nothing pushed (CC ahead 14, TC ahead ~46).
