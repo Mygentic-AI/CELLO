@@ -40,10 +40,11 @@ description: >
     dictionary + generic-entropy catch-all are unit. **FEED-001** — `governance_timeout` is proven in two
     real halves (the real socket-client timeout + the daemon's fail-closed `cello_send` render), not one
     full-daemon-loop test.
-  - **🟡 OVERSTATED (held, NOT flipped):** **M9-OUT-002** — only the non-whitelisted-email warn is live;
-    "whitelisted value passes silently" + "a contact dump warns once" are unit-only, and the live gateway
-    boots with an EMPTY PII whitelist (`bin/cello-gateway.ts`), so the silent-pass path is not exercisable
-    by the gate as configured. Needs a gate run with a seeded whitelist + a bulk dump.
+  - **✅ M9-OUT-002 — RESOLVED (was OVERSTATED, now EARNED, commit `6ccaad4`):** the auditor's exact
+    condition was met — two new live-gateway seam cases: *"OUT-002 whitelist: a WHITELISTED own-email
+    passes SILENTLY … delivered intact"* (gateway seeded with `CELLO_GATEWAY_PII_WHITELIST`) and *"OUT-002
+    bulk: a contact DUMP warns ONCE … not sent"* (6-contact dump → one governance_warn, ≥5 flags, peer gets
+    nothing). All three done-condition behaviors now real-process green.
   - **Held (correctly un-flipped):** M9-IN-002 🟡½ (no DeBERTa model / no real inference in the live bin),
     M9-OUT-004 🟡 (the spawned gateway passes NO rate-limit config — rate-limiting absent from the gate),
     M9-CFG-001 ❌, M9-REC-001 ❌. Build opened 2026-06-22.
@@ -99,7 +100,7 @@ block/redact/warn handling run locally. Config and records are local. Ends at **
 | | _Detector built + unit-tested (dominant Unicode script: non-Latin confident → held, short/Latin → allowed, configurable allowlist). NOT yet wired live: a non-English `block` needs the terminal-block inbound handling (L4/M2 split). Latin-script LANGUAGE discrimination (English vs French) is the separate design session._ | | |
 | ✅ **M9-OUT-001** | Outbound secret detection + redaction: the full gitleaks dictionary + the generic-entropy catch-all. Redact-by-default. | Each secret type is redacted; a novel high-entropy key is caught; the LLM is told what was redacted. | SCAN-003 / REDACT-001 (part) |
 | | _COMPLETE: the FULL 222-rule gitleaks dictionary (generated from canonical config) + the generic-api-key catch-all + the stopword/allow-regex/entropy false-positive layer, on the RE2 engine, typed [REDACTED:rule] placeholders. AC-001/002/003 + SI-001 green; wired into the OutboundScreener (secrets-first); live seam test redacts a credential end-to-end._ | | |
-| 🟡 **M9-OUT-002** | Outbound PII: the whitelist (pre-seeded from registered identity) + the warn flow. Individual PII passes; bulk is a high-severity warning. | Whitelisted value passes silently; a non-whitelisted email warns; a contact dump warns once. | REDACT-001 (part) |
+| ✅ **M9-OUT-002** | Outbound PII: the whitelist (pre-seeded from registered identity) + the warn flow. Individual PII passes; bulk is a high-severity warning. | Whitelisted value passes silently; a non-whitelisted email warns; a contact dump warns once. | REDACT-001 (part) |
 | | _Detector + whitelist + single/bulk + per-session drip built & unit-tested. The warn UX (NOT-SENT, allow-once/always re-send, WebAuthn whitelist-add) is M9-FEED-001._ | | |
 | ✅ **M9-OUT-003** | Outbound exfiltration checks: invisible-character egress strip, encoded-payload check, zero-click image-exfil pattern, injection-artifacts-in-output → block. | Each fires correctly; ordinary links pass; an injection artifact in output blocks the message. | SCAN-003 (part) |
 | | _Complete as a unit (egress strip / image-exfil neutralize / encoded-blob redact / injection-artifact block). Wiring into the screen fn is the assembly + gate._ | | |
