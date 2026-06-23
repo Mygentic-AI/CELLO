@@ -159,7 +159,16 @@ describe("PERSIST-015: Directory unilateral seal logic", () => {
   });
 
   test.todo("SI-002: duplicate unilateral seal is rejected (requires auth handshake — multi-process gate)", () => {
-    // Full e2e test verifies: #unilateralSeals map ensures second call is a no-op.
+    // Full e2e test verifies: #unilateralSeals map ensures a second SEAL_UNILATERAL call is a no-op.
     // Cannot be tested without completing the auth handshake, which requires a running session.
+    //
+    // DOD-UP-1 clarification: this invariant is UNCHANGED — you still cannot UNILATERALLY re-seal a
+    // session. A second NOTARIZATION is allowed ONLY via the sanctioned bilateral-upgrade path
+    // (seal_upgrade_request → a superseding seal_type='bilateral' row over the SAME root, the
+    // unilateral row preserved). That is a different handler (#processSealUpgradeRequest) gated on the
+    // returning absent party's verified ratification — see
+    // m7-upgrade-001-superseding-notarization.test.ts (store: AC-005/AC-006) and
+    // m7-upgrade-001-directory-handler.test.ts (handler: AC-007 + ack verify). The V31
+    // UNIQUE(session_id, seal_type) constraint still rejects a duplicate of the SAME seal_type.
   });
 });
