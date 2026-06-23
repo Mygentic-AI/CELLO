@@ -4966,3 +4966,32 @@ calls them (thin). New seal-upgrade.test.ts runs the REAL bodies with stubs: tam
 content_tamper; unknown→no send + content_unrecoverable; clean→send. Forged returning sig→cert.invalid
 + not sealed; tampered present sig (local=present)→cert.invalid; valid→sealed. + Finding 3 directory
 test. The live J-UPGRADE-001 stays as the happy-path wiring proof.
+
+---
+
+## 2026-06-23 — DOD-UP-1 REVIEW FIXES DONE (both reviewers cleared); done-auditor next
+Both feature-boundary reviewers ran. ALL findings fixed at ALL severities; J-UPGRADE-001 live test
+STILL GREEN after the fixes (commits cello-client 2e43cfd, trustless-cello 6f0d11b5).
+
+**code-reviewer (opus):**
+- **H1 [HIGH] FIXED** — verifyUpgradeConfirmedCert bound the returning sig to a frame-supplied pubkey,
+  not the session's real participants → a malicious directory could sign with a throwaway key and force
+  B to tear down a live session (sovereign-node violation). FIX: cert {present,returning} must equal
+  {self, our counterparty} from the LOCAL session record; reject unknown_session/participant_mismatch.
+- **M1 [MEDIUM] FIXED** — content gate didn't confirm B holds the FULL content behind R1. FIX: interim
+  leaf-count gate (refuse content_incomplete unless B's tree ≥ leaf_count-1). Exact-root repro = MSG-001-3b.
+- **L2 [LOW] FIXED** — A had no durable upgrade notification. FIX: durable 'seal_upgrade' enqueue + an
+  additive reconnect-drain branch (seal_unilateral path untouched).
+- **L1/L3 [LOW]** — documented residuals the reviewer confirmed acceptable (no code).
+
+**cello-test-attacker (2 BLOCKING hollow tests):**
+- **F1 (KERNEL) + F2 (AC-008) FIXED** — EXTRACTED attemptSealUpgrade + verifyUpgradeConfirmedCert into
+  core/daemon/src/seal-upgrade.ts (injected deps; daemon.ts thin wrapper). New seal-upgrade.test.ts (11)
+  runs the REAL bodies adversarially — a gutted impl now FAILS: tamper/unrecoverable/incomplete → no
+  send; forged sig / attacker pubkey (H1) / present-attestation failure → reject.
+- **F3 [LOW] FIXED** — isolated AC-007 directory test (third-party channel + B's real pubkey+ack still
+  rejected not_absent_party).
+
+**Test ledger (all green):** seal-upgrade.test.ts 11; m7-upgrade-001-directory-handler 8;
+m7-upgrade-001-superseding-notarization 4; seam-3 / seam-4; persist-018/023/015 59; J-UPGRADE-001 live 1.
+Nothing pushed (Andre pushes). DOD-UP-1 stays ❌ until cello-done-auditor EARNS the flip.
