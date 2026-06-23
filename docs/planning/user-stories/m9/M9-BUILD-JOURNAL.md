@@ -676,3 +676,41 @@ inference) on the actual 568 MB model. Needs the runtime + the model download + 
 on `main`.** The DETECTOR LAYER is built (IN-001 ✅, IN-002 part-1 🟡½, IN-003 🟡; OUT-001/002/003/004 ✅).
 What remains is integration: IN-002 part 2 (model+runtime), the terminal-block inbound seam (wires the
 IN-002/IN-003 blocks live), FEED-001 inc 4 (the re-send), M9-GATE-1, and CFG-001/REC-001 (config+records).
+
+---
+
+## 2026-06-23 — Terminal-block inbound seam + IN-002/IN-003 wired LIVE (commits `3b6046e`, `274384c`)
+
+The deferred L4/M2 split is built: the daemon now distinguishes a TERMINAL inbound block (a detector
+rejected the content — non-allowlisted language / high-score injection / oversized) from a TRANSIENT
+fail-closed block (gateway_unavailable / governance_timeout).
+
+- **Contract:** `ScreenVerdict.terminal` (threaded types→protocol→server→client). A detector block sets
+  it; `failClosedVerdict` and `screen_error` leave it unset. **TERMINAL** → daemon records a leaf binding
+  the ORIGINAL content hash + acks `persisted` (sender stops), NEVER buffers for the agent. **TRANSIENT**
+  → no leaf, no ack, sender redelivers once the gateway recovers.
+- **Why the leaf is required:** the sender appended a leaf at the message's CANONICAL position on send, so
+  the receiver must record a matching leaf at the SAME index or the two hash chains diverge and the
+  bilateral seal cross-check fails. The terminal block therefore takes the full DOD-MSG-4 strict-in-order
+  path (held at its canonical index when out of order, leafed when the gap fills via #releaseHeld) — it
+  just leafs WITHOUT buffering (the `screenedOut` marker).
+- **InboundScreener** is now async and wires IN-003 (language allowlist) + IN-002 (semantic injection
+  scanner, pluggable classifier — off/graceful when no model) as terminal-block stages, judged on the
+  SANITIZED text (confusables normalized to Latin are not held). A `flag` (35–69) stays observe + delivers.
+
+**Reviews (read-only subagents) — all findings fixed in `274384c`:**
+- code-reviewer **HIGH-1** (real): the first cut appended the terminal leaf in ARRIVAL order, bypassing the
+  in-order gate → could diverge roots by POSITION. Fixed: routed through the shared held/append machinery.
+  LOW-3 (recover tally), LOW-4 (gateway echoed original content on block) fixed. MED-2 (agent-facing inbound
+  feedback) = the inbound half of FEED-001 — reason is logged now; the cello_receive surface is a named
+  FEED-001 increment (see remaining).
+- cello-test-attacker found **3 blocking hollow-test gaps**, all closed: (1) the ACK was never asserted —
+  added `content.delivery.ack.sent` + the seam test asserts it; (2) the transient no-leaf/no-ack property
+  was untested — the gateway-down test now asserts tree size unchanged + no ack; (3) AC-003 score-governs
+  wasn't exercised at the wiring level — the block case now feeds a disagreeing `SAFE` label.
+
+**State: gateway 89 + daemon 385 tests green; lint + typecheck clean; nothing pushed; nothing on `main`.**
+DoD: IN-003 wired live (held proven via the real spawned gateway); IN-002 part-1 scanner wired live
+(pluggable; real model = part 2). Remaining: FEED-001 inc 4 (the governance re-send, in progress next),
+M9-GATE-1, CFG-001/REC-001, IN-002 part 2 (real model+runtime). **NAMED DEFERRAL:** the inbound terminal-block
+agent-facing feedback surface (cello_receive returning a security note) → M9-FEED-001 inbound increment.
