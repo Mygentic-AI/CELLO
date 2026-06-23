@@ -49,8 +49,16 @@ description: >
     the live gateway bin (interim env config, INV-4) and gate-proven — *"OUT-004 rate limit: over-rate sends
     are throttled with a distinct rate_limited reason + guidance"* (cap 2/window: two sends out, the third
     `rate_limited`).
-  - **Held (correctly un-flipped):** M9-IN-002 🟡½ (no DeBERTa model / no real inference in the live bin),
-    M9-CFG-001 ❌, M9-REC-001 ❌. Build opened 2026-06-22.
+  - **✅ M9-CFG-001 + M9-REC-001 — EARNED (was ❌, commits db7a8a5→9167565; done-auditor 2 EARNED / 0
+    OVERSTATED 2026-06-23):** the §7 loosen-confirm gate and both tamper-evidence chains are proven by
+    REAL rejections + raw-DB tampering (not happy-path asserts), and the stores drive the spawned gateway
+    processes live (a store-seeded confirmed whitelist passes silently; both gateways record every screened
+    message inbound+outbound with a verifiable chain + the real correlationId). Reviewed: CFG-001 closed
+    B1/H1/H2/M1/M2/L1 + a hash-chain hollow-test; REC-001 closed correlationId(HIGH)/screen_error(MED)/2 LOW
+    + 2 hollow-test gaps.
+  - **Phase-1: 11/12 ✅ gate-green.** The ONLY remaining story is **M9-IN-002 part 2** (🟡½ — real DeBERTa
+    model + transformers.js inference; the live bin loads no model), gated on external infra (568 MB model +
+    a memory-capable test env). Build opened 2026-06-22.
 
 ## The build gate (resolved)
 
@@ -110,8 +118,8 @@ block/redact/warn handling run locally. Config and records are local. Ends at **
 | ✅ **M9-OUT-004** | Outbound message rate-limiting, keyed on agent identity. | Over-rate sends are throttled with a distinct reason + guidance. | new |
 | ✅ **M9-FEED-001** | The governance feedback channel: the four dispositions (observe / redact / block / warn), blocking `cello_send`, the never-hang guarantee (per-stage + total deadline below the host timeout, timeout-is-a-verdict, fail-closed + circuit breaker), the publish channel, and the stateless re-send flow with `governance_decisions` (redact / allow_once / allow_always, gated by `autonomous_override`). | All four dispositions return correct terminal results; a warn round-trips via re-send; a forced timeout returns a block-verdict, never hangs. | new (the §6 design) |
 | | _Core DONE + live-proven (inc 1/2/3/5/6): the four cello_send outcomes through a REAL screening gateway (clean→sent / redact→altered-delivered / warn→not-sent / block→not-sent), the inbound redact mirror (sanitized delivered, leaf keeps original hash), and governance_timeout vs gateway_unavailable. **Plus the screen-fn assembly** (OutboundScreener + InboundScreener wire the detectors into the live gateway). REMAINING: inc 4 — the stateless `governance_decisions` re-send (redact / allow_once / allow_always, autonomous_override, SI-002) — security-critical, deferred to a focused effort + adversarial review._ | | |
-| **M9-CFG-001** | Config storage: the gateway's own local SQLCipher DB, versioned (append-only rows), with tighten-free / loosen-needs-confirmation. Portal/CLI/file-import front-ends. | A setting change is versioned and attested-ready; loosening a guard requires confirmation; tightening is free. | new |
-| **M9-REC-001** | Local security-pass records: the gateway records what it did to each message (clean / redacted / blocked / warned), and computes a fingerprint of each record. (The cheap half of #5; sending to the directory is Phase 2.) | Every message produces a record with a fingerprint; clean passes are recorded too. | REDACT-004 (part) |
+| ✅ **M9-CFG-001** | Config storage: the gateway's own local SQLCipher DB, versioned (append-only rows), with tighten-free / loosen-needs-confirmation. Portal/CLI/file-import front-ends. | A setting change is versioned and attested-ready; loosening a guard requires confirmation; tightening is free. | new |
+| ✅ **M9-REC-001** | Local security-pass records: the gateway records what it did to each message (clean / redacted / blocked / warned), and computes a fingerprint of each record. (The cheap half of #5; sending to the directory is Phase 2.) | Every message produces a record with a fingerprint; clean passes are recorded too. | REDACT-004 (part) |
 | ✅ **M9-GATE-1** | **End-to-end gate, one machine.** Send a message → screened → secret redacted / injection blocked / warning handled → LLM gets the right answer. A message comes in → screened. | The whole loop is green against the real daemon + gateway on one machine. No directory attestation. | new |
 
 **Retired (cut in the prune — do not build):**
