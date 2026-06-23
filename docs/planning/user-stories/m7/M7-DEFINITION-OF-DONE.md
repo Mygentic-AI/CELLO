@@ -556,10 +556,14 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
   disconnect → directory queries relay → ABSENT; B alive-but-silent → DELIVERED, never ABSENT.
   The seal ALWAYS completes (timeout-driven); liveness only colours the attestation
   (`session.unilateral.attestation` + `notarized` carry `attestation:ABSENT|DELIVERED`).
-  KNOWN LIMITATION: `attestation_mode` is carried in the cert but NOT bound in the seal TBS,
-  so a channel attacker could flip ABSENT↔DELIVERED in the delivered copy without breaking the
-  signature; the authoritative record is the directory's server-side notarization. Tamper-binding
-  the attestation in the TBS is a DOD-LEG hardening follow-on.
+  KNOWN LIMITATION (UNILATERAL cert only): the unilateral seal's `attestation_mode` is carried in
+  the cert but NOT bound in its seal TBS (directory-node.ts uses plain `buildSealTbs` on the unilateral
+  path, no `bindLegibilityToTbs`), so a channel attacker could flip ABSENT↔DELIVERED in the delivered
+  copy without breaking the signature; the authoritative record is the directory's server-side
+  notarization. (DISTINCT from the BILATERAL/legibility `attestation_mode`, which IS tamper-bound via
+  `bindLegibilityToTbs` — SESSION-004, seal-legibility.ts. The two are different fields/paths; no
+  contradiction.) Tamper-binding the unilateral attestation in the TBS is a DOD-LEG hardening follow-on
+  — IN PROGRESS 2026-06-23.
 - **DOD-LIVE-3 — No agent heartbeat.** Liveness is connection/node-level only;
   `last_seen_seq` is the sole engagement signal; DELIVERED is never promoted to
   CLEAN/FLAGGED by a liveness signal. *(SESSION-003 AC-011)* — 🟢 satisfied by construction:
