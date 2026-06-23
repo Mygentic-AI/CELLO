@@ -78,12 +78,37 @@ describeIntegration("SEAL-2: conversation_seals/_participation/_attestations pro
     expect(byPseudo[seal.parties[1]!.pseudonym]).toBe("ABSENT");
   });
 
+  it("PRIVACY (INV-3): the three tables hold ONLY metadata columns — no content-bearing column", async () => {
+    // CR/test-attacker note: privacy is enforced structurally (the input type + schema have no content
+    // field). This pins it behaviorally — if a content-bearing column were ever added to any of the
+    // three tables, this assertion fails. The graph stores relationship metadata + the sealed root
+    // HASH only, never conversation content.
+    const cols = async (t: string) =>
+      (await pool.query<{ column_name: string }>(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1`, [t])).rows.map((r) => r.column_name).sort();
+    expect(await cols("conversation_seals")).toEqual(
+      ["chain_hash", "close_reason_code", "close_type", "conversation_id", "id", "merkle_root", "participant_count", "seal_date"].sort(),
+    );
+    expect(await cols("conversation_participation")).toEqual(["chain_hash", "conversation_id", "id", "party_pseudonym"].sort());
+    expect(await cols("conversation_attestations")).toEqual(
+      ["attestation", "attested_at", "chain_hash", "conversation_id", "id", "participant_pseudonym", "seal_signature"].sort(),
+    );
+    // And merkle_root is the sealed root HASH (hex), never content — a recorded seal's value is exactly
+    // the 64-hex root we passed in.
+    const store = new PgDirectoryStore(pool, noopLogger());
+    const seal = makeSeal();
+    await store.recordConversationSeal(seal, { correlationId: "privacy" });
+    const root = (await pool.query<{ merkle_root: string }>(`SELECT merkle_root FROM conversation_seals WHERE conversation_id = $1`, [seal.conversationId])).rows[0]!.merkle_root;
+    expect(root).toBe(seal.merkleRootHex);
+    expect(root).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it("the analytics graph-edge query derives exactly one edge between the two parties", async () => {
     const store = new PgDirectoryStore(pool, noopLogger());
     const seal = makeSeal();
     await store.recordConversationSeal(seal, { correlationId: "edge" });
 
-    // The exact Phase-2 graph_edges derivation (analytics-job.ts).
+    // The exact Phase-2 graph_edges derivation — kept byte-identical to analytics-job.ts #readGraphEdges
+    // (which is private, so it cannot be imported). If that production query changes, update this copy.
     const edges = await pool.query<{ pseudonym_a: string; pseudonym_b: string; edge_weight: string }>(
       `SELECT LEAST(p1.party_pseudonym, p2.party_pseudonym) AS pseudonym_a,
               GREATEST(p1.party_pseudonym, p2.party_pseudonym) AS pseudonym_b,

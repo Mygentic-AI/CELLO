@@ -526,8 +526,14 @@ export class PgDirectoryStore implements DirectoryStore {
       if (ownsTransaction) await client.query("BEGIN");
 
       // 1. conversation_seals (FK parent — must precede participation/attestations). seal_date is a
-      //    DATE column; pg takes the date part of the JS Date (UTC).
-      const sealDate = new Date(seal.closeTimestampMs);
+      //    DATE column. CR-L4: compute the date in UTC as a 'YYYY-MM-DD' string rather than passing a
+      //    Date — a Date is truncated to a date in the DB SESSION timezone, which would shift seal_date
+      //    (and thus analytics last_activity = MAX(seal_date)) by a day near midnight on a non-UTC node.
+      //    seal_date is excluded from the chain (hash-chain.ts), so this affects only analytics, never
+      //    integrity. NB: the hex TEXT columns (merkle_root/pseudonym/seal_signature) DO chain; an
+      //    all-decimal-digit value would be number-coerced by serializeRecord (CR-L2), binding only its
+      //    leading ~16 digits — self-verifying (no break) and ~1e-12 likely for a 32-byte hash/pubkey.
+      const sealDate = new Date(seal.closeTimestampMs).toISOString().slice(0, 10);
       await this.insertWithChain(
         "conversation_seals",
         { conversation_id: seal.conversationId, merkle_root: seal.merkleRootHex, close_type: seal.closeType, participant_count: seal.parties.length, seal_date: sealDate },

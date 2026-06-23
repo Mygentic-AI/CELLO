@@ -3223,6 +3223,13 @@ export class CelloDirectoryNode {
    * conversation_id = the 16-byte session_id formatted as a UUID. The unilateral→bilateral UPGRADE
    * does NOT call this — the A↔B edge already exists from the unilateral seal (and conversation_id is
    * UNIQUE). `pseudonym` is the party's k_local pubkey hex (stable graph identity).
+   *
+   * CR-M1: the per-party `attestation` written here is the SEAL-TIME LIVENESS value — DELIVERED
+   * (present / co-signed) or ABSENT (the relay observed the party gone). The CLEAN / FLAGGED values
+   * that `pseudonym_stats` (analytics-job) counts are a DIFFERENT, RESERVED signal — the abuse /
+   * reputation attestation set by the abuse-report path (DOD-LOG-3 family), which is NOT YET BUILT.
+   * So `clean_count` / `flagged_count` are intentionally 0 until that lands; the Sybil graph (edges +
+   * clustering) does NOT read attestation, so this is a no-op for the farming-detection signal.
    */
   #recordConversationSealBestEffort(args: {
     sessionId: Uint8Array;
