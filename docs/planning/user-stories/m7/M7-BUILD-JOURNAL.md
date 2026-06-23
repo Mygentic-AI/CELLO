@@ -4995,3 +4995,27 @@ STILL GREEN after the fixes (commits cello-client 2e43cfd, trustless-cello 6f0d1
 **Test ledger (all green):** seal-upgrade.test.ts 11; m7-upgrade-001-directory-handler 8;
 m7-upgrade-001-superseding-notarization 4; seam-3 / seam-4; persist-018/023/015 59; J-UPGRADE-001 live 1.
 Nothing pushed (Andre pushes). DOD-UP-1 stays ❌ until cello-done-auditor EARNS the flip.
+
+---
+
+## 2026-06-23 — DOD-UP-1 ✅ PROVEN LIVE — done-auditor EARNED; LAST ❌ CORE LINE CLOSED
+cello-done-auditor verdict: **1 EARNED, 0 overstated, 0 unproven**. Ran every piece of evidence live:
+J-UPGRADE-001 (1 passed, psqlSpine directory-DB corroboration genuine), seal-upgrade.test.ts 11/11
+(real refusal bodies), directory-handler 8/8, superseding-notarization 4/4. Flipped DOD-UP-1 →
+✅ PROVEN LIVE (commit 886408c2) + corrected the stale Tier-4 / bottom-line / SEAL-2-coupling clauses.
+
+**M7 substantive build is COMPLETE.** Every J-* journey is green against the real binaries: J-SPINE,
+J-AUTH, J-SIG(🟢), J-INT, J-CONTENT, J-UNILATERAL(🟢), J-LEGIBILITY, J-PERSIST, J-LOOPBACK, J-UPGRADE
+(DOD-UP-1 + UP-2). What remains is NOT new build:
+1. **🟢 multi-node failover remainders** — physically need >1 directory/relay; the single-node spine
+   harness cannot model them. Blocked on infra (Andre's "#2 — for the live integration test"). NOT fakeable.
+2. **DOD-MSG-4 Finding 2** (relay-SIGNED sequence verification) — explicitly deferred (RC-1) to the
+   transport-security-audit hardening story. Current AC met with sender-signature ordering (a lying
+   sender only self-DoSes). Andre's "#3 — at some point, not now."
+3. **Minor 🟡 remainders** (e.g. SEAL-2's conversation_seals/conversation_attestations 3-table
+   'ABSENT' discriminator write) — the seal is fully functional + notarized + certified via
+   seal_notarizations; the 3-table write is an alternate representation (category 3/4 polish), not a
+   core gap. Not blocking M7.
+
+Nothing pushed (Andre pushes; trustless-cello push = the 25-30min live deploy). cello-client ahead 15,
+trustless-cello ahead 43.
