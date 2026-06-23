@@ -198,12 +198,14 @@ describe("AC-009: directory routes seal-interrupted frames via pass-through", ()
     const authCounterparty = await connectAndAuth(counterpartyNode, dirNode, counterpartyKey);
 
     const sessionId = "1122334455667788aabbccddeeff0011";
+    const nonce = "cafef00d00112233"; // L-2 replay guard — the ack MUST echo the request nonce
 
     // Counterparty sends seal_interrupted_ack addressed to initiator
     sendFrame(authCounterparty.stream, CBOR_ENC.encode({
       type: "seal_interrupted_ack",
       sessionId,
       initiatorPubkey: initiatorPubkeyHex,
+      nonce,
       sealInterruptedLeaf: {
         leafType: "seal_interrupted",
         sessionId,
@@ -217,6 +219,7 @@ describe("AC-009: directory routes seal-interrupted frames via pass-through", ()
     expect(received["type"]).toBe("seal_interrupted_ack");
     expect(received["sessionId"]).toBe(sessionId);
     expect(received["initiatorPubkey"]).toBe(initiatorPubkeyHex);
+    expect(received["nonce"]).toBe(nonce); // nonce carried through verbatim (DOD-INT-2 replay guard)
     expect(received["sealInterruptedLeaf"]).toBeDefined();
     expect((received["sealInterruptedLeaf"] as Record<string, unknown>)["leafType"]).toBe("seal_interrupted");
 
@@ -303,6 +306,7 @@ describe("AC-014: seal-interrupted catch blocks use proper error message extract
       type: "seal_interrupted_ack",
       sessionId: "aabb",
       initiatorPubkey: "1122",
+      nonce: "ffffffff", // L-2 replay guard — required field on the ack
       sealInterruptedLeaf: { leafType: "seal_interrupted", sessionId: "aabb", merkleRoot: "cafebabe", leafCount: 4 },
     });
     const frame = decodeInboundSignalingFrame(encoded);
@@ -310,6 +314,7 @@ describe("AC-014: seal-interrupted catch blocks use proper error message extract
     expect(frame?.type).toBe("seal_interrupted_ack");
     if (frame?.type === "seal_interrupted_ack") {
       expect(frame.initiatorPubkey).toBe("1122");
+      expect(frame.nonce).toBe("ffffffff");
       expect(frame.sealInterruptedLeaf).toBeDefined();
     }
   });
