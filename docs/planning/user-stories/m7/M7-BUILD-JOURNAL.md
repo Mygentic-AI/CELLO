@@ -4643,3 +4643,31 @@ transcript table keyed to the leaf chain by sequence + recordTranscriptMessage/r
 writes (received in #appendVerifiedContent, sent in the cello_send path). (4) cello_get_transcript read
 surface. (5) J-PERSIST live test: A↔B exchange → kill+restart daemon → read transcript back; assert
 relay/directory never saw plaintext (INV-3).
+
+---
+
+## 2026-06-23 — DOD-LOG-1 durable encrypted transcript BUILT + live-proven (J-PERSIST); reviewers running
+
+The kernel is live-proven: the daemon now durably stores the readable transcript, chain-linked and
+encrypted at rest, and it survives a restart. 5 increments:
+- incr 1 (cc `78d98b6`): transcript-cipher.ts — AES-256-GCM envelope over each message blob, dedicated
+  per-DB 32-byte key (0600 file), node:crypto, no native dep. Unit 4/4 (round-trip, ciphertext≠plaintext,
+  tamper→null, wrong-key→null).
+- incr 2-4 (cc `1175240`): `transcript` table keyed (agent_name, session_id, sequence, direction) where
+  sequence = the canonical leaf index (joins session_tree_leaves — a verifiable transcript, not a loose
+  dump). recordTranscriptMessage (encrypt + INSERT OR IGNORE, idempotent, never fatal to the content
+  path) + readTranscript (decrypt + order). Received write hooked in #appendVerifiedContent, sent write
+  in the cello_send handler. cello_get_transcript IPC handler + cello-mcp tool.
+- incr 5 (tc `79931d4c`): J-PERSIST live test. A↔B exchange 3 msgs → KILL+restart B's daemon on the same
+  CELLO_DIR → B reads [M1,M2,M3] back in canonical order, directions [received,sent,received]; INV-3
+  (relay+directory never saw the plaintext); encrypted-at-rest (the plaintext needles are NOT in the
+  on-disk DB file). Floor: daemon cipher 4 + strict-in-order + manifest 27 green; daemon + mcp bin build.
+
+Decisions (autonomous, high-prob, reversible — no block): envelope+node:sqlite not SQLCipher (avoids the
+native-dep install cost CLAUDE.md flags); a dedicated transcript key not derived from identity (KeyProvider
+is sign-only — no seed exposure; key-separation is better hygiene anyway).
+
+code-reviewer + cello-test-attacker running; done-auditor before the ✅ flip. Triage note: built kernel
+first (chain-linked durable readable transcript) and applied the informed-skeptic test — the at-rest DB
+file check + the sequence-join keying guard against the silently-broken-core trap (a transcript that
+looks saved but isn't really encrypted or isn't tied to the verified chain).
