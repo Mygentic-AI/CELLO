@@ -4936,3 +4936,33 @@ registerSessionSealedListener, which catches session_sealed pushed in the same d
 
 **Status:** DOD-UP-1 stays ❌ in the DoD until the two reviewers (feature-dev:code-reviewer opus +
 cello-test-attacker) clear + done-auditor EARNS the flip. Nothing pushed (CC ahead 13, TC ahead 38).
+
+---
+
+## 2026-06-23 — DOD-UP-1 REVIEW: cello-test-attacker found 2 BLOCKING hollow tests (must fix before flip)
+The two enforcement paths that are the POINT of the story are exercised only where genuine inputs pass
+anyway — a gutted impl is green across the suite. DoD-UP-1 stays ❌ until fixed (HOLLOW = blocking).
+
+1. **[blocking] KERNEL (content-possession gate) untested.** getSealUpgradeReadiness is tested as a
+   PURE function (seam-3); no test proves attemptSealUpgrade CONSULTS it and REFUSES (no
+   seal_upgrade_request sent, no bilateral row) when content is tampered/unrecoverable. Delete the gate
+   (daemon.ts:1592-1604) → signs unconditionally → spine still passes (content was clean). No test
+   references seal.upgrade.refused / content_tamper / content_unrecoverable.
+2. **[blocking] AC-008 consumer verify untested.** verifyAndApplyUpgradeConfirmed (daemon.ts:1679-1697)
+   can be gutted (skip ed25519Verify) → logs upgraded + destroys session on ANY confirmed frame → all
+   tests pass. No test delivers a forged/wrong-root/swapped seal_upgrade_confirmed and asserts
+   session.seal.upgrade.cert.invalid + session NOT accepted as bilateral.
+3. **[low] AC-007 not isolated.** directory-handler test sets BOTH senderHex AND frame.returning_pubkey
+   to the impostor → can't tell which check fired. Add: authenticated senderHex = third party but
+   frame.returning_pubkey = absentHex with a VALID B-signed ack → assert not_absent_party.
+
+**Confirmed-sound (teeth):** AC-006 append-only; ack_signature_invalid (no bilateral row); hash-chain
+exclusion teeth test; UNIQUE dedup; frame codec; psqlSpine authoritative (not daemon-fakeable).
+
+**FIX PLAN (batched with the code-reviewer's findings):** extract attemptSealUpgrade +
+verifyAndApplyUpgradeConfirmed into core/daemon/src/seal-upgrade.ts with INJECTED deps (sessionNodeMgr,
+keyProvider, sendRaw, autoRecover, verifyUnilateralCertificate, destroySessionNode, logger). daemon.ts
+calls them (thin). New seal-upgrade.test.ts runs the REAL bodies with stubs: tampered→no send +
+content_tamper; unknown→no send + content_unrecoverable; clean→send. Forged returning sig→cert.invalid
++ not sealed; tampered present sig (local=present)→cert.invalid; valid→sealed. + Finding 3 directory
+test. The live J-UPGRADE-001 stays as the happy-path wiring proof.
