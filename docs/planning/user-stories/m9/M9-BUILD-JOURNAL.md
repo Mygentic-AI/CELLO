@@ -646,3 +646,33 @@ change for a fresh, focused effort.
 4. **M9-GATE-1** (the Phase-1 E2E gate) — runs once the above land.
 5. CFG-001 (gateway config store) + REC-001 (records) — needed for the configurable allowlist/whitelist
    persistence + the tamper-proof-records half.
+
+---
+
+## 2026-06-23 — M9-IN-002 part 1 (scanner logic + installer). Model resolved. (commit `e4aeda0`)
+
+Andre confirmed the model decision ("agreed"): **protectai/deberta-v3-small-prompt-injection-v2**,
+fp32 ONNX verbatim from Hugging Face (English — pairs with the IN-003 English allowlist), transformers.js
+runtime, confirm-install + graceful degradation. (Found via search; the small repo ships only the fp32
+`onnx/model.onnx` at 568 MB — no published INT8. fp32-verbatim chosen over a self-quantized INT8
+derivative for clean provenance; INT8 is a later size optimization.)
+
+**Part 1 built (gateway):** `InjectionScanner` (score→verdict logic with a PLUGGABLE classifier, so the
+rules unit-test without the model: score≥70 block / ≥35 flag / <35 pass; the SCORE governs the verdict,
+AC-003; no classifier → Layer-2 off, graceful) + the model installer (not bundled; consent-gated
+download, size-verified against the committed manifest, streamed). 11 unit tests green.
+
+**HARNESS LIMITATION (recorded):** this dev environment's secret-redaction rewrites any 64-hex SHA-256
+to asterisks even in generated files — so the pinned model digests cannot be committed here. Integrity
+is the committed file SIZE for now; the full SHA-256 TUF-style pin (so a compromised mirror cannot swap
+the model) is the intended hardening, to be added out-of-band (CI / a non-redacting path).
+
+**Part 2 (the heavy step, to hand off):** the real classifier — transformers.js (@huggingface/transformers,
+an optionalDependency, lazy-imported; absent → degrade) over the local ONNX — and the GATED real-inference
+test proving AC-001 (a known injection blocks) / AC-002 (benign passes) / SI-001 (no network during
+inference) on the actual 568 MB model. Needs the runtime + the model download + a memory-capable test env.
+
+**Whole-M9 status: gateway 82 + daemon 384 tests green; lint + typecheck clean; nothing pushed; nothing
+on `main`.** The DETECTOR LAYER is built (IN-001 ✅, IN-002 part-1 🟡½, IN-003 🟡; OUT-001/002/003/004 ✅).
+What remains is integration: IN-002 part 2 (model+runtime), the terminal-block inbound seam (wires the
+IN-002/IN-003 blocks live), FEED-001 inc 4 (the re-send), M9-GATE-1, and CFG-001/REC-001 (config+records).
