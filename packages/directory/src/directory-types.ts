@@ -429,6 +429,10 @@ export interface SealUpgradeRequest {
   session_id: Uint8Array;       // 16 bytes
   returning_pubkey: Uint8Array; // 32 bytes — must equal the unilateral seal's absent party
   ack_signature: Uint8Array;    // 64-byte Ed25519 signature over the upgrade-ack TBS
+  // leaf_count of the sealed chain (from the unilateral cert B received). The directory does not
+  // store it on the notarization row; B forwards it so the directory can relay it on the confirmed
+  // frame, letting the present party rebuild the seal TBS and verify its own attestation (AC-008).
+  leaf_count: number;
 }
 
 export type SealUpgradeRejectedReason =
@@ -456,6 +460,7 @@ export interface SealUpgradeConfirmed {
   type: "seal_upgrade_confirmed";
   session_id: Uint8Array;
   sealed_root: Uint8Array;              // 32-byte R1 — unchanged from the unilateral seal
+  leaf_count: number;                   // leaves in the sealed chain — rebuilds the seal TBS (AC-008)
   close_timestamp: number;              // Unix ms — from the unilateral notarization
   present_pubkey: Uint8Array;           // 32-byte present party (A) — the original seal signer
   present_signature: Uint8Array;        // A's original seal signature over the seal TBS (from the unilateral row)

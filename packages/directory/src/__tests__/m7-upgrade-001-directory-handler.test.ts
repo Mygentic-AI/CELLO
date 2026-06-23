@@ -80,6 +80,7 @@ describe("DOD-UP-1: seal upgrade frame codec", () => {
       session_id: randomBytes(16),
       returning_pubkey: randomBytes(32),
       ack_signature: randomBytes(64),
+      leaf_count: 3,
     });
     const decoded = decodeInboundSignalingFrame(good);
     expect(decoded?.type).toBe("seal_upgrade_request");
@@ -87,7 +88,12 @@ describe("DOD-UP-1: seal upgrade frame codec", () => {
     // Wrong signature length → null.
     expect(decodeInboundSignalingFrame(ENC.encode({
       type: "seal_upgrade_request", session_id: randomBytes(16),
-      returning_pubkey: randomBytes(32), ack_signature: randomBytes(32),
+      returning_pubkey: randomBytes(32), ack_signature: randomBytes(32), leaf_count: 3,
+    }))).toBeNull();
+    // Missing leaf_count → null.
+    expect(decodeInboundSignalingFrame(ENC.encode({
+      type: "seal_upgrade_request", session_id: randomBytes(16),
+      returning_pubkey: randomBytes(32), ack_signature: randomBytes(64),
     }))).toBeNull();
   });
 
@@ -97,6 +103,7 @@ describe("DOD-UP-1: seal upgrade frame codec", () => {
       type: "seal_upgrade_confirmed",
       session_id: sessionId,
       sealed_root: randomBytes(32),
+      leaf_count: 5,
       close_timestamp: 1234,
       present_pubkey: randomBytes(32),
       present_signature: randomBytes(64),
@@ -164,7 +171,7 @@ describe("DOD-UP-1: #processSealUpgradeRequest handler", () => {
 
       await t.directory.triggerSealUpgradeForTest(
         t.bHex,
-        { type: "seal_upgrade_request", session_id: t.sessionId, returning_pubkey: t.bPub, ack_signature: ackSig },
+        { type: "seal_upgrade_request", session_id: t.sessionId, returning_pubkey: t.bPub, ack_signature: ackSig, leaf_count: 3 },
         stream,
       );
 
@@ -209,7 +216,7 @@ describe("DOD-UP-1: #processSealUpgradeRequest handler", () => {
 
       await t.directory.triggerSealUpgradeForTest(
         impostorHex,
-        { type: "seal_upgrade_request", session_id: t.sessionId, returning_pubkey: impostorPub, ack_signature: ackSig },
+        { type: "seal_upgrade_request", session_id: t.sessionId, returning_pubkey: impostorPub, ack_signature: ackSig, leaf_count: 3 },
         stream,
       );
 
@@ -234,7 +241,7 @@ describe("DOD-UP-1: #processSealUpgradeRequest handler", () => {
 
       await t.directory.triggerSealUpgradeForTest(
         t.bHex,
-        { type: "seal_upgrade_request", session_id: t.sessionId, returning_pubkey: t.bPub, ack_signature: badSig },
+        { type: "seal_upgrade_request", session_id: t.sessionId, returning_pubkey: t.bPub, ack_signature: badSig, leaf_count: 3 },
         stream,
       );
 
@@ -258,7 +265,7 @@ describe("DOD-UP-1: #processSealUpgradeRequest handler", () => {
       const { stream, sent } = makeCaptureStream();
       await t.directory.triggerSealUpgradeForTest(
         t.bHex,
-        { type: "seal_upgrade_request", session_id: unknownSession, returning_pubkey: t.bPub, ack_signature: ackSig },
+        { type: "seal_upgrade_request", session_id: unknownSession, returning_pubkey: t.bPub, ack_signature: ackSig, leaf_count: 3 },
         stream,
       );
       const decoded = decodeOutboundSignalingFrame(stripLpPrefix(sent[0]));
@@ -273,7 +280,7 @@ describe("DOD-UP-1: #processSealUpgradeRequest handler", () => {
     try {
       const ackTbs = t.directory.buildSealUpgradeAckTbsForTest(t.sessionId, t.sealedRoot);
       const ackSig = new Uint8Array(await t.keyB.sign(ackTbs));
-      const frame = { type: "seal_upgrade_request" as const, session_id: t.sessionId, returning_pubkey: t.bPub, ack_signature: ackSig };
+      const frame = { type: "seal_upgrade_request" as const, session_id: t.sessionId, returning_pubkey: t.bPub, ack_signature: ackSig, leaf_count: 3 };
       await t.directory.triggerSealUpgradeForTest(t.bHex, frame, makeCaptureStream().stream); // first upgrade succeeds
       const { stream, sent } = makeCaptureStream();
       await t.directory.triggerSealUpgradeForTest(t.bHex, frame, stream); // second is rejected

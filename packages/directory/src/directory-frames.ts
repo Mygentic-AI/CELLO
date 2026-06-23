@@ -458,10 +458,12 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     const session_id = toUint8Array(o["session_id"]);
     const returning_pubkey = toUint8Array(o["returning_pubkey"]);
     const ack_signature = toUint8Array(o["ack_signature"]);
+    const leaf_count = typeof o["leaf_count"] === "number" ? o["leaf_count"] : null;
     if (!session_id || session_id.length !== 16) return null;
     if (!returning_pubkey || returning_pubkey.length !== 32) return null;
     if (!ack_signature || ack_signature.length !== 64) return null;
-    return { type: "seal_upgrade_request", session_id, returning_pubkey, ack_signature };
+    if (leaf_count === null) return null;
+    return { type: "seal_upgrade_request", session_id, returning_pubkey, ack_signature, leaf_count };
   }
 
   // M7-DIR-PING-001: heartbeat ping from client → directory
@@ -559,6 +561,7 @@ export function encodeSealUpgradeConfirmed(frame: SealUpgradeConfirmed): Uint8Ar
     type: frame.type,
     session_id: frame.session_id,
     sealed_root: frame.sealed_root,
+    leaf_count: frame.leaf_count,
     close_timestamp: frame.close_timestamp,
     present_pubkey: frame.present_pubkey,
     present_signature: frame.present_signature,
@@ -1063,6 +1066,7 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
   if (o["type"] === "seal_upgrade_confirmed") {
     const session_id = toUint8Array(o["session_id"]);
     const sealed_root = toUint8Array(o["sealed_root"]);
+    const leaf_count = typeof o["leaf_count"] === "number" ? o["leaf_count"] : null;
     const close_timestamp = typeof o["close_timestamp"] === "number" ? o["close_timestamp"] : null;
     const present_pubkey = toUint8Array(o["present_pubkey"]);
     const present_signature = toUint8Array(o["present_signature"]);
@@ -1071,6 +1075,7 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     const returning_signature = toUint8Array(o["returning_signature"]);
     if (!session_id || session_id.length !== 16) return null;
     if (!sealed_root || sealed_root.length !== 32) return null;
+    if (leaf_count === null) return null;
     if (close_timestamp === null) return null;
     if (!present_pubkey || present_pubkey.length !== 32) return null;
     if (!present_signature || present_signature.length !== 64) return null;
@@ -1078,7 +1083,7 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     if (!returning_pubkey || returning_pubkey.length !== 32) return null;
     if (!returning_signature || returning_signature.length !== 64) return null;
     return {
-      type: "seal_upgrade_confirmed", session_id, sealed_root, close_timestamp,
+      type: "seal_upgrade_confirmed", session_id, sealed_root, leaf_count, close_timestamp,
       present_pubkey, present_signature, present_signature_type,
       returning_pubkey, returning_signature, seal_type: "BILATERAL",
     };

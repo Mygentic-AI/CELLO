@@ -3271,6 +3271,10 @@ export class CelloDirectoryNode {
       type: "seal_upgrade_confirmed",
       session_id: frame.session_id,
       sealed_root: existing.sealed_root,
+      // leaf_count is forwarded from B's request so the present party can rebuild the seal TBS and
+      // verify its own attestation (AC-008). It is bound to truth at verify time: a wrong leaf_count
+      // makes the present attestation fail verification at the holder of A's key.
+      leaf_count: frame.leaf_count,
       close_timestamp: existing.close_timestamp,
       present_pubkey: presentPubkey,
       present_signature: existing.frost_signature,
