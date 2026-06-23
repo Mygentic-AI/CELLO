@@ -4703,3 +4703,13 @@ LOW findings — accepted/tracked (RC-1, not silently dropped):
   readable transcript inherits it. Noted.
 
 cello-done-auditor next; then the ✅ flip.
+
+**`cello-done-auditor` VERDICT: EARNED ✅** — ran J-PERSIST cold (real cello-directory/relay/daemon/mcp,
+fresh Flyway v30) + the 25 unit tests, all green. Confirmed binary-anchored. Verified all four legs:
+survives-restart (process fully killed+respawned → read can only come from disk), joined-to-chain (the
+test reads session_tree_leaves and matches by content hash; the auditor traced the source and confirmed
+the Merkle-append leafIndex IS the stored sequence — "no parallel loose counter that merely coincides",
+teeth genuine at the source), encrypted-at-rest (scan hits the right sessions.db, plaintext absent),
+INV-3 (relay/directory output never has the plaintext). Auditor note: "the rare case where I went looking
+for the tautology the prompt warned me about and found the implementation actually defeats it at the
+source. Ruling EARNED on evidence, not deference." DOD-LOG-1 flipped ❌ → ✅ PROVEN LIVE. J-PERSIST closed.

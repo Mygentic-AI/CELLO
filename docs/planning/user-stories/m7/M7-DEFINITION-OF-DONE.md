@@ -654,12 +654,27 @@ Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-res
 ### Client data custody (J-PERSIST)
 
 - **DOD-LOG-1 — Durable, encrypted readable transcript survives restart.** The daemon
-  durably stores sent + received plaintext per session, encrypted at rest (SQLCipher OR
-  envelope+sqlite — the live daemon uses plain node:sqlite today; encryption-at-rest is
-  absent and deferred-with-no-home), joined to the hash chain; readable after a restart via
-  a read surface; relay/directory still see only hashes (INV-3). *(**CELLO-M7-PERSIST-LOG-001**)*
-  — ❌ NOT BUILT (storied). Closes the at-rest encryption gap (broader than the transcript:
-  retry_queue content blob, key files).
+  durably stores sent + received plaintext per session, encrypted at rest, joined to the
+  hash chain; readable after a restart via a read surface; relay/directory still see only
+  hashes (INV-3). *(**CELLO-M7-PERSIST-LOG-001**)* — ✅ **PROVEN LIVE** (J-PERSIST, 2026-06-23;
+  `cello-done-auditor` EARNED — ran cold, verified the chain-join down to its two write sites).
+  The daemon now writes each readable message to a durable `transcript` table keyed by the
+  COMMITTED leaf sequence (sent in cello_send, received in #appendVerifiedContent — the
+  `leafIndex` returned by the Merkle append IS the stored sequence, so the row provably sits
+  behind a committed leaf, not a loose dump), AES-256-GCM envelope-encrypted at rest with a
+  dedicated 0600 key (`transcript-cipher.ts`); read back in canonical order via
+  `cello_get_transcript`. LIVE: A↔B exchange 3 messages → KILL+restart B's daemon → B reads
+  [M1,M2,M3] in order with directions [received,sent,received]; the test cross-checks each
+  message's sequence against `session_tree_leaves.leaf_index` by content hash (chain join,
+  teeth-proven sequence+100→red), asserts relay+directory never saw the plaintext, and asserts
+  the plaintext is NOT in the on-disk DB file (encrypted at rest). Decisions: envelope+node:sqlite
+  not SQLCipher (avoids the native-dep install cost); a dedicated transcript key, not derived
+  from identity (KeyProvider is sign-only). The at-rest gap broader than the transcript is also
+  closed: `retry_queue.content_blob` is now encrypted with the same key. LOWs tracked (RC-1, in
+  the build journal): the transcript key sits beside the DB (protects against `.db`-only
+  exfiltration, not full-CELLO_DIR read), non-atomic leaf+row write under I/O failure, and the
+  inherited DOD-MSG-5 repeated-identical-message dedup. **DOD-LOG-2/3** (dispute + abuse-report
+  export bundles) build on this and remain ⬜ NOT STORIED.
 - **DOD-LOG-2 — Dispute-export bundle.** A verifiable bundle (transcript + certificate +
   hash chain) the operator can export for dispute resolution. *(J-PERSIST follow-on; design
   in the data-custody log)* — ⬜ NOT STORIED (builds on DOD-LOG-1; story when J-PERSIST is built).
