@@ -844,3 +844,28 @@ records on BOTH gateways and asserts B's inbound clean record.
 dispatched on the CFG-001 + REC-001 ❌→✅ flips. After it: **11/12 Phase-1 stories** expected ✅; the
 ONLY remainder is **M9-IN-002 part 2** (real DeBERTa model + transformers.js inference), gated on
 external infra (568 MB model download + a memory-capable test env) — not started blindly.
+
+---
+
+## 2026-06-23 — CFG-001 + REC-001 ✅ landed; PHASE-1 11/12 GATE-GREEN (DoD commit `6ad8c560`)
+
+done-auditor ruled the CFG-001 + REC-001 flips **2 EARNED / 0 OVERSTATED / 0 UNPROVEN** (ran the suites
+cold; confirmed the §7 loosen-gate is a real rejection that writes no row, and tamper detection mutates
+the DB via a raw connection + reopens before verifyChain — the security core proven by the run, not the
+happy path; live behavior driven by spawned gateway processes). Both flipped ❌→✅.
+
+**Phase-1 is 11/12 ✅.** Every local-screening, governance, config, and records story is gate-green
+through the real spawned gateway. The ONE remaining story:
+
+**M9-IN-002 part 2 (🟡½) — the real DeBERTa injection scanner.** Part 1 (scanner verdict logic +
+consent-gated model installer) is built + unit-green; the pluggable `InjectionClassifier` seam is wired
+into the live InboundScreener (absent → Layer-2 off, graceful). What remains is the REAL classifier
+(transformers.js over the local ONNX) + a gated real-inference test proving AC-001/002/SI-001 on the
+actual 568 MB model. This is the one piece gated on a DECISION + external infra, surfaced to Andre:
+  1. The transformers.js runtime install mechanism (optionalDependency vs opt-in/peer) — a real operator
+     install-size tradeoff (CLAUDE.md flags install time as a user-facing cost). The MODEL is already
+     consent-gated; the RUNTIME dep mechanism is the open call.
+  2. The actual run needs the 568 MB model download + a memory-capable test env to prove inference.
+
+Until that lands, the live gateway runs Layer-1 (deterministic) + outbound + governance + config + records
+— fully launchable. State: gateway 130 + daemon 395 green; nothing pushed; nothing on `main`.
