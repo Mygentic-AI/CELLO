@@ -4671,3 +4671,35 @@ code-reviewer + cello-test-attacker running; done-auditor before the ✅ flip. T
 first (chain-linked durable readable transcript) and applied the informed-skeptic test — the at-rest DB
 file check + the sequence-join keying guard against the silently-broken-core trap (a transcript that
 looks saved but isn't really encrypted or isn't tied to the verified chain).
+
+---
+
+## 2026-06-23 — DOD-LOG-1 reviewer findings resolved (2 reviewers); LOWs tracked
+
+Both reviewers ran. **cello-test-attacker BLOCKING** (the "joined to the hash chain" property was a
+self-sort tautology) — FIXED: the live test now reads session_tree_leaves from the on-disk DB and
+asserts each transcript message's sequence equals the COMMITTED leaf index carrying its content hash
+(teeth proven: sequence+100 → red). **feature-dev:code-reviewer** APPROVED-with-findings (no
+blocking/high; core chain-join invariant verified sound). Two MEDIUMs FIXED (commit 67f2556): retry_queue
+content_blob now encrypted at rest with the shared transcript key (it held the same plaintext in
+cleartext on slow delivery); readTranscript surfaces an `undecryptable` count instead of silently
+dropping tampered rows.
+
+LOW findings — accepted/tracked (RC-1, not silently dropped):
+- **Transcript key adjacent to the DB (`${dbPath}.transcript-key`, same perms).** At-rest encryption
+  protects against `.db`-file-only exfiltration (a backup globbing `*.db`); it does NOT protect against
+  an attacker with full CELLO_DIR read access (who gets key + ciphertext). Acceptable for the milestone
+  (no OS-keychain/passphrase infra yet); the threat model is documented in transcript-cipher.ts. Future:
+  derive the key from an OS keychain or operator passphrase.
+- **Non-atomic leaf-append + transcript-record.** Under a disk/crypto failure the two best-effort writes
+  can diverge (a committed leaf with no readable row, or vice versa) — both logged, non-fatal. Known
+  weakening of the "row behind a committed leaf" invariant under I/O failure; acceptable for alpha.
+- **cello_get_transcript returns ok:true/messages:[] for a missing/other-agent session** (vs
+  cello_receive's session_not_found). Not a leak (readTranscript filters by currentAgent). Intentional:
+  the transcript PERSISTS past session destruction, so an "empty" answer for an unknown session is valid
+  (a session-existence check would wrongly reject reading a closed session's transcript).
+- **Identical-content dedup fidelity differs by direction** (inherited DOD-MSG-5): a repeated identical
+  RECEIVED message dedups to one leaf+row; the SENT side appends unconditionally. Pre-existing; the
+  readable transcript inherits it. Noted.
+
+cello-done-auditor next; then the ✅ flip.
