@@ -59,7 +59,21 @@ These are not a journey; they are properties every line below must preserve.
 - **DOD-INV-2 — No single party can forge.** No code path lets one node, the
   relay, the directory, or a peer produce a valid ceremony/seal output alone.
   B's acknowledgement is always B's own node's signature. *(audit; SESSION-003
-  SI; DAEMON-004 SI-003)* — 🟡
+  SI; DAEMON-004 SI-003)* — 🟢 **PROVEN across journeys** (aggregate invariant, proven
+  piecewise — no single test, but every forge vector is closed and tested):
+  - DIRECTORY can't sign AS B: the unilateral seal records B ABSENT, never forges B's assent
+    (receipt-not-assent) — J-UNILATERAL live; and the bilateral UPGRADE writes B's ratification
+    only after verifying B's OWN K_local ack (`ack_signature_invalid` rejects a forgery; H1 binds
+    the cert to the real participants) — `m7-upgrade-001-directory-handler` + `seal-upgrade.test.ts`.
+  - DIRECTORY can't inflate B's signed frontier: the client re-derives frontier from B's signed
+    leaves and ABORTS the co-sign on an inflated published frontier — DOD-LEG-2 PROVEN LIVE
+    (negative test asserts co-sign abort).
+  - A PEER can't forge content as the counterparty: `wrong_signer`/`bad_signature` fail-closed
+    (DOD-INV-4, `msg-001-strict-in-order`).
+  - No node completes the THRESHOLD ceremony alone: FROST `threshold/participants` verification
+    against the initiator's primary_pubkey (the directory verifies, never produces the co-signature).
+  Residual: a single live test that exercises ALL vectors at once does not exist — each is proven in
+  its own journey/unit.
 - **DOD-INV-3 — Relay never sees plaintext.** Content is peer↔peer; the relay
   sees only hashes (Structure 2) and, for parked content, ciphertext it cannot
   decrypt. *(M1; MSG-001 SI-001)* — 🟢 **PROVEN LIVE** (both halves; the
