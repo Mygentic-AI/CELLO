@@ -300,7 +300,7 @@ export function encodeDisclosureResponseInbound(frame: DisclosureResponseInbound
 
 import type { RegisterRequest, DkgComplete, ConnectionRequest, ConnectionResponse, DisclosureRequest, DisclosureResponse } from "@cello-protocol/protocol-types";
 
-import type { SealAttempt, SealRejectedTreeMismatch, SealAttemptAck, SealUnilateral, SealUnilateralTooEarly, SealUnilateralConfirmed, SealUnilateralNotification, ManifestPollRequest } from "./directory-types.js";
+import type { SealAttempt, SealRejectedTreeMismatch, SealAttemptAck, SealUnilateral, SealUnilateralTooEarly, SealUnilateralConfirmed, SealUnilateralNotification, ManifestPollRequest, SealUpgradeRequest, SealUpgradeConfirmed, SealUpgradeRejected } from "./directory-types.js";
 
 /** M7-DIR-PING-001: client heartbeat frame. */
 export type PingFrame = { type: "ping"; ts: number };
@@ -313,7 +313,7 @@ export type SealInterruptedAckFrame = { type: "seal_interrupted_ack"; sessionId:
 /** initiatorPubkey is included so the directory can route the rejection back to the initiator by direct lookup in #streams. */
 export type SealInterruptedRejectionFrame = { type: "seal_interrupted_rejection"; sessionId: string; initiatorPubkey: string; reason: string };
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | ManifestPollRequest | PingFrame | SessionOfferAccept | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame;
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -453,6 +453,17 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     return { type: "seal_unilateral", session_id, reported_root, reported_seq };
   }
 
+  // CELLO-M7-UPGRADE-001 (DOD-UP-1): returning absent party ratifies the unilateral seal.
+  if (o["type"] === "seal_upgrade_request") {
+    const session_id = toUint8Array(o["session_id"]);
+    const returning_pubkey = toUint8Array(o["returning_pubkey"]);
+    const ack_signature = toUint8Array(o["ack_signature"]);
+    if (!session_id || session_id.length !== 16) return null;
+    if (!returning_pubkey || returning_pubkey.length !== 32) return null;
+    if (!ack_signature || ack_signature.length !== 64) return null;
+    return { type: "seal_upgrade_request", session_id, returning_pubkey, ack_signature };
+  }
+
   // M7-DIR-PING-001: heartbeat ping from client → directory
   if (o["type"] === "ping") {
     const tsRaw = o["ts"];
@@ -538,6 +549,31 @@ export function encodeSealUnilateralTooEarly(frame: SealUnilateralTooEarly): Uin
     type: frame.type,
     session_id: frame.session_id,
     remaining_seconds: frame.remaining_seconds,
+  });
+}
+
+// ─── CELLO-M7-UPGRADE-001 (DOD-UP-1): seal upgrade response encoders ──────────
+
+export function encodeSealUpgradeConfirmed(frame: SealUpgradeConfirmed): Uint8Array {
+  return ENC.encode({
+    type: frame.type,
+    session_id: frame.session_id,
+    sealed_root: frame.sealed_root,
+    close_timestamp: frame.close_timestamp,
+    present_pubkey: frame.present_pubkey,
+    present_signature: frame.present_signature,
+    present_signature_type: frame.present_signature_type,
+    returning_pubkey: frame.returning_pubkey,
+    returning_signature: frame.returning_signature,
+    seal_type: frame.seal_type,
+  });
+}
+
+export function encodeSealUpgradeRejected(frame: SealUpgradeRejected): Uint8Array {
+  return ENC.encode({
+    type: frame.type,
+    session_id: frame.session_id,
+    reason: frame.reason,
   });
 }
 
@@ -641,6 +677,8 @@ export type OutboundSignalingFrame =
   | SealUnilateralTooEarly
   | SealUnilateralConfirmed
   | SealUnilateralNotification
+  | SealUpgradeConfirmed
+  | SealUpgradeRejected
   | ManifestPollResponse
   | PongFrame;
 
@@ -1019,6 +1057,40 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     const cert = decodeSealCertFields(o, sealed_root);
     if (!cert) return null;
     return { type: "seal_unilateral_notification", session_id, sealed_at, ...cert };
+  }
+
+  // CELLO-M7-UPGRADE-001 (DOD-UP-1): seal upgrade responses (directory → client)
+  if (o["type"] === "seal_upgrade_confirmed") {
+    const session_id = toUint8Array(o["session_id"]);
+    const sealed_root = toUint8Array(o["sealed_root"]);
+    const close_timestamp = typeof o["close_timestamp"] === "number" ? o["close_timestamp"] : null;
+    const present_pubkey = toUint8Array(o["present_pubkey"]);
+    const present_signature = toUint8Array(o["present_signature"]);
+    const present_signature_type = o["present_signature_type"];
+    const returning_pubkey = toUint8Array(o["returning_pubkey"]);
+    const returning_signature = toUint8Array(o["returning_signature"]);
+    if (!session_id || session_id.length !== 16) return null;
+    if (!sealed_root || sealed_root.length !== 32) return null;
+    if (close_timestamp === null) return null;
+    if (!present_pubkey || present_pubkey.length !== 32) return null;
+    if (!present_signature || present_signature.length !== 64) return null;
+    if (present_signature_type !== "frost" && present_signature_type !== "single") return null;
+    if (!returning_pubkey || returning_pubkey.length !== 32) return null;
+    if (!returning_signature || returning_signature.length !== 64) return null;
+    return {
+      type: "seal_upgrade_confirmed", session_id, sealed_root, close_timestamp,
+      present_pubkey, present_signature, present_signature_type,
+      returning_pubkey, returning_signature, seal_type: "BILATERAL",
+    };
+  }
+
+  if (o["type"] === "seal_upgrade_rejected") {
+    const session_id = toUint8Array(o["session_id"]);
+    const reason = o["reason"];
+    if (!session_id || session_id.length !== 16) return null;
+    if (reason !== "no_unilateral_seal" && reason !== "already_bilateral" &&
+        reason !== "not_absent_party" && reason !== "ack_signature_invalid") return null;
+    return { type: "seal_upgrade_rejected", session_id, reason };
   }
 
   // M7-MANIFEST-002: manifest poll response (directory → client)

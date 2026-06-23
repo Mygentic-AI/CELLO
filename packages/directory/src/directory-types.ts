@@ -410,6 +410,61 @@ export interface SealUnilateralNotification extends SealCertificateFields {
   sealed_at: number;
 }
 
+// ─── CELLO-M7-UPGRADE-001 (DOD-UP-1): unilateral → bilateral seal upgrade ─────────
+
+/**
+ * seal_upgrade_request: the previously-ABSENT party (B) → directory, after B has returned,
+ * recovered + verified the content, and signed an attestation over the EXISTING sealed root R1.
+ *
+ * Model 2 (see M7 build journal 2026-06-23 decision): B does NOT re-seal over a new root — it
+ * RATIFIES the unilateral seal's root R1. `ack_signature` is B's Ed25519 signature, made with B's
+ * K_local, over the upgrade-ack TBS = CBOR([SEAL_UPGRADE_ACK_DOMAIN, session_id, sealed_root]).
+ * The directory verifies it against the unilateral notarization's participant_b_pubkey — so only
+ * the absent party itself can upgrade (AC-007, no delegation). The content-possession precondition
+ * is enforced on B's daemon (it produces the ack ONLY after recover+verify); the directory's job
+ * is to confirm the signature is genuinely B's over R1.
+ */
+export interface SealUpgradeRequest {
+  type: "seal_upgrade_request";
+  session_id: Uint8Array;       // 16 bytes
+  returning_pubkey: Uint8Array; // 32 bytes — must equal the unilateral seal's absent party
+  ack_signature: Uint8Array;    // 64-byte Ed25519 signature over the upgrade-ack TBS
+}
+
+export type SealUpgradeRejectedReason =
+  | "no_unilateral_seal"   // no notarization exists for this session — nothing to upgrade
+  | "already_bilateral"    // session is already bilaterally sealed (idempotent: B may treat as success)
+  | "not_absent_party"     // sender is not the unilateral seal's absent party (AC-007)
+  | "ack_signature_invalid"; // ack_signature does not verify against the absent party over R1
+
+/**
+ * seal_upgrade_rejected: directory → B, when the upgrade cannot proceed.
+ */
+export interface SealUpgradeRejected {
+  type: "seal_upgrade_rejected";
+  session_id: Uint8Array;
+  reason: SealUpgradeRejectedReason;
+}
+
+/**
+ * seal_upgrade_confirmed: directory → both parties, when the unilateral seal has been upgraded
+ * to bilateral. Carries the DUAL-ATTESTATION certificate over the unchanged sealed root R1: the
+ * present party's original seal signature AND the returning party's ratification. A client marks
+ * the seal bilateral only after verifying BOTH against R1 (AC-008).
+ */
+export interface SealUpgradeConfirmed {
+  type: "seal_upgrade_confirmed";
+  session_id: Uint8Array;
+  sealed_root: Uint8Array;              // 32-byte R1 — unchanged from the unilateral seal
+  close_timestamp: number;              // Unix ms — from the unilateral notarization
+  present_pubkey: Uint8Array;           // 32-byte present party (A) — the original seal signer
+  present_signature: Uint8Array;        // A's original seal signature over the seal TBS (from the unilateral row)
+  present_signature_type: "frost" | "single"; // how to verify present_signature (vs A's primary_pubkey / directory node key)
+  returning_pubkey: Uint8Array;         // 32-byte returning party (B)
+  returning_signature: Uint8Array;      // B's ack signature over the upgrade-ack TBS
+  seal_type: "BILATERAL";
+}
+
 // ─── Internal directory session state ─────────────────────────────────────────
 // SealNotarization is a storage-only type — defined in @cello-protocol/interfaces, imported where needed.
 export type { SealNotarization } from "@cello-protocol/interfaces";

@@ -157,6 +157,8 @@ import {
   encodeSealUnilateralTooEarly,
   encodeSealUnilateralConfirmed,
   encodeSealUnilateralNotification,
+  encodeSealUpgradeConfirmed,
+  encodeSealUpgradeRejected,
   encodeManifestPollResponse,
   encodePong,
   decodeInboundSignalingFrame,
@@ -184,6 +186,15 @@ const AUTH_DOMAIN = "CELLO-DIR-AUTH-v1";
 const NONCE_TTL_MS = 30_000;
 
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
+
+/**
+ * CELLO-M7-UPGRADE-001 (DOD-UP-1): domain separator for the seal upgrade-ack TBS. The returning
+ * absent party signs CBOR([SEAL_UPGRADE_ACK_DOMAIN, session_id, sealed_root]) with its K_local to
+ * RATIFY the existing unilateral seal's root. B's daemon MUST build the byte-identical TBS — same
+ * domain string, same CBOR encoder options (tagUint8Array:false). Domain separation prevents the
+ * ack signature from being replayed as any other CELLO signature.
+ */
+const SEAL_UPGRADE_ACK_DOMAIN = "cello-seal-upgrade-ack-v1";
 
 // M7-WIRE-001: Local TBS builder for the 10-field session-establishment TBS.
 //
@@ -1548,6 +1559,9 @@ export class CelloDirectoryNode {
         } else if (parsed.type === "seal_unilateral") {
           // PERSIST-015: process unilateral seal request
           void this.#processSealUnilateral(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "seal_upgrade_request") {
+          // CELLO-M7-UPGRADE-001 (DOD-UP-1): returning absent party ratifies the unilateral seal
+          void this.#processSealUpgradeRequest(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "ping") {
           // M7-DIR-PING-001: heartbeat ping/pong — no state, no blocking
           this.#logger?.debug("directory.signaling.ping.received", {
@@ -3166,6 +3180,114 @@ export class CelloDirectoryNode {
   }
 
   /**
+   * CELLO-M7-UPGRADE-001 (DOD-UP-1) — upgrade a unilateral seal to bilateral when the previously
+   * ABSENT party returns and ratifies it.
+   *
+   * Model 2 (build journal 2026-06-23 decision): B does NOT re-seal over a new root. It signs an
+   * attestation over the EXISTING sealed root R1 with its K_local; the directory verifies that
+   * signature against the unilateral notarization's absent party (participant_b) and writes a NEW
+   * bilateral notarization row that SUPERSEDES the unilateral one without mutating it (AC-006,
+   * append-only). The dual-attestation cert sent to both parties carries A's original seal signature
+   * + B's ratification, both over R1 — a client marks the seal bilateral only after verifying BOTH
+   * (AC-008).
+   *
+   * KERNEL: the directory only proves B's signature is genuine over R1 (AC-007 sender check). The
+   * content-possession precondition — B actually recovered + verified the content — is enforced on
+   * B's daemon, which produces the ack ONLY after the content cross-check passes. Refusal on
+   * unverifiable/tampered content happens there (AC-002/AC-003), never by the directory forging it.
+   *
+   * Refuses ONLY on unverifiability: no unilateral seal to upgrade, already bilateral, sender is not
+   * the absent party, or the ack signature does not verify over R1. Never throws out of the handler.
+   */
+  async #processSealUpgradeRequest(
+    stream: import("@libp2p/interface").Stream,
+    senderHex: string,
+    frame: import("./directory-types.js").SealUpgradeRequest,
+  ): Promise<void> {
+    const sessionIdHex = Buffer.from(frame.session_id).toString("hex");
+    const correlationId = sessionIdHex;
+
+    const reject = (reason: import("./directory-types.js").SealUpgradeRejectedReason): void => {
+      this.#logger?.warn("session.upgrade.rejected", {
+        sessionId: sessionIdHex, reason, returningPartyPubkey: truncHex(senderHex), correlationId,
+      });
+      try {
+        this.#sendFrame(stream, encodeSealUpgradeRejected({ type: "seal_upgrade_rejected", session_id: frame.session_id, reason }));
+      } catch { /* best-effort — the durable record is the DB, the client retries on reconnect */ }
+    };
+
+    // 1. Look up the authoritative notarization. getNotarization prefers the bilateral row, so a
+    //    session that has already been upgraded reports seal_type 'bilateral' → idempotent reject.
+    const existing = await this.#store.getNotarization(sessionIdHex);
+    if (!existing) { reject("no_unilateral_seal"); return; }
+    if (existing.seal_type === "bilateral") { reject("already_bilateral"); return; }
+
+    // 2. AC-007: only the unilateral seal's ABSENT party (participant_b) may upgrade — and the
+    //    AUTHENTICATED sender must BE that party (no delegation). The frame's claimed returning
+    //    pubkey must also match, defence-in-depth against a malformed/spoofed body.
+    const presentPubkey = existing.participant_a_pubkey;
+    const absentPubkey = existing.participant_b_pubkey;
+    const presentHex = Buffer.from(presentPubkey).toString("hex");
+    const absentHex = Buffer.from(absentPubkey).toString("hex");
+    if (senderHex !== absentHex) { reject("not_absent_party"); return; }
+    if (Buffer.from(frame.returning_pubkey).toString("hex") !== absentHex) { reject("not_absent_party"); return; }
+
+    // 3. Verify B's ack signature over the upgrade-ack TBS bound to the EXISTING root R1. This proves
+    //    B holds R1 and ratifies it; a channel-swapped root fails the check (SI-003). The signature
+    //    is B's OWN (K_local) — the directory never synthesizes B's assent (receipt-not-assent).
+    const ackTbs = CBOR_ENC.encode([SEAL_UPGRADE_ACK_DOMAIN, frame.session_id, existing.sealed_root]);
+    if (!verify(absentPubkey, ackTbs, frame.ack_signature)) { reject("ack_signature_invalid"); return; }
+
+    // 4. Write the SUPERSEDING bilateral notarization (append-only; the unilateral row is untouched).
+    //    frost_signature carries B's ratification; supersedes_notarization_id links to the unilateral
+    //    row (which still holds A's original seal signature) — both attestations stay recoverable.
+    const uniId = await this.#store.getNotarizationId(sessionIdHex, "unilateral");
+    const bilateralNotarization: SealNotarization = {
+      session_id: frame.session_id,
+      sealed_root: existing.sealed_root,
+      participant_a_pubkey: presentPubkey,
+      participant_b_pubkey: absentPubkey,
+      close_timestamp: existing.close_timestamp,
+      frost_signature: frame.ack_signature,
+      seal_type: "bilateral",
+      supersedes_notarization_id: uniId ?? null,
+    };
+    await this.#store.recordNotarization(bilateralNotarization, { correlationId }).catch(() => { /* logged inside */ });
+
+    this.#logger?.info("session.seal.upgraded", {
+      sessionId: sessionIdHex,
+      presentPartyPubkey: truncHex(presentHex),
+      returningPartyPubkey: truncHex(absentHex),
+      supersedesNotarizationId: uniId ?? null,
+      correlationId,
+    });
+    protocolLog("SEAL", `Upgraded unilateral → bilateral — session ${truncHex(sessionIdHex)} (returning party ratified root ${truncHex(Buffer.from(existing.sealed_root).toString("hex"))})`);
+
+    // 5. Deliver the dual-attestation cert to BOTH parties. present_signature is A's original seal
+    //    signature (the unilateral row's frost_signature); its type follows whether A's primary_pubkey
+    //    is known (FROST) or the directory node key was used (single-key fallback).
+    const presentSignatureType: "frost" | "single" = this.#primaryPubkeys.has(presentHex) ? "frost" : "single";
+    const confirmedFrame = encodeSealUpgradeConfirmed({
+      type: "seal_upgrade_confirmed",
+      session_id: frame.session_id,
+      sealed_root: existing.sealed_root,
+      close_timestamp: existing.close_timestamp,
+      present_pubkey: presentPubkey,
+      present_signature: existing.frost_signature,
+      present_signature_type: presentSignatureType,
+      returning_pubkey: absentPubkey,
+      returning_signature: frame.ack_signature,
+      seal_type: "BILATERAL",
+    });
+    // To B (the returning party) on this stream.
+    try { this.#sendFrame(stream, confirmedFrame); } catch { /* best-effort */ }
+    // To A (the present party) if its signaling stream is live — best-effort; the durable record is
+    // the superseding row, and A re-derives bilateral on its next getNotarization / reconnect.
+    const presentStream = this.#streams.get(presentHex);
+    if (presentStream) { try { this.#sendFrame(presentStream, confirmedFrame); } catch { /* best-effort */ } }
+  }
+
+  /**
    * Process a seal submission from the relay.
    * Called in-process by the relay after both SEAL control leaves are submitted.
    * Returns a structured result; the relay calls confirmSeal or rejectSeal accordingly.
@@ -3676,6 +3798,28 @@ export class CelloDirectoryNode {
       reported_root: reportedRoot,
       reported_seq: 0,
     });
+  }
+
+  /**
+   * Test hook (DOD-UP-1): invoke #processSealUpgradeRequest directly. The caller must have already
+   * recorded the unilateral notarization in the store (the upgrade reads it via getNotarization).
+   * Returns the awaited handler promise so the test can assert on the store + mockStream afterwards.
+   * Only available in NODE_ENV=test.
+   */
+  async triggerSealUpgradeForTest(
+    senderHex: string,
+    frame: import("./directory-types.js").SealUpgradeRequest,
+    mockStream: Stream,
+  ): Promise<void> {
+    if (process.env["NODE_ENV"] !== "test") throw new Error("test-only");
+    await this.#processSealUpgradeRequest(mockStream, senderHex, frame);
+  }
+
+  /** Test hook (DOD-UP-1): the exact upgrade-ack TBS B must sign — exposed so a test signs the same
+   *  bytes the handler verifies. Only available in NODE_ENV=test. */
+  buildSealUpgradeAckTbsForTest(sessionId: Uint8Array, sealedRoot: Uint8Array): Uint8Array {
+    if (process.env["NODE_ENV"] !== "test") throw new Error("test-only");
+    return CBOR_ENC.encode([SEAL_UPGRADE_ACK_DOMAIN, sessionId, sealedRoot]);
   }
 
   /**
