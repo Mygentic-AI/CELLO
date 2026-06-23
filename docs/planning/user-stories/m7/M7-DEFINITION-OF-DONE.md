@@ -502,14 +502,20 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
   directory threshold; counterparty NEVER a signer, never receives `seal_verified`;
   single-key fallback pre-DKG; persisted signed append-only upgrade-ready
   `SealNotarization`, `close_type SEAL_UNILATERAL`, counterparty `ABSENT`. *(SESSION-002
-  AC-005..008, SI-002)* — 🟡 FROST-with-B-ABSENT + signed durable `SealNotarization` +
-  `session.unilateral.notarized` (present/absent pubkeys) PROVEN LIVE; B never signs/never
-  gets `seal_verified`. The `close_type='SEAL_UNILATERAL'` + `conversation_attestations`
-  'ABSENT' discriminator rows are NOT yet written — that 3-table write does not exist for
-  bilateral either. NOTE: DOD-UP-1 (now ✅ PROVEN LIVE) built the upgrade on the
-  `seal_notarizations` table (superseding row), NOT the `conversation_seals`/
-  `conversation_attestations` 3-table write — so this SEAL-2 remainder stays its own open
-  item, no longer coupled to an unbuilt UP-1.
+  AC-005..008, SI-002)* — 🟢 **BUILT + LIVE-PROVEN** (2026-06-23; reviewers + done-auditor pending
+  the final ✅). FROST-with-B-ABSENT + signed durable `SealNotarization` + `session.unilateral.notarized`
+  (present/absent pubkeys) PROVEN LIVE; B never signs/never gets `seal_verified`. The **3-table
+  relationship-graph write is now BUILT** (`recordConversationSeal`): on seal completion the directory
+  writes `conversation_seals` (`close_type` SEAL_UNILATERAL / MUTUAL_SEAL + the sealed root HASH) + one
+  `conversation_participation` row per party (the graph edge) + one `conversation_attestations` row per
+  party (the absent party carries `ABSENT`). This feeds the Sybil / reputation-farming-defense graph
+  (`conversation_graph_edges`); it stores RELATIONSHIP METADATA + the root hash ONLY — never content
+  (INV-3 intact). Best-effort / fire-and-forget (never blocks a seal). The unilateral→bilateral upgrade
+  SKIPS it (`conversation_id` is UNIQUE; the A↔B edge already exists). LIVE: j-loopback (bilateral
+  MUTUAL_SEAL + the analytics edge query derives one A↔B edge) + j-upgrade-bilateral (unilateral
+  SEAL_UNILATERAL + 2 participation + upgrade-skip), both via `psqlSpine` against the directory's OWN
+  tables. Unit: `seal-2-conversation-graph.test.ts` (5 — incl. edge-weight-2 = the Sybil cluster signal,
+  3-table chain validity). Chain fix: `seal_date` (DATE) excluded from chain serialization (M4 bug #7).
 - **DOD-SEAL-3 — Verifiable certificate, channel-independent.** Confirm/notify
   frames carry the full cert; client rebuilds the canonical TBS and verifies the
   signature against an independently-trusted key; a channel-swapped `sealed_root`
@@ -818,8 +824,9 @@ no-double-count (DOD-MSG-5), no-assent-field (DOD-LEG-4).
 - **Tier 2** is PROVEN LIVE — step-6 auth ON (J-AUTH), manifest poll, J-SIG degradation+recovery.
 - **Tier 3** is GREEN, not remaining: J-CONTENT (MSG-1..8, incl. MSG-001-3b recovery), J-UNILATERAL
   (SESSION-002 seal + the SESSION-003 ABSENT gate, DOD-LIVE-2 PROVEN LIVE), J-LEGIBILITY (SESSION-004
-  client) all run live. (Residuals: the SEAL-2 conversation_seals 3-table analytics write — PARKED,
-  values; DOD-SEAL-3 absent-party-notification half; attestation_mode TBS-binding — hardening notes.)
+  client) all run live. The SEAL-2 conversation_seals 3-table relationship-graph write is now BUILT +
+  LIVE-PROVEN (Sybil-defense graph; 2026-06-23; reviewers/done-auditor pending the final ✅). Hardening
+  notes remain: DOD-SEAL-3 absent-party-notification half; attestation_mode TBS-binding.
 - **Tier 4** is COMPLETE — UPGRADE-001 (DOD-UP-1) ✅ PROVEN LIVE 2026-06-23 (J-UPGRADE-001) and
   UPGRADE-002 (DOD-UP-2) ✅ PROVEN LIVE 2026-06-22. Both done-auditor EARNED.
 - **Tier 5** is DECIDED (2026-06-20): REC-1 satisfied (PERSIST-012), REC-2 subsumed, REC-3 absorbed.
