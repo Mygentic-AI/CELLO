@@ -62,8 +62,15 @@ These are not a journey; they are properties every line below must preserve.
   SI; DAEMON-004 SI-003)* — 🟡
 - **DOD-INV-3 — Relay never sees plaintext.** Content is peer↔peer; the relay
   sees only hashes (Structure 2) and, for parked content, ciphertext it cannot
-  decrypt. *(M1; MSG-001 SI-001)* — ✅ for hash layer / ❌ for the encrypted park
-  store (not built)
+  decrypt. *(M1; MSG-001 SI-001)* — 🟢 **PROVEN LIVE** (both halves; the
+  encrypted-park-store half is no longer ❌). The content-park deposit is E2E-encrypted to
+  the recipient (`content-park-client.ts`: the relay stores/forwards ciphertext keyed to the
+  recipient pubkey, decryptable only by the recipient's K_local via `openContentSeal`).
+  J-PERSIST (DOD-LOG-1, 2026-06-23) asserts it LIVE: distinctive plaintext needles exchanged
+  through the FULL flow (including the parked path) — `cluster.relay.output` and
+  `cluster.directory.output` are asserted to NOT contain any needle, and the at-rest DB file
+  scan confirms encryption at rest. The relay/directory never saw plaintext, only
+  hashes/ciphertext.
 - **DOD-INV-4 — Client verifies sender = counterparty.** The relay-stream
   receive path checks `senderPubkey === session.counterparty_pubkey` independently
   of the relay (the 5-line audit fix). *(transport-security-audit §4b — was BROKEN
