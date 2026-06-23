@@ -805,3 +805,42 @@ configured" — both were config-wiring gaps, not missing logic:
 inference — heavy, needs the 568 MB model + a memory-capable env), **M9-CFG-001** (versioned SQLCipher config store
 — replaces the interim env config), **M9-REC-001** (local fingerprinted security-pass records). State: gateway 102 +
 daemon 391 green; nothing pushed; nothing on `main`.
+
+---
+
+## 2026-06-23 — CFG-001 (config store) + REC-001 (records) built, fully reviewed (commits db7a8a5→9167565)
+
+Two persistent stores built (node:sqlite — the daemon's library; the "SQLCipher" in the docs is
+aspirational, the daemon opens its DB without a cipher key, so these match: own FILE per INV-4, no
+key — encryption-at-rest is a cross-cutting gap shared with the daemon, not a store-local concern).
+
+**M9-CFG-001 — versioned config store, the §7 tighten-free / loosen-confirmed gate.** Append-only,
+hash-chained per version. The live gateway bin reads the store as source-of-truth when
+`CELLO_GATEWAY_CONFIG_DB` is set (env = bootstrap fallback). code-reviewer found REAL holes (the
+store ships empty, so its edges ARE the common path):
+- **B1 (blocking)** — first-set of any key was free → first-enabling autonomous_override / seeding a
+  whitelist bypassed the gate, inverting the model. Fixed: per-key TIGHTEST baseline; first-set is
+  classified against it.
+- **H1** — the hash chain excluded `confirmed`+`direction` (the governance payload), so a forged
+  "unconfirmed → confirmed" loosen still verified. Fixed: both bound in the fingerprint.
+- **H2** — `rate_window_ms` shrink loosened the rate for free. Fixed: shorter window = loosen.
+- M1 (cap-without-window silently disabled → default window), M2 (per-key type validation), L1
+  (transactional set + busy_timeout). M3 (truncation/consistent-rewrite need the Phase-2 attested
+  head) — documented. test-attacker's hash-chain hollow-test also closed (tamper + deletion now caught).
+  NOTE: corrected a WRONG test the attacker suggested (first-set-loosest-free) — the reviewer was right.
+
+**M9-REC-001 — local hash-chained security-pass records.** Every screened outcome (clean/redact/
+block/warn, inbound + outbound) recorded in the gateway's own store; a clean pass is recorded too.
+Wired into the live bin (`CELLO_GATEWAY_RECORD_DB`). code-reviewer: **HIGH** — correlationId was
+never read, so records stored "" (INV-7 broken; the attested fingerprint would bind no flow id) →
+fixed + live-asserted. **MEDIUM** — a screener throw left the screen_error block UNRECORDED → the bin
+now catches, records (best-effort), returns. LOW ×2 (docstring limit, reason-extraction clarity).
+test-attacker (both blocking): field-binding proven only for disposition → added content_hash /
+direction / reason tamper cases; inbound recording had no live producer test → the live seam now
+records on BOTH gateways and asserts B's inbound clean record.
+
+**State: gateway 130 + daemon 395 tests green; lint + typecheck clean; nothing pushed; nothing on
+`main`.** Both stores' done-conditions live-proven through the spawned gateway. `cello-done-auditor`
+dispatched on the CFG-001 + REC-001 ❌→✅ flips. After it: **11/12 Phase-1 stories** expected ✅; the
+ONLY remainder is **M9-IN-002 part 2** (real DeBERTa model + transformers.js inference), gated on
+external infra (568 MB model download + a memory-capable test env) — not started blindly.
