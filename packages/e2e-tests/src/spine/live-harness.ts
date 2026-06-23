@@ -387,6 +387,13 @@ export interface StartSpineClusterOpts {
    * served version and a polling daemon adopts it. Unset → the directory ignores polls.
    */
   directoryConsortiumManifestPath?: string;
+  /**
+   * DOD-LEG-2 negative test: when set (>0), the directory inflates every party's published
+   * content_frontier_seq by this amount in the FROST-signed legibility — simulating a buggy/
+   * malicious directory. The receiving client must re-derive and REJECT
+   * (certificate_frontier_unverifiable). Off by default; production never sets it.
+   */
+  directoryInflateFrontierForTest?: number;
 }
 
 /**
@@ -476,6 +483,10 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
       // DOD-AUTH-2: serve a consortium manifest to polling clients (rotatable on disk).
       ...(opts.directoryConsortiumManifestPath
         ? { CELLO_DIRECTORY_CONSORTIUM_MANIFEST: opts.directoryConsortiumManifestPath }
+        : {}),
+      // DOD-LEG-2 negative test: make the directory publish an inflated (still-signed) frontier.
+      ...(opts.directoryInflateFrontierForTest
+        ? { CELLO_DIRECTORY_INFLATE_FRONTIER_FOR_TEST: String(opts.directoryInflateFrontierForTest) }
         : {}),
     };
     directory = new Proc("directory", BINS.directory, directoryEnv);

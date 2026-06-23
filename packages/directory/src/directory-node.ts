@@ -3287,6 +3287,15 @@ export class CelloDirectoryNode {
 
     const close_timestamp = this.#clock.now();
     const leafCount = leaves.length;
+    // DOD-LEG-2 NEGATIVE-TEST SEAM (env-gated, off by default): inflate every party's published
+    // content_frontier_seq BEFORE the TBS binding, so the inflated value is FROST-signed (the
+    // client's signature check passes) and only the client's independent re-derive can catch it.
+    // This simulates a buggy/malicious directory; production never sets this env.
+    const inflateBy = Number.parseInt(process.env["CELLO_DIRECTORY_INFLATE_FRONTIER_FOR_TEST"] ?? "", 10);
+    if (!Number.isNaN(inflateBy) && inflateBy > 0) {
+      for (const p of legibility.participants) p.content_frontier_seq += inflateBy;
+      this.#logger?.warn("seal.certificate.frontier.inflated_for_test", { sessionId: sessionIdHex, inflateBy });
+    }
     // M7 legibility-TBS-binding: fold the legibility hash into the FROST-signed TBS so a MITM
     // cannot tamper answered / content_frontier_seq / attestation_mode in transit without breaking
     // the signature. The daemon co-signs the SAME bound TBS (it receives `legibility` on seal_verified);

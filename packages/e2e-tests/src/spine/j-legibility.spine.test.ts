@@ -201,6 +201,12 @@ describe("J-LEGIBILITY — malicious-tail bilateral seal, cert read cross-proces
     expect(bChecked.some((l) => /"verified":true/.test(l)), `B (responder) must VERIFY the bound seal signature (verified:true), not just accept it:\n${bChecked.slice(-3).join("\n")}`).toBe(true);
     expect(daemonB.output, `B must never log a signature.invalid for this seal:${diag}`).not.toMatch(/session\.sealed\.signature\.invalid/);
 
+    // DOD-LEG-2 (SI-002) happy path: B independently RE-DERIVED each party's content_frontier_seq
+    // from the signed leaves the directory shipped and accepted the honest published frontier
+    // (never the unverifiable rejection). This is the same guard the negative test trips.
+    expect(daemonB.output, `B must re-derive + verify the published frontier:${diag}`).toMatch(/"event":"seal\.certificate\.frontier\.verified"/);
+    expect(daemonB.output, `B must NOT reject an honest frontier:${diag}`).not.toMatch(/seal\.certificate\.frontier\.unverifiable/);
+
     // The live read path (close return) carries the same legibility — same final_message verdict.
     expect(closeB.legibility?.final_message.answered, `B's close return must carry the legibility:${diag}`).toBe(false);
   }, 150_000);
