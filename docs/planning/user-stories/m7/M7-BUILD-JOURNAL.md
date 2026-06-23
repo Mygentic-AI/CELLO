@@ -5130,3 +5130,28 @@ at seal time = DELIVERED/ABSENT (CLEAN/FLAGGED are abuse-report outcomes set lat
 upgrade keeps the unilateral attestation (B=ABSENT) — the edge exists; refining ABSENT→CLEAN would
 need an UPDATE (append-only forbids it) — minor, noted. NEXT: two parallel reviewers
 (feature-dev:code-reviewer opus + cello-test-attacker) → fix findings → done-auditor → flip SEAL-2.
+
+---
+
+## 2026-06-23 — DOD-SEAL-2 ✅ PROVEN LIVE — done-auditor EARNED (Sybil-graph producer closed)
+Both reviewers cleared (code-reviewer: NO BLOCKING/HIGH — privacy-clean, atomic, graph correctly built,
+no attacker evasion; test-attacker: TESTS HAVE TEETH, no hollow tests). All findings fixed (commit
+301c522f): CR-L4 seal_date UTC string; CR-M1 CLEAN/FLAGGED-reserved comment; CR-L2 hex-coercion note;
+CR-L3 best-effort accepted tradeoff; test-attacker note-1 behavioral PRIVACY test; note-2 drift comment.
+
+cello-done-auditor verdict: **1 EARNED, 0 overstated, 0 unproven** — ran both spine tests + the 6-test
+unit suite COLD, confirmed the reviewer fixes are in committed code. LIVE citation:
+j-loopback.spine.test.ts:148-155 (real bilateral seal → MUTUAL_SEAL + 2 participation + the analytics
+edge query derives ONE A↔B edge = the Sybil signal) + j-upgrade-bilateral.spine.test.ts:170-176 (real
+unilateral seal → SEAL_UNILATERAL + upgrade-skip), via psqlSpine against the directory's OWN DB.
+
+HONEST SCOPE folded into the DoD line: the LIVE binary asserts 2 of 3 tables (conversation_seals +
+conversation_participation); conversation_attestations + the edge-WEIGHT accumulation (repeated pairs)
+are proven UNIT-against-real-PG (the 3rd table is written in the SAME atomic transaction the live test
+exercises). Fixed the 5→6 unit-count prose.
+
+**M7 build is now fully complete** — every J-* journey green vs the real binaries, the Sybil-defense
+relationship graph populates on live seals, and the DoD reflects reality. Remaining = E2E testing
+(Andre), multi-node infra (INV-1), the named-deferred relay-signed-sequence hardening (MSG-4 F2), the
+assembly-discipline audits (INV-6/8), and two optional hardening builds (attestation_mode TBS-binding;
+DOD-LOG-2/3 export bundles). No CORE/non-core build work open. Nothing pushed (CC ahead 14, TC ahead 56).
