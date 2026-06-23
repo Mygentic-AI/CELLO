@@ -4523,3 +4523,31 @@ what remains needs a design decision (LEG-2), a deferred dependency (SEAL-2/UP-1
 (🟢 remainders), or a storied build (UP-1, LOG-1).
 
 Branch state: all on main, NOTHING pushed (Andre pushes). cello-client ahead 3, trustless-cello ahead ~12.
+
+---
+
+## 2026-06-23 — DOD-LEG-2 re-derive guard: BUILDING option (b) (Andre: use judgment, build it)
+
+Andre (4am) asked for the plain version and my recommendation; proceeding autonomously with option (b),
+the safe/reversible one. Deviation from the AC's literal "re-derive from LOCAL leaves" is INTENTIONAL and
+justified: B's local leaves are incomplete (it never receives the counterparty's SEAL ctrl leaf), so a
+literal local-only re-derivation false-positives. B instead fetches the COMPLETE signed-leaf set from the
+relay's existing `get_seal_leaves` RPC, verifies the per-leaf sender signatures itself, and re-derives —
+which is still INDEPENDENT verification (B does not trust the directory's published VALUE; it trusts only
+signatures it checks). Easy to switch to (a)/(c)/(d) later if Andre prefers.
+
+**Plan (red-first, live binary):**
+1. Client (B daemon): after the seal signature verifies, fetch the session's signed leaves via the relay
+   `get_seal_leaves`, verify each leaf's sender Ed25519 signature over its Structure1, re-derive each
+   party's `content_frontier_seq` = max signed last_seen_seq (mirror the directory's buildSealLegibility
+   frontier logic), and REJECT the cert with `certificate_frontier_unverifiable` +
+   `seal.certificate.frontier.unverifiable {party, publishedFrontier, derivedFrontier, correlationId}`
+   if any published per-party frontier EXCEEDS B's independently-derived value. Slots in AFTER the sig
+   check, BEFORE recordSealCertificate (daemon.ts ~1359-1378).
+2. Directory test seam: an env-gated inflation of the published frontier
+   (`CELLO_DIRECTORY_INFLATE_FRONTIER_FOR_TEST`) so the negative live test can publish an inflated-but-
+   correctly-signed cert. Test-only, env-gated, off by default.
+3. Tests: a focused client unit test (honest leaves + an inflated published frontier → reject; honest →
+   accept, no false-positive); a live J-LEGIBILITY case (happy: B re-derives, matches, accepts; negative:
+   directory inflates → B rejects `certificate_frontier_unverifiable`, cert NOT persisted).
+4. code-reviewer + cello-test-attacker, then cello-done-auditor before the ✅ flip.
