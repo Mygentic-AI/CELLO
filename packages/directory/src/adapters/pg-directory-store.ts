@@ -23,6 +23,7 @@ import type {
   DirectoryStore,
   DirectoryNotification,
   SealNotarization,
+  ConversationSealRecord,
   Logger,
   AccountRow,
   CreateAccountParams,
@@ -494,6 +495,91 @@ export class PgDirectoryStore implements DirectoryStore {
     );
     if (result.rows.length === 0) return undefined;
     return parseInt(result.rows[0]!.id, 10);
+  }
+
+  // ─── SEAL-2: relationship-graph rows (Sybil/relationship-farming defense) ──────
+
+  /**
+   * Write the relationship-graph rows for a completed seal, ATOMICALLY across the three
+   * hash-chained tables: conversation_seals (close_type + the sealed root HASH) + one
+   * conversation_participation row per party (the graph edge: two parties of a sealed
+   * conversation) + one conversation_attestations row per party.
+   *
+   * PRIVACY: relationship METADATA + the root HASH only — never content. `pseudonym` is the party's
+   * k_local pubkey hex (stable graph identity the directory already holds in seal_notarizations).
+   *
+   * conversation_seals.conversation_id is UNIQUE, so this is written ONCE per conversation (the
+   * normal-bilateral and unilateral seal paths). The unilateral→bilateral UPGRADE does NOT call this
+   * — the A↔B edge already exists from the unilateral seal, and a second seal row would violate the
+   * UNIQUE constraint. The seal's authoritative record is seal_notarizations; this is best-effort
+   * analytics and must NEVER block a seal (callers fire-and-forget + log).
+   */
+  async recordConversationSeal(
+    seal: ConversationSealRecord,
+    opts?: { correlationId?: string; client?: pg.PoolClient },
+  ): Promise<void> {
+    const correlationId = opts?.correlationId;
+    const externalClient = opts?.client;
+    const ownsTransaction = !externalClient;
+    const client = externalClient ?? await this.#pool.connect();
+    try {
+      if (ownsTransaction) await client.query("BEGIN");
+
+      // 1. conversation_seals (FK parent — must precede participation/attestations). seal_date is a
+      //    DATE column; pg takes the date part of the JS Date (UTC).
+      const sealDate = new Date(seal.closeTimestampMs);
+      await this.insertWithChain(
+        "conversation_seals",
+        { conversation_id: seal.conversationId, merkle_root: seal.merkleRootHex, close_type: seal.closeType, participant_count: seal.parties.length, seal_date: sealDate },
+        ["conversation_id", "merkle_root", "close_type", "participant_count", "seal_date", "chain_hash"],
+        [seal.conversationId, seal.merkleRootHex, seal.closeType, seal.parties.length, sealDate, ""],
+        5,
+        client,
+        correlationId,
+      );
+
+      // 2. conversation_participation — one per party (the graph nodes/edge).
+      for (const p of seal.parties) {
+        await this.insertWithChain(
+          "conversation_participation",
+          { conversation_id: seal.conversationId, party_pseudonym: p.pseudonym },
+          ["conversation_id", "party_pseudonym", "chain_hash"],
+          [seal.conversationId, p.pseudonym, ""],
+          2,
+          client,
+          correlationId,
+        );
+      }
+
+      // 3. conversation_attestations — one per party (their seal-time attestation).
+      for (const p of seal.parties) {
+        await this.insertWithChain(
+          "conversation_attestations",
+          { conversation_id: seal.conversationId, participant_pseudonym: p.pseudonym, attestation: p.attestation, seal_signature: p.sealSignatureHex },
+          ["conversation_id", "participant_pseudonym", "attestation", "seal_signature", "chain_hash"],
+          [seal.conversationId, p.pseudonym, p.attestation, p.sealSignatureHex, ""],
+          4,
+          client,
+          correlationId,
+        );
+      }
+
+      if (ownsTransaction) await client.query("COMMIT");
+      this.#logger.info("conversation.seal.recorded", {
+        conversationId: seal.conversationId, closeType: seal.closeType, participantCount: seal.parties.length, correlationId,
+      });
+    } catch (err) {
+      if (ownsTransaction) await client.query("ROLLBACK").catch(() => { /* ignore */ });
+      const reason = err instanceof Error ? err.message : String(err);
+      // Best-effort: a UNIQUE(conversation_id) violation (a duplicate seal for the same conversation)
+      // is benign — the graph row already exists; log at WARN, do not surface.
+      this.#logger.warn("conversation.seal.record.failed", { conversationId: seal.conversationId, reason, correlationId });
+      // When the caller supplied a client (atomic with the notarization), rethrow so their
+      // transaction rolls back consistently; when we own the transaction, swallow (never block a seal).
+      if (!ownsTransaction) throw err;
+    } finally {
+      if (ownsTransaction) client.release();
+    }
   }
 
   // ─── Notification queues (PERSIST-019) ───────────────────────────────────

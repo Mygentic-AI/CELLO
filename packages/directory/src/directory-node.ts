@@ -111,7 +111,7 @@ import { createNode } from "@cello-protocol/transport";
 import type { CelloNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import type { SessionAbandoned, SessionSealRejected, SealVerified } from "@cello-protocol/protocol-types";
-import type { SealNotarization, Logger, NotificationQueue, ICheckpointTransport, CheckpointProposal, TokenValidator } from "@cello-protocol/interfaces";
+import type { SealNotarization, ConversationSealRecord, ConversationCloseType, ConversationAttestation, Logger, NotificationQueue, ICheckpointTransport, CheckpointProposal, TokenValidator } from "@cello-protocol/interfaces";
 import type {
   SessionAssignment,
   SessionAssignmentFrame,
@@ -3110,6 +3110,17 @@ export class CelloDirectoryNode {
     };
     await this.#store.recordNotarization(notarization, { correlationId }).catch(() => { /* logged inside */ });
 
+    // SEAL-2: record the relationship-graph rows (best-effort). The present party is DELIVERED; the
+    // absent party carries the liveness attestation (ABSENT when the relay observed it gone).
+    this.#recordConversationSealBestEffort({
+      sessionId, sealedRoot, closeType: "SEAL_UNILATERAL",
+      participants: [
+        { pubkey: presentPubkey, attestation: "DELIVERED" },
+        { pubkey: absentPubkey, attestation: attestation === "ABSENT" ? "ABSENT" : "DELIVERED" },
+      ],
+      sealSignature: frostSignature, closeTimestamp, correlationId,
+    });
+
     // PERSIST-017: stage sealed_root in the MMR (fire-and-forget; never blocks the seal).
     if (this.#mmrStore) {
       const sealedRootHex = Buffer.from(sealedRoot).toString("hex");
@@ -3202,6 +3213,47 @@ export class CelloDirectoryNode {
     // retained as the in-process duplicate guard (durable dedup is the DB constraint).
     this.#sessionParticipants.delete(sessionIdHex);
     this.#sessionLastActivity.delete(sessionIdHex);
+  }
+
+  /**
+   * SEAL-2 (Sybil/relationship-farming defense): best-effort record of the relationship-graph rows
+   * for a completed seal — conversation_seals + per-party conversation_participation +
+   * conversation_attestations. Stores relationship METADATA + the sealed root HASH only, NEVER
+   * content (INV-3). Fire-and-forget: analytics must NEVER block or fail a seal (like MMR staging).
+   * conversation_id = the 16-byte session_id formatted as a UUID. The unilateral→bilateral UPGRADE
+   * does NOT call this — the A↔B edge already exists from the unilateral seal (and conversation_id is
+   * UNIQUE). `pseudonym` is the party's k_local pubkey hex (stable graph identity).
+   */
+  #recordConversationSealBestEffort(args: {
+    sessionId: Uint8Array;
+    sealedRoot: Uint8Array;
+    closeType: ConversationCloseType;
+    participants: Array<{ pubkey: Uint8Array; attestation: ConversationAttestation }>;
+    sealSignature: Uint8Array;
+    closeTimestamp: number;
+    correlationId: string;
+  }): void {
+    const sessionHex = Buffer.from(args.sessionId).toString("hex");
+    // session_id (16 bytes / 32 hex) → UUID 8-4-4-4-12.
+    const h = sessionHex.padStart(32, "0").slice(0, 32);
+    const conversationId = `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+    const sealSigHex = Buffer.from(args.sealSignature).toString("hex");
+    const record: ConversationSealRecord = {
+      conversationId,
+      merkleRootHex: Buffer.from(args.sealedRoot).toString("hex"),
+      closeType: args.closeType,
+      closeTimestampMs: args.closeTimestamp,
+      parties: args.participants.map((p) => ({
+        pseudonym: Buffer.from(p.pubkey).toString("hex"),
+        attestation: p.attestation,
+        sealSignatureHex: sealSigHex,
+      })),
+    };
+    void this.#store.recordConversationSeal(record, { correlationId: args.correlationId }).catch((err: unknown) => {
+      this.#logger?.warn("conversation.seal.staging.failed", {
+        sessionId: sessionHex, reason: err instanceof Error ? err.message : String(err), correlationId: args.correlationId,
+      });
+    });
   }
 
   /**
@@ -3507,6 +3559,15 @@ export class CelloDirectoryNode {
         seal_type: "bilateral", // DOD-UP-1: both parties co-closed (single-key fallback path)
       };
       void this.#store.recordNotarization(notarization, { correlationId: sessionIdHex }).catch(() => { /* logged inside */ });
+      // SEAL-2: relationship-graph rows (best-effort) — bilateral, both parties DELIVERED.
+      this.#recordConversationSealBestEffort({
+        sessionId, sealedRoot: recomputedRoot, closeType: "MUTUAL_SEAL",
+        participants: [
+          { pubkey: new Uint8Array(pA), attestation: "DELIVERED" },
+          { pubkey: new Uint8Array(pB), attestation: "DELIVERED" },
+        ],
+        sealSignature: notarizationSig, closeTimestamp: close_timestamp, correlationId: sessionIdHex,
+      });
       // PERSIST-017: stage sealed_root in MMR staging table (fire-and-forget).
       // MMR staging failure must not block session closure — the seal is already notarized.
       // correlationId is sessionIdHex (consistent with the pattern used in recordNotarization call sites).
@@ -3676,6 +3737,16 @@ export class CelloDirectoryNode {
       seal_type: "bilateral", // DOD-UP-1: both parties co-signed (FROST notarization path)
     };
     void this.#store.recordNotarization(notarization, { correlationId: pending.correlationId }).catch(() => { /* logged inside */ });
+    // SEAL-2: relationship-graph rows (best-effort) — bilateral FROST, both parties DELIVERED.
+    this.#recordConversationSealBestEffort({
+      sessionId: frame.session_id, sealedRoot: pending.sealedRoot, closeType: "MUTUAL_SEAL",
+      participants: [
+        { pubkey: new Uint8Array(pA), attestation: "DELIVERED" },
+        { pubkey: new Uint8Array(pB), attestation: "DELIVERED" },
+      ],
+      sealSignature: new Uint8Array(frame.frost_signature), closeTimestamp: pending.timestamp,
+      correlationId: pending.correlationId,
+    });
 
     // PERSIST-017: stage sealed_root in MMR staging table (fire-and-forget).
     // MMR staging failure must not block session closure — the seal is already notarized.

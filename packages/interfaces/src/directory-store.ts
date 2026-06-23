@@ -66,6 +66,31 @@ export interface SealNotarization {
   supersedes_notarization_id?: number | null;
 }
 
+/** SEAL-2: the close-type discriminator on conversation_seals (V2 CHECK constraint). */
+export type ConversationCloseType = "MUTUAL_SEAL" | "SEAL_UNILATERAL" | "EXPIRE" | "ABORT" | "REOPEN";
+
+/** SEAL-2: per-party attestation on conversation_attestations (V2 CHECK constraint). */
+export type ConversationAttestation = "CLEAN" | "FLAGGED" | "PENDING" | "DELIVERED" | "ABSENT";
+
+/**
+ * SEAL-2: relationship-graph rows for a completed seal — relationship metadata + the sealed root
+ * HASH only, NEVER content. Consumed by the analytics graph (Sybil-farming defense).
+ */
+export interface ConversationSealRecord {
+  /** The session id as a UUID (the directory's conversation identifier). */
+  conversationId: string;
+  /** The sealed Merkle root, hex (conversation_seals.merkle_root — a HASH, never content). */
+  merkleRootHex: string;
+  closeType: ConversationCloseType;
+  /** Unix ms; stored as conversation_seals.seal_date (DATE, UTC). */
+  closeTimestampMs: number;
+  /**
+   * The parties: `pseudonym` is the stable graph identifier (k_local pubkey hex); `attestation` is
+   * this party's per-conversation attestation. participant_count = parties.length.
+   */
+  parties: Array<{ pseudonym: string; attestation: ConversationAttestation; sealSignatureHex: string }>;
+}
+
 export type DirectoryNotification = SessionAbandoned | SessionSealed | SessionSealRejected | SealVerified | ConnectionEstablished;
 
 export interface DirectoryStore {
@@ -105,6 +130,25 @@ export interface DirectoryStore {
    * at the existing unilateral row. Returns undefined when no such row exists.
    */
   getNotarizationId(sessionIdHex: string, sealType: "unilateral" | "bilateral"): Promise<number | undefined>;
+
+  /**
+   * SEAL-2 (Sybil/relationship-farming defense): record the RELATIONSHIP-GRAPH rows for a completed
+   * seal — conversation_seals (close_type + the sealed root HASH) + one conversation_participation
+   * row per party + one conversation_attestations row per party. These feed the analytics graph
+   * (conversation_graph_edges: two participants of a sealed conversation → an edge; pseudonym_stats).
+   *
+   * PRIVACY: stores relationship METADATA + the sealed root HASH ONLY — NEVER conversation content
+   * (content stays client-side encrypted; INV-3). `pseudonym` is the party's stable identifier for
+   * graph clustering (the k_local pubkey hex — the directory already holds it in seal_notarizations).
+   *
+   * BEST-EFFORT: this is the analytics derivative, not the authoritative seal (that is
+   * seal_notarizations). It MUST NOT block or fail a seal — callers fire-and-forget and log on error,
+   * exactly like the MMR staging. Each of the three tables is independently hash-chained.
+   */
+  recordConversationSeal(
+    seal: ConversationSealRecord,
+    opts?: { correlationId?: string; client?: unknown },
+  ): Promise<void>;
 
   /**
    * Enqueue a notification event for a pubkey that has no active signaling stream.

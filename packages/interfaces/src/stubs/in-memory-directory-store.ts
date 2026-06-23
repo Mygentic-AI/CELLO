@@ -9,7 +9,7 @@
  */
 
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
-import type { DirectoryStore, DirectoryNotification, SealNotarization, AccountRow, CreateAccountParams } from "../directory-store.js";
+import type { DirectoryStore, DirectoryNotification, SealNotarization, ConversationSealRecord, AccountRow, CreateAccountParams } from "../directory-store.js";
 
 const NOTIFICATION_QUEUE_BOUND = 256;
 const PENDING_CONNECTION_REQUEST_BOUND = 32;
@@ -68,6 +68,20 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     sealType: "unilateral" | "bilateral",
   ): Promise<number | undefined> {
     return this.#notarizationIds.get(`${sessionIdHex}:${sealType}`);
+  }
+
+  // SEAL-2: relationship-graph rows, keyed by conversationId (UNIQUE, mirrors the pg constraint).
+  readonly #conversationSeals = new Map<string, ConversationSealRecord>();
+
+  async recordConversationSeal(seal: ConversationSealRecord, _opts?: { correlationId?: string; client?: unknown }): Promise<void> {
+    // Mirror the pg UNIQUE(conversation_id): first writer wins (a duplicate is benign / no-op).
+    if (this.#conversationSeals.has(seal.conversationId)) return;
+    this.#conversationSeals.set(seal.conversationId, seal);
+  }
+
+  /** Test accessor for the recorded relationship-graph rows. */
+  getConversationSealForTest(conversationId: string): ConversationSealRecord | undefined {
+    return this.#conversationSeals.get(conversationId);
   }
 
   enqueueNotification(pubkeyHex: string, event: DirectoryNotification, _correlationId?: string): void {

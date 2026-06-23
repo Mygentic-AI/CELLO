@@ -68,7 +68,12 @@ const TABLE_EXTRA_EXCLUDED: Record<string, ReadonlySet<string>> = {
     "rejection_reason",       // set on rejection
     "via_alias_id",           // set when request came via an alias
   ]),
-  conversation_seals: new Set(["close_reason_code"]),
+  // SEAL-2: seal_date is a DATE — node-pg returns it as a LOCAL-midnight Date and toISOString()
+  // shifts it by the tz offset, so insert-time (a Date with time) and verify-time (SELECT * →
+  // local-midnight Date) serialize DIFFERENTLY (the M4 bug #7 family). Exclude it: the integrity
+  // target is merkle_root + close_type + participant_count (all chained). (close_reason_code is
+  // nullable, set post-INSERT.)
+  conversation_seals: new Set(["close_reason_code", "seal_date"]),
   conversation_proof_leaves: new Set([
     "checkpoint_id",          // NULL at INSERT; set via join table at checkpoint confirmation
   ]),
