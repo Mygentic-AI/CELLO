@@ -50,6 +50,20 @@ export interface SealNotarization {
   participant_b_pubkey: Uint8Array; // 32 bytes
   close_timestamp: number;          // Unix ms
   frost_signature: Uint8Array;      // 64-byte FROST (or legacy Ed25519) signature over the notarization
+  /**
+   * CELLO-M7-UPGRADE-001 (DOD-UP-1): discriminates a UNILATERAL seal (B absent — directory
+   * notarizes B's liveness, B did not co-sign) from a BILATERAL seal (both parties co-signed).
+   * Defaults to 'bilateral' when omitted — the directory's pre-UP-1 two-party path always
+   * produced bilateral seals. Persisted to seal_notarizations.seal_type (V31). NOT on the wire.
+   */
+  seal_type?: "unilateral" | "bilateral";
+  /**
+   * DOD-UP-1: when the previously-ABSENT party returns, recovers + verifies the content, and
+   * co-signs its OWN ack leaf, the directory writes a NEW bilateral row that SUPERSEDES the
+   * unilateral one via this FK to the unilateral row's id. The unilateral row is never mutated
+   * (append-only, AC-006). null/undefined on every non-superseding row.
+   */
+  supersedes_notarization_id?: number | null;
 }
 
 export type DirectoryNotification = SessionAbandoned | SessionSealed | SessionSealRejected | SealVerified | ConnectionEstablished;
@@ -77,8 +91,20 @@ export interface DirectoryStore {
    *
    * PERSIST-018: async — queries Postgres. Returns undefined if no row exists.
    * Does not throw and does not log an error on absence.
+   *
+   * DOD-UP-1: a session may now hold up to two rows (one unilateral + one superseding
+   * bilateral). This returns the AUTHORITATIVE current seal — the bilateral row when an
+   * upgrade has occurred, otherwise the unilateral row. The returned record carries
+   * seal_type so callers can tell which.
    */
   getNotarization(sessionIdHex: string): Promise<SealNotarization | undefined>;
+
+  /**
+   * DOD-UP-1: fetch the DB row id of a notarization by (session, seal_type). Used by the
+   * upgrade ceremony to set supersedes_notarization_id on the new bilateral row, pointing
+   * at the existing unilateral row. Returns undefined when no such row exists.
+   */
+  getNotarizationId(sessionIdHex: string, sealType: "unilateral" | "bilateral"): Promise<number | undefined>;
 
   /**
    * Enqueue a notification event for a pubkey that has no active signaling stream.

@@ -89,6 +89,19 @@ const TABLE_EXTRA_EXCLUDED: Record<string, ReadonlySet<string>> = {
   // (session_id + owning_node_id) which is the security property — participant data is
   // operational, not the integrity target.
   sessions: new Set(["initiator_pubkey_hex", "target_pubkey_hex"]),
+  // CELLO-M7-UPGRADE-001 (DOD-UP-1): V31 added seal_type (NOT NULL DEFAULT 'bilateral')
+  // and supersedes_notarization_id (nullable, no DEFAULT) to seal_notarizations.
+  //  - seal_type: same M4 bug #7 / sessions-V29 pattern — pre-V31 rows read back the
+  //    'bilateral' default while their chain_hash was computed without the column, so
+  //    including it would break verifyChain for every existing notarization. The integrity
+  //    target is sealed_root + frost_signature + participants (all still chained); seal_type
+  //    is a directory-side label whose truth is the FROST signature itself, which the client
+  //    re-verifies at cert time (AC-008). A label flip without a valid bilateral signature is
+  //    inert — it cannot forge B's co-signature.
+  //  - supersedes_notarization_id: nullable, no DEFAULT, set only on the superseding bilateral
+  //    row and NULL on every other row (unilateral + all pre-V31). Textbook exclusion case
+  //    (cf. relay_registrations.deregistered_at): a pointer, not an integrity target.
+  seal_notarizations: new Set(["seal_type", "supersedes_notarization_id"]),
 };
 
 function isExcluded(tableName: string, column: string): boolean {

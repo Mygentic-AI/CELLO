@@ -37,13 +37,37 @@ export class InMemoryDirectoryStore implements DirectoryStore {
   // CONNREQ-002: target_pubkey → queued pending connection requests (up to 32)
   readonly #pendingConnectionRequests = new Map<string, PendingConnectionRequest[]>();
 
+  // DOD-UP-1: a session may hold a unilateral row AND a superseding bilateral row, so the map is
+  // keyed by `${sessionIdHex}:${sealType}` (mirrors the V31 UNIQUE(session_id, seal_type)). A
+  // monotonically-increasing counter stands in for the BIGSERIAL id so getNotarizationId works.
+  #notarizationSeq = 0;
+  readonly #notarizationIds = new Map<string, number>();
+
   async recordNotarization(notarization: SealNotarization, _opts?: { correlationId?: string; client?: unknown }): Promise<void> {
-    const key = Buffer.from(notarization.session_id).toString("hex");
-    this.#notarizations.set(key, notarization);
+    const sessionHex = Buffer.from(notarization.session_id).toString("hex");
+    const sealType = notarization.seal_type ?? "bilateral";
+    const key = `${sessionHex}:${sealType}`;
+    // Mirror the pg UNIQUE(session_id, seal_type) durable dedup: first writer wins, no mutation.
+    if (this.#notarizations.has(key)) return;
+    this.#notarizations.set(key, { ...notarization, seal_type: sealType });
+    this.#notarizationIds.set(key, ++this.#notarizationSeq);
   }
 
   async getNotarization(sessionIdHex: string): Promise<SealNotarization | undefined> {
-    return this.#notarizations.get(sessionIdHex);
+    // Prefer the superseding bilateral row when present, else the unilateral row.
+    return (
+      this.#notarizations.get(`${sessionIdHex}:bilateral`) ??
+      this.#notarizations.get(`${sessionIdHex}:unilateral`) ??
+      // Back-compat: any row written before seal_type existed defaulted to bilateral above.
+      this.#notarizations.get(sessionIdHex)
+    );
+  }
+
+  async getNotarizationId(
+    sessionIdHex: string,
+    sealType: "unilateral" | "bilateral",
+  ): Promise<number | undefined> {
+    return this.#notarizationIds.get(`${sessionIdHex}:${sealType}`);
   }
 
   enqueueNotification(pubkeyHex: string, event: DirectoryNotification, _correlationId?: string): void {

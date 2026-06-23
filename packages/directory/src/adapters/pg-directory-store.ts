@@ -72,7 +72,10 @@ export const BIGINT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   conversation_attestations: ["id"],
   conversation_participation: ["id"],
   notification_events: ["id"],
-  seal_notarizations: ["id", "close_timestamp"],
+  // CELLO-M7-UPGRADE-001 (DOD-UP-1): supersedes_notarization_id is a nullable BIGINT FK added
+  // by V31 — declared here so the AC-005 static gate passes and deserializeRow coerces it from
+  // the pg string to a JS number (null stays null). It is excluded from chain serialization.
+  seal_notarizations: ["id", "close_timestamp", "supersedes_notarization_id"],
   connection_requests: ["id"],
   connections: ["id", "established_at"],
   notification_queue: ["id"],
@@ -333,6 +336,14 @@ export class PgDirectoryStore implements DirectoryStore {
     const participantBBuf = Buffer.from(notarization.participant_b_pubkey);
     const frostSigBuf = Buffer.from(notarization.frost_signature);
 
+    // DOD-UP-1: seal_type discriminates unilateral vs bilateral; defaults to 'bilateral' (the
+    // pre-UP-1 two-party path). supersedes_notarization_id points the superseding bilateral row
+    // at the unilateral row it replaces; null on every other row. Both are EXCLUDED from chain
+    // serialization (see hash-chain.ts TABLE_EXTRA_EXCLUDED) — they appear in the record only so
+    // the insertWithChain column/record consistency guard is satisfied; serializeRecord drops them.
+    const sealType: "unilateral" | "bilateral" = notarization.seal_type ?? "bilateral";
+    const supersedesId: number | null = notarization.supersedes_notarization_id ?? null;
+
     const record: Record<string, unknown> = {
       session_id: sessionIdBuf,
       sealed_root: sealedRootBuf,
@@ -340,6 +351,8 @@ export class PgDirectoryStore implements DirectoryStore {
       participant_b_pubkey: participantBBuf,
       close_timestamp: notarization.close_timestamp,
       frost_signature: frostSigBuf,
+      seal_type: sealType,
+      supersedes_notarization_id: supersedesId,
     };
 
     const columns = [
@@ -349,6 +362,8 @@ export class PgDirectoryStore implements DirectoryStore {
       "participant_b_pubkey",
       "close_timestamp",
       "frost_signature",
+      "seal_type",
+      "supersedes_notarization_id",
       "chain_hash",
     ];
     const values: unknown[] = [
@@ -358,9 +373,11 @@ export class PgDirectoryStore implements DirectoryStore {
       participantBBuf,
       notarization.close_timestamp,
       frostSigBuf,
+      sealType,
+      supersedesId,
       "", // placeholder — overwritten by insertWithChain
     ];
-    const chainHashIndex = 6;
+    const chainHashIndex = 8;
 
     // Attempt 1
     try {
@@ -419,13 +436,20 @@ export class PgDirectoryStore implements DirectoryStore {
    * Returns undefined if no row exists — absence is not an error.
    *
    * PERSIST-018 AC-006: does not throw and does not log an error on absence.
+   *
+   * DOD-UP-1: a session may hold a unilateral row and a superseding bilateral row. We return
+   * the AUTHORITATIVE seal — the bilateral row when an upgrade has occurred, else the unilateral
+   * row. `ORDER BY (seal_type = 'bilateral') DESC` puts a bilateral row first; the seal_type and
+   * supersedes_notarization_id fields are carried on the returned record.
    */
   async getNotarization(sessionIdHex: string): Promise<SealNotarization | undefined> {
     const result = await this.#pool.query<Record<string, unknown>>(
       `SELECT session_id, sealed_root, participant_a_pubkey, participant_b_pubkey,
-              close_timestamp, frost_signature
+              close_timestamp, frost_signature, seal_type, supersedes_notarization_id
        FROM seal_notarizations
-       WHERE session_id = decode($1, 'hex')`,
+       WHERE session_id = decode($1, 'hex')
+       ORDER BY (seal_type = 'bilateral') DESC, id DESC
+       LIMIT 1`,
       [sessionIdHex],
     );
 
@@ -438,6 +462,8 @@ export class PgDirectoryStore implements DirectoryStore {
       participant_b_pubkey: Buffer;
       close_timestamp: number;
       frost_signature: Buffer;
+      seal_type: "unilateral" | "bilateral";
+      supersedes_notarization_id: number | null;
     }>("seal_notarizations", result.rows[0]!);
     return {
       session_id: new Uint8Array(row.session_id),
@@ -446,7 +472,28 @@ export class PgDirectoryStore implements DirectoryStore {
       participant_b_pubkey: new Uint8Array(row.participant_b_pubkey),
       close_timestamp: row.close_timestamp,
       frost_signature: new Uint8Array(row.frost_signature),
+      seal_type: row.seal_type,
+      supersedes_notarization_id: row.supersedes_notarization_id,
     };
+  }
+
+  /**
+   * DOD-UP-1: fetch the DB row id of a notarization by (session, seal_type). The upgrade
+   * ceremony calls this to set supersedes_notarization_id on the new bilateral row. Returns
+   * undefined when no such row exists.
+   */
+  async getNotarizationId(
+    sessionIdHex: string,
+    sealType: "unilateral" | "bilateral",
+  ): Promise<number | undefined> {
+    const result = await this.#pool.query<{ id: string }>(
+      `SELECT id FROM seal_notarizations
+       WHERE session_id = decode($1, 'hex') AND seal_type = $2
+       LIMIT 1`,
+      [sessionIdHex, sealType],
+    );
+    if (result.rows.length === 0) return undefined;
+    return parseInt(result.rows[0]!.id, 10);
   }
 
   // ─── Notification queues (PERSIST-019) ───────────────────────────────────

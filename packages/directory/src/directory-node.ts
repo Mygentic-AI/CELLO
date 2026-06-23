@@ -3057,7 +3057,9 @@ export class CelloDirectoryNode {
     } = args;
 
     // Persist the notarization (participant_a = present, participant_b = ABSENT). The
-    // seal_notarizations UNIQUE(session_id) constraint is the durable dedup (AC-008).
+    // seal_notarizations UNIQUE(session_id, seal_type) constraint is the durable dedup (AC-008).
+    // DOD-UP-1: this is the UNILATERAL row — a later bilateral upgrade supersedes it without
+    // mutating it (append-only).
     const notarization: SealNotarization = {
       session_id: sessionId,
       sealed_root: sealedRoot,
@@ -3065,6 +3067,7 @@ export class CelloDirectoryNode {
       participant_b_pubkey: absentPubkey,
       close_timestamp: closeTimestamp,
       frost_signature: frostSignature,
+      seal_type: "unilateral",
     };
     await this.#store.recordNotarization(notarization, { correlationId }).catch(() => { /* logged inside */ });
 
@@ -3324,6 +3327,7 @@ export class CelloDirectoryNode {
         participant_b_pubkey: new Uint8Array(pB),
         close_timestamp,
         frost_signature: notarizationSig,
+        seal_type: "bilateral", // DOD-UP-1: both parties co-closed (single-key fallback path)
       };
       void this.#store.recordNotarization(notarization, { correlationId: sessionIdHex }).catch(() => { /* logged inside */ });
       // PERSIST-017: stage sealed_root in MMR staging table (fire-and-forget).
@@ -3492,6 +3496,7 @@ export class CelloDirectoryNode {
       participant_b_pubkey: new Uint8Array(pB),
       close_timestamp: pending.timestamp,
       frost_signature: new Uint8Array(frame.frost_signature),
+      seal_type: "bilateral", // DOD-UP-1: both parties co-signed (FROST notarization path)
     };
     void this.#store.recordNotarization(notarization, { correlationId: pending.correlationId }).catch(() => { /* logged inside */ });
 
