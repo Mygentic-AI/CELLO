@@ -110,7 +110,7 @@ import type { AgentProfile } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
 import type { CelloNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
-import type { SessionAbandoned, SessionSealed, SessionSealRejected, SealVerified } from "@cello-protocol/protocol-types";
+import type { SessionAbandoned, SessionSealRejected, SealVerified } from "@cello-protocol/protocol-types";
 import type { SealNotarization, Logger, NotificationQueue, ICheckpointTransport, CheckpointProposal, TokenValidator } from "@cello-protocol/interfaces";
 import type {
   SessionAssignment,
