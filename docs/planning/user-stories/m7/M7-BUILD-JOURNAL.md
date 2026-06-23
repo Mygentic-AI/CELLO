@@ -4713,3 +4713,59 @@ teeth genuine at the source), encrypted-at-rest (scan hits the right sessions.db
 INV-3 (relay/directory output never has the plaintext). Auditor note: "the rare case where I went looking
 for the tautology the prompt warned me about and found the implementation actually defeats it at the
 source. Ruling EARNED on evidence, not deference." DOD-LOG-1 flipped ❌ → ✅ PROVEN LIVE. J-PERSIST closed.
+
+---
+
+## 2026-06-23 — DOD-UP-1 (unilateral→bilateral upgrade): BUILD-READY DESIGN NOTE (next unit; migration-bearing)
+
+After closing DOD-LOG-1, DOD-UP-1 (CELLO-M7-UPGRADE-001) is the last substantive journey. Mapped it
+(Explore). It is the single largest remaining unit and it is MIGRATION-BEARING + touches the hash-chained
+seal_notarizations table — so per the migration-integrity rule (FEDERATION-002 incident: "thoroughly
+assess schema requirements before writing the migration; get it right the first time") the V31 schema is
+designed COMPLETELY here before any code, and the build is sequenced so each increment is independently
+valid. Not started in this (very long, day-4) context to avoid a rushed migration; this note makes it
+build-ready for a fresh context.
+
+**ALREADY BUILT — reuse (do NOT rebuild):**
+- Unilateral seal (directory `#processSealUnilateral` directory-node.ts:2757; `#completeUnilateralNotarization`
+  :3039 → `recordNotarization` → seal_notarizations). attestation_mode='absent', seal_type 'UNILATERAL'.
+- Content recovery + the verifiability gate (daemon `autoRecoverForAgent` daemon.ts:2166; the content
+  cross-check + `#contentDesynced` tamper gate in `ingestReceivedContent` session-node-manager.ts:2104-2145)
+  — this IS the "content possession precondition" + AC-003 tamper path, already built.
+- UP-2 auto-acknowledge (`#maybeAutoAcknowledgeSeal` session-node-manager.ts:2018; submitSealLeaf reuse;
+  the SI-002 verifiability gate). UP-1's ack-leaf signing reuses submitSealLeaf + the bilateral processSeal.
+
+**GREENFIELD — to build, in this order (each increment independently committable):**
+1. **V31 migration (FOUNDATION — assess first).** seal_notarizations currently has
+   `seal_notarizations_session_id_key UNIQUE(session_id)` (V12:58) — enforces one-row-per-session, blocks
+   the superseding row. seal_notarizations is HASH-CHAINED (pg-directory-store `insertWithChain`, advisory
+   lock on "seal_notarizations"). V31 must: (a) drop the global UNIQUE(session_id); (b) add a discriminator
+   + `supersedes_notarization_id BIGINT NULL` FK; (c) add a partial-unique so at most one row per
+   (session_id, type) — one unilateral + one bilateral. OPEN ASSESSMENT before writing V31: trace EXACTLY
+   how the unilateral vs bilateral paths currently populate seal_notarizations — is there already a type/
+   close_type column on THIS table (close_type lives on conversation_seals V2, NOT seal_notarizations), or
+   must V31 add `seal_type`? Confirm the hash-chain stays valid with a 2nd row (it should — append-only).
+   Update infra/cloudformation/cello-ssm-parameters.yaml OpsAgentExpectedMigrationVersion → 31. The harness
+   runs flyway on the local spine DB, so verify V31 applies cleanly (and V1–V30 checksums unchanged) before
+   any code depends on it.
+2. **Directory store `recordNotarizationSuperseding`** — append-only bilateral row referencing the
+   unilateral row via supersedes_notarization_id; unilateral row UNMUTATED (AC-006).
+3. **Directory upgrade handler** — accept the returning-party ack leaf (a SEAL ctrl leaf signed by B's
+   OWN key, AC-007: verify sender==the previously-ABSENT party, no delegation); run the existing two-SEAL-
+   leaf processSeal → bilateral FROST notarization; write the superseding row. Refuse ONLY on unverifiability
+   (AC-002 content_unrecoverable; AC-003 content_tamper → dispute; D-3). New frame: seal_upgrade_request.
+4. **Daemon reconnect-detect** — on return, parse the SealUnilateralNotification, recover content
+   (autoRecoverForAgent), verify (the cross-check), and IF verified, sign + submit the ack leaf (reuse
+   submitSealLeaf). Refuse paths return upgrade_content_unrecoverable / upgrade_content_tamper.
+5. **Client dual-attestation cert verify (AC-008)** — verify BOTH the present party's and the returning
+   party's ack leaf against the sealed root before marking the cert bilateral; reject a forged returning-sig.
+6. **PERSIST-015 SI-002 test INVERSION** (`persist-015-unilateral-seal.test.ts`) — from "reject bilateral
+   after unilateral" to "accept the superseding bilateral row, unilateral preserved" (AC-005).
+7. **J-UPGRADE live test** (`j-upgrade.spine.test.ts`, exists/RED) — kill B → A unilateral seal → B returns
+   → recover+verify → upgrade to bilateral; assert both parties see seal_type 'bilateral', identical
+   sealed_root, the unilateral row still present (append-only), and a tamper/unrecoverable case is REFUSED.
+
+KERNEL (informed-skeptic): the upgrade must NOT promote unless B genuinely recovered + verified the content
+(reuse the cross-check gate) — the "content possession precondition" + "refuse only on unverifiability" ARE
+load-bearing security, not polish. A version that promotes on a bare ack without content verification looks
+done but is the silently-broken-core trap. Build with the gate from increment 4.
