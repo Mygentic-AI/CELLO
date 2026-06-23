@@ -4859,3 +4859,33 @@ deliver seal_upgraded to both). incr 4 = B's daemon signs the ack after recover+
 client dual-attestation verify. incr 6 = SI-002 inversion. incr 7 = NEW J-UPGRADE-001 scenario (B
 KILLED → A unilateral → B returns → recover+verify → upgrade to bilateral; the existing
 j-upgrade.spine.test.ts is UP-2/auto-ack and stays).
+
+---
+
+## 2026-06-23 — DOD-UP-1 incr 3 BUILT (directory upgrade handler, Model 2); incr 4 next (daemon KERNEL)
+**Commit edb83f09.** Directory `seal_upgrade_request` handler + frames + dual-attestation cert.
+Frames: seal_upgrade_request {session_id, returning_pubkey, ack_signature}, seal_upgrade_confirmed
+(present sig=A's original seal + returning sig=B's ack, both over R1), seal_upgrade_rejected.
+`#processSealUpgradeRequest` (directory-node.ts, after #completeUnilateralNotarization): getNotarization
+(prefers bilateral → idempotent already_bilateral) → AC-007 sender==absent party (sender AND frame
+pubkey) → verify B's ack over CBOR([SEAL_UPGRADE_ACK_DOMAIN="cello-seal-upgrade-ack-v1", session_id,
+R1]) against participant_b_pubkey → write SUPERSEDING bilateral row (frost_signature=B's ack,
+supersedes→uni row, append-only) → deliver dual cert to both. Refuses only on unverifiability. Spine
+binary resolution confirmed LOCAL (CELLO_CLIENT_ROOT/core/daemon/dist/bin) so cross-repo daemon edits
+are live-tested without publish.
+
+**Tests:** m7-upgrade-001-directory-handler.test.ts (7, in-memory): happy-path superseding write +
+dual-attestation frame (both sigs verify over R1); AC-007 impostor→not_absent_party; KERNEL forged/
+wrong-root ack→ack_signature_invalid (NO bilateral row); no_unilateral_seal; already_bilateral; codec
+round-trip. NODE_ENV=test seams triggerSealUpgradeForTest + buildSealUpgradeAckTbsForTest. Regression
+green: persist-015, m7-session-004, superseding-store.
+
+**incr 4 (daemon, the KERNEL) — plan.** B's daemon on return: (1) detect the session was unilaterally
+sealed + B is the absent party (via the seal_unilateral_notification drained on reconnect / getNotarization);
+(2) recover parked content (autoRecoverForAgent → recoverParkedFromRelay → ingestReceivedContent cross-
+check); (3) gate on verifiability (#contentDesynced = tamper → refuse upgrade_content_tamper→dispute;
+unrecoverable → refuse upgrade_content_unrecoverable); (4) ONLY IF verified: build the IDENTICAL ack TBS
+(CBOR_ENC tagUint8Array:false, same domain string) over R1, sign K_local, send seal_upgrade_request;
+(5) handle seal_upgrade_confirmed (mark session bilateral) / seal_upgrade_rejected. The content gate is
+the load-bearing KERNEL — reuse the #maybeAutoAcknowledgeSeal gate logic. Then incr 5 client dual-attest
+verify, incr 6 SI-002 inversion, incr 7 J-UPGRADE-001 live (B KILLED → A unilateral → B returns → upgrade).
