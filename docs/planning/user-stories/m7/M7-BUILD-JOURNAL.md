@@ -4551,3 +4551,33 @@ signatures it checks). Easy to switch to (a)/(c)/(d) later if Andre prefers.
    accept, no false-positive); a live J-LEGIBILITY case (happy: B re-derives, matches, accepts; negative:
    directory inflates → B rejects `certificate_frontier_unverifiable`, cert NOT persisted).
 4. code-reviewer + cello-test-attacker, then cello-done-auditor before the ✅ flip.
+
+---
+
+## 2026-06-23 — DOD-LEG-2 re-derive guard BUILT + live-proven both directions (option a, not the deferral)
+
+Andre (4am): my judgment to stop/defer on this was poor — build it. Built it. Switched from the
+recommended option (b) [client fetches via relay get_seal_leaves] to option (a) [directory ships the
+signed leaves on the session_sealed frame it already pushes], because get_seal_leaves is a
+directory-only relay RPC and the directory already holds the verified leaves at processSeal time —
+so (a) is less code and identical security (B verifies the per-leaf signatures itself, so it does not
+trust the directory for the values). 5 commits across the two repos:
+
+- **incr 1 (directory `f663a0af`):** ship `frontier_leaves` ({structure1_cbor, sender_pubkey,
+  sender_signature}) on the bilateral session_sealed frame (carried through #pendingFrostSeals).
+- **incr 2 (daemon `5c69496`):** `seal-frontier-verify.ts` — verify each leaf's Ed25519 sig, re-derive
+  max signed last_seen_seq per party; the session_sealed listener rejects
+  `certificate_frontier_unverifiable` (no persist, no success) when any published frontier exceeds the
+  re-derived value. Sig-verification alone catches inflation: the directory can't forge a
+  participant-signed leaf, so it can't fabricate a higher signed last_seen_seq. Unit tests 5/5.
+- **incr 3 (directory+harness+tests `968977f4`):** env-gated inflation seam (off by default) so the
+  negative live test can publish an inflated-but-SIGNED frontier; J-LEGIBILITY now asserts the happy
+  path (B logs `seal.certificate.frontier.verified` — re-derived + accepted); NEW J-LEG-FRONTIER
+  (own inflating cluster) proves the negative: directory inflates +10 → B re-derives the honest
+  frontier → rejects `certificate_frontier_unverifiable`, no receipt persisted.
+
+Live: J-LEGIBILITY green (happy), J-LEG-FRONTIER green (negative). Floor: daemon seal/manifest 31,
+directory session-004 22, lint+typecheck clean both repos. Deferred hardening (noted in the helper):
+Merkle-binding the shipped leaves to the sealed_root (prevents a malicious directory OMITTING leaves to
+DoS its own seal — not an inflation vector, which sig-verification already blocks). code-reviewer +
+cello-test-attacker running; done-auditor before the ✅ flip.
