@@ -580,3 +580,35 @@ inbound screen; the seam test proves sanitized content reaches the agent.
 **State: gateway 57 + daemon 383 tests green; lint + typecheck clean; nothing pushed; nothing on
 `main`.** Remaining: IN-002 (DeBERTa, mechanism above), IN-003 (English-only), OUT-001 (secrets — now
 unblocked: the RE2 engine exists for the gitleaks set), FEED-001 inc 4 (the re-send), then GATE-1.
+
+---
+
+## 2026-06-23 — M9-OUT-001 COMPLETE (full gitleaks secrets). Outbound detector set DONE. (commit `21045ff`)
+
+Recommended OUT-001 next (highest-value unblocked, the natural RE2 follow-on); Andre said "decide
+and continue", so I took my own recommendation.
+
+**Built the comprehensive secrets layer** (the "comprehensive, not minimal" bar):
+- The **FULL 222-detector gitleaks dictionary**, generated from gitleaks' canonical config into
+  `core/gateway/src/detect/gitleaks-rules.ts` (generator kept at `scripts/gen-gitleaks-rules.py` for
+  reproducible regeneration). File-path allowlists dropped (we scan message TEXT); the value-level
+  stopwords + allow-regexes + per-rule entropy thresholds kept as the false-positive layer.
+- `detect/secrets.ts`: every rule on the RE2 engine (RE2-authored, so they port directly), keyword
+  pre-filter for speed across 222 rules, **typed** `[REDACTED:<rule-id>]` placeholders (the agent is
+  told WHAT leaked). The generic keyword-proximity + entropy catch-all (gitleaks `generic-api-key`)
+  covers un-enumerated formats.
+- Wired into the OutboundScreener as a redact stage, **ordered FIRST** so a known credential gets its
+  typed placeholder before exfil's generic high-entropy redactor would mask it as an opaque blob (a
+  real ordering bug the composed test caught).
+- AC-001 (AWS/Anthropic/GitHub-PAT/Stripe/PEM all redacted, none survive), AC-002 (generic catch-all),
+  AC-003 (stopword/placeholder/low-entropy NOT redacted), SI-001 (base64-wrapped secret caught by the
+  encoded-payload entropy path). 222 rules compile under RE2. Live seam test redacts a credential
+  end-to-end — the peer receives the typed placeholder, not the secret.
+
+**The OUTBOUND detector set is now COMPLETE: secrets (OUT-001) + PII (OUT-002) + exfil (OUT-003) +
+rate-limit (OUT-004), all composed in the live OutboundScreener.**
+
+**State: gateway 64 + daemon 383(+1 seam) tests green; lint + typecheck clean; nothing pushed; nothing
+on `main`.** Remaining M9: **IN-002** (DeBERTa — needs the model source + pinned SHA-256 from Andre),
+**IN-003** (English-only language allowlist — small, needs a tiny detector-lib call), **FEED-001 inc 4**
+(the security-critical governance re-send), then **M9-GATE-1** (the Phase-1 E2E gate).
