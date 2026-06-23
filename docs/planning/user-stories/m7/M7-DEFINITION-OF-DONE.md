@@ -67,7 +67,18 @@ These are not a journey; they are properties every line below must preserve.
 - **DOD-INV-4 — Client verifies sender = counterparty.** The relay-stream
   receive path checks `senderPubkey === session.counterparty_pubkey` independently
   of the relay (the 5-line audit fix). *(transport-security-audit §4b — was BROKEN
-  2026-06-11)* — ❓ VERIFY (status unconfirmed in the daemon path)
+  2026-06-11)* — 🟢 **BUILT + VERIFIED** (status confirmed 2026-06-23; the audit gap is
+  CLOSED). `#recordFrameOrdering` (session-node-manager.ts) — the single inbound funnel for
+  BOTH direct frames AND relay-park recovery — (a) verifies the sender's Ed25519 signature
+  over the exact signed bytes (`structure1_cbor`), then (b) the sovereign-node cross-check:
+  the signer MUST be THIS session's `counterparty_pubkey`, FAIL CLOSED (unknown counterparty
+  → reject; never fail open). It runs on EVERY received frame in the live J-CONTENT tests.
+  Adversarial rejections proven by `msg-001-strict-in-order.test.ts`: a bad signature →
+  `ordering.bad_signature` rejected (content still delivered, no loss); a valid sig by a
+  NON-counterparty key → `ordering.wrong_signer` rejected, no ordering recorded. The client
+  does NOT trust the relay for sender identity. (Distinct from DOD-MSG-4 Finding 2 — the
+  relay's OWN committed-sequence signing identity — which stays deferred to the
+  transport-security-audit hardening story.)
 - **DOD-INV-5 — Ephemeral session Peer ID is session-scoped.** After seal +
   teardown, a dial to the old session multiaddr fails; a session node accepts only
   its one counterparty (connectionGater) before the Noise handshake. *(daemon-
