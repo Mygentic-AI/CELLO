@@ -869,3 +869,24 @@ actual 568 MB model. This is the one piece gated on a DECISION + external infra,
 
 Until that lands, the live gateway runs Layer-1 (deterministic) + outbound + governance + config + records
 — fully launchable. State: gateway 130 + daemon 395 green; nothing pushed; nothing on `main`.
+
+---
+
+## 2026-06-23 — IN-002 part 2 DEFERRED by decision; Phase-1 is launch-complete (11/12 + 1 deferred)
+
+Andre's call: defer the real DeBERTa model work — download the 568 MB model and line up the runtime infra
+first, then build part 2 WITH that infra rather than blind. So M9-IN-002 part 2 (the transformers.js
+classifier + the gated real-inference test for AC-001/002/SI-001) is a NAMED DEFERRAL, not a silent drop —
+its home is the IN-002 row in the DoD. Part 1 (scanner logic + consent-gated installer + pluggable
+classifier seam wired live, absent → L2 off) stands.
+
+**Phase-1 is launch-complete:** 11/12 gate-green + the 12th explicitly deferred. The gateway screens live
+on Layer-1 (deterministic sanitize + RE2 injection patterns) + IN-003 language + all outbound (secrets/PII/
+exfil/rate) + the FEED-001 governance channel + CFG-001 config + REC-001 records — all proven through the
+real spawned gateway process. Layer-2 (semantic DeBERTa) is the one opt-in add that turns on when the model
+is installed.
+
+At part-2 build time, the open sub-decision is the transformers.js runtime install mechanism (lean opt-in/
+lazy to keep the client small, matching the model-not-bundled call). Do NOT build part 2 blind — it needs
+the model + runtime + a memory-capable env to write AND verify; unrunnable inference code would violate the
+"only a live run is done" discipline. State: gateway 130 + daemon 395 green; nothing pushed; nothing on `main`.
