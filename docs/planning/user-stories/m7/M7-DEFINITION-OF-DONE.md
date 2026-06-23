@@ -563,7 +563,14 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
   notarization. (DISTINCT from the BILATERAL/legibility `attestation_mode`, which IS tamper-bound via
   `bindLegibilityToTbs` — SESSION-004, seal-legibility.ts. The two are different fields/paths; no
   contradiction.) Tamper-binding the unilateral attestation in the TBS is a DOD-LEG hardening follow-on
-  — IN PROGRESS 2026-06-23.
+  — DEFERRED (RC-1, named; 2026-06-23 assessment). RISK/VALUE: it is LOW-severity (the authoritative
+  server-side notarization carries the correct attestation; only the delivered cert COPY is flippable,
+  and the recipient can cross-check the directory), but the fix touches the SEAL CO-SIGN FLOW — A
+  reconstructs the TBS when it FROST-co-signs, so binding `attestation_mode` needs A to hold the
+  attestation at co-sign time (changing what `seal_verified` carries) AND a cross-repo byte-identical
+  binding (H-1 drift risk) — a real risk of breaking the WORKING unilateral seal for a low-severity
+  delivered-copy gap. Build it alongside the other scheduled DOD-LEG hardening (same care as the
+  legibility-TBS-binding), not as an ad-hoc grind. Named home: this line + the build journal.
 - **DOD-LIVE-3 — No agent heartbeat.** Liveness is connection/node-level only;
   `last_seen_seq` is the sole engagement signal; DELIVERED is never promoted to
   CLEAN/FLAGGED by a liveness signal. *(SESSION-003 AC-011)* — 🟢 satisfied by construction:
