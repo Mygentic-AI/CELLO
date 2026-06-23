@@ -545,3 +545,38 @@ INV-1/2/5/6 clean; no ReDoS). All findings fixed:
 **State: daemon 383 + gateway 49 green; lint + typecheck clean; nothing pushed; nothing on `main`.**
 The detector layer + FEED-001 core are now REVIEWED + hardened. Clean checkpoint. Next: the 3
 decisions, then FEED-001 inc 4 (the re-send) with its own adversarial pass, then GATE-1.
+
+---
+
+## 2026-06-23 — The 3 decisions RESOLVED. M9-IN-001 COMPLETE (RE2 + Step-9). (commit `aa27b9e`)
+
+**Andre's decisions:**
+1. **RE2 binding — try native `re2`, fall back to `re2-wasm`.** Implemented as the idiomatic npm
+   pattern: `re2` is an **optionalDependency** (native, maintained, fastest; a failed build is
+   non-fatal), `re2-wasm` is a **regular dependency** (prebuilt WASM, always installs, the guaranteed
+   floor). A `LinearRegex` adapter loads native-then-wasm at startup; either way it is real RE2. Both
+   verified loading + ReDoS-safe on Node 24. Engine reported on the gateway ready line + via
+   `linearRegexEngine()`. Install procedure documented in `core/gateway/REGEX-ENGINE.md`. Honest
+   caveat recorded for Andre: this is "wasm's clean install floor + native's upside", not minimal.
+2. **DeBERTa (IN-002) — require the operator to confirm the install.** Model is NOT bundled
+   (keeps the client small); downloaded on first use only with explicit consent, **checksum-verified
+   (SHA-256 pinned in the package)**, consent recorded once (config DB), and **graceful degradation**:
+   model absent ⇒ Layer-2 disabled (L1 + outbound still run), NOT block-everything. Consent surfaces
+   via CLI (`cello gateway install-model`), an actionable daemon `guidance` field, or a portal toggle.
+   Mechanism proposed + accepted; to be built as the IN-002 story.
+3. **Language (IN-003) — English-only to start.** Confident-English allow; confident-non-English
+   hold with a note; short/low-confidence allow. Adding other languages is operator opt-in and gets
+   **its own design session** (the Latin-centric confusables normalization + script handling collide
+   with non-Latin scripts). Recorded as the IN-003 scope; multilingual = Day-2.
+
+**M9-IN-001 COMPLETE (🟡).** The RE2 engine adapter + the Step-9 injection-pattern matcher (role
+markers / override / persona / jailbreak / boundary / leetspeak, attack-corpus §1.6) close AC-002.
+Step-9 runs on the DECODED form (decode-then-rescan, pairing with the M1 review fix) and reports
+matches as **observe signals** in the inbound security context — NOT an auto-block (CELLO surfaces
+evidence; the semantic block is IN-002 / policy). AC-002 proven: a catastrophic-backtracking pattern
+completes in <100 ms (a backtracking engine would hang). The sanitizer is wired into the live gateway
+inbound screen; the seam test proves sanitized content reaches the agent.
+
+**State: gateway 57 + daemon 383 tests green; lint + typecheck clean; nothing pushed; nothing on
+`main`.** Remaining: IN-002 (DeBERTa, mechanism above), IN-003 (English-only), OUT-001 (secrets — now
+unblocked: the RE2 engine exists for the gitleaks set), FEED-001 inc 4 (the re-send), then GATE-1.
