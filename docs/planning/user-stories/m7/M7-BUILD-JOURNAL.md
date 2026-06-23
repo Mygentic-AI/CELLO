@@ -5072,3 +5072,23 @@ multi-node, INV-1), deferred hardening (#3 DOD-MSG-4 F2), assembly-wide discipli
 large/low-core), transport-internal not spine-testable via MCP (INV-5 dial-after-teardown — gater built
 + unit-covered), or this parked values-question (SEAL-2). No CORE work open; UP-1 (the last core line)
 done + audited.
+
+---
+
+## 2026-06-23 — SEAL-2 UN-PARKED (Andre correction): graph analysis IS sanctioned Sybil defense
+I parked the conversation_seals 3-table write as a "values question" — WRONG framing, corrected by
+Andre. CELLO's policy: **never store or monitor conversation CONTENT** (content stays client-side
+encrypted; relay/directory see only hashes — INV-3, intact). But **relationship-graph analysis IS an
+intended, sanctioned feature** for SYBIL / reputation-farming defense: an attacker buys many numbers,
+spins up many agents, has them mutually endorse + hold mock conversations to farm reputation; the only
+viable detection is the GRAPH — if an agent's endorsements/conversations all come from within one
+cluster, that's relationship farming. This operates on RELATIONSHIP METADATA (who sealed with whom +
+the sealed ROOT HASH), never content — fully policy-compliant.
+
+So conversation_seals/_attestations/_participation feeding analytics-job's conversation_graph_edges +
+pseudonym_stats is RIGHT, not a violation. And it's a REAL GAP: those tables have no write method →
+they're empty → the Sybil-defense graph is BLIND. Building the producer now (it's the lowest non-green
+achievable line). Explore mapping the schema + analytics queries + seal write-points. Build: atomic
+hash-chained recordConversationSeal wired into the unilateral + bilateral + upgrade seal paths; stores
+relationship metadata + root hash ONLY (never content); unit + spine(psqlSpine) tests; reviewers +
+done-auditor → flip SEAL-2.
