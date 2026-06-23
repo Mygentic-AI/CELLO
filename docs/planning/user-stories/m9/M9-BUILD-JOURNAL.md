@@ -510,3 +510,38 @@ pushed; nothing on `main`.** Built this session: M9-CORE-001 (complete, reviewed
 (🟡½, RE2 parked) · OUT-002 PII · OUT-003 exfil · OUT-004 rate-limit · the inbound + outbound screen
 compositions · FEED-001 inc 1/2/3/5/6 (the four-outcome contract + never-hang + the screen layer LIVE).
 3 library/model decisions + the FEED-001 inc-4 override-policy design await Andre.
+
+---
+
+## 2026-06-23 (early) — Review of the detector layer + FEED-001 core: all findings fixed (commit `0bbc7d8`)
+
+feature-dev:code-reviewer (opus) + cello-test-attacker, both read-only, on `24a1c25..89da9db`.
+**No blocking/high IMPL findings** — both load-bearing crypto bindings confirmed correct (outbound
+leaf binds the redacted SENT bytes; inbound mirror binds the ORIGINAL hash, no peer-root divergence;
+INV-1/2/5/6 clean; no ReDoS). All findings fixed:
+
+- **M1 (medium)** — the inbound decode step was DELIVERING blindly-decoded text, corrupting legit
+  URLs (`%20`→space), code (`\x41`→`A`), HTML entities. Decode is now **detection-only** (decode-
+  then-rescan): the delivered text keeps the original encoding; a separate `decodedForScan` feeds
+  entropy + the future pattern matcher. (This was the one real correctness bug — it silently
+  corrupted the RECEIVER's content.)
+- **M2 (medium)** — the rate limiter committed a slot for not-sent (block/warn) messages and would
+  double-count a warn→re-send. Split `peek()` (read-only gate) + `record()` (commit); the composition
+  records a slot only when the message reaches the wire (allow/redact).
+- **L1** distinct top-level `rate_limited` reason surfaced; **L2** the connect path is now deadline-
+  bound (INV-6 unconditional); **L6** dead branches dropped.
+- **Test-attacker F1–F6 (4 blocking + 2 high) — all TEST-only** (the impls were already correct; the
+  tests didn't pin them): **F1** widened every negative-delivery poll window to ≥4s/160 polls (the
+  on-wire suppression of block/warn is now actually pinned, not a 400 ms window a fail-open send
+  could outrun); F2 inject VS-supplement + bidi siblings; F3 override-phrase-only block; F4 low-entropy
+  long token must not flag (pins the Shannon math); F5 normalized-whitelist near-miss/case/phone; F6
+  exact drip boundary. + minors (no Cyrillic survives; flags carry flagId; blocks carry category;
+  redact preserves surrounding text).
+- **Deferred (documented, not dropped):** L3 double-encode fixpoint (pattern matcher parked), L4
+  terminal size-cap vs transient (unreachable in default config — the transport caps inbound first),
+  L5 image-exfil scope (matches the OUT-003 AC; URL-allowlist is the harvest's preferred Day-2 form),
+  L7 naming (`governance_warn`/`flags` vs §6 `governance_held`/`flagged`).
+
+**State: daemon 383 + gateway 49 green; lint + typecheck clean; nothing pushed; nothing on `main`.**
+The detector layer + FEED-001 core are now REVIEWED + hardened. Clean checkpoint. Next: the 3
+decisions, then FEED-001 inc 4 (the re-send) with its own adversarial pass, then GATE-1.
