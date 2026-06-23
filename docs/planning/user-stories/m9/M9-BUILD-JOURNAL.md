@@ -789,3 +789,19 @@ GATE-1) is COMPLETE, reviewed, and earned. **Remaining for Phase-1 launch:** M9-
 whitelist + bulk), M9-IN-002 part 2 (real DeBERTa model + inference), M9-OUT-004 (wire a rate cap into the
 gate), M9-CFG-001 (config store), M9-REC-001 (local records). State: gateway 101 + daemon 390 green; nothing
 pushed; nothing on `main`.
+
+---
+
+## 2026-06-23 — Closed the two gate-config gaps: OUT-002 + OUT-004 → ✅ (commits `6ccaad4`/`be0e71e`, `51bd51d`)
+
+After the GATE-1 audit, closed the two stories the auditor held for "not exercised in the live gate as
+configured" — both were config-wiring gaps, not missing logic:
+- **OUT-002 → ✅:** seam now seeds `CELLO_GATEWAY_PII_WHITELIST` and proves whitelist silent-pass (own email
+  delivered intact, no warn) + bulk-warn-once (6-contact dump → one governance_warn, ≥5 flags, not sent).
+- **OUT-004 → ✅:** wired an interim env rate cap into the live gateway bin (`CELLO_GATEWAY_RATE_MAX_PER_WINDOW`
+  + `_WINDOW_MS`, INV-4 pattern, until CFG-001) and gate-proved throttling (cap 2 → third send `rate_limited`).
+
+**Phase-1 status: 9/12 stories ✅ gate-green.** Remaining: **M9-IN-002 part 2** (real DeBERTa model + transformers.js
+inference — heavy, needs the 568 MB model + a memory-capable env), **M9-CFG-001** (versioned SQLCipher config store
+— replaces the interim env config), **M9-REC-001** (local fingerprinted security-pass records). State: gateway 102 +
+daemon 391 green; nothing pushed; nothing on `main`.

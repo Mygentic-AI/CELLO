@@ -45,8 +45,11 @@ description: >
     passes SILENTLY … delivered intact"* (gateway seeded with `CELLO_GATEWAY_PII_WHITELIST`) and *"OUT-002
     bulk: a contact DUMP warns ONCE … not sent"* (6-contact dump → one governance_warn, ≥5 flags, peer gets
     nothing). All three done-condition behaviors now real-process green.
+  - **✅ M9-OUT-004 — RESOLVED (was held 🟡, now EARNED, commit `51bd51d`):** the rate cap is now wired into
+    the live gateway bin (interim env config, INV-4) and gate-proven — *"OUT-004 rate limit: over-rate sends
+    are throttled with a distinct rate_limited reason + guidance"* (cap 2/window: two sends out, the third
+    `rate_limited`).
   - **Held (correctly un-flipped):** M9-IN-002 🟡½ (no DeBERTa model / no real inference in the live bin),
-    M9-OUT-004 🟡 (the spawned gateway passes NO rate-limit config — rate-limiting absent from the gate),
     M9-CFG-001 ❌, M9-REC-001 ❌. Build opened 2026-06-22.
 
 ## The build gate (resolved)
@@ -104,7 +107,7 @@ block/redact/warn handling run locally. Config and records are local. Ends at **
 | | _Detector + whitelist + single/bulk + per-session drip built & unit-tested. The warn UX (NOT-SENT, allow-once/always re-send, WebAuthn whitelist-add) is M9-FEED-001._ | | |
 | ✅ **M9-OUT-003** | Outbound exfiltration checks: invisible-character egress strip, encoded-payload check, zero-click image-exfil pattern, injection-artifacts-in-output → block. | Each fires correctly; ordinary links pass; an injection artifact in output blocks the message. | SCAN-003 (part) |
 | | _Complete as a unit (egress strip / image-exfil neutralize / encoded-blob redact / injection-artifact block). Wiring into the screen fn is the assembly + gate._ | | |
-| 🟡 **M9-OUT-004** | Outbound message rate-limiting, keyed on agent identity. | Over-rate sends are throttled with a distinct reason + guidance. | new |
+| ✅ **M9-OUT-004** | Outbound message rate-limiting, keyed on agent identity. | Over-rate sends are throttled with a distinct reason + guidance. | new |
 | ✅ **M9-FEED-001** | The governance feedback channel: the four dispositions (observe / redact / block / warn), blocking `cello_send`, the never-hang guarantee (per-stage + total deadline below the host timeout, timeout-is-a-verdict, fail-closed + circuit breaker), the publish channel, and the stateless re-send flow with `governance_decisions` (redact / allow_once / allow_always, gated by `autonomous_override`). | All four dispositions return correct terminal results; a warn round-trips via re-send; a forced timeout returns a block-verdict, never hangs. | new (the §6 design) |
 | | _Core DONE + live-proven (inc 1/2/3/5/6): the four cello_send outcomes through a REAL screening gateway (clean→sent / redact→altered-delivered / warn→not-sent / block→not-sent), the inbound redact mirror (sanitized delivered, leaf keeps original hash), and governance_timeout vs gateway_unavailable. **Plus the screen-fn assembly** (OutboundScreener + InboundScreener wire the detectors into the live gateway). REMAINING: inc 4 — the stateless `governance_decisions` re-send (redact / allow_once / allow_always, autonomous_override, SI-002) — security-critical, deferred to a focused effort + adversarial review._ | | |
 | **M9-CFG-001** | Config storage: the gateway's own local SQLCipher DB, versioned (append-only rows), with tighten-free / loosen-needs-confirmation. Portal/CLI/file-import front-ends. | A setting change is versioned and attested-ready; loosening a guard requires confirmation; tightening is free. | new |
