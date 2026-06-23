@@ -4616,3 +4616,30 @@ Switched from the earlier option-(b) recommendation (B fetches via relay get_sea
 (directory ships the leaves it already holds at processSeal time) — simpler, no relay protocol change,
 identical security (the client verifies each leaf's Ed25519 sig regardless of source). Andre: "build it,
 your judgment to defer was poor" — built it.
+
+---
+
+## 2026-06-23 — DOD-LOG-1 (durable encrypted transcript) — DESIGN NOTE + build (envelope + node:sqlite)
+
+Next: DOD-LOG-1 / J-PERSIST (PERSIST-LOG-001). The daemon persists only the hash chain
+(session_tree_leaves); the readable plaintext lives in the in-memory #receivedContent buffer, evicted
+on shutdown — so after a restart you have a chain of opaque hashes, no readable transcript. Core-adjacent:
+non-repudiation needs the readable, chain-linked conversation log.
+
+KERNEL (build first, §0a triage): a durable per-session readable transcript JOINED to the hash chain
+(each row keyed by the committed leaf sequence — NOT a loose message dump; the informed-skeptic trap here
+is the hash-chain mistake — a transcript not tied to the verified chain looks done but is worthless for
+non-repudiation). THEN the encryption-at-rest layer.
+
+Decisions (autonomous, high-probability, reversible — no block):
+- Encryption = envelope + node:sqlite, NOT SQLCipher (D-B3 left it open). SQLCipher is a native dep that
+  compiles from source (+20-40s/install — CLAUDE.md flags this client cost) and replaces node:sqlite.
+- Key = a dedicated per-DB transcript key (32 random bytes, 0600 file under CELLO_DIR), AES-256-GCM via
+  node:crypto — NOT derived from identity_key, because KeyProvider is sign-only (no seed exposure — good
+  hygiene). Key-separation: identity signs, a distinct key encrypts at rest. Meets D-B3's security property.
+
+Plan (commit each): (1) transcript-cipher.ts (0600 key load-or-create, AES-256-GCM, unit test). (2)
+transcript table keyed to the leaf chain by sequence + recordTranscriptMessage/readTranscript. (3) hook
+writes (received in #appendVerifiedContent, sent in the cello_send path). (4) cello_get_transcript read
+surface. (5) J-PERSIST live test: A↔B exchange → kill+restart daemon → read transcript back; assert
+relay/directory never saw plaintext (INV-3).
