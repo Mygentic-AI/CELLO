@@ -5155,3 +5155,29 @@ relationship graph populates on live seals, and the DoD reflects reality. Remain
 (Andre), multi-node infra (INV-1), the named-deferred relay-signed-sequence hardening (MSG-4 F2), the
 assembly-discipline audits (INV-6/8), and two optional hardening builds (attestation_mode TBS-binding;
 DOD-LOG-2/3 export bundles). No CORE/non-core build work open. Nothing pushed (CC ahead 14, TC ahead 56).
+
+---
+
+## 2026-06-23 — M7 BUILD COMPLETE → E2E handoff (compaction point)
+M7's substantive build is done: every J-* journey green vs the real binaries; UP-1 + UP-2 + SEAL-2 all
+✅ done-auditor-EARNED; Tier-0 invariants INV-2/3/4 🟢; the DoD scoreboard + the milestone write-up
+(`milestone-writeups/M7-daemon-architecture.md`) are current. Nothing pushed (Andre pushes).
+
+**NEXT PHASE = E2E of the whole system** (begins after compaction; Andre triggers, not autonomous):
+1. **Push trustless-cello** → the ~25-30min 3-region directory deploy (deploy.sh is the only CFN
+   mechanism; CI swaps images only). Andre has OBSERVED THE DIRECTORY PUSH BREAKING — so the first
+   real task is push + ANALYZE the break per the debugging discipline (read ECS service events →
+   stopped-task reasons → CloudWatch logs → CFN events FIRST; never guess; never blame startup order).
+   infra/STATE.md (last deployed 2026-06-10) + infra/CLAUDE.md are the deploy references; update
+   STATE.md after any infra change. Batch all pending directory changes before a push.
+2. **Publish @cello-protocol/connect** (task #19, subsumed): local 0.0.45 (workspace:* deps) vs
+   published beta 0.0.43; local carries the WHOLE session's daemon work. Version-bump → tag → push →
+   CI publishes to beta (pnpm publish converts workspace:*→real); promote beta→latest after approval.
+   Also update trustless-cello directory/relay package.json refs if their published deps changed.
+3. **Install + run the journeys against the DEPLOYED cluster** (the multi-node 🟢 remainders — INV-1
+   failover — become testable here; they were not modellable by the single-node spine).
+
+**Standing rules for the E2E phase:** deploy work stays FOREGROUND (only read-only reviewers as
+subagents); infra changes are live grenades (enumerate failure modes first); NEVER docker-push from
+local (CI only); always use @CelloConnectStagingBot not production; the drift-check cron is DELETED
+(M7 build done — Andre's call). Nothing pushed without Andre.
