@@ -467,3 +467,46 @@ committed; full reviewer pass (code-reviewer + cello-test-attacker) at the end:
 **Whole-night standing:** daemon **378** + gateway **44** tests green; lint + typecheck clean; nothing
 pushed; nothing on `main`. CORE-001 🟡 complete+reviewed; IN-001 🟡½ (RE2 parked); OUT-002/003/004 🟡;
 both screen compositions built. 3 decisions queued for Andre. FEED-001 is the next build.
+
+---
+
+## 2026-06-23 (early) — FEED-001 core BUILT + LIVE-PROVEN (inc 1/2/3/5/6). Re-send (inc 4) deferred.
+
+The screen layer is now LIVE end-to-end. Commits on `m9-build`: `17f0ee5` (inc 1 wire-carry events),
+`9f7e304` (inc 2 daemon four-outcome cello_send rendering + inc 3 gateway runs the real screeners),
+`0ca03c7` (inc 6 inbound redact mirror), `89da9db` (inc 5 governance_timeout).
+
+**What's live (proven by 9 seam tests against a REAL spawned screening gateway):**
+- **The four cello_send outcomes** (FEED-001 AC-001): clean → sent `{delivered, modified:false}`;
+  redact → the ALTERED bytes go on the wire AND bind the leaf hash, peer receives the redacted content,
+  `{modified:true, transformations}`; block → `{ok:false, blocked_by_governance, blocks}` NOT sent;
+  warn → `{ok:false, governance_warn, flags}` NOT sent.
+- **The inbound redact mirror**: a redact verdict DELIVERS the sanitized text to the agent while the
+  Merkle leaf binds the ORIGINAL content hash (transcript = what the peer sent; agent = sanitized).
+  Proven: Cyrillic confusables pass A's outbound screen, B's inbound sanitizer normalizes them, B
+  receives the Latin form.
+- **never-hang**: governance_timeout (connected but slow) distinct from gateway_unavailable
+  (unreachable); both fail-closed; named events security.gateway.timeout / .unavailable.
+- **The screen-fn assembly**: the gateway bin now runs OutboundScreener (rate-limit + exfil + PII) and
+  InboundScreener (sanitizer) — the detectors are live; clean content still → allow (backward compatible).
+
+**REMAINING FEED-001 — inc 4, the stateless governance re-send. DEFERRED on purpose.** The agent
+re-sends the same content + `governance_decisions {flagId: redact|allow_once|allow_always}`; the gateway
+re-screens statelessly (deterministic flagIds bind), applies each decision: redact; allow_once gated by
+`autonomous_override` (OFF → reject + re-warn, AC-003); allow_always = WebAuthn whitelist-add,
+autonomous-degrades to allow_once + ops-agent request (SI-002 — never deliver original on the agent's
+say-so). This is **security-critical** (SI-002) and intricate (allow_once/always × override × attended),
+and touches config (autonomous_override = CFG-001's store) + auth (WebAuthn/ops-agent). It deserves a
+fresh focused effort + the cello-test-attacker's adversarial pass — not the tail of a long context. The
+gateway-side LOGIC is fork-free (autonomous_override as a screener option, persistence deferred to
+CFG-001); the daemon/wire plumbing of the param is a small follow-on.
+
+**Review in flight:** dispatched feature-dev:code-reviewer (opus) + cello-test-attacker on the post-CORE-001
+diff (`24a1c25..HEAD`) — the detectors, the compositions, and FEED-001 inc 1/2/3/5/6 (the cello_send
+contract change + inbound mirror are security-relevant). Findings to be addressed before this is called done.
+
+**WHOLE-NIGHT TOTAL — daemon 383 + gateway 45 tests green; lint + typecheck clean throughout; nothing
+pushed; nothing on `main`.** Built this session: M9-CORE-001 (complete, reviewed) · IN-001 sanitizer
+(🟡½, RE2 parked) · OUT-002 PII · OUT-003 exfil · OUT-004 rate-limit · the inbound + outbound screen
+compositions · FEED-001 inc 1/2/3/5/6 (the four-outcome contract + never-hang + the screen layer LIVE).
+3 library/model decisions + the FEED-001 inc-4 override-policy design await Andre.
