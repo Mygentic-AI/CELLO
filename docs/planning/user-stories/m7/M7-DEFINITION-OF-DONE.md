@@ -542,30 +542,30 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
 - **DOD-LEG-2 — Per-party content frontier.** `content_frontier_seq` (max signed
   `last_seen_seq`) + `last_authored_seq` per party, derived only from that party's
   signed leaves; client re-derives and rejects `certificate_frontier_unverifiable`
-  on an inflated published frontier. *(SESSION-004 AC-002/005, SI-002)* — 🟡 **DERIVATION + SURFACING
-  PROVEN LIVE** (J-LEGIBILITY): per-party `content_frontier_seq` + `last_authored_seq` derived from each
-  party's OWN signed leaves (directory), carried on the cert, surfaced by B's daemon — live cert shows
-  DISTINCT per-party frontiers (A=2, B=3). REMAINING: the client-side SI-002 re-derive guard (reject
-  `certificate_frontier_unverifiable` on an inflated published frontier) is the one distinct sub-line not
-  yet built. (The asymmetric-frontier DERIVATION is unit-proven, AC-002.)
-  **🔶 DESIGN FORK — NEEDS ANDRE (deferred 2026-06-22, RC-1):** the re-derive guard is NOT the
-  "focused follow-on" it was assumed to be. `buildSealLegibility` derives `content_frontier_seq` from
-  `decodeSignedLastSeenSeq` across ALL of a party's leaves — INCLUDING the trailing SEAL ctrl leaf
-  (seal-legibility.ts:174, no `kind==='msg'` filter). But B's daemon holds only the content/message
-  leaves it sent+received during the session; it does NOT hold the COUNTERPARTY's SEAL ctrl leaf (that
-  goes relay→directory at close, never to B). So the AC's literal "client re-derives from its LOCAL
-  leaves and confirms it equals the published value" (SESSION-004 AC-005) would FALSE-POSITIVE on a
-  legitimate cert whenever A's seal-ctrl `last_seen_seq` exceeds A's last content-leaf `last_seen_seq`
-  (e.g. A receives B's reply after A's last message, then closes). Resolving needs a choice between
-  materially different builds: (a) deliver the complete signed-leaf set to B on the `session_sealed`
-  frame; (b) B fetches the leaves via the relay's existing `get_seal_leaves` RPC, verifies the sender
-  signatures, and re-derives from that complete set (additive, no wire change to others — RECOMMENDED
-  as the safe/reversible option); (c) re-scope `content_frontier_seq` to msg-leaves only so B can
-  re-derive from what it has (changes the frontier semantics + the directory derivation); (d) a loose
-  upper-bound check (reject only frontier > total leaf count) — catches gross SI-002 inflation without
-  needing the counterparty's leaf, but weaker. NAMED TARGET: a SESSION-004 follow-on story (or a
-  direct build of option (b)) once Andre confirms the approach. Also needs a directory test seam to
-  publish an inflated-but-signed frontier for the negative live test (does not exist yet).
+  on an inflated published frontier. *(SESSION-004 AC-002/005, SI-002)* — ✅ **PROVEN LIVE**
+  (J-LEGIBILITY + J-LEG-FRONTIER, 2026-06-23; `cello-done-auditor` EARNED — ran both cold against the
+  shipped binaries, falsified). The per-party derivation (DISTINCT `content_frontier_seq` A=2/B=3 from
+  each party's OWN signed leaves) was already live (J-LEGIBILITY). The SI-002 client re-derive GUARD is
+  now also live-proven: the directory ships the signed leaves (`frontier_leaves` =
+  {structure1_cbor, sender_pubkey, sender_signature}) on `seal_verified` AND `session_sealed`; the
+  client independently re-derives each party's frontier (`seal-frontier-verify.ts`: verify each leaf's
+  Ed25519 sig + that the leaf's SIGNED session_id matches the sealed session, then max signed
+  last_seen_seq per party) and REFUSES an inflated published frontier in two places — the initiator
+  refuses to co-sign (`session.seal.ceremony.abort reason:frontier_unverifiable`, no FROST signature)
+  and the receiver refuses to accept (`seal.certificate.frontier.unverifiable`, no persist) — plus
+  fail-closed (a claimed frontier with no leaves → reject) and session-binding (a cross-session-replayed
+  leaf → reject). HAPPY (J-LEGIBILITY): honest directory → B logs `seal.certificate.frontier.verified`.
+  NEGATIVE (J-LEG-FRONTIER): the directory inflates the published frontier +10 BEFORE the FROST binding
+  (so it is signed — only re-derivation catches it; `seal.certificate.frontier.inflated_for_test` fired)
+  → the co-signing initiator re-derives the honest value, detects the inflation, ABORTS; no seal
+  completes. Implemented option (a) (directory ships the leaves it already holds — simpler than the
+  earlier option-(b) recommendation, identical security since the client verifies each leaf's sig).
+  SCOPE NOTE (done-auditor): the LIVE-proven mechanism is the INITIATOR co-sign abort — which is the
+  stronger guarantee (a seal with an inflated frontier never completes, so `session_sealed` never
+  reaches the receiver). The receiver-side `session_sealed` guard (`daemon.ts`) is real, unit-proven
+  defense-in-depth but is not independently live-exercised (unreachable once the initiator guard fires).
+  Two code-reviewer gaps fixed before the flip: cross-session leaf replay (BLOCKING — now session-bound)
+  and the omit-leaves downgrade (HIGH — now fail-closed).
 - **DOD-LEG-3 — Live/recovered/absent marker.** `attestation_mode` per party,
   always exactly one of the three. *(SESSION-004 AC-003)* — 🟢 **PROVEN LIVE** (J-LEGIBILITY): both
   parties' `attestation_mode` = 'live' in the contemporaneous bilateral seal, surfaced on B's cert read.

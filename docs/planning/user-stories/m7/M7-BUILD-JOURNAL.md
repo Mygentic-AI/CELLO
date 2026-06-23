@@ -4581,3 +4581,38 @@ directory session-004 22, lint+typecheck clean both repos. Deferred hardening (n
 Merkle-binding the shipped leaves to the sealed_root (prevents a malicious directory OMITTING leaves to
 DoS its own seal — not an inflation vector, which sig-verification already blocks). code-reviewer +
 cello-test-attacker running; done-auditor before the ✅ flip.
+
+---
+
+## 2026-06-23 — DOD-LEG-2 ✅ PROVEN LIVE — guard built, all reviewer findings fixed, done-auditor EARNED
+
+The SI-002 client frontier re-derive guard is closed. Two reviewers + cold done-auditor.
+
+**`cello-test-attacker` (BLOCKING, fixed):** findInflatedFrontier was never tested with a NON-FIRST
+party inflated → a participants[0]-only impl passed. Added the case (A index 0 honest, B index 1
+inflated → flag B).
+
+**`feature-dev:code-reviewer` (BLOCKING + HIGH + MEDIUM + 2×LOW, all fixed):**
+- BLOCKING cross-session replay: reDeriveFrontiers now takes the sealed session id and rejects any
+  leaf whose SIGNED session_id (structure1[3]) differs — a malicious directory can't replay a party's
+  genuinely-signed leaves from another session to inflate this one. New unit test.
+- HIGH downgrade bypass: fail-closed — a claimed frontier (>0) with no shipped leaves → reject.
+- MEDIUM co-sign-before-verify: the directory now ships frontier_leaves on seal_verified too, and the
+  initiator re-derives + ABORTS the ceremony (no FROST signature) on an inflated frontier — so a lying
+  directory gets no signature at all and no signed inflated cert can exist.
+- LOW: malformed legibility (null pubkey) rejected, never crashes; the inflation test-seam is doubly
+  gated off when CELLO_ENV=production.
+
+**`cello-done-auditor` VERDICT: EARNED ✅** — ran J-LEGIBILITY (happy) + J-LEG-FRONTIER (negative) cold
+against the shipped binaries + the 7 unit tests; confirmed binary-anchored; confirmed the negative
+catches the inflation by RE-DERIVATION (the inflated_for_test seam fired so an inflated-AND-signed cert
+was really built; the abort reason is specifically frontier_unverifiable with published/derived; no seal
+completes), and the happy path pins ACCEPT (frontier.verified) so the two pin both directions. Scope
+note: the live-proven mechanism is the INITIATOR co-sign abort (the stronger guarantee); the receiver
+session_sealed guard is unit-proven defense-in-depth, unreachable-by-topology once the initiator fires.
+DOD-LEG-2 flipped 🟡 → ✅ PROVEN LIVE. The LEG tier's last open sub-line is closed.
+
+Switched from the earlier option-(b) recommendation (B fetches via relay get_seal_leaves) to option (a)
+(directory ships the leaves it already holds at processSeal time) — simpler, no relay protocol change,
+identical security (the client verifies each leaf's Ed25519 sig regardless of source). Andre: "build it,
+your judgment to defer was poor" — built it.
