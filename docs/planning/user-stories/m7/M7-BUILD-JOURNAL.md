@@ -5092,3 +5092,41 @@ achievable line). Explore mapping the schema + analytics queries + seal write-po
 hash-chained recordConversationSeal wired into the unilateral + bilateral + upgrade seal paths; stores
 relationship metadata + root hash ONLY (never content); unit + spine(psqlSpine) tests; reviewers +
 done-auditor → flip SEAL-2.
+
+---
+
+## 2026-06-23 — SEAL-2 BUILT + LIVE-PROVEN (relationship-graph producer); reviewers next
+The Sybil/relationship-farming-defense graph was BLIND — conversation_seals/_participation/
+_attestations had no write method. Now built (commits d8571b09 producer+unit, f4f10da5 spine):
+
+**Producer (recordConversationSeal).** Atomic, hash-chained write across the three tables:
+conversation_seals (close_type + the sealed root HASH) + one conversation_participation row per
+party (the graph edge) + one conversation_attestations row per party. Interface + pg impl +
+in-memory stub. Stores RELATIONSHIP METADATA + the root hash ONLY — never content (INV-3 intact).
+pseudonym = the party's k_local pubkey hex (stable graph identity the directory already holds;
+no existing pseudonym derivation was wired — recorded as a reversible choice). BEST-EFFORT /
+fire-and-forget (analytics must never block a seal, like MMR staging).
+
+**Wire points (3).** #completeUnilateralNotarization (SEAL_UNILATERAL, absent party carries its
+liveness attestation ABSENT) + the FROST bilateral path + the single-key fallback (MUTUAL_SEAL,
+both DELIVERED). The unilateral→bilateral UPGRADE SKIPS it — conversation_id is UNIQUE and the A↔B
+edge already exists from the unilateral seal. conversation_id = the 16-byte session_id as a UUID.
+
+**CHAIN FIX (M4 bug #7).** conversation_seals.seal_date is a DATE that round-trips non-
+deterministically (node-pg local-midnight Date; toISOString shifts it) → excluded from chain
+serialization (hash-chain.ts). Integrity target merkle_root + close_type + participant_count stays
+chained. Caught by the chain-validity unit test.
+
+**Tests.** seal-2-conversation-graph.test.ts (5 integration): the 3-table shape; the analytics
+graph-edge query derives exactly one edge; TWO seals between the SAME pair → edge weight 2 (the
+Sybil cluster signal); all 3 chains valid; duplicate conversation_id benign. LIVE (psqlSpine vs the
+directory's own tables): j-loopback bilateral MUTUAL_SEAL + edge; j-upgrade-bilateral unilateral
+SEAL_UNILATERAL + upgrade-skip. Regression: persist-008-analytics, persist-018/021, superseding —
+54 green.
+
+**Decisions (reversible, recorded):** pseudonym = pubkey hex (no existing derivation; Sybil
+clustering needs per-agent stable id; directory already holds pubkeys — no new exposure). attestation
+at seal time = DELIVERED/ABSENT (CLEAN/FLAGGED are abuse-report outcomes set later, not at seal). The
+upgrade keeps the unilateral attestation (B=ABSENT) — the edge exists; refining ABSENT→CLEAN would
+need an UPDATE (append-only forbids it) — minor, noted. NEXT: two parallel reviewers
+(feature-dev:code-reviewer opus + cello-test-attacker) → fix findings → done-auditor → flip SEAL-2.
