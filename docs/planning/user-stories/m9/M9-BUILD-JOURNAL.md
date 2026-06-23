@@ -612,3 +612,37 @@ rate-limit (OUT-004), all composed in the live OutboundScreener.**
 on `main`.** Remaining M9: **IN-002** (DeBERTa — needs the model source + pinned SHA-256 from Andre),
 **IN-003** (English-only language allowlist — small, needs a tiny detector-lib call), **FEED-001 inc 4**
 (the security-critical governance re-send), then **M9-GATE-1** (the Phase-1 E2E gate).
+
+---
+
+## 2026-06-23 — M9-IN-003 detector built (🟡). THE DETECTOR LAYER IS COMPLETE. (commit `1b58aef`)
+
+Built IN-003's language detector as a clean unit (no model, no dep — dominant Unicode script: a
+message confidently dominated by a non-Latin script is outside {English=Latin} and held; short /
+Latin / numeric → allowed; allowlist configurable). AC-001/002 + SI-001 green (7 tests). NO model
+needed — Andre's "script inspection covers most of it" holds for English-vs-not; Latin-script
+LANGUAGE discrimination is the separate design session he flagged.
+
+**Deliberately NOT wired live:** a non-English `block` needs the terminal-block inbound handling —
+the deferred L4/M2 split (a TERMINAL inbound block must ack-and-record-without-delivering, distinct
+from the transient fail-closed hold that stays un-ack'd for redelivery; wiring a terminal block into
+today's seam would loop the sender's redelivery forever). That is a security-sensitive daemon seam
+change for a fresh, focused effort.
+
+**THE M9 DETECTOR LAYER IS NOW COMPLETE:**
+- Inbound: IN-001 (sanitize + Step-9 RE2 injection patterns) ✅, IN-003 (language) ✅ detector. IN-002
+  (DeBERTa semantic scanner) is the one remaining inbound detector — blocked on Andre (model source).
+- Outbound: OUT-001 (secrets, 222 gitleaks) + OUT-002 (PII) + OUT-003 (exfil) + OUT-004 (rate-limit),
+  ALL composed in the LIVE OutboundScreener.
+- FEED-001 core (the four cello_send outcomes + inbound redact mirror + never-hang) LIVE + reviewed.
+
+**State: gateway 71 + daemon 384 tests green; lint + typecheck clean; nothing pushed; nothing on
+`main`.** What remains for M9 Phase-1 is INTEGRATION + the gate, not new detectors:
+1. **IN-002** (DeBERTa) — blocked on Andre: the model source + pinned SHA-256.
+2. **The terminal-block inbound seam handling** (L4/M2 split) — needed to wire IN-003's hold + a real
+   IN-002 block live. Security-sensitive daemon change; fresh context.
+3. **FEED-001 inc 4** (the governance re-send, SI-002) — security-critical; fresh context + its own
+   adversarial pass.
+4. **M9-GATE-1** (the Phase-1 E2E gate) — runs once the above land.
+5. CFG-001 (gateway config store) + REC-001 (records) — needed for the configurable allowlist/whitelist
+   persistence + the tamper-proof-records half.
