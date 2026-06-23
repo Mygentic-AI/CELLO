@@ -3292,7 +3292,8 @@ export class CelloDirectoryNode {
     // client's signature check passes) and only the client's independent re-derive can catch it.
     // This simulates a buggy/malicious directory; production never sets this env.
     const inflateBy = Number.parseInt(process.env["CELLO_DIRECTORY_INFLATE_FRONTIER_FOR_TEST"] ?? "", 10);
-    if (!Number.isNaN(inflateBy) && inflateBy > 0) {
+    // Doubly gated: never active in production, even if the env var is somehow set.
+    if (process.env["CELLO_ENV"] !== "production" && !Number.isNaN(inflateBy) && inflateBy > 0) {
       for (const p of legibility.participants) p.content_frontier_seq += inflateBy;
       this.#logger?.warn("seal.certificate.frontier.inflated_for_test", { sessionId: sessionIdHex, inflateBy });
     }
