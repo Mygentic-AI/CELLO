@@ -474,7 +474,10 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
   `session.unilateral.notarized` (present/absent pubkeys) PROVEN LIVE; B never signs/never
   gets `seal_verified`. The `close_type='SEAL_UNILATERAL'` + `conversation_attestations`
   'ABSENT' discriminator rows are NOT yet written — that 3-table write does not exist for
-  bilateral either; it is upgrade-readiness coupled to DOD-UP-1 (Tier-4, deferred).
+  bilateral either. NOTE: DOD-UP-1 (now ✅ PROVEN LIVE) built the upgrade on the
+  `seal_notarizations` table (superseding row), NOT the `conversation_seals`/
+  `conversation_attestations` 3-table write — so this SEAL-2 remainder stays its own open
+  item, no longer coupled to an unbuilt UP-1.
 - **DOD-SEAL-3 — Verifiable certificate, channel-independent.** Confirm/notify
   frames carry the full cert; client rebuilds the canonical TBS and verifies the
   signature against an independently-trusted key; a channel-swapped `sealed_root`
@@ -581,20 +584,49 @@ This tier is the heart of what kept getting dropped. Authority: POSTMORTEM Parts
 
 ---
 
-## Tier 4 — Designed + STORIED, NOT yet built (J-UPGRADE)
+## Tier 4 — J-UPGRADE (BUILT ✅)
 
-Storied 2026-06-20 (CELLO-M7-UPGRADE-001 / -002) — no longer NOT STORIED; now ❌
-NOT BUILT (real story machinery applied; awaiting implementation).
+CELLO-M7-UPGRADE-001 (DOD-UP-1) and -002 (DOD-UP-2) are both ✅ PROVEN LIVE
+(UP-2 2026-06-22, UP-1 2026-06-23; both `cello-done-auditor` EARNED). Tier 4 is complete.
 
 - **DOD-UP-1 — Unilateral → bilateral upgrade (Workstream C).** Returning absent
-  party recovers + verifies content, signs an ack leaf over the sealed root →
-  promote to bilateral (append-only superseding row); reverse PERSIST-015 SI-002;
-  refuse only on unverifiability (D-3). Content possession is the precondition.
-  *(postmortem C-3/C-4, Part 4 row C; **CELLO-M7-UPGRADE-001**)* — ❌ NOT BUILT
-  (storied). Owns the directory Flyway migration that relaxes the
-  one-row-per-session constraint for the superseding row (SESSION-002 deferred it
-  here). Cannot be IMPLEMENTED until MSG-001-3b content recovery lands (the C-4
-  precondition).
+  party recovers + verifies content, signs an ack over the sealed root R1 →
+  promote to bilateral (append-only superseding row); refuse only on unverifiability
+  (D-3). Content possession is the precondition.
+  *(postmortem C-3/C-4, Part 4 row C; **CELLO-M7-UPGRADE-001**)* — ✅ **PROVEN LIVE**
+  (J-UPGRADE-001, 2026-06-23; `cello-done-auditor` EARNED). **Model 2** (build journal
+  2026-06-23 decision): B RATIFIES the EXISTING root R1 — it does not re-seal a new root;
+  the bilateral cert carries A's original seal sig + B's ack, both over R1. The directory
+  writes a SUPERSEDING `seal_type='bilateral'` row (same R1, `supersedes_notarization_id`
+  → the unilateral row, append-only — V31 relaxed `UNIQUE(session_id)` →
+  `UNIQUE(session_id, seal_type)`). PERSIST-015 SI-002 is preserved, not reversed — you
+  still cannot UNILATERALLY re-seal; the bilateral upgrade is the sanctioned second
+  notarization.
+  - **Live-binary citation (the gate):** `j-upgrade-bilateral.spine.test.ts` — real
+    binaries, B SIGKILLed → A seals `seal_type:'unilateral'` → B restarts on the same
+    CELLO_DIR → directory delivers the queued `seal_unilateral_notification` → B recovers +
+    verifies content, ratifies R1, sends `seal_upgrade_request` → both log
+    `session.seal.upgraded`. **Authoritative assertion = `psqlSpine` against the directory's
+    OWN `seal_notarizations` table** (not daemon-fakeable): over R1, `seal_type='unilateral'`
+    count = `"1"` (preserved), `seal_type='bilateral'` count = `"1"`, and the join
+    `(b.supersedes_notarization_id = u.id)` = `"t"`.
+  - **KERNEL (content possession):** B refuses to ratify unless it genuinely recovered +
+    integrity-verified the content — `content_tamper` (AC-003), `content_unrecoverable`
+    (AC-002), and `content_incomplete` (M1 interim leaf-count gate: B's content tree must hold
+    ≥ leaf_count-1) all REFUSE with NO `seal_upgrade_request` sent. Proven by the REAL extracted
+    body in `seal-upgrade.test.ts` (11). AC-007 (only the absent party, authenticated-sender
+    isolated), AC-008 (both parties verify the dual cert; H1 binds the cert pubkeys to the real
+    session participants — a forged returning sig / attacker pubkey REJECTS), and AC-006
+    (append-only) proven by `m7-upgrade-001-directory-handler` (8) + `-superseding-notarization` (4).
+  - **Live coverage scope (honest):** the live binaries prove the HAPPY ratification path; the
+    kernel REFUSALS and directory REJECTIONS are proven by real-body in-process tests (the same
+    bar accepted for sibling DOD-UP-2). **Deferred (named):** the exact "B's frontier covers R1's
+    tail" canonical-sequence reconciliation is MSG-001-3b — replaced here by the interim M1
+    leaf-count completeness gate (B refuses rather than over-attesting); the single-key-fallback
+    A-side divergence is the deprecated pre-DKG path (FROST is the proven production path).
+  - **Build journal:** the design decision (Model 2 vs Model 1), the 7 increments, the
+    key-asymmetry correction, and the two-reviewer + done-auditor pass are recorded in
+    M7-BUILD-JOURNAL.md (2026-06-23). Owned the V31 Flyway migration.
 - **DOD-UP-2 — Auto-acknowledge close (Workstream E).** B's node auto-co-signs the
   responder SEAL leaf on ingesting A's SEAL ctrl leaf + verified content, no agent
   prompt; `counterparty_closing` becomes informational; verifiability-gated; B's
@@ -745,8 +777,11 @@ no-double-count (DOD-MSG-5), no-assent-field (DOD-LEG-4).
 - **Tier 2** is built but step-6 auth is OFF and none of it has touched a real cluster.
 - **Tier 3** is the real remaining work: **MSG-001-3b, SESSION-002, SESSION-004
   client, the SESSION-003 ABSENT gate** are NOT built (or are parked/dead-stack-homed).
-- **Tier 4** is now STORIED (UPGRADE-001/002, 2026-06-20) — ❌ NOT BUILT; UP-1 is
-  gated on the MSG-001-3b content-recovery precondition.
+- **Tier 4** is COMPLETE — UPGRADE-001 (DOD-UP-1) ✅ PROVEN LIVE 2026-06-23
+  (J-UPGRADE-001) and UPGRADE-002 (DOD-UP-2) ✅ PROVEN LIVE 2026-06-22. UP-1's
+  content-recovery precondition is satisfied — the live test proves B recovers + verifies
+  parked content on return before ratifying. The exact canonical-root reconciliation remains
+  MSG-001-3b (replaced here by the interim M1 leaf-count completeness gate).
 - **Tier 5** is DECIDED (2026-06-20): REC-1 satisfied (PERSIST-012), REC-2 subsumed,
   REC-3 absorbed — no silent deferral remains.
 - **Tier 6** is new 2026-06-20 scope, STORIED: J-PERSIST (PERSIST-LOG-001 — durable
