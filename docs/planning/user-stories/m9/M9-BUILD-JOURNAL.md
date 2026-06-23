@@ -714,3 +714,53 @@ DoD: IN-003 wired live (held proven via the real spawned gateway); IN-002 part-1
 (pluggable; real model = part 2). Remaining: FEED-001 inc 4 (the governance re-send, in progress next),
 M9-GATE-1, CFG-001/REC-001, IN-002 part 2 (real model+runtime). **NAMED DEFERRAL:** the inbound terminal-block
 agent-facing feedback surface (cello_receive returning a security note) → M9-FEED-001 inbound increment.
+
+---
+
+## 2026-06-23 — FEED-001 inc 4 (governance re-send, SI-002) + M9-GATE-1 (commits `9c46dc6`, `95091f3`, `9e34809`)
+
+**FEED-001 inc 4 — the stateless `governance_decisions` re-send (security-critical, SI-002).** `cello_send`
+gains optional `governance_decisions` ({flagId: redact|allow_once|allow_always}). The daemon passes it to
+the gateway (which owns config + whitelist, INV-4); the gateway re-scans statelessly and resolves each PII
+warn:
+- `redact` (and any OMITTED flag) → typed `[REDACTED:pii:*]` placeholder, message sends.
+- `allow_once` → value sent verbatim ONLY when the gateway's `autonomous_override` is ON; OFF (default) →
+  REJECTED + re-warned. **SI-002: the agent's only autonomous lever is `redact`; it can never self-authorize
+  sending flagged PII.** `allow_always` → allow-now + an operator whitelist-add request (persistence is the
+  human's), same gate.
+- **All-or-nothing:** if ANY decision is rejected, the WHOLE send re-warns (NOT SENT) — nothing goes out
+  half-decided. No rate slot is consumed on a warn.
+- **Statelessness:** flagId = sha256(category:value), so a decision applies ONLY to the exact value it was
+  computed for; a stale flagId (content changed) defaults to redact → an allow can never mis-apply to a
+  different value. `autonomous_override` is gateway config, default OFF, env opt-in until M9-CFG-001. Plumbed
+  `governanceDecisions` through ScreenContext → wire → server → screen fn → OutboundScreener.
+
+**M9-GATE-1 — the Phase-1 end-to-end gate (one machine, no directory).** The four-outcome real-process loop
+is m9-core-001-seam (13 cases); INV-5 all-three-producers is m9-core-001-inbound-funnel (gateway double). The
+gate closes the one remaining real-process gap (§7): the **park-recovery producer** — the daemon recover
+loop's own `ingestReceivedContent` call — is screened by a REAL spawned `cello-gateway`, IDENTICALLY to
+direct: a clean recovered message is screened (gateway request log) + delivered; a recovered terminal block
+(non-English) records its leaf but is never delivered.
+
+**Reviews (read-only subagents):**
+- cello-test-attacker on FEED-001 → **2 blocking hollow-test gaps** (impl was already correct; tests now guard
+  it), fixed in `95091f3`: (probe 4) the all-or-nothing rule was untested for a MIXED re-send → added; (probe 5)
+  "no rate slot on a warn" was unasserted → added a real-rateLimit test (5 warns don't throttle; warn→redact
+  takes exactly one slot). Probes 1/2/3/6 already had teeth (override on/off opposite outcomes, value-present-
+  after-allow, stale-flagId-no-leak, omitted-value-gone).
+- FEED-001 code-reviewer: **NO leak found** — the override gate holds end-to-end (omitted→redact,
+  malformed map→re-warn, allow_* off→reject, mixed-rejection→whole-send-aborts, stale flagId→redact,
+  rate peek-only). Fixed in `d9edb36`: **HIGH** — the agent-facing MCP `cello_send` tool dropped
+  `governance_decisions` (the feature was unreachable while the daemon shipped guidance to use it) → added
+  the param + forward. **MED** — a `redact` verdict without content fell back to sending the ORIGINAL
+  (fail-OPEN) → now fails closed (`redact_without_content`), guarded by a seam fault-injection test.
+  **LOW** — PII now scans the WORKED text (flagId basis matches the redaction target). **LOW (recorded
+  scope decision, NOT fixed):** global split/join redaction vs span-based — consistent with secrets.ts +
+  exfil across the codebase; span-based precision is a cross-cutting change for ALL three redaction stages,
+  not a FEED-001-local fix. Tracked for backlog.
+
+**State: gateway 101 + daemon 390 tests green; adapter typecheck clean; lint + typecheck clean; nothing
+pushed; nothing on `main`.** GATE-1 checkpoint (§3): `cello-done-auditor` dispatched on the proposed DoD ✅
+flips (CORE-001, IN-001, IN-003, OUT-001/002/003, FEED-001, GATE-1) BEFORE flipping — only EARNED stays ✅.
+Explicitly NOT flipping: IN-002 (🟡½, no real model), OUT-004 (rate-limit not exercised in the live gate),
+CFG-001/REC-001 (❌). Remaining Phase-1: CFG-001 + REC-001; IN-002 part 2 (real model+runtime).
