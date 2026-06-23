@@ -788,8 +788,8 @@ each must stay green once passed:
    busy-silent → ABSENT vs DELIVERED → verifiable cert.
 7. **J-LEGIBILITY** → DOD-LEG-1..4. Malicious-tail transcript → cert reads
    delivered-but-unanswered; four interruption cases legible.
-8. **J-UPGRADE** → DOD-UP-1/2 (storied 2026-06-20; UP-1 gated on MSG-001-3b). Absent
-   party returns → recovers + verifies content → signs ack leaf → bilateral
+8. **J-UPGRADE** → DOD-UP-1/2 ✅ BOTH PROVEN LIVE (2026-06-23 / 2026-06-22). Absent
+   party returns → recovers + verifies content → ratifies sealed root → bilateral
    (superseding row); B online + verified → auto-co-sign with no agent action.
 9. **J-PERSIST** → DOD-LOG-1. A sends + receives → daemon restart → the readable
    transcript is recoverable (encrypted at rest); relay/directory show only hashes.
@@ -805,21 +805,30 @@ no-double-count (DOD-MSG-5), no-assent-field (DOD-LEG-4).
 
 ## The bottom line
 
-- **Tier 1** is built and proven in-process; **never run live as one journey.**
-- **Tier 2** is built but step-6 auth is OFF and none of it has touched a real cluster.
-- **Tier 3** is the real remaining work: **MSG-001-3b, SESSION-002, SESSION-004
-  client, the SESSION-003 ABSENT gate** are NOT built (or are parked/dead-stack-homed).
-- **Tier 4** is COMPLETE — UPGRADE-001 (DOD-UP-1) ✅ PROVEN LIVE 2026-06-23
-  (J-UPGRADE-001) and UPGRADE-002 (DOD-UP-2) ✅ PROVEN LIVE 2026-06-22. UP-1's
-  content-recovery precondition is satisfied — the live test proves B recovers + verifies
-  parked content on return before ratifying. The exact canonical-root reconciliation remains
-  MSG-001-3b (replaced here by the interim M1 leaf-count completeness gate).
-- **Tier 5** is DECIDED (2026-06-20): REC-1 satisfied (PERSIST-012), REC-2 subsumed,
-  REC-3 absorbed — no silent deferral remains.
-- **Tier 6** is new 2026-06-20 scope, STORIED: J-PERSIST (PERSIST-LOG-001 — durable
-  encrypted transcript; closes the daemon at-rest encryption gap) — ❌ NOT BUILT; and J-LOOPBACK
-  (SESSION-CORE-REKEY-001 — two agents on one daemon) — ✅ DONE + LIVE-PROVEN 2026-06-22 (DOD-LOOP-1,
-  j-loopback GREEN; bilateral seal, byte-identical root, no 2nd daemon).
+> **UPDATED 2026-06-23 — the substantive M7 build is COMPLETE.** Every J-* journey (J-SPINE
+> through J-LOOPBACK) is GREEN against the real binaries. The pessimistic text below predated this
+> week's flips and is corrected here. What remains is NOT new build: multi-node infra (INV-1,
+> failover — needs >1 node the single-node spine can't model), the named-deferred relay-signed-
+> sequence hardening (DOD-MSG-4 Finding 2, below), assembly-wide discipline audits (INV-6/8),
+> INV-5 (transport-internal, not spine-testable via the MCP surface), and the PARKED values-question
+> SEAL-2 3-table analytics write (build journal 2026-06-23 — feeds graph_edges, intersects the
+> anti-surveillance values; needs Andre's call). No CORE work is open.
+
+- **Tier 1** is built + proven; the happy spine runs live as J-SPINE.
+- **Tier 2** is PROVEN LIVE — step-6 auth ON (J-AUTH), manifest poll, J-SIG degradation+recovery.
+- **Tier 3** is GREEN, not remaining: J-CONTENT (MSG-1..8, incl. MSG-001-3b recovery), J-UNILATERAL
+  (SESSION-002 seal + the SESSION-003 ABSENT gate, DOD-LIVE-2 PROVEN LIVE), J-LEGIBILITY (SESSION-004
+  client) all run live. (Residuals: the SEAL-2 conversation_seals 3-table analytics write — PARKED,
+  values; DOD-SEAL-3 absent-party-notification half; attestation_mode TBS-binding — hardening notes.)
+- **Tier 4** is COMPLETE — UPGRADE-001 (DOD-UP-1) ✅ PROVEN LIVE 2026-06-23 (J-UPGRADE-001) and
+  UPGRADE-002 (DOD-UP-2) ✅ PROVEN LIVE 2026-06-22. Both done-auditor EARNED.
+- **Tier 5** is DECIDED (2026-06-20): REC-1 satisfied (PERSIST-012), REC-2 subsumed, REC-3 absorbed.
+- **Tier 6**: J-PERSIST (PERSIST-LOG-001 — durable encrypted transcript) ✅ PROVEN LIVE 2026-06-23
+  (DOD-LOG-1, done-auditor EARNED); J-LOOPBACK (SESSION-CORE-REKEY-001) ✅ DONE + LIVE-PROVEN
+  2026-06-22 (DOD-LOOP-1). DOD-LOG-2/3 (dispute/abuse export bundles) remain ⬜ NOT STORIED follow-ons.
+- **Tier 0 invariants**: INV-2/3/4/7 🟢 PROVEN/BUILT+VERIFIED; INV-1 (real cluster) needs infra;
+  INV-5 (dial-after-teardown) gater built + unit-covered, not spine-testable; INV-6/8 (discipline
+  audits) per-story-built, un-audited as an aggregate; INV-9 built, not specifically asserted.
 
 ### Deferred hardening (RC-1: named target, not silent)
 
