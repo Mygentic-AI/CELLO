@@ -5046,3 +5046,29 @@ then corrected:
 ONLY open work is: multi-node infra (#2), the deferred relay-signed-sequence hardening (#3 / DOD-MSG-4
 F2), assembly-wide discipline audits (INV-6/8), and minor polish (SEAL-2 3-table write). No CORE work
 open. Nothing pushed (CC ahead 14, TC ahead ~46).
+
+---
+
+## 2026-06-23 — PARKED (values decision, can't decide alone): SEAL-2 conversation_seals 3-table write
+**Decision parked for Andre.** The one remaining buildable non-green line is the SEAL-2 3-table write
+(`close_type='SEAL_UNILATERAL'` on `conversation_seals` + per-party `ABSENT/DELIVERED` discriminator on
+`conversation_attestations`). It is NOT a mechanical task:
+- **Its primary consumers are `analytics-job.ts` (pseudonym_stats, GRAPH_EDGES) and `mmr.ts`.** The
+  graph_edges / pseudonym analytics is exactly the conversation-graph tracking that CELLO's
+  anti-surveillance values put off-limits (`user_values_anti_surveillance`). So NOT populating these
+  tables may be ALIGNED with the values, not a gap. mmr.ts's checkpoint use is legitimate, but the live
+  MMR is already fed by `mmrStore.appendSeal` in the seal path, not these tables.
+- It is long-standing (never written for unilateral OR bilateral — not a regression from any M7 work),
+  touches the just-audited+green seal path (regression risk), and was not on Andre's "what's left" list
+  (he considered UP-1 the last real thing).
+- **Options:** (a) build the 3-table write (populates analytics graph_edges — values-questionable);
+  (b) leave it unwritten + REMOVE/gate the graph_edges analytics (aligns with anti-surveillance);
+  (c) leave as-is (seal fully functional via seal_notarizations; analytics tables stay empty).
+- **Recommendation:** (c) or (b) — do NOT build the graph analytics feed without an explicit values
+  call. The seal is complete and tamper-evident without it. Parked; not silently dropped.
+
+This is the honest end of the ACTIONABLE M7 queue. Everything non-green that remains is: infra (#2
+multi-node, INV-1), deferred hardening (#3 DOD-MSG-4 F2), assembly-wide discipline audits (INV-6/8,
+large/low-core), transport-internal not spine-testable via MCP (INV-5 dial-after-teardown — gater built
++ unit-covered), or this parked values-question (SEAL-2). No CORE work open; UP-1 (the last core line)
+done + audited.
