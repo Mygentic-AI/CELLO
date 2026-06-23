@@ -199,11 +199,28 @@ export interface SealLegibility {
 }
 
 /**
+ * DOD-LEG-2 (SI-002): the minimal signed-leaf material a receiving client needs to
+ * INDEPENDENTLY re-derive each party's `content_frontier_seq` and reject an inflated
+ * published frontier (`certificate_frontier_unverifiable`). The client verifies
+ * `sender_signature` (Ed25519 over `structure1_cbor`) itself, so it does NOT trust the
+ * directory for these values — only for transporting signed bytes it re-checks.
+ */
+export interface SealFrontierLeaf {
+  structure1_cbor: Uint8Array;
+  sender_pubkey: Uint8Array;
+  sender_signature: Uint8Array;
+}
+
+/**
  * SessionSealed wire frame carrying the M7-SESSION-004 legibility certificate.
  * The directory always attaches `legibility` for new seals; the field is optional
- * for backward-compatible decode of pre-M7 frames.
+ * for backward-compatible decode of pre-M7 frames. `frontier_leaves` (DOD-LEG-2) carries
+ * the signed leaves so the client can re-derive + verify the published frontier.
  */
-export type SessionSealedWithLegibility = SessionSealedBase & { legibility?: SealLegibility };
+export type SessionSealedWithLegibility = SessionSealedBase & {
+  legibility?: SealLegibility;
+  frontier_leaves?: SealFrontierLeaf[];
+};
 
 /**
  * seal_verified frame carrying the legibility object (bilateral seal only). The directory sends

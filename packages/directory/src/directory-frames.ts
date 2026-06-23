@@ -150,6 +150,9 @@ export function encodeSessionSealed(frame: SessionSealedWithLegibility): Uint8Ar
       encoded["leaf_count"] = frame.leaf_count;
     }
     if (legibility !== undefined) encoded["legibility"] = legibility;
+    // DOD-LEG-2 (SI-002): carry the signed leaves so the client can independently re-derive
+    // + verify each party's content_frontier_seq (reject an inflated published frontier).
+    if (frame.frontier_leaves !== undefined) encoded["frontier_leaves"] = frame.frontier_leaves;
     return ENC.encode(encoded);
   }
   // signature_type === "single" (deprecated M1 format)

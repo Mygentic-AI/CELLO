@@ -505,6 +505,9 @@ export class CelloDirectoryNode {
     // Present on the BILATERAL path; absent on the SESSION-002 unilateral path (whose
     // seal_unilateral_confirmed cert is a different frame that does not carry legibility yet).
     legibility?: SealLegibility;
+    // DOD-LEG-2 (SI-002): the signed leaves the legibility was derived from, carried to the
+    // SessionSealed frame so the client can re-derive + verify the published frontier itself.
+    frontierLeaves?: import("./directory-types.js").SealFrontierLeaf[];
     // SESSION-002: when true this is a UNILATERAL seal — participantA is the present
     // (submitting) party, participantB is the ABSENT counterparty (never a signer). On
     // completion the directory sends seal_unilateral_confirmed + notification (cert),
@@ -3362,6 +3365,12 @@ export class CelloDirectoryNode {
       tbs,
       correlationId: sessionIdHex,
       legibility,
+      // DOD-LEG-2: ship the signed leaves so the receiving client re-derives the frontier.
+      frontierLeaves: leaves.map((l) => ({
+        structure1_cbor: l.structure1_cbor,
+        sender_pubkey: l.s2.sender_pubkey,
+        sender_signature: l.s2.sender_signature,
+      })),
     });
 
     // OBS-001 AC-009: FROST seal ceremony log
@@ -3500,6 +3509,7 @@ export class CelloDirectoryNode {
       close_timestamp: pending.timestamp,
       leaf_count: pending.leafCount,
       legibility: pending.legibility,
+      frontier_leaves: pending.frontierLeaves,
     };
     this.#deliverOrEnqueue(pending.participantAHex, sealedEvent, sessionIdHex);
     if (pending.participantBHex) this.#deliverOrEnqueue(pending.participantBHex, sealedEvent, sessionIdHex);
