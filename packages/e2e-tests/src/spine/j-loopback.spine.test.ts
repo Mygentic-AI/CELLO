@@ -30,6 +30,7 @@ import {
   provisionAgent,
   connectMcp,
   cello,
+  psqlSpine,
   type SpineCluster,
   type Proc,
   type McpConn,
@@ -127,5 +128,30 @@ describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => 
 
     // Exactly ONE daemon process hosted the whole conversation.
     expect(daemons.length, "exactly one daemon process was started for the whole conversation").toBe(1);
+
+    // SEAL-2 (Sybil-defense relationship graph, live): a BILATERAL seal populates the graph rows
+    // (best-effort, fire-and-forget after the seal — poll briefly). conversation_seals carries
+    // close_type MUTUAL_SEAL + the sealed root HASH (never content); both K_locals become graph
+    // nodes; the analytics edge query derives exactly one A↔B edge — the signal Sybil detection runs on.
+    const root = closeA.sealed_root!;
+    let csCount = "0";
+    for (let i = 0; i < 24 && csCount !== "1"; i++) {
+      csCount = psqlSpine(`SELECT count(*) FROM conversation_seals WHERE merkle_root = '${root}';`);
+      if (csCount !== "1") await new Promise((r) => setTimeout(r, 250));
+    }
+    expect(csCount, `the bilateral seal must populate conversation_seals:${diag}`).toBe("1");
+    expect(psqlSpine(`SELECT close_type FROM conversation_seals WHERE merkle_root = '${root}';`)).toBe("MUTUAL_SEAL");
+    expect(
+      psqlSpine(`SELECT count(*) FROM conversation_participation cp JOIN conversation_seals cs ON cs.conversation_id = cp.conversation_id WHERE cs.merkle_root = '${root}';`),
+      "both K_locals must be graph nodes (2 conversation_participation rows)",
+    ).toBe("2");
+    expect(
+      psqlSpine(
+        `SELECT count(*) FROM conversation_participation p1 ` +
+        `JOIN conversation_participation p2 ON p1.conversation_id = p2.conversation_id AND p1.party_pseudonym < p2.party_pseudonym ` +
+        `JOIN conversation_seals cs ON cs.conversation_id = p1.conversation_id WHERE cs.merkle_root = '${root}';`,
+      ),
+      "the analytics graph-edge query must derive exactly one A↔B edge (the Sybil signal)",
+    ).toBe("1");
   }, 150_000);
 });

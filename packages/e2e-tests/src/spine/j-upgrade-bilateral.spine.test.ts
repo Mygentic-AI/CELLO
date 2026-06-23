@@ -161,5 +161,22 @@ describe("J-UPGRADE-001 — unilateral → bilateral upgrade on the absent party
     expect(cluster.directory.output, `directory must record the upgrade:${upgradeDiag}`).toMatch(/session\.seal\.upgraded|Upgraded unilateral/i);
     // AC-008: the present party (A) verified the dual-attestation cert before accepting bilateral.
     expect(daemonA.output, `A must accept the bilateral upgrade (dual-attestation verified):${upgradeDiag}`).toMatch(/session\.seal\.upgraded/);
+
+    // SEAL-2 (Sybil-defense relationship graph, live): the UNILATERAL seal populated the graph rows
+    // (best-effort; landed by now since the unilateral close was long before the upgrade). The UPGRADE
+    // does NOT add a second conversation_seals row — conversation_id is UNIQUE; the A↔B edge already
+    // exists. Stored: relationship metadata + the root HASH only, never content.
+    expect(
+      psqlSpine(`SELECT count(*) FROM conversation_seals WHERE merkle_root = '${rootHex}';`),
+      `exactly one conversation_seals row for R1 (unilateral wrote it; upgrade skipped it):${upgradeDiag}`,
+    ).toBe("1");
+    expect(
+      psqlSpine(`SELECT close_type FROM conversation_seals WHERE merkle_root = '${rootHex}';`),
+      `the conversation_seals close_type must be SEAL_UNILATERAL:${upgradeDiag}`,
+    ).toBe("SEAL_UNILATERAL");
+    expect(
+      psqlSpine(`SELECT count(*) FROM conversation_participation cp JOIN conversation_seals cs ON cs.conversation_id = cp.conversation_id WHERE cs.merkle_root = '${rootHex}';`),
+      `both parties must be graph nodes (2 conversation_participation rows — the edge):${upgradeDiag}`,
+    ).toBe("2");
   }, 180_000);
 });
