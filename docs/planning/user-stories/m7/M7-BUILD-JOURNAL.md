@@ -4889,3 +4889,50 @@ unrecoverable → refuse upgrade_content_unrecoverable); (4) ONLY IF verified: b
 (5) handle seal_upgrade_confirmed (mark session bilateral) / seal_upgrade_rejected. The content gate is
 the load-bearing KERNEL — reuse the #maybeAutoAcknowledgeSeal gate logic. Then incr 5 client dual-attest
 verify, incr 6 SI-002 inversion, incr 7 J-UPGRADE-001 live (B KILLED → A unilateral → B returns → upgrade).
+
+---
+
+## 2026-06-23 — DOD-UP-1 incr 5-7 BUILT + J-UPGRADE-001 LIVE GREEN; feature-boundary review running
+**Process note:** Andre approved review-ONCE-at-the-feature-boundary for the rest of UP-1 (not
+per-increment) — the live test is the real gate. Increments 5-7 done straight through, now the two
+parallel reviewers + done-auditor before the DoD flip.
+
+**Incr 4 CORRECTION (informed-skeptic catch before the live run).** B's step-0 called
+verifyUnilateralCertificate to "verify the unilateral cert" — but that helper verifies against the
+LOCAL agent's OWN primary key (loads agentDir's FROST share). The unilateral seal's signature is the
+INITIATOR's (A's) group key, which B does NOT hold (documented asymmetry,
+session-ceremony.ts:365-378). Step 0 would have FAILED for every upgrade → dead on arrival. Removed
+it: B accepts R1 on the AUTHENTICATED daemon↔directory Noise channel (as the responder accepts
+session_sealed); B's real protection is the content cross-check. A wrong R1 yields a B-ack that
+doesn't match A's real seal → no coherent bilateral forms, never a forgery. (commit 7cf000a)
+
+**Incr 5 (AC-008 dual-attestation, key-asymmetry-aware).** The verifier of a bilateral cert must
+HOLD the keys. B (responder) can't verify A's seal sig. So: (a) EVERYONE verifies the RETURNING
+attestation (B's ack) over R1 — catches a directory fabricating B's sig (the kernel of AC-008); (b)
+if THIS agent is the PRESENT party (A, holds its primary), it ALSO verifies the present attestation
+over the rebuilt seal TBS. leaf_count is carried on seal_upgrade_request→_confirmed so A can rebuild
+the TBS; a wrong leaf_count fails A's verify (self-pinning). (commits 20552425 directory, 7cf000a daemon)
+
+**Incr 6.** No stale assertion to invert — persist-015 SI-002 is a test.todo about duplicate
+UNILATERAL rejection (unchanged). Clarified its comment: a 2nd notarization is allowed ONLY via the
+sanctioned upgrade path. (commit d2ad8c86)
+
+**Incr 7 — J-UPGRADE-001 LIVE GREEN (commits 254f75f4 test, 6d16b75 keystone fix).** The capstone:
+A↔B exchange one message B verifies → B SIGKILLed → grace → A closes UNILATERAL (asserted) → B's
+daemon RESTARTED on the same CELLO_DIR → directory delivers the queued seal_unilateral_notification →
+B recovers+verifies content, ratifies R1, sends seal_upgrade_request → directory writes the
+SUPERSEDING bilateral row → both verify the dual cert. **AUTHORITATIVE assertion = psqlSpine against
+the directory's OWN seal_notarizations table** (daemon can't fabricate): root R1 carries BOTH a
+preserved 'unilateral' row AND a 'bilateral' row whose supersedes_notarization_id → the unilateral
+row's id. 1 passed, 48.8s.
+
+**ROOT-CAUSE FIX (the live test earned it).** First run timed out: B reconnected + auto-recovered but
+never got the notification. Producer/consumer trace: the directory PUSHES the queued
+seal_unilateral_notification during the keystone's auth/reconnect DRAIN — BEFORE any cello_start_agent
+runs. The upgrade listener was only registered in startAgent → handler didn't exist when the frame
+arrived → dropped. This absent-party-notification path was a test.todo (never exercised live).
+Fixed: register registerUnilateralUpgradeListener at the KEYSTONE too (mirrors
+registerSessionSealedListener, which catches session_sealed pushed in the same drain). Rerun GREEN.
+
+**Status:** DOD-UP-1 stays ❌ in the DoD until the two reviewers (feature-dev:code-reviewer opus +
+cello-test-attacker) clear + done-auditor EARNS the flip. Nothing pushed (CC ahead 13, TC ahead 38).
