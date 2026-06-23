@@ -4769,3 +4769,46 @@ KERNEL (informed-skeptic): the upgrade must NOT promote unless B genuinely recov
 (reuse the cross-check gate) — the "content possession precondition" + "refuse only on unverifiability" ARE
 load-bearing security, not polish. A version that promotes on a bare ack without content verification looks
 done but is the silently-broken-core trap. Build with the gate from increment 4.
+
+---
+
+## 2026-06-23 — DOD-UP-1 incr 1+2 BUILT (migration + store-layer superseding); incr 3 mapping
+**DoD:** DOD-UP-1 still ❌ overall (not flippable until incr 7 live-proven + reviewed + audited);
+foundation is in.
+
+**Incr 1 — V31 migration (commit d81cba12).** `seal_notarizations` gains `seal_type`
+('unilateral'|'bilateral', NOT NULL DEFAULT 'bilateral') + `supersedes_notarization_id` (nullable
+BIGINT FK). Dropped global `UNIQUE(session_id)` → `UNIQUE(session_id, seal_type)` (≤1 unilateral +
+≤1 bilateral per session, still bounded). Verified: `flyway migrate` applied V31 clean to
+`cello_spine`, V1–V30 checksums validated unchanged (now at v31). Bumped
+`OpsAgentExpectedMigrationVersion` default 0→31 (deploy.sh also computes dynamically; covers
+fresh-region CREATE). NOTE: `cello_dev` is stuck pre-V30 (pre-existing local schema drift —
+`email_stub_hash already exists` on V30); the spine harness uses `cello_spine` which is clean, so
+integration tests were run against `cello_spine`.
+
+**Incr 2 — store-layer superseding (commit 610ab3c6).** `SealNotarization` gains optional
+`seal_type` (default 'bilateral') + `supersedes_notarization_id`. `recordNotarization` persists
+both; the 3 directory-node.ts construction sites set seal_type explicitly (unilateral→'unilateral',
+both bilateral paths→'bilateral'). `getNotarization` returns the AUTHORITATIVE seal (bilateral row
+preferred via `ORDER BY seal_type='bilateral' DESC`). New `getNotarizationId(session, sealType)` for
+the superseding FK. InMemoryDirectoryStore mirrors all three.
+
+**KERNEL caught — M4 bug #7 (hash-chain safety).** `verifyChain` does `SELECT *` + re-serialize, so
+the two new V31 columns must be EXCLUDED from chain serialization (`hash-chain.ts`
+TABLE_EXTRA_EXCLUDED), exactly like the sessions-V29 / relay_registrations precedent — otherwise
+EVERY pre-V31 notarization row (read back with the 'bilateral' default) breaks the chain. seal_type's
+truth is the FROST signature (client re-verifies at cert time, AC-008), not the label; supersedes is
+a pointer. `BIGINT_COLUMNS` gains supersedes_notarization_id so the AC-005 static gate passes.
+
+**Test teeth + falsification.** `m7-upgrade-001-superseding-notarization.test.ts` (4 integration):
+superseding write preserves the unilateral row (AC-006); UNIQUE(session,seal_type) dedup; chain valid
+across uni+bi+plain rows; and a TEETH test — superuser flip of seal_type/supersedes leaves the chain
+valid while a frost_signature flip breaks it. FALSIFIED: removing the exclusion turns the teeth test
+RED (ran it — failed at `expect(result.valid).toBe(true)`), confirming the assertion isn't hollow.
+Regression: persist-018/021/015, m7-session-004, m6b-010, connection-request all green vs clean V31
+cello_spine.
+
+**Next:** incr 3 directory `seal_upgrade_request` handler (Explore mapping the dispatch + bilateral
+processSeal reuse points now). Then incr 4 daemon reconnect-detect+verify+sign-ack (the content-gate
+KERNEL), incr 5 client dual-attestation verify, incr 6 SI-002 inversion, incr 7 J-UPGRADE live.
+NOTHING pushed (Andre pushes). cello-client ahead 10; trustless-cello ahead ~30.
