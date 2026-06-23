@@ -228,7 +228,10 @@ export type SessionSealedWithLegibility = SessionSealedBase & {
  * the TBS it co-signs — directory and daemon must agree on the bound TBS or the FROST seal fails.
  * Absent on the unilateral seal (which carries no legibility).
  */
-export type SealVerifiedWithLegibility = import("@cello-protocol/protocol-types").SealVerified & { legibility?: SealLegibility };
+export type SealVerifiedWithLegibility = import("@cello-protocol/protocol-types").SealVerified & {
+  legibility?: SealLegibility;
+  frontier_leaves?: SealFrontierLeaf[];
+};
 
 // ─── SESSION-005: New signaling frames ────────────────────────────────────────
 

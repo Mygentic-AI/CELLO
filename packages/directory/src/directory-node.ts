@@ -3355,6 +3355,15 @@ export class CelloDirectoryNode {
     // SESSION-005: Push seal_verified to initiator; wait for seal_frost_signature.
     // M7 legibility-TBS-binding: carry the legibility so the initiator's daemon binds the SAME
     // legibility hash into the TBS it co-signs (directory + daemon must agree on the bound TBS).
+    // DOD-LEG-2: the signed leaves the legibility was derived from. Shipped on BOTH seal_verified
+    // (so the initiator re-derives + refuses to co-sign an inflated frontier) and session_sealed
+    // (so the receiver re-derives + refuses to accept one).
+    const frontierLeaves = leaves.map((l) => ({
+      structure1_cbor: l.structure1_cbor,
+      sender_pubkey: l.s2.sender_pubkey,
+      sender_signature: l.s2.sender_signature,
+    }));
+
     const sealVerifiedEvent: SealVerifiedWithLegibility = {
       type: "seal_verified",
       session_id: sessionId,
@@ -3362,6 +3371,7 @@ export class CelloDirectoryNode {
       leaf_count: leafCount,
       timestamp: close_timestamp,
       legibility,
+      frontier_leaves: frontierLeaves,
     };
 
     // Store pending frost seal state for when the initiator returns the signature.
@@ -3375,12 +3385,7 @@ export class CelloDirectoryNode {
       tbs,
       correlationId: sessionIdHex,
       legibility,
-      // DOD-LEG-2: ship the signed leaves so the receiving client re-derives the frontier.
-      frontierLeaves: leaves.map((l) => ({
-        structure1_cbor: l.structure1_cbor,
-        sender_pubkey: l.s2.sender_pubkey,
-        sender_signature: l.s2.sender_signature,
-      })),
+      frontierLeaves,
     });
 
     // OBS-001 AC-009: FROST seal ceremony log

@@ -171,7 +171,7 @@ export function encodeSessionSealed(frame: SessionSealedWithLegibility): Uint8Ar
   return ENC.encode(encodedSingle);
 }
 
-export function encodeSealVerified(frame: SealVerified & { legibility?: import("./directory-types.js").SealLegibility }): Uint8Array {
+export function encodeSealVerified(frame: SealVerified & { legibility?: import("./directory-types.js").SealLegibility; frontier_leaves?: import("./directory-types.js").SealFrontierLeaf[] }): Uint8Array {
   const encoded: Record<string, unknown> = {
     type: frame.type,
     session_id: frame.session_id,
@@ -185,6 +185,8 @@ export function encodeSealVerified(frame: SealVerified & { legibility?: import("
   // daemon binds the SAME hash into its co-signed TBS. The daemon decodes inbound frames generically
   // (cbor-x), so the nested object round-trips without a typed-decoder change.
   if (frame.legibility !== undefined) encoded["legibility"] = frame.legibility;
+  // DOD-LEG-2: the signed leaves, so the initiator re-derives + refuses to co-sign an inflated frontier.
+  if (frame.frontier_leaves !== undefined) encoded["frontier_leaves"] = frame.frontier_leaves;
   return ENC.encode(encoded);
 }
 

@@ -87,19 +87,23 @@ describe("J-LEG-FRONTIER — inflated published frontier is rejected (DOD-LEG-2 
     void connA.call("cello_close_session", { session_id: sessionId }).catch(() => undefined);
     void connB.call("cello_close_session", { session_id: sessionId }).catch(() => undefined);
 
-    // The directory built + signed an inflated legibility (test seam fired).
+    // The directory inflated + FROST-bound the legibility (test seam fired).
     await cluster.directory.waitForLine(/"event":"seal\.certificate\.frontier\.inflated_for_test"/, 30_000);
 
-    // B re-derives the honest frontier from the signed leaves, detects the inflation, and REJECTS.
-    const rejected = await daemonB.waitForLine(/"event":"seal\.certificate\.frontier\.unverifiable"/, 30_000);
-    // The rejection names the inflated published value and the lower re-derived value.
-    expect(rejected).toMatch(/"publishedFrontier":\d+/);
-    expect(rejected).toMatch(/"derivedFrontier":\d+/);
+    // The co-signing initiator (either party — whichever submits the first SEAL ctrl leaf)
+    // independently re-derives the honest frontier from the signed leaves, detects the inflation,
+    // and REFUSES to co-sign → the directory gets NO FROST signature → the seal never completes.
+    const re = /"event":"session\.seal\.ceremony\.abort"[^\n]*"reason":"frontier_unverifiable"/;
+    const abortLine = await Promise.any([
+      daemonA.waitForLine(re, 25_000),
+      daemonB.waitForLine(re, 25_000),
+    ]);
+    expect(abortLine, "the co-signer names the inflated published value").toMatch(/"publishedFrontier":\d+/);
+    expect(abortLine).toMatch(/"derivedFrontier":\d+/);
 
-    // The unverifiable certificate is NEVER accepted: B does not log the verified path, and the
-    // sealed receipt is not readable (the cert was not persisted).
-    expect(daemonB.output, "B must not accept the inflated frontier").not.toMatch(/"event":"seal\.certificate\.frontier\.verified"/);
+    // No seal is produced: neither party ever accepts a frontier, and no sealed receipt exists.
+    expect(daemonA.output + daemonB.output, "the inflated frontier must never be accepted").not.toMatch(/"event":"seal\.certificate\.frontier\.verified"/);
     const receipt = (await connB.call("cello_get_sealed_receipt", { session_id: sessionId })) as { ok?: boolean };
-    expect(receipt.ok, "no sealed receipt is persisted for a rejected (unverifiable) certificate").not.toBe(true);
+    expect(receipt.ok, "no sealed receipt exists when the seal is refused").not.toBe(true);
   }, 90_000);
 });
