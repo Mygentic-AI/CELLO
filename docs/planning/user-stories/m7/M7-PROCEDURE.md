@@ -142,6 +142,27 @@ If ANY item is ❌: STOP, state the drift in one plain sentence ("oops, I went o
 \<what\>"), correct it, then resume the lowest non-green DoD line. If all ✅: say so
 in one line and resume. Keep the loop running.
 
+### 🚨 OVERNIGHT AUTONOMY — NEVER HARD-BLOCK (read this every drift check)
+
+A question in autonomous mode is a **HARD BLOCK**: `AskUserQuestion` (or ending a turn
+waiting on the user) freezes EVERYTHING — the cron stops, no unit runs, and it can't be
+answered until the user wakes. One needless block ~40 min into an overnight once cost
+~7 hours, and the answer was something the agent worked out alone anyway. So:
+
+1. **NEVER call `AskUserQuestion` and NEVER end a turn waiting on the user overnight.**
+2. **Before even considering a stop, ask: "Can I arrive at a high-probability prediction
+   of the right way to go?"** If YES → you are hard-blocking for no reason. Decide and
+   proceed. Any *reversible* (code) choice is always a proceed — a redo costs minutes, a
+   block costs the whole night. Redo > block, always. Don't inflate a minor spec or a
+   low-value hardening item into a "fork that needs the boss."
+3. **If it is GENUINELY a critical, direction-changing decision you truly cannot make
+   alone: do NOT block — PARK IT.** Write the decision + options + your recommendation
+   into the build journal AND the DoD (a peg, never dropped), set it aside, and pull the
+   NEXT item off the work queue. The boss is away; a smart employee shelves the one
+   undecidable thing and keeps shipping the rest. The ONLY rule: never silently drop that
+   you parked something — say plainly "I parked X because I can't decide it alone; I'm now
+   working on Y."
+
 ## 4. Building the live test itself (it doesn't exist yet)
 
 The first unit of all is **writing J-SPINE** (DOD-SPINE-1..7) as a live test that
