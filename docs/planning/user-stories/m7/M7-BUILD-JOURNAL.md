@@ -4812,3 +4812,50 @@ cello_spine.
 processSeal reuse points now). Then incr 4 daemon reconnect-detect+verify+sign-ack (the content-gate
 KERNEL), incr 5 client dual-attestation verify, incr 6 SI-002 inversion, incr 7 J-UPGRADE live.
 NOTHING pushed (Andre pushes). cello-client ahead 10; trustless-cello ahead ~30.
+
+---
+
+## 2026-06-23 — DOD-UP-1 DESIGN DECISION (decided, not parked): Model 2 — B ratifies the EXISTING root
+**Surfaced building incr 3.** A bilateral seal in the existing code (UP-2 / `processSeal`,
+directory-node.ts:3173) requires TWO ctrl leaves in the tree (`verifySealLeaves`), so the root
+includes both parties' ctrl leaves and the notarization is signed by the INITIATOR's primary_pubkey
+via FROST (spine uses real DKG — confirmed j-spine.spine.test.ts:199 — so this is the real path, not
+the single-key fallback). But for UP-1, B was ABSENT when A finalized the UNILATERAL seal over
+`R1 = [...content, A_ctrl]`. B returning cannot retroactively insert a ctrl leaf without changing R1.
+
+**Two models (source material conflicts):**
+- **Model 1** — B appends a ctrl leaf via `submitSealLeaf` → new root `R2 ≠ R1`, re-runs the bilateral
+  ceremony → directory sends `seal_verified` to A → A re-co-signs (FROST) → bilateral notarization over
+  R2. Reuses the proven ceremony but: needs A ONLINE + new A-side wiring to co-sign an already-closed
+  session, and the unilateral (R1) and bilateral (R2) certs attest DIFFERENT roots. My earlier
+  build-note's "reuse submitSealLeaf" hint pointed here.
+- **Model 2 (CHOSEN)** — B signs an ATTESTATION over the EXISTING `R1` with K_local; no root change,
+  no A involvement. The bilateral superseding row carries B's ack; the dual-attestation cert =
+  {sealed_root: R1, present: A's original seal sig (unilateral row), returning: B's ack sig (bilateral
+  row)}. Client marks bilateral only if BOTH verify against R1 (AC-008).
+
+**Why Model 2 (high-probability, decided — NOT blocking):** the AUTHORITATIVE ACs settle it.
+AC-008 verifies both acks against "the sealed root" (singular = the existing one); "supersede over the
+SAME root" + my incr-2 test's identical-root assertion are already Model 2. The unilateral seal is
+DESIGNED to be a complete, final, valid seal (its own accepted cert) — B RATIFIES it, doesn't re-seal
+over a divergent root. Two authoritative roots for one close would break non-repudiation (a client
+that saw R1 and one that saw R2 disagree on "the" sealed root). A build-note implementation hint loses
+to the spec. Self-contained (B+directory only) ⇒ live-testable without requiring A's re-co-sign wiring.
+REVERSIBLE if Andre disagrees — flagged here with the rejected alternative + rationale.
+
+**KERNEL stays intact under Model 2:** the directory verifying B's signature over R1 proves B HAS R1,
+not that B possesses the CONTENT behind it. The content-possession precondition is enforced on B's
+DAEMON (incr 4): B's honest daemon produces the ack ONLY after recover+verify (the #contentDesynced
+gate). AC-002 (content_unrecoverable) / AC-003 (content_tamper→dispute) are B-side refusals. A
+dishonest B signing R1 without content is attesting falsely UNDER ITS OWN KEY — its liability, same as
+any signature; the protocol's job is to ensure the signature is genuinely B's (AC-007 sender check),
+which the directory does.
+
+**Build under Model 2:** incr 3 = `seal_upgrade_request {session_id, ack_signature, returning_pubkey}`
+frame + `#processSealUpgradeRequest` (verify B==absent party of the unilateral notarization, verify
+B's ack_signature over buildSealTbs(sessionId,R1,leafCount,close_ts) against participant_b_pubkey,
+write superseding bilateral row with frost_signature=B's ack + supersedes_notarization_id=uniId,
+deliver seal_upgraded to both). incr 4 = B's daemon signs the ack after recover+verify. incr 5 =
+client dual-attestation verify. incr 6 = SI-002 inversion. incr 7 = NEW J-UPGRADE-001 scenario (B
+KILLED → A unilateral → B returns → recover+verify → upgrade to bilateral; the existing
+j-upgrade.spine.test.ts is UP-2/auto-ack and stays).
