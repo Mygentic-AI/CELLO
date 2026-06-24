@@ -5378,3 +5378,48 @@ working signer. New demo pubkey **`bc94ead650acf8ed21747d9571ef0aa7fc9bfba5511df
   `demo/initiator-test.mjs`.
 - Stage 2 = the NAT-traversal dialer (`CelloNodeTransportDialer` wired into `cello-daemon.ts` + the
   dialer↔session-node reconciliation noted in `daemon.ts` cello_initiate_session).
+
+## 2026-06-24 — cello_list_sessions implemented (session discovery) + seal-upgrade regression fixed
+
+E2E exposed a real hole: after running a session you could read a transcript or sealed receipt **by
+session_id** (`cello_get_transcript` / `cello_get_sealed_receipt`), but there was **no way to discover the
+ids** — `cello_list_sessions` was a stub returning `not_implemented`. Multiple guidance strings ("See
+cello_list_sessions", "Check cello_list_sessions for sealed sessions") dead-ended at it. This is what made
+the earlier transcript read feel impossible from inside the session and pushed toward the throwaway-script
+"cheat". Closed it.
+
+**Delivered (cello-client, `core/daemon`):**
+- `SessionNodeManager.getSessionsForAgent(agentName)` — every persisted session for one agent, **all
+  statuses** (active/sealed/interrupted/seal_interrupted_pending), ordered `updated_at DESC`. Reads the
+  durable SQLite store → works after a daemon restart and from a fresh MCP connection.
+- Real `cello_list_sessions` handler — scoped to the connection's **current agent** (same `no_current_agent`
+  trust boundary `cello_get_transcript` uses; an agent cannot enumerate another agent's sessions). Maps rows
+  to `SessionListEntry` (sessionId, agentName, counterpartyPubkey, status, messageCount, createdAt/updatedAt
+  ISO, interruptedAt). **Metadata only — no content crosses the surface (INV-3).**
+- Removed `cello_list_sessions` from the `SESSION_TOOLS_REQUIRING_AGENT` stub list.
+- TDD red-first: new `cello-list-sessions.test.ts` (5 tests) — `getSessionsForAgent` unit (cross-status,
+  cross-agent isolation, empty) + handler integration (no_current_agent guard; lists current agent's
+  active/interrupted/sealed excluding other agents, newest-first; empty array). Full daemon suite **399
+  green**, lint/typecheck/build clean, code-reviewed (no blocking/high/medium; one low — test-table PK —
+  fixed to the production composite `PRIMARY KEY (agent_name, session_id)`).
+
+*Learned (correct daemon behavior, surfaced by the test):* a persisted `active` session is **reconciled to
+`interrupted` at daemon startup** (a stale active row from a prior process can't be live). The list test
+orders on `updatedAt`, not on fixed status labels, because of this.
+
+**Bug found + fixed (pre-existing, was red on `main`):** commit `f96097b` ("remove unused attackerHex
+variable") over-removed the still-used `attacker` keypair declaration + its `beforeAll` init in
+`seal-upgrade.test.ts`, leaving `attacker.sign(...)` referencing an undefined binding → `ReferenceError`,
+breaking the daemon suite on `main`. Restored only `attacker` (the H1 malicious-directory attack key);
+`attackerHex` stays gone (genuinely unused).
+
+**Published:** cascade is **daemon + cli only** — the daemon ships to operators via `cli` (bundles
+`cello-daemon`); `connect` has no daemon dep and its source was unchanged (the MCP tool was already
+advertised and proxies generically), so it stays `0.0.47`. Bumped **daemon 0.0.7→0.0.8, cli 0.0.5→0.0.6**;
+tag **v0.0.50** pushed → CI publish to beta (`pnpm publish`, workspace:* resolved at publish; `cello login`
++ `status` smoke job). **Not promoted to @latest** (manual, needs Andre's go).
+
+**Also written:** `docs/planning/user-stories/m7/M7-E2E-TEST-PROCEDURE.md` — the canonical way a later agent
+proves M7 end-to-end using **only the real in-session MCP tools** (register → `cello_initiate_session` →
+`cello_send`/`cello_receive` → `cello_list_sessions` → `cello_get_transcript` → seal), with the explicit "no
+throwaway scripts / no side-identity" rule and the directory-DB cross-check.
