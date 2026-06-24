@@ -5309,3 +5309,72 @@ client 0.0.35, **daemon 0.0.6**, **cli 0.0.4**, connect 0.0.47, interfaces 0.0.3
 daemon/cli deprecated. Operator path confirmed live: `cello status` → `daemon: running,
 directory_signaling: connected, agent default registered`; MCP reconnected and `cello_status` round-trips
 from Claude Code. **What this unblocks: the actual peer-to-peer journeys against the live cluster (E2E part 3).**
+
+---
+
+## 2026-06-24 — E2E part 3: demo agent rehosted on M7 — WORKS END-TO-END (Stage 1, via relay)
+
+**Headline: the demo agent is live on M7.** A fresh agent on a laptop established a real session with the
+reworked demo agent on EC2 (`i-0ad3e7c22470f266e`) through the deployed cluster and ran the full 4-message
+sequence — chain: laptop → directory (FROST-signed assignment) → relay → demo on EC2 → responses back.
+Proof: `INITIATE ok, transportMode:"relay"` → send/RECV ×4 (Welcome → Msg2 → Msg3 → sign-off) → DONE.
+
+**Two-stage plan (Andre):** Stage 1 = make it work the M6 way (direct-dial-to-public-endpoint, relay as
+fallback) to PROVE the whole pipeline; Stage 2 = NAT-traversal dialer. This entry is Stage 1.
+
+**Architecture correction (important — I was wrong twice before getting here).** First I claimed the M7
+daemon "can't do real P2P." Wrong. The content path is built and proven: direct two-party send/receive over
+`/cello/content/1.0.0` (DOD-SPINE-6 ✅) + store-and-forward via the relay content-park (DOD-MSG-3 ✅). The
+ONLY genuinely-deferred piece is the production transport SELECTOR's NAT-traversal dialer
+(`CelloNodeTransportDialer`, never wired into `cello-daemon.ts`) — needed only when two peers can't reach
+each other directly. The demo has a public EIP, so it doesn't need it. Intended tiering (confirmed): direct
+P2P → hole-punch → store-and-forward (NOT a live relay tunnel — relay timeouts + low msg-size cap make it a
+bad primary path).
+
+**Demo agent rework (`demo/src/index.ts`, committed b0ed5f81).** The M6 demo spawned `cello-mcp` as the
+whole node; M7 `cello-mcp` is a shim to a daemon. Rewrote: assume a running daemon, `cello_start_agent` +
+`cello_use_agent`, new `cello_status` shape, replace the GONE `cello_await_connection_request`/
+`cello_accept_connection` with `cello_await_session` (auto-active) + per-session non-blocking `cello_receive`
+polling. `message-handler.ts` (the 4-message sequence) unchanged, 15/15 tests pass.
+
+**Daemon fix — public standing receiver (committed b1dd99f, daemon 0.0.7 / cli 0.0.5).**
+`ProductionSessionNodeFactory` hardcoded `/ip4/127.0.0.1/tcp/0` for EVERY node, so a publicly-hosted agent's
+standing receiver only listened on loopback → no external peer could dial in. Now the standing receiver
+honors `CELLO_LISTEN_ADDR` / `CELLO_ANNOUNCE_ADDRS` (M6 parity); ephemeral dial-out nodes stay loopback.
+
+**The cascade of issues found + fixed on the way to the live session — each a real gap:**
+- *Bug — no_signer.* The M6 demo identity (`12ccbfd5`) loaded its key as "registered" but had no usable
+  FROST signer: the M7 daemon reconstructs the signer from `agents/<name>/frost-share.json`, and the M6
+  share lived in `client.db` (never migrated). Re-registering does NOT fix it — the directory replies
+  `already_registered` and SKIPS the DKG (registration-manager.ts:159-184), so no fresh share is minted.
+  **Gap (noted, not yet designed): a returning user who loses local state can't recover — directory
+  remembers them, won't re-DKG, local share unrecoverable.**
+- *Bug — DEV tokens rejected.* The deployed directory uses `PgTokenValidator` (env dev) and rejects
+  `DEV-` tokens (`preauth.token.not_found`). The `already_registered` path skips token validation, which
+  masked this; a real DKG validates the token. → needed real `@CelloConnectStagingBot` pre-auth tokens
+  (Andre provided two: one for the demo, one for the test initiator).
+- *Bug — fire-and-forget share persist.* `persistFrostKeyShare` is `void` (registration-manager.ts:229);
+  restarting the daemon right after `cello register` kills it before the write settles → no
+  `frost-share.json`. Fix in the deploy procedure: register → WAIT → verify the file → only then proceed.
+- *Bug — relay_unavailable.* After today's directory deploy the relay must be restarted to re-register (it
+  has no reconnect logic — documented infra gap). Stopped the us-east-1 relay task; replacement
+  re-registered + `relay.manifest.updated`; session brokering worked.
+
+**Resolution = fresh identities.** The demo got a fresh key (CELLO binary format: magic `ce110e01` + ver
+`01` + 32-byte Ed25519 seed) → registered with a real token → full DKG → `frost-share.json` written →
+working signer. New demo pubkey **`bc94ead650acf8ed21747d9571ef0aa7fc9bfba5511dfeca13bb6cfa9fdc0b61`** (was
+`12ccbfd5…`). Systemd: a `cello-daemon` service (`CELLO_ENV=local`, public listen/announce on 4001) + the
+`cello-demo` service depending on it. SG port 4001 already open.
+
+**Honest caveats / next:**
+- Session went over **`transportMode:"relay"`**, NOT direct. The public-receiver fix makes the demo LISTEN
+  publicly, but it still ADVERTISES relay because `selectAdvertisedAddress` only picks the direct addr when
+  AutoNAT confirms dialability (transport-selector.ts:327-333) — and stub-mode AutoNAT doesn't. The pending
+  refinement: treat a configured `CELLO_ANNOUNCE_ADDRS` as authoritative dialability so a known static-public
+  host advertises its direct address. (Relay works for Stage 1; this is the direct-dial optimization.)
+- The demo's published **AgentID must be updated** to `bc94ead6…`.
+- Cleanup pending: `infra/STATE.md` (redeploy, new pubkey, relay restart), `demo/runbook.md` + `demo/CLAUDE.md`
+  rewritten for M7 (current versions document the M6 spawn-cello-mcp-as-node model), remove the throwaway
+  `demo/initiator-test.mjs`.
+- Stage 2 = the NAT-traversal dialer (`CelloNodeTransportDialer` wired into `cello-daemon.ts` + the
+  dialer↔session-node reconciliation noted in `daemon.ts` cello_initiate_session).
