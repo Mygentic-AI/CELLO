@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cello-protocol/connect": "0.0.12",
+    "@cello-protocol/cli": "^0.0.4",
+    "@cello-protocol/connect": "^0.0.47",
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
