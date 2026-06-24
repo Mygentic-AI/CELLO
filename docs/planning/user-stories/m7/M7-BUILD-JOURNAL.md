@@ -5249,3 +5249,63 @@ provider/role + secret stood up AND the `cello-e2e-tests-pipeline` (e2e suite) g
 phase itself. The REPOSPLIT stale duplicate packages in trustless-cello/packages/* will confuse AI
 coders and want deleting (Andre flagged — separate cleanup). trustless-cello directory/relay still pin
 their own `@cello-protocol/client` range — bump if they need 0.0.34 (unrelated to the daemon).
+
+---
+
+## 2026-06-24 — E2E phase, part 2: operator install → live, end-to-end (4 more bugs fixed)
+
+Took the published packages through a real operator install (`npm i -g @cello-protocol/cli @cello-protocol/connect`
+→ `cello login` → reconnect MCP). Four more bugs surfaced, all in the install/runtime path that source
+tests and the publish-integrity checks couldn't see. End state: **the system is live end-to-end** — a local
+daemon, installed from npm, connects to the deployed directory cluster, and Claude Code drives it through
+the MCP (`cello_status` round-trips `daemon: running, directory_signaling: connected`).
+
+**Bug 4 — crypto version skew → daemon crashed at startup.**
+- *Symptom:* `cello login` → `SyntaxError: ... does not provide an export named 'sealToRecipient'` from
+  `daemon/dist/daemon.js` importing `@cello-protocol/crypto`.
+- *Root cause:* crypto gained `content-seal` (`sealToRecipient`) on 2026-06-18 but was never bumped past
+  0.0.8 (last bumped 06-12). So npm's `crypto@0.0.8` was the stale pre-`content-seal` build, and
+  `daemon@0.0.4` pinned it. npm version ≠ local content — the cardinal sin.
+- *Fix:* full version cascade so npm == local with consistent pins — crypto 0.0.8→0.0.9, protocol-types
+  0.0.5→0.0.6, transport 0.0.5→0.0.6, client 0.0.34→0.0.35, daemon 0.0.4→0.0.5, cli 0.0.2→0.0.3,
+  connect 0.0.46→0.0.47 (workspace:* re-pins at publish). Verified: daemon@0.0.5 pins crypto@0.0.9 which
+  exports `sealToRecipient`.
+- *Rule:* change any `core/*` source → bump it AND every dependent. Now enforced by the CLAUDE.md
+  Publishing Invariants + the `/cello-publish` rewrite.
+
+**Bug 5 — daemon EPIPE-died the moment the cli exited.**
+- *Symptom:* `cello login` printed "Daemon started" but `cello status` a second later → `ECONNREFUSED` on
+  `~/.cello/daemon.sock`. The daemon started, accepted login's connection, then died.
+- *Root cause:* `connect-or-start.ts` spawned the daemon with `stdio: ["ignore", "pipe", "ignore"]` —
+  daemon stdout piped to the cli to read the `daemon.started` event. `detached`+`unref` were correct, but
+  the pipe wasn't closed; when the cli process exited, the read end closed, and the daemon's next log
+  write (`directory.signaling.connected`) hit a broken pipe → EPIPE → crash (no stdout error handler).
+- *Fix:* spawn the daemon with stdout/stderr → `~/.cello/daemon.log` (a file, never a pipe), `unref`
+  immediately, and detect readiness by polling the IPC socket instead of reading stdout. Bonus: durable
+  daemon log + log-tail on startup failure. Bumped daemon 0.0.5→0.0.6, cli 0.0.3→0.0.4. Verified locally
+  (daemon reachable 6s past cli exit) AND in CI (new login-smoke job, below).
+- *Rule:* never leave a detached child's stdio as a live pipe to a parent that will exit — redirect to a
+  file/devnull, or the next write EPIPE-kills the child.
+
+**Bug 6 — verify step false-failed on npm propagation lag.**
+- *Symptom:* a publish that actually succeeded failed CI: `verify` ran ~2s after publish and `npm view
+  @beta` still returned the pre-publish version (`daemon local=0.0.6 beta=0.0.5`) — and that skipped the
+  smoke job.
+- *Fix:* retry each package's `npm view` up to ~60s for read-after-write propagation.
+
+**Guard added — login-smoke (the bug-5 class).** The publish-integrity smoke (module-load) couldn't catch
+a daemon that loads fine but dies at runtime when the cli exits. Strengthened `smoke-tag` to clean-install
+the published `cli` + `connect`, run `cello login`, sleep through the directory-connect window, then assert
+`cello status` is reachable. Now green — bug 5 would be caught on publish, not by an operator.
+
+**Architecture question (resolved, no change).** The EPIPE bug prompted "are the cli and daemon too
+coupled?" Conclusion: the design is sound and matches intent — daemon = all logic (the node); cli and MCP
+are both thin clients over the IPC socket. The one asymmetry (only the cli launches the daemon; the MCP
+defers via a clear `daemon_not_running` → "run cello login" message) is a deliberate control-plane / data-
+plane split, and a good home for future operator commands. Andre's call: keep it.
+
+**Final published + latest-promoted set:** crypto 0.0.9, protocol-types 0.0.6, transport 0.0.6,
+client 0.0.35, **daemon 0.0.6**, **cli 0.0.4**, connect 0.0.47, interfaces 0.0.3. Empty 0.0.3/0.0.1
+daemon/cli deprecated. Operator path confirmed live: `cello status` → `daemon: running,
+directory_signaling: connected, agent default registered`; MCP reconnected and `cello_status` round-trips
+from Claude Code. **What this unblocks: the actual peer-to-peer journeys against the live cluster (E2E part 3).**
