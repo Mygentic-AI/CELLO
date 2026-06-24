@@ -2,9 +2,9 @@
 name: M7 Daemon Architecture & Ephemeral Session Transport
 type: milestone-writeup
 date: 2026-06-12
-updated: 2026-06-23
+updated: 2026-06-24
 milestone: M7
-status: substantive-build-complete (E2E + scheduled hardening remain)
+status: E2E-proven — published to npm + demo agent live end-to-end on the deployed cluster (Stage-1, via relay); direct-dial + NAT-traversal + doc/recovery hardening remain
 description: >
   Living writeup for M7. Each story appends a section when it closes.
   Format: what was delivered, bugs found and fixed, what this unblocks.
@@ -118,18 +118,55 @@ edge query derives one A↔B edge) + `j-upgrade-bilateral` (SEAL_UNILATERAL + up
 | SEAL-2: `conversation_seals` chain invalid | `seal_date` is a DATE; node-pg returns it as a LOCAL-midnight Date and `toISOString()` shifts it → insert vs verify serialize differently | Exclude `seal_date` from the chain + compute it as a UTC `YYYY-MM-DD` string (analytics correctness, TZ-independent) | DATE columns don't round-trip deterministically through the chain serializer; exclude or store as a UTC string |
 | DoD carried CORE-invariant statuses worse than reality | INV-4 (sender=counterparty) read "❓ was BROKEN 2026-06-11"; INV-3 read "park store ❌ not built"; both were actually built+tested | Verified the code + ran the tests, flipped INV-2/3/4 → 🟢 with citations | A 🟡/❓ status is a claim to re-verify against code before trusting; stale-pessimistic statuses hide completed work |
 
+## M7 E2E (2026-06-23/24) — published to npm, live operator path, demo agent end-to-end
+
+The substantive build was verified on localhost spines; this phase took it to the **deployed cluster
+and real npm packages**. Full archaeology in `M7-BUILD-JOURNAL.md` (entries "E2E part 1/2/3").
+
+**Directory push + publish (part 1/2).** Pushed both repos; the 3-region directory deploy ran clean
+after one stale directory unit-test fix (`seal_interrupted_ack` nonce). Publishing surfaced — and fixed —
+a cluster of latent packaging gaps, all the same shape (a piece built + tested but never wired into the
+shipped composition root): the M7 `daemon`/`cli` packages were missing from the CI publish list AND the
+root `tsconfig` build graph (so they published empty); `crypto` had gained `content-seal` without a version
+bump (stale on npm → the daemon crashed importing `sealToRecipient`); the daemon spawned with its stdout
+piped to the cli, so it EPIPE-crashed when the cli exited. **Final published + latest-promoted set:** crypto
+0.0.9, protocol-types 0.0.6, transport 0.0.6, client 0.0.35, daemon 0.0.7, cli 0.0.5, connect 0.0.47,
+interfaces 0.0.3. The publish pipeline now **self-defends** with three CI guards (Publish-completeness check,
+propagation-tolerant verify, and a `cello login`+`status` smoke test on the published artifacts).
+
+**Demo agent rehosted on M7 — WORKS END-TO-END (part 3, Stage 1).** A fresh agent on a laptop established a
+real session with the reworked demo agent on EC2 and ran the full 4-message sequence — chain: laptop →
+directory (FROST-signed assignment) → relay → demo on EC2 → responses. The M6 demo (which spawned
+`cello-mcp` as the whole node) was rewritten for the M7 shim+daemon model and the new receiver tool surface;
+a small daemon fix lets a publicly-hosted standing receiver bind/announce a routable address
+(`CELLO_LISTEN_ADDR`/`CELLO_ANNOUNCE_ADDRS`). The session went over **relay transport, not direct** — proving
+the whole vanilla pipeline (Stage 1); direct-dial-to-public-endpoint and NAT traversal are Stage 2.
+
+**Real gaps this phase exposed (each fixed or noted):** a returning agent that lost local state can't
+recover — the directory replies `already_registered` and skips the re-DKG, and the local FROST share isn't
+reconstructable (NOTED — needs design); the deployed directory's `PgTokenValidator` rejects `DEV-` tokens
+(real bot tokens required for a fresh DKG); `persistFrostKeyShare` is fire-and-forget (register → wait →
+verify before touching the daemon); the relay must be restarted to re-register after any directory redeploy.
+
 ## What M7 unblocks
 
-- **E2E of the whole system** (next): push trustless-cello (the ~25-30min 3-region directory deploy)
-  + publish `@cello-protocol/connect` (carries the whole session's daemon work — UP-1, SEAL-2,
-  keystone fix) + install + run the journeys against the deployed cluster.
-- **Beta**: identity + connect + converse + seal (unilateral & bilateral & upgrade) + durable
-  encrypted transcript + Sybil-defense relationship graph are all live-proven against the real
-  binaries.
+- **Live operator onboarding** is real: `npx @cello-protocol/connect` + `@cello-protocol/cli` → `cello login`
+  → register → converse, all against the deployed cluster, proven by the demo-agent round-trip.
+- **Beta**: identity + connect + converse + seal (unilateral & bilateral & upgrade) + durable encrypted
+  transcript + Sybil-defense relationship graph are live-proven against the real binaries AND the published
+  packages.
 
-## What remains (none core; not in the substantive build)
+## What remains
 
-- **E2E testing** against the deployed cluster (the next phase).
+- **Direct-dial-to-public-endpoint** (Stage 2 start): the demo currently advertises the relay because
+  `selectAdvertisedAddress` only picks the direct addr when AutoNAT confirms dialability, which stub-mode
+  doesn't. Treat a configured `CELLO_ANNOUNCE_ADDRS` as authoritative dialability for static-public hosts.
+- **NAT-traversal dialer** (Stage 2): wire `CelloNodeTransportDialer` into `cello-daemon.ts` + reconcile the
+  dialer's connection with the session node (the documented seam in `daemon.ts` `cello_initiate_session`).
+- **Returning-user recovery** — design the lost-local-share recovery path (directory says `already_registered`
+  but the agent can't sign); affects any reinstall.
+- **Demo cleanup** — update the published demo AgentID to `bc94ead6…`, rewrite `demo/runbook.md` +
+  `demo/CLAUDE.md` for M7, update `infra/STATE.md` (redeploy, relay restart), remove the throwaway test driver.
 - **Multi-node failover** (INV-1) — needs >1 node; the single-node spine harness can't model it → E2E.
 - **Relay-SIGNED sequence verification** (DOD-MSG-4 Finding 2) — needs the relay's signing identity
   plumbed to the daemon; named-deferred (RC-1) to the transport-security-audit hardening story.
