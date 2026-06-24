@@ -1,147 +1,140 @@
 ---
 name: cello-publish
-description: How to publish the cello-client npm packages. Use when bumping versions, publishing to beta, or promoting to latest. Enforces the correct commit ordering that prevents shipping incomplete code.
+description: How to publish the cello-client npm packages. Use when bumping versions, publishing to beta, or promoting to latest. Enforces the version cascade and the three-registration rule that prevent shipping empty or skewed packages.
 ---
 
-# Publishing @cello-protocol/connect
+# Publishing the @cello-protocol packages
 
-## The rule that must never be violated
+## What ships, and what an operator installs
 
-**The version bump commit and tag MUST be the very last thing on the branch — after every other code commit is in place.**
+cello-client publishes **seven** packages (plus `interfaces`, which originates in trustless-cello):
+`crypto`, `protocol-types`, `transport`, `client`, `daemon`, `cli`, `connect`.
 
-CI builds from the tag. Any commit pushed after the tag is ignored by the published package. This has caused broken publishes. Do not bump the version until you are certain no more code changes are needed.
+The architecture matters for publishing:
+- **`connect`** (`@cello-protocol/connect`) is a thin **MCP shim**. It creates no libp2p node; it proxies
+  to a running daemon over `~/.cello/daemon.sock`.
+- **`daemon`** (`@cello-protocol/daemon`) is the heavy local node — crypto, FROST, transport, SQLite. This
+  is where most protocol logic lives post-M7.
+- **`cli`** (`@cello-protocol/cli`) provides the `cello` binary; `cello login` spawns the daemon. The cli
+  depends on the daemon.
 
-## How CI publishes — critical to understand before tagging
+So an operator install is **`@cello-protocol/connect` + `@cello-protocol/cli`** (the cli pulls the daemon
+transitively). Both must be on `latest` for the default install path to work. Installing connect alone gives
+an MCP that fails with `daemon_not_running`.
 
-The GitHub Actions workflow has a pre-publish gate: it checks that npm already has the sub-packages (`@cello-protocol/client`, etc.) at the version numbers in the local `package.json` before allowing the connect publish to proceed.
+## Invariants — violating any of these ships a broken package (all happened 2026-06-23)
 
-**This gate ONLY passes if the sub-packages were previously published.** Sub-packages get their versions bumped and published in the same CI run. If you push the version bump commit and the tag simultaneously:
+**Source-level tests pass on a broken publish** — vitest runs TS source, not the built `dist/`. The only
+checks that catch publish breakage are the CI Build "Publish-completeness" step and the `smoke-tag` job
+(clean-installs the published packages and loads their module graphs). Trust those, not green unit tests.
 
-1. Main-branch CI runs (no publish step — tags only)
-2. Tag CI runs in parallel → pre-publish gate checks npm → npm still has OLD version → gate FAILS → publish step does NOT run
+1. **npm version ≡ published content.** If you change ANY `core/*` source, bump that package's version and
+   republish — even if no dependent changed. Same version + different content = npm keeps the old build
+   forever, and every consumer pinning it silently gets stale code. This broke `daemon`: `crypto` gained
+   `sealToRecipient` without a bump, so published `crypto@0.0.8` lacked it and the daemon crashed at startup.
 
-**Result: the tag is burned, a corrupt 0-byte binary is published, and you need to bump again.**
+2. **Bump the whole cascade.** Inter-package deps inside cello-client are `workspace:*` and resolve to the
+   current local version at publish time. Bump crypto → every package that depends on crypto must ALSO be
+   bumped + republished to re-pin the fresh crypto, or their published copies keep pinning the old one.
+   Dependency order: crypto, protocol-types → transport → client, daemon → cli, connect.
 
-**The correct sequence:**
+3. **A new publishable `core/*` package needs THREE registrations:** root `tsconfig.json` `references` (so
+   `tsc --build` compiles it → non-empty `dist/`), the CI publish list in `ci.yml`, and the verify/smoke
+   loops. Miss tsconfig → it publishes empty (`package.json` only). Miss the publish list → it never ships.
+   The Build "Publish-completeness" step enforces the first two.
 
-1. Push the version bump commit to main FIRST (no tag yet)
-2. Wait for the main-branch CI to pass (it runs tests/build/lint but does NOT publish — confirm it's green)
-3. Confirm npm has the new versions: `npm view @cello-protocol/client@beta version`
-4. Only THEN push the tag
+## Never run `npm publish`
 
-Wait — re-read step 2. Main-branch CI does NOT publish. Sub-packages are not published by main-branch CI. They are published only by the tag CI. So the pre-publish gate's intent is: "client was published in a prior tag run, now we're publishing connect." This means client and connect need **separate tags** if they're bumped together.
+CI publishes via `pnpm publish` on a `v*` git tag. `npm publish` ships raw `workspace:*` specifiers → broken
+package → version burned forever.
 
-**Actually the correct flow is:** The tag CI publishes ALL packages including client. The pre-publish gate is checking that the packages match what's already on beta — which would only be true if client was previously published separately. This gate is designed for the case where only connect changes (client version stays the same as what's already on npm).
+## Procedure
 
-**When BOTH client and connect change (the common case), the pre-publish gate will always fail.** This is a CI workflow design bug. The workaround: push the tag, let it fail the gate, but confirm the packages WERE published (the publish step runs despite the gate failure with `|| true`). Then verify the binary.
-
-## Step 1: Confirm all code commits are in place
-
-Before touching any version number:
+### 1. Determine what changed and compute the cascade
 
 ```bash
-git log --oneline main | head -10
+# Which core packages have source changes since their last publish / last version bump?
+git -C cello-client log --oneline -- core/<pkg>/src | head
+```
+List every package whose source changed, then add every package that (transitively) depends on those.
+That full set gets bumped. When in doubt, bump all seven — version churn is free in alpha, and it guarantees
+npm == local source with consistent pins.
+
+### 2. Bump versions (in cello-client)
+
+Increment `"version"` in each affected `core/*/package.json`. Inter-package `workspace:*` deps need no edit —
+pnpm resolves them at publish. (`@cello-protocol/interfaces` is the one pinned, non-workspace dep — leave it
+unless interfaces itself changed.)
+
+```bash
+pnpm install            # update lockfile
 ```
 
-Verify every commit you intend to ship is already on main and there are no outstanding code changes pending. If in doubt, make the code commits first.
+### 3. Commit — version bump LAST
 
-## Step 2: Bump versions
-
-In `cello-client`:
-
-1. Increment `core/client/package.json` → `"version"` (`0.0.X` → `0.0.X+1`)
-2. Increment `core/adapter-claude-code/package.json` → `"version"` (`0.0.Y` → `0.0.Y+1`)
-3. Run `pnpm install` to update the lockfile
-4. Commit:
+The version-bump commit (and the tag) must be the last thing on the branch. CI builds from the tag; the
+tagged commit's tree must contain every code change AND the bumped versions.
 
 ```bash
-git add core/client/package.json core/adapter-claude-code/package.json pnpm-lock.yaml
-git commit -m "chore: version bump — client X.X.X→X.X.X+1, connect Y.Y.Y→Y.Y.Y+1"
-```
-
-## Step 3: Tag and push
-
-```bash
-git tag v{connect-version}
+git add core/*/package.json pnpm-lock.yaml
+git commit -m "chore: version cascade — <summary>"
 git push origin main
+```
+
+### 4. Tag and push
+
+```bash
+git tag v{connect-version}      # the connect version is the conventional tag name
 git push origin v{connect-version}
 ```
 
-The tag CI will likely FAIL at the pre-publish gate (because it checks npm before publishing client). This is expected. The publish step still runs regardless (it uses `|| true`). Wait for the run to complete.
+The tag CI runs: Build (tests + the Publish-completeness guard) → `publish-tag` (publishes every package in
+dependency order to the `beta` dist-tag; already-published versions are skipped via `|| true`) → the verify
+step → `smoke-tag` (clean-installs `cli@beta` + `connect@beta` and loads the daemon/client module graphs).
+A green `smoke-tag` is the real success signal.
 
-## Step 4: Verify the binary — not the CI status
+> The old cross-repo e2e-gate (`e2e-gate-tag`) is **disabled** (`if: false`) — it required an OIDC role/secret
+> that were never stood up and a `cello-e2e-tests-pipeline` that isn't green. Re-enable only after both exist.
 
-**CI failure at the gate does NOT mean the packages weren't published.** Always verify the actual binary.
-
-Check npm versions:
-```bash
-npm view @cello-protocol/client@beta version
-npm view @cello-protocol/connect@beta version
-```
-
-Then verify the fix code is in the published client package (NOT the connect binary — the fix lives in client):
-```bash
-cd /tmp
-npm pack @cello-protocol/client@{new-client-version} 2>/dev/null
-tar xzf cello-protocol-client-{new-client-version}.tgz
-grep "your.new.string" package/dist/mcp-server.js
-```
-
-Pick a string unique to your change. If grep returns no matches: the code is not in the package. Investigate and republish with the next version number.
-
-Also confirm connect's dependency points to the new client version:
-```bash
-npm view @cello-protocol/connect@{new-connect-version} dependencies
-# Must show "@cello-protocol/client": "{new-client-version}", NEVER "workspace:*"
-```
-
-## Step 5: Update trustless-cello dependency
-
-In `trustless-cello/packages/directory/package.json`, update:
-
-```json
-"@cello-protocol/client": "^0.0.{new-client-version}"
-```
-
-Then:
+### 5. Verify the published artifacts — not the CI status
 
 ```bash
-pnpm install
-pnpm run typecheck
-git add packages/directory/package.json pnpm-lock.yaml
-git commit -m "chore: update @cello-protocol/client to 0.0.{N}"
-git push origin main
+# every package: beta == local
+for p in crypto protocol-types transport client daemon cli connect; do
+  echo "$p: $(npm view @cello-protocol/$p@beta version)"
+done
+# the package that changed actually contains your change (grep its dist, not connect's —
+# connect is a shim; the logic is usually in daemon or client):
+cd /tmp && npm pack @cello-protocol/daemon@{ver} && tar xzf cello-protocol-daemon-{ver}.tgz
+grep "your.new.symbol" package/dist/*.js
+# cross-pins are real versions, never workspace:*:
+npm view @cello-protocol/cli@{ver} dependencies      # @cello-protocol/daemon must be the NEW daemon ver
+npm view @cello-protocol/connect@{ver} dependencies  # client/crypto/transport must be the NEW versions
 ```
 
-## Step 6: Install on demo agent (EC2 via SSM)
+### 6. Promote to `latest` — REQUIRED (operator-run)
+
+`beta` is what CI publishes; the default install path (`npx @cello-protocol/connect`, `npm i -g ...@latest`)
+uses `latest`. Promotion is manual and human-run. **The two that matter are `connect` and `cli`** (installed
+by name); the rest are transitive (pinned) but promote for consistency.
 
 ```bash
-aws ssm start-session --target {instance-id} --document-name AWS-StartInteractiveSSMSession --region us-east-1
-# Then in SSM session:
-cd /opt/cello-demo && npm install @cello-protocol/connect@{new-connect-version}
-sudo systemctl restart cello-demo
+npm dist-tag add @cello-protocol/connect@{ver} latest
+npm dist-tag add @cello-protocol/cli@{ver} latest
+# + daemon, client, crypto, transport, protocol-types at their new versions
 ```
 
-## Step 7: Promote to latest — REQUIRED before MCP reconnects
+If a version was published empty by mistake, `npm deprecate @cello-protocol/<pkg>@<bad> "..."` it after
+publishing the fixed one, and re-point `latest`.
 
-**Always promote to `latest` after verifying the binary.** This is not optional. Claude Code and npx without a pinned version both resolve `latest` — if `latest` still points to an old version, reconnect will silently serve stale code.
+### 7. Reconnect
 
-**Tell the human operator to run this command:**
+Operator reinstalls (`npm i -g @cello-protocol/cli@latest @cello-protocol/connect@latest`), runs
+`cello login` to start the daemon, then reconnects the MCP (`/mcp` or restart Claude Code). `cello status`
+confirms the daemon is up.
 
-```bash
-npm dist-tag add @cello-protocol/connect@{version} latest
-```
+## Verify against the binary, never against memory
 
-Do not proceed past this step until they confirm they have run it.
-
-Then ask them to verify:
-```bash
-npm view @cello-protocol/connect@latest version
-# Must match the version you just published
-```
-
-**Then ask the human operator to reconnect the MCP server** — restart Claude Code or disconnect/reconnect via `/mcp`. The new version does not take effect until they do.
-
-## Common mistake: checking the connect binary instead of the client package
-
-The `dist/bin/cello-mcp.js` in the connect tarball is the compiled `cello-mcp.ts` entrypoint. It imports `@cello-protocol/client` at runtime — it does NOT contain the client code inline. Most fixes (mcp-server.ts, signaling-manager.ts, session-manager.ts) live in client. Always grep the client package dist, not the connect binary.
+After every publish, the truth is the tarball on npm — `npm pack` it and grep `dist/`. Never assume a change
+shipped because the commit is on main; a missing tsconfig reference, a missing publish line, or an unbumped
+version will silently drop it.
