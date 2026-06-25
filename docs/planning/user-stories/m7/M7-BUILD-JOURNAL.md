@@ -5551,3 +5551,58 @@ encrypted), never weakened; no wire/directory/relay change.
 decode a legacy 37-byte CELLO key file to its seed (migration only). The DB-loaded seed builds an
 `InMemoryKeyProvider` (already sign-only, already exported). `FileKeyProvider` file I/O is no longer
 used by the daemon path.
+
+## 2026-06-25 — PERSIST-002 Units 1-3 landed (cello-client, on main; Andre pushes)
+
+Built in `cello-client` foreground, red-first, each unit reviewed before the next moved. All gates
+green per unit (test → lint → typecheck → build). Commits on `main`: `c6cda3b` (U1), `9f62b7d` (U1
+review fixes), `62b8106` (U2), `2a79e46` (U3).
+
+**Unit 1 — SQLCipher engine + key custody + fail-closed (AC-001/010/011, SI-002).** New
+`sqlcipher-db.ts`: a varargs→array `DaemonDatabase` adapter (so SessionNodeManager/RetryQueue/
+NonceDedupStore call sites are unchanged — only `#db`'s type and the one open site change),
+`openEncryptedDatabase` (PRAGMA key → verify sqlite_master → WAL-after-verify), `resolveDbKey` (the
+single plaintext 0600 key file, DEC-2; fail-closed matrix — key-absent+DB-present throws
+`db_encryption_key_mismatch`, never mints a key over an existing DB). Deleted `transcript-cipher.ts`
+(AC-010): transcript + retry_queue blobs are plaintext within the whole-DB-encrypted store. Migrated
+the direct-`new DatabaseSync(dbPath)` tests to a keyed `openTestDb` helper.
+
+*Reviews (3 parallel, read-only):* **fallback-finder** — no HIGH; SI-002 fail-closed genuinely upheld
+across every branch it tried to break. **test-attacker** — 2 BLOCKING hollow-test findings, both
+valid: the wrong-key test bypassed `initialize()` (a silent-recreate regression would pass), and
+"all ciphertext" passed against a reversible scramble. Fixed: the wrong-key test now drives the real
+`initialize()` path AND asserts the DB is left byte-identical (no recreate/plaintext); AC-001 now
+proves genuine SQLCipher (cipher_version + entropy > 7 bits/byte + schema identifiers absent from the
+raw file & WAL). **code-reviewer** — 1 HIGH that proved a FALSE POSITIVE on byte inspection: the
+`SQLITE_MAGIC` literal looked like a trailing space to both the reviewer and the Read tool but was an
+embedded `0x00` NUL (functionally correct). Replaced it anyway with an explicit
+`Buffer.concat([...,0x00])` — an embedded NUL in source is a real footgun (it fooled two tools).
+Other fixes: `isPlaintextSqliteFile` reads exactly 16 bytes (was slurping the whole DB); tmp-key
+unlink on write/fsync failure + key dir 0700 + dir fsync; PRAGMA key moved outside the
+message-bearing catch (SI-001 belt-and-braces); WAL-failure now logs `persist.db.wal.unavailable`.
+
+**Unit 2 — agents table + DB-backed identity persistence (AC-002, SI-001/003).** New
+`db-identity-store.ts`: the `agents` table (one row per agent — K_local seed, ML-DSA, FROST share,
+registration state, agent↔user link as columns), `DbIdentityStore` (createAgent / hasAgent /
+listAgents — for U4's loader + create path; no silent overwrite), and `DbRegistrationPersistence`
+implementing the SAME `DaemonRegistrationPersistence` interface the RegistrationManager + ceremony
+share-reconstruction already consume, backed by single-row UPSERTs. Persist against a missing row
+throws `identity_persist_failed` (AC-012, never a silent no-op). Tests prove byte-for-byte secret
+round-trips under real SQLCipher across a fresh handle (durable commit) and that no secret hits a log.
+
+**Unit 3 — await the identity persist (SI-003, fixes the fire-and-forget).** `registration-manager.ts`:
+all four `void persist…` sites are now AWAITED via `#persistAll`; a failure returns
+`identity_persist_failed` so registration never reports success with an uncommitted identity (the
+can't-sign zombie). In-memory registered state is cached only AFTER a durable commit (no phantom
+"registered" on a failed persist); the share persist moved out of the DKG try so its failure is
+`identity_persist_failed`, not `dkg_failed`. Red-first: a rejecting persistence now fails registration.
+
+**Next — Unit 4 (the big wiring, folds in the Unit-6 migration).** Switching the loader to read from
+the `agents` table and deleting the legacy `~/.cello/key` + per-agent key-file fallback (AC-007) is
+inseparable from the one-time migration (AC-006): the migration is what lets existing file-based
+agents — and every daemon-startup test that seeds `agents/<name>/key` — keep working after the switch
+(it imports key files + the four registration JSONs + a plaintext `sessions.db` into the encrypted DB
+at init, then deletes them). Plus the composition-root reorder (DB opens before `loadAgents`), the
+register handler + ceremony injection moving from `agentDir` to `DbRegistrationPersistence`, and the
+explicit `cello create-agent` path (AC-004). Only tests that call `loadAgents()` directly or assert
+key-file existence need updating; daemon-startup tests transition via the migration.
