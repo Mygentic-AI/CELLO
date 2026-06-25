@@ -15,18 +15,31 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, rmSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
 import {
   startSpineCluster,
   startDaemon,
   provisionAgent,
   connectMcp,
   cello,
+  CELLO_CLIENT_ROOT,
   type SpineCluster,
   type Proc,
   type McpConn,
 } from "./live-harness.js";
+
+// PERSIST-002: the daemon DB is now SQLCipher-encrypted, so the test opens it through the SAME
+// keyed adapter the daemon uses (dynamic-imported from the local build the harness spawns). It reads
+// `<dbPath>.key` itself. Minimal surface: prepare/all/get/close.
+type KeyedStmt = { all(...p: unknown[]): unknown[]; get(...p: unknown[]): unknown };
+type KeyedDb = { prepare(sql: string): KeyedStmt; close(): void };
+async function openEncryptedDb(dbPath: string): Promise<KeyedDb> {
+  const mod = (await import(
+    pathToFileURL(join(CELLO_CLIENT_ROOT, "core/daemon/dist/sqlcipher-db.js")).href
+  )) as { openEncryptedDatabaseAtPath(p: string): KeyedDb };
+  return mod.openEncryptedDatabaseAtPath(dbPath);
+}
 import { contentHashHex } from "./content-seal-fixture.js";
 
 let cluster: SpineCluster;
@@ -115,7 +128,8 @@ describe("J-PERSIST — durable encrypted transcript survives restart (DOD-LOG-1
     // We read session_tree_leaves straight from the daemon's on-disk DB and cross-check by hash —
     // so an impl that keyed the transcript by a loose counter (decoupled from the Merkle chain)
     // fails here, not just a sorted-order check. ──
-    const db = new DatabaseSync(join(dirB, "sessions.db"), { readOnly: true });
+    // PERSIST-002: the DB is SQLCipher-encrypted, so open it through the daemon's own keyed adapter.
+    const db = await openEncryptedDb(join(dirB, "sessions.db"));
     try {
       const leafRows = db
         .prepare(
@@ -135,6 +149,18 @@ describe("J-PERSIST — durable encrypted transcript survives restart (DOD-LOG-1
           `transcript sequence for "${m.text.slice(0, 12)}…" must equal its COMMITTED leaf index (chain join)`,
         ).toBe(committedLeafIndex);
       }
+
+      // ── DOD-STORE-1 (PERSIST-002): B's IDENTITY reloaded from the encrypted store after the restart
+      // — its K_local seed + the FROST signing share are durably in the `agents` row (the share is
+      // what lets B sign; the can't-sign-zombie fix). B already operated post-restart above (the whole
+      // transcript read works), which only succeeds if the daemon loaded B's identity from the DB. ──
+      const agentRow = db
+        .prepare("SELECT k_local_pubkey, k_local_seed, frost_signing_share FROM agents WHERE agent_name = ?")
+        .get("agentB") as { k_local_pubkey: string; k_local_seed: Uint8Array; frost_signing_share: Uint8Array | null };
+      expect(agentRow, "agentB must be a row in the encrypted agents table after restart").toBeDefined();
+      expect(agentRow.k_local_pubkey).toBe(pubB);
+      expect(agentRow.k_local_seed?.length, "K_local seed must be the 32-byte Ed25519 seed").toBe(32);
+      expect(agentRow.frost_signing_share, "the FROST share must be durably persisted (signs after restart)").not.toBeNull();
     } finally {
       db.close();
     }
@@ -145,17 +171,24 @@ describe("J-PERSIST — durable encrypted transcript survives restart (DOD-LOG-1
       expect(cluster.directory.output, "directory must never see plaintext").not.toContain(needle);
     }
 
-    // ── Encrypted at rest: the plaintext needles are NOT present in the daemon's on-disk DB file. ──
-    const dbFiles = readdirSync(dirB).filter((f) => f.endsWith(".db") || f.endsWith(".sqlite") || f === "cello.db");
-    // Find the actual DB file(s) under dirB (the daemon names it cello-daemon.db or similar).
-    const allFiles = readdirSync(dirB);
-    const candidates = dbFiles.length > 0 ? dbFiles : allFiles.filter((f) => /\.db$|sqlite/i.test(f));
-    expect(candidates.length, `expected a daemon DB file under ${dirB}; saw ${allFiles.join(", ")}`).toBeGreaterThan(0);
-    for (const f of candidates) {
+    // ── DOD-STORE-1: the WHOLE daemon DB is SQLCipher-encrypted at rest — no plaintext needles AND no
+    // SQLite header magic (the header itself is ciphertext) — and NO flat-file state exists under
+    // CELLO_DIR (identity migrated into the DB): the only files are the DB(+wal/shm/key), lock, log,
+    // sock. No agents/<name>/key, no *.json, no transcript-key. ──
+    const allFiles = readdirSync(dirB, { recursive: true }).map((f) => String(f));
+    const dbBytes = readFileSync(join(dirB, "sessions.db"));
+    expect(dbBytes.subarray(0, 15).toString("latin1"), "the at-rest DB header must be ciphertext, not 'SQLite format 3'").not.toBe("SQLite format 3");
+    for (const f of allFiles) {
+      if (!/sessions\.db/.test(f)) continue;
       const raw = readFileSync(join(dirB, f)).toString("latin1");
       for (const needle of [M1, M2, M3]) {
         expect(raw, `plaintext "${needle}" must NOT appear in the at-rest DB file ${f}`).not.toContain(needle);
       }
     }
+    // No flat-file identity state survived the migration.
+    const offenders = allFiles.filter(
+      (f) => /(^|\/)key$/.test(f) || f.endsWith(".json") || f.endsWith(".transcript-key"),
+    );
+    expect(offenders, `no flat-file state may exist under CELLO_DIR (DOD-STORE-1): ${offenders.join(", ")}`).toEqual([]);
   }, 150_000);
 });
