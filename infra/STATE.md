@@ -335,6 +335,8 @@ All RDS instances have `wal_level = logical` and `rds.logical_replication = 1` (
 
 Setup with: `./infra/setup-replication.sh dev`
 
+**2026-06-25 — INCIDENT + MANUAL REPAIR (all 6 links rebuilt, streaming).** A directory data wipe done with piecemeal single-table `TRUNCATE`s wedged all 6 subscriptions: `pubtruncate=true` replicated the truncates, and subscribers could not apply a single-table truncate of an FK-referenced parent (`cannot truncate a table referenced in a foreign key constraint`). Apply workers crash-looped (apply_error_count → thousands), `received_lsn` froze, and publisher slots retained ~2.7 GB WAL (`wal_status: extended`). **Repaired manually** (NOT via setup-replication.sh, which is idempotent-skip and never drops a sub/slot): per link, dropped the wedged subscription, dropped the orphaned slot (released WAL), created a fresh slot, and re-created the subscription `WITH (create_slot=false, copy_data=false, origin=none, enabled=true)`. All 6 subscriptions enabled + receiving, all 6 slots active, WAL backlog cleared. **Caveat:** `copy_data=false` means rows written during the outage did NOT back-fill — `agent_profiles`/`user_accounts`/`registrations`/`pre_authorization_tokens` (1 each, Ms_Chelly) exist on us-east-1 only; eu/ap have 0. New writes replicate normally. **Lesson (do not repeat):** never run piecemeal TRUNCATEs on published tables under live replication — disable subscriptions first, or `TRUNCATE … CASCADE` all FK-related tables in one statement.
+
 ### staging — not deployed
 
 ### production — not deployed
