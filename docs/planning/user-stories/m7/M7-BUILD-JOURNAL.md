@@ -5606,3 +5606,49 @@ at init, then deletes them). Plus the composition-root reorder (DB opens before 
 register handler + ceremony injection moving from `agentDir` to `DbRegistrationPersistence`, and the
 explicit `cello create-agent` path (AC-004). Only tests that call `loadAgents()` directly or assert
 key-file existence need updating; daemon-startup tests transition via the migration.
+
+## 2026-06-25 — PERSIST-002 COMPLETE: DOD-STORE-1 proven live (SQLCipher single encrypted store)
+
+CELLO-M7-PERSIST-002 built end-to-end in cello-client across 7 units, each red-first and reviewed
+before the next moved. **All client identity + state now lives in ONE SQLCipher-encrypted DB; no
+flat-file state.** Commits on cello-client main: `c6cda3b`→`3868d71` (10 commits, unpushed — Andre
+pushes). Daemon suite **420 green**; full cross-package suite green; lint + typecheck + build clean.
+
+**The 7 units.** U1 — SQLCipher engine (`sqlcipher-db.ts`: varargs `DaemonDatabase` adapter,
+`openEncryptedDatabase` PRAGMA-key→verify→WAL, `resolveDbKey` single 0600 key file, fail-closed; the
+per-column transcript cipher deleted). U2 — `agents` table + `DbIdentityStore`/`DbRegistrationPersistence`
+(K_local seed + FROST share + ML-DSA + registration + link as encrypted columns). U3 — awaited the four
+fire-and-forget persists (`identity_persist_failed`; register-success ⇒ durable share — the can't-sign
+zombie is gone). U4 — DB-backed loader + composition reorder (DB opens before `loadAgents`) + ceremony/seal
+share-load injection + `cello create-agent` runtime-add (AC-004) + delete the legacy `~/.cello/key`
+fallback + the one-time migration (flat files + plaintext sessions.db → encrypted DB, decrypting old
+column blobs, atomic build-and-swap with `.pre-sqlcipher.bak`, in-place for already-encrypted DBs,
+corrupt-key skip+quarantine, idempotent, resume-on-crash). U5 — `DbManifestVersionStore` (manifest_state
+table) replaces the file store; anti-rollback floor migrated MAX-preserving. U7 — write-allow-list guard
+test + the `persist.*` observability taxonomy + distinct error codes. U8 — J-PERSIST live extension + the
+version cascade.
+
+**Reviews (3 read-only agents per major unit; every finding fixed).** Notable catches: test-attacker
+forced the wrong-key fail-closed test through the real `initialize()` + AC-001 to prove GENUINE SQLCipher
+(cipher_version + entropy + schema-strings-absent, defeating a reversible-scramble hollow impl), and the
+create-agent/identity tests to prove the STORED SEED derives the returned pubkey. fallback-finder caught
+two HIGHs: the migration was storing an undecryptable transcript blob as ciphertext-masquerading-as-
+plaintext (now skipped+logged) and the manifest anti-rollback floor was silently dropped across the
+file→DB store swap (now migrated MAX-preserving — without this, an upgraded operator accepts a downgraded
+manifest for one cycle). code-reviewer flagged a FALSE-POSITIVE HIGH (the `SQLITE_MAGIC` literal looked
+like a trailing space but was an embedded `0x00` NUL — functionally correct; replaced anyway as a footgun
+that fooled two tools), the migration in-place-vs-swap data-loss path, and the partial-commit resume.
+
+**LIVE PROOF (j-persist.spine, real cello-directory+relay+daemon+mcp, 32.6s, GREEN):** A↔B register
+(real DKG) + exchange 3 messages through the deployed-style cluster → KILL+restart B's daemon on the same
+CELLO_DIR → B reloads its identity from the encrypted store (k_local_pubkey matches, 32-byte seed +
+non-null FROST share in the `agents` row) and reads the full transcript in order with NO re-register; the
+raw DB header is ciphertext (not "SQLite format 3"); NO flat-file state (`key`/`*.json`/transcript-key)
+remains under CELLO_DIR. The chain-join cross-check opens the encrypted DB via the daemon's own keyed
+adapter. The MIGRATION of a pre-story plaintext DB is proven by in-process unit tests (not the live run).
+
+**Pending — operator close (Andre-gated, AC-014, NOT done autonomously):** the version cascade is
+committed (`3868d71`: all 7 packages bumped — connect 0.0.48). Andre tags `v0.0.48` + pushes → CI
+publishes to beta + `smoke-tag`; then per /cello-publish verify the daemon dist contains the SQLCipher
+path and the cli/connect cross-pins are real versions, and promote `latest`. Publishing is the one
+outward action left; everything else (build, review, live proof) is done.

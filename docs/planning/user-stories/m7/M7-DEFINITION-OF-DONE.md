@@ -793,12 +793,26 @@ Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-res
   path (today nothing creates `agents/<name>/key` — both register and start_agent require it to
   pre-exist); and DELETES the legacy `~/.cello/key` silent fallback (`agent-loader.ts:55-66`).
   Migrates existing operators' flat files into the encrypted DB atomically.
-  *(**CELLO-M7-PERSIST-002**)* — ❌ NOT BUILT (story YAML written 2026-06-25). Closes, in one
-  pass: the at-rest exposure of identity material (K_local/share/ML-DSA secret are PLAINTEXT
-  files today, only 0600-protected), the share-loss bug, and the onboarding gap. Verified
-  current state (file:line) in the story Context; this contradicts the design (m7-architecture
-  §13: "all client-side persistent state lives in ~/.cello/daemon.db (SQLCipher … key derived
-  from K_local)"), which the daemon migration silently regressed.
+  *(**CELLO-M7-PERSIST-002**)* — ✅ **PROVEN LIVE** (J-PERSIST spine, 2026-06-25; `cello-done-auditor`
+  EARNED). Built in cello-client across 7 units, each red-first + reviewed (code-reviewer +
+  test-attacker + fallback-finder); commits c6cda3b→1a68cf1 on cello-client main. The daemon DB is
+  whole-file SQLCipher (@signalapp/sqlcipher, prebuilt) — engine swap at `session-node-manager.ts`
+  via a varargs `DaemonDatabase` adapter; the `agents` table holds K_local seed + FROST share +
+  ML-DSA + registration + agent↔user link as BLOB/columns; `manifest_state` holds the anti-rollback
+  floor; the per-column transcript cipher is deleted. Fail-closed on encryption (no plaintext
+  fallback); the FROST-share persist is AWAITED (register-success ⇒ durable share — the can't-sign
+  zombie is gone); `cello create-agent` is the explicit fresh-identity path; the legacy `~/.cello/key`
+  fallback is deleted (one loading path); a one-time migration imports pre-story flat files + a
+  plaintext sessions.db (decrypting old column blobs, MAX-preserving the manifest floor) atomically
+  with a `.pre-sqlcipher.bak` backup, and a write-allow-list guard test fails CI on any new flat-file
+  write. LIVE (j-persist.spine): A↔B register (real DKG) + exchange 3 messages through the real
+  directory+relay → KILL+restart B → B reloads its identity from the encrypted store (K_local seed +
+  non-null FROST share in the `agents` row) and reads the full transcript with NO re-register; the raw
+  DB header is ciphertext (not "SQLite format 3"); NO flat-file state (no `key`, no `*.json`, no
+  transcript-key) remains under CELLO_DIR. Closed the at-rest exposure of identity material, the
+  share-loss bug, and the onboarding gap; restored the m7-architecture §13 design the daemon migration
+  had regressed. **Pending operator close (Andre-gated): the cello-client version-bump cascade +
+  publish to beta + smoke-tag + `latest` promotion (AC-014) — outward action, not run autonomously.**
 
 ### Local loopback (J-LOOPBACK)
 
