@@ -5722,3 +5722,38 @@ about the keystone correctly reflecting "I have an agent now," which the operato
 **Cascade:** daemon source changes → bump daemon + cli (connect has no daemon dep). Enforcer: a live
 spine test — fresh daemon (no agents) → `cello_create_agent` → assert `directory_signaling: connected`
 within a few seconds, no restart. Red on current code (stays reconnecting), green after the election.
+
+## 2026-06-25 — CELLO-M7-ONBOARD-001 SHIPPED (keystone runtime election on latest)
+
+Built + reviewed + proven live + published. The fresh-install onboarding gap is closed: `cello login`
+(empty dir) → `cello create-agent <name>` now elects that first agent as the keystone primary, wires
+its ceremony AND seal-completion listeners, and the running reconnect loop connects to the directory in
+~seconds — NO logout/login restart. Commits: cello-client `6053545` (election) + `d3715dc` (review fix)
++ `58f74ed` (cascade); trustless-cello `0dd4f745` (DoD/design note) + `d01f36fc` (J-ONBOARD test).
+
+**Review caught a real HIGH (both code-reviewer + fallback-finder):** my first cut extracted only the
+ceremony/seal/offer HANDLERS into `wireKeystonePrimary` but left the three seal-COMPLETION listeners
+(`session_sealed` / `seal_unilateral_confirmed` / `seal_unilateral_notification`) in a separate
+startup-only block — so an elected primary would connect + run a seal ceremony but the `session_sealed`
+frame would arrive on the keystone with no listener → `cello_close_session` hangs, seal silently never
+finalizes (and the per-agent path doesn't cover it: getAgentSignaling reuses the keystone for the
+primary). Fixed by moving all three listeners INTO `wireKeystonePrimary`, so startup + runtime election
+wire identically; the elected primary is now indistinguishable from a startup-loaded one (whose seal
+round-trip j-spine/j-loopback prove). One accepted LOW documented (cross-restart primary re-derivation
+for a smaller second agent created before first connect — benign, self-correcting).
+
+**Live (j-onboard.spine, real directory+relay+daemon):** fresh daemon (0 agents) →
+`directory_signaling: reconnecting` → `cello create-agent alice` → `connected` in ~2s, no restart;
+alice present.
+
+**Published + promoted to latest:** tag `v0.0.52` → CI publish to beta + `smoke-tag` GREEN. Cascade is
+daemon + cli only (connect has no daemon dep). Binary-verified: `daemon@0.0.10` dist contains the
+keystone-election code; `cli@0.0.8` pins `daemon@0.0.10` (real semver). `latest`: cli 0.0.8, daemon
+0.0.10, connect 0.0.48. The operator install (`cli@latest` + `connect@latest`) now delivers it.
+
+**Found during a clean-room published-install test** (which also re-confirmed PERSIST-002 live: the
+published daemon writes ONLY sessions.db(+wal/shm/key)+lock+log+sock under CELLO_DIR). Full reset done
+for testing: directory wiped (all 3 regions — 0 agents/users/tokens, kept relay+schema), local ~/.cello
+removed, old global install + MCP entry cleared. Open follow-on: the ops-agent (staging bot) may hold
+its own user record out of sync with the wiped directory — verify a fresh token request treats the user
+as new before the next end-to-end registration test.
