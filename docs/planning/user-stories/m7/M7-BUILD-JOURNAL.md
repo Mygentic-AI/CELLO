@@ -5423,3 +5423,59 @@ tag **v0.0.50** pushed → CI publish to beta (`pnpm publish`, workspace:* resol
 proves M7 end-to-end using **only the real in-session MCP tools** (register → `cello_initiate_session` →
 `cello_send`/`cello_receive` → `cello_list_sessions` → `cello_get_transcript` → seal), with the explicit "no
 throwaway scripts / no side-identity" rule and the directory-DB cross-check.
+
+## 2026-06-25 — Persistence gap found → CELLO-M7-PERSIST-002 written (implementation next)
+
+Investigating a broken operator agent (the local `default`, pubkey `35313056…`, that loaded but
+could not sign) surfaced a real M7 persistence regression. Diagnosed to ground truth, file:line,
+no conjecture — corrected three wrong early guesses along the way (the operator had to push back;
+see the rule below).
+
+**Verified current state (cello-client main, file:line):**
+- The daemon DB is plain **node:sqlite** (`session-node-manager.ts:381` `new DatabaseSync`), NO
+  whole-DB encryption, no sqlcipher dep in `core/daemon/package.json`. Only two columns
+  (transcript.blob, retry_queue.content_blob) are AES-256-GCM enveloped, with a key in a
+  **plaintext 0600 sibling file** `sessions.db.transcript-key` (`transcript-cipher.ts:36-48`).
+- The crown-jewel secrets are **plaintext flat files**: K_local key (`ed25519.ts:101`),
+  `frost-share.json` (`registration-persistence.ts:185`, signingShare: hex), `ml-dsa-keypair.json`
+  (:146), `registration-state.json` (:160), `agent-user-link.json` (:212), `manifest-version.json`
+  (`manifest-version-store-file.ts:45`).
+- This CONTRADICTS the design (`m7-architecture-2026-06-12.md §13`: one `~/.cello/daemon.db`
+  SQLCipher store, key derived from K_local, `agents` table holds the FROST share). The daemon
+  migration silently regressed it — at-rest encryption became "a separate future concern"
+  (`registration-persistence.ts:6-16`).
+
+**Why the operator's agent broke (root cause, not the symptoms I first guessed):** his `default`
+is a June-7 (pre-M7) identity; its FROST share was in the M6 `client.db` (SQLCipher) and was
+NEVER migrated to M7's `frost-share.json`, which the daemon reads — and M7 never reads `client.db`.
+A June-24 `cello register` hit `already_registered` (`registration-manager.ts:270-283`) → SKIPPED
+the DKG → wrote a registration record but no share. M7 DKG itself works fine (the demo `bc94ead6`
++ a fresh June-24 registration `33977a38`, both `agent_profiles` rows, prove it). So: a one-time
+migration miss for one carried-over identity, NOT a systemic DKG failure.
+
+**Three latent bugs identified (all fold into PERSIST-002):** (1) at-rest plaintext key material;
+(2) fire-and-forget share persist (`registration-manager.ts:229` `void persistFrostKeyShare`) —
+un-awaited, lost on a restart-after-DKG, unrecoverable because re-register skips the DKG; (3) NO
+agent-key creation path (both register and start_agent require `agents/<name>/key` to pre-exist;
+nothing creates it). Plus the legacy `~/.cello/key` silent fallback (`agent-loader.ts:55-66`).
+
+**Decisions settled with Andre (DEC-1..DEC-4, recorded in the story):** SQLCipher not envelope
+(envelope can't encrypt the columns the DB must query/index/key on → relational metadata leaks;
+SQLCipher's compile objection is moot — `@signalapp/sqlcipher@3.3.5` ships prebuilt); plaintext
+key file at launch (headless daemon, no native app, no OS keystore — at-rest crypto with a
+co-located key is cosmetic except vs backups/cold-theft; only the operator-passphrase RAM-only
+key gives real protection without a keystore, and it breaks unattended restart); passphrase opt-in
+DOCUMENTED not coded; everything in the DB with exactly two necessary exceptions (the DB's own key
+file; operational lock/log/socket).
+
+**Written:** `CELLO-M7-PERSIST-002.yaml` (14 ACs, 3 SIs, 2 degraded clauses, observability;
+engine swap + `agents`/`manifest_state` tables + move all six state items in + one-time migration
++ write-allow-list guard + delete the redundant column cipher + await the share write + add
+create-agent + delete the legacy fallback). DoD: added **DOD-STORE-1** (❌ NOT BUILT) under Tier 6,
+flagged DOD-LOG-1 SUPERSEDED (envelope→SQLCipher), extended the J-PERSIST harness journey, and
+added a 2026-06-25 addendum so the "build complete" banner does not hide the gap. Commit b601674d.
+
+**Rule reinforced (cost the operator several rounds):** verify in code/disk BEFORE presenting any
+diagnosis or raising alarm; never narrate a hypothesis as fact; reconcile against what already
+works (the demo signing live disproved "M7 storage is broken"). What this unblocks: implementing
+PERSIST-002 — the single encrypted store.
