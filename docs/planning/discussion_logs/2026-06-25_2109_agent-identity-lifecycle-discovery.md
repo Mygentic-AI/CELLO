@@ -59,8 +59,9 @@ interact with.
 (`k_local` seed) never leaves the operator's machine. Two public values matter: `k_local_pubkey`
 (the base key) and **`primary_pubkey`** (the FROST group key from the registration DKG). The
 `primary_pubkey` is the **load-bearing public identity** — when a counterparty "trusts Ms_Chelly,"
-they trust this key, because a signature under it requires *both* the client's share *and* a directory
-node's share. Neither side can forge it alone; that split is the whole CELLO guarantee. The directory
+they trust this key, because a signature under it requires *both* the client's share *and* a
+**threshold of the directory nodes' shares** (T-of-N across sovereign nodes — see the threshold-model
+note in §5). Neither side can forge it alone; that split is the whole CELLO guarantee. The directory
 stores the binding `account ↔ k_local_pubkey ↔ primary_pubkey ↔ agent_id` but **no human name**. The
 key is shareable and verifiable, but it is not in any browsable list — you resolve an agent you
 already hold a key for, you do not search for one.
@@ -133,22 +134,36 @@ code, contact link, or a friendly handle that resolves to it) — but the payloa
 
 - **DECIDED:** removal is **revocation, not erasure** — capability dies, accountability survives.
 
-- **The three-position lever.** The mechanism falls out of the 2-of-2 FROST split: the directory node
-  is a *mandatory co-signer*, so it can control the agent's ability to sign without touching the
-  operator's device. This is what makes the lever enforceable *even when the operator's own device is
-  the thing compromised* (a thief with the laptop and the client share still cannot sign, because the
-  node refuses).
-  - **Pause** — the node **withholds** its co-signing. The agent cannot sign while paused; the share
-    is intact; **reversible**. The lightweight "Not Me — pause."
-  - **Retire** — orderly **drain** of in-flight sessions (stop accepting new ones, let existing ones
-    finish sealing), then the node **destroys** its share + tombstone (`reason=voluntary`).
-  - **Burn** — the node **instantly destroys** its share + tombstone (`reason=compromise`). The
-    emergency "Not Me — kill."
+- **Threshold model (grounding).** The intended design is **T-of-N threshold signing across multiple
+  sovereign directory nodes** — no single node is mandatory, and the threshold is specifically meant to
+  survive node outages (the sovereign-node invariant in CLAUDE.md: security *and* redundancy). The
+  current code's **2-of-2** (client + one directory node) is a **known, unfixed stopgap, not the design**
+  (see [[2026-06-03_1200_frost-dkg-single-directory-gap|FROST DKG Single-Directory Gap]]). This section
+  designs for T-of-N and treats 2-of-2 as a transient bug.
 
-- **What "remove" means at the directory level**, decomposed: (1) destroy or withhold the server FROST
-  share → kills or freezes the ability to sign; (2) append a **signed tombstone** → peers reject *new*
-  interactions (the directory is append-only and hash-chained, so this is a tombstone, never a row
-  delete); (3) **preserve all history**.
+- **The three-position lever.** Under T-of-N no single node is mandatory, so the lever is **not** "one
+  node refuses to co-sign." It is an **account-authorized, replicated revocation flag** (a
+  suspended/tombstone fact) that **every sovereign node independently honors** by refusing to contribute
+  its share. Since a signature needs a threshold of nodes and the honest ones all refuse, **no threshold
+  forms** — the agent cannot sign. The property we care about still holds: this works **even when the
+  operator's own device is the compromise**, because the block is **server-side across the federation,
+  independent of the client share** (a thief with the laptop and the client share still cannot assemble a
+  threshold).
+  - **Pause** — set the replicated revocation flag; every node refuses its share; **reversible** (clear
+    the flag); share material left intact. The lightweight "Not Me — pause."
+  - **Retire** — orderly **drain** of in-flight sessions (stop accepting new ones, let existing ones
+    finish sealing), then set the flag *and* **destroy the server-side share material across the
+    federation** + tombstone (`reason=voluntary`).
+  - **Burn** — instantly set the flag *and* **destroy the share material federation-wide** + tombstone
+    (`reason=compromise`). The emergency "Not Me — kill."
+  - The grounding moves from "single mandatory co-signer" (the 2-of-2 artifact) to **"a T-of-N
+    federation honoring a replicated revocation."**
+
+- **What "remove" means at the directory level**, decomposed: (1) set a **replicated revocation flag**
+  that every node honors (pause) and/or **destroy the server-side share material federation-wide**
+  (retire/burn) → freezes or kills the ability to assemble a threshold signature; (2) append a **signed
+  tombstone** → peers reject *new* interactions (the directory is append-only and hash-chained, so this
+  is a tombstone, never a row delete); (3) **preserve all history**.
 
 - **The accountability constraint** (the load-bearing requirement Andre raised). You must not be able
   to "delete to hide guilt" — do something malicious, then delete the agent so an ephemeral inference
@@ -167,15 +182,17 @@ code, contact link, or a friendly handle that resolves to it) — but the payloa
   accountability.
 
 - **Execution path** (reconciles with the M8 "no central control plane"): the account **authorizes**
-  (portal auth) → the daemon/node **executes** (the daemon holds/exports the client share; the node
-  withholds or destroys its share) → the directory **records** the identity-fact change (epoch or
-  tombstone). No central control plane is needed; it is an identity-layer authorization triggering a
-  local action that updates directory identity facts.
+  (portal auth) → **every honest sovereign node executes** by honoring the replicated revocation flag
+  (refusing its share), and burn additionally destroys share material federation-wide → the directory
+  **records** the identity-fact change (epoch or tombstone, replicated). No central control plane is
+  needed; it is an identity-layer authorization that every node independently enforces.
 
 - **OPEN:** is the voluntary **retire** reversible during the drain, or one-way once requested?
   (Pause is reversible by definition; this is specifically about the drain-then-destroy path.)
 - **OPEN (M8-owned scope):** which positions ship in the M8 Agents-list emergency lever vs later
-  (M15?). Pause and burn are cheap and node-enforced; the orderly drain is the heavier one.
+  (M15?). **Scope note (T-of-N):** even **pause** is *not* free — it needs the replicated-flag plumbing
+  (a revocation-flag table + a check in the ceremony/co-signing path + replication), so it is a
+  contained addition, not a property that falls out of the threshold structure for nothing.
 
 ---
 
@@ -351,6 +368,7 @@ sources below.
 ## Related Documents
 
 - [[2026-04-15_1100_key-rotation-design|Key Rotation Design]] — §4 builds on and updates this; adds account-authorized re-key, the stable `agent_id`, and the key-epoch chain.
+- [[2026-06-03_1200_frost-dkg-single-directory-gap|FROST DKG Single-Directory Gap]] — the 2-of-2 stopgap that §5's threshold-model note designs past; the intended T-of-N threshold across sovereign nodes is its remediation.
 - [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — §6 extends this with the petname/introductions → oblivious-handle → public-bio layering and the prior-art synthesis.
 - [[2026-05-20_0354_multi-agent-account-architecture|Single-Account, Multi-Agent Architecture]] — the account-as-anchor basis for §2–§3.
 - [[2026-05-21_1456_identity-as-governance-foundation|Identity as the Foundation of Governance]] — the identity foundations this model rests on.
