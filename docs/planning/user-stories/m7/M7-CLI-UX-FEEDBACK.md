@@ -56,13 +56,40 @@ decide deliberately whether names should be case-insensitive. Validation is
 **#4 — `cello create-agent` success gives no next-step and dumps a misleading pubkey.**
 Today returns `{ ok, name, pubkey }`. "I thought I was creating an agent but nothing seems to have
 happened." Fixes:
-- Say what happened + what's next: "Created agent 'X'. It's local-only and not yet registered. Next:
-  get a one-time token from @CelloConnectStagingBot, then `cello register X <token>`."
+- **REQUIRED (confirmed by Andre 2026-06-25): `create-agent` success MUST state that the agent now
+  needs to be registered, and give the exact command.** Creating an agent is only step one — it is
+  local-only and unreachable until registered. The success output must not leave the user wondering
+  what happened. Exact shape:
+  "Created agent 'X'. It is local-only and **not yet registered** — other agents cannot reach it yet.
+  Next: get a one-time pre-authorization token from the CELLO Operations Agent (@CelloConnectStagingBot
+  on Telegram), then run `cello register X <token>`." This applies to BOTH the CLI text output and the
+  daemon `cello_create_agent` response `guidance` field (the MCP surface), so the human and the driving
+  LLM both get the register instruction.
 - The shown `pubkey` is the **K_local** key — NOT the key others use to reach you (that's the FROST
   `primary_pubkey` you get AFTER registering). Showing it unlabeled actively misleads. Either omit it
   from the headline or label it ("your local identity key — not yet reachable; register to get your
   contact key").
 - On FAILURE, the error should state the name limitations (ties to #3).
+
+**#5 — `cello register` pre-auth-token warning is both mistimed and probably unnecessary.**
+Today, passing the token as an arg prints: "Warning: passing the pre-auth token as a command-line
+argument exposes it in the process list. Prefer the CELLO_PREAUTH_TOKEN environment variable." Two
+problems (Andre, 2026-06-25):
+- **It's too late to be actionable.** The warning is printed *after* the token has already been put on
+  the command line and consumed — the supposed exposure already happened. A warning the user can only
+  read after the fact, with nothing to do about it, is noise. If a warning is justified at all it must
+  appear *before* the exposure (e.g. in `register`'s usage / on the success path of the bot handoff),
+  not as a postscript to a completed registration.
+- **The threat is largely moot for a single-use token.** The pre-auth token is one-time-use and is
+  burned the moment `register` succeeds. By the time anyone could read it from the process list or
+  shell history, it is already spent and worthless. The process-list hygiene rule is cargo-culted from
+  *long-lived* secrets (K_local seed, FROST share, API keys) and doesn't transfer to a burn-on-use
+  ticket. Decision needed: **drop the warning entirely** (defensible — the token is single-use), or if
+  kept, reduce it to a one-line accurate note and move it *before* use. Andre's lean: it's probably
+  not worth warning about at all.
+- Implementation note: the warning is emitted in `core/cli/src/commands.ts` `register()` (~L85-106).
+  Whatever is decided, the message must not imply the operator did something dangerous when they did
+  not — that erodes trust in CELLO's other (real) security warnings.
 
 **Scope note:** these live in `core/cli/src/commands.ts` (login/logout/status/register/create-agent
 CLI output) and the daemon handlers' `guidance` strings (`core/daemon/src/daemon.ts`) which the MCP
