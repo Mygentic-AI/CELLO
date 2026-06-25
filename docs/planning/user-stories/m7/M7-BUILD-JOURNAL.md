@@ -5684,3 +5684,41 @@ was npm read-after-write lag, not a miss). The default operator install
 (`npm i -g @cello-protocol/cli@latest @cello-protocol/connect@latest` → `cello login`) now delivers the
 SQLCipher single-encrypted-store daemon. (Tag `v0.0.51` is the next monotonic counter; v0.0.48 already
 existed from a prior cycle, so the tag name ≠ connect version — the tag is only the CI trigger.)
+
+## 2026-06-25 — CELLO-M7-ONBOARD-001 design note (keystone runtime election) — before code
+
+Found during a clean-room published-package install test: fresh install → `cello login` → `cello
+create-agent alice` → `cello status` shows `directory_signaling: reconnecting` and stays there;
+only `cello logout && cello login` connects it (then `directory.signaling.connected` with alice's
+pubkey). This is the M2 keystone gap the PERSIST-002 reviews parked, now confirmed live on the real
+binary. (Bonus: the same install confirmed PERSIST-002 end-to-end — the published daemon@0.0.9 loads
+@signalapp/sqlcipher, opens an encrypted DB, and writes ONLY sessions.db(+wal/shm/key)+lock+log+sock
+under CELLO_DIR — the DOD-STORE-1 write-allow-list, live.)
+
+**Falsification / mechanism (verified, no guessing):** `getAuthIdentity()` (daemon.ts:482) reads the
+`primaryAgent` variable on each call and returns null when it's undefined. `primaryAgent` is a `const`
+(daemon.ts:481) = the first agent loaded AT STARTUP (empty on a fresh install). The keystone
+`SignalingManager` auto-runs an unbounded reconnect loop from its constructor (signaling-manager.ts:288),
+calling `this._connect()` per attempt → `createSignalingConnect({getAuthIdentity})` → `getAuthIdentity()`
+fresh each attempt. So the loop keeps getting null → reconnecting forever. `cello_create_agent` pushes
+to `loadedAgents` + `keyProviders` but NEVER updates `primaryAgent` — so the keystone never sees the new
+identity. The keystone-bound ceremony/seal/offer handlers (daemon.ts:684-710) are also wired once at
+startup `if (primaryAgent)` and skipped on a fresh install.
+
+**Fix (daemon-only, minimal):** make `primaryAgent` a `let`; extract the keystone handler wiring
+(684-710) into `wireKeystonePrimary(agent)`; in `cello_create_agent`, when there was no primary
+(`!primaryAgent`), set `primaryAgent = the new LoadedAgent` and call `wireKeystonePrimary`. The
+already-running reconnect loop then reads the new identity via `getAuthIdentity` on its next attempt and
+connects — no restart, no transport change. Backoff is exponential from 1s, so on a typical
+login→create-agent (seconds apart) the connect lands within a few seconds; a `reconnectNow()` kick is a
+possible future refinement but not needed (and would widen the cascade to transport).
+
+**Why per-agent registration isn't the same thing (honest scope):** register uses `getAgentSignaling`
+(a dedicated per-agent stream that always has the agent's identity), so it can connect independently of
+the keystone — the keystone is the daemon's directory DOOR + the primary-initiate path. This fix is
+about the keystone correctly reflecting "I have an agent now," which the operator sees as
+`directory_signaling: connected` and which the primary-initiate/ceremony path needs.
+
+**Cascade:** daemon source changes → bump daemon + cli (connect has no daemon dep). Enforcer: a live
+spine test — fresh daemon (no agents) → `cello_create_agent` → assert `directory_signaling: connected`
+within a few seconds, no restart. Red on current code (stays reconnecting), green after the election.

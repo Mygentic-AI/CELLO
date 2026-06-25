@@ -826,6 +826,21 @@ Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-res
   had regressed. **Pending operator close (Andre-gated): the cello-client version-bump cascade +
   publish to beta + smoke-tag + `latest` promotion (AC-014) — outward action, not run autonomously.**
 
+- **DOD-ONBOARD-1 — Fresh-install onboarding connects to the directory after the first
+  `create-agent`, with NO restart.** On a brand-new install (`cello login` with an empty
+  `agents` table), the daemon's keystone (directory-facing signaling) has no identity to authenticate
+  with, so `directory_signaling` is `reconnecting` — correct. But `cello create-agent <name>` adds the
+  agent to the in-memory loaded set WITHOUT updating `primaryAgent` (captured once at startup as a
+  `const`), so the keystone never elects it and `directory_signaling` stays `reconnecting` until a
+  `cello logout && cello login`. A new operator would create an agent, then hit a stuck directory
+  (and the confusing reconnecting status) before they could register — exactly the kind of stale/needs-a-restart
+  gap that masks the real flow. Fix: when `cello_create_agent` creates the FIRST agent (none was
+  primary), elect it as the keystone `primaryAgent` and wire its session/seal/offer ceremony handlers
+  on the keystone stream — the already-running reconnect loop then authenticates with the new identity
+  and connects on its next attempt, no restart. *(CELLO-M7-ONBOARD-001 — keystone runtime election)* —
+  proven live (a fresh daemon with zero agents → `cello_create_agent` → `directory_signaling: connected`
+  within seconds, no logout/login). This is the M2 keystone follow-on that the PERSIST-002 reviews parked.
+
 ### Local loopback (J-LOOPBACK)
 
 - **DOD-LOOP-1 — Two agents converse on ONE daemon.** Two of the operator's own K_locals
