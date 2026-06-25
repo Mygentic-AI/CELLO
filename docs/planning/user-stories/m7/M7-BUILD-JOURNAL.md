@@ -5652,3 +5652,20 @@ committed (`3868d71`: all 7 packages bumped — connect 0.0.48). Andre tags `v0.
 publishes to beta + `smoke-tag`; then per /cello-publish verify the daemon dist contains the SQLCipher
 path and the cli/connect cross-pins are real versions, and promote `latest`. Publishing is the one
 outward action left; everything else (build, review, live proof) is done.
+
+### done-auditor verdict on the DOD-STORE-1 flip — OVERSTATED → split applied (honest tagging)
+
+Ran `cello-done-auditor` on the ✅ flip (procedure §3a item 7). Verdict: **OVERSTATED** (3 earned /
+4 overstated). The j-persist.spine live run genuinely proves the HEADLINE — single SQLCipher store
+(raw DB ciphertext at rest), no flat-file state (greenfield), and identity (K_local) reloads from the
+store post-restart with the agent online + the FROST-share BLOB present, no re-register. But four
+sub-claims the prose tacked onto the ✅ are NOT exercised by the live run and are 🟡 unit-green:
+(1) functional FROST *signing* after restart — the run asserts share PRESENCE, not a produced
+signature; (2) the AC-005/SI-003 immediate-kill-after-register race; (3) the one-time migration
+(greenfield only); (4) fail-closed on a wrong key. I tried to lift #1 by sealing the session after B's
+restart, but the restart reconciles B's session to `interrupted`, so a clean bilateral FROST seal on
+it isn't the flow — proving functional FROST signing post-restart needs a NEW session (a heavier
+journey addition). Applied the auditor's recommended split to the DoD line rather than overstate. The
+four sub-claims are covered by the in-process unit suite (migration, fail-closed, signer
+reconstruction, awaited-persist) — "done" as unit+in-process green, just not live-✅. A follow-on
+journey (seed a pre-story layout → migrate → seal a fresh post-restart session) is the path to full ✅.

@@ -793,8 +793,20 @@ Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-res
   path (today nothing creates `agents/<name>/key` — both register and start_agent require it to
   pre-exist); and DELETES the legacy `~/.cello/key` silent fallback (`agent-loader.ts:55-66`).
   Migrates existing operators' flat files into the encrypted DB atomically.
-  *(**CELLO-M7-PERSIST-002**)* — ✅ **PROVEN LIVE** (J-PERSIST spine, 2026-06-25; `cello-done-auditor`
-  EARNED). Built in cello-client across 7 units, each red-first + reviewed (code-reviewer +
+  *(**CELLO-M7-PERSIST-002**)* — ✅ **PROVEN LIVE (core)** + 🟡 **unit-green (4 sub-claims)** — split per
+  `cello-done-auditor` verdict OVERSTATED, applied 2026-06-25 (3 earned / 4 overstated). ✅ LIVE on the
+  binary (j-persist.spine): the single SQLCipher-encrypted store (raw DB header is ciphertext, no
+  plaintext at rest), NO flat-file state under CELLO_DIR (greenfield onboard), and identity (K_local)
+  RELOADS from the store post-restart with the agent online + the FROST-share BLOB present, NO
+  re-register. 🟡 UNIT-GREEN ONLY (NOT exercised by the live run — proven by in-process tests):
+  (1) functional FROST *signing* after restart (AC-003 — the live run asserts share PRESENCE, not a
+  produced signature; a fresh bilateral seal post-restart needs a new session — the restart interrupts
+  the existing one); (2) the AC-005/SI-003 immediate-kill-after-register durability race (the live kill
+  happens after a full exchange, not right after register); (3) the one-time MIGRATION of a pre-story
+  plaintext DB / flat files (AC-006/DB-002 — the live test is greenfield); (4) fail-closed on a
+  wrong/missing key (AC-011/SI-002). A follow-on live journey seeding a pre-story layout + sealing a
+  fresh post-restart session would lift these four to ✅. Built in cello-client across 7 units, each
+  red-first + reviewed (code-reviewer +
   test-attacker + fallback-finder); commits c6cda3b→1a68cf1 on cello-client main. The daemon DB is
   whole-file SQLCipher (@signalapp/sqlcipher, prebuilt) — engine swap at `session-node-manager.ts`
   via a varargs `DaemonDatabase` adapter; the `agents` table holds K_local seed + FROST share +
