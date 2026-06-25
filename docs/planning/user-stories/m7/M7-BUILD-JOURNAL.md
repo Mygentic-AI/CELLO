@@ -5479,3 +5479,75 @@ added a 2026-06-25 addendum so the "build complete" banner does not hide the gap
 diagnosis or raising alarm; never narrate a hypothesis as fact; reconcile against what already
 works (the demo signing live disproved "M7 storage is broken"). What this unblocks: implementing
 PERSIST-002 — the single encrypted store.
+
+## 2026-06-25 — PERSIST-002 design note (SPARC P/A, §6) — before code
+
+DOD-STORE-1 is design-significant, so this is the §6 design note: the approach, the
+producer/consumer chains, the seam, and the SIs — written before any code. Verified against
+cello-client `main` (file:line). Build is unit-by-unit, red-first, reviewed per unit; all in
+`cello-client` on `main` (foreground, single thread; Andre pushes).
+
+**The seam: one DB-open site, one identity-load seam.** The daemon has exactly ONE
+`new DatabaseSync` (`session-node-manager.ts:381`); retry-queue + nonce-dedup receive that
+handle. So the engine swap is one site. Identity material is loaded through ONE seam too —
+`DaemonRegistrationPersistence`, today constructed per-agent from an `agentDir`
+(`session-ceremony.ts:105/336/401`, `daemon.ts:1259`) and reading `frost-share.json` etc. Move
+the BACKING from files to an `agents` DB row and inject a DB-backed persistence; the interface
+shape is unchanged, so the ceremony/seal call sites change only their construction
+(`agentDir` → an injected `DaemonRegistrationPersistence`).
+
+**Engine adapter (Unit 1).** node:sqlite uses varargs (`stmt.run(a,b,c)`); `@signalapp/sqlcipher`
+(prebuilt, 6 platforms, already a workspace dep of `core/client`) uses array params
+(`stmt.run([a,b,c])`). A thin `DaemonDatabase` adapter exposes a varargs surface that BOTH
+node:sqlite's `DatabaseSync` structurally satisfies AND the SQLCipher wrapper implements, so all
+existing call sites compile unchanged — only `#db`'s type (`DatabaseSync`→`DaemonDatabase`) and
+the open site change. Open pattern is the proven M6 one (`sqlcipher-client-store.ts`): `new
+Database(path)` → `PRAGMA key="x'<hex>'"` → verify via `SELECT count(*) FROM sqlite_master` →
+`journal_mode=WAL` → migrations. Whole-DB SQLCipher supersedes the column cipher, so
+`transcript-cipher.ts` and `retry_queue`/`transcript` blob enc/dec are deleted (AC-010); blobs
+store plaintext (page-encrypted by SQLCipher).
+
+**Key custody (DEC-2/DEC-4).** The SQLCipher key is a standalone random 32-byte 0600 file at
+`<celloDir>/sessions.db.key` — NOT derived from K_local (chicken-and-egg: K_local now lives IN the
+DB). It REPLACES the `sessions.db.transcript-key` file (we repurpose, we don't add a key).
+Fail-closed (SI-002/AC-011): key-missing + DB-missing → generate + create encrypted; key-missing +
+DB-present → `db_encryption_key_mismatch` (never overwrite); key-present + no decrypt →
+`db_encryption_key_mismatch`. No plaintext fallback anywhere.
+
+**The `agents` row (Unit 2) — producer/consumer.** One row per agent: `agent_name` PK,
+`k_local_seed` BLOB, `k_local_pubkey`, `state`, the ML-DSA triplet, the FROST share columns
+(epoch/primary/identifier/share/threshold/participants/commitments/verifyingShares/method), the
+registration-state columns, the agent↔user link, timestamps. Producers: create-agent (seed +
+state='created'), registration (UPDATE with ml-dsa/share/reg-state, awaited). Consumers: the agent
+loader (enumerate → seed → `InMemoryKeyProvider`), the ceremony/seal signer reconstruction
+(`loadActiveFrostKeyShare`). `manifest_state` is a singleton row.
+
+**SI-003 — fix the fire-and-forget (Unit 3).** `registration-manager.ts` has FOUR `void
+persist...` sites (176/180, 229, 287/291, 316/323). Change to `await`; on throw return
+`identity_persist_failed` so register FAILS rather than reports success with an uncommitted share.
+The share write at step 5b is awaited before success → register-success implies a durable share
+(the can't-sign-zombie is eliminated). Each write is a single-row UPSERT (atomic).
+
+**Composition-root reorder.** Today `loadAgents` (daemon.ts:391) runs BEFORE
+`sessionNodeManager.initialize()` (719). The agents now live in the DB, so the DB must open
+(and the one-time migration must run) FIRST, then `loadAgents` reads the `agents` table. The
+migration (Unit 6) imports flat-file identity + decrypts old column blobs into the new encrypted
+DB, verifies, backs up + swaps, deletes flat files; idempotent (an already-encrypted DB — detected
+by the absence of the `SQLite format 3\0` magic in the raw header — skips it).
+
+**Agent creation (Unit 4, AC-004).** New `cello_create_agent` daemon handler + `cello create-agent`
+CLI: generate a fresh K_local seed, INSERT the `agents` row (state='created'), wire it into the
+in-memory maps at runtime (no restart). Explicit only — `cello_start_agent` never auto-creates on a
+typo. Delete the legacy `~/.cello/key` fallback and the per-agent `key`-file read (AC-007); one
+loading path.
+
+**SIs this must satisfy:** SI-001 (no identity secret on disk outside the encrypted DB except the
+one key file — proven by the AC-009 write-allow-list guard + AC-001 raw-ciphertext + AC-002
+file-absence); SI-002 (fail closed on encryption — no plaintext store/fallback ever); SI-003
+(register-success ⇒ durable committed share). DOD-INV-3 is strengthened (more local state
+encrypted), never weakened; no wire/directory/relay change.
+
+**Crypto touch (minimal).** `core/crypto`: add seed helpers — generate a fresh 32-byte seed, and
+decode a legacy 37-byte CELLO key file to its seed (migration only). The DB-loaded seed builds an
+`InMemoryKeyProvider` (already sign-only, already exported). `FileKeyProvider` file I/O is no longer
+used by the daemon path.
