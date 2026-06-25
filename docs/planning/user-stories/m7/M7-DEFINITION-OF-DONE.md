@@ -764,13 +764,41 @@ Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-res
   closed: `retry_queue.content_blob` is now encrypted with the same key. LOWs tracked (RC-1, in
   the build journal): the transcript key sits beside the DB (protects against `.db`-only
   exfiltration, not full-CELLO_DIR read), non-atomic leaf+row write under I/O failure, and the
-  inherited DOD-MSG-5 repeated-identical-message dedup. **DOD-LOG-2/3** (dispute + abuse-report
+  inherited DOD-MSG-5 repeated-identical-message dedup. **SUPERSEDED 2026-06-25 (DOD-STORE-1 /
+  CELLO-M7-PERSIST-002):** the "envelope+node:sqlite not SQLCipher" decision and the dedicated
+  transcript key are REVERSED to whole-DB SQLCipher; the key-beside-the-DB LOW and the broader
+  plaintext-key-material exposure (K_local/share/ML-DSA as plaintext files) are addressed there.
+  This line's transcript table + `cello_get_transcript` read surface STAY — only the encryption
+  mechanism beneath them changes. **DOD-LOG-2/3** (dispute + abuse-report
   export bundles) build on this and remain ⬜ NOT STORIED.
 - **DOD-LOG-2 — Dispute-export bundle.** A verifiable bundle (transcript + certificate +
   hash chain) the operator can export for dispute resolution. *(J-PERSIST follow-on; design
   in the data-custody log)* — ⬜ NOT STORIED (builds on DOD-LOG-1; story when J-PERSIST is built).
 - **DOD-LOG-3 — Abuse-report bundle.** A bundle for reporting malicious counterparty
   behaviour. *(J-PERSIST follow-on)* — ⬜ NOT STORIED (builds on DOD-LOG-1).
+- **DOD-STORE-1 — All client state in ONE SQLCipher-encrypted store; NO flat-file state.**
+  Every persisted item — the K_local identity key, the FROST signing share, the ML-DSA
+  keypair, the registration state, the agent↔user link, the manifest version, plus
+  sessions/transcript/hash-chain — lives in one SQLCipher database (whole-file AES-256 at
+  rest). The daemon writes NO client state to flat files; the only files it writes are the
+  SQLCipher DB, its key file (the one plaintext key, by chicken-and-egg necessity), and the
+  operational lock/log/socket — enforced by a write-allow-list guard test. SUPERSEDES
+  DOD-LOG-1's envelope+node:sqlite mechanism with whole-DB SQLCipher (decision DEC-1,
+  2026-06-25 — envelope cannot encrypt the columns the DB must query/index/key on, so the
+  relational metadata leaks; SQLCipher's compile objection is moot, @signalapp/sqlcipher ships
+  prebuilt). Also fixes the fire-and-forget FROST-share write (`registration-manager.ts:229`
+  `void persistFrostKeyShare(...)` — un-awaited; a restart after the DKG silently loses the
+  share, and re-register hits `already_registered` which SKIPS the DKG → a permanent can't-sign
+  zombie) so registration-success implies a durable share; ADDS the missing agent-key creation
+  path (today nothing creates `agents/<name>/key` — both register and start_agent require it to
+  pre-exist); and DELETES the legacy `~/.cello/key` silent fallback (`agent-loader.ts:55-66`).
+  Migrates existing operators' flat files into the encrypted DB atomically.
+  *(**CELLO-M7-PERSIST-002**)* — ❌ NOT BUILT (story YAML written 2026-06-25). Closes, in one
+  pass: the at-rest exposure of identity material (K_local/share/ML-DSA secret are PLAINTEXT
+  files today, only 0600-protected), the share-loss bug, and the onboarding gap. Verified
+  current state (file:line) in the story Context; this contradicts the design (m7-architecture
+  §13: "all client-side persistent state lives in ~/.cello/daemon.db (SQLCipher … key derived
+  from K_local)"), which the daemon migration silently regressed.
 
 ### Local loopback (J-LOOPBACK)
 
@@ -818,8 +846,11 @@ each must stay green once passed:
 8. **J-UPGRADE** → DOD-UP-1/2 ✅ BOTH PROVEN LIVE (2026-06-23 / 2026-06-22). Absent
    party returns → recovers + verifies content → ratifies sealed root → bilateral
    (superseding row); B online + verified → auto-co-sign with no agent action.
-9. **J-PERSIST** → DOD-LOG-1. A sends + receives → daemon restart → the readable
-   transcript is recoverable (encrypted at rest); relay/directory show only hashes.
+9. **J-PERSIST** → DOD-LOG-1, DOD-STORE-1. A sends + receives → daemon restart → the readable
+   transcript is recoverable (encrypted at rest); relay/directory show only hashes. DOD-STORE-1
+   extends it: identity (K_local + FROST share) reloads from the SQLCipher store and signs after
+   restart with NO flat files present; the raw DB file yields no plaintext; the daemon writes no
+   state outside the allow-list (DB, key, lock, log, socket). ❌ DOD-STORE-1 NOT BUILT.
 10. **J-LOOPBACK** → DOD-LOOP-1. Two agents (two K_locals) on ONE daemon converse +
     bilateral seal; each end signs with its own K_local; no second daemon process.
 
@@ -840,6 +871,15 @@ no-double-count (DOD-MSG-5), no-assent-field (DOD-LEG-4).
 > INV-5 (transport-internal, not spine-testable via the MCP surface), and the PARKED values-question
 > SEAL-2 3-table analytics write (build journal 2026-06-23 — feeds graph_edges, intersects the
 > anti-surveillance values; needs Andre's call). No CORE work is open.
+>
+> **ADDENDUM 2026-06-25 — persistence gap found, scope re-opened.** Investigation of a broken
+> operator agent revealed the daemon stores identity material (K_local, FROST signing share,
+> ML-DSA secret) as PLAINTEXT flat files and runs an UNENCRYPTED `node:sqlite` DB — contrary to
+> the design (m7-architecture §13: one SQLCipher store, key from K_local). Three latent defects
+> ride on it: at-rest exposure of the crown-jewel keys, a fire-and-forget FROST-share write that
+> silently loses the share on a restart (then `already_registered` blocks recovery → can't-sign
+> zombie), and no agent-key creation path (new operators can't onboard from cello-client alone).
+> Storied as **DOD-STORE-1 / CELLO-M7-PERSIST-002** (❌ NOT BUILT). M7 is NOT done until it's built.
 
 - **Tier 1** is built + proven; the happy spine runs live as J-SPINE.
 - **Tier 2** is PROVEN LIVE — step-6 auth ON (J-AUTH), manifest poll, J-SIG degradation+recovery.
@@ -854,6 +894,10 @@ no-double-count (DOD-MSG-5), no-assent-field (DOD-LEG-4).
 - **Tier 6**: J-PERSIST (PERSIST-LOG-001 — durable encrypted transcript) ✅ PROVEN LIVE 2026-06-23
   (DOD-LOG-1, done-auditor EARNED); J-LOOPBACK (SESSION-CORE-REKEY-001) ✅ DONE + LIVE-PROVEN
   2026-06-22 (DOD-LOOP-1). DOD-LOG-2/3 (dispute/abuse export bundles) remain ⬜ NOT STORIED follow-ons.
+  **NEW 2026-06-25 — DOD-STORE-1 (CELLO-M7-PERSIST-002):** all client state into one SQLCipher store,
+  no flat-file state — ❌ NOT BUILT (story written). Re-opens persistence scope; supersedes DOD-LOG-1's
+  envelope mechanism and closes the plaintext-identity-files exposure + the fire-and-forget share bug +
+  the missing agent-key creation path.
 - **Tier 0 invariants**: INV-2/3/4/7 🟢 PROVEN/BUILT+VERIFIED; INV-1 (real cluster) needs infra;
   INV-5 (dial-after-teardown) gater built + unit-covered, not spine-testable; INV-6/8 (discipline
   audits) per-story-built, un-audited as an aggregate; INV-9 built, not specifically asserted.

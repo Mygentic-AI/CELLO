@@ -1,0 +1,539 @@
+---
+name: CELLO-M7-PERSIST-002
+type: user-story
+date: 2026-06-25
+topics: [persistence, data-custody, encryption-at-rest, sqlcipher, key-management, FROST, k-local, ml-dsa, registration, daemon, single-store, flat-file-elimination, m7, j-persist]
+status: draft
+description: >
+  Eliminates ALL flat-file persistence of client state in the M7 daemon and moves
+  every persisted item into a single SQLCipher-encrypted database. Today the
+  daemon's identity material — the K_local Ed25519 key, the FROST signing share,
+  the ML-DSA keypair, the registration state, the agent↔user link, and the
+  manifest version — is written as plaintext flat files outside the database
+  (verified, file:line in Context). The database itself is plain node:sqlite with
+  only two columns (transcript text, retry-queue content) envelope-encrypted by a
+  side key that is itself a plaintext sibling file. This story switches the daemon
+  DB engine to SQLCipher (whole-file AES-256 at rest), moves all six state items
+  into encrypted DB rows, deletes the redundant column cipher, fixes the
+  fire-and-forget FROST-share write, adds the missing agent-key creation path,
+  deletes the legacy `~/.cello/key` fallback, and migrates existing operators.
+  After this story the ONLY files the daemon writes are: the SQLCipher DB, its key
+  file (the one plaintext key, by chicken-and-egg necessity), and the operational
+  lock/log/socket. No persisted state lives outside the encrypted database.
+  cello-client only — no directory/relay change.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-PERSIST-002
+domain: Persistence
+milestone: M7
+actor: CLIENT
+priority: P1
+components:
+  - daemon
+  - crypto       # FileKeyProvider: K_local seed moves from a file to a DB row
+  - cli          # agent-key creation path (close the onboarding gap); migration
+  - e2e-tests
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO daemon (the heavy local node and the operator's data custodian),
+  I want every piece of persisted client state — identity keys, FROST share,
+  ML-DSA keypair, registration record, agent↔user link, manifest version, sessions,
+  transcript, hash chain — to live in ONE SQLCipher-encrypted database and nowhere
+  else, so that there is a single, encrypted-at-rest custody surface for all client
+  state, the crown-jewel secrets are no longer plaintext files an attacker can
+  trivially read, and there is exactly one code path for reading and writing client
+  state — instead of the current split where the most sensitive material (K_local,
+  FROST share, ML-DSA secret) sits in plaintext JSON/binary files while only the
+  message text is (weakly) encrypted in the DB.
+
+# ─── Context ────────────────────────────────────────────────
+# ─── DESIGN DECISIONS (settled with Andre, 2026-06-25 — DO NOT RE-OPEN) ─────────
+#   This story executes and extends decision D-B3 of the 2026-06-20 data-custody log.
+#   That log left the at-rest mechanism as "SQLCipher OR envelope encryption, implementer's
+#   choice." This session CLOSED that choice and widened the scope:
+#
+#   DEC-1 — Mechanism is SQLCipher (whole-DB), NOT envelope encryption.
+#     Reason (settled): envelope encryption on node:sqlite cannot encrypt columns the DB
+#     must query/index/key on (session_id, agent_name, counterparty_pubkey, status,
+#     timestamps, nonces, primary keys) — a fresh-IV cipher (transcript-cipher.ts:57) breaks
+#     equality/index, so those columns MUST stay plaintext. In an identity/trust protocol the
+#     relational metadata (who-talked-to-whom, when, how many) is as sensitive as the message
+#     text. SQLCipher decrypts whole pages in memory so queries work and ALL columns + indexes
+#     + freelists are encrypted. The original objection to SQLCipher (a 42s native compile) is
+#     GONE: @signalapp/sqlcipher@3.3.5 ships PREBUILT binaries for darwin/linux/win
+#     (node_modules/.pnpm/@signalapp+sqlcipher@3.3.5/.../prebuilds/*.node) — no compile.
+#
+#   DEC-2 — Key custody at launch is a PLAINTEXT key file. Documented, accepted limitation.
+#     Reason (settled): the daemon is headless and auto-restarts, so the SQLCipher key must be
+#     readable by the process with no human present → it lives on disk. With a co-located key,
+#     at-rest encryption is cosmetic against a local file-read attacker, and real only against
+#     leaked backups / cloud sync / cold disk theft. OS keystores (Secure Enclave/Keychain,
+#     Linux Secret Service, Windows DPAPI) are NOT available — there is no native app at
+#     launch. So the SQLCipher key is the one plaintext key file (it replaces the existing
+#     plaintext transcript-key file — we repurpose, we do not add a key).
+#
+#   DEC-3 — The operator-passphrase upgrade (KDF → key held in RAM only, never on disk; the one
+#     software-only option that gives real at-rest protection without a keystore) is DOCUMENTED
+#     as a future opt-in onboarding step. NOT coded in this story. It will wrap the same
+#     SQLCipher key DEC-2 establishes — so SQLCipher is forward-compatible: the day the
+#     passphrase lands, the whole DB (all metadata included) becomes real protection with zero
+#     schema rework. (Envelope would still leak metadata even then — another reason for DEC-1.)
+#
+#   DEC-4 — "Everything in the database" has exactly TWO necessary exceptions, and only two:
+#     (1) the SQLCipher key file (chicken-and-egg: the DB's own key cannot live inside the DB);
+#     (2) operational, non-state files read before/around the DB — daemon.lock (read to FIND the
+#     socket before the DB is open), daemon.log, daemon.sock, and the DB file itself. Every
+#     item of persisted STATE moves into the DB. This is enforced by AC-009 (a guard test).
+# ───────────────────────────────────────────────────────────────────────────────
+#
+# Design authority: docs/planning/discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-rest.md
+# (D-B1..D-B4) + the 2026-06-25 decisions above (DEC-1..DEC-4). This story is the
+# execution of D-B3 with the mechanism locked and the scope widened from "the transcript"
+# to "all client state."
+#
+# VERIFIED CURRENT STATE (cello-client main, 2026-06-25 — file:line, no conjecture):
+#
+#   ENGINE — one DB, unencrypted:
+#     - core/daemon/src/session-node-manager.ts:381  this.#db = new DatabaseSync(this.#dbPath)
+#       — plain node:sqlite. No PRAGMA key. No sqlcipher dependency in core/daemon/package.json.
+#     - transcript-cipher.ts:4 states it: "plain node:sqlite (no whole-DB encryption)".
+#     - Six tables, all in that one DB: sessions (:385), seal_interrupted_artifacts (:440),
+#       session_tree_leaves (:460), transcript (:477), session_seen_nonces (nonce-dedup.ts:72),
+#       retry_queue (retry-queue.ts:118). nonce-dedup + retry-queue share the same handle.
+#
+#   WEAK COLUMN CIPHER (to be deleted, made redundant by SQLCipher):
+#     - transcript-cipher.ts:56-62  AES-256-GCM on two columns only (transcript.blob,
+#       retry_queue.content_blob). Key = a SEPARATE random 32-byte key in a PLAINTEXT 0600
+#       sibling file `sessions.db.transcript-key` (transcript-cipher.ts:36-48) — NOT derived
+#       from any identity. Wired daemon.ts:855; applied session-node-manager.ts:565/601;
+#       retry-queue.ts:225-227.
+#
+#   CROWN-JEWEL SECRETS — PLAINTEXT FLAT FILES (the core problem this story fixes):
+#     - K_local Ed25519 identity key: core/crypto/src/ed25519.ts:101 (FileKeyProvider writes a
+#       37-byte CELLO binary file `agents/<name>/key`, 0600). Magic ce110e01 + ver 01 + seed.
+#     - frost-share.json: registration-persistence.ts:185 — signingShare: hex(...) in plain JSON.
+#     - ml-dsa-keypair.json: :146 — secretKeyBlob: hex(...) in plain JSON.
+#     - registration-state.json: :160.  agent-user-link.json: :212.
+#     - manifest-version.json: manifest-version-store-file.ts:45.
+#     - All four registration files via #writeJsonAtomic (registration-persistence.ts:284-309) —
+#       plaintext JSON, file-permission protection only (0600), NOT encryption.
+#
+#   THREE LATENT BUGS THIS STORY ALSO CLOSES (all verified this session):
+#     - Fire-and-forget share write: registration-manager.ts:229  `void persistFrostKeyShare(...)`
+#       — not awaited; a restart before flush silently loses the share, and re-register hits
+#       `already_registered` (registration-manager.ts:270-283) which SKIPS the DKG → no new share
+#       is minted → the identity is a permanent can't-sign zombie. (This is exactly what happened
+#       to the operator's `default` agent.)
+#     - No agent-key creation path: nothing in the shipped code creates an agent's K_local. Both
+#       cello_register (daemon.ts:1210 → agent_not_found) and cello_start_agent (daemon.ts:1062)
+#       require agents/<name>/key to ALREADY exist; FileKeyProvider.load is load-or-create
+#       (ed25519.ts:58-111) but its only caller (agent-loader.ts:100) is guarded to skip dirs
+#       with no key. A brand-new operator cannot onboard from cello-client alone.
+#     - Legacy fallback: agent-loader.ts:55-66 loads the legacy single-file `~/.cello/key` as
+#       agent "default" ONLY when `~/.cello/agents/` is absent; once that dir exists the fallback
+#       silently switches off, orphaning a key that still lives at the old path. A silent
+#       compat shim — delete it (one way only).
+#
+# Sovereign-node constraint: purely LOCAL client-side state on the operator's machine. No
+# directory/relay change, no cross-node state, no wire/protocol change. DOD-INV-3 strengthened
+# (more local state encrypted), never weakened.
+#
+# Cross-repo: cello-client ONLY (core/daemon, core/crypto, core/cli). Version-bump AC applies;
+# NO trustless-cello dependency change; this story triggers no directory/relay pipeline deploy.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the daemon opens its database"
+    action: >
+      the daemon shall open it as a SQLCipher database with PRAGMA key supplied from the
+      SQLCipher key file (the single plaintext key file, DEC-2). If the key file is absent it
+      shall generate one (0600) on first use; if the key is present but the DB does not decrypt,
+      the daemon shall fail closed with 'db_encryption_key_mismatch' and shall NOT open or
+      create a plaintext database.
+
+  - trigger: "When the operator creates a new agent (a new create-agent command / register on a
+      not-yet-existing agent)"
+    action: >
+      the daemon shall generate a fresh K_local Ed25519 seed and write it as a row in the
+      encrypted `agents` table — NOT as a `key` file — closing the missing-creation gap; the
+      KeyProvider for that agent loads its seed from the DB row.
+
+  - trigger: "When the daemon registers an agent (ML-DSA keygen + FROST DKG complete)"
+    action: >
+      the daemon shall persist the K_local seed, the FROST signing share, the ML-DSA keypair,
+      the registration state, and the agent↔user link as columns of that agent's `agents` row,
+      in a SINGLE AWAITED transaction that completes before register returns success — never as
+      JSON/binary files, and never fire-and-forget. Registration success implies the share is
+      durably committed.
+
+  - trigger: "When the daemon starts up"
+    action: >
+      the daemon shall load all agents and their identity material (K_local, FROST share,
+      ML-DSA, registration state) from the encrypted `agents` table, and the manifest version
+      from the encrypted `manifest_state` table. It shall NOT read or write any
+      `agents/<name>/` flat files, the legacy `~/.cello/key`, or `manifest-version.json`.
+
+  - trigger: "When a daemon with this story's code starts and finds pre-existing flat-file state
+      (K_local key file, the four registration JSON files, manifest-version.json) and/or an
+      unencrypted node:sqlite DB"
+    action: >
+      the daemon shall perform a ONE-TIME, atomic migration: import every flat-file state item
+      and every row of the unencrypted DB into the new SQLCipher DB, verify the import, then
+      delete the flat files and the unencrypted DB (after a backup). The migration is idempotent
+      (a second start does not re-run it) and never leaves plaintext state behind.
+
+  - trigger: "When any code path needs to persist a unit of client state"
+    action: >
+      it shall write to the SQLCipher database. The daemon shall write NO state to flat files.
+      The only files the daemon writes are the SQLCipher DB, its key file, the lock file, the
+      log file, and the IPC socket (DEC-4).
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+
+  - id: AC-001
+    given: "The daemon DB engine after this story"
+    when: "the daemon opens its database and writes any row, then the raw DB file is inspected
+      outside the daemon (plain sqlite reader / raw bytes) without the key"
+    then: >
+      The DB is opened via @signalapp/sqlcipher with PRAGMA key (no `new DatabaseSync` from
+      node:sqlite remains in the daemon's DB-open path), and the raw file yields NO readable
+      data of any kind — table contents, indexes, and SQLite structure are all ciphertext. A
+      test asserts: opening without the key fails to yield plaintext, AND the daemon with the
+      key reads every table correctly.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-002
+    given: "A freshly created agent and a completed registration (K_local created, DKG run)"
+    when: "the agents directory and the whole CELLO_DIR are inspected for flat files"
+    then: >
+      The agent's K_local seed, FROST share, ML-DSA keypair, registration state, and agent↔user
+      link exist ONLY as columns of an `agents` row in the encrypted DB. NO `agents/<name>/key`,
+      `frost-share.json`, `ml-dsa-keypair.json`, `registration-state.json`, or
+      `agent-user-link.json` file exists. Verified by reading the DB row AND asserting absence of
+      every such file.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-003
+    given: "A registered agent whose identity material is in the encrypted DB, after which the
+      daemon process is stopped and a fresh daemon is started on the same DB + key"
+    when: "the agent is brought online and initiates a session that requires a FROST signature
+      (e.g. a seal)"
+    then: >
+      The agent loads from the DB, reconstructs its threshold signer from the DB-stored share,
+      and signs successfully — the identity survives a restart with NO flat files present and NO
+      re-registration. (Proves the share persisted durably and reloads from the encrypted store.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-004
+    given: "A brand-new operator: empty CELLO_DIR, no key anywhere"
+    when: "the operator runs the agent-creation path then registers"
+    then: >
+      The create path generates a fresh K_local row in the encrypted `agents` table (no key
+      file), and registration then succeeds against that agent — a new operator can onboard
+      end-to-end from cello-client alone, with no manual key file. (Closes the missing-creation
+      gap; do NOT auto-create on a typo'd start_agent — creation is explicit.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-005
+    given: "Registration that runs a real FROST DKG"
+    when: "register returns success, after which the daemon is immediately stopped"
+    then: >
+      The FROST share is present in the encrypted DB the instant register returns — the persist
+      is AWAITED inside the registration transaction, not fire-and-forget. A test that kills the
+      daemon right after register-success and restarts finds the share intact and signable
+      (reproduces and fixes registration-manager.ts:229). Registration NEVER reports success
+      with an uncommitted share.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-006
+    given: "An operator machine carried from before this story: a K_local at the legacy
+      `~/.cello/key` and/or `agents/<name>/` flat files and/or an unencrypted node:sqlite DB"
+    when: "a daemon with this story's code starts"
+    then: >
+      It migrates all of it into the SQLCipher DB atomically (write-new + verify + rename, with
+      a backup), preserving the agent identity and all rows; afterwards the raw DB file yields no
+      plaintext (AC-001), the flat files are gone, and the legacy key path is removed. The
+      migration is idempotent (second start is a no-op). Verified by seeding the pre-story layout,
+      restarting, and asserting identity preserved + encryption + flat files deleted.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-007
+    given: "The agent loader after this story"
+    when: "the daemon starts with agents in the DB"
+    then: >
+      Agents are enumerated from the `agents` table; there is NO code path that loads the legacy
+      `~/.cello/key` and NO per-agent `agents/<name>/key` file read (the legacy fallback,
+      agent-loader.ts:55-66, is deleted). One loading path only.
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-008
+    given: "The manifest version store"
+    when: "the daemon records a new manifest version and restarts"
+    then: >
+      The manifest version is stored in the encrypted `manifest_state` table and reloaded from
+      it; no `manifest-version.json` file is written (manifest-version-store-file.ts is removed
+      and replaced by a DB-backed ManifestVersionStore behind the existing Store interface).
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-009
+    given: "A full daemon lifecycle: start → create agent → register → session send/receive →
+      seal → restart, run under a filesystem-write probe"
+    when: "every file the daemon writes is captured"
+    then: >
+      The ONLY paths written are: the SQLCipher DB file (+ its WAL/journal), the SQLCipher key
+      file, daemon.lock, daemon.log, and daemon.sock. NO other file is written anywhere under
+      CELLO_DIR. A guard test enforces this allow-list so a future flat-file write fails CI
+      (DEC-4 — "everything in the database", with only the two necessary exceptions).
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-010
+    given: "The redundant column cipher (transcript-cipher.ts) and its key file"
+    when: "the daemon runs on the SQLCipher DB"
+    then: >
+      transcript-cipher.ts and the per-column AES-256-GCM logic (session-node-manager.ts:565/601,
+      retry-queue.ts:225-227) and the `sessions.db.transcript-key` file are REMOVED — whole-DB
+      SQLCipher supersedes them. The transcript table and its read surface (cello_get_transcript,
+      PERSIST-LOG-001 / DOD-LOG-1) still work; only the now-redundant column-encryption layer and
+      its side key are gone. Verified by AC-001 (whole-file ciphertext) plus a passing transcript
+      round-trip read.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-011
+    given: "The SQLCipher key file is missing, or present but does not decrypt the DB"
+    when: "the daemon starts"
+    then: >
+      Missing key on a fresh DB → generate (0600) and proceed. Present-but-wrong key on an
+      existing DB → fail closed with 'db_encryption_key_mismatch' and guidance; the daemon does
+      NOT fall back to a plaintext DB and does NOT recreate the store. (Fail closed on
+      encryption — never silently degrade to plaintext.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-012
+    given: "All error paths introduced by this story"
+    when: "each distinct cause is triggered"
+    then: >
+      Each produces a distinct code ('db_encryption_key_mismatch', 'agent_create_failed',
+      'identity_persist_failed', 'identity_migration_failed', 'manifest_persist_failed'); no
+      catch returns a hardcoded reason without logging error.message; any MCP/CLI-surfaced
+      failure carries a guidance field. A persist failure during registration FAILS the
+      registration (the share/identity must be durable to be valid) — it does NOT silently
+      report success (contrast the transcript best-effort rule; identity is authoritative).
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-013
+    given: "The observability events declared for this story"
+    when: "agent create, identity persist, DB open/migrate execute"
+    then: >
+      persist.identity.created (info), persist.identity.persisted (info), persist.db.opened
+      (info, with encrypted:true), persist.identity.migrated (info), persist.identity.persist.failed
+      (error) fire with agentName/agentPubkey, correlationId; no console.log; NO secret
+      (seed, signingShare, ml-dsa secret) EVER appears in any log event — only pubkeys/metadata
+      (the existing registration-persistence SI-001 "never log the secret" discipline). Registered
+      in the canonical taxonomy.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-014
+    given: "All cello-client code changes implemented and tests passing"
+    when: "the implementer runs the cello-client version bump procedure (per /cello-publish)"
+    then: >
+      core/crypto, core/daemon, core/cli are bumped (and any package depending on them);
+      @cello-protocol/connect bumped; pnpm-lock updated; tag pushed; CI publishes to beta; the
+      smoke-tag job passes; published deps show real semver, never workspace:*; the published
+      daemon dist contains the SQLCipher path (grep the tarball). NO trustless-cello change.
+    test_type: integration
+    component_under_test: cello-client CI
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      No item of client identity material — the K_local seed, the FROST signing share, or the
+      ML-DSA secret key — shall be written to disk OUTSIDE the SQLCipher-encrypted database. The
+      only plaintext key on disk shall be the single SQLCipher key file (DEC-2/DEC-4).
+    adversarial_condition: >
+      even during registration, migration, or a crash mid-write. An attacker reading the
+      filesystem (stolen backup, cold disk) must find no readable secret except via the one key
+      file; the secrets themselves are inside the encrypted DB. Verified by AC-002, AC-009 (the
+      write allow-list), and AC-001 (raw file is ciphertext). No temp/backup file may contain a
+      plaintext secret (migration writes encrypted, deletes plaintext).
+    test_type: integration
+    component_under_test: daemon
+
+  - id: SI-002
+    statement: >
+      The daemon shall fail closed on encryption: if the database cannot be opened encrypted, it
+      shall not open, create, or migrate to a plaintext store, and shall not write identity
+      material to flat files as a fallback.
+    adversarial_condition: >
+      even when a plaintext path would let the daemon "work." A wrong/missing key, a SQLCipher
+      load failure, or a migration error must surface (AC-011/AC-012) — never silently degrade to
+      an unencrypted store. There is no plaintext fallback anywhere in the persistence path.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: SI-003
+    statement: >
+      Registration shall not report success unless the FROST share (and the rest of the identity
+      row) is durably committed to the encrypted DB.
+    adversarial_condition: >
+      even under a daemon kill immediately after the DKG. The share write is awaited within the
+      registration transaction (fixes the fire-and-forget at registration-manager.ts:229); a
+      success response is a durable-commit guarantee, so the can't-sign-zombie failure mode is
+      eliminated. Verified by AC-005.
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the SQLCipher key file is unavailable or does not match an existing DB at
+      startup"
+    fallback: >
+      the daemon fails closed — returns 'db_encryption_key_mismatch' with guidance and does not
+      open a plaintext DB, recreate the store, or write identity to files. The operator's
+      encrypted state is left intact and untouched until the correct key is supplied. (No
+      plaintext degradation — SI-002.)
+    test_type: integration
+    component_under_test: daemon
+
+  - id: DB-002
+    condition: "While the one-time flat-file → SQLCipher migration fails partway (disk full, I/O
+      error, interrupted)"
+    fallback: >
+      the migration is atomic and aborts cleanly: the original flat files / unencrypted DB are
+      left in place (and a backup retained), the partial encrypted DB is discarded, and the
+      daemon surfaces 'identity_migration_failed' with guidance. No identity is lost and no
+      plaintext is left in a half-migrated state. Re-running retries from a clean point
+      (idempotent). (AC-006.)
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: persist.db.opened
+      level: info
+      trigger: "When the daemon opens the SQLCipher database"
+      context_fields: [encrypted, migrated]
+      correlationId: false
+    - name: persist.identity.created
+      level: info
+      trigger: "When a new agent's K_local row is created in the DB"
+      context_fields: [agentName, agentPubkey]
+      correlationId: true
+    - name: persist.identity.persisted
+      level: info
+      trigger: "When an agent's full identity row (K_local, share, ml-dsa, registration) is
+        committed at registration"
+      context_fields: [agentName, agentPubkey]
+      correlationId: true
+    - name: persist.identity.migrated
+      level: info
+      trigger: "When pre-story flat-file identity is migrated into the encrypted DB"
+      context_fields: [agentsMigrated, rowsMigrated]
+      correlationId: false
+  error_events:
+    - name: persist.identity.persist.failed
+      level: error
+      trigger: "When an identity persist or migration fails (fatal to register/migration)"
+      context_fields: [agentName, error]
+      correlationId: true
+  alarms:
+    - condition: "persist.identity.persist.failed fires during registration"
+      fires_to: "local daemon ERROR log + the register response (registration fails). Indicates
+        DB/key trouble; the operator must resolve it before a valid identity exists. Local, not
+        CloudWatch."
+  notes: >
+    Register persist.db.* / persist.identity.* in the canonical taxonomy (2026-05-16_0753). A
+    SECRET (K_local seed, FROST signingShare, ML-DSA secretKeyBlob) MUST NEVER appear in any log
+    event — only the agent name and PUBLIC key / counts. This extends the existing SI-001/002
+    "never log the secret" rule (registration-persistence.ts) to every new persist path.
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Engine swap (single site): core/daemon/src/session-node-manager.ts:381 is the ONLY
+    `new DatabaseSync`. Replace node:sqlite with @signalapp/sqlcipher (already a workspace dep,
+    prebuilt — DEC-1), open with PRAGMA key from the key file. The two table modules
+    (nonce-dedup, retry-queue) receive the shared handle, so this is one swap point. The
+    @signalapp/sqlcipher API is a better-sqlite3 fork — prepare/run/get/all/exec map nearly 1:1
+    to node:sqlite's DatabaseSync; expect a thin adapter at the open site, SQL unchanged. Add
+    @cello-protocol/daemon a dependency on @signalapp/sqlcipher; drop the daemon's reliance on
+    node:sqlite for this DB.
+  - >
+    Schema (idempotent CREATE TABLE IF NOT EXISTS — the daemon DB has NO Flyway, it evolves via
+    in-code idempotent migrations): add `agents` (per the m7-architecture §13 model) holding
+    agent_name PK, k_local_seed (or sign-only material), k_local_pubkey, frost_share blob,
+    ml_dsa_keypair blob, primary_pubkey, registration_state, agent_user_link, state, timestamps;
+    and `manifest_state` (last_seen_version, updated_at). Keep the existing sessions /
+    session_tree_leaves / transcript / retry_queue / session_seen_nonces / seal_interrupted_artifacts
+    tables — they move under whole-DB encryption automatically.
+  - >
+    Move the writers: rewrite FileRegistrationPersistence (registration-persistence.ts) to a
+    DB-backed implementation writing one awaited transaction (fixes fire-and-forget — SI-003);
+    move K_local out of core/crypto FileKeyProvider's file I/O (ed25519.ts) so the seed is loaded
+    from / stored to the `agents` row while the KeyProvider stays sign-only; rewrite agent-loader.ts
+    to enumerate from `agents` and DELETE the legacy `~/.cello/key` fallback; point
+    session-ceremony.ts share-load at the DB row; replace FileManifestVersionStore with a
+    DB-backed store behind the same interface (cello-daemon.ts:88).
+  - >
+    Add the agent-creation path (AC-004): an explicit create (e.g. `cello create-agent <name>`,
+    or register creating the row when absent) that generates a fresh K_local seed and writes the
+    `agents` row. Do NOT make cello_start_agent auto-create on an unknown name (avoid creating an
+    identity on a typo). This closes the onboarding gap and is the clean fresh-identity path.
+  - >
+    Delete after migration: transcript-cipher.ts, manifest-version-store-file.ts, the
+    agents/<name>/ JSON+key file writers/readers, the legacy key fallback, and the transcript-key
+    file. The end state is one encrypted store and one read/write path.
+  - >
+    DEC-3 (future, NOT this story): document the operator-passphrase opt-in (KDF over a passphrase
+    → key in RAM only, wrapping the SQLCipher key) as an onboarding option in the operator docs /
+    runbook. No code. It is the only software-only path to real at-rest protection without an OS
+    keystore, and SQLCipher makes it a drop-in later (whole-DB already encrypted).
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by: []
+  related:
+    - CELLO-M7-PERSIST-LOG-001   # the durable transcript store/read surface this story keeps; its column-cipher mechanism is superseded by whole-DB SQLCipher (AC-010)
+    - CELLO-M7-MSG-001           # retry_queue.content_blob — its column cipher is removed; the table moves under whole-DB encryption
+  blocks: []
+  notes: >
+    Executes decision D-B3 (2026-06-20) with the mechanism locked to SQLCipher (DEC-1) and the
+    scope widened from the transcript to ALL client state. Closes three latent bugs in one pass:
+    at-rest exposure of identity material, the fire-and-forget FROST-share write
+    (registration-manager.ts:229), and the missing agent-key creation path. Deletes the legacy
+    `~/.cello/key` silent fallback.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Client Persistence, Data Custody, Key Management"
+  end_to_end_flow: "§Client-side records"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-20_2217_client-data-custody-and-encryption-at-rest"
+  related_docs:
+    - "[[CONTEXT]]"
+    - "[[CELLO-M7-PERSIST-LOG-001]]"
+    - "[[m7-architecture-2026-06-12]]"
+  notes: >
+    SETTLED 2026-06-25 (do not re-open): DEC-1 SQLCipher (not envelope); DEC-2 plaintext key file
+    at launch; DEC-3 passphrase opt-in documented, not coded; DEC-4 everything in the DB, two
+    necessary exceptions (the DB key file; operational lock/log/socket). Product promise: data
+    stays local AND encrypted at rest in one store — the client is the data custodian; the server
+    is a hash custodian only.
