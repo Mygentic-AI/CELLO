@@ -126,11 +126,17 @@ Three different jobs — keep them separate.
 7. **Commit.** (See §3 cadence — commit before tests too.)
 8. **Review.** Dispatch `feature-dev:code-reviewer` (`model:'opus'` — it pins
    Sonnet otherwise) AND `cello-test-attacker` on the unit, in parallel: the
-   reviewer attacks the code, the attacker attacks the tests. Fix EVERY reviewer
-   finding at EVERY severity (blocking/high/medium/low), and treat every HOLLOW
-   TESTS finding as blocking — fix the test and re-run red → green. Dispute only a
-   finding that is provably wrong or a recorded scope decision — and write the why
-   in the journal. Commit the fixes.
+   reviewer attacks the code, the attacker attacks the tests. **Additionally, when
+   the unit touches persistence, crypto, registration, or config** — the code where
+   silent fallbacks hide — dispatch `cello-fallback-finder` as a third parallel
+   attacker on the failure paths (skip it for pure-UI/pure-test/mechanical diffs
+   where it would be noise). Fix EVERY reviewer finding at EVERY severity
+   (blocking/high/medium/low); treat every HOLLOW TESTS finding as blocking — fix
+   the test and re-run red → green; and treat every HIGH silent-fallback finding as
+   blocking — make it fail loud (throw or return an explicit error with a reason)
+   before the unit closes (MEDIUM/LOW are Andre's call). Dispute only a finding that
+   is provably wrong or a recorded scope decision — and write the why in the
+   journal. Commit the fixes.
 9. **Update the two docs.** Flip the DoD line's status tag. Append a journal entry.
 10. **Back to step 1.**
 
@@ -167,7 +173,7 @@ When it fires: STOP, produce the checklist in chat, each item marked
 
 1. **Anchored to the binary.** Run `grep -nE 'createClient|createMcpSessionServer|createDirectoryNode|createRelayNode|session-fixture'` on the J-SPINE test file(s). Zero functional hits. Paste output. *(§4)*
 2. **Nothing pushed.** Run `git status -sb` in BOTH repos. On main is fine; nothing ahead in a way that means a push happened — Andre handles all pushing (trustless-cello push = the 25–30 min live deploy). Paste. *(§5)*
-3. **Read-only subagents only.** Reviewer / test-attacker / done-auditor / explorer only — no parallel implementers. State yes/no. *(§5)*
+3. **Read-only subagents only.** Reviewer / test-attacker / fallback-finder / done-auditor / explorer only — no parallel implementers. State yes/no. *(§5)*
 4. **Working the lowest non-green DoD line.** Name the DoD-ID in progress; confirm not skipping ahead. *(§2)*
 5. **Committing constantly.** Run `git log --oneline -3`. A commit within ~the last unit? Paste. *(§3)*
 6. **No deploy / no AWS used.** State yes/no. *(§5)*
@@ -221,8 +227,8 @@ spawns the real binaries. Until it exists, every other instruction is blind.
 
 - **One thread. One coder. Andre watching.** No parallel implementation agents.
   Parallel branches are what produced the sprawl that buried this milestone. Only
-  read-only subagents (the reviewer, the test-attacker, the done-auditor, and
-  read-only explorers) may be dispatched.
+  read-only subagents (the reviewer, the test-attacker, the fallback-finder, the
+  done-auditor, and read-only explorers) may be dispatched.
 - **One branch. No sprawl.** Work on the assembly branch (or main once merged). Do
   not spin up new branches/worktrees per unit.
 - **Never merge to main. Never push.** Both are Andre's call. Commit locally,
