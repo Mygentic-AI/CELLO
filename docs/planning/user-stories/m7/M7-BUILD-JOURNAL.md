@@ -5669,3 +5669,18 @@ journey addition). Applied the auditor's recommended split to the DoD line rathe
 four sub-claims are covered by the in-process unit suite (migration, fail-closed, signer
 reconstruction, awaited-persist) — "done" as unit+in-process green, just not live-✅. A follow-on
 journey (seed a pre-story layout → migrate → seal a fresh post-restart session) is the path to full ✅.
+
+### 2026-06-25 — PERSIST-002 PUBLISHED to npm latest (operator install path live)
+
+The cello-client version cascade (commit `3868d71`) was tagged **`v0.0.51`** and pushed; CI published all
+seven `@cello-protocol` packages to `beta` and the **`smoke-tag` job passed** (clean-installs cli+connect,
+loads the daemon module graph — the real signal). Binary-verified against the published tarball, not the
+version number: `daemon@0.0.9` dist ships `sqlcipher-db.js` (`openEncryptedDatabase` + `@signalapp/sqlcipher`),
+`identity-migration.js`, and `cello_create_agent`; cross-pins are real semver (`cli@0.0.7 → daemon@0.0.9`;
+`connect@0.0.48 → crypto@0.0.10 / client@0.0.36 / transport@0.0.7`), no `workspace:*` leaked. Promoted all
+seven to `latest`: crypto 0.0.10, protocol-types 0.0.7, transport 0.0.7, client 0.0.36, daemon 0.0.9,
+cli 0.0.7, **connect 0.0.48** (confirmed via `npm dist-tag ls` — the verify-loop's `connect latest = 0.0.47`
+was npm read-after-write lag, not a miss). The default operator install
+(`npm i -g @cello-protocol/cli@latest @cello-protocol/connect@latest` → `cello login`) now delivers the
+SQLCipher single-encrypted-store daemon. (Tag `v0.0.51` is the next monotonic counter; v0.0.48 already
+existed from a prior cycle, so the tag name ≠ connect version — the tag is only the CI trigger.)
