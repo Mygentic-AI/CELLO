@@ -137,4 +137,49 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
       db2.close();
     }
   }, 150_000);
+
+  it("removing a registered SECONDARY agent drops its per-agent signaling (no leaked directory door)", async () => {
+    // HIGH-1 teeth: a non-primary agent that has registered owns a dedicated SignalingManager (an
+    // unbounded reconnect loop) cached in perAgentSignaling. Removal must stop+forget it, or the
+    // retired identity keeps re-authenticating the directory door. The daemon emits
+    // `agent.signaling.dropped` only when dropAgentSignaling actually runs — the unfixed handler never
+    // did. We drive it on the binary and assert the log line.
+    const dir = mkdtempSync(join(tmpdir(), "cello-remove2-"));
+    dirs.push(dir);
+    const daemon = await startDaemon(dir, cluster.directoryUrl, "remove2");
+    daemons.push(daemon);
+
+    // alpha = the keystone primary; register it so signaling connects.
+    expect(cello(["create-agent", "alpha"], { CELLO_DIR: dir }).status).toBe(0);
+    let signaling = "reconnecting";
+    for (let i = 0; i < 50; i++) {
+      signaling = status(dir).directory_signaling ?? "unknown";
+      if (signaling === "connected") break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    expect(signaling).toBe("connected");
+    expect(cello(["register", "alpha", `DEV-rm2-a-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dir }).status).toBe(0);
+
+    // beta = a SECONDARY agent; registering it creates its dedicated per-agent signaling manager.
+    expect(cello(["create-agent", "beta"], { CELLO_DIR: dir }).status).toBe(0);
+    expect(cello(["register", "beta", `DEV-rm2-b-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dir }).status).toBe(0);
+
+    // Remove beta — its per-agent signaling MUST be dropped (the leak fix).
+    expect(cello(["remove-agent", "beta"], { CELLO_DIR: dir }).status).toBe(0);
+    const line = await daemon.waitForLine(/agent\.signaling\.dropped[\s\S]*?beta|beta[\s\S]*?agent\.signaling\.dropped/, 10_000);
+    expect(line, "remove must stop+forget beta's per-agent signaling manager").toMatch(/agent\.signaling\.dropped/);
+
+    // alpha (the primary) is untouched and still active; beta is retired-and-kept.
+    expect((status(dir).agents ?? []).map((a) => a.name)).toContain("alpha");
+    expect((status(dir).agents ?? []).map((a) => a.name)).not.toContain("beta");
+    const db = await openEncryptedDb(join(dir, "sessions.db"));
+    try {
+      const tomb = db
+        .prepare("SELECT state FROM agents WHERE agent_name = ? AND state = 'retired'")
+        .get("beta") as { state: string } | undefined;
+      expect(tomb!.state, "beta's identity is kept as a retired tombstone").toBe("retired");
+    } finally {
+      db.close();
+    }
+  }, 150_000);
 });
