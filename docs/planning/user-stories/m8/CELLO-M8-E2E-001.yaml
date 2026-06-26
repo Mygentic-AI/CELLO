@@ -2,15 +2,14 @@
 name: CELLO-M8-E2E-001
 type: user-story
 date: 2026-06-26
-topics: [portal, magic-link, webauthn, totp, presence, suspend-burn, trust-signal-pipe, four-class-scaffold, account-security, e2e, m8]
+topics: [portal, magic-link, webauthn, presence, suspend-burn, trust-signal-pipe, four-class-scaffold, e2e, m8]
 status: draft
 description: >
-  M8 milestone close gate. A stranger registers an agent via the ceremony, magic-links
-  into the hosted portal, enrolls WebAuthn (which flows a real trust signal through the
-  handoff pipe), sees the agent appear with live presence, registers a second agent,
-  suspends one via the lever, and views the four-class Trust Signals scaffold with the
-  WebAuthn signal live and the rest honest placeholders — all against the live directory
-  cluster, with no plaintext/PII/token persisted server-side.
+  M8 milestone close gate. An operator magic-links into the hosted portal, enrolls
+  WebAuthn (which flows a real trust signal end-to-end through the handoff pipe), sees
+  agents appear with live directory-derived presence, suspends one via the lever, and
+  views the four-class Trust Signals scaffold — all against the live directory cluster,
+  with no plaintext/PII/token persisted server-side.
 ---
 # ─── Identity ───────────────────────────────────────────────
 id: CELLO-M8-E2E-001
@@ -28,273 +27,145 @@ components:
 # ─── Intent ─────────────────────────────────────────────────
 story: >
   As the M8 milestone close gate,
-  I want an operator to magic-link into the hosted portal, set up strong auth
-  (WebAuthn + TOTP) where WebAuthn enrollment flows a real trust signal end-to-end
-  through the handoff pipe, see their ceremony-registered agents appear with live
-  presence, suspend one via the emergency lever, and view the four-class Trust
-  Signals scaffold —
-  so that M8 is provably done: the portal auth model, the directory-derived presence
-  surface, the suspend/burn lever, and the general trust-signal mechanism are all
-  exercised in combination against the live directory cluster, with the no-plaintext
-  invariant intact.
+  I want an operator to magic-link into the hosted portal, enroll WebAuthn (flowing a
+  real trust signal end-to-end through the handoff pipe), see their ceremony-registered
+  agents appear with live presence, suspend one via the lever, and view the four-class
+  Trust Signals scaffold —
+  so that M8 is provably done: the portal auth model, directory-derived presence, the
+  suspend lever, and the general trust-signal mechanism are exercised together against
+  the live cluster, with the no-plaintext invariant intact.
 
 # ─── Context ────────────────────────────────────────────────
-# Why this story exists:
+# M8 adds a hosted portal (frontend + backend) plus new directory surfaces
+# (agent_presence, the write API, the revocation honor-check, the trust-signal pickup
+# queue) and a new daemon flow (sealed-box pickup). Green unit tests will not prove the
+# magic-link → WebAuthn-flows-a-signal → presence → suspend → scaffold flow composes:
+# the portal is HOSTED (sees only directory-derived facts, never local daemon state),
+# presence is persisted from per-node memory into a replicated table, and the lever is
+# a T-of-N replicated revocation — not a single node withholding. This gate exercises
+# all of it live.
 #
-# M6/M7 taught that green unit and integration tests do not prove a cross-system
-# flow works (PERSIST-024 wired nothing; M6B-001 passed unit tests and caused 100%
-# session failure in production). M8 adds an entire new system — a hosted portal
-# frontend + backend — plus new directory surfaces (agent_presence, the write API,
-# the revocation honor-check, the trust-signal pickup queue) and a new daemon flow
-# (the sealed-box trust-signal pickup). None of these compose until exercised live:
-#   1. The portal is a HOSTED web app. It can only show directory-derived, account-
-#      scoped facts; it cannot see local daemon state. This gate proves the portal
-#      reads real replicated directory data, not a mock.
-#   2. Presence is persisted from per-node in-memory #streams into a replicated
-#      agent_presence table. The "online = row online AND node fresh" read rule and
-#      the node-liveness guard only show their seams under a live cluster.
-#   3. The suspend lever is an account-authorized replicated revocation flag honored
-#      by the T-of-N federation — NOT a single node withholding. It must block signing
-#      server-side, even with the client share present.
-#   4. The trust-signal handoff pipe (portal → hash to directory + sealed ciphertext
-#      to pickup queue → daemon openSealed → verify → store → ACK → directory deletes
-#      ciphertext) is signal-type-agnostic; WebAuthn enrollment is its first live
-#      consumer and proves every stage.
-#
-# This story is the finish line. All SCAFFOLD, AUTH, PRESENCE, READ, AGENTS,
-# WRITEAPI, LEVER, and TRUST component stories (see outline.md) are prerequisites.
-# M8 does not close until every AC passes against a live portal, live directory
-# cluster, and a real daemon.
-#
-# NOTE: Written first (per /cello-story E2E-first rule) and implemented last. A
-# cohesion pass is required after all component stories are written, to align AC
-# event/field names with what the component stories actually specify.
+# Written first (E2E-first rule), implemented last. Keep ACs few and load-bearing — the
+# component stories own per-component behavior; this gate proves the milestone claim.
+# Cohesion pass required after component stories are written.
 
 # ─── Sovereign Node Constraint ──────────────────────────────
-# Must run against the real multi-node directory cluster, not a single local instance:
-#   - The portal read path (AC-005) must read account/agent/presence data that was
-#     written on one node and replicated to the node the portal queries — proving
-#     replicated-reads, not single-node coupling.
-#   - The trust-signal hash (AC-003) must be verifiable from a node OTHER than the one
-#     the portal wrote it to — proving the identity-tree write replicates.
-#   - The suspend lever (AC-007) must block signing across the federation: every honest
-#     node refuses its share. A single-node run proves functional correctness only;
-#     sovereign-node compliance requires the full cluster honoring the revocation flag.
-#   - Presence (AC-005) node-liveness must be exercised with at least two nodes so the
-#     "node fresh" half of the read rule is meaningful.
+# Must run against the real multi-node cluster, not one local instance:
+#   - AC-002: the signal hash is written via one node and read back from ANOTHER (the
+#     identity-tree write replicates).
+#   - AC-003: presence is written by the node the agent connected to and read by the
+#     portal from a (possibly different) replicated node; node-liveness needs ≥2 nodes.
+#   - AC-004: suspend blocks signing because EVERY honest node refuses its share — a
+#     single-node run proves functional correctness only, not sovereign compliance.
 
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:
-  - trigger: "When a visitor opens the portal URL with no session and no magic link"
-    action: "the portal shows the signpost landing — it routes the visitor to the
-      Telegram ceremony (to register) and the GitHub repo (to install), and offers a
-      sign-in field; it never offers a portal-side account-creation form"
+  - trigger: "When an operator who completed the ceremony enters their email + 6-digit code"
+    action: "the portal resolves the account by matching the directory's email_stub_hash,
+      establishes a durable httpOnly-cookie session, and lands on the Agents home — there
+      is no portal-side account creation"
 
-  - trigger: "When an operator who completed the ceremony opens the magic link (or
-      enters the 6-digit code) issued at ceremony"
-    action: "the portal resolves the account by hashing the typed email and matching
-      the directory's email_stub_hash, establishes a durable server-side session
-      (httpOnly cookie), and lands the operator on the Agents home"
-
-  - trigger: "When the operator enrolls a WebAuthn credential during onboarding"
-    action: "strong auth is satisfied (the 7-day grace no longer applies); AND the
-      WebAuthn enrollment is turned into a trust signal that flows the full pipe —
-      its hash is written to the directory identity tree, its sealed ciphertext is
-      queued, the daemon picks it up, verifies the hash, stores the plaintext locally,
-      ACKs, and the directory deletes the ciphertext"
+  - trigger: "When the operator enrolls a WebAuthn credential"
+    action: "the enrollment is turned into a trust signal that flows the full pipe — hash
+      to the directory identity tree, sealed ciphertext to the pickup queue, daemon pickup
+      + openSealed + verify + store + ACK, directory deletes the ciphertext"
 
   - trigger: "When the operator views the Agents home"
     action: "each ceremony-registered agent appears with directory-derived presence
-      (online / last-seen), a fingerprint, and the per-row suspend/burn lever; the
-      operator never registered, started, or stopped an agent from the portal"
+      (online iff its presence row is online AND its owning node is fresh); the operator
+      never registers/starts/stops an agent from the portal"
 
-  - trigger: "When the operator triggers the suspend lever (pause) on an agent"
-    action: "a step-up WebAuthn challenge is required; on success an account-authorized
-      revocation flag is recorded and replicated; every honest directory node refuses
-      its FROST share for that agent, so the agent can no longer complete a ceremony;
-      un-suspending clears the flag and restores the ability to sign"
+  - trigger: "When the operator suspends (pause) an agent via the lever"
+    action: "a step-up is required; on success a replicated revocation flag is recorded;
+      every honest node refuses its FROST share so the agent cannot complete a ceremony;
+      un-suspending restores signing"
 
-  - trigger: "When the operator opens the Trust Signals section"
-    action: "the four named classes render as distinct categories; the WebAuthn signal
-      shows live (real state); the OAuth/device/endorsement/track-record/stake signals
-      show honest placeholders; no composite score, level, distance, or TrustRank
-      element appears anywhere"
+  - trigger: "When the operator opens Trust Signals"
+    action: "four named classes render; the WebAuthn signal is live; the rest are honest
+      placeholders; no composite score / level / TrustRank appears anywhere"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 # All ACs require CELLO_E2E_LIVE (live portal + directory cluster + daemon).
-# Wrap automated portions in describe.skipIf(!process.env.CELLO_E2E_LIVE).
-
 acceptance_criteria:
   - id: AC-001
-    given: "A clean browser with no portal session, opening the portal URL with no magic link"
-    when: "the landing page renders"
+    given: "An operator who completed the ceremony, on a clean browser"
+    when: "they enter their email at the portal sign-in and then the 6-digit code"
     then: >
-      The signpost is shown: an outbound route to the Telegram ceremony AND to the
-      GitHub install, plus a sign-in field. NO portal-side account-creation/registration
-      form exists anywhere on the page. AND portal.landing.signpost.shown is logged at
-      INFO. A page that offers 'create account' fails this AC — identity is minted only
-      at the ceremony.
+      A durable session is established and the operator lands on the Agents home. The
+      account is resolved by matching the typed email's hash against the directory's
+      email_stub_hash — NOT minted by the portal (a portal that creates a local account
+      without a matching directory record fails). The session credential is an httpOnly
+      cookie, absent from document.cookie and localStorage. portal.session.started is
+      logged with accountId and correlationId.
     test_type: e2e
     component_under_test: portal
-    notes: "Requires CELLO_E2E_LIVE. Enforces the ceremony-gated entry decision (Journey 01 D1/D2)."
 
   - id: AC-002
-    given: "An operator who completed the ceremony and was issued a first magic link + 6-digit code"
-    when: "the operator enters the email at the portal sign-in, then enters the 6-digit code"
+    given: "An authenticated operator with no WebAuthn credential and a daemon running for their agent"
+    when: "the operator enrolls a WebAuthn credential"
     then: >
-      A durable server-side session is established and the operator lands on the Agents
-      home. The session credential is an httpOnly, Secure cookie — verified absent from
-      document.cookie (JS-readable) and absent from localStorage/sessionStorage.
-      AND portal.session.started is logged with accountId (resolved via email_stub_hash
-      match against the directory — NOT a portal-minted account), authLevel, and
-      correlationId. A flow that resolves the account by storing a plaintext email→account
-      map rather than hashing-and-matching fails the resolution assertion.
+      The enrollment flows the full trust-signal pipe:
+        - the signal hash is written to the directory identity tree (agent_id-keyed) and
+          is readable from a DIFFERENT cluster node than it was written to;
+        - the daemon pulls the sealed ciphertext over signaling, openSealed(k_local)
+          succeeds, the recomputed SHA-256 matches the directory hash, the plaintext is
+          stored locally, and an ACK is sent;
+        - after the ACK, the pickup queue holds no ciphertext for that signal.
+      portal.trust_signal.handed_off carries a hash and NO plaintext field;
+      daemon.trust_signal.received carries verified: true. A run where the directory keeps
+      the ciphertext after ACK, or any event carries the plaintext, fails.
     test_type: e2e
     component_under_test: portal
-    notes: >
-      Requires CELLO_E2E_LIVE. Email is delivered via the configured provider (the
-      ceremony issues the FIRST link; this AC may use a returning sign-in to email).
-      Telegram is NOT in this path (Journey 01 D4).
 
   - id: AC-003
-    given: "An authenticated operator with no WebAuthn credential, and a daemon running for their agent"
-    when: "the operator enrolls a WebAuthn credential in the portal"
+    given: "An operator whose agent registered via the ceremony, daemon online, ≥2 cluster nodes"
+    when: "the operator views the Agents home, then the daemon disconnects"
     then: >
-      Strong auth is satisfied (authLevel upgraded; the 7-day grace no longer applies).
-      AND the WebAuthn enrollment flows the full trust-signal pipe:
-        - the signal hash is written to the directory identity tree (verified present,
-          agent_id-keyed) and is readable from a DIFFERENT cluster node than it was
-          written to (replication);
-        - the sealed ciphertext is queued, the daemon pulls it over signaling,
-          openSealed(k_local) succeeds, the recomputed SHA-256 matches the directory
-          hash, the plaintext is stored locally, and an ACK is sent;
-        - after ACK, the directory pickup queue no longer holds the ciphertext.
-      Events: portal.webauthn.enrolled, portal.trust_signal.handed_off (with signalType:
-      'webauthn', a hash, NO plaintext field), daemon.trust_signal.received (verified:
-      true). A run where the directory retains the ciphertext after ACK, or where any
-      event carries the plaintext signal, fails this AC.
+      The agent reads 'online' ONLY while its agent_presence row is online AND its owning
+      node's last_heartbeat_at is fresh; the row was written by the node the agent
+      connected to and read by the portal from a replicated node. After the daemon
+      disconnects, presence transitions to last-seen within the transition-write +
+      replication-lag window (directory.presence.transition fires). The portal response
+      contains no daemon-local fields (retry queue, interrupted sessions, daemon status).
     test_type: e2e
     component_under_test: portal
-    notes: "Requires CELLO_E2E_LIVE. WebAuthn-as-first-live-signal (Journey 04 D7). Seal target is k_local_pubkey via content-seal.ts."
 
   - id: AC-004
-    given: "An authenticated operator"
-    when: "the operator enrolls TOTP and is issued backup codes"
+    given: "An online agent able to establish FROST sessions, operator with WebAuthn enrolled, full cluster"
+    when: "the operator suspends (pause) the agent, then un-suspends it"
     then: >
-      TOTP verifies a current 6-digit code. A set of one-time backup codes is issued
-      and shown once. cello-side: the TOTP secret and backup codes are stored only in
-      the portal backend DB, KMS-encrypted — verified by inspecting the row is ciphertext,
-      not plaintext. portal.totp.enrolled and portal.backup_codes.issued (count only,
-      never the codes) are logged.
-    test_type: e2e
-    component_under_test: portal
-    notes: "Requires CELLO_E2E_LIVE. TOTP is the recoverable floor; WebAuthn is the convenience layer (Journey 01 D6)."
-
-  - id: AC-005
-    given: "An operator whose agent registered via the ceremony, with a daemon online"
-    when: "the operator views the Agents home"
-    then: >
-      The agent appears with: a fingerprint, online/last-seen presence, and the suspend
-      lever. Presence is directory-derived: an agent reads as 'online' ONLY when its
-      agent_presence row is online AND its owning node's last_heartbeat_at is fresh.
-      Verified by: (a) the agent shows online while the daemon holds a live signaling
-      connection; (b) after the daemon disconnects, presence transitions to last-seen
-      within the transition-write + replication-lag window; (c) the presence row was
-      written by the node the agent connected to and read by the portal from a
-      (possibly different) replicated node. Events: directory.presence.transition
-      (online→offline), portal.agents.viewed. The portal never shows daemon-local fields
-      (retry queue, interrupted sessions, daemon status) — those are not present in the
-      response.
-    test_type: e2e
-    component_under_test: portal
-    notes: "Requires CELLO_E2E_LIVE, ≥2 nodes. Honest last-seen, no faked real-time dot (Journey 02 D4/D5/D6)."
-
-  - id: AC-006
-    given: "An operator who has registered a SECOND agent via the ceremony"
-    when: "the operator views the Agents home"
-    then: >
-      Both agents appear, each with its own fingerprint and presence. Account scoping
-      holds: only this account's agents appear (agent_profiles.account_id filter) — an
-      agent belonging to a different account is never shown. There is no 'register agent'
-      action in the portal; both agents appeared after their local ceremonies.
-    test_type: e2e
-    component_under_test: portal
-    notes: "Requires CELLO_E2E_LIVE. Multi-agent account management = viewing, not lifecycle control."
-
-  - id: AC-007
-    given: "An online agent able to establish FROST sessions, and an operator with WebAuthn enrolled"
-    when: "the operator triggers the suspend lever (pause) on that agent"
-    then: >
-      A step-up WebAuthn challenge is required and satisfied. An account-authorized
-      revocation flag is recorded (agent_revocations) and replicated. The agent can no
-      longer complete a FROST ceremony — a session establishment attempt for that agent
-      fails because the honest nodes refuse their shares (no threshold forms). This holds
-      even though the agent's client share is present and valid (server-side enforcement).
-      Un-suspending clears the flag and a subsequent ceremony succeeds.
-      Events: portal.agent.suspend.requested (with stepUp: true), directory.agent.revocation.recorded
-      (mode: 'pause'), directory.agent.revocation.cleared on un-suspend.
-      A run where one node refusing is sufficient, or where the agent can still sign while
-      flagged, fails this AC.
+      Suspend requires a satisfied step-up and records a replicated revocation flag
+      (directory.agent.revocation.recorded, mode: 'pause'). While flagged, a FROST session
+      establishment for that agent FAILS for revocation reasons even though the daemon
+      holds a valid client share — the honest nodes refuse their shares, no threshold
+      forms. After un-suspend (directory.agent.revocation.cleared), a subsequent ceremony
+      succeeds. A run where one node refusing is enough, or where the agent still signs
+      while flagged, fails.
     test_type: e2e
     component_under_test: directory
-    notes: >
-      Requires CELLO_E2E_LIVE, full cluster. Tests pause (reversible). Burn (irreversible
-      share destruction) is verified in LEVER-001's own ACs, not re-destroyed here.
-      Mechanism is T-of-N replicated revocation, NOT 2-of-2 ([[project_threshold_t_of_n_not_2_of_2]]).
 
-  - id: AC-008
-    given: "An authenticated operator with WebAuthn enrolled (AC-003) and the rest of the signals unbuilt"
-    when: "the operator opens the Trust Signals section"
+  - id: AC-005
+    given: "An operator with WebAuthn enrolled and the other signals unbuilt"
+    when: "the operator opens Trust Signals"
     then: >
-      Exactly four named class sections render (Class 1 Identity / Class 2 Network graph /
-      Class 3 Track record / Class 4 Economic stake), Class 1 sub-groups visually distinct.
-      The WebAuthn signal shows live (real enrolled state). Every other signal (LinkedIn,
-      GitHub, Twitter/X, device attestation, endorsements, track record, stake) shows an
-      honest placeholder with no functional action behind it. NO aggregate score, level,
-      distance, TrustRank, or Trust-Seeder element appears anywhere on the screen
-      (asserted by absence). A placeholder that shows fabricated 'verified' data or a
-      working-looking Connect button fails this AC.
+      Four named class sections render (Identity / Network graph / Track record / Economic
+      stake). The WebAuthn signal shows live (real state); every other signal shows an
+      honest placeholder with no functional action. NO aggregate score, level, distance,
+      TrustRank, or Trust-Seeder element appears anywhere (asserted by absence). A
+      placeholder showing fabricated 'verified' data, or a working-looking Connect button,
+      fails.
     test_type: e2e
     component_under_test: portal
-    notes: "Requires CELLO_E2E_LIVE. Four-class mandatory; no composite (Journey 03 D2/D3)."
 
-  - id: AC-009
-    given: "An operator signed in on two devices (two sessions)"
-    when: "the operator views Account & Security and uses 'log out everywhere'"
-    then: >
-      Both active sessions are listed (device/UA + last-seen). 'Log out everywhere'
-      revokes the other session — verified by the other device's next request failing
-      auth and being bounced to sign-in. The current session optionally survives.
-      Events: portal.sessions.listed, portal.session.revoked (×N).
-    test_type: e2e
-    component_under_test: portal
-    notes: "Requires CELLO_E2E_LIVE. Server-side session revocation (the reason sessions are stateful)."
-
-  - id: AC-010
-    given: "AC-001 through AC-009 have run"
+  - id: AC-006
+    given: "AC-001 through AC-005 have run"
     when: "the no-plaintext invariant is audited across the systems"
     then: >
-      The directory holds, for the WebAuthn signal, ONLY hashes (no plaintext signal row);
-      for the suspend, ONLY a flag/tombstone. The trust-signal pickup queue is empty for
-      that agent (ciphertext deleted on ACK). The portal backend DB holds no plaintext
-      trust-signal data and no OAuth token; the only PII it holds is the email, and that
-      row is KMS-encrypted ciphertext. The browser holds the session in an httpOnly cookie
-      and NO agent/identity data in localStorage/IndexedDB. Any plaintext message content
-      is absent from every server-side store (the hard invariant).
-    test_type: manual
-    component_under_test: e2e-tests
-    notes: "Requires CELLO_E2E_LIVE. This AC is the invariant audit — it crosses portal, directory, and browser."
-
-  - id: AC-011
-    given: "AC-001 through AC-010 all pass"
-    when: "the milestone close gate is satisfied"
-    then: >
-      The M8 milestone claim is met end-to-end: ceremony-gated magic-link login (AC-001/002),
-      strong auth via WebAuthn + TOTP with WebAuthn flowing a real signal through the pipe
-      (AC-003/004), agents appearing with directory-derived presence (AC-005/006), the
-      suspend lever blocking signing server-side and reversible (AC-007), the four-class
-      Trust Signals scaffold honest (AC-008), account/session management (AC-009), and the
-      no-plaintext invariant intact (AC-010). The milestone writeup
+      The directory holds, for the WebAuthn signal, only a hash (no plaintext row); for the
+      suspend, only a flag. The pickup queue is empty for that agent. The portal backend DB
+      holds no plaintext trust-signal data and no OAuth token; the only PII is the email,
+      stored as KMS-encrypted ciphertext. The browser holds no agent/identity data in
+      localStorage/IndexedDB. The milestone writeup
       (docs/planning/milestone-writeups/M8-portal-skeleton.md) is updated with a dated
       confirmation that all conditions passed.
     test_type: manual
@@ -305,151 +176,78 @@ security_invariants:
   - id: SI-001
     statement: >
       The directory and portal backend must never persist plaintext trust-signal data,
-      message content, or an OAuth token. The directory holds only hashes (identity tree)
-      and flags/tombstones; the pickup queue holds only sealed ciphertext and deletes it
-      on ACK; the portal backend holds only the KMS-encrypted email and auth credentials.
+      message content, or an OAuth token — only hashes, flags, and sealed ciphertext that
+      is deleted on ACK.
     adversarial_condition: >
-      After AC-003 completes, dump the directory identity tree, the pickup queue, and the
-      portal backend DB. None contains the plaintext WebAuthn signal JSON; the pickup queue
-      contains no ciphertext for that signal (ACK deleted it); no OAuth token is present
-      anywhere. Verified by querying each store and asserting the plaintext byte sequence
-      is absent.
+      After AC-002, dump the directory identity tree + pickup queue and the portal backend
+      DB. Assert the plaintext WebAuthn-signal JSON byte sequence is absent from all of
+      them, the pickup queue holds no ciphertext for that signal (ACK deleted it), and no
+      OAuth token is present anywhere.
     test_type: e2e
     component_under_test: directory
 
   - id: SI-002
     statement: >
-      Once an account has strong auth, a fresh email-magic-link session must NOT be able to
-      add a new root credential or escalate. Adding a credential or any sensitive action
-      requires step-up against an existing strong factor.
+      A suspended agent must be unable to complete a FROST ceremony even with a valid
+      client (k_local) share present — enforcement is server-side across the federation.
     adversarial_condition: >
-      An attacker who controls only the email opens a fresh magic-link session on an account
-      that already has WebAuthn. They attempt to enroll their own WebAuthn credential. The
-      portal requires a step-up against an existing factor and the attempt is rejected
-      without it. Verified by asserting the enroll-credential call returns a step-up-required
-      error and no credential is added.
+      With the agent paused (AC-004), the operator's daemon — holding the valid client
+      share — calls cello_initiate_session. Assert the ceremony fails for revocation
+      reasons (not a transient network error), and that no single honest node alone could
+      have produced a signature.
     test_type: e2e
-    component_under_test: portal
-
-  - id: SI-003
-    statement: >
-      A suspended agent must be unable to complete a FROST ceremony even when its client
-      (k_local) share is present and valid — enforcement is server-side across the federation.
-    adversarial_condition: >
-      With an agent paused (AC-007), the operator's daemon — holding the valid client share —
-      attempts cello_initiate_session. The ceremony fails because the honest nodes refuse
-      their shares; no threshold forms. Verified by asserting session establishment returns
-      a failure attributable to the revocation, not a transient network error.
-    test_type: e2e
-    component_under_test: directory
-
-  - id: SI-004
-    statement: >
-      The portal must leave no agent/identity data in the browser's persistent storage. The
-      session credential is an httpOnly cookie; directory data is cached in-memory only.
-    adversarial_condition: >
-      After a full session (AC-005/008), inspect localStorage, sessionStorage, and IndexedDB.
-      They contain no agent fingerprints, presence, session data, or the session token. After
-      closing the tab and reopening, no agent/identity data is restored from disk — only a
-      cookie-backed session (if still valid). Verified by enumerating browser storage and
-      asserting absence.
-    test_type: e2e
-    component_under_test: portal
-
-# ─── Degraded Behavior ──────────────────────────────────────
-degraded_behavior:
-  - id: DB-001
-    condition: "While the directory cluster is unreachable from the portal backend"
-    fallback: >
-      The Agents home shows an honest stale/empty state (last-known data marked stale, or an
-      explicit 'directory unreachable' notice) — NEVER fabricated agents or presence. Reads
-      resume automatically when the directory is reachable. portal.directory.unreachable is
-      logged at WARN. No fake data, ever (the 'real data or honest empty state' rule).
-    test_type: integration
-    component_under_test: portal
-
-  - id: DB-002
-    condition: "While one directory node (the one an agent connected to) goes dark"
-    fallback: >
-      That node's agents age out of 'online' via the node-liveness guard (its
-      last_heartbeat_at goes stale) and render as last-seen, not falsely online. The portal
-      continues reading account/agent data from another replicated node. directory.node.heartbeat.stale
-      is logged. No agent is shown online behind a dead node.
-    test_type: integration
     component_under_test: directory
 
 # ─── Observability ──────────────────────────────────────────
 observability:
-  events: [] # empty by design — gate story; events are defined in the component stories
-  error_events: [] # empty by design
+  events: [] # gate story — events are defined in the component stories
+  error_events: []
   notes: >
-    Gate story, not a code story. It exercises events defined in the SCAFFOLD, AUTH,
-    PRESENCE, READ, AGENTS, WRITEAPI, LEVER, and TRUST component stories. Events verified
-    per AC:
-      AC-001: portal.landing.signpost.shown
-      AC-002: portal.session.started (accountId via email_stub_hash match, authLevel)
-      AC-003: portal.webauthn.enrolled, portal.trust_signal.handed_off (hash, no plaintext),
-              daemon.trust_signal.received (verified: true)
-      AC-004: portal.totp.enrolled, portal.backup_codes.issued (count only)
-      AC-005: directory.presence.transition, portal.agents.viewed
-      AC-007: portal.agent.suspend.requested (stepUp: true),
-              directory.agent.revocation.recorded (mode: 'pause'),
-              directory.agent.revocation.cleared
-      AC-008: (UI assertion — no aggregate/TrustRank element; no new event required)
-      AC-009: portal.sessions.listed, portal.session.revoked
-      DB-001: portal.directory.unreachable
-      DB-002: directory.node.heartbeat.stale
+    Events verified per AC (defined in the component stories, not here):
+      AC-001: portal.session.started (accountId via email_stub_hash match)
+      AC-002: portal.trust_signal.handed_off (hash, no plaintext), daemon.trust_signal.received (verified: true)
+      AC-003: directory.presence.transition
+      AC-004: directory.agent.revocation.recorded (mode: 'pause'), directory.agent.revocation.cleared
     No new events are introduced by this story.
-  alarms: [] # verification story; component stories define alarms
+  alarms: []
 
 # ─── Implementation Notes ────────────────────────────────────
 implementation_notes:
   - >
-    AC-003 — proving the no-plaintext + replication properties together: write the signal
-    hash via the node the portal backend talks to, then read it back from a DIFFERENT node
-    (query a second cluster node directly). Assert the daemon ACK caused the pickup-queue
-    row to be deleted (poll the queue, assert empty) before asserting the directory still
-    holds the hash.
+    AC-002 — prove no-plaintext + replication together: write the hash via the node the
+    portal talks to, read it back from a SECOND node; assert the daemon ACK deleted the
+    pickup-queue row (poll, assert empty) before asserting the directory still holds the hash.
   - >
-    AC-007 — proving server-side enforcement: keep the operator's daemon holding the valid
-    client share throughout. After pause, attempt cello_initiate_session and assert it fails
-    for revocation reasons (not network). Then un-suspend and assert a subsequent ceremony
-    succeeds — proving pause is reversible and the share was never destroyed.
+    AC-004 — prove server-side enforcement: keep the daemon holding the valid client share
+    throughout; after pause, assert cello_initiate_session fails for revocation (not
+    network); after un-suspend, assert a ceremony succeeds (pause is reversible; the share
+    was never destroyed).
   - >
-    AC-010 / SI-001 — the invariant audit crosses three stores (directory identity tree +
-    pickup queue, portal backend DB, browser storage). Script each query and assert the
-    plaintext byte sequence of the WebAuthn signal JSON is absent from all server-side stores,
-    and that browser localStorage/IndexedDB hold no agent/identity data.
-  - >
-    Cohesion pass: after all component stories (SCAFFOLD-001/002, AUTH-001..006, PRESENCE-001,
-    READ-001, AGENTS-001, WRITEAPI-001, LEVER-001, TRUST-001/002/003) are written, re-read
-    this story and align AC event names, field names, and the agent_revocations record shape
-    with what the component stories actually specify. This is a story-writing task.
+    Cohesion pass: after the component stories are written, align AC event names, field
+    names, and the agent_revocations record shape with what they specify.
 
 # ─── Dependencies ────────────────────────────────────────────
 dependencies:
   blocked_by:
-    - CELLO-M8-SCAFFOLD-001   # portal frontend (app shell, design system, routing)
+    - CELLO-M8-SCAFFOLD-001   # portal frontend (app shell, design system, routing, signpost)
     - CELLO-M8-SCAFFOLD-002   # portal backend (dedicated Postgres + KMS + migrations)
     - CELLO-M8-AUTH-001       # magic-link + server-side sessions + account resolution
     - CELLO-M8-AUTH-002       # WebAuthn enrollment + login
     - CELLO-M8-AUTH-003       # TOTP + backup codes
     - CELLO-M8-AUTH-004       # strong-auth enforcement (7-day grace + waiver + admin override)
-    - CELLO-M8-AUTH-005       # stranger signpost landing
     - CELLO-M8-AUTH-006       # Account & Security screen
     - CELLO-M8-PRESENCE-001   # agent_presence + edge-triggered writer + node-liveness
     - CELLO-M8-READ-001       # authenticated portal→directory read path
     - CELLO-M8-AGENTS-001     # Agents home (M8 landing page)
     - CELLO-M8-WRITEAPI-001   # directory write API seam
     - CELLO-M8-LEVER-001      # suspend/burn lever (pause/retire/burn)
-    - CELLO-M8-TRUST-001      # trust-signal handoff mechanism (the pipe)
-    - CELLO-M8-TRUST-002      # WebAuthn-enrollment-as-signal (first live consumer)
+    - CELLO-M8-TRUST-001      # trust-signal handoff mechanism (the pipe) + WebAuthn first consumer
     - CELLO-M8-TRUST-003      # Trust Signals four-class placeholder UI
   blocks: []
   notes: >
-    Written first (per /cello-story E2E-first rule), implemented last. M8 does not close
-    until all ACs pass against a live portal connected to the staging directory cluster.
-    A cohesion pass is required after all component stories are written.
+    Written first (E2E-first), implemented last. Signpost folded into SCAFFOLD-001 and
+    WebAuthn-as-signal folded into TRUST-001 (the two over-splits removed). Cohesion pass
+    required after component stories are written.
 
 # ─── References ─────────────────────────────────────────────
 references:

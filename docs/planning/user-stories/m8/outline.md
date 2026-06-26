@@ -54,15 +54,14 @@ multi-process smoke test).
 ### Wave 0 — Foundation (parallel)
 | ID | Title | Where | Depends |
 |---|---|---|---|
-| `CELLO-M8-SCAFFOLD-001` | Portal frontend: Next.js app, light/dark design system as code, app shell (nav + top bar), routing, auth-gated layout | portal | — |
+| `CELLO-M8-SCAFFOLD-001` | Portal frontend: Next.js app, light/dark design system as code, app shell (nav + top bar), routing, auth-gated layout, **stranger signpost landing** | portal | — |
 | `CELLO-M8-SCAFFOLD-002` | Portal backend: service + dedicated **PostgreSQL** + migrations + KMS envelope encryption + secrets | portal | — |
 | `CELLO-M8-PRESENCE-001` | `agent_presence` (mutable upsert) + edge-triggered writer (hook `#streams`) + `directory_nodes.last_heartbeat_at` + startup reconciliation + the "online = row online AND node fresh" read rule | directory | — |
 
-### Wave 1 — Auth core + signpost
+### Wave 1 — Auth core
 | ID | Title | Where | Depends |
 |---|---|---|---|
 | `CELLO-M8-AUTH-001` | Magic-link bootstrap + **server-side sessions**: email link + 6-digit code, durable session, sessions table, email delivery, email-hash → `account_id` resolution | portal | SCAFFOLD-001/002 |
-| `CELLO-M8-AUTH-005` | Stranger signpost landing (no link → routes to the Telegram ceremony + GitHub install) | portal | SCAFFOLD-001 |
 
 ### Wave 2 — Strong auth + read path
 | ID | Title | Where | Depends |
@@ -83,13 +82,12 @@ multi-process smoke test).
 | ID | Title | Where | Depends |
 |---|---|---|---|
 | `CELLO-M8-LEVER-001` | **Suspend/burn lever** (pause / retire / burn): revocation honor-check in the ceremony/co-signing path + replication (`agent_revocations` V32 exists) + portal trigger (step-up) + lever UI on the Agents home | directory + portal | WRITEAPI-001, AGENTS-001, AUTH-002 |
-| `CELLO-M8-TRUST-001` | **Trust-signal handoff mechanism** (the general pipe): stateless portal pipeline (verify → JSON → hash → seal to `k_local` → write hash + ciphertext) + directory identity-tree table + ephemeral pickup queue + daemon pickup flow (`openSealed` → verify → store → ACK) | portal + directory + daemon | WRITEAPI-001 |
+| `CELLO-M8-TRUST-001` | **Trust-signal handoff mechanism** (the general pipe) + **WebAuthn as first live signal**: stateless portal pipeline (verify → JSON → hash → seal to `k_local` → write hash + ciphertext) + directory identity-tree table + ephemeral pickup queue + daemon pickup flow (`openSealed` → verify → store → ACK); proven end-to-end by WebAuthn enrollment | portal + directory + daemon | WRITEAPI-001, AUTH-002 |
 
-### Wave 5 — Trust signals live + UI
+### Wave 5 — Trust signals UI
 | ID | Title | Where | Depends |
 |---|---|---|---|
-| `CELLO-M8-TRUST-002` | **WebAuthn-enrollment-as-signal**: the first live signal through the pipe (proves it end-to-end) | portal + daemon | TRUST-001, AUTH-002 |
-| `CELLO-M8-TRUST-003` | **Trust Signals UI**: four-class placeholder scaffold; WebAuthn cell live (via TRUST-002), rest honest placeholders; no composite/TrustRank | portal | SCAFFOLD-001, TRUST-002 |
+| `CELLO-M8-TRUST-003` | **Trust Signals UI**: four-class placeholder scaffold; WebAuthn cell live (via TRUST-001), rest honest placeholders; no composite/TrustRank | portal | SCAFFOLD-001, TRUST-001 |
 
 ### Gate
 | ID | Title | Where | Depends |
@@ -102,15 +100,16 @@ multi-process smoke test).
 
 ```
 Wave 0:  SCAFFOLD-001 | SCAFFOLD-002 | PRESENCE-001        (parallel)
-Wave 1:  AUTH-001 | AUTH-005
+Wave 1:  AUTH-001
 Wave 2:  AUTH-002 | AUTH-003 | READ-001
 Wave 3:  AUTH-004 | AUTH-006 | AGENTS-001 | WRITEAPI-001
 Wave 4:  LEVER-001 | TRUST-001
-Wave 5:  TRUST-002 | TRUST-003
+Wave 5:  TRUST-003
 Gate:    E2E-001  (written first, verified last)
 ```
 
-16 stories. The portal frontend (SCAFFOLD/AUTH/AGENTS/TRUST-UI) and the server-side work
+14 stories (signpost folded into SCAFFOLD-001; WebAuthn-as-signal folded into TRUST-001).
+The portal frontend (SCAFFOLD/AUTH/AGENTS/TRUST-UI) and the server-side work
 (PRESENCE/WRITEAPI/LEVER/TRUST pipe) parallelize across the portal and directory repos.
 
 ## Explicitly NOT in M8 (no stories)
