@@ -2,15 +2,16 @@
 name: m8-journey-agents
 type: journey
 date: 2026-06-25
-topics: [m8, portal, agents, presence, sessions, directory, federation, liveness, daemon-channel]
+topics: [m8, portal, agents, presence, sessions, directory, federation, liveness, daemon-channel, not-me, suspend-burn, t-of-n, dashboard, landing-home]
 status: draft
 description: >
-  Second M8 portal journey — the Agents section. Where an operator sees their
-  agents, each agent's online/last-seen status, and its sessions (who it's
-  connected to / talking with). Resolves the hard data-availability questions:
-  what the directory DB holds, how online presence is persisted, and what is
-  deferred to a future portal→daemon channel. Single-focus working doc; folds
-  into the M8 outline + user stories later.
+  Second M8 portal journey — the Agents section, which is also the M8 landing home.
+  Where an operator sees their agents and each agent's online/last-seen status, and
+  triggers the emergency suspend/burn lever. Resolves the data-availability questions
+  (what the directory DB holds, how online presence is persisted), folds the Dashboard
+  into the Agents home (the standalone operational Dashboard is deferred), and scopes
+  the per-agent detail page and transcript to a future portal→daemon channel. Single-
+  focus working doc; folds into the M8 outline + user stories later.
 ---
 
 # M8 Journey — Agents
@@ -23,15 +24,19 @@ Working spec, not a final user story.
 ## What the operator wants (the journey)
 
 - **Agents section = where you see your agents.** Each agent shows whether the
-  directory considers it online.
-- **Click an agent → a dedicated per-agent page.** Everything about that one agent.
-- On that page: **its sessions, and who each session is with.**
-- **Later:** click into **information about the counterparties** it's talking to, and
-  view the **evolving transcript** of a live session.
-- **The only agent-control action is the emergency "Not Me" shutdown** of a compromised
-  agent (carried in the dedicated security journey; referenced, not defined here). There
-  is no register / start / stop / set-current in the portal — agents *appear* after the
-  local ceremony; the daemon owns process lifecycle. (See [[project-portal-model]].)
+  directory considers it online (last-seen) and carries the emergency suspend/burn lever.
+- **The per-agent detail page is DEFERRED in full (D9).** Launch is the Agents **list**
+  only. A per-agent page — its sessions, who each session is with, counterparty detail,
+  and the evolving transcript — needs the portal→daemon channel and does not ship in M8.
+- **The only agent-control action is the emergency suspend/"Not Me" lever (D10)** — a
+  three-position pause / retire / burn, account-authorized, enforced server-side by the
+  T-of-N node federation. There is no register / start / stop / set-current in the portal
+  — agents *appear* after the local ceremony; the daemon owns process lifecycle.
+  (See [[project-portal-model]], [[project_threshold_t_of_n_not_2_of_2]].)
+- **The Agents view is also the M8 landing/home page (D11).** At M8 a separate Dashboard
+  would be virtually identical to the agent list, so there is no standalone Dashboard — the
+  Agents home carries a thin alerts + posture header, and the operational Dashboard is
+  deferred to the daemon-channel milestone.
 
 ## The hard invariant being guarded
 
@@ -60,6 +65,10 @@ Keyed on the agent's identity pubkey (`k_local_pubkey`):
   pubkeys, FROST notarization signature, attestations.
 - **Connection-request outcomes** (`connection_requests`): accepted/rejected/expired, by
   pseudonym.
+
+> Note: most of these directory facts (connection graph, sessions) are only *displayed* on
+> the deferred per-agent page (D9). The Agents **list** at launch needs only identity
+> (fingerprint) + presence (below) + the lever (D10).
 
 ## Federation: replicated reads, sovereign writes, per-node memory
 
@@ -90,9 +99,8 @@ Keyed on the agent's identity pubkey (`k_local_pubkey`):
 ## Decisions (locked)
 
 **D1 — The Agents section is an observe surface + the one emergency lever.**
-See your agents and their status; open a per-agent page; see sessions and counterparties.
-No register / start / stop / set-current. The only control is the emergency "Not Me"
-shutdown (defined in the security journey).
+See your agents and their last-seen status; trigger the emergency suspend/burn lever (D10).
+No register / start / stop / set-current. The per-agent detail page is deferred in full (D9).
 
 **D2 — The portal reads replicated global DB state, from any node.**
 It does not couple to a single node and does not (for launch) reach into the local daemon.
@@ -136,7 +144,7 @@ falsely-precise real-time dot. Real data or honest empty state — no faked live
 **D7 — Counterparties are fingerprints at launch.**
 The directory has no names or bios, so "with whom" renders as a **pubkey/fingerprint**
 until either the trust/profile layer fills it in or the deferred daemon channel enriches
-it. Do not invent names.
+it. Do not invent names. (Applies to the per-agent page, D9 — itself deferred.)
 
 **D8 — Transcript + counterparty enrichment are deferred to a portal→daemon channel.**
 Showing live transcript or rich counterparty detail requires streaming directly from the
@@ -145,16 +153,79 @@ new daemon capability and a significant lift — **out of scope for launch.** It
 *same* deferred capability for both transcript and the (optional, fresher) real-time
 presence alternative, which keeps the deferral tidy.
 
+**D9 — The per-agent detail page is deferred in full.**
+Launch ships the Agents **list** only (identity by fingerprint, last-seen status, the
+suspend/burn lever per row). Clicking into an agent — its connection graph, in-flight and
+sealed sessions, who each session is with, counterparty detail, and the live transcript —
+is **deferred until the portal→daemon channel exists.** This supersedes the earlier framing
+(per-agent page shows directory-readable facts at launch): the operator wants the page to be
+*about the live agent*, and the live substance only arrives over the daemon channel. Rather
+than ship a thin directory-only page now and a rich one later, the whole page waits for the
+channel.
+
+**D10 — The emergency suspend/burn lever (the "Not Me" control).**
+- **Lives on the Agents list**, per row (since the per-agent page is deferred). It is the
+  *only* agent-control action in the portal.
+- **Three positions** (from the identity-lifecycle thread,
+  `discussion_logs/2026-06-25_2109_agent-identity-lifecycle-discovery.md` §5):
+  - **Pause** — reversible freeze; the node federation withholds co-signing. Share intact.
+  - **Retire** — orderly drain of in-flight sessions, then destroy share + tombstone
+    (`reason=voluntary`).
+  - **Burn** — instant destroy share + tombstone (`reason=compromise`). The emergency kill.
+- **Mechanism is T-of-N, NOT 2-of-2.** The current code's 2-of-2 (client + one *mandatory*
+  node) is a **known stopgap bug, not the design** ([[project_threshold_t_of_n_not_2_of_2]]).
+  Do **not** ground the lever on "one node withholds." Correct mechanism: an
+  **account-authorized, replicated revocation flag** (suspended fact / tombstone) that
+  **every sovereign node independently honors** by refusing to contribute its share — since
+  a signature needs a *threshold* of nodes and the honest ones all refuse, no threshold
+  forms and signing is blocked. **Burn** additionally destroys the server-side share
+  material across the federation.
+- **Works even when the operator's device is the compromise** — the block is server-side
+  across the federation, independent of the client share. A thief holding the laptop and the
+  client share still cannot sign.
+- **Capability dies, accountability survives** — burn kills *future* signing, never *past*
+  accountability: counterparties hold the sealed records, the directory keeps the identity
+  binding resolvable, and the burn is itself a signed, timestamped event.
+- **Account-authorized, step-up gated** — triggered via portal strong-auth (Journey 01), not
+  by the agent's own key. Authorize (portal) → node federation executes (withhold / destroy)
+  → directory records (revocation flag / tombstone). No central control plane.
+- **Scope (DECIDED — all three ship in M8):** pause / retire / burn all land in M8. Under
+  T-of-N even **pause** needs the replicated-flag plumbing (revocation-flag table + a check
+  in the ceremony/co-signing path + replication), so it's a contained addition rather than
+  free; **burn** adds coordinated share destruction across the federation. The directory
+  revocation record already exists — `agent_revocations` (V32, deployed all regions; see
+  `infra/STATE.md`) — so the record shape is in place; the lever wires the portal trigger +
+  the ceremony-path honor check on top.
+
+**D11 — The Agents home is the M8 landing page; the standalone Dashboard is deferred.**
+At M8 a separate "Dashboard" and the Agents list would be virtually identical — the only
+thing that would distinguish a dashboard (live session event feed, active-connection /
+retry / interrupted metrics, daemon/signaling status cards) is exactly the **deferred
+daemon-channel telemetry**. So there is **no separate Dashboard screen at M8**:
+- **The landing page after login *is* the Agents home** — the agent list with presence +
+  the lever — plus a thin header for **identity/security alerts** (directory / ops-agent
+  sourced; honest empty state) and **account posture** (strong-auth status, trust-signal
+  coverage). This satisfies the roadmap's "operator dashboard / agent health and status."
+- **The real operational Dashboard** (live event feed, metrics, daemon status) is **deferred
+  to the milestone that brings the portal→daemon channel** — where a dashboard finally shows
+  something a list doesn't. The old dashboard screenshot was a *daemon-console* dashboard:
+  the daemon / directory-signaling / standing-receiver cards, retry-queue / interrupted-
+  session metrics, and the live session feed are all `cello_status` (local-daemon) state a
+  hosted portal cannot see without that channel.
+- The distinct bits absorb cleanly: **alerts** → a strip atop the Agents home; **posture** →
+  Account & Security (strong-auth) + the Trust Signals section (coverage).
+
 ## Launch scope vs. deferred
 
-**Launch (directory-readable + new presence table):**
-- Agents list: each agent with identity (fingerprint), **online / last-seen** status.
-- Per-agent page: its **connection graph** (who, by fingerprint), **in-flight sessions**
-  (with whom, by fingerprint), **sealed-session history** (hashes, close type, dates),
-  last activity.
-- Emergency "Not Me" lever (security journey).
+**Launch (the Agents home — directory-readable + new presence table):**
+- The **Agents home** is the M8 landing page (D11): the agent **list** — each agent with
+  identity (fingerprint), **online / last-seen** status, and the per-row **suspend/burn
+  lever** (D10) — plus a thin header for **identity/security alerts** and **account posture**.
+- That's the whole Agents UI at launch. No per-agent detail page, no separate Dashboard.
 
 **Deferred (needs the portal→daemon channel):**
+- The **entire per-agent detail page** (D9): connection graph, in-flight + sealed sessions,
+  who each session is with.
 - Live, evolving **transcript** of a session.
 - **Counterparty enrichment** beyond a fingerprint.
 - Real-time (sub-replication-lag) presence, if ever wanted.
@@ -167,11 +238,20 @@ presence alternative, which keeps the deferral tidy.
   "online = row online AND node fresh" read rule + startup reconciliation.
 - **Authenticated portal read path** to the (replicated) directory data, scoped to the
   operator's account (`account_id`).
+- **Suspend/burn lever (D10):** a replicated **revocation-flag / tombstone** record, a
+  check in the ceremony path so every node honors it, account-authorized trigger from the
+  portal (step-up), and — for burn — coordinated server-side share destruction. T-of-N, not
+  2-of-2. (Scope split M8 vs M15 being settled with the identity-lifecycle thread.)
 
 ## Rejected / not doing
 
 - **Register / create / start / stop / set-current an agent in the portal.** Agents appear
-  after the local ceremony; the daemon owns lifecycle. Only the emergency brake exists.
+  after the local ceremony; the daemon owns lifecycle. Only the emergency lever exists.
+- **A per-agent detail page at launch** (even a thin directory-only one). Deferred in full
+  (D9) — it waits for the daemon channel rather than shipping thin-then-rich.
+- **Grounding the suspend/burn lever on "one mandatory node."** Rejected — that's the 2-of-2
+  stopgap bug, not the design. Use the replicated revocation flag honored by the T-of-N
+  federation ([[project_threshold_t_of_n_not_2_of_2]]).
 - **In-memory presence gossip across nodes.** Rejected — couples sovereign nodes; we
   persist instead.
 - **Per-node presence routing from the portal** (query the specific node's memory).
@@ -184,10 +264,11 @@ presence alternative, which keeps the deferral tidy.
 
 ## Downstream / open items
 
-- Per-agent page **UI** detail (layout of sessions, how a fingerprint counterparty is
-  presented, what "last seen" looks like). Not yet narrated.
-- Where the **"Not Me"** emergency brake lives in the IA and how it relates to this page
-  — cross-reference the security journey once written; avoid duplication.
+- Per-agent page **UI** — deferred in full (D9); to be designed when the portal→daemon
+  channel is built. Not an M8 concern.
+- **Suspend/burn lever:** scope DECIDED — all three (pause / retire / burn) ship M8 (D10).
+  Remaining: the exact revocation-record fields (`agent_revocations` V32 exists) and the
+  ceremony-path honor check — coordinate with the identity-lifecycle thread.
 - The masked-phone display seen on the old Account screen (`+1 ••• ••• 4417`) can't come
   from the directory (it stores only `phone_stub_hash`). Reconcile in the account journey.
 - Exact freshness windows (per-node heartbeat cadence, "last seen" thresholds for the dot).
