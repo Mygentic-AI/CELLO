@@ -1,0 +1,137 @@
+---
+name: CELLO-M8-AUTH-002
+type: user-story
+date: 2026-06-26
+topics: [portal, auth, webauthn, passkey, step-up, multi-credential, m8]
+status: draft
+description: >
+  WebAuthn enrollment + login + step-up. The operator enrolls one or more per-device
+  passkeys; login authenticates against them; sensitive operations require a fresh WebAuthn
+  step-up. Enrolling satisfies strong auth. A fresh email-magic-link session cannot add a new
+  credential without stepping up against an existing factor.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M8-AUTH-002
+domain: Portal
+milestone: M8
+actor: OPS
+priority: P0
+components:
+  - portal
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As an operator,
+  I want to enroll per-device WebAuthn passkeys, log in with them, and be asked for a fresh
+  step-up before sensitive actions,
+  so that I have phishing-resistant, multi-device strong auth — and a stolen email session
+  alone cannot plant a new credential or take sensitive actions.
+
+# ─── Context ────────────────────────────────────────────────
+# WebAuthn is the convenience layer on top of the recoverable TOTP floor (Journey 01 D6), and
+# the per-device new-device bootstrap reuses the magic link (D5). Accounts hold MULTIPLE
+# credentials (one per device). Step-up issues a FRESH challenge per sensitive op, not once per
+# session. The bootstrap-grants-session-but-not-privilege invariant (D, SI-002 of the gate)
+# lives here: on an account that already has strong auth, adding a credential requires step-up
+# against an existing factor. Use @simplewebauthn/server. webauthn_credentials table from
+# SCAFFOLD-002.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When an authenticated operator enrolls a passkey"
+    action: "a WebAuthn registration ceremony runs; the credential (id + public key) is stored
+      for this account/device; authLevel is upgraded to strong"
+
+  - trigger: "When the operator logs in with an enrolled passkey"
+    action: "a WebAuthn authentication ceremony verifies against a stored credential and
+      establishes the session"
+
+  - trigger: "When a sensitive operation is attempted"
+    action: "a fresh WebAuthn step-up challenge is required; the op proceeds only if step-up
+      succeeded within the step-up window"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An authenticated operator with no passkey"
+    when: "they enroll a passkey, then log out and log in with it"
+    then: >
+      A webauthn_credentials row is stored (unique credential_id, public key, bound to
+      account_id) and authLevel becomes strong. Login runs a real WebAuthn assertion verified
+      against the stored public key — a wrong/absent assertion is rejected. portal.webauthn.enrolled
+      is logged. (Verification against the stored public key is the stub-resistant observable —
+      a stub that returns success without checking the signature fails when given a bad assertion.)
+    test_type: e2e
+    component_under_test: portal
+
+  - id: AC-002
+    given: "An operator with one passkey on device A"
+    when: "they enroll a second passkey on device B"
+    then: >
+      The account holds TWO credentials (distinct credential_ids); either device authenticates
+      independently; removing device A's credential does not affect device B's. Proves
+      multi-credential, per-device enrollment.
+    test_type: e2e
+    component_under_test: portal
+
+  - id: AC-003
+    given: "An authenticated operator with a passkey, no recent step-up"
+    when: "a sensitive operation is attempted (e.g. remove a factor)"
+    then: >
+      The operation is refused until a FRESH WebAuthn step-up is satisfied (last_step_up_at
+      within the window). A second sensitive op after the window requires a new step-up — step-up
+      is per-op, not once-per-session. portal.stepup.challenged / portal.stepup.satisfied logged.
+    test_type: e2e
+    component_under_test: portal
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      On an account that already has strong auth, a fresh email-magic-link session must NOT be
+      able to add a new credential without stepping up against an existing factor.
+    adversarial_condition: >
+      An attacker holding only the email opens a fresh magic-link session on an account that
+      already has a passkey, and attempts to enroll their own passkey. The enroll call returns
+      step-up-required and no credential is added without satisfying step-up against the existing
+      passkey. A flow that lets a bare email session plant a new credential fails this invariant.
+    test_type: e2e
+    component_under_test: portal
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: portal.webauthn.enrolled
+      level: info
+      context_fields: [accountId, credentialId, correlationId]
+      asserted_by: AC-001
+    - name: portal.stepup.satisfied
+      level: info
+      context_fields: [accountId, operation, correlationId]
+      asserted_by: AC-003
+  error_events:
+    - name: portal.stepup.required
+      level: info
+      context_fields: [accountId, operation, correlationId]
+      asserted_by: AC-003
+  alarms: []
+  notes: "Turning enrollment into a trust signal through the pipe is TRUST-001, not this story."
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M8-AUTH-001
+  blocks:
+    - CELLO-M8-AUTH-004
+    - CELLO-M8-AUTH-006
+    - CELLO-M8-LEVER-001
+    - CELLO-M8-TRUST-001
+  notes: "WebAuthn enrollment/login/step-up. The step-up gate is consumed by LEVER-001 and AUTH-006."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M8
+  related_docs:
+    - "[[outline]]"
+    - "[[01-onboarding-and-authentication]]"
+  notes: "Convenience layer on the TOTP floor; multi-credential; step-up per sensitive op."
