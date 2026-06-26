@@ -345,11 +345,10 @@ directory tasks healthy (running 1/1, failedTasks 0, zero crashed/stopped tasks 
 `agent_revocations` is an append-only, INSERT-only-RLS table (cello_service: INSERT/SELECT, no
 UPDATE/DELETE) holding self-signed agent revocations. **TWO follow-ups still pending (NOT done by the
 pipeline):**
-1. **ops-agent expected-migration-version SSM is STALE at 30** (`/cello/dev/ops-agent/expected-migration-version`,
-   us-east-1) — it was never bumped for V31 either; DB is now at 32. The ops-agent is currently HEALTHY (1/1)
-   because it gates the version check only at STARTUP, but it will REFUSE TO START on its next restart until
-   bumped: `aws ssm put-parameter --name /cello/dev/ops-agent/expected-migration-version --value 32 --overwrite --region us-east-1`.
-   (The IaC template `cello-ssm-parameters.yaml` is already at 32; deploy.sh would also set it.)
+1. ~~ops-agent expected-migration-version SSM stale at 30~~ **DONE 2026-06-26** — bumped to **32** via
+   `aws ssm put-parameter … --value 32 --overwrite --region us-east-1` (verified Value=32). The running
+   ops-agent was unaffected (healthy 1/1; gates at startup); its next restart reads 32 = DB. IaC template
+   `cello-ssm-parameters.yaml` already at 32.
 2. **`agent_revocations` is NOT yet in the `cello_pub` publication** — `setup-replication.sh` (PUBLICATION_TABLES
    updated in IaC) must be re-run (`./infra/setup-replication.sh dev`) so revocations replicate across nodes
    (cross-node AC-002). Single-region revocation works without it.
