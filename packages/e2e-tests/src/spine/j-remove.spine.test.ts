@@ -21,6 +21,7 @@ import {
   startSpineCluster,
   startDaemon,
   cello,
+  psqlSpine,
   CELLO_CLIENT_ROOT,
   type SpineCluster,
   type Proc,
@@ -34,6 +35,23 @@ async function openEncryptedDb(dbPath: string): Promise<KeyedDb> {
   )) as { openEncryptedDatabaseAtPath(p: string): KeyedDb };
   return mod.openEncryptedDatabaseAtPath(dbPath);
 }
+
+// AC-002 cross-node re-verification: rebuild the canonical TBS (protocol-types) and verify the stored
+// signature (crypto) — both loaded from the SAME local cello-client build the daemon signed with.
+async function loadRevocationVerifier(): Promise<{
+  buildAgentRevocationTbs: (a: string, k: string, e: string, r: string, t: number) => Uint8Array;
+  verify: (pub: Uint8Array, data: Uint8Array, sig: Uint8Array) => boolean;
+}> {
+  const pt = (await import(pathToFileURL(join(CELLO_CLIENT_ROOT, "core/protocol-types/dist/index.js")).href)) as {
+    buildAgentRevocationTbs: (a: string, k: string, e: string, r: string, t: number) => Uint8Array;
+  };
+  const crypto = (await import(pathToFileURL(join(CELLO_CLIENT_ROOT, "core/crypto/dist/index.js")).href)) as {
+    verify: (pub: Uint8Array, data: Uint8Array, sig: Uint8Array) => boolean;
+  };
+  return { buildAgentRevocationTbs: pt.buildAgentRevocationTbs, verify: crypto.verify };
+}
+
+const hexToBytes = (h: string): Uint8Array => new Uint8Array(Buffer.from(h, "hex"));
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -87,11 +105,39 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
     // ── Remove X: one-way, echoes the retired agent_id, states it is one-way. ──
     const removed = cello(["remove-agent", "xavier"], { CELLO_DIR: dir });
     expect(removed.status, `remove-agent failed: ${removed.stdout}`).toBe(0);
-    const r = JSON.parse(removed.stdout) as { ok: boolean; agentId: string; oneWay: boolean; message: string };
+    const r = JSON.parse(removed.stdout) as { ok: boolean; agentId: string; oneWay: boolean; message: string; directoryRevocation: string };
     expect(r.ok).toBe(true);
     expect(r.oneWay).toBe(true);
     expect(r.agentId).toBe(id1);
     expect(r.message.toLowerCase()).toContain("one-way");
+    // DOD-REMOVE-2: the directory accepted + recorded the signed revocation (the daemon got the ack).
+    expect(r.directoryRevocation, "the directory must record the signed revocation").toBe("recorded");
+
+    // ── AC-002: an agent_revocations row for X's DIRECTORY agent_id is present, its signature VERIFIES
+    // against X's registered K_local, and X's agent_profiles row is UNCHANGED (purely additive — SI-002).
+    // Read straight from the directory's Postgres (its OWN write), not the daemon's self-report. ──
+    const regId = psqlSpine(`SELECT agent_id FROM agent_profiles WHERE k_local_pubkey = '${pub1}'`);
+    expect(regId, "X must have a directory-assigned agent_id after registration").toMatch(/\S/);
+    let revRow = "";
+    for (let i = 0; i < 20; i++) {
+      // The directory INSERT is fire-and-forget after the ack — poll for the committed row.
+      revRow = psqlSpine(
+        `SELECT encode(signature,'hex') || '|' || COALESCE(epoch_id,'') || '|' || COALESCE(reason,'') || '|' || revoked_at FROM agent_revocations WHERE agent_id = '${regId}'`,
+      );
+      if (revRow) break;
+      await new Promise((res) => setTimeout(res, 250));
+    }
+    expect(revRow, `an agent_revocations row must exist for ${regId}`).toMatch(/\S/);
+    const [sigHex, epochId, reason, revokedAtStr] = revRow.split("|");
+    const { buildAgentRevocationTbs, verify } = await loadRevocationVerifier();
+    const tbs = buildAgentRevocationTbs(regId, pub1, epochId, reason, Number(revokedAtStr));
+    expect(
+      verify(hexToBytes(pub1), tbs, hexToBytes(sigHex)),
+      "the stored revocation signature must verify against X's registered K_local (self-signed fact)",
+    ).toBe(true);
+    // agent_profiles untouched — the revocation is additive, the identity binding stays resolvable.
+    expect(psqlSpine(`SELECT status FROM agent_profiles WHERE agent_id = '${regId}'`), "agent_profiles must be unchanged").toBe("active");
+    expect(psqlSpine(`SELECT k_local_pubkey FROM agent_profiles WHERE agent_id = '${regId}'`)).toBe(pub1);
 
     // ── SI-002: the retired row is KEPT — same agent_id, state=retired, K_local seed AND the FROST
     // signing share intact (a registered identity survives removal; it is a tombstone, not an erasure). ──
