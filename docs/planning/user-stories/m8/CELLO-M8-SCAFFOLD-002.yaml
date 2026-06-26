@@ -1,0 +1,140 @@
+---
+name: CELLO-M8-SCAFFOLD-002
+type: user-story
+date: 2026-06-26
+topics: [portal, backend, postgres, kms, migrations, sessions, webauthn, totp, m8]
+status: draft
+description: >
+  Portal backend scaffold — the service, its own dedicated PostgreSQL (separate from the
+  directory DB), the migration framework, and KMS envelope encryption for sensitive fields.
+  The store for sessions, WebAuthn credentials, TOTP secrets, and the operator email.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M8-SCAFFOLD-002
+domain: Portal
+milestone: M8
+actor: OPS
+priority: P0
+components:
+  - portal
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the foundation for the M8 portal backend,
+  I want a backend service with its own dedicated PostgreSQL, a migration framework, and KMS
+  envelope encryption for sensitive fields,
+  so that sessions, WebAuthn credentials, TOTP secrets, and the operator email have a
+  centralized store that is strictly separate from the sovereign directory database and never
+  holds directory key material.
+
+# ─── Context ────────────────────────────────────────────────
+# The portal backend is a CENTRALIZED service DB — NOT the directory's federated/replicated
+# Postgres, NOT the daemon's SQLCipher. It holds the auth state the directory deliberately
+# does not: the real email (needed to send magic links; the directory keeps only a hash),
+# WebAuthn credentials, TOTP secrets, sessions. Sensitive fields are KMS-encrypted at rest
+# (same envelope pattern the directory uses for K_server_X shares). This is an accepted
+# alpha trade-off (a small, bounded PII/secret store) — see [[01-onboarding-and-authentication]].
+# Constraint: the portal backend must hold NO directory key material and have NO connection
+# to the directory DB; it reaches the directory only via the read/write API (READ-001/WRITEAPI-001).
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the backend service starts"
+    action: "it connects to its own dedicated PostgreSQL, applies all pending migrations, and
+      reports ready only after migrations succeed"
+
+  - trigger: "When a sensitive field (TOTP secret, email) is written"
+    action: "it is stored KMS-envelope-encrypted; the plaintext is never persisted"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A fresh dedicated portal Postgres and the migration set"
+    when: "migrations are applied, then re-applied against the already-migrated DB"
+    then: >
+      All migrations apply with zero checksum errors on the second run (idempotent / additive,
+      applied against prior migrations already present — not a fresh DB). The schema contains
+      the enumerated tables with their constraints: sessions (session id, account_id, device/UA,
+      created/last_seen/expires, auth_level, last_step_up_at), webauthn_credentials (account_id,
+      credential_id UNIQUE, public_key, per-device), totp_secrets (account_id), and the account
+      record (account_id, email). Indexes/uniqueness named in implementation_notes are present.
+    test_type: integration
+    component_under_test: portal
+
+  - id: AC-002
+    given: "The backend running with KMS configured"
+    when: "a TOTP secret and an email are written, then the rows are read directly from Postgres"
+    then: >
+      The stored bytes for the TOTP secret and email are ciphertext — NOT the plaintext value
+      (asserted by reading the raw column and confirming the plaintext byte sequence is absent).
+      The value round-trips correctly through the application layer (decrypt → usable TOTP
+      secret / email). A write that stores plaintext fails this AC.
+    test_type: integration
+    component_under_test: portal
+
+  - id: AC-003
+    given: "The backend configuration"
+    when: "the backend's data access is inspected"
+    then: >
+      The backend has NO connection string / credentials for the directory database and holds
+      no directory key material (no K_server shares, no FROST material). Verified structurally:
+      the only database connection configured is the portal's own Postgres. A backend that can
+      reach the directory DB directly fails this AC.
+    test_type: integration
+    component_under_test: portal
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The portal backend DB must never hold directory key material or message content, and must
+      hold the email and TOTP secret only as KMS-encrypted ciphertext.
+    adversarial_condition: >
+      Dump the entire portal backend DB. Assert it contains no K_server share / FROST material /
+      message content, and that the email and TOTP-secret columns are ciphertext (the plaintext
+      byte sequences are absent).
+    test_type: integration
+    component_under_test: portal
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: portal.backend.started
+      level: info
+      context_fields: [migrationVersion, correlationId]
+      asserted_by: AC-001
+  error_events:
+    - name: portal.backend.migration.failed
+      level: error
+      context_fields: [migrationVersion, reason, correlationId]
+  alarms: []
+  notes: "Migration failure is a startup-blocking error event."
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Schema enumeration (Architecture phase): sessions (PK session id; index on account_id;
+    expires_at index for sweep), webauthn_credentials (UNIQUE credential_id; index on account_id;
+    multiple rows per account = per device), totp_secrets (one per account_id), account
+    (account_id PK; email KMS-encrypted; the directory's email_stub_hash is matched at login,
+    not stored here as a hash). Backup codes: stored hashed + KMS-wrapped, one-time-use flag.
+  - >
+    KMS envelope pattern mirrors the directory's K_server_X handling — encrypt the field with a
+    data key, store the wrapped data key; never log plaintext.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by: []
+  blocks:
+    - CELLO-M8-AUTH-001
+    - CELLO-M8-AUTH-002
+    - CELLO-M8-AUTH-003
+  notes: "Dedicated Postgres + KMS. Separate from the directory DB. Open scoping (hosting) ratified before start."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M8
+  related_docs:
+    - "[[outline]]"
+    - "[[01-onboarding-and-authentication]]"
+  notes: "Centralized portal-backend store; never the sovereign directory DB."
