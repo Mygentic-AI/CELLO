@@ -1,0 +1,226 @@
+---
+name: CELLO-M7-CONN-001
+type: user-story
+date: 2026-06-26
+topics: [daemon, directory-connection, keystone, per-agent-signaling, manifest, TUF, sovereign-nodes, agent-identity]
+status: ready
+description: >
+  Full per-agent directory connections — delete the keystone. Every agent operates its
+  own directory signaling connection authenticated as itself (register, send, RECEIVE,
+  seal); the daemon holds no agent-borrowed "keystone" identity. The one daemon-level
+  directory operation, the consortium-manifest poll, moves off the authenticated stream
+  to unauthenticated HTTP and runs even with zero agents. Fixes the Demo1 bug: removing
+  the agent the keystone borrowed stranded the daemon's directory connection.
+---
+
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M7-CONN-001
+domain: Daemon
+actor: CLIENT
+priority: P0
+components:
+  - client
+  - directory
+  - transport
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client (daemon),
+  I want every agent to operate its own directory connection authenticated as itself, with
+  no shared "keystone" connection borrowing one agent's identity, and the daemon-level
+  consortium-manifest poll served over unauthenticated HTTP independent of any agent,
+  so that removing any agent never strands the daemon's directory presence and the daemon
+  has no agent-borrowed identity — preserving the sovereign-node invariant.
+
+# ─── Background (the bug) ───────────────────────────────────
+# The directory has no concept of "the daemon" — only agents. Each signaling connection
+# authenticates by an agent signing a directory challenge (SHA-256("CELLO-DIR-AUTH-v1" ‖
+# nonce ‖ pubkey)). The daemon's single directory connection (the "keystone") borrowed the
+# primary (lexicographically-first) agent's identity. Removing that agent cleared the
+# primary but never re-established the connection under a new identity, so the connection
+# lingered authenticated as the removed agent (its pubkey pinged the directory 6 min after
+# removal) and a subsequent registration timed out. A verification pass proved 18 of 19
+# signaling frame types are agent-scoped; only manifest_poll_request is daemon-level — and
+# the manifest is public, self-authenticating (threshold-signed, root keys pinned locally),
+# so it can move to unauthenticated HTTP. See discussion log
+# 2026-06-26_1030_per-agent-directory-connections-and-manifest-over-http.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When an agent comes online (registration or start)"
+    action: "the daemon shall establish a directory signaling connection authenticated as THAT agent's own K_local, independent of every other agent's connection"
+  - trigger: "When an agent is removed/retired"
+    action: "the daemon shall tear down only that agent's own directory connection, leaving every other agent's connection established and authenticated as itself"
+  - trigger: "Where the former 'primary' agent is removed"
+    action: "the daemon shall NOT leave any directory connection authenticated as the removed agent, and a subsequent registration by another agent shall complete its directory ceremony"
+  - trigger: "When a non-primary agent is the target of an inbound session"
+    action: "the daemon shall handle the inbound session_assignment on that agent's own signaling stream (SPINE-5 closure), so the agent receives the session"
+  - trigger: "While the daemon is running (with zero or more agents)"
+    action: "the daemon shall poll the consortium manifest over unauthenticated HTTP (GET /manifest), verify the threshold signature against locally-pinned CELLO_CONSORTIUM_ROOT_KEYS, and adopt only a newer, validly-signed, unexpired manifest"
+  - trigger: "If the consortium manifest served over HTTP fails signature / version / expiry verification"
+    action: "the daemon shall reject it, hold the last trusted version, and never let it affect any agent's directory connection"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Two agents X and Y are registered + online on one daemon, where X is the lexicographically-first agent (the one the old keystone borrowed its identity from)"
+    when: "`cello remove-agent X` is run, then a fresh agent Z runs `cello register` against the same directory"
+    then: "Z's registration completes its real FROST DKG and the directory's OWN log/DB shows Z's `register_success` (DKG primary_pubkey persisted) AFTER X's removal; and the directory observes NO further signaling frames authenticated by X's pubkey after removal (X's authenticated stream is closed, not lingering). The removal does not strand the daemon's directory presence."
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-002
+    given: "Two agents A (lexicographically-first) and B (non-primary) are registered + online on one daemon, and a counterparty initiates a session targeting B"
+    when: "The directory brokers the session to B and delivers session_assignment on B's own per-agent signaling stream"
+    then: "B receives the inbound session on its own stream (not a keystone stream) and the counterparty's `cello_send` reaches B's `cello_receive` with byte-identical plaintext — proving non-primary agents receive inbound sessions (SPINE-5 closed). A stub routing all inbound through one shared stream would fail because B's stream is a distinct libp2p-authenticated connection."
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-003
+    given: "A directory serving a threshold-signed consortium manifest at version N, and a daemon configured with the matching CELLO_CONSORTIUM_ROOT_KEYS"
+    when: "The daemon's HTTP manifest poll fetches GET /manifest from the directory's bootstrap HTTP endpoint and the directory's served manifest is bumped to version N+1"
+    then: "The daemon verifies the served manifest's threshold signature against its locally-pinned root keys and adopts N+1 end-to-end across the two real processes (`manifest.http.poll.success` oldVersion:N newVersion:N+1; persisted trusted version = N+1). The bytes the directory served verify against the officer keys — proving the manifest is fetched over HTTP, not the signaling stream."
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-004
+    given: "A daemon with ZERO agents (empty agents table) and a directory serving a signed manifest over HTTP"
+    when: "The daemon's HTTP manifest poll runs"
+    then: "The poll fetches + verifies + adopts the manifest with NO agent identity and NO authenticated signaling connection in existence — the operation the keystone could never perform. Proves the manifest poll is fully decoupled from any agent connection."
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-005
+    given: "A daemon holding trusted manifest version N, and a directory (or MITM) serving over HTTP a manifest that is forged (bad officer signatures), rolled-back (version ≤ N), or expired"
+    when: "The daemon's HTTP manifest poll fetches each adversarial manifest"
+    then: "Each is rejected with a distinct reason (`manifest_signature_invalid` / `manifest_version_rollback` / `manifest_expired`), never adopted, and the trusted version stays N — proving moving the poll to HTTP did NOT weaken the TUF guarantees (DOD-AUTH-2 semantics preserved)."
+    test_type: integration
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The daemon shall never hold a directory connection authenticated as an agent other than the one operating it, and never as a removed/retired agent"
+    adversarial_condition: "even when the removed agent was the lexicographically-first agent whose identity the old keystone borrowed — after removal, the directory must see that agent's authenticated stream close and receive no further frames signed by its pubkey"
+    test_type: e2e
+    component_under_test: client
+
+  - id: SI-002
+    statement: "The consortium manifest served over unauthenticated HTTP shall contain only the public node roster — no agent_id, no k_local, no per-operator or per-agent data"
+    adversarial_condition: "even as the manifest schema evolves over time — an anonymous unauthenticated fetcher parsing GET /manifest learns only {nodeId, pubkey, region, provider, endpoint} per node plus {version, not_before, expires, signatures}; any agent-scoped field present is a violation (the locked invariant: nothing agent-specific ever goes in the manifest)"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the directory's HTTP manifest endpoint is unreachable"
+    fallback: "the daemon shall keep using its last-verified cached manifest and retry the HTTP poll on its schedule, WITHOUT dropping or disturbing any agent's directory signaling connection — instead of failing agent connectivity. Agent sessions in flight continue. The manifest poll failure is logged with a distinct reason (`manifest_http_unreachable`), never conflated with an agent-connection failure."
+    test_type: integration
+    component_under_test: client
+
+# ─── Cross-repo (cello-client) — mandatory ──────────────────
+# §6: this story changes core/daemon, core/transport, core/client. Two blocking ACs.
+  - id: AC-006
+    condition: "cello-client packages changed (daemon, transport, client; + connect)"
+    fallback: "Version-bump cascade: every changed core/* package bumped; every dependent's dependency version re-pinned to the new semver; @cello-protocol/connect bumped; pnpm install; the version-bump commit is last; tag v{next-free-counter} pushed; CI Build + publish-completeness + smoke-tag green on beta; `npm view @cello-protocol/connect@beta dependencies --json` shows real versions, never workspace:*. Promotion to latest is operator-run (Andre-gated)."
+    test_type: e2e
+    component_under_test: client
+  - id: AC-007
+    condition: "trustless-cello consumes the bumped cello-client packages"
+    fallback: "directory + relay package.json reference the new semver ranges (no workspace:* for the five cello-client packages); pnpm install; typecheck passes; committed to main. The HTTP-manifest change consumes the EXISTING ConsortiumManifest type (no new protocol-types export), so the directory dep update may be version-only — but it must still be re-pinned so directory/relay do not compile against stale local copies."
+    test_type: integration
+    component_under_test: directory
+
+# ─── Infrastructure (directory ALB + deploy) ────────────────
+  - id: AC-008
+    condition: "GET /manifest is a new unauthenticated path on the directory health server (port 9090)"
+    fallback: "A new AWS::ElasticLoadBalancingV2::ListenerRule in cello-ecs-directory.yaml routes path `/manifest` to BootstrapTargetGroup (port 9090), alongside the existing /bootstrap and /agent-lookup rules; deployed via deploy.sh (NOT a pipeline image swap) to all 3 regions; curling the ALB `/manifest` in EACH region returns the current signed manifest; infra/STATE.md updated; passes the region-expansion test (a brand-new region serves /manifest with zero manual steps — the rule is in the template). The health server's /manifest handler returns 503 before a manifest store is configured (liveness-only /health unaffected)."
+    test_type: e2e
+    component_under_test: directory
+
+# ─── Observability (M4+) ───────────────────────────────────
+observability:
+  events:
+    - name: "agent.directory.connection.established"
+      level: info
+      trigger: "an agent's own per-agent directory signaling connection authenticates"
+      context_fields: [agentName, agentPubkey, directoryNodeId]
+      correlationId: true
+    - name: "agent.directory.connection.dropped"
+      level: info
+      trigger: "an agent's own directory connection is torn down (removal/stop)"
+      context_fields: [agentName, agentPubkey, reason]
+      correlationId: true
+    - name: "directory.manifest.http.served"
+      level: info
+      trigger: "the directory serves the consortium manifest over GET /manifest"
+      context_fields: [nodeId, manifestVersion]
+      correlationId: false
+    - name: "manifest.http.poll.success"
+      level: info
+      trigger: "the daemon adopts a newer signed manifest fetched over HTTP"
+      context_fields: [oldVersion, newVersion, directoryUrl]
+      correlationId: true
+  error_events:
+    - name: "manifest.http.poll.failed"
+      level: warn
+      trigger: "the HTTP manifest poll fails fetch, signature, version, or expiry verification"
+      context_fields: [reason, directoryUrl]
+    - name: "directory.manifest.http.unavailable"
+      level: warn
+      trigger: "GET /manifest is hit before a manifest store is configured (503)"
+      context_fields: [nodeId]
+  alarms:
+    - condition: "manifest.http.poll.failed rate > 0 sustained over 30 min for a daemon (poll never succeeding) — note in runbook, not a paging alarm (cached manifest keeps the daemon serving)"
+      fires_to: "ops runbook (non-paging — degraded, not down)"
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Daemon / Directory connection"
+  end_to_end_flow: "DOD-SPINE-4 (SPINE-5 closure), DOD-AUTH-2 (manifest poll transport), DOD-ONBOARD-1 (supersedes keystone election)"
+  discussion_logs:
+    - "2026-06-26_1030_per-agent-directory-connections-and-manifest-over-http"
+    - "2026-06-11_1030_daemon-transport-architecture"
+    - "2026-06-11_1459_implementing-directory-bidirectional-authentication"
+    - "2026-06-25_2109_agent-identity-lifecycle-discovery"
+
+# ─── Implementation notes ───────────────────────────────────
+implementation_notes: >
+  SCOPE / what already exists. The per-agent signaling path already exists in daemon.ts
+  (`getAgentSignaling`) and wires six handlers per agent (session ceremony, seal ceremony,
+  session_sealed, unilateral-confirmed, unilateral-upgrade, session-offer). The refactor is
+  mostly DELETION + UNIFICATION, not greenfield:
+   - Remove the primary special-case in getAgentSignaling (lines ~591-593) so EVERY agent
+     gets its own dedicated SignalingManager; delete `primaryAgent`, the keystone
+     `getAuthIdentity`, `wireKeystonePrimary`, `keystoneDispose`, and the shared keystone
+     `signalingManager` as an agent-authed connection.
+   - SPINE-5 closure (the one genuinely new wiring): the inbound `session_assignment`
+     handlers currently attached only to the keystone `signalingManager` (daemon.ts
+     ~lines 2777, 3147, 3274) must move into per-agent wiring so each agent receives its
+     own inbound sessions. Some hold daemon-global session state — thread agent identity
+     carefully (Architecture phase).
+   - Manifest poll: replace the keystone signaling `dispatchManifestPoll` with an HTTP poll
+     scheduler that GETs `/manifest` from the directory's bootstrap HTTP base URL (the
+     daemon already discovers that host for /bootstrap auto-discovery — reuse it), verifies
+     via `verifyManifest` (RFC 8032 threshold) against locally-pinned root keys, and updates
+     the SAME shared manifestProvider/cache the startup load + challengeVerifier read. Runs
+     daemon-level, even with zero agents.
+   - Directory: add a GET /manifest handler to health-server.ts serving
+     `directoryManifestStore.getCurrentManifest()` (the store is ALREADY injected into
+     DirectoryNode; thread it into createHealthServer). 503 if no store / no manifest yet.
+     Keep the signaling `manifest_poll_request` handler in place for backward compat during
+     the deploy window (old clients) — the new client just stops using it.
+  ZERO-AGENT correctness: with no agents there are simply no directory signaling
+  connections (correct); the HTTP manifest poll still runs. This is the property the
+  keystone could never provide.
+  INVARIANT (SI-002, locked): nothing agent-specific ever goes in the consortium manifest.
+  The HTTP move is safe ONLY because the manifest is public, self-authenticating data with
+  a locally-pinned trust root. Any future per-agent field in the manifest reverses this.
+  TEST INFRA: extend `packages/e2e-tests/src/session-fixture.ts` (the J-CONN journey) — no
+  new makeFixture(). The Demo1 repro (AC-001) + non-primary inbound (AC-002) are the new
+  live journey J-CONN.
+  TRAP NOTES: the new HTTP-poll catch path gets its own distinct reason (DB-001
+  `manifest_http_unreachable`), kept separate from agent-connection failures (INV-6). The
+  manifest endpoint is a new dialed address with exactly one consumer (the client HTTP
+  poll) — AC-003/AC-008 cover producer + consumer.

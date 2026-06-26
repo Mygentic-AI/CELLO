@@ -169,6 +169,7 @@ Source: outline Milestone Close Gate + E2E-001 AC-001–012. Mostly built/merged
   intended. **Fixed** a directory account-link race (insert-with-account_id atomically).
   Note: non-primary agents' INBOUND session routing is the **SPINE-5** follow-on (their
   per-agent stream has no session inbound handler yet — registration works; sessions next).
+  **→ CLOSED by DOD-CONN-2 (CELLO-M7-CONN-001): inbound session_assignment handlers move per-agent.**
 - **DOD-SPINE-5 — Initiate session, ephemeral nodes.** `cello_initiate_session`
   creates an ephemeral session node (fresh key/Peer ID), reports it to the
   directory, receives a FROST-signed SessionAssignment carrying both session Peer
@@ -266,6 +267,10 @@ Source: outline Milestone Close Gate + E2E-001 AC-001–012. Mostly built/merged
   a per-cycle correlationId, and refuses adoption at `threshold < 1`. The producer
   side is a file-re-reading `FileDirectoryManifestStore` wired from
   `CELLO_DIRECTORY_CONSORTIUM_MANIFEST` (the production-faithful TUF roll-forward seam).
+  **→ TRANSPORT SUPERSEDED by DOD-CONN-3 (CELLO-M7-CONN-001): the poll moves from the keystone
+  signaling stream to unauthenticated `GET /manifest` (HTTP). The TUF security claim above —
+  threshold-verify, anti-rollback, refuse-expired, never-trust-directory-for-content — is PRESERVED
+  unchanged; only the fetch transport changes (the manifest is public, self-authenticating data).**
 - **DOD-SIG-1 — Signaling resilience.** Heartbeat (DIR-PING-001 pong) → on kill,
   `directory_signaling: reconnecting`, exponential backoff, reconnect to a
   **different** directory node from the manifest, drain queued outbound ops; tool
@@ -840,6 +845,10 @@ Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-res
   and connects on its next attempt, no restart. *(CELLO-M7-ONBOARD-001 — keystone runtime election)* —
   proven live (a fresh daemon with zero agents → `cello_create_agent` → `directory_signaling: connected`
   within seconds, no logout/login). This is the M2 keystone follow-on that the PERSIST-002 reviews parked.
+  **→ MECHANISM SUPERSEDED by DOD-CONN-1 (CELLO-M7-CONN-001): the keystone is DELETED, so there is no
+  `primaryAgent` to elect; a fresh `create-agent` brings up that agent's OWN per-agent connection. The
+  onboarding OUTCOME asserted here (zero agents → create-agent → `directory_signaling: connected`, no
+  restart) is PRESERVED, achieved per-agent instead of by keystone runtime election.**
 
 ### Local loopback (J-LOOPBACK)
 
@@ -934,6 +943,55 @@ Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-res
 >    first removal" surfacing is not exercised live (hard in the shared spine cluster) — the daemon returns
 >    `deferred` + re-run guidance by construction.
 
+### Directory connection model — per-agent, no keystone (J-CONN)
+
+Source: `discussion_logs/2026-06-26_1030_per-agent-directory-connections-and-manifest-over-http.md`
++ **CELLO-M7-CONN-001**. Surfaced while debugging the Demo1 registration timeout: the
+daemon's single directory connection (the "keystone") borrowed the lexicographically-first
+agent's identity; removing that agent stranded the connection (it kept pinging the directory
+authenticated as the removed agent). A verification pass proved 18 of 19 signaling frame
+types are agent-scoped; only the manifest poll is daemon-level — and the manifest is public,
+self-authenticating, so it moves to HTTP. Decision: delete the keystone, go full per-agent.
+
+- **DOD-CONN-1 — Full per-agent directory connections; no keystone; removal never strands.**
+  Every agent operates its OWN directory signaling connection authenticated as its own K_local;
+  the daemon holds no shared "keystone" connection borrowing one agent's identity. Removing any
+  agent — including the former lexicographically-first "primary" — tears down only that agent's
+  own connection; every other agent's connection stays up, and a subsequent registration by
+  another agent completes its directory ceremony. The directory observes the removed agent's
+  authenticated stream CLOSE and receives no further frames signed by its pubkey (the Demo1 bug:
+  the removed agent's pubkey pinged the directory 6 min after removal). *(CELLO-M7-CONN-001
+  AC-001, SI-001; sovereign-node invariant — no connection authenticated as another/removed
+  agent)* — ❌ NOT BUILT (story written).
+- **DOD-CONN-2 — Non-primary agents receive inbound sessions on their own stream (SPINE-5
+  closed).** The inbound `session_assignment` handlers, previously attached only to the keystone
+  stream, are wired per-agent, so a non-primary agent RECEIVES inbound sessions on its own
+  authenticated stream (counterparty `cello_send` reaches its `cello_receive`). This closes the
+  DOD-SPINE-4 "non-primary agents' INBOUND session routing is the SPINE-5 follow-on" note.
+  *(CELLO-M7-CONN-001 AC-002)* — ❌ NOT BUILT (story written).
+- **DOD-CONN-3 — Manifest poll over unauthenticated HTTP; runs with zero agents; TUF preserved.**
+  The consortium-manifest poll moves off the (deleted) authenticated keystone stream to
+  unauthenticated `GET /manifest` on the directory health server (new ALB ListenerRule →
+  BootstrapTargetGroup, alongside /bootstrap + /agent-lookup). The daemon polls it over HTTP,
+  verifies the threshold signature against locally-pinned `CELLO_CONSORTIUM_ROOT_KEYS`, and runs
+  even with ZERO agents (the thing the keystone could never do). The TUF semantics are preserved
+  unchanged: threshold-verify, anti-rollback (reject version ≤ trusted), refuse-expired; a forged
+  manifest served over HTTP is rejected and never adopted. A manifest-poll failure NEVER disturbs
+  any agent's connection (DB-001). LOCKED INVARIANT (SI-002): nothing agent-specific ever goes in
+  the consortium manifest — the served roster is `{nodeId, pubkey, region, provider, endpoint}`
+  per node + `{version, not_before, expires, signatures}` only. *(CELLO-M7-CONN-001
+  AC-003/004/005, SI-002, DB-001; cross-repo AC-006/007; infra AC-008)* — ❌ NOT BUILT (story
+  written).
+
+> **DOD-CONN supersedes / closes three prior lines.** (a) **DOD-AUTH-2** — the manifest poll's
+> TRANSPORT moves from the keystone signaling stream to HTTP; the TUF semantics are unchanged, so
+> DOD-AUTH-2 stays ✅ for its security claim but its mechanism note ("the daemon's keystone
+> signaling manager re-polls…") is superseded by DOD-CONN-3 once built. (b) **DOD-ONBOARD-1** — the
+> keystone runtime-election fix is SUPERSEDED: there is no keystone to elect; a fresh `create-agent`
+> brings up that agent's own connection. The onboarding OUTCOME (fresh install → create-agent →
+> `directory_signaling: connected`, no restart) is preserved, achieved per-agent. (c) **DOD-SPINE-4**
+> SPINE-5 follow-on — CLOSED by DOD-CONN-2.
+
 ---
 
 ## The verification harness (DoD → live test journeys)
@@ -970,6 +1028,12 @@ each must stay green once passed:
     revocation is appended in the directory and verifiable from a SECOND DirectoryNode → initiating to
     X is refused (`agent_revoked`) → X's profile + history stay resolvable (accountability survives);
     a forged-signer revocation is rejected. ❌ NOT BUILT.
+12. **J-CONN** → DOD-CONN-1..3. Two agents X (primary) + Y on one daemon → `remove-agent X` →
+    a fresh agent Z registers (real DKG) AND Y still receives an inbound session — the directory sees
+    X's stream close with no further X-authed frames (no stranding); a non-primary agent receives an
+    inbound session on its own stream (SPINE-5); the manifest poll runs over `GET /manifest` (HTTP,
+    verified vs pinned root keys) including on a ZERO-agent daemon; a forged/rolled-back/expired
+    manifest over HTTP is rejected. ❌ NOT BUILT.
 
 The adversarial SIs (every story's SI block) are journey assertions, not extras:
 ephemeral-Peer-ID-dies (INV-5), third-party-dial-rejected (INV-5), relay-can't-read
@@ -1015,6 +1079,11 @@ no-double-count (DOD-MSG-5), no-assent-field (DOD-LEG-4).
   no flat-file state — ❌ NOT BUILT (story written). Re-opens persistence scope; supersedes DOD-LOG-1's
   envelope mechanism and closes the plaintext-identity-files exposure + the fire-and-forget share bug +
   the missing agent-key creation path.
+  **NEW 2026-06-26 — DOD-CONN-1/2/3 (CELLO-M7-CONN-001):** full per-agent directory connections (delete
+  the keystone), close SPINE-5 (per-agent inbound sessions), and move the manifest poll to unauthenticated
+  HTTP (runs with zero agents; TUF preserved) — ❌ NOT BUILT (story written). Fixes the Demo1 stranding
+  bug; supersedes the keystone mechanism in DOD-AUTH-2 (transport)/DOD-ONBOARD-1 (election) and closes the
+  DOD-SPINE-4 SPINE-5 follow-on. Locks the invariant: nothing agent-specific ever goes in the manifest.
 - **Tier 0 invariants**: INV-2/3/4/7 🟢 PROVEN/BUILT+VERIFIED; INV-1 (real cluster) needs infra;
   INV-5 (dial-after-teardown) gater built + unit-covered, not spine-testable; INV-6/8 (discipline
   audits) per-story-built, un-audited as an aggregate; INV-9 built, not specifically asserted.
