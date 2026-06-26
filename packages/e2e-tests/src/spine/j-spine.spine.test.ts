@@ -19,6 +19,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   startSpineCluster,
   startDaemon,
@@ -26,10 +27,23 @@ import {
   connectMcp,
   cello,
   psqlSpine,
+  CELLO_CLIENT_ROOT,
   type McpConn,
   type Proc,
   type SpineCluster,
 } from "./live-harness.js";
+
+// PERSIST-002 (DOD-STORE-1): per-agent identity material lives in the daemon's SQLCipher store
+// (the `agents` table), NOT flat files. Open it through the daemon's OWN keyed adapter to assert
+// registration persisted each agent's row (k_local_seed + frost_signing_share — its split-key half).
+type KeyedStmt = { get(...p: unknown[]): unknown };
+type KeyedDb = { prepare(sql: string): KeyedStmt; close(): void };
+async function openEncryptedDb(dbPath: string): Promise<KeyedDb> {
+  const mod = (await import(
+    pathToFileURL(join(CELLO_CLIENT_ROOT, "core/daemon/dist/sqlcipher-db.js")).href
+  )) as { openEncryptedDatabaseAtPath(p: string): KeyedDb };
+  return mod.openEncryptedDatabaseAtPath(dbPath);
+}
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -303,16 +317,27 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     const accountCount = psqlSpine(`SELECT count(*) FROM user_accounts WHERE account_id = '${sharedAccount}'`);
     expect(accountCount, "exactly one user_accounts row backs the shared account_id").toBe("1");
 
-    // ── Per-agent local files under ${CELLO_DIR}/agents/<name>/ (daemon-side persistence,
-    // including the agent→user link captured at registration). DOD-INV-2: the persisted
-    // client-side frost-share is the agent's HALF of the split key — neither it nor the
-    // directory's K_server_X share can sign alone.
-    for (const name of ["agentA", "agentB"]) {
-      const dir = join(celloDir, "agents", name);
-      for (const file of ["key", "registration-state.json", "ml-dsa-keypair.json", "frost-share.json", "agent-user-link.json"]) {
-        expect(existsSync(join(dir, file)), `missing per-agent file ${name}/${file}`).toBe(true);
+    // ── Per-agent persistence: PERSIST-002 (DOD-STORE-1) moved all per-agent material from flat files
+    // into the daemon's SQLCipher store (the `agents` table). Assert each registered agent has its row
+    // with a K_local seed AND a persisted FROST signing share — DOD-INV-2: that share is the agent's
+    // HALF of the split key, neither it nor the directory's K_server_X share can sign alone. Read
+    // through the daemon's OWN keyed adapter (a stub that skipped persistence fails here). And assert
+    // NO legacy flat-file key exists (the PERSIST-002 no-flat-file invariant). ──
+    const adb = await openEncryptedDb(join(celloDir, "sessions.db"));
+    try {
+      for (const name of ["agentA", "agentB"]) {
+        const row = adb
+          .prepare("SELECT length(k_local_seed) AS seedLen, length(frost_signing_share) AS shareLen FROM agents WHERE agent_name = ? AND state != 'retired'")
+          .get(name) as { seedLen?: number; shareLen?: number } | undefined;
+        expect(row, `${name} must have a row in the encrypted agents store`).toBeTruthy();
+        expect((row?.seedLen ?? 0) > 0, `${name} must persist its K_local seed`).toBe(true);
+        expect((row?.shareLen ?? 0) > 0, `${name} must persist its FROST signing share (DOD-INV-2)`).toBe(true);
       }
+    } finally {
+      adb.close();
     }
+    // PERSIST-002 no-flat-file invariant: the legacy per-agent key file must NOT exist.
+    expect(existsSync(join(celloDir, "agents", "agentA", "key")), "PERSIST-002: no legacy flat-file key").toBe(false);
   }, 60_000);
 
   it("DOD-SPINE-5 (partial) — initiate session negotiator is wired: session_request reaches the directory", async () => {
