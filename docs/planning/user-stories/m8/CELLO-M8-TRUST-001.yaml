@@ -1,0 +1,170 @@
+---
+name: CELLO-M8-TRUST-001
+type: user-story
+date: 2026-06-26
+topics: [portal, directory, daemon, trust-signal-pipe, sealed-box, pickup-queue, webauthn, cross-repo, m8]
+status: draft
+description: >
+  The general trust-signal handoff mechanism (the pipe), proven by WebAuthn enrollment as its
+  first live signal. Stateless portal pipeline (verify → JSON → hash → seal to k_local → write
+  hash + ciphertext) → directory identity-tree + ephemeral pickup queue → daemon pickup
+  (openSealed → verify → store → ACK) → directory deletes the ciphertext. No plaintext, token,
+  or content persists server-side.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M8-TRUST-001
+domain: Identity & Trust
+milestone: M8
+actor: OPS
+priority: P0
+components:
+  - portal
+  - directory
+  - daemon            # cello-client — version bump applies (§ cross-repo)
+  - crypto            # content-seal (reused)
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the trust-signal subsystem,
+  I want a signal-type-agnostic pipe — hash to the directory, sealed ciphertext to a pickup
+  queue, daemon pickup + verify + store + ACK, directory deletes the ciphertext —
+  so that any trust signal (starting with WebAuthn enrollment) reaches the operator's daemon as
+  the only plaintext copy, while the server side holds only a tamper-evident hash.
+
+# ─── Context ────────────────────────────────────────────────
+# M8 builds the general MECHANISM; the per-signal connectors (LinkedIn/GitHub/device) are M10
+# (Journey 04). WebAuthn enrollment is the M8 first live consumer, so the pipe ships proven, not
+# speculative. Seal to k_local_pubkey via the existing content-seal.ts (sealToRecipient/openSealed) —
+# no new key (signals are re-mintable on the rare rotation race, D1). The directory holds only the
+# hash (verification anchor, not for policy); the pickup queue holds sealed ciphertext, deleted on
+# ACK; the portal is stateless (discards plaintext + OAuth token). Everything written replicates.
+# This story modifies cello-client (the daemon pickup flow) → cross-repo version bump applies (§6).
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a signal is generated (M8: a WebAuthn enrollment)"
+    action: "the portal builds the JSON record, computes the hash(es), seals the JSON to the
+      agent's k_local_pubkey, writes the hash to the directory identity tree and the ciphertext to
+      the pickup queue, then discards the plaintext (and any token)"
+
+  - trigger: "When the daemon next connects"
+    action: "it pulls the ciphertext over signaling, openSealed(k_local) recovers the JSON,
+      recomputes the hash and verifies it against the directory hash, stores the plaintext locally,
+      and ACKs — after which the directory deletes the ciphertext"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An authenticated operator enrolling WebAuthn, a daemon online, a ≥2-node cluster"
+    when: "the enrollment flows the pipe"
+    then: >
+      The signal hash is written to the directory identity tree (agent_id-keyed) and is READABLE
+      FROM A DIFFERENT node than it was written to (replication). The daemon (a separate process)
+      pulls the ciphertext, openSealed(k_local) recovers the JSON, the recomputed hash MATCHES the
+      directory hash, the plaintext is stored locally, and an ACK is sent. After the ACK, the pickup
+      queue holds NO ciphertext for that signal. (Cross-process + cross-node = stub-resistant.)
+    test_type: e2e
+    component_under_test: daemon
+
+  - id: AC-002
+    given: "AC-001 completed"
+    when: "the directory + portal stores are dumped"
+    then: >
+      The directory holds only the hash for the signal — no plaintext row; the pickup queue is empty
+      for that signal (ACK deleted it). The portal backend holds no plaintext signal JSON and no
+      OAuth token. portal.trust_signal.handed_off carries a hash and NO plaintext field;
+      daemon.trust_signal.received carries verified: true. A store that retains plaintext, or an
+      event carrying it, fails.
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-003
+    given: "The directory DB with prior migrations applied"
+    when: "the identity-tree and pickup-queue migrations are applied (then re-applied)"
+    then: >
+      The identity-tree table (signal hashes, agent_id-keyed, append-only) and the ephemeral
+      pickup-queue table (sealed ciphertext, TTL, deleted on ACK) exist with their constraints;
+      migrations apply with zero checksum errors against the already-migrated DB. The pickup queue
+      reuses the existing notification/delivery path rather than a parallel mechanism.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "The cello-client changes for the daemon pickup flow"
+    when: "the packages are released"
+    then: >
+      Every modified cello-client package is version-bumped, dependents' dependency versions
+      updated, @cello-protocol/connect bumped, lockfile updated, tag pushed, CI publishes to beta,
+      and `npm view @cello-protocol/connect@beta dependencies --json` shows real versions (never
+      workspace:*).
+    test_type: manual
+    component_under_test: daemon
+
+  - id: AC-005
+    given: "The new cello-client versions on beta"
+    when: "trustless-cello is updated"
+    then: >
+      directory + relay package.json reference the new pinned semver ranges (no workspace:* for the
+      five cello-client packages); pnpm install; typecheck passes; committed to main.
+    test_type: manual
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The sealed signal must be decryptable only by the agent's k_local — never by the portal or the
+      directory; the directory must hold only the hash.
+    adversarial_condition: >
+      The directory operator (holding the replicated ciphertext) and the portal both attempt to
+      recover the signal plaintext without k_local. Both fail — the sealed box yields nothing without
+      the k_local seed. Only the daemon's openSealed(k_local) recovers it. The directory's stored row
+      is a hash, not the plaintext.
+    test_type: e2e
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: portal.trust_signal.handed_off
+      level: info
+      context_fields: [accountId, agentId, signalType, signalHash, correlationId]
+      asserted_by: AC-002
+    - name: daemon.trust_signal.received
+      level: info
+      context_fields: [agentId, signalType, verified, correlationId]
+      asserted_by: AC-001
+  error_events:
+    - name: daemon.trust_signal.hash_mismatch
+      level: error
+      context_fields: [agentId, correlationId]
+  alarms: []
+  notes: "handed_off carries signalHash, never the plaintext. hash_mismatch → reject + do not store."
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Seal target is k_local_pubkey (content-seal.ts sealToRecipient). The rotation race (k_local
+    rotates between seal and pickup) is tolerated — the signal is re-mintable; if pickup fails on
+    hash/open, regenerate.
+  - >
+    Per-signal account-identifier hash (Sybil dedup) applies only to externally-accountable signals
+    (not WebAuthn). The WebAuthn signal carries the content hash only.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M8-AUTH-002
+    - CELLO-M8-WRITEAPI-001
+  blocks:
+    - CELLO-M8-TRUST-003
+  notes: "The general pipe + WebAuthn first consumer. M10 plugs LinkedIn/GitHub/device into this pipe."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M8
+  related_docs:
+    - "[[outline]]"
+    - "[[04-trust-signal-mechanism]]"
+    - "[[03-trust-signals]]"
+  notes: "Signal-type-agnostic pipe, proven by WebAuthn; sealed to k_local; directory holds only hashes."
