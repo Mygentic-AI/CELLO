@@ -20,11 +20,13 @@ import { randomBytes } from "node:crypto";
 import {
   startSpineCluster,
   startDaemon,
+  connectMcp,
   cello,
   psqlSpine,
   CELLO_CLIENT_ROOT,
   type SpineCluster,
   type Proc,
+  type McpConn,
 } from "./live-harness.js";
 
 type KeyedStmt = { get(...p: unknown[]): unknown };
@@ -56,12 +58,14 @@ const hexToBytes = (h: string): Uint8Array => new Uint8Array(Buffer.from(h, "hex
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
 const dirs: string[] = [];
+const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
   cluster = await startSpineCluster({});
 }, 180_000);
 
 afterAll(async () => {
+  for (const c of mcpConns) await c.close();
   for (const d of daemons) await d.stop();
   await cluster?.stop();
   for (const dir of dirs) {
@@ -244,5 +248,45 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
     } finally {
       db.close();
     }
+  }, 150_000);
+
+  it("DOD-REMOVE-3: a revoked agent is refused as a session target (agent_revoked)", async () => {
+    const waitConnected = async (dir: string): Promise<void> => {
+      for (let i = 0; i < 50; i++) {
+        if ((status(dir).directory_signaling ?? "") === "connected") return;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      throw new Error(`directory_signaling never connected for ${dir}`);
+    };
+
+    // Target X: register, then remove (revoked at the directory).
+    const dirX = mkdtempSync(join(tmpdir(), "cello-revX-"));
+    dirs.push(dirX);
+    daemons.push(await startDaemon(dirX, cluster.directoryUrl, "revX"));
+    const cX = JSON.parse(cello(["create-agent", "xtarget"], { CELLO_DIR: dirX }).stdout) as { pubkey: string };
+    const pubX = cX.pubkey;
+    await waitConnected(dirX);
+    expect(cello(["register", "xtarget", `DEV-revx-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirX }).status).toBe(0);
+    const rmX = JSON.parse(cello(["remove-agent", "xtarget"], { CELLO_DIR: dirX }).stdout) as { directoryRevocation: string };
+    expect(rmX.directoryRevocation, "X's revocation must be recorded at the directory").toBe("recorded");
+
+    // Initiator A: register + online.
+    const dirA = mkdtempSync(join(tmpdir(), "cello-revA-"));
+    dirs.push(dirA);
+    daemons.push(await startDaemon(dirA, cluster.directoryUrl, "revA"));
+    expect(cello(["create-agent", "ainit"], { CELLO_DIR: dirA }).status).toBe(0);
+    await waitConnected(dirA);
+    expect(cello(["register", "ainit", `DEV-reva-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
+    const connA = await connectMcp(dirA, "rev-A");
+    mcpConns.push(connA);
+    expect(((await connA.call("cello_start_agent", { name: "ainit" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connA.call("cello_use_agent", { name: "ainit" })) as { ok?: boolean }).ok).toBe(true);
+
+    // A initiates a session targeting the REVOKED X. The directory's revocation gate fires BEFORE the
+    // target-online check, so the refusal reason is unambiguously agent_revoked — the directory does not
+    // broker the connection (DOD-REMOVE-3 soft enforcement).
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubX })) as { ok?: boolean; reason?: string };
+    expect(init.ok, `initiate to a revoked agent must fail: ${JSON.stringify(init)}`).toBe(false);
+    expect(init.reason, "the directory must refuse a revoked target with agent_revoked").toBe("agent_revoked");
   }, 150_000);
 });
