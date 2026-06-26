@@ -1,0 +1,113 @@
+---
+name: CELLO-M8-AGENTS-001
+type: user-story
+date: 2026-06-26
+topics: [portal, agents-home, landing-page, presence, alerts, posture, in-memory-cache, m8]
+status: draft
+description: >
+  The Agents home — the M8 landing page (the Dashboard, folded in). Lists the account's agents
+  with honest presence and a de-emphasized suspend affordance, plus a thin header for
+  identity/security alerts and account posture. No register/start/stop/set-current. No separate
+  Dashboard. No agent/identity data persisted to browser storage.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M8-AGENTS-001
+domain: Portal
+milestone: M8
+actor: OPS
+priority: P0
+components:
+  - portal
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As an operator,
+  I want a landing page that shows my agents, their presence, and any identity alerts at a glance,
+  so that I can answer "is my identity healthy?" — without the portal controlling my agents'
+  processes or leaving my identity data on the device.
+
+# ─── Context ────────────────────────────────────────────────
+# The Agents home IS the M8 landing page; there is no standalone Dashboard (Journey 02 D11) — the
+# only thing that would distinguish one (live session feed, metrics, daemon status) is deferred
+# daemon-channel telemetry. Agents APPEAR after the local ceremony; the portal never registers/
+# starts/stops/sets-current (project-portal-model). The only control is the suspend/burn lever
+# (LEVER-001), shown as a quiet emergency affordance. Agent identity is fingerprint-primary (no
+# name available to the hosted portal at M8). Anti-surveillance client property: no agent/identity
+# data in browser persistent storage — in-memory only (Journey 01 / screen-specs). Data via READ-001.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the operator lands after sign-in"
+    action: "the Agents home renders: a header with the alerts strip (honest empty state) and the
+      account-posture line, above the list of the account's agents with presence and fingerprint"
+
+  - trigger: "When the operator has no agents yet"
+    action: "an empty state routes them to register via the Telegram ceremony"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An account with agents (via READ-001), signed in"
+    when: "the Agents home renders"
+    then: >
+      Each agent shows a fingerprint, honest presence (online / 'last seen X'), and a single,
+      de-emphasized suspend affordance. There are NO register / start / stop / set-current
+      controls anywhere (asserted by absence). The empty-account state routes to the ceremony.
+      portal.agents.viewed logged.
+    test_type: e2e
+    component_under_test: portal
+
+  - id: AC-002
+    given: "The signed-in operator"
+    when: "the landing page renders and the nav is inspected"
+    then: >
+      The landing route IS the Agents home — it carries the alerts strip (with an honest 'no
+      alerts' empty state) and the account-posture line (strong-auth status + trust-signal
+      coverage). There is NO separate Dashboard route/screen (asserted by absence in the route map
+      and nav). Daemon-local telemetry (session feed, retry/interrupted metrics, daemon status) is
+      not present.
+    test_type: e2e
+    component_under_test: portal
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The portal must not persist agent/identity data to the browser's durable storage — directory
+      data is cached in-memory only; the session credential is an httpOnly cookie.
+    adversarial_condition: >
+      After viewing the Agents home, inspect localStorage, sessionStorage, and IndexedDB: they
+      contain no agent fingerprints, presence, or session data, and no session token. After closing
+      and reopening the tab, no agent/identity data is restored from disk. A build that caches the
+      agent list in localStorage/IndexedDB fails this invariant.
+    test_type: e2e
+    component_under_test: portal
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: portal.agents.viewed
+      level: debug
+      context_fields: [accountId, agentCount, correlationId]
+      asserted_by: AC-001
+  error_events: []
+  alarms: []
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M8-SCAFFOLD-001
+    - CELLO-M8-READ-001
+  blocks:
+    - CELLO-M8-LEVER-001
+  notes: "Landing page = Agents home (Dashboard folded in, D11). The lever's UI entry lives on the row (LEVER-001)."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M8
+  related_docs:
+    - "[[outline]]"
+    - "[[02-agents]]"
+    - "[[screen-specs]]"
+    - "[[project-portal-model]]"
+  notes: "Observe surface + the one emergency lever; fingerprint-primary; in-memory-only client cache."
