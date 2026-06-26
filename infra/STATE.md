@@ -349,9 +349,10 @@ pipeline):**
    `aws ssm put-parameter … --value 32 --overwrite --region us-east-1` (verified Value=32). The running
    ops-agent was unaffected (healthy 1/1; gates at startup); its next restart reads 32 = DB. IaC template
    `cello-ssm-parameters.yaml` already at 32.
-2. **`agent_revocations` is NOT yet in the `cello_pub` publication** — `setup-replication.sh` (PUBLICATION_TABLES
-   updated in IaC) must be re-run (`./infra/setup-replication.sh dev`) so revocations replicate across nodes
-   (cross-node AC-002). Single-region revocation works without it.
+2. ~~agent_revocations not in cello_pub~~ **DONE 2026-06-26** — ran `./infra/setup-replication.sh dev
+   us-east-1 eu-central-1 ap-northeast-1`: all 6 subscriptions already existed (skipped, none dropped),
+   refreshed to pick up the new table, all 6 slots confirmed STREAMING. Verified `agent_revocations` IS in
+   `cello_pub` (pg_publication_tables, us-east-1). Cross-node revocation replication is live.
 
 ### staging — not deployed
 
