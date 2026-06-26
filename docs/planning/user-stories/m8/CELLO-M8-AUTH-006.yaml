@@ -1,0 +1,97 @@
+---
+name: CELLO-M8-AUTH-006
+type: user-story
+date: 2026-06-26
+topics: [portal, account-security, sessions, factor-management, log-out-everywhere, m8]
+status: draft
+description: >
+  The Account & Security screen — manage authentication factors (WebAuthn credentials, TOTP,
+  backup codes), view and revoke active sessions (per-device logout + log-out-everywhere), and
+  see the account (email; phone display TBD). Factor removal is a step-up-gated sensitive action.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M8-AUTH-006
+domain: Portal
+milestone: M8
+actor: OPS
+priority: P1
+components:
+  - portal
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As an operator,
+  I want a screen to manage my factors, see my active sessions, and log out everywhere,
+  so that I can control how my account is accessed and shut down a session I don't recognize.
+
+# ─── Context ────────────────────────────────────────────────
+# A management surface over the factors (AUTH-002/003) and the server-side sessions (AUTH-001).
+# The active-sessions list + remote logout are exactly why sessions are server-side. Removing a
+# factor is a sensitive operation → step-up (AUTH-002). Screen layout: [[screen-specs]] §Account
+# & Security. Phone display is TBD (directory holds only a hash; the row must work masked-or-omitted).
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the operator opens Account & Security"
+    action: "the screen lists enrolled factors (WebAuthn per device, TOTP, backup codes) and
+      active sessions (device/UA, last-seen, this-device marker), and the account email"
+
+  - trigger: "When the operator chooses 'log out everywhere'"
+    action: "all other sessions are revoked server-side; the other devices' next requests fail auth"
+
+  - trigger: "When the operator removes an authentication factor"
+    action: "a fresh step-up is required; on success the factor is removed"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The operator signed in on two devices (two sessions)"
+    when: "they view Account & Security and choose 'log out everywhere'"
+    then: >
+      Both sessions are listed (device/UA, last-seen, 'this device'). After 'log out everywhere',
+      the OTHER device's next request fails auth and is bounced to sign-in (verified from the other
+      session, proving server-side revocation across sessions — not just a local cookie clear).
+      portal.sessions.listed and portal.session.revoked logged.
+    test_type: e2e
+    component_under_test: portal
+
+  - id: AC-002
+    given: "An operator with a WebAuthn credential and no recent step-up"
+    when: "they attempt to remove a factor"
+    then: >
+      Removal is refused until a fresh WebAuthn step-up is satisfied; after step-up, the factor is
+      removed and no longer authenticates. A remove path that succeeds without step-up fails this AC.
+    test_type: e2e
+    component_under_test: portal
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: portal.sessions.listed
+      level: debug
+      context_fields: [accountId, correlationId]
+      asserted_by: AC-001
+    - name: portal.session.revoked
+      level: info
+      context_fields: [accountId, revokedSessionId, scope, correlationId]
+      asserted_by: AC-001
+  error_events: []
+  alarms: []
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M8-AUTH-001
+    - CELLO-M8-AUTH-002
+    - CELLO-M8-AUTH-003
+  blocks: []
+  notes: "Phone display TBD (directory holds only a hash) — design the row masked-or-omitted (screen-specs)."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M8
+  related_docs:
+    - "[[outline]]"
+    - "[[screen-specs]]"
+    - "[[01-onboarding-and-authentication]]"
+  notes: "Management surface over factors + server-side sessions; remote logout is why sessions are stateful."
