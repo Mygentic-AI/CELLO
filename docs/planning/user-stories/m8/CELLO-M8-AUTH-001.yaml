@@ -1,0 +1,156 @@
+---
+name: CELLO-M8-AUTH-001
+type: user-story
+date: 2026-06-26
+topics: [portal, auth, magic-link, sessions, account-resolution, email-stub-hash, m8]
+status: draft
+description: >
+  Magic-link bootstrap + server-side sessions. The operator enters their email, receives a
+  one-time link + 6-digit code, and either establishes a durable, revocable, httpOnly-cookie
+  session. The account is resolved by matching the email's hash against the directory's
+  email_stub_hash — never minted by the portal.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M8-AUTH-001
+domain: Portal
+milestone: M8
+actor: OPS
+priority: P0
+components:
+  - portal
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As an operator who completed the ceremony,
+  I want to sign in by entering my email and using a one-time link or 6-digit code,
+  so that I get a durable, revocable session — with my account resolved against the directory,
+  never created by the portal.
+
+# ─── Context ────────────────────────────────────────────────
+# Slack-style passwordless bootstrap (Journey 01 D3). The link/code is the bootstrap; the
+# durable session rides it. Ceremony-gated: the account is resolved by hashing the typed email
+# and matching the directory's email_stub_hash — the portal has NO account-creation path. Email
+# is the delivery channel (Telegram is NOT in the ongoing auth loop, D4). Sessions are
+# server-side and revocable (the active-sessions list + log-out-everywhere in AUTH-006 require
+# it). Sessions table + KMS email are from SCAFFOLD-002.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the operator submits an email at sign-in"
+    action: "the portal resolves the account by matching SHA-256(email) against the directory's
+      email_stub_hash; if matched, it issues a one-time, time-limited link + 6-digit code to
+      that email; if unmatched, no link is issued and the visitor is routed to the signpost"
+
+  - trigger: "When the operator opens the link or enters the code"
+    action: "a durable server-side session is established (opaque token in an httpOnly Secure
+      cookie); the operator lands on the Agents home"
+
+  - trigger: "When a link/code is used a second time or after expiry"
+    action: "it is rejected; no session is established"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An email whose SHA-256 matches a directory email_stub_hash (the account exists)"
+    when: "the operator requests a link and then enters the 6-digit code"
+    then: >
+      A durable session is established as a SERVER-SIDE record (a sessions row exists with the
+      resolved account_id and an expiry), referenced by an opaque token in an httpOnly Secure
+      cookie — the token is absent from document.cookie and from localStorage/sessionStorage.
+      portal.session.started is logged with accountId and correlationId. A JWT-in-localStorage
+      implementation fails (no server-side revocable record).
+    test_type: e2e
+    component_under_test: portal
+
+  - id: AC-002
+    given: "An email with NO matching directory email_stub_hash"
+    when: "the operator submits it at sign-in"
+    then: >
+      No link/code is issued and no session can be created — the visitor is routed to the
+      signpost. The portal never mints a local account for an unmatched email (asserted: no
+      account row is created, no session issued). This proves account resolution goes through
+      the directory (email_stub_hash match), not a portal-local account store.
+    test_type: e2e
+    component_under_test: portal
+
+  - id: AC-003
+    given: "A freshly issued one-time link + code"
+    when: "the code is used once (success), then the same code (or link) is presented again, and a separately-expired code is presented"
+    then: >
+      The first use establishes a session; the second use of the same code/link is rejected
+      (single-use); an expired code is rejected. No session is established in the rejected cases.
+    test_type: e2e
+    component_under_test: portal
+
+  - id: AC-004
+    given: "Repeated code-entry attempts for one sign-in"
+    when: "the wrong code is submitted past the attempt cap"
+    then: >
+      Code verification is rate-limited — after the cap, further attempts are refused for a
+      cooldown (the issued code is invalidated). A flow that allows unbounded brute-force of the
+      6-digit code fails this AC. portal.auth.otp.rate_limited is logged.
+    test_type: integration
+    component_under_test: portal
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The session credential must be a server-side, revocable, httpOnly cookie token — never a
+      client-readable token or a stateless JWT that cannot be revoked.
+    adversarial_condition: >
+      After sign-in, a script attempts to read the session token via document.cookie and via
+      localStorage/sessionStorage — both return nothing. Revoking the session row server-side
+      causes the next request with that cookie to fail auth. A JWT that still authenticates
+      after server-side revocation fails this invariant.
+    test_type: e2e
+    component_under_test: portal
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: portal.session.started
+      level: info
+      context_fields: [accountId, authLevel, correlationId]
+      asserted_by: AC-001
+    - name: portal.magic_link.issued
+      level: info
+      context_fields: [accountId, correlationId]
+  error_events:
+    - name: portal.auth.otp.rate_limited
+      level: warn
+      context_fields: [correlationId]
+      asserted_by: AC-004
+  alarms: []
+  notes: "accountId in events is the resolved directory account_id, never a portal-minted id."
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Account resolution reads the directory's email_stub_hash (a consumer of directory data) —
+    via the READ-001 path or a narrow lookup. The email is hashed the same way registration
+    hashed it (matching algorithm/salt) so the match works.
+  - >
+    The FIRST link is issued by the ceremony (M6); this story owns the RETURNING sign-in to
+    email. Both establish the same durable session.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M8-SCAFFOLD-001
+    - CELLO-M8-SCAFFOLD-002
+  blocks:
+    - CELLO-M8-AUTH-002
+    - CELLO-M8-AUTH-003
+    - CELLO-M8-AUTH-006
+    - CELLO-M8-READ-001
+  notes: "Magic-link + sessions + account resolution. Email delivery channel; Telegram not in the loop."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M8
+  related_docs:
+    - "[[outline]]"
+    - "[[01-onboarding-and-authentication]]"
+  notes: "Bootstrap that grants a session; strong-auth (AUTH-002/003) and enforcement (AUTH-004) layer on top."
