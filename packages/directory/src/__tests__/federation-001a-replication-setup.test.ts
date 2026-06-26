@@ -457,6 +457,11 @@ describe("FEDERATION-001A: cello_pub covers all required append-only tables", ()
     const script = loadScript();
     expect(script).toContain("user_accounts");
   });
+
+  it("setup-replication.sh includes agent_revocations in publication (CELLO-M7-REMOVE-001 AC-004)", () => {
+    const script = loadScript();
+    expect(script).toContain("agent_revocations");
+  });
 });
 
 // ─── Script structure: idempotency guards ─────────────────────────────────────
