@@ -12,7 +12,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 ## Environments
 
 ### dev — us-east-1
-*Last deployed: 2026-06-10
+*Last deployed: 2026-06-26 (CONN-001 directory /manifest image, all 3 regions; ALB rule pending deploy.sh)
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -25,7 +25,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-10 | M6B-019 SSM node registry; image cello-directory:934d130; task def :170 |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-26 | CELLO-M7-CONN-001: GET /manifest handler + getCurrentManifest wiring — image cello-directory:d5d0424, task def :204, CI/CD image swap to all 3 regions (rollout COMPLETED, running==desired). ⚠️ ALB ManifestPathRule (in cello-ecs-directory.yaml) NOT yet applied — needs deploy.sh (CI/CD swaps images only, not CFN), so /manifest is served on port 9090 but NOT ALB-routable until deploy.sh runs; the daemon HTTP manifest poll degrades gracefully (manifest_http_unreachable → cached) meanwhile. (prev: M6B-019 image 934d130 / task def :170) |
 | cello-ecs-operations-agent-dev | UPDATE_COMPLETE | 2026-06-07 | M6B-016 registration engine; image cello-operations-agent:f4c3e72; task def :43; migrationVersion=30 confirmed healthy |
 | cello-waf-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-06-07 | Running task def :55 (pipeline-deployed 2026-06-07) |
