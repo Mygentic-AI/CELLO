@@ -313,10 +313,13 @@ not).
 - Which positions of the suspend/burn lever ship in M8 vs later (§5).
 - The oblivious-handle mechanism — OPRF / ZK construction (§6).
 - Preserving oblivious non-enumerability across federated nodes (§6).
-- **Privacy tension to settle between the two threads:** the directory holding the **connection graph
-  by fingerprint** (M8 Journey 02, replicated to every node) vs "the directory must not be a
-  who-talks-to-whom map" (§6). Is edges-by-pubkey (no names, no content) an acceptable line, or does it
-  need the same oblivious treatment as discovery?
+- **Edges-by-fingerprint (metadata surveillance) — resolved in principle, see §12.** Not the same
+  problem as discovery's oblivious lookup, and *not* solvable by deletion (the graph is a required asset
+  for the planned Sybil/reputation-farm detection). Reconciliation: a sovereign-threshold,
+  purpose-constrained, verdict-only, audited analysis layer — neither a centralized honeypot nor deleted.
+  Residual: detection *is* association-observability, bounded to that function. Launch stance: don't
+  foreclose, don't build the honeypot (§13, guardrail 6). *Still open:* the concrete shard/compute design
+  and the governance of who may run the analysis under sovereignty.
 - Daemon-level default connection policy — a settable default vs per-agent + a hardcoded fallback
   (M8-owned, adjacent).
 - The user-facing form of "sharing a key" (QR / link / handle carrier).
@@ -342,6 +345,91 @@ discovery handle. These will become several stories across M8 / M10 / M11 — no
 References: the replication incident (`infra/STATE.md` + memory), `M7-CLI-UX-FEEDBACK.md`, the M8
 journey docs (account-control model, Journeys 01–02, connection policy), and the discovery prior-art
 sources below.
+
+---
+
+## 12. Edges-by-fingerprint: metadata surveillance vs. required Sybil detection (resolved in principle)
+
+The directory's `connections`/`sessions` tables record **pubkey-to-pubkey edges with timestamps** — no
+names, no content (content is *never* stored — hard invariant). The exposure is the **social graph**:
+who-talks-to-whom, how often, when. It is sharper in CELLO because (a) **fingerprints are stable and
+linkable** — one durable pubkey per agent, you learn a counterparty's the moment you connect, public-bio
+agents publish theirs, and graph topology de-anonymizes the rest; and (b) **the graph is replicated to
+every sovereign node**, so every operator (or any single breach) gets the whole federation-wide graph.
+The precise question: *can a node operator connect the dots on who-talks-to-whom across the network, by
+fingerprint, without ever seeing a message?* Today, yes.
+
+- **The discovery oblivious-lookup solution does NOT transfer.** That solves query-privacy +
+  anti-enumeration over a registry the directory needn't read in plaintext. The edge graph is data the
+  directory must *read and use*. Different problem, different tool.
+- **The graph is a required analytical asset, not a deletable byproduct.** A *planned* (future, not
+  launch) need: **graph analysis to detect reputation-farm cliques** — Sybil rings that talk to and
+  endorse each other to stack reputation inside the clique. This is fundamentally graph-structural
+  (dense inward-facing subgraphs; the sparse honest/Sybil cut — cf. SybilGuard / SybilLimit / SybilRank).
+  Consequence: **reputation-as-counters is insufficient** — a farm shows *excellent* counters; only the
+  topology exposes it. So deleting the edges disarms the defense and hands the system to the farmers.
+- **So the tension is real and does not resolve by deletion.** Two load-bearing requirements pull
+  opposite ways: anti-surveillance (no party holds a browsable global graph) vs. Sybil detection (some
+  analysis must see global topology). Reconciliation is about **access & compute, not existence**:
+  - **Don't centralize** into one analysis node (the honeypot — concentrates the graph and reintroduces
+    a central authority).
+  - **Don't delete** (the free-for-all).
+  - **Extend CELLO's sovereign-threshold model to the analysis layer:** shard the graph so **no single
+    analysis node ever holds the whole thing**; running analysis needs a **quorum**; the function is
+    **purpose-constrained** (only anti-Sybil structural questions; emits only **verdicts** — a risk flag,
+    never raw edges or arbitrary "who talks to X") and **audited**. This is not walking back to a central
+    authority — it is the same sovereignty invariant one layer up.
+  - **Limit:** a federation-spanning farm is only visible by correlating structure *across* nodes, so you
+    cannot fully pre-aggregate locally — which is exactly why the analyzer must be threshold/quorum.
+- **Irreducible residual — and the principled stop for "how far back from pure P2P":** automated
+  collusion detection *is* association-observability (the same capability from two sides). So the
+  strongest honest promise is: *association is observable only to a sovereign-threshold,
+  purpose-constrained, audited function that emits only abuse verdicts — to no operator, for no other
+  purpose.* Stop there: going further (delete) hands the system to scammers; stopping short (one trusted
+  analyzer) gives up the distribution that makes the surveillance critique answerable.
+- **This is future work.** Distinct from propagated scoring — structural anomaly detection, consistent
+  with the rejected-TrustRank stance. See `2026-04-11_1000_sybil-floor-and-trust-farming-defenses`,
+  `2026-06-07_1221_sybil-confirm-shortcut-audit`.
+
+---
+
+## 13. Forward-looking guardrails (must hold at launch)
+
+The launch blockers are the **basics — create / name / remove agent, and the portal** (observe your
+agents + collect trust signals; the portal shows nothing the directory doesn't already hold). The point
+of §§2–12 is **not** to build any of it now, but to keep the cheap launch decisions from painting into an
+architectural corner, so the future capabilities are **additive, not a rewrite**. Six guardrails — each
+cheap now, mostly *constraints/audits, not features*:
+
+1. **Identity keyed by the stable `agent_id` / `account`, never by a pubkey.** Pubkeys rotate; everything
+   durable (reputation, edges, sessions, references) hangs off `agent_id`, with pubkeys as *attributes*;
+   a profile holds a *history* of keys, not one immutable scalar. → avoids rotation/succession becoming a
+   migration nightmare.
+2. **Human names never enter the directory** (the petname rule). Names stay client-local; the directory
+   keys by pubkey / `agent_id` only; no name column, no name-based lookup. → avoids building a
+   squattable/surveillable registry that must later be ripped out.
+3. **Default is non-discoverable.** Launch = share-the-key / introduction only, or strictly opt-in
+   listings keyed by pubkey and separable from identity. → avoids un-building a public enumerable
+   directory.
+4. **The server side is a *set* of nodes/shares — never "the node."** No singular co-signer baked into
+   schema / API / records, despite the 2-of-2 stopgap ([[2026-06-03_1200_frost-dkg-single-directory-gap|
+   FROST DKG Single-Directory Gap]]). → avoids T-of-N being a protocol rewrite.
+5. **Agents are append/tombstone only — never hard-deleted — and the ceremony path reads a `status`.** A
+   `status` field consulted by the co-signing path (always "active" today) + a firm no-hard-delete rule.
+   → avoids retrofitting revocation into a permanence-assuming ceremony path, and avoids an *erasure* path
+   that breaks the accountability invariant.
+6. **Policy stays local; the directory never becomes load-bearing on a global edge graph.** "Known
+   requester?" stays on the receiver; edges persisted minimally, `agent_id`-keyed, behind one access
+   seam. → avoids the free-for-all, the honeypot, *and* a rewrite-to-shard simultaneously.
+
+**Mapping to the launch basics:**
+- **create-agent** — stable `agent_id` + `account_id` + a `status` from day one; pubkeys as attributes;
+  no name in the directory.
+- **name-agent** — a *local* petname operation, never the directory, so rename/reuse is free and the
+  future handle/oblivious-lookup/public-bio layer is purely additive.
+- **remove-agent** — local removal (frees the local name) + a directory-side revocation *fact* / `status`
+  flip, **never a hard-delete**. The threshold-honored enforcement (pause/burn) is future; the *record
+  shape* is forward-compatible now.
 
 ---
 
