@@ -1,0 +1,133 @@
+---
+name: CELLO-M8-READ-001
+type: user-story
+date: 2026-06-26
+topics: [portal, directory, read-path, account-scoping, presence-read-rule, replication, m8]
+status: draft
+description: >
+  The authenticated portal→directory read path, scoped to the operator's account_id. Reads
+  replicated directory data (the account's agents, their presence, sessions-by-fingerprint)
+  from any node, applies the presence read rule (online iff row online AND owning node fresh),
+  and never reaches the local daemon.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M8-READ-001
+domain: Portal
+milestone: M8
+actor: OPS
+priority: P0
+components:
+  - portal
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the portal backend,
+  I want an authenticated read path that returns only the signed-in account's directory data,
+  reads replicated state from any node, and computes honest presence,
+  so that the portal surfaces truthful, account-scoped facts without coupling to one node or
+  reaching into the local daemon.
+
+# ─── Context ────────────────────────────────────────────────
+# The portal is HOSTED: it reads replicated directory state, never local daemon state (Journey 02
+# D2). Reads are scoped to the authenticated account_id (agent_profiles.account_id). Presence
+# comes from PRESENCE-001 and must apply the read rule: online iff the agent_presence row is
+# online AND its owning node's last_heartbeat_at is fresh — else last-seen (D5/D6). Sessions /
+# connections surface by fingerprint only (no names, no content). Daemon-local fields (retry
+# queue, interrupted sessions, daemon status) are NOT exposed.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the portal requests the signed-in account's agents"
+    action: "the read path returns only agents whose account_id matches the session's account,
+      each with identity (fingerprint) and presence computed via the read rule"
+
+  - trigger: "When the directory is unreachable"
+    action: "the read path returns an honest stale/empty result (marked), never fabricated data"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Two accounts each with agents; a session for account A"
+    when: "the read path is called for account A (including an attempt to pass account B's id as a param)"
+    then: >
+      Only account A's agents are returned; account B's agents are never returned, including
+      when B's account_id is supplied as a client parameter — scoping is derived from the
+      server-side session, not the request. A read that returns another account's agent on
+      parameter injection fails this AC.
+    test_type: e2e
+    component_under_test: portal
+
+  - id: AC-002
+    given: "An agent with an online agent_presence row whose owning node's heartbeat then goes stale"
+    when: "the read path computes the agent's presence"
+    then: >
+      The agent reads 'online' only while the row is online AND the owning node's
+      last_heartbeat_at is fresh; once the node heartbeat is stale, the agent reads 'last seen'
+      even though the row still says online. Proves the read rule, not a raw row read.
+    test_type: e2e
+    component_under_test: portal
+
+  - id: AC-003
+    given: "Agent data written via node X in a ≥2-node cluster"
+    when: "the portal read path queries (it may hit node Y)"
+    then: >
+      The agent data written on node X is returned (read from a replicated node, proving the
+      path is node-agnostic). The response contains NO daemon-local fields (retry queue,
+      interrupted sessions, daemon status) — those are absent, not null.
+    test_type: e2e
+    component_under_test: portal
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The read path must scope every result to the session's account_id, server-side — a client
+      must not be able to read another account's directory data by manipulating parameters.
+    adversarial_condition: >
+      An authenticated request for account A supplies account B's account_id (and B's agent
+      fingerprints) in every manipulable parameter. Every response contains only A's data; none
+      of B's agents, presence, or sessions appear.
+    test_type: e2e
+    component_under_test: portal
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the directory cluster is unreachable from the portal backend"
+    fallback: >
+      The read path returns an honest stale/empty result (last-known marked stale, or an explicit
+      'directory unreachable' status) — NEVER fabricated agents/presence. portal.directory.unreachable
+      is logged at WARN. Reads resume automatically when the directory is reachable.
+    test_type: integration
+    component_under_test: portal
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: portal.directory.read
+      level: debug
+      context_fields: [accountId, surface, correlationId]
+  error_events:
+    - name: portal.directory.unreachable
+      level: warn
+      context_fields: [correlationId]
+      asserted_by: DB-001
+  alarms: []
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M8-AUTH-001
+    - CELLO-M8-PRESENCE-001
+  blocks:
+    - CELLO-M8-AGENTS-001
+  notes: "Shared read seam — consumed by AGENTS-001 and the AUTH-001 account resolution."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M8
+  related_docs:
+    - "[[outline]]"
+    - "[[02-agents]]"
+  notes: "Replicated reads, account-scoped, honest presence, no daemon-local state."
