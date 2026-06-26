@@ -281,11 +281,40 @@ export type SessionRequestErrorReason =
   | "not_registered"               // REG-001 AC-009: agent has not completed registration
   | "no_connection"                // SESSION-006/CONNREQ-002: no active connection between initiator+target
   | "connection_id_required"       // SESSION-006: session_request missing connection_id field
-  | "session_request_missing_peer_id";  // M7-WIRE-001 AC-002: session_request missing initiator_session_peer_id or addrs
+  | "session_request_missing_peer_id"  // M7-WIRE-001 AC-002: session_request missing initiator_session_peer_id or addrs
+  | "agent_revoked";  // CELLO-M7-REMOVE-001 DOD-REMOVE-3: the target agent has been revoked
 
 export interface SessionRequestError {
   type: "session_request_error";
   reason: SessionRequestErrorReason;
+}
+
+// ─── CELLO-M7-REMOVE-001 (DOD-REMOVE-2): agent revocation frames ──────────────
+// Local copies until @cello-protocol/protocol-types is published with these shapes (M7-WIRE-001
+// convention). The inbound request mirrors protocol-types RevokeAgentRequest; the signature is hex.
+
+export interface RevokeAgentRequest {
+  type: "revoke_agent";
+  /** The directory-assigned agent_id (agent_profiles.agent_id) being revoked. */
+  agent_id: string;
+  epoch_id?: string;
+  reason?: string;
+  revoked_at: number;
+  /** Hex Ed25519 signature over the canonical revocation TBS, by the agent's own K_local. */
+  signature: string;
+}
+
+export interface AgentRevocationAck {
+  type: "agent_revocation_ack";
+  agent_id: string;
+}
+
+export type AgentRevocationErrorReason = "unknown_agent" | "not_self_authorized" | "signature_invalid" | "malformed";
+
+export interface AgentRevocationError {
+  type: "agent_revocation_error";
+  reason: AgentRevocationErrorReason;
+  agent_id?: string;
 }
 
 export interface NotAuthenticated {

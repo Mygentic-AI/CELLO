@@ -28,6 +28,9 @@ import type {
   PeerInfoAnnounce,
   ManifestPollResponse,
   SessionOfferAccept,
+  RevokeAgentRequest,
+  AgentRevocationAck,
+  AgentRevocationError,
 } from "./directory-types.js";
 
 const ENC = new Encoder({ tagUint8Array: false });
@@ -40,6 +43,15 @@ export function encodeSignalingAuthChallenge(frame: SignalingAuthChallenge): Uin
 
 export function encodeSignalingAuthFailed(frame: SignalingAuthFailed): Uint8Array {
   return ENC.encode({ type: frame.type, reason: frame.reason });
+}
+
+// CELLO-M7-REMOVE-001 (DOD-REMOVE-2): revocation reply encoders.
+export function encodeAgentRevocationAck(frame: AgentRevocationAck): Uint8Array {
+  return ENC.encode({ type: frame.type, agent_id: frame.agent_id });
+}
+
+export function encodeAgentRevocationError(frame: AgentRevocationError): Uint8Array {
+  return ENC.encode({ type: frame.type, reason: frame.reason, agent_id: frame.agent_id });
 }
 
 /**
@@ -313,7 +325,7 @@ export type SealInterruptedAckFrame = { type: "seal_interrupted_ack"; sessionId:
 /** initiatorPubkey is included so the directory can route the rejection back to the initiator by direct lookup in #streams. */
 export type SealInterruptedRejectionFrame = { type: "seal_interrupted_rejection"; sessionId: string; initiatorPubkey: string; reason: string };
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame;
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -431,6 +443,17 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     const primary_pubkey = typeof o["primary_pubkey"] === "string" ? o["primary_pubkey"] : null;
     if (primary_pubkey === null) return null;
     return { type: "dkg_complete" as const, primary_pubkey };
+  }
+
+  if (o["type"] === "revoke_agent") {
+    // CELLO-M7-REMOVE-001 DOD-REMOVE-2: a self-signed agent revocation on the authed signaling stream.
+    const agent_id = typeof o["agent_id"] === "string" ? o["agent_id"] : null;
+    const signature = typeof o["signature"] === "string" ? o["signature"] : null;
+    const revoked_at = typeof o["revoked_at"] === "number" ? o["revoked_at"] : null;
+    if (agent_id === null || signature === null || revoked_at === null) return null;
+    const epoch_id = typeof o["epoch_id"] === "string" ? o["epoch_id"] : undefined;
+    const reason = typeof o["reason"] === "string" ? o["reason"] : undefined;
+    return { type: "revoke_agent", agent_id, epoch_id, reason, revoked_at, signature };
   }
 
   if (o["type"] === "seal_attempt") {

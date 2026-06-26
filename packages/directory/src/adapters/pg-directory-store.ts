@@ -27,6 +27,7 @@ import type {
   Logger,
   AccountRow,
   CreateAccountParams,
+  AgentRevocationRecord,
 } from "@cello-protocol/interfaces";
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
 import {
@@ -195,6 +196,11 @@ export class PgDirectoryStore implements DirectoryStore {
   readonly #profilesByPrimaryKey = new Map<string, AgentProfile>();
   readonly #profilesByAgentId = new Map<string, AgentProfile>();
 
+  // CELLO-M7-REMOVE-001 (DOD-REMOVE-2/3): agent revocations. #revokedPubkeys is the synchronous
+  // soft-refuse index (k_local_pubkey hex); #revocationsByAgentId serves the read-back (AC-002).
+  readonly #revokedPubkeys = new Set<string>();
+  readonly #revocationsByAgentId = new Map<string, AgentRevocationRecord>();
+
   /**
    * Pseudocode for constructor (FEDERATION-001 AC-011):
    *   1. Call configurePgTypes() — idempotent, safe to call multiple times.
@@ -248,6 +254,65 @@ export class PgDirectoryStore implements DirectoryStore {
       this.#profilesByAgentId.set(agentId, profile);
     }
     this.#logger.info("adapter.profiles.loaded", { count: result.rows.length });
+    await this.#loadRevocations();
+  }
+
+  /**
+   * REMOVE-001 (DOD-REMOVE-2/3): load the agent revocations into the synchronous in-memory indexes.
+   * JOINs agent_profiles to recover each revoked agent's k_local_pubkey (not a stored column). Called
+   * at the end of loadProfiles (startup + restart) so the soft-refuse path and the read-back are warm.
+   */
+  async #loadRevocations(): Promise<void> {
+    const result = await this.#pool.query<{
+      agent_id: string;
+      k_local_pubkey: string | null;
+      epoch_id: string | null;
+      reason: string | null;
+      signature: Buffer;
+      revoked_at: string | number;
+    }>(
+      `SELECT ar.agent_id, ap.k_local_pubkey, ar.epoch_id, ar.reason, ar.signature, ar.revoked_at
+         FROM agent_revocations ar
+         LEFT JOIN agent_profiles ap ON ap.agent_id = ar.agent_id`,
+    );
+    for (const row of result.rows) {
+      const kLocalPubkey = row.k_local_pubkey ?? "";
+      const rec: AgentRevocationRecord = {
+        agentId: row.agent_id,
+        kLocalPubkey,
+        epochId: row.epoch_id ?? "",
+        reason: row.reason ?? "",
+        signature: new Uint8Array(row.signature),
+        revokedAt: Number(row.revoked_at),
+      };
+      this.#revocationsByAgentId.set(row.agent_id, rec);
+      if (kLocalPubkey) this.#revokedPubkeys.add(kLocalPubkey);
+    }
+    this.#logger.info("adapter.revocations.loaded", { count: result.rows.length });
+  }
+
+  insertAgentRevocation(rec: AgentRevocationRecord): void {
+    if (this.#revocationsByAgentId.has(rec.agentId)) return; // append-only, idempotent
+    this.#revocationsByAgentId.set(rec.agentId, rec);
+    if (rec.kLocalPubkey) this.#revokedPubkeys.add(rec.kLocalPubkey);
+    this.#fire(
+      this.#pool.query(
+        `INSERT INTO agent_revocations (agent_id, epoch_id, reason, signature, revoked_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (agent_id) DO NOTHING`,
+        [rec.agentId, rec.epochId, rec.reason, Buffer.from(rec.signature), rec.revokedAt],
+      ),
+      "agent_revocations",
+    );
+    this.#logger.info("adapter.revocation.recorded", { agentId: rec.agentId });
+  }
+
+  isAgentRevoked(kLocalPubkeyHex: string): boolean {
+    return this.#revokedPubkeys.has(kLocalPubkeyHex);
+  }
+
+  getAgentRevocation(agentId: string): AgentRevocationRecord | undefined {
+    return this.#revocationsByAgentId.get(agentId);
   }
 
   /**

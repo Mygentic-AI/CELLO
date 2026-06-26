@@ -9,7 +9,7 @@
  */
 
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
-import type { DirectoryStore, DirectoryNotification, SealNotarization, ConversationSealRecord, AccountRow, CreateAccountParams } from "../directory-store.js";
+import type { DirectoryStore, DirectoryNotification, SealNotarization, ConversationSealRecord, AccountRow, CreateAccountParams, AgentRevocationRecord } from "../directory-store.js";
 
 const NOTIFICATION_QUEUE_BOUND = 256;
 const PENDING_CONNECTION_REQUEST_BOUND = 32;
@@ -154,6 +154,24 @@ export class InMemoryDirectoryStore implements DirectoryStore {
 
   hasProfile(kLocalPubkeyHex: string): boolean {
     return this.#profiles.has(kLocalPubkeyHex);
+  }
+
+  // ─── CELLO-M7-REMOVE-001 (DOD-REMOVE-2/3): agent revocation ────────────────
+  readonly #revocations = new Map<string, AgentRevocationRecord>(); // agentId → record
+  readonly #revokedPubkeys = new Set<string>(); // k_local_pubkey hex
+
+  insertAgentRevocation(rec: AgentRevocationRecord): void {
+    if (this.#revocations.has(rec.agentId)) return; // append-only, idempotent
+    this.#revocations.set(rec.agentId, rec);
+    this.#revokedPubkeys.add(rec.kLocalPubkey);
+  }
+
+  isAgentRevoked(kLocalPubkeyHex: string): boolean {
+    return this.#revokedPubkeys.has(kLocalPubkeyHex);
+  }
+
+  getAgentRevocation(agentId: string): AgentRevocationRecord | undefined {
+    return this.#revocations.get(agentId);
   }
 
   hasPhoneStubHash(phoneStubHashHex: string): boolean {

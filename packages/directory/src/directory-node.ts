@@ -139,6 +139,8 @@ import {
   encodeSessionSealed,
   encodeSessionSealRejected,
   encodeSessionRequestError,
+  encodeAgentRevocationAck,
+  encodeAgentRevocationError,
   encodeNotAuthenticated,
   encodeSealVerified,
   encodeSessionFrostSealed,
@@ -250,6 +252,32 @@ export function buildSessionEstablishmentTbsM7(
     pubA,
     pubB,
     genesisPrevRoot,
+    tsEncoded,
+  ]) as Uint8Array;
+}
+
+/**
+ * CELLO-M7-REMOVE-001 (DOD-REMOVE-2): canonical agent-revocation TBS — a BYTE-IDENTICAL local copy of
+ * @cello-protocol/protocol-types buildAgentRevocationTbs (the published package lags; M7-WIRE-001
+ * convention). Field order is load-bearing: [domain, agentId, kLocalPubkeyHex, epochId, reason, ts].
+ * The m7-remove-001-tbs-drift-guard test + the live spine (sign-in-daemon / verify-here) catch drift.
+ * Replace with a direct import once protocol-types ships this helper.
+ */
+export const AGENT_REVOCATION_DOMAIN = "CELLO-REVOKE-v1";
+export function buildAgentRevocationTbs(
+  agentId: string,
+  kLocalPubkeyHex: string,
+  epochId: string,
+  reason: string,
+  revokedAt: number | bigint,
+): Uint8Array {
+  const tsEncoded = typeof revokedAt === "bigint" || revokedAt > 0xffffffff ? BigInt(revokedAt) : revokedAt;
+  return CBOR_ENC.encode([
+    AGENT_REVOCATION_DOMAIN,
+    agentId,
+    kLocalPubkeyHex,
+    epochId,
+    reason,
     tsEncoded,
   ]) as Uint8Array;
 }
@@ -1521,6 +1549,9 @@ export class CelloDirectoryNode {
           // REG-001: handle registration (runs concurrently; allows dkg_complete frames
           // to be processed by this same loop while DKG is in progress)
           void this.#processRegisterRequest(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "revoke_agent") {
+          // CELLO-M7-REMOVE-001 DOD-REMOVE-2: record a self-signed agent revocation.
+          void this.#processRevokeAgent(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "session_request") {
           // REG-001 AC-009: refuse session_request if registration is required and the agent
           // has not completed it. requireRegistration defaults to false for backward compat.
@@ -1532,6 +1563,14 @@ export class CelloDirectoryNode {
           // (neither via wire peer_info_announce nor via direct registerPeerInfo call).
           if (!this.#peerInfoAnnounced.has(authedPubkeyHex!)) {
             this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "peer_not_registered" }));
+            continue;
+          }
+          // CELLO-M7-REMOVE-001 DOD-REMOVE-3 (soft enforcement): refuse to broker a session if the
+          // TARGET has been revoked (the AC-003 case) — or if the revoked agent is the initiator. The
+          // directory does not broker or report a revoked agent as reachable.
+          const sessionTargetHex = Buffer.from(parsed.target_pubkey).toString("hex");
+          if (this.#store.isAgentRevoked(sessionTargetHex) || this.#store.isAgentRevoked(authedPubkeyHex!)) {
+            this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "agent_revoked" }));
             continue;
           }
           // M7-WIRE-001 AC-002: Reject session_request missing initiator session Peer ID
@@ -1834,6 +1873,59 @@ export class CelloDirectoryNode {
    *
    * RFC 9591 (FROST DKG), FIPS 180-4 (SHA-256), NIST FIPS 204 (ML-DSA)
    */
+  /**
+   * CELLO-M7-REMOVE-001 (DOD-REMOVE-2): record a self-signed agent revocation. Self-authorized — the
+   * stream is already K_local-authenticated as `authedPubkeyHex`; the agent may revoke ONLY its own
+   * agent_id, and the signature must verify against its registered K_local (SI-001). On success the
+   * revocation is APPENDED (never an agent_profiles mutation — SI-002, guardrail #5); on any failure
+   * NOTHING is written and a distinct reason is returned.
+   */
+  async #processRevokeAgent(
+    stream: Stream,
+    authedPubkeyHex: string,
+    frame: import("./directory-types.js").RevokeAgentRequest,
+  ): Promise<void> {
+    // The authenticated stream key is the agent's own K_local — resolve its profile by that key.
+    const profile = this.#store.getProfile(authedPubkeyHex);
+    if (!profile) {
+      this.#sendFrame(stream, encodeAgentRevocationError({ type: "agent_revocation_error", reason: "unknown_agent", agent_id: frame.agent_id }));
+      this.#logger?.warn("agent.revocation.rejected", { agentId: frame.agent_id, reason:"unknown_agent" });
+      return;
+    }
+    // Self-authorization (SI-001 / guardrail #1): an agent may revoke ONLY its own agent_id.
+    if (profile.agent_id !== frame.agent_id) {
+      this.#sendFrame(stream, encodeAgentRevocationError({ type: "agent_revocation_error", reason: "not_self_authorized", agent_id: frame.agent_id }));
+      this.#logger?.warn("agent.revocation.rejected", { agentId: frame.agent_id, reason:"not_self_authorized" });
+      return;
+    }
+    // Verify the self-signature over the canonical TBS against the registered K_local. A forged signer
+    // or invalid signature is rejected and NOTHING is written (SI-001).
+    const tbs = buildAgentRevocationTbs(frame.agent_id, profile.k_local_pubkey, frame.epoch_id ?? "", frame.reason ?? "", frame.revoked_at);
+    let sigBytes: Uint8Array;
+    try {
+      sigBytes = new Uint8Array(Buffer.from(frame.signature, "hex"));
+    } catch {
+      sigBytes = new Uint8Array(0);
+    }
+    const pubBytes = new Uint8Array(Buffer.from(authedPubkeyHex, "hex"));
+    if (sigBytes.length !== 64 || !verify(pubBytes, tbs, sigBytes)) {
+      this.#sendFrame(stream, encodeAgentRevocationError({ type: "agent_revocation_error", reason: "signature_invalid", agent_id: frame.agent_id }));
+      this.#logger?.warn("agent.revocation.rejected", { agentId: frame.agent_id, reason:"signature_invalid" });
+      return;
+    }
+    // Verified — append the revocation fact (idempotent). agent_profiles is left UNTOUCHED.
+    this.#store.insertAgentRevocation({
+      agentId: frame.agent_id,
+      kLocalPubkey: profile.k_local_pubkey,
+      epochId: frame.epoch_id ?? "",
+      reason: frame.reason ?? "",
+      signature: sigBytes,
+      revokedAt: frame.revoked_at,
+    });
+    this.#logger?.info("agent.revocation.recorded", { agentId: frame.agent_id });
+    this.#sendFrame(stream, encodeAgentRevocationAck({ type: "agent_revocation_ack", agent_id: frame.agent_id }));
+  }
+
   async #processRegisterRequest(
     stream: Stream,
     authedPubkeyHex: string,

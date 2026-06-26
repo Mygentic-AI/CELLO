@@ -93,6 +93,22 @@ export interface ConversationSealRecord {
 
 export type DirectoryNotification = SessionAbandoned | SessionSealed | SessionSealRejected | SealVerified | ConnectionEstablished;
 
+/**
+ * CELLO-M7-REMOVE-001 (DOD-REMOVE-2): an append-only agent revocation fact. `agentId` is the
+ * directory-assigned agent_id (agent_profiles.agent_id) — guardrail #1, never a pubkey. `kLocalPubkey`
+ * is the agent's registered K_local hex; it is NOT a stored column (it lives in agent_profiles) — it is
+ * carried on insert to update the in-memory revoked-pubkey index, and re-derived on read via a JOIN.
+ * `signature` is the agent's own Ed25519 signature over the canonical revocation TBS.
+ */
+export interface AgentRevocationRecord {
+  agentId: string;
+  kLocalPubkey: string;
+  epochId: string;
+  reason: string;
+  signature: Uint8Array;
+  revokedAt: number;
+}
+
 export interface DirectoryStore {
   /**
    * Store a completed SealNotarization.
@@ -189,6 +205,30 @@ export interface DirectoryStore {
    * Return true if an agent with this k_local_pubkey has already registered.
    */
   hasProfile(kLocalPubkeyHex: string): boolean;
+
+  // ─── CELLO-M7-REMOVE-001 (DOD-REMOVE-2/3): agent revocation ────────────────
+  // Append-only, self-signed revocation facts. Removal is RECORDED, never an
+  // agent_profiles mutation or delete (design log §5; guardrail #5; SI-002).
+
+  /**
+   * Append a verified revocation (the directory verified the self-signature first). Idempotent:
+   * a revocation that already exists for agent_id is a no-op. `kLocalPubkey` is the agent's
+   * registered K_local (not a stored column) — passed so the in-memory revoked-pubkey index used by
+   * the soft-refuse path can be updated synchronously.
+   */
+  insertAgentRevocation(rec: AgentRevocationRecord): void;
+
+  /**
+   * True if the agent whose K_local pubkey is `kLocalPubkeyHex` has a recorded revocation.
+   * Synchronous (in-memory index) — used by the routing/initiation refuse gates (DOD-REMOVE-3).
+   */
+  isAgentRevoked(kLocalPubkeyHex: string): boolean;
+
+  /**
+   * Read a revocation back by the directory-assigned agent_id (AC-002 — verifiable from any node).
+   * Returns undefined if the agent has no revocation.
+   */
+  getAgentRevocation(agentId: string): AgentRevocationRecord | undefined;
 
   /**
    * Return true if the given phone_stub_hash (hex SHA-256) is already claimed.
