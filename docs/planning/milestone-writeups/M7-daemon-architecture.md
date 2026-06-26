@@ -148,8 +148,45 @@ reconstructable (NOTED — needs design); the deployed directory's `PgTokenValid
 (real bot tokens required for a fresh DKG); `persistFrostKeyShare` is fire-and-forget (register → wait →
 verify before touching the daemon); the relay must be restarted to re-register after any directory redeploy.
 
+## CELLO-M7-CONN-001 (2026-06-26) — per-agent directory connections; the keystone is deleted
+
+The live operator path surfaced the **Demo1 bug**: registering a fresh agent right after removing another
+timed out (it blocked registering Demo1 after removing Ms_Chelly). Root cause: the daemon held ONE shared
+"keystone" directory connection that borrowed the lexicographically-first ("primary") agent's identity.
+Removing that agent cleared the primary but never tore down + re-established the connection, so it lingered
+authenticated as the removed agent (its pubkey pinged the directory 6 min after removal) and the next
+registration's DKG had no working directory door.
+
+**A verification pass drove the design.** All 19 frame types on the authenticated signaling stream were
+enumerated: 18 are agent-scoped; only the manifest poll is daemon-level — and the manifest is public,
+self-authenticating data (threshold-signed; root keys pinned locally), so it can move to unauthenticated
+HTTP. Decision: **delete the keystone, go fully per-agent**, and rehome the one daemon-level operation
+(the manifest poll) to `GET /manifest`. Locked invariant: nothing agent-specific ever goes in the
+consortium manifest.
+
+**Built in three red-first phases (foreground):** (1) the manifest poll moved to unauthenticated HTTP
+(`http-manifest-poll.ts`), preserving the TUF verify-before-adopt policy and running daemon-level even
+with zero agents — the property the keystone could never provide; a directory `GET /manifest` handler +
+ALB `ManifestPathRule` serve it. (2) inbound `session_assignment` / `seal_interrupted` responders wired
+**per-agent** (closing the SPINE-5 gap where only the primary received them). (3) the keystone deleted
+(`primaryAgent` / `getAuthIdentity` / `wireKeystonePrimary`); every site re-homed to the owning agent via
+`signalingFor` / `sendOver`; create/register/start + a startup loop bring up **each agent's own**
+connection. Three read-only reviewers (code-reviewer, fallback-finder, test-attacker) ran; every finding
+was fixed — notably a HIGH (loaded agents weren't connected at startup → no inbound after a restart) and
+two MEDs (a swallowed manifest-store throw; a status field that masked a partial per-agent outage).
+
+**Proven at every layer.** Live close gate against the real binaries: **j-conn 2/2** (the Demo1 repro +
+name-reuse-after-removal), **j-spine 7/7** (non-regressive; the stale DOD-SPINE-4 flat-file assertion was
+updated to the PERSIST-002 SQLCipher model), **j-remove 3/3**. Published daemon 0.0.13 / cli 0.0.11 to
+`latest` (binary-verified, smoke-tag green). Operator-confirmed on a laptop — remove an agent → register a
+fresh one → DKG completed (`primary_pubkey` returned), `directory_signaling: connected` — and corroborated
+in the directory Postgres (Demo2 `active` in us-east-1) and replicated to eu-central-1 + ap-northeast-1
+(`agent_profiles` is in `cello_pub`). The keystone stranding bug is dead.
+
 ## What M7 unblocks
 
+- **Clean agent lifecycle** (CELLO-M7-CONN-001): removing an agent and registering a fresh one no longer
+  strands the daemon — every agent runs its OWN directory connection; removal is per-agent and self-healing.
 - **Live operator onboarding** is real: `npx @cello-protocol/connect` + `@cello-protocol/cli` → `cello login`
   → register → converse, all against the deployed cluster, proven by the demo-agent round-trip.
 - **Beta**: identity + connect + converse + seal (unilateral & bilateral & upgrade) + durable encrypted
@@ -167,6 +204,9 @@ verify before touching the daemon); the relay must be restarted to re-register a
   but the agent can't sign); affects any reinstall.
 - **Demo cleanup** — update the published demo AgentID to `bc94ead6…`, rewrite `demo/runbook.md` +
   `demo/CLAUDE.md` for M7, update `infra/STATE.md` (redeploy, relay restart), remove the throwaway test driver.
+- **DOD-CONN-3 manifest-over-HTTP directory deploy** — the `GET /manifest` code is merged to main; the
+  end-to-end live poll needs the CI/CD directory image + `deploy.sh` for the ALB `/manifest` rule across all
+  3 regions + STATE.md. Degrades gracefully (`manifest_http_unreachable` → cached, 6–12h schedule) until then.
 - **Multi-node failover** (INV-1) — needs >1 node; the single-node spine harness can't model it → E2E.
 - **Relay-SIGNED sequence verification** (DOD-MSG-4 Finding 2) — needs the relay's signing identity
   plumbed to the daemon; named-deferred (RC-1) to the transport-security-audit hardening story.

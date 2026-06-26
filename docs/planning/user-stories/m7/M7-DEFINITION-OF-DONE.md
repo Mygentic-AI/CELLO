@@ -1108,9 +1108,13 @@ no-double-count (DOD-MSG-5), no-assent-field (DOD-LEG-4).
   the missing agent-key creation path.
   **NEW 2026-06-26 — DOD-CONN-1/2/3 (CELLO-M7-CONN-001):** full per-agent directory connections (delete
   the keystone), close SPINE-5 (per-agent inbound sessions), and move the manifest poll to unauthenticated
-  HTTP (runs with zero agents; TUF preserved) — ❌ NOT BUILT (story written). Fixes the Demo1 stranding
-  bug; supersedes the keystone mechanism in DOD-AUTH-2 (transport)/DOD-ONBOARD-1 (election) and closes the
-  DOD-SPINE-4 SPINE-5 follow-on. Locks the invariant: nothing agent-specific ever goes in the manifest.
+  HTTP (runs with zero agents; TUF preserved) — ✅ **SHIPPED + PROVEN LIVE** (DOD-CONN-1/2 PROVEN LIVE;
+  DOD-CONN-3 BUILT + unit-proven, manifest-over-HTTP end-to-end live pending the directory deploy). Fixes
+  the Demo1 stranding bug — proven live (j-conn 2/2, j-spine 7/7, j-remove 3/3), operator-confirmed, and
+  corroborated in the directory Postgres + replicated to all 3 regions. Published daemon 0.0.13 / cli 0.0.11
+  to `latest`. Supersedes the keystone mechanism in DOD-AUTH-2 (transport) / DOD-ONBOARD-1 (election) and
+  closes the DOD-SPINE-4 SPINE-5 follow-on. Locks the invariant: nothing agent-specific ever goes in the
+  manifest.
 - **Tier 0 invariants**: INV-2/3/4/7 🟢 PROVEN/BUILT+VERIFIED; INV-1 (real cluster) needs infra;
   INV-5 (dial-after-teardown) gater built + unit-covered, not spine-testable; INV-6/8 (discipline
   audits) per-story-built, un-audited as an aggregate; INV-9 built, not specifically asserted.

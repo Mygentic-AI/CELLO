@@ -6026,3 +6026,66 @@ has `remove-agent`; all cross-pins real semver. **Deployed:** directory V32 to a
 agent_revocations verified in every RDS), ops-agent SSM 30→32, agent_revocations in cello_pub (6 slots
 streaming). All four DoD lines ✅; 3-attacker review APPROVED (incl. the durable-write BLOCKER fix).
 Operators get `cello remove-agent` via `npm i -g @cello-protocol/cli@latest @cello-protocol/connect@latest`.
+
+## 2026-06-26 — CELLO-M7-CONN-001 FULLY SHIPPED (per-agent directory connections; keystone DELETED)
+
+**The Demo1 bug, root-caused + fixed.** Registering a fresh agent right after removing another timed out
+(this blocked registering Demo1 after removing Ms_Chelly). Root cause: the daemon held ONE shared
+"keystone" directory connection that borrowed the lexicographically-first ("primary") agent's identity;
+removing that agent cleared the primary but never tore down + re-established the connection, so it lingered
+authenticated as the removed agent (its pubkey pinged the directory 6 min after removal) and the next
+registration's DKG had no working directory door.
+
+**Design (verification-pass first).** Enumerated all 19 frame types on the authenticated signaling stream:
+18 are agent-scoped; only the manifest poll is daemon-level — and the manifest is PUBLIC, self-authenticating
+(threshold-signed, root keys pinned locally), so it can move to unauthenticated HTTP. Decision: delete the
+keystone, go FULL per-agent; rehome the manifest poll to HTTP. Locked invariant (SI-002): nothing
+agent-specific ever goes in the consortium manifest. (Discussion log
+`2026-06-26_1030_per-agent-directory-connections-and-manifest-over-http`.)
+
+**Built (3 phases, red-first, foreground — no implementation subagents):**
+- **Phase 1 (DOD-CONN-3, client):** manifest poll → unauthenticated HTTP (`http-manifest-poll.ts`); the
+  verify-before-adopt TUF policy is preserved unchanged (threshold / not_before / expires / anti-rollback /
+  already-current no-op); runs DAEMON-LEVEL even with ZERO agents (the keystone could not). Directory
+  `GET /manifest` handler + ALB `ManifestPathRule` + the SI-002 public-roster-only guard.
+- **Phase 2 (DOD-CONN-2):** inbound `session_assignment` + `seal_interrupted_request` responders wired
+  PER-AGENT (`wirePerAgentSessionInbound`) — closes the SPINE-5 gap where only the primary (keystone)
+  received them.
+- **Phase 3 (DOD-CONN-1):** deleted `primaryAgent` / `getAuthIdentity` / `wireKeystonePrimary` /
+  `keystoneDispose` / the shared keystone manager; re-homed ~13 sites via `signalingFor` / `sendOver` /
+  `directorySignalingStatus` / `stopAllSignaling`; the shared manager survives ONLY as the in-process test
+  path. create/register/start + a startup loop bring up EACH agent's OWN connection.
+
+**Reviews (3 read-only agents, ALL findings fixed):**
+- `feature-dev:code-reviewer` (opus) — 1 HIGH: `start_agent` didn't establish the connection (then made
+  more complete by a startup-connect loop once the live spine surfaced loaded-agents-not-connected) + 2 LOW.
+- `cello-fallback-finder` — 2 MED: a thrown store error in the HTTP poll was swallowed → logged
+  `manifest_store_error`; `directorySignalingStatus` showed "connected" during a partial per-agent outage
+  → now "connected" only when EVERY agent connection is up + 2 LOW.
+- `cello-test-attacker` — tests have teeth (forged-sig forces real Ed25519; the `<`/`<=` anti-rollback
+  floor is pinned; cache-untouched on unreachable) → 3 LOW boundary ticks tightened.
+
+**Live close gate (real cello-daemon + cello-directory + cello-relay):** **j-conn 2/2** (the Demo1 repro +
+name-reuse-after-removal), **j-spine 7/7** (non-regressive — incl. the stale DOD-SPINE-4 flat-file
+assertion updated to the PERSIST-002 SQLCipher model: a pre-existing gap surfaced by this close gate),
+**j-remove 3/3** (keystone clear/re-elect events → per-agent connection drop/initiate).
+
+**Published + promoted:** daemon **0.0.13** / cli **0.0.11** to beta (tags `v0.0.54` then `v0.0.55` — the
+startup-connect fix bumped it) → `smoke-tag` GREEN → promoted to `latest` (Andre ran the dist-tag adds).
+`connect` 0.0.49 unchanged (does NOT depend on daemon). AC-007 a NO-OP (trustless-cello depends on
+crypto/transport/protocol-types/client/connect, not daemon/cli). Binary-verified the daemon tarball
+(`http-manifest-poll.js` + the startup-connect loop present in `dist/`).
+
+**Operator-confirmed + DB-corroborated.** On Andre's machine: remove an agent → register a fresh one →
+`register` returned a `primary_pubkey` (DKG completed), `directory_signaling: connected`. Verified against
+the directory POSTGRES (not the self-report): Demo2's `agent_profile` is present + `active` in us-east-1
+(home) AND replicated to eu-central-1 + ap-northeast-1 (`agent_profiles` is in `cello_pub`). The keystone
+bug is dead at every layer: in-process tests → live spines → operator machine → directory DB → replication.
+
+**Floors:** daemon 436, http-manifest-poll 12, directory health-server 6; j-conn/j-spine/j-remove GREEN
+live; typecheck + lint clean — both repos. Merged to main in both repos.
+
+**REMAINING (deferred, non-blocking):** DOD-CONN-3's manifest-over-HTTP END-TO-END LIVE needs the directory
+deploy — the `GET /manifest` code is now on main → CI/CD image + `deploy.sh` the ALB rule to all 3 regions
++ STATE.md. The poll degrades gracefully (`manifest_http_unreachable` → cached) and fires only on a 6–12h
+schedule, so it's not urgent. Everything else is shipped + proven.
