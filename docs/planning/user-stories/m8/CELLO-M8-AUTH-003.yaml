@@ -1,0 +1,115 @@
+---
+name: CELLO-M8-AUTH-003
+type: user-story
+date: 2026-06-26
+topics: [portal, auth, totp, backup-codes, recoverable-floor, m8]
+status: draft
+description: >
+  TOTP enrollment + verification + backup codes. TOTP is the recoverable strong-auth floor
+  (RFC 6238); backup codes are the one-time, off-device device-loss escape hatch. Secrets are
+  KMS-encrypted; backup codes are stored hashed and single-use.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M8-AUTH-003
+domain: Portal
+milestone: M8
+actor: OPS
+priority: P0
+components:
+  - portal
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As an operator,
+  I want to enroll a TOTP authenticator and receive backup codes,
+  so that I have a portable, recoverable strong-auth factor that survives device loss — the
+  floor beneath WebAuthn.
+
+# ─── Context ────────────────────────────────────────────────
+# TOTP is the recoverable floor (Journey 01 D6) — portable across devices, unlike a device-bound
+# passkey. Backup codes are the device-loss escape that needs neither email nor Telegram (D7).
+# RFC 6238, 30s window, ±1 step tolerance. The TOTP secret is KMS-encrypted at rest (SCAFFOLD-002);
+# backup codes are stored hashed + single-use. otplib.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When an operator enrolls TOTP"
+    action: "a secret is generated and shown as a QR/string; a current 6-digit code must verify
+      to complete enrollment; the secret is stored KMS-encrypted; authLevel becomes strong"
+
+  - trigger: "When backup codes are issued"
+    action: "a set of one-time codes is generated, shown once, and stored hashed"
+
+  - trigger: "When a backup code is used to authenticate"
+    action: "the code verifies against its stored hash and is marked consumed; reuse fails"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An operator enrolling TOTP"
+    when: "they submit a current authenticator code, then later authenticate with a fresh code"
+    then: >
+      Enrollment completes only when a valid current code (RFC 6238, ±1 step) verifies against
+      the freshly generated secret; a wrong code is rejected. A later login verifies a fresh code
+      — proving the secret was stored and decrypts to a usable secret (verify-after-load, crossing
+      the storage boundary), not merely persisted as bytes. portal.totp.enrolled logged.
+    test_type: e2e
+    component_under_test: portal
+
+  - id: AC-002
+    given: "An operator with backup codes issued"
+    when: "they authenticate with one backup code, then attempt to reuse the same code"
+    then: >
+      The first use authenticates and marks that code consumed; the second use of the same code
+      is rejected (single-use). portal.backup_codes.issued logs a COUNT only (never the codes);
+      portal.backup_code.consumed logged on use.
+    test_type: e2e
+    component_under_test: portal
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The TOTP secret and backup codes must not be recoverable from the portal DB — the secret
+      is KMS-encrypted, the codes are stored hashed.
+    adversarial_condition: >
+      Dump the portal DB after enrollment + backup-code issuance. The TOTP-secret column is
+      ciphertext (plaintext secret absent) and the backup-code column holds hashes, not the
+      codes — an attacker with the dump cannot derive a usable TOTP code or a usable backup code.
+    test_type: integration
+    component_under_test: portal
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: portal.totp.enrolled
+      level: info
+      context_fields: [accountId, correlationId]
+      asserted_by: AC-001
+    - name: portal.backup_codes.issued
+      level: info
+      context_fields: [accountId, count, correlationId]
+      asserted_by: AC-002
+    - name: portal.backup_code.consumed
+      level: info
+      context_fields: [accountId, correlationId]
+      asserted_by: AC-002
+  error_events: []
+  alarms: []
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M8-AUTH-001
+    - CELLO-M8-SCAFFOLD-002
+  blocks:
+    - CELLO-M8-AUTH-004
+  notes: "The recoverable floor. WebAuthn (AUTH-002) is convenience on top."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M8
+  related_docs:
+    - "[[outline]]"
+    - "[[01-onboarding-and-authentication]]"
+  notes: "Portable, recoverable factor; backup codes survive device loss without email/Telegram."
