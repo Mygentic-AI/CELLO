@@ -5842,3 +5842,53 @@ agent_not_found; remove-nonexistent->agent_not_found. (2) live `j-remove.spine.t
 cello-daemon+directory via the CLI) -- create-agent X->register X->remove-agent X (exit 0, output states
 one-way + guidance)->DB shows the retired row with seed + frost share + agent_id=id1 kept->create-agent X->
 new id2!=id1. Honors AC-001 "registered, active agent X" + SI-002-local without a two-party session.
+
+## 2026-06-26 — DOD-REMOVE-1 — ✅ PROVEN LIVE (retire-and-keep + name reuse, local)
+
+**Unit closed.** `cello remove-agent X` retires an agent (state=retired; row + K_local seed + FROST
+share + history KEPT — never hard-deleted) and frees the human name; `cello create-agent X` then mints a
+DISTINCT identity (new agent_id + K_local). Proven on the binary by `j-remove.spine` (2 cases) + the
+in-process `persist-remove-001` (3 cases, behavioral). DEC-4 scope: LOCAL record shape only — the signed
+directory revocation is DOD-REMOVE-2 (next).
+
+**What was red → green.** db-identity-store re-key (agent_name PK → stable agent_id PK + partial unique
+index `agents_active_name … WHERE state != 'retired'`; one-time idempotent rebuild for existing DBs);
+createAgent mints+returns agent_id; retireAgent (flip active row, keep everything); listAgents/hasActiveAgent
+active-only; DbRegistrationPersistence queries qualified active-only (the name-reuse ambiguity hinge);
+identity-migration flat-import mints agent_id; daemon cello_create_agent returns agentId + new
+cello_remove_agent handler (in-memory purge); cli `cello remove-agent`.
+
+**Commits.** cello-client: `0064d95` (impl) → `a2627e7` (review fixes) → `344a0f4` (behavioral teeth).
+trustless-cello: `a68a32c8` (design note) → `77be2fac` (j-remove live) → `de4b7e1e` (HIGH-1 secondary
+teeth) → `cec4cbc5` (keystone teeth). All local, UNPUSHED (Andre pushes).
+
+**Per-unit review (3 read-only attackers, opus) — all resolved, re-verified.**
+- `feature-dev:code-reviewer`: 2× HIGH → **APPROVED** after fixes. (1) remove handler never dropped the
+  retired agent's per-agent SignalingManager → a removed SECONDARY kept re-authenticating the directory
+  door; fixed with `await dropAgentSignaling(name)`. (2) `wireKeystonePrimary` discarded its 6 unregister
+  fns → removing-then-recreating the PRIMARY stacked duplicate keystone listeners; fixed by returning an
+  aggregate disposer (`keystoneDispose`), called on keystone-clear + before re-election.
+- `cello-fallback-finder`: MED (standing-receiver teardown was `void`+swallowed → leaked libp2p node looked
+  torn down) → now awaited + logged (`agent.removal.{receiver,signaling}_teardown_failed`,
+  `session.standing_receiver.teardown.failed`). LOW-MED (flat-import existence guard unqualified → a retired
+  tombstone silently skipped+deleted a same-named restored flat identity) → guard now `AND state !=
+  'retired'`.
+- `cello-test-attacker`: found the online-teardown branch UNEXERCISED (a splice-only stub passed). Closed in
+  two rounds: first notification teeth (it correctly flagged those as decoupled PROXIES), then BEHAVIORAL
+  teeth via `DaemonHandle.getSessionNodeManager()` — (1) SR torn down (no longer receives), (2) keyProvider
+  gone → register `agent_not_found` (no longer signs), (3) recreate gets a FRESH SR (onlineAgents truly
+  cleared). **Verified RED against the exact stub** (left SR+keyProviders intact → assertion (1) failed),
+  GREEN with the real handler → **APPROVED**. Its one noted residual (keystone clear on PRIMARY removal
+  unpinned, explicitly NON-blocking/lower-severity) closed cheaply with log teeth (directory.keystone.cleared
+  + 2nd .elected) in `j-remove` (`cec4cbc5`).
+
+**Floor.** daemon suite 423 green, cli green, typecheck + lint clean; live j-remove (2) green; build green.
+
+**Known scope boundary (homed in the DoD — DOD-REMOVE-NOTE).** session/transcript tables still keyed by
+agent_name not agent_id; after name reuse a new identity shares session storage by name. Acceptable at
+launch record-shape scope; forward fix is to re-key those tables too (guardrail #1). Not silently dropped.
+
+**Next (per M7-PROCEDURE).** Lowest non-green REMOVE line = **DOD-REMOVE-2** (append-only SIGNED directory
+revocation; the cross-repo + Flyway unit). Directory is at **Flyway v31** → agent_revocations = **V32**,
+OpsAgentExpectedMigrationVersion → 32. This is a major cross-repo unit (protocol-types shape, crypto sign,
+client send, directory accept+verify+append, migration, version-bump cascade) — a natural checkpoint.

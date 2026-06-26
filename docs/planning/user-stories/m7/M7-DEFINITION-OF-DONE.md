@@ -869,7 +869,11 @@ Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-res
   state=retired WITHOUT deleting its row, transcripts, or keys; the local `agents` store is re-keyed
   to the stable agent_id (agent_name unique only among non-retired), so `cello create-agent X` then
   succeeds as a NEW agent_id / K_local. One-way; output states it + carries guidance.
-  *(**CELLO-M7-REMOVE-001** AC-001, SI-002 local)* — ❌ NOT BUILT (story written 2026-06-26).
+  *(**CELLO-M7-REMOVE-001** AC-001, SI-002 local)* — ✅ PROVEN LIVE (2026-06-26 — `j-remove.spine`:
+  register X → remove-agent X (retired row + K_local seed + FROST share KEPT, read from the keyed DB)
+  → create-agent X = a NEW agent_id/pubkey; + secondary-agent signaling drop + keystone clear/re-elect
+  teeth). Online-teardown behaviorally pinned in `persist-remove-001` (SR gone / can't sign / fresh SR).
+  Scope boundary: session/transcript tables still keyed by agent_name — see DOD-REMOVE-NOTE below.
 - **DOD-REMOVE-2 — Append-only signed directory revocation; accountability survives.** remove-agent
   submits a revocation signed by X's K_local; the directory VERIFIES and APPENDS to agent_revocations
   (agent_id-keyed) — never modifies/deletes agent_profiles. Readable from a second DirectoryNode
@@ -882,6 +886,15 @@ Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-res
   migrations (zero checksum errors); schema specified (UNIQUE agent_id, index, INSERT-only RLS, in
   cello_pub); OpsAgentExpectedMigrationVersion bumped; cello-client packages + connect bumped (real
   semver, never workspace:*), trustless-cello deps updated. *(AC-004/005/006)* — ❌ NOT BUILT.
+  *(Directory is at Flyway v31 as of 2026-06-26, so agent_revocations = **V32**, OpsAgentExpectedMigrationVersion → 32.)*
+
+> **DOD-REMOVE-NOTE (known scope boundary, not a deferral of REMOVE-001's DECs).** The daemon's
+> session/transcript tables (session_tree_leaves, transcript, retry_queue, …) remain keyed by
+> `agent_name`, NOT the stable `agent_id`. After name reuse a NEW identity would share that session
+> storage with the retired one by name. Acceptable at the launch record-shape scope (reuse is rare; the
+> retired identity is purged from the runtime) and does NOT affect REMOVE-001's tested create→remove→
+> recreate behavior. Forward-looking fix (guardrail #1): re-key the session tables to `agent_id` too.
+> Owner: future M7+ hardening line; tracked here so it is never silently assumed done.
 
 ---
 
