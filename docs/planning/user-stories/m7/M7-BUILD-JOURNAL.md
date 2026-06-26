@@ -5790,3 +5790,55 @@ live — the line is stale; flip it when next touching it, don't let it pull the
 retire-and-keep + name reuse). Red-first against the live binary test (add J-REMOVE to the spine suite),
 implement minimum, per-unit review (feature-dev:code-reviewer model:opus + cello-test-attacker +
 cello-fallback-finder — this touches persistence/crypto/registration), flip the DoD line, append here.
+
+## 2026-06-26 — DOD-REMOVE-1 — design note (local re-key + retire-and-keep + name reuse) — before code
+
+**Unit:** DOD-REMOVE-1 (the lowest non-green REMOVE line). Local-only slice: the daemon `agents` store
+re-key + `cello remove-agent` retire + name reuse. The signed directory revocation is DOD-REMOVE-2;
+DB-001 (directory-unreachable degraded) lands with that unit. This unit does NOT touch the directory.
+
+**Producer/consumer chain mapped (cello-client only):**
+- `agents` table is `agent_name TEXT PRIMARY KEY` today (db-identity-store.ts). Re-key to a stable
+  `agent_id TEXT PRIMARY KEY`, `agent_name TEXT NOT NULL` a column, + a PARTIAL UNIQUE INDEX
+  `agents_active_name ON agents(agent_name) WHERE state != 'retired'` → a name is unique only among
+  NON-retired rows (guardrail #1: durable identity = agent_id; name/pubkey are attributes).
+- `agent_id` minted locally at create (`createAgent`, randomUUID), stable, independent of the directory's
+  `reg_agent_id` (that stays a separate column / attribute). Returned on the create response + surfaced.
+- `retireAgent(name)` flips the ACTIVE row -> `state='retired'` (UPDATE ... WHERE agent_name=? AND state!=
+  'retired'), KEEPING the row + seed + frost share + all columns. Fail-loud `agent_not_found` if no active
+  row. One-way.
+- **Correctness hinge (falsified):** every `WHERE agent_name=?` write in `DbRegistrationPersistence`
+  becomes ambiguous once a retired row + a new active row share a name. FIX: qualify ALL its queries with
+  `AND state != 'retired'`; the partial unique index guarantees <=1 active row per name, so it resolves to
+  exactly the active row. (Producer createAgent inserts active; retire flips to retired; consumer
+  registration UPDATEs target active.)
+- **Second break found (producer/consumer):** `listAgents()` (the startup loader path, agent-loader.ts)
+  returns ALL rows -> a retired agent would be RESURRECTED into the runtime after a restart. FIX: the loader
+  enumeration filters `state != 'retired'`. The retired row stays in the DB and is readable directly (the
+  accountability read, SI-002) -- just never loaded as a runtime identity. `hasAgent` -> `hasActiveAgent`
+  (the create-collision check) likewise qualifies active-only.
+- Daemon in-memory purge: `cello_remove_agent` must drop the name from `agents[]`, `loadedAgents`,
+  `keyProviders`, `onlineAgents` (+ tear down a standing receiver if online), so the in-memory
+  collision check (`agents.some(a=>a.name===name)`) passes on recreate and the retired identity stops
+  operating live.
+- Both INSERT-into-`agents` sites must set `agent_id`: `createAgent` and `importFlatIdentity`
+  (identity-migration.ts) -- else the flat-file import breaks under the NOT NULL PK.
+- Existing DBs: `ensureIdentitySchema` detects the OLD shape (PRAGMA table_info has no `agent_id`) and
+  REBUILDs once (ALTER RENAME -> CREATE new -> INSERT...SELECT backfilling agent_id=lower(hex(randomblob(16)))
+  -> DROP old -> index), guarded by the column check so it is a no-op thereafter (idempotent, matching the
+  defensive-call contract). Works on node:sqlite (in-memory test handles) and SQLCipher alike.
+
+**Parked scope boundary (noted, NOT silently ignored -- guardrail #1 follow-on):** session/transcript
+tables (session_tree_leaves, transcript, ...) are still keyed by `agent_name`, not `agent_id`. After name
+reuse the NEW identity would share session storage with the retired one by name. Acceptable at the launch
+record-shape scope (reuse is rare; the retired identity is gone from the runtime) but should be agent_id-
+keyed eventually. Out of scope for REMOVE-001's DECs (agents store + directory revocation). Recorded here +
+in the DoD as a known boundary so it has a home (procedure section 5 "deferrals get a home").
+
+**Red-first enforcers:** (1) in-process `persist-remove-001.test.ts` (real daemon + IPC
+create/remove/list + encrypted-DB inspection, the fast inner loop) -- create X->remove->retired row+seed kept
++ agentId recorded; recreate X->OK with a DIFFERENT agentId/pubkey; list excludes retired; start retired->
+agent_not_found; remove-nonexistent->agent_not_found. (2) live `j-remove.spine.test.ts` (real
+cello-daemon+directory via the CLI) -- create-agent X->register X->remove-agent X (exit 0, output states
+one-way + guidance)->DB shows the retired row with seed + frost share + agent_id=id1 kept->create-agent X->
+new id2!=id1. Honors AC-001 "registered, active agent X" + SI-002-local without a two-party session.
