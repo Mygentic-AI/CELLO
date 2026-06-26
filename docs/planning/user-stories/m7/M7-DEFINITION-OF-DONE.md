@@ -891,15 +891,20 @@ Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-res
 - **DOD-REMOVE-4 — Migration + cross-repo bump.** agent_revocations Flyway V32 applies on ALL prior
   migrations (zero checksum errors); schema specified (UNIQUE agent_id, index, INSERT-only RLS, in
   cello_pub); OpsAgentExpectedMigrationVersion bumped; cello-client packages bumped (real semver, never
-  workspace:*), trustless-cello deps updated. *(AC-004/005/006)* — 🟡 BUILT + PROVEN (migration/RLS):
+  workspace:*), trustless-cello deps updated. *(AC-004/005/006)* — ✅ DONE (migration + publish + deploy):
   V32 + cello_pub + SSM 31→32 done; `m7-remove-001-v32-migration` gate green (applies on all priors,
-  append-only RLS enforced). **AC-005 version cascade COMMITTED** (cello-client: crypto 0.0.11 /
-  protocol-types 0.0.8 / transport 0.0.8 / client 0.0.37 / daemon 0.0.11 / cli 0.0.9 / connect 0.0.49) —
-  the **tag-push → CI publish to beta + smoke-tag + latest-promotion is ANDRE's** (I never push/publish).
+  append-only RLS enforced). **AC-005 PUBLISHED + PROMOTED 2026-06-26** — tag `v0.0.53` → CI Build +
+  publish-completeness guard + `smoke-tag` GREEN; all seven packages on beta then promoted to `latest`
+  (crypto 0.0.11 / protocol-types 0.0.8 / transport 0.0.8 / client 0.0.37 / daemon 0.0.11 / cli 0.0.9 /
+  connect 0.0.49). BINARY-verified: daemon dist contains `cello_remove_agent`/`submitAgentRevocation`,
+  protocol-types dist contains `buildAgentRevocationTbs`, cli dist contains `remove-agent`; all cross-pins
+  real semver (never workspace:*). `connect@latest`/`cli@latest` confirmed. Operators get `cello
+  remove-agent` via `npm i -g @cello-protocol/cli@latest @cello-protocol/connect@latest`.
   **AC-006 is a no-op for revocation**: the directory uses LOCAL copies of the TBS + frame types
   (M7-WIRE-001 convention) and consumes no new protocol-types exports, so no trustless dep bump is
-  functionally required. The V32 directory DEPLOY (deploy.sh + setup-replication re-run + SSM
-  put-parameter + subscription refresh) is also Andre's (live AWS).
+  functionally required. **Directory V32 DEPLOY DONE** — deployed to all 3 regions (Flyway V32 verified in
+  all 3 RDS), ops-agent SSM bumped 30→32, `agent_revocations` added to `cello_pub` (6 slots streaming).
+  CELLO-M7-REMOVE-001 is fully shipped.
   *(Directory is at Flyway v31 as of 2026-06-26, so agent_revocations = **V32**, OpsAgentExpectedMigrationVersion → 32.)*
 
 > **DOD-REMOVE-NOTE (known scope boundary, not a deferral of REMOVE-001's DECs).** The daemon's

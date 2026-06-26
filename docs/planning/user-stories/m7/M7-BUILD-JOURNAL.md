@@ -6013,3 +6013,16 @@ is effectively a no-op for revocation: the directory uses LOCAL copies of the TB
 (M7-WIRE-001 convention), so it does NOT consume the new protocol-types exports — no trustless dep change is
 functionally required. The directory/relay deploy of V32 (deploy.sh + setup-replication re-run + SSM
 put-parameter + subscription refresh) is also Andre's (a live AWS deploy).
+
+## 2026-06-26 — CELLO-M7-REMOVE-001 FULLY SHIPPED (AC-005 published + promoted; deploy done)
+
+DOD-REMOVE-4 closed. **Published:** tag `v0.0.53` (counter, not connect version — the skill's "tag =
+connect version" line was stale and was fixed) → CI Build + publish-completeness guard + `smoke-tag` GREEN
+→ all seven packages on beta → promoted to `latest` (Andre ran the dist-tag adds; I'm not npm-authed).
+Versions: crypto 0.0.11 / protocol-types 0.0.8 / transport 0.0.8 / client 0.0.37 / daemon 0.0.11 / cli
+0.0.9 / connect 0.0.49. BINARY-verified the tarballs (not CI status): daemon dist has
+`cello_remove_agent`+`submitAgentRevocation`, protocol-types dist has `buildAgentRevocationTbs`, cli dist
+has `remove-agent`; all cross-pins real semver. **Deployed:** directory V32 to all 3 regions (V32 +
+agent_revocations verified in every RDS), ops-agent SSM 30→32, agent_revocations in cello_pub (6 slots
+streaming). All four DoD lines ✅; 3-attacker review APPROVED (incl. the durable-write BLOCKER fix).
+Operators get `cello remove-agent` via `npm i -g @cello-protocol/cli@latest @cello-protocol/connect@latest`.
