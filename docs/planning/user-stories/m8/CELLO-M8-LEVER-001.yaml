@@ -1,0 +1,179 @@
+---
+name: CELLO-M8-LEVER-001
+type: user-story
+date: 2026-06-26
+topics: [directory, portal, suspend, burn, revocation, t-of-n, agent_revocations, m8]
+status: draft
+description: >
+  The emergency suspend/burn lever — pause / retire / burn. Account-authorized (step-up), it
+  records a replicated revocation flag honored by the T-of-N federation: every honest node
+  refuses its FROST share, so the agent cannot sign even with its client share present. Pause is
+  reversible; burn destroys server-side share material. Enforcement is server-side, so it works
+  even when the operator's device is the compromise.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M8-LEVER-001
+domain: Node Operations
+milestone: M8
+actor: OPS
+priority: P0
+components:
+  - directory
+  - portal
+  - crypto
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As an operator,
+  I want to pause, retire, or burn a compromised agent from the portal,
+  so that I can stop it signing immediately — server-side across the federation — even if the
+  thing compromised is my own device holding the agent's client share.
+
+# ─── Context ────────────────────────────────────────────────
+# The ONLY agent-control action in the portal (Journey 02 D10). THREE positions: pause (reversible
+# freeze), retire (drain in-flight sessions, then destroy share + tombstone, reason=voluntary),
+# burn (instant destroy share + tombstone, reason=compromise). Account-authorized via portal
+# step-up (AUTH-002), executed by the federation, recorded by the directory.
+#
+# MECHANISM IS T-of-N, NOT 2-of-2 (restated, load-bearing): the current code's 2-of-2 (client +
+# one mandatory node) is a known stopgap bug, not the design ([[project_threshold_t_of_n_not_2_of_2]]).
+# The lever is an account-authorized, REPLICATED revocation flag that EVERY honest sovereign node
+# independently honors by refusing its FROST share — since a signature needs a THRESHOLD of nodes,
+# no threshold forms and signing is blocked. Do NOT ground this on "one node withholds."
+# The agent_revocations table already exists (V32, all regions). Capability dies, accountability
+# survives: counterparties hold the sealed records; the binding stays resolvable; the revocation
+# is itself a signed, timestamped event.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the operator triggers Pause on an agent (after a satisfied step-up)"
+    action: "a replicated revocation flag (mode=pause) is recorded; every honest node refuses its
+      share for that agent; the agent cannot complete a ceremony; clearing the flag restores signing"
+
+  - trigger: "When the operator triggers Burn (after step-up)"
+    action: "a tombstone (reason=compromise) is recorded and the server-side share material is
+      destroyed federation-wide; the agent can never sign again — not reversible by clearing a flag"
+
+  - trigger: "When a FROST ceremony is attempted for a flagged agent"
+    action: "the honest nodes refuse to contribute their shares; the ceremony fails with a distinct
+      revocation error"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An online agent that can establish FROST sessions, a step-up-capable operator, full cluster"
+    when: "the operator Pauses the agent, then the agent's daemon — holding a valid client share —
+      attempts cello_initiate_session, then the operator un-pauses and the daemon retries"
+    then: >
+      Pause requires a satisfied step-up and records a replicated revocation flag. While flagged,
+      the ceremony FAILS for revocation reasons even though the client share is valid — because the
+      honest nodes refuse their shares and no threshold forms. After un-pause, the retry SUCCEEDS.
+      (Cross-process, stub-resistant: the daemon is a separate process holding a real share; the
+      block must come from the federation, not the client.) directory.agent.revocation.recorded
+      (mode: pause) and .cleared logged.
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-002
+    given: "An agent and a step-up-capable operator, full cluster"
+    when: "the operator Burns the agent"
+    then: >
+      A tombstone (reason=compromise) is recorded and the server-side share material is destroyed
+      across the federation. A subsequent ceremony fails permanently, and the agent cannot be
+      restored by clearing a flag (burn ≠ pause). The identity binding (agent_id ↔ primary_pubkey ↔
+      account) remains resolvable, and the burn event is signed + timestamped (accountability
+      survives).
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A flagged agent in a T-of-N cluster"
+    when: "fewer than the blocking number of nodes have observed/honored the revocation"
+    then: >
+      The block holds because a THRESHOLD of honest nodes refuse — NOT because one node withheld.
+      A single node continuing to offer its share does not let the ceremony complete (the threshold
+      still cannot form among honoring nodes). This proves the T-of-N revocation model, not a
+      single-mandatory-node assumption. The ceremony failure returns a DISTINCT revocation error
+      code (not a generic directory_below_threshold), so the daemon can give correct guidance.
+    test_type: e2e
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      Suspend/burn must be enforced server-side across the federation — effective even when the
+      operator's own device (and its client share) is the compromise.
+    adversarial_condition: >
+      An attacker controls the operator's daemon and its valid client share. With the agent paused,
+      the attacker attempts to sign. The ceremony fails because the honest nodes refuse — the block
+      does not depend on anything the attacker controls. A design where holding the client share is
+      sufficient to sign past a revocation fails this invariant.
+    test_type: e2e
+    component_under_test: directory
+
+  - id: SI-002
+    statement: >
+      Only the owning account, after step-up, may revoke its agent — and burn must never erase past
+      accountability.
+    adversarial_condition: >
+      (a) A different account, and a bare email-magic-link session, each attempt to revoke the agent
+      — both rejected (not the owner / no step-up). (b) After a burn, an investigator can still
+      resolve the agent_id to its key and account, and the sealed records held by counterparties are
+      untouched. Burn kills future capability, never past accountability.
+    test_type: e2e
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: directory.agent.revocation.recorded
+      level: warn
+      context_fields: [agentId, accountId, mode, correlationId]
+      asserted_by: AC-001
+    - name: directory.agent.revocation.cleared
+      level: info
+      context_fields: [agentId, accountId, correlationId]
+      asserted_by: AC-001
+    - name: portal.agent.suspend.requested
+      level: info
+      context_fields: [accountId, agentId, mode, stepUp, correlationId]
+  error_events:
+    - name: frost.ceremony.refused.revoked
+      level: info
+      context_fields: [agentId, correlationId]
+      asserted_by: AC-003
+  alarms:
+    - condition: "A burn is recorded"
+      note: "Burn is a high-signal identity event — alarm/notify."
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    The ceremony/co-signing path must consult the replicated revocation state (agent_revocations,
+    V32) before contributing a share — a distinct 'revoked' refusal, not folded into
+    directory_below_threshold (lateral catch audit: distinct cause → distinct code).
+  - >
+    Scope: all three positions ship in M8. Pause = set/clear the flag; retire = drain then destroy;
+    burn = destroy now. The flag/honor-check + replication is the contained part; coordinated
+    share destruction (retire/burn) is the heavier part.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M8-AUTH-002
+    - CELLO-M8-WRITEAPI-001
+    - CELLO-M8-AGENTS-001
+  blocks: []
+  notes: "Coordinate the agent_revocations record shape + honor-check with the identity-lifecycle thread (§5)."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M8
+  related_docs:
+    - "[[outline]]"
+    - "[[02-agents]]"
+    - "[[project_threshold_t_of_n_not_2_of_2]]"
+  discussion_logs:
+    - "2026-06-25_2109_agent-identity-lifecycle-discovery"
+  notes: "The one agent-control action; T-of-N replicated revocation; server-side enforcement; capability dies, accountability survives."
