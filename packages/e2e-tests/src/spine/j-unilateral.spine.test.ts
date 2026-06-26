@@ -205,7 +205,7 @@ describe("J-UNILATERAL — DOD-LIVE-2: the ABSENT gate (gone→ABSENT vs alive-b
   // observes B's standing-connection drop. At A's unilateral close the directory queries the
   // relay, gets 'gone', and records the counterparty ABSENT — never self-asserted by A.
   it("B GONE (relay observed the disconnect) → counterparty recorded ABSENT", async () => {
-    const { connA, daemonA, daemonB, sessionIdA, pubB } = await setupAtoBSession("liveabs");
+    const { connA, daemonB, sessionIdA } = await setupAtoBSession("liveabs");
 
     // B crashes (SIGKILL). Its standing relay stream drops.
     await daemonB.kill();

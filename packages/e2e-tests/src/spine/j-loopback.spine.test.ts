@@ -71,7 +71,7 @@ describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => 
     // ONE celloDir → ONE daemon hosting BOTH ends.
     const celloDir = mkdtempSync(join(tmpdir(), "cello-loop-"));
     dirs.push(celloDir);
-    const pubA = await provisionAgent(celloDir, "agentA");
+    await provisionAgent(celloDir, "agentA");
     const pubB = await provisionAgent(celloDir, "agentB");
     const daemon = await startDaemon(celloDir, cluster.directoryUrl, "loop");
     daemons.push(daemon);
