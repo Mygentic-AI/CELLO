@@ -337,6 +337,23 @@ Setup with: `./infra/setup-replication.sh dev`
 
 **2026-06-25 — INCIDENT + MANUAL REPAIR (all 6 links rebuilt, streaming).** A directory data wipe done with piecemeal single-table `TRUNCATE`s wedged all 6 subscriptions: `pubtruncate=true` replicated the truncates, and subscribers could not apply a single-table truncate of an FK-referenced parent (`cannot truncate a table referenced in a foreign key constraint`). Apply workers crash-looped (apply_error_count → thousands), `received_lsn` froze, and publisher slots retained ~2.7 GB WAL (`wal_status: extended`). **Repaired manually** (NOT via setup-replication.sh, which is idempotent-skip and never drops a sub/slot): per link, dropped the wedged subscription, dropped the orphaned slot (released WAL), created a fresh slot, and re-created the subscription `WITH (create_slot=false, copy_data=false, origin=none, enabled=true)`. All 6 subscriptions enabled + receiving, all 6 slots active, WAL backlog cleared. **Caveat:** `copy_data=false` means rows written during the outage did NOT back-fill — `agent_profiles`/`user_accounts`/`registrations`/`pre_authorization_tokens` (1 each, Ms_Chelly) exist on us-east-1 only; eu/ap have 0. New writes replicate normally. **Lesson (do not repeat):** never run piecemeal TRUNCATEs on published tables under live replication — disable subscriptions first, or `TRUNCATE … CASCADE` all FK-related tables in one statement.
 
+**2026-06-26 — V32 agent_revocations DEPLOYED (CELLO-M7-REMOVE-001 DOD-REMOVE-2/3/4).** The directory
+pipeline (triggered by the main push) deployed the new directory image to all 3 regions; Flyway applied
+**V32 `agent_revocations`** on startup. Verified directly in all 3 RDS: `flyway_schema_history` has version
+32 and `to_regclass('agent_revocations')` is non-null in us-east-1, eu-central-1, AND ap-northeast-1. All
+directory tasks healthy (running 1/1, failedTasks 0, zero crashed/stopped tasks — no migration churn).
+`agent_revocations` is an append-only, INSERT-only-RLS table (cello_service: INSERT/SELECT, no
+UPDATE/DELETE) holding self-signed agent revocations. **TWO follow-ups still pending (NOT done by the
+pipeline):**
+1. **ops-agent expected-migration-version SSM is STALE at 30** (`/cello/dev/ops-agent/expected-migration-version`,
+   us-east-1) — it was never bumped for V31 either; DB is now at 32. The ops-agent is currently HEALTHY (1/1)
+   because it gates the version check only at STARTUP, but it will REFUSE TO START on its next restart until
+   bumped: `aws ssm put-parameter --name /cello/dev/ops-agent/expected-migration-version --value 32 --overwrite --region us-east-1`.
+   (The IaC template `cello-ssm-parameters.yaml` is already at 32; deploy.sh would also set it.)
+2. **`agent_revocations` is NOT yet in the `cello_pub` publication** — `setup-replication.sh` (PUBLICATION_TABLES
+   updated in IaC) must be re-run (`./infra/setup-replication.sh dev`) so revocations replicate across nodes
+   (cross-node AC-002). Single-region revocation works without it.
+
 ### staging — not deployed
 
 ### production — not deployed
