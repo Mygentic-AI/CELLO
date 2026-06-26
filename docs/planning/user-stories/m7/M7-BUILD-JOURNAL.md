@@ -5951,3 +5951,65 @@ agent_revocations in cello_pub. Version cascade per /cello-publish is the LAST s
 present + its signature VERIFIES from a SECOND DirectoryNode instance (AC-002); agent_profiles unchanged;
 initiating to X → refused `agent_revoked` (AC-003); a forged-signer revocation → rejected, table unchanged
 (SI-001). Plus the migration-gate + drift-guard + federation tests.
+
+## 2026-06-26 — DOD-REMOVE-2/3/4 — ✅ signed directory revocation PROVEN LIVE (AC-005 publish pending)
+
+**Units closed.** `cello remove-agent X` now also submits a SELF-SIGNED revocation to the directory; the
+directory verifies it against X's registered K_local and DURABLY appends it to `agent_revocations`
+(append-only, never an agent_profiles mutation); a revoked agent is soft-refused for session routing. V32
+migration + cello_pub + SSM bump landed. Cross-repo. DOD-REMOVE-1 closed earlier same day.
+
+**Proven:** AC-002 live (`j-remove.spine`): daemon signs (protocol-types `buildAgentRevocationTbs`) →
+directory verifies (byte-identical local copy) → durable INSERT (await+retry before ack) → test re-reads
+the row from the directory's OWN Postgres and re-verifies the signature; agent_profiles unchanged + DB-001
+re-push idempotency (one row). AC-003 live: before/after control on the SAME target — A→X NOT agent_revoked
+before revocation, IS after. SI-001 in-process (`m7-remove-001-si`): forged / wrong-key revocation rejected,
+nothing written + positive control. AC-004 (`m7-remove-001-v32-migration`, CELLO_ENV=local vs cello_spine):
+V32 applies on all priors zero checksum errors; cello_service INSERT/SELECT only, UPDATE/DELETE denied;
+UNIQUE(agent_id). Drift-guard + federation cello_pub coverage green.
+
+**Producer/consumer (both repos):** protocol-types revoke_agent/ack/error + canonical CBOR TBS (domain
+CELLO-REVOKE-v1); daemon submitAgentRevocation (sign with re-derived K_local, send on the agent's authed
+signaling, BEFORE retire) + getAgentForRevocation (active-else-most-recent-retired, DB-001 re-push) +
+agent_revoked reason propagation; directory #processRevokeAgent (self-auth: own agent_id + verify vs
+registered key; durable append; agent_profiles untouched) + session_request soft-refuse gate; DirectoryStore
+insertAgentRevocation(async)/isAgentRevoked/getAgentRevocation on the interface + in-memory + pg (in-memory
+soft-refuse index loaded via agent_revocations JOIN agent_profiles). V32 (mirrors V21 pending_notifications)
++ PUBLICATION_TABLES += agent_revocations + OpsAgentExpectedMigrationVersion 31→32.
+
+**Commits.** cello-client: `a8795c5`(client) → `7977af9`(cli) → `40e2b78`(reason) → `4ce811c`(review fixes).
+trustless: `ab297bf2`(V32 infra) → `dd703204`(design note) → `63e0774c`(directory) → `139578d1`/`fb5aa5ea`/
+`a0daba18`/`dba6feab`(tests) → `77e18e14`(review BLOCKER fix) → `f09cd139`(DB-001 re-push). All local, UNPUSHED.
+
+**Per-unit review (3 read-only attackers, opus) — all resolved + re-verified APPROVED.**
+- `feature-dev:code-reviewer`: 1× HIGH (BLOCKED) → **APPROVED**. The directory acked `agent_revocation_ack`
+  BEFORE the fire-and-forget INSERT committed → a silent INSERT failure re-enabled a revoked agent on
+  restart + broke AC-002 cross-node + disabled the client re-push. Fixed: `insertAgentRevocation` is now
+  async (Promise<void> on the interface + both impls), awaits the commit with one retry (mirrors
+  recordNotarization), updates the in-memory index only AFTER commit, and `#processRevokeAgent` returns
+  `persist_failed` on throw → daemon `deferred` + re-push.
+- `cello-fallback-finder`: 2× HIGH + MEDIUM + LOW → all FIXED. HIGH-1 = same ack-before-commit. HIGH-2 =
+  loadRevocations LEFT JOIN null k_local_pubkey silently dropped from the soft-refuse index → now logs
+  `adapter.revocation.unenforceable`. MEDIUM = registered-without-directory-id now loud. LOW = signaling
+  teardown logged. Verify path confirmed clean (every reject writes nothing).
+- `cello-test-attacker`: 1× BLOCKING hollow test → FIXED. AC-003 tested only the revoked path (always-refuse
+  stub would pass); now a before/after control on the same target pins the gate to the revocation set.
+  AC-002/SI-001/AC-004 confirmed to have teeth (SI-001 is the sole+sufficient verify guard; AC-002 reads
+  Postgres directly).
+
+**Floors:** j-remove spine x3 green (incl. AC-002 durable round-trip + DB-001 re-push + AC-003 control),
+daemon 423, directory 622, migration-gate 5, drift-guard 3, lint clean — both repos.
+
+**Known limitations (homed in the DoD DOD-REMOVE-NOTE, all non-blocking):** session-only soft-refuse (no
+connection_request gate until protocol-types publishes agent_revoked); name-reuse shadows a deferred
+revocation; replicated read-back variance (LOW, cosmetic); DB-001 directory-down surfacing not exercised
+live.
+
+**REMAINING — AC-005/006 (the ONLY open item):** the cello-client publish cascade. The changed cello-client
+packages (protocol-types, daemon, cli + dependents) need a version bump + `pnpm install` + commit, then a
+`git tag` push to trigger CI publish to beta + smoke-tag, then operator-run `latest` promotion. **The
+tag-push + CI publish + latest-promotion are Andre's** (I never push/publish). AC-006 (trustless dep update)
+is effectively a no-op for revocation: the directory uses LOCAL copies of the TBS + frame types
+(M7-WIRE-001 convention), so it does NOT consume the new protocol-types exports — no trustless dep change is
+functionally required. The directory/relay deploy of V32 (deploy.sh + setup-replication re-run + SSM
+put-parameter + subscription refresh) is also Andre's (a live AWS deploy).

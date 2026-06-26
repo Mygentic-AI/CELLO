@@ -878,14 +878,23 @@ Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-res
   submits a revocation signed by X's K_local; the directory VERIFIES and APPENDS to agent_revocations
   (agent_id-keyed) — never modifies/deletes agent_profiles. Readable from a second DirectoryNode
   instance; signature verifies; profile untouched. Forged-signer → rejected, nothing written.
-  *(AC-002, SI-001, SI-002 directory)* — ❌ NOT BUILT.
+  *(AC-002, SI-001, SI-002 directory)* — ✅ PROVEN LIVE (2026-06-26 — `j-remove.spine` AC-002: daemon
+  signs → directory verifies vs registered K_local → DURABLY appends (await+retry before ack) →
+  re-verified from the directory's own Postgres, agent_profiles unchanged; SI-001 in-process: forged /
+  wrong-key revocation rejected, nothing written + positive control). 3-attacker review APPROVED.
 - **DOD-REMOVE-3 — Soft enforcement: revoked agent not routed.** Initiation / routing lookup targeting
   a revoked agent → directory refuses with the distinct reason `agent_revoked`; not brokered, not listed
-  reachable. (Hard threshold-honored refusal deferred — DEC-4.) *(AC-003)* — ❌ NOT BUILT.
-- **DOD-REMOVE-4 — Migration + cross-repo bump.** agent_revocations Flyway V{N} applies on ALL prior
+  reachable. (Hard threshold-honored refusal deferred — DEC-4.) *(AC-003)* — ✅ PROVEN LIVE (2026-06-26 —
+  `j-remove.spine` before/after control: A→X is NOT agent_revoked before revocation, IS after; gate fires
+  before the target-online check; session_request path. Connection_request-path refuse deferred — see
+  DOD-REMOVE-NOTE).
+- **DOD-REMOVE-4 — Migration + cross-repo bump.** agent_revocations Flyway V32 applies on ALL prior
   migrations (zero checksum errors); schema specified (UNIQUE agent_id, index, INSERT-only RLS, in
-  cello_pub); OpsAgentExpectedMigrationVersion bumped; cello-client packages + connect bumped (real
-  semver, never workspace:*), trustless-cello deps updated. *(AC-004/005/006)* — ❌ NOT BUILT.
+  cello_pub); OpsAgentExpectedMigrationVersion bumped; cello-client packages bumped (real semver, never
+  workspace:*), trustless-cello deps updated. *(AC-004/005/006)* — 🟡 BUILT + PROVEN (migration/RLS):
+  V32 + cello_pub + SSM 31→32 done; `m7-remove-001-v32-migration` gate green (applies on all priors,
+  append-only RLS enforced). **AC-005/006 (publish cascade + dep update) PENDING** — the npm tag-push
+  (Andre) + trustless dep bump; tracked below.
   *(Directory is at Flyway v31 as of 2026-06-26, so agent_revocations = **V32**, OpsAgentExpectedMigrationVersion → 32.)*
 
 > **DOD-REMOVE-NOTE (known scope boundary, not a deferral of REMOVE-001's DECs).** The daemon's
@@ -895,6 +904,25 @@ Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-res
 > retired identity is purged from the runtime) and does NOT affect REMOVE-001's tested create→remove→
 > recreate behavior. Forward-looking fix (guardrail #1): re-key the session tables to `agent_id` too.
 > Owner: future M7+ hardening line; tracked here so it is never silently assumed done.
+>
+> **DOD-REMOVE-2/3 known limitations (from the 3-attacker review, all non-blocking — homed here):**
+> 1. **Soft-refuse is on `session_request` only.** The `connection_request` (M3 connection-policy) and
+>    disclosure brokering paths are NOT gated for a revoked agent — `ConnectionRequestErrorReason` lives in
+>    published protocol-types and lacks `agent_revoked` until the AC-005 publish. Launch scope = session
+>    brokering (no session = no conversation); add the connection-path gate after protocol-types publishes
+>    `agent_revoked`.
+> 2. **Name-reuse can shadow a deferred revocation.** If X1 is removed while the directory is unreachable
+>    (`deferred`) and the freed name is reused by X2 before retry, a later `remove-agent <name>` resolves to
+>    active X2 (active shadows retired) and never re-pushes X1's deferred revocation. Narrow
+>    (directory-down-during-removal + reuse-before-retry).
+> 3. **Replicated read-back variance (LOW).** If a peer-replicated revocation row already exists for an
+>    agent_id, a local `revoke_agent` that hits `ON CONFLICT DO NOTHING` leaves `getAgentRevocation`
+>    returning the local variant until the next restart reload. `isAgentRevoked` (soft-refuse) and the
+>    Postgres-read AC-002 verification are unaffected — cosmetic read-back only.
+> 4. **DB-001 directory-unreachable→deferred** is covered by code + the re-push idempotency test
+>    (`j-remove` re-removes a retired registered agent → re-pushes, one row); the literal "directory down at
+>    first removal" surfacing is not exercised live (hard in the shared spine cluster) — the daemon returns
+>    `deferred` + re-run guidance by construction.
 
 ---
 
