@@ -143,6 +143,14 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
     expect(psqlSpine(`SELECT status FROM agent_profiles WHERE agent_id = '${regId}'`), "agent_profiles must be unchanged").toBe("active");
     expect(psqlSpine(`SELECT k_local_pubkey FROM agent_profiles WHERE agent_id = '${regId}'`)).toBe(pub1);
 
+    // DB-001 re-push idempotency: removing the ALREADY-RETIRED (but registered) agent again re-submits
+    // its revocation — the recovery path for "directory unreachable at first removal." It re-acks
+    // 'recorded' (the directory's append-only INSERT is ON CONFLICT DO NOTHING / idempotent), and the
+    // single revocation row is unchanged (UNIQUE(agent_id)).
+    const rePush = JSON.parse(cello(["remove-agent", "xavier"], { CELLO_DIR: dir }).stdout) as { ok: boolean; directoryRevocation: string };
+    expect(rePush.ok && rePush.directoryRevocation, "re-removing a retired registered agent re-pushes idempotently").toBe("recorded");
+    expect(psqlSpine(`SELECT count(*) FROM agent_revocations WHERE agent_id = '${regId}'`), "still exactly one revocation row").toBe("1");
+
     // ── SI-002: the retired row is KEPT — same agent_id, state=retired, K_local seed AND the FROST
     // signing share intact (a registered identity survives removal; it is a tombstone, not an erasure). ──
     const db = await openEncryptedDb(join(dir, "sessions.db"));
