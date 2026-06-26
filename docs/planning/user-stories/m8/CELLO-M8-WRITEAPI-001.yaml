@@ -1,0 +1,119 @@
+---
+name: CELLO-M8-WRITEAPI-001
+type: user-story
+date: 2026-06-26
+topics: [directory, write-api, account-scoped, hashes-flags-only, no-plaintext, m8]
+status: draft
+description: >
+  The directory write-API seam — an authenticated, account_id-scoped endpoint the portal calls
+  to write identity-layer facts. It accepts only hashes, flags, and sealed ciphertext — never
+  plaintext, PII, or tokens (everything written replicates to every sovereign node). Consumed by
+  the suspend/burn lever and the trust-signal handoff.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M8-WRITEAPI-001
+domain: Node Operations
+milestone: M8
+actor: DIR
+priority: P0
+components:
+  - directory
+  - portal
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the directory,
+  I want one authenticated, account-scoped write seam that accepts only hashes, flags, and sealed
+  ciphertext,
+  so that the portal can write identity-layer facts (a revocation flag, a trust-signal hash +
+  ciphertext) without any plaintext, PII, or token ever crossing into the replicated store.
+
+# ─── Context ────────────────────────────────────────────────
+# The portal is mostly a read surface; the few writes go through this disciplined seam (like the
+# directory's existing /internal/pre-authorize). Two M8 consumers: the revocation flag (LEVER-001)
+# and the trust-signal hash + ciphertext (TRUST-001). EVERYTHING written replicates to every
+# sovereign node, so the seam must accept ONLY safe-to-replicate data: hashes, flags/tombstones,
+# and sealed ciphertext — never plaintext, PII, or tokens (Journey 04 D6). Writes are scoped to the
+# caller's account_id. Portal↔directory auth mechanism (API key / signed / mTLS) is operator-ratified.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the portal calls the write API authenticated as account A"
+    action: "the directory accepts the write only if it targets an agent owned by account A and
+      the payload is a permitted shape (hash, flag, or sealed ciphertext)"
+
+  - trigger: "When a write targets an agent not owned by the calling account, or carries a
+      disallowed payload (plaintext / PII / token)"
+    action: "the write is rejected; nothing is persisted"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An authenticated write call from account A targeting (a) A's agent and (b) account B's agent"
+    when: "each write is submitted"
+    then: >
+      The write for A's agent is accepted; the write targeting B's agent is rejected and nothing
+      is persisted for B — scoping is derived from the authenticated caller, not a request field.
+      An unauthenticated call is rejected outright. directory.write.accepted / directory.write.rejected
+      logged with correlationId.
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-002
+    given: "The write API"
+    when: "a caller submits a permitted payload (a hash, a flag, sealed ciphertext) and then a
+      disallowed payload (plaintext signal JSON, raw email/phone, an OAuth token)"
+    then: >
+      The permitted payloads are accepted and stored; the disallowed payloads are rejected — there
+      is no code path or field by which plaintext, PII, or a token can be written to the directory.
+      Verified by attempting each disallowed shape and asserting rejection + nothing persisted.
+    test_type: e2e
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The write seam must never persist plaintext, PII, or a token to the directory, and must never
+      let one account write to another account's agents.
+    adversarial_condition: >
+      A caller authenticated as A attempts to (a) write a flag/hash to B's agent by supplying B's
+      agent_id, and (b) smuggle a plaintext trust-signal JSON / raw email into an accepted field.
+      Both fail: the cross-account write is rejected, and there is no field that accepts the
+      plaintext (it is rejected or has no schema slot). Dump the directory: no plaintext/PII/token
+      from these attempts is present.
+    test_type: e2e
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: directory.write.accepted
+      level: info
+      context_fields: [accountId, agentId, writeKind, correlationId]
+      asserted_by: AC-001
+  error_events:
+    - name: directory.write.rejected
+      level: warn
+      context_fields: [accountId, reason, correlationId]
+      asserted_by: AC-001
+  alarms: []
+  notes: "writeKind ∈ {revocation_flag, trust_signal_hash, trust_signal_ciphertext} — distinct cause per rejection reason."
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M8-READ-001
+  blocks:
+    - CELLO-M8-LEVER-001
+    - CELLO-M8-TRUST-001
+  notes: "Shared write seam. Producers/consumers: the lever writes a flag; the trust pipe writes a hash + ciphertext."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M8
+  related_docs:
+    - "[[outline]]"
+    - "[[02-agents]]"
+    - "[[04-trust-signal-mechanism]]"
+  notes: "Authenticated, account-scoped, hashes/flags/ciphertext only — never plaintext/PII/tokens."
