@@ -1,0 +1,294 @@
+---
+name: CELLO-M7-REMOVE-001
+type: user-story
+date: 2026-06-26
+topics: [agent-lifecycle, removal, retirement, revocation, tombstone, accountability, agent-id, name-reuse, directory, migration, sovereign-nodes, m7]
+status: draft
+description: >
+  Agent removal/retirement at launch — the RECORD SHAPE, with enforcement deferred.
+  `cello remove-agent <name>` retires an agent: locally it flips the agent to
+  state=retired (retire-and-keep — transcripts and keys are NOT destroyed) and frees
+  the human name for reuse (the local agents store is re-keyed to the stable agent_id,
+  so a retired agent keeps its row while the name becomes available again). On the
+  directory it appends a SIGNED, append-only revocation fact (new agent_revocations
+  table, agent_id-keyed, self-authorized by the agent's own K_local) — never a delete,
+  never an in-place overwrite of the profile. Launch enforcement is record + SOFT: the
+  directory stops routing/brokering to a revoked agent. The threshold-honored hard
+  refusal (the future pause/burn lever) is deliberately NOT built here. One-way at
+  launch. Cross-repo: cello-client (remove-agent command + local re-key + signed
+  revocation) and trustless-cello (agent_revocations migration + accept endpoint).
+---
+id: CELLO-M7-REMOVE-001
+domain: Lifecycle
+milestone: M7
+actor: CLIENT
+priority: P1
+components:
+  - cli          # `cello remove-agent <name>`
+  - daemon       # local retire-and-keep; local store re-key name→agent_id; build+sign the revocation
+  - crypto       # sign the revocation with the agent's K_local (Ed25519)
+  - client       # send the signed revocation to the directory
+  - protocol-types  # the revocation message shape
+  - directory    # accept + verify + append the revocation; soft-refuse routing to a revoked agent
+  - e2e-tests
+
+# ─── DESIGN DECISIONS (settled with Andre 2026-06-26 — DO NOT RE-OPEN) ───────────
+#   Authority: discussion_logs/2026-06-25_2109_agent-identity-lifecycle-discovery.md,
+#   §5 (removal = revocation, not erasure) and §13 (forward-looking launch guardrails).
+#   DEC-1  retire-and-keep: removal flips state=retired and KEEPS the agent's local
+#          record, transcripts, and keys. It does NOT hard-delete. Only the human NAME
+#          is freed. (Your own transcripts are your accountability history — removing an
+#          agent must not destroy them.)
+#   DEC-2  name reuse: the freed name can be used by a NEW agent. This REQUIRES the local
+#          agents store to be keyed by the stable `agent_id`, with `agent_name` unique
+#          only AMONG ACTIVE (non-retired) agents — guardrail #1. (Today the local PK is
+#          agent_name; this story re-keys it.)
+#   DEC-3  directory revocation is an APPEND-ONLY, SIGNED fact (new agent_revocations
+#          table), keyed by agent_id, self-authorized by the agent's own K_local. NOT a
+#          status UPDATE of agent_profiles (which would fight the append-only invariant).
+#          The agent_profiles row is left untouched — the identity binding stays
+#          resolvable forever (accountability survives — guardrail #5).
+#   DEC-4  launch enforcement = record + SOFT only: the directory stops routing/brokering
+#          to a revoked agent. The threshold-honored HARD refusal (every sovereign node
+#          refusing its share) is the FUTURE pause/burn lever and is NOT built here
+#          (the 2-of-2 in current code is a stopgap — design log §5/§13; do not lean on
+#          one node enforcing). Record shape now, enforcement later, no rewrite.
+#   DEC-5  one-way at launch: remove is a permanent tombstone. The reversible PAUSE is
+#          the future lever, not this story.
+#
+# Sovereign-node constraint (inline, not just linked): the revocation is an IDENTITY
+# FACT (public, replicated in cello_pub), NOT secret share material; it carries no
+# K_server data. agent_revocations is keyed by the stable agent_id, never by a pubkey
+# (guardrail #1 — pubkeys rotate). No single node forges a revocation: the directory
+# accepts one ONLY if it verifies against the agent's own K_local (SI-001).
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the operator runs `cello remove-agent <name>` on an active agent"
+    action: >
+      the daemon shall (a) flip that agent's local row to state=retired WITHOUT deleting
+      the row, its transcripts, or its keys; (b) free the name for reuse (the local store
+      keys agents by agent_id; agent_name uniqueness applies only among non-retired
+      agents); (c) build a revocation fact for the agent's agent_id, sign it with that
+      agent's K_local, and submit it to the directory. The command output states what
+      happened and that removal is one-way, and carries a guidance field.
+
+  - trigger: "When the directory receives a signed revocation"
+    action: >
+      the directory shall verify the signature against the agent's registered key and,
+      only if valid, APPEND a row to agent_revocations (keyed by agent_id) — it shall
+      NOT modify or delete the agent_profiles row. A revocation whose signature does not
+      verify against that agent's key is rejected with a distinct reason and nothing is
+      written.
+
+  - trigger: "When a session initiation / routing lookup targets a revoked agent"
+    action: >
+      the directory shall refuse it with a distinct reason (agent_revoked) and shall not
+      broker the connection or report the agent as reachable. (Soft enforcement — DEC-4;
+      the hard threshold-refusal is deferred.)
+
+  - trigger: "When the operator creates a new agent reusing a freed (retired) name"
+    action: >
+      `cello create-agent <name>` shall succeed and mint a NEW agent_id and K_local — a
+      distinct identity from the retired one that previously held the name.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+
+  - id: AC-001
+    given: "A registered, active agent X with transcript history"
+    when: "`cello remove-agent X` runs, then the local store is inspected and `cello create-agent X` is run"
+    then: >
+      X's local row still EXISTS with state=retired and its key material + transcript rows
+      intact (nothing hard-deleted), AND `create-agent X` then succeeds and produces an
+      agent with a DIFFERENT agent_id and K_local pubkey than retired-X. (Proves
+      retire-and-keep DEC-1 + name reuse via agent_id re-key DEC-2.) The remove command
+      output states it is one-way and carries a guidance field.
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-002
+    given: "A registered agent X and a live directory, after `cello remove-agent X`"
+    when: "the directory is queried for X's revocation from a DIFFERENT DirectoryNode instance than the one that received it"
+    then: >
+      An agent_revocations row for X's agent_id is present and its signature VERIFIES
+      against X's registered key; X's original agent_profiles row is UNCHANGED (not
+      deleted, not status-overwritten) — the revocation is purely additive. (Stub-resistant:
+      the row is readable from a second node = it crossed the real accept+persist+replicate
+      path; signature-verifies = the real self-signed fact, not a stub flag. Proves DEC-3 +
+      accountability-survives.)
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "Agent X revoked (AC-002), and an agent A attempting to reach X"
+    when: "A initiates a session / routing lookup targeting X's agent_id"
+    then: >
+      The directory refuses with the distinct reason `agent_revoked` and does not broker
+      the connection or list X as reachable. (Soft enforcement, DEC-4 — proves the
+      directory acts on the recorded revocation, not just stores it.)
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "The new agent_revocations table introduced as Flyway migration V{N}"
+    when: "the migration is applied against a database with ALL prior migrations V1..V{N-1} already applied (not a fresh DB)"
+    then: >
+      Flyway reports zero checksum errors on V1..V{N-1} and applies V{N} cleanly. The
+      schema is fully specified: agent_revocations(agent_id TEXT, epoch_id TEXT, reason
+      TEXT, signature BYTEA, revoked_at BIGINT, created_at TIMESTAMPTZ), UNIQUE(agent_id),
+      index on agent_id, INSERT-only RLS (append-only — no UPDATE/DELETE), and the table
+      is added to the cello_pub publication. `cello-ssm-parameters.yaml`
+      OpsAgentExpectedMigrationVersion is bumped to {N}.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "The cello-client packages changed by this story (crypto, client, protocol-types, daemon, cli)"
+    when: "the version-bump procedure (/cello-publish) is run"
+    then: >
+      Every changed core/* package is bumped, every dependent's dep version updated,
+      @cello-protocol/connect bumped, pnpm-lock updated, tag pushed, CI publishes to beta,
+      smoke-tag passes, and `npm view @cello-protocol/connect@beta dependencies --json`
+      shows real semver — never `workspace:*`.
+    test_type: integration
+    component_under_test: cello-client CI
+
+  - id: AC-006
+    given: "trustless-cello directory + relay depending on the bumped cello-client packages"
+    when: "their package.json references are updated and `pnpm install` + `typecheck` run"
+    then: >
+      directory and relay reference the new pinned semver ranges for the five cello-client
+      packages (no `workspace:*`); pnpm-lock updated; typecheck passes; committed to main.
+    test_type: integration
+    component_under_test: trustless-cello
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The directory shall record a revocation for agent X ONLY if it is signed by X's own
+      K_local (self-authorized). No party can revoke an agent it does not control.
+    adversarial_condition: >
+      An attacker submits a revocation for X's agent_id signed with a DIFFERENT key (or an
+      invalid signature). The directory rejects it with a distinct reason, writes nothing
+      to agent_revocations, and X stays active and reachable. Verified by a negative AC-002
+      variant (forged-signer → rejected, table unchanged).
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: >
+      Removal shall never hard-delete an agent's identity binding or its records — locally
+      or in the directory. It is tombstone-only; the agent_id↔key↔account binding and all
+      historical records remain resolvable.
+    adversarial_condition: >
+      After `remove-agent X`, an investigator resolves X's agent_id → its agent_profiles
+      row and any sessions/seals referencing X's pubkey are still present. A "remove" that
+      destroyed the local transcript or the directory profile would FAIL this — accountability
+      must survive removal (design log §5). Verified by AC-001 (local row+transcript kept) +
+      AC-002 (profile unchanged).
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the directory is unreachable at remove time"
+    fallback: >
+      the local retire (state=retired, name freed) still applies and is one-way; the
+      directory revocation surfaces a DISTINCT error with guidance (the agent is locally
+      retired but the directory does not yet know — re-run to push the revocation when the
+      directory is reachable). No silent success: the operator is told the revocation did
+      not reach the directory.
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: agent.removal.retired
+      level: info
+      trigger: "When an agent is flipped to state=retired locally and its name freed"
+      context_fields: [agentName, agentId]
+      correlationId: true
+    - name: agent.revocation.recorded
+      level: info
+      trigger: "When the directory appends a verified revocation row"
+      context_fields: [agentId]
+      correlationId: true
+  error_events:
+    - name: agent.revocation.rejected
+      level: warn
+      trigger: "When the directory rejects a revocation whose signature does not verify (SI-001)"
+      context_fields: [agentId, reason]
+      correlationId: true
+    - name: agent.removal.failed
+      level: error
+      trigger: "When the directory revocation submit fails (directory unreachable / error — DB-001)"
+      context_fields: [agentName, error]
+      correlationId: true
+  alarms:
+    - condition: "No CloudWatch alarm — local daemon ERROR log only; this is an operator-initiated action, not a background failure mode."
+  notes: >
+    Register agent.removal.* / agent.revocation.* in the canonical taxonomy
+    (2026-05-16_0753). Never log key material — only agentName/agentId and the public
+    reason.
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Local re-key (the one real schema change client-side): the daemon `agents` table is
+    keyed by agent_name today (PERSIST-002). Re-key to a stable agent_id (use the existing
+    reg_agent_id once registered, or a locally-minted id pre-registration), with
+    agent_name a column UNIQUE only among non-retired rows (partial unique index, or
+    enforce in code on create). This is an in-code idempotent SQLCipher migration (the
+    daemon DB has no Flyway). A retired row keeps agent_name for its own history but no
+    longer blocks reuse.
+  - >
+    Revocation fact + signing: build a minimal revocation object {agent_id, epoch_id,
+    reason, revoked_at}, sign it with the agent's K_local Ed25519 (core/crypto), send to
+    the directory (core/client + a protocol-types shape). Self-authorized — the directory
+    verifies the signature against the agent's registered key (the same key bound in
+    agent_profiles) before appending.
+  - >
+    Directory side: Flyway V{N} agent_revocations (schema in AC-004) — append-only
+    INSERT-only RLS like agent_profiles; add to cello_pub; bump OpsAgentExpectedMigrationVersion
+    in cello-ssm-parameters.yaml. An accept path that verifies the signature then INSERTs.
+    Routing/initiation consults agent_revocations and refuses revoked agents (agent_revoked).
+    Read the actual current max migration version (infra/.../migrations) to fix N; reserve
+    it in COORDINATION.md if any parallel migration work is in flight.
+  - >
+    Enforcement boundary (DEC-4): soft only. Do NOT build the threshold-honored refusal or
+    destroy any K_server share material in this story — record shape now, enforcement later.
+  - >
+    Test infra from createSessionFixture()/session-fixture.ts (extend with a non-breaking
+    opts field); no new makeFixture. Live ACs gate on the real binaries per the M7
+    live-test procedure.
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M7-PERSIST-002   # the encrypted `agents` store this re-keys to agent_id
+  related:
+    - CELLO-M7-PERSIST-002
+  blocks: []
+  notes: >
+    Cross-repo + directory migration → a full story (not a hotfix). Executes design-log
+    §5 (removal = revocation) at the launch record-shape scope (§13 guardrails 1/5/6),
+    enforcement deferred to the future pause/burn lever.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Identity, Agent Lifecycle, Directory"
+  milestone: M7
+  discussion_logs:
+    - "2026-06-25_2109_agent-identity-lifecycle-discovery"
+  related_docs:
+    - "[[CONTEXT]]"
+    - "[[CELLO-M7-PERSIST-002]]"
+    - "[[2026-06-25_2109_agent-identity-lifecycle-discovery|Agent Identity, Lifecycle & Discovery Model]]"
+  notes: >
+    SETTLED 2026-06-26 (do not re-open): DEC-1 retire-and-keep; DEC-2 name reuse via
+    agent_id re-key; DEC-3 append-only signed directory revocation; DEC-4 soft enforcement
+    at launch; DEC-5 one-way. Full enforcement (pause/burn, threshold-honored) is future.

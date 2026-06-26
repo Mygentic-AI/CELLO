@@ -863,6 +863,26 @@ Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-res
 > tool — a contained fix recorded as a note for the implementation thread (not a story).
 > See the loopback decision log + the build journal.
 
+### Agent lifecycle — removal (J-REMOVE)
+
+- **DOD-REMOVE-1 — Retire-and-keep + name reuse (local).** `cello remove-agent X` flips X to
+  state=retired WITHOUT deleting its row, transcripts, or keys; the local `agents` store is re-keyed
+  to the stable agent_id (agent_name unique only among non-retired), so `cello create-agent X` then
+  succeeds as a NEW agent_id / K_local. One-way; output states it + carries guidance.
+  *(**CELLO-M7-REMOVE-001** AC-001, SI-002 local)* — ❌ NOT BUILT (story written 2026-06-26).
+- **DOD-REMOVE-2 — Append-only signed directory revocation; accountability survives.** remove-agent
+  submits a revocation signed by X's K_local; the directory VERIFIES and APPENDS to agent_revocations
+  (agent_id-keyed) — never modifies/deletes agent_profiles. Readable from a second DirectoryNode
+  instance; signature verifies; profile untouched. Forged-signer → rejected, nothing written.
+  *(AC-002, SI-001, SI-002 directory)* — ❌ NOT BUILT.
+- **DOD-REMOVE-3 — Soft enforcement: revoked agent not routed.** Initiation / routing lookup targeting
+  a revoked agent → directory refuses with the distinct reason `agent_revoked`; not brokered, not listed
+  reachable. (Hard threshold-honored refusal deferred — DEC-4.) *(AC-003)* — ❌ NOT BUILT.
+- **DOD-REMOVE-4 — Migration + cross-repo bump.** agent_revocations Flyway V{N} applies on ALL prior
+  migrations (zero checksum errors); schema specified (UNIQUE agent_id, index, INSERT-only RLS, in
+  cello_pub); OpsAgentExpectedMigrationVersion bumped; cello-client packages + connect bumped (real
+  semver, never workspace:*), trustless-cello deps updated. *(AC-004/005/006)* — ❌ NOT BUILT.
+
 ---
 
 ## The verification harness (DoD → live test journeys)
@@ -894,6 +914,11 @@ each must stay green once passed:
    state outside the allow-list (DB, key, lock, log, socket). ❌ DOD-STORE-1 NOT BUILT.
 10. **J-LOOPBACK** → DOD-LOOP-1. Two agents (two K_locals) on ONE daemon converse +
     bilateral seal; each end signs with its own K_local; no second daemon process.
+11. **J-REMOVE** → DOD-REMOVE-1..4. Register agent X → `remove-agent X` → X retired locally (row +
+    transcript + keys kept) and the name reusable (`create-agent X` = a new agent_id) → a signed
+    revocation is appended in the directory and verifiable from a SECOND DirectoryNode → initiating to
+    X is refused (`agent_revoked`) → X's profile + history stay resolvable (accountability survives);
+    a forged-signer revocation is rejected. ❌ NOT BUILT.
 
 The adversarial SIs (every story's SI block) are journey assertions, not extras:
 ephemeral-Peer-ID-dies (INV-5), third-party-dial-rejected (INV-5), relay-can't-read
