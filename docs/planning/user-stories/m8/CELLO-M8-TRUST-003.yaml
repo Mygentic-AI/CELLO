@@ -1,0 +1,94 @@
+---
+name: CELLO-M8-TRUST-003
+type: user-story
+date: 2026-06-26
+topics: [portal, trust-signals, four-class, placeholder-scaffold, no-composite, m8]
+status: draft
+description: >
+  The Trust Signals UI — the four-class taxonomy as a navigable scaffold. The WebAuthn signal is
+  live (via the pipe); the rest are honest placeholders. Four distinct named classes, never a
+  composite score; no TrustRank / Trust-Seeder badge anywhere.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M8-TRUST-003
+domain: Portal
+milestone: M8
+actor: OPS
+priority: P1
+components:
+  - portal
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As an operator,
+  I want to see my trust signals organized as the four named classes,
+  so that I understand my identity's trust posture as distinct, honest signals — never as a single
+  score — with the live ones real and the rest clearly marked coming soon.
+
+# ─── Context ────────────────────────────────────────────────
+# M8 ships the four-class IA as a SCAFFOLD (Journey 03): a few signals live, the rest honest
+# placeholders that M10 connectors fill in. The four-class display is a hard requirement
+# (frontend.md) — distinct named categories, NEVER a composite. TrustRank / Trust Seeders / seed
+# badges are explicitly forbidden ([[feedback_no_trustrank_or_single_score]]). The WebAuthn cell is
+# live via TRUST-001; phone/email/TOTP reflect real state; everything else is a placeholder.
+# Honest placeholders = no fabricated data, no working-looking controls. Layout: [[screen-specs]].
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the operator opens Trust Signals"
+    action: "four named class sections render (Identity / Network graph / Track record / Economic
+      stake), with Class 1 sub-groups visually distinct; live signals show real state and the rest
+      show honest placeholders"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An operator with WebAuthn enrolled and the other signals unbuilt"
+    when: "the Trust Signals section renders"
+    then: >
+      Exactly four named class sections render in order (Identity proofs / Network graph / Track
+      record / Economic stake), with Class 1's sub-groups (account-security / verified-contacts /
+      social / device-sacrifice) visually distinct. The WebAuthn signal shows LIVE (real enrolled
+      state); phone/email/TOTP reflect real state. NO aggregate score, level, distance, TrustRank,
+      or Trust-Seeder element appears anywhere (asserted by absence across the rendered DOM).
+    test_type: e2e
+    component_under_test: portal
+
+  - id: AC-002
+    given: "The unbuilt signals (LinkedIn, GitHub, device, endorsements, track record, stake)"
+    when: "they render in the scaffold"
+    then: >
+      Each shows an HONEST placeholder — clearly labeled not-yet-available, with no functional
+      control behind it (no working Connect button) and no fabricated data (no '✓ Verified · 500
+      connections'). A placeholder presenting fake verified data, or a control that appears to
+      initiate a real verification, fails this AC.
+    test_type: e2e
+    component_under_test: portal
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: portal.trust_signals.viewed
+      level: debug
+      context_fields: [accountId, correlationId]
+      asserted_by: AC-001
+  error_events: []
+  alarms: []
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M8-SCAFFOLD-001
+    - CELLO-M8-TRUST-001
+  blocks: []
+  notes: "Scaffold the IA M10 fills in. WebAuthn cell live via TRUST-001; the rest are honest placeholders."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M8
+  related_docs:
+    - "[[outline]]"
+    - "[[03-trust-signals]]"
+    - "[[screen-specs]]"
+    - "[[feedback_no_trustrank_or_single_score]]"
+  notes: "Four named classes, never a composite; honest placeholders; no TrustRank/seed badge."
