@@ -91,6 +91,33 @@ problems (Andre, 2026-06-25):
   Whatever is decided, the message must not imply the operator did something dangerous when they did
   not — that erodes trust in CELLO's other (real) security warnings.
 
+**#6 — `cello status` shows the wrong key (K_local, not the contact key). (Found 2026-06-25.)**
+When an agent is registered, `cello status` lists its `pubkey` as the **K_local** key (e.g. `be66b5…`),
+not the FROST `primary_pubkey` (`38411853…`) that others use to reach it. This is the same misleading-key
+problem as #4, in a second location. Fix: surface the **contact key** (`primary_pubkey`) for registered
+agents, clearly labelled and distinct from the local identity key. Ties to #2 (annotate the fields) and
+#4 (label/relabel the pubkey).
+
+**#7 — No way to get or share your contact key. (Found 2026-06-25.)**
+What you actually hand someone so they can reach you is the `primary_pubkey` (optionally with a suggested
+name), as a QR / link / handle — established in the identity/lifecycle/discovery design log
+(`discussion_logs/2026-06-25_2109_agent-identity-lifecycle-discovery.md`). But the CLI only ever prints
+the *wrong* key (K_local — in both `create-agent` and `status`) and has **no affordance that produces the
+shareable contact identity at all.** A freshly-registered operator has no obvious way to get the thing
+they are supposed to give out. Add a clear "here's your agent's contact key to share" path (eventually a
+QR/link). Connects #4 and the discovery design.
+
+**#8 — The Telegram ops-agent onboarding messages need the same "actionable, never strand" standard
+(cross-surface). (Found + partly fixed 2026-06-25.)**
+The CLI is only half the on-ramp; #1 and #4 point users to the **Telegram ops-agent**, whose messages are
+an onboarding feedback surface too. This session it stranded a real user outright: the email-OTP expiry
+dead-end ("Your verification code has expired. Please request a new one." — with no command that issued
+one). That specific bug is **fixed** (`a6653002`: the expiry / cleared-hash / missing-salt branches now
+transition back to `AWAITING_EMAIL` with "re-enter your email"). The list-level point: the north-star
+principle — every message must point the way forward and never dead-end — applies to the **bot** as much
+as the CLI/MCP; audit the bot's onboarding messages against it. Scope here is `packages/operations-agent`
+(trustless-cello), not `core/cli`/daemon.
+
 **Scope note:** these live in `core/cli/src/commands.ts` (login/logout/status/register/create-agent
 CLI output) and the daemon handlers' `guidance` strings (`core/daemon/src/daemon.ts`) which the MCP
 surfaces. The status object is built in the daemon (`cello_status` handler) + returned by `cello
@@ -120,7 +147,7 @@ field — this extends the same discipline to SUCCESS + status output.
     `be66b5b16fc1737ca9bfe7dd933485d8caf08cde0a895a1b605ba6795495f2b0`. Next in HIS flow: get a token
     from the bot and `cello register Ms_Chelly <token>`.
 
-## Open items (besides implementing #1–#4)
+## Open items (besides implementing #1–#8)
 
 - **Ops-agent (staging bot) state may be stale vs the wiped directory.** The directory `user_accounts`
   is 0, but the bot (CELLO Operations Agent on ECS) may keep its own record of Andre's Telegram user.
