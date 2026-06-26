@@ -5757,3 +5757,36 @@ for testing: directory wiped (all 3 regions — 0 agents/users/tokens, kept rela
 removed, old global install + MCP entry cleared. Open follow-on: the ops-agent (staging bot) may hold
 its own user record out of sync with the wiped directory — verify a fresh token request treats the user
 as new before the next end-to-end registration test.
+
+---
+
+## 2026-06-26 — DOD-REMOVE-1..4 (CELLO-M7-REMOVE-001) — STORY WRITTEN, ready to implement (compaction handoff)
+
+**Unit:** new journey **J-REMOVE** (agent removal/retirement = record shape at launch; enforcement
+deferred). Not yet started — story + DoD lines written this turn; red-first begins next session.
+
+**Decisions locked with Andre (DEC-1..DEC-5, do not re-open):** retire-and-keep (state=retired, keep
+transcripts/keys, never hard-delete); name reuse via re-keying the local `agents` store from agent_name
+PK → stable `agent_id` (agent_name unique only among non-retired); append-only SIGNED directory
+revocation (new `agent_revocations` table, agent_id-keyed, self-authorized by the agent's K_local —
+NOT a status UPDATE of agent_profiles); soft enforcement only at launch (directory stops routing to a
+revoked agent; threshold-honored hard refusal deferred — 2-of-2 is a stopgap, do not lean on one node);
+one-way. Names are case-sensitive (separate decision, surfaces in #3). Design authority: discussion log
+`2026-06-25_2109_agent-identity-lifecycle-discovery.md` §5 (revocation-not-erasure) + §13 (the six
+launch guardrails).
+
+**Cross-repo + migration:** cello-client (cli `remove-agent`, daemon local re-key + retire + build/sign
+revocation, crypto sign, client send, protocol-types shape) AND trustless-cello (Flyway V{N}
+`agent_revocations` append-only INSERT-only RLS, add to cello_pub, bump OpsAgentExpectedMigrationVersion;
+accept+verify+append endpoint; soft-refuse routing to revoked). → worktrees in BOTH repos; version-bump
+cascade per /cello-publish. Read the current max migration version to fix N (reserve in COORDINATION.md
+if parallel migration work is live).
+
+**Blocked_by:** PERSIST-002 (the encrypted `agents` store this re-keys). NOTE a DoD discrepancy to
+reconcile (not REMOVE work): DOD-STORE-1 reads "❌ NOT BUILT" but PERSIST-002 shipped to `latest` and is
+live — the line is stale; flip it when next touching it, don't let it pull the loop off REMOVE.
+
+**Next (per M7-PROCEDURE):** lowest non-green REMOVE line = **DOD-REMOVE-1** (local re-key +
+retire-and-keep + name reuse). Red-first against the live binary test (add J-REMOVE to the spine suite),
+implement minimum, per-unit review (feature-dev:code-reviewer model:opus + cello-test-attacker +
+cello-fallback-finder — this touches persistence/crypto/registration), flip the DoD line, append here.
