@@ -136,6 +136,23 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
     } finally {
       db2.close();
     }
+
+    // Keystone clear + re-election teeth: xavier was the elected PRIMARY (keystone). Removing it must
+    // CLEAR the keystone (directory.keystone.cleared) and recreating it must RE-ELECT (a 2nd
+    // directory.keystone.elected). A stub that left primaryAgent pointing at the retired identity would
+    // do neither — the directory door would keep authenticating as the retired primary, and the new
+    // primary would never be wired for ceremonies.
+    let cleared = false;
+    let electedCount = 0;
+    for (let i = 0; i < 30; i++) {
+      const out = daemon.output;
+      cleared = /directory\.keystone\.cleared/.test(out);
+      electedCount = (out.match(/directory\.keystone\.elected/g) ?? []).length;
+      if (cleared && electedCount >= 2) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    expect(cleared, "removing the PRIMARY agent must clear the keystone (directory.keystone.cleared)").toBe(true);
+    expect(electedCount, "recreating the primary must RE-ELECT the keystone (a 2nd directory.keystone.elected)").toBeGreaterThanOrEqual(2);
   }, 150_000);
 
   it("removing a registered SECONDARY agent drops its per-agent signaling (no leaked directory door)", async () => {
