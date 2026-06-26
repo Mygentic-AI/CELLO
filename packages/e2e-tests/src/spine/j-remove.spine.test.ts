@@ -259,7 +259,7 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
       throw new Error(`directory_signaling never connected for ${dir}`);
     };
 
-    // Target X: register, then remove (revoked at the directory).
+    // Target X: register (NOT yet removed).
     const dirX = mkdtempSync(join(tmpdir(), "cello-revX-"));
     dirs.push(dirX);
     daemons.push(await startDaemon(dirX, cluster.directoryUrl, "revX"));
@@ -267,8 +267,6 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
     const pubX = cX.pubkey;
     await waitConnected(dirX);
     expect(cello(["register", "xtarget", `DEV-revx-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirX }).status).toBe(0);
-    const rmX = JSON.parse(cello(["remove-agent", "xtarget"], { CELLO_DIR: dirX }).stdout) as { directoryRevocation: string };
-    expect(rmX.directoryRevocation, "X's revocation must be recorded at the directory").toBe("recorded");
 
     // Initiator A: register + online.
     const dirA = mkdtempSync(join(tmpdir(), "cello-revA-"));
@@ -282,11 +280,22 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
     expect(((await connA.call("cello_start_agent", { name: "ainit" })) as { ok?: boolean }).ok).toBe(true);
     expect(((await connA.call("cello_use_agent", { name: "ainit" })) as { ok?: boolean }).ok).toBe(true);
 
-    // A initiates a session targeting the REVOKED X. The directory's revocation gate fires BEFORE the
-    // target-online check, so the refusal reason is unambiguously agent_revoked — the directory does not
-    // broker the connection (DOD-REMOVE-3 soft enforcement).
-    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubX })) as { ok?: boolean; reason?: string };
-    expect(init.ok, `initiate to a revoked agent must fail: ${JSON.stringify(init)}`).toBe(false);
-    expect(init.reason, "the directory must refuse a revoked target with agent_revoked").toBe("agent_revoked");
+    // POSITIVE CONTROL (test-attacker): BEFORE revocation, A initiating to the SAME registered target X
+    // must NOT be refused with agent_revoked. This pins the refusal to the revocation set — an
+    // always-refuse / refuse-any-removed-name gate would fail here. (X is registered-but-offline, so the
+    // expected non-revoked outcome is some OTHER reason, e.g. target_offline — never agent_revoked.)
+    const before = (await connA.call("cello_initiate_session", { target_pubkey: pubX })) as { ok?: boolean; reason?: string };
+    expect(before.reason, `a NON-revoked target must NOT be refused with agent_revoked: ${JSON.stringify(before)}`).not.toBe("agent_revoked");
+
+    // Now revoke X.
+    const rmX = JSON.parse(cello(["remove-agent", "xtarget"], { CELLO_DIR: dirX }).stdout) as { directoryRevocation: string };
+    expect(rmX.directoryRevocation, "X's revocation must be recorded at the directory").toBe("recorded");
+
+    // AFTER revocation: A initiating to the SAME target X is now refused with agent_revoked. The gate
+    // fires BEFORE the target-online check, so the reason is unambiguously agent_revoked (the ONLY thing
+    // that changed between `before` and here is X's revocation). DOD-REMOVE-3 soft enforcement.
+    const after = (await connA.call("cello_initiate_session", { target_pubkey: pubX })) as { ok?: boolean; reason?: string };
+    expect(after.ok, `initiate to a revoked agent must fail: ${JSON.stringify(after)}`).toBe(false);
+    expect(after.reason, "the directory must refuse a revoked target with agent_revoked").toBe("agent_revoked");
   }, 150_000);
 });

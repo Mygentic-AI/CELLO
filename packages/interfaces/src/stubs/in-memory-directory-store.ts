@@ -160,7 +160,7 @@ export class InMemoryDirectoryStore implements DirectoryStore {
   readonly #revocations = new Map<string, AgentRevocationRecord>(); // agentId → record
   readonly #revokedPubkeys = new Set<string>(); // k_local_pubkey hex
 
-  insertAgentRevocation(rec: AgentRevocationRecord): void {
+  async insertAgentRevocation(rec: AgentRevocationRecord): Promise<void> {
     if (this.#revocations.has(rec.agentId)) return; // append-only, idempotent
     this.#revocations.set(rec.agentId, rec);
     this.#revokedPubkeys.add(rec.kLocalPubkey);

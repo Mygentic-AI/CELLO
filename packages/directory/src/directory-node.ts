@@ -1913,15 +1913,24 @@ export class CelloDirectoryNode {
       this.#logger?.warn("agent.revocation.rejected", { agentId: frame.agent_id, reason:"signature_invalid" });
       return;
     }
-    // Verified — append the revocation fact (idempotent). agent_profiles is left UNTOUCHED.
-    this.#store.insertAgentRevocation({
-      agentId: frame.agent_id,
-      kLocalPubkey: profile.k_local_pubkey,
-      epochId: frame.epoch_id ?? "",
-      reason: frame.reason ?? "",
-      signature: sigBytes,
-      revokedAt: frame.revoked_at,
-    });
+    // Verified — DURABLY append the revocation fact (idempotent). agent_profiles is left UNTOUCHED.
+    // Await the commit BEFORE acking: a revocation is an authoritative, replicated fact; acking
+    // "recorded" before it is durable would silently re-enable the agent on restart and disable the
+    // client's re-push recovery (review HIGH / fallback-finder HIGH-1).
+    try {
+      await this.#store.insertAgentRevocation({
+        agentId: frame.agent_id,
+        kLocalPubkey: profile.k_local_pubkey,
+        epochId: frame.epoch_id ?? "",
+        reason: frame.reason ?? "",
+        signature: sigBytes,
+        revokedAt: frame.revoked_at,
+      });
+    } catch (err) {
+      this.#logger?.error("agent.revocation.persist_failed", { agentId: frame.agent_id, error: err instanceof Error ? err.message : String(err) });
+      this.#sendFrame(stream, encodeAgentRevocationError({ type: "agent_revocation_error", reason: "persist_failed", agent_id: frame.agent_id }));
+      return;
+    }
     this.#logger?.info("agent.revocation.recorded", { agentId: frame.agent_id });
     this.#sendFrame(stream, encodeAgentRevocationAck({ type: "agent_revocation_ack", agent_id: frame.agent_id }));
   }

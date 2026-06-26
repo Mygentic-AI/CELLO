@@ -214,9 +214,12 @@ export interface DirectoryStore {
    * Append a verified revocation (the directory verified the self-signature first). Idempotent:
    * a revocation that already exists for agent_id is a no-op. `kLocalPubkey` is the agent's
    * registered K_local (not a stored column) — passed so the in-memory revoked-pubkey index used by
-   * the soft-refuse path can be updated synchronously.
+   * the soft-refuse path can be updated. RESOLVES ONLY AFTER the row is DURABLY committed (the caller
+   * must not ack "recorded" until then — a revocation is an authoritative, replicated security fact);
+   * REJECTS if the write fails so the caller can surface a deferred/persist-failed error instead of a
+   * false "recorded."
    */
-  insertAgentRevocation(rec: AgentRevocationRecord): void;
+  insertAgentRevocation(rec: AgentRevocationRecord): Promise<void>;
 
   /**
    * True if the agent whose K_local pubkey is `kLocalPubkeyHex` has a recorded revocation.

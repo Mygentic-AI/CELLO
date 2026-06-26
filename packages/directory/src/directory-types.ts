@@ -309,7 +309,7 @@ export interface AgentRevocationAck {
   agent_id: string;
 }
 
-export type AgentRevocationErrorReason = "unknown_agent" | "not_self_authorized" | "signature_invalid" | "malformed";
+export type AgentRevocationErrorReason = "unknown_agent" | "not_self_authorized" | "signature_invalid" | "malformed" | "persist_failed";
 
 export interface AgentRevocationError {
   type: "agent_revocation_error";

@@ -275,6 +275,7 @@ export class PgDirectoryStore implements DirectoryStore {
          FROM agent_revocations ar
          LEFT JOIN agent_profiles ap ON ap.agent_id = ar.agent_id`,
     );
+    let unenforceable = 0;
     for (const row of result.rows) {
       const kLocalPubkey = row.k_local_pubkey ?? "";
       const rec: AgentRevocationRecord = {
@@ -286,24 +287,47 @@ export class PgDirectoryStore implements DirectoryStore {
         revokedAt: Number(row.revoked_at),
       };
       this.#revocationsByAgentId.set(row.agent_id, rec);
-      if (kLocalPubkey) this.#revokedPubkeys.add(kLocalPubkey);
+      if (kLocalPubkey) {
+        this.#revokedPubkeys.add(kLocalPubkey);
+      } else {
+        // The revocation exists but its agent_profiles row (and thus k_local_pubkey) is absent — e.g.
+        // the revocation replicated ahead of the profile on a peer node. The soft-refuse gate keys by
+        // pubkey, so this agent CANNOT be enforced until the profile arrives + reload. Surface it
+        // LOUDLY (fallback-finder HIGH-2 / review): a silently-unenforceable revocation must not look
+        // healthy. The row stays in the read-back map (getAgentRevocation) for verifiability.
+        unenforceable++;
+        this.#logger.error("adapter.revocation.unenforceable", { agentId: row.agent_id });
+      }
     }
-    this.#logger.info("adapter.revocations.loaded", { count: result.rows.length });
+    this.#logger.info("adapter.revocations.loaded", { count: result.rows.length, unenforceable });
   }
 
-  insertAgentRevocation(rec: AgentRevocationRecord): void {
-    if (this.#revocationsByAgentId.has(rec.agentId)) return; // append-only, idempotent
+  /**
+   * Append a verified revocation. Resolves ONLY after the row is DURABLY committed (mirrors
+   * recordNotarization: one retry, then rethrow) — the in-memory soft-refuse/read-back indexes are
+   * updated AFTER the commit, so a failed write never leaves the directory advertising a revocation it
+   * did not persist (review HIGH / fallback-finder HIGH-1). REJECTS on durable failure so the caller
+   * sends a persist_failed error instead of a false "recorded" ack.
+   */
+  async insertAgentRevocation(rec: AgentRevocationRecord): Promise<void> {
+    if (this.#revocationsByAgentId.has(rec.agentId)) return; // already durably recorded — idempotent
+    const params = [rec.agentId, rec.epochId, rec.reason, Buffer.from(rec.signature), rec.revokedAt];
+    const sql = `INSERT INTO agent_revocations (agent_id, epoch_id, reason, signature, revoked_at)
+                 VALUES ($1, $2, $3, $4, $5) ON CONFLICT (agent_id) DO NOTHING`;
+    try {
+      await this.#pool.query(sql, params);
+    } catch {
+      this.#logger.error("adapter.revocation.write.failed", { agentId: rec.agentId, attempt: 1 });
+      try {
+        await this.#pool.query(sql, params); // retry once
+      } catch (err2) {
+        this.#logger.error("adapter.revocation.write.failed", { agentId: rec.agentId, attempt: 2 });
+        throw err2 instanceof Error ? err2 : new Error(String(err2));
+      }
+    }
+    // Durable — only now update the in-memory indexes (soft-refuse + read-back).
     this.#revocationsByAgentId.set(rec.agentId, rec);
     if (rec.kLocalPubkey) this.#revokedPubkeys.add(rec.kLocalPubkey);
-    this.#fire(
-      this.#pool.query(
-        `INSERT INTO agent_revocations (agent_id, epoch_id, reason, signature, revoked_at)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (agent_id) DO NOTHING`,
-        [rec.agentId, rec.epochId, rec.reason, Buffer.from(rec.signature), rec.revokedAt],
-      ),
-      "agent_revocations",
-    );
     this.#logger.info("adapter.revocation.recorded", { agentId: rec.agentId });
   }
 
