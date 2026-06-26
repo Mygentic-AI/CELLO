@@ -5892,3 +5892,62 @@ launch record-shape scope; forward fix is to re-key those tables too (guardrail 
 revocation; the cross-repo + Flyway unit). Directory is at **Flyway v31** → agent_revocations = **V32**,
 OpsAgentExpectedMigrationVersion → 32. This is a major cross-repo unit (protocol-types shape, crypto sign,
 client send, directory accept+verify+append, migration, version-bump cascade) — a natural checkpoint.
+
+## 2026-06-26 — DOD-REMOVE-2/3/4 — design note (signed directory revocation) — before code
+
+**Units:** DOD-REMOVE-2 (append-only signed directory revocation), DOD-REMOVE-3 (soft-refuse routing),
+DOD-REMOVE-4 (migration + cross-repo bump). Cross-repo. Infra slice already landed (V32, cello_pub, SSM).
+
+**Producer/consumer chain (mapped both repos):**
+- **Wire + TBS (cello-client protocol-types):** new `RevokeAgentRequest {type:"revoke_agent", agent_id,
+  epoch_id?, reason?, revoked_at, signature}` + `AgentRevocationAck` / `AgentRevocationError` (reasons:
+  unknown_agent / not_self_authorized / signature_invalid). Canonical TBS helper
+  `buildAgentRevocationTbs(agentId, kLocalPubkeyHex, epochId, reason, revokedAt)` = SHA-256 over an
+  EXPLICIT length-prefixed byte layout (domain "CELLO-REVOKE-v1", zero encoder dependence — seal-
+  legibility-tbs.ts style). The agent_id is the DIRECTORY-known id (reg_agent_id / agent_profiles.agent_id),
+  never the local agent_id; k_local_pubkey is bound but is the directory-resolved registered key (never a
+  client-supplied one).
+- **Cross-repo TBS (established M7-WIRE-001 convention):** the directory keeps a BYTE-IDENTICAL local copy
+  of buildAgentRevocationTbs (published protocol-types lags), guarded by a drift-guard test
+  (m7-remove-001-tbs-drift-guard) + the live spine as the real cross-repo guard (sign in daemon / verify in
+  directory — any drift → revocation rejected → live test red). Replace the local copy with a direct import
+  after the protocol-types publish (TODO comment).
+- **Daemon (cello-client, DOD-REMOVE-2):** in cello_remove_agent, BEFORE retireAgent (which flips state=
+  retired, after which the row is filtered out of every accessor — the ordering hinge the client mapper
+  flagged): read keyProviders.get(name) + loadRegistrationState() → reg_agent_id + k_local_pubkey. If
+  registered, build TBS → keyProvider.sign → send `revoke_agent` on the agent's SignalingManager.sendRaw +
+  armed reply resolver + timeout (the registration-manager / daemon.ts:832 pattern), BEFORE
+  dropAgentSignaling. THEN retire + purge. DB-001 degraded: directory unreachable/never-registered → the
+  LOCAL retire still applies (one-way) and the response carries a DISTINCT status (agent locally retired,
+  directory not yet informed — re-run when reachable). No silent success.
+- **Directory accept (trustless-cello, DOD-REMOVE-2):** decode revoke_agent in directory-frames.ts; dispatch
+  branch in the post-auth signaling switch (directory-node.ts ~1520) → #processRevokeAgent(stream,
+  authedPubkeyHex, frame). getProfileByAgentId(agent_id) → unknown_agent if none; the authenticated stream
+  key MUST equal profile.k_local_pubkey (self-authorized — not_self_authorized otherwise); recompute TBS +
+  verify(profile.k_local_pubkey, tbs, signature) (the @cello-protocol/crypto verify already imported) →
+  signature_invalid otherwise (SI-001: nothing written on a bad/forged signature). Only then INSERT into
+  agent_revocations (append-only; ON CONFLICT(agent_id) DO NOTHING → idempotent ack). agent_profiles is left
+  UNTOUCHED (SI-002, guardrail #5 — never a status UPDATE).
+- **Store (pg-directory-store.ts):** insertRevocation(...) (+ add k_local_pubkey to an in-memory
+  #revokedPubkeys Set), isRevoked(pubkeyHex) (synchronous hot-path check), loadRevocations() at startup
+  (JOIN agent_profiles → populate the Set), getRevocation(agentId) (read-back for AC-002 cross-node verify).
+- **Soft refuse (DOD-REMOVE-3):** add an `agent_revoked` gate in #processConnectionRequest (after the
+  target-has-profile gate, ~2067) and #processSessionRequest (~2343 / the switch ~1524) using
+  store.isRevoked(targetPubkey); add `agent_revoked` to the connection/session error reason unions. Refuse =
+  distinct reason, not brokered, not listed reachable. (DEC-4: SOFT only — no threshold-honored hard refusal.)
+
+**SIs:** SI-001 — record only if the signature verifies against the agent's OWN registered K_local; a
+forged-signer / wrong-key revocation is rejected with a distinct reason and NOTHING is written, agent stays
+active (negative AC-002 variant in the live test). SI-002 — never hard-delete; agent_profiles untouched, the
+revocation is purely additive, identity binding stays resolvable.
+
+**Migration integrity (DOD-REMOVE-4):** V32 applies on ALL priors (m7-remove-001-v32-migration gate test,
+modeled on m6b-004-v28; assert cello_service can INSERT/SELECT but NOT UPDATE/DELETE). Add explicit
+`REVOKE UPDATE, DELETE` (V24 security pattern). Extend federation-001a-replication-setup to expect
+agent_revocations in cello_pub. Version cascade per /cello-publish is the LAST step (protocol-types + daemon
++ dependents; trustless-cello dep update for protocol-types) — tag-push/publish + deploy are Andre's.
+
+**Enforcers:** extend J-REMOVE live — remove-agent X → an agent_revocations row for X's reg_agent_id is
+present + its signature VERIFIES from a SECOND DirectoryNode instance (AC-002); agent_profiles unchanged;
+initiating to X → refused `agent_revoked` (AC-003); a forged-signer revocation → rejected, table unchanged
+(SI-001). Plus the migration-gate + drift-guard + federation tests.
