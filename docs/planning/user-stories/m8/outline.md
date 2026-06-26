@@ -41,11 +41,13 @@ multi-process smoke test).
 - **Where the work lives** (per story): **portal** = greenfield frontend + backend ·
   **directory** = `trustless-cello/packages/directory` · **daemon** = `cello-client`.
 
-## Open scoping decisions (mine to recommend, yours to ratify — block SCAFFOLD)
+## Scoping decisions (RATIFIED 2026-06-26)
 
-- **Which repo the portal lives in** (own new repo vs. a package).
-- **Where frontend + backend host.**
-- **Portal ↔ directory auth** (API key like `/internal/pre-authorize`, signed requests, mTLS).
+- **Repo:** the portal lives in its own **private repo `cello-portal`** in the Mygentic-AI org
+  — distinct from `cello-client` (public, client) and `trustless-cello` (server-side + IaC).
+- **Hosting:** AWS **us-east-1** — frontend on a static/edge host, backend on ECS.
+- **Portal ↔ directory auth:** the existing `/internal/pre-authorize` **API-key** pattern,
+  extended for the read + write API (no new mTLS machinery).
 
 ---
 
