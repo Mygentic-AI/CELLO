@@ -1,0 +1,119 @@
+---
+name: CELLO-M8-SCAFFOLD-001
+type: user-story
+date: 2026-06-26
+topics: [portal, frontend, app-shell, design-system, routing, signpost, m8]
+status: draft
+description: >
+  Portal frontend scaffold — the Next.js app, the dark-console design system as code, the
+  app shell (sidebar nav + top bar), the route map, the auth-gated layout, and the stranger
+  signpost landing. The substrate every other portal-frontend story sits on.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M8-SCAFFOLD-001
+domain: Portal
+milestone: M8
+actor: OPS
+priority: P0
+components:
+  - portal
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the foundation for the M8 portal frontend,
+  I want a Next.js app with the dark-console design system, an app shell (nav + top bar),
+  the M8 route map, an auth-gated layout, and the stranger signpost landing,
+  so that every other portal-frontend story (auth, agents, trust signals) renders inside a
+  consistent, on-brand, auth-aware shell.
+
+# ─── Context ────────────────────────────────────────────────
+# Greenfield. The portal is a HOSTED web app — it reads directory-derived facts, never local
+# daemon state. This story builds only the shell + signpost; auth logic is AUTH-001, screens
+# are their own stories. The signpost is folded in here (it was over-split as its own story).
+# Design system + screen intent: see [[screen-specs]]. Constraint: ceremony-gated entry —
+# the portal has NO account-creation path (identity is minted only at the ceremony).
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the app is loaded by an authenticated operator"
+    action: "the app shell renders — sidebar nav listing the real M8 sections (Agents home,
+      Trust Signals, Account & Security) and a top bar — on the dark-console design system,
+      and routes to the requested section"
+
+  - trigger: "When an unauthenticated request hits a protected route"
+    action: "the layout redirects to the sign-in route; no protected content renders"
+
+  - trigger: "When a visitor with no session lands with no magic link"
+    action: "the signpost is shown — outbound routes to the Telegram ceremony and the GitHub
+      install — and NO account-creation form is present anywhere"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The portal app served, an authenticated session present"
+    when: "the operator navigates to each M8 route (/, /trust-signals, /account)"
+    then: >
+      The app shell renders for each: the sidebar nav lists exactly the real M8 sections
+      (no 'register agent', no dimmed 'coming soon' menu of dropped features), the top bar
+      renders, and the routed section mounts. The dark-console design tokens are applied
+      (surface, text, accent, StatusDot) — verified by asserting the computed root theme
+      attributes match the design-system tokens, not browser defaults.
+    test_type: e2e
+    component_under_test: portal
+
+  - id: AC-002
+    given: "No authenticated session"
+    when: "a protected route (e.g. /account) is requested directly"
+    then: >
+      The response redirects to the sign-in route and no protected content is rendered or
+      sent to the client (the protected component's data is absent from the response body —
+      not merely hidden with CSS). A scaffold that renders protected markup and hides it
+      client-side fails this AC.
+    test_type: e2e
+    component_under_test: portal
+
+  - id: AC-003
+    given: "A visitor with no session and no magic link"
+    when: "the landing route renders"
+    then: >
+      The signpost shows outbound routes to BOTH the Telegram ceremony and the GitHub
+      install, and a sign-in field. There is NO account-creation/registration form on the
+      page (asserted by absence). portal.landing.signpost.shown is logged at INFO with
+      correlationId.
+    test_type: e2e
+    component_under_test: portal
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: portal.landing.signpost.shown
+      level: info
+      context_fields: [correlationId]
+      asserted_by: AC-003
+  error_events: []
+  alarms: []
+  notes: >
+    Scaffold has minimal observability — one event for the signpost (proves the
+    ceremony-gated entry path is taken, not an account-creation path).
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by: []
+  blocks:
+    - CELLO-M8-AUTH-001
+    - CELLO-M8-AGENTS-001
+    - CELLO-M8-TRUST-003
+  notes: >
+    Foundation. Signpost folded in here (was over-split). Open scoping decisions (which repo
+    the portal lives in, where it hosts) are operator-ratified before this story starts —
+    see [[outline]] §Open scoping decisions.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M8
+  related_docs:
+    - "[[outline]]"
+    - "[[screen-specs]]"
+    - "[[01-onboarding-and-authentication]]"
+    - "[[project-portal-model]]"
+  notes: "Portal frontend substrate. Auth logic is AUTH-001; screens are their own stories."
