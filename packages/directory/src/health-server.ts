@@ -19,6 +19,7 @@
 import { createServer, type Server } from "node:http";
 import { parse as parseUrl } from "node:url";
 import type { Logger } from "@cello-protocol/interfaces";
+import type { ConsortiumManifest } from "@cello-protocol/protocol-types";
 
 export interface HealthServerOptions {
   nodeId: string;
@@ -35,6 +36,17 @@ export interface HealthServerOptions {
    * Injected from the composition root so health-server has no direct dependency on PgDirectoryStore.
    */
   getKLocalPubkeyByAgentId?: (agentId: string) => string | undefined;
+  /**
+   * CELLO-M7-CONN-001 (DOD-CONN-3): resolver for GET /manifest. Returns the current
+   * signed consortium manifest, or null when no manifest store is configured / no
+   * manifest is loaded yet. Injected from the composition root so health-server has no
+   * direct dependency on the DirectoryManifestStore. The manifest is PUBLIC,
+   * self-authenticating data (threshold-signed; clients verify against locally-pinned
+   * root keys) — hence served unauthenticated, like /bootstrap and /agent-lookup.
+   * Invariant (SI-002): the manifest carries ONLY the public node roster — nothing
+   * agent-specific ever goes in it.
+   */
+  getCurrentManifest?: () => ConsortiumManifest | null;
 }
 
 /**
@@ -42,7 +54,7 @@ export interface HealthServerOptions {
  * the /health and /bootstrap endpoints. The caller is responsible for calling .listen().
  */
 export function createHealthServer(opts: HealthServerOptions): Server {
-  const { nodeId, schemaVersion, multiaddr, peerId, getKLocalPubkeyByAgentId } = opts;
+  const { nodeId, schemaVersion, multiaddr, peerId, getKLocalPubkeyByAgentId, getCurrentManifest } = opts;
 
   const healthResponseBody = JSON.stringify({
     status: "ok",
@@ -103,6 +115,24 @@ export function createHealthServer(opts: HealthServerOptions): Server {
       }
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ k_local_pubkey: kLocalPubkey }));
+      return;
+    }
+
+    // CELLO-M7-CONN-001 (DOD-CONN-3): GET /manifest — the consortium manifest poll over
+    // unauthenticated HTTP. Returns the current signed manifest (clients verify the
+    // threshold signature against locally-pinned root keys; the channel is not the trust
+    // boundary). 503 until a manifest store is configured / a manifest is loaded — never a
+    // junk body. Routed via the BootstrapTargetGroup ALB ListenerRule (AC-008), same as
+    // /bootstrap and /agent-lookup. /health stays liveness-only and is unaffected.
+    if (req.method === "GET" && req.url === "/manifest") {
+      const manifest = getCurrentManifest ? getCurrentManifest() : null;
+      if (manifest === null) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "not ready" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(manifest));
       return;
     }
 

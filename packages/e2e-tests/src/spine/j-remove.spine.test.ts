@@ -94,7 +94,7 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
     const pub1 = c1.pubkey;
     expect(id1, "create-agent must return a stable agent_id").toBeTruthy();
 
-    // The keystone elects X and connects; then register X (real DKG with the directory) so it has
+    // CONN-001: create brings up X's OWN per-agent directory connection; then register X (real DKG) so it has
     // persisted FROST material whose survival across removal proves SI-002.
     let signaling = "reconnecting";
     for (let i = 0; i < 50; i++) {
@@ -195,22 +195,22 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
       db2.close();
     }
 
-    // Keystone clear + re-election teeth: xavier was the elected PRIMARY (keystone). Removing it must
-    // CLEAR the keystone (directory.keystone.cleared) and recreating it must RE-ELECT (a 2nd
-    // directory.keystone.elected). A stub that left primaryAgent pointing at the retired identity would
-    // do neither — the directory door would keep authenticating as the retired primary, and the new
-    // primary would never be wired for ceremonies.
-    let cleared = false;
-    let electedCount = 0;
+    // CONN-001 (keystone DELETED): xavier ran its OWN per-agent directory connection, not a shared
+    // keystone. Removing it must DROP that connection (agent.directory.connection.dropped), and
+    // recreating the freed name must bring up a NEW connection (agent.directory.connection.initiated —
+    // ≥2: the original create + the recreate). A stub that left the retired identity's connection
+    // lingering (the Demo1 stranding bug) would do neither.
+    let dropped = false;
+    let initiatedCount = 0;
     for (let i = 0; i < 30; i++) {
       const out = daemon.output;
-      cleared = /directory\.keystone\.cleared/.test(out);
-      electedCount = (out.match(/directory\.keystone\.elected/g) ?? []).length;
-      if (cleared && electedCount >= 2) break;
+      dropped = /agent\.directory\.connection\.dropped/.test(out);
+      initiatedCount = (out.match(/agent\.directory\.connection\.initiated/g) ?? []).length;
+      if (dropped && initiatedCount >= 2) break;
       await new Promise((r) => setTimeout(r, 200));
     }
-    expect(cleared, "removing the PRIMARY agent must clear the keystone (directory.keystone.cleared)").toBe(true);
-    expect(electedCount, "recreating the primary must RE-ELECT the keystone (a 2nd directory.keystone.elected)").toBeGreaterThanOrEqual(2);
+    expect(dropped, "removing the agent must drop its OWN per-agent directory connection").toBe(true);
+    expect(initiatedCount, "the original create + the recreate each bring up a connection (>=2 initiated)").toBeGreaterThanOrEqual(2);
   }, 150_000);
 
   it("removing a registered SECONDARY agent drops its per-agent signaling (no leaked directory door)", async () => {
@@ -224,7 +224,7 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
     const daemon = await startDaemon(dir, cluster.directoryUrl, "remove2");
     daemons.push(daemon);
 
-    // alpha = the keystone primary; register it so signaling connects.
+    // alpha = the lexicographically-first agent; register it so its own per-agent signaling connects.
     expect(cello(["create-agent", "alpha"], { CELLO_DIR: dir }).status).toBe(0);
     let signaling = "reconnecting";
     for (let i = 0; i < 50; i++) {

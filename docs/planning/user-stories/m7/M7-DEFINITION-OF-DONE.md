@@ -962,13 +962,26 @@ self-authenticating, so it moves to HTTP. Decision: delete the keystone, go full
   authenticated stream CLOSE and receives no further frames signed by its pubkey (the Demo1 bug:
   the removed agent's pubkey pinged the directory 6 min after removal). *(CELLO-M7-CONN-001
   AC-001, SI-001; sovereign-node invariant — no connection authenticated as another/removed
-  agent)* — ❌ NOT BUILT (story written).
+  agent)* — ✅ **PROVEN LIVE** (2026-06-26, J-CONN). Against the real cello-daemon + cello-directory +
+  cello-relay: removing the former-primary agent does NOT strand the daemon — a fresh agent registers
+  (real FROST DKG) without timing out while a second agent's own connection stays connected; name reuse
+  after removing the SOLE agent (the worst pre-CONN-001 stranding case) re-registers a fresh identity
+  cleanly. NON-REGRESSIVE: j-spine 7/7 + j-remove 3/3 green against the keystone-less daemon. The keystone
+  (primaryAgent / getAuthIdentity / wireKeystonePrimary) is DELETED; every agent — including each loaded
+  agent at startup — runs its OWN per-agent connection. Published: daemon 0.0.13 / cli 0.0.11 (smoke-tag
+  green, binary-verified; promoted to `latest` 2026-06-26).
 - **DOD-CONN-2 — Non-primary agents receive inbound sessions on their own stream (SPINE-5
   closed).** The inbound `session_assignment` handlers, previously attached only to the keystone
   stream, are wired per-agent, so a non-primary agent RECEIVES inbound sessions on its own
   authenticated stream (counterparty `cello_send` reaches its `cello_receive`). This closes the
   DOD-SPINE-4 "non-primary agents' INBOUND session routing is the SPINE-5 follow-on" note.
-  *(CELLO-M7-CONN-001 AC-002)* — ❌ NOT BUILT (story written).
+  *(CELLO-M7-CONN-001 AC-002)* — 🟢 **PROVEN LIVE** (J-SPINE, 2026-06-26). Inbound session_assignment +
+  seal handlers wire per-agent in getAgentSignaling (wirePerAgentSessionInbound); j-spine DOD-SPINE-5/6/7
+  establish + send/receive + bilateral-seal a session between two agents on ONE daemon over their OWN
+  authenticated per-agent streams (the inbound path that was keystone-only before) — green against the
+  keystone-less daemon. SPINE-5 closed. Also operator-confirmed live (2026-06-26): a fresh agent
+  registers (real DKG over its own stream) immediately after another agent's removal — `register` returns
+  a primary_pubkey, no stranding.
 - **DOD-CONN-3 — Manifest poll over unauthenticated HTTP; runs with zero agents; TUF preserved.**
   The consortium-manifest poll moves off the (deleted) authenticated keystone stream to
   unauthenticated `GET /manifest` on the directory health server (new ALB ListenerRule →
@@ -980,8 +993,18 @@ self-authenticating, so it moves to HTTP. Decision: delete the keystone, go full
   any agent's connection (DB-001). LOCKED INVARIANT (SI-002): nothing agent-specific ever goes in
   the consortium manifest — the served roster is `{nodeId, pubkey, region, provider, endpoint}`
   per node + `{version, not_before, expires, signatures}` only. *(CELLO-M7-CONN-001
-  AC-003/004/005, SI-002, DB-001; cross-repo AC-006/007; infra AC-008)* — ❌ NOT BUILT (story
-  written).
+  AC-003/004/005, SI-002, DB-001; cross-repo AC-006/007; infra AC-008)* — 🟡 **BUILT + UNIT-PROVEN;
+  end-to-end LIVE pending the directory deploy.** Client HTTP poll (pollManifestOverHttp +
+  startHttpManifestPoll) is unit-proven (12 tests: adopt-newer AC-003, zero-agent AC-004, reject
+  forged/rollback/expired + boundary ticks AC-005, unreachable-keeps-cached DB-001, throwing-store
+  manifest_store_error) and shipped in daemon 0.0.13. Directory `GET /manifest` + the SI-002
+  public-roster-only guard are built + tested (6 tests); the ALB `ManifestPathRule` is in
+  cello-ecs-directory.yaml. AC-006 PUBLISHED: daemon 0.0.13 / cli 0.0.11 on beta → `latest` (smoke-tag
+  green, binary-verified, startup-connect loop in dist). AC-007 is a NO-OP (trustless-cello depends on
+  crypto/transport/protocol-types/client/connect, NOT daemon/cli). REMAINING for end-to-end LIVE +
+  AC-008: push the directory `/manifest` code to main (CI/CD image) + `deploy.sh` the ALB rule to all 3
+  regions + STATE.md — batched, not yet deployed. The manifest poll degrades gracefully
+  (`manifest_http_unreachable` → cached) until then, and fires only on a 6–12h schedule.
 
 > **DOD-CONN supersedes / closes three prior lines.** (a) **DOD-AUTH-2** — the manifest poll's
 > TRANSPORT moves from the keystone signaling stream to HTTP; the TUF semantics are unchanged, so
@@ -1033,7 +1056,11 @@ each must stay green once passed:
     X's stream close with no further X-authed frames (no stranding); a non-primary agent receives an
     inbound session on its own stream (SPINE-5); the manifest poll runs over `GET /manifest` (HTTP,
     verified vs pinned root keys) including on a ZERO-agent daemon; a forged/rolled-back/expired
-    manifest over HTTP is rejected. ❌ NOT BUILT.
+    manifest over HTTP is rejected. ✅ **GREEN** (2026-06-26): j-conn.spine 2/2 live (the Demo1 repro +
+    name-reuse-after-removal); the no-stranding + per-agent registration halves are PROVEN LIVE against
+    the real binaries (and operator-confirmed). The non-primary-inbound half rides J-SPINE (DOD-CONN-2);
+    the manifest-over-HTTP half is unit-proven + directory-endpoint-built, live pending the directory
+    deploy (DOD-CONN-3).
 
 The adversarial SIs (every story's SI block) are journey assertions, not extras:
 ephemeral-Peer-ID-dies (INV-5), third-party-dial-rejected (INV-5), relay-can't-read
