@@ -83,10 +83,21 @@ git push origin main
 
 ### 4. Tag and push
 
+The tag is just a monotonic CI trigger — **NOT** the connect version. They have **drifted** (e.g. tag
+`v0.0.52` existed while connect was `0.0.48`), because a re-run/abandoned cycle can burn a tag without
+bumping connect. So **always pick the next free `v*` counter**, never assume it equals the connect version:
+
 ```bash
-git tag v{connect-version}      # the connect version is the conventional tag name
-git push origin v{connect-version}
+git -C cello-client tag -l 'v*' --sort=-v:refname | head -1   # find the highest existing tag, e.g. v0.0.52
+# then increment THAT counter (→ v0.0.53). Verify it is free before pushing:
+git -C cello-client tag -l v0.0.53                            # must print nothing
+git tag v0.0.53
+git push origin v0.0.53
 ```
+
+If you push a tag that already exists, the push is rejected (or re-triggers a stale build) — that is the
+symptom of using the connect version blindly. The connect version is what gets PUBLISHED (from the
+package.json versions on the tagged commit); the tag name only triggers the run.
 
 The tag CI runs: Build (tests + the Publish-completeness guard) → `publish-tag` (publishes every package in
 dependency order to the `beta` dist-tag; already-published versions are skipped via `|| true`) → the verify
