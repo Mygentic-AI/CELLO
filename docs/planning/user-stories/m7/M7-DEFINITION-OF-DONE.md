@@ -893,8 +893,13 @@ Logs: `discussion_logs/2026-06-20_2217_client-data-custody-and-encryption-at-res
   cello_pub); OpsAgentExpectedMigrationVersion bumped; cello-client packages bumped (real semver, never
   workspace:*), trustless-cello deps updated. *(AC-004/005/006)* — 🟡 BUILT + PROVEN (migration/RLS):
   V32 + cello_pub + SSM 31→32 done; `m7-remove-001-v32-migration` gate green (applies on all priors,
-  append-only RLS enforced). **AC-005/006 (publish cascade + dep update) PENDING** — the npm tag-push
-  (Andre) + trustless dep bump; tracked below.
+  append-only RLS enforced). **AC-005 version cascade COMMITTED** (cello-client: crypto 0.0.11 /
+  protocol-types 0.0.8 / transport 0.0.8 / client 0.0.37 / daemon 0.0.11 / cli 0.0.9 / connect 0.0.49) —
+  the **tag-push → CI publish to beta + smoke-tag + latest-promotion is ANDRE's** (I never push/publish).
+  **AC-006 is a no-op for revocation**: the directory uses LOCAL copies of the TBS + frame types
+  (M7-WIRE-001 convention) and consumes no new protocol-types exports, so no trustless dep bump is
+  functionally required. The V32 directory DEPLOY (deploy.sh + setup-replication re-run + SSM
+  put-parameter + subscription refresh) is also Andre's (live AWS).
   *(Directory is at Flyway v31 as of 2026-06-26, so agent_revocations = **V32**, OpsAgentExpectedMigrationVersion → 32.)*
 
 > **DOD-REMOVE-NOTE (known scope boundary, not a deferral of REMOVE-001's DECs).** The daemon's
