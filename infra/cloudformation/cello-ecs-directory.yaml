@@ -310,6 +310,26 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref BootstrapTargetGroup
 
+  # CELLO-M7-CONN-001 (DOD-CONN-3, AC-008): /manifest path rule — routes to
+  # BootstrapTargetGroup (port 9090, the health server), same as /bootstrap and
+  # /agent-lookup. The daemon polls the consortium manifest over this unauthenticated
+  # HTTP path (the keystone signaling poll is gone); the manifest is public,
+  # self-authenticating data (threshold-signed; clients verify against pinned root keys).
+  # In the template so a brand-new region serves /manifest with zero manual steps.
+  ManifestPathRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    DependsOn: HttpListener
+    Properties:
+      ListenerArn: !Ref HttpListener
+      Priority: 6
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - "/manifest"
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BootstrapTargetGroup
+
   # AC-009d (OPS-AGENT-005A): /internal/* path protection.
   # The directory /internal/pre-authorize endpoint is authenticated by x-cello-internal-api-key
   # header (verified in directory code). The ALB forwards all /internal/* requests to the

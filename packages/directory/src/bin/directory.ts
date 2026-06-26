@@ -1050,6 +1050,10 @@ const healthServer = createHealthServer({
     const profile = store.getProfileByAgentId(agentId);
     return profile?.k_local_pubkey;
   },
+  // CELLO-M7-CONN-001 (DOD-CONN-3): serve the consortium manifest over unauthenticated
+  // HTTP so the daemon polls it without an agent identity (the keystone is gone). The
+  // store never throws from getCurrentManifest(); an unset store → null → 503.
+  getCurrentManifest: () => directoryManifestStore?.getCurrentManifest() ?? null,
 });
 healthServer.listen(healthPort, () => {
   logger.info("adapter.initialised", { adapterName: "HealthServer", implementation: "http", env, port: healthPort });
