@@ -1,0 +1,116 @@
+---
+name: CELLO-M8-AUTH-004
+type: user-story
+date: 2026-06-26
+topics: [portal, auth, strong-auth-enforcement, grace-period, waiver, admin-override, m8]
+status: draft
+description: >
+  Strong-auth enforcement — a 7-day grace during which an operator may use the portal without
+  WebAuthn/TOTP, then a hard gate. The only bypass is a human-granted, per-account waiver flag
+  (set by support after a written request), scoped to the individual account.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M8-AUTH-004
+domain: Portal
+milestone: M8
+actor: OPS
+priority: P0
+components:
+  - portal
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the portal,
+  I want to require strong auth via a 7-day grace then a hard gate, with a human-granted
+  per-account waiver as the only bypass,
+  so that strong auth is de-facto mandatory while a rare operator who genuinely cannot use
+  WebAuthn or TOTP is not permanently locked out.
+
+# ─── Context ────────────────────────────────────────────────
+# Journey 01 D5: strong auth is mandatory in practice via friction, never a hard wall with no
+# escape. A new operator may use the portal WITHOUT a second factor for 7 days (nudged), then is
+# gated. The ONLY bypass is to contact support, request a waiver in writing, and have support set
+# a PER-ACCOUNT waiver flag (the admin override). The flag is scoped to the individual, operated
+# by support, and lifts the gate for that account. This implies a small admin surface (set/clear
+# the flag) — the first support tooling behind the portal.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "While an account has no strong-auth factor and is within 7 days of first login"
+    action: "the operator may use the portal; a persistent nudge to enroll a factor is shown"
+
+  - trigger: "When an account has no strong-auth factor past 7 days and no waiver"
+    action: "the portal gates the operator — they cannot proceed until they enroll a factor (or a
+      waiver is granted)"
+
+  - trigger: "When support sets the per-account waiver flag"
+    action: "the gate is lifted for that account only; the operator may continue without a factor"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An account with no WebAuthn/TOTP, first login at T0"
+    when: "the operator uses the portal before T0+7d, then after T0+7d"
+    then: >
+      Before the cliff: access is allowed with a persistent enroll-a-factor nudge. After the
+      cliff: the operator is gated server-side — protected actions are refused until a factor is
+      enrolled, and the gate cannot be bypassed by client-side manipulation (the gate decision is
+      server-side, not a hideable banner). portal.strongauth.grace_expired logged.
+    test_type: e2e
+    component_under_test: portal
+
+  - id: AC-002
+    given: "A gated account (past grace, no factor) and a second gated account"
+    when: "support sets the waiver flag on the FIRST account"
+    then: >
+      The first account is no longer gated and may proceed without a factor; the SECOND account
+      remains gated — the waiver is scoped to the individual account, not global. Clearing the
+      flag re-gates the first account. portal.strongauth.waiver_granted logged with accountId and
+      the granting admin identity.
+    test_type: e2e
+    component_under_test: portal
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The strong-auth gate must be enforced server-side and the waiver must be settable only by
+      an authorized admin — an operator must not be able to self-grant a waiver or bypass the gate
+      from the client.
+    adversarial_condition: >
+      A gated operator (no admin role) attempts to set their own waiver flag and to call protected
+      actions with client-side gate state forged to 'passed'. Both fail: the waiver write is
+      rejected (not an admin), and protected actions remain refused server-side.
+    test_type: e2e
+    component_under_test: portal
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: portal.strongauth.grace_expired
+      level: info
+      context_fields: [accountId, correlationId]
+      asserted_by: AC-001
+    - name: portal.strongauth.waiver_granted
+      level: warn
+      context_fields: [accountId, grantedBy, correlationId]
+      asserted_by: AC-002
+  error_events: []
+  alarms: []
+  notes: "Each waiver grant is a notable, audited event (who granted it)."
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by:
+    - CELLO-M8-AUTH-002
+    - CELLO-M8-AUTH-003
+  blocks: []
+  notes: "First support/admin tooling: set/clear the per-account waiver flag."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M8
+  related_docs:
+    - "[[outline]]"
+    - "[[01-onboarding-and-authentication]]"
+  notes: "De-facto mandatory strong auth via friction; waiver is the human escape hatch, never self-serve."
