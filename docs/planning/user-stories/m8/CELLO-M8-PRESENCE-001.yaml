@@ -1,0 +1,144 @@
+---
+name: CELLO-M8-PRESENCE-001
+type: user-story
+date: 2026-06-26
+topics: [directory, presence, agent_presence, edge-triggered, node-liveness, federation, m8]
+status: draft
+description: >
+  Directory-side agent presence — a replicated, mutable agent_presence table written
+  edge-triggered (on connect/disconnect transitions only) from the in-memory #streams map,
+  plus a coarse per-node liveness heartbeat so a crashed node doesn't leave agents falsely
+  online. Gives the portal a truthful, replicated "online / last seen" signal.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M8-PRESENCE-001
+domain: Node Operations
+milestone: M8
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the directory,
+  I want to persist agent presence into a replicated agent_presence table, written only on
+  connect/disconnect transitions, guarded by a per-node liveness heartbeat,
+  so that the hosted portal can read a truthful, node-agnostic "online / last seen" signal
+  without me faking liveness or exposing per-node in-memory state.
+
+# ─── Context ────────────────────────────────────────────────
+# Online presence today lives only in the directory's per-node in-memory #streams map
+# (directory-node.ts ~457) — not persisted, not replicated, no query API. The portal is a
+# HOSTED app that reads only replicated state, so presence must be persisted. Sovereign-node
+# constraint (restated, load-bearing): a node writes presence ONLY for agents connected to
+# IT (same ownership pattern as sessions.owning_node_id) — never for another node's agents.
+# Presence is high-churn mutable state → a mutable upsert table, NOT append-only/hash-chained.
+# Design: [[02-agents]] D3–D6.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When an agent authenticates and is added to #streams"
+    action: "the owning node upserts its agent_presence row to online (one write, on the
+      transition only)"
+
+  - trigger: "When an agent's signaling stream closes or its heartbeat dies"
+    action: "the owning node upserts the row to offline with a last-seen timestamp (one write,
+      on the transition only) — idle-but-connected agents produce NO writes"
+
+  - trigger: "When a node restarts with an empty #streams"
+    action: "it reconciles its owned presence rows to offline, then re-marks online as agents
+      reconnect"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A fresh directory DB with prior migrations applied"
+    when: "the presence migration is applied (then re-applied)"
+    then: >
+      agent_presence exists as a MUTABLE upsert table (one row per agent_id; no chain_hash,
+      not append-only), and directory_nodes gains last_heartbeat_at. Migration applies with
+      zero checksum errors against the already-migrated DB (not a fresh one). Constraints:
+      one row per agent_id (PK/UNIQUE), an owning-node column, an online flag, a last_seen
+      timestamp.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "A live cluster; an agent connects to node X"
+    when: "the agent connects (transition to online), stays idle, then disconnects"
+    then: >
+      A single presence write occurs on connect (online) and a single write on disconnect
+      (offline + last_seen) — NO write during the idle period (asserted by counting writes /
+      directory.presence.transition events: exactly two across the lifecycle, not one per
+      heartbeat). The online row is written by node X and is READABLE FROM A DIFFERENT node
+      (replication) — proving the write persisted and replicated, not an in-process value.
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-003
+    given: "An agent shown online via node X; ≥2 nodes"
+    when: "node X goes dark (stops refreshing last_heartbeat_at) without a clean disconnect"
+    then: >
+      A reader applying the rule 'online iff presence row online AND owning node's
+      last_heartbeat_at fresh' returns NOT-online (last-seen) for that agent once X's heartbeat
+      is stale — even though the presence row still says online. This proves the node-liveness
+      guard catches a crashed node (the edge-triggered offline write never fired). On node X
+      restart, its owned rows are reconciled to offline at boot.
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-004
+    given: "Agent A connected to node X; node Y in the same cluster"
+    when: "node Y processes presence"
+    then: >
+      Node Y never writes or overwrites agent A's presence row — only X (the owning node) does.
+      Verified by asserting the writer/owning-node recorded for A's row is X, and Y attempting
+      to write A's presence is rejected or no-ops. (Sovereign write-ownership.)
+    test_type: e2e
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: directory.presence.transition
+      level: info
+      context_fields: [agentId, owningNodeId, state, correlationId]
+      asserted_by: AC-002
+    - name: directory.node.heartbeat.stale
+      level: warn
+      context_fields: [nodeId, lastHeartbeatAt, correlationId]
+      asserted_by: AC-003
+  error_events: []
+  alarms:
+    - condition: "A node's last_heartbeat_at is stale beyond threshold while it has online agents"
+      note: "Alarm — a dark node with stale presence; agents should be aging out."
+  notes: "transition fires on edges only (connect/disconnect), never per heartbeat tick."
+
+# ─── Implementation Notes ────────────────────────────────────
+implementation_notes:
+  - >
+    Edge-triggered: hook the #streams add/remove sites, not the 15s ping/pong. The heartbeat is
+    the 'frequent check'; the table write is bound to the transition. Per-node heartbeat cadence
+    ~30–60s (one tiny write per node, not per agent).
+  - >
+    Read rule belongs to the consumer (READ-001), but this story must expose last_heartbeat_at
+    and the presence row so the rule is computable. Freshness window = transition-write +
+    replication lag + node-heartbeat window (rendered as honest "last seen", D6).
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  blocked_by: []
+  blocks:
+    - CELLO-M8-READ-001
+    - CELLO-M8-AGENTS-001
+  notes: "Directory-side; parallel with the portal scaffold. DB-table + in-memory-derived + sovereign-ownership traps apply."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M8
+  related_docs:
+    - "[[outline]]"
+    - "[[02-agents]]"
+    - "[[project_sovereign_nodes]]"
+  notes: "Presence persisted from per-node memory; written by the owning node only; read honestly as last-seen."
