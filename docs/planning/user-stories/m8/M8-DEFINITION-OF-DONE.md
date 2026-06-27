@@ -145,7 +145,11 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 - **DOD-AUTH-4 — Strong-auth enforcement.** 7-day grace → server-side gate; per-account admin
   waiver flag (scoped, not global) lifts it; no self-grant, no client bypass. *(AUTH-004)* — ❌
 - **DOD-AUTH-5 — Account & Security.** Lists factors + active sessions; log-out-everywhere revokes
-  other sessions server-side; factor removal requires step-up. *(AUTH-006)* — ❌
+  other sessions server-side; factor removal requires step-up. *(AUTH-006)* — ✅ *(PROVEN LIVE: the
+  Account screen lists factors (WebAuthn panel + TOTP panel) + active sessions (SessionsPanel,
+  this-device marked); J-account AC-001 — two devices, "log out everywhere" from A bounces B to
+  sign-in on its next request (B's cookie unchanged → server-side revocation across sessions), A
+  stays in. Factor-removal step-up is proven by AUTH-002 (J-AUTH AC-003).)*
 - **DOD-AUTH-6 — Signpost landing.** No-session, no-link visitor → routes to the Telegram ceremony
   + GitHub install; no account-creation form. *(SCAFFOLD-001 AC-003)* — ✅ *(PROVEN LIVE, J-SPINE:
   /sign-in shows both outbound routes + a sign-in field, and asserts the ABSENCE of any

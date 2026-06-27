@@ -497,3 +497,17 @@ J-AUTH (AUTH-004 grace, AUTH-006 account screen), LEVER-001 (SPINE-4), TRUST-001
 the multi-node PRESENCE e2e + directory cluster auto-bring-up, and the E2E close gate.
 
 **Blocker needing Andre.** None.
+
+---
+
+## 2026-06-27 — AUTH-006 ✅: active sessions + log-out-everywhere (DOD-AUTH-5)
+
+The Account & Security screen now manages active sessions on top of the factors (WebAuthn + TOTP
+panels from AUTH-002/003). session store: listSessions (active, marks the current device) +
+revokeOtherSessionsById. Endpoints GET /api/account/sessions (portal.sessions.listed) + POST
+/api/account/sessions/revoke-others (portal.session.revoked, scope=others). SessionsPanel (SSR list
++ "Log out everywhere"). **J-account AC-001 (1/1):** two contexts (two devices) on one account; "log
+out everywhere" from A → B's next request is bounced to sign-in (B's cookie unchanged → server-side
+revocation across sessions, exactly why sessions are stateful), A stays in. Factor-removal step-up
+(AC-002) is already proven by AUTH-002 (J-AUTH AC-003). Full default e2e green; build/typecheck/lint
+clean. `DOD-AUTH-5` ✅. cello-portal `1281ef4`.
