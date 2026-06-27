@@ -6089,3 +6089,45 @@ live; typecheck + lint clean — both repos. Merged to main in both repos.
 deploy — the `GET /manifest` code is now on main → CI/CD image + `deploy.sh` the ALB rule to all 3 regions
 + STATE.md. The poll degrades gracefully (`manifest_http_unreachable` → cached) and fires only on a 6–12h
 schedule, so it's not urgent. Everything else is shipped + proven.
+
+## 2026-06-27 — CONN-001 directory /manifest deployed (3 regions) + demo agent on 0.0.13 + live cross-machine seal CONFIRMED
+
+**Directory `/manifest` image deployed to all 3 regions.** Merging CONN-001 to main triggered the
+`cello-directory-pipeline` (path-based: `packages/directory/src/**`). Build → StagingDeploy(us-east-1) →
+SmokeTest → ProductionDeploy(eu-central-1 + ap-northeast-1) all green; image `cello-directory:d5d0424`
+(task def :204), rollout COMPLETED, running==desired in every region. Recorded in `infra/STATE.md`. The
+**ALB `ManifestPathRule` is NOT yet applied** — CI/CD swaps images only, not CFN. Verified blast radius for
+the `deploy.sh` run that adds it (Andre to approve): additive ListenerRule only, NO directory restart —
+`/cello/dev/pipeline/directory-image-uri` already = `d5d0424` (so deploy.sh re-applies the SAME image, no
+revert) and the manifest-signer-pubkey matches the node key in all 3 regions (no task-def change). So
+`/manifest` is served on :9090 but not ALB-routable until `deploy.sh`; the daemon poll degrades gracefully
+meanwhile. (deploy.sh is per-region + deploys the whole env, ~16 stacks; unchanged ones no-op, CFN delta-only.)
+
+**Demo agent (EC2 `i-0ad3e7c…`) updated to the CONN-001 daemon — runs the path operators run.** Bumped the
+local `@cello-protocol` packages to **daemon 0.0.13 / cli 0.0.11 / connect 0.0.49** (was daemon 0.0.7). The
+0.0.13 daemon **migrated the demo's pre-PERSIST-002 flat-file state → SQLCipher cleanly** (`persist.identity.
+migrated` agentsMigrated:1, rowsMigrated:17; backup `.cello.bak-pre-0013`); agent `default` (bc94ead6…)
+reloads, per-agent directory connection up. `demo/package.json` bumped + STATE.md updated. (Deploy is manual
+via SSM — no pipeline.)
+
+**Live cross-machine E2E with a CONFIRMED seal.** Laptop (Demo2, 0.0.13) ↔ demo agent (bc94ead6, 0.0.13)
+over relay: session established, message round-trip (the demo's MIGRATED FROST share signs; `cello_receive`
+verified sender = counterparty), then `cello_close_session` → **bilateral FROST seal returned the
+`sealed_root` + legibility certificate**, `cello_list_sessions` shows `status:"sealed"`, and
+`cello_get_sealed_receipt` returns the receipt — i.e. **the seal confirms on the END USER's client**, not
+just server-side. This is the production path (both ends on shipped 0.0.13, real directory + relay).
+
+**Two operational lessons (NOT code bugs):**
+1. **Relay must be restarted after every directory redeploy** (documented gap — the relay has no reconnect
+   logic). The `/manifest` image deploy restarted the directory containers; the relay's connection died →
+   `relay_unavailable` on `cello_initiate_session` until I bounced the relay in all 3 regions (stop-task →
+   ECS relaunch → re-register; relayId is stable via the persisted transport key). This is the right
+   permanent-fix candidate: symmetric relay↔directory reconnect-with-backoff (deferred to federation).
+2. **Driving sessions through a settling cluster looks like a seal bug but isn't.** Right after the directory
+   + relay bounce I created 4 sessions faster than the demo's one-at-a-time await loop could clear (3 piled
+   up `pending`/`active`), and the first seal's `session_sealed` certificate lagged past the 30s window →
+   the client escalated to a unilateral seal which the directory correctly refused (grace). The directory
+   HAD notarized it (`seal_notarizations` bilateral row) — the gap was purely client-side delivery timing
+   under churn. On a **settled cluster with a freshly-restarted demo, ONE clean session sealed + confirmed
+   first try** (matching j-spine DOD-SPINE-7). Lesson: don't restart infra and immediately load-test it;
+   let it settle, and test one session at a time against the single-receiver demo.

@@ -183,6 +183,18 @@ fresh one → DKG completed (`primary_pubkey` returned), `directory_signaling: c
 in the directory Postgres (Demo2 `active` in us-east-1) and replicated to eu-central-1 + ap-northeast-1
 (`agent_profiles` is in `cello_pub`). The keystone stranding bug is dead.
 
+**Deployed + dogfooded (2026-06-27).** The directory `GET /manifest` image rolled to all 3 regions via the
+pipeline (`cello-directory:d5d0424`, rollout COMPLETED everywhere; the ALB `ManifestPathRule` is the one
+remaining `deploy.sh` step — additive, verified no restart). The **demo agent (EC2) was updated to the same
+shipped 0.0.13 daemon** (migrating its pre-PERSIST-002 flat-file state → SQLCipher cleanly), and a **live
+cross-machine conversation between a laptop and the demo, both on 0.0.13, sealed and the seal CONFIRMED on
+the client** — `cello_close_session` returned the `sealed_root` + certificate, the session reads `sealed`,
+and `cello_get_sealed_receipt` returns the receipt. Two operational lessons (not code bugs): the relay must
+be bounced after any directory redeploy (no reconnect logic — `relay_unavailable` until it re-registers), and
+loading sessions onto a just-restarted cluster faster than the single-receiver demo's await loop produces
+transient `session_stream_unavailable` + a lagged first seal; on a settled cluster one clean session seals
+first try (matching DOD-SPINE-7).
+
 ## What M7 unblocks
 
 - **Clean agent lifecycle** (CELLO-M7-CONN-001): removing an agent and registering a fresh one no longer
@@ -204,9 +216,14 @@ in the directory Postgres (Demo2 `active` in us-east-1) and replicated to eu-cen
   but the agent can't sign); affects any reinstall.
 - **Demo cleanup** — update the published demo AgentID to `bc94ead6…`, rewrite `demo/runbook.md` +
   `demo/CLAUDE.md` for M7, update `infra/STATE.md` (redeploy, relay restart), remove the throwaway test driver.
-- **DOD-CONN-3 manifest-over-HTTP directory deploy** — the `GET /manifest` code is merged to main; the
-  end-to-end live poll needs the CI/CD directory image + `deploy.sh` for the ALB `/manifest` rule across all
-  3 regions + STATE.md. Degrades gracefully (`manifest_http_unreachable` → cached, 6–12h schedule) until then.
+- **DOD-CONN-3 manifest-over-HTTP — last step: the ALB rule.** The `GET /manifest` directory *image* is now
+  deployed to all 3 regions (done 2026-06-27). The only remaining piece for the end-to-end live poll is the
+  ALB `ManifestPathRule` via `deploy.sh` (CI/CD swaps images, not CFN) — verified additive, no directory
+  restart (image SSM already points at the deployed `d5d0424`; signer-pubkey matches in all 3 regions).
+  Degrades gracefully (`manifest_http_unreachable` → cached, 6–12h schedule) until applied.
+- **Relay reconnect-after-directory-redeploy** — the relay has no reconnect logic, so every directory deploy
+  needs a manual relay bounce per region (surfaced again during the CONN-001 deploy). The permanent fix is
+  symmetric relay↔directory reconnect-with-backoff, deferred to the federation milestone.
 - **Multi-node failover** (INV-1) — needs >1 node; the single-node spine harness can't model it → E2E.
 - **Relay-SIGNED sequence verification** (DOD-MSG-4 Finding 2) — needs the relay's signing identity
   plumbed to the daemon; named-deferred (RC-1) to the transport-security-audit hardening story.
