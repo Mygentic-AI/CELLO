@@ -12,8 +12,12 @@
 -- upserts for agents in its own #streams); RLS stays permissive for the shared cello_service role,
 -- matching every other directory table.
 
+-- Keyed by k_local_pubkey — the agent's stable Ed25519 identity. It is what the #streams auth
+-- hook holds directly (the authenticated signaling pubkey) and is UNIQUE NOT NULL on
+-- agent_profiles (agent_profiles.agent_id can be NULL/derived), so it joins cleanly to
+-- agent_profiles for the account-scoped read with NO lookup on the hot connect/disconnect path.
 CREATE TABLE agent_presence (
-  agent_id        TEXT PRIMARY KEY,                 -- one MUTABLE row per agent (no chain_hash)
+  k_local_pubkey  TEXT PRIMARY KEY,                 -- one MUTABLE row per agent (no chain_hash)
   owning_node_id  TEXT NOT NULL,                    -- the node that owns this agent's connection
   online          BOOLEAN NOT NULL DEFAULT false,
   last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
