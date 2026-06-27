@@ -579,3 +579,49 @@ holds). cello-portal `b66cf32`.
 **Remaining.** AGENTS-001 polish (alerts/posture header → DOD-AGENT-1), WRITEAPI-001 + LEVER-001
 (SPINE-4, INV-6 suspend lever), TRUST-001 (SPINE-6 pipe, INV-2 server-write half), the multi-node
 PRESENCE e2e + directory auto-bring-up, E2E close gate.
+
+---
+
+## 2026-06-27 — WRITEAPI-001 ✅: the directory write seam (DOD-WRITE-1)
+
+The portal's one authenticated, account-scoped directory write endpoint — `POST /internal/agent-write`
+(`internal-api-server.ts`), the shared seam that blocks LEVER-001 (revocation flag) and TRUST-001
+(trust-signal hash + sealed ciphertext). Built schema-first.
+
+**Schema (V34, schema-first per M5 #4).** One migration reserves all three target tables so the two
+consumers build in parallel: `agent_suspensions` (MUTABLE reversible pause flag — mirrors
+agent_presence V33; a pause must be clearable, so it can't live in the append-only permanent
+agent_revocations V32), `identity_tree_entries` (trust-signal hash), `pickup_queue` (sealed
+ciphertext). RLS permissive for cello_service with app-level scoping (matches V33). All three added
+to cello_pub (everything written replicates to every sovereign node); pickup_queue's BIGSERIAL-under-
+replication concern flagged for TRUST-001. SSM OpsAgentExpectedMigrationVersion 33→34.
+
+**Seam discipline.** Auth (x-cello-internal-api-key). Account-scoping is DERIVED from
+`isAgentOwnedByAccount` (agent_profiles.account_id) — not a request field — so A cannot write B's
+agent (403, nothing persisted). Payload discipline is structural: `validateWritePayload` enforces a
+strict per-kind schema with NO free-text slot — revocation_flag = {mode∈pause|clear}, trust_signal_hash
+= {signalKind∈allowlist, signalHash=64-hex}, trust_signal_ciphertext = {ciphertext: base64, ≥48 bytes,
+not all-printable}. Unknown kind / extra key / non-hex / all-printable → 422, nothing persisted.
+Validation runs BEFORE any DB touch. directory.write.accepted/.rejected with distinct reason +
+correlationId.
+
+**Proof.** Contract test 11/11 (real HTTP + recording stub pool: auth, ownership, every reject
+persists nothing). Live test 5/5 against the real directory Postgres (:5433): pause→paused=true +
+authorized_by_account, clear→false; cross-account 403; hash→identity_tree; ciphertext→pickup_queue;
+**SI-001 dump — a smuggled raw email + OAuth token are rejected AND absent from every byte of the
+three seam tables.** typecheck + lint clean.
+
+**Reviews.** cello-fallback-finder: NO SILENT FALLBACKS (fail-closed at every gate; ownership error
+not swallowed; no permissive default; rejections persist nothing). Applied its one note — capped
+readBody at 256KB across all internal endpoints. feature-dev:code-reviewer (opus) dispatched.
+
+**Portal half.** `DirectoryClient.writeAgent` added to the interface + both adapters. HttpDirectoryClient
+distinguishes a deliberate REJECTION (4xx → DirectoryWriteRejectedError with the directory's machine
+reason) from an outage (5xx/transport → DirectoryUnreachableError) — never flattening a refusal into
+success. StubDirectoryClient records writes for introspection. `DOD-WRITE-1` ✅. directory branch
+m8-read-001 (local); cello-portal `fefcf9b` (pushed, no CI).
+
+**Next.** LEVER-001 — the FROST honor-check (frost-handler share gate reads agent_suspensions,
+mirroring the agent_revocations soft-refuse) + the portal per-row pause lever (step-up-gated) →
+DOD-SPINE-4 + DOD-INV-6 + DOD-LEVER-1/4. AC-003 strict-T-of-N distinct-error + AC-002 burn share-
+destruction are the heavier cross-repo / multi-node parts (marked honestly when reached).

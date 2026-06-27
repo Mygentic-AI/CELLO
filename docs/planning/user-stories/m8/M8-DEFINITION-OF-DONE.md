@@ -236,7 +236,16 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 
 - **DOD-WRITE-1 — Write API: authenticated, account-scoped, safe-payload-only.** Cross-account
   write rejected; only hashes/flags/sealed-ciphertext accepted — no field takes plaintext/PII/
-  token. *(WRITEAPI-001 AC-001/002, SI-001)* — ❌
+  token. *(WRITEAPI-001 AC-001/002, SI-001)* — ✅
+  *(PROVEN: the directory write seam `POST /internal/agent-write` (V34 target tables). Contract test
+  11/11 + live test 5/5 against the real directory Postgres. AC-001: API-key auth (401 without);
+  account A may write its OWN agent but is rejected (403, nothing persisted) targeting account B's
+  agent — scoping derives from the ownership check (agent_profiles.account_id), not a request field.
+  AC-002/SI-001: only the three permitted kinds with strict per-kind schemas — an unknown kind,
+  non-hex hash, non-enum flag mode, all-printable "ciphertext", or any extra key is rejected (422,
+  nothing persisted); the live SI-001 DUMP confirms a smuggled raw email + OAuth token are absent
+  from every byte of the three seam tables. directory.write.accepted/.rejected (distinct reason)
+  logged. Fallback-finder: NO SILENT FALLBACKS. Portal half: DirectoryClient.writeAgent wired.)*
 - **DOD-LEVER-1 — Pause blocks signing, reversible.** Server-side; the agent's valid client share
   doesn't help; un-pause restores. *(LEVER-001 AC-001)* — ❌
 - **DOD-LEVER-2 — Burn: permanent, accountability survives.** Destroys share material federation-
