@@ -955,3 +955,19 @@ shared seeded agent). cello-portal `edffa56`; directory burned-read on m8-read-0
 
 DOD-LEVER-2 stays 🟡 — the ONE remaining part is coordinated per-node K_server share destruction (the
 heavier part the story separates); the flag/honor-check/replication + portal affordance are done.
+
+## 2026-06-27 — LEVER-002 share destruction BUILT (zero, append-only) + per-node trigger
+
+The "heavier part" of burn — per-node K_server share destruction. agent_key_shares (V4) is append-only
+(GRANT allows UPDATE of encrypted_share, not DELETE), so destruction ZEROES the material (capability
+dies, the row/accountability survives), never deletes. ShareStore.destroyShares: InMemory drops the
+"${pubkey}:" entries; EncryptedPgShareStore UPDATEs encrypted_share→empty + key_version='burned';
+PersistentShareStore awaits both. Store gains isAgentBurned; the frost-gate honor-check fires
+frostHandler.destroyShares eager-on-observe (each node zeroes its OWN share when it sees the replicated
+burn — fire-and-forget cleanup; the flag already refuses). PROVEN: lever-002-share-destroy.live (zeroes
+both epochs, keeps rows, idempotent, never decrypts) + burn live 2/2 + directory-node 26/26. directory
+`b31dda76`.
+
+DOD-LEVER-2 stays 🟡 with two residuals: (1) a reconcile loop for fully-IDLE nodes (zero without a
+ceremony attempt); (2) the burn as a cryptographically SIGNED event (today account-authorized +
+timestamped, not Ed25519-signed). The security property (a burned agent can never sign) holds via the flag.
