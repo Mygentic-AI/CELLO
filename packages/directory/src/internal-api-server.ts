@@ -284,6 +284,7 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
         JSON.stringify({
           agents: agents.map((a) => ({
             k_local_pubkey: a.kLocalPubkey,
+            agent_id: a.agentId,
             online: a.online,
             last_seen_at: a.lastSeenAt ? a.lastSeenAt.toISOString() : null,
           })),

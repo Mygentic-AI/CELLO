@@ -83,6 +83,9 @@ export async function refreshNodeHeartbeat(db: PgExecutor, nodeId: string): Prom
 
 export interface AgentWithPresence {
   kLocalPubkey: string;
+  /** The directory-assigned stable agent_id — the key the write seam (WRITEAPI-001/LEVER-001) uses.
+   *  Nullable: an agent that has not yet been assigned one is not suspendable via the seam. */
+  agentId: string | null;
   online: boolean;
   lastSeenAt: Date | null;
 }
@@ -100,10 +103,12 @@ export async function listAccountAgentsWithPresence(
 ): Promise<AgentWithPresence[]> {
   const res = await db.query<{
     k_local_pubkey: string;
+    agent_id: string | null;
     online: boolean;
     last_seen_at: Date | null;
   }>(
     `SELECT ag.k_local_pubkey,
+            ag.agent_id,
             COALESCE(
               ap.online AND dn.last_heartbeat_at > now() - ($2::bigint * interval '1 millisecond'),
               false
@@ -118,6 +123,7 @@ export async function listAccountAgentsWithPresence(
   );
   return res.rows.map((r) => ({
     kLocalPubkey: r.k_local_pubkey,
+    agentId: r.agent_id,
     online: r.online,
     lastSeenAt: r.last_seen_at,
   }));
