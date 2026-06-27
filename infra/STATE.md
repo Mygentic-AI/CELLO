@@ -12,7 +12,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 ## Environments
 
 ### dev — us-east-1
-*Last deployed: 2026-06-26 (CONN-001 directory /manifest image, all 3 regions; ALB rule pending deploy.sh)
+*Last deployed: 2026-06-27 (CONN-001 /manifest ALB ManifestPathRule APPLIED in all 3 regions via deploy.sh; relays redeployed in-order + re-registered)
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -25,10 +25,10 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | Fresh deploy from current IaC |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-26 | CELLO-M7-CONN-001: GET /manifest handler + getCurrentManifest wiring — image cello-directory:d5d0424, task def :204, CI/CD image swap to all 3 regions (rollout COMPLETED, running==desired). ⚠️ ALB ManifestPathRule (in cello-ecs-directory.yaml) NOT yet applied — needs deploy.sh (CI/CD swaps images only, not CFN), so /manifest is served on port 9090 but NOT ALB-routable until deploy.sh runs; the daemon HTTP manifest poll degrades gracefully (manifest_http_unreachable → cached) meanwhile. (prev: M6B-019 image 934d130 / task def :170) |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-27 | CELLO-M7-CONN-001: GET /manifest handler + getCurrentManifest wiring — image cello-directory:d5d0424. ✅ ALB ManifestPathRule (priority 6, path /manifest → BootstrapTargetGroup) APPLIED via deploy.sh 2026-06-27 (all 3 regions). /manifest is ALB-routable and returns the designed 503 `{"error":"not ready"}` — CELLO_DIRECTORY_CONSORTIUM_MANIFEST is unset (M6 backward-compat: no consortium manifest published to dev), so the daemon HTTP manifest poll degrades gracefully to its locally-pinned CELLO_CONSORTIUM_ROOT_KEYS. (prev: M6B-019 image 934d130 / task def :170) |
 | cello-ecs-operations-agent-dev | UPDATE_COMPLETE | 2026-06-07 | M6B-016 registration engine; image cello-operations-agent:f4c3e72; task def :43; migrationVersion=30 confirmed healthy |
 | cello-waf-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
-| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-06-07 | Running task def :55 (pipeline-deployed 2026-06-07) |
+| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-06-27 | Redeployed by deploy.sh 2026-06-27 (in-order, after directory) → new task IP 10.0.1.138; re-registered. S3 relay manifest healthCheckUrl matches live IP (directory re-signed on re-registration) — no manual re-sign needed. |
 | cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | cello-route53-dev | UPDATE_COMPLETE (CFN DRIFT) | 2026-06-07 | A record deleted by purge_stale_dns_record() bug during M6B-014 deploy. Recreated manually 2026-06-07. deploy.sh fixed (commit 6d17b30) — drift resolves on next deploy.sh run. |
 | cello-route53-relay-dev | UPDATE_COMPLETE (CFN DRIFT) | 2026-06-07 | A record deleted by purge_stale_dns_record() bug. Recreated manually 2026-06-07. Drift resolves on next deploy.sh run. |
@@ -157,7 +157,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 - ap-northeast-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-ap1.cello.mygentic.ai --type String --region ap-northeast-1`
 
 ### dev — eu-central-1
-*Last deployed: 2026-06-10
+*Last deployed: 2026-06-27
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -170,10 +170,10 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-10 | M6B-019 SSM node registry; image cello-directory:934d130; task def :59 |
-| cello-ecs-operations-agent-dev | NOT DEPLOYED | — | eu-central-1 only has PLACEHOLDER secrets; single instance runs in us-east-1 |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-27 | CELLO-M7-CONN-001: image cello-directory:d5d0424; ALB ManifestPathRule (priority 6, /manifest) APPLIED via deploy.sh 2026-06-27. /manifest ALB-routable, returns designed 503 (consortium manifest unset — M6 backward-compat). (prev: M6B-019 934d130 / task def :59) |
+| cello-ecs-operations-agent-dev | ROLLBACK_COMPLETE | 2026-06-27 | EXPECTED: deploy.sh 2026-06-27 attempted CREATE; ECS circuit breaker triggered (PLACEHOLDER Telegram/SES secrets → task crash-loops) → rolled back. Ops-agent is us-east-1-only per infra/CLAUDE.md; deploy.sh is non-fatal on it and continued. Does NOT affect protocol operation. |
 | cello-waf-dev | CREATE_COMPLETE | 2026-06-06 | |
-| cello-ecs-relay-dev | CREATE_COMPLETE | 2026-06-06 | |
+| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-06-27 | Redeployed by deploy.sh 2026-06-27 → new task IP 10.1.77.112; re-registered. S3 relay manifest healthCheckUrl matches live IP — no manual re-sign needed. |
 | cello-cloudwatch-dev | CREATE_COMPLETE | 2026-06-06 | |
 | cello-route53-dev | CREATE_COMPLETE | 2026-06-06 | directory-eu1.cello.mygentic.ai |
 | cello-route53-relay-dev | CREATE_COMPLETE (CFN DRIFT) | 2026-06-07 | A record deleted by purge_stale_dns_record() bug. Recreated manually 2026-06-07. Drift resolves on next deploy.sh run. |
@@ -213,7 +213,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | SNS Topic — ops-warning | arn:aws:sns:eu-central-1:257394457473:cello-ops-warning-dev |
 
 ### dev — ap-northeast-1
-*Last deployed: 2026-06-10
+*Last deployed: 2026-06-27
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -226,10 +226,10 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | cello-s3-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-10 | M6B-019 SSM node registry; image cello-directory:934d130; task def :50 |
-| cello-ecs-operations-agent-dev | NOT DEPLOYED | — | ap-northeast-1 only has PLACEHOLDER secrets; single instance runs in us-east-1 |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-27 | CELLO-M7-CONN-001: image cello-directory:d5d0424; ALB ManifestPathRule (priority 6, /manifest) APPLIED via deploy.sh 2026-06-27. /manifest ALB-routable, returns designed 503 (consortium manifest unset — M6 backward-compat). (prev: M6B-019 934d130 / task def :50) |
+| cello-ecs-operations-agent-dev | ROLLBACK_COMPLETE | 2026-06-27 | EXPECTED: deploy.sh 2026-06-27 attempted CREATE; ECS circuit breaker triggered (PLACEHOLDER Telegram/SES secrets → task crash-loops) → rolled back. Ops-agent is us-east-1-only per infra/CLAUDE.md; deploy.sh is non-fatal on it and continued. Does NOT affect protocol operation. |
 | cello-waf-dev | CREATE_COMPLETE | 2026-06-06 | |
-| cello-ecs-relay-dev | CREATE_COMPLETE | 2026-06-06 | |
+| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-06-27 | Redeployed by deploy.sh 2026-06-27 → new task IP 10.2.94.2. Directory did NOT auto-re-sign on the IP change (known gap), so S3 relay manifest was stale (10.2.75.117) → manually re-signed via sign-manifest.sh to v6 with 10.2.94.2 (matches live IP). Directory adopts on next 2-min poll. |
 | cello-cloudwatch-dev | CREATE_COMPLETE | 2026-06-06 | |
 | cello-route53-dev | CREATE_COMPLETE | 2026-06-06 | directory-ap1.cello.mygentic.ai |
 | cello-route53-relay-dev | CREATE_COMPLETE (CFN DRIFT) | 2026-06-07 | A record deleted by purge_stale_dns_record() bug. Recreated manually 2026-06-07. Drift resolves on next deploy.sh run. |
