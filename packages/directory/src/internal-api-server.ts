@@ -288,6 +288,7 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
             online: a.online,
             last_seen_at: a.lastSeenAt ? a.lastSeenAt.toISOString() : null,
             paused: a.paused,
+            burned: a.burned,
           })),
         }),
       );

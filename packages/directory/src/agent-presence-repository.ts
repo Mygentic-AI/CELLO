@@ -91,6 +91,8 @@ export interface AgentWithPresence {
   /** True iff a reversible suspend (pause) flag is currently set (LEVER-001) — drives the lever's
    *  Pause/Resume state and the row's suspended indicator. */
   paused: boolean;
+  /** True iff the agent has been BURNED (permanent — LEVER-002). A burned agent can never sign. */
+  burned: boolean;
 }
 
 /**
@@ -110,6 +112,7 @@ export async function listAccountAgentsWithPresence(
     online: boolean;
     last_seen_at: Date | null;
     paused: boolean;
+    burned: boolean;
   }>(
     `SELECT ag.k_local_pubkey,
             ag.agent_id,
@@ -118,7 +121,8 @@ export async function listAccountAgentsWithPresence(
               false
             ) AS online,
             ap.last_seen_at,
-            COALESCE(sus.paused, false) AS paused
+            COALESCE(sus.paused, false) AS paused,
+            COALESCE(sus.burned, false) AS burned
        FROM agent_profiles ag
        LEFT JOIN agent_presence ap ON ap.k_local_pubkey = ag.k_local_pubkey
        LEFT JOIN directory_nodes dn ON dn.node_id = ap.owning_node_id
@@ -133,5 +137,6 @@ export async function listAccountAgentsWithPresence(
     online: r.online,
     lastSeenAt: r.last_seen_at,
     paused: r.paused,
+    burned: r.burned,
   }));
 }
