@@ -455,3 +455,45 @@ harness. These light SPINE-3.
 does, a renumber would be needed — flagged for coordination. The `m8-read-001` branch is LOCAL.
 
 **Blocker needing Andre.** None.
+
+---
+
+## 2026-06-27 — SPINE-3 ✅: agents appear with directory-derived presence (PRESENCE-001 + READ-001 + AGENTS-001)
+
+**What was built + proven.**
+- *Directory (m8-read-001):* V33 agent_presence migration (keyed by k_local_pubkey) + the presence
+  repository + the read rule, proven 5/5 against real schema (presence-001-repository: AC-002
+  connect→online, AC-003 dark-node→last-seen, AC-004 sovereign ownership, reconcile, edge-triggered
+  single-row). Node-code wired at the REAL #streams hook sites (connect 1334 → upsertPresenceOnline,
+  disconnect 1822 → upsertPresenceOffline; fire-and-forget so a presence hiccup never breaks auth),
+  a 45s per-node heartbeat in start() (cleared on stop), and startup reconciliation in
+  bin/directory.ts. `/internal/agents-by-account` endpoint (read rule, node freshness 120s) +
+  in-process contract test 3/3.
+- *Portal (cello-portal):* DirectoryClient.listAgents (HTTP adapter + stub seeded via
+  PORTAL_DIRECTORY_STUB_AGENTS); getAccountAgents with honest degradation; the Agents home renders
+  fingerprint-primary agent rows + StatusDot (directory-derived) + last-seen, empty→ceremony, no
+  lifecycle controls.
+
+**Live-test run — cello-portal `78b67ec`:** J-SPINE against the REAL directory (DIRECTORY_API_URL +
+a seeded ceremony-registered agent online on a freshly-heartbeating node) — **6/6**, SPINE-3
+included: the agent appears in the Agents home with presence computed by the real read rule
+(portal HttpDirectoryClient → directory agents endpoint → directory Postgres). The first run
+correctly read OFFLINE once the seeded node's heartbeat aged past the 120s window — the
+node-liveness guard working. Default (stub) mode: e2e green, SPINE-3 + the live-directory tests
+skipped (gated). vitest 19 passed + 3 skipped.
+
+**Applied V33 to the running dev directory DB** via psql (the container has pre-existing flyway
+drift at V30 — schema ahead of history, not my migration's fault; V33 adds only new objects so it
+applies cleanly). The real-directory internal-api (8099) re-spawned with the agents endpoint.
+
+**DoD flips.** `DOD-SPINE-3` ✅. `DOD-READ-1` ✅ (account-scoped read live). `DOD-READ-2` ✅ (read
+rule live). `DOD-PRES-1/2/3` 🟡 (migration + repo + read rule + sovereign ownership + node-code
+proven at integration/repo layer; the live ≥2-node assertions — exactly-two-writes-per-lifecycle,
+readable-from-a-different-node, live dark-node — are the E2E close gate). `DOD-READ-3` 🟡 (degraded
+path coded; focused test pending).
+
+**Next red.** The directory-unreachable degraded-path test (DOD-READ-3 → ✅), then the remaining
+J-AUTH (AUTH-004 grace, AUTH-006 account screen), LEVER-001 (SPINE-4), TRUST-001/003 (SPINE-5/6),
+the multi-node PRESENCE e2e + directory cluster auto-bring-up, and the E2E close gate.
+
+**Blocker needing Andre.** None.

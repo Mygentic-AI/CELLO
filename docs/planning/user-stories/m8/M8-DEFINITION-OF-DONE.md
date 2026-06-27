@@ -104,7 +104,13 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   auto-bring-up of the directory cluster is the E2E close gate.)*
 - **DOD-SPINE-3 — Agents appear with presence.** A ceremony-registered agent appears in the
   Agents home with directory-derived presence (online iff presence row online AND owning node
-  fresh), fingerprint-primary. *(PRESENCE-001; READ-001; AGENTS-001)* — ❌
+  fresh), fingerprint-primary. *(PRESENCE-001; READ-001; AGENTS-001)* — ✅ *(PROVEN LIVE end-to-end
+  against the served portal + the REAL directory, J-SPINE 6/6 with DIRECTORY_API_URL set: a seeded
+  ceremony-registered agent (online on a freshly-heartbeating node) appears in the Agents home,
+  fingerprint-primary, with presence computed by the REAL read rule (presence row online AND owning
+  node fresh) through the portal's HttpDirectoryClient → the directory `/internal/agents-by-account`
+  endpoint → the directory Postgres. The earlier run correctly read OFFLINE once the seeded node's
+  heartbeat aged out — the read rule's node-liveness guard working.)*
 - **DOD-SPINE-4 — Suspend blocks signing.** Pause (step-up) → the agent cannot complete a FROST
   ceremony even with its client share → un-pause restores. *(LEVER-001 AC-001)* — ❌
 - **DOD-SPINE-5 — Trust scaffold renders.** The four-class trust UI: WebAuthn live, rest honest
@@ -156,18 +162,35 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 
 - **DOD-PRES-1 — agent_presence: mutable, edge-triggered, replicated.** One row per agent_id,
   not chain-hashed; exactly two writes per connect/disconnect lifecycle (no per-heartbeat write);
-  readable from a different node. *(PRESENCE-001 AC-001/002)* — ❌
+  readable from a different node. *(PRESENCE-001 AC-001/002)* — 🟡 *(migration V33 (keyed by
+  k_local_pubkey) applies cleanly vs real schema; the repo + edge-triggered single-row semantics
+  (connect→online, disconnect→offline, ONE mutable row) proven by presence-001-repository 5/5; the
+  node-code wires the two transitions at the real #streams add/remove sites (fire-and-forget). The
+  exactly-two-writes-during-a-real-lifecycle + readable-from-a-DIFFERENT-node assertions need a
+  ≥2-node live cluster — the E2E close gate.)*
 - **DOD-PRES-2 — Node-liveness guard.** A dark node's agents age out via stale
   `directory_nodes.last_heartbeat_at`; on restart the node reconciles its owned rows to offline.
-  *(PRESENCE-001 AC-003)* — ❌
+  *(PRESENCE-001 AC-003)* — 🟡 *(PROVEN by presence-001-repository (AC-003: a stale-heartbeat node
+  ages the online row out to last-seen) + the SPINE-3 run (a non-heartbeating seeded node read
+  OFFLINE); startup reconcile (reconcileNodeOffline) proven + wired at boot. 45s heartbeat wired in
+  start(). Live multi-node dark-node test = close gate.)*
 - **DOD-PRES-3 — Sovereign presence write-ownership.** Only the owning node writes its agents'
-  presence. *(PRESENCE-001 AC-004)* — ❌
+  presence. *(PRESENCE-001 AC-004)* — 🟡 *(PROVEN by presence-001-repository (AC-004: node Y's
+  offline write no-ops, only the owning node X flips the row — SQL-scoped WHERE owning_node_id).
+  Live ≥2-node assertion = close gate.)*
 - **DOD-READ-1 — Account-scoped replicated read path.** Returns only the session account's data,
-  from any node, with no daemon-local fields. *(READ-001 AC-001/003)* — ❌
+  from any node, with no daemon-local fields. *(READ-001 AC-001/003)* — ✅ *(PROVEN LIVE, SPINE-3:
+  the portal reads the operator's agents account-scoped (server-side accountId) through the real
+  directory; no daemon-local fields. Account resolution + agents read both go through the real
+  directory HTTP API.)*
 - **DOD-READ-2 — Presence read rule.** Online iff row online AND owning node fresh; else last-seen.
-  *(READ-001 AC-002)* — ❌
+  *(READ-001 AC-002)* — ✅ *(PROVEN: the read rule (online iff row online AND node fresh) computed
+  by the directory against real data — online for a fresh node (SPINE-3), last-seen for a stale one
+  (presence-001-repository AC-003 + the SPINE-3 first run).)*
 - **DOD-READ-3 — Directory-unreachable = honest empty.** Stale/empty marked, never fabricated.
-  *(READ-001 DB-001)* — ❌
+  *(READ-001 DB-001)* — 🟡 *(coded: getAccountAgents returns empty MARKED unreachable + logs
+  portal.directory.unreachable + the Agents home shows an honest "directory unreachable" banner,
+  never fabricated agents. A focused degraded-path test is pending.)*
 
 ---
 
