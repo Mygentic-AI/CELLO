@@ -301,10 +301,14 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   Proven by the burn live test (2/2, cello_spine) + contract (13/13). V36. The PORTAL Burn affordance
   is also done (J-LEVER 4/4): a per-row Burn action behind a two-click "irreversible" confirm, a
   terminal "Burned" row state, step-up-gated through the same route → seam. REMAINING (the single
-  heavier part): coordinated per-node K_server SHARE DESTRUCTION (each node, on observing the
-  replicated burn, deletes its own agent_key_shares row + in-memory cache — ShareStore.destroyShares +
-  a per-node eager-on-observe trigger in the frost gate + a reconcile for idle nodes). The SECURITY
-  property — a burned agent can never sign — already holds via the replicated flag the federation honors.)*
+  heavier part): coordinated per-node K_server SHARE DESTRUCTION. DESIGN NOTE (from the code):
+  agent_key_shares (V4) is APPEND-ONLY — "row deletion is not permitted" (UPDATE-for-rotation IS
+  allowed). So destruction must ZERO encrypted_share (capability dies; the row/accountability
+  survives), NOT DELETE — plus drop the in-memory cache entry. Mechanism: ShareStore.destroyShares
+  [InMemory delete prefix; EncryptedPg UPDATE encrypted_share→empty WHERE agent_id; Persistent both] +
+  a per-node eager-on-observe trigger in the frost gate (each node zeroes its own share when it sees
+  the replicated burn) + a reconcile for idle nodes. Sensitive crypto-material code → a focused unit.
+  The SECURITY property — a burned agent can never sign — already holds via the replicated flag.)*
 - **DOD-LEVER-3 — T-of-N mechanism + distinct error.** A threshold of honest nodes refuse; a
   single node continuing doesn't let it sign; the ceremony returns a distinct revocation error.
   *(LEVER-001 AC-003)* — 🟡
