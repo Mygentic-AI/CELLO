@@ -985,3 +985,20 @@ residual keeping it 🟡 is "the burn is a SIGNED event": today it's account-aut
 attributable (monotonic, replicated), auditable but not Ed25519-signed; "whose key signs an
 account-authorized burn" is a design question, not guessed. Security property (a burned agent can
 never sign) holds.
+
+## 2026-06-27 — DOD-LEVER-4 ✅ + DOD-INV-8 ✅ (observability audit)
+
+LEVER-4 ✅: owner-only + step-up (J-LEVER 4/4) + burn-never-erases (burn kills capability — permanent
+flag + share zeroed federation-wide — yet keeps the binding + rows = accountability, lever-002-burn.live).
+
+INV-8 ✅: audited observability across M8 (all journeys landed). No console.* in impl (no-console
+lint gate passes on every M8 file; grep confirms only doc-comments + one dev-bin runner). Events are
+domain.noun.verb throughout; async/multi-process flows thread correlationId (suspend route, write seam,
+trust pipe; daemon pickup uses the pickup id); error paths use distinct codes (not_owner /
+invalid_payload / burned_immutable / agent_suspended / hash_mismatch / …). Per-event context_fields
+were asserted by each story's observability ACs as it landed.
+
+M8 now: all 6 spine lines ✅; the suspend/burn lever ✅ except the design-ambiguous "signed event"
+(LEVER-2) + strict ≥3-node T-of-N (LEVER-3/INV-6, protocol beyond M8). Remaining lines all need a
+resource outside a self-contained loop: signed-event design decision, real T-of-N, cross-node presence
+(multi-node infra), the publish (merge + Andre), the close gate (gated), INV-1 timing residual.

@@ -92,10 +92,18 @@ Proven by SI/adversarial assertions woven into the journeys, never a separate pa
   J-trust: the Trust Signals screen renders four distinct NAMED classes (no single rollup) and the
   rendered DOM contains no TrustRank / Trust-Seeder / seed badge / aggregate-score element.)*
 - **DOD-INV-8 — Observability.** Named `domain.noun.verb` events with `context_fields` +
-  `correlationId`; no `console.log`; distinct cause → distinct code. *(M4+ rules)* — 🟡
-  *(structured logger emits `portal.backend.started` + `portal.backend.migration.failed` +
-  `portal.landing.signpost.shown`; `no-console` is lint-enforced on `src/**`; the full per-journey
-  event taxonomy accrues as each journey lands.)*
+  `correlationId`; no `console.log`; distinct cause → distinct code. *(M4+ rules)* — ✅
+  *(All journeys landed; audited across M8. NO console.* in implementation — `no-console` is
+  lint-enforced (a real passing gate; every M8 file passed lint) and a grep confirms the only console
+  calls are doc-comments + one local dev-bin runner. Events follow `domain.noun.verb` throughout
+  (portal.agent.suspend.requested/rejected/failed, portal.trust_signal.handed_off, directory.write.
+  accepted/rejected/failed, frost.ceremony.refused.revoked, daemon.trust_signal.received/hash_mismatch,
+  share.destroyed, key.burned, …). The async/multi-process flows thread `correlationId` (the suspend
+  route, the write seam, the trust pipe — the daemon pickup uses the pickup id as the correlation
+  handle). Error paths use DISTINCT codes (not_owner / invalid_payload / invalid_hash /
+  invalid_ciphertext / burned_immutable / agent_suspended / hash_mismatch / open_failed) — never a
+  generic catch-all. Per-event context_fields were asserted by each story's own observability ACs as it
+  landed; this is the cross-cutting confirmation.)*
 - **DOD-INV-9 — Agents appear; no lifecycle control.** No register/create/start/stop/set-current
   in the portal; the only agent-control action is the emergency suspend lever.
   *(AGENTS-001 AC-001; [[project-portal-model]])* — ✅
