@@ -174,6 +174,19 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     return this.#revocations.get(agentId);
   }
 
+  // ─── CELLO-M8-LEVER-001 (DOD-INV-6): reversible suspend (pause) ──────────────
+  readonly #suspendedPubkeys = new Set<string>(); // k_local_pubkey hex, currently paused
+
+  /** Test/stub helper: set or clear the pause flag for an agent by k_local_pubkey. */
+  setAgentSuspended(kLocalPubkeyHex: string, paused: boolean): void {
+    if (paused) this.#suspendedPubkeys.add(kLocalPubkeyHex);
+    else this.#suspendedPubkeys.delete(kLocalPubkeyHex);
+  }
+
+  async isAgentSuspended(kLocalPubkeyHex: string): Promise<boolean> {
+    return this.#suspendedPubkeys.has(kLocalPubkeyHex);
+  }
+
   hasPhoneStubHash(phoneStubHashHex: string): boolean {
     return this.#phoneHashIndex.has(phoneStubHashHex);
   }

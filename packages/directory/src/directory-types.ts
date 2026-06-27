@@ -282,7 +282,8 @@ export type SessionRequestErrorReason =
   | "no_connection"                // SESSION-006/CONNREQ-002: no active connection between initiator+target
   | "connection_id_required"       // SESSION-006: session_request missing connection_id field
   | "session_request_missing_peer_id"  // M7-WIRE-001 AC-002: session_request missing initiator_session_peer_id or addrs
-  | "agent_revoked";  // CELLO-M7-REMOVE-001 DOD-REMOVE-3: the target agent has been revoked
+  | "agent_revoked"  // CELLO-M7-REMOVE-001 DOD-REMOVE-3: the target agent has been revoked
+  | "agent_suspended";  // CELLO-M8-LEVER-001 DOD-INV-6: the target/initiator is PAUSED (reversible)
 
 export interface SessionRequestError {
   type: "session_request_error";

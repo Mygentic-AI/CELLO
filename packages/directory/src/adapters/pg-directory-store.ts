@@ -339,6 +339,21 @@ export class PgDirectoryStore implements DirectoryStore {
     return this.#revocationsByAgentId.get(agentId);
   }
 
+  // CELLO-M8-LEVER-001 (DOD-INV-6): reversible suspend honor-check. A pause is MUTABLE and a
+  // security control, so this reads the live replicated row directly — NOT an in-memory cache that
+  // could be stale and let a paused (possibly-compromised) agent sign. One indexed join from the
+  // ceremony-time k_local_pubkey to the agent's current pause flag.
+  async isAgentSuspended(kLocalPubkeyHex: string): Promise<boolean> {
+    const result = await this.#pool.query(
+      `SELECT 1 FROM agent_suspensions s
+         JOIN agent_profiles p ON p.agent_id = s.agent_id
+        WHERE p.k_local_pubkey = $1 AND s.paused = true
+        LIMIT 1`,
+      [kLocalPubkeyHex],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
   /**
    * FEDERATION-001 AC-011 / SI-004: Verify pg type parsers are configured correctly.
    *

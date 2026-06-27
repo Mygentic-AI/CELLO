@@ -963,6 +963,37 @@ export class CelloDirectoryNode {
 
   // ─── FROST stream handler ────────────────────────────────────────────────────
 
+  /**
+   * LEVER-001 honor-check (DOD-INV-6, SI-001): each honest node consults the REPLICATED suspension
+   * state and refuses its FROST share for a PAUSED agent, so no threshold forms and the agent cannot
+   * sign — even with a valid client share, even if the operator's own device is the compromise. The
+   * block is server-side and account-authorized, never "one mandatory node withholding": every node
+   * independently honors the replicated flag. Fails CLOSED — if the suspension state cannot be read,
+   * the share is refused (a transient error must not let a paused agent sign; other healthy nodes
+   * still serve, preserving availability/redundancy).
+   */
+  async #isAgentPaused(agentPubkey: string, epochId: string): Promise<boolean> {
+    let paused: boolean;
+    try {
+      paused = await this.#store.isAgentSuspended(agentPubkey);
+    } catch (err) {
+      this.#logger?.error("frost.suspend_check.failed", {
+        agentShort: agentPubkey?.slice(0, 16),
+        epochId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return true; // fail closed — refuse the share when suspension state is unknown
+    }
+    if (paused) {
+      this.#logger?.info("frost.ceremony.refused.revoked", {
+        agentId: agentPubkey?.slice(0, 16),
+        epochId,
+        correlationId: Buffer.from(randomBytes(16)).toString("hex"),
+      });
+    }
+    return paused;
+  }
+
   async #handleFrostStream(stream: Stream): Promise<void> {
     // /cello/frost/1.0.0 wire protocol — one request/response per stream open.
     //
@@ -1047,6 +1078,15 @@ export class CelloDirectoryNode {
           epochIdType: typeof epochId,
         });
 
+        // LEVER-001 honor-check: refuse this node's share if the agent is paused (DOD-INV-6, SI-001).
+        if (await this.#isAgentPaused(agentPubkey, epochId)) {
+          stream.send(lp.encode.single(
+            CBOR_ENC.encode({ type: "frost_commit_response", ok: false, reason: "AGENT_SUSPENDED" })
+          ));
+          await stream.close();
+          return;
+        }
+
         const result = await this.#frostHandler.generateCommitment(agentPubkey, epochId);
         this.#logger?.info("frost.debug.frost_stream.commit_response", {
           agentShort: agentPubkey?.slice(0, 16), epochId, resultOk: result.ok,
@@ -1076,6 +1116,16 @@ export class CelloDirectoryNode {
           peerIdStringShort: peerIdString?.slice(0, 16),
           rawFrameKeys: Object.keys(req),
         });
+
+        // LEVER-001 honor-check: refuse this node's signature share if the agent is paused. The
+        // block is server-side — a valid client share does not help (DOD-INV-6, SI-001).
+        if (await this.#isAgentPaused(agentPubkey, epochId)) {
+          stream.send(lp.encode.single(
+            CBOR_ENC.encode({ type: "frost_sign_response", ok: false, reason: "AGENT_SUSPENDED" })
+          ));
+          await stream.close();
+          return;
+        }
 
         const result = await this.#frostHandler.signRawMessage({
           agentPubkey,
@@ -1644,6 +1694,18 @@ export class CelloDirectoryNode {
           const sessionTargetHex = Buffer.from(parsed.target_pubkey).toString("hex");
           if (this.#store.isAgentRevoked(sessionTargetHex) || this.#store.isAgentRevoked(authedPubkeyHex!)) {
             this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "agent_revoked" }));
+            continue;
+          }
+          // CELLO-M8-LEVER-001 (DOD-INV-6, SI-001): refuse to broker a session if the TARGET or the
+          // INITIATOR is PAUSED (reversible suspend). Server-side block — a valid client share does
+          // not help, and it holds even if the operator's own device is the compromise. A pause is
+          // mutable + a security control, so this reads the live replicated row (async), not a cache.
+          if ((await this.#store.isAgentSuspended(sessionTargetHex)) || (await this.#store.isAgentSuspended(authedPubkeyHex!))) {
+            this.#logger?.info("frost.ceremony.refused.revoked", {
+              agentId: authedPubkeyHex!.slice(0, 16),
+              correlationId: Buffer.from(randomBytes(16)).toString("hex"),
+            });
+            this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "agent_suspended" }));
             continue;
           }
           // M7-WIRE-001 AC-002: Reject session_request missing initiator session Peer ID

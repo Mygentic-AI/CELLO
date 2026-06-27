@@ -233,6 +233,17 @@ export interface DirectoryStore {
    */
   getAgentRevocation(agentId: string): AgentRevocationRecord | undefined;
 
+  // ─── CELLO-M8-LEVER-001 (DOD-INV-6): reversible suspend (pause) honor-check ──
+  /**
+   * True if the agent whose K_local pubkey is `kLocalPubkeyHex` is currently PAUSED (a reversible
+   * suspension flag in agent_suspensions, written through the account-scoped write seam). Unlike
+   * {@link isAgentRevoked} (a permanent, cacheable tombstone), a pause is MUTABLE and a security
+   * control — so this reads the live replicated row directly (async) rather than an in-memory cache,
+   * so an un-cleared cache can never let a paused, possibly-compromised agent sign. Each honest node
+   * consults its own replicated copy and refuses its FROST share independently (T-of-N, not 2-of-2).
+   */
+  isAgentSuspended(kLocalPubkeyHex: string): Promise<boolean>;
+
   /**
    * Return true if the given phone_stub_hash (hex SHA-256) is already claimed.
    * Used for the phone_already_claimed duplicate guard.
