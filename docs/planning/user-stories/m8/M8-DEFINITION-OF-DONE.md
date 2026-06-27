@@ -238,7 +238,12 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 
 - **DOD-AGENT-1 — The Agents home is the landing page.** List + presence + the per-row suspend
   affordance + alerts strip + posture header; no separate Dashboard; no register/start/stop/
-  set-current; empty state routes to the ceremony. *(AGENTS-001 AC-001/002)* — ❌
+  set-current; empty state routes to the ceremony. *(AGENTS-001 AC-001/002)* — 🟡
+  *(List + presence PROVEN (SPINE-3); the per-row SUSPEND affordance PROVEN by J-LEVER
+  (`e2e/j-lever.spec.ts`, 2/2): the Agents home renders exactly one per-row Pause/Resume lever (and
+  no register/start/stop/set-current — INV-9 still green), and Pause→read-reflects-paused→Resume
+  round-trips through the route + write seam. Empty state → ceremony signpost (existing). REMAINING:
+  the alerts strip + security-posture header (no security-event source wired yet).)*
 - **DOD-AGENT-2 — No identity data in browser storage.** No agent fingerprints/presence/session
   in localStorage/IndexedDB; nothing restored from disk on reopen. *(AGENTS-001 SI-001)* — ✅
   *(PROVEN live by J-AGENTS Playwright (`e2e/j-agents.spec.ts`, AGENT-2/INV-2 case, green): after
@@ -282,7 +287,14 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   is local (branch m8-lever-001); the npm publish cascade is Andre-gated.)*
 - **DOD-LEVER-4 — Owner-only, step-up, burn-never-erases.** Only the owning account after step-up
   may revoke; a different account / bare session is rejected; burn kills future capability, never
-  past accountability. *(LEVER-001 SI-002)* — ❌
+  past accountability. *(LEVER-001 SI-002)* — 🟡
+  *(OWNER-ONLY + STEP-UP built + partly proven: the suspend route derives accountId from the session
+  (never the client), requires a fresh WebAuthn step-up when the account has a strong factor, and
+  routes through the account-scoped seam — which REJECTS a cross-account write (`not_owner`, proven
+  by WRITEAPI-001 SI-001 live: A cannot write B's agent, nothing persisted). A bare-session write is
+  401. J-LEVER proves the within-grace (no-step-up) path end-to-end. REMAINING: an explicit portal
+  e2e for the step-up-REQUIRED path (strong factor + stale step-up → 403) and the cross-account
+  rejection at the route; and burn-never-erases, which is the burn path (DOD-LEVER-2, deferred).)*
 
 ---
 

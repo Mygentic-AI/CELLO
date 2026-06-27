@@ -673,3 +673,38 @@ portal real-directory mode is needed again.
 isStepUpFresh) + UI button on the Agents home → DOD-LEVER-4 (SI-002 owner-only/step-up). Then the
 heavier deferred parts: DOD-LEVER-2 burn (federation-wide share destruction) + DOD-LEVER-3 strict
 multi-node T-of-N.
+
+---
+
+## 2026-06-27 — LEVER-001 portal lever ✅ (J-LEVER): per-row Pause/Resume (DOD-AGENT-1 lever, DOD-LEVER-4 owner/step-up)
+
+The portal half of the suspend lever — the ONE agent-control action (DOD-INV-9).
+
+**Read extension (additive).** `agents-by-account` now returns `agent_id` (the seam's write key) and
+`paused` (LEFT JOIN agent_suspensions) alongside k_local_pubkey. Portal `AgentPresence` gains both;
+http-client + stub map them. No WRITEAPI rework. READ-001 tests green.
+
+**Route** `POST /api/agents/suspend {agentId, mode}`: accountId from the session (never the client);
+requires a fresh WebAuthn step-up when the account has a strong factor (mirrors the enroll gate);
+routes through `DirectoryClient.writeAgent` → the account-scoped seam, which re-proves ownership
+(SI-002 — cross-account `not_owner` rejected, proven by WRITEAPI-001 live). Distinguishes a directory
+rejection (not_owner→403, invalid→422) from an outage (503). portal.agent.suspend.requested/.rejected.
+
+**UI** `SuspendLever` client island per Agents-home row: Pause/Resume + a paused badge, driven by the
+agent's directory `paused`. Not rendered when agent_id is null (not suspendable). On step_up_required
+it prompts to verify a passkey.
+
+**Proof — J-LEVER (`e2e/j-lever.spec.ts`, 2/2):** the home renders exactly one per-row Pause lever
+(INV-9 still green — no register/start/stop/set-current); within grace (no strong factor) Pause needs
+no step-up and round-trips: Pause → read reflects paused (Resume + badge) → Resume clears it. Stub
+reflects writes via globalThis (Next bundles the route + page RSC separately, so a plain field
+wouldn't cross the write→read boundary). Regression: j-agents + j-grace 6/6 green with the seeded
+agent (the lever does not trip INV-9).
+
+**Tags.** `DOD-AGENT-1` 🟡 (list + presence + per-row lever + empty-state proven; alerts strip +
+posture header remain). `DOD-LEVER-4` 🟡 (owner-only seam + step-up gate built; within-grace path
+proven; the step-up-REQUIRED + cross-account route e2e + burn remain). directory branch m8-read-001;
+cello-portal `f5cb778` (pushed).
+
+**LEVER-001 status.** Enforcement core ✅ (J-SUSPEND, DOD-SPINE-4/LEVER-1). Portal lever ✅ (J-LEVER).
+Remaining: step-up-required e2e, burn (DOD-LEVER-2), strict multi-node T-of-N (DOD-LEVER-3 second half).
