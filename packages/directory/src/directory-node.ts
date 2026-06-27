@@ -100,6 +100,11 @@
  */
 
 import { randomBytes, randomUUID, createHash } from "node:crypto";
+import {
+  upsertPresenceOnline,
+  upsertPresenceOffline,
+  refreshNodeHeartbeat,
+} from "./agent-presence-repository.js";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash } from "@cello-protocol/crypto";
@@ -450,6 +455,8 @@ export class CelloDirectoryNode {
   readonly #tokenValidator: TokenValidator | undefined;
   // OPS-AGENT-001: Postgres pool for account deduplication (AC-005b)
   readonly #pgPool: import("pg").Pool | undefined;
+  // PRESENCE-001: per-node liveness heartbeat timer (refreshes directory_nodes.last_heartbeat_at).
+  #presenceHeartbeat: ReturnType<typeof setInterval> | undefined;
   // OPS-AGENT-001: stash phone_stub_hash from consumed token for account linking after DKG completes
   // agentPubkeyHex → { phoneStubHash, emailStubHash }
   readonly #pendingPreAuthData = new Map<string, { phoneStubHash: string; emailStubHash: string }>();
@@ -611,6 +618,49 @@ export class CelloDirectoryNode {
     this.#directoryManifestStore = opts.directoryManifestStore;
   }
 
+  /**
+   * PRESENCE-001: record an edge-triggered presence transition for an agent connected to THIS node.
+   * Best-effort + fire-and-forget — a presence-write hiccup must never break the signaling auth or
+   * disconnect path. Emits directory.presence.transition on success. (online = connect, offline =
+   * disconnect; the owning node is this node, so the offline write is sovereign-scoped in SQL.)
+   */
+  #recordPresence(state: "online" | "offline", kLocalPubkey: string): void {
+    const pool = this.#pgPool;
+    if (!pool) return;
+    const owningNodeId = this.#frostHandler.nodeId;
+    const correlationId = randomBytes(8).toString("hex");
+    const write =
+      state === "online"
+        ? upsertPresenceOnline(pool, kLocalPubkey, owningNodeId)
+        : upsertPresenceOffline(pool, kLocalPubkey, owningNodeId);
+    void Promise.resolve(write)
+      .then(() => {
+        this.#logger?.info("directory.presence.transition", {
+          agentId: kLocalPubkey,
+          owningNodeId,
+          state,
+          correlationId,
+        });
+      })
+      .catch((err: unknown) => {
+        this.#logger?.error("directory.presence.transition.failed", {
+          agentId: kLocalPubkey,
+          owningNodeId,
+          state,
+          reason: err instanceof Error ? err.message : String(err),
+          correlationId,
+        });
+      });
+  }
+
+  /** PRESENCE-001: stop the liveness heartbeat (called on node shutdown). */
+  stopPresenceHeartbeat(): void {
+    if (this.#presenceHeartbeat) {
+      clearInterval(this.#presenceHeartbeat);
+      this.#presenceHeartbeat = undefined;
+    }
+  }
+
   async start(): Promise<void> {
     await this.#node.handle(SIGNALING_PROTOCOL_ID, (stream) => {
       void this.#handleSignalingStream(stream);
@@ -630,6 +680,27 @@ export class CelloDirectoryNode {
       await this.#node.handle("/cello/checkpoint/1.0.0", (stream) => {
         void this.#handleCheckpointStream(stream);
       }, { maxInboundStreams: 8 });
+    }
+
+    // PRESENCE-001: start the per-node liveness heartbeat (refreshes last_heartbeat_at on a coarse
+    // cadence — the read rule treats an agent as online only if its owning node's heartbeat is
+    // fresh, so a crashed node's stale presence rows age out to last-seen). unref so it never keeps
+    // the process alive.
+    if (this.#pgPool && !this.#presenceHeartbeat) {
+      const pool = this.#pgPool;
+      const nodeId = this.#frostHandler.nodeId;
+      const tick = () => {
+        void refreshNodeHeartbeat(pool, nodeId).catch((err: unknown) => {
+          this.#logger?.warn("directory.node.heartbeat.failed", {
+            nodeId,
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        });
+      };
+      tick(); // mark fresh immediately at boot
+      // Coarse cadence — one tiny per-node write (NOT per agent, NOT per ping).
+      this.#presenceHeartbeat = setInterval(tick, 45_000);
+      this.#presenceHeartbeat.unref?.();
     }
 
     // OBS-001 AC-002: directory startup log
@@ -1262,6 +1333,8 @@ export class CelloDirectoryNode {
 
           authedPubkeyHex = Buffer.from(resp.pubkey).toString("hex");
           this.#streams.set(authedPubkeyHex, stream);
+          // PRESENCE-001: edge-triggered — this node now owns this agent's connection → online.
+          this.#recordPresence("online", authedPubkeyHex);
 
           const existingDelegated = this.#delegatedSigners.get(authedPubkeyHex);
           this.#logger?.info("frost.debug.auth.setStreams", {
@@ -1748,6 +1821,9 @@ export class CelloDirectoryNode {
       });
       if (authedPubkeyHex && this.#streams.get(authedPubkeyHex) === stream) {
         this.#streams.delete(authedPubkeyHex);
+        // PRESENCE-001: edge-triggered — the agent's stream closed → offline + last-seen (only if
+        // this node still owns the row; a stale stream that was already replaced no-ops in SQL).
+        this.#recordPresence("offline", authedPubkeyHex);
         protocolLog("AUTH", `Removed stream from map — peer ${truncHex(authedPubkeyHex)}`);
       }
 
@@ -4634,6 +4710,6 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
   return {
     directory,
     node,
-    stop: async () => { await node.stop(); },
+    stop: async () => { directory.stopPresenceHeartbeat(); await node.stop(); },
   };
 }
