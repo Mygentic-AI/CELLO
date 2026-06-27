@@ -72,7 +72,15 @@ Proven by SI/adversarial assertions woven into the journeys, never a separate pa
   the preflight.)*
 - **DOD-INV-6 — Suspend is T-of-N server-side, not 2-of-2.** A suspended agent cannot sign even
   with a valid client share; the block is the honest-node threshold refusing, never one mandatory
-  node withholding. *(LEVER-001 SI-001, AC-003; [[project_threshold_t_of_n_not_2_of_2]])* — ❌
+  node withholding. *(LEVER-001 SI-001, AC-003; [[project_threshold_t_of_n_not_2_of_2]])* — 🟡
+  *(CORE PROVEN by J-SUSPEND: a suspended agent cannot sign even with a valid client share, and the
+  block is SERVER-SIDE (the directory refuses; nothing the client holds helps — SI-001). The
+  MECHANISM is T-of-N-correct: each node independently consults its OWN replicated `agent_suspensions`
+  copy and refuses its FROST share at the share gate (`#handleFrostStream` commit+sign frames) +
+  the session-init gate — no node is a mandatory co-signer. The explicit "a single node continuing
+  to offer its share does not let it sign" distinction (the anti-2-of-2 proof) needs a ≥3-node
+  cluster and is DOD-LEVER-3 / AC-003, pending the multi-node harness. Current daemon path is the
+  2-of-2 stopgap, so J-SUSPEND cannot yet distinguish threshold-refusal from single-node refusal.)*
 - **DOD-INV-7 — Trust = named signals only.** No composite score/level/distance/TrustRank/seed
   badge anywhere. *(TRUST-003 AC-001; [[feedback_no_trustrank_or_single_score]])* — ✅ *(PROVEN LIVE,
   J-trust: the Trust Signals screen renders four distinct NAMED classes (no single rollup) and the
@@ -124,7 +132,15 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   endpoint → the directory Postgres. The earlier run correctly read OFFLINE once the seeded node's
   heartbeat aged out — the read rule's node-liveness guard working.)*
 - **DOD-SPINE-4 — Suspend blocks signing.** Pause (step-up) → the agent cannot complete a FROST
-  ceremony even with its client share → un-pause restores. *(LEVER-001 AC-001)* — ❌
+  ceremony even with its client share → un-pause restores. *(LEVER-001 AC-001)* — ✅
+  *(PROVEN LIVE by J-SUSPEND (`packages/e2e-tests/src/spine/j-suspend.spine.test.ts`, 1/1, real
+  binaries cross-process): agent A registers (real DKG → a valid FROST client share) and is online;
+  the reversible pause flag is set in the directory's replicated `agent_suspensions` (keyed by A's
+  directory agent_id, exactly as the write seam writes it); A's OWN `cello_initiate_session` then
+  fails with `agent_suspended` — the directory refuses server-side even though A holds a valid client
+  share — and after clearing the flag the retry no longer returns `agent_suspended` (reversible).
+  Positive control before the pause pins the refusal to the flag. Step-up gating is the portal-lever
+  half, DOD-LEVER-4.)*
 - **DOD-SPINE-5 — Trust scaffold renders.** The four-class trust UI: WebAuthn live, rest honest
   placeholders, no composite. *(TRUST-003 AC-001)* — ✅ *(PROVEN LIVE, J-trust 3/3: four named
   classes render in order with Class-1 sub-groups distinct; the WebAuthn cell reflects REAL state
@@ -247,12 +263,23 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   from every byte of the three seam tables. directory.write.accepted/.rejected (distinct reason)
   logged. Fallback-finder: NO SILENT FALLBACKS. Portal half: DirectoryClient.writeAgent wired.)*
 - **DOD-LEVER-1 — Pause blocks signing, reversible.** Server-side; the agent's valid client share
-  doesn't help; un-pause restores. *(LEVER-001 AC-001)* — ❌
+  doesn't help; un-pause restores. *(LEVER-001 AC-001)* — ✅
+  *(PROVEN LIVE by J-SUSPEND — see DOD-SPINE-4. The directory honor-check reads the LIVE replicated
+  `agent_suspensions` row (not a cache — a pause is mutable + a security control) and refuses; fails
+  CLOSED on a read error so a transient fault cannot let a paused agent sign. Pause→fail→clear→succeed
+  on real binaries.)*
 - **DOD-LEVER-2 — Burn: permanent, accountability survives.** Destroys share material federation-
   wide; binding stays resolvable; the burn is a signed event. *(LEVER-001 AC-002)* — ❌
 - **DOD-LEVER-3 — T-of-N mechanism + distinct error.** A threshold of honest nodes refuse; a
   single node continuing doesn't let it sign; the ceremony returns a distinct revocation error.
-  *(LEVER-001 AC-003)* — ❌
+  *(LEVER-001 AC-003)* — 🟡
+  *(DISTINCT-ERROR half PROVEN: the directory refuses with `session_request_error reason=agent_suspended`
+  and the daemon now recognizes it (added to the known-reason set in session-assignment-parser.ts) so
+  it surfaces distinctly to the MCP — NOT folded into the generic `directory_unreachable`. J-SUSPEND
+  asserts the exact `agent_suspended` reason cross-process. The STRICT T-of-N half — "a single node
+  continuing to offer its share does not let it sign" — needs a ≥3-node cluster (the current daemon
+  path is the 2-of-2 stopgap) and the multi-node PRESENCE/cluster harness; pending. The daemon change
+  is local (branch m8-lever-001); the npm publish cascade is Andre-gated.)*
 - **DOD-LEVER-4 — Owner-only, step-up, burn-never-erases.** Only the owning account after step-up
   may revoke; a different account / bare session is rejected; burn kills future capability, never
   past accountability. *(LEVER-001 SI-002)* — ❌

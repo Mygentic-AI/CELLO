@@ -625,3 +625,51 @@ m8-read-001 (local); cello-portal `fefcf9b` (pushed, no CI).
 mirroring the agent_revocations soft-refuse) + the portal per-row pause lever (step-up-gated) →
 DOD-SPINE-4 + DOD-INV-6 + DOD-LEVER-1/4. AC-003 strict-T-of-N distinct-error + AC-002 burn share-
 destruction are the heavier cross-repo / multi-node parts (marked honestly when reached).
+
+---
+
+## 2026-06-27 — LEVER-001 directory honor-check ✅: pause blocks signing (DOD-SPINE-4, DOD-LEVER-1)
+
+The reversible suspend lever's enforcement core — a PAUSED agent cannot complete a FROST ceremony,
+server-side, even with a valid client share. Cross-repo: directory + cello-client daemon.
+
+**Directory honor-check (two gates, defense-in-depth).** `isAgentSuspended(kLocalPubkeyHex)` added to
+the DirectoryStore interface + pg adapter + in-memory stub. The pg impl reads the LIVE replicated
+`agent_suspensions` row (async, one indexed join) — NOT an in-memory cache: a pause is mutable and a
+security control, so a stale cache must never let a paused agent sign. Two gates:
+- session-init gate (`directory-node.ts`, mirrors the existing `agent_revoked` soft-refuse): a paused
+  TARGET or INITIATOR → `session_request_error reason=agent_suspended`. `agent_suspended` added to the
+  directory-local `SessionRequestErrorReason`.
+- FROST share gate (`#handleFrostStream` commit + sign frames, `#isAgentPaused`): an honest node
+  refuses its share (`reason=AGENT_SUSPENDED`) so no threshold forms. Fails CLOSED on a read error
+  (refuse + `frost.suspend_check.failed`); other healthy nodes still serve (redundancy preserved).
+  `frost.ceremony.refused.revoked` logged.
+
+**Daemon (cello-client, branch m8-lever-001).** `agent_suspended` added to the daemon's known-reason
+set (`session-assignment-parser.ts`) so the directory's refusal surfaces DISTINCTLY to the MCP instead
+of mapping to the generic `directory_unreachable` — parallel to `agent_revoked`. Local rebuild; the
+npm publish cascade is Andre-gated (operators get it on publish).
+
+**Proof — J-SUSPEND (`packages/e2e-tests/src/spine/j-suspend.spine.test.ts`, 1/1, ~42s).** Real
+binaries cross-process: A registers (real DKG → valid client share) + online; set the replicated
+pause flag in `agent_suspensions` keyed by A's directory agent_id; A's OWN `cello_initiate_session`
+fails with exactly `agent_suspended` (directory refuses server-side, valid share doesn't help —
+SI-001); un-pause → no longer `agent_suspended` (reversible). Positive control before the pause pins
+the refusal to the flag. typecheck + lint clean; m6b-002 + writeapi tests green. (First run surfaced
+`directory_unreachable` — the daemon didn't know the new reason yet; the daemon fix + rebuild is what
+made it `agent_suspended`, confirming the directory was already refusing correctly.)
+
+**Tags.** `DOD-SPINE-4` ✅, `DOD-LEVER-1` ✅. `DOD-INV-6` 🟡 (server-side block + per-node honor-check
+mechanism proven; the strict "one node continuing doesn't help" anti-2-of-2 distinction needs a
+≥3-node cluster — DOD-LEVER-3/AC-003). `DOD-LEVER-3` 🟡 (distinct-error half done; strict T-of-N
+pending multi-node). directory branch m8-read-001 `54861044`; cello-client m8-lever-001 `0eb70a9`.
+
+**Env note.** The spine harness owns docker postgres on :5433; I stopped `trustless-cello-postgres-1`
+(the dev cello_dev DB) to free the port. The default portal e2e uses the directory STUB (no :5433
+dep), so j-grace/j-agents are unaffected. Restart that container (after stopping the spine one) if
+portal real-directory mode is needed again.
+
+**Next (LEVER-001 remaining).** Portal per-row pause lever — API route (owner-only, step-up-gated via
+isStepUpFresh) + UI button on the Agents home → DOD-LEVER-4 (SI-002 owner-only/step-up). Then the
+heavier deferred parts: DOD-LEVER-2 burn (federation-wide share destruction) + DOD-LEVER-3 strict
+multi-node T-of-N.
