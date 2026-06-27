@@ -60,7 +60,10 @@ Proven by SI/adversarial assertions woven into the journeys, never a separate pa
   redirects to sign-in with the same cookie in the jar).)*
 - **DOD-INV-5 — Bootstrap can't escalate.** On a strong-auth account, a fresh email-magic-link
   session cannot add a credential or take a sensitive action without step-up against an existing
-  factor. *(AUTH-002 SI-001)* — ❌
+  factor. *(AUTH-002 SI-001)* — ✅ *(PROVEN LIVE, J-AUTH: a fresh bootstrap session on an account
+  that already has a passkey is refused at BOTH /register/options AND /register/verify
+  (step_up_required); no credential is planted. The step-up gate is on the mutation path, not just
+  the preflight.)*
 - **DOD-INV-6 — Suspend is T-of-N server-side, not 2-of-2.** A suspended agent cannot sign even
   with a valid client share; the block is the honest-node threshold refusing, never one mandatory
   node withholding. *(LEVER-001 SI-001, AC-003; [[project_threshold_t_of_n_not_2_of_2]])* — ❌
@@ -113,9 +116,14 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 
 - **DOD-AUTH-1 — WebAuthn enroll / login / multi-credential.** Enroll a passkey (verified against
   the stored public key) upgrades authLevel; a second device enrolls independently; removing one
-  doesn't affect the other. *(AUTH-002 AC-001/002)* — ❌
+  doesn't affect the other. *(AUTH-002 AC-001/002)* — ✅ *(PROVEN LIVE via a Chrome CDP virtual
+  authenticator, J-AUTH 7/7: enroll → sign out → usernameless passkey login; a FORGED assertion for
+  a known credential is rejected (real signature verification, not a stub); device B (usb) enrolls
+  independently of device A, removing A leaves B.)*
 - **DOD-AUTH-2 — Step-up per sensitive op.** Sensitive actions require a fresh WebAuthn step-up
-  (per-op, not once-per-session). *(AUTH-002 AC-003)* — ❌
+  (per-op, not once-per-session). *(AUTH-002 AC-003)* — ✅ *(PROVEN LIVE, J-AUTH: removing a factor
+  is refused on a stale session, allowed after a fresh step-up; and after the step-up window
+  elapses, a SECOND sensitive op requires a new step-up — proving per-op, not once-per-session.)*
 - **DOD-AUTH-3 — TOTP + backup codes.** TOTP enroll verifies a current RFC-6238 code (verify-
   after-load); backup codes single-use; secret KMS-encrypted, codes hashed. *(AUTH-003)* — ❌
 - **DOD-AUTH-4 — Strong-auth enforcement.** 7-day grace → server-side gate; per-account admin
