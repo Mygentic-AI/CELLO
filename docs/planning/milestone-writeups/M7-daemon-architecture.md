@@ -1,239 +1,260 @@
 ---
-name: M7 Daemon Architecture & Ephemeral Session Transport
+name: M7 — Daemon Architecture & Ephemeral Session Transport
 type: milestone-writeup
 date: 2026-06-12
-updated: 2026-06-24
+updated: 2026-06-27
 milestone: M7
-status: E2E-proven — published to npm + demo agent live end-to-end on the deployed cluster (Stage-1, via relay); direct-dial + NAT-traversal + doc/recovery hardening remain
+status: closed — E2E proven live; Stage-1 (relay transport) operational; per-agent connections live (CONN-001)
 description: >
-  Living writeup for M7. Each story appends a section when it closes.
-  Format: what was delivered, bugs found and fixed, what this unblocks.
+  M7 delivered the daemon architecture for CELLO's client: a long-running process that
+  holds all agent identities, all active sessions, and the directory-facing connections.
+  The milestone went through three distinct phases: a healthy story-by-story start,
+  a collapse caused by dead-stack orphaning and branch sprawl, and a disciplined
+  live-binary rebuild that delivered more than the original scope. This writeup covers
+  all three phases, the bugs found, and the process lessons.
 ---
 
 # M7 — Daemon Architecture & Ephemeral Session Transport
 
-## M7-DAEMON-001 — Daemon Foundation
-
-**Delivered:** Long-running daemon process with Unix domain socket IPC, lock file
-management, agent identity loading from `~/.cello/agents/*.yaml`, structured JSON
-logging, status/shutdown IPC methods, and CLI binary (`cello-daemon`). 52 tests.
-
-**Branch:** `m7/daemon-001` in cello-client
-
-**Unblocks:** M7-DAEMON-002, M7-MCP-001, M7-SIGNAL-001
+**Started:** 2026-06-11
+**Collapsed to ground truth:** 2026-06-18
+**Rebuild phase closed:** 2026-06-23 (substantive) / 2026-06-27 (CONN-001 deployed live)
+**Published (npm, latest):** daemon 0.0.13, cli 0.0.11, connect 0.0.49
 
 ---
 
-## M7-DAEMON-002 — Ephemeral Session Nodes
+## What M7 Was Supposed To Be
 
-**Delivered:** `SessionNodeManager` managing per-session ephemeral libp2p nodes
-with fresh transport key + Peer ID. Standing receiver node (pre-created, open
-gater, immediately replaced on handoff). `SessionConnectionGater` and
-`DirectoryConnectionGater` enforcing single-peer allowlists in both inbound and
-outbound directions. 32-node cap enforced on both `createSessionNode` and
-`acceptSession`. SQLite session tracking (`active` → `sealed`/`interrupted`).
-SIGKILL orphan detection at startup. Standing receiver bounded retry (3 attempts,
-exponential backoff) with `session.standing_receiver.permanently_unavailable`
-alert. 76 tests total (28 new in session-node-manager.test.ts).
+The original outline specified thirteen stories across four tracks:
 
-**Branch:** `m7/daemon-002` in cello-client (stacked on daemon-001)
+- **Daemon + transport:** DAEMON-001 (IPC socket, CLI), DAEMON-002 (ephemeral session nodes), DAEMON-003 (retry queue + nonce dedup), MCP-001 (adapter rewrite), MCP-002 (agent-aware notifications), WIRE-001 (SessionAssignment wire format), SESSION-001 (interrupted session handling), TRANSPORT-001 (AutoNAT + direct P2P), SIGNAL-001 (signaling resilience), DIR-PING-001 (directory-side ping handler)
+- **Security:** MANIFEST-001 (manifest schema + key ceremony), MANIFEST-002 (client verification + handshake step 6)
+- **CI/CD:** CICD-001
 
-**Bugs found and fixed:**
-
-| Symptom | Root cause | Fix | Rule |
-|---------|-----------|-----|------|
-| `gracefulShutdown` logged `session.node.destroyed` even when node stop failed | `.catch().then()` chain — catch resolves, so then always fires | `.then().catch()` — destroyed only on success | Observability events must only fire on the condition they describe |
-| AC-012 test always green | Assertion wrapped in `if (caughtError !== null)` + old stream API | Unconditional assertion + server stop to force error + v3 API | Tests must not conditionally assert the behavior they verify |
-| Standing receiver permanently unavailable after one factory failure | No retry in the catch handler | Bounded retry (3 attempts, exponential backoff) | Background infrastructure must self-heal with bounded retries |
-| `INSERT OR REPLACE` overwrites `created_at` on duplicate sessionId | SQLite `REPLACE` = DELETE + INSERT | Plain `INSERT` — let constraint violation surface | Use plain INSERT unless idempotency is an explicit requirement |
-| DirectoryConnectionGater missing outbound gate | Only `denyInbound` implemented | Added `denyOutbound` with shared `#denyIfNotDirectory` | Defense-in-depth: gate both directions on every gater |
-| `daemon.shutdown.failed` indistinguishable between SIGTERM and logout | IPC path logged `{ error }` only | Added `signal: "logout"` field | Every error event must carry enough context to identify the trigger path |
-| Binary AC-009 test: SIGTERM didn't mark synthetic rows interrupted | `gracefulShutdown()` iterated in-memory map only | Batch `UPDATE ... WHERE status = 'active'` covers all rows | Shutdown must update all persistent state, not just in-memory tracked objects |
-
-**Unblocks:** M7-DAEMON-003, M7-WIRE-001, M7-SESSION-001, M7-MCP-002
+Close gate: two Claude Code sessions simultaneously via IPC, two agents exchanging messages over ephemeral session nodes, direct P2P default, signaling resilience verified, directory bidirectional auth (steps 5–6), manifest polling.
 
 ---
 
-## M7 verification pivot — journey-based live-binary testing (J-SPINE → J-LOOPBACK)
+## Phase 1 — Healthy story-by-story progress (June 11–14)
 
-After the daemon/transport foundation, M7's remaining scope was verified by a **live-binary
-journey harness** (`packages/e2e-tests/src/spine/`, `live-harness.ts`): each test spawns the REAL
-shipped binaries — `cello-directory`, `cello-relay`, `cello-daemon`, `cello-mcp`, `cello` — on
-localhost over real TCP/Noise/crypto/IPC, and asserts the DoD lines against them (directory-side
-assertions via `psqlSpine` against the directory's own Postgres, which the daemon cannot fabricate).
-The discipline: anchor every assertion to the BINARY, never the in-process library; never construct
-nodes in-process; grow the lowest non-green DoD line. The full DoD scoreboard is
-`docs/planning/user-stories/m7/M7-DEFINITION-OF-DONE.md`; the day-by-day archaeology is
-`M7-BUILD-JOURNAL.md`.
+The first phase went well. About twelve stories were written, implemented, reviewed, and merged in order: DAEMON-001/002/003, MANIFEST-001/002, MCP-001/002, SIGNAL-001, WIRE-001, SESSION-001, DIR-PING-001, CICD-001. The per-story process (SPARC → sprint-coder → code-reviewer → sprint-reviewer) was being followed. 342 daemon unit tests green, typechecks clean.
 
-### Journeys delivered (all green vs the real binaries)
+**What "healthy" obscured.** Every individual story passed its own ACs, lint, typecheck, and review. None of this verified that the stories composed into a working system. The live multi-process run — which the close gate required — had never happened.
 
-| Journey | DoD | What it proves live |
-|---|---|---|
+---
+
+## Phase 2 — The postmortem discovery (June 14–15)
+
+Everything changed when someone walked one user journey out loud: *"A is chatting with B. A closes the laptop. B keeps talking. The session times out and seals. What does A actually have when they come back an hour later?"*
+
+That single question surfaced three system-level gaps, each verified against live code:
+
+**Gap 1 — Unilateral seal produces no signed certificate.** `#processSealUnilateral` accepted the submitter's self-reported root on faith (`sealed_root: frame.reported_root` — no tree rebuild, no signature verification). It ran no FROST ceremony, produced no signature, and never wrote a `SealNotarization`. The absent party's notification was unsigned metadata. Contrast with the bilateral seal, which rebuilt the tree, verified the root, and ran a full FROST ceremony.
+
+**Gap 2 — Missed message content is never resent.** Content traveled fire-and-forget with a silent catch. The sender received no delivery signal. When direct P2P failed and the counterparty was offline, content was simply lost — the session was killed instead of the content being queued and redelivered. The circuit-relay fallback was bounded by libp2p's unconfigured 128 KB / 2-minute defaults.
+
+**Gap 3 — Unilateral→bilateral upgrade was half-built.** The intended upgrade flow (absent party returns, ratifies the existing seal, producing a superseding bilateral notarization) depended on recovery that didn't exist: the absent party had no way to receive missed content, and the directory had no machinery to issue a `seal_upgrade_request`.
+
+Two process root causes were named: **RC-1** — deferrals had no named home and evaporated into discussion logs; **RC-2** — verification stopped at the story boundary and nothing owned the end-to-end journey. Every individual story was correct; the gaps lived between stories.
+
+Four remediation stories were spawned: MSG-001 (content delivery: ACK + queue), SESSION-002 (unilateral seal → notarization), SESSION-003 (peer liveness), SESSION-004 (seal certificate legibility).
+
+---
+
+## Phase 3 — Dead-stack orphaning and branch sprawl (June 15–18)
+
+**The problem the four stories caused.** The four were specified and implemented against `core/client` — the in-process `CelloClient` stack (`session-manager.ts`, `seal-manager.ts`, `relay-stream-manager.ts`). But M7 had already turned `cello-mcp` into a thin IPC proxy and moved the live code path into the daemon. No shipped binary constructed `CelloClient`. Implementing the four stories against it meant building correct code on a path nothing ran.
+
+**The architecture decision.** The correct fix: the daemon owns the session core (Merkle tree, send/receive, active seal) — not a hosted `CelloClient`. This decision ("Option A," confirmed with Andre) required new foundation work that wasn't in the original slate: Keystone (wire the daemon to the directory at startup — the shipped binary was booting without dialing it), Registration (re-home `cello_register` + FROST DKG into the daemon), and DAEMON-004 (the daemon session core itself).
+
+**Branch sprawl.** This produced ~14 worktrees and ~15 branches across the two repos. Branches couldn't see each other. Work was redone. The same questions were asked across sessions that had already been answered. The sprawl itself became the bug — entropy increasing with every session.
+
+---
+
+## The Collapse (June 18)
+
+Both repos were collapsed to one ground truth in main and all branches were deleted. The `PRUNE-LEDGER.md` records every deleted branch and its tip hash for resurrection. The choice was deliberate: stop drowning, get to one working base, then pick through.
+
+**What "ground truth" actually meant.** cello-client main at the collapse: 342 daemon tests green, workspace typecheck + lint clean, dead-code gate clean. trustless-cello main: typecheck clean. That was unit/in-process green only. **The live multi-process run — two agents, real directory, real DKG, real conversation — had never happened.** Several DoD lines marked as "BUILT" were built against in-process seams or the dead `CelloClient` stack.
+
+Three artifacts were created to govern the rebuild phase:
+- `M7-DEFINITION-OF-DONE.md` — every M7 requirement pulled from all five sources into one ordered list, mapped to 8 test journeys
+- `M7-PROCEDURE.md` — the runbook (per-unit loop, severity triage, commit discipline, overnight rules)
+- `M7-BUILD-JOURNAL.md` — append-only archaeology; one entry per unit of work (6,133 lines at close)
+
+**The decision: not a from-scratch rewrite.** The daemon/client architecture was right and most of it was once-reviewed. Delete the dead `core/client` in-process stack. Repair and verify the existing daemon under a live binary test, growing the lowest non-green DoD line.
+
+---
+
+## Phase 4 — The live-binary rebuild (June 18–23)
+
+### The harness
+
+`packages/e2e-tests/src/spine/` — a process-spawning E2E harness that spawns the real `cello-directory`, `cello-relay`, `cello-daemon`, `cello-mcp`, and `cello` CLI as child processes on localhost over real TCP/Noise/crypto/IPC. Never constructs nodes in-process. Drives the agent surface only. Asserts DoD lines from observable outputs + relay/directory stdout. Directory-side assertions go via `psqlSpine` against the directory's own Postgres (the daemon cannot fabricate these).
+
+**Anchoring proof (enforced per unit):** `grep -E '^import .*(createClient|createMcpSessionServer|createDirectoryNode|createRelayNode|session-fixture)'` against every spine test file returns zero.
+
+### The ten journeys
+
+| Journey | DoD lines | What it proves live |
+|---------|-----------|---------------------|
 | **J-SPINE** | SPINE-1..7 | register (real DKG) → connect → converse → bilateral FROST seal, byte-identical root |
 | **J-AUTH** | AUTH-1/2 | directory step-6 bidirectional identity auth; consortium manifest; 6–12h manifest poll |
 | **J-SIG** | SIG-1 | kill signaling → reconnect to a different directory node → queued ops drain |
 | **J-INT** | INT-1/2, RETRY-1 | both parties SIGKILLed mid-session → interrupted → seal-interrupted bilateral agreement; retry queue + nonce-dedup survive restart |
 | **J-CONTENT** | MSG-1..8 | content delivery; offline → relay parks ciphertext → recover/decrypt; oversize rejected; replay deduped; tamper desyncs; irreducible-loss kept alive |
 | **J-UNILATERAL** | SEAL-1/2/3, LIVE-1/2/3 | A seals while B is GONE → directory rebuilds+verifies the root, FROST-notarizes B ABSENT; relay-observed liveness → ABSENT vs DELIVERED; verifiable cert |
-| **J-LEGIBILITY** | LEG-1..4 | receipt-not-assent seal cert (attests:receipt, implies_assent:false); malicious tail reads delivered-but-unanswered; per-party signed frontier re-derive guard (co-sign abort on an inflated frontier) |
+| **J-LEGIBILITY** | LEG-1..4 | receipt-not-assent seal cert; malicious tail reads delivered-but-unanswered; per-party signed frontier re-derive guard (co-sign abort on inflated frontier) |
 | **J-PERSIST** | LOG-1 | durable AES-256-GCM-at-rest transcript survives daemon restart; relay/directory never see plaintext (INV-3) |
-| **J-LOOPBACK** | LOOP-1 | two of the operator's own K_locals converse on ONE daemon → bilateral seal, byte-identical root, no 2nd process (session core re-keyed to (agent, session_id)) |
+| **J-LOOPBACK** | LOOP-1 | two of the operator's own K_locals converse on ONE daemon → bilateral seal, byte-identical root, no 2nd process |
 | **J-UPGRADE** | UP-1/2 | B online+verified auto-co-signs (UP-2); B KILLED → A unilateral → B returns, recovers+verifies, RATIFIES → superseding bilateral notarization (UP-1) |
 
-## The two largest units (this session, both `cello-done-auditor` EARNED)
+---
 
-### DOD-UP-1 — unilateral → bilateral seal upgrade (CELLO-M7-UPGRADE-001)
+## Bugs Found During Live Testing
 
-**Delivered:** a returning ABSENT party (B) RATIFIES the existing unilateral sealed root R1 (Model 2
-— B does NOT re-seal a new root). V31 migration relaxes `seal_notarizations` `UNIQUE(session_id)` →
-`UNIQUE(session_id, seal_type)` so a bilateral row can SUPERSEDE the unilateral one (append-only,
-`supersedes_notarization_id` FK, the unilateral row never mutated). New `seal_upgrade_request` frame;
-directory `#processSealUpgradeRequest`; daemon `seal-upgrade.ts` (extracted for testability) —
-attemptSealUpgrade (the KERNEL) + verifyUpgradeConfirmedCert (AC-008). 7 increments, two-reviewer +
-done-auditor. Live: `j-upgrade-bilateral.spine.test.ts`.
+The following bugs were found by the live binary tests. None would have been caught by in-process unit tests or the session-fixture approach.
 
-**THE KERNEL:** B signs its ratification ONLY after recovering + integrity-verifying the content
-(content-possession precondition); refuses `content_tamper` / `content_unrecoverable` /
-`content_incomplete` — never co-signs content it could not verify.
+| Symptom | Root cause | Fix |
+|---------|-----------|-----|
+| `cello login` crashed: `ERR_PACKAGE_PATH_NOT_EXPORTED` | Daemon's `package.json` `exports` map only exposed `"."`, not `"./package.json"`. The CLI did `require.resolve("@cello-protocol/daemon/package.json")` to find the binary — Node's encapsulation refused it. | Add `"./package.json": "./package.json"` to daemon exports |
+| `cello-mcp` failed to connect to daemon | `cello-mcp` hardcoded `~/.cello/daemon.sock`, ignoring `CELLO_DIR`. The daemon and CLI both honor `CELLO_DIR`. This also broke any operator who sets `CELLO_DIR` in production. | `cello-mcp` resolves `CELLO_DIR` identically to daemon/CLI |
+| SPINE-1 assertions were tautological | `directory_signaling: connected` gated on a LOADED agent, not a REGISTERED one. `cello status` showed `connected` whether or not a real DKG had run. Test was asserting preconditions, not behavior. | Add directory-corroborated assertion: the test waits for the directory's own auth log to show it authenticated this agent's stream |
+| Second agent's registration timed out (30s) | Daemon held ONE signaling stream authed as the primary (keystone). Second agent's `dkg_complete` frame arrived on the primary's stream → directory routed by authed pubkey → no match → pending resolver never fired | Per-agent directory signaling streams: each agent opens and authenticates its own stream |
+| Account-link race: `account_id` permanently NULL | Registration INSERTed `agent_profiles` without `account_id`, then UPDATEd via a separate fire-and-forget `linkAgentToAccount`. The UPDATE could run on a different pool connection before INSERT committed → matched 0 rows | Extract `resolveAccountId()` (lookup-or-create the account first); INSERT profile WITH `account_id` atomically |
+| Session initiation 30s ceremony_timeout | FROST ceremony participation handler not wired to per-agent signaling streams. The directory sends a `ceremony_request` to the initiator's stream and awaits a `ceremony_result`. The daemon had no handler on the per-agent stream → directory timed out. | New `session-ceremony.ts`: reconstruct threshold signer from persisted `frost-share.json`; attach per-agent handler |
+| `cello_send` returned "Invalid peer ID" | `wants_session_offer` field silently dropped by the typed allowlist decoder in `decodeInboundSignalingFrame` — it rebuilt `SessionRequest` from known fields only and dropped unknown ones | Carry `wants_session_offer` through the decoder + add it to `SessionRequest` type |
+| Relay dial failed: `[object Object]` | Session node's `SessionConnectionGater` denied the relay (a third peer) — it allowed only the counterparty. Error object was also serialized as `[object Object]` via string interpolation | `setAllowedOutboundPeer(relayPeerId)` OUTBOUND-only; inbound still counterparty-only. Fix all `[object Object]` error logging |
+| Multi-session relay bug (blocking, found by review) | H1 fix to per-agent relay client used a single agent-global `#lastSeen` counter instead of per-session. Once any session advanced, a newer session's first submit would report an ahead `last_seen_seq` → rejected by relay | `#lastSeen` is a `Map<session_id_hex, seq>` |
+| Relay FIFO ack desync on timeout | A timed-out submit left the stream open; a late ack would settle the NEXT submit's resolver, shifting every subsequent ack | Reset (close) the stream on `relay_submit_timeout` so the desynced queue can't persist |
+| Published daemon and cli were empty | `packages/daemon` and `packages/cli` were not in the root `tsconfig.json` build graph AND not in the CI publish list. They published empty packages — the build step produced nothing | Add both packages to root `tsconfig.json` and CI publish list |
+| Daemon crashed importing `sealToRecipient` | `packages/crypto` had gained `content-seal` functionality without a version bump — npm still served the stale version without `sealToRecipient` | Bump `@cello-protocol/crypto` version; update all dependents |
+| Daemon crashed when CLI exited (EPIPE) | `cello login` spawned the daemon with stdout piped to the short-lived login process. When login exited, the pipe closed, the daemon got EPIPE on its next log write and crashed | Daemon spawned with `stdio: ['ignore', 'ignore', 'pipe']`; stdout unpiped from the CLI |
 
-### DOD-SEAL-2 — relationship-graph producer (Sybil / reputation-farming defense)
+---
 
-**Delivered:** the directory now populates `conversation_seals` + `conversation_participation` +
-`conversation_attestations` on every seal (`recordConversationSeal`, atomic + hash-chained), wired
-into the unilateral + both bilateral paths (the upgrade skips — `conversation_id` UNIQUE; the edge
-already exists). These feed `analytics-job`'s `conversation_graph_edges` + `pseudonym_stats` — the
-graph that detects clusters of mutually-sealing agents farming reputation. **Privacy:** relationship
-metadata + the sealed root HASH only, NEVER content (INV-3). Live: `j-loopback` (MUTUAL_SEAL + the
-edge query derives one A↔B edge) + `j-upgrade-bilateral` (SEAL_UNILATERAL + upgrade-skip).
+## The Two Largest Deliverables
 
-## Bugs found and fixed (this session)
+### DOD-UP-1 — Unilateral → bilateral seal upgrade (CELLO-M7-UPGRADE-001)
 
-| Symptom | Root cause | Fix | Rule |
-|---|---|---|---|
-| Every pre-V31 `seal_notarizations` row would break `verifyChain` after V31 | `verifyChain` does `SELECT *` + re-serialize; the new `seal_type`/`supersedes` columns read back the `'bilateral'` default for old rows, diverging from the chained hash | Exclude both V31 columns from chain serialization (the sessions-V29 / M4-bug-#7 precedent); the FROST signature is the bilateral truth, not the label | A column added to a hash-chained table with a DEFAULT must be excluded from the chain or it breaks every pre-existing row |
-| UP-1: every upgrade would be refused (dead on arrival) | B's daemon called `verifyUnilateralCertificate` to verify A's seal sig — but that verifies against the LOCAL agent's own key; B does NOT hold the initiator's group key | Removed it — B accepts R1 on the authenticated daemon↔directory Noise channel (the documented responder asymmetry); the content cross-check is B's real gate | The responder cannot channel-independently verify the initiator's group signature; don't assume a verify helper works for the other party's key |
-| UP-1 first live run: B reconnected but never got the `seal_unilateral_notification` → upgrade never triggered | The directory PUSHES the queued notification during the keystone's auth/reconnect drain — BEFORE `cello_start_agent` registers the per-agent handler | Register the absent-party upgrade listener at the KEYSTONE too (mirrors `registerSessionSealedListener`) | Listeners for frames the directory PUSHES on reconnect must be registered at daemon-startup, not only in startAgent |
-| UP-1 [HIGH security]: a malicious directory could sign B's "ratification" with a throwaway key and force B to tear down a live session as sealed | `verifyAndApplyUpgradeConfirmed` verified the returning sig against `returning_pubkey` taken FROM THE FRAME, not bound to the session's real participants | Bind the cert's {present, returning} pubkeys to {self, our counterparty} from the LOCAL session record; reject `unknown_session` / `participant_mismatch` | Never verify a signature against a pubkey the untrusted sender chose; bind it to known session state (sovereign-node invariant) |
-| SEAL-2: `conversation_seals` chain invalid | `seal_date` is a DATE; node-pg returns it as a LOCAL-midnight Date and `toISOString()` shifts it → insert vs verify serialize differently | Exclude `seal_date` from the chain + compute it as a UTC `YYYY-MM-DD` string (analytics correctness, TZ-independent) | DATE columns don't round-trip deterministically through the chain serializer; exclude or store as a UTC string |
-| DoD carried CORE-invariant statuses worse than reality | INV-4 (sender=counterparty) read "❓ was BROKEN 2026-06-11"; INV-3 read "park store ❌ not built"; both were actually built+tested | Verified the code + ran the tests, flipped INV-2/3/4 → 🟢 with citations | A 🟡/❓ status is a claim to re-verify against code before trusting; stale-pessimistic statuses hide completed work |
+A returning absent party (B) RATIFIES the existing unilateral sealed root R1 rather than re-sealing a new root (Model 2, not Model 1). V31 migration relaxes `seal_notarizations` `UNIQUE(session_id)` → `UNIQUE(session_id, seal_type)` so a bilateral row can SUPERSEDE the unilateral one (append-only, `supersedes_notarization_id` FK, the unilateral row never mutated). New `seal_upgrade_request` frame; directory `#processSealUpgradeRequest`; daemon `seal-upgrade.ts` (extracted for testability) — `attemptSealUpgrade` (the kernel) + `verifyUpgradeConfirmedCert` (AC-008). 7 increments, two reviewers + done-auditor.
 
-## M7 E2E (2026-06-23/24) — published to npm, live operator path, demo agent end-to-end
+**The kernel:** B signs its ratification ONLY after recovering + integrity-verifying the content (content-possession precondition); refuses `content_tamper` / `content_unrecoverable` / `content_incomplete` — never co-signs content it could not verify.
 
-The substantive build was verified on localhost spines; this phase took it to the **deployed cluster
-and real npm packages**. Full archaeology in `M7-BUILD-JOURNAL.md` (entries "E2E part 1/2/3").
+Bugs found here: (1) B's daemon called `verifyUnilateralCertificate` to verify A's seal sig, but that verifies against the LOCAL agent's own key — B doesn't hold the initiator's group key. (2) Absent-party upgrade listener wasn't registered at the keystone; the directory PUSHES the queued notification during the keystone's auth/reconnect drain BEFORE `cello_start_agent` registers the per-agent handler — so B reconnected but never triggered the upgrade. (3) HIGH security bug: `verifyAndApplyUpgradeConfirmed` verified the returning sig against `returning_pubkey` taken FROM THE FRAME — a malicious directory could forge B's ratification with a throwaway key. Fix: bind the cert's pubkeys to the LOCAL session record's real participants.
 
-**Directory push + publish (part 1/2).** Pushed both repos; the 3-region directory deploy ran clean
-after one stale directory unit-test fix (`seal_interrupted_ack` nonce). Publishing surfaced — and fixed —
-a cluster of latent packaging gaps, all the same shape (a piece built + tested but never wired into the
-shipped composition root): the M7 `daemon`/`cli` packages were missing from the CI publish list AND the
-root `tsconfig` build graph (so they published empty); `crypto` had gained `content-seal` without a version
-bump (stale on npm → the daemon crashed importing `sealToRecipient`); the daemon spawned with its stdout
-piped to the cli, so it EPIPE-crashed when the cli exited. **Final published + latest-promoted set:** crypto
-0.0.9, protocol-types 0.0.6, transport 0.0.6, client 0.0.35, daemon 0.0.7, cli 0.0.5, connect 0.0.47,
-interfaces 0.0.3. The publish pipeline now **self-defends** with three CI guards (Publish-completeness check,
-propagation-tolerant verify, and a `cello login`+`status` smoke test on the published artifacts).
+### DOD-SEAL-2 — Relationship-graph producer (Sybil / reputation-farming defense)
 
-**Demo agent rehosted on M7 — WORKS END-TO-END (part 3, Stage 1).** A fresh agent on a laptop established a
-real session with the reworked demo agent on EC2 and ran the full 4-message sequence — chain: laptop →
-directory (FROST-signed assignment) → relay → demo on EC2 → responses. The M6 demo (which spawned
-`cello-mcp` as the whole node) was rewritten for the M7 shim+daemon model and the new receiver tool surface;
-a small daemon fix lets a publicly-hosted standing receiver bind/announce a routable address
-(`CELLO_LISTEN_ADDR`/`CELLO_ANNOUNCE_ADDRS`). The session went over **relay transport, not direct** — proving
-the whole vanilla pipeline (Stage 1); direct-dial-to-public-endpoint and NAT traversal are Stage 2.
+The directory now populates `conversation_seals` + `conversation_participation` + `conversation_attestations` on every seal (`recordConversationSeal`, atomic + hash-chained), wired into the unilateral + both bilateral paths. These feed `analytics-job`'s `conversation_graph_edges` + `pseudonym_stats` — the graph that detects clusters of mutually-sealing agents farming reputation. Relationship metadata + the sealed root HASH only, never content (INV-3). Bug found here: `seal_date` is a DATE column that round-trips non-deterministically (node-pg returns local-midnight Date, `toISOString()` shifts it) — excluded from chain serialization.
 
-**Real gaps this phase exposed (each fixed or noted):** a returning agent that lost local state can't
-recover — the directory replies `already_registered` and skips the re-DKG, and the local FROST share isn't
-reconstructable (NOTED — needs design); the deployed directory's `PgTokenValidator` rejects `DEV-` tokens
-(real bot tokens required for a fresh DKG); `persistFrostKeyShare` is fire-and-forget (register → wait →
-verify before touching the daemon); the relay must be restarted to re-register after any directory redeploy.
+---
 
-## CELLO-M7-CONN-001 (2026-06-26) — per-agent directory connections; the keystone is deleted
+## CELLO-M7-CONN-001 — The Keystone Deleted (June 25–27)
 
-The live operator path surfaced the **Demo1 bug**: registering a fresh agent right after removing another
-timed out (it blocked registering Demo1 after removing Ms_Chelly). Root cause: the daemon held ONE shared
-"keystone" directory connection that borrowed the lexicographically-first ("primary") agent's identity.
-Removing that agent cleared the primary but never tore down + re-established the connection, so it lingered
-authenticated as the removed agent (its pubkey pinged the directory 6 min after removal) and the next
-registration's DKG had no working directory door.
+The live operator path surfaced the **Demo1 bug**: removing an agent and registering a fresh one immediately after caused a timeout. Root cause: the daemon held ONE shared "keystone" directory connection borrowing the lexicographically-first (primary) agent's identity. Removing that agent cleared the primary but never tore down + re-established the connection — it lingered authenticated as the removed agent, and the next registration's DKG had no working directory door.
 
-**A verification pass drove the design.** All 19 frame types on the authenticated signaling stream were
-enumerated: 18 are agent-scoped; only the manifest poll is daemon-level — and the manifest is public,
-self-authenticating data (threshold-signed; root keys pinned locally), so it can move to unauthenticated
-HTTP. Decision: **delete the keystone, go fully per-agent**, and rehome the one daemon-level operation
-(the manifest poll) to `GET /manifest`. Locked invariant: nothing agent-specific ever goes in the
-consortium manifest.
+A verification pass enumerated all 19 frame types on the authenticated signaling stream: 18 are agent-scoped; only the manifest poll is daemon-level — and the manifest is public, self-authenticating data (threshold-signed; root keys pinned locally), so it can move to unauthenticated HTTP. Decision: **delete the keystone entirely, go fully per-agent**, and rehome the manifest poll to `GET /manifest`.
 
-**Built in three red-first phases (foreground):** (1) the manifest poll moved to unauthenticated HTTP
-(`http-manifest-poll.ts`), preserving the TUF verify-before-adopt policy and running daemon-level even
-with zero agents — the property the keystone could never provide; a directory `GET /manifest` handler +
-ALB `ManifestPathRule` serve it. (2) inbound `session_assignment` / `seal_interrupted` responders wired
-**per-agent** (closing the SPINE-5 gap where only the primary received them). (3) the keystone deleted
-(`primaryAgent` / `getAuthIdentity` / `wireKeystonePrimary`); every site re-homed to the owning agent via
-`signalingFor` / `sendOver`; create/register/start + a startup loop bring up **each agent's own**
-connection. Three read-only reviewers (code-reviewer, fallback-finder, test-attacker) ran; every finding
-was fixed — notably a HIGH (loaded agents weren't connected at startup → no inbound after a restart) and
-two MEDs (a swallowed manifest-store throw; a status field that masked a partial per-agent outage).
+Built in three red-first phases: (1) manifest poll moved to unauthenticated HTTP (`http-manifest-poll.ts`), running daemon-level even with zero agents — the property the keystone could never provide; (2) inbound `session_assignment` / `seal_interrupted` responders wired per-agent; (3) keystone deleted (`primaryAgent` / `getAuthIdentity` / `wireKeystonePrimary` removed); every site re-homed to the owning agent via `signalingFor` / `sendOver`.
 
-**Proven at every layer.** Live close gate against the real binaries: **j-conn 2/2** (the Demo1 repro +
-name-reuse-after-removal), **j-spine 7/7** (non-regressive; the stale DOD-SPINE-4 flat-file assertion was
-updated to the PERSIST-002 SQLCipher model), **j-remove 3/3**. Published daemon 0.0.13 / cli 0.0.11 to
-`latest` (binary-verified, smoke-tag green). Operator-confirmed on a laptop — remove an agent → register a
-fresh one → DKG completed (`primary_pubkey` returned), `directory_signaling: connected` — and corroborated
-in the directory Postgres (Demo2 `active` in us-east-1) and replicated to eu-central-1 + ap-northeast-1
-(`agent_profiles` is in `cello_pub`). The keystone stranding bug is dead.
+Three read-only reviewers (code-reviewer, fallback-finder, test-attacker) ran; every finding was fixed — notably a HIGH (loaded agents weren't connected at startup → no inbound after a restart) and two MEDs (swallowed manifest-store throw; status field that masked a partial per-agent outage).
 
-**Deployed + dogfooded (2026-06-27).** The directory `GET /manifest` image rolled to all 3 regions via the
-pipeline (`cello-directory:d5d0424`, rollout COMPLETED everywhere; the ALB `ManifestPathRule` is the one
-remaining `deploy.sh` step — additive, verified no restart). The **demo agent (EC2) was updated to the same
-shipped 0.0.13 daemon** (migrating its pre-PERSIST-002 flat-file state → SQLCipher cleanly), and a **live
-cross-machine conversation between a laptop and the demo, both on 0.0.13, sealed and the seal CONFIRMED on
-the client** — `cello_close_session` returned the `sealed_root` + certificate, the session reads `sealed`,
-and `cello_get_sealed_receipt` returns the receipt. Two operational lessons (not code bugs): the relay must
-be bounced after any directory redeploy (no reconnect logic — `relay_unavailable` until it re-registers), and
-loading sessions onto a just-restarted cluster faster than the single-receiver demo's await loop produces
-transient `session_stream_unavailable` + a lagged first seal; on a settled cluster one clean session seals
-first try (matching DOD-SPINE-7).
+Proven at every layer: `j-conn` (Demo1 repro + name-reuse-after-removal), `j-spine` (non-regressive), `j-remove`. Published daemon 0.0.13 / cli 0.0.11. Operator-confirmed: remove an agent → register a fresh one → DKG completed, `directory_signaling: connected`, corroborated in directory Postgres + replicated to eu-central-1 + ap-northeast-1.
 
-## What M7 unblocks
+---
 
-- **Clean agent lifecycle** (CELLO-M7-CONN-001): removing an agent and registering a fresh one no longer
-  strands the daemon — every agent runs its OWN directory connection; removal is per-agent and self-healing.
-- **Live operator onboarding** is real: `npx @cello-protocol/connect` + `@cello-protocol/cli` → `cello login`
-  → register → converse, all against the deployed cluster, proven by the demo-agent round-trip.
-- **Beta**: identity + connect + converse + seal (unilateral & bilateral & upgrade) + durable encrypted
-  transcript + Sybil-defense relationship graph are live-proven against the real binaries AND the published
-  packages.
+## Numbers
 
-## What remains
+| Metric | Value |
+|--------|-------|
+| Stories in original outline | 13 |
+| Stories written and merged before collapse | ~12 |
+| Build journal length at close | 6,133 lines |
+| Days from collapse to substantive build complete | 5 (June 18–23) |
+| Days from collapse to CONN-001 live | 9 (June 18–27) |
+| Journeys built (J-SPINE → J-UPGRADE) | 10 |
+| DoD lines closed (vs. 0 live at collapse) | ~40 |
+| cello-client commits during rebuild (packages/) | 106 |
+| Total commits in rebuild phase (all files) | 367 |
+| npm packages published at M7 close | crypto 0.0.9, protocol-types 0.0.6, transport 0.0.6, client 0.0.35, daemon 0.0.7, cli 0.0.5, connect 0.0.47, interfaces 0.0.3 |
+| npm packages at CONN-001 close (`@latest`) | daemon 0.0.13, cli 0.0.11, connect 0.0.49 |
+| Branches pruned at collapse | ~14 worktrees + ~15 branches across two repos |
+| Binary packaging bugs found (not catchable by unit tests) | 3 (exports map, CELLO_DIR socket, CI publish list) |
+| Architecture-level bugs found by live tests | 5 (per-agent signaling, keystone, gater, relay FIFO, UP-1 pubkey binding) |
 
-- **Direct-dial-to-public-endpoint** (Stage 2 start): the demo currently advertises the relay because
-  `selectAdvertisedAddress` only picks the direct addr when AutoNAT confirms dialability, which stub-mode
-  doesn't. Treat a configured `CELLO_ANNOUNCE_ADDRS` as authoritative dialability for static-public hosts.
-- **NAT-traversal dialer** (Stage 2): wire `CelloNodeTransportDialer` into `cello-daemon.ts` + reconcile the
-  dialer's connection with the session node (the documented seam in `daemon.ts` `cello_initiate_session`).
-- **Returning-user recovery** — design the lost-local-share recovery path (directory says `already_registered`
-  but the agent can't sign); affects any reinstall.
-- **Demo cleanup** — update the published demo AgentID to `bc94ead6…`, rewrite `demo/runbook.md` +
-  `demo/CLAUDE.md` for M7, update `infra/STATE.md` (redeploy, relay restart), remove the throwaway test driver.
-- **DOD-CONN-3 manifest-over-HTTP — last step: the ALB rule.** The `GET /manifest` directory *image* is now
-  deployed to all 3 regions (done 2026-06-27). The only remaining piece for the end-to-end live poll is the
-  ALB `ManifestPathRule` via `deploy.sh` (CI/CD swaps images, not CFN) — verified additive, no directory
-  restart (image SSM already points at the deployed `d5d0424`; signer-pubkey matches in all 3 regions).
-  Degrades gracefully (`manifest_http_unreachable` → cached, 6–12h schedule) until applied.
-- **Relay reconnect-after-directory-redeploy** — the relay has no reconnect logic, so every directory deploy
-  needs a manual relay bounce per region (surfaced again during the CONN-001 deploy). The permanent fix is
-  symmetric relay↔directory reconnect-with-backoff, deferred to the federation milestone.
-- **Multi-node failover** (INV-1) — needs >1 node; the single-node spine harness can't model it → E2E.
-- **Relay-SIGNED sequence verification** (DOD-MSG-4 Finding 2) — needs the relay's signing identity
-  plumbed to the daemon; named-deferred (RC-1) to the transport-security-audit hardening story.
-- **Unilateral `attestation_mode` TBS-binding** — deferred (RC-1): low-severity (delivered-copy only;
-  authoritative record correct) vs. real risk of breaking the working seal co-sign flow.
-- **Assembly-wide discipline audits** (INV-6/8 — error-message / no-console.log / correlationId).
-- **DOD-LOG-2/3** dispute/abuse export bundles — ⬜ NOT STORIED follow-ons on the durable transcript.
+---
 
-## Related documents
+## What M7 Actually Delivered
+
+- **Daemon model:** single long-running process, Unix socket IPC, lock file, structured logging, graceful shutdown
+- **Per-agent directory connections:** each agent authenticates its own signaling stream; removing an agent is fully self-healing
+- **Ephemeral session nodes:** per-session libp2p nodes, connectionGater enforcing single-peer allowlists, 32-node cap
+- **Content delivery:** direct P2P content path + relay-backed encrypted store-and-forward for offline delivery; receiver ACK; oversize cap; replay dedup; tamper detection
+- **Signaling resilience:** heartbeat/keepalive, exponential backoff reconnect, queued outbound ops drain after reconnect
+- **Unilateral seal with FROST notarization:** directory rebuilds the tree, verifies the root, FROST-notarizes the absent party as ABSENT
+- **Unilateral → bilateral upgrade:** returning party ratifies the sealed root; superseding notarization row; content-possession precondition
+- **Seal certificate legibility:** receipt-not-assent, per-party content frontier (with client re-derive guard), attestation mode (live/absent/recovered), final-message-answered
+- **Durable encrypted transcript:** AES-256-GCM at rest in client SQLite; survives daemon restart; relay/directory never see plaintext
+- **Bidirectional directory auth:** manifest-pinned step-6 verification; TUF-aligned signed manifest; 6–12h background poll over unauthenticated HTTP
+- **Sybil-defense relationship graph:** conversation_seals + participation + attestations populated at every seal, feeding the graph analytics that detect reputation-farming clusters
+- **CLI-first interface:** `cello login`, `cello status`, `cello register`, `cello create-agent`, `cello remove-agent`, `cello start-agent`
+
+---
+
+## Bugs Found and Rules Created
+
+### Process rules
+
+**Never verify only within a story boundary.**
+The three system-level gaps (unilateral seal certificate, content delivery, upgrade path) each lived between stories — not inside any one story's scope. Every gap passed every per-story gate. The fix: walk a complete user journey out loud at the END of every milestone, before declaring scope complete. No individual story gate substitutes for this.
+
+**Dead-stack orphaning is invisible until you run the binary.**
+Twelve stories of implementation passed every gate against the dead `CelloClient` stack. The live binary harness revealed, in the first run, that `cello login` crashed with `ERR_PACKAGE_PATH_NOT_EXPORTED`. Unit tests that call library methods directly can never catch this. Any implementation milestone must include a live binary smoke test as a CI gate from day one.
+
+**Branch sprawl deserves a hard limit.**
+When branches cannot see each other's code, work gets redone. A reasonable working limit: never more than 3 worktrees open per repo at the same time. When that limit would be exceeded, merge or prune before opening a new worktree.
+
+**RC-1: every deferral must have a named home.**
+The original postmortem named RC-1 explicitly: deferrals that evaporate into discussion logs don't get fixed. The implementation: a `PRUNE-LEDGER.md` + explicit deferral ledger entries in the build journal. A deferral without a name and a file reference is a deletion.
+
+### Code rules
+
+**Composition root verification is mandatory.**
+Multiple bugs (empty published packages, dead session node factory, disconnected keystone) all shared the same shape: a class or module was built, tested, and reviewed — but never wired into the binary's composition root. Every story that introduces a new capability must include an AC asserting observable behavior from the entrypoint, not just that the class exists.
+
+**Every per-agent operation needs its own per-agent stream.**
+The FROST ceremony routing, session assignment routing, registration reply routing — all keyed by authenticated stream identity. If a second agent doesn't have its own authenticated stream, its frames are misrouted to the primary and silently timeout. The keystone model was wrong in principle, not just in implementation.
+
+**Typed decoders must carry every protocol field.**
+`decodeInboundSignalingFrame` as a typed allowlist silently dropped `wants_session_offer`. The symptom was "Invalid peer ID" from a session node creation that should have been a session offer. The rule: after any wire format change, verify that the decoder's output carries the new field — not just that the encoder sends it.
+
+**Never verify against a pubkey the untrusted sender chose.**
+The UPGRADE-001 HIGH security bug: `verifyAndApplyUpgradeConfirmed` verified the ratification signature against `returning_pubkey` taken from the untrusted frame. A malicious directory could forge B's ratification. Fix: bind cert pubkeys to the LOCAL session record's real participants, never the frame's claim.
+
+**Listeners for directory-pushed frames must be registered at daemon startup, not per-session.**
+When B reconnects after absence, the directory PUSHES queued notifications (like `seal_unilateral_notification`) during the keystone auth/reconnect drain — before `cello_start_agent` registers the per-session handler. These frames are dropped silently. Any notification the directory pushes on reconnect must be registered at daemon startup time.
+
+---
+
+## What Remains
+
+- **Direct-dial-to-public-endpoint (Stage 2):** `selectAdvertisedAddress` only picks the direct address when AutoNAT confirms dialability. A configured `CELLO_ANNOUNCE_ADDRS` should be treated as authoritative dialability for static-public hosts (no AutoNAT needed). Demo currently advertises relay.
+- **NAT traversal dialer:** wire `CelloNodeTransportDialer` into `cello-daemon.ts` + reconcile the dialer's connection with the session node.
+- **Returning-user recovery:** directory replies `already_registered` when a user reinstalls and tries to re-register — the agent can't sign without its local FROST share, which isn't reconstructable from the directory alone. Design needed before the recovery flow can be implemented.
+- **Relay reconnect after directory redeploy:** the relay has no reconnect logic; every directory deploy needs a manual relay bounce per region. Permanent fix: symmetric relay↔directory reconnect-with-backoff (deferred to the federation milestone).
+- **Assembly-wide discipline audits (INV-6/8):** error-message distinctness, no-console.log, and correlationId threading were enforced per-story but never audited as an aggregate across the assembly.
+- **DOD-MSG-4 Finding 2** (relay-SIGNED sequence verification): explicitly deferred (RC-1) to the transport-security-audit hardening story.
+- **Demo cleanup:** update published demo AgentID, rewrite `demo/runbook.md` + `demo/CLAUDE.md` for M7, update `infra/STATE.md`, remove throwaway test driver.
+- **DOD-CONN-3 last step:** ALB `ManifestPathRule` via `deploy.sh` — the `GET /manifest` directory image is deployed to all 3 regions; the ALB rule is the only remaining step.
+
+---
+
+## Related Documents
 
 - `docs/planning/user-stories/m7/M7-DEFINITION-OF-DONE.md` — the DoD scoreboard (authoritative status)
-- `docs/planning/user-stories/m7/M7-BUILD-JOURNAL.md` — day-by-day archaeology + design decisions
+- `docs/planning/user-stories/m7/M7-BUILD-JOURNAL.md` — day-by-day archaeology (6,133 lines)
 - `docs/planning/user-stories/m7/M7-PROCEDURE.md` — the per-unit loop + severity triage + overnight rules
+- `docs/planning/user-stories/m7/M7-STATE-OF-THE-UNION.md` — the post-collapse brief that started the rebuild phase
+- `docs/planning/user-stories/m7/PRUNE-LEDGER.md` — every pruned branch + tip hash (all resurrectable)
+- `docs/planning/user-stories/m7/POSTMORTEM-seal-and-content-delivery-gaps.md` — the three gaps + remediation plan
+- `docs/planning/user-stories/m7/COORDINATION.md` — per-story claims + coordination log
