@@ -12,6 +12,12 @@
 --   identity_tree_entries — TRUST-001 trust-signal HASH (the directory-side identity tree).
 --   pickup_queue          — TRUST-001 sealed ciphertext the agent's daemon pulls, openSeals, ACKs, deletes.
 --
+-- Replication note: agent_suspensions + identity_tree_entries use natural keys and join cello_pub now.
+-- pickup_queue's BIGSERIAL id is NOT yet replicated — TRUST-001 must add it to the publication WITH the
+-- `ALTER SEQUENCE pickup_queue_id_seq INCREMENT BY 3 RESTART WITH {node_offset}` staggering that every
+-- other replicated BIGSERIAL table uses (sessions, user_accounts, …), or a cross-node insert would
+-- collide ids and halt the subscription. See infra/setup-replication.sh.
+--
 -- Idempotency: CREATE ... IF NOT EXISTS; RLS policy creation guarded by pg_policies existence check;
 -- GRANT is idempotent. Running V34 twice on the same database is safe.
 

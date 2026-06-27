@@ -339,6 +339,7 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
       if (!validation.ok) {
         logger.warn("directory.write.rejected", {
           accountId,
+          agentId,
           reason: validation.reason,
           correlationId,
         });
@@ -364,7 +365,7 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
         return;
       }
       if (!owned) {
-        logger.warn("directory.write.rejected", { accountId, reason: "not_owner", correlationId });
+        logger.warn("directory.write.rejected", { accountId, agentId, reason: "not_owner", correlationId });
         res.writeHead(403, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "forbidden", reason: "not_owner" }));
         return;

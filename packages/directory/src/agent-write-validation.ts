@@ -88,17 +88,20 @@ export function validateWritePayload(writeKind: unknown, payload: unknown): Vali
       if (typeof ciphertext !== "string" || ciphertext.length === 0) {
         return { ok: false, reason: "invalid_ciphertext" };
       }
-      let bytes: Buffer;
-      try {
-        bytes = Buffer.from(ciphertext, "base64");
-      } catch {
+      // Accept BOTH standard base64 and base64url, tolerating MIME line-wrapping — the client's seal
+      // encoding must not be false-rejected. Strip whitespace, reject any out-of-alphabet char, then
+      // normalize base64url (-_) to standard (+/) before decoding. Buffer.from is lenient, so a
+      // round-trip compare (padding-insensitive) still rejects non-canonical garbage.
+      const stripped = ciphertext.replace(/\s+/g, "");
+      if (!/^[A-Za-z0-9+/_-]*={0,2}$/.test(stripped)) {
         return { ok: false, reason: "invalid_ciphertext" };
       }
-      // Reject non-base64 (Buffer.from is lenient — re-encode and compare to catch garbage), too
-      // short to be a sealed box, oversized, or plausibly-plaintext (all printable).
-      if (bytes.toString("base64").replace(/=+$/, "") !== ciphertext.replace(/=+$/, "")) {
+      const normalized = stripped.replace(/-/g, "+").replace(/_/g, "/");
+      const bytes = Buffer.from(normalized, "base64");
+      if (bytes.toString("base64").replace(/=+$/, "") !== normalized.replace(/=+$/, "")) {
         return { ok: false, reason: "invalid_ciphertext" };
       }
+      // Too short to be a sealed box, oversized, or plausibly-plaintext (all printable).
       if (bytes.length < MIN_SEALED_BYTES || bytes.length > MAX_SEALED_BYTES) {
         return { ok: false, reason: "invalid_ciphertext" };
       }

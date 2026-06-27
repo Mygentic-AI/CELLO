@@ -171,6 +171,25 @@ describe("WRITEAPI-001 — POST /internal/agent-write", () => {
     expect(writes).toHaveLength(0);
   });
 
+  it("AC-002: sealed ciphertext in base64url (and MIME-wrapped) encoding is accepted", async () => {
+    const raw = Uint8Array.from({ length: 64 }, (_, i) => (i * 41 + 19) % 256);
+    const b64url = Buffer.from(raw).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const { pool, writes } = makePool();
+    const base = await start(pool);
+    const r1 = await write(base, {
+      accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext", payload: { ciphertext: b64url },
+    }, API_KEY);
+    expect(r1.status).toBe(200);
+    // wrapped standard base64 (embedded newlines) is tolerated too
+    const wrapped = Buffer.from(raw).toString("base64").replace(/(.{20})/g, "$1\n");
+    const r2 = await write(base, {
+      accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext", payload: { ciphertext: wrapped },
+    }, API_KEY);
+    expect(r2.status).toBe(200);
+    expect(writes).toHaveLength(2);
+    expect(writes.every((w) => /pickup_queue/i.test(w.text))).toBe(true);
+  });
+
   it("AC-002 / SI-001: a plaintext token smuggled as 'ciphertext' is rejected (all-printable)", async () => {
     const { pool, writes } = makePool();
     // base64 of a printable OAuth-looking token — valid base64, but decodes to plaintext ASCII.
