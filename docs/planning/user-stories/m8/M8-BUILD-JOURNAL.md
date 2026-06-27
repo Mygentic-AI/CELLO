@@ -511,3 +511,24 @@ out everywhere" from A → B's next request is bounced to sign-in (B's cookie un
 revocation across sessions, exactly why sessions are stateful), A stays in. Factor-removal step-up
 (AC-002) is already proven by AUTH-002 (J-AUTH AC-003). Full default e2e green; build/typecheck/lint
 clean. `DOD-AUTH-5` ✅. cello-portal `1281ef4`.
+
+---
+
+## 2026-06-27 — TRUST-003 ✅ (SPINE-5 / INV-7) + INV-3 read-half proven
+
+**TRUST-003 — four-class Trust Signals scaffold.** Four named classes (Identity proofs / Network
+graph / Track record / Economic stake) in order, Class-1 sub-groups distinct (account-security /
+verified-contacts / social / device-sacrifice). WebAuthn/TOTP/email are LIVE (real account state —
+the WebAuthn cell flips active after a real enrollment); the rest are honest "coming soon"
+placeholders with no working control / no fabricated data. NEVER a composite / TrustRank / seed
+badge. **J-trust 3/3.** `DOD-SPINE-5` ✅, `DOD-INV-7` ✅, `DOD-TRUST-5` ✅. cello-portal `11fc900`.
+
+**AUTH-006 review (fallback-finder): NO silent fallbacks** — account-scoping tight (account/session
+id come only from the cookie-bound DB row, no client-supplied path, no off-by-one); revoke-others
+keeps exactly the current session; the only swallow is the cosmetic last_seen telemetry (correctly
+isolated from auth). That also confirms DOD-INV-3's READ half → flipped 🟡 (read-scoping server-side
+proven; the WRITE half is WRITEAPI-001, not yet built).
+
+**Remaining.** AUTH-004 (7-day grace), AGENTS-001 polish (alerts/posture + browser-storage SI),
+WRITEAPI-001 + LEVER-001 (SPINE-4), TRUST-001 (SPINE-6 pipe), the multi-node PRESENCE e2e + directory
+auto-bring-up, E2E close gate.

@@ -51,7 +51,11 @@ Proven by SI/adversarial assertions woven into the journeys, never a separate pa
   served write paths + the browser-storage half lands with AGENTS-001/WRITEAPI-001/TRUST-001.)*
 - **DOD-INV-3 — Account-scoping is server-side.** Every read/write is scoped to the session's
   `account_id` derived server-side; parameter injection of another account's id returns nothing
-  / is rejected. *(READ-001 SI-001; WRITEAPI-001 SI-001)* — ❌
+  / is rejected. *(READ-001 SI-001; WRITEAPI-001 SI-001)* — 🟡 *(READ half PROVEN: account/session
+  id come only from the cookie-bound DB row (getSession → getSessionByToken), never client input;
+  the agents read + sessions list/revoke are SQL-scoped WHERE account_id; the fallback-finder traced
+  the producer chain and confirmed no client-supplied path widens scope, no off-by-one. The WRITE
+  half is WRITEAPI-001 (not yet built).)*
 - **DOD-INV-4 — Session: server-side, httpOnly, revocable.** Opaque token in an httpOnly cookie,
   not JS-readable, not in localStorage; revoking the row server-side fails the next request.
   No stateless JWT. *(AUTH-001 SI-001)* — ✅ *(PROVEN: opaque random token, SHA-256-hashed at rest,
@@ -68,7 +72,9 @@ Proven by SI/adversarial assertions woven into the journeys, never a separate pa
   with a valid client share; the block is the honest-node threshold refusing, never one mandatory
   node withholding. *(LEVER-001 SI-001, AC-003; [[project_threshold_t_of_n_not_2_of_2]])* — ❌
 - **DOD-INV-7 — Trust = named signals only.** No composite score/level/distance/TrustRank/seed
-  badge anywhere. *(TRUST-003 AC-001; [[feedback_no_trustrank_or_single_score]])* — ❌
+  badge anywhere. *(TRUST-003 AC-001; [[feedback_no_trustrank_or_single_score]])* — ✅ *(PROVEN LIVE,
+  J-trust: the Trust Signals screen renders four distinct NAMED classes (no single rollup) and the
+  rendered DOM contains no TrustRank / Trust-Seeder / seed badge / aggregate-score element.)*
 - **DOD-INV-8 — Observability.** Named `domain.noun.verb` events with `context_fields` +
   `correlationId`; no `console.log`; distinct cause → distinct code. *(M4+ rules)* — 🟡
   *(structured logger emits `portal.backend.started` + `portal.backend.migration.failed` +
@@ -114,7 +120,10 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 - **DOD-SPINE-4 — Suspend blocks signing.** Pause (step-up) → the agent cannot complete a FROST
   ceremony even with its client share → un-pause restores. *(LEVER-001 AC-001)* — ❌
 - **DOD-SPINE-5 — Trust scaffold renders.** The four-class trust UI: WebAuthn live, rest honest
-  placeholders, no composite. *(TRUST-003 AC-001)* — ❌
+  placeholders, no composite. *(TRUST-003 AC-001)* — ✅ *(PROVEN LIVE, J-trust 3/3: four named
+  classes render in order with Class-1 sub-groups distinct; the WebAuthn cell reflects REAL state
+  (not-set-up fresh → active after a real enrollment); the rest are honest placeholders; no
+  composite/TrustRank/seed element.)*
 - **DOD-SPINE-6 — WebAuthn signal flows the pipe.** Enrolling WebAuthn writes a hash to the
   directory identity tree + sealed ciphertext to the pickup queue → the daemon pulls,
   `openSealed`, verifies, stores, ACKs → the directory deletes the ciphertext. *(TRUST-001 AC-001)* — ❌
@@ -239,7 +248,11 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   trustless-cello dep update if consumed. *(TRUST-001 AC-004/005)* — ❌ *(tag-push/publish = Andre)*
 - **DOD-TRUST-5 — Four-class UI scaffold.** Four named classes, Class-1 sub-groups distinct,
   WebAuthn/phone/email/TOTP live, rest honest placeholders, no composite, no fake data.
-  *(TRUST-003 AC-001/002)* — ❌
+  *(TRUST-003 AC-001/002)* — ✅ *(PROVEN LIVE, J-trust 3/3: four named classes + distinct Class-1
+  sub-groups; WebAuthn/TOTP/email live (real state, WebAuthn flips active after enrollment), phone +
+  the rest honest "coming soon" placeholders with no working control / no fabricated data; no
+  composite/TrustRank/seed. NOTE: the WebAuthn cell shows real ENROLLED state directly — turning
+  enrollment into a directory-pipe trust signal is TRUST-001/SPINE-6, still ❌.)*
 
 ---
 
