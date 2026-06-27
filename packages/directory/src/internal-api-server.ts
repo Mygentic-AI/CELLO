@@ -417,16 +417,25 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
-/** Read the full request body as a Buffer. */
+// Hard cap on a request body. All internal endpoints carry small JSON (hashes, flags, a sealed
+// blob bounded to 64KB by MAX_SEALED_BYTES). 256KB leaves comfortable headroom while preventing an
+// unbounded body from exhausting memory — a request exceeding it is rejected, never truncated.
+const MAX_BODY_BYTES = 256 * 1024;
+
+/** Read the full request body as a Buffer, rejecting if it exceeds MAX_BODY_BYTES. */
 function readBody(req: import("node:http").IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
+    let total = 0;
     req.on("data", (chunk) => {
-      if (Buffer.isBuffer(chunk)) {
-        chunks.push(chunk);
-      } else {
-        chunks.push(Buffer.from(chunk as string));
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
+      total += buf.length;
+      if (total > MAX_BODY_BYTES) {
+        reject(new Error("request body too large"));
+        req.destroy();
+        return;
       }
+      chunks.push(buf);
     });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
