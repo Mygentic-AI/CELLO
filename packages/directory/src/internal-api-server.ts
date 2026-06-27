@@ -36,6 +36,13 @@ import type pg from "pg";
 import type { Logger } from "@cello-protocol/interfaces";
 import { issuePreAuthToken } from "./pre-auth-token-repository.js";
 import { listAccountAgentsWithPresence } from "./agent-presence-repository.js";
+import { validateWritePayload } from "./agent-write-validation.js";
+import {
+  isAgentOwnedByAccount,
+  upsertSuspension,
+  upsertIdentityHash,
+  enqueuePickup,
+} from "./agent-write-repository.js";
 
 // READ-001: a node is considered "fresh" for the presence read rule if it heartbeat within this
 // window (2× the 45s heartbeat cadence + slack). A staler owning node ages its agents to last-seen.
@@ -282,6 +289,121 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
           })),
         }),
       );
+      return;
+    }
+
+    // ─── POST /internal/agent-write (WRITEAPI-001) ───────────────────────────────
+    // The portal's one authenticated, account-scoped write seam. Accepts ONLY hashes, flags, and
+    // sealed ciphertext (DOD-INV-2) and only for an agent OWNED by the calling account (SI-001).
+    // Everything written replicates to every sovereign node, so the discipline is structural: a
+    // strict per-kind schema with no free-text slot.
+    if (req.method === "POST" && req.url === "/internal/agent-write") {
+      const providedKey = req.headers["x-cello-internal-api-key"];
+      if (!providedKey || providedKey !== internalApiKey) {
+        logger.warn("directory.write.auth.failed", { remoteAddr, correlationId });
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+
+      let body: Buffer;
+      try {
+        body = await readBody(req);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "could not read request body" }));
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body.toString("utf8"));
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid JSON body" }));
+        return;
+      }
+
+      const p = parsed as Record<string, unknown>;
+      const accountId = typeof p["accountId"] === "string" ? p["accountId"] : null;
+      const agentId = typeof p["agentId"] === "string" ? p["agentId"] : null;
+      const writeKind = p["writeKind"];
+      if (!accountId || !agentId || typeof writeKind !== "string") {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "missing required fields: accountId, agentId, writeKind" }));
+        return;
+      }
+
+      // Payload discipline FIRST — reject a disallowed shape before touching the DB (so a smuggled
+      // plaintext/PII/token never even reaches a query). Distinct reason per cause.
+      const validation = validateWritePayload(writeKind, p["payload"]);
+      if (!validation.ok) {
+        logger.warn("directory.write.rejected", {
+          accountId,
+          reason: validation.reason,
+          correlationId,
+        });
+        res.writeHead(422, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid write", reason: validation.reason }));
+        return;
+      }
+
+      // Account-scoping: the target agent must be OWNED by the calling account. Derived from the
+      // ownership check, never from a request field — so account A cannot write account B's agent.
+      let owned: boolean;
+      try {
+        owned = await isAgentOwnedByAccount(pool, agentId, accountId);
+      } catch (err: unknown) {
+        const pgErr = err as { code?: string };
+        const isDbError = typeof pgErr.code === "string" && /^\d{5}$/.test(pgErr.code);
+        const reason = isDbError
+          ? `database_error:${pgErr.code}`
+          : err instanceof Error ? err.message : String(err);
+        logger.error("directory.write.failed", { accountId, reason, correlationId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "write failed" }));
+        return;
+      }
+      if (!owned) {
+        logger.warn("directory.write.rejected", { accountId, reason: "not_owner", correlationId });
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "forbidden", reason: "not_owner" }));
+        return;
+      }
+
+      // Persist the validated write to its target table.
+      try {
+        const w = validation.write;
+        switch (w.kind) {
+          case "revocation_flag":
+            await upsertSuspension(pool, { agentId, paused: w.paused, accountId, reason: null });
+            break;
+          case "trust_signal_hash":
+            await upsertIdentityHash(pool, { agentId, signalKind: w.signalKind, signalHash: w.signalHash });
+            break;
+          case "trust_signal_ciphertext":
+            await enqueuePickup(pool, { agentId, ciphertext: w.ciphertext });
+            break;
+        }
+      } catch (err: unknown) {
+        const pgErr = err as { code?: string };
+        const isDbError = typeof pgErr.code === "string" && /^\d{5}$/.test(pgErr.code);
+        const reason = isDbError
+          ? `database_error:${pgErr.code}`
+          : err instanceof Error ? err.message : String(err);
+        logger.error("directory.write.failed", { accountId, reason, correlationId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "write failed" }));
+        return;
+      }
+
+      logger.info("directory.write.accepted", {
+        accountId,
+        agentId,
+        writeKind,
+        correlationId,
+      });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, writeKind }));
       return;
     }
 
