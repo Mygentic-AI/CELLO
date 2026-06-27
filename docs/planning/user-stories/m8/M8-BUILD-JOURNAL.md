@@ -338,3 +338,48 @@ tests → DOD-AUTH-3), then AUTH-004 (strong-auth enforcement) + AUTH-006 (Accou
 batched PRESENCE-001 + real-directory-harness step (SPINE-2 ✅ + SPINE-3).
 
 **Blocker needing Andre.** None.
+
+---
+
+## 2026-06-27 — AUTH-003 LIVE: TOTP + backup codes; 3 reviewers, 2 HIGH + all fixed
+
+**Repo / branch / HEAD.** `cello-portal` `m8-assembly` HEAD `c32e4bc` (pushed). 21 commits, granular.
+
+**Built (AUTH-003 / J-TOTP).** TOTP (otplib v13 functional API — `generateSecret`/`generateURI`/
+`verifySync`, ±1 step) + one-time backup codes. Secret KMS-encrypted at rest; backup codes 80-bit,
+sha256-hashed (account-bound), single-use. 5 endpoints (enroll/start, enroll/verify, verify,
+backup-codes/issue, backup-code/verify) + a TotpPanel on the Account screen. Migrations: `0003`
+(webauthn challenges, from AUTH-002) and **`0004`** (TOTP replay column + auth_verify_attempts).
+
+**Live-test run — HEAD `c32e4bc`:** **J-TOTP 4/4** against the served portal (the test plays the
+authenticator app, generating RFC-6238 codes): AC-001 enroll-with-current-code + fresh-login
+verify-after-load + the bootstrap→strong auth_level TRANSITION (wrong code stays bootstrap);
+DOD-INV-5 enroll gate (bootstrap refused at start AND verify once a factor exists); TOTP verify
+rate-limit (5 fails → 429); AC-002 backup-code single-use + strong-auth upgrade. **vitest 19/19**
+(scaffold + magic-link + TOTP). Full e2e **15/15** (J-SPINE 4 + J-AUTH 7 + J-TOTP 4); build +
+typecheck + lint clean.
+
+**Reviewers (all three) — 2 HIGH + every finding fixed:**
+- *code-reviewer (opus)* — HIGH-1: a malformed/empty code threw in otplib → HTTP 500 on a normal
+  typo; guarded (`/^\d{6}$/`) → clean `invalid_code`. HIGH-2 (DOD-INV-5): TOTP enroll was an
+  unguarded escalation/downgrade (a bootstrap session could plant/reset a strong factor with no
+  step-up — AUTH-002 gated WebAuthn but TOTP had no equivalent); added a shared `hasStrongFactor()`
+  (passkey OR confirmed TOTP) gating BOTH TOTP enroll endpoints, and aligned the WebAuthn register
+  gate to the same cross-factor predicate. MED: replay protection (last_used_time_step + atomic
+  conditional UPDATE) + verify rate-limit. MED: 40→80-bit codes. LOW: transactional issuance.
+- *fallback-finder* — NO silent fallbacks (every absence denies, KMS/DB failures throw loud,
+  single-use atomic); flagged the 40-bit entropy (fixed).
+- *test-attacker* — 4 hollow-test gaps, all closed: SI-001 secret assertion now proves KEYED
+  encryption (different master key can't decrypt) not reversible encoding; backup-hash assertion now
+  recompute-equality + 64-hex; concurrent double-spend test (spends once); strong-auth transition
+  asserted (positive + negative, not just HTTP status).
+
+**DoD flip.** `DOD-AUTH-3` ✅.
+
+**Next red.** The J-AUTH tier is essentially complete (DOD-AUTH-1/2/3 ✅, INV-4/5 ✅). Remaining
+M8: AUTH-004 (7-day strong-auth grace + waiver / admin override → DOD-AUTH-4), AUTH-006 (Account &
+Security screen → DOD-AUTH-5), AUTH-001 signpost assertion (DOD-AUTH-6); then the batched
+**PRESENCE-001 + real-directory harness** (flips SPINE-2 ✅ + lights SPINE-3), LEVER-001 (SPINE-4),
+TRUST-001/003 (SPINE-5/6), E2E close gate.
+
+**Blocker needing Andre.** None.

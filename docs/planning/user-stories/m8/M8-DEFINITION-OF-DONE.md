@@ -125,7 +125,14 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   is refused on a stale session, allowed after a fresh step-up; and after the step-up window
   elapses, a SECOND sensitive op requires a new step-up — proving per-op, not once-per-session.)*
 - **DOD-AUTH-3 — TOTP + backup codes.** TOTP enroll verifies a current RFC-6238 code (verify-
-  after-load); backup codes single-use; secret KMS-encrypted, codes hashed. *(AUTH-003)* — ❌
+  after-load); backup codes single-use; secret KMS-encrypted, codes hashed. *(AUTH-003)* — ✅
+  *(PROVEN: J-TOTP live — enroll confirms only with a current code, a fresh login verifies after
+  load (secret decrypts), wrong code rejected, the session upgrades bootstrap→strong only on a
+  valid code; backup codes single-use (reuse → 401). Integration proves SI-001 KEYED encryption
+  (a different master key can't decrypt) + recompute-equality hashing, concurrent single-use,
+  malformed-code clean reject, and TOTP replay rejection. Review fixes: malformed→500 closed,
+  DOD-INV-5 enroll gate (bootstrap can't plant/reset a factor), replay protection, verify
+  rate-limit (429), 80-bit codes, transactional issuance. vitest 19/19.)*
 - **DOD-AUTH-4 — Strong-auth enforcement.** 7-day grace → server-side gate; per-account admin
   waiver flag (scoped, not global) lifts it; no self-grant, no client bypass. *(AUTH-004)* — ❌
 - **DOD-AUTH-5 — Account & Security.** Lists factors + active sessions; log-out-everywhere revokes
