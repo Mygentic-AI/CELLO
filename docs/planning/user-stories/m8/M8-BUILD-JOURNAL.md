@@ -788,3 +788,41 @@ m8-read-001 `726c32a3`; cello-portal `02d4379`.
 **Env note.** :5433 is the spine's docker postgres (cello_spine, full V1–V35). The old cello_dev (full
 history) was on the stopped trustless-cello-postgres-1; the WRITEAPI/pickup live tests now run against
 cello_spine (DATABASE_URL override). Default portal e2e uses the stub (no :5433 dep).
+
+---
+
+## 2026-06-27 — TRUST-001 pickup signaling codec (directory-side foundation COMPLETE + tested)
+
+Added the directory→daemon delivery codec, completing the directory-side foundation for the pipe.
+
+**Frames (`directory-types.ts` + `directory-frames.ts`).** `trust_signal_pickup` (OUTBOUND): the
+opaque sealed ciphertext + the authoritative identity-tree `signal_hash` (the daemon's verification
+anchor) + `id` (the ACK handle). `trust_signal_ack` (INBOUND): id-only — the daemon's confirmation
+it opened+verified+stored, which triggers the directory's ack-delete. `encodeTrustSignalPickup` +
+a decode branch + the inbound union. Codec test 3/3 (round-trip + malformed→null). typecheck+lint clean.
+
+**Directory-side foundation is now COMPLETE + tested:** V35 `pickup_queue.signal_kind`; the seam
+carries `signalKind`; `drainPickupForAgent` (joins the identity-tree hash) + `ackPickupDelete` (live
+1/1); the pickup signaling codec (3/3). Directory branch m8-read-001 `6e8b3050`.
+
+**REMAINING for SPINE-6 — the interlocking finale (needs the daemon to be e2e-verifiable):**
+1. DirectoryStore: add `getAgentIdByPubkey(kLocalHex)` + `drainPickup(agentId)` + `ackPickup(id)`
+   (pg impl wraps the pickup-repository over its #pool; in-memory stub for tests) — so directory-node
+   can reach them like isAgentSuspended.
+2. directory-node reconnect: resolve agent_id from authedPubkeyHex → `drainPickup` → `#sendFrame`
+   `encodeTrustSignalPickup` per item (do NOT delete yet — the ACK round-trip deletes); add a
+   `parsed.type === "trust_signal_ack"` branch in the inbound dispatch → `ackPickup(id)`.
+3. DAEMON (cello-client): add the trust_signal_pickup decode + trust_signal_ack encode to ITS
+   signaling codec; a handler: openSealed(k_local seed) → recompute hash(canonicalJson) → compare to
+   signal_hash → store locally + send trust_signal_ack (daemon.trust_signal.received verified:true);
+   mismatch → daemon.trust_signal.hash_mismatch, NO store/ACK. Local storage (a daemon table or the
+   existing content-park store). Rebuild local dist for the spine.
+4. J-TRUST spine (J-SUSPEND pattern): seed identity_tree+pickup (as the portal writes) → daemon online
+   pulls → openSealed → verify → ACK → assert pickup_queue empty + daemon stored it + directory holds
+   only the hash (AC-002 dump). ≥2-node for the cross-node hash read (AC-001).
+5. DOD-TRUST-4 publish cascade (AC-004/005) — Andre-gated.
+
+Note: directory-node reconnect wiring (#1/#2) is not independently verifiable without the daemon ACK
+(#3), so they ship together as one unit with the J-TRUST spine as the proof — deliberately NOT
+half-wired-and-untested. The canonicalJson serializer must match between portal (handoff.ts) and
+daemon (recompute) — same recursively-sorted-keys algorithm.
