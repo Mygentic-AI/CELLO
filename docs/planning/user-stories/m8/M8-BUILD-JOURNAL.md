@@ -292,3 +292,49 @@ in one step. SPINE-2 stays honestly 🟠 until then; the endpoint is ready and c
 **Next red.** Advance the next fully-unblocked tier — **J-AUTH: AUTH-002 (WebAuthn enroll/login,
 multi-credential, step-up) + AUTH-003 (TOTP + backup codes)** — pure portal-backend, no directory.
 Then the batched directory-harness + PRESENCE-001 step lights up SPINE-2 ✅ and SPINE-3.
+
+---
+
+## 2026-06-27 — AUTH-002 LIVE: WebAuthn enroll/login/step-up; 3 reviewers, all fixed
+
+**Repo / branch / HEAD.** `cello-portal` `m8-assembly` HEAD `18c2dec` (pushed). 16 commits, granular.
+
+**Built (AUTH-002 / J-AUTH).** WebAuthn enroll / usernameless login / step-up with
+`@simplewebauthn/server` v13. Server-side single-use challenges (migration `0003`, cookie-keyed);
+discoverable-credential login (resolve account from the asserted credential id, verify against the
+stored public key); step-up window model; the bootstrap-can't-escalate gate on BOTH /register/options
+and /register/verify. UI: a passkey panel on Account (SSR list, add/remove with step-up) +
+usernameless passkey sign-in. `@simplewebauthn/browser` client glue.
+
+**Live-test run — HEAD `18c2dec`:** **J-AUTH 7/7** via a Chrome CDP virtual authenticator (real
+ceremonies): enroll → sign-out → usernameless login; FORGED-assertion-for-a-known-credential rejected
+(proves real signature verification, deterministic — replaced a flaky route-interception version);
+multi-credential (device A platform + device B usb, removing A leaves B); SI-001 at /options AND the
+mutation path /verify; step-up-gated removal; and per-op window expiry (a 2nd op after `ageStepUp()`
+needs a fresh step-up). Full e2e **11/11** (4 J-SPINE + 7 J-AUTH), stable across runs; vitest 12/12;
+typecheck + lint + build clean.
+
+**Reviewers (all three, on the AUTH-002 unit) — every finding fixed:**
+- *code-reviewer (opus)* — NO blocking/high; crypto invariants all verified correct (verify against
+  stored key, counter regression, single-use challenges, SI-001 not bypassable, cookie flags). Fixed:
+  userVerification 'required' on all 3 ceremonies (was 'preferred', mismatched the v13 verify default);
+  finishRegistration catches the credential_id UNIQUE violation → `already_registered` (was a raw 500);
+  flagged the login-stamps-step-up window (kept — window model is the AC-003 spec, now proven per-op).
+- *fallback-finder* — MED: WEBAUTHN_RP_ID/ORIGIN defaulted to localhost everywhere → now fail loud
+  outside `local`. Confirmed the auth grant path is fully honest (every `verified` checked; no
+  throw-into-success; challenge single-use/purpose/expiry enforced; step-up gate denies on null).
+- *test-attacker* — 3 blocking hollow-test gaps, all closed: AC-001 negative (forged assertion
+  rejected — was indistinguishable from a no-verify stub); SI-001 mutation path (gate /verify, not just
+  /options — added the gate + the test); per-op step-up (window expiry vs once-per-session flag).
+
+**Also (AUTH-003 in flight).** The TOTP + backup-codes service is built (otplib v13 functional API —
+`generateSecret`/`generateURI`/`verifySync` with `epochTolerance`; KMS-encrypted secret; hashed
+single-use backup codes). Endpoints/UI/tests next.
+
+**DoD flips.** `DOD-AUTH-1` ✅, `DOD-AUTH-2` ✅, `DOD-INV-5` ✅ (all proven live, J-AUTH).
+
+**Next red.** Finish AUTH-003 (TOTP enroll/verify + backup codes endpoints + UI + integration/live
+tests → DOD-AUTH-3), then AUTH-004 (strong-auth enforcement) + AUTH-006 (Account screen), then the
+batched PRESENCE-001 + real-directory-harness step (SPINE-2 ✅ + SPINE-3).
+
+**Blocker needing Andre.** None.
