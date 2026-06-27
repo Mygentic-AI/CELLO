@@ -1058,3 +1058,29 @@ DESIGN RESIDUALS (documented, not silently skipped):
   stale pickup row that re-fires hash_mismatch — both noted for the TRUST delivery follow-up.
 
 LESSON: never flip a DoD tag before the unit's §8 review. The cron (86f0ce75) now injects this every tick.
+
+## 2026-06-27 — REVIEW REMEDIATION cont'd: hollow-test teeth F3/F4/F1 all GREEN
+
+The three test-attacker "hollow test" findings from the §8 remediation are now closed — each adds a
+test that a wrong implementation would fail:
+
+- F4 ✅ — `packages/directory/src/__tests__/lever-001-frost-share-refusal.test.ts` (2/2). Drives a RAW
+  frost_commit_request directly at the FROST share gate (bypassing the polite session-routing gate that
+  J-SUSPEND covers) against a paused agent that HAS a valid K_server share → asserts AGENT_SUSPENDED;
+  a non-paused positive control succeeds (refusal pinned to suspension, not always-refuse). This is the
+  SI-001 honor-check path — deleting it would still pass J-SUSPEND.
+- F3 ✅ — appended a HASH-MISMATCH phase to `j-trust.spine.test.ts`: seed a valid seal but POISON the
+  identity_tree anchor → daemon opens, recomputes hash(recovered) ≠ anchor → daemon.trust_signal.hash_
+  mismatch, NOT stored under the bogus hash, NOT ACKed (the poisoned pickup row stays). A daemon that
+  self-attested / skipped the compare would wrongly store+ack — these are the teeth.
+- F1 ✅ — `cello-portal/e2e/j-lever-binding.spec.ts` (1/1, with j-lever 4/4 + j-agents 3/3 still green).
+  The stub seam now enforces ownership; playwright.config seeds a second account B owning foreign-agent-b.
+  Operator A POSTs a suspend for foreign-agent-b while SMUGGLING accountId:B → 403 not_owner (route used
+  A's session); the same smuggled body on A's own agent → 200 (body accountId inert both directions). If
+  the route ever trusts the body accountId, the attack assertion flips to 200 and the spec fails.
+  cello-portal `5351a98`.
+
+REMAINING from the remediation (all design/infra residuals, NOT hollow tests):
+- H2 (real) — DOD-TRUST-1 🟡: fan-out the portal ciphertext write to all nodes OR replicate pickup_queue.
+- F6 / "no origin signature" — signed trust/burn records (whose key signs) — tracked under LEVER-2.
+- F5 / LEVER-3 / INV-6 — strict T-of-N (protocol beyond M8's 2-of-2 stopgap).
