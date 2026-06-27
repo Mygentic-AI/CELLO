@@ -47,8 +47,10 @@ Proven by SI/adversarial assertions woven into the journeys, never a separate pa
   plaintext signal, no OAuth token, no message content. Browser holds NO agent/identity data
   (in-memory only). *(gate SI-001; SCAFFOLD-002 SI-001; AGENTS-001 SI-001; TRUST-001 SI-001)* — 🟡
   *(ciphertext-at-rest for email + TOTP secret, and SHA-256 token-hash sessions, PROVEN by the
-  SCAFFOLD-002 vitest integration tests against real Postgres; full no-plaintext audit across the
-  served write paths + the browser-storage half lands with AGENTS-001/WRITEAPI-001/TRUST-001.)*
+  SCAFFOLD-002 vitest integration tests against real Postgres. The BROWSER-STORAGE half is now
+  PROVEN live by J-AGENTS (`e2e/j-agents.spec.ts`): localStorage/sessionStorage are `"{}"` and
+  IndexedDB is empty after visiting the protected screens. Remaining: the full no-plaintext audit
+  across the served WRITE paths (directory + portal) lands with WRITEAPI-001/TRUST-001.)*
 - **DOD-INV-3 — Account-scoping is server-side.** Every read/write is scoped to the session's
   `account_id` derived server-side; parameter injection of another account's id returns nothing
   / is rejected. *(READ-001 SI-001; WRITEAPI-001 SI-001)* — 🟡 *(READ half PROVEN: account/session
@@ -82,7 +84,11 @@ Proven by SI/adversarial assertions woven into the journeys, never a separate pa
   event taxonomy accrues as each journey lands.)*
 - **DOD-INV-9 — Agents appear; no lifecycle control.** No register/create/start/stop/set-current
   in the portal; the only agent-control action is the emergency suspend lever.
-  *(AGENTS-001 AC-001; [[project-portal-model]])* — ❌
+  *(AGENTS-001 AC-001; [[project-portal-model]])* — ✅
+  *(PROVEN live by J-AGENTS Playwright (`e2e/j-agents.spec.ts`, INV-9 case, green): the served Agents
+  home exposes zero lifecycle controls — `getByRole("button", {name: /register|start agent|stop agent|create agent|set current/i})`
+  has count 0, the matching text has count 0, and the nav is exactly the 3 M8 sections. The only
+  outbound affordance is the ceremony signpost link. The suspend lever lands with LEVER-001.)*
 
 ---
 
@@ -218,7 +224,11 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   affordance + alerts strip + posture header; no separate Dashboard; no register/start/stop/
   set-current; empty state routes to the ceremony. *(AGENTS-001 AC-001/002)* — ❌
 - **DOD-AGENT-2 — No identity data in browser storage.** No agent fingerprints/presence/session
-  in localStorage/IndexedDB; nothing restored from disk on reopen. *(AGENTS-001 SI-001)* — ❌
+  in localStorage/IndexedDB; nothing restored from disk on reopen. *(AGENTS-001 SI-001)* — ✅
+  *(PROVEN live by J-AGENTS Playwright (`e2e/j-agents.spec.ts`, AGENT-2/INV-2 case, green): after
+  logging in and visiting both the Agents home and the Account screen, `JSON.stringify(localStorage)`
+  and `JSON.stringify(sessionStorage)` are each `"{}"`, and `indexedDB.databases()` returns length 0.
+  The session rides an httpOnly cookie only; the browser persists no agent/identity/session data.)*
 
 ---
 

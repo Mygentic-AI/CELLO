@@ -550,3 +550,32 @@ endpoints are exercised live by login.)
 **Remaining.** AGENTS-001 polish (alerts/posture + browser-storage SI → DOD-AGENT-1/2, DOD-INV-9),
 WRITEAPI-001 + LEVER-001 (SPINE-4, INV-6), TRUST-001 (SPINE-6 pipe, INV-2 browser-storage half), the
 multi-node PRESENCE e2e + directory auto-bring-up, E2E close gate.
+
+---
+
+## 2026-06-27 — DOD-INV-9 ✅ + DOD-AGENT-2 ✅ (J-AGENTS); INV-2 browser-half proven; AUTH-004 wall centralized
+
+**J-AGENTS Playwright (`e2e/j-agents.spec.ts`, 2/2 green).** Two invariant cases proven live against
+the served portal:
+- *INV-9 — agents appear, no lifecycle control:* the Agents home exposes zero register/start/stop/
+  create/set-current controls (button + text counts both 0), and the nav is exactly the 3 M8
+  sections. The only outbound affordance is the ceremony signpost. `DOD-INV-9` ❌ → ✅.
+- *AGENT-2/INV-2 browser half — no identity data in web storage:* after visiting the Agents home and
+  the Account screen, `localStorage`/`sessionStorage` are `"{}"` and `indexedDB.databases()` is
+  length 0. The session rides an httpOnly cookie only. `DOD-AGENT-2` ❌ → ✅, and `DOD-INV-2`'s
+  browser-storage half flipped from pending to PROVEN (its note now scopes the residual to the
+  served WRITE paths under WRITEAPI-001/TRUST-001). cello-portal `ac83cf1`.
+
+**AUTH-004 fallback-finder hardening (centralize the wall).** The fallback-finder (`ad26edca`) found
+NO silent fallbacks but raised one MEDIUM: the strong-auth wall was enforced PER-PAGE — each (app)
+server component opted in by calling `isStrongAuthWalled`. A new (app) route added without that call
+would be silently ungated (fail-open by omission). Fixed: the proxy now forwards `x-cello-pathname`
+(a layout can't read the pathname), and `(app)/layout.tsx` enforces the wall centrally for every
+route except `/account` (the wall destination). Removed the now-redundant per-page checks from the
+agents home and trust-signals pages. The default is now fail-closed: a new route is gated unless it
+explicitly is `/account`. typecheck + lint clean; **J-grace re-run 4/4 green** (centralized gate
+holds). cello-portal `b66cf32`.
+
+**Remaining.** AGENTS-001 polish (alerts/posture header → DOD-AGENT-1), WRITEAPI-001 + LEVER-001
+(SPINE-4, INV-6 suspend lever), TRUST-001 (SPINE-6 pipe, INV-2 server-write half), the multi-node
+PRESENCE e2e + directory auto-bring-up, E2E close gate.
