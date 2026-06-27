@@ -188,9 +188,9 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   by the directory against real data — online for a fresh node (SPINE-3), last-seen for a stale one
   (presence-001-repository AC-003 + the SPINE-3 first run).)*
 - **DOD-READ-3 — Directory-unreachable = honest empty.** Stale/empty marked, never fabricated.
-  *(READ-001 DB-001)* — 🟡 *(coded: getAccountAgents returns empty MARKED unreachable + logs
-  portal.directory.unreachable + the Agents home shows an honest "directory unreachable" banner,
-  never fabricated agents. A focused degraded-path test is pending.)*
+  *(READ-001 DB-001)* — ✅ *(PROVEN by agents-degraded.integration: getAccountAgents against a dead
+  directory returns `{ agents: [], unreachable: true }` + a portal.directory.unreachable WARN — never
+  fabricated agents; the Agents home shows an honest "directory unreachable" banner.)*
 
 ---
 
