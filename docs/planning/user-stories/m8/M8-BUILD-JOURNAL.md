@@ -268,3 +268,27 @@ in the J-SPINE harness seeded with the known operator + an agent, swap the harne
 → flips SPINE-2 to ✅ and lights up SPINE-3 (agents appear with presence).
 
 **Blocker needing Andre.** None.
+
+---
+
+## 2026-06-27 — READ-001 endpoint done; harness bring-up sequenced with PRESENCE-001; pivot to J-AUTH
+
+**Directory endpoint (READ-001 first deliverable).** Added `POST /internal/account-by-email-stub` to
+the directory's internal API (`packages/directory/src/internal-api-server.ts`) — API-key protected
+(`x-cello-internal-api-key`), `SELECT account_id FROM user_accounts WHERE email_stub_hash=$1`, 200
+`{account_id}` / 404 / 401 / 400. Exactly the contract the portal `HttpDirectoryClient` targets.
+In-process contract test (real HTTP server + recording stub pool, no docker) — **5/5 green**.
+Worktree `trustless-cello-m8-read001`, branch `m8-read-001`, commits `57483b4f` + `aceab8ce` (kept
+LOCAL — a trustless-cello feature branch is not pushed; only main/docs are).
+
+**Sequencing decision (deliberate).** The rest of READ-001 — spawning the real directory + a
+Flyway-migrated Postgres inside the J-SPINE Playwright harness, seeding `user_accounts`, and swapping
+the portal off the stub onto the HTTP adapter — is a heavyweight cross-repo lift, and it ALSO needs
+PRESENCE-001's `agent_presence` for SPINE-3. Rather than stand the directory up twice (a fragile
+half-harness for SPINE-2 now, then again for SPINE-3), I'm batching the real-directory harness
+bring-up with PRESENCE-001 so it serves SPINE-2 (account resolution) AND SPINE-3 (agents + presence)
+in one step. SPINE-2 stays honestly 🟠 until then; the endpoint is ready and contract-locked.
+
+**Next red.** Advance the next fully-unblocked tier — **J-AUTH: AUTH-002 (WebAuthn enroll/login,
+multi-credential, step-up) + AUTH-003 (TOTP + backup codes)** — pure portal-backend, no directory.
+Then the batched directory-harness + PRESENCE-001 step lights up SPINE-2 ✅ and SPINE-3.
