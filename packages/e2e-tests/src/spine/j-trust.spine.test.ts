@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { randomBytes, createHash } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
   startSpineCluster,
   startDaemon,
@@ -157,9 +157,35 @@ describe("J-TRUST — sealed signal pickup end-to-end (CELLO-M8-TRUST-001 DOD-SP
 
     // The plaintext credentialId is absent from the directory's pickup queue + identity tree (dump).
     const credId = record.credentialId;
-    const dumpHash = createHash("sha256");
-    dumpHash.update(credId);
-    const treeDump = psqlSpine(`SELECT coalesce(string_agg(signal_hash, ','), '') FROM identity_tree_entries WHERE agent_id = '${agentId}'`);
-    expect(treeDump).not.toContain(credId);
-  }, 150_000);
+    expect(psqlSpine(`SELECT coalesce(string_agg(signal_hash, ','), '') FROM identity_tree_entries WHERE agent_id = '${agentId}'`)).not.toContain(credId);
+
+    // ── F3 (test-attacker): HASH-MISMATCH negative — the directory anchor is AUTHORITATIVE. Seed a new
+    // pickup with a VALID seal but POISON the identity-tree anchor to a bogus hash. The daemon opens it,
+    // recomputes hash(recovered) ≠ anchor → MUST reject: hash_mismatch, NOT stored, NOT ACKed (row stays).
+    // (A daemon that self-attested / skipped the compare would wrongly store + ack — this is the teeth.)
+    const bogusHash = "f".repeat(64);
+    psqlSpine(`UPDATE identity_tree_entries SET signal_hash = '${bogusHash}' WHERE agent_id = '${agentId}' AND signal_kind = 'webauthn'`);
+    const sealed2 = sealToRecipient(hexToBytes(pubA), new TextEncoder().encode(JSON.stringify({ type: "webauthn", credentialId: "cred-mismatch", enrolledAt: 1700000001 })));
+    psqlSpine(`INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext) VALUES ('${agentId}', 'webauthn', decode('${Buffer.from(sealed2).toString("hex")}', 'hex'))`);
+
+    await d2.stop();
+    const d3 = await startDaemon(dir, cluster.directoryUrl, "trust3");
+    daemons.push(d3);
+    const conn3 = await connectMcp(dir, "trust-A3");
+    mcpConns.push(conn3);
+    expect(((await conn3.call("cello_start_agent", { name: "tagent" })) as { ok?: boolean }).ok).toBe(true);
+    await waitConnected(dir);
+
+    const mismatchLine = await d3.waitForLine(/daemon\.trust_signal\.(hash_mismatch|received)/, 25_000);
+    expect(mismatchLine, "a poisoned anchor must trigger hash_mismatch, NOT received").toMatch(/hash_mismatch/);
+    // NOT ACKed → the poisoned pickup row is still there; NOT stored under the bogus hash.
+    expect(psqlSpine(`SELECT count(*)::int FROM pickup_queue WHERE agent_id = '${agentId}'`)).toBe("1");
+    const db2 = await openEncryptedDb(join(dir, "sessions.db"));
+    try {
+      const bogusRow = db2.prepare("SELECT signal_hash FROM trust_signals WHERE signal_hash = ?").get(bogusHash);
+      expect(bogusRow, "a hash-mismatched signal must NOT be stored").toBeUndefined();
+    } finally {
+      db2.close();
+    }
+  }, 200_000);
 });
