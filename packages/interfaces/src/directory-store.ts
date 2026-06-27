@@ -261,6 +261,13 @@ export interface DirectoryStore {
    */
   isAgentBurned(kLocalPubkeyHex: string): Promise<boolean>;
 
+  /**
+   * The k_local pubkeys of ALL burned agents — for the per-node burn reconcile sweep, so a node that
+   * was idle/offline when the (replicated) burn arrived still zeroes its own K_server share without
+   * waiting for a ceremony attempt (LEVER-002, the federation-wide guarantee).
+   */
+  listBurnedAgentPubkeys(): Promise<string[]>;
+
   // ─── CELLO-M8-TRUST-001: trust-signal pickup delivery ──────────────────────
   /** Resolve the directory agent_id for a k_local pubkey (the pickup queue is keyed by agent_id). */
   getAgentIdByPubkey(kLocalPubkeyHex: string): Promise<string | null>;

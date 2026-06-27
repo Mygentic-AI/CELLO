@@ -10,6 +10,8 @@ import pg from "pg";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { createInternalApiServer } from "../internal-api-server.js";
+import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
+import type { Logger } from "@cello-protocol/interfaces";
 
 const DB_URL = process.env.DATABASE_URL ?? "postgresql://postgres:dev@localhost:5433/cello_spine";
 const API_KEY = "test-burn-live-key";
@@ -85,6 +87,15 @@ describeLive("LEVER-002 live — burn is permanent; accountability survives", ()
       [AGENT],
     );
     expect(profile.rows[0]).toMatchObject({ k_local_pubkey: KP, account_id: ACCOUNT, status: "active" });
+  });
+
+  it("the burned agent is listed for the per-node reconcile sweep (LEVER-002 idle-node guarantee)", async () => {
+    // The agent is burned from the prior test. The reconcile sweep lists burned agents by k_local so
+    // an idle/offline node can zero its own share without a ceremony attempt.
+    const store = new PgDirectoryStore(pool, { info() {}, warn() {}, error() {}, debug() {} } as unknown as Logger);
+    const burned = await store.listBurnedAgentPubkeys();
+    expect(burned).toContain(KP);
+    expect(await store.isAgentBurned(KP)).toBe(true);
   });
 
   it("a pause is reversible, but once burned it stays burned (burn is monotonic)", async () => {

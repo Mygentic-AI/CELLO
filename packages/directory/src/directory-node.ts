@@ -458,6 +458,7 @@ export class CelloDirectoryNode {
   readonly #pgPool: import("pg").Pool | undefined;
   // PRESENCE-001: per-node liveness heartbeat timer (refreshes directory_nodes.last_heartbeat_at).
   #presenceHeartbeat: ReturnType<typeof setInterval> | undefined;
+  #burnReconcile: ReturnType<typeof setInterval> | undefined;
   // OPS-AGENT-001: stash phone_stub_hash from consumed token for account linking after DKG completes
   // agentPubkeyHex → { phoneStubHash, emailStubHash }
   readonly #pendingPreAuthData = new Map<string, { phoneStubHash: string; emailStubHash: string }>();
@@ -655,7 +656,39 @@ export class CelloDirectoryNode {
   }
 
   /** PRESENCE-001: stop the liveness heartbeat (called on node shutdown). */
+  /**
+   * LEVER-002 burn reconcile: zero THIS node's K_server share for every burned agent. Catches the
+   * idle/offline case — a node that was not asked to sign when the (replicated) burn arrived still
+   * destroys its own material, so the federation-wide guarantee holds without a ceremony attempt.
+   * Idempotent (zeroing an already-zeroed share is a no-op).
+   */
+  async reconcileBurnedShares(): Promise<void> {
+    let burned: string[];
+    try {
+      burned = await this.#store.listBurnedAgentPubkeys();
+    } catch (err) {
+      this.#logger?.warn("frost.burn.reconcile.failed", {
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    for (const pubkey of burned) {
+      try {
+        await this.#frostHandler.destroyShares(pubkey);
+      } catch (err) {
+        this.#logger?.error("frost.share.destroy.failed", {
+          agentShort: pubkey.slice(0, 16),
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
   stopPresenceHeartbeat(): void {
+    if (this.#burnReconcile) {
+      clearInterval(this.#burnReconcile);
+      this.#burnReconcile = undefined;
+    }
     if (this.#presenceHeartbeat) {
       clearInterval(this.#presenceHeartbeat);
       this.#presenceHeartbeat = undefined;
@@ -702,6 +735,15 @@ export class CelloDirectoryNode {
       // Coarse cadence — one tiny per-node write (NOT per agent, NOT per ping).
       this.#presenceHeartbeat = setInterval(tick, 45_000);
       this.#presenceHeartbeat.unref?.();
+    }
+
+    // LEVER-002: burn reconcile — sweep burned agents and zero this node's shares, on boot (catches a
+    // burn that arrived while the node was down) and on a coarse cadence (catches an idle agent never
+    // asked to sign). Idempotent + unref'd so it never keeps the process alive.
+    if (this.#pgPool && !this.#burnReconcile) {
+      void this.reconcileBurnedShares();
+      this.#burnReconcile = setInterval(() => void this.reconcileBurnedShares(), 60_000);
+      this.#burnReconcile.unref?.();
     }
 
     // OBS-001 AC-002: directory startup log

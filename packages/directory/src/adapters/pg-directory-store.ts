@@ -356,6 +356,16 @@ export class PgDirectoryStore implements DirectoryStore {
     return (result.rowCount ?? 0) > 0;
   }
 
+  async listBurnedAgentPubkeys(): Promise<string[]> {
+    const result = await this.#pool.query<{ k_local_pubkey: string }>(
+      `SELECT p.k_local_pubkey
+         FROM agent_suspensions s
+         JOIN agent_profiles p ON p.agent_id = s.agent_id
+        WHERE s.burned = true`,
+    );
+    return result.rows.map((r) => r.k_local_pubkey);
+  }
+
   async isAgentBurned(kLocalPubkeyHex: string): Promise<boolean> {
     const result = await this.#pool.query(
       `SELECT 1 FROM agent_suspensions s

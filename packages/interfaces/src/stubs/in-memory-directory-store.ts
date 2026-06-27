@@ -197,6 +197,10 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     return this.#burnedPubkeys.has(kLocalPubkeyHex);
   }
 
+  async listBurnedAgentPubkeys(): Promise<string[]> {
+    return [...this.#burnedPubkeys];
+  }
+
   // ─── CELLO-M8-TRUST-001: trust-signal pickup (in-memory) ───────────────────
   readonly #pubkeyToAgentId = new Map<string, string>(); // k_local_pubkey hex → agent_id
   readonly #pickup = new Map<string, PickupItem[]>(); // agent_id → queued items
