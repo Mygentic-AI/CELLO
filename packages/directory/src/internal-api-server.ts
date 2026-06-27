@@ -1,8 +1,10 @@
 /**
- * Internal API Server — OPS-AGENT-001
+ * Internal API Server — OPS-AGENT-001 + READ-001
  *
- * Provides the POST /internal/pre-authorize endpoint for the Operations Agent
- * to request pre-authorization tokens after phone + email verification.
+ * Endpoints (all API-key protected, never internet-exposed):
+ *   POST /internal/pre-authorize          — OPS-AGENT-001: issue a pre-auth token.
+ *   POST /internal/account-by-email-stub   — READ-001: resolve an account by email_stub_hash
+ *                                            (the portal's ceremony-gated sign-in lookup).
  *
  * Security:
  *   SI-001: Protected by API key validation (x-cello-internal-api-key header).
@@ -131,6 +133,77 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
         token: result.token,
         expiresAt: result.expiresAt.toISOString(),
       }));
+      return;
+    }
+
+    // ─── POST /internal/account-by-email-stub (READ-001) ─────────────────────────
+    // Resolve an operator account by the SHA-256 hash of their email. The portal calls this to
+    // gate sign-in (DOD-INV-1): a hit means a real ceremony-minted account exists; a 404 means
+    // "no account" → the portal shows the signpost and mints nothing. Hash-only; no plaintext.
+    if (req.method === "POST" && req.url === "/internal/account-by-email-stub") {
+      const providedKey = req.headers["x-cello-internal-api-key"];
+      if (!providedKey || providedKey !== internalApiKey) {
+        logger.warn("account.lookup.auth.failed", { remoteAddr, correlationId });
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+
+      let body: Buffer;
+      try {
+        body = await readBody(req);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "could not read request body" }));
+        return;
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body.toString("utf8"));
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid JSON body" }));
+        return;
+      }
+
+      const p = parsed as Record<string, unknown>;
+      const emailStubHash = typeof p["emailStubHash"] === "string" ? p["emailStubHash"] : null;
+      if (!emailStubHash) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "missing required field: emailStubHash" }));
+        return;
+      }
+
+      let accountId: string | null;
+      try {
+        const result = await pool.query<{ account_id: string }>(
+          "SELECT account_id FROM user_accounts WHERE email_stub_hash = $1",
+          [emailStubHash],
+        );
+        accountId = result.rows[0]?.account_id ?? null;
+      } catch (err: unknown) {
+        const pgErr = err as { code?: string };
+        const isDbError = typeof pgErr.code === "string" && /^\d{5}$/.test(pgErr.code);
+        const reason = isDbError
+          ? `database_error:${pgErr.code}`
+          : err instanceof Error ? err.message : String(err);
+        logger.error("account.lookup.failed", { reason, correlationId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "account lookup failed" }));
+        return;
+      }
+
+      if (!accountId) {
+        logger.info("account.lookup.miss", { correlationId });
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "not found" }));
+        return;
+      }
+
+      logger.info("account.lookup.hit", { accountId, correlationId });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ account_id: accountId }));
       return;
     }
 
