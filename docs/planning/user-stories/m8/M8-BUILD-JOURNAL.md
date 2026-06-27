@@ -746,3 +746,45 @@ DOD-TRUST-3) and the DAEMON pickup (`openSealed` → recompute+verify hash → s
 `daemon.trust_signal.received verified:true`) — both cross-process, proven by a J-TRUST spine test;
 plus the cello-client publish cascade (DOD-TRUST-4, Andre-gated) + the trustless-cello dep update
 (DOD-TRUST-5... actually DOD-TRUST-4 publish / AC-005 dep-update). cello-portal `6aad444` (pushed).
+
+---
+
+## 2026-06-27 — TRUST-001 directory delivery foundation: V35 + pickup drain/ACK (DOD-TRUST-3 mechanics)
+
+The directory-delivery half's foundation — schema + queue mechanics, proven live. The directory-node
+reconnect wiring + daemon pickup + J-TRUST spine are the final interlocking cross-process piece.
+
+**V35 — pickup_queue.signal_kind.** The daemon must verify openSealed(ciphertext) recomputes to the
+directory's hash (AC-001). The hash is authoritative in identity_tree_entries, so the pickup delivery
+JOINs it by (agent_id, signal_kind) — but V34's pickup_queue lacked signal_kind. V35 adds it (V34
+already applied → new migration, not a modify). The seam's trust_signal_ciphertext payload now carries
+{ciphertext, signalKind}; the hash stays SINGLE-SOURCED in the identity tree (never denormalized onto
+the queue). SSM expected migration 34→35. Threaded through the portal (AgentWrite + wire + handoff).
+WRITEAPI contract 12/12 + live 5/5 (cello_spine) green.
+
+**Pickup drain + ACK-delete (`pickup-repository.ts`).** drainPickupForAgent returns an agent's unacked
+sealed signals (oldest first), each LEFT JOINed to its identity-tree hash (the daemon's anchor).
+ackPickupDelete DELETEs the row — "the directory deletes the ciphertext" (AC-002: queue empty after
+ACK); idempotent. Mirrors the notification path (enqueue→drain→acknowledge), satisfying DOD-TRUST-3's
+"reuses the notification/delivery path." Live test 1/1 (cello_spine): drain returns 2 with the joined
+hash, ACK each → queue empty.
+
+**Tags.** DOD-TRUST-3 mechanics proven (queue + reuse pattern + ack-delete); the migration-applied-
+against-prior check rides the spine flyway run (V35 applied cleanly atop V1–V34). Directory branch
+m8-read-001 `726c32a3`; cello-portal `02d4379`.
+
+**REMAINING for SPINE-6 (the final interlocking unit — directory-node + daemon + spine + publish):**
+1. directory-node reconnect drain: alongside the notification drain, `drainPickupForAgent` → `#sendFrame`
+   a `trust_signal_pickup` frame {id, ciphertext, signalKind, signalHash} per item; on the daemon's
+   `trust_signal_ack` frame → `ackPickupDelete`. New frame types in directory-types.ts (directory-local).
+2. daemon (cello-client): registerInboundHandler for trust_signal_pickup → openSealed(k_local seed) →
+   recompute hash(canonicalJson) → compare to signalHash → store + send trust_signal_ack (verified:true);
+   mismatch → daemon.trust_signal.hash_mismatch, do NOT store/ACK. Rebuild local dist for the spine.
+3. J-TRUST spine test (J-SUSPEND pattern): seed identity_tree+pickup (as the portal would) → daemon
+   online pulls → openSealed → verify → ACK → assert queue empty + daemon stored + directory holds only
+   the hash. ≥2-node for the cross-node-read half (AC-001).
+4. DOD-TRUST-4 cello-client publish cascade (AC-004/005) — Andre-gated.
+
+**Env note.** :5433 is the spine's docker postgres (cello_spine, full V1–V35). The old cello_dev (full
+history) was on the stopped trustless-cello-postgres-1; the WRITEAPI/pickup live tests now run against
+cello_spine (DATABASE_URL override). Default portal e2e uses the stub (no :5433 dep).
