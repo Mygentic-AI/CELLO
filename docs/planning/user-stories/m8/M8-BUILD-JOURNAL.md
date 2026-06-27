@@ -200,3 +200,71 @@ SPINE-1 AC-001b (authed shell).
 
 **Blocker needing Andre.** None. (No deploy, no merge, no design fork. Code stays on `m8-assembly`,
 unpushed. These planning-doc updates go to `trustless-cello` main, which is authorized.)
+
+---
+
+## 2026-06-27 — SPINE-2 LIVE: magic-link → durable session (AUTH-001); 3 reviewers, all fixed
+
+**Repo / branch / HEAD.** `cello-portal` branch `m8-assembly`, HEAD **`d73f55f`** (pushed to origin —
+Andre confirmed cello-portal has no CI, so the branch is pushed freely). `cello-portal` is no longer
+unpushed (the earlier "never push code" rule was about the trustless-cello deploy; this repo has no
+pipeline).
+
+**Directory map (Explore agent).** The directory's `user_accounts` table has `account_id` (UUID PK) +
+`email_stub_hash` (SHA-256 of lowercase+trim email, V30). Internal API = raw-`http`,
+header `x-cello-internal-api-key` exact-match against `INTERNAL_API_KEY`, default port 8081, and it
+runs INDEPENDENTLY of the FROST/libp2p stack (so a lightweight account-read endpoint is feasible for
+READ-001). `agent_presence` does NOT exist yet (confirms PRESENCE-001 builds it). `agent_profiles`
+has `account_id` (V23) + `agent_id` (V27).
+
+**What was built (AUTH-001 / SPINE-2 portal half).** Magic-link request/verify behind a
+**DirectoryClient** seam (M4 adapter): interface + real HTTP adapter (to the contract above; the
+`/internal/account-by-email-stub` endpoint itself is READ-001) + an env-seeded local stub, selected
+by a fail-loud composition root (stub only under `CELLO_ENV=local`). requestMagicLink resolves the
+account by `email_stub_hash`, persists the KMS-encrypted account row on match, issues a hashed
+one-time link + 6-digit code; verify atomically consumes (`FOR UPDATE SKIP LOCKED`) and sets the
+opaque httpOnly session cookie. Two route handlers with distinct reason+guidance; events
+`portal.auth.magic_link.*` + `portal.session.started`.
+
+**Live-test run (the map) — HEAD `d73f55f`:** J-SPINE **4/4 green** — SPINE-1 (AC-001a tokens RENDERED,
+AC-002 redirect-no-PII, AC-001b authed shell + operator-PII positive control) AND SPINE-2 (`/` gated →
+request → code → verify → durable opaque httpOnly session → gated Agents home → live cookie
+server-side-revocable). SPINE-3..6 fixme. **vitest 12/12** (4 SCAFFOLD-002 + 8 AUTH-001: unknown-email
+no-token/no-account, no-enumeration response parity, no-enumeration rate-limit parity, single-use
+sequential, single-use CONCURRENT (→ exactly 1 session), expiry, attempt-cap-BLOCKS, request
+rate-limit). Floor: typecheck + lint clean.
+
+**Reviewers (all three, on the SPINE-2 unit) — every finding fixed:**
+- *code-reviewer (opus)* — HIGH (DOD-INV-1): the per-email rate limit counted issued tokens (which
+  exist only for resolved emails) → a 429-known-vs-200-unknown **enumeration oracle**. Fixed: new
+  `magic_link_requests` table (migration **0002**, hash-only) records every request → the limit fires
+  identically for known/unknown. HIGH: `devCode` returned in dev+staging → restricted to `local` only.
+  MED: open redirect via protocol-relative `next` (`//evil.com`) → reject `//`. MED: timing
+  side-channel on the resolved path → **tracked residual** (alpha-acceptable; noted on DOD-INV-1).
+  LOW: verify GET swallowed all errors → rethrow non-`MagicLinkError`; reason leak → unified to
+  `invalid`/`rate_limited`; explicit `FOR UPDATE SKIP LOCKED`; dead `no_account` branch dropped.
+  Verified-correct: directory outage surfaces (not flattened to "no account"); cookie flags; no
+  plaintext at rest.
+- *fallback-finder* — same `devCode` + `CELLO_ENV`-unset findings; the latter fixed by requiring
+  `CELLO_ENV` when `NODE_ENV=production`. http-client 200-without-`account_id` → now throws.
+  Confirmed the auth GRANT path is fully honest (nothing fails into a session).
+- *test-attacker* — 4 blocking test-quality gaps, all closed: no-enumeration (response + rate-limit
+  parity), CONCURRENT single-use, attempt-cap actually BLOCKS, and SPINE-2 now proves `/` is gated
+  AND the live cookie session is server-side-revocable end-to-end.
+
+**DoD flips.** `DOD-SPINE-1` → ✅ (J-SPINE 4/4). `DOD-SPINE-2` → 🟠 (portal half live end-to-end;
+real-directory resolution = READ-001). `DOD-INV-1` → 🟡 (ceremony-gated + no-enumeration proven by
+AUTH-001 tests; real directory = READ-001; timing residual tracked). `DOD-INV-4` → ✅ (opaque httpOnly
+cookie + server-side revoke fails the next gated request, proven live + integration). `DOD-AUTH-7` →
+🟡 (single-use/concurrent/expiry/cap/rate-limit proven by AUTH-001 integration tests).
+
+**Cron.** A 30-minute watchdog (`fd223740`, fires :07/:37, session-only) is running per Andre's
+request — each fire: apply finished reviewers, advance the lowest non-green DoD line, drift-check
+✅ flips, commit/push, never block.
+
+**Next red (one sentence).** `READ-001` — add the directory `/internal/account-by-email-stub` endpoint
+(trustless-cello, directory-side) + the account/agents read path, stand up a real directory + Postgres
+in the J-SPINE harness seeded with the known operator + an agent, swap the harness to the HTTP adapter
+→ flips SPINE-2 to ✅ and lights up SPINE-3 (agents appear with presence).
+
+**Blocker needing Andre.** None.
