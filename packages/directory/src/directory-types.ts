@@ -318,6 +318,28 @@ export interface AgentRevocationError {
   agent_id?: string;
 }
 
+// ─── CELLO-M8-TRUST-001: trust-signal pickup delivery ──────────────────────────
+// The directory delivers a sealed trust signal to the agent's daemon over signaling (OUTBOUND); the
+// daemon opens it with its k_local, verifies the recomputed hash against signal_hash, stores it, and
+// ACKs by id (INBOUND) — after which the directory DELETEs the pickup_queue row (capability to read
+// the signal dies at the daemon; the directory keeps only the hash).
+export interface TrustSignalPickup {
+  type: "trust_signal_pickup";
+  /** pickup_queue.id — the ACK handle. */
+  id: string;
+  signal_kind: string;
+  /** The authoritative directory hash (identity tree), hex — the daemon's verification anchor. */
+  signal_hash: string;
+  /** The opaque sealed ciphertext; only the agent's k_local seed opens it. */
+  ciphertext: Uint8Array;
+}
+
+export interface TrustSignalAck {
+  type: "trust_signal_ack";
+  /** The pickup_queue.id the daemon verified + stored; the directory deletes it on receipt. */
+  id: string;
+}
+
 export interface NotAuthenticated {
   type: "not_authenticated";
 }

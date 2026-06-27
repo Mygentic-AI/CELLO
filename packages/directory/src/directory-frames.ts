@@ -31,6 +31,8 @@ import type {
   RevokeAgentRequest,
   AgentRevocationAck,
   AgentRevocationError,
+  TrustSignalPickup,
+  TrustSignalAck,
 } from "./directory-types.js";
 
 const ENC = new Encoder({ tagUint8Array: false });
@@ -325,7 +327,22 @@ export type SealInterruptedAckFrame = { type: "seal_interrupted_ack"; sessionId:
 /** initiatorPubkey is included so the directory can route the rejection back to the initiator by direct lookup in #streams. */
 export type SealInterruptedRejectionFrame = { type: "seal_interrupted_rejection"; sessionId: string; initiatorPubkey: string; reason: string };
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest;
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck;
+
+/**
+ * CELLO-M8-TRUST-001: encode a trust-signal pickup for delivery to the agent's daemon (OUTBOUND).
+ * Carries the opaque sealed ciphertext + the authoritative identity-tree hash (the daemon's
+ * verification anchor) + the ACK handle. Canonical CBOR.
+ */
+export function encodeTrustSignalPickup(frame: TrustSignalPickup): Uint8Array {
+  return ENC.encode({
+    type: "trust_signal_pickup",
+    id: frame.id,
+    signal_kind: frame.signal_kind,
+    signal_hash: frame.signal_hash,
+    ciphertext: frame.ciphertext,
+  });
+}
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -454,6 +471,14 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     const epoch_id = typeof o["epoch_id"] === "string" ? o["epoch_id"] : undefined;
     const reason = typeof o["reason"] === "string" ? o["reason"] : undefined;
     return { type: "revoke_agent", agent_id, epoch_id, reason, revoked_at, signature };
+  }
+
+  if (o["type"] === "trust_signal_ack") {
+    // CELLO-M8-TRUST-001: the daemon confirms it opened + verified + stored a pickup; the directory
+    // then DELETEs that pickup_queue row. id-only — nothing sensitive on the wire.
+    const id = typeof o["id"] === "string" ? o["id"] : null;
+    if (id === null) return null;
+    return { type: "trust_signal_ack", id };
   }
 
   if (o["type"] === "seal_attempt") {
