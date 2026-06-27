@@ -5,6 +5,8 @@
  *   POST /internal/pre-authorize          — OPS-AGENT-001: issue a pre-auth token.
  *   POST /internal/account-by-email-stub   — READ-001: resolve an account by email_stub_hash
  *                                            (the portal's ceremony-gated sign-in lookup).
+ *   POST /internal/agents-by-account        — READ-001/PRESENCE-001: the account's agents with
+ *                                            honest presence (online iff row online AND node fresh).
  *
  * Security:
  *   SI-001: Protected by API key validation (x-cello-internal-api-key header).
@@ -33,6 +35,11 @@ import { randomBytes } from "node:crypto";
 import type pg from "pg";
 import type { Logger } from "@cello-protocol/interfaces";
 import { issuePreAuthToken } from "./pre-auth-token-repository.js";
+import { listAccountAgentsWithPresence } from "./agent-presence-repository.js";
+
+// READ-001: a node is considered "fresh" for the presence read rule if it heartbeat within this
+// window (2× the 45s heartbeat cadence + slack). A staler owning node ages its agents to last-seen.
+const PRESENCE_NODE_FRESHNESS_MS = 120_000;
 
 export interface InternalApiServerOptions {
   pool: pg.Pool;
@@ -204,6 +211,77 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
       logger.info("account.lookup.hit", { accountId, correlationId });
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ account_id: accountId }));
+      return;
+    }
+
+    // ─── POST /internal/agents-by-account (READ-001 / PRESENCE-001) ──────────────
+    // The account's agents with HONEST presence (online iff the presence row is online AND the
+    // owning node's heartbeat is fresh). Account-scoped by the body's accountId; hashes/flags only.
+    if (req.method === "POST" && req.url === "/internal/agents-by-account") {
+      const providedKey = req.headers["x-cello-internal-api-key"];
+      if (!providedKey || providedKey !== internalApiKey) {
+        logger.warn("agents.lookup.auth.failed", { remoteAddr, correlationId });
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+
+      let body: Buffer;
+      try {
+        body = await readBody(req);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "could not read request body" }));
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body.toString("utf8"));
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid JSON body" }));
+        return;
+      }
+      const accountId =
+        typeof (parsed as Record<string, unknown>)["accountId"] === "string"
+          ? ((parsed as Record<string, unknown>)["accountId"] as string)
+          : null;
+      if (!accountId) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "missing required field: accountId" }));
+        return;
+      }
+
+      let agents: Awaited<ReturnType<typeof listAccountAgentsWithPresence>>;
+      try {
+        agents = await listAccountAgentsWithPresence(
+          pool,
+          accountId,
+          PRESENCE_NODE_FRESHNESS_MS,
+        );
+      } catch (err: unknown) {
+        const pgErr = err as { code?: string };
+        const isDbError = typeof pgErr.code === "string" && /^\d{5}$/.test(pgErr.code);
+        const reason = isDbError
+          ? `database_error:${pgErr.code}`
+          : err instanceof Error ? err.message : String(err);
+        logger.error("agents.lookup.failed", { reason, correlationId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "agents lookup failed" }));
+        return;
+      }
+
+      logger.info("agents.lookup.ok", { accountId, count: agents.length, correlationId });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          agents: agents.map((a) => ({
+            k_local_pubkey: a.kLocalPubkey,
+            online: a.online,
+            last_seen_at: a.lastSeenAt ? a.lastSeenAt.toISOString() : null,
+          })),
+        }),
+      );
       return;
     }
 
