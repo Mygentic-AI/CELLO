@@ -286,12 +286,11 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | IAM Instance Profile | cello-agent-ssm-role |
 | IAM Role | cello-agent-ssm-role |
 | Secrets Manager Key Path | cello/dev/demo-agent/identity-key |
-| Agent ID | c94dfa2e5df1b5b4f00a3e174f4c71e4 |
-| Agent pubkey (K_local) | 12ccbfd5fa4049177e4c4a81f7462641c1ab4490bfd640ea7e6407a69d06a2f8 |
-| SQLCipher DB path | /opt/cello-demo/data/client.db |
-| @cello-protocol/connect version | 0.0.30 (beta) |
-| Service status | active — REGISTERED 2026-06-07 — re-registered after DB wipe; demo.started confirmed in journalctl |
-| Previous Agent IDs | a2c55e2721f45cfa86cb3417a76e3f7b, c684a3d274ad4ecc716d1d6fd420545c, ba493e6eca98924f02378ac1a5de81d3 (all invalidated — directory DB wiped 2026-06-06) |
+| Agent pubkey (K_local) | bc94ead650acf8ed21747d9571ef0aa7fc9bfba5511dfeca13bb6cfa9fdc0b61 (current; the published demo identity per M7 write-up. Prior: 12ccbfd5… / c94dfa2e… directory agent_id — superseded) |
+| Daemon state dir (CELLO_DIR) | /opt/cello-demo/.cello — SQLCipher `sessions.db` (whole-DB encrypted, post-PERSIST-002). The old `/opt/cello-demo/data/client.db` is a dead M6 leftover (unused). |
+| @cello-protocol versions | **daemon 0.0.13 / cli 0.0.11 / connect 0.0.49** (+ crypto 0.0.11, transport 0.0.8, client 0.0.37, protocol-types 0.0.8) — updated 2026-06-27 |
+| Architecture | M7 shim+daemon: `cello-daemon.service` (the node — key, SQLCipher DB, libp2p, directory connection) + `cello-demo.service` (the app → spawns `cello-mcp` → daemon socket). Both active. |
+| Service status | **UPDATED 2026-06-27 to CONN-001 (daemon 0.0.13)** — bumped the local @cello-protocol packages; the 0.0.13 daemon migrated the pre-PERSIST-002 flat-file state → SQLCipher cleanly (`persist.identity.migrated` agentsMigrated:1, rowsMigrated:17; backup at `/opt/cello-demo/.cello.bak-pre-0013` + `keys.bak-pre-0013`); agent `default` (bc94ead6…) reloads, per-agent directory connection up (`directory.signaling.connected`), demo.started confirmed. Now runs the same per-agent path operators run. |
 | Access | SSM Session Manager only - no key pair, no inbound SG rules |
 | Inbound rules | None |
 | Outbound rules | TCP 443 to 0.0.0.0/0 only |
