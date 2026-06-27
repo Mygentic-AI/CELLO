@@ -273,8 +273,10 @@ export interface DirectoryStore {
   getAgentIdByPubkey(kLocalPubkeyHex: string): Promise<string | null>;
   /** An agent's unacked sealed signals, oldest first, each with its authoritative identity-tree hash. */
   drainPickup(agentId: string): Promise<PickupItem[]>;
-  /** ACK a delivered pickup: DELETE the row so no ciphertext lingers (TRUST-001 AC-002). Idempotent. */
-  ackPickup(id: string): Promise<void>;
+  /** ACK a delivered pickup: DELETE the row so no ciphertext lingers (TRUST-001 AC-002). Idempotent.
+   *  ACCOUNT-SCOPED by the ACK'ing agent's agent_id — an ACK can only delete a row addressed to it
+   *  (pickup_queue.id is a guessable BIGSERIAL; id-alone would allow cross-tenant deletion). */
+  ackPickup(id: string, agentId: string): Promise<void>;
 
   /**
    * Return true if the given phone_stub_hash (hex SHA-256) is already claimed.

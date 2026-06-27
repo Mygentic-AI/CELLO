@@ -39,15 +39,23 @@ function hasExactKeys(obj: Record<string, unknown>, keys: string[]): boolean {
   return actual.length === keys.length && keys.every((k) => Object.prototype.hasOwnProperty.call(obj, k));
 }
 
-/** True iff every decoded byte is printable ASCII or common whitespace — i.e. plausibly plaintext. */
-function isAllPrintable(bytes: Buffer): boolean {
+/** The longest run of consecutive printable-ASCII/whitespace bytes. A real sealed box (≈uniform
+ *  random) has only short runs; embedded plaintext (an email/token/JSON) shows a long printable run —
+ *  so a run >= MAX_PRINTABLE_RUN is the tell, even when non-printable padding defeats an all-printable
+ *  check (test-attacker finding 2: base64(email + random bytes)). */
+function longestPrintableRun(bytes: Buffer): number {
+  let longest = 0;
+  let run = 0;
   for (const b of bytes) {
-    const printable = b >= 0x20 && b <= 0x7e;
-    const whitespace = b === 0x09 || b === 0x0a || b === 0x0d;
-    if (!printable && !whitespace) return false;
+    const printable = (b >= 0x20 && b <= 0x7e) || b === 0x09 || b === 0x0a || b === 0x0d;
+    run = printable ? run + 1 : 0;
+    if (run > longest) longest = run;
   }
-  return true;
+  return longest;
 }
+// A sealed crypto_box (32+12+ct+16, ≈uniform random) has runs of ~1–4; 16 gives a negligible
+// false-reject on a real seal while catching emails/tokens/JSON smuggled in the ciphertext slot.
+const MAX_PRINTABLE_RUN = 16;
 
 /**
  * Validate a (writeKind, payload) pair into a persisted-ready shape, or a rejection reason.
@@ -114,7 +122,11 @@ export function validateWritePayload(writeKind: unknown, payload: unknown): Vali
       if (bytes.length < MIN_SEALED_BYTES || bytes.length > MAX_SEALED_BYTES) {
         return { ok: false, reason: "invalid_ciphertext" };
       }
-      if (isAllPrintable(bytes)) {
+      // Reject plaintext smuggled in the opaque slot — a long printable run gives it away even with
+      // non-printable padding (an all-printable check alone is defeatable). Best-effort tripwire: the
+      // directory has no key to truly verify a seal, so the real no-plaintext guarantee rests on the
+      // portal sealing + the API-key trust boundary; this stops accidental/trivial smuggling.
+      if (longestPrintableRun(bytes) >= MAX_PRINTABLE_RUN) {
         return { ok: false, reason: "invalid_ciphertext" };
       }
       return { ok: true, write: { kind: "trust_signal_ciphertext", signalKind, ciphertext: bytes } };

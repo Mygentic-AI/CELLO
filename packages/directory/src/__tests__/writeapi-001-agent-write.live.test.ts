@@ -134,6 +134,14 @@ describeLive("WRITEAPI-001 live — /internal/agent-write (real Postgres + HTTP)
     expect(emailAsHash.status).toBe(422);
     const tokenAsCipher = await write({ accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext", payload: { ciphertext: Buffer.from(RAW_TOKEN).toString("base64"), signalKind: "webauthn" } });
     expect(tokenAsCipher.status).toBe(422);
+    // test-attacker finding 2: PII + non-printable padding (defeats an all-printable check) must ALSO
+    // be rejected — the embedded email is a long printable run.
+    const paddedEmail = Buffer.concat([
+      Buffer.from(RAW_EMAIL),
+      Buffer.from(Uint8Array.from({ length: 24 }, (_, i) => (i * 91 + 3) % 32)),
+    ]).toString("base64");
+    const paddedCipher = await write({ accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext", payload: { ciphertext: paddedEmail, signalKind: "webauthn" } });
+    expect(paddedCipher.status).toBe(422);
 
     // Dump every byte of the three seam tables for our agents and assert the plaintext is absent.
     const dump = await pool.query(

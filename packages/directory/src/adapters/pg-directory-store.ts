@@ -353,7 +353,8 @@ export class PgDirectoryStore implements DirectoryStore {
         LIMIT 1`,
       [kLocalPubkeyHex],
     );
-    return (result.rowCount ?? 0) > 0;
+    // rows.length (always an array), NOT rowCount ?? 0 — a security gate must not default fail-OPEN.
+    return result.rows.length > 0;
   }
 
   async listBurnedAgentPubkeys(): Promise<string[]> {
@@ -374,7 +375,8 @@ export class PgDirectoryStore implements DirectoryStore {
         LIMIT 1`,
       [kLocalPubkeyHex],
     );
-    return (result.rowCount ?? 0) > 0;
+    // rows.length (always an array), NOT rowCount ?? 0 — a security gate must not default fail-OPEN.
+    return result.rows.length > 0;
   }
 
   // CELLO-M8-TRUST-001: trust-signal pickup delivery (the pickup queue is keyed by agent_id).
@@ -390,8 +392,8 @@ export class PgDirectoryStore implements DirectoryStore {
     return drainPickupForAgent(this.#pool, agentId);
   }
 
-  async ackPickup(id: string): Promise<void> {
-    await ackPickupDelete(this.#pool, id);
+  async ackPickup(id: string, agentId: string): Promise<void> {
+    await ackPickupDelete(this.#pool, id, agentId);
   }
 
   /**

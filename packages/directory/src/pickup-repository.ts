@@ -51,6 +51,10 @@ export async function drainPickupForAgent(db: Queryable, agentId: string): Promi
  * acked_at flag) guarantees no sealed ciphertext lingers in the replicated store. Idempotent: a
  * re-ACK of an already-deleted id is a no-op.
  */
-export async function ackPickupDelete(db: Queryable, id: string): Promise<void> {
-  await db.query(`DELETE FROM pickup_queue WHERE id = $1`, [id]);
+export async function ackPickupDelete(db: Queryable, id: string, agentId: string): Promise<void> {
+  // ACCOUNT-SCOPED: the delete is bound to the ACK'ing agent's own agent_id, NOT id alone. pickup_queue.id
+  // is a sequential BIGSERIAL, so an id-only delete would let any authenticated agent wipe OTHER agents'
+  // undelivered sealed signals by looping ids (cross-tenant data destruction). WHERE id AND agent_id
+  // makes an ACK only able to delete a row addressed to the ACK'ing agent.
+  await db.query(`DELETE FROM pickup_queue WHERE id = $1 AND agent_id = $2`, [id, agentId]);
 }

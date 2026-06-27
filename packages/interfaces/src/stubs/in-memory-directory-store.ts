@@ -221,10 +221,10 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     return [...(this.#pickup.get(agentId) ?? [])];
   }
 
-  async ackPickup(id: string): Promise<void> {
-    for (const [agentId, items] of this.#pickup) {
-      this.#pickup.set(agentId, items.filter((it) => it.id !== id));
-    }
+  async ackPickup(id: string, agentId: string): Promise<void> {
+    // Account-scoped: only remove the row if it belongs to the ACK'ing agent.
+    const items = this.#pickup.get(agentId);
+    if (items) this.#pickup.set(agentId, items.filter((it) => it.id !== id));
   }
 
   hasPhoneStubHash(phoneStubHashHex: string): boolean {

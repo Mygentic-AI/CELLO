@@ -667,7 +667,11 @@ export class CelloDirectoryNode {
     try {
       burned = await this.#store.listBurnedAgentPubkeys();
     } catch (err) {
-      this.#logger?.warn("frost.burn.reconcile.failed", {
+      // ERROR, not WARN: this is the ONLY durable path that zeroes an idle node's at-rest burned
+      // share. A node that can NEVER enumerate burned agents (schema/grant regression) would silently
+      // leave material un-zeroed forever — a security-control failure, not a transient hiccup. (The
+      // live honor-check still refuses signing, so capability dies; this protects the at-rest erase.)
+      this.#logger?.error("frost.burn.reconcile.failed", {
         reason: err instanceof Error ? err.message : String(err),
       });
       return;
@@ -1763,10 +1767,18 @@ export class CelloDirectoryNode {
           void this.#processRevokeAgent(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "trust_signal_ack") {
           // CELLO-M8-TRUST-001: the daemon opened + verified + stored a pickup → DELETE the row so no
-          // sealed ciphertext lingers (AC-002). Fire-and-forget + idempotent (re-ACK is a no-op).
+          // sealed ciphertext lingers (AC-002). ACCOUNT-SCOPED: resolve the ACK'ing agent's agent_id
+          // and delete only a row addressed to IT — pickup_queue.id is a guessable BIGSERIAL, so an
+          // id-only delete would let any authed agent wipe other agents' undelivered signals.
           const ackId = parsed.id;
-          void this.#store.ackPickup(ackId)
-            .then(() => this.#logger?.info("directory.trust_signal.acked", { pickupId: ackId, agentId: authedPubkeyHex!.slice(0, 16) }))
+          const ackPubkey = authedPubkeyHex!;
+          void this.#store.getAgentIdByPubkey(ackPubkey)
+            .then((ackAgentId) => {
+              if (!ackAgentId) return; // unknown agent — nothing it can own to ACK
+              return this.#store.ackPickup(ackId, ackAgentId).then(() =>
+                this.#logger?.info("directory.trust_signal.acked", { pickupId: ackId, agentId: ackPubkey.slice(0, 16) }),
+              );
+            })
             .catch(() => {});
         } else if (parsed.type === "session_request") {
           // REG-001 AC-009: refuse session_request if registration is required and the agent

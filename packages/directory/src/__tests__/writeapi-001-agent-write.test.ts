@@ -217,6 +217,22 @@ describe("WRITEAPI-001 — POST /internal/agent-write", () => {
     expect(writes[0].text).toMatch(/agent_suspensions/i);
   });
 
+  it("AC-002 / SI-001: PII smuggled as ciphertext with non-printable padding is rejected (long printable run)", async () => {
+    // test-attacker finding 2: base64(email + random non-printable bytes) defeats an all-printable
+    // check but the embedded email is a long printable run → must be rejected, nothing persisted.
+    const smuggle = Buffer.concat([
+      Buffer.from("victim-operator@example.com"), // 27-char printable run
+      Buffer.from(Uint8Array.from({ length: 24 }, (_, i) => (i * 91 + 3) % 32)), // non-printable padding
+    ]).toString("base64");
+    const { pool, writes } = makePool();
+    const res = await write(await start(pool), {
+      accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext",
+      payload: { ciphertext: smuggle, signalKind: "webauthn" },
+    }, API_KEY);
+    expect(res.status).toBe(422);
+    expect(writes).toHaveLength(0);
+  });
+
   it("AC-002: a revocation_flag with a non-enum mode is rejected", async () => {
     const { pool, writes } = makePool();
     const res = await write(await start(pool), {
