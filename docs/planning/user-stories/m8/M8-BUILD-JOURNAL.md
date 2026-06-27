@@ -532,3 +532,21 @@ proven; the WRITE half is WRITEAPI-001, not yet built).
 **Remaining.** AUTH-004 (7-day grace), AGENTS-001 polish (alerts/posture + browser-storage SI),
 WRITEAPI-001 + LEVER-001 (SPINE-4), TRUST-001 (SPINE-6 pipe), the multi-node PRESENCE e2e + directory
 auto-bring-up, E2E close gate.
+
+---
+
+## 2026-06-27 — AUTH-004 ✅: 7-day strong-auth grace + hard wall + admin waiver (DOD-AUTH-4)
+
+Migration 0005 adds account.strong_auth_waiver (admin/support-set; NO portal surface writes it →
+operators cannot self-grant). isStrongAuthWalled(accountId) = no strong factor (passkey OR confirmed
+TOTP) AND account age > 7 days AND no waiver. The agents + trust-signals pages compute it
+server-side and redirect to /account when walled (no client bypass); the Account screen is the
+reachable destination with a hard 2FA-required banner. **J-grace 4/4:** within-grace accessible;
+past-grace gated to the wall; enrolling a passkey lifts it; an admin waiver lifts it without 2FA.
+vitest 20 passed (0005 applied + asserted); full default e2e 24 passed. `DOD-AUTH-4` ✅. cello-portal
+`1641b00`. (AUTH-007 single-use/expiry/rate-limit is integration-proven 🟡; the magic-link OTP
+endpoints are exercised live by login.)
+
+**Remaining.** AGENTS-001 polish (alerts/posture + browser-storage SI → DOD-AGENT-1/2, DOD-INV-9),
+WRITEAPI-001 + LEVER-001 (SPINE-4, INV-6), TRUST-001 (SPINE-6 pipe, INV-2 browser-storage half), the
+multi-node PRESENCE e2e + directory auto-bring-up, E2E close gate.

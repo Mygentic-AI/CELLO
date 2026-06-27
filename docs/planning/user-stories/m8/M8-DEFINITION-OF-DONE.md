@@ -152,7 +152,12 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   DOD-INV-5 enroll gate (bootstrap can't plant/reset a factor), replay protection, verify
   rate-limit (429), 80-bit codes, transactional issuance. vitest 19/19.)*
 - **DOD-AUTH-4 — Strong-auth enforcement.** 7-day grace → server-side gate; per-account admin
-  waiver flag (scoped, not global) lifts it; no self-grant, no client bypass. *(AUTH-004)* — ❌
+  waiver flag (scoped, not global) lifts it; no self-grant, no client bypass. *(AUTH-004)* — ✅
+  *(PROVEN LIVE, J-grace 4/4: within the 7-day grace no-2FA is accessible; past it the app routes
+  redirect server-side to the Account wall (a hard 2FA-required banner; the gate is computed
+  server-side from account age + hasStrongFactor + waiver — no client bypass); enrolling a passkey
+  lifts it; a per-account admin waiver (migration 0005, no portal surface writes it → no self-grant)
+  lifts it without 2FA.)*
 - **DOD-AUTH-5 — Account & Security.** Lists factors + active sessions; log-out-everywhere revokes
   other sessions server-side; factor removal requires step-up. *(AUTH-006)* — ✅ *(PROVEN LIVE: the
   Account screen lists factors (WebAuthn panel + TOTP panel) + active sessions (SessionsPanel,
