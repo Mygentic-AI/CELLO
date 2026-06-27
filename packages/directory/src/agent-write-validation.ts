@@ -23,8 +23,9 @@ const SIGNAL_KINDS = new Set(["webauthn"]);
 const MIN_SEALED_BYTES = 48; // ephemeral pubkey (32) + MAC (16) is the floor for a sealed box
 const MAX_SEALED_BYTES = 65536;
 
+export type RevocationMode = "pause" | "clear" | "burn";
 export type ValidatedWrite =
-  | { kind: "revocation_flag"; paused: boolean }
+  | { kind: "revocation_flag"; mode: RevocationMode }
   | { kind: "trust_signal_hash"; signalKind: string; signalHash: string }
   | { kind: "trust_signal_ciphertext"; signalKind: string; ciphertext: Buffer };
 
@@ -64,11 +65,13 @@ export function validateWritePayload(writeKind: unknown, payload: unknown): Vali
 
   switch (writeKind as WriteKind) {
     case "revocation_flag": {
-      // Exactly { mode }. mode ∈ {pause, clear}. No reason/free-text reaches the directory — the
-      // operational reason is captured in the portal audit log, never replicated here.
+      // Exactly { mode }. mode ∈ {pause, clear, burn}. No reason/free-text reaches the directory —
+      // the operational reason is captured in the portal audit log, never replicated here. pause is
+      // reversible; burn is PERMANENT (capability dies, accountability survives).
       if (!hasExactKeys(p, ["mode"])) return { ok: false, reason: "invalid_payload" };
-      if (p["mode"] !== "pause" && p["mode"] !== "clear") return { ok: false, reason: "invalid_payload" };
-      return { ok: true, write: { kind: "revocation_flag", paused: p["mode"] === "pause" } };
+      const mode = p["mode"];
+      if (mode !== "pause" && mode !== "clear" && mode !== "burn") return { ok: false, reason: "invalid_payload" };
+      return { ok: true, write: { kind: "revocation_flag", mode } };
     }
     case "trust_signal_hash": {
       if (!hasExactKeys(p, ["signalKind", "signalHash"])) return { ok: false, reason: "invalid_payload" };

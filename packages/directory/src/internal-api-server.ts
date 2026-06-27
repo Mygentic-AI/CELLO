@@ -39,7 +39,7 @@ import { listAccountAgentsWithPresence } from "./agent-presence-repository.js";
 import { validateWritePayload } from "./agent-write-validation.js";
 import {
   isAgentOwnedByAccount,
-  upsertSuspension,
+  applyRevocationFlag,
   upsertIdentityHash,
   enqueuePickup,
 } from "./agent-write-repository.js";
@@ -377,9 +377,17 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
       try {
         const w = validation.write;
         switch (w.kind) {
-          case "revocation_flag":
-            await upsertSuspension(pool, { agentId, paused: w.paused, accountId, reason: null });
+          case "revocation_flag": {
+            const result = await applyRevocationFlag(pool, { agentId, mode: w.mode, accountId });
+            if (result === "burned_immutable") {
+              // A burn is permanent — a clear cannot lift it (DOD-LEVER-2). Distinct rejection.
+              logger.warn("directory.write.rejected", { accountId, agentId, reason: "burned_immutable", correlationId });
+              res.writeHead(409, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "burned", reason: "burned_immutable" }));
+              return;
+            }
             break;
+          }
           case "trust_signal_hash":
             await upsertIdentityHash(pool, { agentId, signalKind: w.signalKind, signalHash: w.signalHash });
             break;

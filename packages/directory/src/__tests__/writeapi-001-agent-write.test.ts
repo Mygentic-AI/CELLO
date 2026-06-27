@@ -204,6 +204,19 @@ describe("WRITEAPI-001 — POST /internal/agent-write", () => {
     expect(writes).toHaveLength(0);
   });
 
+  it("LEVER-2: a revocation_flag with mode=burn is accepted + persisted to agent_suspensions", async () => {
+    const { pool, writes } = makePool();
+    const res = await write(await start(pool), {
+      accountId: ACCOUNT_A,
+      agentId: AGENT_A,
+      writeKind: "revocation_flag",
+      payload: { mode: "burn" },
+    }, API_KEY);
+    expect(res.status).toBe(200);
+    expect(writes).toHaveLength(1);
+    expect(writes[0].text).toMatch(/agent_suspensions/i);
+  });
+
   it("AC-002: a revocation_flag with a non-enum mode is rejected", async () => {
     const { pool, writes } = makePool();
     const res = await write(await start(pool), {

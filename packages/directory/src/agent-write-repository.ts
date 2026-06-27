@@ -31,24 +31,52 @@ export async function isAgentOwnedByAccount(
 }
 
 /**
- * LEVER-001 reversible PAUSE flag. Mutable upsert (mirrors agent_presence): pause sets paused=true,
- * clear sets paused=false. `authorized_by_account` records which account authorized it (ownership
- * already proven by the caller). Burn is permanent and does NOT come through here.
+ * LEVER-001 revocation flag. pause/clear are reversible; BURN is permanent. `authorized_by_account`
+ * records which account authorized it (ownership already proven by the caller).
+ *
+ *   pause → paused=true (does not touch a prior burn).
+ *   burn  → paused=true, burned=true. PERMANENT — burned is monotonic (never un-set).
+ *   clear → paused=false, but ONLY if NOT burned. A clear on a BURNED agent is rejected
+ *           ("burned_immutable") — capability dies, it cannot be restored by clearing a flag.
+ *
+ * Returns "applied" on success, or "burned_immutable" when a clear targets a burned agent (the seam
+ * surfaces this as a distinct rejection rather than a silent no-op).
  */
-export async function upsertSuspension(
+export async function applyRevocationFlag(
   pool: Queryable,
-  args: { agentId: string; paused: boolean; accountId: string; reason: string | null },
-): Promise<void> {
+  args: { agentId: string; mode: "pause" | "clear" | "burn"; accountId: string },
+): Promise<"applied" | "burned_immutable"> {
+  if (args.mode === "clear") {
+    // Only an un-burned row may be cleared. The WHERE burned=false guard makes a burn terminal.
+    const res = await pool.query(
+      `UPDATE agent_suspensions SET paused = false, updated_at = now()
+        WHERE agent_id = $1 AND burned = false`,
+      [args.agentId],
+    );
+    if ((res.rowCount ?? 0) === 0) {
+      const existing = await pool.query<{ burned: boolean }>(
+        `SELECT burned FROM agent_suspensions WHERE agent_id = $1`,
+        [args.agentId],
+      );
+      if (existing.rows[0]?.burned) return "burned_immutable";
+      // No row at all → clearing a never-suspended agent is a benign no-op.
+    }
+    return "applied";
+  }
+
+  const burn = args.mode === "burn";
+  // pause or burn: paused=true. burned is monotonic — once set it never clears (OR with the prior).
   await pool.query(
-    `INSERT INTO agent_suspensions (agent_id, paused, reason, authorized_by_account, updated_at)
-     VALUES ($1, $2, $3, $4, now())
+    `INSERT INTO agent_suspensions (agent_id, paused, burned, authorized_by_account, updated_at)
+     VALUES ($1, true, $2, $3, now())
      ON CONFLICT (agent_id) DO UPDATE
-       SET paused = EXCLUDED.paused,
-           reason = EXCLUDED.reason,
+       SET paused = true,
+           burned = agent_suspensions.burned OR EXCLUDED.burned,
            authorized_by_account = EXCLUDED.authorized_by_account,
            updated_at = now()`,
-    [args.agentId, args.paused, args.reason, args.accountId],
+    [args.agentId, burn, args.accountId],
   );
+  return "applied";
 }
 
 /** TRUST-001 trust-signal HASH — one current hash per (agent, signal kind). Hash only, never plaintext. */
