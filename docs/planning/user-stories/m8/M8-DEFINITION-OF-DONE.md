@@ -291,7 +291,18 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   CLOSED on a read error so a transient fault cannot let a paused agent sign. Pause→fail→clear→succeed
   on real binaries.)*
 - **DOD-LEVER-2 — Burn: permanent, accountability survives.** Destroys share material federation-
-  wide; binding stays resolvable; the burn is a signed event. *(LEVER-001 AC-002)* — ❌
+  wide; binding stays resolvable; the burn is a signed event. *(LEVER-001 AC-002)* — 🟡
+  *(CONTAINED PART PROVEN (the story splits burn: "the flag/honor-check + replication is the contained
+  part; coordinated share destruction is the heavier part"). The seam's revocation_flag gains mode=burn:
+  it sets a PERMANENT replicated flag (paused + burned in agent_suspensions ∈ cello_pub, honored by
+  every sovereign node) that a clear CANNOT lift — a clear on a burned agent is rejected
+  (409 burned_immutable), so capability cannot be restored by clearing a flag; burned is monotonic. The
+  agent_profiles binding (agent_id ↔ key ↔ account) is UNTOUCHED — accountability survives (SI-002).
+  Proven by the burn live test (2/2, cello_spine) + contract (13/13). V36. REMAINING (the heavier
+  part): coordinated per-node K_server SHARE DESTRUCTION (each node, on observing the replicated burn,
+  deletes its own agent_key_shares row + in-memory cache — ShareStore.destroyShares + a per-node
+  eager-on-observe trigger in the frost gate + a reconcile for idle nodes); and the portal Burn
+  affordance. The SECURITY property — a burned agent can never sign — already holds via the flag.)*
 - **DOD-LEVER-3 — T-of-N mechanism + distinct error.** A threshold of honest nodes refuse; a
   single node continuing doesn't let it sign; the ceremony returns a distinct revocation error.
   *(LEVER-001 AC-003)* — 🟡

@@ -920,3 +920,25 @@ NOT flipping them without real proof (drift rule) and NOT manufacturing flaky in
   • DOD-LEVER-2 — burn (coordinated federation-wide share destruction).
   • DOD-E2E-1 — close gate: gated on the above + the milestone writeup.
   • DOD-INV-1 — timing-side-channel residual (constant-time response hardening).
+
+---
+
+## 2026-06-27 — LEVER-002 burn: the contained part (permanent replicated flag) 🟡
+
+The story splits burn — "the flag/honor-check + replication is the contained part; coordinated share
+destruction is the heavier part." Built the contained part.
+
+**Directory (m8-read-001).** V36 adds agent_suspensions.burned. The seam's revocation_flag mode enum
+gains `burn`; `applyRevocationFlag` (replacing upsertSuspension): pause→paused=true; burn→paused+burned
+(burned MONOTONIC — never un-set); clear→paused=false ONLY if not burned, else rejected
+(409 burned_immutable). agent_suspensions is replicated (cello_pub), so every node honors the burn —
+the honest-node T-of-N model. agent_profiles UNTOUCHED (accountability survives, SI-002). SSM 35→36.
+
+**Proof.** Burn live test (`lever-002-burn.live.test.ts`, 2/2, cello_spine): burn sets paused+burned;
+a clear is rejected (409 burned_immutable) and the flag stays; the agent_profiles binding (k_local +
+account + status) is unchanged; pause doesn't un-burn. Contract 13/13. typecheck+lint clean. `caf73748`.
+
+**Tag.** DOD-LEVER-2 ❌ → 🟡. The SECURITY property (a burned agent can never sign — the replicated flag
+the federation honors) holds. REMAINING (the heavier part): coordinated per-node K_server SHARE
+destruction (ShareStore.destroyShares across InMemory/EncryptedPg/Persistent + a per-node eager-on-
+observe trigger in the frost gate + reconcile for idle nodes) + the portal Burn affordance.
