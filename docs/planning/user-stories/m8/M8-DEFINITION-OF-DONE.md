@@ -36,7 +36,11 @@ Proven by SI/adversarial assertions woven into the journeys, never a separate pa
 
 - **DOD-INV-1 — Ceremony-gated entry.** No portal account-creation path anywhere; the account
   is resolved by matching `SHA-256(email)` against the directory's `email_stub_hash`; an
-  unmatched email gets the signpost, never an account. *(SCAFFOLD-001 AC-003, AUTH-001 AC-002)* — ❌
+  unmatched email gets the signpost, never an account. *(SCAFFOLD-001 AC-003, AUTH-001 AC-002)* — 🟡
+  *(PROVEN by AUTH-001 integration tests: an unknown email mints no token + no account; the request
+  response is identical for known/unknown AND the rate limit fires identically (no 429-vs-200
+  enumeration oracle). Account resolution runs through the DirectoryClient stub; the real-directory
+  path is READ-001. Residual: a timing side-channel on the resolved path, tracked in the journal.)*
 - **DOD-INV-2 — No plaintext/PII/token/content server-side.** Directory holds only hashes,
   flags/tombstones, and sealed ciphertext (deleted on ACK). Portal DB holds only: KMS-encrypted
   email, KMS-encrypted TOTP secret, hashed backup codes, sessions, WebAuthn public keys — no
@@ -50,9 +54,10 @@ Proven by SI/adversarial assertions woven into the journeys, never a separate pa
   / is rejected. *(READ-001 SI-001; WRITEAPI-001 SI-001)* — ❌
 - **DOD-INV-4 — Session: server-side, httpOnly, revocable.** Opaque token in an httpOnly cookie,
   not JS-readable, not in localStorage; revoking the row server-side fails the next request.
-  No stateless JWT. *(AUTH-001 SI-001)* — 🟡 *(opaque token, SHA-256-hashed at rest, server-side
-  revoke-fails-next-read PROVEN by the SCAFFOLD-002 integration test; the httpOnly-cookie + not-in-JS
-  half is asserted live once login lands — SPINE-2 / AUTH-001.)*
+  No stateless JWT. *(AUTH-001 SI-001)* — ✅ *(PROVEN: opaque random token, SHA-256-hashed at rest,
+  no JWT (SCAFFOLD-002 integration); httpOnly + not-JS-readable cookie AND server-side revoke fails
+  the next GATED request, end-to-end through the browser (J-SPINE SPINE-2: revoke row → gated home
+  redirects to sign-in with the same cookie in the jar).)*
 - **DOD-INV-5 — Bootstrap can't escalate.** On a strong-auth account, a fresh email-magic-link
   session cannot add a credential or take a sensitive action without step-up against an existing
   factor. *(AUTH-002 SI-001)* — ❌
@@ -78,14 +83,19 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 
 - **DOD-SPINE-1 — Portal served + app shell.** Frontend builds; the shell renders the real M8
   nav (Agents home / Trust Signals / Account & Security) on the dark-console tokens; a protected
-  route with no session redirects to sign-in (no protected markup sent). *(SCAFFOLD-001 AC-001/002)* — 🟠
-  *(PROVEN LIVE against the served app: dark-console design tokens RENDERED — body dark surface +
-  brand font + accent consumed by a real element — and the protected-route redirect emits no
-  protected markup/PII. The authed-shell-renders-the-three-sections half is red until login lands —
-  SPINE-2. J-SPINE: AC-001a + AC-002 green; AC-001b red.)*
+  route with no session redirects to sign-in (no protected markup sent). *(SCAFFOLD-001 AC-001/002)* — ✅
+  *(PROVEN LIVE against the served app, J-SPINE 4/4: dark-console tokens RENDERED — body dark
+  surface + brand font + accent consumed by a real element (AC-001a); protected-route redirect
+  emits no protected markup/PII (AC-002); the authed operator gets the shell with exactly the three
+  M8 sections + the operator-PII positive control (AC-001b).)*
 - **DOD-SPINE-2 — Magic-link sign-in → durable session.** Enter email → link + 6-digit code →
   durable httpOnly-cookie session → land on Agents home; account resolved via `email_stub_hash`.
-  *(AUTH-001 AC-001)* — ❌
+  *(AUTH-001 AC-001)* — 🟠 *(PROVEN LIVE end-to-end against the served app, J-SPINE: request →
+  6-digit code → verify → durable opaque httpOnly session → lands on the gated Agents home; `/`
+  is gated; the live cookie session is server-side-revocable. Account resolution goes through the
+  real DirectoryClient seam to a LOCAL STUB (env-selected, local-only) — the real directory HTTP
+  adapter + the `/internal/account-by-email-stub` endpoint + a live directory in the harness is
+  READ-001, which flips this to ✅ and lights up SPINE-3.)*
 - **DOD-SPINE-3 — Agents appear with presence.** A ceremony-registered agent appears in the
   Agents home with directory-derived presence (online iff presence row online AND owning node
   fresh), fingerprint-primary. *(PRESENCE-001; READ-001; AGENTS-001)* — ❌
@@ -114,7 +124,11 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   other sessions server-side; factor removal requires step-up. *(AUTH-006)* — ❌
 - **DOD-AUTH-6 — Signpost landing.** No-session, no-link visitor → routes to the Telegram ceremony
   + GitHub install; no account-creation form. *(SCAFFOLD-001 AC-003)* — ❌
-- **DOD-AUTH-7 — OTP single-use, expiring, rate-limited.** *(AUTH-001 AC-003/004)* — ❌
+- **DOD-AUTH-7 — OTP single-use, expiring, rate-limited.** *(AUTH-001 AC-003/004)* — 🟡
+  *(PROVEN by AUTH-001 integration tests: single-use sequential AND concurrent (2 verifies → exactly
+  1 session via FOR UPDATE SKIP LOCKED); expiry; attempt-cap that actually BLOCKS (correct code
+  after the cap mints no session); per-email request rate limit. Endpoints exercised live by the
+  J-SPINE login; the full browser J-AUTH journey ties the rest later.)*
 
 ---
 
