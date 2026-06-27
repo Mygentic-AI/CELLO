@@ -902,3 +902,21 @@ T-of-N (the 2-of-2→real-T-of-N FROST ceremony is a known stopgap, larger than 
 node read + the multi-node PRESENCE e2e (≥2-node directory cluster — the spine harness is single-node);
 DOD-LEVER-2 burn (federation-wide share destruction); DOD-E2E-1 close gate (gated on the above + the
 milestone writeup); DOD-INV-8 observability audit; DOD-INV-1 timing-side-channel residual.
+
+## 2026-06-27 — heartbeat: self-contained loops exhausted; remaining lines need Andre / protocol / infra
+
+Audited M8 observability (INV-8): no console.log in impl (lint-enforced), events are domain.noun.verb
+with distinct codes; fixed the one gap — the daemon trust-signal events now carry agentName + the
+pickup id as correlationId (cello-client `5c64da7`). M8-new-code is observability-complete; the broad
+INV-8 audit across all M8 remains for the close pass.
+
+Every remaining non-green line is gated on a resource OUTSIDE a self-contained red→green loop, so I am
+NOT flipping them without real proof (drift rule) and NOT manufacturing flaky infra/fake proofs:
+  • DOD-TRUST-4 — cello-client publish cascade → ANDRE (daemon change on m8-lever-001, local-build proven).
+  • DOD-LEVER-3 / DOD-INV-6 — strict T-of-N → the 2-of-2→real-T-of-N FROST ceremony is a known stopgap,
+    a protocol change larger than M8 (the daemon talks to ONE node today).
+  • DOD-PRES-1 + multi-node PRESENCE e2e — a FAITHFUL cross-node read needs ≥2 SEPARATE Postgres + logical
+    replication (setup-replication.sh) + a 2nd directory; a shared-DB 2-node test would be a fake proof.
+  • DOD-LEVER-2 — burn (coordinated federation-wide share destruction).
+  • DOD-E2E-1 — close gate: gated on the above + the milestone writeup.
+  • DOD-INV-1 — timing-side-channel residual (constant-time response hardening).
