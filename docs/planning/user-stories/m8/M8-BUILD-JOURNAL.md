@@ -1011,3 +1011,50 @@ email resolves. No account-creation path. The done-condition's three clauses are
 micro-timing residual (matched path does extra mint DB writes) is acknowledged as defense-in-depth,
 NOT a done-condition clause — the exploitable oracle (response/status/rate-limit) is closed and the
 timing delta isn't closed with fake "dummy work". cello-portal `4d21f8f`.
+
+---
+
+## 2026-06-27 — REVIEW REMEDIATION: the §8 reviewer pass I skipped for ~6h (LEVER/TRUST/burn)
+
+Andre caught that I dropped the procedure §8 review step after WRITEAPI-001 (15:00) and ran ~6h /
+~12 watchdog cycles building LEVER-001/002 + TRUST-001 + AGENT-1 + AUTH-7 + INV-1/3/8 + burn WITHOUT
+reviewers. Ran all three retroactively on that window. Findings + fixes:
+
+REAL BUGS (fixed, commit 9d4256b5):
+- H1 [code-reviewer conf 85] CROSS-TENANT DELETE — trust_signal_ack deleted pickup_queue by id ALONE
+  (guessable BIGSERIAL); any authed agent could wipe other accounts' undelivered sealed signals. FIX:
+  ackPickup/ackPickupDelete scope DELETE by the ACK'ing agent's agent_id; handler resolves it from the
+  authed pubkey; live cross-account-ACK negative added.
+- F2 [test-attacker blocking] ciphertext PII gate defeatable — base64(email + non-printable padding)
+  passed the all-printable check. FIX: reject a printable RUN >= 16; contract + live SI-001 dump add
+  the padded-email smuggle → 422 + absent.
+- MEDIUM-1 [fallback-finder] reconcile list-failure WARN→ERROR (silent at-rest non-zeroing).
+- LOW-3 [fallback-finder] isAgentSuspended/isAgentBurned use rows.length not rowCount ?? 0 (no fail-open).
+
+DRIFT CORRECTION (H2 [code-reviewer conf 80]): DOD-TRUST-1 ✅ → 🟡. The ciphertext (pickup_queue) is NOT
+replicated, the portal writes it to one node, the daemon drains only from its node → in the 3-region
+federation the ciphertext is node-pinned and may be undelivered. AC-001 "readable from a DIFFERENT
+node" holds for the hash anchor (replicated) but NOT the ciphertext. SPINE-6 keeps ✅ (the pipe
+MECHANISM is proven single-node) with the H2 caveat noted. FIX needed: fan-out the portal write OR
+replicate pickup_queue with sequence staggering.
+
+HOLLOW TESTS still to harden [test-attacker blocking] — IN PROGRESS:
+- F1: no test binds the write to the authenticated PRINCIPAL (the directory trusts the body accountId
+  + checks ownership; the real binding is the portal session→accountId). Add a portal test that the
+  suspend route ignores a client-supplied accountId.
+- F3: J-TRUST never tests a hash MISMATCH (a daemon that skipped the compare would pass). Add: seed a
+  mismatched anchor → assert daemon.trust_signal.hash_mismatch, nothing stored, no ACK (row stays).
+- F4: J-SUSPEND only hits the session-routing gate, not the FROST share-refusal (1138/1178). Add a
+  test driving a ceremony to the share gate against a paused agent → AGENT_SUSPENDED.
+
+DESIGN RESIDUALS (documented, not silently skipped):
+- F5/LEVER-3/INV-6: strict T-of-N has no test + the 2-of-2 stopgap can't prove it — stays 🟡 (NOT
+  carried by j-suspend).
+- F6 + code-reviewer "no origin signature": burn + trust records are authorized+timestamped but not
+  cryptographically signed; a malicious directory could fabricate a (hash,ciphertext) pair → daemon
+  stores verified:true. Limited impact (no usable credential behind a fabricated record). Design
+  decision (whose key signs) — tracked under LEVER-2 / a future signed-record story.
+- Online agent gets no live push (drain-on-reconnect only); a superseded identity-tree hash leaves a
+  stale pickup row that re-fires hash_mismatch — both noted for the TRUST delivery follow-up.
+
+LESSON: never flip a DoD tag before the unit's §8 review. The cron (86f0ce75) now injects this every tick.

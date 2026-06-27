@@ -177,7 +177,9 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   plaintext in its encrypted `trust_signals` table, and ACKs (`trust_signal_ack`) — after which the
   pickup queue is EMPTY for that agent (directory ack-deleted) and the identity-tree hash remains. The
   store assertion reads the daemon's OWN encrypted SQLCipher DB. The portal SOURCE (enroll → seal →
-  write) is unit-proven separately (`test/trust-handoff.test.ts`). All 6 spine lines now green.)*
+  write) is unit-proven separately (`test/trust-handoff.test.ts`). The pipe MECHANISM is proven; the
+  PRODUCTION multi-node delivery caveat (the ciphertext is node-pinned — pickup_queue not replicated)
+  is the DOD-TRUST-1 🟡 / code-reviewer-H2 gap, not a mechanism failure.)*
 
 ---
 
@@ -359,13 +361,17 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 
 - **DOD-TRUST-1 — The pipe end-to-end (WebAuthn first consumer).** Hash written + readable from a
   different node; daemon `openSealed(k_local)` + hash-match + ACK; pickup queue empty after ACK.
-  *(TRUST-001 AC-001)* — ✅
-  *(PROVEN LIVE end-to-end by J-TRUST (see DOD-SPINE-6): portal seal SOURCE (unit, real Ed25519) →
-  directory write seam → identity_tree + pickup_queue → directory drain on reconnect → daemon
-  openSealed + hash-match + store + ACK → directory ack-deletes (queue empty). The "readable from a
-  DIFFERENT node" sub-claim of AC-001 rides general replication — identity_tree_entries is in
-  cello_pub and cross-node reads are proven by READ-001; the single-node J-TRUST proves the
-  open+verify+store+ACK+delete pipe, not a second-node read.)*
+  *(TRUST-001 AC-001)* — 🟡 *(DROPPED from ✅ on the code-review drift check — H2.)*
+  *(The pipe is PROVEN end-to-end SINGLE-NODE by J-TRUST: portal seal SOURCE (unit, real Ed25519) →
+  write seam → identity_tree + pickup_queue → directory drain on reconnect → daemon openSealed +
+  hash-match + store + ACK → directory ack-deletes (queue empty). BLOCKER for ✅ (code-reviewer H2,
+  conf 80): the CIPHERTEXT half is node-pinned — pickup_queue is deliberately NOT replicated (id-
+  collision risk), the portal writes the ciphertext to ONE node, and the daemon drains only from the
+  node its per-agent stream is on. In the live 3-region federation (daemon connects to / fails over to
+  ANY node) the ciphertext may be on a different node than the daemon → undelivered. AC-001's "readable
+  from a DIFFERENT node" therefore does NOT hold for the ciphertext (only the hash anchor, which IS in
+  cello_pub, replicates). FIX needed: either fan-out the portal ciphertext write to all nodes, or
+  replicate pickup_queue with `ALTER SEQUENCE … INCREMENT BY 3 RESTART WITH {offset}` staggering.)*
 - **DOD-TRUST-2 — No-plaintext across the pipe.** Directory holds only the hash; ciphertext sealed
   to k_local (directory/portal can't decrypt); portal discards plaintext + token. *(TRUST-001 AC-002, SI-001)* — ✅
   *(PROVEN: the signal is sealed to the agent's k_local — only the k_local SEED opens it (a wrong seed
