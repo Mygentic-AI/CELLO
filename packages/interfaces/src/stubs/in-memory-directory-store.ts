@@ -9,7 +9,7 @@
  */
 
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
-import type { DirectoryStore, DirectoryNotification, SealNotarization, ConversationSealRecord, AccountRow, CreateAccountParams, AgentRevocationRecord } from "../directory-store.js";
+import type { DirectoryStore, DirectoryNotification, SealNotarization, ConversationSealRecord, AccountRow, CreateAccountParams, AgentRevocationRecord, PickupItem } from "../directory-store.js";
 
 const NOTIFICATION_QUEUE_BOUND = 256;
 const PENDING_CONNECTION_REQUEST_BOUND = 32;
@@ -185,6 +185,32 @@ export class InMemoryDirectoryStore implements DirectoryStore {
 
   async isAgentSuspended(kLocalPubkeyHex: string): Promise<boolean> {
     return this.#suspendedPubkeys.has(kLocalPubkeyHex);
+  }
+
+  // ─── CELLO-M8-TRUST-001: trust-signal pickup (in-memory) ───────────────────
+  readonly #pubkeyToAgentId = new Map<string, string>(); // k_local_pubkey hex → agent_id
+  readonly #pickup = new Map<string, PickupItem[]>(); // agent_id → queued items
+
+  /** Test/stub helper: register a pubkey→agent_id mapping and seed a pickup item. */
+  seedPickup(kLocalPubkeyHex: string, agentId: string, item: PickupItem): void {
+    this.#pubkeyToAgentId.set(kLocalPubkeyHex, agentId);
+    const q = this.#pickup.get(agentId) ?? [];
+    q.push(item);
+    this.#pickup.set(agentId, q);
+  }
+
+  async getAgentIdByPubkey(kLocalPubkeyHex: string): Promise<string | null> {
+    return this.#pubkeyToAgentId.get(kLocalPubkeyHex) ?? null;
+  }
+
+  async drainPickup(agentId: string): Promise<PickupItem[]> {
+    return [...(this.#pickup.get(agentId) ?? [])];
+  }
+
+  async ackPickup(id: string): Promise<void> {
+    for (const [agentId, items] of this.#pickup) {
+      this.#pickup.set(agentId, items.filter((it) => it.id !== id));
+    }
   }
 
   hasPhoneStubHash(phoneStubHashHex: string): boolean {

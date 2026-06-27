@@ -109,6 +109,17 @@ export interface AgentRevocationRecord {
   revokedAt: number;
 }
 
+/** CELLO-M8-TRUST-001: one sealed trust signal awaiting an agent's daemon, with its anchor hash. */
+export interface PickupItem {
+  /** pickup_queue.id — the ACK handle. */
+  id: string;
+  signalKind: string | null;
+  /** The opaque sealed ciphertext — only the agent's k_local seed opens it. */
+  ciphertext: Uint8Array;
+  /** The authoritative directory hash (identity tree), hex — the daemon's verification anchor; null if no anchor. */
+  signalHash: string | null;
+}
+
 export interface DirectoryStore {
   /**
    * Store a completed SealNotarization.
@@ -243,6 +254,14 @@ export interface DirectoryStore {
    * consults its own replicated copy and refuses its FROST share independently (T-of-N, not 2-of-2).
    */
   isAgentSuspended(kLocalPubkeyHex: string): Promise<boolean>;
+
+  // ─── CELLO-M8-TRUST-001: trust-signal pickup delivery ──────────────────────
+  /** Resolve the directory agent_id for a k_local pubkey (the pickup queue is keyed by agent_id). */
+  getAgentIdByPubkey(kLocalPubkeyHex: string): Promise<string | null>;
+  /** An agent's unacked sealed signals, oldest first, each with its authoritative identity-tree hash. */
+  drainPickup(agentId: string): Promise<PickupItem[]>;
+  /** ACK a delivered pickup: DELETE the row so no ciphertext lingers (TRUST-001 AC-002). Idempotent. */
+  ackPickup(id: string): Promise<void>;
 
   /**
    * Return true if the given phone_stub_hash (hex SHA-256) is already claimed.

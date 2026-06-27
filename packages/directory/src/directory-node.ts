@@ -166,6 +166,7 @@ import {
   encodeSealUnilateralNotification,
   encodeSealUpgradeConfirmed,
   encodeSealUpgradeRejected,
+  encodeTrustSignalPickup,
   encodeManifestPollResponse,
   encodePong,
   decodeInboundSignalingFrame,
@@ -1579,6 +1580,36 @@ export class CelloDirectoryNode {
             }
           }
 
+          // CELLO-M8-TRUST-001: deliver queued sealed trust signals (the pickup queue), mirroring the
+          // notification drain. Resolve agent_id (the queue is agent_id-keyed) → drain → send each
+          // over the stream. Do NOT delete here — the daemon ACKs (trust_signal_ack) only after it
+          // opens + verifies + stores, and the inbound handler deletes on that ACK (AC-001).
+          try {
+            const pickupAgentId = await this.#store.getAgentIdByPubkey(authedPubkeyHex);
+            if (pickupAgentId) {
+              const pickups = await this.#store.drainPickup(pickupAgentId);
+              for (const item of pickups) {
+                if (!item.signalKind || !item.signalHash) continue; // no anchor → cannot be verified; skip (re-mintable)
+                try {
+                  this.#sendFrame(stream, encodeTrustSignalPickup({
+                    type: "trust_signal_pickup",
+                    id: item.id,
+                    signal_kind: item.signalKind,
+                    signal_hash: item.signalHash,
+                    ciphertext: item.ciphertext,
+                  }));
+                  this.#logger?.info("directory.trust_signal.delivered", {
+                    agentId: pickupAgentId, pickupId: item.id, correlationId: reconnectCorrelationId,
+                  });
+                } catch {
+                  break; // stream send failed — stop; the next reconnect re-drains (still unacked)
+                }
+              }
+            }
+          } catch {
+            // pickup drain failed — non-blocking; signals are re-deliverable on the next reconnect
+          }
+
           // CONNREQ-002 DB-001: deliver queued pending connection requests (target reconnected)
           // PERSIST-019: real Postgres dequeue with 24h TTL filter, atomic SELECT+DELETE
           const pendingConnRequests = await this.#store.dequeuePendingConnectionRequests(authedPubkeyHex, reconnectCorrelationId);
@@ -1675,6 +1706,13 @@ export class CelloDirectoryNode {
         } else if (parsed.type === "revoke_agent") {
           // CELLO-M7-REMOVE-001 DOD-REMOVE-2: record a self-signed agent revocation.
           void this.#processRevokeAgent(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "trust_signal_ack") {
+          // CELLO-M8-TRUST-001: the daemon opened + verified + stored a pickup → DELETE the row so no
+          // sealed ciphertext lingers (AC-002). Fire-and-forget + idempotent (re-ACK is a no-op).
+          const ackId = parsed.id;
+          void this.#store.ackPickup(ackId)
+            .then(() => this.#logger?.info("directory.trust_signal.acked", { pickupId: ackId, agentId: authedPubkeyHex!.slice(0, 16) }))
+            .catch(() => {});
         } else if (parsed.type === "session_request") {
           // REG-001 AC-009: refuse session_request if registration is required and the agent
           // has not completed it. requireRegistration defaults to false for backward compat.

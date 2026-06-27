@@ -28,7 +28,9 @@ import type {
   AccountRow,
   CreateAccountParams,
   AgentRevocationRecord,
+  PickupItem,
 } from "@cello-protocol/interfaces";
+import { drainPickupForAgent, ackPickupDelete } from "../pickup-repository.js";
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
 import {
   computeChainHash,
@@ -352,6 +354,23 @@ export class PgDirectoryStore implements DirectoryStore {
       [kLocalPubkeyHex],
     );
     return (result.rowCount ?? 0) > 0;
+  }
+
+  // CELLO-M8-TRUST-001: trust-signal pickup delivery (the pickup queue is keyed by agent_id).
+  async getAgentIdByPubkey(kLocalPubkeyHex: string): Promise<string | null> {
+    const result = await this.#pool.query<{ agent_id: string | null }>(
+      `SELECT agent_id FROM agent_profiles WHERE k_local_pubkey = $1`,
+      [kLocalPubkeyHex],
+    );
+    return result.rows[0]?.agent_id ?? null;
+  }
+
+  async drainPickup(agentId: string): Promise<PickupItem[]> {
+    return drainPickupForAgent(this.#pool, agentId);
+  }
+
+  async ackPickup(id: string): Promise<void> {
+    await ackPickupDelete(this.#pool, id);
   }
 
   /**
