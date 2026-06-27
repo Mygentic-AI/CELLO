@@ -942,3 +942,16 @@ account + status) is unchanged; pause doesn't un-burn. Contract 13/13. typecheck
 the federation honors) holds. REMAINING (the heavier part): coordinated per-node K_server SHARE
 destruction (ShareStore.destroyShares across InMemory/EncryptedPg/Persistent + a per-node eager-on-
 observe trigger in the frost gate + reconcile for idle nodes) + the portal Burn affordance.
+
+## 2026-06-27 — LEVER-002 portal Burn affordance (J-LEVER 4/4)
+
+The per-row lever gains Burn: a two-click "irreversible" confirm → mode=burn through the same
+step-up-gated route → seam; a burned agent shows a terminal "Burned" row (no Pause/Resume). The agents
+read carries `burned` (additive, mirrors `paused`) so the terminal state renders; the stub reflects
+burn (permanent — clear cannot lift). J-LEVER 4/4 + J-AGENTS 3/3 (INV-9 green — Burn/Pause aren't
+lifecycle controls). The burn EXECUTION round-trip is proven directory-side (lever-002-burn.live 2/2);
+the e2e proves the affordance + confirm WITHOUT committing (a burn is permanent + would pollute the
+shared seeded agent). cello-portal `edffa56`; directory burned-read on m8-read-001.
+
+DOD-LEVER-2 stays 🟡 — the ONE remaining part is coordinated per-node K_server share destruction (the
+heavier part the story separates); the flag/honor-check/replication + portal affordance are done.
