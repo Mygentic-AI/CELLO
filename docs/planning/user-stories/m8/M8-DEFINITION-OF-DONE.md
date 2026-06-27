@@ -308,10 +308,14 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   The frost-gate honor-check fires frostHandler.destroyShares eager-on-observe (each node zeroes its
   OWN share when it sees the replicated burn; isAgentBurned distinguishes burn from pause). PROVEN by
   the share-destroy live test (zeroes both epochs, keeps rows, idempotent, never decrypts) + burn live
-  + directory-node 26/26. RESIDUALS (→ still 🟡): (1) a reconcile loop so a fully-IDLE node (never asked
-  to sign) zeroes its share without a ceremony attempt; (2) the burn as a cryptographically SIGNED
-  event (today it is account-authorized + timestamped, recorded with authorized_by_account — auditable,
-  not Ed25519-signed). The SECURITY property — a burned agent can never sign — holds via the flag.)*
+  + directory-node 26/26. The FEDERATION-WIDE guarantee is now complete: besides the eager-on-observe
+  trigger, a per-node RECONCILE sweep (listBurnedAgentPubkeys → frostHandler.destroyShares, on boot +
+  a 60s cadence) zeroes the share of an IDLE/offline node that was never asked to sign — proven by the
+  reconcile-list live assertion. ONE residual keeps this 🟡: "the burn is a SIGNED event." Today the
+  burn is account-authorized + timestamped + attributable (authorized_by_account, monotonic, replicated,
+  append-only-ish) — an auditable record, but NOT cryptographically Ed25519-signed. Whose key signs an
+  account-authorized burn is a genuine design question (no account Ed25519 key in this flow), left for a
+  decision rather than guessed. The SECURITY property — a burned agent can never sign — holds.)*
 - **DOD-LEVER-3 — T-of-N mechanism + distinct error.** A threshold of honest nodes refuse; a
   single node continuing doesn't let it sign; the ceremony returns a distinct revocation error.
   *(LEVER-001 AC-003)* — 🟡

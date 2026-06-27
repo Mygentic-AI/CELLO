@@ -971,3 +971,17 @@ both epochs, keeps rows, idempotent, never decrypts) + burn live 2/2 + directory
 DOD-LEVER-2 stays 🟡 with two residuals: (1) a reconcile loop for fully-IDLE nodes (zero without a
 ceremony attempt); (2) the burn as a cryptographically SIGNED event (today account-authorized +
 timestamped, not Ed25519-signed). The security property (a burned agent can never sign) holds via the flag.
+
+## 2026-06-27 — LEVER-002 burn reconcile sweep (federation-wide share destruction complete)
+
+The eager-on-observe trigger destroys a node's share on a ceremony attempt; the reconcile catches the
+idle/offline node. Store.listBurnedAgentPubkeys (burned agents by k_local); directory-node
+reconcileBurnedShares sweeps → frostHandler.destroyShares, on boot + a 60s unref'd cadence (idempotent).
+Burn live 3/3 (incl. the reconcile-list assertion: a burned agent is listed for the sweep) + share
+destroy 1/1 + directory-node 26/26. directory `4ee7f859`.
+
+DOD-LEVER-2 now has its share destruction FEDERATION-WIDE (eager + reconcile) — proven. The single
+residual keeping it 🟡 is "the burn is a SIGNED event": today it's account-authorized + timestamped +
+attributable (monotonic, replicated), auditable but not Ed25519-signed; "whose key signs an
+account-authorized burn" is a design question, not guessed. Security property (a burned agent can
+never sign) holds.
