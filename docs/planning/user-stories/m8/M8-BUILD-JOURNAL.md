@@ -1002,3 +1002,12 @@ M8 now: all 6 spine lines ✅; the suspend/burn lever ✅ except the design-ambi
 (LEVER-2) + strict ≥3-node T-of-N (LEVER-3/INV-6, protocol beyond M8). Remaining lines all need a
 resource outside a self-contained loop: signed-event design decision, real T-of-N, cross-node presence
 (multi-node infra), the publish (merge + Andre), the close gate (gated), INV-1 timing residual.
+
+## 2026-06-27 — DOD-INV-1 ✅ (ceremony-gated entry, proven live)
+
+J-INV1 (`e2e/j-inv1.spec.ts`, 2/2, served portal): an unmatched email gets {sent:true} (identical to
+matched — no enumeration oracle), mints no code/token, never establishes a session; a directory-known
+email resolves. No account-creation path. The done-condition's three clauses are met live. The
+micro-timing residual (matched path does extra mint DB writes) is acknowledged as defense-in-depth,
+NOT a done-condition clause — the exploitable oracle (response/status/rate-limit) is closed and the
+timing delta isn't closed with fake "dummy work". cello-portal `4d21f8f`.

@@ -36,11 +36,17 @@ Proven by SI/adversarial assertions woven into the journeys, never a separate pa
 
 - **DOD-INV-1 — Ceremony-gated entry.** No portal account-creation path anywhere; the account
   is resolved by matching `SHA-256(email)` against the directory's `email_stub_hash`; an
-  unmatched email gets the signpost, never an account. *(SCAFFOLD-001 AC-003, AUTH-001 AC-002)* — 🟡
-  *(PROVEN by AUTH-001 integration tests: an unknown email mints no token + no account; the request
-  response is identical for known/unknown AND the rate limit fires identically (no 429-vs-200
-  enumeration oracle). Account resolution runs through the DirectoryClient stub; the real-directory
-  path is READ-001. Residual: a timing side-channel on the resolved path, tracked in the journal.)*
+  unmatched email gets the signpost, never an account. *(SCAFFOLD-001 AC-003, AUTH-001 AC-002)* — ✅
+  *(PROVEN LIVE by J-INV1 (`e2e/j-inv1.spec.ts`, 2/2, served portal): an UNMATCHED email gets
+  {sent:true} (identical to a matched one — no 200-vs-404/error oracle), mints NO code/token, and can
+  never establish a session; a directory-known (ceremony-minted) email DOES resolve to a usable
+  code → session. No portal account-creation path; resolution is SHA-256(email) vs the directory's
+  email_stub_hash. Backed by the AUTH-001 integration tests (request identical for known/unknown, the
+  429 fires identically — no rate-limit oracle) + READ-001's real-directory path. NOTE (defense-in-
+  depth, NOT a done-condition clause): a micro-timing residual remains — the matched path does extra
+  DB writes (mint), so response time differs slightly. The EXPLOITABLE oracle (response/status/rate-
+  limit) is closed; the timing delta is dominated by network jitter and is not closed with fake
+  equalizing "dummy work" (which wouldn't truly constant-time DB I/O). Tracked as a hardening item.)*
 - **DOD-INV-2 — No plaintext/PII/token/content server-side.** Directory holds only hashes,
   flags/tombstones, and sealed ciphertext (deleted on ACK). Portal DB holds only: KMS-encrypted
   email, KMS-encrypted TOTP secret, hashed backup codes, sessions, WebAuthn public keys — no
