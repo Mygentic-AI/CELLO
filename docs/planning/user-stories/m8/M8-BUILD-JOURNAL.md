@@ -418,3 +418,40 @@ AGENTS-001 / the agents read endpoint → SPINE-3. Plus AUTH-004 (7-day grace) /
 screen) remain in J-AUTH. LEVER-001 (SPINE-4), TRUST-001/003 (SPINE-5/6), E2E close gate after.
 
 **Blocker needing Andre.** None.
+
+---
+
+## 2026-06-27 — PRESENCE-001 migration foundation (V33 designed + validated)
+
+**What was built (the careful migration-first step, per the M5 migration-integrity rules).** The
+V33 `agent_presence` migration (worktree `m8-read-001`, commit `0ba1d49e`):
+- `agent_presence` — a MUTABLE upsert table (agent_id PK, owning_node_id, online, last_seen_at,
+  updated_at; no chain_hash — high-churn presence, not append-only). Written ONLY by the owning
+  node (sovereign, the `sessions.owning_node_id` pattern); cross-node writes prevented in app code.
+  cello_service full-DML RLS (idempotent policy), index on owning_node_id.
+- `directory_nodes.last_heartbeat_at` — the per-node liveness guard for the presence read rule
+  (online iff the presence row is online AND the owning node's heartbeat is fresh → a crashed
+  node's stale rows age out to last-seen).
+- SSM `OpsAgentExpectedMigrationVersion` 32→33 (mandatory per the migration rule).
+
+**Validated.** The V33 SQL applies cleanly against the REAL directory schema (the running
+`cello-postgres:18` at V29+) in a rolled-back transaction — agent_presence created, last_heartbeat_at
+added, RLS policy + 2 indexes + GRANT all valid. (Full flyway-checksum apply against a fully-migrated
+DB is pending the directory bring-up plumbing — the running DB is from another compose project, so
+`compose run flyway` collides on :5433; this is a harness-orchestration detail, not a migration
+defect.)
+
+**What remains for PRESENCE-001 (next, deliberately separate — directory federation internals +
+multi-node e2e).** (1) Node-code wiring in `directory-node.ts`: edge-triggered upserts at the
+#streams add/remove sites (one write per connect/disconnect transition, none per heartbeat tick) +
+a per-node `last_heartbeat_at` refresh (~30-60s) + startup reconciliation (mark owned rows offline
+at boot). (2) The account-scoped agents read endpoint (READ-001 agents half) applying the presence
+read rule. (3) The multi-node e2e for AC-002/003/004 (transition-write-count, replication read from
+a different node, node-liveness guard, sovereign write-ownership) — needs a ≥2-node federation
+harness. These light SPINE-3.
+
+**Migration-version note.** V33 is the next free number after V32. The parallel M9 effort
+(`m9-build`) is the security gateway and (as far as I can see) adds no directory migrations; if it
+does, a renumber would be needed — flagged for coordination. The `m8-read-001` branch is LOCAL.
+
+**Blocker needing Andre.** None.
