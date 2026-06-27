@@ -158,7 +158,11 @@ for REGION in "${REGIONS[@]}"; do
 done
 
 # Tables covered by the publication (all append-only tables, AC behavior)
-PUBLICATION_TABLES="agent_profiles,conversation_seals,conversation_seal_staging,directory_checkpoints,checkpoint_node_signatures,relay_registrations,sessions,pending_notifications,user_accounts,registrations,pre_authorization_tokens,agent_revocations"
+# V34 write-seam targets (WRITEAPI-001): everything written through /internal/agent-write replicates
+# to every sovereign node. agent_suspensions + identity_tree_entries replicate cleanly (natural PKs).
+# pickup_queue is included so a daemon can pull from any node; TRUST-001 must finalize its id strategy
+# (BIGSERIAL across multiple write-receiving nodes risks PK conflicts — switch to a non-sequence key).
+PUBLICATION_TABLES="agent_profiles,conversation_seals,conversation_seal_staging,directory_checkpoints,checkpoint_node_signatures,relay_registrations,sessions,pending_notifications,user_accounts,registrations,pre_authorization_tokens,agent_revocations,agent_suspensions,identity_tree_entries,pickup_queue"
 TABLE_COUNT=$(echo "${PUBLICATION_TABLES}" | tr ',' '\n' | wc -l | tr -d ' ')
 
 # ── Step 1: Validate all ECS tasks are RUNNING before touching any DB ─────────
