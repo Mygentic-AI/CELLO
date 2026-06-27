@@ -384,7 +384,7 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
             await upsertIdentityHash(pool, { agentId, signalKind: w.signalKind, signalHash: w.signalHash });
             break;
           case "trust_signal_ciphertext":
-            await enqueuePickup(pool, { agentId, ciphertext: w.ciphertext });
+            await enqueuePickup(pool, { agentId, signalKind: w.signalKind, ciphertext: w.ciphertext });
             break;
         }
       } catch (err: unknown) {

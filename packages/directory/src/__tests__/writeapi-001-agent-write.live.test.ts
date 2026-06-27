@@ -122,7 +122,7 @@ describeLive("WRITEAPI-001 live — /internal/agent-write (real Postgres + HTTP)
     expect(treeRow.rows[0].signal_hash).toBe(hash);
 
     const sealed = Buffer.from(Uint8Array.from({ length: 80 }, (_, i) => (i * 53 + 7) % 256)).toString("base64");
-    const c = await write({ accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext", payload: { ciphertext: sealed } });
+    const c = await write({ accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext", payload: { ciphertext: sealed, signalKind: "webauthn" } });
     expect(c.status).toBe(200);
     const pq = await pool.query(`SELECT ciphertext FROM pickup_queue WHERE agent_id=$1`, [AGENT_A]);
     expect(pq.rowCount).toBe(1);
@@ -132,7 +132,7 @@ describeLive("WRITEAPI-001 live — /internal/agent-write (real Postgres + HTTP)
     // Try to land a raw email as a 'hash' and a raw token as 'ciphertext' — both must be rejected.
     const emailAsHash = await write({ accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_hash", payload: { signalKind: "webauthn", signalHash: RAW_EMAIL } });
     expect(emailAsHash.status).toBe(422);
-    const tokenAsCipher = await write({ accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext", payload: { ciphertext: Buffer.from(RAW_TOKEN).toString("base64") } });
+    const tokenAsCipher = await write({ accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext", payload: { ciphertext: Buffer.from(RAW_TOKEN).toString("base64"), signalKind: "webauthn" } });
     expect(tokenAsCipher.status).toBe(422);
 
     // Dump every byte of the three seam tables for our agents and assert the plaintext is absent.

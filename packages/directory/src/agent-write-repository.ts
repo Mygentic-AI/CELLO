@@ -65,13 +65,14 @@ export async function upsertIdentityHash(
   );
 }
 
-/** TRUST-001 sealed ciphertext — appended to the pickup queue; the agent's daemon pulls + ACKs it. */
+/** TRUST-001 sealed ciphertext — appended to the pickup queue; the agent's daemon pulls + ACKs it.
+ *  signal_kind lets the drain JOIN the authoritative identity-tree hash for verification (AC-001). */
 export async function enqueuePickup(
   pool: Queryable,
-  args: { agentId: string; ciphertext: Buffer },
+  args: { agentId: string; signalKind: string; ciphertext: Buffer },
 ): Promise<void> {
   await pool.query(
-    `INSERT INTO pickup_queue (agent_id, ciphertext) VALUES ($1, $2)`,
-    [args.agentId, args.ciphertext],
+    `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext) VALUES ($1, $2, $3)`,
+    [args.agentId, args.signalKind, args.ciphertext],
   );
 }

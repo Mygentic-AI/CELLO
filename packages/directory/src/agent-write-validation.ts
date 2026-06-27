@@ -26,7 +26,7 @@ const MAX_SEALED_BYTES = 65536;
 export type ValidatedWrite =
   | { kind: "revocation_flag"; paused: boolean }
   | { kind: "trust_signal_hash"; signalKind: string; signalHash: string }
-  | { kind: "trust_signal_ciphertext"; ciphertext: Buffer };
+  | { kind: "trust_signal_ciphertext"; signalKind: string; ciphertext: Buffer };
 
 export type ValidationResult =
   | { ok: true; write: ValidatedWrite }
@@ -83,7 +83,13 @@ export function validateWritePayload(writeKind: unknown, payload: unknown): Vali
       return { ok: true, write: { kind: "trust_signal_hash", signalKind, signalHash } };
     }
     case "trust_signal_ciphertext": {
-      if (!hasExactKeys(p, ["ciphertext"])) return { ok: false, reason: "invalid_payload" };
+      // { ciphertext, signalKind } — signalKind lets the daemon-pickup delivery JOIN the authoritative
+      // identity-tree hash for verification (TRUST-001 AC-001). No hash here (it lives in the tree).
+      if (!hasExactKeys(p, ["ciphertext", "signalKind"])) return { ok: false, reason: "invalid_payload" };
+      const signalKind = p["signalKind"];
+      if (typeof signalKind !== "string" || !SIGNAL_KINDS.has(signalKind)) {
+        return { ok: false, reason: "invalid_signal_kind" };
+      }
       const ciphertext = p["ciphertext"];
       if (typeof ciphertext !== "string" || ciphertext.length === 0) {
         return { ok: false, reason: "invalid_ciphertext" };
@@ -108,7 +114,7 @@ export function validateWritePayload(writeKind: unknown, payload: unknown): Vali
       if (isAllPrintable(bytes)) {
         return { ok: false, reason: "invalid_ciphertext" };
       }
-      return { ok: true, write: { kind: "trust_signal_ciphertext", ciphertext: bytes } };
+      return { ok: true, write: { kind: "trust_signal_ciphertext", signalKind, ciphertext: bytes } };
     }
   }
 }

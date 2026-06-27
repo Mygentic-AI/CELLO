@@ -139,7 +139,7 @@ describe("WRITEAPI-001 — POST /internal/agent-write", () => {
       accountId: ACCOUNT_A,
       agentId: AGENT_A,
       writeKind: "trust_signal_ciphertext",
-      payload: { ciphertext: SEALED_B64 },
+      payload: { ciphertext: SEALED_B64, signalKind: "webauthn" },
     }, API_KEY);
     expect(res.status).toBe(200);
     expect(writes).toHaveLength(1);
@@ -177,13 +177,13 @@ describe("WRITEAPI-001 — POST /internal/agent-write", () => {
     const { pool, writes } = makePool();
     const base = await start(pool);
     const r1 = await write(base, {
-      accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext", payload: { ciphertext: b64url },
+      accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext", payload: { ciphertext: b64url, signalKind: "webauthn" },
     }, API_KEY);
     expect(r1.status).toBe(200);
     // wrapped standard base64 (embedded newlines) is tolerated too
     const wrapped = Buffer.from(raw).toString("base64").replace(/(.{20})/g, "$1\n");
     const r2 = await write(base, {
-      accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext", payload: { ciphertext: wrapped },
+      accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext", payload: { ciphertext: wrapped, signalKind: "webauthn" },
     }, API_KEY);
     expect(r2.status).toBe(200);
     expect(writes).toHaveLength(2);
@@ -198,7 +198,7 @@ describe("WRITEAPI-001 — POST /internal/agent-write", () => {
       accountId: ACCOUNT_A,
       agentId: AGENT_A,
       writeKind: "trust_signal_ciphertext",
-      payload: { ciphertext: tokenB64 },
+      payload: { ciphertext: tokenB64, signalKind: "webauthn" },
     }, API_KEY);
     expect(res.status).toBe(422);
     expect(writes).toHaveLength(0);
