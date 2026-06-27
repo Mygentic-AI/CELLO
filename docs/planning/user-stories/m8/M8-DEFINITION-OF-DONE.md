@@ -328,14 +328,16 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   is local (branch m8-lever-001); the npm publish cascade is Andre-gated.)*
 - **DOD-LEVER-4 — Owner-only, step-up, burn-never-erases.** Only the owning account after step-up
   may revoke; a different account / bare session is rejected; burn kills future capability, never
-  past accountability. *(LEVER-001 SI-002)* — 🟡
+  past accountability. *(LEVER-001 SI-002)* — ✅
   *(OWNER-ONLY + STEP-UP PROVEN: the suspend route derives accountId from the session (never the
   client), requires a fresh WebAuthn step-up when the account has a strong factor, and routes through
   the account-scoped seam — which REJECTS a cross-account write (`not_owner`, WRITEAPI-001 SI-001 live:
-  A cannot write B's agent, nothing persisted); a bare-session write is 401. J-LEVER (3/3) proves both
-  the within-grace path AND the step-up-REQUIRED path: with a strong factor + a stale step-up, Pause is
-  refused (403 step_up_required), the lever shows "verify a passkey", and NO flag is set. REMAINING:
-  burn-never-erases, which is the burn path (DOD-LEVER-2, deferred).)*
+  A cannot write B's agent, nothing persisted); a bare-session write is 401. J-LEVER (4/4) proves the
+  within-grace path AND the step-up-REQUIRED path (strong factor + stale step-up → 403 step_up_required,
+  "verify a passkey", NO flag set). BURN-NEVER-ERASES PROVEN (lever-002-burn.live): burn kills future
+  capability (permanent flag + share zeroed across the federation) yet NEVER erases past accountability
+  — the agent_profiles binding (agent_id ↔ key ↔ account) is untouched and the zeroed share rows are
+  kept. (The separate "burn as a cryptographically signed event" nuance is tracked under DOD-LEVER-2.))*
 
 ---
 
