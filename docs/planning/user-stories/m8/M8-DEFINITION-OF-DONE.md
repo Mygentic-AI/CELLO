@@ -41,13 +41,18 @@ Proven by SI/adversarial assertions woven into the journeys, never a separate pa
   flags/tombstones, and sealed ciphertext (deleted on ACK). Portal DB holds only: KMS-encrypted
   email, KMS-encrypted TOTP secret, hashed backup codes, sessions, WebAuthn public keys — no
   plaintext signal, no OAuth token, no message content. Browser holds NO agent/identity data
-  (in-memory only). *(gate SI-001; SCAFFOLD-002 SI-001; AGENTS-001 SI-001; TRUST-001 SI-001)* — ❌
+  (in-memory only). *(gate SI-001; SCAFFOLD-002 SI-001; AGENTS-001 SI-001; TRUST-001 SI-001)* — 🟡
+  *(ciphertext-at-rest for email + TOTP secret, and SHA-256 token-hash sessions, PROVEN by the
+  SCAFFOLD-002 vitest integration tests against real Postgres; full no-plaintext audit across the
+  served write paths + the browser-storage half lands with AGENTS-001/WRITEAPI-001/TRUST-001.)*
 - **DOD-INV-3 — Account-scoping is server-side.** Every read/write is scoped to the session's
   `account_id` derived server-side; parameter injection of another account's id returns nothing
   / is rejected. *(READ-001 SI-001; WRITEAPI-001 SI-001)* — ❌
 - **DOD-INV-4 — Session: server-side, httpOnly, revocable.** Opaque token in an httpOnly cookie,
   not JS-readable, not in localStorage; revoking the row server-side fails the next request.
-  No stateless JWT. *(AUTH-001 SI-001)* — ❌
+  No stateless JWT. *(AUTH-001 SI-001)* — 🟡 *(opaque token, SHA-256-hashed at rest, server-side
+  revoke-fails-next-read PROVEN by the SCAFFOLD-002 integration test; the httpOnly-cookie + not-in-JS
+  half is asserted live once login lands — SPINE-2 / AUTH-001.)*
 - **DOD-INV-5 — Bootstrap can't escalate.** On a strong-auth account, a fresh email-magic-link
   session cannot add a credential or take a sensitive action without step-up against an existing
   factor. *(AUTH-002 SI-001)* — ❌
@@ -57,7 +62,10 @@ Proven by SI/adversarial assertions woven into the journeys, never a separate pa
 - **DOD-INV-7 — Trust = named signals only.** No composite score/level/distance/TrustRank/seed
   badge anywhere. *(TRUST-003 AC-001; [[feedback_no_trustrank_or_single_score]])* — ❌
 - **DOD-INV-8 — Observability.** Named `domain.noun.verb` events with `context_fields` +
-  `correlationId`; no `console.log`; distinct cause → distinct code. *(M4+ rules)* — ❌
+  `correlationId`; no `console.log`; distinct cause → distinct code. *(M4+ rules)* — 🟡
+  *(structured logger emits `portal.backend.started` + `portal.backend.migration.failed` +
+  `portal.landing.signpost.shown`; `no-console` is lint-enforced on `src/**`; the full per-journey
+  event taxonomy accrues as each journey lands.)*
 - **DOD-INV-9 — Agents appear; no lifecycle control.** No register/create/start/stop/set-current
   in the portal; the only agent-control action is the emergency suspend lever.
   *(AGENTS-001 AC-001; [[project-portal-model]])* — ❌
@@ -70,7 +78,11 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 
 - **DOD-SPINE-1 — Portal served + app shell.** Frontend builds; the shell renders the real M8
   nav (Agents home / Trust Signals / Account & Security) on the dark-console tokens; a protected
-  route with no session redirects to sign-in (no protected markup sent). *(SCAFFOLD-001 AC-001/002)* — ❌
+  route with no session redirects to sign-in (no protected markup sent). *(SCAFFOLD-001 AC-001/002)* — 🟠
+  *(PROVEN LIVE against the served app: dark-console design tokens RENDERED — body dark surface +
+  brand font + accent consumed by a real element — and the protected-route redirect emits no
+  protected markup/PII. The authed-shell-renders-the-three-sections half is red until login lands —
+  SPINE-2. J-SPINE: AC-001a + AC-002 green; AC-001b red.)*
 - **DOD-SPINE-2 — Magic-link sign-in → durable session.** Enter email → link + 6-digit code →
   durable httpOnly-cookie session → land on Agents home; account resolved via `email_stub_hash`.
   *(AUTH-001 AC-001)* — ❌

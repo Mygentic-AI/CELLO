@@ -122,3 +122,81 @@ on an assembly branch, and standing up the backend skeleton + its Postgres + mig
 ### Reviewer outcome / blockers
 N/A (docs only this entry; no code, no tests run). No blocker needing Andre — scoping is
 ratified, the repo is created, mockups are in hand. Ready to start J-SPINE.
+
+---
+
+## 2026-06-27 — J-SPINE bootstrap: scaffold + backend foundation + spine map (SCAFFOLD-001/002)
+
+**Repo / branch / HEAD.** `cello-portal` (cloned from the empty GitHub repo), branch
+**`m8-assembly`** (never pushed), HEAD **`f0c3997`**. Four commits from empty: scaffold baseline
+→ shell+backend-foundation → spine harness → review fixes. Code is committed locally only.
+
+**Architecture decision (settled).** cello-portal is a **single Next.js 16 App Router full-stack
+app** — `app/api/*` + `src/server/*` (server-only) are the backend (SCAFFOLD-002); route group
+`(app)` is the protected shell + screens (SCAFFOLD-001); public `sign-in` is the signpost.
+Dedicated Postgres (docker-compose); a checksummed SQL-file migration runner on `pg`; KMS via a
+local `EnvelopeCipher` adapter (prod swaps AWS KMS). Mirrors `cello-agent`'s full-stack Next
+pattern; deploys as a standalone Node server on ECS; splitting the API onto its own service later
+is a reversible refactor. Stack: Next 16.2.9 / React 19.2.4 / Tailwind 4.3.1 / TS 5.9. Dark-console
+tokens ported verbatim from `cello-agent/frontend/src/app/globals.css` (JetBrains Mono + Lora, pink
+`#db2777`).
+
+**What was built.**
+- *Frontend (SCAFFOLD-001):* dark-console design system as code; left-sidebar `AppShell` with
+  exactly the three M8 sections (no register/start/stop, no "coming soon"); `proxy`-gated protected
+  routes (Next 16 renamed `middleware`→`proxy`); sign-in + stranger signpost (Telegram ceremony +
+  GitHub, no account-creation form); Agents-home / Trust-Signals / Account section scaffolds.
+- *Backend foundation (SCAFFOLD-002):* composition-root `config.ts` (portal Postgres is the ONLY DB
+  connection — no directory DB); lazy `pg` pool (bounded, max 10); `EnvelopeCipher` (AES-256-GCM
+  per-field data key, HMAC-wrapped under the master key); checksummed migration runner +
+  `0001_init` (account / sessions / webauthn_credentials / totp_secrets / backup_codes /
+  magic_link_tokens); server-side opaque-token session store (SHA-256-hashed at rest, revocable);
+  structured `domain.noun.verb` logger (process.stdout, `no-console` lint-enforced on `src/**`);
+  self-migrate-on-boot via `instrumentation.ts`.
+- *Live test (J-SPINE):* Playwright drives the **served** portal (real build + Node server + own
+  Postgres, brought up inside `webServer.command`). Anchored to the running app — no in-process
+  component/handler imports. All six spine lines present; SPINE-3..6 are `fixme` with explicit
+  unblock notes (the local directory cluster + daemon).
+
+**Live-test run (the map, not a claim) — HEAD `f0c3997`:**
+- `DOD-SPINE-1 AC-001a` (dark-console tokens RENDERED — computed body bg dark + brand font +
+  accent **consumed** by the submit button = `rgb(219,39,119)`) — **✓ green**.
+- `DOD-SPINE-1 AC-002` (protected route → redirect to /sign-in; no protected markup/PII; body < 1KB)
+  — **✓ green**.
+- `DOD-SPINE-1 AC-001b` (authed shell renders the three sections) — **✗ red** (awaits login/SPINE-2).
+- `DOD-SPINE-2` (magic-link → durable session) — **✗ red** (endpoints not built).
+- `DOD-SPINE-3..6` — fixme (the visible map).
+- *SCAFFOLD-002 integration tests (vitest, real Postgres):* **4/4 green** — migration idempotency
+  + enumerated schema; **ciphertext-at-rest** for email + TOTP secret (raw column ≠ plaintext,
+  round-trips); no directory DB connection; opaque/hashed/revocable sessions (revoke fails next read).
+- Floor: `typecheck` clean, `lint` clean, `build` green.
+
+**Reviewers (all three, read-only, on the full unit up to `f0c3997`) — every finding fixed:**
+- *fallback-finder* — HIGH: `CELLO_ENV` cast without an allow-list could run production under the
+  source-published all-zeros dev KMS key → **fixed** (validate the four envs; dev key only under
+  `env=local`; dev/staging/prod require `PORTAL_KMS_MASTER_KEY`). MED: instrumentation silently
+  skipped migration on missing DB → **fixed** (build-phase guard only; `process.exit(1)` on migrate
+  failure). LOW: orphaned-account label → **fixed** (redirect). Clean paths confirmed: kms, session,
+  migrate, the auth gate.
+- *code-reviewer (opus)* — verified DOD-INV-1/2/4 + no-directory-DB + proxy-gate CORRECT. HIGH: no
+  automated SCAFFOLD-002 integration tests + `pnpm test` errored → **fixed** (4 integration tests
+  added; vitest config). MED: KMS key only enforced in prod (= fallback HIGH, same fix); webServer
+  raced DB bring-up → **fixed** (DB folded into `webServer.command`). LOW: unguarded `last_seen`
+  write → **fixed** (fire-and-forget); is-the-throw-blocking → **fixed** (`process.exit(1)`).
+- *test-attacker* — BLOCKING: AC-001a was hollow (a declared-but-unconsumed CSS var would pass) →
+  **fixed** (assert computed rendered styles + accent consumed by a real element). AC-002 hardened
+  (PII-value absent + body size). Re-ran red→green.
+
+**DoD flips (honest, partial where partial).** `DOD-SPINE-1` → 🟠 (tokens + redirect proven LIVE;
+authed-shell half red until SPINE-2). `DOD-INV-2` → 🟡 (ciphertext-at-rest proven by integration
+tests; served-path + browser-storage audit pending). `DOD-INV-4` → 🟡 (opaque/hashed/revocable
+proven; httpOnly-cookie half proven when login lands). `DOD-INV-8` → 🟡 (three events emitted +
+`no-console` enforced; full taxonomy accrues per journey).
+
+**Next red (one sentence).** `DOD-SPINE-2` — build the AUTH-001 magic-link request/verify endpoints
++ account resolution via the directory `email_stub_hash`, and stand up the local directory cluster
+in the J-SPINE harness seeded with a known operator + agent — which turns SPINE-2 green and unblocks
+SPINE-1 AC-001b (authed shell).
+
+**Blocker needing Andre.** None. (No deploy, no merge, no design fork. Code stays on `m8-assembly`,
+unpushed. These planning-doc updates go to `trustless-cello` main, which is authorized.)
