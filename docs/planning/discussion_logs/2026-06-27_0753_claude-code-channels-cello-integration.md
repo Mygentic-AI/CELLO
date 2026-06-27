@@ -1,40 +1,38 @@
 ---
-name: Claude Code Channels × CELLO Client — Integration Model
+name: Claude Code Channels × CELLO — Integration Model
 type: discussion
 date: 2026-06-27
-topics: [claude-code-channels, mcp, daemon, ipc, notifications, shim, stack-retirement, telegram-bridge, relay, prompt-injection, anti-surveillance]
+topics: [claude-code-channels, mcp, daemon, ipc, notifications, shim, telegram-bridge, relay, prompt-injection, anti-surveillance, webhook, slack, discord]
 status: design-investigated-not-built
 description: >
-  What Claude Code "channels" are, how they map onto the CELLO client's daemon/shim
-  architecture, and what it would actually take to make CELLO react to inbound events
-  (a peer opening a session, a peer message) as pushed channel notifications instead of
-  poll-only tool calls. Includes the correction that the existing channel code lives in
-  the RETIRED in-process adapter, the new-architecture-only plan (two shim edits + one
-  optional daemon hook), and the feasibility of a Telegram ⇄ Claude ⇄ CELLO human relay.
+  What Claude Code "channels" are and how CELLO can use them to become a reactive
+  push-based participant, enabling integrations with Telegram, Slack, Discord, or
+  generic Webhooks. Covers the channel protocol model, the minimal shim edits
+  required to surface daemon events as pushed channel notifications, and the
+  Telegram ⇄ Claude ⇄ CELLO human relay as the canonical use case.
   Investigation + design discussion only — no implementation landed.
 ---
 
-# Claude Code Channels × CELLO Client — Integration Model
+# Claude Code Channels × CELLO — Integration Model
 
-## 1. Context — how we got here
+## 1. Purpose of this discussion log
 
-This started as a feasibility question, not a build: *can we use Claude Code's newish
-"channels" feature to let the CELLO client **react** to inbound events instead of only
-responding when prompted?* Today every CELLO interaction is **pull-based** — the agent
-must call `cello_await_session` or `cello_receive` and block on a timeout. Channels are
-the opposite shape: **events pushed into a live Claude Code session** so Claude can act
-the moment something arrives.
+This document records what Claude Code "channels" are and how CELLO can use them to
+become a **reactive, push-based participant** — rather than a poll-only one.
 
-The investigation walked the client source — the `adapter-claude-code` package (the MCP
-surface), the `cello-mcp` shim binary, the `IpcProxy`, and the `daemon` (IPC server +
-notification dispatcher). The first finding reframed everything: **CELLO already speaks
-the channel protocol** — but in the wrong, now-retiring place. The bulk of this log is
-(a) separating the dead in-process path from the live daemon path, (b) the minimal
-new-architecture plan, and (c) the Telegram ⇄ CELLO relay that channels make possible.
+The motivating question is whether CELLO can integrate with platforms like Telegram,
+Slack, Discord, or even generic Webhooks: a peer sends a CELLO message → CELLO wakes
+Claude → Claude routes it out to Telegram (or wherever the operator is reachable). The
+same channel model works in reverse — the operator types in Telegram and Claude relays
+it back over CELLO.
 
-A correction landed mid-thread and is load-bearing: *do not confuse the old in-process
-adapter with the new daemon architecture.* §3 records it, because it changes what counts
-as "already working."
+The investigation covers three things:
+- What the channel protocol is and how it maps onto CELLO's daemon/shim architecture
+- The minimal shim edits needed to surface daemon events as pushed channel notifications
+  (rather than poll-only tool calls)
+- The Telegram ⇄ Claude ⇄ CELLO relay as the canonical use case
+
+This is a design investigation, not a build. No implementation landed.
 
 ---
 
@@ -65,62 +63,9 @@ Reference: Claude Code Docs — Channels reference
 
 ---
 
-## 3. The architecture correction — old in-process vs new daemon (load-bearing)
+## 3. The daemon already emits the event
 
-CELLO underwent a **massive shift to a daemon architecture**. Two MCP servers exist in
-the tree; only one is production, and the channel code that already exists is in the
-*other* one.
-
-**OLD (retired) — in-process adapter.**
-`core/adapter-claude-code/src/server.ts` `createMcpServer(node, client, keyProvider)` is
-the pre-split, in-process MCP server. It **already**:
-- declares the capability — `{ capabilities: { experimental: { "claude/channel": {} } } }`
-  (`server.ts:131`); and
-- pushes real channel notifications — `pushSessionRequestNotification` /
-  `pushChannelNotification` call
-  `server.server.notification({ method: "notifications/claude/channel", params })`
-  (`notifications.ts:8,25`).
-
-But it takes a `CelloClient` as its second argument, and
-`core/daemon/src/__tests__/daemon-004-stack-retirement.test.ts` enforces that **no
-production path constructs `CelloClient`** (`session-manager` / `seal-manager` /
-`new CelloClient` → zero matches in daemon + adapter production source, *and* in built
-`dist/`). By that test's own definition `server.ts` is **not production code** — it is the
-dead stack, "RETIRED, not merely bypassed." Its channel support never runs in the shipped
-client and is slated to disappear.
-
-> **Consequence:** `server.ts` / `notifications.ts` are useful **only** as a reference for
-> the notification *payload shape*. They are **not** a foundation to build on or revive.
-
-**NEW (live) — daemon + thin shim.**
-
-```
-Claude Code ──stdio(MCP)──► cello-mcp shim ──IPC(unix sock)──► daemon
-                            (bin/cello-mcp.ts)                 (libp2p node, session-node-manager,
-                             no client, no DB, no keys          NotificationDispatcher — the real work)
-                             NO channel capability
-                             DROPS daemon notifications)
-```
-
-- **The shim is a shim** — a thin pass-through. Every tool in `bin/cello-mcp.ts` is the
-  same one-liner: receive an MCP call, `proxy.call(...)` it to the daemon over IPC, relay
-  the reply (`cello-mcp.ts` tool registrations). Its own header: *"Holds no key material,
-  opens no database, creates no libp2p node."* README framing: `cli`/daemon is "the heavy
-  node," `connect` (`cello-mcp`) is "the thin MCP server that Claude Code talks to and
-  that proxies to the running daemon."
-- The shim's `McpServer` declares **no** channel capability (`cello-mcp.ts:120`).
-- The shim's `IpcProxy` **throws daemon notifications away**:
-  `if ("notification" in frame) { /* skip for now */ continue; }` (`ipc-proxy.ts:183`).
-
-So today: a peer connects → the daemon emits an IPC notification → **the shim drops it** →
-Claude never hears about it.
-
----
-
-## 4. The daemon already emits the event (new architecture, not the dead stack)
-
-Crucially, the daemon has its **own** notification system, independent of the retired
-`notifications.ts`:
+Crucially, the daemon has its **own** notification system that is live and production:
 
 - `NotificationDispatcher` (`core/daemon/src/notification-dispatcher.ts`) with per-type
   routing:
@@ -137,12 +82,12 @@ Crucially, the daemon has its **own** notification system, independent of the re
   pattern — a ready-made template for teaching the shim's proxy to surface frames instead
   of dropping them.
 
-This is live code, not the retired stack. The event already crosses the socket; only the
-shim's last hop is missing.
+The event already crosses the socket. The shim's last hop is all that's missing:
+`if ("notification" in frame) { /* skip for now */ continue; }` (`ipc-proxy.ts:183`).
 
 ---
 
-## 5. The easy path — DECIDED shape
+## 4. The easy path — DECIDED shape
 
 - **DECIDED (wake on inbound session needs ZERO daemon changes — shim only).** Two small
   edits, both in the live shim:
@@ -157,10 +102,9 @@ shim's last hop is missing.
 
 - **DECIDED ("we're an MCP tool, as is a channel" is NOT a blocker).** A single `McpServer`
   can be **both** a tools-provider **and** a channel — `claude/channel` capability and
-  `tools` coexist on one server (that is exactly what a two-way channel is). The retired
-  `server.ts` already proves the pattern (≈15 tools + the channel capability on one
-  server). So the shim stays **one** MCP server and simply gains the capability; no second
-  process, no second `claude mcp add`.
+  `tools` coexist on one server (that is exactly what a two-way channel is). The shim
+  stays **one** MCP server and simply gains the capability; no second process, no second
+  `claude mcp add`.
 
 - **DECIDED (content-free design composes cleanly).** CELLO's SI-001 discipline keeps the
   notification payload content-free — only `type` + counterparty pubkey + `session_id`;
@@ -172,11 +116,11 @@ shim's last hop is missing.
   agent state — **not** per inbound message (messages are still pulled via `cello_receive`
   polling). A true chat relay wants a ping per message: one extra
   `dispatchSessionStateChanged`-style hook on the daemon's message-arrival path. Modest,
-  but it *is* a daemon edit, so it falls under the publish-cascade rules (§8).
+  but it *is* a daemon edit, so it falls under the publish-cascade rules (§6.4).
 
 ---
 
-## 6. The Telegram ⇄ Claude ⇄ CELLO relay — feasibility
+## 5. The Telegram ⇄ Claude ⇄ CELLO relay — feasibility
 
 The motivating use case: chat from Telegram to Claude, and from Claude to whoever is
 reaching out over CELLO (and back). This is the **canonical** channels pattern — Claude
@@ -200,17 +144,32 @@ Code as a **router between two channels**, one session in the middle:
   the reference examples in the channels docs and exist as plugins; they poll the platform,
   forward your messages in, and expose a `reply` tool. Mostly configuration + allowlisting
   your own user ID.
-- **CELLO half — the §5 shim work.** The *reply* direction is already free: `cello_send`
-  exists. The inbound *wake* is the two shim edits (and the §5 per-message daemon hook for
+- **CELLO half — the §4 shim work.** The *reply* direction is already free: `cello_send`
+  exists. The inbound *wake* is the two shim edits (and the §4 per-message daemon hook for
   message-granularity).
 
+The same pattern extends to any platform that has a channel bridge. The appropriate
+choice depends on the use case:
+
+| Platform | When to use |
+|---|---|
+| **Telegram** | Personal control — one operator, one chat, familiar mobile UI |
+| **Discord** | Bot-driven developer community or personal control channel; Anthropic ships an official plugin |
+| **Slack** | Team chat and threaded ops workflows; Claude Code has an official Slack integration |
+| **Webhook** | When the source is not a chat app — CI alerts, production incidents, calendar bookings, CRM events |
+| **Custom UI** | When you want a specialized front end with file views, task status, or approval flows |
+
+For CELLO's near-term purposes, Telegram is the simplest to stand up. For event-driven
+agent control (e.g. a peer-initiated session triggering a workflow), the webhook pattern
+is the most general: any system that can emit an HTTP event can become a CELLO trigger.
+
 **DECIDED:** feasible, and squarely what channels are for. The only genuinely novel build
-is the CELLO inbound channel; Telegram is mostly config; the security framing is the part
-not to hand-wave.
+is the CELLO inbound channel; the platform-side bridge is mostly configuration; the
+security framing is the part not to hand-wave.
 
 ---
 
-## 7. Caveats that actually matter
+## 6. Caveats that actually matter
 
 1. **Foreground router, not a background bridge.** It works only while a Claude session is
    live with both channels attached and `--channels` enabled. If the session ends, the
@@ -240,7 +199,7 @@ not to hand-wave.
 
 ---
 
-## 8. How this fits existing CELLO architecture
+## 7. How this fits existing CELLO architecture
 
 - The daemon is already the **control point** (heavy node: libp2p, sessions, seals,
   encrypted DB); the shim is a deliberately dumb relay. Channels fit the seam exactly: the
@@ -250,12 +209,10 @@ not to hand-wave.
 - The **anti-surveillance / content-minimization** value (SI-001 content-free
   notifications) is preserved by the doorbell-then-`cello_receive` shape — the channel
   leaks no message content into the wake.
-- The retired in-process adapter (`server.ts`) is forward-incompatible with the
-  stack-retirement invariant; the design deliberately does **not** revive it.
 
 ---
 
-## 9. Open questions
+## 8. Open questions
 
 - **Message-granularity wake:** confirm the exact daemon hook point on the inbound
   message-arrival path (alongside `daemon.ts:3075`) and the notification shape for a
@@ -268,24 +225,24 @@ not to hand-wave.
   live (shim config? daemon? Claude instructions?) and how they are enforced.
 - **Liveness/reconnect:** behavior when the session drops while CELLO messages queue in the
   daemon — replay-on-reattach vs notify-summary.
-- **Publish plan:** which packages bump (`connect` only for §5 wake-on-session; `connect` +
+- **Publish plan:** which packages bump (`connect` only for §4 wake-on-session; `connect` +
   `daemon` for per-message) and the dependent cascade.
 
 ---
 
-## 10. What this unblocks / next steps
+## 9. What this unblocks / next steps
 
 New capability implied: **CELLO as a reactive (push) participant** rather than poll-only —
 the inbound channel on the live shim, optionally a per-message daemon dispatch hook, and a
-Telegram ⇄ CELLO human relay built by composing an off-the-shelf Telegram channel with the
-CELLO MCP. Natural staging:
+platform relay (Telegram, Slack, Discord, or Webhook) built by composing an off-the-shelf
+channel bridge with the CELLO MCP. Natural staging:
 
-1. **Shim-only one-way channel** (DECIDED, §5) — prove "peer opens session → Claude wakes"
+1. **Shim-only one-way channel** (DECIDED, §4) — prove "peer opens session → Claude wakes"
    end to end. Zero daemon change, `connect` bump only.
 2. **Per-message daemon hook** — wake on every inbound message (daemon + `connect` bump,
    cascade).
-3. **Telegram relay** — attach an allowlisted two-way Telegram channel; Claude routes
-   between it and CELLO (`cello_send` / `cello_receive`).
+3. **Platform relay** — attach an allowlisted two-way channel (Telegram, Slack, Discord,
+   or Webhook); Claude routes between it and CELLO (`cello_send` / `cello_receive`).
 4. **Hardening** — sender allowlists, relay-don't-obey framing, multi-peer addressing.
 
 These would become SPARC stories (Specification → Pseudocode → Architecture → Refinement
@@ -296,13 +253,9 @@ These would become SPARC stories (Specification → Pseudocode → Architecture 
 ## Related Documents / source pointers
 
 - `core/adapter-claude-code/src/bin/cello-mcp.ts` — the live production shim; `McpServer`
-  at `:120` (no channel capability), all tools are IPC pass-throughs.
+  at `:120` (no channel capability today), all tools are IPC pass-throughs.
 - `core/adapter-claude-code/src/ipc-proxy.ts` — `:183` drops daemon notification frames
   (the gap); the `onNotification` hook would go here.
-- `core/adapter-claude-code/src/server.ts` — **retired** in-process MCP server; `:131`
-  declares `claude/channel`; reference-only for payload shape.
-- `core/adapter-claude-code/src/notifications.ts` — **retired** `pushChannelNotification` /
-  `pushSessionRequestNotification`; the `notifications/claude/channel` shape to mirror.
 - `core/daemon/src/notification-dispatcher.ts` — live push routing (agent/session events).
 - `core/daemon/src/ipc-server.ts` — `:297` `sendNotification`, `:312` `getConnectionIds`.
 - `core/daemon/src/ipc-client.ts` — `:68` `onNotification(handler)` pattern to copy into
@@ -310,7 +263,15 @@ These would become SPARC stories (Specification → Pseudocode → Architecture 
 - `core/daemon/src/daemon.ts` — `:3075` already dispatches `session_state_changed`/`created`
   on a real inbound session.
 - `core/daemon/src/types.ts` — `:73` `IpcNotification` frame shape.
-- `core/daemon/src/__tests__/daemon-004-stack-retirement.test.ts` — the invariant proving
-  `server.ts`/the `CelloClient` stack is not production.
 - Claude Code Docs — Channels reference: https://code.claude.com/docs/en/channels-reference
-- `.claude/CLAUDE.md` — SPARC process + the publishing/version-cascade invariants (§7.4).
+- Claude Code Docs — Push events into a running session: https://code.claude.com/docs/en/channels
+- Claude Code Docs — Slack integration: https://code.claude.com/docs/en/slack
+- Claude Code Docs — Platforms and integrations: https://code.claude.com/docs/en/platforms
+- Anthropic official Discord plugin: https://github.com/anthropics/claude-plugins-official/blob/main/external_plugins/discord/README.md
+- `.claude/CLAUDE.md` — SPARC process + the publishing/version-cascade invariants (§6.4).
+
+**Legacy code (reference only):** `core/adapter-claude-code/src/server.ts` and
+`core/adapter-claude-code/src/notifications.ts` are the retired in-process adapter. They
+contain a working `claude/channel` capability declaration and `pushChannelNotification`
+implementation — useful only as a reference for the notification payload shape. They are
+not production code and are not a foundation to build on.
