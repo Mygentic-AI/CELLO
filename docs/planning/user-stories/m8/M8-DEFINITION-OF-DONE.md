@@ -138,7 +138,9 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 - **DOD-AUTH-5 — Account & Security.** Lists factors + active sessions; log-out-everywhere revokes
   other sessions server-side; factor removal requires step-up. *(AUTH-006)* — ❌
 - **DOD-AUTH-6 — Signpost landing.** No-session, no-link visitor → routes to the Telegram ceremony
-  + GitHub install; no account-creation form. *(SCAFFOLD-001 AC-003)* — ❌
+  + GitHub install; no account-creation form. *(SCAFFOLD-001 AC-003)* — ✅ *(PROVEN LIVE, J-SPINE:
+  /sign-in shows both outbound routes + a sign-in field, and asserts the ABSENCE of any
+  account-creation/registration form — ceremony-gated entry.)*
 - **DOD-AUTH-7 — OTP single-use, expiring, rate-limited.** *(AUTH-001 AC-003/004)* — 🟡
   *(PROVEN by AUTH-001 integration tests: single-use sequential AND concurrent (2 verifies → exactly
   1 session via FOR UPDATE SKIP LOCKED); expiry; attempt-cap that actually BLOCKS (correct code
