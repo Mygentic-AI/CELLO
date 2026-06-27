@@ -144,6 +144,22 @@ export class EncryptedPgShareStore {
   }
 
   /**
+   * CELLO-M8-LEVER-002 (burn): destroy the persisted K_server_X material for ALL of an agent's
+   * epochs. agent_key_shares is APPEND-ONLY (row deletion forbidden), so we ZERO encrypted_share
+   * (the GRANT covers UPDATE of encrypted_share/key_version/updated_at) — capability dies, the row /
+   * accountability survives. key_version is stamped 'burned'. Idempotent (a re-burn re-zeroes).
+   */
+  async destroyShares(agentId: string): Promise<void> {
+    const res = await this.#pool.query(
+      `UPDATE agent_key_shares
+          SET encrypted_share = '\\x'::bytea, key_version = 'burned', updated_at = now()
+        WHERE agent_id = $1`,
+      [agentId],
+    );
+    this.#logger.warn("key.burned", { agentId, epochsZeroed: res.rowCount ?? 0 });
+  }
+
+  /**
    * Retrieve and decrypt a K_server_X share for the given agent/epoch.
    * Returns null if no share exists for that (agentId, epochId) pair.
    *

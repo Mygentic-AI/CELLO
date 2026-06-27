@@ -324,6 +324,15 @@ export class FrostDirectoryHandler {
 
   get nodeId(): string { return this.#nodeId; }
 
+  /**
+   * CELLO-M8-LEVER-002 (burn): destroy THIS node's K_server_X share material for an agent (all
+   * epochs) — the per-node reaction to a replicated burn. Delegates to the ShareStore (in-memory
+   * dropped; persisted zeroed). Idempotent.
+   */
+  async destroyShares(agentPubkey: string): Promise<void> {
+    await this.#shareStore.destroyShares(agentPubkey);
+  }
+
   // ─── bootstrapKeyShares ──────────────────────────────────────────────────────
 
   /**

@@ -72,6 +72,14 @@ export interface ShareStore {
    * If a share already exists for the key, it is overwritten.
    */
   storeShare(agentPubkey: string, epochId: string, share: LocalShare): void;
+
+  /**
+   * CELLO-M8-LEVER-002 (burn): destroy ALL K_server_X shares for an agent (every epoch). The
+   * in-memory entries are removed; the persisted material is ZEROED (agent_key_shares is append-only —
+   * row deletion is forbidden, so encrypted_share is overwritten empty: capability dies, the row /
+   * accountability survives). Async because the persisted store is async; idempotent.
+   */
+  destroyShares(agentPubkey: string): Promise<void>;
 }
 
 // ─── InMemoryShareStore ───────────────────────────────────────────────────────
@@ -96,5 +104,13 @@ export class InMemoryShareStore implements ShareStore {
 
   storeShare(agentPubkey: string, epochId: string, share: LocalShare): void {
     this.#shares.set(`${agentPubkey}:${epochId}`, share);
+  }
+
+  async destroyShares(agentPubkey: string): Promise<void> {
+    // Remove every (agentPubkey, epoch) entry — the key prefix is "${agentPubkey}:".
+    const prefix = `${agentPubkey}:`;
+    for (const key of this.#shares.keys()) {
+      if (key.startsWith(prefix)) this.#shares.delete(key);
+    }
   }
 }

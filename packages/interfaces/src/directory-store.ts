@@ -255,6 +255,12 @@ export interface DirectoryStore {
    */
   isAgentSuspended(kLocalPubkeyHex: string): Promise<boolean>;
 
+  /**
+   * True if the agent has been BURNED (permanent — LEVER-002). A burned agent is also suspended; this
+   * distinguishes burn (→ each node destroys its own K_server share) from a reversible pause.
+   */
+  isAgentBurned(kLocalPubkeyHex: string): Promise<boolean>;
+
   // ─── CELLO-M8-TRUST-001: trust-signal pickup delivery ──────────────────────
   /** Resolve the directory agent_id for a k_local pubkey (the pickup queue is keyed by agent_id). */
   getAgentIdByPubkey(kLocalPubkeyHex: string): Promise<string | null>;

@@ -991,6 +991,19 @@ export class CelloDirectoryNode {
         epochId,
         correlationId: Buffer.from(randomBytes(16)).toString("hex"),
       });
+      // LEVER-002: a burn is the per-node reaction — destroy THIS node's K_server share when we
+      // observe the replicated burn (eager-on-observe). Fire-and-forget cleanup: the refusal above
+      // already protects; zeroing the material is the "capability dies" completeness. Idempotent.
+      void this.#store.isAgentBurned(agentPubkey)
+        .then((burned) => {
+          if (burned) return this.#frostHandler.destroyShares(agentPubkey);
+        })
+        .catch((err) => {
+          this.#logger?.error("frost.share.destroy.failed", {
+            agentShort: agentPubkey?.slice(0, 16),
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
     }
     return paused;
   }

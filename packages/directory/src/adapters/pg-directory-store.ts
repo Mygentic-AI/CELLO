@@ -356,6 +356,17 @@ export class PgDirectoryStore implements DirectoryStore {
     return (result.rowCount ?? 0) > 0;
   }
 
+  async isAgentBurned(kLocalPubkeyHex: string): Promise<boolean> {
+    const result = await this.#pool.query(
+      `SELECT 1 FROM agent_suspensions s
+         JOIN agent_profiles p ON p.agent_id = s.agent_id
+        WHERE p.k_local_pubkey = $1 AND s.burned = true
+        LIMIT 1`,
+      [kLocalPubkeyHex],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
   // CELLO-M8-TRUST-001: trust-signal pickup delivery (the pickup queue is keyed by agent_id).
   async getAgentIdByPubkey(kLocalPubkeyHex: string): Promise<string | null> {
     const result = await this.#pool.query<{ agent_id: string | null }>(
