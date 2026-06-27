@@ -826,3 +826,43 @@ Note: directory-node reconnect wiring (#1/#2) is not independently verifiable wi
 (#3), so they ship together as one unit with the J-TRUST spine as the proof — deliberately NOT
 half-wired-and-untested. The canonicalJson serializer must match between portal (handoff.ts) and
 daemon (recompute) — same recursively-sorted-keys algorithm.
+
+---
+
+## 2026-06-27 — SPINE-6 GREEN: the trust-signal pipe end-to-end (J-TRUST). All 6 spine lines pass.
+
+The finale — directory-node wiring + daemon pickup handler + the J-TRUST spine — landed together (as
+planned, ships with its proof). The pipe is live end-to-end across all three repos.
+
+**Directory wiring.** DirectoryStore gained getAgentIdByPubkey + drainPickup + ackPickup (pg wraps the
+pickup-repository; in-memory stub; PickupItem in the interface). On signaling reconnect, directory-node
+resolves agent_id → drains the pickup queue → sends `trust_signal_pickup` frames (NOT deleting — the
+ACK round-trip deletes). The inbound `trust_signal_ack` branch → ackPickup (DELETE). directory-node
+26/26.
+
+**Daemon (cello-client m8-lever-001).** A per-agent `trust_signal_pickup` handler: openContentSeal
+(k_local) → recompute hash → compare to the directory anchor → store in a new encrypted `trust_signals`
+table → send `trust_signal_ack`. open-fail / hash-mismatch / store-fail → NO ack (re-mintable). New
+table + codec; identity-store/sqlcipher/write-allowlist 16/16.
+
+**Proof — J-TRUST (`packages/e2e-tests/src/spine/j-trust.spine.test.ts`, 1/1, ~25s, real binaries).**
+Seed a sealed signal as the portal writes it (hash → identity_tree, ciphertext → pickup_queue) →
+restart the daemon → it reconnects → the directory drains + delivers → the daemon opens with k_local
+(only it can — SI-001), hash-MATCHES the anchor, STORES the plaintext in its encrypted DB, ACKs → the
+pickup queue is EMPTY (directory ack-deleted), the identity-tree hash remains, the plaintext credential
+id is absent from the directory tables. (First run timed out on an MCP stop/start bounce that didn't
+re-auth the signaling; a daemon restart is the reliable reconnect trigger.)
+
+**Tags flipped (all drift-checked vs the J-TRUST run):** `DOD-SPINE-6` ✅, `DOD-TRUST-1` ✅, `DOD-TRUST-2`
+✅, `DOD-TRUST-3` ✅. `DOD-INV-2` ✅ (all three surfaces proven: portal ciphertext-at-rest + no-plaintext
+handoff, directory write-seam SI-001 dump + J-TRUST cross-pipe dump, browser empty storage). **All 6
+spine lines green.** directory branch m8-read-001 `48fff9e0`; cello-client m8-lever-001 `34edf50`
+(daemon — local build; npm publish is DOD-TRUST-4, Andre-gated).
+
+**Remaining M8:** DOD-TRUST-4 (cello-client publish cascade — Andre); DOD-AGENT-1 alerts/posture header;
+DOD-LEVER-2 burn + DOD-LEVER-3 strict multi-node T-of-N + the LEVER-4 step-up-required e2e; the
+multi-node PRESENCE e2e; DOD-E2E-1 close gate.
+
+**Note:** the cross-node-read sub-claim of TRUST-1 AC-001 ("readable from a DIFFERENT node") rides
+general replication (identity_tree ∈ cello_pub; cross-node reads proven by READ-001) — the single-node
+J-TRUST proves the open+verify+store+ACK+delete pipe, not a second-node read.

@@ -45,12 +45,15 @@ Proven by SI/adversarial assertions woven into the journeys, never a separate pa
   flags/tombstones, and sealed ciphertext (deleted on ACK). Portal DB holds only: KMS-encrypted
   email, KMS-encrypted TOTP secret, hashed backup codes, sessions, WebAuthn public keys — no
   plaintext signal, no OAuth token, no message content. Browser holds NO agent/identity data
-  (in-memory only). *(gate SI-001; SCAFFOLD-002 SI-001; AGENTS-001 SI-001; TRUST-001 SI-001)* — 🟡
-  *(ciphertext-at-rest for email + TOTP secret, and SHA-256 token-hash sessions, PROVEN by the
-  SCAFFOLD-002 vitest integration tests against real Postgres. The BROWSER-STORAGE half is now
-  PROVEN live by J-AGENTS (`e2e/j-agents.spec.ts`): localStorage/sessionStorage are `"{}"` and
-  IndexedDB is empty after visiting the protected screens. Remaining: the full no-plaintext audit
-  across the served WRITE paths (directory + portal) lands with WRITEAPI-001/TRUST-001.)*
+  (in-memory only). *(gate SI-001; SCAFFOLD-002 SI-001; AGENTS-001 SI-001; TRUST-001 SI-001)* — ✅
+  *(PROVEN across all three surfaces. PORTAL DB: ciphertext-at-rest for email + TOTP secret, and
+  SHA-256 token-hash sessions (SCAFFOLD-002 vitest vs real Postgres); the trust-signal handoff keeps
+  no plaintext (sealed before it leaves; the log carries the hash only). DIRECTORY: the write seam
+  accepts only hashes/flags/sealed-ciphertext — a smuggled raw email + OAuth token are rejected AND
+  absent from every byte of the seam tables (WRITEAPI-001 live SI-001 dump); the pickup ciphertext is
+  ack-DELETED so none lingers, and the plaintext credential id is absent from the directory tables
+  (J-TRUST live dump) — only the daemon's encrypted DB holds the recovered plaintext (sealed to
+  k_local, SI-001). BROWSER: localStorage/sessionStorage `"{}"` + empty IndexedDB (J-AGENTS).)*
 - **DOD-INV-3 — Account-scoping is server-side.** Every read/write is scoped to the session's
   `account_id` derived server-side; parameter injection of another account's id returns nothing
   / is rejected. *(READ-001 SI-001; WRITEAPI-001 SI-001)* — 🟡 *(READ half PROVEN: account/session
@@ -148,7 +151,16 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   composite/TrustRank/seed element.)*
 - **DOD-SPINE-6 — WebAuthn signal flows the pipe.** Enrolling WebAuthn writes a hash to the
   directory identity tree + sealed ciphertext to the pickup queue → the daemon pulls,
-  `openSealed`, verifies, stores, ACKs → the directory deletes the ciphertext. *(TRUST-001 AC-001)* — ❌
+  `openSealed`, verifies, stores, ACKs → the directory deletes the ciphertext. *(TRUST-001 AC-001)* — ✅
+  *(PROVEN LIVE by J-TRUST (`packages/e2e-tests/src/spine/j-trust.spine.test.ts`, 1/1, real binaries
+  cross-process): a sealed signal seeded exactly as the portal writes it (hash → identity_tree_entries,
+  ciphertext → pickup_queue) is DELIVERED to the agent's daemon on reconnect (the directory drains the
+  pickup queue → `trust_signal_pickup` frame), the daemon `openContentSeal`s it with k_local (only A's
+  daemon can — SI-001), recomputes the hash and MATCHES the directory anchor, STORES the recovered
+  plaintext in its encrypted `trust_signals` table, and ACKs (`trust_signal_ack`) — after which the
+  pickup queue is EMPTY for that agent (directory ack-deleted) and the identity-tree hash remains. The
+  store assertion reads the daemon's OWN encrypted SQLCipher DB. The portal SOURCE (enroll → seal →
+  write) is unit-proven separately (`test/trust-handoff.test.ts`). All 6 spine lines now green.)*
 
 ---
 
@@ -302,22 +314,28 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 
 - **DOD-TRUST-1 — The pipe end-to-end (WebAuthn first consumer).** Hash written + readable from a
   different node; daemon `openSealed(k_local)` + hash-match + ACK; pickup queue empty after ACK.
-  *(TRUST-001 AC-001)* — 🟡
-  *(SOURCE half built + unit-proven (`test/trust-handoff.test.ts`, 3/3, real Ed25519 keypairs): the
-  portal seals the WebAuthn enrollment to each agent's k_local and writes the hash + sealed ciphertext
-  through the WRITEAPI seam (the seam's persistence is proven by WRITEAPI-001). REMAINING for the
-  end-to-end pipe: the DIRECTORY delivery (drain pickup_queue on signaling reconnect + ACK-delete,
-  reusing the notification path) and the DAEMON pickup (openSealed → hash-match → store → ACK →
-  directory deletes), proven cross-process by a J-TRUST spine test. Not yet wired.)*
+  *(TRUST-001 AC-001)* — ✅
+  *(PROVEN LIVE end-to-end by J-TRUST (see DOD-SPINE-6): portal seal SOURCE (unit, real Ed25519) →
+  directory write seam → identity_tree + pickup_queue → directory drain on reconnect → daemon
+  openSealed + hash-match + store + ACK → directory ack-deletes (queue empty). The "readable from a
+  DIFFERENT node" sub-claim of AC-001 rides general replication — identity_tree_entries is in
+  cello_pub and cross-node reads are proven by READ-001; the single-node J-TRUST proves the
+  open+verify+store+ACK+delete pipe, not a second-node read.)*
 - **DOD-TRUST-2 — No-plaintext across the pipe.** Directory holds only the hash; ciphertext sealed
-  to k_local (directory/portal can't decrypt); portal discards plaintext + token. *(TRUST-001 AC-002, SI-001)* — 🟡
-  *(PORTAL/SEAL half PROVEN (unit, real crypto): the signal is sealed to the agent's k_local — only
-  the k_local SEED opens it (a wrong seed → null, the directory/portal cannot decrypt), the opaque
-  ciphertext carries no plaintext, and the portal keeps no plaintext (the JSON is a local value,
-  sealed before it leaves; the handoff log carries the hash only). The cross-pipe dump (directory
-  holds only the hash, queue empty after ACK) lands with the directory+daemon halves under DOD-TRUST-1.)*
+  to k_local (directory/portal can't decrypt); portal discards plaintext + token. *(TRUST-001 AC-002, SI-001)* — ✅
+  *(PROVEN: the signal is sealed to the agent's k_local — only the k_local SEED opens it (a wrong seed
+  → null, unit-proven with real crypto), the opaque ciphertext carries no plaintext, and the portal
+  keeps no plaintext (sealed before it leaves; the handoff log carries the hash only). J-TRUST confirms
+  the cross-pipe dump LIVE: the directory holds only the hash (identity tree), the pickup queue is
+  empty after the daemon ACK, and the plaintext credential id is absent from the directory tables —
+  only the daemon's encrypted DB holds the recovered plaintext.)*
 - **DOD-TRUST-3 — Identity-tree + pickup-queue migrations.** Applied against prior; the pickup queue
-  reuses the notification delivery path. *(TRUST-001 AC-003)* — ❌
+  reuses the notification delivery path. *(TRUST-001 AC-003)* — ✅
+  *(PROVEN: identity_tree_entries + pickup_queue (V34) + pickup_queue.signal_kind (V35) apply cleanly
+  against the full prior history — the spine flyway run reports v35 with zero checksum errors atop
+  V1–V34. The pickup queue REUSES the notification delivery path: drainPickupForAgent →
+  `#sendFrame` → ackPickup-DELETE mirrors pg-notification-queue's drainUndelivered/acknowledge and the
+  same directory-node reconnect-drain loop. Drain/ACK proven by a live test; the full delivery by J-TRUST.)*
 - **DOD-TRUST-4 — cello-client publish + dep update.** Version bump + connect bump + beta publish;
   trustless-cello dep update if consumed. *(TRUST-001 AC-004/005)* — ❌ *(tag-push/publish = Andre)*
 - **DOD-TRUST-5 — Four-class UI scaffold.** Four named classes, Class-1 sub-groups distinct,
