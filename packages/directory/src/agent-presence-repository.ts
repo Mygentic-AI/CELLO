@@ -88,6 +88,9 @@ export interface AgentWithPresence {
   agentId: string | null;
   online: boolean;
   lastSeenAt: Date | null;
+  /** True iff a reversible suspend (pause) flag is currently set (LEVER-001) — drives the lever's
+   *  Pause/Resume state and the row's suspended indicator. */
+  paused: boolean;
 }
 
 /**
@@ -106,6 +109,7 @@ export async function listAccountAgentsWithPresence(
     agent_id: string | null;
     online: boolean;
     last_seen_at: Date | null;
+    paused: boolean;
   }>(
     `SELECT ag.k_local_pubkey,
             ag.agent_id,
@@ -113,10 +117,12 @@ export async function listAccountAgentsWithPresence(
               ap.online AND dn.last_heartbeat_at > now() - ($2::bigint * interval '1 millisecond'),
               false
             ) AS online,
-            ap.last_seen_at
+            ap.last_seen_at,
+            COALESCE(sus.paused, false) AS paused
        FROM agent_profiles ag
        LEFT JOIN agent_presence ap ON ap.k_local_pubkey = ag.k_local_pubkey
        LEFT JOIN directory_nodes dn ON dn.node_id = ap.owning_node_id
+       LEFT JOIN agent_suspensions sus ON sus.agent_id = ag.agent_id
       WHERE ag.account_id = $1
       ORDER BY ag.k_local_pubkey`,
     [accountId, nodeFreshnessMs],
@@ -126,5 +132,6 @@ export async function listAccountAgentsWithPresence(
     agentId: r.agent_id,
     online: r.online,
     lastSeenAt: r.last_seen_at,
+    paused: r.paused,
   }));
 }
