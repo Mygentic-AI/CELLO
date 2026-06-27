@@ -884,3 +884,21 @@ Pause refused (403 step_up_required), the lever shows "verify a passkey", no fla
 **Remaining M8 (all heavier / gated):** DOD-TRUST-4 cello-client publish (Andre); DOD-LEVER-2 burn
 (federation share destruction); DOD-LEVER-3 + DOD-INV-6 strict ≥3-node T-of-N (multi-node cluster);
 multi-node PRESENCE e2e; DOD-E2E-1 close gate.
+
+---
+
+## 2026-06-27 — DOD-AUTH-7 ✅ (live) + DOD-INV-3 ✅ (write half)
+
+**AUTH-7.** J-AUTH7 (`e2e/j-auth7.spec.ts`, 3/3, served portal) proves the magic-link OTP is
+single-use (consumed code → invalid, no replay), expiring (aged-past-TTL code → invalid), and
+rate-limited (429 within the window). 🟡 → ✅. cello-portal `cf7821f`.
+
+**INV-3.** WRITEAPI-001 live proves the write half (ownership-derived scoping: A cannot write B's
+agent → 403 not_owner; unauth → 401). Both read+write halves green. 🟡 → ✅.
+
+**Boundary reached on the remaining M8 lines** — each needs Andre, a major-protocol change, or a real
+infra lift (not a self-contained loop): DOD-TRUST-4 publish (Andre); DOD-LEVER-3 + DOD-INV-6 strict
+T-of-N (the 2-of-2→real-T-of-N FROST ceremony is a known stopgap, larger than M8); DOD-PRES-1 cross-
+node read + the multi-node PRESENCE e2e (≥2-node directory cluster — the spine harness is single-node);
+DOD-LEVER-2 burn (federation-wide share destruction); DOD-E2E-1 close gate (gated on the above + the
+milestone writeup); DOD-INV-8 observability audit; DOD-INV-1 timing-side-channel residual.

@@ -205,11 +205,12 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   + GitHub install; no account-creation form. *(SCAFFOLD-001 AC-003)* — ✅ *(PROVEN LIVE, J-SPINE:
   /sign-in shows both outbound routes + a sign-in field, and asserts the ABSENCE of any
   account-creation/registration form — ceremony-gated entry.)*
-- **DOD-AUTH-7 — OTP single-use, expiring, rate-limited.** *(AUTH-001 AC-003/004)* — 🟡
-  *(PROVEN by AUTH-001 integration tests: single-use sequential AND concurrent (2 verifies → exactly
-  1 session via FOR UPDATE SKIP LOCKED); expiry; attempt-cap that actually BLOCKS (correct code
-  after the cap mints no session); per-email request rate limit. Endpoints exercised live by the
-  J-SPINE login; the full browser J-AUTH journey ties the rest later.)*
+- **DOD-AUTH-7 — OTP single-use, expiring, rate-limited.** *(AUTH-001 AC-003/004)* — ✅
+  *(PROVEN LIVE by J-AUTH7 (`e2e/j-auth7.spec.ts`, 3/3, served portal): SINGLE-USE — a verified code
+  cannot be replayed (consumed → `invalid`, no second session); EXPIRING — a code aged past its TTL
+  is rejected (`invalid`); RATE-LIMITED — the request endpoint returns 429 (`rate_limited`) within the
+  window. Backed by the AUTH-001 integration tests (concurrent single-use via FOR UPDATE SKIP LOCKED →
+  exactly 1 session; attempt-cap that BLOCKS even a correct code after the cap).)*
 
 ---
 
