@@ -708,3 +708,41 @@ cello-portal `f5cb778` (pushed).
 
 **LEVER-001 status.** Enforcement core ✅ (J-SUSPEND, DOD-SPINE-4/LEVER-1). Portal lever ✅ (J-LEVER).
 Remaining: step-up-required e2e, burn (DOD-LEVER-2), strict multi-node T-of-N (DOD-LEVER-3 second half).
+
+---
+
+## 2026-06-27 — TRUST-001 portal seal pipeline (the pipe's source; cross-process halves pending)
+
+The portal half of the trust-signal pipe — proven in isolation; the directory delivery + daemon
+pickup + ACK are the cross-process halves that flip SPINE-6.
+
+**Mapping (Explore agent).** Confirmed the reuse pattern + signatures: the directory's existing
+notification path (`pg-notification-queue.ts` enqueue/drainUndelivered/acknowledge + the reconnect
+drain in `directory-node.ts` ~L1472/L1516-1580) is what the pickup_queue delivery mirrors;
+`@cello-protocol/crypto` exports `sealToRecipient(pubkey, plaintext)` / `openSealed(seed, blob)` /
+`hash(bytes)` / `generateKLocalSeed` / `InMemoryKeyProvider`; the portal hooks in at
+`webauthn/register/verify`; `listAgents` already returns `kLocalPubkey` + `agentId`. **Design answer
+(D-multi-agent):** an account-level signal seals to EVERY addressable agent (one sealed copy each, so
+each can prove enrollment + independently verify/ACK).
+
+**Built — `src/server/trust/handoff.ts`.** `handTrustSignal(accountId, signal)`: canonical JSON →
+`hash` → for each agent with a `kLocalPubkey`+`agentId`, `sealToRecipient(k_local)` → write the hash
+(`trust_signal_hash`) + sealed ciphertext (`trust_signal_ciphertext`) through the WRITEAPI seam, then
+discard the plaintext. Best-effort (a directory failure never fails the local enrollment — the signal
+is re-mintable). Wired into the WebAuthn enroll verify route. `portal.trust_signal.handed_off` carries
+the signalHash ONLY, never the plaintext.
+
+**Proof — `test/trust-handoff.test.ts` (3/3, real Ed25519 keypairs).** SI-001: only the agent's
+k_local SEED opens the ciphertext (a wrong seed → null); the opaque blob does not contain the
+plaintext secret; the written hash is the exact anchor the daemon recomputes from the recovered JSON.
+Account-level signal seals to every agent, each copy bound to its own key (B's seed cannot open A's
+copy). typecheck + lint clean; j-grace + j-lever 6/6 (enrollment path unaffected). Added
+`@cello-protocol/crypto@^0.0.11`.
+
+**Tags.** `DOD-TRUST-1` 🟡, `DOD-TRUST-2` 🟡 (portal source half proven: seal-to-k_local + no
+server-side plaintext at the portal). REMAINING for SPINE-6/DOD-TRUST-1: the DIRECTORY delivery
+(drain pickup_queue on reconnect over signaling + ACK-DELETE, reusing the notification path —
+DOD-TRUST-3) and the DAEMON pickup (`openSealed` → recompute+verify hash → store → ACK,
+`daemon.trust_signal.received verified:true`) — both cross-process, proven by a J-TRUST spine test;
+plus the cello-client publish cascade (DOD-TRUST-4, Andre-gated) + the trustless-cello dep update
+(DOD-TRUST-5... actually DOD-TRUST-4 publish / AC-005 dep-update). cello-portal `6aad444` (pushed).

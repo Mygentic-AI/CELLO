@@ -302,9 +302,20 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 
 - **DOD-TRUST-1 — The pipe end-to-end (WebAuthn first consumer).** Hash written + readable from a
   different node; daemon `openSealed(k_local)` + hash-match + ACK; pickup queue empty after ACK.
-  *(TRUST-001 AC-001)* — ❌
+  *(TRUST-001 AC-001)* — 🟡
+  *(SOURCE half built + unit-proven (`test/trust-handoff.test.ts`, 3/3, real Ed25519 keypairs): the
+  portal seals the WebAuthn enrollment to each agent's k_local and writes the hash + sealed ciphertext
+  through the WRITEAPI seam (the seam's persistence is proven by WRITEAPI-001). REMAINING for the
+  end-to-end pipe: the DIRECTORY delivery (drain pickup_queue on signaling reconnect + ACK-delete,
+  reusing the notification path) and the DAEMON pickup (openSealed → hash-match → store → ACK →
+  directory deletes), proven cross-process by a J-TRUST spine test. Not yet wired.)*
 - **DOD-TRUST-2 — No-plaintext across the pipe.** Directory holds only the hash; ciphertext sealed
-  to k_local (directory/portal can't decrypt); portal discards plaintext + token. *(TRUST-001 AC-002, SI-001)* — ❌
+  to k_local (directory/portal can't decrypt); portal discards plaintext + token. *(TRUST-001 AC-002, SI-001)* — 🟡
+  *(PORTAL/SEAL half PROVEN (unit, real crypto): the signal is sealed to the agent's k_local — only
+  the k_local SEED opens it (a wrong seed → null, the directory/portal cannot decrypt), the opaque
+  ciphertext carries no plaintext, and the portal keeps no plaintext (the JSON is a local value,
+  sealed before it leaves; the handoff log carries the hash only). The cross-pipe dump (directory
+  holds only the hash, queue empty after ACK) lands with the directory+daemon halves under DOD-TRUST-1.)*
 - **DOD-TRUST-3 — Identity-tree + pickup-queue migrations.** Applied against prior; the pickup queue
   reuses the notification delivery path. *(TRUST-001 AC-003)* — ❌
 - **DOD-TRUST-4 — cello-client publish + dep update.** Version bump + connect bump + beta publish;
