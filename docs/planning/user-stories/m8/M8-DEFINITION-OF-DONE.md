@@ -56,11 +56,14 @@ Proven by SI/adversarial assertions woven into the journeys, never a separate pa
   k_local, SI-001). BROWSER: localStorage/sessionStorage `"{}"` + empty IndexedDB (J-AGENTS).)*
 - **DOD-INV-3 — Account-scoping is server-side.** Every read/write is scoped to the session's
   `account_id` derived server-side; parameter injection of another account's id returns nothing
-  / is rejected. *(READ-001 SI-001; WRITEAPI-001 SI-001)* — 🟡 *(READ half PROVEN: account/session
-  id come only from the cookie-bound DB row (getSession → getSessionByToken), never client input;
-  the agents read + sessions list/revoke are SQL-scoped WHERE account_id; the fallback-finder traced
-  the producer chain and confirmed no client-supplied path widens scope, no off-by-one. The WRITE
-  half is WRITEAPI-001 (not yet built).)*
+  / is rejected. *(READ-001 SI-001; WRITEAPI-001 SI-001)* — ✅ *(READ half: account/session id come
+  only from the cookie-bound DB row (getSession → getSessionByToken), never client input; the agents
+  read + sessions list/revoke are SQL-scoped WHERE account_id; the fallback-finder traced the producer
+  chain and confirmed no client-supplied path widens scope, no off-by-one. WRITE half PROVEN by
+  WRITEAPI-001 (live): the seam derives scoping from the ownership check (agent_profiles.account_id),
+  NOT a request field — account A writing account B's agent is rejected (403 not_owner, nothing
+  persisted), an unauthenticated write is 401, and the portal suspend route only ever asserts the
+  session's own account_id. Cross-account injection returns nothing / is rejected on both halves.)*
 - **DOD-INV-4 — Session: server-side, httpOnly, revocable.** Opaque token in an httpOnly cookie,
   not JS-readable, not in localStorage; revoking the row server-side fails the next request.
   No stateless JWT. *(AUTH-001 SI-001)* — ✅ *(PROVEN: opaque random token, SHA-256-hashed at rest,
@@ -344,8 +347,8 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   *(TRUST-003 AC-001/002)* — ✅ *(PROVEN LIVE, J-trust 3/3: four named classes + distinct Class-1
   sub-groups; WebAuthn/TOTP/email live (real state, WebAuthn flips active after enrollment), phone +
   the rest honest "coming soon" placeholders with no working control / no fabricated data; no
-  composite/TrustRank/seed. NOTE: the WebAuthn cell shows real ENROLLED state directly — turning
-  enrollment into a directory-pipe trust signal is TRUST-001/SPINE-6, still ❌.)*
+  composite/TrustRank/seed. NOTE: the WebAuthn cell shows real ENROLLED state directly; turning
+  enrollment into a directory-pipe trust signal is TRUST-001/SPINE-6, now ✅ (J-TRUST).)*
 
 ---
 
