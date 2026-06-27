@@ -171,7 +171,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-27 | CELLO-M7-CONN-001: image cello-directory:d5d0424; ALB ManifestPathRule (priority 6, /manifest) APPLIED via deploy.sh 2026-06-27. /manifest ALB-routable, returns designed 503 (consortium manifest unset — M6 backward-compat). (prev: M6B-019 934d130 / task def :59) |
-| cello-ecs-operations-agent-dev | ROLLBACK_COMPLETE | 2026-06-27 | EXPECTED: deploy.sh 2026-06-27 attempted CREATE; ECS circuit breaker triggered (PLACEHOLDER Telegram/SES secrets → task crash-loops) → rolled back. Ops-agent is us-east-1-only per infra/CLAUDE.md; deploy.sh is non-fatal on it and continued. Does NOT affect protocol operation. |
+| cello-ecs-operations-agent-dev | NOT DEPLOYED (by design) | 2026-06-27 | Ops-agent is a SINGLE GLOBAL service (one Telegram bot / one long-poller) — us-east-1 only, never per-region (unlike sovereign directory/relay). deploy.sh now SKIPS it outside us-east-1 (region guard added 2026-06-27). The dead ROLLBACK_COMPLETE stack created by the 2026-06-27 deploy.sh run (before the guard) was deleted. |
 | cello-waf-dev | CREATE_COMPLETE | 2026-06-06 | |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-06-27 | Redeployed by deploy.sh 2026-06-27 → new task IP 10.1.77.112; re-registered. S3 relay manifest healthCheckUrl matches live IP — no manual re-sign needed. |
 | cello-cloudwatch-dev | CREATE_COMPLETE | 2026-06-06 | |
@@ -227,7 +227,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | cello-rds-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-06-05 | |
 | cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-27 | CELLO-M7-CONN-001: image cello-directory:d5d0424; ALB ManifestPathRule (priority 6, /manifest) APPLIED via deploy.sh 2026-06-27. /manifest ALB-routable, returns designed 503 (consortium manifest unset — M6 backward-compat). (prev: M6B-019 934d130 / task def :50) |
-| cello-ecs-operations-agent-dev | ROLLBACK_COMPLETE | 2026-06-27 | EXPECTED: deploy.sh 2026-06-27 attempted CREATE; ECS circuit breaker triggered (PLACEHOLDER Telegram/SES secrets → task crash-loops) → rolled back. Ops-agent is us-east-1-only per infra/CLAUDE.md; deploy.sh is non-fatal on it and continued. Does NOT affect protocol operation. |
+| cello-ecs-operations-agent-dev | NOT DEPLOYED (by design) | 2026-06-27 | Ops-agent is a SINGLE GLOBAL service (one Telegram bot / one long-poller) — us-east-1 only, never per-region (unlike sovereign directory/relay). deploy.sh now SKIPS it outside us-east-1 (region guard added 2026-06-27). The dead ROLLBACK_COMPLETE stack created by the 2026-06-27 deploy.sh run (before the guard) was deleted. |
 | cello-waf-dev | CREATE_COMPLETE | 2026-06-06 | |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-06-27 | Redeployed by deploy.sh 2026-06-27 → new task IP 10.2.94.2. Directory did NOT auto-re-sign on the IP change (known gap), so S3 relay manifest was stale (10.2.75.117) → manually re-signed via sign-manifest.sh to v6 with 10.2.94.2 (matches live IP). Directory adopts on next 2-min poll. |
 | cello-cloudwatch-dev | CREATE_COMPLETE | 2026-06-06 | |

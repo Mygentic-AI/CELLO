@@ -428,4 +428,6 @@ aws iam simulate-principal-policy \
 
 ## Ops-Agent Is Single-Region
 
-The operations agent (`cello-ecs-operations-agent`) runs in **us-east-1 only** (single Telegram long-polling instance). The `deploy.sh` script deploys it to all regions for IaC consistency, but eu-central-1 and ap-northeast-1 instances will have PLACEHOLDER values for `telegram-bot-token` and `ses-credentials`. This is acceptable — they exist for IaC parity, not for operation.
+The operations agent (`cello-ecs-operations-agent`) runs in **us-east-1 only** (single Telegram long-polling instance). It is a **single global service**, not a sovereign per-region node — unlike the directory and relay, there is never more than one instance, because exactly one process can long-poll the one Telegram bot token.
+
+**`deploy.sh` deploys it in us-east-1 only** (region guard, added 2026-06-27). It is NOT deployed to eu-central-1 or ap-northeast-1: those regions hold only PLACEHOLDER `telegram-bot-token` / `ses-credentials`, so deploying it there produced a crash-looping, circuit-breaker-rolled-back `ROLLBACK_COMPLETE` stack — pure noise for a service that has no business running there. Do not "restore IaC parity" by deploying it everywhere; the single-global-service shape is the correct design. (cicd is the other us-east-1-only stack, for the same single-global reason.)

@@ -269,14 +269,14 @@ echo ""
 
 # ── Observability helpers ─────────────────────────────────────────────────────
 
-# cello-cicd deploys to us-east-1 only — adjust count per region.
-# +1 for cello-ecs-operations-agent (OPS-AGENT-005A)
-# +1 for cello-route53-relay (M6B-007 AC-003) — relay DNS stack deploys in every region
-# +1 for cello-ssm-parameters (M6B-011 AC-004) — SSM Parameter Store values
+# Two stacks deploy to us-east-1 ONLY (both are single global services, not per-region):
+#   - cello-cicd: CI/CD pipelines, defined once.
+#   - cello-ecs-operations-agent: single global Telegram bot (one long-poller).
+# us-east-1 = base 15 + cicd + ops-agent = 17; every other region = base 15.
 if [[ "${REGION}" == "us-east-1" ]]; then
   STACK_COUNT=17
 else
-  STACK_COUNT=16
+  STACK_COUNT=15
 fi
 DEPLOY_START=$(date +%s)
 
@@ -895,21 +895,31 @@ fi
 # depends on: cello-iam, cello-ecr, cello-vpc, cello-ecs-directory (cluster ARN, ALB DNS)
 # Position: after directory (provides cluster + ALB DNS name) and before WAF (no dep).
 # AC-001: public subnet, AssignPublicIp: ENABLED; no ALB; MinimumHealthyPercent=0.
-# NON-FATAL: ops-agent is a Telegram bot — not required for CELLO protocol operation.
-# A crash-loop here must not block relay, WAF, CloudWatch, and Route53 from deploying.
+#
+# US-EAST-1 ONLY. The ops-agent is a SINGLE GLOBAL service — one Telegram bot, one
+# long-poller. Unlike the sovereign per-region directory and relay (one node = one
+# region), there is never more than one instance. Other regions hold only PLACEHOLDER
+# Telegram/SES secrets, so deploying it there only manufactures a crash-looping,
+# rolled-back stack. Skip it everywhere but us-east-1.
+# NON-FATAL even in us-east-1: ops-agent is a Telegram bot — not required for CELLO
+# protocol operation. A crash-loop must not block relay, WAF, CloudWatch, Route53.
 
-ops_agent_exit=0
-(
-  deploy_stack "cello-ecs-operations-agent-${ENVIRONMENT}" "cello-ecs-operations-agent.yaml" \
-    "Environment=${ENVIRONMENT}" \
-    "ImageUri=${OPS_AGENT_IMAGE}"
-) || ops_agent_exit=$?
+if [[ "${REGION}" == "us-east-1" ]]; then
+  ops_agent_exit=0
+  (
+    deploy_stack "cello-ecs-operations-agent-${ENVIRONMENT}" "cello-ecs-operations-agent.yaml" \
+      "Environment=${ENVIRONMENT}" \
+      "ImageUri=${OPS_AGENT_IMAGE}"
+  ) || ops_agent_exit=$?
 
-if [[ ${ops_agent_exit} -ne 0 ]]; then
-  echo ""
-  echo "WARNING: cello-ecs-operations-agent-${ENVIRONMENT} failed (exit ${ops_agent_exit})." >&2
-  echo "         Ops-agent health check issue is tracked separately. Continuing deployment." >&2
-  echo ""
+  if [[ ${ops_agent_exit} -ne 0 ]]; then
+    echo ""
+    echo "WARNING: cello-ecs-operations-agent-${ENVIRONMENT} failed (exit ${ops_agent_exit})." >&2
+    echo "         Ops-agent health check issue is tracked separately. Continuing deployment." >&2
+    echo ""
+  fi
+else
+  echo "  Skipping cello-ecs-operations-agent in ${REGION} — ops-agent is a single global service (us-east-1 only)."
 fi
 
 # ── STEP 10: cello-waf — WAF WebACL associated with directory ALB ────────────
