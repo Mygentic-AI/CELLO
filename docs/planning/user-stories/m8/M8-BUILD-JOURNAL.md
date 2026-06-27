@@ -866,3 +866,21 @@ multi-node PRESENCE e2e; DOD-E2E-1 close gate.
 **Note:** the cross-node-read sub-claim of TRUST-1 AC-001 ("readable from a DIFFERENT node") rides
 general replication (identity_tree ∈ cello_pub; cross-node reads proven by READ-001) — the single-node
 J-TRUST proves the open+verify+store+ACK+delete pipe, not a second-node read.
+
+---
+
+## 2026-06-27 — DOD-AGENT-1 ✅ (posture header) + DOD-LEVER-4 step-up proven
+
+**Posture header (AGENTS-001).** Added the thin alerts + account-posture header atop the Agents home:
+an alerts strip with an HONEST empty state (no security-event source yet — deferred to the
+portal→daemon channel, so no fabricated alerts) + an account-posture line (strong-auth status +
+trust-signal coverage, all derived from real account state). J-AGENTS 3/3 (INV-9 still green).
+`DOD-AGENT-1` 🟡 → ✅. cello-portal `2ff74bc`.
+
+**LEVER-4 step-up.** J-LEVER gained the step-up-REQUIRED case: a strong factor + a stale step-up →
+Pause refused (403 step_up_required), the lever shows "verify a passkey", no flag set. 3/3.
+`DOD-LEVER-4` note upgraded (owner-only + step-up proven; only burn-never-erases / DOD-LEVER-2 remains).
+
+**Remaining M8 (all heavier / gated):** DOD-TRUST-4 cello-client publish (Andre); DOD-LEVER-2 burn
+(federation share destruction); DOD-LEVER-3 + DOD-INV-6 strict ≥3-node T-of-N (multi-node cluster);
+multi-node PRESENCE e2e; DOD-E2E-1 close gate.

@@ -250,12 +250,13 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 
 - **DOD-AGENT-1 — The Agents home is the landing page.** List + presence + the per-row suspend
   affordance + alerts strip + posture header; no separate Dashboard; no register/start/stop/
-  set-current; empty state routes to the ceremony. *(AGENTS-001 AC-001/002)* — 🟡
-  *(List + presence PROVEN (SPINE-3); the per-row SUSPEND affordance PROVEN by J-LEVER
-  (`e2e/j-lever.spec.ts`, 2/2): the Agents home renders exactly one per-row Pause/Resume lever (and
-  no register/start/stop/set-current — INV-9 still green), and Pause→read-reflects-paused→Resume
-  round-trips through the route + write seam. Empty state → ceremony signpost (existing). REMAINING:
-  the alerts strip + security-posture header (no security-event source wired yet).)*
+  set-current; empty state routes to the ceremony. *(AGENTS-001 AC-001/002)* — ✅
+  *(PROVEN: List + presence (SPINE-3); the per-row SUSPEND affordance (J-LEVER, 3/3: exactly one
+  Pause/Resume lever, no register/start/stop/set-current — INV-9 green; Pause→read-reflects-paused→
+  Resume round-trips); empty state → ceremony signpost; and the thin header (J-AGENTS, 3/3): an alerts
+  strip with an HONEST empty state ("no security alerts" — no event source fabricated) + an
+  account-posture line showing real derivable state (strong-auth status + trust-signal coverage). The
+  live operational Dashboard (event feed/metrics) is deferred to the portal→daemon channel by design.)*
 - **DOD-AGENT-2 — No identity data in browser storage.** No agent fingerprints/presence/session
   in localStorage/IndexedDB; nothing restored from disk on reopen. *(AGENTS-001 SI-001)* — ✅
   *(PROVEN live by J-AGENTS Playwright (`e2e/j-agents.spec.ts`, AGENT-2/INV-2 case, green): after
