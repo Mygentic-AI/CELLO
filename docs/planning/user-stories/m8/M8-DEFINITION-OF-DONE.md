@@ -93,12 +93,15 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   M8 sections + the operator-PII positive control (AC-001b).)*
 - **DOD-SPINE-2 — Magic-link sign-in → durable session.** Enter email → link + 6-digit code →
   durable httpOnly-cookie session → land on Agents home; account resolved via `email_stub_hash`.
-  *(AUTH-001 AC-001)* — 🟠 *(PROVEN LIVE end-to-end against the served app, J-SPINE: request →
-  6-digit code → verify → durable opaque httpOnly session → lands on the gated Agents home; `/`
-  is gated; the live cookie session is server-side-revocable. Account resolution goes through the
-  real DirectoryClient seam to a LOCAL STUB (env-selected, local-only) — the real directory HTTP
-  adapter + the `/internal/account-by-email-stub` endpoint + a live directory in the harness is
-  READ-001, which flips this to ✅ and lights up SPINE-3.)*
+  *(AUTH-001 AC-001)* — ✅ *(PROVEN LIVE end-to-end against the served portal + the REAL directory,
+  J-SPINE 5/5 with DIRECTORY_API_URL set: request → 6-digit code → verify → durable opaque httpOnly
+  session → lands on the gated Agents home, with account resolution going through the portal's real
+  HttpDirectoryClient → the directory `/internal/account-by-email-stub` endpoint → the directory
+  Postgres; `/` is gated; the live cookie session is server-side-revocable. The endpoint is also
+  proven against real Postgres (directory live test 3/3) and the adapter link against the real
+  directory (portal live test 3/3). The default harness uses an env-selected stub seam for suite
+  robustness; the real-directory mode is opt-in (the directory must be up + seeded). Full
+  auto-bring-up of the directory cluster is the E2E close gate.)*
 - **DOD-SPINE-3 — Agents appear with presence.** A ceremony-registered agent appears in the
   Agents home with directory-derived presence (online iff presence row online AND owning node
   fresh), fingerprint-primary. *(PRESENCE-001; READ-001; AGENTS-001)* — ❌

@@ -383,3 +383,38 @@ Security screen → DOD-AUTH-5), AUTH-001 signpost assertion (DOD-AUTH-6); then 
 TRUST-001/003 (SPINE-5/6), E2E close gate.
 
 **Blocker needing Andre.** None.
+
+---
+
+## 2026-06-27 — READ-001 (account resolution) LIVE + SPINE-2 ✅
+
+**What was built.** The READ-001 account-resolution path, proven end-to-end against the REAL
+directory (not the stub):
+- *Directory side* (worktree `m8-read-001`, commits `57483b4f` endpoint, `aceab8ce` in-process
+  contract test, `b958f74b` `internal-api-only` standalone runner, + the live test): a live
+  integration test stands up `createInternalApiServer` with a real pg pool to the directory
+  Postgres (the running `cello-postgres:18` on :5433, 29 migrations, `user_accounts.email_stub_hash`
+  present), seeds a `user_accounts` row, and hits `/internal/account-by-email-stub` over real HTTP —
+  resolves by email_stub_hash, 404 unknown, 401 no-key. **3/3.**
+- *Portal side* (`cello-portal`): a gated (READ001_LIVE) integration test runs the portal's real
+  `HttpDirectoryClient` against the live directory internal-api — resolves the operator, null for
+  unknown, THROWS on 401 (auth failure not flattened to null). **3/3.**
+- *End-to-end* (`cello-portal` `a771985`): an opt-in harness mode — when `DIRECTORY_API_URL` is set,
+  the served portal resolves accounts via the real HTTP adapter instead of the stub. Ran J-SPINE
+  against the live directory (seeded operator): **5/5**, SPINE-2 included — the served portal's
+  magic-link flow resolved the account through the real directory in the browser. Default harness
+  keeps the stub for suite robustness.
+
+**DoD flip.** `DOD-SPINE-2` → ✅ (proven live against the served portal + the real directory).
+
+**What remains for the directory tier.** SPINE-3 (agents appear with presence) needs PRESENCE-001
+(the `agent_presence` table doesn't exist yet) + the agents read endpoint, plus auto-bring-up of the
+directory in the harness (currently the real-directory mode assumes the directory is up + seeded;
+full automation is the E2E close gate). The `m8-read-001` directory branch is LOCAL (a trustless-cello
+feature branch is not pushed).
+
+**Next red.** PRESENCE-001 (`agent_presence` + node-liveness + the presence read rule) → then
+AGENTS-001 / the agents read endpoint → SPINE-3. Plus AUTH-004 (7-day grace) / AUTH-006 (Account
+screen) remain in J-AUTH. LEVER-001 (SPINE-4), TRUST-001/003 (SPINE-5/6), E2E close gate after.
+
+**Blocker needing Andre.** None.
