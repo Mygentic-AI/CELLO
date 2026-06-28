@@ -1329,3 +1329,17 @@ destruction 3 test gaps + key.burn.no_share + reconcile aggregate; anchor-less-s
 All on worktree m8-read-001 (LOCAL). These harden already-✅ DOD lines (no tag flips). Remaining M8 is
 gated: live cluster (PRES, strict T-of-N, TRUST-1 cross-node, E2E-1), npm publish (TRUST-4), account-key
 (LEVER-2 signed burn).
+
+## 2026-06-28 — orphan-sweep cross-repo assumption RESOLVED (portal writes hash-first)
+
+The sweep review left one open cross-repo question: could the portal write a ciphertext BEFORE its anchor
+(a >24h gap → the sweep deletes a deliverable row)? Read the portal handoff (cello-portal
+src/server/trust/handoff.ts): it writes the trust_signal_HASH first, then the trust_signal_ciphertext —
+sequentially, hash before ciphertext. If the hash write throws, the function throws BEFORE the ciphertext
+is written, so an anchor-less ciphertext is never produced via the portal. The reverse-order orphan the
+fallback-finder feared cannot occur. CONCLUSION: the orphan sweep is a backstop for direct-DB / future-bug
+states only; under the real portal flow no orphan is created. Handoff is otherwise correct (seal-per-agent,
+no plaintext persisted, best-effort/re-mintable) and covered by J-TRUST + the unit test — no fix.
+
+Next: §8 on the CONSUMER end (cello-client daemon handleTrustSignalPickup — openContentSeal/hash-verify/
+store/ACK) — fallback-finder dispatched against m8-lever-001 (the correct M8 daemon branch; local-only).
