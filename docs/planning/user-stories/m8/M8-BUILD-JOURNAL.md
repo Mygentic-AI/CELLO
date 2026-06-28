@@ -1582,3 +1582,41 @@ STATUS: exploration complete, **NO implementation started** (2 premature edits w
 Andre explicitly gated the work — align on the approach BEFORE touching code. Do NOT start the step-up fix
 (tasks #18/#19/#20) on a watchdog tick; it is blocked on Andre's sign-off of §8/§9 of the remediation doc.
 This overrides the watchdog default. Resume point after compaction = that remediation doc.
+
+## 2026-06-28 — Gate LIFTED → STEP 1 done (stories corrected) + scope EXPANDED to a second inversion
+
+Andre's post-compaction kickoff lifted the gate ("begin coding… do not wait for Andre to approve…
+unless you have a critical design decision, you should not be stopping"). The journey is unambiguous, so
+both inversions are journey-faithful corrections, not design forks → proceeding (story-first per §8).
+
+A dedicated journey→story fidelity audit (Explore subagent) found the inversion is BROADER than step-up.
+TWO distinct violations, both from collapsing two journey concepts onto one predicate `hasStrongFactor`
+(= passkey OR confirmed TOTP):
+- **Violation A (step-up)** — the original. Step-up must accept ANY strong factor; only the route/UI was
+  WebAuthn-only. The GATE predicate is fine.
+- **Violation B (the 7-day cliff)** — NEW. `strong-auth-wall.ts:16` lifts the cliff on `hasStrongFactor`,
+  so a passkey-only account clears the cliff — the exact device-loss lockout journey-01 D6 exists to
+  prevent ("WebAuthn as a substitute for 2FA — Rejected"). VERIFIED IN CODE (strong-auth-wall.ts,
+  strong-factor.ts). The cliff is the recoverable-FLOOR requirement → satisfiable only by TOTP.
+
+Key distinction the audit conflated (corrected): SESSION authLevel="strong" after a passkey LOGIN is
+LEGITIMATE; it is wrong only when used for the ACCOUNT cliff. So AUTH-002 AC-001 (authLevel) is KEPT
+(clarified); the cliff predicate is what changes.
+
+STEP 1 — STORIES CORRECTED (commits 5a44469d, 4ce5f041):
+- AUTH-002: description + context + behavior + AC-003 + new AC-004 (TOTP-only step-up) + AC-001
+  (session-vs-account) + SI-001 + observability.
+- AUTH-006: AC-002 factor removal step-up → strong-factor.
+- AUTH-004: description/context/behavior/AC-001 (cliff requires TOTP floor) + new AC-003 (passkey-only
+  stays gated).
+- Verified faithful (no change): LEVER-001, outline. AUTH-002↔AUTH-003 hard-dep deliberately NOT added
+  (prompt-order + cliff enforce the floor; a hard prerequisite would create new lockout edges).
+
+DoD impact: DOD-AUTH-2 + DOD-LEVER-4 already 🟡 (Violation A); **DOD-AUTH-4 must drop ✅→🟡** (Violation B —
+"enrolling a passkey lifts the cliff" codified the inversion); to be flipped + re-proven in STEP 3.
+
+NEXT — STEP 2 (in progress): (B) split the predicate — keep `hasStrongFactor` for step-up, add
+`hasTotpFloor` (= isTotpConfirmed) for the cliff (strong-auth-wall) + PostureHeader; (A) factor-aware
+step-up UI (webauthn-client.stepUp, TotpPanel.onStart 403 handling, SuspendLever, F1 enroll) + factor-
+agnostic strings + Account TOTP-first ordering. Then STEP 3 red-first: TOTP-only sensitive actions +
+passkey-only-stays-gated. Resume doc = the remediation discussion log (now updated, §6c + §8).
