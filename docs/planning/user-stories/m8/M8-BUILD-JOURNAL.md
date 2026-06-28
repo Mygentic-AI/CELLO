@@ -1493,3 +1493,32 @@ plaintext dump), DOD-AUTH-1 (real forged-assertion-rejected via CDP virtual auth
 
 Net: proven-live count corrected 32→31 of 41 (~76%). This is the honest-status discipline working — an
 all-✅ tier is exactly where an over-claim hid (a skip-gated served journey reading as PROVEN LIVE).
+
+## 2026-06-28 — SPINE-3 auto-bring-up investigated → close-gate prep (the pieces + the 3 constraints)
+
+Attempted to advance the lowest autonomously-touchable non-green line (DOD-SPINE-3) by auto-bringing-up
+the directory in the portal e2e. The pieces EXIST: `packages/directory/src/bin/internal-api-only.ts` is a
+libp2p-free runner (pg pool + createInternalApiServer only; env DATABASE_URL, INTERNAL_API_KEY,
+INTERNAL_API_PORT) built explicitly for "the cello-portal J-SPINE harness." But a LEGITIMATE standing ✅
+hits three constraints that make it the close gate's (DOD-E2E-1) job, not an autonomous one:
+1. ORDERING — the served portal reads DIRECTORY_API_URL at playwright-config eval, BEFORE webServer start;
+   globalSetup is not guaranteed to precede webServer. So the directory must come up on a FIXED port inside
+   webServer.command (like portal-postgres :55432), not in globalSetup. Plus cello_dev must be migrated to
+   V37 (it currently is NOT — only cello_spine is kept current by the spine harness).
+2. CROSS-REPO PATH — the only directory dist carrying V37 + this session's changes is the WORKTREE
+   (../trustless-cello-m8-read001/packages/directory/dist); hardcoding that worktree name is machine-specific.
+3. REPRODUCIBILITY — graceful-skip-when-absent means it passes only on this machine, which is NOT a
+   reproducible standing gate → would not honestly earn ✅ (it'd be the same one-time opt-in demo the
+   DoD note already describes). A true standing gate needs the close gate to orchestrate both repos.
+
+CLOSE-GATE TODO (recorded so DOD-E2E-1 can wire it directly): (a) migrate cello_dev to V{latest} in the
+portal webServer.command; (b) spawn internal-api-only against cello_dev on a fixed port with
+INTERNAL_API_KEY; (c) set DIRECTORY_API_URL/KEY + READ001_LIVE in playwright.config directoryEnv (fixed
+port, config-eval); (d) seed the operator account + an online ceremony agent (seedDirectoryAgentOnline
+exists in e2e/helpers.ts); (e) drop the test.skip on j-spine SPINE-3. Then SPINE-3 + the served halves of
+READ-1/2 become standing-✅. The directory-location path should be an env var, not hardcoded.
+
+CONCLUSION: no clean autonomous unit legitimately advances a non-green DoD line — H2 ships unverifiable
+replication; SPINE-3 auto-bring-up is machine-specific (not a reproducible gate). Both correctly wait for
+the live cluster / close gate. The autonomous security+honesty campaign is complete; remaining lines are
+gated on the cluster, npm publish, an account-key story, and the E2E-001 close-gate orchestration above.
