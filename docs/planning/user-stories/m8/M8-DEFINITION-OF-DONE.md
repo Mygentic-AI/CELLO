@@ -203,7 +203,7 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   /totp/verify stamp); the bug was UI-only — the only step-up affordance ran the WebAuthn ceremony, so a
   TOTP-only operator (journey-01 D6's PRIMARY recoverable factor) was dead-ended at "verify a passkey".
   FIXED: a factor-aware StepUpDialog fetches the operator's LIVE factors and offers the one(s) they hold
-  — passkey ceremony AND/OR TOTP code — with factor-agnostic copy. PROVEN LIVE (J-AUTH 14/14): per-op
+  — passkey ceremony AND/OR TOTP code — with factor-agnostic copy. PROVEN LIVE (J-AUTH 9/9): per-op
   step-up (AC-003); +AC-004 F1 catch-22 BOTH directions — a passkey operator adds the TOTP floor via a
   passkey step-up, and a TOTP-only operator adds their first passkey via a TOTP code (stub-resistant:
   stepup-passkey count 0 for the TOTP-only holder, stepup-totp-code count 0 for the passkey-only holder

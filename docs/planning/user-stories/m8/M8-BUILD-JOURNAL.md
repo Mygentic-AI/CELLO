@@ -1645,7 +1645,7 @@ ceremony AND/OR TOTP code — with factor-agnostic copy; wired into SuspendLever
 up WebAuthn-only internally (it surfaced the dead end). Cosmetic: factor-agnostic guidance on all step-up
 routes; the AUTH-004 wall demands the TOTP floor; Account screen TOTP-first (D6). Proven (served portal):
 J-LEVER 6/6 — a TOTP-only operator suspends via a TOTP code (no passkey dead end), a passkey operator via the
-ceremony; J-AUTH 14/14 — the F1 catch-22 fixed BOTH directions; full e2e 41 passed / 4 skipped (DIRECTORY_API_URL
+ceremony; J-AUTH 9/9 (j-auth.spec.ts) — the F1 catch-22 fixed BOTH directions; full e2e 41 passed / 4 skipped (DIRECTORY_API_URL
 gated). Reviewers (all 3, twice): code-reviewer APPROVED, fallback-finder NO-FALLBACKS (one LOW — dialog
 fetch error handling — fixed), test-attacker found a BLOCKING hollow-test gap (hasTotp asserted present-only)
 → FIXED with symmetric stepup-totp-code count-0 guards → re-run green. DoD: DOD-AUTH-2 + DOD-LEVER-4 RESTORED
