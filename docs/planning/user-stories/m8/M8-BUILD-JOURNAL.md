@@ -1084,3 +1084,19 @@ REMAINING from the remediation (all design/infra residuals, NOT hollow tests):
 - H2 (real) — DOD-TRUST-1 🟡: fan-out the portal ciphertext write to all nodes OR replicate pickup_queue.
 - F6 / "no origin signature" — signed trust/burn records (whose key signs) — tracked under LEVER-2.
 - F5 / LEVER-3 / INV-6 — strict T-of-N (protocol beyond M8's 2-of-2 stopgap).
+
+## 2026-06-28 00:25 — heartbeat: remediation floor re-verified; multi-node keystone scoped
+
+Post-remediation floor GREEN on the touched directory units: typecheck (tsc --build) clean; F4
+frost-share-refusal 2/2; writeapi contract 14/14 + trust frames 3/3 (in-process). cello-portal floor
+green (8/8 e2e incl. F1 binding). All §8 remediation findings (H1/F2/F4/F1/F3 + MEDIUM-1/LOW-3) closed
+and committed.
+
+Next frontier = the MULTI-NODE keystone. The remaining non-green DoD lines all hinge on ≥2 sovereign
+nodes with cello_pub logical replication: PRES-1 (readable-from-different-node + exactly-two-writes),
+PRES-3 (sovereign write-ownership), TRUST-1 (cross-node ciphertext after the H2 fan-out), and they feed
+LEVER-3/INV-6 strict T-of-N + the E2E-1 close gate. Dispatched a read-only Explore agent to map the
+authoritative cello_pub table set + how production wires cross-node subscriptions + the shape of
+startSpineCluster, before building a local 2-node replication harness (the build is autonomous — local
+binaries, no AWS, no Andre). TRUST-4 (publish) + E2E-1 sign-off + strict T-of-N protocol remain genuinely
+gated (Andre / cello-client protocol work).
