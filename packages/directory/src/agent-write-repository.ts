@@ -93,14 +93,28 @@ export async function upsertIdentityHash(
   );
 }
 
-/** TRUST-001 sealed ciphertext — appended to the pickup queue; the agent's daemon pulls + ACKs it.
- *  signal_kind lets the drain JOIN the authoritative identity-tree hash for verification (AC-001). */
+/** TRUST-001 sealed ciphertext — the agent's daemon pulls + ACKs it. signal_kind lets the drain JOIN
+ *  the authoritative identity-tree hash for verification (AC-001).
+ *
+ *  SUPERSEDE semantics (matches the one-anchor-per-(agent,kind) model that upsertIdentityHash enforces):
+ *  a new ciphertext for an (agent, signal_kind) REPLACES any prior UNDELIVERED one for that same kind.
+ *  Without this, a re-enrolled signal leaves the prior sealed value in the queue; once the anchor moves
+ *  to the new hash, that stale ciphertext hashes to the SUPERSEDED anchor on every drain → a permanent
+ *  hash_mismatch the daemon can never verify or ACK (a poison-pill row). Deleting the prior undelivered
+ *  row for the kind keeps exactly the current value pending — consistent with the single anchor. The
+ *  delete is scoped to acked_at IS NULL (delivered rows are already removed by ACK) AND to the same kind
+ *  (a different kind's pending pickup is untouched). A single CTE statement makes the supersede atomic —
+ *  the DELETE and INSERT commit together, so a concurrent drain never observes zero rows mid-replace. */
 export async function enqueuePickup(
   pool: Queryable,
   args: { agentId: string; signalKind: string; ciphertext: Buffer },
 ): Promise<void> {
   await pool.query(
-    `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext) VALUES ($1, $2, $3)`,
+    `WITH superseded AS (
+       DELETE FROM pickup_queue
+        WHERE agent_id = $1 AND signal_kind = $2 AND acked_at IS NULL
+     )
+     INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext) VALUES ($1, $2, $3)`,
     [args.agentId, args.signalKind, args.ciphertext],
   );
 }
