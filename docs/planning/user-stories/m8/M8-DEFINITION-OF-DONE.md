@@ -370,8 +370,16 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   node its per-agent stream is on. In the live 3-region federation (daemon connects to / fails over to
   ANY node) the ciphertext may be on a different node than the daemon → undelivered. AC-001's "readable
   from a DIFFERENT node" therefore does NOT hold for the ciphertext (only the hash anchor, which IS in
-  cello_pub, replicates). FIX needed: either fan-out the portal ciphertext write to all nodes, or
-  replicate pickup_queue with `ALTER SEQUENCE … INCREMENT BY 3 RESTART WITH {offset}` staggering.)*
+  cello_pub, replicates). FIX needed: replicate pickup_queue (its ciphertext is sealed to k_local, so
+  replicating it leaks nothing). The setup-replication comment proposes `ALTER SEQUENCE pickup_queue_id_seq
+  INCREMENT BY 3 RESTART WITH {offset}` staggering — but the 2026-06-28 multi-node investigation found
+  per-node staggering is DOCUMENTED yet NEVER IMPLEMENTED (no code applies an offset; Flyway can't, it
+  runs identical SQL on every node). RECOMMENDED H2 DIRECTION: change `pickup_queue.id` to a UUID
+  (replicates with zero per-node coordination, matching agent_suspensions/identity_tree_entries' natural
+  keys), then add pickup_queue to cello_pub; the ack-DELETE (id+agent_id post-H1) replicates and cleans
+  every node. Verifiable only on the live ≥2-node cluster (DOD-E2E-1) — a local intra-instance
+  logical-replication harness was tried and rejected as too flaky (slot creation blocks on concurrent
+  open txns); see the build journal.)*
 - **DOD-TRUST-2 — No-plaintext across the pipe.** Directory holds only the hash; ciphertext sealed
   to k_local (directory/portal can't decrypt); portal discards plaintext + token. *(TRUST-001 AC-002, SI-001)* — ✅
   *(PROVEN: the signal is sealed to the agent's k_local — only the k_local SEED opens it (a wrong seed
