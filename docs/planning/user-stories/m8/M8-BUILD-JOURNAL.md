@@ -1435,3 +1435,30 @@ severity applied (incl LOWs: handoff retry, daemon malformed/no_content_key logs
 skip log, key.burn.no_share, reconcile aggregate + sweep escalation). Live gates green (J-TRUST, J-SUSPEND).
 Remaining M8 gated: live cluster (PRES/strict-T-of-N/TRUST-1 cross-node/E2E-1), npm publish (TRUST-4),
 account key (LEVER-2 signed burn).
+
+## 2026-06-28 — session/scoping §8 (fail-closed) + LOWs applied; H2 confirmed cluster-gated
+
+§8 fallback-finder on the session lifecycle + revocation + account-scoping (DOD-INV-3/4): fail-closed
+surface — opaque hashed token, revoked_at IS NULL + expires_at > now() on every request (NULL expiry reads
+as expired → deny), account_id session-derived everywhere (never body/param/header), no JWT, no session
+cache, gate redirects on null session/account. No HIGH/MEDIUM. Three LOWs applied (cello-portal a3120f9):
+- listAgents 200-without-agents-array → now throws (contract violation, matching resolveAccountByEmailStub)
+  instead of papering it as an empty home; a genuine zero-agent account ({agents:[]}) is unaffected.
+- strong-auth-wall missing-account → was return false (fail-OPEN on the 2FA gate); now throws (fail closed
+  + loud). Dead in practice (layout redirects on null account first) but future-proofed.
+- paused/burned ?? false → documented as benign forward-compat (cosmetic badge; authoritative enforcement
+  is the federation honor-check, DOD-INV-6).
+Floor: typecheck; portal unit 25/25; e2e 37/37.
+
+H2 (DOD-TRUST-1 cross-node) — FINAL determination: confirmed genuinely cluster-gated, not avoidance. The
+daemon needs NO change (the pickup id is already string-typed on the wire, so UUID is transparent), so H2
+would be directory-only — BUT its value-bearing part is the REPLICATION semantics: cross-node upsert
+conflicts against the V37 (agent_id,signal_kind) partial unique index when pickup_queue joins cello_pub,
+ack-DELETE propagation, and the owning-node sweep gate under replica lag. None are verifiable single-node.
+Shipping the UUID migration + cello_pub membership blind would be an unverified schema+replication change
+(violates migration-integrity). So H2's implementation correctly waits for the live ≥2-node cluster
+(DOD-E2E-1). The recommended shape is recorded in the DoD-TRUST-1 note (UUID id + owning-node sweep gate).
+
+CAMPAIGN: §8 now covers EVERY M8 surface (trust pipe end-to-end, burn/share-destruction, suspend,
+WebAuthn, magic-link, agents-home, session/scoping); every finding at every severity applied; J-TRUST +
+J-SUSPEND live-gated green. Running cello-done-auditor as an independent honesty check on the DoD ✅ claims.
