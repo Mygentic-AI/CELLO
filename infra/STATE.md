@@ -9,6 +9,34 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## ⏳ DEPLOY IN PROGRESS — M8 directory (2026-06-28, Andre-authorized)
+
+**Pushed `387afc78`** (merge of `m8-read-001` onto main): the M8 directory code — READ-001
+(account-by-email-stub / agents-by-account), WRITEAPI-001 (agent-write seam), TRUST-001 (pickup queue +
+delivery), LEVER-001/002 (suspend/burn honor-check + per-node share destruction), PRESENCE-001
+(agent_presence) — plus **migrations V31–V37** (V31/V32 already applied 2026-06-23/26; V33–V37 new).
+`cello-directory-pipeline` execution InProgress (Build stage at push time). Rolls to all 3 regions.
+
+POST-DEPLOY CHECKLIST (deploy is NOT complete until ALL done — update this file after each):
+1. [ ] Pipeline ProductionDeploy succeeds (all 3 regions). Watch ECS rolloutState (custom poll, ALB
+       deregistration 30s; `aws ecs wait` 10-min limit is exceeded — never use it).
+2. [ ] **Migrations:** directory runs Flyway on startup → applies V33–V37 (cluster had V31+V32, in-order,
+       no gap). Verify `flyway_schema_history` reaches V37 in all 3 RDS (via ECS Exec + psql).
+3. [ ] **Ops-agent SSM version (us-east-1 only):**
+       `aws ssm put-parameter --name /cello/dev/ops-agent/expected-migration-version --value 37 --overwrite --region us-east-1`
+       → ECS restarts ops-agent. (Required — else crash-loop. infra/CLAUDE.md "SSM Parameters and Migrations".)
+4. [ ] **Restart the relay in EACH region** after the directory redeploy (relay has no reconnect logic;
+       its libp2p conn to the old directory is dead → `relay_unavailable` until restarted +
+       re-registered). infra/CLAUDE.md "Startup Sequence". Watch for `relay.already.registered`.
+5. [ ] **Replication:** `./infra/setup-replication.sh dev us-east-1 eu-central-1 ap-northeast-1` to add the
+       new replicated M8 tables to `cello_pub` + refresh subscriptions. CAUTION: pickup_queue is BIGSERIAL
+       (no staggering yet → TRUST-1 H2); confirm before adding it. agent_presence is MUTABLE (not
+       append-only) — confirm the publication/setup handles it.
+6. [ ] **Verify cross-node** (PRES-2/3 read-from-other-node, TRUST-1 delivery) against the live endpoints;
+       then update this file + flip the DoD lines.
+
+---
+
 ## Environments
 
 ### dev — us-east-1
