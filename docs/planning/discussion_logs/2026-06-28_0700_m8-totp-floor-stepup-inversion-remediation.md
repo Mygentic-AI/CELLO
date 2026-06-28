@@ -16,8 +16,10 @@ description: >
 
 # M8 — TOTP-floor step-up inversion: remediation record
 
-> STATUS: exploration complete, **implementation NOT started** (2 premature string edits were reverted).
-> Aligning on approach with Andre before any code changes. This doc is the durable pick-up point.
+> STATUS (2026-06-28, gate LIFTED by Andre's kickoff): **STEP 1 DONE** (stories corrected — commits
+> 5a44469d, 4ce5f041). **STEP 2 in progress** (factor-aware step-up + cliff predicate split). The audit
+> EXPANDED the scope: a second inversion (Violation B — the cliff requires the TOTP floor, a passkey must
+> NOT lift it) on top of the step-up inversion (Violation A). See §6c + §8. This doc is the durable pick-up.
 
 ## 1. The mistake (root cause = the STORY, not the procedure/review)
 
@@ -128,53 +130,100 @@ compromised verifier. So a passkey-only design leaves the spec's FLOOR factor (T
   (`totp/enroll/start` + `enroll/verify` gate on the WebAuthn-only `isStepUpFresh`).
 - VERIFIED SPEC-FAITHFUL (trustworthy — NOT broken): magic-link bootstrap (D3); presence tracking edge-
   triggered + node-liveness (J02 D4-D5); revocation-flag write + honor-check (J02 D10); TOTP + backup codes
-  (D7); strong-auth 7-day grace + admin waiver (D5); magic-link routes to email not Telegram in the ongoing
-  loop (D4). So the inversion is ONE root cause with several blast sites; the rest of M8 audited faithful.
+  (D7); magic-link routes to email not Telegram in the ongoing loop (D4).
+
+### 6c. STORY→JOURNEY audit (2026-06-28, Explore subagent) — found a BROADER second inversion (Violation B)
+The dedicated journey→story fidelity audit found the inversion is WIDER than step-up. Root: the stories
+AND the code treat **WebAuthn as an equivalent SUBSTITUTE for TOTP**, which journey-01 D6 explicitly
+rejects ("Face ID / WebAuthn as a substitute for 2FA — Rejected"). Two DISTINCT journey concepts were
+collapsed onto ONE predicate `hasStrongFactor` (= passkey OR confirmed TOTP), used for BOTH purposes:
+
+- **Violation A — step-up** (the original finding). Step-up must be satisfiable by ANY strong factor
+  (passkey OR TOTP). `hasStrongFactor` for the step-up GATE is CORRECT; only the step-up ROUTE/UI was
+  WebAuthn-only. FIX = factor-aware step-up (STEP 2). Stories AUTH-002/AUTH-006 corrected.
+- **Violation B — the 7-day cliff / strong-auth REQUIREMENT** (NEW). `strong-auth-wall.ts:16` lifts the
+  cliff on `hasStrongFactor`, so a **passkey-only account clears the cliff** — the exact device-loss
+  lockout D6 exists to prevent. Per D6 the cliff is the RECOVERABLE FLOOR requirement → satisfiable ONLY
+  by TOTP (or the admin waiver). VERIFIED IN CODE (`src/server/auth/strong-auth-wall.ts`,
+  `src/server/auth/strong-factor.ts`), not just the story. Stories AUTH-002 (description + AC-001) and
+  AUTH-004 (description/context/behavior/AC-001 + new AC-003) corrected.
+
+CRITICAL DISTINCTION (the audit conflated this; corrected here): **session authLevel** ("strong" after a
+passkey LOGIN, `webauthn/authenticate/verify:28`) is LEGITIMATE — a passkey login IS a strong-assurance
+session. It is wrong ONLY when used to satisfy the ACCOUNT-level requirement (the cliff). So AC-001's
+"authLevel strong" is KEPT (clarified as session assurance); the cliff predicate is what changes.
+
+AUDIT FALSE-POSITIVE worth recording: the audit flagged a missing AUTH-002↔AUTH-003 hard dependency to
+force "TOTP before WebAuthn". DECISION (reversible): do NOT add a hard prerequisite block — the corrected
+cliff (TOTP-required) + the TOTP-first prompt ordering (§6a) enforce the floor without a hard block that
+could create new lockout edge cases. D6's "after the TOTP floor" is prompt ORDERING, not an enrollment
+prerequisite.
+
+VERIFIED SPEC-FAITHFUL by this audit (NOT broken): AUTH-001 magic-link (D3/D4), LEVER-001 T-of-N (J02 D10,
+generic step-up), TRUST-001/003 (J03/J04), AGENTS-001 (D11), all scaffold/presence/read/write-API stories.
 
 ## 7. DoD corrections already made (committed to main)
 - DOD-SPINE-3 ✅→🟡 (served agents-appear journey is `test.skip`-gated on DIRECTORY_API_URL — separate
   done-auditor finding; standing proof is the close gate). READ-1/2 notes corrected. AGENT-1 caveat added.
-- DOD-AUTH-2 ✅→🟡 and DOD-LEVER-4 ✅→🟡 (step-up inversion; step-up half only — owner-only + burn-never-
-  erases remain proven).
+- DOD-AUTH-2 ✅→🟡 and DOD-LEVER-4 ✅→🟡 (Violation A — step-up inversion; step-up half only — owner-only +
+  burn-never-erases remain proven).
 - DOD-LEVER-2 stays 🟡 by decision (signed-event → M10).
-- Honest proven-live count after corrections: ~29/41 (~71%).
+- **DOD-AUTH-4 ✅→🟡 (PENDING — Violation B, must be flipped in STEP 3):** the proven line says "enrolling a
+  passkey lifts the cliff" — that codifies the inversion. After the predicate split it must read "the cliff
+  is lifted by the TOTP floor (or admin waiver); a passkey does NOT lift it" and be re-proven (AUTH-004
+  AC-003). Until then DOD-AUTH-4's ✅ is NOT trustworthy.
+- Honest proven-live count after corrections: ~28/41 (DOD-AUTH-4 now also suspect).
 
-## 8. Remediation plan (NOT started — pending alignment) — FIX THE STORY FIRST, then implement from it
+## 8. Remediation plan — FIX THE STORY FIRST, then implement from it
 
-The fix follows the normal procedure once the CONTRACT is right. Order:
+UPDATE 2026-06-28: the gate was LIFTED (Andre's post-compaction kickoff: "begin coding… do not wait for
+Andre to approve… unless you have a critical design decision, you should not be stopping"). The journey is
+unambiguous, so both violations are journey-faithful corrections, NOT design forks → proceeding.
 
-**STEP 1 — correct the stories (the golden contract) against the journeys.**
-   a. Audit every M8 story YAML + outline.md against journeys 01-04 for the same journey→AC translation
-      failure (a story that drops/inverts a journey decision). KNOWN-WRONG: `CELLO-M8-AUTH-002.yaml`
-      (step-up ACs say WebAuthn-only despite citing D6). SUSPECT: `CELLO-M8-LEVER-001.yaml` (suspend
-      step-up wording), `outline.md`, and any other AC that names a single factor where the journey says
-      "strong factor". (cello-done-auditor / Explore can do this audit anchored to the journeys.)
-   b. Rewrite the wrong ACs to be journey-faithful: step-up is "against an existing STRONG FACTOR (passkey
-      OR confirmed TOTP)"; add an explicit AC that a TOTP-only operator can satisfy step-up and complete
-      every sensitive action (onboarding F1 enroll, suspend/burn, factor add/remove). TOTP is the floor.
+**STEP 1 — correct the stories (the golden contract) against the journeys. ✅ DONE.**
+   - **Violation A (step-up):** AUTH-002 (description, context, behavior, AC-003, +new AC-004 TOTP-only,
+     SI-001, observability) + AUTH-006 (AC-002) rewritten — step-up is "against an existing STRONG FACTOR
+     (passkey OR confirmed TOTP)"; AC-004 proves a TOTP-only operator completes every sensitive action.
+   - **Violation B (cliff/requirement):** AUTH-002 (description + AC-001 — session authLevel vs account
+     floor) + AUTH-004 (description/context/behavior/AC-001 + new AC-003) rewritten — the 7-day cliff
+     requires the recoverable TOTP floor; a passkey does NOT lift it.
+   - VERIFIED FAITHFUL (no change): LEVER-001 (generic step-up), outline.md. AUTH-002↔AUTH-003 hard-dep
+     NOT added (decision in §6c).
+   - Commits: `5a44469d` (A: AUTH-002/006), `4ce5f041` (B: AUTH-002/004).
 
-**STEP 2 — implement from the corrected stories** (the gate is already factor-agnostic; `/totp/verify`
-   already stamps `last_step_up_at`). Add a factor-aware step-up UI that offers the operator's ACTUAL
-   factor(s) — passkey ceremony → `/webauthn/stepup`, OR TOTP code → `/totp/verify` — and let `startStepUp`
-   use the TOTP path when there are no WebAuthn creds. Wire into SuspendLever, WebAuthnPanel, TotpPanel, and
-   the F1 onboarding enroll flow (server components already know {hasPasskey, hasTotp}). Plus the 7 cosmetic
-   "passkey" → "passkey or authenticator app" strings + Account TOTP-first ordering.
+**STEP 2 — implement from the corrected stories.** TWO threads:
+   - **B (cliff) — split the predicate.** Keep `hasStrongFactor` (passkey OR TOTP) for the STEP-UP gate
+     (it is correct there). Add a recoverable-floor predicate (`hasTotpFloor` = `isTotpConfirmed`) and use
+     it in `strong-auth-wall.ts:isStrongAuthWalled` (cliff) and `PostureHeader` (compliance display). A
+     passkey-only account past grace stays walled until TOTP. Nudge copy → "set up TOTP".
+   - **A (step-up) — factor-aware UI.** The gate is already factor-agnostic; `/totp/verify` already stamps
+     `last_step_up_at`. Add a step-up UI that offers the operator's ACTUAL factor(s): passkey ceremony →
+     `/webauthn/stepup`, OR TOTP code → `/totp/verify`; `webauthn-client.ts:stepUp()` must stop being
+     WebAuthn-only; `TotpPanel.onStart` must handle 403 step_up_required. Wire into SuspendLever,
+     WebAuthnPanel, TotpPanel, F1 onboarding enroll. Plus the 7 cosmetic "passkey" → "passkey or
+     authenticator app" strings (§6a) + Account TOTP-first ordering.
 
-**STEP 3 — RED-FIRST proof with a TOTP-only account** (the missing AC): onboarding F1 + suspend/burn +
-   factor add/remove, all via TOTP step-up. Update the DoD wording FROM THE CORRECTED STORY, then restore
-   DOD-AUTH-2 / DOD-LEVER-4 ✅. §8 review (code-reviewer + test-attacker).
+**STEP 3 — RED-FIRST proof.** (a) A TOTP-only account: onboarding F1 enroll + suspend/burn + factor
+   add/remove, all via TOTP step-up (Violation A). (b) A passkey-only account past grace STAYS gated until
+   TOTP (Violation B, AUTH-004 AC-003). Update the DoD wording FROM THE CORRECTED STORIES, then restore
+   DOD-AUTH-2 / DOD-LEVER-4 and re-verify DOD-AUTH-4 (now correctly TOTP-floor). Per-unit review
+   (code-reviewer + test-attacker; fallback-finder on the auth gate).
 
-NOTE: known code touch-points are in §6a (still accurate as the implementation surface) — but they are
-STEP 2; do not start them before STEP 1 (the story) is corrected and signed off.
+NOTE: known code touch-points are in §6a (step-up) + §6c (cliff: strong-auth-wall.ts, strong-factor.ts).
 
-## 9. OPEN DECISIONS for Andre (gate the work)
-- (a) Approach sign-off on the §8 plan: fix the STORIES first (audit M8 stories + outline vs journeys,
-  rewrite the WebAuthn-only step-up ACs to "any strong factor"), then implement from the corrected stories.
+## 9. OPEN DECISIONS for Andre
+- (a) ~~Approach sign-off~~ — RESOLVED: Andre's kickoff lifted the gate ("begin coding… do not wait"). The
+  fix is underway (STEP 1 done; STEP 2 in progress). The journey is unambiguous so both violations are
+  faithfulness corrections, not forks. FLAGGED FOR AWARENESS (not blocking): the audit expanded the scope —
+  Violation B (cliff requires TOTP, passkey no longer lifts it) overturns the previously-✅ DOD-AUTH-4 and
+  changes onboarding UX (TOTP becomes de-facto mandatory for everyone, per D6). If Andre disagrees with the
+  passkey-doesn't-lift-the-cliff reading, this is the one place to say so — but D6 ("WebAuthn as a substitute
+  for 2FA — Rejected") is explicit.
 - (b) Portal deployment model (centralized hosted vs per-operator self-hosted) — gates the M10
-  signed-revocation Layer 1 design; not needed to start the step-up fix.
+  signed-revocation Layer 1 design; not needed for this fix.
 - (c) Still-pending from before: #1 stand up the live cluster, #2 npm publish — both await "go".
 - (d) Today was meant to be launch; it is now remediation. Launch can't proceed on a board whose ✅ just
-  proved fallible — the step-up fix + the spec re-audit (done) are the trust-restoring work.
+  proved fallible — the step-up fix + the cliff fix + the spec re-audit are the trust-restoring work.
 
 ## 10. Lesson (saved to memory)
 [[feedback_anchor_reviews_to_journey_spec]] — review against the source spec, not only tests+DoD.
