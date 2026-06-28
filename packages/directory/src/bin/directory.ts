@@ -47,6 +47,7 @@ import type { AuditLogShipper, NotificationQueue, TokenValidator, DirectoryKeyPr
 // S3AuditLogShipper is imported dynamically below to avoid loading @aws-sdk/client-s3
 // in CELLO_ENV=local subprocesses where it causes tsx/esm resolution noise.
 import { createInternalApiServer } from "../internal-api-server.js";
+import { reconcileNodeOffline } from "../agent-presence-repository.js";
 import { PgTokenValidator } from "../adapters/pg-token-validator.js";
 import { InMemoryShareStore } from "../share-store.js";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
@@ -948,6 +949,21 @@ if (store instanceof PgDirectoryStore) {
       stateType: "session_participants_and_last_activity",
       reason: err instanceof Error ? err.message : String(err),
     });
+  }
+
+  // PRESENCE-001: startup reconciliation — this node boots with an empty #streams, so any of its
+  // own agent_presence rows still marked online are stale (a crash skipped the edge-triggered
+  // offline write). Mark them offline now; they re-mark online as agents reconnect.
+  if (pgPool) {
+    try {
+      const reconciledCount = await reconcileNodeOffline(pgPool, nodeId);
+      logger.info("directory.presence.startup.reconciled", { nodeId, reconciledCount });
+    } catch (err: unknown) {
+      logger.error("directory.presence.startup.reconcile.failed", {
+        nodeId,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 }
 

@@ -100,6 +100,11 @@
  */
 
 import { randomBytes, randomUUID, createHash } from "node:crypto";
+import {
+  upsertPresenceOnline,
+  upsertPresenceOffline,
+  refreshNodeHeartbeat,
+} from "./agent-presence-repository.js";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash } from "@cello-protocol/crypto";
@@ -161,6 +166,7 @@ import {
   encodeSealUnilateralNotification,
   encodeSealUpgradeConfirmed,
   encodeSealUpgradeRejected,
+  encodeTrustSignalPickup,
   encodeManifestPollResponse,
   encodePong,
   decodeInboundSignalingFrame,
@@ -428,6 +434,9 @@ export interface DirectoryNodeOptions {
   directoryManifestStore?: import("@cello-protocol/interfaces").DirectoryManifestStore;
 }
 
+/** Orphan-sweep failures in a row before escalating to a distinct alarm event (~5 min at the 60s cadence). */
+const SWEEP_FAILURE_ALARM_THRESHOLD = 5;
+
 export class CelloDirectoryNode {
   readonly #node: CelloNode;
   readonly #keyProvider: KeyProvider;
@@ -450,6 +459,11 @@ export class CelloDirectoryNode {
   readonly #tokenValidator: TokenValidator | undefined;
   // OPS-AGENT-001: Postgres pool for account deduplication (AC-005b)
   readonly #pgPool: import("pg").Pool | undefined;
+  // PRESENCE-001: per-node liveness heartbeat timer (refreshes directory_nodes.last_heartbeat_at).
+  #presenceHeartbeat: ReturnType<typeof setInterval> | undefined;
+  #burnReconcile: ReturnType<typeof setInterval> | undefined;
+  /** Consecutive orphan-sweep failures — escalates to a distinct alarm event at the threshold. */
+  #sweepConsecutiveFailures = 0;
   // OPS-AGENT-001: stash phone_stub_hash from consumed token for account linking after DKG completes
   // agentPubkeyHex → { phoneStubHash, emailStubHash }
   readonly #pendingPreAuthData = new Map<string, { phoneStubHash: string; emailStubHash: string }>();
@@ -611,6 +625,130 @@ export class CelloDirectoryNode {
     this.#directoryManifestStore = opts.directoryManifestStore;
   }
 
+  /**
+   * PRESENCE-001: record an edge-triggered presence transition for an agent connected to THIS node.
+   * Best-effort + fire-and-forget — a presence-write hiccup must never break the signaling auth or
+   * disconnect path. Emits directory.presence.transition on success. (online = connect, offline =
+   * disconnect; the owning node is this node, so the offline write is sovereign-scoped in SQL.)
+   */
+  #recordPresence(state: "online" | "offline", kLocalPubkey: string): void {
+    const pool = this.#pgPool;
+    if (!pool) return;
+    const owningNodeId = this.#frostHandler.nodeId;
+    const correlationId = randomBytes(8).toString("hex");
+    const write =
+      state === "online"
+        ? upsertPresenceOnline(pool, kLocalPubkey, owningNodeId)
+        : upsertPresenceOffline(pool, kLocalPubkey, owningNodeId);
+    void Promise.resolve(write)
+      .then(() => {
+        this.#logger?.info("directory.presence.transition", {
+          agentId: kLocalPubkey,
+          owningNodeId,
+          state,
+          correlationId,
+        });
+      })
+      .catch((err: unknown) => {
+        this.#logger?.error("directory.presence.transition.failed", {
+          agentId: kLocalPubkey,
+          owningNodeId,
+          state,
+          reason: err instanceof Error ? err.message : String(err),
+          correlationId,
+        });
+      });
+  }
+
+  /** PRESENCE-001: stop the liveness heartbeat (called on node shutdown). */
+  /**
+   * LEVER-002 burn reconcile: zero THIS node's K_server share for every burned agent. Catches the
+   * idle/offline case — a node that was not asked to sign when the (replicated) burn arrived still
+   * destroys its own material, so the federation-wide guarantee holds without a ceremony attempt.
+   * Idempotent (zeroing an already-zeroed share is a no-op).
+   */
+  async reconcileBurnedShares(): Promise<void> {
+    let burned: string[];
+    try {
+      burned = await this.#store.listBurnedAgentPubkeys();
+    } catch (err) {
+      // ERROR, not WARN: this is the ONLY durable path that zeroes an idle node's at-rest burned
+      // share. A node that can NEVER enumerate burned agents (schema/grant regression) would silently
+      // leave material un-zeroed forever — a security-control failure, not a transient hiccup. (The
+      // live honor-check still refuses signing, so capability dies; this protects the at-rest erase.)
+      this.#logger?.error("frost.burn.reconcile.failed", {
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    let failed = 0;
+    for (const pubkey of burned) {
+      try {
+        await this.#frostHandler.destroyShares(pubkey);
+      } catch (err) {
+        failed++;
+        this.#logger?.error("frost.share.destroy.failed", {
+          agentShort: pubkey.slice(0, 16),
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    // Aggregate signal: a per-agent ERROR can scroll past, but the at-rest-erase guarantee is only as
+    // good as the WHOLE sweep succeeding. Emit a sweep-level result every run so a PERSISTENT failure
+    // (the same shares un-zeroed tick after tick — a grant/schema regression) is alarmable on the
+    // failed>0 count, not just inferable from scattered per-agent lines. (Capability still dies via the
+    // honor-check meanwhile; this protects the at-rest erase, LEVER-002.)
+    if (failed > 0) {
+      this.#logger?.error("frost.burn.reconcile.incomplete", { total: burned.length, failed });
+    } else if (burned.length > 0) {
+      this.#logger?.info("frost.burn.reconcile.complete", { total: burned.length });
+    }
+  }
+
+  /**
+   * TRUST-001 backstop: delete ORPHANED pending pickups (anchor-less + older than the TTL) so an
+   * undeliverable sealed ciphertext cannot linger forever. Failure is logged (ERROR), never thrown — the
+   * sweep retries on the next cadence; a delete count >0 is logged so an orphan being cleaned is visible.
+   *
+   * A single failure is transient (next tick retries). But a PERSISTENT failure (a bad plan, a revoked
+   * grant, a column rename) would ERROR every 60s forever while orphaned ciphertext silently accumulates
+   * and the per-tick ERROR reads as log noise. So we track CONSECUTIVE failures and, once they cross a
+   * threshold, emit a DISTINCT escalation event an alarm can fire on (M4+ rule: every new failure mode
+   * gets an alarm threshold). The counter resets on the next success.
+   */
+  async runPickupSweep(): Promise<void> {
+    try {
+      const swept = await this.#store.sweepUndeliverablePickups();
+      if (swept > 0) this.#logger?.warn("trust_signal.pickup.swept", { count: swept });
+      this.#sweepConsecutiveFailures = 0;
+    } catch (err) {
+      this.#sweepConsecutiveFailures++;
+      this.#logger?.error("trust_signal.pickup.sweep.failed", {
+        reason: err instanceof Error ? err.message : String(err),
+        consecutiveFailures: this.#sweepConsecutiveFailures,
+      });
+      // ~5 min of unbroken failure (5 × 60s) = no longer a hiccup; escalate to a distinct, alarmable event
+      // so a permanent regression can never hide behind routine retry noise.
+      if (this.#sweepConsecutiveFailures === SWEEP_FAILURE_ALARM_THRESHOLD) {
+        this.#logger?.error("trust_signal.pickup.sweep.persistent_failure", {
+          consecutiveFailures: this.#sweepConsecutiveFailures,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  stopPresenceHeartbeat(): void {
+    if (this.#burnReconcile) {
+      clearInterval(this.#burnReconcile);
+      this.#burnReconcile = undefined;
+    }
+    if (this.#presenceHeartbeat) {
+      clearInterval(this.#presenceHeartbeat);
+      this.#presenceHeartbeat = undefined;
+    }
+  }
+
   async start(): Promise<void> {
     await this.#node.handle(SIGNALING_PROTOCOL_ID, (stream) => {
       void this.#handleSignalingStream(stream);
@@ -630,6 +768,43 @@ export class CelloDirectoryNode {
       await this.#node.handle("/cello/checkpoint/1.0.0", (stream) => {
         void this.#handleCheckpointStream(stream);
       }, { maxInboundStreams: 8 });
+    }
+
+    // PRESENCE-001: start the per-node liveness heartbeat (refreshes last_heartbeat_at on a coarse
+    // cadence — the read rule treats an agent as online only if its owning node's heartbeat is
+    // fresh, so a crashed node's stale presence rows age out to last-seen). unref so it never keeps
+    // the process alive.
+    if (this.#pgPool && !this.#presenceHeartbeat) {
+      const pool = this.#pgPool;
+      const nodeId = this.#frostHandler.nodeId;
+      const tick = () => {
+        void refreshNodeHeartbeat(pool, nodeId).catch((err: unknown) => {
+          this.#logger?.warn("directory.node.heartbeat.failed", {
+            nodeId,
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        });
+      };
+      tick(); // mark fresh immediately at boot
+      // Coarse cadence — one tiny per-node write (NOT per agent, NOT per ping).
+      this.#presenceHeartbeat = setInterval(tick, 45_000);
+      this.#presenceHeartbeat.unref?.();
+    }
+
+    // LEVER-002: burn reconcile — sweep burned agents and zero this node's shares, on boot (catches a
+    // burn that arrived while the node was down) and on a coarse cadence (catches an idle agent never
+    // asked to sign). Idempotent + unref'd so it never keeps the process alive.
+    if (this.#pgPool && !this.#burnReconcile) {
+      const tickReconcile = (): void => {
+        void this.reconcileBurnedShares();
+        // TRUST-001 backstop: delete orphaned (anchor-less, >TTL) pending pickups so an undeliverable
+        // ciphertext (its hash write never landed) cannot linger forever. Same cadence — the sweep is a
+        // cheap, age-filtered DELETE. Independent of the burn reconcile (one failing must not skip the other).
+        void this.runPickupSweep();
+      };
+      tickReconcile();
+      this.#burnReconcile = setInterval(tickReconcile, 60_000);
+      this.#burnReconcile.unref?.();
     }
 
     // OBS-001 AC-002: directory startup log
@@ -892,6 +1067,50 @@ export class CelloDirectoryNode {
 
   // ─── FROST stream handler ────────────────────────────────────────────────────
 
+  /**
+   * LEVER-001 honor-check (DOD-INV-6, SI-001): each honest node consults the REPLICATED suspension
+   * state and refuses its FROST share for a PAUSED agent, so no threshold forms and the agent cannot
+   * sign — even with a valid client share, even if the operator's own device is the compromise. The
+   * block is server-side and account-authorized, never "one mandatory node withholding": every node
+   * independently honors the replicated flag. Fails CLOSED — if the suspension state cannot be read,
+   * the share is refused (a transient error must not let a paused agent sign; other healthy nodes
+   * still serve, preserving availability/redundancy).
+   */
+  async #isAgentPaused(agentPubkey: string, epochId: string): Promise<boolean> {
+    let paused: boolean;
+    try {
+      paused = await this.#store.isAgentSuspended(agentPubkey);
+    } catch (err) {
+      this.#logger?.error("frost.suspend_check.failed", {
+        agentShort: agentPubkey?.slice(0, 16),
+        epochId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return true; // fail closed — refuse the share when suspension state is unknown
+    }
+    if (paused) {
+      this.#logger?.info("frost.ceremony.refused.revoked", {
+        agentId: agentPubkey?.slice(0, 16),
+        epochId,
+        correlationId: Buffer.from(randomBytes(16)).toString("hex"),
+      });
+      // LEVER-002: a burn is the per-node reaction — destroy THIS node's K_server share when we
+      // observe the replicated burn (eager-on-observe). Fire-and-forget cleanup: the refusal above
+      // already protects; zeroing the material is the "capability dies" completeness. Idempotent.
+      void this.#store.isAgentBurned(agentPubkey)
+        .then((burned) => {
+          if (burned) return this.#frostHandler.destroyShares(agentPubkey);
+        })
+        .catch((err) => {
+          this.#logger?.error("frost.share.destroy.failed", {
+            agentShort: agentPubkey?.slice(0, 16),
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    }
+    return paused;
+  }
+
   async #handleFrostStream(stream: Stream): Promise<void> {
     // /cello/frost/1.0.0 wire protocol — one request/response per stream open.
     //
@@ -976,6 +1195,15 @@ export class CelloDirectoryNode {
           epochIdType: typeof epochId,
         });
 
+        // LEVER-001 honor-check: refuse this node's share if the agent is paused (DOD-INV-6, SI-001).
+        if (await this.#isAgentPaused(agentPubkey, epochId)) {
+          stream.send(lp.encode.single(
+            CBOR_ENC.encode({ type: "frost_commit_response", ok: false, reason: "AGENT_SUSPENDED" })
+          ));
+          await stream.close();
+          return;
+        }
+
         const result = await this.#frostHandler.generateCommitment(agentPubkey, epochId);
         this.#logger?.info("frost.debug.frost_stream.commit_response", {
           agentShort: agentPubkey?.slice(0, 16), epochId, resultOk: result.ok,
@@ -1005,6 +1233,16 @@ export class CelloDirectoryNode {
           peerIdStringShort: peerIdString?.slice(0, 16),
           rawFrameKeys: Object.keys(req),
         });
+
+        // LEVER-001 honor-check: refuse this node's signature share if the agent is paused. The
+        // block is server-side — a valid client share does not help (DOD-INV-6, SI-001).
+        if (await this.#isAgentPaused(agentPubkey, epochId)) {
+          stream.send(lp.encode.single(
+            CBOR_ENC.encode({ type: "frost_sign_response", ok: false, reason: "AGENT_SUSPENDED" })
+          ));
+          await stream.close();
+          return;
+        }
 
         const result = await this.#frostHandler.signRawMessage({
           agentPubkey,
@@ -1262,6 +1500,8 @@ export class CelloDirectoryNode {
 
           authedPubkeyHex = Buffer.from(resp.pubkey).toString("hex");
           this.#streams.set(authedPubkeyHex, stream);
+          // PRESENCE-001: edge-triggered — this node now owns this agent's connection → online.
+          this.#recordPresence("online", authedPubkeyHex);
 
           const existingDelegated = this.#delegatedSigners.get(authedPubkeyHex);
           this.#logger?.info("frost.debug.auth.setStreams", {
@@ -1456,6 +1696,50 @@ export class CelloDirectoryNode {
             }
           }
 
+          // CELLO-M8-TRUST-001: deliver queued sealed trust signals (the pickup queue), mirroring the
+          // notification drain. Resolve agent_id (the queue is agent_id-keyed) → drain → send each
+          // over the stream. Do NOT delete here — the daemon ACKs (trust_signal_ack) only after it
+          // opens + verifies + stores, and the inbound handler deletes on that ACK (AC-001).
+          try {
+            const pickupAgentId = await this.#store.getAgentIdByPubkey(authedPubkeyHex);
+            if (pickupAgentId) {
+              const pickups = await this.#store.drainPickup(pickupAgentId);
+              for (const item of pickups) {
+                if (!item.signalKind || !item.signalHash) {
+                  // No identity-tree anchor → the daemon could not verify openSealed(ciphertext) against
+                  // a hash, so the row cannot be delivered. We do NOT delete it (an anchor may arrive: the
+                  // portal writes hash then ciphertext as two calls), but we MUST NOT skip SILENTLY — a row
+                  // that can be neither verified nor discarded is a quiet stall. Log it so a persistently
+                  // anchor-less pickup is observable (a stale-row sweep is the follow-up, not a silent drop).
+                  this.#logger?.warn("directory.trust_signal.skipped", {
+                    agentId: pickupAgentId,
+                    pickupId: item.id,
+                    reason: "no_anchor",
+                    signalKind: item.signalKind ?? null,
+                    correlationId: reconnectCorrelationId,
+                  });
+                  continue;
+                }
+                try {
+                  this.#sendFrame(stream, encodeTrustSignalPickup({
+                    type: "trust_signal_pickup",
+                    id: item.id,
+                    signal_kind: item.signalKind,
+                    signal_hash: item.signalHash,
+                    ciphertext: item.ciphertext,
+                  }));
+                  this.#logger?.info("directory.trust_signal.delivered", {
+                    agentId: pickupAgentId, pickupId: item.id, correlationId: reconnectCorrelationId,
+                  });
+                } catch {
+                  break; // stream send failed — stop; the next reconnect re-drains (still unacked)
+                }
+              }
+            }
+          } catch {
+            // pickup drain failed — non-blocking; signals are re-deliverable on the next reconnect
+          }
+
           // CONNREQ-002 DB-001: deliver queued pending connection requests (target reconnected)
           // PERSIST-019: real Postgres dequeue with 24h TTL filter, atomic SELECT+DELETE
           const pendingConnRequests = await this.#store.dequeuePendingConnectionRequests(authedPubkeyHex, reconnectCorrelationId);
@@ -1552,6 +1836,21 @@ export class CelloDirectoryNode {
         } else if (parsed.type === "revoke_agent") {
           // CELLO-M7-REMOVE-001 DOD-REMOVE-2: record a self-signed agent revocation.
           void this.#processRevokeAgent(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "trust_signal_ack") {
+          // CELLO-M8-TRUST-001: the daemon opened + verified + stored a pickup → DELETE the row so no
+          // sealed ciphertext lingers (AC-002). ACCOUNT-SCOPED: resolve the ACK'ing agent's agent_id
+          // and delete only a row addressed to IT — pickup_queue.id is a guessable BIGSERIAL, so an
+          // id-only delete would let any authed agent wipe other agents' undelivered signals.
+          const ackId = parsed.id;
+          const ackPubkey = authedPubkeyHex!;
+          void this.#store.getAgentIdByPubkey(ackPubkey)
+            .then((ackAgentId) => {
+              if (!ackAgentId) return; // unknown agent — nothing it can own to ACK
+              return this.#store.ackPickup(ackId, ackAgentId).then(() =>
+                this.#logger?.info("directory.trust_signal.acked", { pickupId: ackId, agentId: ackPubkey.slice(0, 16) }),
+              );
+            })
+            .catch(() => {});
         } else if (parsed.type === "session_request") {
           // REG-001 AC-009: refuse session_request if registration is required and the agent
           // has not completed it. requireRegistration defaults to false for backward compat.
@@ -1571,6 +1870,18 @@ export class CelloDirectoryNode {
           const sessionTargetHex = Buffer.from(parsed.target_pubkey).toString("hex");
           if (this.#store.isAgentRevoked(sessionTargetHex) || this.#store.isAgentRevoked(authedPubkeyHex!)) {
             this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "agent_revoked" }));
+            continue;
+          }
+          // CELLO-M8-LEVER-001 (DOD-INV-6, SI-001): refuse to broker a session if the TARGET or the
+          // INITIATOR is PAUSED (reversible suspend). Server-side block — a valid client share does
+          // not help, and it holds even if the operator's own device is the compromise. A pause is
+          // mutable + a security control, so this reads the live replicated row (async), not a cache.
+          if ((await this.#store.isAgentSuspended(sessionTargetHex)) || (await this.#store.isAgentSuspended(authedPubkeyHex!))) {
+            this.#logger?.info("frost.ceremony.refused.revoked", {
+              agentId: authedPubkeyHex!.slice(0, 16),
+              correlationId: Buffer.from(randomBytes(16)).toString("hex"),
+            });
+            this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "agent_suspended" }));
             continue;
           }
           // M7-WIRE-001 AC-002: Reject session_request missing initiator session Peer ID
@@ -1748,6 +2059,9 @@ export class CelloDirectoryNode {
       });
       if (authedPubkeyHex && this.#streams.get(authedPubkeyHex) === stream) {
         this.#streams.delete(authedPubkeyHex);
+        // PRESENCE-001: edge-triggered — the agent's stream closed → offline + last-seen (only if
+        // this node still owns the row; a stale stream that was already replaced no-ops in SQL).
+        this.#recordPresence("offline", authedPubkeyHex);
         protocolLog("AUTH", `Removed stream from map — peer ${truncHex(authedPubkeyHex)}`);
       }
 
@@ -4634,6 +4948,6 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
   return {
     directory,
     node,
-    stop: async () => { await node.stop(); },
+    stop: async () => { directory.stopPresenceHeartbeat(); await node.stop(); },
   };
 }

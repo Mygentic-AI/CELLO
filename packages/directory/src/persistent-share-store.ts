@@ -218,4 +218,15 @@ export class PersistentShareStore implements ShareStore {
     const json = JSON.stringify({ secret: share.secret, pub: share.pub }, replacer);
     return new TextEncoder().encode(json);
   }
+
+  /**
+   * CELLO-M8-LEVER-002 (burn): destroy this node's K_server_X material for the agent — drop the
+   * in-memory cache AND zero the persisted (KMS-encrypted) share. AWAITED (unlike the fire-and-forget
+   * storeShare) — a burn must reliably destroy before the node reports the share gone.
+   */
+  async destroyShares(agentPubkey: string): Promise<void> {
+    await this.#memory.destroyShares(agentPubkey);
+    await this.#encrypted.destroyShares(agentPubkey);
+    this.#logger.warn("share.destroyed", { agentPubkey });
+  }
 }

@@ -9,7 +9,7 @@
  */
 
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
-import type { DirectoryStore, DirectoryNotification, SealNotarization, ConversationSealRecord, AccountRow, CreateAccountParams, AgentRevocationRecord } from "../directory-store.js";
+import type { DirectoryStore, DirectoryNotification, SealNotarization, ConversationSealRecord, AccountRow, CreateAccountParams, AgentRevocationRecord, PickupItem } from "../directory-store.js";
 
 const NOTIFICATION_QUEUE_BOUND = 256;
 const PENDING_CONNECTION_REQUEST_BOUND = 32;
@@ -172,6 +172,65 @@ export class InMemoryDirectoryStore implements DirectoryStore {
 
   getAgentRevocation(agentId: string): AgentRevocationRecord | undefined {
     return this.#revocations.get(agentId);
+  }
+
+  // ─── CELLO-M8-LEVER-001 (DOD-INV-6): reversible suspend (pause) ──────────────
+  readonly #suspendedPubkeys = new Set<string>(); // k_local_pubkey hex, currently paused
+
+  /** Test/stub helper: set or clear the pause flag for an agent by k_local_pubkey. */
+  setAgentSuspended(kLocalPubkeyHex: string, paused: boolean): void {
+    if (paused) this.#suspendedPubkeys.add(kLocalPubkeyHex);
+    else this.#suspendedPubkeys.delete(kLocalPubkeyHex);
+  }
+
+  async isAgentSuspended(kLocalPubkeyHex: string): Promise<boolean> {
+    return this.#suspendedPubkeys.has(kLocalPubkeyHex);
+  }
+
+  readonly #burnedPubkeys = new Set<string>();
+  /** Test/stub helper: mark an agent burned (permanent). */
+  setAgentBurned(kLocalPubkeyHex: string): void {
+    this.#burnedPubkeys.add(kLocalPubkeyHex);
+    this.#suspendedPubkeys.add(kLocalPubkeyHex);
+  }
+  async isAgentBurned(kLocalPubkeyHex: string): Promise<boolean> {
+    return this.#burnedPubkeys.has(kLocalPubkeyHex);
+  }
+
+  async listBurnedAgentPubkeys(): Promise<string[]> {
+    return [...this.#burnedPubkeys];
+  }
+
+  // ─── CELLO-M8-TRUST-001: trust-signal pickup (in-memory) ───────────────────
+  readonly #pubkeyToAgentId = new Map<string, string>(); // k_local_pubkey hex → agent_id
+  readonly #pickup = new Map<string, PickupItem[]>(); // agent_id → queued items
+
+  /** Test/stub helper: register a pubkey→agent_id mapping and seed a pickup item. */
+  seedPickup(kLocalPubkeyHex: string, agentId: string, item: PickupItem): void {
+    this.#pubkeyToAgentId.set(kLocalPubkeyHex, agentId);
+    const q = this.#pickup.get(agentId) ?? [];
+    q.push(item);
+    this.#pickup.set(agentId, q);
+  }
+
+  async getAgentIdByPubkey(kLocalPubkeyHex: string): Promise<string | null> {
+    return this.#pubkeyToAgentId.get(kLocalPubkeyHex) ?? null;
+  }
+
+  async drainPickup(agentId: string): Promise<PickupItem[]> {
+    return [...(this.#pickup.get(agentId) ?? [])];
+  }
+
+  async ackPickup(id: string, agentId: string): Promise<void> {
+    // Account-scoped: only remove the row if it belongs to the ACK'ing agent.
+    const items = this.#pickup.get(agentId);
+    if (items) this.#pickup.set(agentId, items.filter((it) => it.id !== id));
+  }
+
+  // The in-memory stub does not model identity-tree anchors or row age, so the orphan-sweep is a no-op
+  // here (it is a DB-backstop, exercised by the live test). Satisfies the interface.
+  async sweepUndeliverablePickups(_ttlHours = 24): Promise<number> {
+    return 0;
   }
 
   hasPhoneStubHash(phoneStubHashHex: string): boolean {

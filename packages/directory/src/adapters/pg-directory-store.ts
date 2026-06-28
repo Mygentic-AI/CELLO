@@ -28,7 +28,9 @@ import type {
   AccountRow,
   CreateAccountParams,
   AgentRevocationRecord,
+  PickupItem,
 } from "@cello-protocol/interfaces";
+import { drainPickupForAgent, ackPickupDelete, sweepUndeliverablePickups } from "../pickup-repository.js";
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
 import {
   computeChainHash,
@@ -337,6 +339,65 @@ export class PgDirectoryStore implements DirectoryStore {
 
   getAgentRevocation(agentId: string): AgentRevocationRecord | undefined {
     return this.#revocationsByAgentId.get(agentId);
+  }
+
+  // CELLO-M8-LEVER-001 (DOD-INV-6): reversible suspend honor-check. A pause is MUTABLE and a
+  // security control, so this reads the live replicated row directly — NOT an in-memory cache that
+  // could be stale and let a paused (possibly-compromised) agent sign. One indexed join from the
+  // ceremony-time k_local_pubkey to the agent's current pause flag.
+  async isAgentSuspended(kLocalPubkeyHex: string): Promise<boolean> {
+    const result = await this.#pool.query(
+      `SELECT 1 FROM agent_suspensions s
+         JOIN agent_profiles p ON p.agent_id = s.agent_id
+        WHERE p.k_local_pubkey = $1 AND s.paused = true
+        LIMIT 1`,
+      [kLocalPubkeyHex],
+    );
+    // rows.length (always an array), NOT rowCount ?? 0 — a security gate must not default fail-OPEN.
+    return result.rows.length > 0;
+  }
+
+  async listBurnedAgentPubkeys(): Promise<string[]> {
+    const result = await this.#pool.query<{ k_local_pubkey: string }>(
+      `SELECT p.k_local_pubkey
+         FROM agent_suspensions s
+         JOIN agent_profiles p ON p.agent_id = s.agent_id
+        WHERE s.burned = true`,
+    );
+    return result.rows.map((r) => r.k_local_pubkey);
+  }
+
+  async isAgentBurned(kLocalPubkeyHex: string): Promise<boolean> {
+    const result = await this.#pool.query(
+      `SELECT 1 FROM agent_suspensions s
+         JOIN agent_profiles p ON p.agent_id = s.agent_id
+        WHERE p.k_local_pubkey = $1 AND s.burned = true
+        LIMIT 1`,
+      [kLocalPubkeyHex],
+    );
+    // rows.length (always an array), NOT rowCount ?? 0 — a security gate must not default fail-OPEN.
+    return result.rows.length > 0;
+  }
+
+  // CELLO-M8-TRUST-001: trust-signal pickup delivery (the pickup queue is keyed by agent_id).
+  async getAgentIdByPubkey(kLocalPubkeyHex: string): Promise<string | null> {
+    const result = await this.#pool.query<{ agent_id: string | null }>(
+      `SELECT agent_id FROM agent_profiles WHERE k_local_pubkey = $1`,
+      [kLocalPubkeyHex],
+    );
+    return result.rows[0]?.agent_id ?? null;
+  }
+
+  async drainPickup(agentId: string): Promise<PickupItem[]> {
+    return drainPickupForAgent(this.#pool, agentId);
+  }
+
+  async ackPickup(id: string, agentId: string): Promise<void> {
+    await ackPickupDelete(this.#pool, id, agentId);
+  }
+
+  async sweepUndeliverablePickups(ttlHours = 24): Promise<number> {
+    return sweepUndeliverablePickups(this.#pool, ttlHours);
   }
 
   /**

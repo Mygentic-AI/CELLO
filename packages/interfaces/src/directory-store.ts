@@ -109,6 +109,17 @@ export interface AgentRevocationRecord {
   revokedAt: number;
 }
 
+/** CELLO-M8-TRUST-001: one sealed trust signal awaiting an agent's daemon, with its anchor hash. */
+export interface PickupItem {
+  /** pickup_queue.id — the ACK handle. */
+  id: string;
+  signalKind: string | null;
+  /** The opaque sealed ciphertext — only the agent's k_local seed opens it. */
+  ciphertext: Uint8Array;
+  /** The authoritative directory hash (identity tree), hex — the daemon's verification anchor; null if no anchor. */
+  signalHash: string | null;
+}
+
 export interface DirectoryStore {
   /**
    * Store a completed SealNotarization.
@@ -232,6 +243,44 @@ export interface DirectoryStore {
    * Returns undefined if the agent has no revocation.
    */
   getAgentRevocation(agentId: string): AgentRevocationRecord | undefined;
+
+  // ─── CELLO-M8-LEVER-001 (DOD-INV-6): reversible suspend (pause) honor-check ──
+  /**
+   * True if the agent whose K_local pubkey is `kLocalPubkeyHex` is currently PAUSED (a reversible
+   * suspension flag in agent_suspensions, written through the account-scoped write seam). Unlike
+   * {@link isAgentRevoked} (a permanent, cacheable tombstone), a pause is MUTABLE and a security
+   * control — so this reads the live replicated row directly (async) rather than an in-memory cache,
+   * so an un-cleared cache can never let a paused, possibly-compromised agent sign. Each honest node
+   * consults its own replicated copy and refuses its FROST share independently (T-of-N, not 2-of-2).
+   */
+  isAgentSuspended(kLocalPubkeyHex: string): Promise<boolean>;
+
+  /**
+   * True if the agent has been BURNED (permanent — LEVER-002). A burned agent is also suspended; this
+   * distinguishes burn (→ each node destroys its own K_server share) from a reversible pause.
+   */
+  isAgentBurned(kLocalPubkeyHex: string): Promise<boolean>;
+
+  /**
+   * The k_local pubkeys of ALL burned agents — for the per-node burn reconcile sweep, so a node that
+   * was idle/offline when the (replicated) burn arrived still zeroes its own K_server share without
+   * waiting for a ceremony attempt (LEVER-002, the federation-wide guarantee).
+   */
+  listBurnedAgentPubkeys(): Promise<string[]>;
+
+  // ─── CELLO-M8-TRUST-001: trust-signal pickup delivery ──────────────────────
+  /** Resolve the directory agent_id for a k_local pubkey (the pickup queue is keyed by agent_id). */
+  getAgentIdByPubkey(kLocalPubkeyHex: string): Promise<string | null>;
+  /** An agent's unacked sealed signals, oldest first, each with its authoritative identity-tree hash. */
+  drainPickup(agentId: string): Promise<PickupItem[]>;
+  /** ACK a delivered pickup: DELETE the row so no ciphertext lingers (TRUST-001 AC-002). Idempotent.
+   *  ACCOUNT-SCOPED by the ACK'ing agent's agent_id — an ACK can only delete a row addressed to it
+   *  (pickup_queue.id is a guessable BIGSERIAL; id-alone would allow cross-tenant deletion). */
+  ackPickup(id: string, agentId: string): Promise<void>;
+  /** Backstop sweep: delete ORPHANED pending pickups — anchor-less (no identity_tree entry for their
+   *  (agent_id, signal_kind)) and older than ttlHours — so an undeliverable ciphertext (its hash write
+   *  never landed) cannot linger forever. Returns the rows deleted. Anchored or fresh rows are untouched. */
+  sweepUndeliverablePickups(ttlHours?: number): Promise<number>;
 
   /**
    * Return true if the given phone_stub_hash (hex SHA-256) is already claimed.

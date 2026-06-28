@@ -282,7 +282,8 @@ export type SessionRequestErrorReason =
   | "no_connection"                // SESSION-006/CONNREQ-002: no active connection between initiator+target
   | "connection_id_required"       // SESSION-006: session_request missing connection_id field
   | "session_request_missing_peer_id"  // M7-WIRE-001 AC-002: session_request missing initiator_session_peer_id or addrs
-  | "agent_revoked";  // CELLO-M7-REMOVE-001 DOD-REMOVE-3: the target agent has been revoked
+  | "agent_revoked"  // CELLO-M7-REMOVE-001 DOD-REMOVE-3: the target agent has been revoked
+  | "agent_suspended";  // CELLO-M8-LEVER-001 DOD-INV-6: the target/initiator is PAUSED (reversible)
 
 export interface SessionRequestError {
   type: "session_request_error";
@@ -315,6 +316,28 @@ export interface AgentRevocationError {
   type: "agent_revocation_error";
   reason: AgentRevocationErrorReason;
   agent_id?: string;
+}
+
+// ─── CELLO-M8-TRUST-001: trust-signal pickup delivery ──────────────────────────
+// The directory delivers a sealed trust signal to the agent's daemon over signaling (OUTBOUND); the
+// daemon opens it with its k_local, verifies the recomputed hash against signal_hash, stores it, and
+// ACKs by id (INBOUND) — after which the directory DELETEs the pickup_queue row (capability to read
+// the signal dies at the daemon; the directory keeps only the hash).
+export interface TrustSignalPickup {
+  type: "trust_signal_pickup";
+  /** pickup_queue.id — the ACK handle. */
+  id: string;
+  signal_kind: string;
+  /** The authoritative directory hash (identity tree), hex — the daemon's verification anchor. */
+  signal_hash: string;
+  /** The opaque sealed ciphertext; only the agent's k_local seed opens it. */
+  ciphertext: Uint8Array;
+}
+
+export interface TrustSignalAck {
+  type: "trust_signal_ack";
+  /** The pickup_queue.id the daemon verified + stored; the directory deletes it on receipt. */
+  id: string;
 }
 
 export interface NotAuthenticated {
