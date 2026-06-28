@@ -700,6 +700,22 @@ export class CelloDirectoryNode {
     }
   }
 
+  /**
+   * TRUST-001 backstop: delete ORPHANED pending pickups (anchor-less + older than the TTL) so an
+   * undeliverable sealed ciphertext cannot linger forever. Failure is logged (ERROR), never thrown — the
+   * sweep retries on the next cadence; a delete count >0 is logged so an orphan being cleaned is visible.
+   */
+  async #sweepUndeliverablePickups(): Promise<void> {
+    try {
+      const swept = await this.#store.sweepUndeliverablePickups();
+      if (swept > 0) this.#logger?.warn("trust_signal.pickup.swept", { count: swept });
+    } catch (err) {
+      this.#logger?.error("trust_signal.pickup.sweep.failed", {
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   stopPresenceHeartbeat(): void {
     if (this.#burnReconcile) {
       clearInterval(this.#burnReconcile);
@@ -757,8 +773,15 @@ export class CelloDirectoryNode {
     // burn that arrived while the node was down) and on a coarse cadence (catches an idle agent never
     // asked to sign). Idempotent + unref'd so it never keeps the process alive.
     if (this.#pgPool && !this.#burnReconcile) {
-      void this.reconcileBurnedShares();
-      this.#burnReconcile = setInterval(() => void this.reconcileBurnedShares(), 60_000);
+      const tickReconcile = (): void => {
+        void this.reconcileBurnedShares();
+        // TRUST-001 backstop: delete orphaned (anchor-less, >TTL) pending pickups so an undeliverable
+        // ciphertext (its hash write never landed) cannot linger forever. Same cadence — the sweep is a
+        // cheap, age-filtered DELETE. Independent of the burn reconcile (one failing must not skip the other).
+        void this.#sweepUndeliverablePickups();
+      };
+      tickReconcile();
+      this.#burnReconcile = setInterval(tickReconcile, 60_000);
       this.#burnReconcile.unref?.();
     }
 

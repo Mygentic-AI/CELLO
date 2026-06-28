@@ -58,3 +58,27 @@ export async function ackPickupDelete(db: Queryable, id: string, agentId: string
   // makes an ACK only able to delete a row addressed to the ACK'ing agent.
   await db.query(`DELETE FROM pickup_queue WHERE id = $1 AND agent_id = $2`, [id, agentId]);
 }
+
+/**
+ * Sweep genuinely-ORPHANED pickups: pending (acked_at IS NULL) ciphertext that has NO identity-tree
+ * anchor for its (agent_id, signal_kind) and is older than ttlHours. The portal writes the hash and the
+ * ciphertext as two calls; if the hash write never lands, the ciphertext is undeliverable forever — the
+ * drain can neither verify nor ACK it, so it lingers (the skip is logged, not silent). This backstop
+ * deletes such rows once they are unambiguously orphaned (default 24h, matching the pending-connection
+ * TTL). It targets ONLY anchor-LESS rows: a row whose anchor merely MISMATCHES (a stale/poisoned hash) is
+ * left to the supersede path (a re-enrollment replaces it) — it is not orphaned. Returns the row count.
+ * No-op for an agent whose anchors all exist; safe to run on any node (the queue is node-local).
+ */
+export async function sweepUndeliverablePickups(db: Queryable, ttlHours = 24): Promise<number> {
+  const res = await db.query(
+    `DELETE FROM pickup_queue pq
+      WHERE pq.acked_at IS NULL
+        AND pq.created_at < now() - make_interval(hours => $1)
+        AND NOT EXISTS (
+          SELECT 1 FROM identity_tree_entries it
+           WHERE it.agent_id = pq.agent_id AND it.signal_kind = pq.signal_kind
+        )`,
+    [ttlHours],
+  );
+  return res.rowCount ?? 0;
+}

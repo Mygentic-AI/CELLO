@@ -227,6 +227,12 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     if (items) this.#pickup.set(agentId, items.filter((it) => it.id !== id));
   }
 
+  // The in-memory stub does not model identity-tree anchors or row age, so the orphan-sweep is a no-op
+  // here (it is a DB-backstop, exercised by the live test). Satisfies the interface.
+  async sweepUndeliverablePickups(_ttlHours = 24): Promise<number> {
+    return 0;
+  }
+
   hasPhoneStubHash(phoneStubHashHex: string): boolean {
     return this.#phoneHashIndex.has(phoneStubHashHex);
   }

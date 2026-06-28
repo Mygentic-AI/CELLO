@@ -277,6 +277,10 @@ export interface DirectoryStore {
    *  ACCOUNT-SCOPED by the ACK'ing agent's agent_id — an ACK can only delete a row addressed to it
    *  (pickup_queue.id is a guessable BIGSERIAL; id-alone would allow cross-tenant deletion). */
   ackPickup(id: string, agentId: string): Promise<void>;
+  /** Backstop sweep: delete ORPHANED pending pickups — anchor-less (no identity_tree entry for their
+   *  (agent_id, signal_kind)) and older than ttlHours — so an undeliverable ciphertext (its hash write
+   *  never landed) cannot linger forever. Returns the rows deleted. Anchored or fresh rows are untouched. */
+  sweepUndeliverablePickups(ttlHours?: number): Promise<number>;
 
   /**
    * Return true if the given phone_stub_hash (hex SHA-256) is already claimed.

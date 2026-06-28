@@ -30,7 +30,7 @@ import type {
   AgentRevocationRecord,
   PickupItem,
 } from "@cello-protocol/interfaces";
-import { drainPickupForAgent, ackPickupDelete } from "../pickup-repository.js";
+import { drainPickupForAgent, ackPickupDelete, sweepUndeliverablePickups } from "../pickup-repository.js";
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
 import {
   computeChainHash,
@@ -394,6 +394,10 @@ export class PgDirectoryStore implements DirectoryStore {
 
   async ackPickup(id: string, agentId: string): Promise<void> {
     await ackPickupDelete(this.#pool, id, agentId);
+  }
+
+  async sweepUndeliverablePickups(ttlHours = 24): Promise<number> {
+    return sweepUndeliverablePickups(this.#pool, ttlHours);
   }
 
   /**

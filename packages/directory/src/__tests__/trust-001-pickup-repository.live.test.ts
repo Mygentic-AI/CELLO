@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
-import { drainPickupForAgent, ackPickupDelete } from "../pickup-repository.js";
+import { drainPickupForAgent, ackPickupDelete, sweepUndeliverablePickups } from "../pickup-repository.js";
 import { enqueuePickup, upsertIdentityHash } from "../agent-write-repository.js";
 
 const DB_URL = process.env.DATABASE_URL ?? "postgresql://postgres:dev@localhost:5433/cello_spine";
@@ -136,5 +136,44 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
     await pool.query(`INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext) VALUES ($1, 'phone', $2)`, [AGENT, ct]);
     for (const d of await drainPickupForAgent(pool, AGENT)) await ackPickupDelete(pool, d.id, AGENT);
     expect(await drainPickupForAgent(pool, AGENT)).toHaveLength(0);
+  });
+
+  it("sweepUndeliverablePickups deletes only ORPHANED (anchor-less) pending rows older than the TTL", async () => {
+    // A pickup whose (agent,kind) has NO identity-tree anchor is undeliverable forever (the drain can
+    // neither verify nor ACK it). The backstop deletes such rows once unambiguously orphaned (past TTL),
+    // and ONLY those: a fresh anchor-less row (anchor may still be arriving) and an ANCHORED row of any
+    // age both survive. 'orphan_kind' has no anchor for AGENT; 'webauthn' does (seeded in beforeAll).
+    await pool.query(`DELETE FROM pickup_queue WHERE agent_id = $1`, [AGENT]);
+    const ct = Buffer.from(Uint8Array.from({ length: 24 }, (_, i) => (i * 5 + 1) % 256));
+    // (a) OLD anchor-less → must be swept.
+    await pool.query(
+      `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, created_at)
+       VALUES ($1, 'orphan_kind', $2, now() - interval '48 hours')`,
+      [AGENT, ct],
+    );
+    // (b) FRESH anchor-less → must survive (its anchor may still be in flight).
+    await pool.query(
+      `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, created_at)
+       VALUES ($1, 'orphan_fresh', $2, now())`,
+      [AGENT, ct],
+    );
+    // (c) OLD but ANCHORED (webauthn has an anchor) → must survive (it IS deliverable).
+    await pool.query(
+      `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, created_at)
+       VALUES ($1, 'webauthn', $2, now() - interval '48 hours')`,
+      [AGENT, ct],
+    );
+
+    const swept = await sweepUndeliverablePickups(pool, 24);
+    expect(swept, "exactly one orphaned row (the old anchor-less one) is swept").toBe(1);
+
+    const remaining = await drainPickupForAgent(pool, AGENT);
+    const kinds = remaining.map((r) => r.signalKind).sort();
+    expect(kinds, "the fresh anchor-less and the old anchored rows survive; only the old orphan is gone").toEqual([
+      "orphan_fresh",
+      "webauthn",
+    ]);
+
+    for (const d of remaining) await ackPickupDelete(pool, d.id, AGENT);
   });
 });
