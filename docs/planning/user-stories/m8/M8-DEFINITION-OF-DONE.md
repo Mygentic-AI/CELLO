@@ -144,13 +144,18 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   auto-bring-up of the directory cluster is the E2E close gate.)*
 - **DOD-SPINE-3 — Agents appear with presence.** A ceremony-registered agent appears in the
   Agents home with directory-derived presence (online iff presence row online AND owning node
-  fresh), fingerprint-primary. *(PRESENCE-001; READ-001; AGENTS-001)* — ✅ *(PROVEN LIVE end-to-end
-  against the served portal + the REAL directory, J-SPINE 6/6 with DIRECTORY_API_URL set: a seeded
-  ceremony-registered agent (online on a freshly-heartbeating node) appears in the Agents home,
-  fingerprint-primary, with presence computed by the REAL read rule (presence row online AND owning
-  node fresh) through the portal's HttpDirectoryClient → the directory `/internal/agents-by-account`
-  endpoint → the directory Postgres. The earlier run correctly read OFFLINE once the seeded node's
-  heartbeat aged out — the read rule's node-liveness guard working.)*
+  fresh), fingerprint-primary. *(PRESENCE-001; READ-001; AGENTS-001)* — 🟡 *(DROPPED from ✅ on the
+  2026-06-28 done-auditor honesty check — the served-portal journey is not a STANDING gate.)*
+  *(The served-portal agents-appear-with-presence journey lives in `e2e/j-spine.spec.ts:147` but is
+  `test.skip(!process.env.DIRECTORY_API_URL)` — opt-in, DEFAULT-SKIPPED (it is one of the "4 skipped"
+  in every standing e2e run), and the directory auto-bring-up that would make it standing is admittedly
+  unbuilt (`e2e/global-setup.ts`, → DOD-E2E-1 close gate). The "6/6 with DIRECTORY_API_URL set" was a
+  one-time opt-in demonstration recorded in the journal, NOT a reproducible standing gate. What IS
+  standing-proven (LIVE, real Postgres): the directory read rule itself — `read-001-agents-by-account`
+  (account-scoped agents + presence join) and `presence-001-repository` (online iff row online AND node
+  fresh; stale-node ages to last-seen). So the read LOGIC is live-proven at the component boundary; the
+  served end-to-end (portal→directory→Postgres) + cross-node both land at the E2E close gate. Tag is 🟡
+  until that gate makes the served journey a standing pass.)*
 - **DOD-SPINE-4 — Suspend blocks signing.** Pause (step-up) → the agent cannot complete a FROST
   ceremony even with its client share → un-pause restores. *(LEVER-001 AC-001)* — ✅
   *(PROVEN LIVE by J-SUSPEND (`packages/e2e-tests/src/spine/j-suspend.spine.test.ts`, 1/1, real
@@ -251,14 +256,21 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   offline write no-ops, only the owning node X flips the row — SQL-scoped WHERE owning_node_id).
   Live ≥2-node assertion = close gate.)*
 - **DOD-READ-1 — Account-scoped replicated read path.** Returns only the session account's data,
-  from any node, with no daemon-local fields. *(READ-001 AC-001/003)* — ✅ *(PROVEN LIVE, SPINE-3:
-  the portal reads the operator's agents account-scoped (server-side accountId) through the real
-  directory; no daemon-local fields. Account resolution + agents read both go through the real
-  directory HTTP API.)*
+  from any node, with no daemon-local fields. *(READ-001 AC-001/003)* — ✅ *(Note corrected on the
+  2026-06-28 done-auditor check: the standing LIVE proof is the directory component test
+  `read-001-agents-by-account` (real Postgres) — the account-scoped agents read returns ONLY the asserted
+  account's agents (cross-account injection returns nothing) with no daemon-local fields, exactly the
+  done-condition. The earlier "SPINE-3" citation is the SERVED end-to-end, which is opt-in/default-skipped
+  (now DOD-SPINE-3 🟡) — so the served integration + the "from ANY node" cross-node guarantee both land at
+  the E2E close gate. The read LOGIC + account-scoping are standing-live-proven; tag stays ✅ on that, with
+  the served-journey + cross-node aspects gated.)*
 - **DOD-READ-2 — Presence read rule.** Online iff row online AND owning node fresh; else last-seen.
-  *(READ-001 AC-002)* — ✅ *(PROVEN: the read rule (online iff row online AND node fresh) computed
-  by the directory against real data — online for a fresh node (SPINE-3), last-seen for a stale one
-  (presence-001-repository AC-003 + the SPINE-3 first run).)*
+  *(READ-001 AC-002)* — ✅ *(Note corrected on the 2026-06-28 done-auditor check: the standing LIVE
+  proof is `presence-001-repository` (real Postgres) — online iff the presence row is online AND the
+  owning node is fresh, else last-seen; a stale-heartbeat node ages the row to last-seen (AC-003). The
+  earlier "SPINE-3" citation for the SERVED online/offline render is opt-in/default-skipped (DOD-SPINE-3
+  🟡 → E2E close gate). The read RULE is standing-live-proven at the component boundary; tag stays ✅ on
+  that, with the served-render aspect gated.)*
 - **DOD-READ-3 — Directory-unreachable = honest empty.** Stale/empty marked, never fabricated.
   *(READ-001 DB-001)* — ✅ *(PROVEN by agents-degraded.integration: getAccountAgents against a dead
   directory returns `{ agents: [], unreachable: true }` + a portal.directory.unreachable WARN — never
@@ -271,7 +283,10 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 - **DOD-AGENT-1 — The Agents home is the landing page.** List + presence + the per-row suspend
   affordance + alerts strip + posture header; no separate Dashboard; no register/start/stop/
   set-current; empty state routes to the ceremony. *(AGENTS-001 AC-001/002)* — ✅
-  *(PROVEN: List + presence (SPINE-3); the per-row SUSPEND affordance (J-LEVER, 3/3: exactly one
+  *(PROVEN — with one gated sub-claim (2026-06-28 done-auditor). List + presence: the SERVED render is
+  via SPINE-3, now 🟡 (opt-in/default-skipped — see DOD-SPINE-3); the read logic itself is standing-live
+  (read-001/presence-001 component tests). Everything ELSE in AGENT-1 is standing-proven by default:
+  the per-row SUSPEND affordance (J-LEVER, 3/3: exactly one
   Pause/Resume lever, no register/start/stop/set-current — INV-9 green; Pause→read-reflects-paused→
   Resume round-trips); empty state → ceremony signpost; and the thin header (J-AGENTS, 3/3): an alerts
   strip with an HONEST empty state ("no security alerts" — no event source fabricated) + an

@@ -1462,3 +1462,34 @@ Shipping the UUID migration + cello_pub membership blind would be an unverified 
 CAMPAIGN: §8 now covers EVERY M8 surface (trust pipe end-to-end, burn/share-destruction, suspend,
 WebAuthn, magic-link, agents-home, session/scoping); every finding at every severity applied; J-TRUST +
 J-SUSPEND live-gated green. Running cello-done-auditor as an independent honesty check on the DoD ✅ claims.
+
+## 2026-06-28 — done-auditor: ONE real over-claim caught → DOD-SPINE-3 ✅→🟡 (honest correction)
+
+Ran cello-done-auditor as an independent honesty check on the DoD ✅ claims (anchored to the test FILES,
+not the prose). Verdict: 8 EARNED, 1 OVER-CLAIMED, 2 inherited-caveat. (The first dispatch died on a
+transient API outage at 21min; re-ran clean.)
+
+OVER-CLAIM (corrected):
+- DOD-SPINE-3 ✅ → 🟡. The served-portal "agent appears with presence" journey (e2e/j-spine.spec.ts:147)
+  is `test.skip(!process.env.DIRECTORY_API_URL)` — opt-in, DEFAULT-SKIPPED (it IS one of the "4 skipped"
+  in every standing e2e run I've done), and the directory auto-bring-up that would make it standing is
+  unbuilt (global-setup, → DOD-E2E-1). The "6/6 with DIRECTORY_API_URL set" was a one-time opt-in demo
+  (journal claim), not a reproducible standing gate. What IS standing-live (real Postgres): the read RULE
+  via read-001-agents-by-account + presence-001-repository. So the logic is component-live-proven; the
+  served end-to-end + cross-node = the close gate. Tag honestly 🟡.
+- DOD-READ-1 / DOD-READ-2: notes corrected (they cited the now-🟡 SPINE-3). Kept ✅ — each has its OWN
+  standing LIVE proof (read-001-agents-by-account / presence-001-repository, real Postgres) of the
+  account-scoped read + the online/fresh rule; the served-render + cross-node aspects are gated (noted).
+- DOD-AGENT-1: kept ✅ with a caveat — its "list + presence" sub-claim inherits SPINE-3 🟡 (served render
+  gated); everything else (the suspend lever, alerts strip, posture, INV-9) is standing-proven by default
+  (J-LEVER/J-AGENTS).
+
+EARNED, verified by the auditor against the test source (NOT over-claimed): DOD-SPINE-2 (session/httpOnly/
+revoke live by default; real-directory hop honestly disclosed as opt-in), DOD-SPINE-4/LEVER-1 (J-SUSPEND:
+suspended agent with a VALID share refused server-side, positive control + reversible), DOD-SPINE-6/
+TRUST-2 (J-TRUST: openSeal+hash-verify+store+ACK+delete cross-process + hash-mismatch negative + no-
+plaintext dump), DOD-AUTH-1 (real forged-assertion-rejected via CDP virtual authenticator), DOD-INV-2
+(live SI-001 seam-table dump + browser-storage empty). INV-6 + TRUST-1 already-honest 🟡.
+
+Net: proven-live count corrected 32→31 of 41 (~76%). This is the honest-status discipline working — an
+all-✅ tier is exactly where an over-claim hid (a skip-gated served journey reading as PROVEN LIVE).
