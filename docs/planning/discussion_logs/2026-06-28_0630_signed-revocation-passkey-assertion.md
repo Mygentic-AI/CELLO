@@ -14,6 +14,15 @@ description: >
 
 # Signed revocation (burn/suspend) via WebAuthn passkey assertion
 
+> ⚠️ **SUPERSEDED / INCOMPLETE — read [[m8-totp-floor-stepup-inversion-remediation]] §5 instead.**
+> This log's design ("sign with the operator's WebAuthn passkey") only protects WebAuthn users. Andre
+> corrected it: M8 mandates 2FA and TOTP is the recoverable FLOOR (journey-01 D6); WebAuthn is a layer.
+> **TOTP cannot sign** (symmetric, server-held, presence-code not a payload signature). The corrected
+> design is TWO-LAYER — the PORTAL signs every burn (covers TOTP + passkey, defeats a rogue directory),
+> and WebAuthn users ALSO attach a passkey assertion (defeats a rogue portal) — with an open question
+> about the portal's trust/deployment model. See the remediation doc §5. The threat model below is still
+> accurate; the "who signs" solution below is not.
+
 ## The threat this closes
 
 A burn/suspend is a row in `agent_suspensions` (directory state, in `cello_pub`, replicated to every
