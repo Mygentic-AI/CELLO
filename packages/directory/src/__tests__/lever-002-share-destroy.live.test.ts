@@ -75,4 +75,33 @@ describeLive("LEVER-002 live — burn zeroes the persisted K_server share (appen
     );
     expect(again.rows[0].nonempty).toBe("0");
   });
+
+  it("a zero-row destroy emits a DISTINCT key.burn.no_share event — never a success-shaped key.burned", async () => {
+    // fallback-finder #1: destroyShares matching ZERO rows (this node never held a share, OR a keying/
+    // migration drift left a share under a different key) must NOT log the success-shaped key.burned —
+    // a real miss has to be distinguishable from a real erase so it is alarmable. A throwing logger here
+    // would also catch any accidental success-path log.
+    const events: string[] = [];
+    const spyLogger: Logger = {
+      info() {}, debug() {}, error() {},
+      warn(event: string) { events.push(event); },
+    } as unknown as Logger;
+    const store = new EncryptedPgShareStore(pool, stubProvider, spyLogger);
+
+    // An agent with NO agent_key_shares row at all → zero rows match.
+    await store.destroyShares("never-held-a-share-agent");
+    expect(events, "a no-op destroy must emit key.burn.no_share").toContain("key.burn.no_share");
+    expect(events, "a no-op destroy must NOT claim a successful burn").not.toContain("key.burned");
+
+    // Contrast: a real zeroing (the seeded AGENT, re-burned) emits key.burned, not no_share.
+    events.length = 0;
+    await pool.query(
+      `INSERT INTO agent_key_shares (agent_id, epoch_id, encrypted_share, key_version)
+       VALUES ($1, 'e:contrast', $2, 'v1')`,
+      [AGENT, Buffer.from([9, 9, 9])],
+    );
+    await store.destroyShares(AGENT);
+    expect(events, "a real zeroing emits key.burned").toContain("key.burned");
+    expect(events).not.toContain("key.burn.no_share");
+  });
 });

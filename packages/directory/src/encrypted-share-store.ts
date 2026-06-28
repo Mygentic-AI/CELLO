@@ -156,7 +156,19 @@ export class EncryptedPgShareStore {
         WHERE agent_id = $1`,
       [agentId],
     );
-    this.#logger.warn("key.burned", { agentId, epochsZeroed: res.rowCount ?? 0 });
+    const epochsZeroed = res.rowCount ?? 0;
+    if (epochsZeroed === 0) {
+      // No agent_key_shares row matched. Under consistent keying (agent_id == k_local pubkey) this node
+      // simply never held a share for this agent — a T-of-N non-participant — which is benign, so we do
+      // NOT throw (that would break a legitimate non-participant node). But it is ALSO the exact shape a
+      // keying/migration drift would take (a share held under a different key, silently left un-zeroed).
+      // Surface it as a DISTINCT event so a real miss is alarmable and can never masquerade as a
+      // completed burn — the success-shaped key.burned is reserved for an ACTUAL zeroing. LEVER-002's
+      // promise is PROVABLE at-rest destruction, so a no-op must be distinguishable from a real erase.
+      this.#logger.warn("key.burn.no_share", { agentId });
+      return;
+    }
+    this.#logger.warn("key.burned", { agentId, epochsZeroed });
   }
 
   /**

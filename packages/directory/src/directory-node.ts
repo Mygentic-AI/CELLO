@@ -676,15 +676,27 @@ export class CelloDirectoryNode {
       });
       return;
     }
+    let failed = 0;
     for (const pubkey of burned) {
       try {
         await this.#frostHandler.destroyShares(pubkey);
       } catch (err) {
+        failed++;
         this.#logger?.error("frost.share.destroy.failed", {
           agentShort: pubkey.slice(0, 16),
           reason: err instanceof Error ? err.message : String(err),
         });
       }
+    }
+    // Aggregate signal: a per-agent ERROR can scroll past, but the at-rest-erase guarantee is only as
+    // good as the WHOLE sweep succeeding. Emit a sweep-level result every run so a PERSISTENT failure
+    // (the same shares un-zeroed tick after tick — a grant/schema regression) is alarmable on the
+    // failed>0 count, not just inferable from scattered per-agent lines. (Capability still dies via the
+    // honor-check meanwhile; this protects the at-rest erase, LEVER-002.)
+    if (failed > 0) {
+      this.#logger?.error("frost.burn.reconcile.incomplete", { total: burned.length, failed });
+    } else if (burned.length > 0) {
+      this.#logger?.info("frost.burn.reconcile.complete", { total: burned.length });
     }
   }
 

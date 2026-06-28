@@ -61,12 +61,30 @@ let scope: TestScope;
 beforeEach(() => { scope = createTestScope(); });
 afterEach(() => scope.run(async () => {}));
 
-describe("LEVER-001 — FROST share gate refuses a paused agent (SI-001, even with a valid share)", () => {
-  async function setup(suspended: boolean) {
+type Mode = "none" | "suspended" | "burned";
+
+async function waitForShareGone(
+  shareStore: InMemoryShareStore,
+  pubkey: string,
+  epochId: string,
+  timeoutMs = 5000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (shareStore.getShare(pubkey, epochId) === undefined) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error("share was not destroyed within timeout");
+}
+
+describe("LEVER-001/002 — FROST share gate refusal + burn share-destruction (SI-001)", () => {
+  // Build a directory node holding a REAL, valid K_server share for an agent, with the agent in the given
+  // revocation state. Returns the pieces so a test can drive a frost frame AND assert at-rest share state.
+  async function buildNode(mode: Mode) {
     const store = new InMemoryDirectoryStore();
     const shareStore = new InMemoryShareStore();
 
-    // A real, valid K_server share for the agent (so a refusal is NOT "no share" but the honor-check).
+    // A real, valid K_server share (so a refusal/destroy is NOT "no share" but the honor-check / burn).
     const agentPubkeyHex = Buffer.from(randomBytes(32)).toString("hex");
     const epochId = `${agentPubkeyHex}:epoch:1`;
     const stubs = createInProcessStubs(1);
@@ -75,18 +93,36 @@ describe("LEVER-001 — FROST share gate refuses a paused agent (SI-001, even wi
     if (!share) throw new Error("no share");
     shareStore.storeShare(agentPubkeyHex, epochId, share);
 
-    if (suspended) store.setAgentSuspended(agentPubkeyHex, true);
+    if (mode === "suspended") store.setAgentSuspended(agentPubkeyHex, true);
+    if (mode === "burned") store.setAgentBurned(agentPubkeyHex); // sets paused + burned (mirrors applyRevocationFlag)
 
-    const dirKey = generateKeypair();
+    // Spy logger so a test can assert the reconcile aggregate signal (fallback-finder #2).
+    const events: string[] = [];
+    const logger = {
+      info(e: string) { events.push(e); },
+      warn(e: string) { events.push(e); },
+      error(e: string) { events.push(e); },
+      debug() {},
+    } as unknown as Parameters<typeof createDirectoryNode>[0]["logger"];
+
     const dirNode = await createDirectoryNode({
-      keyProvider: dirKey,
+      keyProvider: generateKeypair(),
       relay: makeRelay(),
       relayEndpoint: { peer_id: "12D3KooWRelayTest", multiaddrs: ["/ip4/127.0.0.1/tcp/9999"] },
       store,
       shareStore,
+      logger,
     });
     scope.addCleanup(dirNode.stop);
+    return { store, shareStore, dirNode, agentPubkeyHex, epochId, events };
+  }
 
+  // Dial the node and send a raw frost_commit_request, returning the response frame.
+  async function sendFrostCommit(
+    dirNode: Awaited<ReturnType<typeof buildNode>>["dirNode"],
+    agentPubkeyHex: string,
+    epochId: string,
+  ): Promise<Record<string, unknown>> {
     const clientNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await clientNode.start();
     scope.addCleanup(() => clientNode.stop());
@@ -97,15 +133,80 @@ describe("LEVER-001 — FROST share gate refuses a paused agent (SI-001, even wi
   }
 
   it("SI-001: a PAUSED agent's frost_commit_request is refused AGENT_SUSPENDED — despite a valid share", async () => {
-    const resp = await setup(true);
+    const { dirNode, agentPubkeyHex, epochId } = await buildNode("suspended");
+    const resp = await sendFrostCommit(dirNode, agentPubkeyHex, epochId);
     expect(resp.type).toBe("frost_commit_response");
     expect(resp.ok).toBe(false);
     expect(resp.reason).toBe("AGENT_SUSPENDED");
   });
 
   it("positive control: a NON-paused agent's frost_commit_request succeeds (refusal is pinned to suspension)", async () => {
-    const resp = await setup(false);
+    const { dirNode, agentPubkeyHex, epochId } = await buildNode("none");
+    const resp = await sendFrostCommit(dirNode, agentPubkeyHex, epochId);
     expect(resp.type).toBe("frost_commit_response");
     expect(resp.ok, `non-paused must not be refused: ${JSON.stringify(resp)}`).toBe(true);
+  });
+
+  // LEVER-002 gap (test-attacker): the EAGER-on-observe destruction at the frost gate had no coverage —
+  // deleting it left every test green. Drive a frost_commit against a BURNED agent: it must be refused
+  // AND the gate must ZERO this node's share as a result (fire-and-forget, so poll for it).
+  it("LEVER-002 eager-on-observe: a BURNED agent's frost_commit is refused AND its share is destroyed", async () => {
+    const { shareStore, dirNode, agentPubkeyHex, epochId } = await buildNode("burned");
+    expect(shareStore.getShare(agentPubkeyHex, epochId), "precondition: the share exists").toBeDefined();
+
+    const resp = await sendFrostCommit(dirNode, agentPubkeyHex, epochId);
+    expect(resp.ok).toBe(false);
+    expect(resp.reason).toBe("AGENT_SUSPENDED");
+
+    // The eager destroy is fire-and-forget after the refusal — the burned agent's K_server share must go.
+    await waitForShareGone(shareStore, agentPubkeyHex, epochId);
+    expect(shareStore.getShare(agentPubkeyHex, epochId)).toBeUndefined();
+  });
+
+  // LEVER-002 gap (test-attacker): the reconcile sweep's idle-node ZEROING had no coverage — only
+  // listBurnedAgentPubkeys/isAgentBurned were asserted, so a list-but-don't-zero impl passed. Drive the
+  // actual sweep on a node that was NEVER asked to sign: it must zero the burned agent's at-rest share.
+  it("LEVER-002 reconcile sweep: an idle node zeroes a burned agent's share (never asked to sign)", async () => {
+    const { shareStore, dirNode, agentPubkeyHex, epochId, events } = await buildNode("burned");
+    expect(shareStore.getShare(agentPubkeyHex, epochId), "precondition: the share exists").toBeDefined();
+
+    events.length = 0; // ignore boot-time events; assert on THIS explicit sweep
+    await dirNode.directory.reconcileBurnedShares();
+
+    expect(
+      shareStore.getShare(agentPubkeyHex, epochId),
+      "the reconcile sweep must zero an idle burned agent's share, not just list it",
+    ).toBeUndefined();
+    // fallback-finder #2: the sweep emits an aggregate result so a PERSISTENT failure is alarmable.
+    expect(events, "a clean sweep over a burned agent must emit the aggregate complete signal").toContain(
+      "frost.burn.reconcile.complete",
+    );
+    expect(events).not.toContain("frost.burn.reconcile.incomplete");
+  });
+});
+
+// LEVER-002 gap (test-attacker): the in-memory cache drop had no coverage — the live test exercises the
+// encrypted PG store directly, bypassing the in-memory cache the hot signing path reads. A no-op memory
+// destroy would let a burned agent's cached share survive in-process. Prove getShare returns undefined.
+describe("LEVER-002 — InMemoryShareStore.destroyShares clears the in-process cache", () => {
+  it("after destroyShares, getShare returns undefined for every epoch of the agent", async () => {
+    const shareStore = new InMemoryShareStore();
+    const pubkey = Buffer.from(randomBytes(32)).toString("hex");
+    const other = Buffer.from(randomBytes(32)).toString("hex");
+    const stubs = createInProcessStubs(1);
+    await bootstrapKeyShares(Buffer.from(pubkey, "hex"), { threshold: 2, participants: 1, directoryNodeStubs: stubs });
+    const share = stubs[0].getShareForTest();
+    if (!share) throw new Error("no share");
+    // Two epochs for the agent, plus a co-tenant share that must survive.
+    shareStore.storeShare(pubkey, `${pubkey}:epoch:1`, share);
+    shareStore.storeShare(pubkey, `${pubkey}:epoch:2`, share);
+    shareStore.storeShare(other, `${other}:epoch:1`, share);
+
+    await shareStore.destroyShares(pubkey);
+
+    expect(shareStore.getShare(pubkey, `${pubkey}:epoch:1`)).toBeUndefined();
+    expect(shareStore.getShare(pubkey, `${pubkey}:epoch:2`)).toBeUndefined();
+    // Scoped to the agent — a different agent's cached share is untouched.
+    expect(shareStore.getShare(other, `${other}:epoch:1`)).toBeDefined();
   });
 });
