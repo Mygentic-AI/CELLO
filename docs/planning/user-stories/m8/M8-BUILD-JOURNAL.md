@@ -1365,3 +1365,15 @@ The TRUST-001 pipe is now §8-reviewed END-TO-END: portal handoff (hash-first, n
 (WRITEAPI) → identity_tree/pickup (poison-loop supersede + V37 + orphan sweep + escalation) → directory
 drain (anchor-less-skip observable) → daemon (handler verified + diagnostics). Next: run the live J-TRUST
 gate to confirm the hardened pipe is green end-to-end on real binaries.
+
+## 2026-06-28 — LIVE GATE: J-TRUST green end-to-end with the hardened pipe (real binaries)
+
+Rebuilt the directory dist (supersede ON CONFLICT, orphan sweep + escalation, V37) and confirmed the
+daemon dist carries the diagnostic fix, then ran the live J-TRUST spine gate (real directory + daemon
+binaries, fresh cluster). RESULT: 1/1 pass (62s). Flyway applied V1→V37 cleanly (incl. V37
+pickup_queue_one_pending_per_kind, zero checksum errors); the directory binary booted with the new
+reconcile+sweep intervals; the full pipe (seal → seam → identity_tree/pickup → drain → daemon openSeal +
+hash-verify + store + ACK → directory ack-delete, queue empty) is green on real binaries, including the
+F3 hash-mismatch negative phase. The session's trust-pipe hardening is now validated at BOTH levels —
+unit + the live multi-process gate (the procedure's real done-signal). No DoD tag change (DOD-SPINE-6 was
+already ✅; this re-confirms it survives the hardening). DOD-TRUST-1 stays 🟡 on cross-node (H2/cluster).
