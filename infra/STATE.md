@@ -24,14 +24,22 @@ POST-DEPLOY CHECKLIST:
        BEFORE serving, so a healthy task ⇒ migrations succeeded; AND setup-replication's GRANT SELECT on
        `agent_suspensions` + `identity_tree_entries` succeeded (those tables only exist at ≥V34/V36).
 3. [x] **Ops-agent SSM `/cello/dev/ops-agent/expected-migration-version` 32 → 37** (us-east-1, done).
-4. [ ] **Restart the relay in EACH region** (relay has no reconnect logic after a directory redeploy →
-       `relay_unavailable` until restarted + re-registered). infra/CLAUDE.md "Startup Sequence".
+4. [x] **Relays restarted (3 regions)** — stopped each; ECS relaunched. us-east-1 logged
+       `relay.already.registered`; us-east-1 + eu-central-1 at 1/1; ap-northeast-1 relaunching. Ops-agent
+       recovered (1/1, picked up SSM=37).
 5. [x] **Replication DONE** — `setup-replication.sh dev us-east-1 eu-central-1 ap-northeast-1` ran clean:
        `cello_pub` now includes `agent_suspensions` + `identity_tree_entries` (added by m8-read-001's
        PUBLICATION_TABLES); all 6 subscriptions refreshed; **all 6 replication slots STREAMING** (246s).
        `pickup_queue` (BIGSERIAL, TRUST-1 H2) + `agent_presence` (mutable) deliberately NOT replicated.
-6. [ ] **Verify cross-node** (write on node A's RDS, read on node B's RDS for the replicated M8 tables);
-       restart the ops-agent + relays; then flip the cross-node DoD lines + finalize this file.
+6. [x] **CROSS-NODE REPLICATION VERIFIED LIVE** — wrote `identity_tree_entries('xnode-verify-…')` on
+       **us-east-1** via ECS-Exec psql; 10s later read it back from **eu-central-1** with the exact hash;
+       cleaned up. The M8 append-only tables (identity_tree_entries, agent_suspensions) replicate across
+       regions on the live federation. (This proves the cross-node DATA layer; the dependent DoD
+       *behavioral* lines still need: TRUST-1 pickup_queue/H2, INV-6/LEVER-3 the T-of-N protocol,
+       PRES-2/3 agent_presence replication — none of which this deploy delivers.)
+
+**NET: M8 directory is LIVE in all 3 regions; cross-node replication of the M8 append-only tables is
+verified.** Remaining cross-node DoD flips are gated on other work, not on the cluster.
 
 ---
 
