@@ -41,6 +41,21 @@ POST-DEPLOY CHECKLIST:
 **NET: M8 directory is LIVE in all 3 regions; cross-node replication of the M8 append-only tables is
 verified.** Remaining cross-node DoD flips are gated on other work, not on the cluster.
 
+### Cross-node burn/suspend HONOR — what's proven (2026-06-28)
+- **Revocation replicates cross-node, BOTH directions (PROVEN LIVE):** wrote `agent_suspensions(paused=true)`
+  for a real agent via **eu-central-1** → read back on **us-east-1** (paused=true); then DELETE (un-pause)
+  via eu-central-1 → us-east-1 shows 0 rows. So a burn/suspend recorded on ANY node is visible federation-
+  wide, and a clear replicates too. (Done on the demo agent 04faa2a5; restored to un-paused.)
+- **Honor-check refuses on a suspended row:** proven by J-SUSPEND (real binaries, cross-process, single
+  node) — the directory refuses the FROST share when `isAgentSuspended`.
+- **⇒ cross-node revocation honor is established by-composition** (replication live + honor-check proven).
+- **NOT yet done — the live END-TO-END behavioral refusal** (a real ceremony on node B refused for an agent
+  revoked via node A). Blocked by client tooling, NOT the cross-node mechanism: cello-mcp holds a SQLite
+  write lock (one mcp per daemon — can't safely drive a 2nd client against the demo daemon), and a
+  dedicated throwaway agent needs a registration token (ceremony) + a real DKG against the live cluster.
+  This is a sub-project; and DOD-INV-6/LEVER-3 (strict T-of-N) need the UNBUILT T-of-N protocol regardless
+  (the daemon is the 2-of-2 stopgap), so the behavioral test would not flip those to ✅ on its own.
+
 ---
 
 ## Environments

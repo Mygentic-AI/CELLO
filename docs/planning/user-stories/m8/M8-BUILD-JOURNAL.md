@@ -1753,3 +1753,59 @@ Instead did the required, safe, valuable deliverable: wrote docs/planning/milest
 (~32/41 proven-live), the TOTP-floor incident + story-first remediation, the local served close gate
 (42/3), bugs-found (Symptom/Root cause/Fix/Rule), the gated remainder (AWS cluster / T-of-N / publish /
 M10), and lessons. Local-actionable M8 work remains exhausted; the frontier is the AWS close gate (Andre).
+
+## 2026-06-28 — M8 directory DEPLOYED to the live 3-region cluster + cross-node replication VERIFIED
+
+Andre authorized the deploy. Merged `m8-read-001` onto newer main (clean, no conflicts — `387afc78`),
+verified it typechecks/builds (directory image = `tsc --build`, tests excluded), confirmed migration
+ordering safe (cluster had V31+V32 → V33–V37 strictly in-order). Pushed → `cello-directory-pipeline`
+SUCCEEDED (Build→StagingDeploy→SmokeTest→ProductionDeploy); directory live in all 3 regions (task defs
+207/78/69). Post-deploy: migrations V33–V37 applied (healthy tasks + setup-replication GRANTs prove it);
+ops-agent SSM 32→37 (recovered); relays restarted + re-registered; `setup-replication.sh` added
+`agent_suspensions` + `identity_tree_entries` to `cello_pub`, all 6 slots STREAMING.
+
+**CROSS-NODE PROOF (live):** wrote `identity_tree_entries('xnode-verify-…')` on us-east-1 via ECS-Exec
+psql; 10s later read it back from eu-central-1 with the exact hash; cleaned up. The M8 append-only tables
+replicate across regions on the real federation — the first genuinely-live cross-node proof.
+
+HONEST DoD impact: this deploy proves the cross-node DATA layer but does NOT cleanly flip a 🟡→✅, because
+the dependent lines are BEHAVIORAL and gated on other work:
+- DOD-TRUST-1: the HASH anchor (identity_tree_entries) now replicates + is proven readable cross-node —
+  narrowing the blocker to ONLY the pickup_queue ciphertext (H2: bigserial→UUID + cello_pub). Stays 🟡.
+- DOD-INV-6 / DOD-LEVER-3 (strict T-of-N): ≥3 real nodes now EXIST, but the daemon path is still the
+  2-of-2 stopgap — the T-of-N protocol is unbuilt, so "a single node continuing doesn't let it sign"
+  cannot be proven yet. Stays 🟡 (protocol, not cluster).
+- DOD-PRES-2/3: `agent_presence` is deliberately NOT replicated (mutable) → cross-node presence not
+  enabled by this deploy. Stays 🟡.
+- DOD-E2E-1: needs the served PORTAL against the live cluster; the portal isn't deployed. Stays 🟡.
+
+So: a major infrastructure milestone (M8 directory live + cross-node replication verified) that UNBLOCKS
+the cross-node behavioral work, but the remaining flips need the T-of-N protocol, the pickup_queue H2, the
+agent_presence replication decision, and the portal deploy — none delivered here. No DoD line flipped
+(disciplined: no behavioral assertion yet).
+
+## 2026-06-28 — Cross-node burn/suspend HONOR: replication proven LIVE; full behavioral test boundary mapped
+
+Andre asked to stand up the cross-node burn-honor test against the now-live cluster. Result:
+
+PROVEN LIVE (the load-bearing new capability):
+- A revocation (`agent_suspensions`, paused=true) written for a real agent (04faa2a5) via **eu-central-1**
+  REPLICATES to **us-east-1** (read back paused=true); the un-pause DELETE replicates too (us-east-1 → 0
+  rows). So a burn/suspend (or clear) recorded on ANY node is visible federation-wide. Demo agent restored.
+- Combined with the directory honor-check refusing on a suspended row (proven by J-SUSPEND, real binaries),
+  cross-node revocation honor is established BY-COMPOSITION.
+
+The live END-TO-END behavioral refusal (a real ceremony on node B refused for an agent revoked via node A)
+is NOT done — and the blocker is client tooling + the ceremony, NOT the cross-node mechanism (each tried):
+- cello-mcp holds a SQLite WRITE LOCK (one mcp per daemon) — driving a 2nd client against the demo daemon
+  hangs on the lock (and risks its ceremony state). Confirmed: a fresh cello-mcp's daemon-backed tool calls
+  (cello_status / cello_initiate_session) hang; tools/list (mcp-local) returns fine.
+- A dedicated THROWAWAY agent needs a registration token → CONFIRMED `/internal/pre-authorize` requires a
+  prior registration record (only the Telegram ceremony creates it); a fabricated registrationId → 500
+  "token issuance failed". So a scripted throwaway registration is not available without the ceremony.
+- The demo daemon logs show no organic refusal (it didn't attempt a session while paused).
+
+AND: DOD-INV-6 / DOD-LEVER-3 (strict T-of-N: "a single node continuing doesn't let it sign") need the
+UNBUILT T-of-N protocol (the daemon is the 2-of-2 stopgap) — so even a perfect behavioral refusal test
+would NOT flip those to ✅ on its own. No DoD line flipped (disciplined); the cross-node REPLICATION layer
++ honor mechanism are proven live, which is the real deliverable of the deploy.
