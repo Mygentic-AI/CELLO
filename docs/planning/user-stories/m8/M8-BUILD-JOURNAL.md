@@ -1271,3 +1271,39 @@ elsewhere that's fine; flagging only as an observation, out of M8 scope.)
 Status: the one clean contained defect found by mining (the TRUST pickup poison-loop) is fixed +
 reviewed. Further residuals resolve to correct-by-design or design/resource-gated (account-key signed
 burn, anchor-less-pickup TTL sweep, the live-cluster lines, npm publish). Not manufacturing changes.
+
+## 2026-06-28 — burn/share-destruction §8 hardening + orphaned-pickup backstop sweep
+
+Continuous mining of the security-critical paths (no waiting on ticks). Two units, both red→green→reviewed.
+
+### Unit A — LEVER-002 burn/share-destruction hardening (worktree 5516739b)
+Ran §8 on the share-destruction path (the most security-critical M8 code). Both reviewers + the
+fallback-finder confirmed the KEYING is consistent (agent_key_shares.agent_id == k_local pubkey across
+store/destroy/listBurnedAgentPubkeys — no pubkey↔agent_id resolution bug). Findings, all applied:
+- test-attacker — THREE blocking hollow-test gaps (behaviors existed but a deletion stayed green). Now
+  covered with teeth (in-process InMemory stores): (1) eager-on-observe — a BURNED agent's frost_commit
+  is refused AND its share is zeroed; (2) reconcile sweep — an IDLE node zeroes a burned agent's share
+  (reconcileBurnedShares() actually invoked); (3) in-memory cache drop — InMemoryShareStore.destroyShares
+  clears the hot-path cache (getShare→undefined), scoped to the agent.
+- fallback-finder #1 (HIGH-but-latent) — destroyShares logged success-shaped key.burned even on
+  rowCount=0; a real zeroing miss (keying/migration drift) was indistinguishable from a legit
+  non-participant no-op. FIX: a zero-row destroy emits a DISTINCT key.burn.no_share (does NOT throw — a
+  non-participant node is benign). Live test pins both branches.
+- fallback-finder #2 (MEDIUM) — no aggregate sweep signal; FIX: frost.burn.reconcile.complete/.incomplete
+  {total,failed} so a persistent failure is alarmable. Asserted via spy logger.
+- fallback-finder #3 (LOW, eager fire-and-forget) — confirmed by-design (fails loud, backstopped by 60s
+  reconcile); no change.
+
+### Unit B — orphaned-pickup backstop sweep (worktree 9b7929d3)
+Fully closes the anchor-less-pickup residual (was observable-but-lingering). sweepUndeliverablePickups
+DELETEs pending pickups that are anchor-less (no identity_tree entry for their (agent_id,signal_kind))
+AND older than 24h (matching the pending-connection TTL — a reversible default). Targets ONLY orphans:
+a mismatching-anchor row is left to the supersede path; anchored or fresh rows survive. Exposed on the
+DirectoryStore interface (PgDirectoryStore delegates; InMemory no-op), wired into the reconcile interval
+(boot + 60s, unref'd, independent of the burn reconcile). Emits trust_signal.pickup.swept{count} on a
+clean + trust_signal.pickup.sweep.failed on error (logged, never thrown). Live test: old anchor-less →
+swept; fresh anchor-less + old anchored → survive. §8 review in flight (code-reviewer + fallback-finder);
+findings will be applied before this is considered closed.
+
+These harden the already-✅ DOD-SPINE-4/6 + DOD-LEVER-1/2/4 paths (no tag flips). DOD-LEVER-2's
+signed-event clause + DOD-TRUST-1 cross-node remain gated (account key / live cluster).
