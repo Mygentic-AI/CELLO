@@ -1377,3 +1377,11 @@ hash-verify + store + ACK → directory ack-delete, queue empty) is green on rea
 F3 hash-mismatch negative phase. The session's trust-pipe hardening is now validated at BOTH levels —
 unit + the live multi-process gate (the procedure's real done-signal). No DoD tag change (DOD-SPINE-6 was
 already ✅; this re-confirms it survives the hardening). DOD-TRUST-1 stays 🟡 on cross-node (H2/cluster).
+
+## 2026-06-28 — LIVE GATE: J-SUSPEND also green with the hardened binary
+
+J-SUSPEND (1/1, 42s) against the rebuilt directory binary: pause A → A's cello_initiate_session fails
+agent_suspended with a valid client share; un-pause restores. Confirms the suspend honor-check survives
+all this session's directory changes (the reconcile/sweep intervals, the no_share/aggregate logging, V37).
+Both live gates the session's work touches — J-TRUST (trust pipe) and J-SUSPEND (suspend) — are green on
+real binaries. Auth (WebAuthn verify + step-up) fallback-finder dispatched next (highest-criticality surface).
