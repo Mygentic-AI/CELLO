@@ -23,20 +23,24 @@ one build script (all in `infra/`):
 - **`infra/build-portal.sh`** → `git archive` the committed cello-portal HEAD → S3 → CodeBuild. Images
   built in AWS only (never docker-pushed from local). **Built `cello-portal:8a2603b` + `:latest`**
   (commit 8a2603b on m8-assembly; CodeBuild SUCCEEDED).
-- **`cello-portal-data.yaml`** → stack `cello-portal-data-dev` **[CREATING]**. SGs (portal-alb /
-  portal-task / portal-db), RDS Postgres `cello-portal-dev` (db.t4g.micro, DB `cello_portal`,
-  ManageMasterUserPassword), ACM cert for `portal.cello.mygentic.ai` (DNS-validated via zone
-  Z02692523DOH7NW521CL8). (First attempt rolled back: em-dash in an EC2 GroupDescription — ASCII-only;
-  fixed + redeploying.)
-- **`cello-portal-app.yaml`** → stack `cello-portal-dev` **[PENDING]**. Public ALB (HTTPS/ACM, HTTP→443
+- **`cello-portal-data.yaml`** → stack `cello-portal-data-dev` **[CREATE_COMPLETE]**. SGs (portal-alb
+  `sg-0640c459d8887e2b6` / portal-task `sg-00c0f6e65386bf534` / portal-db), RDS Postgres
+  **`cello-portal-dev.c9iokw02w3f8.us-east-1.rds.amazonaws.com:5432`** (db.t4g.micro, DB `cello_portal`,
+  ManageMasterUserPassword → secret `rds!db-1292ef13-…`), ACM cert
+  `arn:aws:acm:us-east-1:257394457473:certificate/de0d5927-601e-450e-914a-f58ff7a80200` (issued, DNS-
+  validated via zone Z02692523DOH7NW521CL8). (First attempt rolled back on an em-dash in an EC2
+  GroupDescription — ASCII-only; fixed + redeployed clean.)
+- **`cello-portal-app.yaml`** → stack `cello-portal-dev` **[DEPLOYING]**. Public ALB (HTTPS/ACM, HTTP→443
   redirect), Route53 A `portal.cello.mygentic.ai`, ECS Fargate service on the shared `cello-dev` cluster,
-  exec+task IAM (ECR pull, secrets read, `ses:SendEmail` for `*@mygentic.ai`).
+  exec+task IAM (ECR pull, secrets read, `ses:SendEmail` for `*@mygentic.ai`), + a
+  `MagicLinkDeliveryFailures` metric filter/alarm (reviewer-required: a SES misconfig = silent login
+  outage). ImageTag pinned to `f6a43d8`.
 
-**Secrets (us-east-1):** `cello/dev/portal/kms-master-key` (64-hex, encrypts operator email+TOTP at
-rest — DOD-INV-2; **value only in Secrets Manager, never recorded**) and `cello/dev/portal/database-url`
-(`postgres://…?sslmode=no-verify`) are created via CLI after RDS exists. `DIRECTORY_API_KEY` reuses the
-existing `cello/dev/ops-agent/directory-api-key`. **TODO: create both portal secrets after RDS endpoint
-is known, then deploy the app stack.**
+**Secrets (us-east-1, CREATED):** `cello/dev/portal/kms-master-key` (64-hex, encrypts operator
+email+TOTP at rest — DOD-INV-2; **value only in Secrets Manager, never recorded**;
+ARN `…secret:cello/dev/portal/kms-master-key-C4n1Cc`, CREATE-ONCE) and `cello/dev/portal/database-url`
+(`postgres://…?sslmode=no-verify`; ARN `…secret:cello/dev/portal/database-url-D6wkFq`). `DIRECTORY_API_KEY`
+reuses the existing `cello/dev/ops-agent/directory-api-key`. Created by `infra/create-portal-secrets.sh`.
 
 Runtime env: `CELLO_ENV=dev`, `DIRECTORY_API_URL=http://directory-us1.cello.mygentic.ai`,
 `PORTAL_BASE_URL=https://portal.cello.mygentic.ai`, `PORTAL_EMAIL_FROM=CELLO <no-reply@mygentic.ai>`.

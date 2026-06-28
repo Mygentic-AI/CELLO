@@ -43,6 +43,13 @@ Parameters:
   Memory:
     Type: String
     Default: "1024"
+  AlarmTopicArn:
+    Type: String
+    Default: ""
+    Description: Optional SNS topic for the magic-link delivery alarm. Empty = alarm with no action.
+
+Conditions:
+  HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, ""]]
 
 Resources:
   LogGroup:
@@ -50,6 +57,37 @@ Resources:
     Properties:
       LogGroupName: !Sub "/ecs/cello-portal-${Environment}"
       RetentionInDays: 90
+
+  # ─── Magic-link delivery observability ────────────────────────────────────────
+  # Magic-link is the sole auth entry. A SES misconfig (unverified identity, missing
+  # ses:SendEmail, wrong region) makes EVERY sign-in email silently fail while the request still
+  # returns {sent:true} (forced by the no-enumeration invariant — the failure cannot surface
+  # in-band). This metric filter + alarm is the out-of-band loud signal the reviewers required.
+  DeliveryFailureMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroup
+      FilterPattern: '{ $.event = "portal.auth.magic_link.delivery_failed" }'
+      MetricTransformations:
+        - MetricNamespace: CelloPortal
+          MetricName: !Sub "MagicLinkDeliveryFailures-${Environment}"
+          MetricValue: "1"
+          DefaultValue: 0
+
+  DeliveryFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-portal-magic-link-delivery-failures-${Environment}"
+      AlarmDescription: Magic-link email delivery is failing (SES misconfig = silent login outage).
+      Namespace: CelloPortal
+      MetricName: !Sub "MagicLinkDeliveryFailures-${Environment}"
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref "AWS::NoValue"]
 
   # ─── IAM ──────────────────────────────────────────────────────────────────────
   ExecutionRole:
