@@ -9,31 +9,29 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
-## ⏳ DEPLOY IN PROGRESS — M8 directory (2026-06-28, Andre-authorized)
+## ⏳ M8 directory — DEPLOYED, post-steps nearly done (2026-06-28, Andre-authorized)
 
 **Pushed `387afc78`** (merge of `m8-read-001` onto main): the M8 directory code — READ-001
 (account-by-email-stub / agents-by-account), WRITEAPI-001 (agent-write seam), TRUST-001 (pickup queue +
 delivery), LEVER-001/002 (suspend/burn honor-check + per-node share destruction), PRESENCE-001
 (agent_presence) — plus **migrations V31–V37** (V31/V32 already applied 2026-06-23/26; V33–V37 new).
-`cello-directory-pipeline` execution InProgress (Build stage at push time). Rolls to all 3 regions.
 
-POST-DEPLOY CHECKLIST (deploy is NOT complete until ALL done — update this file after each):
-1. [ ] Pipeline ProductionDeploy succeeds (all 3 regions). Watch ECS rolloutState (custom poll, ALB
-       deregistration 30s; `aws ecs wait` 10-min limit is exceeded — never use it).
-2. [ ] **Migrations:** directory runs Flyway on startup → applies V33–V37 (cluster had V31+V32, in-order,
-       no gap). Verify `flyway_schema_history` reaches V37 in all 3 RDS (via ECS Exec + psql).
-3. [ ] **Ops-agent SSM version (us-east-1 only):**
-       `aws ssm put-parameter --name /cello/dev/ops-agent/expected-migration-version --value 37 --overwrite --region us-east-1`
-       → ECS restarts ops-agent. (Required — else crash-loop. infra/CLAUDE.md "SSM Parameters and Migrations".)
-4. [ ] **Restart the relay in EACH region** after the directory redeploy (relay has no reconnect logic;
-       its libp2p conn to the old directory is dead → `relay_unavailable` until restarted +
-       re-registered). infra/CLAUDE.md "Startup Sequence". Watch for `relay.already.registered`.
-5. [ ] **Replication:** `./infra/setup-replication.sh dev us-east-1 eu-central-1 ap-northeast-1` to add the
-       new replicated M8 tables to `cello_pub` + refresh subscriptions. CAUTION: pickup_queue is BIGSERIAL
-       (no staggering yet → TRUST-1 H2); confirm before adding it. agent_presence is MUTABLE (not
-       append-only) — confirm the publication/setup handles it.
-6. [ ] **Verify cross-node** (PRES-2/3 read-from-other-node, TRUST-1 delivery) against the live endpoints;
-       then update this file + flip the DoD lines.
+POST-DEPLOY CHECKLIST:
+1. [x] **Pipeline `cello-directory-pipeline` SUCCEEDED** (exec 9b0dff77; Build→StagingDeploy→SmokeTest→
+       ProductionDeploy all green). Directory rollout COMPLETED in all 3 regions — task defs
+       us-east-1:207, eu-central-1:78, ap-northeast-1:69. Image healthy.
+2. [x] **Migrations V33–V37 applied** — proven two ways: the directory runs Flyway in its entrypoint
+       BEFORE serving, so a healthy task ⇒ migrations succeeded; AND setup-replication's GRANT SELECT on
+       `agent_suspensions` + `identity_tree_entries` succeeded (those tables only exist at ≥V34/V36).
+3. [x] **Ops-agent SSM `/cello/dev/ops-agent/expected-migration-version` 32 → 37** (us-east-1, done).
+4. [ ] **Restart the relay in EACH region** (relay has no reconnect logic after a directory redeploy →
+       `relay_unavailable` until restarted + re-registered). infra/CLAUDE.md "Startup Sequence".
+5. [x] **Replication DONE** — `setup-replication.sh dev us-east-1 eu-central-1 ap-northeast-1` ran clean:
+       `cello_pub` now includes `agent_suspensions` + `identity_tree_entries` (added by m8-read-001's
+       PUBLICATION_TABLES); all 6 subscriptions refreshed; **all 6 replication slots STREAMING** (246s).
+       `pickup_queue` (BIGSERIAL, TRUST-1 H2) + `agent_presence` (mutable) deliberately NOT replicated.
+6. [ ] **Verify cross-node** (write on node A's RDS, read on node B's RDS for the replicated M8 tables);
+       restart the ops-agent + relays; then flip the cross-node DoD lines + finalize this file.
 
 ---
 
