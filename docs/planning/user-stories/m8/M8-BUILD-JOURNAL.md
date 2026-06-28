@@ -1144,3 +1144,26 @@ live multi-node cluster + close-gate sign-off (DOD-E2E-1, Andre), the cello-clie
 + npm publish (DOD-LEVER-3/INV-6-strict, DOD-TRUST-4, Andre), and the H2 schema decision above
 (pickup_queue UUID) which only matters once the cluster exists. Everything autonomously completable —
 all single-node spine/auth/agents/lever/trust lines + the full §8 review remediation — is DONE.
+
+## 2026-06-28 — heartbeat: autonomous frontier reached; full portal suite green
+
+Full cello-portal e2e suite re-run after the F1 stub-ownership change: 37 passed, 4 skipped (the skips
+are j-spine SPINE-3/4/6 real-directory-mode journeys, proven separately via the spine harness +
+real-directory mode). No regression. Directory floor green (typecheck; F4 2/2; writeapi 14/14 + trust
+frames 3/3). All §8 remediation findings closed and committed in both repos.
+
+Remaining M8 non-green lines are ALL gated on resources unavailable to an autonomous loop, with a named
+home for each:
+- DOD-PRES-1/2/3, DOD-INV-6 + DOD-LEVER-3 (strict T-of-N "single node continuing doesn't let it sign"),
+  DOD-TRUST-1 (H2 cross-node) → the live ≥2-node cluster = the E2E close gate (DOD-E2E-1). Strict T-of-N
+  also needs the cello-client daemon to move past the 2-of-2 stopgap (protocol work, npm-publish-gated).
+- DOD-TRUST-4 → npm publish + dist-tag promotion (Andre).
+- DOD-E2E-1 → the full close gate against the live cluster + dated writeup (Andre).
+- DOD-LEVER-2 residual ("burn is a signed event") → needs an account-held Ed25519 key that does not
+  exist in M8's trust model; node-self-attestation would be security theater (a node can forge its own
+  record), so it is correctly deferred to a future account-key story rather than faked. The SECURITY
+  property (a burned agent can never sign) already holds and is proven.
+
+No DoD tags changed this window (the F1/F3/F4 teeth strengthened already-✅ lines without re-tagging).
+Idle on gated work — not manufacturing or fake-advancing any line. Standing by for the next tick / any
+unblock (a finished agent, or Andre returning to run the publish + close gate).
