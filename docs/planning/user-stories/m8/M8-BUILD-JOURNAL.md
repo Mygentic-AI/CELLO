@@ -1167,3 +1167,31 @@ home for each:
 No DoD tags changed this window (the F1/F3/F4 teeth strengthened already-✅ lines without re-tagging).
 Idle on gated work — not manufacturing or fake-advancing any line. Standing by for the next tick / any
 unblock (a finished agent, or Andre returning to run the publish + close gate).
+
+## 2026-06-28 — §8 review of the F1 unit (the new code added this session) — CLEAN
+
+Closed the procedure gap: F1 introduced NEW code (stub-client ownership enforcement + the playwright
+seed + j-lever-binding.spec) that hadn't itself been through §8. Ran both reviewers on the F1 diff
+(cello-portal 5351a98). NOTE: the first dispatch of both died on a transient API outage (ConnectionRefused/
+FailedToOpenSocket, zero findings produced) — re-dispatched after the API recovered.
+
+- cello-test-attacker → SOUND (test has teeth). It could not construct a passing-but-wrong body-trusting
+  route: the seed makes account B the TRUE owner of foreign-agent-b, so the two-assertion pincer (ATTACK
+  foreign-agent-b+body:B → 403 not_owner; CONTROL agent-lever-001+body:B → 200) is satisfiable ONLY by
+  session.accountId=A. Every bypass (pure body-trust, body??session, try-body-fallback-if-not-owner,
+  route-side ownership check, hollow stub rewrite) fails ≥1 assertion. The `reason==="not_owner"` assert
+  also blocks a false pass via the step-up 403 branch.
+- feature-dev:code-reviewer (opus) → no findings ≥ threshold. Confirmed: the route reads ONLY {agentId,
+  mode} from the body and writes session.accountId (never body.accountId); the rejected ATTACK mutates
+  nothing (throw precedes pausedAgentIds.add); the explicit `clear` cleanup is correct (globalThis stub
+  state isn't reset by resetPortalAuthState) and the new account-B seed perturbs no sibling spec.
+  ONE sub-threshold note (conf ~60): the reviewer (portal repo only) assumed /internal/agent-write
+  doesn't exist and flagged the stub's collapse of "agent missing" vs "exists-but-not-owned" into one
+  not_owner 403 as an unverified assumption. VERIFIED RESOLVED against the real directory: isAgentOwnedBy
+  Account (agent-write-repository.ts:26-30) returns false for a missing (agent_id,account_id) row → the
+  handler returns 403 not_owner (internal-api-server.ts:371-373) for BOTH the missing and not-owned cases,
+  exactly mirroring the stub. No existence oracle, no divergence, no fix needed — the stub is faithful even
+  on the un-exercised branch.
+
+F1 is now fully closed per §8 (green + both reviewers applied). All units added this session
+(H1/F2/MEDIUM-1/LOW-3 fixes + F4/F3/F1 teeth) have been reviewed.
