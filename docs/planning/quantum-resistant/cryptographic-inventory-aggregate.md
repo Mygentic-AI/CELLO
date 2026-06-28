@@ -475,29 +475,60 @@ replacements required anywhere in Tier 2.
 
 ---
 
-## Open Decisions
+## Decisions — Closed
 
-- **Hybrid vs. PQC-only.** Classical + PQC concatenation (e.g. X25519 + ML-KEM, Ed25519 + ML-DSA)
-  is the conservative industry default during transition and protects against PQC implementation
-  flaws. Decide CELLO's policy before any migration story is written.
-- **Security level.** ML-DSA-44 (level 2) vs. ML-DSA-65/87 (levels 3/5); likewise ML-KEM-512 /
-  768 / 1024. Higher levels mean larger keys and signatures — this changes on-wire sizes, the
-  operator's `~/.cello/key` format, and the publish-cascade burden.
-- **Wire format & version negotiation.** Larger PQC keys/signatures affect every envelope and
-  on-disk format. Given CELLO's strict cross-repo publishing invariants (every `core/*` change
-  requires a package version bump and dependency-cascade republish), plan this carefully before
-  writing the first migration story.
-- **FROST strategy (T1-D).** Confirm whether a true post-quantum *threshold* signature is required,
-  or whether the protocol can move to a PQC multi-signature aggregate. This is the decision with the
-  longest lead time and must be made before any other migration story can be sequenced around it.
-- **ML-DSA security level for manifest root keys (T1-B).** Root keys are compiled into the client
-  binary and changed only through a client release. They should probably use a higher level
-  (ML-DSA-87 / SLH-DSA) than operational keys.
-- **No-silent-downgrade (mandatory on every migration story AC).** During any hybrid transition
-  window where both classical and PQC paths coexist, the algorithm choice must be encoded
-  explicitly in the envelope/wire format. A receiver must reject — never silently accept — a
-  message that arrives under the wrong algorithm for its negotiated version. Mixed-version
-  transcripts are an attack surface, not a compatibility feature.
+These were the open questions. All are now resolved.
+
+**1. Hybrid vs. PQC-only — ✅ PQC-only.**
+CELLO is alpha with no users and no legacy traffic to protect. If a PQC implementation flaw
+surfaces, the response is a key rotation and forced re-registration — feasible at tens-to-hundreds
+of users. Hybrid adds protocol complexity with no meaningful benefit at this scale.
+
+**2. Security level — ✅ Level 5 everywhere.**
+ML-KEM-1024 and ML-DSA-87 across the board. Size and compute cost are negligible at CELLO's
+scale. No tiering — root keys and operational keys all get level 5. Simpler, no tiering to manage.
+
+**3. Wire format versioning — ✅ Not a decision, it's a mandatory story AC.**
+Every story that changes a signed format, context string, or envelope gets a version bump. Tracked
+alongside no-silent-downgrade as a required AC on every migration story (see below). Nothing to
+decide upfront.
+
+**4. FROST / signature strategy — ✅ Keep FROST live; build ML-DSA multi-sig behind the interface; do T1-E now.**
+
+The key distinction is signatures vs. encryption:
+
+- **Signatures (T1-A, T1-B, T1-C, T1-D):** The harvest-now-decrypt-later attack does not apply
+  to signatures — the threat is future forgery, which only becomes possible when quantum computers
+  exist (5-10 years out). Current FROST (Ed25519 threshold) is *stronger* than PQC multi-sig today
+  because its threshold is math-enforced, not policy-enforced. Keep FROST running. Build the
+  ML-DSA multi-sig replacement fully implemented and tested behind `IThresholdSigner` and
+  `KeyProvider`, but do not flip the switch until the market, a real quantum threat signal, or an
+  enterprise requirement demands it.
+
+- **Content sealing (T1-E):** Harvest-now-decrypt-later IS a real concern for encryption. Sealed
+  content recorded today could be decrypted by a future quantum computer. **T1-E is the one item
+  to do now**, not deferred.
+
+- **Multi-sig vs. threshold:** The "policy-enforced vs. math-enforced" threshold distinction is
+  real but acceptable for the transitional implementation. If an attacker can modify the client's
+  verification policy check, they have already compromised the device and have access to the signing
+  keys anyway. Document multi-sig explicitly as transitional — switch to threshold ML-DSA when
+  NIST IR 8214C standardizes a scheme.
+
+---
+
+## Mandatory Story Acceptance Criteria
+
+Every PQC migration story must include these ACs verbatim:
+
+- **No-silent-downgrade:** The envelope/wire format encodes the algorithm choice explicitly. A
+  receiver rejects — never silently accepts — a message under the wrong algorithm for its negotiated
+  version. Mixed-version transcripts are an attack surface.
+- **Version bump on any format change:** Any story that changes a signed format, context string,
+  envelope layout, or on-disk key format increments the relevant version identifier. PQC and
+  classical signatures must be incapable of confusion at the byte level.
+- **WASM removal (T1-A only):** On completion of the ML-DSA wiring, `@oqs/liboqs-js` is removed
+  from `package.json` and the install is verified clean.
 
 ---
 
