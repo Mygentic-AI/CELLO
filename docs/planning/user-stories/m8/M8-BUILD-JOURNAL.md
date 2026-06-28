@@ -1568,3 +1568,17 @@ first-class TOTP step-up (a route that verifies a current TOTP code on the sessi
 factor-agnostic messaging ("re-verify your second factor", not "passkey") + the SuspendLever / step-up UI
 offering the factor the operator actually has. Then re-prove DOD-AUTH-2/LEVER-4 for a TOTP-only account and
 restore ✅.
+
+## 2026-06-28 — ⛔ IMPLEMENTATION GATED pending Andre's alignment — see the remediation record
+
+The M8 step-up SPEC INVERSION (WebAuthn-only step-up vs journey-01 D6 "TOTP is the floor") and its full
+exploration — threat model, the corrected two-layer signed-revocation design, both audits' findings, the
+DoD corrections, the remediation plan, and the open decisions — are captured in the authoritative,
+compaction-safe pick-up doc:
+
+  docs/planning/discussion_logs/2026-06-28_0700_m8-totp-floor-stepup-inversion-remediation.md
+
+STATUS: exploration complete, **NO implementation started** (2 premature edits were reverted; tree clean).
+Andre explicitly gated the work — align on the approach BEFORE touching code. Do NOT start the step-up fix
+(tasks #18/#19/#20) on a watchdog tick; it is blocked on Andre's sign-off of §8/§9 of the remediation doc.
+This overrides the watchdog default. Resume point after compaction = that remediation doc.
