@@ -67,7 +67,22 @@ export async function ackPickupDelete(db: Queryable, id: string, agentId: string
  * deletes such rows once they are unambiguously orphaned (default 24h, matching the pending-connection
  * TTL). It targets ONLY anchor-LESS rows: a row whose anchor merely MISMATCHES (a stale/poisoned hash) is
  * left to the supersede path (a re-enrollment replaces it) — it is not orphaned. Returns the row count.
- * No-op for an agent whose anchors all exist; safe to run on any node (the queue is node-local).
+ * No-op for an agent whose anchors all exist.
+ *
+ * NULL signal_kind (fallback-finder #1): such a row is undeliverable BY CONSTRUCTION — drainPickupForAgent's
+ * LEFT JOIN on `it.signal_kind = pq.signal_kind` yields UNKNOWN for NULL, so it never joins an anchor; the
+ * `NOT EXISTS` here is likewise UNKNOWN→empty→true, so a NULL-kind row past TTL is correctly swept as the
+ * orphan it is. This relies on the write seam ALWAYS setting signal_kind (validateWritePayload rejects any
+ * kind not in the closed SIGNAL_KINDS set; enqueuePickup types it `string`), so a NULL-kind row cannot be
+ * produced today — only V34-era leftovers (none in practice) would match.
+ *
+ * REPLICATION GATE (fallback-finder #3 — load-bearing for the H2 work): this sweep is safe ONLY because
+ * pickup_queue is NODE-LOCAL today (NOT in cello_pub) while identity_tree_entries IS replicated and never
+ * deleted in production — so every node re-checks anchor existence against the same converged anchor set at
+ * delete time. When H2 adds pickup_queue to cello_pub, this per-node, per-cadence DELETE becomes UNSAFE: a
+ * node whose identity_tree replica has not yet converged could see an anchor as absent, delete a deliverable
+ * ciphertext, and replicate that delete federation-wide. H2 MUST gate the sweep before publishing
+ * pickup_queue — owning-node ownership of the sweep, or a convergence check — never per-node on a replicated queue.
  */
 export async function sweepUndeliverablePickups(db: Queryable, ttlHours = 24): Promise<number> {
   const res = await db.query(

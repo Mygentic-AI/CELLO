@@ -434,6 +434,9 @@ export interface DirectoryNodeOptions {
   directoryManifestStore?: import("@cello-protocol/interfaces").DirectoryManifestStore;
 }
 
+/** Orphan-sweep failures in a row before escalating to a distinct alarm event (~5 min at the 60s cadence). */
+const SWEEP_FAILURE_ALARM_THRESHOLD = 5;
+
 export class CelloDirectoryNode {
   readonly #node: CelloNode;
   readonly #keyProvider: KeyProvider;
@@ -459,6 +462,8 @@ export class CelloDirectoryNode {
   // PRESENCE-001: per-node liveness heartbeat timer (refreshes directory_nodes.last_heartbeat_at).
   #presenceHeartbeat: ReturnType<typeof setInterval> | undefined;
   #burnReconcile: ReturnType<typeof setInterval> | undefined;
+  /** Consecutive orphan-sweep failures — escalates to a distinct alarm event at the threshold. */
+  #sweepConsecutiveFailures = 0;
   // OPS-AGENT-001: stash phone_stub_hash from consumed token for account linking after DKG completes
   // agentPubkeyHex → { phoneStubHash, emailStubHash }
   readonly #pendingPreAuthData = new Map<string, { phoneStubHash: string; emailStubHash: string }>();
@@ -704,15 +709,32 @@ export class CelloDirectoryNode {
    * TRUST-001 backstop: delete ORPHANED pending pickups (anchor-less + older than the TTL) so an
    * undeliverable sealed ciphertext cannot linger forever. Failure is logged (ERROR), never thrown — the
    * sweep retries on the next cadence; a delete count >0 is logged so an orphan being cleaned is visible.
+   *
+   * A single failure is transient (next tick retries). But a PERSISTENT failure (a bad plan, a revoked
+   * grant, a column rename) would ERROR every 60s forever while orphaned ciphertext silently accumulates
+   * and the per-tick ERROR reads as log noise. So we track CONSECUTIVE failures and, once they cross a
+   * threshold, emit a DISTINCT escalation event an alarm can fire on (M4+ rule: every new failure mode
+   * gets an alarm threshold). The counter resets on the next success.
    */
-  async #sweepUndeliverablePickups(): Promise<void> {
+  async runPickupSweep(): Promise<void> {
     try {
       const swept = await this.#store.sweepUndeliverablePickups();
       if (swept > 0) this.#logger?.warn("trust_signal.pickup.swept", { count: swept });
+      this.#sweepConsecutiveFailures = 0;
     } catch (err) {
+      this.#sweepConsecutiveFailures++;
       this.#logger?.error("trust_signal.pickup.sweep.failed", {
         reason: err instanceof Error ? err.message : String(err),
+        consecutiveFailures: this.#sweepConsecutiveFailures,
       });
+      // ~5 min of unbroken failure (5 × 60s) = no longer a hiccup; escalate to a distinct, alarmable event
+      // so a permanent regression can never hide behind routine retry noise.
+      if (this.#sweepConsecutiveFailures === SWEEP_FAILURE_ALARM_THRESHOLD) {
+        this.#logger?.error("trust_signal.pickup.sweep.persistent_failure", {
+          consecutiveFailures: this.#sweepConsecutiveFailures,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 
@@ -778,7 +800,7 @@ export class CelloDirectoryNode {
         // TRUST-001 backstop: delete orphaned (anchor-less, >TTL) pending pickups so an undeliverable
         // ciphertext (its hash write never landed) cannot linger forever. Same cadence — the sweep is a
         // cheap, age-filtered DELETE. Independent of the burn reconcile (one failing must not skip the other).
-        void this.#sweepUndeliverablePickups();
+        void this.runPickupSweep();
       };
       tickReconcile();
       this.#burnReconcile = setInterval(tickReconcile, 60_000);

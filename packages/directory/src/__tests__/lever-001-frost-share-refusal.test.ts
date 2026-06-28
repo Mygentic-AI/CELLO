@@ -210,3 +210,53 @@ describe("LEVER-002 — InMemoryShareStore.destroyShares clears the in-process c
     expect(shareStore.getShare(other, `${other}:epoch:1`)).toBeDefined();
   });
 });
+
+// TRUST-001 backstop (fallback-finder #2): a PERSISTENT orphan-sweep failure must escalate to a distinct
+// alarmable event, not just ERROR every tick forever. Drive runPickupSweep() against a store whose sweep
+// throws and assert the threshold behavior + reset-on-success.
+describe("TRUST-001 — orphan-sweep persistent-failure escalation", () => {
+  it("escalates to trust_signal.pickup.sweep.persistent_failure after N consecutive failures; success resets", async () => {
+    const events: string[] = [];
+    const logger = {
+      info() {}, warn() {}, debug() {},
+      error(e: string) { events.push(e); },
+    } as unknown as Parameters<typeof createDirectoryNode>[0]["logger"];
+
+    const store = new InMemoryDirectoryStore();
+    let failSweep = true;
+    // Override the no-op stub sweep to fail on demand (simulates a permanent grant/schema regression).
+    store.sweepUndeliverablePickups = async () => {
+      if (failSweep) throw new Error("sweep boom");
+      return 0;
+    };
+
+    const dirNode = await createDirectoryNode({
+      keyProvider: generateKeypair(),
+      relay: makeRelay(),
+      relayEndpoint: { peer_id: "12D3KooWRelayTest", multiaddrs: ["/ip4/127.0.0.1/tcp/9999"] },
+      store,
+      shareStore: new InMemoryShareStore(),
+      logger,
+    });
+    scope.addCleanup(dirNode.stop);
+
+    // 4 failures: per-tick ERROR each time, but NOT yet the escalation event (threshold is 5).
+    for (let i = 0; i < 4; i++) await dirNode.directory.runPickupSweep();
+    expect(events.filter((e) => e === "trust_signal.pickup.sweep.failed")).toHaveLength(4);
+    expect(events).not.toContain("trust_signal.pickup.sweep.persistent_failure");
+
+    // The 5th consecutive failure crosses the threshold → the distinct, alarmable event fires once.
+    await dirNode.directory.runPickupSweep();
+    expect(events).toContain("trust_signal.pickup.sweep.persistent_failure");
+
+    // A success resets the counter — a later failure does not immediately re-escalate.
+    failSweep = false;
+    await dirNode.directory.runPickupSweep();
+    events.length = 0;
+    failSweep = true;
+    await dirNode.directory.runPickupSweep();
+    expect(events, "one failure after a reset must not re-trigger the escalation").not.toContain(
+      "trust_signal.pickup.sweep.persistent_failure",
+    );
+  });
+});
