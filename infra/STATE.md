@@ -9,6 +9,45 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🌐 M8 operator portal — DEPLOY IN PROGRESS (2026-06-28, Andre-authorized, us-east-1)
+
+The portal (Mygentic-AI/cello-portal, branch `m8-assembly`) is being stood up on AWS as IaC. It is a
+single-region (us-east-1) Next.js app in the **directory's VPC**, reaching the directory ONLY over its
+public ALB `/internal/*` (header-authenticated) — never the directory DB. Three new CFN templates +
+one build script (all in `infra/`):
+
+- **`cello-portal-build.yaml`** → stack `cello-portal-build-dev` **[CREATE_COMPLETE]**. ECR repo
+  `cello-portal`, S3 build-source bucket `cello-portal-build-source-257394457473`, CodeBuild project
+  `cello-portal-build-dev` (privileged; builds the Dockerfile, pushes to ECR). Export
+  `cello-dev-portal-ecr-uri`.
+- **`infra/build-portal.sh`** → `git archive` the committed cello-portal HEAD → S3 → CodeBuild. Images
+  built in AWS only (never docker-pushed from local). **Built `cello-portal:8a2603b` + `:latest`**
+  (commit 8a2603b on m8-assembly; CodeBuild SUCCEEDED).
+- **`cello-portal-data.yaml`** → stack `cello-portal-data-dev` **[CREATING]**. SGs (portal-alb /
+  portal-task / portal-db), RDS Postgres `cello-portal-dev` (db.t4g.micro, DB `cello_portal`,
+  ManageMasterUserPassword), ACM cert for `portal.cello.mygentic.ai` (DNS-validated via zone
+  Z02692523DOH7NW521CL8). (First attempt rolled back: em-dash in an EC2 GroupDescription — ASCII-only;
+  fixed + redeploying.)
+- **`cello-portal-app.yaml`** → stack `cello-portal-dev` **[PENDING]**. Public ALB (HTTPS/ACM, HTTP→443
+  redirect), Route53 A `portal.cello.mygentic.ai`, ECS Fargate service on the shared `cello-dev` cluster,
+  exec+task IAM (ECR pull, secrets read, `ses:SendEmail` for `*@mygentic.ai`).
+
+**Secrets (us-east-1):** `cello/dev/portal/kms-master-key` (64-hex, encrypts operator email+TOTP at
+rest — DOD-INV-2; **value only in Secrets Manager, never recorded**) and `cello/dev/portal/database-url`
+(`postgres://…?sslmode=no-verify`) are created via CLI after RDS exists. `DIRECTORY_API_KEY` reuses the
+existing `cello/dev/ops-agent/directory-api-key`. **TODO: create both portal secrets after RDS endpoint
+is known, then deploy the app stack.**
+
+Runtime env: `CELLO_ENV=dev`, `DIRECTORY_API_URL=http://directory-us1.cello.mygentic.ai`,
+`PORTAL_BASE_URL=https://portal.cello.mygentic.ai`, `PORTAL_EMAIL_FROM=CELLO <no-reply@mygentic.ai>`.
+The portal self-migrates its RDS on startup (instrumentation.ts, fail-closed). Magic-link codes are
+delivered by SES (new `src/server/email.ts`, commit 8a2603b).
+
+**Not yet wired into deploy.sh** (deployed via targeted `aws cloudformation deploy`, like a new-stack
+bootstrap). Follow-up: add a guarded us-east-1-only portal step to deploy.sh for reproducibility.
+
+---
+
 ## ⏳ M8 directory — DEPLOYED, post-steps nearly done (2026-06-28, Andre-authorized)
 
 **Pushed `387afc78`** (merge of `m8-read-001` onto main): the M8 directory code — READ-001

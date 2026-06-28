@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO Operator Portal — data layer (M8). The portal's OWN Postgres (never the sovereign
+  directory DB — DOD-INV-2 / SCAFFOLD-002), security groups, and the ACM certificate for the
+  public portal hostname. Lives in the directory's VPC (us-east-1) reusing its private subnets.
+  Separate from the app stack so the RDS endpoint + managed master secret exist before the
+  PORTAL_DATABASE_URL secret is assembled and the ECS service references it.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, production]
+  PortalHostname:
+    Type: String
+    Default: portal.cello.mygentic.ai
+  HostedZoneId:
+    Type: String
+    Default: Z02692523DOH7NW521CL8
+    Description: Route53 hosted zone for cello.mygentic.ai (DNS validation of the ACM cert).
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+
+Resources:
+  # ─── Security groups ──────────────────────────────────────────────────────────
+  PortalAlbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Portal public ALB - HTTP/HTTPS from the internet
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP (redirected to HTTPS)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Name
+          Value: !Sub "cello-portal-alb-${Environment}"
+
+  PortalTaskSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Portal ECS task - Next.js on 3000, egress to RDS / directory ALB / SES
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !Ref PortalAlbSg
+          Description: Next.js from the portal ALB
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Name
+          Value: !Sub "cello-portal-task-${Environment}"
+
+  PortalDbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Portal RDS - Postgres 5432 from the portal task only
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref PortalTaskSg
+          Description: Postgres from the portal task
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Name
+          Value: !Sub "cello-portal-db-${Environment}"
+
+  # ─── RDS Postgres (the portal's own DB) ───────────────────────────────────────
+  PortalDbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Portal RDS subnet group (directory private subnets)
+      SubnetIds:
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-private-subnet-a"
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-private-subnet-b"
+      Tags:
+        - Key: Project
+          Value: cello
+
+  PortalDb:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "cello-portal-${Environment}"
+      Engine: postgres
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: "20"
+      StorageType: gp3
+      StorageEncrypted: true
+      DBName: cello_portal
+      MasterUsername: portal_admin
+      # RDS creates + manages the master credential secret ({username,password}); no password
+      # ever appears in this template or in any task definition.
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref PortalDbSubnetGroup
+      VPCSecurityGroups:
+        - !Ref PortalDbSg
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 7
+      DeletionProtection: false
+      Tags:
+        - Key: Project
+          Value: cello
+
+  # ─── ACM certificate for the public portal hostname (DNS-validated) ───────────
+  PortalCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref PortalHostname
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref PortalHostname
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: Project
+          Value: cello
+
+Outputs:
+  PortalDbEndpoint:
+    Value: !GetAtt PortalDb.Endpoint.Address
+    Export:
+      Name: !Sub "cello-${Environment}-portal-db-endpoint"
+  PortalDbPort:
+    Value: !GetAtt PortalDb.Endpoint.Port
+    Export:
+      Name: !Sub "cello-${Environment}-portal-db-port"
+  PortalDbMasterSecretArn:
+    Value: !GetAtt PortalDb.MasterUserSecret.SecretArn
+    Export:
+      Name: !Sub "cello-${Environment}-portal-db-master-secret-arn"
+  PortalAlbSgId:
+    Value: !Ref PortalAlbSg
+    Export:
+      Name: !Sub "cello-${Environment}-portal-alb-sg"
+  PortalTaskSgId:
+    Value: !Ref PortalTaskSg
+    Export:
+      Name: !Sub "cello-${Environment}-portal-task-sg"
+  PortalCertificateArn:
+    Value: !Ref PortalCertificate
+    Export:
+      Name: !Sub "cello-${Environment}-portal-cert-arn"

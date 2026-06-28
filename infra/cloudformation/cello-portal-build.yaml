@@ -1,0 +1,165 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO Operator Portal — build infrastructure (M8). ECR repository for the portal image,
+  an S3 source bucket, and a CodeBuild project that builds the portal Dockerfile and pushes
+  to ECR. Images are built in AWS (CodeBuild) — never docker-pushed from a developer machine.
+  The portal lives in a separate GitHub repo (Mygentic-AI/cello-portal); the build source is
+  the committed git tree, uploaded to the S3 source bucket by infra/build-portal.sh, so the
+  image is reproducible from a recorded commit SHA without depending on a GitHub App webhook.
+  This is a standalone single-region stack (us-east-1), like cicd/ops-agent.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, production]
+
+Resources:
+  # ─── ECR repository for the portal image ──────────────────────────────────────
+  PortalRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: cello-portal
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep the last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+      Tags:
+        - Key: Project
+          Value: cello
+
+  # ─── S3 bucket holding the build source zip (git archive of the committed tree) ─
+  BuildSourceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "cello-portal-build-source-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-source
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 7
+      Tags:
+        - Key: Project
+          Value: cello
+
+  # ─── CodeBuild service role ───────────────────────────────────────────────────
+  PortalBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "cello-portal-build-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: portal-build-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Logs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/cello-portal-build-${Environment}*"
+              - Sid: EcrAuth
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: EcrPush
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !GetAtt PortalRepository.Arn
+              - Sid: SourceBucket
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "${BuildSourceBucket.Arn}/*"
+
+  # ─── CodeBuild project ────────────────────────────────────────────────────────
+  PortalBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "cello-portal-build-${Environment}"
+      ServiceRole: !GetAtt PortalBuildRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Source:
+        Type: S3
+        Location: !Sub "${BuildSourceBucket}/source.zip"
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo "Logging in to ECR ${ECR_REPO_URI}"
+                - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+            build:
+              commands:
+                - echo "Building portal image tag=${IMAGE_TAG}"
+                - docker build --platform linux/amd64 -t "$ECR_REPO_URI:$IMAGE_TAG" -t "$ECR_REPO_URI:latest" .
+            post_build:
+              commands:
+                - docker push "$ECR_REPO_URI:$IMAGE_TAG"
+                - docker push "$ECR_REPO_URI:latest"
+                - echo "Pushed $ECR_REPO_URI:$IMAGE_TAG and :latest"
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: ECR_REGISTRY
+            Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com"
+          - Name: ECR_REPO_URI
+            Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cello-portal"
+          - Name: IMAGE_TAG
+            Value: latest
+      TimeoutInMinutes: 30
+      Tags:
+        - Key: Project
+          Value: cello
+
+Outputs:
+  PortalRepositoryUri:
+    Value: !GetAtt PortalRepository.RepositoryUri
+    Export:
+      Name: !Sub "cello-${Environment}-portal-ecr-uri"
+  BuildSourceBucketName:
+    Value: !Ref BuildSourceBucket
+  BuildProjectName:
+    Value: !Ref PortalBuildProject

@@ -1,0 +1,261 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO Operator Portal — app layer (M8). Public ALB (HTTPS via ACM) + Route53 record + ECS
+  Fargate service on the shared cello cluster, reusing the directory VPC. The portal reaches the
+  directory ONLY over its internal HTTP API (account-by-email-stub / agents-by-account /
+  agent-write), authenticated by the x-cello-internal-api-key header — never the directory DB.
+  Secrets (DB URL, KMS master key, directory API key) are injected by ARN at task launch.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, production]
+  PortalHostname:
+    Type: String
+    Default: portal.cello.mygentic.ai
+  HostedZoneId:
+    Type: String
+    Default: Z02692523DOH7NW521CL8
+  ImageTag:
+    Type: String
+    Default: latest
+  DirectoryApiUrl:
+    Type: String
+    Default: http://directory-us1.cello.mygentic.ai
+    Description: The directory's public ALB (its /internal/* is header-authenticated).
+  EmailFrom:
+    Type: String
+    Default: "CELLO <no-reply@mygentic.ai>"
+  DatabaseUrlSecretArn:
+    Type: String
+    Description: Secrets Manager ARN for cello/{env}/portal/database-url (full ARN incl. suffix).
+  KmsMasterKeySecretArn:
+    Type: String
+    Description: Secrets Manager ARN for cello/{env}/portal/kms-master-key (64-hex).
+  DirectoryApiKeySecretArn:
+    Type: String
+    Default: arn:aws:secretsmanager:us-east-1:257394457473:secret:cello/dev/ops-agent/directory-api-key-YTcKGN
+    Description: Reuses the directory internal API key (same value the ops-agent uses).
+  Cpu:
+    Type: String
+    Default: "512"
+  Memory:
+    Type: String
+    Default: "1024"
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/cello-portal-${Environment}"
+      RetentionInDays: 90
+
+  # ─── IAM ──────────────────────────────────────────────────────────────────────
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "cello-portal-execution-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: portal-secrets-read
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DatabaseUrlSecretArn
+                  - !Ref KmsMasterKeySecretArn
+                  - !Ref DirectoryApiKeySecretArn
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "cello-portal-task-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: portal-ses-send
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Magic-link delivery. Scoped to the verified mygentic.ai sending identity.
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: "*"
+                Condition:
+                  StringLike:
+                    "ses:FromAddress": "*@mygentic.ai"
+
+  # ─── ECS task + service ───────────────────────────────────────────────────────
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "cello-portal-${Environment}"
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: portal
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cello-portal:${ImageTag}"
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+              Protocol: tcp
+          Environment:
+            - Name: CELLO_ENV
+              Value: !Ref Environment
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: PORTAL_BASE_URL
+              Value: !Sub "https://${PortalHostname}"
+            - Name: PORTAL_EMAIL_FROM
+              Value: !Ref EmailFrom
+            - Name: DIRECTORY_API_URL
+              Value: !Ref DirectoryApiUrl
+          Secrets:
+            - Name: PORTAL_DATABASE_URL
+              ValueFrom: !Ref DatabaseUrlSecretArn
+            - Name: PORTAL_KMS_MASTER_KEY
+              ValueFrom: !Ref KmsMasterKeySecretArn
+            - Name: DIRECTORY_API_KEY
+              ValueFrom: !Ref DirectoryApiKeySecretArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: portal
+
+  Alb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "cello-portal-${Environment}"
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-public-subnet-a"
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-public-subnet-b"
+      SecurityGroups:
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-portal-alb-sg"
+      Tags:
+        - Key: Project
+          Value: cello
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 3000
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      HealthCheckPath: /sign-in
+      HealthCheckProtocol: HTTP
+      Matcher:
+        HttpCode: "200"
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref Alb
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !ImportValue
+            Fn::Sub: "cello-${Environment}-portal-cert-arn"
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref Alb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: "443"
+            StatusCode: HTTP_301
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: [HttpsListener, HttpListener]
+    Properties:
+      ServiceName: !Sub "cello-portal-${Environment}"
+      Cluster: !ImportValue
+        Fn::Sub: "cello-${Environment}-cluster-arn"
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      EnableExecuteCommand: true
+      DeploymentConfiguration:
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      HealthCheckGracePeriodSeconds: 120
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !ImportValue
+              Fn::Sub: "cello-${Environment}-private-subnet-a"
+            - !ImportValue
+              Fn::Sub: "cello-${Environment}-private-subnet-b"
+          SecurityGroups:
+            - !ImportValue
+              Fn::Sub: "cello-${Environment}-portal-task-sg"
+      LoadBalancers:
+        - ContainerName: portal
+          ContainerPort: 3000
+          TargetGroupArn: !Ref TargetGroup
+      Tags:
+        - Key: Project
+          Value: cello
+
+  PortalDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub "${PortalHostname}."
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt Alb.DNSName
+        HostedZoneId: !GetAtt Alb.CanonicalHostedZoneID
+        EvaluateTargetHealth: false
+
+Outputs:
+  PortalUrl:
+    Value: !Sub "https://${PortalHostname}"
+  AlbDnsName:
+    Value: !GetAtt Alb.DNSName
