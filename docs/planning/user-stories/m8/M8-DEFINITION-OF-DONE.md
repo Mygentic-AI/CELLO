@@ -144,18 +144,20 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   auto-bring-up of the directory cluster is the E2E close gate.)*
 - **DOD-SPINE-3 — Agents appear with presence.** A ceremony-registered agent appears in the
   Agents home with directory-derived presence (online iff presence row online AND owning node
-  fresh), fingerprint-primary. *(PRESENCE-001; READ-001; AGENTS-001)* — 🟡 *(DROPPED from ✅ on the
-  2026-06-28 done-auditor honesty check — the served-portal journey is not a STANDING gate.)*
-  *(The served-portal agents-appear-with-presence journey lives in `e2e/j-spine.spec.ts:147` but is
-  `test.skip(!process.env.DIRECTORY_API_URL)` — opt-in, DEFAULT-SKIPPED (it is one of the "4 skipped"
-  in every standing e2e run), and the directory auto-bring-up that would make it standing is admittedly
-  unbuilt (`e2e/global-setup.ts`, → DOD-E2E-1 close gate). The "6/6 with DIRECTORY_API_URL set" was a
-  one-time opt-in demonstration recorded in the journal, NOT a reproducible standing gate. What IS
-  standing-proven (LIVE, real Postgres): the directory read rule itself — `read-001-agents-by-account`
-  (account-scoped agents + presence join) and `presence-001-repository` (online iff row online AND node
-  fresh; stale-node ages to last-seen). So the read LOGIC is live-proven at the component boundary; the
-  served end-to-end (portal→directory→Postgres) + cross-node both land at the E2E close gate. Tag is 🟡
-  until that gate makes the served journey a standing pass.)*
+  fresh), fingerprint-primary. *(PRESENCE-001; READ-001; AGENTS-001)* — ✅ *(RESTORED 2026-06-28: the
+  served-portal journey is now a REPRODUCIBLE STANDING gate — the directory auto-bring-up the done-auditor
+  flagged as unbuilt is now built.)*
+  *(`npm run test:e2e:real-dir -- j-spine` (cello-portal) brings up a REAL local directory — Docker
+  Postgres + Flyway (V37) + the standalone internal-API harness `createInternalApiServer`
+  (account-by-email-stub / agents-by-account; the genuine directory code, no libp2p/KMS/stub) — seeds the
+  operator, and drives the SERVED portal through a browser: SPINE-3 (`e2e/j-spine.spec.ts:147`) goes GREEN
+  end-to-end (portal → real directory internal API → directory Postgres → a ceremony-registered agent
+  appears online with directory-derived presence; the logs show real account.lookup.hit + agents.lookup.ok
+  count:1). SPINE-2 in the same run exercises real account resolution. This is deterministic and repeatable
+  (clean schema each run), not a one-time manual demo. Also standing-proven at the component boundary
+  (real Postgres): `read-001-agents-by-account` + `presence-001-repository`. REMAINING (the close gate,
+  unchanged): the cross-node "from ANY node" / 3-region guarantee needs the live ≥2-node AWS cluster
+  (DOD-E2E-1) — the single-directory served journey is now standing; multi-region is the final gate.)*
 - **DOD-SPINE-4 — Suspend blocks signing.** Pause (step-up) → the agent cannot complete a FROST
   ceremony even with its client share → un-pause restores. *(LEVER-001 AC-001)* — ✅
   *(PROVEN LIVE by J-SUSPEND (`packages/e2e-tests/src/spine/j-suspend.spine.test.ts`, 1/1, real
@@ -277,16 +279,16 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   2026-06-28 done-auditor check: the standing LIVE proof is the directory component test
   `read-001-agents-by-account` (real Postgres) — the account-scoped agents read returns ONLY the asserted
   account's agents (cross-account injection returns nothing) with no daemon-local fields, exactly the
-  done-condition. The earlier "SPINE-3" citation is the SERVED end-to-end, which is opt-in/default-skipped
-  (now DOD-SPINE-3 🟡) — so the served integration + the "from ANY node" cross-node guarantee both land at
-  the E2E close gate. The read LOGIC + account-scoping are standing-live-proven; tag stays ✅ on that, with
-  the served-journey + cross-node aspects gated.)*
+  done-condition. The SERVED end-to-end is now ALSO standing (DOD-SPINE-3 ✅ via `test:e2e:real-dir` — the
+  served portal reads this account's agents through the REAL directory internal API). The "from ANY node"
+  cross-node guarantee remains the E2E close gate. Read LOGIC + account-scoping + served integration are
+  standing-proven; only multi-region is gated.)*
 - **DOD-READ-2 — Presence read rule.** Online iff row online AND owning node fresh; else last-seen.
   *(READ-001 AC-002)* — ✅ *(Note corrected on the 2026-06-28 done-auditor check: the standing LIVE
   proof is `presence-001-repository` (real Postgres) — online iff the presence row is online AND the
   owning node is fresh, else last-seen; a stale-heartbeat node ages the row to last-seen (AC-003). The
-  earlier "SPINE-3" citation for the SERVED online/offline render is opt-in/default-skipped (DOD-SPINE-3
-  🟡 → E2E close gate). The read RULE is standing-live-proven at the component boundary; tag stays ✅ on
+  SERVED online render is now ALSO standing (DOD-SPINE-3 ✅ via `test:e2e:real-dir` — the seeded online
+  agent renders online through the real directory). The read RULE is standing-live-proven; tag stays ✅ on
   that, with the served-render aspect gated.)*
 - **DOD-READ-3 — Directory-unreachable = honest empty.** Stale/empty marked, never fabricated.
   *(READ-001 DB-001)* — ✅ *(PROVEN by agents-degraded.integration: getAccountAgents against a dead
@@ -300,8 +302,9 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 - **DOD-AGENT-1 — The Agents home is the landing page.** List + presence + the per-row suspend
   affordance + alerts strip + posture header; no separate Dashboard; no register/start/stop/
   set-current; empty state routes to the ceremony. *(AGENTS-001 AC-001/002)* — ✅
-  *(PROVEN — with one gated sub-claim (2026-06-28 done-auditor). List + presence: the SERVED render is
-  via SPINE-3, now 🟡 (opt-in/default-skipped — see DOD-SPINE-3); the read logic itself is standing-live
+  *(PROVEN. List + presence: the SERVED render is via SPINE-3, now ✅ standing (`test:e2e:real-dir` — the
+  served Agents home lists the account's agents with directory-derived presence through the REAL directory;
+  cross-node/multi-region remains the close gate); the read logic is also standing-live
   (read-001/presence-001 component tests). Everything ELSE in AGENT-1 is standing-proven by default:
   the per-row SUSPEND affordance (J-LEVER, 3/3: exactly one
   Pause/Resume lever, no register/start/stop/set-current — INV-9 green; Pause→read-reflects-paused→

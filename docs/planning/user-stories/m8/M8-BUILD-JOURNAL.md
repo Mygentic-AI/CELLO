@@ -1669,3 +1669,33 @@ every non-green M8 line is gated on something not locally actionable:
   M10 by decision).
 No further unit can be driven red→green locally. Awaiting the live-cluster close gate / Andre's go; not
 blocking — the watchdog continues.
+
+## 2026-06-28 — DOD-SPINE-3 RESTORED ✅: built the local real-directory served gate (was "cluster-gated" — wasn't)
+
+Correction to the prior heartbeat's claim that everything left was cluster-gated. SPINE-3 was NOT
+AWS-cluster-gated — it was blocked only on the LOCAL directory auto-bring-up the done-auditor flagged as
+unbuilt (`e2e/global-setup.ts`). The M8 procedure §4 explicitly runs the served e2e against a local Docker
+directory; only the FINAL 3-region/cross-node gate is AWS. I conflated the two and stopped short.
+
+Built it:
+- NEW directory bin `internal-api-harness.ts` (m8-read-001 worktree, LOCAL commit d77c1f6c): starts JUST
+  `createInternalApiServer` (account-by-email-stub / agents-by-account / agent-write) against the directory
+  Postgres — the genuine directory code, no libp2p/KMS/transport-keys. The full node isn't needed to prove
+  the portal↔directory read/write seam.
+- NEW portal wrapper `e2e/run-with-directory.sh` + `npm run test:e2e:real-dir` (cello-portal, commit
+  38c0928): brings up the directory (Docker Postgres + Flyway V37), resets to a clean schema, seeds the
+  operator, starts the harness, exports DIRECTORY_API_URL, runs Playwright.
+
+Proof: `test:e2e:real-dir -- j-spine` → SPINE-3 GREEN (6 passed / 3 fixme). The served portal resolves the
+account + reads the ceremony-registered agent with directory-derived presence (online) through the REAL
+directory internal API → directory Postgres (logs: account.lookup.hit + agents.lookup.ok count:1). SPINE-2
+also exercises real account resolution. Deterministic + repeatable (clean schema each run) — a reproducible
+STANDING gate, not the prior one-time manual demo.
+
+DoD: DOD-SPINE-3 🟡→✅ (served journey standing; cross-node/3-region remains the AWS close gate). READ-1/2 +
+AGENT-1 cross-references updated (SPINE-3 served render now standing). Review: feature-dev:code-reviewer
+dispatched on the harness+wrapper unit (test infra). Default `test:e2e` stays stub-mode/self-contained.
+
+Note: the OTHER journeys (j-lever/j-agents/j-lever-binding) stay stub-mode by design (they rely on
+config-seeded stub agents); making the WHOLE suite run against the real directory (seeding every journey's
+agents) is the DOD-E2E-1 close-gate work, alongside the live cluster.
