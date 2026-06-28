@@ -1522,3 +1522,22 @@ CONCLUSION: no clean autonomous unit legitimately advances a non-green DoD line 
 replication; SPINE-3 auto-bring-up is machine-specific (not a reproducible gate). Both correctly wait for
 the live cluster / close gate. The autonomous security+honesty campaign is complete; remaining lines are
 gated on the cluster, npm publish, an account-key story, and the E2E-001 close-gate orchestration above.
+
+## 2026-06-28 — decisions: #3 (account-key) taken as reversible default; #1/#2 await Andre's go
+
+Per the autonomy rule (pick the reversible option, continue, never block):
+- #3 ACCOUNT-KEY / DOD-LEVER-2 signed-event — DECIDED (reversible default, Andre may override): DEFER to a
+  future account-key story; ACCEPT the account-authorized-but-unsigned burn for M8. The security property
+  (burned agent can never sign) holds + is proven; the signed-event adds only tamper-proof attribution
+  (audit nicety). An account Ed25519 key is real new protocol surface (lifecycle/recovery) better done
+  deliberately. LEVER-2 stays 🟡 BY DECISION (contained + share-destruction parts done; signed-event = named
+  M10/M11 follow-up). DoD note updated.
+- #1 CLUSTER + #2 PUBLISH — NOT autonomously executable: both are outward-facing / hard-to-reverse (npm
+  publish burns a version forever; AWS deploy = live infra + cost) AND were gated by Andre this session
+  ("cello-client m8-lever-001 stays LOCAL — Andre-gated"; infra deploys = live-grenade, foreground, never
+  from local). Directionally there is no reason to say no — they just need Andre's explicit "go", at which
+  point: publish = version-cascade + tag → CI beta (then latest-promotion); cluster = deploy.sh per the
+  region-expansion procedure. Both are flagged and ready; not started unilaterally.
+
+Drift check this window: clean (no ✅ flips; SPINE-3 was a 🟡 downgrade last window). Lowest non-green
+(INV-6 strict T-of-N, then SPINE-3) are cluster/close-gate-gated. No autonomous DoD advance remains.

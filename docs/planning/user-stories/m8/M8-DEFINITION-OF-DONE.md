@@ -345,8 +345,15 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   reconcile-list live assertion. ONE residual keeps this 🟡: "the burn is a SIGNED event." Today the
   burn is account-authorized + timestamped + attributable (authorized_by_account, monotonic, replicated,
   append-only-ish) — an auditable record, but NOT cryptographically Ed25519-signed. Whose key signs an
-  account-authorized burn is a genuine design question (no account Ed25519 key in this flow), left for a
-  decision rather than guessed. The SECURITY property — a burned agent can never sign — holds.)*
+  account-authorized burn is a genuine design question (no account Ed25519 key in this flow). DECISION
+  (2026-06-28, reversible default — Andre may override): DEFER the signed-event to a future account-key
+  story; ACCEPT for M8 the "account-authorized + recorded, not cryptographically signed" burn. Rationale:
+  the security property that matters (a burned agent can never sign — share destroyed federation-wide)
+  already holds + is proven; the signed-event adds only tamper-proof ATTRIBUTION (audit integrity of WHO
+  ordered the burn), which is a nicety, not a security gap. An account signing key is real new protocol
+  surface (key lifecycle, where the private key lives, recovery) better done deliberately than bolted on
+  to close one M8 line. So this stays 🟡 BY DECISION — the contained + share-destruction parts are done;
+  the signed-event is a named M10/M11 follow-up (account-key story), not an M8 gap.)*
 - **DOD-LEVER-3 — T-of-N mechanism + distinct error.** A threshold of honest nodes refuse; a
   single node continuing doesn't let it sign; the ceremony returns a distinct revocation error.
   *(LEVER-001 AC-003)* — 🟡
