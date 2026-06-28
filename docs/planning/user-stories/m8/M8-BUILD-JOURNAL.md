@@ -1343,3 +1343,25 @@ no plaintext persisted, best-effort/re-mintable) and covered by J-TRUST + the un
 
 Next: §8 on the CONSUMER end (cello-client daemon handleTrustSignalPickup — openContentSeal/hash-verify/
 store/ACK) — fallback-finder dispatched against m8-lever-001 (the correct M8 daemon branch; local-only).
+
+## 2026-06-28 — daemon trust-signal handler §8 (consumer end) — NO silent fallbacks; LOW diagnostic fix
+
+§8 fallback-finder on the CONSUMER end (cello-client m8-lever-001, handleTrustSignalPickup in
+core/daemon/src/daemon.ts). Verdict: NO SILENT FALLBACKS. Every failure (malformed frame, missing anchor,
+openContentSeal failure, HASH MISMATCH, store failure) returns BEFORE the trust_signal_ack, so the
+directory retains the ciphertext and re-delivers — the ACK is emitted ONLY after a durable store. The
+load-bearing detail: the un-awaited storeTrustSignal is SAFE because the SQLCipher driver is synchronous
+(DaemonStatement.run returns {changes} not a promise), so the surrounding try/catch genuinely catches a
+failed write. Idempotent: trust_signals.signal_hash is PRIMARY KEY + INSERT OR IGNORE, so duplicate
+delivery stores once and re-ACKs. Hash-mismatch compares recovered-hash against the DIRECTORY anchor (not
+self-attestation). All correct.
+
+LOW (applied, e86d00b): two guard early-returns (malformed frame; stub-key agent that can't openContentSeal)
+logged nothing → a permanently-stuck frame would be re-delivered forever with zero daemon-side signal. Now
+log daemon.trust_signal.malformed / .no_content_key (behavior unchanged — still no store, no ACK; just
+observable). Diagnostic-only; daemon typecheck clean. Local on m8-lever-001 (no publish — Andre-gated).
+
+The TRUST-001 pipe is now §8-reviewed END-TO-END: portal handoff (hash-first, no orphan) → write seam
+(WRITEAPI) → identity_tree/pickup (poison-loop supersede + V37 + orphan sweep + escalation) → directory
+drain (anchor-less-skip observable) → daemon (handler verified + diagnostics). Next: run the live J-TRUST
+gate to confirm the hardened pipe is green end-to-end on real binaries.
