@@ -1648,7 +1648,21 @@ export class CelloDirectoryNode {
             if (pickupAgentId) {
               const pickups = await this.#store.drainPickup(pickupAgentId);
               for (const item of pickups) {
-                if (!item.signalKind || !item.signalHash) continue; // no anchor → cannot be verified; skip (re-mintable)
+                if (!item.signalKind || !item.signalHash) {
+                  // No identity-tree anchor → the daemon could not verify openSealed(ciphertext) against
+                  // a hash, so the row cannot be delivered. We do NOT delete it (an anchor may arrive: the
+                  // portal writes hash then ciphertext as two calls), but we MUST NOT skip SILENTLY — a row
+                  // that can be neither verified nor discarded is a quiet stall. Log it so a persistently
+                  // anchor-less pickup is observable (a stale-row sweep is the follow-up, not a silent drop).
+                  this.#logger?.warn("directory.trust_signal.skipped", {
+                    agentId: pickupAgentId,
+                    pickupId: item.id,
+                    reason: "no_anchor",
+                    signalKind: item.signalKind ?? null,
+                    correlationId: reconnectCorrelationId,
+                  });
+                  continue;
+                }
                 try {
                   this.#sendFrame(stream, encodeTrustSignalPickup({
                     type: "trust_signal_pickup",
