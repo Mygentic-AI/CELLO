@@ -28,10 +28,18 @@ MASTER_ARN="$(get_out PortalDbMasterSecretArn)"
 
 MASTER_JSON="$(aws secretsmanager get-secret-value --secret-id "$MASTER_ARN" --region "$REGION" \
   --query SecretString --output text)"
-DB_USER="$(printf '%s' "$MASTER_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin)["username"])')"
-DB_PASS="$(printf '%s' "$MASTER_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin)["password"])')"
 
-DB_URL="postgres://${DB_USER}:${DB_PASS}@${ENDPOINT}:${PORT}/cello_portal?sslmode=no-verify"
+# Build the URL in python and URL-ENCODE the username + password. RDS-generated passwords routinely
+# contain URL-unsafe characters (#, /, @, :, ?, %); an un-encoded '#' truncates the connection string
+# at the fragment, so the portal silently connects to the wrong/no DB. quote(safe="") encodes them all.
+DB_URL="$(ENDPOINT="$ENDPOINT" PORT="$PORT" python3 - "$MASTER_JSON" <<'PY'
+import json, os, sys, urllib.parse
+m = json.loads(sys.argv[1])
+u = urllib.parse.quote(m["username"], safe="")
+p = urllib.parse.quote(m["password"], safe="")
+print(f'postgres://{u}:{p}@{os.environ["ENDPOINT"]}:{os.environ["PORT"]}/cello_portal?sslmode=no-verify')
+PY
+)"
 
 # ── kms-master-key: create-once ──────────────────────────────────────────────
 KMS_NAME="cello/${ENV}/portal/kms-master-key"

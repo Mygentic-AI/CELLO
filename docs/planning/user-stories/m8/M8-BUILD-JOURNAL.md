@@ -1867,3 +1867,62 @@ publish — load the cello-publish skill); PRES-2/3 (agent_presence node-local �
 **Branches/access:** cello-portal m8-assembly (push OK, no CI). trustless-cello main (docs push OK,
 path-filtered; directory CODE push triggers the 25-30min 3-region deploy). AWS = Andre's IAM (confirmed).
 Watchdog cron 86f0ce75 (30min) live. NEVER docker-push from local; images via CI/CD only.
+
+## 2026-06-28 — ★ M8 OPERATOR PORTAL DEPLOYED LIVE TO AWS ★ (the portal had never run on AWS)
+
+Andre authorized the portal deploy and said keep going overnight. The portal (cello-portal, m8-assembly)
+is now LIVE at **https://portal.cello.mygentic.ai** (us-east-1, in the directory's VPC). Built as IaC; no
+docker push from local (CodeBuild only).
+
+WHAT WAS BUILT (all in trustless-cello/infra, committed locally — push is Andre's call):
+- `cello-portal-build.yaml` (stack `cello-portal-build-dev`): ECR repo + S3 build-source bucket +
+  privileged CodeBuild project. `build-portal.sh` git-archives the committed cello-portal HEAD → S3 →
+  CodeBuild builds the Dockerfile → ECR. Reproducible from a recorded SHA; respects no-local-push.
+- `cello-portal-data.yaml` (stack `cello-portal-data-dev`): SGs (alb/task/db), RDS Postgres
+  `cello-portal-dev` (db.t4g.micro, DB `cello_portal`, ManageMasterUserPassword) — the portal's OWN DB,
+  never the directory DB (DOD-INV-2) — and a DNS-validated ACM cert for portal.cello.mygentic.ai.
+- `create-portal-secrets.sh`: creates `cello/dev/portal/kms-master-key` (64-hex, CREATE-ONCE — never
+  regenerated; value only in Secrets Manager) and `cello/dev/portal/database-url` from the RDS managed
+  master secret. `DIRECTORY_API_KEY` reuses the existing ops-agent directory-api-key.
+- `cello-portal-app.yaml` (stack `cello-portal-dev`): public ALB (HTTPS/ACM, HTTP→443 redirect), Route53
+  A record, ECS Fargate service on the shared `cello-dev` cluster, exec+task IAM (ECR pull, secrets read,
+  ses:SendEmail for *@mygentic.ai), + a MagicLinkDeliveryFailures metric filter/alarm. Image pinned f6a43d8.
+
+NEW PORTAL CODE (cello-portal m8-assembly, pushed):
+- SES magic-link email delivery (`src/server/email.ts` + wiring) — the long-standing AUTH-001 TODO. In
+  non-local envs the 6-digit code is never returned in the response (no enumeration), so it's delivered
+  out-of-band via SES (verified mygentic.ai identity). Commit 8a2603b.
+- Review fixes (commit f6a43d8): fire-and-forget the SES send (awaiting it widened the accepted
+  enumeration timing channel); PORTAL_BASE_URL required outside local (no silent prod default → broken
+  links); reuse hardened emailDomain(); test env restore. Reviewers: feature-dev:code-reviewer (no
+  blocking/high) + cello-fallback-finder (top finding: SES misconfig = silent login outage → the
+  delivery-failure ALARM, now wired in the app stack).
+
+VERIFIED LIVE (end-to-end, 2026-06-28):
+- HTTPS /sign-in → 200 (ACM valid); HTTP → 301→HTTPS; protected `/` → 307→sign-in.
+- The task SELF-MIGRATES its RDS on boot (`portal.backend.started migrationVersion 0005`, fail-closed).
+- **Served portal ↔ LIVE directory seam PROVEN:** POST /api/auth/magic-link/request → {ok:true,sent:true}
+  (200) + log `portal.auth.magic_link.requested accountResolved:false`. A 200 (not 500) proves the portal
+  reached the LIVE directory `/internal/account-by-email-stub` over its public ALB with a valid
+  x-cello-internal-api-key, and the directory answered (unknown email → not resolved; no enumeration). The
+  portal↔directory contract was pre-verified too: matching x-cello-internal-api-key header, fail-loud
+  directory client (no silent stub fallback).
+- The exact ECR image was also smoke-tested locally (boots, migrates, /sign-in 200) before deploy.
+
+BUG FOUND + FIXED (Symptom/Root cause/Fix/Rule): first app deploy rolled back — task exit 1. Root cause:
+the RDS-generated master password contained `#`; built into a postgres:// URL un-encoded, `#` starts the
+URL fragment → truncated connection string → no DB → migrate failed. (Local smoke used a trivial password,
+so it hid the bug.) Fix: create-portal-secrets.sh now URL-encodes the credential components. Rule: any DB
+URL from a generated/managed credential MUST url-encode the parts; smoke-test with special-char passwords.
+
+DoD IMPACT: DOD-E2E-1 stays 🟡 — the "served portal against the LIVE directory" DIMENSION is now real (the
+portal had never run on AWS; that gap is closed), but the cross-node aspects are unchanged: 3-region/
+from-ANY-node presence (PRES-2/3), pickup_queue replication (TRUST-1 H2), strict T-of-N refusal
+(INV-6/LEVER-3, unbuilt protocol). No DoD line flipped to ✅ (disciplined — a full browser-driven E2E vs
+the live cluster + the dated milestone-writeup confirmation are what remain).
+
+REMAINING for the portal deploy to be fully "productionized" (named, not silently dropped): wire the
+delivery-failure alarm to an SNS topic (AlarmTopicArn param, currently no action); wire the portal stacks
+into deploy.sh as a guarded us-east-1-only step (today deployed via targeted `aws cloudformation deploy`);
+HTTPS or VPC-internal portal→directory (today HTTP+API-key over the public ALB, the existing ops-agent
+model). All in STATE.md. trustless-cello infra/docs commits are LOCAL awaiting Andre's push.

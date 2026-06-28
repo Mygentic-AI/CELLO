@@ -480,6 +480,17 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   aspects (PRES-2/3 from-any-node, TRUST-1 pickup_queue replication, strict T-of-N INV-6/LEVER-3) — the
   live-cluster close gate (Andre's deploy), plus the dated milestone writeup. The LOCAL served milestone
   claim is green and reproducible; only multi-region remains.)*
+  *(UPDATE 2026-06-28 — THE PORTAL IS NOW DEPLOYED LIVE: `https://portal.cello.mygentic.ai` (ECS Fargate +
+  ALB/ACM/Route53, RDS, us-east-1, image f6a43d8). Verified live: HTTPS /sign-in 200, HTTP→HTTPS redirect,
+  protected-route redirect, the task self-migrates its RDS on boot (migrationVersion 0005), and a magic-link
+  request resolves accounts through the REAL LIVE directory's `/internal/account-by-email-stub` over its
+  public ALB (200 + accountResolved:false for an unknown email — proves the served-portal↔live-directory
+  seam with a valid API key, no enumeration). Magic-link codes deliver via SES; a delivery-failure alarm is
+  wired. So the "served portal against the live directory" DIMENSION of E2E-1 is now real (was the missing
+  piece — the portal had never run on AWS). STILL 🟡, NOT ✅: the remaining cross-node aspects are
+  unchanged — 3-region/from-ANY-node presence (PRES-2/3), pickup_queue replication (TRUST-1 H2), strict
+  T-of-N refusal (INV-6/LEVER-3, unbuilt protocol). A full browser-driven E2E against the live cluster +
+  the dated milestone-writeup confirmation are what remain for ✅.)*
 
 ---
 

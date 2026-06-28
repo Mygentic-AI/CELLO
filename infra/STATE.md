@@ -30,11 +30,36 @@ one build script (all in `infra/`):
   `arn:aws:acm:us-east-1:257394457473:certificate/de0d5927-601e-450e-914a-f58ff7a80200` (issued, DNS-
   validated via zone Z02692523DOH7NW521CL8). (First attempt rolled back on an em-dash in an EC2
   GroupDescription — ASCII-only; fixed + redeployed clean.)
-- **`cello-portal-app.yaml`** → stack `cello-portal-dev` **[DEPLOYING]**. Public ALB (HTTPS/ACM, HTTP→443
-  redirect), Route53 A `portal.cello.mygentic.ai`, ECS Fargate service on the shared `cello-dev` cluster,
-  exec+task IAM (ECR pull, secrets read, `ses:SendEmail` for `*@mygentic.ai`), + a
-  `MagicLinkDeliveryFailures` metric filter/alarm (reviewer-required: a SES misconfig = silent login
-  outage). ImageTag pinned to `f6a43d8`.
+- **`cello-portal-app.yaml`** → stack `cello-portal-dev` **[CREATE_COMPLETE — LIVE]**. Public ALB (HTTPS/
+  ACM, HTTP→443 redirect), Route53 A `portal.cello.mygentic.ai`, ECS Fargate service on the shared
+  `cello-dev` cluster (running 1/1, rollout COMPLETED), exec+task IAM (ECR pull, secrets read,
+  `ses:SendEmail` for `*@mygentic.ai`), + a `MagicLinkDeliveryFailures` metric filter/alarm (reviewer-
+  required: a SES misconfig = silent login outage). ImageTag pinned to `f6a43d8`.
+
+**✅ PORTAL IS LIVE — verified end-to-end (2026-06-28):**
+- `https://portal.cello.mygentic.ai/sign-in` → **200** (ACM cert valid); HTTP → **301**→HTTPS; protected
+  `/` → **307**→sign-in (no session). DNS A → ALB.
+- The task **self-migrated** the RDS on startup (`portal.backend.started migrationVersion 0005`).
+- **Served portal ↔ LIVE directory seam PROVEN:** `POST /api/auth/magic-link/request` → `{ok:true,
+  sent:true}` (200) + log `portal.auth.magic_link.requested accountResolved:false`. A 200 (not 500) proves
+  the portal reached the **live** directory `/internal/account-by-email-stub` over its public ALB with a
+  valid `x-cello-internal-api-key`, and the directory answered (unknown email → not resolved, no
+  enumeration). This is the DOD-E2E-1 "served portal against the live directory" dimension, now real
+  (single-region; cross-node/3-region/T-of-N aspects remain gated as before).
+
+### Portal deploy bug found + fixed (Symptom / Root cause / Fix / Rule)
+- **Symptom:** first app-stack deploy rolled back — ECS task exited 1 (deployment circuit breaker), logs
+  lost with the rolled-back log group. The image had smoke-tested clean locally.
+- **Root cause:** the RDS-generated master password contained `#`. Built into a `postgres://user:pass@…`
+  URL un-encoded, `#` starts the URL fragment → the connection string was truncated → the portal could
+  not connect to RDS → instrumentation migrate failed → exit 1. The local smoke test used a trivial
+  password (`smoke`) so it never hit this.
+- **Fix:** `create-portal-secrets.sh` now URL-encodes username + password (`urllib.parse.quote(safe="")`)
+  before assembling the URL. Re-ran (kms-master-key correctly left untouched — CREATE-ONCE), redeployed
+  → task booted + migrated + healthy.
+- **Rule:** any DB connection URL built from a generated/managed credential MUST URL-encode the
+  credential components — RDS passwords routinely contain `#/@:%`. Smoke tests must use a password with
+  special characters, not a trivial one, or this class of bug hides.
 
 **Secrets (us-east-1, CREATED):** `cello/dev/portal/kms-master-key` (64-hex, encrypts operator
 email+TOTP at rest — DOD-INV-2; **value only in Secrets Manager, never recorded**;
