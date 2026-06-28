@@ -1809,3 +1809,61 @@ AND: DOD-INV-6 / DOD-LEVER-3 (strict T-of-N: "a single node continuing doesn't l
 UNBUILT T-of-N protocol (the daemon is the 2-of-2 stopgap) — so even a perfect behavioral refusal test
 would NOT flip those to ✅ on its own. No DoD line flipped (disciplined); the cross-node REPLICATION layer
 + honor mechanism are proven live, which is the real deliverable of the deploy.
+
+## 2026-06-28 — ★ RESUME POINT (pre-compaction) — finishing M8: portal AWS deploy in progress ★
+
+**WORKING RULE — non-negotiable (Andre, repeated + forceful): DO NOT STOP to ask permission or
+report-and-wait.** Keep going. The ONLY valid reason to stop is a genuine, serious DESIGN DECISION (a real
+fork the docs didn't already decide). It's alpha, no users — worst case is a rollback. Stopping/waiting is
+the least helpful thing. Pick the reversible option, document it, continue. Do NOT save more "don't stop"
+memories (there are ~10 already) — just act.
+
+**READ FIRST — the 3 pillars:** docs/planning/user-stories/m8/M8-PROCEDURE.md (how we work),
+M8-DEFINITION-OF-DONE.md (the yardstick + current tags), and THIS latest M8-BUILD-JOURNAL entry (state).
+For any deploy work also read infra/STATE.md (deployed AWS truth) + infra/CLAUDE.md (infra rules).
+
+**M8 STATE:**
+- Portal (cello-portal, branch m8-assembly): LOCALLY COMPLETE. `npm run test:e2e:real-dir` → 42 passed / 3
+  skipped vs a REAL local directory. TOTP-floor remediation done (both violations; AUTH-2/AUTH-4/LEVER-4
+  restored ✅, reviewed). SPINE-3 ✅. Write-seam/lever proven served-real.
+- Directory: DEPLOYED LIVE to all 3 regions (commit 387afc78, merged m8-read-001→main). Migrations V37;
+  ops-agent SSM=37; replication live (6 slots streaming; agent_suspensions + identity_tree_entries in
+  cello_pub). CROSS-NODE replication PROVEN live (wrote eu-central-1 → read us-east-1, both directions).
+  Cross-node revocation honor proven BY-COMPOSITION (replication live + honor-check J-SUSPEND). Live
+  behavioral session-refusal NOT done (demo agent standing_receiver not ready; throwaway needs a ceremony
+  token [pre-authorize needs a prior registration]; AND DOD-INV-6/LEVER-3 need the unbuilt T-of-N protocol
+  regardless — so it would not flip those even if done).
+- M7 two-same-machine-agents: VERIFIED FINE. Daemon IPC server multiplexes up to 16 clients; a 2nd
+  cello-mcp connects to the existing daemon (connectOrStart, no competitor). The SQLCipher single-writer
+  lock is on the ONE daemon; shims proxy over the socket. (Earlier "lock blocks 2 clients" was MY error —
+  I fired tool calls before cello-mcp's ~15s background daemon-connect; proven a 2nd shim works with the wait.)
+
+**CURRENT TASK — portal AWS deploy (portal had ZERO deploy infra; building it).** Andre authorized the deploy.
+DONE: Dockerfile (Next standalone, pnpm@10.33.2 pinned, copies migrations/, self-migrates on startup via
+instrumentation.ts) — IMAGE BUILDS CLEAN locally. Committed+pushed on m8-assembly.
+REMAINING (build it, don't ask — defaults: hostname portal.cello.mygentic.ai, portal in the directory's
+us-east-1 VPC):
+  1. ECR repo for the portal image.
+  2. Image build/push via CodeBuild (NEVER docker push from local — infra rule). cello-portal is a SEPARATE
+     GitHub repo; the existing filter Lambda watches trustless-cello only → portal needs its own CodeBuild/source.
+  3. CFN: RDS Postgres (portal's own DB), ECS Fargate service+task, ALB (public)+ACM cert+Route53, security
+     groups, Secrets Manager (PORTAL_DATABASE_URL, PORTAL_KMS_MASTER_KEY [32-byte/64-hex], DIRECTORY_API_URL,
+     DIRECTORY_API_KEY [= secret cello/dev/ops-agent/directory-api-key]) — in the directory's VPC.
+  4. Portal→directory internal API: portal must reach the directory's :8081 (account-by-email-stub /
+     agents-by-account / agent-write). 8081 is VPC-internal (ALB rejects /internal/*). Open it to the
+     portal SG (a change to the deployed directory's networking) OR reach the directory internal ALB target
+     on 8081 from within the VPC. DIRECTORY_API_URL = that internal endpoint.
+  5. Deploy → verify the portal self-migrates its RDS, serves, and resolves accounts via the REAL directory.
+  6. Update infra/STATE.md after EACH action (live deploy = foreground, monitor pipelines/ECS).
+Runtime env the portal needs (config.ts): CELLO_ENV, PORTAL_DATABASE_URL, PORTAL_KMS_MASTER_KEY(64hex),
+DIRECTORY_API_URL, DIRECTORY_API_KEY, PORT=3000, HOSTNAME=0.0.0.0.
+
+**OTHER remaining (not the current task):** T-of-N protocol (INV-6/LEVER-3 — core unbuilt protocol, 2-of-2
+stopgap today, own milestone, cross-repo crypto+client+directory); TRUST-1 H2 (pickup_queue bigint→UUID +
+cello_pub + owning-node sweep gate — pickup id already opaque string, daemon-transparent); TRUST-4 (npm
+publish — load the cello-publish skill); PRES-2/3 (agent_presence node-local — design decision); LEVER-2
+(signed revocation → M10, decided).
+
+**Branches/access:** cello-portal m8-assembly (push OK, no CI). trustless-cello main (docs push OK,
+path-filtered; directory CODE push triggers the 25-30min 3-region deploy). AWS = Andre's IAM (confirmed).
+Watchdog cron 86f0ce75 (30min) live. NEVER docker-push from local; images via CI/CD only.
