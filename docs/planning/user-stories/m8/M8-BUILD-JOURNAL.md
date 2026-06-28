@@ -1734,3 +1734,22 @@ This closes out the local-actionable M8 work: SPINE-3 ✅, the write seam served
 close gate green — far more than the earlier (wrong) "everything cluster-gated" call. What's left is
 genuinely the AWS cluster (Andre), the unbuilt T-of-N protocol (separate feature), and the publish/M10
 go (Andre).
+
+## 2026-06-28 — HEARTBEAT: TRUST-1 H2 examined in depth (verified cluster-coupled) + M8 milestone write-up created
+
+This tick: examined the TRUST-1 H2 fix (pickup_queue → UUID + cello_pub) as the next candidate unit.
+Findings (evidence, not assumption): the pickup id is ALREADY an opaque string throughout
+(pickup-repository.ts: "BIGSERIAL, read back as a string"; SELECT id::text; ackPickupDelete(id: string)),
+so bigint→UUID is transparent to JS/daemon — no cello-client change. BUT all three H2 parts are
+cluster-coupled in their verifiable PURPOSE: (a) the migration's point is cross-node delivery — unverifiable
+locally (task-15: local logical replication non-viable); (b) cello_pub membership is cluster infra
+(setup-replication.sh), not Flyway; (c) the sweep-gating correctness is a cross-node property and the
+gating approach (owning-node vs convergence) is an open design choice the code comment itself leaves open.
+Building (a)+(b) blind overnight would violate the M5 migration-integrity rules + risk the deploy. So H2 is
+a deliberate migration story to pair with the cluster — scoped + documented, not rushed.
+
+Instead did the required, safe, valuable deliverable: wrote docs/planning/milestone-writeups/M8-operator-portal.md
+(DOD-E2E-1 requires the milestone write-up; M5 rule: write-ups are incremental). Captures what's delivered
+(~32/41 proven-live), the TOTP-floor incident + story-first remediation, the local served close gate
+(42/3), bugs-found (Symptom/Root cause/Fix/Rule), the gated remainder (AWS cluster / T-of-N / publish /
+M10), and lessons. Local-actionable M8 work remains exhausted; the frontier is the AWS close gate (Andre).
