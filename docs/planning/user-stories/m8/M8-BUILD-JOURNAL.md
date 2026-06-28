@@ -1100,3 +1100,47 @@ authoritative cello_pub table set + how production wires cross-node subscription
 startSpineCluster, before building a local 2-node replication harness (the build is autonomous — local
 binaries, no AWS, no Andre). TRUST-4 (publish) + E2E-1 sign-off + strict T-of-N protocol remain genuinely
 gated (Andre / cello-client protocol work).
+
+## 2026-06-28 — multi-node keystone investigation: local WAL-replication harness is NOT a viable substitute for the live close-gate cluster
+
+Goal: prove the SOVEREIGN federation lines (DOD-PRES-1 readable-from-different-node, DOD-INV-6/LEVER-1
+honored-at-node-B, DOD-TRUST-1 cross-node) without the live cluster, by standing up two cello_pub-
+replicating Postgres databases locally and asserting node B independently honors what node A wrote.
+
+What I established (kept — real findings):
+- The authoritative replicated set is `cello_pub` = 14 tables (infra/setup-replication.sh:170):
+  agent_profiles, conversation_seals, conversation_seal_staging, directory_checkpoints,
+  checkpoint_node_signatures, relay_registrations, sessions, pending_notifications, user_accounts,
+  registrations, pre_authorization_tokens, agent_revocations, agent_suspensions, identity_tree_entries.
+- `pickup_queue` and `agent_presence` are DELIBERATELY EXCLUDED. pickup_queue's BIGSERIAL id collides
+  across nodes; the script comment says TRUST-001 should add it "WITH the sequence staggering
+  (ALTER SEQUENCE … INCREMENT BY 3 RESTART WITH {offset})" when the journey lands.
+- CRITICAL GAP found: that per-node sequence-staggering is DOCUMENTED but NEVER IMPLEMENTED anywhere
+  (no code applies a per-node offset). Flyway can't do it (identical SQL on every node). So the H2 fix
+  for DOD-TRUST-1 cannot just "add pickup_queue to cello_pub" — it needs either (a) a real per-node
+  offset bootstrap (region→offset, net-new infra touching every node's boot), or (b) change
+  pickup_queue.id to a UUID (replicates cleanly with zero per-node coordination, matching how the other
+  replicated M8 tables — agent_suspensions, identity_tree_entries — already use natural keys). UUID is
+  the more self-contained, reversible choice; recorded as the recommended H2 direction.
+
+Why the LOCAL harness was abandoned (honest, not a silent drop):
+- wal_level=logical works in the harness container; loopback walsenders connect; slots create/drop.
+- BUT making logical replication DETERMINISTIC in an automated fixture is genuinely flaky here:
+  intra-instance loopback adds walsender/apply-worker contention, and — the real blocker — logical
+  replication SLOT CREATION requires a consistent snapshot and BLOCKS on any concurrent open transaction
+  (leftover pooled idle-in-transaction connections). Observed both an empty pg_subscription_rel after a
+  "successful" CREATE SUBSCRIPTION and an intermittent multi-minute hang on slot creation. Two separate
+  containers (production's shape) would remove the loopback contention but NOT the snapshot-blocking, so
+  it would still be fragile as a unit fixture.
+- Conclusion: a flaky replication fixture is worse than none (it would break the floor and give false
+  signal). The DoD ALREADY gates every one of these lines on the live ≥2-node cluster (the E2E close
+  gate, DOD-E2E-1), and production proves real RDS logical replication. The local substitute is not
+  worth its fragility. Reverted the experimental docker-compose wal_level change and removed the
+  experimental fixture/test (no flaky test committed). No DoD tags changed — PRES-1/2/3, TRUST-1,
+  LEVER-3/INV-6-strict stay 🟡 and E2E-1 stays ❌, which is the correct, honest state.
+
+Net: the remaining non-green M8 lines are GENUINELY GATED on resources unavailable autonomously — the
+live multi-node cluster + close-gate sign-off (DOD-E2E-1, Andre), the cello-client T-of-N protocol work
++ npm publish (DOD-LEVER-3/INV-6-strict, DOD-TRUST-4, Andre), and the H2 schema decision above
+(pickup_queue UUID) which only matters once the cluster exists. Everything autonomously completable —
+all single-node spine/auth/agents/lever/trust lines + the full §8 review remediation — is DONE.
