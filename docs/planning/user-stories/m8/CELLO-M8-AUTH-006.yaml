@@ -56,11 +56,15 @@ acceptance_criteria:
     component_under_test: portal
 
   - id: AC-002
-    given: "An operator with a WebAuthn credential and no recent step-up"
+    given: "An operator with a strong factor and no recent step-up"
     when: "they attempt to remove a factor"
     then: >
-      Removal is refused until a fresh WebAuthn step-up is satisfied; after step-up, the factor is
-      removed and no longer authenticates. A remove path that succeeds without step-up fails this AC.
+      Removal is refused until a fresh step-up against an existing STRONG FACTOR is satisfied — a
+      passkey ceremony OR a confirmed TOTP code, whichever the operator holds (journey-01 D6: TOTP
+      is the recoverable floor and satisfies step-up on its own; the remove flow must not require a
+      passkey the operator does not have). After step-up, the factor is removed and no longer
+      authenticates. A remove path that succeeds without step-up fails this AC. (The TOTP-only
+      step-up path for factor add/remove is proven by AUTH-002 AC-004.)
     test_type: e2e
     component_under_test: portal
 
