@@ -197,18 +197,19 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   a known credential is rejected (real signature verification, not a stub); device B (usb) enrolls
   independently of device A, removing A leaves B.)*
 - **DOD-AUTH-2 — Step-up per sensitive op.** Sensitive actions require a fresh step-up against a
-  STRONG FACTOR (per-op, not once-per-session). *(AUTH-002 AC-003)* — 🟡 *(DROPPED from ✅ on the
-  2026-06-28 spec-conformance check — SPEC INVERSION vs journey-01 D6.)*
-  *(The WebAuthn path is PROVEN LIVE (J-AUTH: factor-removal refused on a stale session, allowed after a
-  fresh step-up; per-op not once-per-session). BUT the step-up was built WebAuthn-ONLY: the only stepup
-  route is `webauthn/stepup`, and the route message + the SuspendLever UI hard-code "verify a passkey".
-  journey-01 D6 is explicit that TOTP is the required recoverable FLOOR and WebAuthn is a convenience
-  LAYER ("not an equal alternative… not a substitute for 2FA"), and step-up is "against an existing strong
-  factor". A TOTP-only operator — the spec's PRIMARY factor — therefore cannot complete a sensitive action
-  through the product after the 5-min window (dead-ended at "verify a passkey" they don't have). NOT a hard
-  lockout (/totp/verify incidentally stamps last_step_up_at) but the UX has no TOTP step-up. 🟡 until a
-  first-class TOTP step-up + factor-agnostic messaging/UI land. The DoD wording was itself wrong here
-  ("WebAuthn step-up") — it codified the implementation's assumption instead of the spec's.)*
+  STRONG FACTOR — a passkey OR a confirmed TOTP code (per-op, not once-per-session). *(AUTH-002 AC-003/AC-004)* — ✅
+  *(RESTORED 2026-06-28 after the Violation-A spec inversion was fixed. The step-up GATE was always
+  factor-agnostic (isStepUpFresh keys on last_step_up_at, which both /webauthn/stepup/verify AND
+  /totp/verify stamp); the bug was UI-only — the only step-up affordance ran the WebAuthn ceremony, so a
+  TOTP-only operator (journey-01 D6's PRIMARY recoverable factor) was dead-ended at "verify a passkey".
+  FIXED: a factor-aware StepUpDialog fetches the operator's LIVE factors and offers the one(s) they hold
+  — passkey ceremony AND/OR TOTP code — with factor-agnostic copy. PROVEN LIVE (J-AUTH 14/14): per-op
+  step-up (AC-003); +AC-004 F1 catch-22 BOTH directions — a passkey operator adds the TOTP floor via a
+  passkey step-up, and a TOTP-only operator adds their first passkey via a TOTP code (stub-resistant:
+  stepup-passkey count 0 for the TOTP-only holder, stepup-totp-code count 0 for the passkey-only holder
+  — both factors pinned in both directions). The step-up is server-enforced on retry (the dialog cannot
+  bypass it). Reviewed clean — code-reviewer APPROVED, fallback-finder NO-FALLBACKS, test-attacker gap
+  (hasTotp asserted present-only) FIXED then SOUND.)*
 - **DOD-AUTH-3 — TOTP + backup codes.** TOTP enroll verifies a current RFC-6238 code (verify-
   after-load); backup codes single-use; secret KMS-encrypted, codes hashed. *(AUTH-003)* — ✅
   *(PROVEN: J-TOTP live — enroll confirms only with a current code, a fresh login verifies after
@@ -219,12 +220,19 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   DOD-INV-5 enroll gate (bootstrap can't plant/reset a factor), replay protection, verify
   rate-limit (429), 80-bit codes, transactional issuance. vitest 19/19.)*
 - **DOD-AUTH-4 — Strong-auth enforcement.** 7-day grace → server-side gate; per-account admin
-  waiver flag (scoped, not global) lifts it; no self-grant, no client bypass. *(AUTH-004)* — ✅
-  *(PROVEN LIVE, J-grace 4/4: within the 7-day grace no-2FA is accessible; past it the app routes
-  redirect server-side to the Account wall (a hard 2FA-required banner; the gate is computed
-  server-side from account age + hasStrongFactor + waiver — no client bypass); enrolling a passkey
-  lifts it; a per-account admin waiver (migration 0005, no portal surface writes it → no self-grant)
-  lifts it without 2FA.)*
+  waiver flag (scoped, not global) lifts it; no self-grant, no client bypass. The required factor is
+  the RECOVERABLE FLOOR (TOTP) — a passkey does NOT lift the cliff (journey-01 D6). *(AUTH-004)* — ✅
+  *(CORRECTED + RE-PROVEN 2026-06-28 after the Violation-B spec inversion: the cliff previously lifted
+  on hasStrongFactor (passkey OR TOTP), letting a passkey-only account clear it — the device-loss
+  lockout D6 exists to prevent. Now keys on hasRecoverableFloor (= confirmed TOTP). PROVEN LIVE, J-grace
+  5/5: within the 7-day grace no-2FA is accessible; past it the app routes redirect server-side to the
+  Account wall (gate computed server-side from account age + hasRecoverableFloor + waiver — no client
+  bypass); **a passkey does NOT lift the wall** (AC-003 — stub-resistant: the account holds a strong
+  SESSION factor yet stays walled); **TOTP (the recoverable floor) lifts it**; a per-account admin
+  waiver (migration 0005, no portal surface writes it → no self-grant) lifts it without TOTP. Backed by
+  the strong-auth-wall integration test (7/7 vs real Postgres: passkey-only/two-passkeys past grace stay
+  walled, TOTP lifts, waiver lifts, within-grace allows). Reviewed clean — code-reviewer APPROVED,
+  fallback-finder NO-FALLBACKS, test-attacker TESTS-HAVE-TEETH.)*
 - **DOD-AUTH-5 — Account & Security.** Lists factors + active sessions; log-out-everywhere revokes
   other sessions server-side; factor removal requires step-up. *(AUTH-006)* — ✅ *(PROVEN LIVE: the
   Account screen lists factors (WebAuthn panel + TOTP panel) + active sessions (SessionsPanel,
@@ -375,18 +383,20 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   is local (branch m8-lever-001); the npm publish cascade is Andre-gated.)*
 - **DOD-LEVER-4 — Owner-only, step-up, burn-never-erases.** Only the owning account after step-up
   may revoke; a different account / bare session is rejected; burn kills future capability, never
-  past accountability. *(LEVER-001 SI-002)* — 🟡 *(DROPPED from ✅ on the 2026-06-28 spec-conformance
-  check — the step-up half inherits the DOD-AUTH-2 spec inversion: revocation step-up is WebAuthn-only, so
-  a TOTP-only operator (the spec's primary factor, journey-01 D6) cannot complete a burn/suspend through
-  the product after the 5-min window — the route + SuspendLever say "verify a passkey" they don't have, and
-  there is no TOTP step-up UX. OWNER-ONLY + burn-never-erases remain PROVEN (below); only the step-up-for-
-  TOTP path is broken. 🟡 until the TOTP step-up fix lands.)*
-  *(OWNER-ONLY + STEP-UP PROVEN (for WebAuthn): the suspend route derives accountId from the session
+  past accountability. *(LEVER-001 SI-002)* — ✅ *(RESTORED 2026-06-28: the step-up half (which inherited
+  the DOD-AUTH-2 Violation-A inversion) is FIXED — revocation step-up is now factor-aware. The SuspendLever
+  opens the factor-aware StepUpDialog on 403 and retries; a TOTP-only operator (journey-01 D6's primary
+  factor) completes a suspend/burn via a TOTP code, never dead-ended at "verify a passkey". OWNER-ONLY +
+  burn-never-erases were always proven; the step-up-for-TOTP path is now proven too.)*
+  *(OWNER-ONLY + STEP-UP PROVEN (both factors): the suspend route derives accountId from the session
   (never the client), requires a fresh step-up when the account has a strong factor, and routes through
   the account-scoped seam — which REJECTS a cross-account write (`not_owner`, WRITEAPI-001 SI-001 live:
-  A cannot write B's agent, nothing persisted); a bare-session write is 401. J-LEVER (4/4) proves the
-  within-grace path AND the step-up-REQUIRED path (strong factor + stale step-up → 403 step_up_required,
-  "verify a passkey", NO flag set). BURN-NEVER-ERASES PROVEN (lever-002-burn.live): burn kills future
+  A cannot write B's agent, nothing persisted); a bare-session write is 401. J-LEVER (6/6) proves the
+  within-grace path AND the step-up-REQUIRED path for BOTH factors: a passkey operator completes the Pause
+  via a passkey step-up dialog, and a TOTP-only operator completes it via a TOTP code (stub-resistant —
+  stepup-passkey count 0, agent pauses only AFTER the real server-verified step-up). Reviewed clean
+  (code-reviewer APPROVED, test-attacker SOUND, fallback-finder NO-FALLBACKS). BURN-NEVER-ERASES PROVEN
+  (lever-002-burn.live): burn kills future
   capability (permanent flag + share zeroed across the federation) yet NEVER erases past accountability
   — the agent_profiles binding (agent_id ↔ key ↔ account) is untouched and the zeroed share rows are
   kept. (The separate "burn as a cryptographically signed event" nuance is tracked under DOD-LEVER-2.))*

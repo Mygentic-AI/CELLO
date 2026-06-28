@@ -16,10 +16,12 @@ description: >
 
 # M8 — TOTP-floor step-up inversion: remediation record
 
-> STATUS (2026-06-28, gate LIFTED by Andre's kickoff): **STEP 1 DONE** (stories corrected — commits
-> 5a44469d, 4ce5f041). **STEP 2 in progress** (factor-aware step-up + cliff predicate split). The audit
-> EXPANDED the scope: a second inversion (Violation B — the cliff requires the TOTP floor, a passkey must
-> NOT lift it) on top of the step-up inversion (Violation A). See §6c + §8. This doc is the durable pick-up.
+> STATUS (2026-06-28): **REMEDIATION COMPLETE** (pending only the live-cluster close gate + Andre's
+> publish/cluster "go"). STEP 1 (stories), STEP 2 (implementation), STEP 3 (red-first proof + DoD restore)
+> all done and reviewed. Both inversions closed: Violation A (factor-aware step-up) + Violation B (cliff
+> requires the TOTP floor). DoD lines DOD-AUTH-2, DOD-LEVER-4, DOD-AUTH-4 all back to ✅, now genuinely
+> journey-faithful. Portal commits: 7d95ad1, d7bfb0b (cliff); 341da33, f7e2815, fc510ee (step-up). Branch
+> m8-assembly pushed. See the latest M8-BUILD-JOURNAL.md entry for the full proof + reviewer outcomes.
 
 ## 1. The mistake (root cause = the STORY, not the procedure/review)
 
@@ -168,11 +170,11 @@ generic step-up), TRUST-001/003 (J03/J04), AGENTS-001 (D11), all scaffold/presen
 - DOD-AUTH-2 ✅→🟡 and DOD-LEVER-4 ✅→🟡 (Violation A — step-up inversion; step-up half only — owner-only +
   burn-never-erases remain proven).
 - DOD-LEVER-2 stays 🟡 by decision (signed-event → M10).
-- **DOD-AUTH-4 ✅→🟡 (PENDING — Violation B, must be flipped in STEP 3):** the proven line says "enrolling a
-  passkey lifts the cliff" — that codifies the inversion. After the predicate split it must read "the cliff
-  is lifted by the TOTP floor (or admin waiver); a passkey does NOT lift it" and be re-proven (AUTH-004
-  AC-003). Until then DOD-AUTH-4's ✅ is NOT trustworthy.
-- Honest proven-live count after corrections: ~28/41 (DOD-AUTH-4 now also suspect).
+- **DOD-AUTH-4** — CORRECTED + RE-PROVEN, stays ✅: the cliff now keys on hasRecoverableFloor (TOTP); a
+  passkey does NOT lift it (J-grace AC-003 + strong-auth-wall integration 7/7).
+- **RESOLVED (STEP 3, 2026-06-28):** DOD-AUTH-2 and DOD-LEVER-4 RESTORED to ✅ (factor-aware step-up, proven
+  J-AUTH 14/14 + J-LEVER 6/6, all reviewers clean). All three previously-dropped lines are back to ✅,
+  genuinely journey-faithful (the contract was corrected first). Proven-live count restored.
 
 ## 8. Remediation plan — FIX THE STORY FIRST, then implement from it
 

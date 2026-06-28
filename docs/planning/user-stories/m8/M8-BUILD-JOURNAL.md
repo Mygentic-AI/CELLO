@@ -1620,3 +1620,40 @@ NEXT — STEP 2 (in progress): (B) split the predicate — keep `hasStrongFactor
 step-up UI (webauthn-client.stepUp, TotpPanel.onStart 403 handling, SuspendLever, F1 enroll) + factor-
 agnostic strings + Account TOTP-first ordering. Then STEP 3 red-first: TOTP-only sensitive actions +
 passkey-only-stays-gated. Resume doc = the remediation discussion log (now updated, §6c + §8).
+
+## 2026-06-28 — STEP 2 + STEP 3 COMPLETE: factor-aware step-up + TOTP-floor cliff (both violations fixed, reviewed, DoD restored)
+
+The TOTP-floor remediation is implemented, proven, reviewed, and the DoD is restored. Both inversions are
+closed. cello-portal branch m8-assembly (pushed); HEAD fc510ee.
+
+**Violation B — the 7-day cliff (commits 7d95ad1, d7bfb0b).** Split the predicate: NEW hasRecoverableFloor
+(= isTotpConfirmed) gates the cliff (strong-auth-wall.ts) + the posture header; hasStrongFactor (passkey OR
+TOTP) stays for the step-up gate (correct there). A passkey no longer lifts the cliff — only the recoverable
+TOTP floor (or admin waiver) does, closing the device-loss lockout journey-01 D6 exists to prevent. Proven:
+strong-auth-wall integration test 7/7 (real Postgres — passkey-only & two-passkeys past grace stay walled,
+TOTP lifts, waiver lifts, within-grace allows) + J-grace e2e 5/5 (passkey does NOT lift; TOTP lifts).
+Reviewers: code-reviewer APPROVED, fallback-finder NO-FALLBACKS (removes a fail-open), test-attacker
+TESTS-HAVE-TEETH (+ added the two-passkeys assertion they suggested). DoD: DOD-AUTH-4 corrected + re-proven,
+stays ✅ (wording was the inversion; behavior now matches D6).
+
+**Violation A — factor-aware step-up (commits 341da33, f7e2815, fc510ee).** The step-up GATE was always
+factor-agnostic (isStepUpFresh on last_step_up_at, stamped by BOTH /webauthn/stepup/verify and /totp/verify);
+the bug was UI-only — the only affordance ran the WebAuthn ceremony. FIX: a factor-aware StepUpDialog that
+fetches the operator's LIVE factors (new GET /api/auth/factors) and offers the one(s) they hold — passkey
+ceremony AND/OR TOTP code — with factor-agnostic copy; wired into SuspendLever (suspend/burn), WebAuthnPanel
+(add/remove), TotpPanel (enroll), each opening the dialog on 403 and retrying. enrollPasskey no longer steps
+up WebAuthn-only internally (it surfaced the dead end). Cosmetic: factor-agnostic guidance on all step-up
+routes; the AUTH-004 wall demands the TOTP floor; Account screen TOTP-first (D6). Proven (served portal):
+J-LEVER 6/6 — a TOTP-only operator suspends via a TOTP code (no passkey dead end), a passkey operator via the
+ceremony; J-AUTH 14/14 — the F1 catch-22 fixed BOTH directions; full e2e 41 passed / 4 skipped (DIRECTORY_API_URL
+gated). Reviewers (all 3, twice): code-reviewer APPROVED, fallback-finder NO-FALLBACKS (one LOW — dialog
+fetch error handling — fixed), test-attacker found a BLOCKING hollow-test gap (hasTotp asserted present-only)
+→ FIXED with symmetric stepup-totp-code count-0 guards → re-run green. DoD: DOD-AUTH-2 + DOD-LEVER-4 RESTORED
+to ✅.
+
+**Net:** all three previously-dropped lines (AUTH-2, LEVER-4, AUTH-4) are back to ✅ — now genuinely
+journey-faithful, not laundering the inversion. The contract (stories) was corrected FIRST (STEP 1), then the
+implementation derived from it. Trust restored on the board. Remaining non-green M8 lines are cluster-gated
+(SPINE-3, PRES-1..3, LEVER-3, TRUST-1, INV-6 → DOD-E2E-1 close gate) or Andre-gated (TRUST-4 publish, the
+live cluster, the M10 signed-revocation DOD-LEVER-2). Nothing else is locally actionable without the live
+≥2-node cluster.
