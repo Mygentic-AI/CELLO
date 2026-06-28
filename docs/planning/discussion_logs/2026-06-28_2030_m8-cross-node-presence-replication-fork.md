@@ -91,3 +91,18 @@ the [[2026-06-28_… ]] TRUST-1 H2 migration work as the single deliberate clust
 
 Related: [[project_sovereign_nodes]], [[project_threshold_t_of_n_not_2_of_2]], the M8 DoD (DOD-PRES-1/2/3,
 DOD-READ-1/2), and the M8 build journal cross-node entries.
+
+---
+
+## Related Documents
+
+- [[2026-04-17_1000_trust-signal-pickup-queue|Trust-signal pickup queue]] — the sibling not-yet-replicated
+  table (TRUST-1 H2); pair the chosen presence option with that one deliberate cluster-coupled replication
+  change rather than two separate live topology edits.
+- [[2026-05-21_1400_m5-infrastructure-decisions|M5 infrastructure decisions]] — established the
+  logical-replication topology (`cello_pub` per-peer subscriptions) this fork extends.
+- [[2026-05-30_0637_federation-transport-sovereignty-and-mtls|Federation transport sovereignty]] — the
+  sovereign-node invariant the "replicate mutable presence" question is weighed against.
+- [[2026-06-26_1030_per-agent-directory-connections-and-manifest-over-http|Per-agent directory connections]]
+  — which node a daemon connects to / fails over to, i.e. why "the owning node" is not fixed and why
+  cross-node read matters.
