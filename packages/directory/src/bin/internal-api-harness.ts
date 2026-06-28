@@ -32,6 +32,14 @@ const logger = {
 const pool = new pg.Pool({ connectionString: DB_URL });
 const server = createInternalApiServer({ pool, internalApiKey: API_KEY, logger });
 
+// Fail LOUD + fast on a bind error (e.g. an orphaned harness still holding the port) — otherwise the
+// caller's readiness probe just times out and the real cause is buried.
+server.on("error", (err: NodeJS.ErrnoException) => {
+  const msg = err.code === "EADDRINUSE" ? `port ${PORT} already in use (orphaned harness?)` : String(err);
+  process.stderr.write(`internal-api-harness: ${msg}\n`);
+  process.exit(1);
+});
+
 server.listen(PORT, () => {
   // stdout ready line (single, parseable).
   process.stdout.write(`internal-api-harness listening on ${PORT}\n`);
