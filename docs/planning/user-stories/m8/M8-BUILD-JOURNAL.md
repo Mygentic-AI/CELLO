@@ -1236,3 +1236,16 @@ surface.
 This hardens the already-✅ DOD-SPINE-6 / DOD-TRUST-2/3 pipe (no tag flip; DOD-TRUST-1 stays 🟡 on the
 separate cross-node H2 gate). NOTE: the V37 unique index is exactly the kind of constraint the H2 work
 (pickup_queue → cello_pub) will want, so it is already in place for that.
+
+## 2026-06-28 — addressed the silent anchor-less-pickup skip (no-silent-fallback rule)
+
+The pre-existing residual the fallback-finder surfaced (directory-node.ts:1651 silently `continue`-ing
+on an anchor-less pickup) is now ADDRESSED, not just logged: the skip emits
+`directory.trust_signal.skipped {reason:'no_anchor', agentId, pickupId, signalKind, correlationId}` so a
+row that can be neither verified nor discarded is observable instead of masked (worktree fd963b6b).
+Behavior unchanged (no anchor → cannot verify → still not delivered; NOT deleted, since the portal writes
+hash-then-ciphertext and the anchor may still arrive). Pure observability addition; typecheck clean,
+directory-node smoke 2/2, no-console lint clean. A dedicated firing-test is deferred (the authed
+reconnect-drain needs the full integration harness; the trigger is unreachable via the normal portal
+flow). REMAINING deeper follow-up: a TTL sweep that deletes pickups that stay anchor-less past a grace
+window (so a genuinely-orphaned ciphertext doesn't linger indefinitely) — design item, not a hotfix.
