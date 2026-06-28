@@ -1699,3 +1699,16 @@ dispatched on the harness+wrapper unit (test infra). Default `test:e2e` stays st
 Note: the OTHER journeys (j-lever/j-agents/j-lever-binding) stay stub-mode by design (they rely on
 config-seeded stub agents); making the WHOLE suite run against the real directory (seeding every journey's
 agents) is the DOD-E2E-1 close-gate work, alongside the live cluster.
+
+## 2026-06-28 — real-directory gate extended to the WRITE SEAM + lever (toward a local DOD-E2E-1)
+
+Continuing past SPINE-3: the real-directory gate (test:e2e:real-dir) now also drives j-lever +
+j-lever-binding against the REAL directory. New seedDirectoryLeverAgent helper (self-contained: upserts
+the account [user_accounts FK target], agent_profiles with agent_id + unique primary_pubkey, presence
+online, clears prior suspension) seeds the operator's agent (+ the foreign agent for the binding test).
+The suspend Pause/Resume/Burn round-trips through the genuine /internal/agent-write seam → directory
+Postgres (logs: directory.write.accepted), and the cross-account SI-001 binding (smuggled accountId →
+not_owner) runs against real ownership rows. Proven: real-dir 6/6; stub 6/6 (REAL_DIR guard → no-op);
+typecheck+lint clean. cello-portal commit 147c230. So WRITE-1/LEVER-1/LEVER-4/WRITEAPI-SI-001 are now
+proven SERVED end-to-end against a real directory locally (added on top of their contract/component
+proofs). Cross-node/3-region remains the AWS close gate.
