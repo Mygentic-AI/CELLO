@@ -19,18 +19,28 @@ description: >
 > STATUS: exploration complete, **implementation NOT started** (2 premature string edits were reverted).
 > Aligning on approach with Andre before any code changes. This doc is the durable pick-up point.
 
-## 1. The mistake (root cause)
+## 1. The mistake (root cause = the STORY, not the procedure/review)
 
-M8's **step-up** (the fresh re-auth required for a sensitive action) was built **WebAuthn-only**:
+The root cause is the **story** `CELLO-M8-AUTH-002.yaml` — the contract implementation derives from. The
+journeys are Andre's hand-reviewed golden source; the procedure is correct; the plan was: write the stories
+FAITHFULLY from the journeys, then implement from the stories (stories = golden truth, no need to re-check
+journeys downstream). **The story-writer broke that translation.** AUTH-002 even CITES the floor (line 31:
+*"WebAuthn is the convenience layer on top of the recoverable TOTP floor (Journey 01 D6)"*) — then its ACs
+spec the opposite: line 9 *"sensitive operations require a fresh **WebAuthn** step-up"*, AC line 50 *"a fresh
+**WebAuthn** step-up challenge is required"*, AC line 81 *"refused until a FRESH **WebAuthn** step-up"*, and
+AC-SI line 96 *"step-up against the existing **passkey**"*. So the story acknowledged TOTP-as-floor in a
+comment and then wrote WebAuthn-only acceptance criteria. Everything downstream — the DoD wording, the
+tests, and the implementation — faithfully implemented the WRONG STORY. (Likely also wrong: LEVER-001's
+step-up wording and possibly the outline; **auditing the rest of the M8 stories + outline vs the journeys is
+step 1 of the fix** — see §8.)
+
+The journey is unambiguous. journey-01 **D6**: *"The required 2FA is the recoverable factor: TOTP. WebAuthn/
+Face ID is a layer on [top]… TOTP is the floor."* Rejected-alternatives: *"Face ID / WebAuthn as a substitute
+for 2FA — Rejected."* Step-up is *"against an existing strong factor."* Principle: *"no mechanism is ever the
+only door."* `hasStrongFactor` correctly = passkey OR confirmed TOTP. The story made the convenience layer
+mandatory anyway. The code then matched the story:
 - the only step-up route is `webauthn/stepup`; `webauthn-client.ts:stepUp()` runs only the WebAuthn ceremony;
 - the route/UI guidance hard-codes "verify a passkey".
-
-This **contradicts the spec.** journey-01 **D6**: *"The required 2FA is the recoverable factor: TOTP.
-WebAuthn/Face ID is a layer on [top]… TOTP is the floor."* Rejected-alternatives: *"Face ID / WebAuthn as a
-substitute for 2FA — Rejected — a convenience layer… not an equal alternative."* Step-up is *"against an
-existing strong factor."* journey-01 principle: **"no mechanism is ever the only door."** `hasStrongFactor`
-correctly = passkey OR confirmed TOTP. So TOTP is first-class (and likely the majority factor); the build
-made the convenience layer mandatory.
 
 **Impact:** a TOTP-only operator (no passkey) cannot, through the product:
 - suspend / resume / burn an agent (suspend route → 403 step_up_required, no TOTP path);
@@ -42,14 +52,17 @@ NOT a hard lockout in theory (`/totp/verify` on an existing session calls `markS
 `last_step_up_at`, so the GATE is factor-agnostic) — but **no UI offers a TOTP step-up**, so in practice the
 operator is dead-ended.
 
-## 2. How it slipped through (the process failure + the lesson)
+## 2. Where it failed (story authoring) and where it did NOT (procedure/reviews)
 
-AUTH-002 (WebAuthn) built step-up first → the **DoD copied the implementation's wording** ("a fresh WebAuthn
-step-up" in DOD-AUTH-2, DOD-LEVER-4) → tests exercised only the WebAuthn path (or the no-factor grace) →
-every review, **including the cello-done-auditor run earlier today**, anchored to tests + DoD, which agreed
-with each other. **Internal consistency (test ↔ DoD) cannot catch a SHARED wrong assumption.** Nobody read
-journey-01 D6 against the step-up code. LESSON (saved to memory `feedback_anchor_reviews_to_journey_spec`):
-anchor ≥1 review to the SOURCE journey/spec; a DoD line's wording must come from the spec, not the code.
+It failed at exactly ONE place: **journey → story translation** (the cello-story step). AUTH-002's ACs
+contradicted the D6 it cited. Everything after that worked AS DESIGNED — the DoD, the live tests, and the
+implementation correctly traced the STORY (the contract). The procedure is correct and the downstream
+reviews did their job (verify code against the story/DoD); they are NOT supposed to re-derive from the
+journeys — the story is meant to BE the journey-faithful contract. So the fix is NOT to make reviewers read
+journeys; it is to (a) correct the wrong stories against the journeys, and (b) guard the story-authoring
+step so a story can never cite a journey decision and then write ACs that contradict it. LESSON (memory
+`feedback_anchor_reviews_to_journey_spec`, to be re-framed): the guard belongs at story WRITING — every AC
+must carry the cited journey decision; a story that names D6 but writes WebAuthn-only ACs is the failure.
 
 ## 3. How we found it (don't lose this thread)
 
@@ -126,20 +139,37 @@ compromised verifier. So a passkey-only design leaves the spec's FLOOR factor (T
 - DOD-LEVER-2 stays 🟡 by decision (signed-event → M10).
 - Honest proven-live count after corrections: ~29/41 (~71%).
 
-## 8. Remediation plan (NOT started — pending alignment)
-ONE coherent unit, red-first, §8-reviewed (do NOT dribble piecemeal):
-1. ROOT FIX — first-class **factor-aware step-up**: the gate is already factor-agnostic and `/totp/verify`
-   already stamps `last_step_up_at`. Add a step-up UI that offers the operator's ACTUAL factor(s) (passkey
-   ceremony → `/webauthn/stepup`, OR TOTP code → `/totp/verify`), and a TOTP step-up the `startStepUp`
-   path can use when there are no WebAuthn creds. Wire into SuspendLever, WebAuthnPanel, TotpPanel, and the
-   F1 onboarding enroll flow. (Server components already know the factors — pass {hasPasskey, hasTotp}.)
-2. The 7 cosmetic strings + Account TOTP-first ordering.
-3. RED-FIRST proof with a **TOTP-only account**: complete onboarding F1, suspend/burn, and factor-removal —
-   all via TOTP step-up. Then restore DOD-AUTH-2 / DOD-LEVER-4 ✅ and add the missing TOTP-only AC coverage.
-4. §8 review (code-reviewer + test-attacker) anchored to journey-01 D6, not just the tests.
+## 8. Remediation plan (NOT started — pending alignment) — FIX THE STORY FIRST, then implement from it
+
+The fix follows the normal procedure once the CONTRACT is right. Order:
+
+**STEP 1 — correct the stories (the golden contract) against the journeys.**
+   a. Audit every M8 story YAML + outline.md against journeys 01-04 for the same journey→AC translation
+      failure (a story that drops/inverts a journey decision). KNOWN-WRONG: `CELLO-M8-AUTH-002.yaml`
+      (step-up ACs say WebAuthn-only despite citing D6). SUSPECT: `CELLO-M8-LEVER-001.yaml` (suspend
+      step-up wording), `outline.md`, and any other AC that names a single factor where the journey says
+      "strong factor". (cello-done-auditor / Explore can do this audit anchored to the journeys.)
+   b. Rewrite the wrong ACs to be journey-faithful: step-up is "against an existing STRONG FACTOR (passkey
+      OR confirmed TOTP)"; add an explicit AC that a TOTP-only operator can satisfy step-up and complete
+      every sensitive action (onboarding F1 enroll, suspend/burn, factor add/remove). TOTP is the floor.
+
+**STEP 2 — implement from the corrected stories** (the gate is already factor-agnostic; `/totp/verify`
+   already stamps `last_step_up_at`). Add a factor-aware step-up UI that offers the operator's ACTUAL
+   factor(s) — passkey ceremony → `/webauthn/stepup`, OR TOTP code → `/totp/verify` — and let `startStepUp`
+   use the TOTP path when there are no WebAuthn creds. Wire into SuspendLever, WebAuthnPanel, TotpPanel, and
+   the F1 onboarding enroll flow (server components already know {hasPasskey, hasTotp}). Plus the 7 cosmetic
+   "passkey" → "passkey or authenticator app" strings + Account TOTP-first ordering.
+
+**STEP 3 — RED-FIRST proof with a TOTP-only account** (the missing AC): onboarding F1 + suspend/burn +
+   factor add/remove, all via TOTP step-up. Update the DoD wording FROM THE CORRECTED STORY, then restore
+   DOD-AUTH-2 / DOD-LEVER-4 ✅. §8 review (code-reviewer + test-attacker).
+
+NOTE: known code touch-points are in §6a (still accurate as the implementation surface) — but they are
+STEP 2; do not start them before STEP 1 (the story) is corrected and signed off.
 
 ## 9. OPEN DECISIONS for Andre (gate the work)
-- (a) Approach sign-off on the factor-aware step-up fix (§8 plan above).
+- (a) Approach sign-off on the §8 plan: fix the STORIES first (audit M8 stories + outline vs journeys,
+  rewrite the WebAuthn-only step-up ACs to "any strong factor"), then implement from the corrected stories.
 - (b) Portal deployment model (centralized hosted vs per-operator self-hosted) — gates the M10
   signed-revocation Layer 1 design; not needed to start the step-up fix.
 - (c) Still-pending from before: #1 stand up the live cluster, #2 npm publish — both await "go".
