@@ -264,6 +264,18 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   node-code wires the two transitions at the real #streams add/remove sites (fire-and-forget). The
   exactly-two-writes-during-a-real-lifecycle + readable-from-a-DIFFERENT-node assertions need a
   ≥2-node live cluster — the E2E close gate.)*
+  *(⚠ CONTRADICTION SURFACED 2026-06-28 — "replicated / readable from a different node" is UNIMPLEMENTED,
+  and this line's "replicated" wording contradicts the build journal's "agent_presence is deliberately NOT
+  replicated." Verified in code: `agent_presence` and `directory_nodes` are BOTH absent from
+  setup-replication.sh `PUBLICATION_TABLES` (only append-only-ish tables + agent_suspensions replicate), so
+  a query on node B for an agent owned by node A finds NO presence row → the read rule
+  (`agent-presence-repository.ts` `COALESCE(ap.online AND dn.last_heartbeat_at > fresh, false)`) returns
+  OFFLINE. The portal is pinned to `directory-us1`, so presence is correct ONLY for us-east-1-owned agents;
+  eu/ap-owned agents read offline. This is a genuine ARCHITECTURAL DECISION (replicate mutable presence vs.
+  node-local + owning-node read vs. node-pinned agents) that touches the sovereign-node invariant —
+  TEED UP FOR ANDRE in [[2026-06-28_2030_m8-cross-node-presence-replication-fork]] with a recommendation.
+  Not resolved unilaterally overnight (changes the live federation's replication topology). The single-node
+  presence LOGIC is proven; cross-node read is unbuilt + decision-blocked, NOT merely "close-gate".)*
 - **DOD-PRES-2 — Node-liveness guard.** A dark node's agents age out via stale
   `directory_nodes.last_heartbeat_at`; on restart the node reconciles its owned rows to offline.
   *(PRESENCE-001 AC-003)* — 🟡 *(PROVEN by presence-001-repository (AC-003: a stale-heartbeat node
