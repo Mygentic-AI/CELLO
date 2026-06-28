@@ -103,18 +103,22 @@ export async function upsertIdentityHash(
  *  hash_mismatch the daemon can never verify or ACK (a poison-pill row). Deleting the prior undelivered
  *  row for the kind keeps exactly the current value pending — consistent with the single anchor. The
  *  delete is scoped to acked_at IS NULL (delivered rows are already removed by ACK) AND to the same kind
- *  (a different kind's pending pickup is untouched). A single CTE statement makes the supersede atomic —
- *  the DELETE and INSERT commit together, so a concurrent drain never observes zero rows mid-replace. */
+ *  (a different kind's pending pickup is untouched). The supersede is an atomic ON CONFLICT upsert against
+ *  the partial UNIQUE index `idx_pickup_queue_one_pending_per_kind` (V37, on (agent_id, signal_kind) WHERE
+ *  acked_at IS NULL): the new ciphertext REPLACES the prior pending one in a single statement. The unique
+ *  index makes "one pending per kind" a DB-ENFORCED invariant — not best-effort — so even two concurrent
+ *  same-(agent,kind) enqueues converge to one row (one wins the INSERT, the other takes the DO UPDATE)
+ *  rather than both surviving and re-arming the hash_mismatch poison pill (a READ COMMITTED race an
+ *  app-level DELETE-then-INSERT could not close). A concurrent drain sees the old or the new row, never
+ *  zero. (signal_kind is always set by the write seam; the NULL-kind partial-index edge cannot arise.) */
 export async function enqueuePickup(
   pool: Queryable,
   args: { agentId: string; signalKind: string; ciphertext: Buffer },
 ): Promise<void> {
   await pool.query(
-    `WITH superseded AS (
-       DELETE FROM pickup_queue
-        WHERE agent_id = $1 AND signal_kind = $2 AND acked_at IS NULL
-     )
-     INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext) VALUES ($1, $2, $3)`,
+    `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext) VALUES ($1, $2, $3)
+     ON CONFLICT (agent_id, signal_kind) WHERE acked_at IS NULL
+     DO UPDATE SET ciphertext = EXCLUDED.ciphertext, created_at = now()`,
     [args.agentId, args.signalKind, args.ciphertext],
   );
 }

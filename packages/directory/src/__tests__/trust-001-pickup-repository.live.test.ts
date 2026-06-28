@@ -15,6 +15,7 @@ import { enqueuePickup, upsertIdentityHash } from "../agent-write-repository.js"
 
 const DB_URL = process.env.DATABASE_URL ?? "postgresql://postgres:dev@localhost:5433/cello_spine";
 const AGENT = "trust-pickup-live-agent";
+const OTHER_AGENT = "trust-pickup-live-other-agent"; // a co-tenant — its pickups must survive AGENT's supersede
 const HASH_WEBAUTHN = "c".repeat(64);
 const HASH_PHONE = "d".repeat(64);
 const describeLive = process.env.CELLO_ENV === "local" ? describe : describe.skip;
@@ -24,16 +25,16 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DB_URL });
-    await pool.query(`DELETE FROM pickup_queue WHERE agent_id = $1`, [AGENT]);
-    await pool.query(`DELETE FROM identity_tree_entries WHERE agent_id = $1`, [AGENT]);
+    await pool.query(`DELETE FROM pickup_queue WHERE agent_id = ANY($1)`, [[AGENT, OTHER_AGENT]]);
+    await pool.query(`DELETE FROM identity_tree_entries WHERE agent_id = ANY($1)`, [[AGENT, OTHER_AGENT]]);
     // Two authoritative anchors — one per signal kind (the one-anchor-per-(agent,kind) model).
     await upsertIdentityHash(pool, { agentId: AGENT, signalKind: "webauthn", signalHash: HASH_WEBAUTHN });
     await upsertIdentityHash(pool, { agentId: AGENT, signalKind: "phone", signalHash: HASH_PHONE });
   });
 
   afterAll(async () => {
-    await pool.query(`DELETE FROM pickup_queue WHERE agent_id = $1`, [AGENT]).catch(() => {});
-    await pool.query(`DELETE FROM identity_tree_entries WHERE agent_id = $1`, [AGENT]).catch(() => {});
+    await pool.query(`DELETE FROM pickup_queue WHERE agent_id = ANY($1)`, [[AGENT, OTHER_AGENT]]).catch(() => {});
+    await pool.query(`DELETE FROM identity_tree_entries WHERE agent_id = ANY($1)`, [[AGENT, OTHER_AGENT]]).catch(() => {});
     await pool.end();
   });
 
@@ -54,7 +55,9 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
     expect(byKind.phone.signalHash).toBe(HASH_PHONE);
     expect(Buffer.compare(byKind.webauthn.ciphertext, ctWeb)).toBe(0);
     expect(Buffer.compare(byKind.phone.ciphertext, ctPhone)).toBe(0);
-    expect(drained[0].id <= drained[1].id || true).toBe(true); // oldest-first ordering preserved by the query
+    // Oldest-first: webauthn was enqueued before phone, so it has the smaller id AND drains first.
+    expect(Number(byKind.webauthn.id)).toBeLessThan(Number(byKind.phone.id));
+    expect(drained[0].signalKind).toBe("webauthn");
 
     // H1 (account-scoping): an ACK from a DIFFERENT agent must NOT delete this agent's row, even with
     // the correct (guessable BIGSERIAL) id — cross-tenant deletion is the attack ackPickupDelete guards.
@@ -99,7 +102,39 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
     expect(afterPhone.filter((d) => d.signalKind === "phone"), "a different kind is not superseded").toHaveLength(1);
     expect(afterPhone.filter((d) => d.signalKind === "webauthn")).toHaveLength(1);
 
-    // Cleanup for the shared agent row.
+    // Supersede is also scoped to agent_id — a DIFFERENT agent's pending pickup of the SAME kind must
+    // SURVIVE our enqueue (an unscoped DELETE would silently destroy other tenants' undelivered signals,
+    // the cross-tenant twin of the H1 ACK guard). Seed OTHER_AGENT's webauthn pickup, then re-enqueue
+    // AGENT's webauthn; OTHER_AGENT's row must remain.
+    await enqueuePickup(pool, { agentId: OTHER_AGENT, signalKind: "webauthn", ciphertext: ctOld });
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctNew });
+    const otherDrain = await drainPickupForAgent(pool, OTHER_AGENT);
+    expect(
+      otherDrain.filter((d) => d.signalKind === "webauthn"),
+      "supersede must be scoped to agent_id — a co-tenant's pending pickup is untouched",
+    ).toHaveLength(1);
+    expect(Buffer.compare(otherDrain.filter((d) => d.signalKind === "webauthn")[0].ciphertext, ctOld)).toBe(0);
+
+    // Cleanup for the shared agent rows.
     for (const d of afterPhone) await ackPickupDelete(pool, d.id, AGENT);
+    for (const d of otherDrain) await ackPickupDelete(pool, d.id, OTHER_AGENT);
+    await ackPickupDelete(pool, (await drainPickupForAgent(pool, AGENT)).find((d) => d.signalKind === "webauthn")?.id ?? "0", AGENT);
+  });
+
+  it("the invariant is DB-ENFORCED: a raw duplicate pending INSERT (bypassing enqueuePickup) is rejected", async () => {
+    // The supersede is best-effort in app code under a concurrent same-(agent,kind) race; the V37 partial
+    // UNIQUE index makes "one pending per kind" a real constraint. Prove it directly: a second raw INSERT
+    // for the same (agent, kind) with acked_at NULL — exactly what two racing enqueues would attempt —
+    // must be REJECTED by the database, not silently produce a second poison-pill row.
+    const ct = Buffer.from(Uint8Array.from({ length: 32 }, (_, i) => (i * 3 + 1) % 256));
+    await pool.query(`INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext) VALUES ($1, 'webauthn', $2)`, [AGENT, ct]);
+    await expect(
+      pool.query(`INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext) VALUES ($1, 'webauthn', $2)`, [AGENT, ct]),
+      "a second pending row for the same (agent,kind) must violate the unique index",
+    ).rejects.toThrow(/duplicate key|unique/i);
+    // A DIFFERENT kind is still allowed (the index is per-kind), and the row clears on ACK.
+    await pool.query(`INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext) VALUES ($1, 'phone', $2)`, [AGENT, ct]);
+    for (const d of await drainPickupForAgent(pool, AGENT)) await ackPickupDelete(pool, d.id, AGENT);
+    expect(await drainPickupForAgent(pool, AGENT)).toHaveLength(0);
   });
 });
