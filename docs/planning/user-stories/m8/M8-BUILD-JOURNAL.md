@@ -1926,3 +1926,45 @@ delivery-failure alarm to an SNS topic (AlarmTopicArn param, currently no action
 into deploy.sh as a guarded us-east-1-only step (today deployed via targeted `aws cloudformation deploy`);
 HTTPS or VPC-internal portal→directory (today HTTP+API-key over the public ALB, the existing ops-agent
 model). All in STATE.md. trustless-cello infra/docs commits are LOCAL awaiting Andre's push.
+
+## 2026-06-28 — Post-deploy: hardened to reproducible IaC + cross-node presence fork surfaced
+
+After the portal went live, continued autonomously (overnight, non-stopping):
+- **Reviewed the SES email unit** (feature-dev:code-reviewer + cello-fallback-finder): no blocking/high on
+  correctness; the converging top finding was "a SES misconfig is a SILENT login outage." FIXED: the
+  delivery-failure CloudWatch alarm (now wired to `cello-ops-warning-dev`), fire-and-forget the send (tighten
+  the accepted enumeration timing channel), PORTAL_BASE_URL required outside local (no silent broken-link
+  default), reuse the hardened emailDomain(), test env restore. cello-portal f6a43d8.
+- **Reproducible IaC:** `infra/deploy-portal.sh` orchestrates the whole flow idempotently (build→image→data→
+  secrets→app→verify) — codifies the manual steps, passes the region-expansion test. KMS master key is
+  CREATE-ONCE (never regenerated).
+- **Verification:** magic-link integration 8/8 green after the auth-path edits (the email branch is inert in
+  local — exposeDevCode=true — so the 42/3 served gate is unaffected; not re-run, per the battery rule).
+- **Cross-node presence FORK surfaced (investigation, read-only):** DOD-PRES-1's "replicated / readable from
+  a different node" is UNIMPLEMENTED and contradicts the journal's "deliberately NOT replicated."
+  agent_presence + directory_nodes are NOT in cello_pub → a node-B query for a node-A-owned agent reads
+  OFFLINE; the live portal (pinned to directory-us1) shows correct presence ONLY for us-east-1-owned agents.
+  This is a real architectural DECISION (replicate mutable presence vs node-local+forward vs node-pinned)
+  touching the sovereign invariant — TEED UP with a recommendation (Option 1: replicate; the natural PK
+  means no serial-stagger blocker, and agent_suspensions is the mutable+replicated precedent) in
+  discussion_logs/2026-06-28_2030_m8-cross-node-presence-replication-fork.md. DoD note corrected. NOT
+  resolved unilaterally (changes the live federation's replication topology + reverses a recorded decision).
+
+### M8 AUTONOMOUS FRONTIER — what remains, and why each needs Andre (not buildable solo overnight)
+- **DOD-PRES-1/2/3 (cross-node presence):** the design fork above — Andre decides; then a cluster-coupled
+  replication change (live `setup-replication.sh` op).
+- **DOD-TRUST-1 H2 (pickup_queue → UUID + cello_pub + owning-node sweep gate):** same class — a deliberate
+  cluster-coupled migration + live deploy. Pair it with the presence option as ONE change.
+- **DOD-INV-6 / DOD-LEVER-3 (strict T-of-N refusal):** needs the UNBUILT T-of-N protocol (own milestone,
+  cross-repo crypto+client+directory) — the daemon is the documented 2-of-2 stopgap.
+- **DOD-TRUST-4 (npm publish):** Andre-gated (tag push / promotion).
+- **DOD-LEVER-2 (burn as a signed event):** deferred by decision to an M10/M11 account-key story.
+- **DOD-E2E-1 (full live browser E2E):** the "served portal against the live directory" DIMENSION is now
+  real + verified; the remaining full browser login E2E needs a ceremony-registered account (staging bot)
+  + the SES-delivered code (Andre's inbox) — not self-runnable without fabricating live directory data.
+
+So the portal-deploy task is COMPLETE and hardened; the rest of M8 is genuinely gated on Andre's decision
+(presence), a paired cluster migration deploy, the unbuilt T-of-N protocol, Andre's publish, or a
+ceremony-account live E2E. All trustless-cello infra/docs commits this session are LOCAL (push is Andre's
+call): 3677f37d, a254ef10, a4e9a9b1, 1efff80e, facc436f, 271d8404, 0625828f. cello-portal pushed: 8a2603b,
+f6a43d8.
