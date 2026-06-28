@@ -467,7 +467,19 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 - **DOD-E2E-1 — The full milestone gate.** `CELLO-M8-E2E-001` green end-to-end against the served
   portal + the live directory cluster: ceremony-gated magic-link login, WebAuthn flowing a signal
   through the pipe, agents with presence, suspend blocking signing, the four-class scaffold, and
-  the no-plaintext audit. The milestone writeup is updated with a dated confirmation. *(E2E-001)* — ❌
+  the no-plaintext audit. The milestone writeup is updated with a dated confirmation. *(E2E-001)* — 🟡
+  *(LOCAL CLOSE GATE GREEN (2026-06-28): the FULL M8 portal e2e suite passes against a REAL local
+  directory — `npm run test:e2e:real-dir` → 42 passed / 3 skipped. The served portal drives, through a
+  browser, against the genuine directory internal API (Docker Postgres + Flyway V37 + createInternalApiServer):
+  ceremony-gated magic-link login resolving via the REAL directory (SPINE-2), WebAuthn enroll + the
+  four-class scaffold with WebAuthn live (J-AUTH/J-trust), agents appearing with directory-derived
+  presence (SPINE-3), and suspend/burn round-tripping through the REAL /internal/agent-write seam with
+  the cross-account not_owner binding (J-LEVER). The 3 skipped are the j-spine fixmes SPINE-4 (suspend
+  blocks signing) + SPINE-6 (trust pipe → daemon), both PROVEN in the cello_spine cross-process harness
+  (J-SUSPEND, J-TRUST, real binaries). REMAINING for ✅: the AWS 3-region run + cross-node/replication
+  aspects (PRES-2/3 from-any-node, TRUST-1 pickup_queue replication, strict T-of-N INV-6/LEVER-3) — the
+  live-cluster close gate (Andre's deploy), plus the dated milestone writeup. The LOCAL served milestone
+  claim is green and reproducible; only multi-region remains.)*
 
 ---
 

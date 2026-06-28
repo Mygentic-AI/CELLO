@@ -1712,3 +1712,25 @@ not_owner) runs against real ownership rows. Proven: real-dir 6/6; stub 6/6 (REA
 typecheck+lint clean. cello-portal commit 147c230. So WRITE-1/LEVER-1/LEVER-4/WRITEAPI-SI-001 are now
 proven SERVED end-to-end against a real directory locally (added on top of their contract/component
 proofs). Cross-node/3-region remains the AWS close gate.
+
+## 2026-06-28 — DOD-E2E-1 ❌→🟡: the FULL local served close gate is GREEN (42/3 against a real directory)
+
+Running the ENTIRE M8 portal e2e suite through the real-directory gate (`npm run test:e2e:real-dir`,
+no args) → **42 passed / 3 skipped**. The served portal drives a browser against the genuine directory
+internal API (Docker Postgres + Flyway V37 + createInternalApiServer): magic-link login via the REAL
+directory (SPINE-2), WebAuthn enroll + four-class scaffold WebAuthn-live (J-AUTH/J-trust), agents
+appearing with directory-derived presence (SPINE-3), suspend/burn through the REAL /internal/agent-write
+seam + cross-account not_owner binding (J-LEVER), TOTP/grace/account/inv1 all green. The 3 skipped are
+the j-spine fixmes SPINE-4 (suspend-blocks-signing) + SPINE-6 (trust-pipe→daemon), both proven in the
+cello_spine cross-process harness (J-SUSPEND, J-TRUST). The seed helper is reviewer-APPROVED (honest
+served proof — provisions agents, never pre-creates the asserted suspension).
+
+So the LOCAL served milestone claim is green + reproducible. DOD-E2E-1 ❌→🟡. REMAINING for ✅: the AWS
+3-region run + the genuinely cross-node/replication aspects (PRES-2/3 from-any-node, TRUST-1 pickup_queue
+replication, strict T-of-N INV-6/LEVER-3) + the dated milestone writeup — the live-cluster close gate,
+Andre's deploy.
+
+This closes out the local-actionable M8 work: SPINE-3 ✅, the write seam served-real, and the full local
+close gate green — far more than the earlier (wrong) "everything cluster-gated" call. What's left is
+genuinely the AWS cluster (Andre), the unbuilt T-of-N protocol (separate feature), and the publish/M10
+go (Andre).
