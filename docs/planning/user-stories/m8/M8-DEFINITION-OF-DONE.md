@@ -379,7 +379,13 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   keys), then add pickup_queue to cello_pub; the ack-DELETE (id+agent_id post-H1) replicates and cleans
   every node. Verifiable only on the live ≥2-node cluster (DOD-E2E-1) — a local intra-instance
   logical-replication harness was tried and rejected as too flaky (slot creation blocks on concurrent
-  open txns); see the build journal.)*
+  open txns); see the build journal. ALSO REQUIRED BY H2 (orphan-sweep gate, fallback-finder 2026-06-28):
+  the orphan-pickup backstop sweep (sweepUndeliverablePickups) is safe ONLY while pickup_queue is
+  node-local — it deletes anchor-less rows per-node against the replicated identity_tree. Once
+  pickup_queue joins cello_pub, a node with an unconverged identity_tree replica could delete a
+  deliverable ciphertext and replicate the delete. H2 MUST gate the sweep to the owning node (or add a
+  convergence check) before publishing pickup_queue — the in-code comment on sweepUndeliverablePickups
+  carries this as a blocking note.)*
 - **DOD-TRUST-2 — No-plaintext across the pipe.** Directory holds only the hash; ciphertext sealed
   to k_local (directory/portal can't decrypt); portal discards plaintext + token. *(TRUST-001 AC-002, SI-001)* — ✅
   *(PROVEN: the signal is sealed to the agent's k_local — only the k_local SEED opens it (a wrong seed

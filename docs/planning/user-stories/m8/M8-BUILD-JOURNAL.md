@@ -1307,3 +1307,25 @@ findings will be applied before this is considered closed.
 
 These harden the already-✅ DOD-SPINE-4/6 + DOD-LEVER-1/2/4 paths (no tag flips). DOD-LEVER-2's
 signed-event clause + DOD-TRUST-1 cross-node remain gated (account key / live cluster).
+
+## 2026-06-28 — orphan-sweep §8 review applied (escalation + replication-gate forward-guard)
+
+§8 on the orphan-pickup sweep (worktree e456e46e). code-reviewer: NO high-confidence issues (the DELETE
+predicate is correct; NULL-kind handling explicitly correct; both age + anchor clauses are load-bearing
+in the test). fallback-finder: 3, none HIGH — all applied:
+- #2 MEDIUM (no escalation on persistent failure) → consecutive-failure counter; at threshold (5 ≈ 5 min)
+  emit a DISTINCT trust_signal.pickup.sweep.persistent_failure event; reset on success. Made the sweep a
+  public method (runPickupSweep) for testability; new test drives 4→none, 5→escalate, success→reset.
+- #3 MEDIUM forward (replication unsafety once pickup_queue joins cello_pub) → load-bearing in-code
+  comment + carried into the DoD-TRUST-1 H2 note: H2 MUST gate the sweep to the owning node (or a
+  convergence check) before publishing pickup_queue, else a node with an unconverged identity_tree
+  replica deletes a deliverable ciphertext and replicates the delete.
+- #1 LOW (NULL-kind rows swept) → documented as correct (undeliverable by construction; the write seam
+  guarantees non-null kind so none occur today).
+
+Session tally (trust-pipe + burn hardening, all red→green→§8-reviewed, every finding applied):
+poison-loop supersede + V37 one-pending-per-kind; orphaned-pickup sweep + escalation; burn/share-
+destruction 3 test gaps + key.burn.no_share + reconcile aggregate; anchor-less-skip observability.
+All on worktree m8-read-001 (LOCAL). These harden already-✅ DOD lines (no tag flips). Remaining M8 is
+gated: live cluster (PRES, strict T-of-N, TRUST-1 cross-node, E2E-1), npm publish (TRUST-4), account-key
+(LEVER-2 signed burn).
