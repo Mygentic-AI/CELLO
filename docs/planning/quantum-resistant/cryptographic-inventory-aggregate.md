@@ -16,6 +16,36 @@ description: Unified, de-duplicated inventory of all cryptographic primitives ac
 > actually lives. Items that appear in both source inventories were merged; the overlapping
 > call-site evidence is consolidated here.
 
+## Library Selection Policy
+
+> **Confirmed 2026-06-28 via Node.js Web Crypto API docs.** Node.js 24.7+ ships native ML-KEM
+> and ML-DSA support in `SubtleCrypto` — no WASM, no external dependency, FIPS-adjacent
+> platform implementation. Since CELLO already requires Node ≥ 24, this is the default choice
+> for all new PQC primitives.
+
+**Decision rule (in priority order):**
+
+1. **`node:crypto` Web Crypto (`SubtleCrypto`)** — use for ML-DSA and ML-KEM. Native, no install
+   overhead, no WASM load time. Specifically: `ML-DSA-44`, `ML-DSA-65`, `ML-DSA-87`,
+   `ML-KEM-512`, `ML-KEM-768`, `ML-KEM-1024` are all supported via `generateKey`, `sign`,
+   `verify`, `encapsulateKey`/`decapsulateKey`, `importKey`/`exportKey`.
+2. **`@noble/post-quantum`** — fallback if Web Crypto is missing a needed operation or format.
+   Same audit lineage as `@noble/curves` (already in use), pure JS, consistent API shape.
+3. **Never implement crypto math.** Only write key provider adapters, on-disk formats, wire
+   format serialization, version tags, and domain separation strings.
+
+**Implication for `@oqs/liboqs-js`:** The existing ML-DSA implementation in `core/crypto/src/ml-dsa.ts`
+uses `@oqs/liboqs-js` (WASM). This should be **replaced** with `node:crypto` Web Crypto during
+the migration. Removing the WASM dependency reduces operator install time (CLAUDE.md: WASM adds
+20-40 seconds per install) and eliminates a build-time compilation step.
+
+**No-silent-downgrade rule (mandatory AC on every migration story):** If both classical and PQC
+paths exist during a transition window, the envelope format must encode the algorithm choice
+explicitly. A receiver must never silently fall back from a PQC path to a classical path. Mixed-
+version transcripts must be rejected, not silently accepted under the old algorithm.
+
+---
+
 **Layer key used throughout this document:**
 
 | Tag | Meaning |
@@ -83,9 +113,12 @@ self-registration.
   boundary — replace the *implementation behind the interface*, not every call site.
 - On-disk key format at `~/.cello/key` changes. Requires a migration path for existing operators.
 
-**PQC target:** ML-DSA-44 (FIPS 204 / CRYSTALS-Dilithium). Already implemented in
-`core/crypto/src/ml-dsa.ts` — `InMemoryMlDsaKeyProvider`, `FileMlDsaKeyProvider`, `mlDsaKeygen`.
-Wire the real implementation through the live `KeyProvider`; remove the `FakeMlDsaKeyProvider` stub.
+**PQC target:** ML-DSA (FIPS 204) via **`node:crypto` Web Crypto** (`SubtleCrypto.generateKey`,
+`sign`, `verify` with algorithm `'ML-DSA-44'`). The `core/crypto/src/ml-dsa.ts` file already has
+the right abstraction (`FileMlDsaKeyProvider`, `InMemoryMlDsaKeyProvider`, `mlDsaKeygen`) — the
+implementation behind those interfaces must be **rewritten to call `node:crypto` instead of
+`@oqs/liboqs-js`**. The WASM dependency is then removed from the package. The
+`FakeMlDsaKeyProvider` stub is removed once real tests pass.
 
 **Open question:** ML-DSA-44 (level 2) vs. ML-DSA-65/87 for high-value keys.
 
@@ -204,7 +237,14 @@ The overhead constant and any on-wire size assumptions must be updated.
 - Update `CONTENT_SEAL_OVERHEAD_BYTES` and the wire format spec.
 - The relay never holds a decryption key (CELLO-M7-MSG-001) — this invariant must be preserved.
 
-**PQC target:** ML-KEM (FIPS 203 / Kyber), likely ML-KEM-768 for level-3 security.
+**PQC target:** ML-KEM (FIPS 203) via **`node:crypto` Web Crypto** (`encapsulateKey` /
+`decapsulateKey` with algorithm `'ML-KEM-768'` for level-3 security). The HKDF and AES-GCM steps
+are retained unchanged — only the key-agreement input to HKDF changes from an X25519 shared
+secret to the ML-KEM decapsulated secret.
+
+**Wire format note:** ML-KEM-768 ciphertext is 1088 bytes; encapsulated public key is 1184 bytes.
+`CONTENT_SEAL_OVERHEAD_BYTES = 44` becomes ~1100+ bytes. Update this constant and every relay /
+message-size assumption that depends on it.
 
 ---
 
@@ -270,6 +310,10 @@ exposure for recorded traffic.
 - AWS ALB must support hybrid-KEM TLS 1.3 (X25519 + ML-KEM) — **gated on the AWS roadmap**.
 - No CELLO code change; this is an infrastructure configuration update when AWS enables it.
 - Track [AWS post-quantum TLS roadmap](https://aws.amazon.com/security/post-quantum-cryptography/).
+
+**AWS PQC status as of 2026-06-28:** KMS, ACM, Secrets Manager, S3, CloudFront — all already
+have PQC TLS or ML-KEM/ML-DSA support deployed. **ALB is the specific remaining gap** for CELLO's
+agent↔directory channel. RDS in-transit TLS status unconfirmed — check separately.
 
 ---
 
@@ -348,8 +392,10 @@ the quantum threat but worth fixing in the same pass.
 One symmetric master key per environment per region (`infra/cloudformation/cello-kms.yaml`). Key
 rotation enabled. Directory task role has `Decrypt`/`DescribeKey` only.
 
-**Action:** AWS-managed symmetric encryption — quantum-safe as-is. Track the AWS KMS PQC roadmap
-for future key wrapping algorithm updates.
+**Action:** AWS KMS **already supports ML-KEM hybrid key exchange and ML-DSA digital signatures**
+(confirmed 2026-06-28 via AWS PQC page). ACM and Secrets Manager TLS endpoints already run
+post-quantum s2n-tls. S3 and CloudFront have PQC TLS policies. **No CELLO action required here.**
+The only remaining AWS gap is the ALB (T1-H).
 
 ---
 
@@ -393,9 +439,11 @@ RFC 8032 §5.1.5). SHA-512 is quantum-safe. No action needed.
 Ordered by: criticality of the invariant it protects × ease of migration × external dependencies.
 
 **1. ML-DSA for single signatures — T1-A, T1-B, T1-C (quickest win)**
-The ML-DSA-44 scaffold already exists in `core/crypto/src/ml-dsa.ts`. Wire the real
-implementation through `KeyProvider` / `SigningKeyProvider`. Simultaneously plan the manifest
-hybrid-signature strategy and client binary release for the consortium root key change (T1-B).
+The ML-DSA-44 scaffold already exists in `core/crypto/src/ml-dsa.ts`. Rewrite the implementation
+behind `FileMlDsaKeyProvider` to use `node:crypto` Web Crypto (`SubtleCrypto`) instead of
+`@oqs/liboqs-js`, then wire it through `KeyProvider` / `SigningKeyProvider`. Remove `@oqs/liboqs-js`
+from `package.json` once tests pass — this eliminates the WASM install overhead. Simultaneously
+plan the manifest hybrid-signature strategy and client binary release for T1-B.
 Bump the `@cello-protocol/crypto` and `@cello-protocol/connect` version cascade on completion.
 
 **2. ML-KEM for content sealing — T1-E (cleanest swap)**
@@ -445,6 +493,11 @@ replacements required anywhere in Tier 2.
 - **ML-DSA security level for manifest root keys (T1-B).** Root keys are compiled into the client
   binary and changed only through a client release. They should probably use a higher level
   (ML-DSA-87 / SLH-DSA) than operational keys.
+- **No-silent-downgrade (mandatory on every migration story AC).** During any hybrid transition
+  window where both classical and PQC paths coexist, the algorithm choice must be encoded
+  explicitly in the envelope/wire format. A receiver must reject — never silently accept — a
+  message that arrives under the wrong algorithm for its negotiated version. Mixed-version
+  transcripts are an attack surface, not a compatibility feature.
 
 ---
 
