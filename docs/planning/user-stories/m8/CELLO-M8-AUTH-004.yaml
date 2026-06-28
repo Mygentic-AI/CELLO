@@ -6,7 +6,9 @@ topics: [portal, auth, strong-auth-enforcement, grace-period, waiver, admin-over
 status: draft
 description: >
   Strong-auth enforcement — a 7-day grace during which an operator may use the portal without
-  WebAuthn/TOTP, then a hard gate. The only bypass is a human-granted, per-account waiver flag
+  TOTP, then a hard gate. The required strong factor is the recoverable TOTP floor (journey-01 D6):
+  a passkey is a convenience layer and does NOT lift the cliff — a passkey-only account past grace
+  is still gated until it enrolls TOTP. The only bypass is a human-granted, per-account waiver flag
   (set by support after a written request), scoped to the individual account.
 ---
 # ─── Identity ───────────────────────────────────────────────
@@ -21,41 +23,59 @@ components:
 # ─── Intent ─────────────────────────────────────────────────
 story: >
   As the portal,
-  I want to require strong auth via a 7-day grace then a hard gate, with a human-granted
-  per-account waiver as the only bypass,
-  so that strong auth is de-facto mandatory while a rare operator who genuinely cannot use
-  WebAuthn or TOTP is not permanently locked out.
+  I want to require the recoverable TOTP floor via a 7-day grace then a hard gate, with a
+  human-granted per-account waiver as the only bypass,
+  so that the recoverable strong factor (TOTP) is de-facto mandatory — closing the device-loss
+  lockout that a passkey-only account would hit — while a rare operator who genuinely cannot use
+  TOTP is not permanently locked out.
 
 # ─── Context ────────────────────────────────────────────────
-# Journey 01 D5: strong auth is mandatory in practice via friction, never a hard wall with no
-# escape. A new operator may use the portal WITHOUT a second factor for 7 days (nudged), then is
-# gated. The ONLY bypass is to contact support, request a waiver in writing, and have support set
-# a PER-ACCOUNT waiver flag (the admin override). The flag is scoped to the individual, operated
-# by support, and lifts the gate for that account. This implies a small admin surface (set/clear
-# the flag) — the first support tooling behind the portal.
+# Journey 01 D5+D6: strong auth is mandatory in practice via friction, never a hard wall with no
+# escape. The required factor is the recoverable TOTP floor — "Face ID / WebAuthn as a substitute
+# for 2FA — Rejected" (D6). A passkey is a convenience layer (device-bound, not recoverable) and
+# does NOT satisfy this requirement: a passkey-only account past grace is STILL gated until it
+# enrolls TOTP (this is what closes the device-loss lockout the journey exists to prevent). A new
+# operator may use the portal WITHOUT TOTP for 7 days (nudged), then is gated. The ONLY bypass is
+# to contact support, request a waiver in writing, and have support set a PER-ACCOUNT waiver flag
+# (the admin override). The flag is scoped to the individual, operated by support, and lifts the
+# gate for that account. This implies a small admin surface (set/clear the flag) — the first
+# support tooling behind the portal.
 
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:
-  - trigger: "While an account has no strong-auth factor and is within 7 days of first login"
-    action: "the operator may use the portal; a persistent nudge to enroll a factor is shown"
+  - trigger: "While an account has no confirmed TOTP and is within 7 days of first login"
+    action: "the operator may use the portal; a persistent nudge to enroll TOTP is shown (a passkey
+      does not clear the nudge — TOTP is the required floor)"
 
-  - trigger: "When an account has no strong-auth factor past 7 days and no waiver"
-    action: "the portal gates the operator — they cannot proceed until they enroll a factor (or a
-      waiver is granted)"
+  - trigger: "When an account has no confirmed TOTP past 7 days and no waiver"
+    action: "the portal gates the operator — they cannot proceed until they enroll TOTP (or a
+      waiver is granted); enrolling only a passkey does NOT lift the gate"
 
   - trigger: "When support sets the per-account waiver flag"
-    action: "the gate is lifted for that account only; the operator may continue without a factor"
+    action: "the gate is lifted for that account only; the operator may continue without TOTP"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "An account with no WebAuthn/TOTP, first login at T0"
+    given: "An account with no confirmed TOTP, first login at T0"
     when: "the operator uses the portal before T0+7d, then after T0+7d"
     then: >
-      Before the cliff: access is allowed with a persistent enroll-a-factor nudge. After the
-      cliff: the operator is gated server-side — protected actions are refused until a factor is
-      enrolled, and the gate cannot be bypassed by client-side manipulation (the gate decision is
-      server-side, not a hideable banner). portal.strongauth.grace_expired logged.
+      Before the cliff: access is allowed with a persistent enroll-TOTP nudge. After the cliff: the
+      operator is gated server-side — protected actions are refused until TOTP is enrolled, and the
+      gate cannot be bypassed by client-side manipulation (the gate decision is server-side, not a
+      hideable banner). portal.strongauth.grace_expired logged.
+    test_type: e2e
+    component_under_test: portal
+
+  - id: AC-003
+    given: "An account with a passkey enrolled but NO confirmed TOTP, past T0+7d"
+    when: "the operator uses the portal"
+    then: >
+      The operator is STILL gated — a passkey does not satisfy the strong-auth requirement (journey-01
+      D6: WebAuthn is a convenience layer, not a substitute for the recoverable TOTP floor). The gate
+      lifts only after TOTP is enrolled (or a waiver granted). Stub-resistant: the account holds a
+      strong SESSION factor (the passkey) yet is still walled — proving the cliff keys on the TOTP
+      floor, not on "any factor". This is the device-loss-lockout closure the journey requires.
     test_type: e2e
     component_under_test: portal
 

@@ -8,9 +8,11 @@ description: >
   WebAuthn enrollment + login, plus the factor-agnostic step-up gate. The operator enrolls one
   or more per-device passkeys; login authenticates against them; sensitive operations require a
   fresh step-up against an existing STRONG FACTOR — a passkey OR a confirmed TOTP code (journey-01
-  D6: TOTP is the recoverable floor, WebAuthn a convenience layer). Enrolling a passkey satisfies
-  strong auth. A fresh email-magic-link session cannot add a new credential without stepping up
-  against an existing strong factor.
+  D6: TOTP is the recoverable floor, WebAuthn a convenience layer). Enrolling a passkey gives a
+  strong SESSION login but is a convenience layer — it does NOT by itself satisfy the account's
+  strong-auth REQUIREMENT, which is the recoverable TOTP floor (the 7-day cliff in AUTH-004 is
+  lifted by TOTP, not a passkey). A fresh email-magic-link session cannot add a new credential
+  without stepping up against an existing strong factor.
 ---
 # ─── Identity ───────────────────────────────────────────────
 id: CELLO-M8-AUTH-002
@@ -69,10 +71,13 @@ acceptance_criteria:
     when: "they enroll a passkey, then log out and log in with it"
     then: >
       A webauthn_credentials row is stored (unique credential_id, public key, bound to
-      account_id) and authLevel becomes strong. Login runs a real WebAuthn assertion verified
-      against the stored public key — a wrong/absent assertion is rejected. portal.webauthn.enrolled
-      is logged. (Verification against the stored public key is the stub-resistant observable —
-      a stub that returns success without checking the signature fails when given a bad assertion.)
+      account_id) and the SESSION authLevel becomes strong (the passkey login is a strong-assurance
+      session — this is session-level assurance, NOT the account's strong-auth REQUIREMENT, which
+      is the recoverable TOTP floor; a passkey-only account is still subject to the AUTH-004 cliff).
+      Login runs a real WebAuthn assertion verified against the stored public key — a wrong/absent
+      assertion is rejected. portal.webauthn.enrolled is logged. (Verification against the stored
+      public key is the stub-resistant observable — a stub that returns success without checking the
+      signature fails when given a bad assertion.)
     test_type: e2e
     component_under_test: portal
 
