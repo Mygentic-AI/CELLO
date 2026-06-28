@@ -1657,3 +1657,15 @@ implementation derived from it. Trust restored on the board. Remaining non-green
 (SPINE-3, PRES-1..3, LEVER-3, TRUST-1, INV-6 → DOD-E2E-1 close gate) or Andre-gated (TRUST-4 publish, the
 live cluster, the M10 signed-revocation DOD-LEVER-2). Nothing else is locally actionable without the live
 ≥2-node cluster.
+
+## 2026-06-28 — HEARTBEAT: locally-actionable M8 work is complete; remainder is cluster-/Andre-gated
+
+The TOTP-floor remediation (both violations) is done, proven, reviewed, and the DoD is restored. After it,
+every non-green M8 line is gated on something not locally actionable:
+- CLUSTER-GATED (need the live ≥2/≥3-node cluster — the DOD-E2E-1 close gate, an Andre-run AWS deploy):
+  DOD-SPINE-3, DOD-PRES-1/2/3, DOD-INV-6, DOD-LEVER-3, DOD-TRUST-1 (pickup_queue UUID/replication — a
+  directory Flyway change the DoD defers to the close gate; unverifiable without the cluster).
+- ANDRE-GATED: DOD-TRUST-4 (npm publish "go"), the live cluster bring-up, DOD-LEVER-2 (signed revocation →
+  M10 by decision).
+No further unit can be driven red→green locally. Awaiting the live-cluster close gate / Andre's go; not
+blocking — the watchdog continues.
