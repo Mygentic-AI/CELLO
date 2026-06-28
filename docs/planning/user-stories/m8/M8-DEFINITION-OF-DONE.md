@@ -196,10 +196,19 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   authenticator, J-AUTH 7/7: enroll → sign out → usernameless passkey login; a FORGED assertion for
   a known credential is rejected (real signature verification, not a stub); device B (usb) enrolls
   independently of device A, removing A leaves B.)*
-- **DOD-AUTH-2 — Step-up per sensitive op.** Sensitive actions require a fresh WebAuthn step-up
-  (per-op, not once-per-session). *(AUTH-002 AC-003)* — ✅ *(PROVEN LIVE, J-AUTH: removing a factor
-  is refused on a stale session, allowed after a fresh step-up; and after the step-up window
-  elapses, a SECOND sensitive op requires a new step-up — proving per-op, not once-per-session.)*
+- **DOD-AUTH-2 — Step-up per sensitive op.** Sensitive actions require a fresh step-up against a
+  STRONG FACTOR (per-op, not once-per-session). *(AUTH-002 AC-003)* — 🟡 *(DROPPED from ✅ on the
+  2026-06-28 spec-conformance check — SPEC INVERSION vs journey-01 D6.)*
+  *(The WebAuthn path is PROVEN LIVE (J-AUTH: factor-removal refused on a stale session, allowed after a
+  fresh step-up; per-op not once-per-session). BUT the step-up was built WebAuthn-ONLY: the only stepup
+  route is `webauthn/stepup`, and the route message + the SuspendLever UI hard-code "verify a passkey".
+  journey-01 D6 is explicit that TOTP is the required recoverable FLOOR and WebAuthn is a convenience
+  LAYER ("not an equal alternative… not a substitute for 2FA"), and step-up is "against an existing strong
+  factor". A TOTP-only operator — the spec's PRIMARY factor — therefore cannot complete a sensitive action
+  through the product after the 5-min window (dead-ended at "verify a passkey" they don't have). NOT a hard
+  lockout (/totp/verify incidentally stamps last_step_up_at) but the UX has no TOTP step-up. 🟡 until a
+  first-class TOTP step-up + factor-agnostic messaging/UI land. The DoD wording was itself wrong here
+  ("WebAuthn step-up") — it codified the implementation's assumption instead of the spec's.)*
 - **DOD-AUTH-3 — TOTP + backup codes.** TOTP enroll verifies a current RFC-6238 code (verify-
   after-load); backup codes single-use; secret KMS-encrypted, codes hashed. *(AUTH-003)* — ✅
   *(PROVEN: J-TOTP live — enroll confirms only with a current code, a fresh login verifies after
@@ -366,9 +375,14 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   is local (branch m8-lever-001); the npm publish cascade is Andre-gated.)*
 - **DOD-LEVER-4 — Owner-only, step-up, burn-never-erases.** Only the owning account after step-up
   may revoke; a different account / bare session is rejected; burn kills future capability, never
-  past accountability. *(LEVER-001 SI-002)* — ✅
-  *(OWNER-ONLY + STEP-UP PROVEN: the suspend route derives accountId from the session (never the
-  client), requires a fresh WebAuthn step-up when the account has a strong factor, and routes through
+  past accountability. *(LEVER-001 SI-002)* — 🟡 *(DROPPED from ✅ on the 2026-06-28 spec-conformance
+  check — the step-up half inherits the DOD-AUTH-2 spec inversion: revocation step-up is WebAuthn-only, so
+  a TOTP-only operator (the spec's primary factor, journey-01 D6) cannot complete a burn/suspend through
+  the product after the 5-min window — the route + SuspendLever say "verify a passkey" they don't have, and
+  there is no TOTP step-up UX. OWNER-ONLY + burn-never-erases remain PROVEN (below); only the step-up-for-
+  TOTP path is broken. 🟡 until the TOTP step-up fix lands.)*
+  *(OWNER-ONLY + STEP-UP PROVEN (for WebAuthn): the suspend route derives accountId from the session
+  (never the client), requires a fresh step-up when the account has a strong factor, and routes through
   the account-scoped seam — which REJECTS a cross-account write (`not_owner`, WRITEAPI-001 SI-001 live:
   A cannot write B's agent, nothing persisted); a bare-session write is 401. J-LEVER (4/4) proves the
   within-grace path AND the step-up-REQUIRED path (strong factor + stale step-up → 403 step_up_required,

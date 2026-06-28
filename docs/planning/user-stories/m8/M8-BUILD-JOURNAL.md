@@ -1541,3 +1541,30 @@ Per the autonomy rule (pick the reversible option, continue, never block):
 
 Drift check this window: clean (no ✅ flips; SPINE-3 was a 🟡 downgrade last window). Lowest non-green
 (INV-6 strict T-of-N, then SPINE-3) are cluster/close-gate-gated. No autonomous DoD advance remains.
+
+## 2026-06-28 — SPEC INVERSION found (step-up is WebAuthn-only) → DOD-AUTH-2 + DOD-LEVER-4 ✅→🟡
+
+Andre's intuition ("maybe things were built assuming everyone has WebAuthn") caught a real spec inversion.
+journey-01 D6 is explicit: TOTP is the required, recoverable FLOOR; WebAuthn is a convenience LAYER
+("not an equal alternative… not a substitute for 2FA"); step-up is "against an existing strong factor".
+The IMPLEMENTATION inverted this: the only step-up route is `webauthn/stepup`; the suspend route message
+and SuspendLever.tsx both hard-code "verify a passkey". So a TOTP-only operator (the spec's PRIMARY user)
+cannot complete a sensitive action (burn/suspend, factor change) through the product after the 5-min
+window — dead-ended at "verify a passkey" they don't have. NOT a hard lockout (/totp/verify on an existing
+session incidentally calls markStrongAuth → stamps last_step_up_at, so the gate IS factor-agnostic), but
+there is no TOTP step-up UX.
+
+WHY IT SLIPPED THROUGH (the lesson): AUTH-002 built WebAuthn step-up first → the DoD then CODIFIED the
+wrong assumption ("a fresh WebAuthn step-up" in DOD-AUTH-2 + DOD-LEVER-4) → tests exercised only the
+WebAuthn path or the no-factor grace, never a TOTP-only account at a sensitive action → every review,
+incl. the cello-done-auditor run earlier today, anchored to the tests + DoD, which agreed with each other.
+Internal consistency (test ↔ DoD) cannot catch a SHARED wrong assumption. Nobody read journey-01 D6 against
+the step-up implementation. LESSON saved to memory: anchor ≥1 review to the SOURCE journey/spec, and a DoD
+line's wording must come from the spec, not the implementation (else the DoD just launders the bug).
+
+CORRECTION: DOD-AUTH-2 ✅→🟡 and DOD-LEVER-4 ✅→🟡 (step-up half only; owner-only + burn-never-erases remain
+proven). Proven-live count 31→29 of 41 (~71%). FIX (next unit, autonomous + portal-side + testable): add a
+first-class TOTP step-up (a route that verifies a current TOTP code on the session → recordStepUp) +
+factor-agnostic messaging ("re-verify your second factor", not "passkey") + the SuspendLever / step-up UI
+offering the factor the operator actually has. Then re-prove DOD-AUTH-2/LEVER-4 for a TOTP-only account and
+restore ✅.
