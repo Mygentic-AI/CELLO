@@ -1249,3 +1249,25 @@ directory-node smoke 2/2, no-console lint clean. A dedicated firing-test is defe
 reconnect-drain needs the full integration harness; the trigger is unreachable via the normal portal
 flow). REMAINING deeper follow-up: a TTL sweep that deletes pickups that stay anchor-less past a grace
 window (so a genuinely-orphaned ciphertext doesn't linger indefinitely) — design item, not a hotfix.
+
+## 2026-06-28 — investigation (no code change): burn vs agent_revocations — correct by design
+
+Mining the documented residuals, I checked whether the M8 account-burn should write the append-only
+`agent_revocations` tombstone (V34's comment says "burn/retire stay in agent_revocations"). Finding:
+NO bug — the burn correctly uses `agent_suspensions.burned`. `agent_revocations` (V32, M7 REMOVE-001) is
+the agent SELF-revocation path: its `signature BYTEA NOT NULL` is the agent's OWN K_local Ed25519
+signature, verified against agent_profiles.k_local_pubkey before INSERT. An M8 account-authorized burn
+(operator via the portal) has NO K_local signature — the account doesn't hold the agent's private key —
+so it cannot and must not write agent_revocations. The V34 comment conflated the two distinct revocation
+paths (agent-self-signed vs account-authorized). No fix; the impl is sound.
+
+This RECONFIRMS the DOD-LEVER-2 "signed event" gating: agent_revocations demonstrates CELLO's signed-
+revocation pattern already exists, but it is bound to K_local self-revocation, not account authorization.
+A cryptographically-signed account-authorized burn genuinely needs a signing key that does not exist in
+the M8 trust model — the future account-key story, not an M8 hotfix. (Separately noted: agent_revocations
+appears unwritten/unread in the current directory src per grep — if M7 REMOVE-001's wiring lives
+elsewhere that's fine; flagging only as an observation, out of M8 scope.)
+
+Status: the one clean contained defect found by mining (the TRUST pickup poison-loop) is fixed +
+reviewed. Further residuals resolve to correct-by-design or design/resource-gated (account-key signed
+burn, anchor-less-pickup TTL sweep, the live-cluster lines, npm publish). Not manufacturing changes.
