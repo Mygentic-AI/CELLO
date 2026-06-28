@@ -72,8 +72,19 @@ Runtime env: `CELLO_ENV=dev`, `DIRECTORY_API_URL=http://directory-us1.cello.myge
 The portal self-migrates its RDS on startup (instrumentation.ts, fail-closed). Magic-link codes are
 delivered by SES (new `src/server/email.ts`, commit 8a2603b).
 
-**Not yet wired into deploy.sh** (deployed via targeted `aws cloudformation deploy`, like a new-stack
-bootstrap). Follow-up: add a guarded us-east-1-only portal step to deploy.sh for reproducibility.
+**Reproducible deploy:** `infra/deploy-portal.sh [env]` orchestrates the whole flow idempotently (build
+stack → CodeBuild image → data stack → secrets [kms CREATE-ONCE] → app stack → verify /sign-in==200) —
+codifies tonight's manual steps, passes the region-expansion test. NOT folded into the giant `deploy.sh`
+(its 3-region directory/relay flow is a different shape); the portal is single-region us-east-1 like
+ops-agent/cicd. ALARM_TOPIC_ARN defaults to `cello-ops-warning-${env}` (wired).
+
+**⚠ Cross-node presence is a DECISION for Andre, not done:** the live portal shows correct online/offline
+ONLY for us-east-1-owned agents — `agent_presence` + `directory_nodes` are not in `cello_pub`, so the
+portal (pinned to `directory-us1`) reads eu/ap-owned agents as offline. This is an architectural fork
+(replicate mutable presence vs. node-local+forward vs. node-pinned) touching the sovereign-node invariant;
+teed up with a recommendation (Option 1: replicate, citing the agent_suspensions precedent) in
+`docs/planning/discussion_logs/2026-06-28_2030_m8-cross-node-presence-replication-fork.md`. Pair it with
+the TRUST-1 H2 pickup_queue replication as ONE deliberate cluster-coupled change.
 
 ---
 
