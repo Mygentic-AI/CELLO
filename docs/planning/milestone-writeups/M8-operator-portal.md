@@ -141,3 +141,40 @@ pending). This is reproducible, not a one-time manual demo.
 - **Migration-integrity holds even under "keep going."** TRUST-1 H2 is genuinely cluster-coupled
   (unverifiable purpose locally + cluster infra); building it blind would violate the M5 rules. The
   disciplined call is to scope it and pair it with the cluster.
+
+## 2026-06-28 — Portal deployed live to AWS (dated DOD-E2E-1 confirmation)
+
+The portal is now **deployed and serving on AWS** — the dimension DOD-E2E-1 was missing (the portal had
+only ever run locally). Live at **https://portal.cello.mygentic.ai** (us-east-1, ECS Fargate + ALB/ACM/
+Route53 + a dedicated RDS, in the directory's VPC; image `f6a43d8`, built by CodeBuild — never pushed from
+local).
+
+**Delivered (IaC):** `cello-portal-build.yaml` (ECR + S3 source + CodeBuild), `cello-portal-data.yaml`
+(SGs + RDS + ACM cert), `cello-portal-app.yaml` (ALB/HTTPS + Route53 + ECS service + IAM + delivery-failure
+alarm), plus `build-portal.sh` / `create-portal-secrets.sh`. SES magic-link email delivery was wired in the
+portal (the AUTH-001 TODO), reviewed (code-reviewer + fallback-finder), and the reviewer-blocking finding —
+a SES misconfig is a silent login outage — is covered by a CloudWatch alarm on
+`portal.auth.magic_link.delivery_failed`, wired to the `cello-ops-warning-dev` SNS topic.
+
+**Verified live:** HTTPS `/sign-in` → 200 (ACM valid), HTTP → 301→HTTPS, protected `/` → 307→sign-in; the
+task self-migrates its RDS on boot (`migrationVersion 0005`); and a magic-link request resolves accounts
+through the **LIVE directory** `/internal/account-by-email-stub` over its public ALB (200 +
+`accountResolved:false` for an unknown email — proves the served-portal↔live-directory seam with a valid
+API key, no enumeration oracle).
+
+**Bug found + fixed (Symptom / Root cause / Fix / Rule):** the first app deploy rolled back (task exit 1).
+Root cause — the RDS-generated master password contained `#`; built into a `postgres://user:pass@…` URL
+un-encoded, `#` starts the URL fragment → truncated connection string → no DB → migrate failed. The local
+smoke test used a trivial password (`smoke`), hiding it. Fix — `create-portal-secrets.sh` URL-encodes the
+credential components. Rule — any DB URL assembled from a generated/managed credential MUST url-encode the
+parts (RDS passwords routinely contain `#/@:%`); smoke-test with special-char passwords.
+
+**Still 🟡 (unchanged), NOT ✅:** the cross-node aspects — 3-region/from-ANY-node presence (PRES-2/3),
+pickup_queue replication (TRUST-1 H2), strict T-of-N refusal (INV-6/LEVER-3, unbuilt protocol) — and a
+full browser-driven E2E against the live cluster (needs a real ceremony-registered account + the
+SES-delivered code). The "served portal against the live directory" gap is now closed.
+
+**Productionization follow-ups (named, in `infra/STATE.md`):** wire the portal stacks into `deploy.sh` as a
+guarded us-east-1-only step (today deployed via targeted `aws cloudformation deploy`); optionally move
+portal→directory to HTTPS or VPC-internal (today HTTP + API-key over the public ALB, the existing ops-agent
+model). trustless-cello infra/docs commits are local, awaiting Andre's push.
