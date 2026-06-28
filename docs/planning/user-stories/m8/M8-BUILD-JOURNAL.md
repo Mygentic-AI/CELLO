@@ -1385,3 +1385,34 @@ agent_suspended with a valid client share; un-pause restores. Confirms the suspe
 all this session's directory changes (the reconcile/sweep intervals, the no_share/aggregate logging, V37).
 Both live gates the session's work touches — J-TRUST (trust pipe) and J-SUSPEND (suspend) — are green on
 real binaries. Auth (WebAuthn verify + step-up) fallback-finder dispatched next (highest-criticality surface).
+
+## 2026-06-28 — auth surfaces §8 (WebAuthn + magic-link) + AGENT-1 — all fail-closed / honest; campaign complete
+
+Closed the last high-criticality surfaces with two fallback-finders + a manual AGENT-1 read:
+- WebAuthn verify + step-up → NO SILENT FALLBACKS. Every verification failure denies; createSession runs
+  only after finishAuthentication resolves; {verified:false}/missing-credential/expired-challenge all
+  throw → 401. Step-up reads a null lastStepUpAt as NOT fresh (fail closed); hasStrongFactor errors
+  propagate (won't skip the gate); challenge is atomic single-use + purpose+expiry+session bound; RP
+  config throws outside CELLO_ENV=local (no permissive prod default). LOW (documented, not fixed): the
+  register/verify trust-signal handoff is best-effort (WARN on a propagation miss) — re-mintable (D1),
+  local credential intact; an eventual propagation reconcile is the follow-up, not a hotfix. Design note
+  (not a fallback): within the 7-day grace (no strong factor) suspend/burn need no step-up — matches
+  DOD-LEVER-4 / the strong-auth wall.
+- Magic-link sign-in → NO SILENT FALLBACKS. Atomic single-use (UPDATE … WHERE consumed_at IS NULL +
+  FOR UPDATE SKIP LOCKED), expiry in every WHERE, salted-hash code compare, no enumeration oracle
+  (rate-limit row recorded for EVERY email before resolution → identical 429), no auto-create, devCode
+  gated to local (config throws on prod/unknown env), directory outage propagates (never minted/allowed).
+- AGENT-1 posture/alerts (manual read) → HONEST. The alerts strip is a genuine static empty state (no
+  event source exists yet — deferred to the daemon channel; not faking a populated feed); the posture
+  line reads real derivable state (hasStrongFactor + countCredentials + isTotpConfirmed). No mock/fabrication.
+
+CAMPAIGN COMPLETE — every M8 security-critical/-adjacent path is now §8-reviewed this session: trust pipe
+(end-to-end, all hops) + burn/share-destruction + suspend honor-check + WebAuthn + magic-link + agents
+home. Both live gates the work touches are green on real binaries (J-TRUST, J-SUSPEND). All worktrees
+clean; everything committed (directory + daemon LOCAL on their M8 branches; docs on main).
+
+DOCUMENTED FOLLOW-UPS (design/feature, not hotfixes): trust-signal PROPAGATION reconcile (re-attempt a
+handoff/hash write that WARN-failed — needs a pending-propagation record; complements the orphan sweep
+which handles the inbound side). REMAINING M8 stays gated: live ≥2-node cluster (PRES-1/2/3, strict
+T-of-N INV-6/LEVER-3, TRUST-1 cross-node, E2E-1), npm publish (TRUST-4), account Ed25519 key (LEVER-2
+signed burn). None are autonomously completable without those resources or your sign-off.
