@@ -1195,3 +1195,44 @@ FailedToOpenSocket, zero findings produced) — re-dispatched after the API reco
 
 F1 is now fully closed per §8 (green + both reviewers applied). All units added this session
 (H1/F2/MEDIUM-1/LOW-3 fixes + F4/F3/F1 teeth) have been reviewed.
+
+## 2026-06-28 — TRUST-pipe hardening: enqueuePickup supersede + DB-enforced one-pending-per-kind (reviewed)
+
+Closed a documented TRUST-pipe defect (the "superseded identity-tree hash leaves a stale pickup row
+that re-fires hash_mismatch" residual). RED→GREEN red-first, then full §8 review (code-reviewer/opus +
+test-attacker + fallback-finder — it's a write/persistence path). Worktree m8-read-001 (LOCAL):
+79433b3c (fix) + 11f6ce76 (review remediation).
+
+THE BUG: upsertIdentityHash keeps ONE anchor per (agent, signal_kind), but enqueuePickup APPENDED — so a
+re-enrolled signal left the prior sealed ciphertext in the queue; once the anchor moved, that stale
+ciphertext hashed to the SUPERSEDED anchor on every drain → a permanent hash_mismatch the daemon could
+never verify or ACK (a poison-pill row).
+
+THE FIX (after review): enqueuePickup upserts the current sealed value via ON CONFLICT against a NEW
+partial UNIQUE index (V37: idx_pickup_queue_one_pending_per_kind ON (agent_id, signal_kind) WHERE
+acked_at IS NULL). One pending row per kind is now DB-ENFORCED, not best-effort — consistent with
+identity_tree_entries' (agent_id, signal_kind) PK. OpsAgentExpectedMigrationVersion → 37; V37 applies
+cleanly atop V1-V36 (zero checksum errors).
+
+§8 REVIEW OUTCOMES (all findings applied):
+- test-attacker → initially HOLLOW (BLOCKING): the supersede's agent_id scoping was untested — a DELETE
+  dropping agent_id (cross-tenant destruction of co-tenants' same-kind pending pickups) would have
+  passed. FIXED: added a co-tenant (OTHER_AGENT) survival assertion. Re-verified SOUND.
+- code-reviewer (opus) → CTE atomicity correct, replication-neutral (pickup_queue still not in cello_pub),
+  test non-hollow. One substantive item: no DB uniqueness backstop (concurrent same-kind race).
+- fallback-finder → MEDIUM: same concurrent-enqueue race re-arms the poison pill while the API returns
+  ok:true. Both converged → FIXED at the schema level (V37 unique index + ON CONFLICT) + a DB-backstop
+  test (a raw duplicate pending INSERT is rejected). Also fixed a vacuous ordering assertion (`|| true`)
+  → real oldest-first check.
+
+PRE-EXISTING RESIDUAL surfaced by the fallback-finder (NOT introduced by this diff, separate from the
+unit — logged for follow-up): directory-node.ts:1651 `if (!signalKind || !signalHash) continue;` silently
+SKIPS a pickup row whose kind has no matching identity-tree anchor — it is never delivered, never ACKed,
+and lingers. The comment says "re-mintable" but nothing auto-re-mints. With one-pending-per-kind now
+enforced, a kind whose anchor is absent just sits silently. Worth a dedicated look (a drain that can
+neither verify nor discard an anchor-less row is a quiet stall). Not a regression; out of this unit's
+surface.
+
+This hardens the already-✅ DOD-SPINE-6 / DOD-TRUST-2/3 pipe (no tag flip; DOD-TRUST-1 stays 🟡 on the
+separate cross-node H2 gate). NOTE: the V37 unique index is exactly the kind of constraint the H2 work
+(pickup_queue → cello_pub) will want, so it is already in place for that.
