@@ -1416,3 +1416,22 @@ handoff/hash write that WARN-failed — needs a pending-propagation record; comp
 which handles the inbound side). REMAINING M8 stays gated: live ≥2-node cluster (PRES-1/2/3, strict
 T-of-N INV-6/LEVER-3, TRUST-1 cross-node, E2E-1), npm publish (TRUST-4), account Ed25519 key (LEVER-2
 signed burn). None are autonomously completable without those resources or your sign-off.
+
+## 2026-06-28 — WebAuthn finder LOW fixed: transient-only retry on the trust-signal handoff
+
+Closed the one actionable LOW from the auth review with a real fix (not just docs): the best-effort handoff
+now retries DirectoryUnreachableError (transport/5xx) up to 3× with a small backoff, but rethrows
+DirectoryWriteRejectedError (4xx) immediately. A single transient directory blip during enrollment no
+longer silently drops the trust signal; permanent-failure behavior is unchanged (exhausts → throws →
+caller best-effort WARN; still re-mintable, D1). Tests: fails-twice-then-succeeds lands both writes; a 4xx
+is attempted exactly once. cello-portal 584d051; handoff 5/5; portal e2e 37/37 (no regression).
+
+This downgrades the remaining trust-signal PROPAGATION reconcile follow-up to LOW value — the retry covers
+the common transient case; only a SUSTAINED outage during the whole enrollment still defers to re-mint (D1,
+acceptable). A pending-propagation record + retry job remains a documented (now low-priority) follow-up.
+
+SESSION SECURITY CAMPAIGN — fully closed: every M8 security path §8-reviewed, every finding at every
+severity applied (incl LOWs: handoff retry, daemon malformed/no_content_key logs, directory anchor-less
+skip log, key.burn.no_share, reconcile aggregate + sweep escalation). Live gates green (J-TRUST, J-SUSPEND).
+Remaining M8 gated: live cluster (PRES/strict-T-of-N/TRUST-1 cross-node/E2E-1), npm publish (TRUST-4),
+account key (LEVER-2 signed burn).
