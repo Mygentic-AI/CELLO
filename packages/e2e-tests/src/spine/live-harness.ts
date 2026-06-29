@@ -303,6 +303,26 @@ export function psqlSpineN(i: number, sql: string): string {
   return psqlDb(`${SPINE_DB}_${i}`, sql);
 }
 
+/**
+ * DOD-SUSPEND-1: copy an agent's `agent_profiles` row from directory node `from` to node `to`,
+ * mimicking the `cello_pub` logical replication that production uses so every sovereign node can
+ * honor a suspension (isAgentSuspended JOINs agent_suspensions→agent_profiles per node; only the
+ * registering node has the row). `id` (auto) + `account_id` (FK to user_accounts, absent on the
+ * target → NULL) are excluded; the suspension JOIN needs only agent_id + k_local_pubkey.
+ */
+export function copyAgentProfileBetweenNodes(fromNode: number, toNode: number, kLocalPubkeyHex: string): void {
+  const cols = "k_local_pubkey,primary_pubkey,ml_dsa_pubkey,phone_stub_hash,registered_at,status,created_at,chain_hash,agent_id";
+  execFileSync(
+    "docker",
+    [
+      "compose", "exec", "-T", "postgres", "bash", "-c",
+      `psql -U postgres -d ${SPINE_DB}_${fromNode} -c "COPY (SELECT ${cols} FROM agent_profiles WHERE k_local_pubkey='${kLocalPubkeyHex}') TO STDOUT" | ` +
+        `psql -U postgres -d ${SPINE_DB}_${toNode} -v ON_ERROR_STOP=1 -c "COPY agent_profiles (${cols}) FROM STDIN"`,
+    ],
+    { cwd: TRUSTLESS_ROOT, stdio: "inherit" },
+  );
+}
+
 // ─── The spine cluster: relay + directory, real binaries ────────────────────────
 export interface SpineCluster {
   tmpDir: string;
