@@ -786,3 +786,33 @@ trustedDealer a 3-of-3 key → P1=combineSecret → run the PSS refresh in-proce
 assert combineSecret(new shares)==P1 (secret preserved), new shares ≠ old shares, and a mixed old+new
 share set does NOT reconstruct. Confirm red (no frost-resharing.ts yet), then implement until green, then
 gate, then 3 reviewers, then wire daemon/directory, then J-REFRESH on the spine.
+
+### 2026-07-01 ~02:25 — DOD-REFRESH-1 falsification PROBE — construction pivot (the design note's #1 unknown, resolved)
+**Ran the falsification probe before any code (CLAUDE.md debugging discipline).** Result: the design's
+assumed building block is WRONG and is now pivoted — caught at zero cost.
+
+- **`generateSecretPolynomial(signers, secret=0)` THROWS** `invalid scalar: expected 1 <= sc < curve.n` —
+  @noble rejects a zero constant term. So I CANNOT generate the zero-constant refresh polynomial via that
+  helper. **Pivot:** build δ_i MANUALLY: `coefficients = [0n, c_1, …, c_{T-1}]` with `c_k =
+  Fn.fromBytes(utils.randomScalar())`, degree T−1; commitments `= [Point.ZERO, c_1·G, …, c_{T-1}·G]`.
+- **Confirmed primitives (all present, real):** `ed25519_FROST.utils.Fn` (IField: `fromBytes` LE→bigint,
+  `ORDER`=L, add/mul/create), `utils.randomScalar()` (32B), `ed25519.Point` (`.BASE`, `.multiply(scalar)`,
+  `.add`, `.ZERO`, `.toBytes()`→32, `.equals`). `Point.ZERO.toHex()` = `0100…00` ← this is exactly the
+  commitment[0] value that PROVES the zero constant term (group secret unchanged).
+- **Identifiers are 32-byte LITTLE-ENDIAN scalar hex:** `trustedDealer` ids are `0100…`, `0200…`, `0300…`
+  = scalars 1,2,3; `Fn.fromBytes(bytes('0300…'))` === `3n`. So the polynomial evaluation point for party j
+  is `Fn.fromBytes(hexToBytes(j.identifier))` — same identifier space as DKG.
+- **`combineSecret(shares, signers)` round-trips** → use it as the TEST oracle: secret(before) ==
+  secret(after refresh) proves the group key is preserved without ever assembling it in production.
+
+**Locked construction (frost-resharing.ts):**
+- `generateRefreshContribution(signers, allIds)` → δ = [0n, random…] degree T−1; `subShares[j] = Σ_k
+  coeffs[k]·x_j^k mod L` (Horner, `Fn`); `commitment = [ZERO, c_1·G, …]`.
+- `verifyRefreshContribution(commitment, signers)` → assert length===T, `commitment[0]===Point.ZERO.toBytes()`
+  (the zero-constant proof), each a valid point.
+- `applyRefresh(oldShare, received[], signers)` → for my id j: VSS-check each `δ_i(j)·G == Σ_k x_j^k·C_i[k]`
+  + commitment[0]==identity, then `newShare = oldScalar + Σ_i δ_i(j) mod L`.
+
+RED test next: `core/crypto/src/__tests__/frost-resharing.test.ts` — trustedDealer 3-of-3 → refresh →
+combineSecret(new)==combineSecret(old), new≠old, mixed old+new does NOT reconstruct, VSS rejects a
+tampered/non-zero-constant contribution.
