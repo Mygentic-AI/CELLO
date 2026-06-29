@@ -2163,6 +2163,28 @@ export class CelloDirectoryNode {
     return this.#store.getProfile(kLocalPubkeyHex);
   }
 
+  /**
+   * DOD-SIGN-1: resolve an initiator's FROST group key (primary_pubkey) for signing/seal.
+   * `#primaryPubkeys` is an in-memory cache populated at REGISTRATION time on the node that ran
+   * the DKG handler — it is EMPTY after a directory restart, and on a consortium node that took
+   * part in the DKG rounds but did not run the registration reply. So when the cache misses, fall
+   * back to the PERSISTED store (`agent_profiles.primary_pubkey`) and re-seed the cache. This is
+   * what makes the seal FROST-sign whenever a DKG group key exists, instead of silently dropping to
+   * the M1 single-key notarization (the recurring "seal reads an unseeded in-memory map" bug). The
+   * single-key path then fires ONLY when there is genuinely no profile (no DKG ever happened).
+   */
+  #resolvePrimaryPubkey(kLocalPubkeyHex: string): Uint8Array | undefined {
+    const cached = this.#primaryPubkeys.get(kLocalPubkeyHex);
+    if (cached) return cached;
+    const profile = this.#store.getProfile(kLocalPubkeyHex);
+    if (profile?.primary_pubkey) {
+      const bytes = new Uint8Array(Buffer.from(profile.primary_pubkey, "hex"));
+      this.#primaryPubkeys.set(kLocalPubkeyHex, bytes); // re-seed for next lookup
+      return bytes;
+    }
+    return undefined;
+  }
+
   getThresholdSignerForTest(kLocalPubkeyHex: string): IThresholdSigner | undefined {
     if (process.env.NODE_ENV !== "test") throw new Error("test-only");
     return this.#thresholdSigners.get(kLocalPubkeyHex);
@@ -3365,7 +3387,7 @@ export class CelloDirectoryNode {
     });
 
     // DOD-SEAL-2: notarize with the counterparty ABSENT.
-    const initiatorPrimaryPubkey = this.#primaryPubkeys.get(senderHex);
+    const initiatorPrimaryPubkey = this.#resolvePrimaryPubkey(senderHex);
     if (!initiatorPrimaryPubkey) {
       // Single-key fallback (pre-DKG / local): sign the notarization TBS with the node key.
       // The single-key certificate is rejected by M2 clients, identical to the bilateral path.
@@ -3776,7 +3798,7 @@ export class CelloDirectoryNode {
     // 5. Deliver the dual-attestation cert to BOTH parties. present_signature is A's original seal
     //    signature (the unilateral row's frost_signature); its type follows whether A's primary_pubkey
     //    is known (FROST) or the directory node key was used (single-key fallback).
-    const presentSignatureType: "frost" | "single" = this.#primaryPubkeys.has(presentHex) ? "frost" : "single";
+    const presentSignatureType: "frost" | "single" = this.#resolvePrimaryPubkey(presentHex) ? "frost" : "single";
     const confirmedFrame = encodeSealUpgradeConfirmed({
       type: "seal_upgrade_confirmed",
       session_id: frame.session_id,
@@ -3970,7 +3992,7 @@ export class CelloDirectoryNode {
     const tbs = bindLegibilityToTbs(buildSealTbs(sessionId, recomputedRoot, leafCount, close_timestamp), legibility);
 
     // Look up the seal initiator's primary_pubkey (registered by SESSION-004 or test harness).
-    const initiatorPrimaryPubkey = this.#primaryPubkeys.get(initiatorHex);
+    const initiatorPrimaryPubkey = this.#resolvePrimaryPubkey(initiatorHex);
 
     if (!initiatorPrimaryPubkey) {
       // No primary_pubkey registered for this initiator — fall back to M1 single-key notarization.
@@ -4110,7 +4132,7 @@ export class CelloDirectoryNode {
 
     this.#pendingFrostSeals.delete(sessionIdHex);
 
-    const primaryPubkey = this.#primaryPubkeys.get(initiatorHex);
+    const primaryPubkey = this.#resolvePrimaryPubkey(initiatorHex);
     if (!primaryPubkey) return; // Should not happen; initiator's key was present at processSeal time
 
     // Verify FROST signature (SI-002)
