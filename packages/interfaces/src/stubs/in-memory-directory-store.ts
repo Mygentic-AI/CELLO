@@ -187,6 +187,15 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     return this.#suspendedPubkeys.has(kLocalPubkeyHex);
   }
 
+  /**
+   * The in-memory stub models a SINGLE-node store that holds every agent it is queried about, so it
+   * always reports the profile present (no spurious uncheckable warns in unit tests). Real multi-node
+   * profile-absence — the single-node-honor gap — is exercised only by the pg-backed spine.
+   */
+  async hasAgentProfile(_kLocalPubkeyHex: string): Promise<boolean> {
+    return true;
+  }
+
   readonly #burnedPubkeys = new Set<string>();
   /** Test/stub helper: mark an agent burned (permanent). */
   setAgentBurned(kLocalPubkeyHex: string): void {

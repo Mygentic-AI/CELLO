@@ -256,6 +256,16 @@ export interface DirectoryStore {
   isAgentSuspended(kLocalPubkeyHex: string): Promise<boolean>;
 
   /**
+   * True if THIS node holds an agent_profiles row for `kLocalPubkeyHex`. The suspension honor-check
+   * ({@link isAgentSuspended}) JOINs agent_suspensions→agent_profiles, so a node with NO local profile
+   * resolves every suspension to "not suspended" and signs blind. Callers use this to emit a loud
+   * `frost.suspension.uncheckable` warn when a node participates in a ceremony for an agent it cannot
+   * check — surfacing the single-node-honor production gap until the flag+profile are replicated to
+   * every node (PRESENCE-1 / cello_pub). Observability-only; never a security gate.
+   */
+  hasAgentProfile(kLocalPubkeyHex: string): Promise<boolean>;
+
+  /**
    * True if the agent has been BURNED (permanent — LEVER-002). A burned agent is also suspended; this
    * distinguishes burn (→ each node destroys its own K_server share) from a reversible pause.
    */

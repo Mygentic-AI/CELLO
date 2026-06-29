@@ -135,22 +135,78 @@ describe("J-SUSPEND-TOFN — quorum-aware suspension (DOD-SUSPEND-1)", () => {
     // nodes 1,2 refuse their shares ⇒ only node 0 can sign ⇒ client+1 = 2 < T=3 ⇒ NO signature.
     setPaused(1, agentIdA, true);
     setPaused(2, agentIdA, true);
-    const blocked = (await connA.call("cello_initiate_session", { target_pubkey: pubX })) as { ok?: boolean; reason?: string };
+    // F1 (test-attacker): retry-wrap the block on the SAME transient (standing_receiver_unavailable) as
+    // control/signs. Without this symmetry the block has no retry, so a flaky transient could satisfy a
+    // loose `ok===false` and masquerade as the threshold block.
+    let blocked = (await connA.call("cello_initiate_session", { target_pubkey: pubX })) as { ok?: boolean; reason?: string };
+    for (let i = 0; i < 20 && !blocked.ok && blocked.reason === "standing_receiver_unavailable"; i++) {
+      await sleep(300);
+      blocked = (await connA.call("cello_initiate_session", { target_pubkey: pubX })) as { ok?: boolean; reason?: string };
+    }
     expect(blocked.ok, `2 suspended directories must block signing: ${JSON.stringify(blocked)}`).toBe(false);
-    // NOT agent_suspended — node 0 (the initiator's node) is NOT paused; this is a THRESHOLD failure,
-    // proving the per-node share refusal (not the single-node initiator gate).
-    expect(blocked.reason, `block must be a threshold failure, not the single-node gate: ${JSON.stringify(blocked)}`).not.toBe("agent_suspended");
+    // EXACT reason — not merely "not agent_suspended" (which accepts ~18 unrelated/transient failures).
+    // The client-side FROST signer returns DIRECTORY_BELOW_THRESHOLD; the delegated session-request path
+    // collapses a sub-threshold ceremony to a null signature, which the directory's ClientDelegatedSigner
+    // re-derives as CEREMONY_EXHAUSTED → wire reason `ceremony_exhausted`. This is the GENUINE
+    // threshold-refusal signature: the ceremony RAN and could not reach T because nodes 1,2 refused.
+    expect(blocked.reason, `block must be the threshold-refusal reason ceremony_exhausted: ${JSON.stringify(blocked)}`).toBe("ceremony_exhausted");
+
+    // F3 (test-attacker, agent-scoped redundancy): a SECOND agent B, seeded to nodes 1,2 and NOT
+    // suspended, must STILL sign through those same nodes while A is suspended there. Proves the refusal
+    // is scoped to agent A — not the whole node going dark (which would pass A's assertions identically
+    // yet violate the sovereign-node redundancy invariant: suspending A must not disable 1/2 for others).
+    const connB = await connectMcp(celloDir, "suspn-B");
+    mcpConns.push(connB);
+    // Create B THROUGH the running daemon: provisionAgent only writes a pre-daemon key file the live
+    // daemon never rescans (→ agent_not_found). cello_create_agent runtime-adds B and returns its
+    // K_local pubkey (same identity provisionAgent returns for A/X, created before the daemon started).
+    const createB = (await connB.call("cello_create_agent", { name: "binit" })) as { ok?: boolean; pubkey?: string };
+    expect(createB.ok, `create binit failed: ${JSON.stringify(createB)}`).toBe(true);
+    const pubB = createB.pubkey!;
+    expect(pubB, "binit must have a K_local pubkey").toMatch(/^[0-9a-f]{64}$/);
+    {
+      const r = cello(["register", "binit", `DEV-suspn-binit-${randomBytes(6).toString("hex")}`], env);
+      expect(r.status, `register binit failed: ${r.stdout}`).toBe(0);
+    }
+    expect(((await connB.call("cello_start_agent", { name: "binit" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_use_agent", { name: "binit" })) as { ok?: boolean }).ok).toBe(true);
+    copyAgentProfileBetweenNodes(0, 1, pubB);
+    copyAgentProfileBetweenNodes(0, 2, pubB);
+    let bSigns = (await connB.call("cello_initiate_session", { target_pubkey: pubX })) as { ok?: boolean; reason?: string };
+    for (let i = 0; i < 20 && !bSigns.ok && bSigns.reason === "standing_receiver_unavailable"; i++) {
+      await sleep(300);
+      bSigns = (await connB.call("cello_initiate_session", { target_pubkey: pubX })) as { ok?: boolean; reason?: string };
+    }
+    expect(bSigns.ok, `agent B (not suspended) must sign through nodes 1,2 while A is suspended there — refusal must be agent-scoped, not node-wide: ${JSON.stringify(bSigns)}`).toBe(true);
 
     // UN-SUSPEND node 2 (only node 1 suspended now) ⇒ the FROST signer EXCLUDES the refusing node 1 (the
     // route-around fix: the COMMIT round now excludes a refusing/failing stub, mirroring the sign round)
     // and nodes 0,2 sign ⇒ client+2 = T=3 ⇒ signature forms. Proves a SINGLE node's refusal does NOT
     // block — the whole point of DOD-SUSPEND-1: threshold-refusal ≠ single-node-refusal.
     setPaused(2, agentIdA, false);
+    // F2 (test-attacker): POSITIVE CONTROL that node 1 genuinely refused A's share DURING this ceremony
+    // (not that survivors trivially reached T without ever asking node 1). (a) node 1's OWN db must show
+    // A suspended right now; (b) node 1 must emit a FRESH frost.ceremony.refused.revoked for A.
+    const node1ShowsASuspended = psqlSpineN(
+      1,
+      `SELECT 1 FROM agent_suspensions s JOIN agent_profiles p ON p.agent_id = s.agent_id ` +
+        `WHERE p.k_local_pubkey = '${pubA}' AND s.paused = true LIMIT 1`,
+    );
+    expect(node1ShowsASuspended, "node 1 must independently show A suspended before the route-around").toMatch(/\S/);
+    const refusedReA = new RegExp(`frost\\.ceremony\\.refused\\.revoked.*${pubA.slice(0, 16)}`);
+    const refusedBefore = cluster.directories[1].countLines(refusedReA);
     let signs = (await connA.call("cello_initiate_session", { target_pubkey: pubX })) as { ok?: boolean; reason?: string };
     for (let i = 0; i < 20 && !signs.ok && signs.reason === "standing_receiver_unavailable"; i++) {
       await sleep(300);
       signs = (await connA.call("cello_initiate_session", { target_pubkey: pubX })) as { ok?: boolean; reason?: string };
     }
     expect(signs.ok, `1 suspended directory must NOT block (survivors reach T): ${JSON.stringify(signs)}`).toBe(true);
-  }, 240_000);
+    // stdout-capture lag (DKG-1 lesson): let node 1's refusal line surface before counting the delta.
+    await sleep(2000);
+    const refusedAfter = cluster.directories[1].countLines(refusedReA);
+    expect(
+      refusedAfter,
+      `node 1 must emit a FRESH suspension-refusal for A during the route-around ceremony (before=${refusedBefore} after=${refusedAfter}) — proving survivors routed AROUND a genuinely-refusing node, not that node 1 was never asked`,
+    ).toBeGreaterThan(refusedBefore);
+  }, 300_000);
 });

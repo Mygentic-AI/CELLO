@@ -357,6 +357,17 @@ export class PgDirectoryStore implements DirectoryStore {
     return result.rows.length > 0;
   }
 
+  // SUSPEND-1 review (fallback HIGH): does THIS node hold a profile for the agent? When it does not,
+  // isAgentSuspended above JOINs to zero rows and the node signs BLIND to any suspension — the
+  // single-node-honor gap. Used only to emit the loud `frost.suspension.uncheckable` warn.
+  async hasAgentProfile(kLocalPubkeyHex: string): Promise<boolean> {
+    const result = await this.#pool.query(
+      `SELECT 1 FROM agent_profiles WHERE k_local_pubkey = $1 LIMIT 1`,
+      [kLocalPubkeyHex],
+    );
+    return result.rows.length > 0;
+  }
+
   async listBurnedAgentPubkeys(): Promise<string[]> {
     const result = await this.#pool.query<{ k_local_pubkey: string }>(
       `SELECT p.k_local_pubkey

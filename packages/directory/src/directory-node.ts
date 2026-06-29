@@ -1108,6 +1108,28 @@ export class CelloDirectoryNode {
           });
         });
     }
+    // fallback HIGH (SUSPEND-1 review): a node can only HONOR a suspension for an agent whose
+    // agent_profiles row it holds — the honor-check JOINs agent_suspensions→agent_profiles, so a
+    // missing local profile resolves to "not suspended" and the node SIGNS BLIND. Until the flag+profile
+    // are REPLICATED to every node (PRESENCE-1 / cello_pub, Tier C), single-node honoring means a
+    // genuinely-paused agent can still reach threshold by routing around the one honoring node. That is
+    // the production gap. Make it LOUD here rather than silently signing: emit a distinct warn an alarm
+    // can fire on whenever this node participates in a ceremony for an agent it cannot check. Probe is
+    // observability-only — it never blocks the ceremony (a transient probe error must not strand a
+    // legitimate agent; the security gate is the fail-CLOSED read above, not this warn).
+    if (!paused) {
+      try {
+        if (!(await this.#store.hasAgentProfile(agentPubkey))) {
+          this.#logger?.warn("frost.suspension.uncheckable", {
+            agentShort: agentPubkey?.slice(0, 16),
+            epochId,
+            detail: "no local agent_profiles row — suspension cannot be honored on this node until the flag+profile are replicated (PRESENCE-1)",
+          });
+        }
+      } catch {
+        /* observability-only probe — never block the ceremony on it */
+      }
+    }
     return paused;
   }
 

@@ -142,6 +142,16 @@ export class Proc {
     }
   }
 
+  /**
+   * Count captured stdout/stderr lines matching `re`. Used for windowed positive-control scrapes:
+   * record a count before an action and assert it increased after, to prove a FRESH log event fired
+   * (not an identical one from an earlier phase). Subject to the same stdout-capture lag as the
+   * backlog — await a short settle before reading after an action that should have logged.
+   */
+  countLines(re: RegExp): number {
+    return this.lines.filter((l) => re.test(l)).length;
+  }
+
   /** Resolve with the first stdout/stderr line matching `re` (scans backlog first). */
   waitForLine(re: RegExp, timeoutMs: number): Promise<string> {
     const existing = this.lines.find((l) => re.test(l));
