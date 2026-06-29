@@ -18,7 +18,7 @@ description: >
 | Unit | DoD line | Repo(s) | Status | Notes |
 |------|----------|---------|--------|-------|
 | FED-SPINE-001 (enforcer, build FIRST) | DOD-SPINE-1 | e2e | 🔨 substrate green | harness spawns 3 sovereign dir nodes (own key/transport/port/DB) — j-tofn GREEN; journey asserts (DKG/seal/suspend) accrue per-unit |
-| FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | 🔨 design note done | signed N-node manifest + N-endpoint resolver — seam mapped (resolver→N + manifestNodesToEndpoints), endpoint convention decided |
+| FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | 🟡 spine-green, reviewers running | resolver layer (46cd9e8) + daemon resolve+log (1b1a761) + 3-node manifest spine proof (228be9e6); j-tofn 3/3 GREEN; reviewers pending |
 | FED-DKG-001 | DOD-DKG-1 | client+dir | ⬜ not started | multi-node DKG (2-of-3) |
 | FED-SIGN-001 | DOD-SIGN-1 | client+dir | ⬜ not started | T-of-N session sign + seal; kill single-key fallback |
 | FED-SUSPEND-001 | DOD-SUSPEND-1 | dir | ⬜ not started | quorum-aware refusal |
