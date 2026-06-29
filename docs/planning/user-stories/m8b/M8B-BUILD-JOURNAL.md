@@ -21,7 +21,7 @@ description: >
 | FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | ✅ spine-proven | resolver + daemon resolve+log + 3-node manifest spine proof + pairwise binding + forged-refusal; 3 reviewers clean (fixes: http(s) endpoint contract, severity-graded roster, key guards); j-tofn 4/4 GREEN |
 | FED-DKG-001 | DOD-DKG-1 | client+dir | ✅ spine-proven | multi-node 2-of-3 DKG fans to all 3 dirs (j-tofn-dkg GREEN); below-threshold gate + B1 fix (empty-roster refuses, no downgrade); 3 reviewers clean; MEDIUM count-gate parked |
 | FED-SIGN-001 | DOD-SIGN-1 | client+dir | ✅ spine-proven | T-of-N seal: ≥2 dirs FROST-sign, kill-a-participant still seals, FROST-not-single-key (j-sign teeth); 3 reviewers clean (B1 fixed: session-signing store reconstruction); restart-path + REFRESH cache parked |
-| FED-SUSPEND-001 | DOD-SUSPEND-1 | dir | 🔨 design note done + key finding | quorum-aware refusal — mechanism EXISTS (#isAgentPaused per-node share refusal); FINDING: needs profile+flag replicated to honor on each node (single-node today); prove arithmetic by seeding (spine), replication → Tier C |
+| FED-SUSPEND-001 | DOD-SUSPEND-1 | dir+crypto | 🟡 block-half proven; route-around gap | 2-suspended ⇒ no signature PROVEN (j-suspend-tofn, baf2cfa7); FINDING: 1-suspended also blocks (ceremony_exhausted) — signer doesn't route a refusal to survivors → needs a crypto fix (it.todo); also profile+flag replication → Tier C |
 | FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | ⬜ not started | share refresh / epoch rollover |
 | FED-RELAYSIG-001 | DOD-RELAYSIG-1 | relay+client | ⬜ not started | relay-signed ordering + PERSIST-012 live |
 | FED-OPTIONB-SETUP-001 | DOD-OPTIONB-SETUP-1 | dir+relay+client | ⬜ not started | client-presented assignment; kill relay dial |
@@ -628,3 +628,37 @@ different identifier. CHECK how `#isAgentPaused(agentPubkey)` maps agentPubkey�
 AGENT PUBKEY, not agent_id — so agent_suspensions may be keyed/joined via agent_profiles; verify the
 per-node lookup works when only node 0 has the profile). This is the one real unknown — resolve it
 red-first. NO directory code change expected unless this lookup gap surfaces.
+
+### 2026-07-01 ~05:40 — DOD-SUSPEND-1 — block-half PROVEN; route-around gap FOUND (the real finding)
+**Resolved the unknowns + built the proof.** `isAgentSuspended` JOINs agent_suspensions→agent_profiles
+per node; only node 0 has A's profile after registration, so I added `copyAgentProfileBetweenNodes`
+(cross-DB COPY excluding id+account_id) to SEED A's profile to nodes 1,2 — works (`COPY 1`). j-suspend-tofn
+(`baf2cfa7`) GREEN for the BLOCK half: no-suspension ⇒ A signs; **suspend on 2 of 3 directories ⇒ NO
+signature** (NOT agent_suspended — a real THRESHOLD block via the per-node `#isAgentPaused` share refusal,
+suspending nodes 1,2 not node 0 so the single-node initiator gate doesn't pre-empt).
+
+**THE FINDING (non-obvious, reshapes SUSPEND-1):** a SINGLE suspended directory ALSO blocks
+(`ceremony_exhausted`), not just ≥2. Per the DoD a sub-threshold suspension (1 of 3, below N−T+1=2) MUST
+still sign (the 2 healthy directories reach T) — "threshold-refusal ≠ single-node-refusal." So
+DOD-SUSPEND-1 needs a CRYPTO-LAYER FIX in the FROST signer's route-around, NOT just a proof. Marked
+`it.todo`; the suite stays green.
+
+**Mechanism (for the fix).** The suspended directory sends `{frost_sign_response, ok:false,
+reason:"AGENT_SUSPENDED"}` then closes the stream (`directory-node.ts:1239`). The signer
+(`cello-client/core/crypto/src/frost/frost-threshold-signer.ts`) loops `for attempt < maxRetries`
+(`:378`), EXCLUDES a stub that returns `null`/timeout (`:471`) or an invalid share (`:490`) into
+`ceremonyExcluded`, and retries with a fresh set. It exhausts on 1-suspended instead of routing to {0,2}.
+
+**RESUME POINTER — DOD-SUSPEND-1 route-around fix (diagnose THEN fix the signer).** Run j-suspend-tofn
+with the `it.todo` un-skipped + capture the `[CLIENT-DEBUG]` stderr (the harness captures it — grep the
+daemon/directory output for "FrostThresholdSigner"). Check, in order: (1) `#DEFAULT_MAX_RETRIES`
+(`frost-threshold-signer.ts:279`) — is it ≥2? if 1, a single exclusion can't retry → bump it (cheap fix).
+(2) Does `NetworkDirectoryNode.signRound` (`network-directory-node.ts:181`) return `null` on the
+`{ok:false, reason:"AGENT_SUSPENDED"}` frame (→ excluded) or does it throw/return garbage that isn't
+excluded? If the refusal isn't mapped to null/exclude, map it. (3) Does the per-attempt stub SELECTION
+honor `ceremonyExcluded` (does it re-pick the excluded node 1)? (4) Does the COMMITMENT round
+(generateCommitment) also get refused + excluded, or does it build a commitmentList including node 1 that
+then can't sign? Likely fix: ensure a refusal (AGENT_SUSPENDED) is treated EXACTLY like a timeout (exclude
++ retry) at BOTH commitment and sign rounds, and maxRetries ≥ N (so it can exclude up to N−T+1 and still
+retry). This is a cello-client/core/crypto change (rebuild + re-run j-suspend-tofn). The block-half is
+already proven; the fix makes 1-suspended sign, closing "threshold ≠ single-node." Then 3 reviewers.
