@@ -20,7 +20,7 @@ description: >
 | FED-SPINE-001 (enforcer, build FIRST) | DOD-SPINE-1 | e2e | 🔨 substrate green | harness spawns 3 sovereign dir nodes (own key/transport/port/DB) — j-tofn GREEN; journey asserts (DKG/seal/suspend) accrue per-unit |
 | FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | ✅ spine-proven | resolver + daemon resolve+log + 3-node manifest spine proof + pairwise binding + forged-refusal; 3 reviewers clean (fixes: http(s) endpoint contract, severity-graded roster, key guards); j-tofn 4/4 GREEN |
 | FED-DKG-001 | DOD-DKG-1 | client+dir | ✅ spine-proven | multi-node 2-of-3 DKG fans to all 3 dirs (j-tofn-dkg GREEN); below-threshold gate + B1 fix (empty-roster refuses, no downgrade); 3 reviewers clean; MEDIUM count-gate parked |
-| FED-SIGN-001 | DOD-SIGN-1 | client+dir | ⬜ not started | T-of-N session sign + seal; kill single-key fallback |
+| FED-SIGN-001 | DOD-SIGN-1 | client+dir | 🔨 design note done | T-of-N session sign + seal; kill single-key fallback — seam verified (session-ceremony stubs[] like DKG-1; directory #primaryPubkeys seeding + single-key guard) |
 | FED-SUSPEND-001 | DOD-SUSPEND-1 | dir | ⬜ not started | quorum-aware refusal |
 | FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | ⬜ not started | share refresh / epoch rollover |
 | FED-RELAYSIG-001 | DOD-RELAYSIG-1 | relay+client | ⬜ not started | relay-signed ordering + PERSIST-012 live |
@@ -480,3 +480,46 @@ into the session ctx as DKG-1 did for registration). The signer (`FrostThreshold
 `directoryNodeStubs[]`. THIS is where "kill a node, still signs" gets proven (the T-of-N tolerance the
 DKG-1 reviewers correctly said belongs here). Also: the J-TOFN-DKG happy test could be extended to SIGN a
 session with a node down. Write the §6 design note first; the threshold T (=N) is already decided (Fork B).
+
+### 2026-07-01 ~02:30 — DOD-SIGN-1 design note (§6) — T-of-N session signing + seal
+**Target.** Session signing + seal use a real T-of-N FROST ceremony across the consortium: the client
+coordinates with ANY T of N directory nodes; **kill one node ⇒ it still signs** (exclusion/retry). The
+directory's M1 **single-key notarization fallback** is removed/guarded — FROST whenever a DKG group key
+exists. This is where the "no single node mandatory" invariant gets its SIGNING proof (DKG-1 proved key
+generation; the kill-a-node tolerance the DKG-1 reviewers deferred is proven HERE).
+
+**Verified seam (both sides read):**
+- CLIENT — `session-ceremony.ts:154-167` builds ONE `directoryNodeStubs=[stub]` from
+  `deps.getDirectoryEndpoint()` (single), then `new FrostThresholdSigner({threshold, participants,
+  directoryNodeStubs}, …)`. The signer ALREADY takes `directoryNodeStubs[]`, and `share.threshold/
+  participants` come from the persisted FROST share — which after DKG-1 is N/T. So the client change
+  mirrors DKG-1 EXACTLY: thread `getConsortiumEndpoints` into `CeremonyWiringDeps` (it has
+  `getDirectoryEndpoint` at :96; add the roster getter), build N stubs (each `setBootstrapContext`),
+  pass them all. The signer's `participateInCeremony` then coordinates T-of-N. The same null-vs-empty
+  refusal discipline from DKG-1 B1 applies (manifest configured + empty roster ⇒ refuse, not single-stub).
+- DIRECTORY — `directory-node.ts:3974`: the seal looks up `initiatorPrimaryPubkey =
+  #primaryPubkeys.get(initiatorHex)`; if NULL → **M1 single-key notarization** (`#keyProvider.sign`),
+  "rejected by M2 clients." The recurring CELLO bug (memory `[[project_relay_directory_any_to_any]]` +
+  the seal-receipt investigation): `#primaryPubkeys` is a SEPARATE in-memory map NOT seeded from the
+  persisted store (`agent_profiles.primary_pubkey`), so even after a real DKG the seal can fall to
+  single-key. SIGN-1 directory work: (a) SEED `#primaryPubkeys` from the store (or read the store at
+  seal time) so the FROST path is taken whenever a DKG group key exists; (b) GUARD the single-key
+  fallback — when a DKG key exists it must NEVER single-key-sign (refuse / error), the fallback only for
+  genuinely-no-DKG legacy/test envs (and even that is M2-rejected).
+
+**DECISION (reversible) — keep the single-key fallback ONLY for the no-DKG path, guarded.** Don't delete
+it outright (it serves pure-SESSION-003 test envs); instead guard: if a primary_pubkey EXISTS for the
+initiator (DKG happened) the directory MUST FROST-seal — a null `#primaryPubkeys` lookup when the store
+HAS the primary_pubkey is the bug to fix (seed it), not a legitimate fallback trigger. Log distinctly if
+the fallback ever fires with a DKG present (should be impossible after the seeding fix).
+
+**Spine red (J-TOFN-DKG grows, or a new J-SIGN).** After the 3-node DKG: open a session, send, and SEAL
+→ assert the seal is a real T-of-N FROST signature (not single-key; the directory logs the FROST seal
+ceremony, NOT `M1 single-key notarization`) + verifies against the group key. Then KILL one directory
+node and seal again → still completes (T-of-N exclusion/retry). The kill-a-node spine assert is the
+DOD-INV-NODE proof for signing.
+
+**Cross-repo + build.** Client: `session-ceremony.ts` + `CeremonyWiringDeps` wiring in daemon.ts
+(cello-client). Directory: `directory-node.ts` `#primaryPubkeys` seeding + the seal FROST/single-key
+guard (trustless-cello). Rebuild BOTH dist bins. Falsify-first DONE (this note). Red-first on the spine
+before coding. The threshold (T=N, Fork B) + topology-from-manifest (Fork A) are already decided.
