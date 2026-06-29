@@ -2298,16 +2298,27 @@ export class CelloDirectoryNode {
     }
 
     const epochId = `${frame.k_local_pubkey}:epoch:1`;
+    // DOD-DKG-1: derive the DKG topology from THIS directory's verified consortium manifest
+    // (topology consensus — neither the client nor any single node dictates N; the officer-
+    // signed manifest is the tamper-proof source). N = the manifest's node count; an absent or
+    // single-node manifest → the single-node 2-of-2 (M6/M7 back-compat).
+    const consortiumNodeCount = this.#directoryManifestStore?.getCurrentManifest()?.nodes.length ?? 1;
+    // Fork B threshold: N=1 keeps 2-of-2 (both mandatory); N≥2 → T=N (= max−1: client + any
+    // N−1 directory nodes; tolerates exactly ONE directory outage at SIGNING time; no single
+    // directory node mandatory). `participants` is the directory-node count — runNetworkDkg adds
+    // the client as +1, so FROST max = participants+1. DKG itself still needs all N+1 present.
+    const dkgParticipants = consortiumNodeCount;
+    const dkgThreshold = consortiumNodeCount === 1 ? 2 : consortiumNodeCount;
     // OBS-001 AC-004: DKG begin log
-    // 1 directory node + 1 client = 2 total DKG participants, threshold 2
-    protocolLog("REG", `DKG begin — agent ${truncHex(frame.k_local_pubkey)}, 1 directory nodes, threshold 2`);
-    // DKG requires min 2 participants per @noble/curves constraint.
-    // participants=1 means this directory node + the client = 2 total DKG participants.
+    protocolLog(
+      "REG",
+      `DKG begin — agent ${truncHex(frame.k_local_pubkey)}, ${dkgParticipants} directory nodes, threshold ${dkgThreshold}`,
+    );
     this.#sendFrame(stream, encodeDkgReady({
       type: "dkg_ready",
       epochId,
-      participants: 1,
-      threshold: 2,
+      participants: dkgParticipants,
+      threshold: dkgThreshold,
     }));
 
     // Wait for dkg_complete from the client with primary_pubkey.

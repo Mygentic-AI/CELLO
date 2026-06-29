@@ -442,6 +442,15 @@ export interface StartSpineClusterOpts {
    */
   directoryConsortiumManifestPath?: string;
   /**
+   * DOD-DKG-1: called once after every directory's bootstrap URL is known (health ports
+   * pre-allocated) but BEFORE any directory spawns. A consortium directory reads its
+   * manifest at STARTUP (and exits if the file is missing), and that manifest must carry
+   * these URLs — so this hook lets the caller write the signed consortium manifest (to
+   * directoryConsortiumManifestPath) before the directories boot. Receives the ordered
+   * directoryUrls (== the eventual cluster.directoryUrls).
+   */
+  onDirectoryUrlsReady?: (directoryUrls: string[]) => void | Promise<void>;
+  /**
    * DOD-LEG-2 negative test: when set (>0), the directory inflates every party's published
    * content_frontier_seq by this amount in the FROST-signed legibility — simulating a buggy/
    * malicious directory. The receiving client must re-derive and REJECT
@@ -547,13 +556,20 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
     // seal callback (SPINE-7). Per-node node-identity keys + the relay accepting any node
     // arrive with DOD-MANIFEST-1 / Option B.
     let dir0Pubkey = "";
+    // Pre-allocate every directory's health port BEFORE spawning, so the bootstrap URLs are
+    // known up front (DOD-DKG-1): a consortium directory reads its manifest at STARTUP and
+    // that manifest must carry these URLs, so onDirectoryUrlsReady writes it before any spawn.
+    const healthPorts: number[] = [];
+    for (let i = 0; i < count; i++) healthPorts.push(await freePort());
+    for (let i = 0; i < count; i++) directoryUrls.push(`http://127.0.0.1:${healthPorts[i]}`);
+    if (opts.onDirectoryUrlsReady) await opts.onDirectoryUrlsReady([...directoryUrls]);
     for (let i = 0; i < count; i++) {
       // Provision THIS node's signing key in the binary's own format, read its pubkey.
       const dirKeyFile = join(tmpDir, `directory-key-${i}`);
       const dirKp = await FileKeyProvider.load(dirKeyFile);
       const dirPubkeyHex = Buffer.from(await dirKp.getPublicKey()).toString("hex");
       if (i === 0) dir0Pubkey = dirPubkeyHex;
-      const healthPort = await freePort();
+      const healthPort = healthPorts[i]!;
       // Per-node at-rest envelope key + audit sink (cello-fallback-finder DOD-SPINE-1 #2/#3):
       // sovereign nodes each encrypt their OWN K_server share with their OWN envelope key and
       // write their OWN audit log (so a later test can attribute "node i did X"). Captured in
@@ -607,7 +623,8 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
       // BootstrapEndpoint line means /bootstrap is live — the daemon can discover us.
       await proc.waitForLine(/"adapterName":"BootstrapEndpoint"/, 30_000);
       dirEnvs.push(directoryEnv);
-      directoryUrls.push(`http://127.0.0.1:${healthPort}`);
+      // directoryUrls were pre-built above (before spawn) so onDirectoryUrlsReady could write
+      // the consortium manifest — don't re-push here.
     }
 
     const directoryMultiaddr = listenMultiaddr(spawnedDirs[0], { ws: false });
