@@ -13,6 +13,13 @@ import {
   reconcileNodeOffline,
   listAccountAgentsWithPresence,
 } from "../agent-presence-repository.js";
+import { configurePgTypes } from "../pg-type-config.js";
+
+// Match the PRODUCTION directory node, which installs a global TIMESTAMPTZ→string parser. Without
+// this the test pool returns Dates and HIDES the very bug this file must guard: in prod
+// last_seen_at came back as a string, so `.toISOString()` in the agents-by-account handler crashed
+// (502, agents never appeared). The harness diverging from prod is what let it ship.
+configurePgTypes();
 
 const DB_URL =
   process.env.DATABASE_URL ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
@@ -43,7 +50,14 @@ describeLive("PRESENCE-001 — agent_presence repository + read rule (real schem
   beforeEach(async () => {
     client = await pool.connect();
     await client.query("BEGIN");
-    await client.query(V33_SQL); // create agent_presence + add directory_nodes.last_heartbeat_at
+    // Apply V33 only if it isn't already in the schema — the shared dev DB may be flyway-migrated
+    // past V33 (e.g. after a real-directory e2e run), in which case CREATE TABLE would conflict.
+    const { rows: pre } = await client.query<{ exists: boolean }>(
+      `SELECT to_regclass('agent_presence') IS NOT NULL AS exists`,
+    );
+    if (!pre[0].exists) {
+      await client.query(V33_SQL); // create agent_presence + add directory_nodes.last_heartbeat_at
+    }
     await client.query(
       `INSERT INTO directory_nodes (node_id, region, last_heartbeat_at)
        VALUES ($1, 'test', now()), ($2, 'test', now())`,
@@ -74,6 +88,9 @@ describeLive("PRESENCE-001 — agent_presence repository + read rule (real schem
     const agents = await readAgents();
     expect(agents).toHaveLength(1);
     expect(agents[0]).toMatchObject({ kLocalPubkey: KPUB_A, online: true });
+    // Regression: lastSeenAt must be a real Date even under the prod string parser, so the
+    // internal API's `last_seen_at.toISOString()` cannot crash (the live 502).
+    expect(agents[0].lastSeenAt).toBeInstanceOf(Date);
   });
 
   it("AC-003: node-liveness guard — a dark node ages the agent out to last-seen", async () => {

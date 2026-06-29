@@ -17,6 +17,12 @@
  */
 import pg from "pg";
 import { createInternalApiServer } from "../internal-api-server.js";
+import { configurePgTypes } from "../pg-type-config.js";
+
+// Match the PRODUCTION directory: install the global TIMESTAMPTZ→string parser BEFORE the pool is
+// created. Without this the harness returned Dates while prod returns strings — which is exactly
+// how the agents-by-account `last_seen_at.toISOString()` crash (502) slipped past the portal e2e.
+configurePgTypes();
 
 const DB_URL = process.env["DATABASE_URL"] ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
 const PORT = parseInt(process.env["INTERNAL_API_PORT"] ?? "8081", 10);

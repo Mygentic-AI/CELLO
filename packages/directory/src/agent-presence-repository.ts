@@ -110,7 +110,9 @@ export async function listAccountAgentsWithPresence(
     k_local_pubkey: string;
     agent_id: string | null;
     online: boolean;
-    last_seen_at: Date | null;
+    // The directory node installs a GLOBAL pg parser (pg-type-config.ts) that returns TIMESTAMPTZ
+    // as a raw string, NOT a Date — so this is string|null at runtime. Normalized to a Date below.
+    last_seen_at: string | Date | null;
     paused: boolean;
     burned: boolean;
   }>(
@@ -135,7 +137,9 @@ export async function listAccountAgentsWithPresence(
     kLocalPubkey: r.k_local_pubkey,
     agentId: r.agent_id,
     online: r.online,
-    lastSeenAt: r.last_seen_at,
+    // Normalize to a real Date so consumers (the internal API's last_seen_at.toISOString()) work
+    // whether pg returned a Date or — under the global TIMESTAMPTZ string parser — a string.
+    lastSeenAt: r.last_seen_at == null ? null : new Date(r.last_seen_at),
     paused: r.paused,
     burned: r.burned,
   }));
