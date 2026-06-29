@@ -116,6 +116,18 @@ description: >
 - **J-LIVE** → DOD-DEPLOY-1: all of the above against the live dev cluster.
 
 ## Parked decisions (never silently dropped — RC-1)
+- **DOD-SUSPEND-1 — quorum-aware suspension needs the flag+profile REPLICATED (production gap).**
+  `isAgentSuspended(pubkey)` JOINs `agent_suspensions` → `agent_profiles ON agent_id` per node; a node
+  honors a suspension only if it has BOTH rows. Registration writes `agent_profiles` only on the node that
+  ran the reply (node 0), so non-registration consortium nodes can't honor → suspension is single-node
+  today, NOT quorum-aware T-of-N. The honor-check mechanism (`#isAgentPaused`, per-node share refusal,
+  fails closed) is built and correct. SUSPEND-1 proves the ARITHMETIC by SEEDING the per-node state in the
+  spine (M8B-DECISIONS). **REQUIRED production follow-on:** add `agent_suspensions` + `agent_profiles` to
+  `cello_pub` logical replication (fold into DOD-PRESENCE-1/PICKUP, Tier C, which already extends
+  `cello_pub`) so every sovereign node honors the replicated flag. Until then suspension is single-node in
+  production. Tracked, not dropped.
+
+
 - **DOD-SIGN-1 — store-fallback RESTART path is fixed-in-code but not yet spine-exercised.** The seal
   (`#resolvePrimaryPubkey`) + session-signing (B1: `#processSessionRequest` reconstruction) both fall
   back from the in-memory caches to the persisted `agent_profiles.primary_pubkey` so signing/sealing

@@ -114,6 +114,27 @@ Genuine undecidable forks are PARKED (journal + DoD "Parked decisions" + here), 
   — a degraded consortium must not silently run a ceremony on too few nodes. **Reverse:** n/a (a
   correctness/security gate, not a preference).
 
+### 2026-07-01 ~05:00 — FED-SUSPEND-001 — quorum-aware suspension DEPENDS on replicated profile+flag
+- **Finding.** `pg-directory-store.isAgentSuspended(kLocalPubkeyHex)` JOINs `agent_suspensions` →
+  `agent_profiles ON agent_id WHERE p.k_local_pubkey=$1`. A node honors a suspension only if it has BOTH
+  the agent's `agent_profiles` row (pubkey→agent_id) AND the `agent_suspensions` row. Registration writes
+  `agent_profiles` ONLY on the node that ran the reply (node 0; DKG-1 proved db1=db2=0). So nodes 1,2
+  CANNOT honor a suspension today — `isAgentSuspended` returns false (no profile row) → they sign anyway →
+  the suspension is effectively SINGLE-NODE (node 0's view), NOT the intended quorum-aware T-of-N refusal.
+- **Fork.** (a) Block SUSPEND-1 on the replication (Tier C), or (b) prove the honor-ARITHMETIC now by
+  SEEDING `agent_profiles` + `agent_suspensions` on the consortium nodes (mimicking `cello_pub`
+  replication) and defer the real replication.
+- **Chose (b):** seed the per-node state in the spine to prove "≥2 directories honoring ⇒ no signature; 1 ⇒
+  still signs" (the DOD-SUSPEND-1 requirement is the ARITHMETIC, which is the honor-check + threshold). The
+  mechanism (`#isAgentPaused` per-node share refusal, fails closed) is built and correct.
+- **Why:** SUSPEND-1 precedes PRESENCE/PICKUP (replication) in the DoD order; the honor-arithmetic is
+  independently provable by seeding. Don't block.
+- **REQUIRED follow-on (tracked, not dropped):** production quorum-aware suspension needs `agent_suspensions`
+  AND `agent_profiles` in `cello_pub` logical replication so every sovereign node can honor the flag — fold
+  this into DOD-PRESENCE-1/PICKUP (Tier C replication) which already adds tables to `cello_pub`. Without it,
+  suspension is single-node in production. Logged in DoD "Parked decisions".
+- **Reverse:** n/a (a real architectural dependency + a test-seeding choice).
+
 <!-- Append below. Format:
 ### YYYY-MM-DD HH:MM — <unit-id> — <short title>
 - Fork: …  Chose: …  Why: …  Reverse: …

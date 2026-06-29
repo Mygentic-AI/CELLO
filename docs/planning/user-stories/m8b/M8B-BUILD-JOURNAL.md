@@ -21,7 +21,7 @@ description: >
 | FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | ✅ spine-proven | resolver + daemon resolve+log + 3-node manifest spine proof + pairwise binding + forged-refusal; 3 reviewers clean (fixes: http(s) endpoint contract, severity-graded roster, key guards); j-tofn 4/4 GREEN |
 | FED-DKG-001 | DOD-DKG-1 | client+dir | ✅ spine-proven | multi-node 2-of-3 DKG fans to all 3 dirs (j-tofn-dkg GREEN); below-threshold gate + B1 fix (empty-roster refuses, no downgrade); 3 reviewers clean; MEDIUM count-gate parked |
 | FED-SIGN-001 | DOD-SIGN-1 | client+dir | ✅ spine-proven | T-of-N seal: ≥2 dirs FROST-sign, kill-a-participant still seals, FROST-not-single-key (j-sign teeth); 3 reviewers clean (B1 fixed: session-signing store reconstruction); restart-path + REFRESH cache parked |
-| FED-SUSPEND-001 | DOD-SUSPEND-1 | dir | ⬜ not started | quorum-aware refusal |
+| FED-SUSPEND-001 | DOD-SUSPEND-1 | dir | 🔨 design note done + key finding | quorum-aware refusal — mechanism EXISTS (#isAgentPaused per-node share refusal); FINDING: needs profile+flag replicated to honor on each node (single-node today); prove arithmetic by seeding (spine), replication → Tier C |
 | FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | ⬜ not started | share refresh / epoch rollover |
 | FED-RELAYSIG-001 | DOD-RELAYSIG-1 | relay+client | ⬜ not started | relay-signed ordering + PERSIST-012 live |
 | FED-OPTIONB-SETUP-001 | DOD-OPTIONB-SETUP-1 | dir+relay+client | ⬜ not started | client-presented assignment; kill relay dial |
