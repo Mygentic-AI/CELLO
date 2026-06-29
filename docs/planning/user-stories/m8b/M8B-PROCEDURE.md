@@ -22,9 +22,14 @@ users to protect.** Consequences (non-negotiable):
 - **Do not invent decisions for Andre.** "Should I do this code work?" is always yes.
 - **DO pause for a GENUINE design fork** (materially different architectures, unclear which Andre wants) —
   but overnight you do NOT pause: you PARK it (see §3a). Never dress up "should I proceed?" as a fork.
-- **Deploys + npm publish ARE authorized this milestone** (Andre's explicit grant). Worst case =
-  recoverable setback. Use them as the CLOSE GATE (local 3-dir spine green → publish beta → deploy dev →
-  prove live), NOT as a discovery loop.
+- **AWS actions are AUTHORIZED — take them, never ask, never treat as a "live grenade."** Pushing to
+  AWS, running `deploy.sh`, deploying the directory / relay / portal stacks, publishing npm packages
+  (beta), bouncing/force-redeploying ECS tasks, applying Flyway migrations, editing SSM — ALL authorized
+  for M8B (Andre's explicit grant; alpha, solo, no users; worst case is a recoverable setback). NEVER
+  pause, hedge, or ask permission for an AWS / deploy / publish action. The ONLY discipline is SEQUENCING
+  + BATCHING: build + prove on the local 3-dir spine FIRST, then deploy to dev and prove live (deploys are
+  the close gate, not a debugging loop); and batch directory/relay pushes (each triggers a ~25-30 min
+  deploy). Take the action — never block on it.
 
 ## 0a. Severity triage (spend effort top-down, never invert)
 1. **CORE JOB.** No single node mandatory; any T of N co-sign; Option B seals with no directory→relay;
@@ -121,10 +126,13 @@ The overnight loop is a **session-only** cron (it dies if the Claude process exi
 this block is the durable record. After any restart or `/compact`, re-arm it with CronCreate:
 `cron: "17,47 * * * *"`, `durable: true`, `prompt:` the text below.
 
-> `<<autonomous-loop>>` M8B federation build — kickoff self-audit + 30-min drift check + advance. Follow
-> M8B-PROCEDURE.md §3a. FIRST answer the three kickoff self-audit questions (above): (a) unnecessarily
-> stalled on a decision? pick-reversible-and-log, don't stall; (b) awaiting confirmation / made a
-> checkpoint? unwanted — continue; (c) committing often? commit now if it's been a while. THEN (1) run
+> `<<autonomous-loop>>` M8B federation build. **STEP 0 — if you've been through a `/compact` (or otherwise
+> don't have the M8B docs in context), STOP and READ them before doing anything else:**
+> `docs/planning/user-stories/m8b/M8B-PROCEDURE.md` (this runbook), then `M8B-DEFINITION-OF-DONE.md`, the
+> last `M8B-BUILD-JOURNAL.md` entry + its **Resume pointer**, and `M8B-DECISIONS.md`. They are the source
+> of truth; this cron prompt is only the trigger. THEN answer the three kickoff self-audit questions
+> (§3a): (a) unnecessarily stalled on a decision? pick-reversible-and-log, don't stall; (b) awaiting
+> confirmation / made a checkpoint? unwanted — continue; (c) committing often? commit now if it's been a while. THEN (1) run
 > the drift checklist (anchored-to-real-binaries; on main + committing often; read-only
 > subagents only; lowest non-✅ DoD line; committing constantly; directory/relay pushes batched, deploy
 > only at close gate; every ✅ earned by a spine run), correcting any drift. THEN (2) ADVANCE: read
@@ -134,8 +142,10 @@ this block is the durable record. After any restart or `/compact`, re-arm it wit
 > reviewers code-reviewer model:'opus' + test-attacker + fallback-finder, fix every finding, commit,
 > flip the DoD tag + journal entry + status board). ONE coder thread; no parallel implementers; no
 > per-unit branches. NEVER ask Andre — pick reversible + log in M8B-DECISIONS.md, or PARK a genuine
-> undecidable fork (journal + DoD + decisions) and ship the next unit. Deploys + npm publish authorized
-> as the CLOSE GATE (after local 3-dir spine green). Keep going until all DoD lines ✅ on spine then 🚀 live dev.
+> undecidable fork (journal + DoD + decisions) and ship the next unit. AWS actions (push, deploy.sh,
+> deploy directory/relay/portal, npm publish beta, bounce ECS, migrations, SSM) are AUTHORIZED — take them
+> without asking, never treat as a live grenade; only discipline is sequence (local 3-dir spine green
+> FIRST, then deploy dev + prove live) + batch directory/relay pushes. Keep going until all DoD lines ✅ on spine then 🚀 live dev.
 
 ## 4. Building the enforcer first (it doesn't exist yet)
 The first unit is **DOD-SPINE-1**: extend the spine harness to spawn **3 real directory nodes** locally

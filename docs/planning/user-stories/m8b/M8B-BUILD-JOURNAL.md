@@ -64,7 +64,7 @@ directory/relay pushes (a push there triggers the ~25-30 min CI/CD deploy).
 **Reviewer / blockers.** N/A (docs only). No code, no tests run.
 
 **Resume pointer (pre-compaction, ~20:45).** **Work on `main`** in both repos (no assembly branch —
-merged + deleted). Cron heartbeat armed (job `0a122267`, every :17/:47) — **session-only, NOT durable; the verbatim prompt
+merged + deleted). Cron heartbeat armed (job `6599d248`, every :17/:47) — **session-only, NOT durable; the verbatim prompt
 + schedule live in M8B-PROCEDURE.md §3b, re-arm from there after any restart/compaction.** The cron fires
 the 3 kickoff self-audit questions (no stalling on reversible forks / no unwanted checkpoints / commit
 often) then the drift check then advances. cello
