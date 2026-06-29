@@ -59,10 +59,19 @@ for the architecture (don't re-derive; it's verified). Then start the loop (§2)
 6. **Floor holds** — all tests green; typecheck + lint clean; reachability gate unchanged (daemon never
    imports `@cello-protocol/client`; dead-stack count only shrinks). Vitest: ONE worker, foreground, timeout, filtered.
 7. **Commit** (constantly — §3).
-8. **Review** — dispatch read-only `feature-dev:code-reviewer` (`model:'opus'`) + `cello-test-attacker` on
-   the unit's diff in parallel; add `cello-fallback-finder` when the unit touches crypto/persistence/
-   registration/config. Fix EVERY finding at EVERY severity; hollow-tests + HIGH silent-fallback = blocking.
-   Commit the fixes.
+8. **Review — three READ-ONLY subagents, three distinct jobs (never an implementer).** On the unit's
+   diff, in parallel:
+   - **`feature-dev:code-reviewer`** (`model:'opus'` — it pins Sonnet otherwise) — attacks the CODE
+     (bugs, logic, security, intent-vs-impl).
+   - **`cello-test-attacker`** — attacks the TESTS (tries to pass them with a different/wrong
+     implementation; a test it can satisfy while violating the AC is HOLLOW).
+   - **`cello-fallback-finder`** — attacks the FAILURE PATHS for silent fallbacks. Add it whenever the
+     unit touches **crypto / FROST / DKG, the seal path, the relay-signed-ordering, persistence,
+     registration, config, or a replication/migration** (i.e. nearly every M8B unit — these are exactly
+     where a missing share / unsigned ordering / unconverged replica hides as "looks healthy").
+   Fix EVERY finding at EVERY severity; HOLLOW-TESTS and HIGH silent-fallback findings are **blocking**
+   (fix → re-run red→green / make it fail loud). Commit the fixes. (At journey boundaries,
+   `cello-done-auditor` audits every ✅ flip — §3. All four are read-only; the main loop is the only coder.)
 9. **Update docs** — flip the DoD tag, append a journal entry, update the status board.
 10. Back to step 1.
 
