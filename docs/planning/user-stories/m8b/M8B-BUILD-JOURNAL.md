@@ -588,3 +588,43 @@ fewer honor it, the remaining T still sign. The proof (DOD-SUSPEND-1) is the thr
 on enough nodes ⇒ refuse; suspend on too few ⇒ still signs. Memory `[[project_threshold_t_of_n_not_2_of_2]]`:
 suspend/burn = account-authorized replicated revocation flag every node honors, NOT "one node withholds".
 Write the §6 design note first. The consortium topology (N, T) + the per-node DKG shares are already in place.
+
+### 2026-07-01 ~04:50 — DOD-SUSPEND-1 design note (§6) — quorum-aware refusal (mechanism EXISTS; prove the arithmetic)
+**Target.** Prove threshold-refusal ≠ single-node-refusal: with ≥ (enough) directories honoring a
+suspension the ceremony can't reach T → NO signature; with fewer, the survivors still sign.
+
+**Verified seam (falsify-first DONE).** The suspend mechanism is ALREADY built + T-of-N-by-design:
+- `#isAgentPaused(agentPubkey)` (`directory-node.ts:1080`) reads the REPLICATED `agent_suspensions` via
+  `#store.isAgentSuspended`, FAILS CLOSED (read error → refuse). Comment 1071-1078: "every node
+  INDEPENDENTLY honors the replicated flag — NOT one mandatory node withholding; other healthy nodes
+  still serve (availability)." Exactly the sovereign T-of-N model.
+- TWO honor layers: (1) the INITIATOR gate — `#processSessionRequest` refuses `agent_suspended` if the
+  initiator's OWN node sees it paused (`:1876-1894`; this is what j-suspend single-node proves); (2) the
+  PER-NODE SHARE refusal — each directory's FROST round handler refuses its share for a paused agent
+  (`:1198`, `:1237`). Layer (2) is the threshold arithmetic.
+- **No implementation needed** — the mechanism is complete. DOD-SUSPEND-1 = the SPINE PROOF of layer (2).
+
+**The threshold arithmetic (N=3, T=3 = client + any 2 of 3 directories).** To form a signature the client
+needs 2 directory shares. To BLOCK: ≥ 2 of 3 directories must refuse (only ≤1 left ⇒ client+1 < T). To
+still sign: ≤ 1 directory refuses (≥ 2 left). So: **suspend on 2 → block; suspend on 1 → still signs.**
+
+**Key test trick.** The INITIATOR gate (layer 1) fires FIRST and is single-node (the initiator's node 0's
+view). To exercise layer (2)'s ARITHMETIC, suspend on nodes 1 & 2 but NOT node 0 — node 0 doesn't gate, so
+the ceremony PROCEEDS to FROST signing, where nodes 1,2 refuse their shares → client+node0 = 2 < T → the
+assignment can't be signed → initiate fails (a below-threshold reason, NOT `agent_suspended`). Then
+un-suspend node 2 (only node 1 suspended) → nodes 0,2 sign → T reached → initiate succeeds.
+
+**Spine red (new j-suspend-tofn or extend).** 3-node consortium; register A (multi-node DKG) + target X.
+Set `agent_suspensions(paused=true)` on cello_spine_1 AND cello_spine_2 (via psqlSpineN, keyed by A's
+agent_id on EACH node's DB — the replicated flag, set per-node in the spine since there's no live
+replication). A `cello_initiate_session(X)` → FAILS (can't reach T; reason ≠ agent_suspended since node 0
+isn't paused). Then clear node 2's flag → initiate → SUCCEEDS. Proves 2-suspend-blocks, 1-suspend-doesn't.
+Note: A's agent_id may differ per node DB (each ran its own registration?) — actually registration writes
+agent_profiles only on the node that ran the reply (node 0); nodes 1,2 may NOT have A's profile/agent_id.
+FALSIFY THIS during implementation: if nodes 1,2 lack A's agent_profiles row, `isAgentSuspended` keys on
+agent_id which won't exist there → the suspend flag can't be set the same way. May need to key the
+suspension by k_local_pubkey, or seed agent_profiles on all nodes, or the share-refusal keys on a
+different identifier. CHECK how `#isAgentPaused(agentPubkey)` maps agentPubkey→suspension (it takes the
+AGENT PUBKEY, not agent_id — so agent_suspensions may be keyed/joined via agent_profiles; verify the
+per-node lookup works when only node 0 has the profile). This is the one real unknown — resolve it
+red-first. NO directory code change expected unless this lookup gap surfaces.
