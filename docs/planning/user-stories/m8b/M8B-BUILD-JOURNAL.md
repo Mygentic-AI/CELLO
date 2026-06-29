@@ -290,3 +290,23 @@ harness to prove the resolve end-to-end against 3 real binaries.
 
 **Pre-existing j-auth poll failure** still parked (DoD Parked decisions) — revisit during MANIFEST-1 close
 or after.
+
+### 2026-06-30 ~22:35 — DOD-DKG-1 prep (read-only, while MANIFEST-1 reviewers run)
+Confirmed the DKG ceremony crypto is ALREADY T-of-N capable — DKG-1 is wiring, not new crypto:
+- `runNetworkDkg(agentPubkey, {threshold, participants, directoryNodes: NetworkDirectoryNode[], preAuthToken})`
+  (`network-directory-node.ts:567+`) fans **round1/round2/round3 across ALL `directoryNodes` via
+  `Promise.all`**; `signers = {min: threshold, max: participants+1}` (client always +1). Round-2 already
+  routes each node's `othersRound1 = allRound1.filter(j => j !== i+1)` (everyone except itself) — the
+  per-node share relay the DoD calls "relays round-2 targetIdentifier shares" is IN PLACE.
+- The ONLY limiter is the CALLER: `registration-manager.ts:263` passes `directoryNodes: [dirNode]`
+  (single, built from `this.#ctx.getDirectoryEndpoint()`), and `session-ceremony.ts:166`
+  `directoryNodeStubs=[stub]`. DKG-1 seam: thread the MANIFEST-1 `consortiumEndpoints` (resolved at
+  startup in daemon.ts) into the registration/session ctx, build N `NetworkDirectoryNode` from them, pass
+  `directoryNodes: [n0,n1,n2]` with `participants:N` + the chosen threshold.
+- The directory SIDE (trustless-cello `directory-node.ts:2309-2310 participants:1, threshold:2`) must
+  accept being ONE of N (it already runs round1/2/3 per the stream protocol; verify it doesn't assume
+  participants:1). That's DKG-1's directory-side check.
+- OPEN for DKG-1 design: the exact T-of-N numbers ("2-of-3": 3 directory nodes + client = 4 participants;
+  threshold T such that any T co-sign and 1 node down still completes) + how `consortiumEndpoints` reaches
+  the ctx (a new ctx field / setter). Write the DKG-1 design note (§6) before coding, after MANIFEST-1
+  reviewers clear.
