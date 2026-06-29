@@ -20,7 +20,7 @@ description: >
 | FED-SPINE-001 (enforcer, build FIRST) | DOD-SPINE-1 | e2e | 🔨 substrate green | harness spawns 3 sovereign dir nodes (own key/transport/port/DB) — j-tofn GREEN; journey asserts (DKG/seal/suspend) accrue per-unit |
 | FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | ✅ spine-proven | resolver + daemon resolve+log + 3-node manifest spine proof + pairwise binding + forged-refusal; 3 reviewers clean (fixes: http(s) endpoint contract, severity-graded roster, key guards); j-tofn 4/4 GREEN |
 | FED-DKG-001 | DOD-DKG-1 | client+dir | ✅ spine-proven | multi-node 2-of-3 DKG fans to all 3 dirs (j-tofn-dkg GREEN); below-threshold gate + B1 fix (empty-roster refuses, no downgrade); 3 reviewers clean; MEDIUM count-gate parked |
-| FED-SIGN-001 | DOD-SIGN-1 | client+dir | 🔨 design note done | T-of-N session sign + seal; kill single-key fallback — seam verified (session-ceremony stubs[] like DKG-1; directory #primaryPubkeys seeding + single-key guard) |
+| FED-SIGN-001 | DOD-SIGN-1 | client+dir | 🟡 implemented both sides | client N-stubs (33338f9) + directory #primaryPubkeys store-seed (861c7aef); j-spine + j-loopback seal GREEN (back-compat); REMAINING: T-of-N seal spine proof (+ kill-a-node) + 3 reviewers |
 | FED-SUSPEND-001 | DOD-SUSPEND-1 | dir | ⬜ not started | quorum-aware refusal |
 | FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | ⬜ not started | share refresh / epoch rollover |
 | FED-RELAYSIG-001 | DOD-RELAYSIG-1 | relay+client | ⬜ not started | relay-signed ordering + PERSIST-012 live |
@@ -523,3 +523,29 @@ DOD-INV-NODE proof for signing.
 (cello-client). Directory: `directory-node.ts` `#primaryPubkeys` seeding + the seal FROST/single-key
 guard (trustless-cello). Rebuild BOTH dist bins. Falsify-first DONE (this note). Red-first on the spine
 before coding. The threshold (T=N, Fork B) + topology-from-manifest (Fork A) are already decided.
+
+### 2026-07-01 ~03:00 — DOD-SIGN-1 IMPLEMENTED both sides (spine proof + reviewers remain)
+**Client (cello-client `33338f9`).** `CeremonyWiringDeps.getConsortiumEndpoints()` (async, manifest-
+resolved at ceremony time, null=no-manifest); `reconstructThresholdSigner` builds ONE stub per
+consortium node so the FrostThresholdSigner coordinates the signing/seal ceremony across all N (reaches
+any T, excludes a down node). Null roster → single primary (back-compat). The share's threshold T is
+FIXED, so a degraded roster makes signing FAIL — never forges a lower-threshold sig (single-stub fallback
+safe). Shared `resolveConsortiumRoster` closure wired into all 4 wireSession/wireSeal sites. j-spine 7/7.
+**Directory (trustless-cello `861c7aef`).** `#resolvePrimaryPubkey` helper — the seal/sign read sites
+now fall back from the in-memory `#primaryPubkeys` cache to the persisted store
+(`getProfile().primary_pubkey`) on a miss + re-seed. Fixes the recurring "unseeded in-memory map → seal
+single-keys after restart / on a non-registration node" bug. M1 single-key fires ONLY with no profile.
+j-spine DOD-SPINE-7 + j-loopback bilateral seal GREEN (FROST-notarized). Both dist bins rebuilt.
+
+**RESUME POINTER — DOD-SIGN-1 remaining = the spine PROOF + reviewers (implementation is DONE + back-compat
+green).** Write a T-of-N SEAL spine test (extend `j-tofn-dkg.spine.test.ts` or new `j-sign`): on the 3-node
+consortium, register TWO agents (multi-node DKG each), `cello_initiate_session` A→B, send, both close →
+SEAL. Assert: (1) the directory logs a real FROST seal ceremony across the consortium, NOT `M1 single-key
+notarization` (grep the directory output for the FROST-seal path / absence of single-key); (2) byte-identical
+sealed_root verifies against the group key; (3) KILL one directory node and seal another session → still
+completes (T-of-N — the DOD-INV-NODE signing proof the DKG-1 reviewers deferred here). **LESSON FROM DKG-1
+(critical):** the harness captures directory stdout via async pipe `data` events that LAG the IPC response —
+`await sleep(2000)` (or poll) BEFORE reading directory logs, else a working multi-node ceremony looks
+single-node. Then 3 reviewers (code-reviewer opus + test-attacker + fallback-finder) on the SIGN-1 diff
+(`33338f9`,`861c7aef` + the spine test); fix findings; flip DOD-SIGN-1 → ✅. Both dist already rebuilt.
+Two-agent-session-seal-on-consortium is heavy (like j-loopback on the 3-node cluster) — budget for it.
