@@ -17,7 +17,7 @@ description: >
 
 | Unit | DoD line | Repo(s) | Status | Notes |
 |------|----------|---------|--------|-------|
-| FED-SPINE-001 (enforcer, build FIRST) | DOD-SPINE-1 | e2e | ⬜ not started | spine spawns 3 directory nodes |
+| FED-SPINE-001 (enforcer, build FIRST) | DOD-SPINE-1 | e2e | 🔨 substrate green | harness spawns 3 sovereign dir nodes (own key/transport/port/DB) — j-tofn GREEN; journey asserts (DKG/seal/suspend) accrue per-unit |
 | FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | ⬜ not started | signed N-node manifest + N-endpoint resolver |
 | FED-DKG-001 | DOD-DKG-1 | client+dir | ⬜ not started | multi-node DKG (2-of-3) |
 | FED-SIGN-001 | DOD-SIGN-1 | client+dir | ⬜ not started | T-of-N session sign + seal; kill single-key fallback |
@@ -137,3 +137,30 @@ M7 suite stays green (default path untouched).
 `directories.length === 3`, 3 distinct listen multiaddrs/PeerIDs, 3 distinct `directoryUrls`, and each
 `cello_spine_${i}` reports `flyway_schema_history` present + a sane migration count. RED until the harness
 spawns N; GREEN when it does. The T-of-N ceremony assertions come with DKG/SIGN.
+
+### 2026-06-30 ~21:10 — DOD-SPINE-1 substrate GREEN (harness spawns 3 sovereign nodes)
+**Delivered.** `startSpineCluster({ directoryCount })` now spawns N real `directory.js` binaries
+(default 1 = unchanged M7 behavior). Each node is sovereign: own signing key + transport key (distinct
+PeerID) + health/bootstrap port + listen port + OWN fresh-migrated Postgres DB (`cello_spine_${i}`).
+New harness surface: `directories[]`, `directoryUrls[]`, `databaseUrls[]`, `psqlSpineN(i,sql)`,
+`spineDbUrl()`, `ensurePostgres(dbNames[])`, `psqlDb(db,sql)`. Commit `a42ef342`.
+
+**Proof (real binaries).** `j-tofn.spine.test.ts` GREEN (63.6s): 3 distinct directory PeerIDs, 3 distinct
+bootstrap URLs, 3 DBs each migrated V1→V37. Floor: typecheck 0, eslint 0. Back-compat: `j-sig` (single-node;
+exercises `restartDirectory`/`directory`-getter/`stop` — the exact refactored accessors) both tests GREEN.
+Test-infra only — no directory/relay/daemon source touched, reachability gate untouched.
+
+**Env fix (logged in DECISIONS).** Stopped stale worktree orphan `trustless-cello-m8-read001-postgres-1`
+(Up 41h) that held `:5433`; canonical project postgres then bound it. Reversible.
+
+**Status.** FED-SPINE-001 → 🔨 *substrate green* (NOT ✅ — its DoD line requires ALL journeys green:
+2-of-3 DKG, seal-with-node-down, suspend-quorum, Option B, cross-node, refresh). Those assertions are
+added red-first INSIDE their own units (DKG/SIGN/SUSPEND/…) and grow `j-tofn.spine.test.ts` one journey
+at a time. The enforcer now EXISTS; everything downstream proves itself against it.
+
+**Reviewers.** Dispatched (read-only, on `a42ef342`): `feature-dev:code-reviewer` (opus),
+`cello-test-attacker`, `cello-fallback-finder`. Findings get fixed before this unit is considered closed.
+
+**Next red.** DOD-MANIFEST-1 — client loads + verifies the FULL set of N directory nodes from a real
+threshold-signed consortium manifest (replaces the single-endpoint resolver + placeholder one-node
+manifest); rejects forged / under-threshold / rolled-back manifests.
