@@ -503,6 +503,22 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   unchanged — 3-region/from-ANY-node presence (PRES-2/3), pickup_queue replication (TRUST-1 H2), strict
   T-of-N refusal (INV-6/LEVER-3, unbuilt protocol). A full browser-driven E2E against the live cluster +
   the dated milestone-writeup confirmation are what remain for ✅.)*
+  *(UPDATE 2026-06-29 — OPERATOR-EXERCISED LIVE: Andre drove the deployed portal through a browser
+  end-to-end: magic-link login (6-digit code AND the emailed link), agents appearing from the LIVE
+  directory with truthful presence, passkey enroll/login (WebAuthn), the four-class trust scaffold, and a
+  REAL Burn of an orphan agent — verified federation-wide on the live directory (`burned:true`; a clear
+  returns `409 burned_immutable`, i.e. monotonic/irreversible). Several live bugs were found + fixed today
+  (sign-in code-entry + emailed-link redirect/prefetch; agents-by-account 502 from a pg TIMESTAMPTZ
+  string-vs-Date crash; missing WEBAUTHN_RP_ID/ORIGIN; Account-screen UX: passkey naming, green status,
+  readable sessions; burned-row showing amber "paused" alongside "burned"). Portal image now `776752d`.
+  So the human-operated core path (login → agents → suspend/burn → passkey → trust scaffold) is PROVEN
+  LIVE on AWS. STILL 🟡, NOT ✅ — the remaining items are unchanged: (a) the AUTOMATED CELLO-M8-E2E-001
+  gate run against the live cluster (today's proof was manual/operator-driven, not the harness); (b) the
+  WebAuthn signal flowing THROUGH THE PIPE to a daemon live (SPINE-6/TRUST-1 — proven cross-process, not
+  re-exercised live); (c) suspend BLOCKING a real signing ceremony live (today's burn was an OFFLINE
+  orphan — block-signing is proven by J-SUSPEND, not live); (d) cross-node/3-region (PRES-2/3 from-ANY-node,
+  TRUST-1 pickup_queue replication, strict T-of-N INV-6/LEVER-3). The dated milestone-writeup confirmation
+  IS now in place (M8-operator-portal.md, 2026-06-28 + 2026-06-29 entries).)*
 
 ---
 

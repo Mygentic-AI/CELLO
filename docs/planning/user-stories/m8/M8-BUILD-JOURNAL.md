@@ -2086,3 +2086,28 @@ controls. Full real-dir gate 45 passed / 3 skipped.
 NOTE: the portal lists agents the DIRECTORY has bound to an account; cello status lists the LOCAL daemon's
 agents — the gap (an orphan registered in the directory with no local daemon) is expected, not a bug. A
 softer "archive/dismiss" affordance for orphans (vs Burn) is a possible future nicety (raised, not built).
+
+## 2026-06-29 — ★ CAPSTONE: M8 portal LIVE + operator-exercised on AWS ★
+
+End-of-day consolidation (details in the dated entries above + the milestone writeup + STATE.md):
+
+- The M8 operator portal is **deployed and live** at https://portal.cello.mygentic.ai (us-east-1, ECS
+  Fargate + ALB/ACM/Route53 + dedicated RDS, in the directory VPC; reaches the directory only over its
+  public ALB /internal/* with the API key). Built as IaC; image via CodeBuild only. Current image
+  `cello-portal:776752d`. Delivery-failure alarm → `cello-ops-warning-dev`.
+- **Andre exercised the full human path live:** magic-link login (code + emailed link), agents appearing
+  from the LIVE directory with truthful presence, passkey enroll/login, the four-class trust scaffold, and
+  a real Burn — burn verified federation-wide (`burned:true`; clear → `409 burned_immutable`).
+- **Bugs found + fixed under real use** (each redeployed + verified): sign-in code-entry + emailed-link
+  (internal-host redirect + scanner-prefetch); agents-by-account 502 (pg TIMESTAMPTZ string vs Date —
+  directory pipeline); missing WEBAUTHN_RP_ID/ORIGIN; Account UX (passkey naming/green/sessions);
+  burned-row amber-paused-vs-red-burned. Recurring lesson: the test harness must match production
+  (pg type parser; API-login e2e doesn't prove the UI screen).
+- **Tracking docs updated to reflect all of the above:** this journal (6 dated entries + this capstone);
+  M8-DEFINITION-OF-DONE.md DOD-E2E-1 (operator-exercised-live note; stays 🟡 — automated cluster gate +
+  cross-node + signal-pipe-live + suspend-blocks-real-signing remain); infra/STATE.md (LIVE +
+  operator-verified, image 776752d, WebAuthn env, alarm→SNS, directory agents-502 fix);
+  milestone-writeups/M8-operator-portal.md (2026-06-29 operator section + the 5 bug post-mortems).
+- **Open decisions for Andre** (documented, non-blocking): passkeys multi-device vs cap-at-one;
+  cross-node presence replication fork; orphan-agent archive/dismiss vs Burn; hold directory deploys for
+  explicit go. cello-client packages NOT republished (TRUST-4); T-of-N protocol unbuilt (INV-6/LEVER-3).

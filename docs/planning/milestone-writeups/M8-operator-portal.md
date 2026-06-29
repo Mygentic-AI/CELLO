@@ -178,3 +178,57 @@ SES-delivered code). The "served portal against the live directory" gap is now c
 guarded us-east-1-only step (today deployed via targeted `aws cloudformation deploy`); optionally move
 portal→directory to HTTPS or VPC-internal (today HTTP + API-key over the public ALB, the existing ops-agent
 model). trustless-cello infra/docs commits are local, awaiting Andre's push.
+
+## 2026-06-29 — Operator-exercised live; the bugs that only a real user surfaces
+
+Andre used the deployed portal end-to-end through a browser. The full human path works on AWS:
+magic-link login (6-digit code AND the emailed link), agents appearing from the LIVE directory with
+truthful presence, passkey enroll/login, the four-class trust scaffold, and a **real Burn** of an orphan
+agent — verified federation-wide on the live directory (`burned:true`; a clear returns `409
+burned_immutable`). Portal image `776752d`.
+
+Five classes of bug surfaced only under real use — each fixed, redeployed, verified (Symptom / Root cause
+/ Fix / Rule):
+
+1. **No OTP entry + broken emailed link.** Symptom: the email arrived with a code but the sign-in page had
+   nowhere to enter it, and the link landed on `https://ip-10-0-x-x.ec2.internal:3000/...?error=link`.
+   Root cause: the code-entry step was never built (the e2e logged in via the API helper, so the screen
+   gap was invisible); the verify-GET built its redirect from `new URL(req.url).origin` (the container's
+   internal host behind the ALB); and the single-use token was consumed by an email-scanner's GET
+   prefetch. Fix: stepped sign-in form (email → code), the emailed link lands on `/sign-in?token=` and
+   completes via POST (prefetch-safe), all redirects use the public base URL. Rule: a journey that signs
+   in via the API does NOT prove the sign-in SCREEN; behind an ALB, never derive a user-facing URL from
+   `req.url` — use the configured public base URL.
+
+2. **Agents page: "directory unreachable" + 502.** Symptom: the agents read failed while account
+   resolution worked. Root cause: the agents-by-account query SUCCEEDED but serializing crashed —
+   `last_seen_at.toISOString is not a function`. The directory installs a GLOBAL pg parser returning
+   TIMESTAMPTZ as a string, but the code assumed a Date; the local internal-api-harness + repo test pool
+   did NOT install that parser, so they returned Dates and hid the bug. Fix: normalize to a Date at the
+   repo boundary; `configurePgTypes()` in the harness + repo test so the e2e exercises the prod parser.
+   Rule: the test harness MUST match production's pg type config, or a whole class of timestamp bugs is
+   invisible.
+
+3. **Passkeys broken** — `WEBAUTHN_RP_ID must be set outside CELLO_ENV=local`. Root cause: the WebAuthn env
+   was never set in the task def. Fix: added `WEBAUTHN_RP_ID` / `WEBAUTHN_ORIGIN`. Rule: enumerate every
+   `required()`-outside-local env var when writing the task def.
+
+4. **Account & Security UX.** Hardcoded "test-device" passkey name (the e2e enrolled via the API, so the
+   name path was never UI-tested); gray (not green) status; raw user-agent string in sessions. Fix: the
+   operator names the passkey on enroll (editable default, never "test"); green "Enabled" / "this device";
+   friendly "Chrome on macOS" (raw UA kept on hover). Rule: a UI affordance (naming) needs a UI-level
+   assertion, not just an API test.
+
+5. **Burned row showed both "paused" (amber) and "Burned."** Root cause: burn sets paused=true AND
+   burned=true; the row rendered the paused badge without checking burned. Fix: burned supersedes paused —
+   red terminal "burned" only; amber reserved for the reversible paused state. Burn verified live
+   federation-wide.
+
+**Standing decisions still open for Andre** (all documented, none blocking): passkeys multi-device vs
+cap-at-one (shipped multi-device); cross-node presence replication fork
+([[2026-06-28_2030_m8-cross-node-presence-replication-fork]]); a softer "archive/dismiss" for orphan
+agents (vs Burn); whether to hold directory-pipeline deploys for explicit go.
+
+**Net:** the M8 operator portal is deployed, live, and proven by the operator on the core path. What
+remains for DOD-E2E-1 ✅ is the automated cluster gate + the genuinely cross-node aspects (presence
+from-any-node, pickup-queue replication, strict T-of-N) — unchanged from the start.

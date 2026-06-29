@@ -9,7 +9,17 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
-## 🌐 M8 operator portal — DEPLOY IN PROGRESS (2026-06-28, Andre-authorized, us-east-1)
+## 🌐 M8 operator portal — LIVE + OPERATOR-VERIFIED (deployed 2026-06-28; exercised 2026-06-29, us-east-1)
+
+> **2026-06-29 status:** the portal is live at **https://portal.cello.mygentic.ai** and Andre drove it
+> end-to-end through a browser: magic-link login (code + emailed link), agents appearing from the LIVE
+> directory, passkey enroll, and a real Burn of an orphan agent (verified federation-wide — `burned:true`,
+> a clear returns `409 burned_immutable`). Current portal image: **`cello-portal:776752d`**. Several live
+> bugs were found + fixed today (see the "2026-06-29 operator-verified" subsection below). The directory
+> was redeployed via `cello-directory-pipeline` with the agents-by-account 502 fix (commits 469c2711 +
+> 04d95ad3). Runtime env now also includes `WEBAUTHN_RP_ID` / `WEBAUTHN_ORIGIN`; the delivery-failure
+> alarm is wired to the `cello-ops-warning-dev` SNS topic.
+
 
 The portal (Mygentic-AI/cello-portal, branch `m8-assembly`) is being stood up on AWS as IaC. It is a
 single-region (us-east-1) Next.js app in the **directory's VPC**, reaching the directory ONLY over its
@@ -33,8 +43,33 @@ one build script (all in `infra/`):
 - **`cello-portal-app.yaml`** → stack `cello-portal-dev` **[CREATE_COMPLETE — LIVE]**. Public ALB (HTTPS/
   ACM, HTTP→443 redirect), Route53 A `portal.cello.mygentic.ai`, ECS Fargate service on the shared
   `cello-dev` cluster (running 1/1, rollout COMPLETED), exec+task IAM (ECR pull, secrets read,
-  `ses:SendEmail` for `*@mygentic.ai`), + a `MagicLinkDeliveryFailures` metric filter/alarm (reviewer-
-  required: a SES misconfig = silent login outage). ImageTag pinned to `f6a43d8`.
+  `ses:SendEmail` for `*@mygentic.ai`), + a `MagicLinkDeliveryFailures` metric filter/alarm wired to SNS
+  `cello-ops-warning-dev` (a SES misconfig = silent login outage). Runtime env: CELLO_ENV, DIRECTORY_API_URL,
+  PORTAL_BASE_URL, PORTAL_EMAIL_FROM, **WEBAUTHN_RP_ID=portal.cello.mygentic.ai**,
+  **WEBAUTHN_ORIGIN=https://portal.cello.mygentic.ai**. **Current ImageTag: `776752d`** (was f6a43d8 at
+  first deploy; redeployed several times today for live fixes).
+
+### 2026-06-29 — operator-verified live + the fixes it surfaced
+Andre exercised the live portal; each issue was fixed, redeployed, and verified:
+1. **Sign-in had no code field + the emailed link was broken.** SignInForm dead-ended after the request
+   (code-entry step never built); the verify-GET redirected to the container's internal host
+   (`new URL(req.url).origin` behind the ALB) and the single-use token was consumed by an email-scanner
+   prefetch. FIX: stepped form (email → code), token deep-link completes via POST (prefetch-safe), all
+   redirects use the public base URL (`src/server/base-url.ts`), prominent HTML email.
+2. **Agents page showed "directory unreachable" + no agents (502).** The directory's agents-by-account
+   query SUCCEEDED but serializing crashed: `last_seen_at.toISOString is not a function` — the directory
+   installs a global pg TIMESTAMPTZ→string parser, but the code assumed a Date. FIX (directory pipeline):
+   normalize to a Date at the repo boundary; configurePgTypes() in the harness + repo test so the e2e
+   catches this class. (Plus AC-011 guard: deploy-portal.sh added to the authorized-script allowlist.)
+3. **Passkeys broke** — `WEBAUTHN_RP_ID must be set outside CELLO_ENV=local`. FIX: added the WebAuthn env
+   to the task def.
+4. **Account & Security UX** — hardcoded "test-device" passkey name; gray (not green) status; raw
+   user-agent string in sessions. FIX: operator names the passkey (never "test"), green "Enabled" /
+   "this device", friendly "Chrome on macOS" (raw UA on hover).
+5. **Burned row showed amber "paused" alongside "Burned."** Burn sets paused+burned; the row now shows a
+   RED terminal "burned" only (amber reserved for reversible paused). Burn proven federation-wide live
+   (`burned:true`; clear → `409 burned_immutable`).
+
 
 **✅ PORTAL IS LIVE — verified end-to-end (2026-06-28):**
 - `https://portal.cello.mygentic.ai/sign-in` → **200** (ACM cert valid); HTTP → **301**→HTTPS; protected
