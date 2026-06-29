@@ -19,7 +19,7 @@ description: >
 |------|----------|---------|--------|-------|
 | FED-SPINE-001 (enforcer, build FIRST) | DOD-SPINE-1 | e2e | 🔨 substrate green | harness spawns 3 sovereign dir nodes (own key/transport/port/DB) — j-tofn GREEN; journey asserts (DKG/seal/suspend) accrue per-unit |
 | FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | ✅ spine-proven | resolver + daemon resolve+log + 3-node manifest spine proof + pairwise binding + forged-refusal; 3 reviewers clean (fixes: http(s) endpoint contract, severity-graded roster, key guards); j-tofn 4/4 GREEN |
-| FED-DKG-001 | DOD-DKG-1 | client+dir | 🔨 design note done | multi-node DKG (2-of-3) — seam verified (runNetworkDkg N-capable; limiter is the [dirNode] caller + dkg_ready hardcode); topology+threshold+refusal decided |
+| FED-DKG-001 | DOD-DKG-1 | client+dir | 🟡 spine-green, reviewers running | multi-node 2-of-3 DKG fans to all 3 dirs (j-tofn-dkg GREEN); below-threshold gate (unit); client roster threading (358f1f2,8b520c2) + directory dkg_ready derivation + harness pre-spawn manifest hook (35130846,a804af8f); reviewers pending |
 | FED-SIGN-001 | DOD-SIGN-1 | client+dir | ⬜ not started | T-of-N session sign + seal; kill single-key fallback |
 | FED-SUSPEND-001 | DOD-SUSPEND-1 | dir | ⬜ not started | quorum-aware refusal |
 | FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | ⬜ not started | share refresh / epoch rollover |
@@ -421,3 +421,31 @@ re-design — the §6 note above + M8B-DECISIONS Forks A/B/C are settled. Falsif
   bins. Then 3 reviewers. NOTE: the J-TOFN sovereign-isolation test already registers per-node — that
   registration currently uses the SINGLE-node path; once DKG-1 lands it becomes a real multi-node DKG, so
   re-verify that test still holds (it may need the 3-node manifest configured on its daemons too).
+
+### 2026-07-01 ~01:30 — DOD-DKG-1 IMPLEMENTED + spine-proven (reviewers running)
+**What landed.** Multi-node FROST DKG fans key-generation across the client + ALL N consortium directory
+nodes. Client (cello-client `358f1f2`,`8b520c2`): `RegistrationContext.getConsortiumEndpoints()` (the resolved
+roster); `register()` re-resolves it from the verified manifest at ceremony time; registration-manager builds
+N `NetworkDirectoryNode` (else single primary endpoint, back-compat) + the **dkg_below_threshold gate**
+(resolved roster ≠ directory's declared N ⇒ refuse, since DKG needs all N). Directory (trustless-cello
+`35130846`): `dkg_ready` derives `{participants:N, threshold:T}` from ITS OWN `#directoryManifestStore`
+(topology consensus); no/1-node manifest → 2-of-2 (back-compat). Harness (`a804af8f`): pre-allocate health
+ports + `onDirectoryUrlsReady` hook (a consortium directory reads its manifest at startup, so it's written
+with real URLs BEFORE spawn). `runNetworkDkg` was already N-capable — this is the caller + directory wiring.
+
+**Proof.** `j-tofn-dkg.spine.test.ts` GREEN (real binaries): 3-node consortium → real DKG; primary advertises
+"3 directory nodes, threshold 3"; ALL 3 directories log "Round 1 commit"; one group key. The below-threshold
+gate → deterministic in-process unit test (the spine version was flaky under multi-daemon contention).
+Back-compat: j-tofn 4/4, j-spine 7/7, 8/8 registration-manager units. tsc 0, eslint 0.
+
+**The detour (recorded so it's not repeated).** The multi-node DKG worked from the FIRST run, but an async
+stdout-capture lag in the test (harness pipes directory stdout; it lags the IPC response) made it look
+single-node for ~6 diagnostic iterations — resolved by a 2s settle delay before reading directory logs +
+checking DB state. Lesson: when a spine test inspects a child proc's logs right after an IPC call, the logs
+may not have flushed; settle or poll first.
+
+**Reviewers (read-only, running).** code-reviewer (opus) + test-attacker + fallback-finder on the cross-repo
+diff. ANTICIPATED finding to fix: a silent downgrade — if a manifest IS configured but the roster resolves
+EMPTY (all nodes unreachable) the client currently falls back to single-node DKG (and the directory's `?? 1`
+does the same if getCurrentManifest is null mid-run). Plan: refuse rather than silently downgrade a
+consortium to 2-of-2.
