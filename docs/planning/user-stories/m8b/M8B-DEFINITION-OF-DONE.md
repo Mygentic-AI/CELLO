@@ -61,7 +61,14 @@ description: >
   skew parked — see Parked decisions.)
 - **DOD-SIGN-1** — T-of-N session signing + seal: client coordinates with any T of N; one node down ⇒
   still signs (exclusion/retry). Byte-identical sealed root. The single-key fallback (`directory-node.ts:3964`)
-  is removed/guarded — FROST whenever DKG exists. *(FED-SIGN-001)* — ❌
+  is removed/guarded — FROST whenever DKG exists. *(FED-SIGN-001)* — ✅ SPINE-PROVEN (j-sign: 3-node
+  consortium, two agents bilaterally seal; **≥2 directories FROST-sign** the ceremony (T-of-N, teeth);
+  a directory that PARTICIPATED is killed → seal **still completes** (DOD-INV-NODE for signing); a
+  directory logs "FROST seal ceremony" — NOT single-key (the #resolvePrimaryPubkey store-fallback +
+  anomaly warn). Client builds N stubs; the fixed share-threshold makes a degraded roster FAIL the FROST
+  pre-check, never forge weaker. 3 reviewers clean (code-reviewer B1 fixed: session-signing
+  reconstruction from the store, symmetric to the seal). NOTE: the store-fallback RESTART path is
+  fixed-in-code but not end-to-end spine-exercised — see Parked decisions.)
 - **DOD-SUSPEND-1** — Quorum-aware refusal: with ≥ N−T+1 nodes honoring a suspension no signature forms;
   with fewer it still signs — proving threshold-refusal ≠ single-node-refusal. *(FED-SUSPEND-001)* — ❌
 - **DOD-REFRESH-1** — Proactive share refresh / resharing + real epoch rollover: a refresh rotates all
@@ -109,6 +116,25 @@ description: >
 - **J-LIVE** → DOD-DEPLOY-1: all of the above against the live dev cluster.
 
 ## Parked decisions (never silently dropped — RC-1)
+- **DOD-SIGN-1 — store-fallback RESTART path is fixed-in-code but not yet spine-exercised.** The seal
+  (`#resolvePrimaryPubkey`) + session-signing (B1: `#processSessionRequest` reconstruction) both fall
+  back from the in-memory caches to the persisted `agent_profiles.primary_pubkey` so signing/sealing
+  survive a directory RESTART (the "restart state loss disease"). j-sign proves the DoD requirements
+  (T-of-N: ≥2 directories sign; one node DOWN ⇒ still seals; FROST-not-single-key) but does NOT restart
+  node 0, so the store-fallback branches aren't END-TO-END exercised (in-run the caches are warm). The
+  fixes are correct-by-symmetry (identical pattern, the seal+session share `#resolvePrimaryPubkey`) +
+  back-compat-green + typecheck-clean, and the code-reviewer explicitly allowed the initiator-restart
+  case as a tracked follow-on. **Follow-up:** add a restart-resilience spine test (register → restart
+  node 0 → wait reconnect → session-sign + seal still succeed via the store fallback). Tracked here, not
+  dropped. Revisit with DOD-REFRESH-1 (which also touches the cache) or standalone.
+- **DOD-SIGN-1 / DOD-REFRESH-1 — `#resolvePrimaryPubkey` cache never invalidates (fallback-finder F2).**
+  The re-seeded in-memory cache will serve a STALE group key after a share-refresh/epoch rollover (it
+  keys on the agent, not the epoch, fixed at `:epoch:1`). Fails LOUD (seal verification rejects), not a
+  silent weaker seal — so out of SIGN-1's forgery scope. **DOD-REFRESH-1 MUST invalidate/re-seed this
+  cache on rotation.** Also noted: the store fallback does not consult revocation (revocations are
+  append-only, never touch `agent_profiles`); signing-time revocation enforcement lives elsewhere.
+
+
 - **DOD-DKG-1 MEDIUM — the topology gate is COUNT-only (identity skew not caught).** The DKG refusal
   gate compares the client's resolved roster COUNT to the directory's declared `participants` N
   (`registration-manager.ts`). A same-COUNT but different-IDENTITY manifest version skew (e.g. a forward

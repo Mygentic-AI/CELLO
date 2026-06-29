@@ -20,7 +20,7 @@ description: >
 | FED-SPINE-001 (enforcer, build FIRST) | DOD-SPINE-1 | e2e | 🔨 substrate green | harness spawns 3 sovereign dir nodes (own key/transport/port/DB) — j-tofn GREEN; journey asserts (DKG/seal/suspend) accrue per-unit |
 | FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | ✅ spine-proven | resolver + daemon resolve+log + 3-node manifest spine proof + pairwise binding + forged-refusal; 3 reviewers clean (fixes: http(s) endpoint contract, severity-graded roster, key guards); j-tofn 4/4 GREEN |
 | FED-DKG-001 | DOD-DKG-1 | client+dir | ✅ spine-proven | multi-node 2-of-3 DKG fans to all 3 dirs (j-tofn-dkg GREEN); below-threshold gate + B1 fix (empty-roster refuses, no downgrade); 3 reviewers clean; MEDIUM count-gate parked |
-| FED-SIGN-001 | DOD-SIGN-1 | client+dir | 🟡 spine-green, reviewers running | client N-stubs (33338f9) + directory #primaryPubkeys store-seed (861c7aef) + j-sign T-of-N seal proof (c96f75e7: FROST + kill-a-node, GREEN); 3 reviewers pending |
+| FED-SIGN-001 | DOD-SIGN-1 | client+dir | ✅ spine-proven | T-of-N seal: ≥2 dirs FROST-sign, kill-a-participant still seals, FROST-not-single-key (j-sign teeth); 3 reviewers clean (B1 fixed: session-signing store reconstruction); restart-path + REFRESH cache parked |
 | FED-SUSPEND-001 | DOD-SUSPEND-1 | dir | ⬜ not started | quorum-aware refusal |
 | FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | ⬜ not started | share refresh / epoch rollover |
 | FED-RELAYSIG-001 | DOD-RELAYSIG-1 | relay+client | ⬜ not started | relay-signed ordering + PERSIST-012 live |
@@ -549,3 +549,42 @@ completes (T-of-N — the DOD-INV-NODE signing proof the DKG-1 reviewers deferre
 single-node. Then 3 reviewers (code-reviewer opus + test-attacker + fallback-finder) on the SIGN-1 diff
 (`33338f9`,`861c7aef` + the spine test); fix findings; flip DOD-SIGN-1 → ✅. Both dist already rebuilt.
 Two-agent-session-seal-on-consortium is heavy (like j-loopback on the 3-node cluster) — budget for it.
+
+### 2026-07-01 ~04:30 — DOD-SIGN-1 ✅ CLOSED (reviewer-clean)
+**3 reviewers (read-only, cross-repo).** test-attacker **HOLLOW** (my negative "no single-key" assert was
+hollow — single-key path logs only generic "Sealed —"); code-reviewer **BLOCKED on B1**; fallback-finder
+**no HIGH** (verified the impl is genuinely T-of-N — `participateInCeremony` fails `reachable<T-1` and
+`aggregate` needs ≥T shares, so a degraded roster FAILS, never forges; client refuses single-key seals).
+**All fixed** (cello-client `2b53cf0`, trustless-cello `75bfc98e`):
+- **B1 (BLOCKING):** the seal got the `#resolvePrimaryPubkey` store-fallback but session-establishment
+  signing (`#processSessionRequest`) hard-failed `frost_signer_not_configured` when `#thresholdSigners`
+  was wiped (directory restart). Symmetric fix: reconstruct the `ClientDelegatedSigner` from the
+  persisted group key on a cache miss. (The recurring "restart state loss disease.")
+- **test-attacker F1/F2/F3 (blocking):** j-sign now asserts POSITIVELY — a directory logs "FROST seal
+  ceremony" (F1, FROST-not-single-key); ≥2 distinct directories emit `frost_stream.sign_request` (F2,
+  T-of-N participation — single-node/single-key touches one); and the kill targets a directory PROVEN to
+  have participated, so the seal completing proves a survivor reached threshold (F3).
+- **fallback-finder F1 (MEDIUM):** both single-key seal paths now WARN (`seal.single_key.anomaly`) when a
+  profile EXISTS but yields no primary (split-brain anomaly) instead of a normal "Sealed".
+- **fallback-finder F3 / code-reviewer note (LOW):** client warns on configured-but-empty roster +
+  documented the intentional single-stub asymmetry with DKG-1.
+
+**Proof.** j-sign GREEN (teeth). Back-compat: j-spine sign+seal, j-loopback, j-tofn-dkg, 32 daemon units.
+tsc 0, eslint 0. **Parked (DoD):** the store-fallback RESTART path is fixed-in-code + back-compat-green +
+correct-by-symmetry but not end-to-end spine-exercised (j-sign doesn't restart node 0); the
+`#resolvePrimaryPubkey` cache-invalidation is DOD-REFRESH-1's job.
+
+**DOD-SIGN-1 ✅.** Both DKG and signing/seal are now genuinely T-of-N — the 2-of-2 stopgap is GONE from
+the entire core ceremony path. cello-client: `33338f9`,`2b53cf0`. trustless-cello: `861c7aef`,`c96f75e7`,`75bfc98e`.
+
+**Resume pointer → DOD-SUSPEND-1.** Next: "Quorum-aware refusal: with ≥ N−T+1 nodes honoring a suspension
+no signature forms; with fewer it still signs — proving threshold-refusal ≠ single-node-refusal." This is
+DIRECTORY-side (trustless-cello). Seam: the directory already has `agent_suspensions` (j-suspend tests a
+single-node suspend → `directory_below_threshold` per the file header). Falsify-first: find where a
+suspended agent's K_server share is WITHHELD (the directory refuses to partial-sign for a paused agent —
+file header `directory-node.ts:1072` "refuses its FROST share for a PAUSED agent, so no threshold forms").
+For T-of-N: if ≥ N−T+1 directories honor the suspension, the ceremony can't reach T → no signature; if
+fewer honor it, the remaining T still sign. The proof (DOD-SUSPEND-1) is the threshold arithmetic: suspend
+on enough nodes ⇒ refuse; suspend on too few ⇒ still signs. Memory `[[project_threshold_t_of_n_not_2_of_2]]`:
+suspend/burn = account-authorized replicated revocation flag every node honors, NOT "one node withholds".
+Write the §6 design note first. The consortium topology (N, T) + the per-node DKG shares are already in place.
