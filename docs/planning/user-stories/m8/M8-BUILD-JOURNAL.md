@@ -2043,3 +2043,23 @@ parser.
 NET: the live portal core path now works end-to-end — magic-link login (code + emailed link),
 agents appear from the live directory with truthful presence, passkeys enabled. Remaining gated
 items unchanged (cross-node presence decision, T-of-N, TRUST-4 publish, full live E2E).
+
+## 2026-06-29 — Account & Security UX fixes (Andre live feedback) — DEPLOYED
+
+Andre enrolled a passkey and flagged real UX/correctness issues. Fixed + deployed (cello-portal
+ceee554, live):
+- Passkey naming: WebAuthnPanel hardcoded enrollPasskey("test-device"). Now the operator NAMES the
+  device on enroll (editable default "Passkey N", never "test", never forced). Clarified the label is
+  human-reference-only (login offers device-present passkeys; you never pick by name). Multi-device
+  kept (recovery); button → "Add another device" once one exists; each row: name + green "Enabled" +
+  Remove. (Open: Andre may still want single-passkey — one-line flip.)
+- TOTP "enrolled" → green "· enabled".
+- Active sessions: raw UA ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)…") → friendly
+  "Chrome on macOS" (new lib/user-agent.ts; raw kept as hover title); green "this device" badge.
+  Kept on the Security page (it's the log-out-everywhere control for an unrecognized session).
+- e2e: new enrollPasskeyUI() helper drives the name-form flow; all add-passkey call sites across
+  j-auth/j-lever/j-grace/j-trust migrated; webauthn-status assertions → credential-row "Enabled"/count.
+  Full real-dir gate 44 passed / 3 skipped (no regression). typecheck+lint clean.
+
+LESSON: enrolling via the API helper in e2e meant the passkey NAME path was never exercised by a UI
+test — the hardcoded "test-device" shipped. UI affordances (naming) need a UI-level assertion.
