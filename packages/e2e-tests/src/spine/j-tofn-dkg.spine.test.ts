@@ -132,4 +132,10 @@ describe("J-TOFN-DKG — multi-node 2-of-3 FROST DKG (DOD-DKG-1)", () => {
       );
     }
   }, 120_000);
+
+  // The below-threshold REFUSAL gate (resolved roster < the directory's declared N ⇒
+  // dkg_below_threshold) is proven by a deterministic in-process unit test in cello-client's
+  // registration-manager.test.ts — a spine version is flaky under multi-daemon contention
+  // (registration can fail on signaling BEFORE reaching the gate), so the gate logic is asserted
+  // directly where it lives.
 });
