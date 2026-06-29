@@ -475,10 +475,27 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
         "one shared node identity (silent sovereignty violation). Pass per-node directoryNodeKeysHex[] instead.",
     );
   }
-  if (opts.directoryNodeKeysHex && opts.directoryNodeKeysHex.length !== count) {
+  if (opts.directoryNodeKeyHex && opts.directoryNodeKeysHex) {
     throw new Error(
-      `startSpineCluster: directoryNodeKeysHex length (${opts.directoryNodeKeysHex.length}) must equal directoryCount (${count}).`,
+      "startSpineCluster: pass EITHER directoryNodeKeyHex (single-node J-AUTH) OR directoryNodeKeysHex[] " +
+        "(per-node), not both — the array would silently win and the scalar be ignored.",
     );
+  }
+  if (opts.directoryNodeKeysHex) {
+    if (opts.directoryNodeKeysHex.length !== count) {
+      throw new Error(
+        `startSpineCluster: directoryNodeKeysHex length (${opts.directoryNodeKeysHex.length}) must equal directoryCount (${count}).`,
+      );
+    }
+    // Per-element validation (cello-fallback-finder DOD-MANIFEST-1 #3): an empty/garbage seed
+    // at index i would boot node i with a missing/degraded step-5 identity and NO error — a
+    // falsely-degraded "sovereign" node. Require a real 32-byte (64-hex) seed per node.
+    const bad = opts.directoryNodeKeysHex.findIndex((k) => !/^[0-9a-fA-F]{64}$/.test(k));
+    if (bad !== -1) {
+      throw new Error(
+        `startSpineCluster: directoryNodeKeysHex[${bad}] is not a 64-hex (32-byte) seed — node ${bad} would boot with no/degraded identity.`,
+      );
+    }
   }
   const dbNames = Array.from({ length: count }, (_, i) => (count === 1 ? SPINE_DB : `${SPINE_DB}_${i}`));
   const databaseUrls = dbNames.map(spineDbUrl);

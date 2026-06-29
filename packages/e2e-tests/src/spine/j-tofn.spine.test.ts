@@ -33,7 +33,7 @@ import {
   type SpineCluster,
   type Proc,
 } from "./live-harness.js";
-import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
+import { spineDirectoryNode, spineNodeId, spineNodeKeypair } from "./auth-manifest.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -174,15 +174,24 @@ describe("J-TOFN — 3-directory spine substrate (DOD-SPINE-1)", () => {
     // startup, before the primary connect). This is the N-endpoint resolution that replaces the
     // single-endpoint assumption — the roster a T-of-N ceremony (DOD-DKG-1) fans out to.
     const resolved = await daemon.waitForLine(/"event":"directory\.consortium\.resolved"/, 20_000);
-    const parsed = JSON.parse(resolved) as { declaredNodes?: number; resolvedNodes?: number; peerIds?: string[] };
+    const parsed = JSON.parse(resolved) as {
+      declaredNodes?: number;
+      resolvedNodes?: number;
+      nodes?: { nodeId: string; peerId: string }[];
+    };
     expect(parsed.declaredNodes, `manifest must declare 3 nodes: ${resolved}`).toBe(3);
     expect(parsed.resolvedNodes, `all 3 consortium endpoints must resolve to live directories: ${resolved}`).toBe(3);
 
-    // The resolved peerIds are EXACTLY the 3 directories' real PeerIDs — not one endpoint, not
-    // duplicates. A single-endpoint resolver (the thing replaced) could never produce all three.
-    const dirPeerIds = cluster.directories.map((d) => peerId(listenMultiaddr(d, { ws: false })));
-    expect(new Set(parsed.peerIds), `resolved peerIds must equal the 3 directory PeerIDs: ${resolved}`).toEqual(
-      new Set(dirPeerIds),
-    );
+    // PAIRWISE binding (not just the set): each manifest nodeId must resolve to ITS OWN
+    // directory's real PeerID. A single-endpoint resolver could never produce all three, and a
+    // resolver that scrambled the identity↔endpoint pairing would fail here even if the set matched.
+    const byNodeId = new Map((parsed.nodes ?? []).map((n) => [n.nodeId, n.peerId]));
+    for (let i = 0; i < 3; i++) {
+      const dirPeerId = peerId(listenMultiaddr(cluster.directories[i], { ws: false }));
+      expect(
+        byNodeId.get(spineNodeId(i)),
+        `manifest ${spineNodeId(i)} must bind to directory ${i}'s real PeerID: ${resolved}`,
+      ).toBe(dirPeerId);
+    }
   }, 120_000);
 });
