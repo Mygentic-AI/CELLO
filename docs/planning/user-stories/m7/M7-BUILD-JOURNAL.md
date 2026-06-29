@@ -6131,3 +6131,31 @@ just server-side. This is the production path (both ends on shipped 0.0.13, real
    under churn. On a **settled cluster with a freshly-restarted demo, ONE clean session sealed + confirmed
    first try** (matching j-spine DOD-SPINE-7). Lesson: don't restart infra and immediately load-test it;
    let it settle, and test one session at a time against the single-receiver demo.
+
+## 2026-06-29 — Session reporting fixed (M7 work, surfaced during M8 portal use)
+
+Andre, using the live portal (M8) + his daemon, ran `cello status` and found the session reporting
+broken in two ways — both M7 session-resume / CLI-UX issues (M7-SESSION-001 discovery surface +
+M7-CLI-UX-FEEDBACK), not M8:
+
+1. `cello status` listed EVERY interrupted session, unbounded (monotonic growth), INCLUDING dead
+   0-message handshakes (failed session-inits). Noise that would balloon to thousands and mislead.
+2. The full-list surface (cello_list_sessions) had no filtering or cap.
+
+FIX (cello-client `main`, commit 83a4fbc; published as daemon 0.0.15 + cli 0.0.13 — see the
+/cello-publish run, tag v0.0.57):
+- New pure session taxonomy `core/daemon/src/session-category.ts` (unit-tested): **open** (active OR
+  interrupted-with-messages = resumable), **closed** (sealed / seal_interrupted_pending), **failed**
+  (interrupted with 0 messages — a dead handshake). Single source of truth for both surfaces.
+- `cello status` now surfaces ONLY resumable interrupted sessions (messages > 0), capped at 10 —
+  failed inits never appear (the exact complaint).
+- `cello_list_sessions` (MCP) + new daemon-wide `list_sessions` accept { filter: open|closed|failed|all
+  (default open), limit (default 50, max 500) }; classify → filter → cap; return `totalMatched` so
+  truncation is visible; entries gain a `category`.
+- New `cello sessions [--open|--closed|--failed|--all] [--limit N]` CLI command.
+- Tests: classifier unit (4); list-sessions filter/limit (rewrote LIST-3); SESSION-001 AC-006 updated
+  — status excludes the 0-message failed session. daemon 34 + cli 7 green; typecheck + eslint clean.
+
+Built in an isolated worktree/branch (another agent was on cello-client at the time); fast-forward
+merged to main + pushed once verified clean. Recorded here per Andre: "this is M7 work, not M8 —
+record it in the M7 milestone as well."

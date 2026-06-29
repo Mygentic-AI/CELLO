@@ -180,3 +180,19 @@ field — this extends the same discipline to SUCCESS + status output.
   `trustless-cello/packages/e2e-tests`; they spawn the LOCAL cello-client build
   (`CELLO_CLIENT_ROOT/core/*/dist`), so rebuild cello-client (`npx tsc --build`) before running.
 </content>
+
+---
+
+## Resolved 2026-06-29 (surfaced during M8 portal use): session reporting
+
+`cello status` was dumping an unbounded list of interrupted sessions including dead 0-message
+handshakes (failed inits) — exactly the "raw enum/JSON dump that grows forever and misleads" this
+doc's north star warns against. Andre's directive: status shows only live/working (+ resumable)
+sessions; the full list belongs in a `get-sessions` surface with filter flags + a default cap.
+
+Shipped (daemon 0.0.15 + cli 0.0.13, tag v0.0.57; cello-client commit 83a4fbc):
+- **`cello status`** → only resumable interrupted sessions (messages exchanged), capped at 10; failed
+  0-message inits never appear.
+- **`cello sessions [--open|--closed|--failed|--all] [--limit N]`** (+ the MCP cello_list_sessions /
+  daemon-wide list_sessions) → default `open`, default limit 50 (max 500), reports `totalMatched`.
+- Session taxonomy: open (active/resumable) · closed (sealed) · failed (interrupted, 0 messages).
