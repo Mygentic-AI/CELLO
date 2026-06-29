@@ -155,19 +155,20 @@ describe("J-SUSPEND-TOFN — quorum-aware suspension (DOD-SUSPEND-1)", () => {
     // suspended, must STILL sign through those same nodes while A is suspended there. Proves the refusal
     // is scoped to agent A — not the whole node going dark (which would pass A's assertions identically
     // yet violate the sovereign-node redundancy invariant: suspending A must not disable 1/2 for others).
-    const connB = await connectMcp(celloDir, "suspn-B");
-    mcpConns.push(connB);
-    // Create B THROUGH the running daemon: provisionAgent only writes a pre-daemon key file the live
-    // daemon never rescans (→ agent_not_found). cello_create_agent runtime-adds B and returns its
-    // K_local pubkey (same identity provisionAgent returns for A/X, created before the daemon started).
-    const createB = (await connB.call("cello_create_agent", { name: "binit" })) as { ok?: boolean; pubkey?: string };
-    expect(createB.ok, `create binit failed: ${JSON.stringify(createB)}`).toBe(true);
-    const pubB = createB.pubkey!;
-    expect(pubB, "binit must have a K_local pubkey").toMatch(/^[0-9a-f]{64}$/);
+    // Create B THROUGH the running daemon via the CLI: provisionAgent only writes a pre-daemon key file
+    // the live daemon never rescans (→ agent_not_found), and cello_create_agent is not on the MCP tool
+    // surface. `cello create-agent` (daemon IPC) runtime-adds B and returns its K_local pubkey — the
+    // same identity provisionAgent returns for A/X, which were created before the daemon started.
+    const createOut = cello(["create-agent", "binit"], env);
+    expect(createOut.status, `create binit failed: ${createOut.stdout}`).toBe(0);
+    const pubB = (JSON.parse(createOut.stdout.trim()) as { pubkey?: string }).pubkey!;
+    expect(pubB, `binit must have a K_local pubkey: ${createOut.stdout}`).toMatch(/^[0-9a-f]{64}$/);
     {
       const r = cello(["register", "binit", `DEV-suspn-binit-${randomBytes(6).toString("hex")}`], env);
       expect(r.status, `register binit failed: ${r.stdout}`).toBe(0);
     }
+    const connB = await connectMcp(celloDir, "suspn-B");
+    mcpConns.push(connB);
     expect(((await connB.call("cello_start_agent", { name: "binit" })) as { ok?: boolean }).ok).toBe(true);
     expect(((await connB.call("cello_use_agent", { name: "binit" })) as { ok?: boolean }).ok).toBe(true);
     copyAgentProfileBetweenNodes(0, 1, pubB);
