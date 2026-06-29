@@ -21,7 +21,7 @@ description: >
 | FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | ✅ spine-proven | resolver + daemon resolve+log + 3-node manifest spine proof + pairwise binding + forged-refusal; 3 reviewers clean (fixes: http(s) endpoint contract, severity-graded roster, key guards); j-tofn 4/4 GREEN |
 | FED-DKG-001 | DOD-DKG-1 | client+dir | ✅ spine-proven | multi-node 2-of-3 DKG fans to all 3 dirs (j-tofn-dkg GREEN); below-threshold gate + B1 fix (empty-roster refuses, no downgrade); 3 reviewers clean; MEDIUM count-gate parked |
 | FED-SIGN-001 | DOD-SIGN-1 | client+dir | ✅ spine-proven | T-of-N seal: ≥2 dirs FROST-sign, kill-a-participant still seals, FROST-not-single-key (j-sign teeth); 3 reviewers clean (B1 fixed: session-signing store reconstruction); restart-path + REFRESH cache parked |
-| FED-SUSPEND-001 | DOD-SUSPEND-1 | dir+crypto | 🟡 spine-green, reviewers running | FULL arithmetic PROVEN (j-suspend-tofn): 2-suspended ⇒ no signature; 1-suspended ⇒ still signs. Fixes: signer excludes refusing stub in commit round (bcea30a) + directory nonce-replace on retry (87d226c2). Back-compat green. 3 reviewers pending (nonce-safety scrutiny); replication → Tier C |
+| FED-SUSPEND-001 | DOD-SUSPEND-1 | dir+crypto | ✅ spine-green, 3 reviewers clean | j-suspend-tofn green (103s): 2-suspended ⇒ block w/ EXACT `ceremony_exhausted`+retry; 1-suspended ⇒ nodes 0,2 sign while node 1 emits FRESH refusal (route-AROUND proven); agent B signs through 1,2 ⇒ agent-scoped. Fixes: signer commit-round per-stub exclusion + per-node timeout/deadline (bcea30a/5cd2da2), directory nonce-replace (87d226c2, consume-once confirmed by all 3). Fallback HIGH made LOUD: frost.suspension.uncheckable + hasAgentProfile. Production quorum-binding → PRESENCE-1 (Tier C) |
 | FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | ⬜ not started | share refresh / epoch rollover |
 | FED-RELAYSIG-001 | DOD-RELAYSIG-1 | relay+client | ⬜ not started | relay-signed ordering + PERSIST-012 live |
 | FED-OPTIONB-SETUP-001 | DOD-OPTIONB-SETUP-1 | dir+relay+client | ⬜ not started | client-presented assignment; kill relay dial |
@@ -662,3 +662,54 @@ then can't sign? Likely fix: ensure a refusal (AGENT_SUSPENDED) is treated EXACT
 + retry) at BOTH commitment and sign rounds, and maxRetries ≥ N (so it can exclude up to N−T+1 and still
 retry). This is a cello-client/core/crypto change (rebuild + re-run j-suspend-tofn). The block-half is
 already proven; the fix makes 1-suspended sign, closing "threshold ≠ single-node." Then 3 reviewers.
+
+### 2026-07-01 ~01:40 — DOD-SUSPEND-1 ✅ — route-around fixed, 3 reviewers clean, spine green
+**The route-around gap (above) is fixed and the unit is closed.** Root cause was diagnosed via
+`[CLIENT-DEBUG]`: (a) the COMMIT round did NOT exclude a refusing stub (only the sign round did), so a
+suspended node 1 stayed in `selected` every attempt; (b) the directory's `generateCommitment` rejected an
+honest coordinator's retry with `NONCE_ALREADY_PENDING`, cascading the survivors. Two fixes:
+- **client `bcea30a`** — commit round gathers PER-STUB (not Promise.all) and excludes a refusing/failing
+  stub into `ceremonyExcluded`, mirroring the sign round, so a sub-threshold suspension routes to survivors.
+- **directory `87d226c2`** — `generateCommitment` REPLACES a still-pending nonce on retry (the unconsumed
+  nonce never signed, so dropping it is safe) instead of refusing.
+
+**Reviewers (3, all clean).** code-reviewer **APPROVED**; test-attacker + fallback-finder both
+independently traced the nonce-safety and confirmed **no reuse path** — `signRawMessage` deletes the
+pending nonce (`frost-handler.ts:573`) BEFORE `signShare` (`:587`) with no `await` between, so consume is
+atomic and a replaced nonce is provably never signed. Findings fixed this round:
+- **F1 (blocking)** — the block assertion was `not.toBe("agent_suspended")` (accepts ~18 transient
+  reasons, no retry). Now asserts the EXACT `ceremony_exhausted` (client-side `DIRECTORY_BELOW_THRESHOLD`
+  → delegated null signature → directory `CEREMONY_EXHAUSTED` → wire `ceremony_exhausted`) + retry-wrapped
+  on `standing_receiver_unavailable` to close the retry asymmetry.
+- **F2 (blocking)** — no positive control that node 1 actually REFUSED during the route-around. Now
+  asserts node 1's own DB shows A suspended AND a FRESH `frost.ceremony.refused.revoked` for A fires during
+  the signs ceremony (windowed `Proc.countLines` delta + 2s capture-lag settle). Proves survivors routed
+  AROUND a genuinely-refusing node, not that node 1 was never selected.
+- **F3 (high)** — refusal not proven agent-scoped. Now a second agent B (created via `cello create-agent`
+  — `cello_create_agent` is NOT on the MCP surface; `provisionAgent` writes a pre-daemon key the live
+  daemon never rescans), seeded to nodes 1,2 and not suspended, STILL signs through those same nodes while
+  A is suspended there ⇒ refusal scoped to A, not the node going dark (sovereign-node redundancy invariant).
+- **fallback HIGH** — single-node profile replication makes `isAgentSuspended` JOIN to zero rows ⇒ sign
+  blind. Made LOUD: `DirectoryStore.hasAgentProfile` + a `frost.suspension.uncheckable` warn whenever a
+  node participates in a ceremony for an agent it cannot check. Observability-only (never a gate; the
+  fail-CLOSED read remains the control). Production quorum-binding still needs PRESENCE-1 replication —
+  now alarmable, not silent.
+- **code-reviewer IMPORTANT** — the new commit round had no per-node timeout/deadline (the sign round
+  has both); a hung directory would stall the ceremony forever (availability-invariant violation). Now
+  mirrors the sign round: deadline check + `Promise.race` per-node timeout, treat timeout as a refusal
+  (`5cd2da2`). Also dropped 36 `[CLIENT-DEBUG]` raw-stderr lines (M4+ logger-rule).
+
+**Gates green:** crypto frost units 23/23; j-suspend-tofn 103s green; back-compat j-sign (T-of-N +
+node-down) + j-tofn-dkg (2-of-3 DKG) green. Held at +N unpushed on both repos (directory changes batched
+for the DOD-DEPLOY-1 gate; cello-client crypto/daemon dist rebuilt locally for the spine).
+
+**RESUME POINTER → DOD-REFRESH-1.** Next unit: "Proactive share refresh / resharing + real epoch
+rollover: a refresh rotates all shares to a new epoch, old shares no longer sign, group pubkey unchanged;
+a node compromised in epoch e holds nothing usable in e+1." This is client+dir+crypto. NOTE two parked
+items REFRESH-1 must resolve (Parked decisions in the DoD): (1) `#resolvePrimaryPubkey` cache keys on the
+agent at fixed `:epoch:1` and never invalidates — after a rollover it will serve a STALE group key (fails
+LOUD via seal-verify reject, but must invalidate on rotation); (2) the FROST epoch identifier is currently
+pinned (`cacheKey = agent:epochId`) — a real rollover must advance it. Write the REFRESH-1 design note
+(§6) first, falsify-first, then red on the spine (j-refresh: register → refresh → old-epoch share rejected,
+new-epoch signs, group pubkey byte-identical). The crypto file `frost-threshold-signer.ts` + directory
+`frost-handler.ts` (both just touched here) are the surface; the nonce/epoch machinery is fresh in context.

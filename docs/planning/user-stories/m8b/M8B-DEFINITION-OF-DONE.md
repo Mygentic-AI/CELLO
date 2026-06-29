@@ -70,7 +70,18 @@ description: >
   reconstruction from the store, symmetric to the seal). NOTE: the store-fallback RESTART path is
   fixed-in-code but not end-to-end spine-exercised — see Parked decisions.)
 - **DOD-SUSPEND-1** — Quorum-aware refusal: with ≥ N−T+1 nodes honoring a suspension no signature forms;
-  with fewer it still signs — proving threshold-refusal ≠ single-node-refusal. *(FED-SUSPEND-001)* — ❌
+  with fewer it still signs — proving threshold-refusal ≠ single-node-refusal. *(FED-SUSPEND-001)* — ✅
+  (j-suspend-tofn.spine.test.ts green on the 3-dir spine, 103s: 2 of 3 suspended ⇒ block with the EXACT
+  reason `ceremony_exhausted` — the genuine sub-threshold signature, retry-wrapped so a transient can't
+  masquerade; un-suspend 1 ⇒ nodes 0,2 sign while node 1 emits a FRESH frost.ceremony.refused.revoked for
+  A, proving survivors route AROUND a genuinely-refusing node (not that node 1 was never asked); a second
+  agent B, not suspended, STILL signs through the same nodes 1,2 ⇒ refusal is agent-scoped, not the node
+  going dark. Two real FROST-retry fixes landed: client commit-round per-stub exclusion + per-node
+  timeout/deadline — `bcea30a`/`5cd2da2` — (availability invariant); directory nonce-REPLACE on retry —
+  `87d226c2` — (consume-once delete-before-sign preserved; all 3 reviewers independently confirmed NO
+  nonce-reuse path). 3 reviewers clean. The fallback HIGH single-node-production gap is now LOUD —
+  `frost.suspension.uncheckable` warn + `DirectoryStore.hasAgentProfile` — instead of silently signing
+  blind; production quorum-binding still gated on PRESENCE-1 replication, see Parked.)
 - **DOD-REFRESH-1** — Proactive share refresh / resharing + real epoch rollover: a refresh rotates all
   shares to a new epoch, old shares no longer sign, group pubkey unchanged; a node compromised in epoch e
   holds nothing usable in e+1. *(FED-REFRESH-001)* — ❌
@@ -125,7 +136,11 @@ description: >
   spine (M8B-DECISIONS). **REQUIRED production follow-on:** add `agent_suspensions` + `agent_profiles` to
   `cello_pub` logical replication (fold into DOD-PRESENCE-1/PICKUP, Tier C, which already extends
   `cello_pub`) so every sovereign node honors the replicated flag. Until then suspension is single-node in
-  production. Tracked, not dropped.
+  production. Tracked, not dropped. **Now LOUD (SUSPEND-1 review, fallback HIGH):** a node that
+  participates in a ceremony for an agent it has NO local `agent_profiles` row for (cannot check the
+  suspension) emits `frost.suspension.uncheckable` (via `DirectoryStore.hasAgentProfile`) — so the
+  single-node-honor reality is alarmable, not silent. The warn fires exactly in the gap and disappears
+  once PRESENCE-1 replicates the profile to every node.
 
 
 - **DOD-SIGN-1 — store-fallback RESTART path is fixed-in-code but not yet spine-exercised.** The seal
