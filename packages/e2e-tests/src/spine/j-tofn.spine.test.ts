@@ -30,10 +30,17 @@ import {
   listenMultiaddr,
   psqlSpineN,
   writeConsortiumManifest,
+  writeForgedManifestTo,
   type SpineCluster,
   type Proc,
 } from "./live-harness.js";
-import { spineDirectoryNode, spineNodeId, spineNodeKeypair } from "./auth-manifest.js";
+import {
+  spineDirectoryNode,
+  spineNodeId,
+  spineNodeKeypair,
+  CONSORTIUM_ROOT_KEYS,
+  CONSORTIUM_THRESHOLD,
+} from "./auth-manifest.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -193,5 +200,35 @@ describe("J-TOFN — 3-directory spine substrate (DOD-SPINE-1)", () => {
         `manifest ${spineNodeId(i)} must bind to directory ${i}'s real PeerID: ${resolved}`,
       ).toBe(dirPeerId);
     }
+  }, 120_000);
+
+  it("daemon REFUSES a forged 3-node consortium manifest — no silent downgrade (DOD-MANIFEST-1)", async () => {
+    // Rejection half of the DoD line: a forged manifest (valid version/window, GARBAGE officer
+    // signatures — as a rogue/compromised source would serve) must be refused at load. The daemon
+    // logs the failure and will NOT operate on an unverified manifest (no downgrade to the
+    // single-endpoint path). This proves forged-manifest rejection on the 3-node spine; expired +
+    // rollback rejection share this verifyManifest+refuse path (proven green in J-AUTH).
+    const celloDir = mkdtempSync(join(tmpdir(), "cello-tofn-forged-"));
+    agentDirs.push(celloDir);
+    await provisionAgent(celloDir, "forged");
+    const forgedPath = join(celloDir, "forged-consortium-manifest.json");
+    const nodes = [0, 1, 2].map((i) => spineDirectoryNode(i, cluster.directoryUrls[i]));
+    writeForgedManifestTo(forgedPath, nodes); // correct structure, garbage signatures
+    const manifestEnv = {
+      CELLO_CONSORTIUM_MANIFEST: forgedPath,
+      CELLO_CONSORTIUM_ROOT_KEYS: CONSORTIUM_ROOT_KEYS.join(","),
+      CELLO_CONSORTIUM_THRESHOLD: String(CONSORTIUM_THRESHOLD),
+    };
+    // waitForStarted:false — we expect the daemon to refuse (log load.failed, then throw/exit),
+    // never reach daemon.started.
+    const daemon = await startDaemon(celloDir, cluster.directoryUrls[0], "tofn-forged", {
+      manifestEnv,
+      waitForStarted: false,
+    });
+    daemons.push(daemon);
+    const failed = await daemon.waitForLine(/"event":"directory\.auth\.manifest\.load\.failed"/, 15_000);
+    expect(failed, `forged manifest must fail verification on signature: ${failed}`).toMatch(/manifest_signature_invalid/);
+    // And it must NOT have resolved a consortium roster from the rejected manifest.
+    expect(daemon.output).not.toMatch(/"event":"directory\.consortium\.resolved"/);
   }, 120_000);
 });
