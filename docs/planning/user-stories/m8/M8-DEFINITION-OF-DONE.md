@@ -463,7 +463,16 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   `#sendFrame` → ackPickup-DELETE mirrors pg-notification-queue's drainUndelivered/acknowledge and the
   same directory-node reconnect-drain loop. Drain/ACK proven by a live test; the full delivery by J-TRUST.)*
 - **DOD-TRUST-4 — cello-client publish + dep update.** Version bump + connect bump + beta publish;
-  trustless-cello dep update if consumed. *(TRUST-001 AC-004/005)* — ❌ *(tag-push/publish = Andre)*
+  trustless-cello dep update if consumed. *(TRUST-001 AC-004/005)* — ✅
+  *(PUBLISHED 2026-06-29. The M8 daemon work (TRUST-001 pickup open/verify/store/ACK + LEVER-001
+  agent_suspended reason) was merged to cello-client `main`, version-cascaded (daemon 0.0.13→0.0.14;
+  cli 0.0.11→0.0.12, which re-pins daemon — connect/client/crypto/transport/protocol-types unchanged and
+  don't pin daemon, so not bumped), tagged `v0.0.56`, published to `beta` by CI (Build+Test, publish-tag,
+  smoke-tag all green), and promoted to `latest`. VERIFIED AGAINST THE BINARY: `daemon@0.0.14` dist
+  contains `agent_suspended` (session-assignment-parser.js) + the trust-signal pickup (db-identity-store.js);
+  `cli@0.0.12` pins `@cello-protocol/daemon: 0.0.14` (real version, never workspace:*). No trustless-cello
+  dep update needed — the directory/relay consume crypto/transport/protocol-types/client, NOT the daemon
+  (daemon is client-side only). Operators get it via `npm i -g @cello-protocol/cli@latest`.)*
 - **DOD-TRUST-5 — Four-class UI scaffold.** Four named classes, Class-1 sub-groups distinct,
   WebAuthn/phone/email/TOTP live, rest honest placeholders, no composite, no fake data.
   *(TRUST-003 AC-001/002)* — ✅ *(PROVEN LIVE, J-trust 3/3: four named classes + distinct Class-1

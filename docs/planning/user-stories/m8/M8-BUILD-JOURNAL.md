@@ -2111,3 +2111,21 @@ End-of-day consolidation (details in the dated entries above + the milestone wri
 - **Open decisions for Andre** (documented, non-blocking): passkeys multi-device vs cap-at-one;
   cross-node presence replication fork; orphan-agent archive/dismiss vs Burn; hold directory deploys for
   explicit go. cello-client packages NOT republished (TRUST-4); T-of-N protocol unbuilt (INV-6/LEVER-3).
+
+## 2026-06-29 — DOD-TRUST-4 ✅: cello-client M8 daemon work PUBLISHED to latest
+
+Merged the M8 daemon branch (m8-lever-001) to cello-client `main`, then published via the
+/cello-publish skill. Cascade computed precisely (not "bump all seven"): only `core/daemon/src`
+changed (the 4 M8 commits), and only `cli` pins daemon → bumped **daemon 0.0.13→0.0.14 + cli
+0.0.11→0.0.12**; connect/client/crypto/transport/protocol-types unchanged + don't pin daemon, so
+untouched. Committed (version bump last), tagged **v0.0.56** (next free counter — the tag is just the
+CI trigger, drifted from the connect version), pushed. CI green (Build+Test, publish-tag → beta,
+smoke-tag clean-install). Promoted beta→latest (Andre-run, per the skill). VERIFIED AGAINST THE BINARY:
+`daemon@0.0.14` dist has `agent_suspended` (session-assignment-parser.js) + trust-signal pickup
+(db-identity-store.js); `cli@0.0.12` pins daemon 0.0.14 (real version). `daemon latest=0.0.14`,
+`cli latest=0.0.12`. No trustless-cello dep update (directory/relay don't consume the daemon).
+
+Also today: all M8 work converged to `main` across repos — cello-portal `m8-assembly`→`main` (sole
+branch); trustless-cello M8 on main + merged-leftover worktree removed. M8's only remaining 🟡 items
+are the cross-node/cluster ones (PRES-2/3 from-any-node, TRUST-1 pickup_queue replication, strict T-of-N
+INV-6/LEVER-3) + the automated E2E-001 gate against the live cluster.
