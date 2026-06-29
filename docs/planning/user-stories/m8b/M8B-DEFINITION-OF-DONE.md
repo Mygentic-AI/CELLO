@@ -43,7 +43,12 @@ description: >
 ## Tier A — T-of-N spine (critical path)
 - **DOD-MANIFEST-1** — Client loads + verifies the FULL set of N directory nodes from a real
   threshold-signed consortium manifest (replaces the single-endpoint resolver + placeholder manifest);
-  rejects forged / under-threshold / rolled-back manifests. *(unit FED-MANIFEST-001)* — ❌
+  rejects forged / under-threshold / rolled-back manifests. *(unit FED-MANIFEST-001)* — ✅ SPINE-PROVEN
+  (j-tofn: daemon resolves the 3-node roster from a verified manifest, pairwise nodeId↔peerId binding;
+  forged manifest refused; expired+rollback share the verifyManifest+refuse path proven in J-AUTH.
+  Resolver `manifestNodesToEndpoints` is availability-aware + http(s)-contract-validated. 3 reviewers
+  clean. NOTE: the resolved roster is logged + reserved for DKG-1 to consume — DKG-1 adds the
+  threshold-REFUSAL gate so a sub-threshold roster can't run a ceremony.)
 - **DOD-DKG-1** — Multi-node DKG: client drives `participants:N, threshold:T`, fans round1/2/3 to N
   directory nodes, relays round-2 `targetIdentifier` shares; each node stores its own K_server share for
   one group key. 2-of-3 DKG completes against 3 directory nodes. *(FED-DKG-001)* — ❌

@@ -18,7 +18,7 @@ description: >
 | Unit | DoD line | Repo(s) | Status | Notes |
 |------|----------|---------|--------|-------|
 | FED-SPINE-001 (enforcer, build FIRST) | DOD-SPINE-1 | e2e | 🔨 substrate green | harness spawns 3 sovereign dir nodes (own key/transport/port/DB) — j-tofn GREEN; journey asserts (DKG/seal/suspend) accrue per-unit |
-| FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | 🟡 spine-green, reviewers running | resolver layer (46cd9e8) + daemon resolve+log (1b1a761) + 3-node manifest spine proof (228be9e6); j-tofn 3/3 GREEN; reviewers pending |
+| FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | ✅ spine-proven | resolver + daemon resolve+log + 3-node manifest spine proof + pairwise binding + forged-refusal; 3 reviewers clean (fixes: http(s) endpoint contract, severity-graded roster, key guards); j-tofn 4/4 GREEN |
 | FED-DKG-001 | DOD-DKG-1 | client+dir | ⬜ not started | multi-node DKG (2-of-3) |
 | FED-SIGN-001 | DOD-SIGN-1 | client+dir | ⬜ not started | T-of-N session sign + seal; kill single-key fallback |
 | FED-SUSPEND-001 | DOD-SUSPEND-1 | dir | ⬜ not started | quorum-aware refusal |
@@ -310,3 +310,37 @@ Confirmed the DKG ceremony crypto is ALREADY T-of-N capable — DKG-1 is wiring,
   threshold T such that any T co-sign and 1 node down still completes) + how `consortiumEndpoints` reaches
   the ctx (a new ctx field / setter). Write the DKG-1 design note (§6) before coding, after MANIFEST-1
   reviewers clear.
+
+### 2026-06-30 ~23:05 — DOD-MANIFEST-1 ✅ CLOSED (reviewer-clean, spine-proven)
+**3 reviewers (read-only, on the cross-repo diff):** code-reviewer **APPROVED**; test-attacker **TESTS
+HAVE TEETH** (all 4 bypasses caught — manifest is load-bearing); fallback-finder found real items (none
+clean-HIGH as scoped). **All findings fixed** (cello-client `4b72cfb`, trustless-cello `a971fd62`):
+- Endpoint contract pinned http(s)-ONLY (`mapEndpointToBootstrapBase`→null otherwise); a non-http endpoint
+  in SIGNED data → distinct `directory.consortium.node.endpoint_invalid` (ERROR), not a silent transient
+  skip; no wss-port guessing. (code-reviewer MED + fallback #2)
+- Severity-graded roster log: `directory.consortium.none` (ERROR) / `.partial` (WARN) / `.resolved`
+  (info) — degraded ≠ healthy. (fallback #1)
+- Pairwise nodeId↔peerId binding logged + asserted on the spine. (test-attacker note 1)
+- Harness: reject both-keys-set; per-element 64-hex validation. (code-reviewer LOW + fallback #3)
+- Added forged-3-node-manifest **refusal** spine test (`7ce93bc3`) — rejection half of the DoD line.
+
+**Proof:** j-tofn **4/4 GREEN** (real binaries: 3 sovereign nodes; sovereign DB isolation via 3 real DKGs;
+full 3-node roster resolved w/ pairwise binding; forged manifest refused). Daemon focused 24/24. Floor:
+typecheck 0, eslint 0 (both repos); back-compat j-sig 2/2, j-spine 7/7, j-auth 4/6 (2 pre-existing poll
+failures unchanged). cello-client commits: `46cd9e8`,`1b1a761`,`4b72cfb`. trustless-cello: `228be9e6`,
+`a971fd62`,`7ce93bc3` (+docs).
+
+**⚠️ HANDOFF TO DOD-DKG-1 (load-bearing — fallback-finder #1):** the resolved roster
+(`consortiumEndpoints` in daemon.ts) is currently **logged + reserved, NOT consumed** — the daemon's real
+ceremonies still use the single `getDirectoryEndpoint`. DKG-1 MUST (a) thread `consortiumEndpoints` into
+the registration/session ctx + fan `runNetworkDkg` across all N (seam: `registration-manager.ts:263`
+`directoryNodes:[dirNode]` → N nodes; `runNetworkDkg` is already N-capable), AND (b) add the
+**threshold-REFUSAL gate** — refuse to run a ceremony when fewer than T of N resolve (else a degraded
+consortium silently runs on too few nodes). Without (b), fallback-finder #1 escalates to HIGH. The
+directory side (`directory-node.ts:2309 participants:1,threshold:2`) must accept being one of N.
+
+**Resume pointer → DOD-DKG-1.** Next unit. Write the DKG-1 design note (§6) first — see the
+"2026-06-30 ~22:35 DOD-DKG-1 prep" entry above for the verified seam. Then red-first on j-tofn
+(2-of-3 DKG against 3 real directories; kill a node → still completes). cello-client daemon source +
+directory source both change; rebuild daemon dist + (directory is trustless-cello — the spine runs its
+built bin, rebuild `packages/directory/dist`). NO publish until DOD-DEPLOY-1.
