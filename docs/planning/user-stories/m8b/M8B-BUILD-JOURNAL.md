@@ -63,7 +63,10 @@ nodes** locally (today: one). It's the enforcer; until it exists, T-of-N can't b
 **Reviewer / blockers.** N/A (docs only). No code, no tests run.
 
 **Resume pointer (pre-compaction, ~20:25).** Branch `m8b-assembly` created in **trustless-cello** (create
-the same in cello-client when first touched). Cron heartbeat armed (job `6b651805`, every :17/:47). cello
+the same in cello-client when first touched). Cron heartbeat armed (job `f8069b29`, every :17/:47) — **session-only, NOT durable; the verbatim prompt
++ schedule live in M8B-PROCEDURE.md §3b, re-arm from there after any restart/compaction.** The cron fires
+the 3 kickoff self-audit questions (no stalling on reversible forks / no unwanted checkpoints / commit
+often) then the drift check then advances. cello
 MCP reconnected (can drive `cello_*` for live checks). **Currently starting DOD-SPINE-1** = extend
 `packages/e2e-tests/src/spine/live-harness.ts` to spawn **3 real directory nodes** (today it spawns ONE).
 Harness facts found: the single directory is spawned at `live-harness.ts:455-524` — env block `:462-491`

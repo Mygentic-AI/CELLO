@@ -98,6 +98,36 @@ user) freezes EVERYTHING — the cron stops, no unit runs — until Andre wakes.
    queue. Never silently drop that you parked something — say "I parked X; I'm now working on Y."
 4. **Log every reversible fork** in M8B-DECISIONS.md (timestamp / fork / choice / why / reverse).
 
+### Kickoff self-audit — answer these THREE at every cron fire, then act
+1. **Have I been unnecessarily stalled asking for a design decision?** Unless choosing wrong is
+   ABSOLUTELY DESTRUCTIVE, pick the option I'd most likely recommend, log it in M8B-DECISIONS.md, and
+   proceed. Never stall on a reversible call.
+2. **Have I stopped awaiting confirmation to continue — or decided to create a checkpoint?** Those are
+   unwanted and unnecessary; Andre is asleep. Continue the work.
+3. **Am I committing frequently?** Commits are vital — lots of commits are good. Commit often (before
+   tests, after each unit, after each fix). Never go >~15 min without one.
+
+### 3b. The cron (verbatim, recreatable — re-arm after any restart/compaction)
+The overnight loop is a **session-only** cron (it dies if the Claude process exits). It is NOT durable —
+this block is the durable record. After any restart or `/compact`, re-arm it with CronCreate:
+`cron: "17,47 * * * *"`, `durable: true`, `prompt:` the text below.
+
+> `<<autonomous-loop>>` M8B federation build — kickoff self-audit + 30-min drift check + advance. Follow
+> M8B-PROCEDURE.md §3a. FIRST answer the three kickoff self-audit questions (above): (a) unnecessarily
+> stalled on a decision? pick-reversible-and-log, don't stall; (b) awaiting confirmation / made a
+> checkpoint? unwanted — continue; (c) committing often? commit now if it's been a while. THEN (1) run
+> the drift checklist (anchored-to-real-binaries; on m8b-assembly + nothing merged to main; read-only
+> subagents only; lowest non-✅ DoD line; committing constantly; deploys only at close gate; every ✅
+> earned by a spine run), correcting any drift. THEN (2) ADVANCE: read M8B-DEFINITION-OF-DONE.md, take
+> the lowest non-✅ DoD line (order MANIFEST→DKG→SIGN→SUSPEND→REFRESH→RELAYSIG→OPTIONB-SETUP→
+> OPTIONB-SEAL→PRESENCE→PICKUP→DEPLOY; build DOD-SPINE-1 enforcer first), do the §2 per-unit loop
+> (falsify-first, red-first on the spine, implement on m8b-assembly, gate green, dispatch READ-ONLY
+> reviewers code-reviewer model:'opus' + test-attacker + fallback-finder, fix every finding, commit,
+> flip the DoD tag + journal entry + status board). ONE coder thread; no parallel implementers; no
+> per-unit branches. NEVER ask Andre — pick reversible + log in M8B-DECISIONS.md, or PARK a genuine
+> undecidable fork (journal + DoD + decisions) and ship the next unit. Deploys + npm publish authorized
+> as the CLOSE GATE (after local 3-dir spine green). Keep going until all DoD lines ✅ on spine then 🚀 live dev.
+
 ## 4. Building the enforcer first (it doesn't exist yet)
 The first unit is **DOD-SPINE-1**: extend the spine harness to spawn **3 real directory nodes** locally
 (today it spawns one). Until that exists, T-of-N can't be proven. Anchor to the binaries; drive only the
