@@ -399,3 +399,25 @@ directory → register another → still completes (T-of-N). Below-threshold: on
 (cello-client). Directory: `directory-node.ts` dkg_ready derivation + below-threshold (trustless-cello).
 Rebuild BOTH dist bins (cello-client `core/daemon/dist`, trustless-cello `packages/directory/dist`). NO
 publish/deploy until DOD-DEPLOY-1. Red-first on j-tofn before coding.
+
+**RESUME POINTER (current — DOD-DKG-1 design DONE + falsify-first done; next = IMPLEMENT).** Don't
+re-design — the §6 note above + M8B-DECISIONS Forks A/B/C are settled. Falsify-first findings (cello-client):
+- `RegistrationContext` (registration-manager.ts:39) exposes singular `getDirectoryEndpoint()`; ADD
+  `getConsortiumEndpoints()` (returns the resolved `ConsortiumEndpoint[]` roster, re-resolved from the
+  manifest provider for fresh failover coords, empty → single-node fallback to `[getDirectoryEndpoint()]`).
+- ctx is built at MULTIPLE daemon.ts sites: ~604 (keystone), ~629/639 (per-agent), ~706/715, ~1587. All
+  must supply the new getter. `consortiumEndpoints` resolved at startup (daemon.ts MANIFEST-1 block) needs
+  to be reachable there — either stash on a daemon-scoped ref the getters close over, or have the getter
+  re-call `manifestNodesToEndpoints(manifestProvider.getCurrentManifest().nodes, …)`.
+- registration-manager.ts:263 `directoryNodes:[dirNode]` → map the roster to N `NetworkDirectoryNode`;
+  `participants:N`; threshold via the shared T-helper (Fork B: N_dirs≥2 → T=N_dirs). Add the Fork-C
+  below-threshold refusal BEFORE `runNetworkDkg` (resolved < T → `dkg_below_threshold`). Same for
+  session-ceremony.ts:166.
+- Directory (trustless-cello directory-node.ts:2306): derive `dkg_ready {participants:N, threshold:T}`
+  from ITS verified manifest (Fork A) instead of the 1/2 hardcode; keep the line-2348 multi-node-accept.
+- Build a shared T-helper used by BOTH repos (or duplicate the tiny formula — it's `N_dirs===1?2:N_dirs`).
+- Red-first on j-tofn: 2-of-3 DKG fans to 3 dirs (each `cello_spine_${i}` holds its OWN K_server share) +
+  ONE group key; kill 1 dir → still completes; only-1-resolves → `dkg_below_threshold`. Rebuild BOTH dist
+  bins. Then 3 reviewers. NOTE: the J-TOFN sovereign-isolation test already registers per-node — that
+  registration currently uses the SINGLE-node path; once DKG-1 lands it becomes a real multi-node DKG, so
+  re-verify that test still holds (it may need the 3-node manifest configured on its daemons too).
