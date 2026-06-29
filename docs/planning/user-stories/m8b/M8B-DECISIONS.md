@@ -77,6 +77,20 @@ Genuine undecidable forks are PARKED (journal + DoD "Parked decisions" + here), 
   milestone. Revisit during/after MANIFEST-1 (same manifest area).
 - Reverse: n/a (investigation deferral, not a code choice).
 
+### 2026-07-01 ~00:05 — FED-DKG-001 — CORRECTION: DKG needs ALL N present (refusal gate = resolved<N)
+- Refines Fork C below. **Crypto correctness:** FROST **DKG** (key generation) requires ALL N declared
+  directory nodes present — a node absent DURING DKG receives no share, so the resulting key is held by
+  only the present subset (a smaller, different consortium). The "kill any one node and the ceremony still
+  completes" tolerance (DOD-INV-NODE / DOD-SIGN-1) is a **SIGNING** property (only T need be online to
+  sign), NOT a DKG property. So:
+  - DKG-1 refusal gate = **resolved roster < N (declared) → refuse** (`dkg_below_threshold` /
+    `consortium_incomplete`) — you cannot DKG a partial consortium. (Not "< T" as Fork C first said.)
+  - The threshold T (Fork B) is baked into the DKG via FROST `signers = {min: T, max: N+1}` so the
+    GENERATED key is T-of-(N+1) for later signing; DKG itself still runs with all N+1 participants.
+  - DOD-DKG-1 spine test: all 3 directories UP → DKG produces the 2-of-3 key. The "kill a node, still
+    works" assertion belongs to DOD-SIGN-1 (signing), not here. The only-1-resolves case → refuse.
+- Reverse: n/a (correctness).
+
 ### 2026-06-30 ~23:25 — FED-DKG-001 — T-of-N topology + threshold formula + refusal gate
 - **Fork A (topology source):** who decides N (and T) for the DKG — the client, a single directory, or
   the signed manifest? **Chose:** the threshold-signed consortium manifest — both client and directory
