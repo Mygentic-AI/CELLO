@@ -61,3 +61,19 @@ nodes** locally (today: one). It's the enforcer; until it exists, T-of-N can't b
 (trustless-cello, docs only). Nothing merged to main-code; assembly branch may be pushed for visibility.
 
 **Reviewer / blockers.** N/A (docs only). No code, no tests run.
+
+**Resume pointer (pre-compaction, ~20:25).** Branch `m8b-assembly` created in **trustless-cello** (create
+the same in cello-client when first touched). Cron heartbeat armed (job `6b651805`, every :17/:47). cello
+MCP reconnected (can drive `cello_*` for live checks). **Currently starting DOD-SPINE-1** = extend
+`packages/e2e-tests/src/spine/live-harness.ts` to spawn **3 real directory nodes** (today it spawns ONE).
+Harness facts found: the single directory is spawned at `live-harness.ts:455-524` — env block `:462-491`
+(`CELLO_DIRECTORY_KEY_FILE` / `CELLO_DIRECTORY_TRANSPORT_KEY_FILE` / `CELLO_DIRECTORY_LISTEN_ADDR` tcp/0 /
+`HEALTH_PORT` / optional `CELLO_DIRECTORY_NODE_KEY_HEX` + `CELLO_DIRECTORY_CONSORTIUM_MANIFEST`); a
+relay↔directory address cycle is broken by pre-deriving the relay PeerID from a fixed transport seed +
+fixed port (`:449-453`); `restartDirectory` re-spawns an identical directory (`:519-524`); the cluster
+returns `{directory getter, relay, restartDirectory, directoryUrl, stop}` (`:536-546`). To spawn 3:
+each directory proc needs its OWN transport key + key file + health port + listen tcp/0; the DKG +
+consortium manifest must enumerate all 3; DECIDE per-node DB vs shared (T-of-N alone needs only that each
+node holds its own K_server share → per-node DB is fine; cross-node replication tests (PRESENCE/PICKUP)
+need shared/replicated PG — likely a separate harness mode). Write the DOD-SPINE-1 design note in this
+journal first (PROCEDURE §6), then red-first on a new `j-tofn.spine.test.ts`.
