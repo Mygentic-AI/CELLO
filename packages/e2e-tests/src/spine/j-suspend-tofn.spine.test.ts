@@ -80,7 +80,7 @@ function setPaused(node: number, agentId: string, paused: boolean): void {
 }
 
 describe("J-SUSPEND-TOFN — quorum-aware suspension (DOD-SUSPEND-1)", () => {
-  it("2 of 3 directories suspended ⇒ no signature forms (per-node share refusal, threshold-block half)", async () => {
+  it("threshold-refusal ≠ single-node: 2 of 3 directories suspended ⇒ no signature; 1 ⇒ still signs", async () => {
     const celloDir = mkdtempSync(join(tmpdir(), "cello-suspn-"));
     agentDirs.push(celloDir);
     const pubA = await provisionAgent(celloDir, "ainit");
@@ -141,16 +141,16 @@ describe("J-SUSPEND-TOFN — quorum-aware suspension (DOD-SUSPEND-1)", () => {
     // proving the per-node share refusal (not the single-node initiator gate).
     expect(blocked.reason, `block must be a threshold failure, not the single-node gate: ${JSON.stringify(blocked)}`).not.toBe("agent_suspended");
 
+    // UN-SUSPEND node 2 (only node 1 suspended now) ⇒ the FROST signer EXCLUDES the refusing node 1 (the
+    // route-around fix: the COMMIT round now excludes a refusing/failing stub, mirroring the sign round)
+    // and nodes 0,2 sign ⇒ client+2 = T=3 ⇒ signature forms. Proves a SINGLE node's refusal does NOT
+    // block — the whole point of DOD-SUSPEND-1: threshold-refusal ≠ single-node-refusal.
+    setPaused(2, agentIdA, false);
+    let signs = (await connA.call("cello_initiate_session", { target_pubkey: pubX })) as { ok?: boolean; reason?: string };
+    for (let i = 0; i < 20 && !signs.ok && signs.reason === "standing_receiver_unavailable"; i++) {
+      await sleep(300);
+      signs = (await connA.call("cello_initiate_session", { target_pubkey: pubX })) as { ok?: boolean; reason?: string };
+    }
+    expect(signs.ok, `1 suspended directory must NOT block (survivors reach T): ${JSON.stringify(signs)}`).toBe(true);
   }, 240_000);
-
-  // PENDING (DOD-SUSPEND-1 route-around gap, found 2026-07-01). A SINGLE suspended directory currently
-  // ALSO blocks (the ceremony returns `ceremony_exhausted`), not just ≥2. The FROST signer
-  // (frost-threshold-signer.ts:471-495) excludes TIMED-OUT (`null`) and INVALID stubs and retries with a
-  // fresh set — but a suspended node's share refusal is not cleanly routed around to the survivors, so a
-  // sub-threshold suspension (1 of 3, below N−T+1=2) exhausts the ceremony instead of signing with the
-  // 2 healthy directories. Per the DoD this MUST still sign (threshold-refusal ≠ single-node-refusal).
-  // Diagnose via the [CLIENT-DEBUG] signRound/exclude lines + the attempt loop: confirm node 1 is
-  // excluded and the retry selects {0,2}; check why the retry exhausts (attempt cap? the directory's
-  // refusal frame vs a timeout? the coordinator node 0 also being a signer?). Un-skip once it signs.
-  it.todo("1 of 3 directories suspended ⇒ still signs (survivors reach T) — threshold ≠ single-node");
 });

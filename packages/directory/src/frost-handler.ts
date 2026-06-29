@@ -431,11 +431,20 @@ export class FrostDirectoryHandler {
     this.#logger?.info("frost.debug.generateCommitment.nonce_sweep", { agentShort, expiredCount, pendingNonceCount: this.#pendingNonces.size });
 
     if (this.#pendingNonces.has(cacheKey)) {
+      // DOD-SUSPEND-1 route-around: a pending nonce here is from an ABANDONED prior ceremony attempt —
+      // the coordinator restarted the round with a fresh participant set (e.g. excluding a SUSPENDED
+      // directory) and is re-requesting a commitment for the same (agent, epoch). The old nonce was
+      // NEVER consumed by signRawMessage (it's still pending), so DISCARD it and generate a fresh one
+      // below. FROST nonce safety holds: a nonce must never sign twice, but an unconsumed pending nonce
+      // never signed, so replacing it is safe — the stale one is dropped. REFUSING here strands every
+      // retry that re-touches an already-committed survivor (NONCE_ALREADY_PENDING cascades the survivor
+      // into the excluded set), so a sub-threshold suspension exhausts instead of signing with the
+      // healthy directories — defeating threshold-refusal ≠ single-node-refusal.
       const existing = this.#pendingNonces.get(cacheKey)!;
-      this.#logger?.warn("frost.debug.generateCommitment.nonce_already_pending", {
-        agentShort, epochId, expiresInMs: existing.expiresAt - now
+      this.#logger?.warn("frost.debug.generateCommitment.nonce_replaced", {
+        agentShort, epochId, staleExpiresInMs: existing.expiresAt - now,
       });
-      return { ok: false, reason: "NONCE_ALREADY_PENDING" };
+      this.#pendingNonces.delete(cacheKey);
     }
 
     let nonce: ReturnType<typeof ed25519_FROST.commit>;
