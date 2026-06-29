@@ -148,30 +148,35 @@ describe("J-SIGN — T-of-N session seal across the consortium (DOD-SIGN-1)", ()
   // ONE test: both agents must be REGISTERED (multi-node DKG, all 3 up) BEFORE any node is killed —
   // DKG needs all N, but SIGNING tolerates one down. So seal once with all up, then kill a node and
   // seal AGAIN with the same agents.
-  it("consortium bilateral seal is FROST T-of-N, and survives one directory node DOWN", async () => {
+  it("consortium seal is FROST T-of-N (≥2 directories sign), and survives a participating node DOWN", async () => {
     const { connA, connB, pubB, daemon } = await setupTwoAgents("seal");
 
     // Seal 1 — all 3 directories up.
     const root1 = await sealSession(connA, connB, pubB, daemon);
     expect(root1).toMatch(/^[0-9a-f]{64}$/);
 
-    // Settle (directory stdout lags the IPC response — DKG-1 lesson), then assert the directories
-    // FROST-sealed and did NOT drop to M1 single-key notarization (the #resolvePrimaryPubkey guard:
-    // FROST whenever a DKG group key exists).
+    // Settle — directory stdout lags the IPC response (DKG-1 lesson) — then assert with TEETH
+    // (cello-test-attacker): a NEGATIVE "no single-key" check is hollow (the single-key path logs only
+    // a generic "Sealed —"). Assert POSITIVELY instead.
     await sleep(2000);
-    for (let i = 0; i < 3; i++) {
-      expect(
-        cluster.directories[i].output,
-        `directory ${i} must NOT single-key-notarize when a DKG group key exists`,
-      ).not.toMatch(/single-key notarization|"signatureType":"single"/i);
-    }
+    // F1 — a directory ran the FROST seal ceremony. The M1 single-key path RETURNS before this log
+    // (directory-node.ts:4089 is FROST-branch only), so this fails if the seal silently single-keyed.
+    const frostSealed = cluster.directories.some((d) => /FROST seal ceremony — session/.test(d.output));
+    expect(frostSealed, "a directory must run the FROST seal ceremony (proves not single-key)").toBe(true);
+    // F2 — ≥2 DISTINCT directories partial-signed (each that's asked to sign logs frost_stream.sign_request).
+    // A single-node or single-key seal touches only one directory → this would fail. (FROST signing is
+    // distinct from DKG's round1/2/3, so this counts SIGNING participation, not the earlier key-gen.)
+    const signedSet1 = [0, 1, 2].filter((i) => /"event":"frost\.debug\.frost_stream\.sign_request"/.test(cluster.directories[i].output));
+    expect(signedSet1.length, `≥2 directories must FROST-sign the ceremony (T-of-N); signed: ${signedSet1.join(",")}`).toBeGreaterThanOrEqual(2);
 
-    // Seal 2 — kill directory node 1 (DOD-INV-NODE for signing). The client re-resolves the roster
-    // (2 of 3), the threshold signer drops the dead node, and the seal still completes with client +
-    // the 2 survivors (T=3=N ⇒ tolerate exactly one directory outage). Same agents (already DKG'd).
-    await cluster.directories[1].kill();
+    // F3 — kill a NON-PRIMARY directory that ACTUALLY participated in seal 1, so its exclusion forces
+    // the survivors to step in (a no-op kill of an unused node would prove nothing). Seal again → still
+    // completes; the FROST pre-check only aggregates with ≥ T live signers, so completion proves the
+    // killed participant was excluded and a survivor reached threshold (DOD-INV-NODE for signing).
+    const killTarget = signedSet1.find((i) => i !== 0) ?? 1;
+    await cluster.directories[killTarget].kill();
     await sleep(1000);
     const root2 = await sealSession(connA, connB, pubB, daemon);
-    expect(root2, "a bilateral seal must still complete with one directory node down").toMatch(/^[0-9a-f]{64}$/);
+    expect(root2, `seal must still complete with participating directory ${killTarget} down`).toMatch(/^[0-9a-f]{64}$/);
   }, 240_000);
 });

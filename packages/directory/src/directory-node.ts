@@ -2802,7 +2802,24 @@ export class CelloDirectoryNode {
     }
 
     // SESSION-004 Step 1: Check for injected IThresholdSigner (CRITICAL-2: fail loudly if absent)
-    const signer = this.#thresholdSigners.get(initiatorHex);
+    let signer = this.#thresholdSigners.get(initiatorHex);
+    // DOD-SIGN-1 (code-reviewer B1): #thresholdSigners / #delegatedSigners are in-memory — wiped on a
+    // directory RESTART, and absent on a consortium node that took part in the DKG rounds but did not
+    // run the registration reply. Reconstruct the ClientDelegatedSigner from the PERSISTED group key
+    // (agent_profiles.primary_pubkey, via #resolvePrimaryPubkey) — symmetric to the seal path's
+    // fallback — so session signing survives a restart instead of hard-failing frost_signer_not_configured.
+    // Only fall through to that error when there is genuinely no profile (no DKG ever happened).
+    if (!signer) {
+      const primary = this.#resolvePrimaryPubkey(initiatorHex);
+      if (primary) {
+        const reconstructed = new ClientDelegatedSigner(initiatorHex, new Uint8Array(primary));
+        reconstructed.setStreams(this.#streams);
+        this.#delegatedSigners.set(initiatorHex, reconstructed);
+        this.registerThresholdSigner(initiatorHex, reconstructed);
+        signer = reconstructed;
+        this.#logger?.info("session.signer.reconstructed_from_store", { initiatorShort: initiatorHex.slice(0, 16) });
+      }
+    }
     this.#logger?.info("frost.debug.session_request.signer_lookup", {
       initiatorShort: initiatorHex.slice(0, 16),
       signerFound: !!signer,
@@ -3389,6 +3406,11 @@ export class CelloDirectoryNode {
     // DOD-SEAL-2: notarize with the counterparty ABSENT.
     const initiatorPrimaryPubkey = this.#resolvePrimaryPubkey(senderHex);
     if (!initiatorPrimaryPubkey) {
+      // fallback-finder SIGN-1 #1: profile-exists-but-no-primary is a split-brain anomaly (DKG'd
+      // agent, group key missing on this node), not the legitimate no-DKG case — WARN loudly.
+      if (this.#store.getProfile(senderHex) !== undefined) {
+        this.#logger?.warn("seal.single_key.anomaly", { initiatorShort: senderHex.slice(0, 16), reason: "profile_without_primary_pubkey", path: "unilateral" });
+      }
       // Single-key fallback (pre-DKG / local): sign the notarization TBS with the node key.
       // The single-key certificate is rejected by M2 clients, identical to the bilateral path.
       const notarizationTbs = CBOR_ENC.encode([
@@ -3995,6 +4017,17 @@ export class CelloDirectoryNode {
     const initiatorPrimaryPubkey = this.#resolvePrimaryPubkey(initiatorHex);
 
     if (!initiatorPrimaryPubkey) {
+      // fallback-finder SIGN-1 #1: a profile that EXISTS but yields no primary_pubkey is an ANOMALY —
+      // a DKG'd agent whose group key is missing on THIS node (split-brain risk; the client refuses
+      // single-key seals) — distinct from the legitimate no-DKG case (no profile). WARN loudly so it
+      // isn't buried under the normal "Sealed" log.
+      if (this.#store.getProfile(initiatorHex) !== undefined) {
+        this.#logger?.warn("seal.single_key.anomaly", {
+          sessionId: sessionIdHex,
+          initiatorShort: initiatorHex.slice(0, 16),
+          reason: "profile_without_primary_pubkey",
+        });
+      }
       // No primary_pubkey registered for this initiator — fall back to M1 single-key notarization.
       // This path is taken in environments where SESSION-004 DKG has not been performed
       // (e.g. pure SESSION-003 test environment). The single-key path will be rejected by M2 clients.
