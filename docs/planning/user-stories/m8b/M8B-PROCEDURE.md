@@ -86,7 +86,7 @@ for the architecture (don't re-derive; it's verified). Then start the loop (§2)
 A session cron fires ~every 30 min. When it fires: STOP, produce the checklist, each item ✅ FOLLOWED /
 ❌ DRIFTED with COMMAND OUTPUT as evidence:
 1. **Anchored to real binaries** — the spine test spawns real directory/relay/daemon, never imports library internals. Paste a grep.
-2. **On the assembly branch, nothing merged to main** — `git status -sb` both repos. Branch pushes OK; main merges are Andre's. Paste.
+2. **On `main`, committing often** — `git status -sb` + `git log --oneline -3` both repos. Push triggers the CI/CD deploy → batch directory/relay pushes, never push per-commit. Paste.
 3. **Read-only subagents only** — reviewer / test-attacker / fallback-finder / done-auditor / explorer. No parallel implementers. yes/no.
 4. **Working the lowest non-✅ DoD line** — name it; not skipping ahead.
 5. **Committing constantly** — `git log --oneline -3`. Paste.
@@ -125,12 +125,12 @@ this block is the durable record. After any restart or `/compact`, re-arm it wit
 > M8B-PROCEDURE.md §3a. FIRST answer the three kickoff self-audit questions (above): (a) unnecessarily
 > stalled on a decision? pick-reversible-and-log, don't stall; (b) awaiting confirmation / made a
 > checkpoint? unwanted — continue; (c) committing often? commit now if it's been a while. THEN (1) run
-> the drift checklist (anchored-to-real-binaries; on m8b-assembly + nothing merged to main; read-only
-> subagents only; lowest non-✅ DoD line; committing constantly; deploys only at close gate; every ✅
-> earned by a spine run), correcting any drift. THEN (2) ADVANCE: read M8B-DEFINITION-OF-DONE.md, take
-> the lowest non-✅ DoD line (order MANIFEST→DKG→SIGN→SUSPEND→REFRESH→RELAYSIG→OPTIONB-SETUP→
-> OPTIONB-SEAL→PRESENCE→PICKUP→DEPLOY; build DOD-SPINE-1 enforcer first), do the §2 per-unit loop
-> (falsify-first, red-first on the spine, implement on m8b-assembly, gate green, dispatch READ-ONLY
+> the drift checklist (anchored-to-real-binaries; on main + committing often; read-only
+> subagents only; lowest non-✅ DoD line; committing constantly; directory/relay pushes batched, deploy
+> only at close gate; every ✅ earned by a spine run), correcting any drift. THEN (2) ADVANCE: read
+> M8B-DEFINITION-OF-DONE.md, take the lowest non-✅ DoD line (order MANIFEST→DKG→SIGN→SUSPEND→REFRESH→
+> RELAYSIG→OPTIONB-SETUP→OPTIONB-SEAL→PRESENCE→PICKUP→DEPLOY; build DOD-SPINE-1 enforcer first), do the §2
+> per-unit loop (falsify-first, red-first on the spine, implement on main, gate green, dispatch READ-ONLY
 > reviewers code-reviewer model:'opus' + test-attacker + fallback-finder, fix every finding, commit,
 > flip the DoD tag + journal entry + status board). ONE coder thread; no parallel implementers; no
 > per-unit branches. NEVER ask Andre — pick reversible + log in M8B-DECISIONS.md, or PARK a genuine
@@ -147,8 +147,11 @@ agent surface (`cello register` / `cello_initiate_session` / `cello_send` / `cel
 ## 5. Hard rules (non-negotiable)
 - **One thread. One coder (the main loop). NO parallel implementation agents.** Parallel branches are what
   buried M7. Only READ-ONLY subagents (reviewer, test-attacker, fallback-finder, done-auditor, explorer).
-- **One assembly branch per repo** (`m8b-assembly` in cello-client and trustless-cello). No per-unit
-  worktree/branch sprawl. Push the assembly branch for visibility; **never merge to main** (Andre merges).
+- **Work directly on `main`** in both repos (Andre's call 2026-06-29: solo, deploying anyway, no other
+  coders — branch isolation is pure overhead). No per-unit branches/worktrees. Commit OFTEN locally;
+  **push to `main`** when a unit's changes are ready — but a push touching `packages/directory/**` or
+  `packages/relay/**` triggers the CI/CD deploy (~25-30 min), so BATCH directory/relay changes and push
+  at sensible points / the close gate, not per-commit (cello-client + e2e/spine pushes are free).
 - **Reachability gate stays green** — daemon never imports `@cello-protocol/client`; no new dead code.
 - **Deploys/publish at the CLOSE GATE only** — local 3-dir spine green first, then publish beta + deploy
   dev (authorized), then prove live. Not a debugging loop.

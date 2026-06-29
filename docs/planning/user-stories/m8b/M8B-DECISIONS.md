@@ -35,6 +35,16 @@ Genuine undecidable forks are PARKED (journal + DoD "Parked decisions" + here), 
   both). Restructured to the M7 5-doc shape under `docs/planning/user-stories/m8b/`. The old
   `docs/planning/federation-milestone/` folder is removed. Reverse: git history.
 
+### 2026-06-29 ~20:45 — RUN — work directly on main (SUPERSEDES the assembly-branch decision)
+- Fork: keep the `m8b-assembly` branch (no-merge-to-main) vs work directly on `main`.
+- Chose: **work directly on `main` in both repos.** Merged `m8b-assembly` → main (ff) and deleted it.
+- Why: Andre — solo, no other coders, and we're deploying from main anyway, so branch isolation +
+  no-merge is pure overhead. Supersedes the earlier "one assembly branch / never merge to main" choice.
+- Caveat carried into PROCEDURE §5: a push touching `packages/directory/**` or `packages/relay/**`
+  triggers the ~25-30 min CI/CD deploy, so commit often locally but BATCH directory/relay pushes (don't
+  push per-commit); cello-client + e2e/spine pushes are free.
+- Reverse: branch off main again if ever needed.
+
 <!-- Append below. Format:
 ### YYYY-MM-DD HH:MM — <unit-id> — <short title>
 - Fork: …  Chose: …  Why: …  Reverse: …

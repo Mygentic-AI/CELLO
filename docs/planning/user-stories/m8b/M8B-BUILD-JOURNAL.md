@@ -57,13 +57,14 @@ read-only reviewers, cron drift-check). See M8B-DECISIONS.md.
 **Next red (first unit of real work).** DOD-SPINE-1 — extend the spine harness to spawn **3 real directory
 nodes** locally (today: one). It's the enforcer; until it exists, T-of-N can't be proven. Then DOD-MANIFEST-1.
 
-**Branch / where.** Code goes on `m8b-assembly` in each repo. These planning docs commit to `main`
-(trustless-cello, docs only). Nothing merged to main-code; assembly branch may be pushed for visibility.
+**Branch / where.** **Work directly on `main`** in both repos (Andre's call ~20:45 — solo, deploying
+anyway, no other coders; the `m8b-assembly` branch was merged to main + deleted). Commit often; batch
+directory/relay pushes (a push there triggers the ~25-30 min CI/CD deploy).
 
 **Reviewer / blockers.** N/A (docs only). No code, no tests run.
 
-**Resume pointer (pre-compaction, ~20:25).** Branch `m8b-assembly` created in **trustless-cello** (create
-the same in cello-client when first touched). Cron heartbeat armed (job `f8069b29`, every :17/:47) — **session-only, NOT durable; the verbatim prompt
+**Resume pointer (pre-compaction, ~20:45).** **Work on `main`** in both repos (no assembly branch —
+merged + deleted). Cron heartbeat armed (job `0a122267`, every :17/:47) — **session-only, NOT durable; the verbatim prompt
 + schedule live in M8B-PROCEDURE.md §3b, re-arm from there after any restart/compaction.** The cron fires
 the 3 kickoff self-audit questions (no stalling on reversible forks / no unwanted checkpoints / commit
 often) then the drift check then advances. cello
