@@ -168,6 +168,12 @@ Resources:
               Value: !Ref EmailFrom
             - Name: DIRECTORY_API_URL
               Value: !Ref DirectoryApiUrl
+            # WebAuthn relying-party config — must match the served host (no scheme/port for the ID;
+            # full origin for the browser check). Required outside CELLO_ENV=local.
+            - Name: WEBAUTHN_RP_ID
+              Value: !Ref PortalHostname
+            - Name: WEBAUTHN_ORIGIN
+              Value: !Sub "https://${PortalHostname}"
           Secrets:
             - Name: PORTAL_DATABASE_URL
               ValueFrom: !Ref DatabaseUrlSecretArn
