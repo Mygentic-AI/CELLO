@@ -77,6 +77,29 @@ Genuine undecidable forks are PARKED (journal + DoD "Parked decisions" + here), 
   milestone. Revisit during/after MANIFEST-1 (same manifest area).
 - Reverse: n/a (investigation deferral, not a code choice).
 
+### 2026-06-30 ~23:25 — FED-DKG-001 — T-of-N topology + threshold formula + refusal gate
+- **Fork A (topology source):** who decides N (and T) for the DKG — the client, a single directory, or
+  the signed manifest? **Chose:** the threshold-signed consortium manifest — both client and directory
+  derive N = manifest node count from their OWN verified manifest and cross-check; mismatch aborts.
+  **Why:** neither party can unilaterally shrink/inflate the quorum (a malicious client can't weaken it,
+  a malicious node can't pad it); the officer-signed manifest is the tamper-proof source. **Reverse:**
+  change the derivation source in the shared topology helper.
+- **Fork B (threshold formula — the genuine fork):** what FROST threshold T? **Chose:** participants =
+  N_dirs+1 (client always present); N_dirs=1 → T=2 (current 2-of-2, unchanged); **N_dirs≥2 → T=N_dirs**
+  (= max−1: client + any N_dirs−1 directory nodes, tolerates exactly ONE directory outage, no single
+  directory mandatory). N_dirs=3 → T=3 of 4 (the DoD's "2-of-3"). **Why:** DOD-INV-NODE requires "kill
+  any one of N and the ceremony still completes"; T=max−1 is the tightest threshold meeting that
+  (maximizes forge-resistance while tolerating 1 outage). A lower T tolerates more outages but lets fewer
+  nodes forge (weaker security). **This is the security/availability knob — change this line if Andre
+  wants higher outage tolerance for large N.** T is derived in a shared helper, NOT a manifest field yet.
+  **Reverse:** edit the threshold helper; add a signed `signingThreshold` manifest field if a deploy needs
+  a configurable T.
+- **Fork C (degraded roster):** run the ceremony on whatever resolved, or refuse below quorum? **Chose:**
+  REFUSE with a distinct `dkg_below_threshold` error when fewer than T of N directory endpoints resolve.
+  **Why:** closes the silent fallback cello-fallback-finder flagged (MANIFEST-1 #1) as HIGH-if-DKG-1-skips
+  — a degraded consortium must not silently run a ceremony on too few nodes. **Reverse:** n/a (a
+  correctness/security gate, not a preference).
+
 <!-- Append below. Format:
 ### YYYY-MM-DD HH:MM — <unit-id> — <short title>
 - Fork: …  Chose: …  Why: …  Reverse: …

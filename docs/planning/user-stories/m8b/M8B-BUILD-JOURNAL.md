@@ -19,7 +19,7 @@ description: >
 |------|----------|---------|--------|-------|
 | FED-SPINE-001 (enforcer, build FIRST) | DOD-SPINE-1 | e2e | 🔨 substrate green | harness spawns 3 sovereign dir nodes (own key/transport/port/DB) — j-tofn GREEN; journey asserts (DKG/seal/suspend) accrue per-unit |
 | FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | ✅ spine-proven | resolver + daemon resolve+log + 3-node manifest spine proof + pairwise binding + forged-refusal; 3 reviewers clean (fixes: http(s) endpoint contract, severity-graded roster, key guards); j-tofn 4/4 GREEN |
-| FED-DKG-001 | DOD-DKG-1 | client+dir | ⬜ not started | multi-node DKG (2-of-3) |
+| FED-DKG-001 | DOD-DKG-1 | client+dir | 🔨 design note done | multi-node DKG (2-of-3) — seam verified (runNetworkDkg N-capable; limiter is the [dirNode] caller + dkg_ready hardcode); topology+threshold+refusal decided |
 | FED-SIGN-001 | DOD-SIGN-1 | client+dir | ⬜ not started | T-of-N session sign + seal; kill single-key fallback |
 | FED-SUSPEND-001 | DOD-SUSPEND-1 | dir | ⬜ not started | quorum-aware refusal |
 | FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | ⬜ not started | share refresh / epoch rollover |
@@ -344,3 +344,58 @@ directory side (`directory-node.ts:2309 participants:1,threshold:2`) must accept
 (2-of-3 DKG against 3 real directories; kill a node → still completes). cello-client daemon source +
 directory source both change; rebuild daemon dist + (directory is trustless-cello — the spine runs its
 built bin, rebuild `packages/directory/dist`). NO publish until DOD-DEPLOY-1.
+
+### 2026-06-30 ~23:25 — DOD-DKG-1 design note (§6) — multi-node DKG (client fans to N, T-of-N)
+**Target.** Registration runs a real interactive FROST DKG across the CLIENT + all N consortium
+directory nodes (resolved from the manifest in MANIFEST-1), producing ONE group key where each node holds
+its OWN K_server share. 2-of-3 (2 of 3 directory nodes + the always-present client) completes; kill any
+ONE directory node and DKG/sign still completes (DOD-INV-NODE).
+
+**Verified seam (both sides read):**
+- CLIENT — `registration-manager.ts:263` passes `directoryNodes:[dirNode]` (single, from the single
+  `getDirectoryEndpoint()`) into `runNetworkDkg`. `runNetworkDkg` (`network-directory-node.ts:567+`) is
+  ALREADY N-capable: fans round1/2/3 across all `directoryNodes` via `Promise.all`, routes each node's
+  round-2 `othersRound1 = allRound1.filter(j => j !== i+1)`, `max = participants+1` (client). Only client
+  change: build N `NetworkDirectoryNode` from `consortiumEndpoints` + pass `participants:N`.
+- DIRECTORY — `directory-node.ts:2306` sends `dkg_ready {participants:1, threshold:2}` (the 2-of-2
+  hardcode); each node runs its own round1/2/3 on `/cello/frost/1.0.0` and verifies the client's
+  primary_pubkey vs its `#pendingDkgCommitments` — BUT line 2348 ALREADY handles "no stored commitment
+  (client did DKG with a different node) → accept (multi-node DKG)". Per-node DKG participation already
+  works; the hardcoded `participants:1/threshold:2` is the limiter.
+
+**DECISION 1 — topology from the SIGNED MANIFEST, not either party unilaterally (reversible).** Both
+client and directory derive N from the threshold-signed manifest they each load+verify (MANIFEST-1).
+Neither dictates N — a malicious client can't shrink the quorum, a malicious node can't inflate it. The
+directory's `dkg_ready` N/T become DERIVED from its verified manifest (N = node count); the client
+cross-checks against its OWN verified manifest; mismatch → abort.
+
+**DECISION 2 — threshold formula (the one genuine fork; RECOMMENDATION, reversible).** FROST participants
+= N_dirs + 1 (client always present). Threshold T:
+- N_dirs = 1 (single-node back-compat): T = 2 (= max) — current 2-of-2, both mandatory. Unchanged.
+- N_dirs ≥ 2: **T = N_dirs** (= max − 1) → client + any (N_dirs−1) directory nodes; tolerates exactly ONE
+  directory outage; no single directory node mandatory. N_dirs=3 → T=3 of max=4 (the DoD's "2-of-3").
+Rationale: DOD-INV-NODE requires "kill any one of N and the ceremony still completes" — T=max−1 is the
+tightest threshold meeting that (maximizes forge-resistance floor while tolerating 1 outage). Lower T
+tolerates more outages but lets fewer nodes forge (weaker). **If Andre wants higher outage tolerance for
+large N, this is the line to change.** T is DERIVED in a shared helper (client+directory), NOT a manifest
+field yet (add a signed `signingThreshold` field only when a real deploy needs a configurable T).
+
+**DECISION 3 — threshold-REFUSAL gate (fallback-finder #1 escalation — MUST land here).** Before the
+ceremony, if fewer than T of N directory endpoints resolved (MANIFEST-1's availability-aware roster),
+REFUSE with a distinct error (`dkg_below_threshold`; directory already has `directory_below_threshold`)
+rather than silently running on too few nodes. Closes the silent fallback flagged HIGH-if-skipped.
+
+**consortiumEndpoints threading.** daemon.ts resolves it at startup (MANIFEST-1, logged only). DKG-1
+stashes it on the registration/session ctx (new ctx field + setter, set in startDaemon post-resolve) so
+`registration-manager` builds the N `NetworkDirectoryNode`. Re-resolve at ceremony time too (fresh
+failover coordinates); the startup resolve becomes validation+warming.
+
+**Spine red (J-TOFN grows).** 2-of-3 DKG: register with a 3-node manifest → assert the ceremony fans to
+all 3 (each persists its OWN K_server share — query each `cello_spine_${i}`) + ONE group key. Kill 1
+directory → register another → still completes (T-of-N). Below-threshold: only 1 of 3 resolves →
+`dkg_below_threshold`. (DOD-SIGN-1/SUSPEND-1 add session-sign + quorum.)
+
+**Cross-repo + build.** Client: `registration-manager.ts`, `session-ceremony.ts`, ctx, T-helper
+(cello-client). Directory: `directory-node.ts` dkg_ready derivation + below-threshold (trustless-cello).
+Rebuild BOTH dist bins (cello-client `core/daemon/dist`, trustless-cello `packages/directory/dist`). NO
+publish/deploy until DOD-DEPLOY-1. Red-first on j-tofn before coding.
