@@ -19,7 +19,7 @@ description: >
 |------|----------|---------|--------|-------|
 | FED-SPINE-001 (enforcer, build FIRST) | DOD-SPINE-1 | e2e | 🔨 substrate green | harness spawns 3 sovereign dir nodes (own key/transport/port/DB) — j-tofn GREEN; journey asserts (DKG/seal/suspend) accrue per-unit |
 | FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | ✅ spine-proven | resolver + daemon resolve+log + 3-node manifest spine proof + pairwise binding + forged-refusal; 3 reviewers clean (fixes: http(s) endpoint contract, severity-graded roster, key guards); j-tofn 4/4 GREEN |
-| FED-DKG-001 | DOD-DKG-1 | client+dir | 🟡 spine-green, reviewers running | multi-node 2-of-3 DKG fans to all 3 dirs (j-tofn-dkg GREEN); below-threshold gate (unit); client roster threading (358f1f2,8b520c2) + directory dkg_ready derivation + harness pre-spawn manifest hook (35130846,a804af8f); reviewers pending |
+| FED-DKG-001 | DOD-DKG-1 | client+dir | ✅ spine-proven | multi-node 2-of-3 DKG fans to all 3 dirs (j-tofn-dkg GREEN); below-threshold gate + B1 fix (empty-roster refuses, no downgrade); 3 reviewers clean; MEDIUM count-gate parked |
 | FED-SIGN-001 | DOD-SIGN-1 | client+dir | ⬜ not started | T-of-N session sign + seal; kill single-key fallback |
 | FED-SUSPEND-001 | DOD-SUSPEND-1 | dir | ⬜ not started | quorum-aware refusal |
 | FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | ⬜ not started | share refresh / epoch rollover |
@@ -449,3 +449,34 @@ diff. ANTICIPATED finding to fix: a silent downgrade — if a manifest IS config
 EMPTY (all nodes unreachable) the client currently falls back to single-node DKG (and the directory's `?? 1`
 does the same if getCurrentManifest is null mid-run). Plan: refuse rather than silently downgrade a
 consortium to 2-of-2.
+
+### 2026-07-01 ~02:10 — DOD-DKG-1 ✅ CLOSED (reviewer-clean)
+**3 reviewers (read-only, cross-repo diff):** test-attacker **TESTS HAVE TEETH** (the per-directory "Round 1
+commit" assertion is per-OS-process, single emission site, real participation required; no cluster-reuse
+pollution; gate proves short-circuit-before-runNetworkDkg). code-reviewer **BLOCKED on B1**;
+fallback-finder **HIGH (= B1)** + MEDIUM. Everything else verified CORRECT by all three (gate `!==` both
+directions, directory dkg_ready derivation + FileDirectoryManifestStore no-throw last-good, threshold
+formula no off-by-one, multi-node build, harness back-compat).
+- **B1 (BLOCKING) FIXED (cello-client `448e1c9`):** empty roster + manifest configured was silently
+  downgrading T-of-N → 2-of-2. `getConsortiumEndpoints()` now returns `ConsortiumEndpoint[] | null` (null =
+  no manifest → single-node; array = consortium configured); registration-manager branches on `roster !==
+  null`, so an empty roster hits the gate (0 ≠ N) → `dkg_below_threshold`. Unit tests: <N, =[] , >N all
+  refuse; null → single-node (dkg_failed on stub, past the gate). 19/19 daemon units; j-tofn-dkg + j-spine
+  7/7 GREEN; back-compat held.
+- **MEDIUM (count-only gate, identity skew) PARKED** — needs a `manifestVersion` field in the `dkg_ready`
+  protocol frame (cross-repo, deliberate). Narrow exposure (both root-key-verified; valid T-of-N over the
+  client's verified nodes). Full writeup in DoD "Parked decisions"; code carries a `// NOTE (MEDIUM, parked)`.
+- LOW (non-blocking): L1 harness port TOCTOU window (acceptable, localhost); L2 directory accept-primary-
+  pubkey-as-is when not in roster (out of scope — follow-up for any-directory signaling, DOD-OPTIONB).
+
+**DOD-DKG-1 ✅.** The DKG is genuinely T-of-N — the milestone's 2-of-2 stopgap is GONE for key generation.
+cello-client commits: `358f1f2`,`8b520c2`,`448e1c9`. trustless-cello: `35130846`,`a804af8f` (+docs).
+
+**Resume pointer → DOD-SIGN-1.** Next unit: "T-of-N session signing + seal: client coordinates with any T
+of N; one node down ⇒ still signs (exclusion/retry). The single-key fallback (`directory-node.ts:3964`) is
+removed/guarded — FROST whenever DKG exists." Seam (analogous to DKG-1): `session-ceremony.ts:166`
+`directoryNodeStubs=[stub]` (single) → build N stubs from the consortium roster (thread `getConsortiumEndpoints`
+into the session ctx as DKG-1 did for registration). The signer (`FrostThresholdSigner`) already takes
+`directoryNodeStubs[]`. THIS is where "kill a node, still signs" gets proven (the T-of-N tolerance the
+DKG-1 reviewers correctly said belongs here). Also: the J-TOFN-DKG happy test could be extended to SIGN a
+session with a node down. Write the §6 design note first; the threshold T (=N) is already decided (Fork B).

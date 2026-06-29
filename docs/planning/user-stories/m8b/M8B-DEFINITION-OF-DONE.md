@@ -51,7 +51,14 @@ description: >
   threshold-REFUSAL gate so a sub-threshold roster can't run a ceremony.)
 - **DOD-DKG-1** — Multi-node DKG: client drives `participants:N, threshold:T`, fans round1/2/3 to N
   directory nodes, relays round-2 `targetIdentifier` shares; each node stores its own K_server share for
-  one group key. 2-of-3 DKG completes against 3 directory nodes. *(FED-DKG-001)* — ❌
+  one group key. 2-of-3 DKG completes against 3 directory nodes. *(FED-DKG-001)* — ✅ SPINE-PROVEN
+  (j-tofn-dkg: 3-node consortium → real DKG fans to all 3 directories (each logs Round 1 commit; primary
+  derives "3 directory nodes, threshold 3" from its OWN manifest); one group key. Topology from the
+  signed manifest, not either party. Below-threshold refusal gate (resolved roster ≠ declared N ⇒
+  dkg_below_threshold; B1-fixed: empty-roster-with-manifest refuses, never downgrades to 2-of-2) proven by
+  deterministic unit tests. 3 reviewers clean. NOTE: distinct-K_server-share-per-node + the
+  kill-a-node-still-signs tolerance are SIGNING properties proven in DOD-SIGN-1. Count-only-gate identity
+  skew parked — see Parked decisions.)
 - **DOD-SIGN-1** — T-of-N session signing + seal: client coordinates with any T of N; one node down ⇒
   still signs (exclusion/retry). Byte-identical sealed root. The single-key fallback (`directory-node.ts:3964`)
   is removed/guarded — FROST whenever DKG exists. *(FED-SIGN-001)* — ❌
@@ -102,6 +109,23 @@ description: >
 - **J-LIVE** → DOD-DEPLOY-1: all of the above against the live dev cluster.
 
 ## Parked decisions (never silently dropped — RC-1)
+- **DOD-DKG-1 MEDIUM — the topology gate is COUNT-only (identity skew not caught).** The DKG refusal
+  gate compares the client's resolved roster COUNT to the directory's declared `participants` N
+  (`registration-manager.ts`). A same-COUNT but different-IDENTITY manifest version skew (e.g. a forward
+  officer-key rotation window where the client has manifest v2 and the directory still serves v1, both
+  with N nodes) passes `N === N` and the DKG fans over the client's node set, which may differ from the
+  directory's. **Exposure is narrow** (cello-fallback-finder + code-reviewer both rated it MEDIUM /
+  "Andre's call"): it needs a same-count version-skew window; anti-rollback blocks backward skew; BOTH
+  sides verify their manifest against the same officer root keys; and the resulting key is still a valid
+  T-of-N over the client's officer-verified nodes. **Recommended fix (deliberate, not done overnight):**
+  add a `manifestVersion` field to the `dkg_ready` frame; the directory sends ITS verified manifest
+  version, the client refuses if it ≠ its own `verifiedManifestVersion` (version agreement ⇒ identity
+  agreement, since same version + same root keys ⇒ same manifest). Parked rather than fixed because it
+  adds PROTOCOL surface (a new frame field, cross-repo) — a design choice for Andre, not a silent
+  overnight change. The gate code carries a `// NOTE (MEDIUM, parked)` marker. Revisit with DOD-SIGN-1
+  (which also reads the consortium topology) or as a standalone hardening.
+
+
 - **PRE-EXISTING j-auth poll-test failures (NOT an M8B regression).** During DOD-SPINE-1 back-compat
   checks, `j-auth.spine.test.ts` was found to fail 2 of 6 tests: *DOD-AUTH-2 (poll refresh)* and
   *DOD-AUTH-2 (poll rejects forged)* — both time out in `waitForLine` on the daemon's manifest-poll log
