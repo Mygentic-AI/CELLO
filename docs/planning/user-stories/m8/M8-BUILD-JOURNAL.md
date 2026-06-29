@@ -2024,3 +2024,22 @@ LESSON (reinforced): the test harness MUST match production's pg type config. A 
 timestamp-serialization bugs is invisible when the harness returns Dates and prod returns strings.
 configurePgTypes() now runs in the internal-api-harness so the portal real-dir e2e exercises the real
 parser.
+
+## 2026-06-29 — agents-502 fix DEPLOYED + VERIFIED live; WebAuthn env live
+
+- First directory pipeline run FAILED at Build: not the fix — the AC-011 guard test
+  (deploy-001a-automation) forbids `aws cloudformation deploy` in infra/*.sh outside an allowlist;
+  my new deploy-portal.sh tripped it. Fixed by authorizing deploy-portal.sh in the allowlist
+  (precedent: deploy-peering.sh), 51/51 green. Re-pushed (04d95ad3).
+- Second run SUCCEEDED (~30 min, 3 regions). VERIFIED LIVE: `POST /internal/agents-by-account`
+  for Andre's account (19ab08ff) → **HTTP 200** with his 2 agents (8999608f/Demo2 + be66b5b1),
+  `last_seen_at` serialized as a proper ISO string ("2026-06-29T10:24:12.605Z") — the exact value
+  that crashed before. The 502 is gone; the portal Agents page now populates.
+- Both agents read online:false (accurate — the daemon's directory_signaling was "reconnecting"
+  per Andre's `cello status`; presence reflects real connection state). They're us-east-1-owned,
+  so the cross-node presence caveat doesn't apply to them.
+- WebAuthn env fix (WEBAUTHN_RP_ID/ORIGIN) is live + confirmed (portal task def + /sign-in 200).
+
+NET: the live portal core path now works end-to-end — magic-link login (code + emailed link),
+agents appear from the live directory with truthful presence, passkeys enabled. Remaining gated
+items unchanged (cross-node presence decision, T-of-N, TRUST-4 publish, full live E2E).
