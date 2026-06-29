@@ -253,3 +253,40 @@ until `getDirectoryEndpoints` + `manifestNodesToEndpoints` exist and the daemon 
 **Cross-repo note.** Changes land in cello-client (`core/daemon`: directory-bootstrap.ts, types.ts,
 manifest wiring). Local iteration rebuilds `core/daemon/dist` (the spine BINS.daemon) — NO publish needed
 until DOD-DEPLOY-1. Version bump + publish + trustless-cello package.json update happen at the deploy gate.
+
+### 2026-06-30 ~22:15 — DOD-MANIFEST-1 increments 1+2 done (cello-client, committed)
+**Increment 1 — resolver layer (cello-client commit `46cd9e8`).** `directory-bootstrap.ts`:
+`mapEndpointToBootstrapBase(endpoint)` (wss→http base) + `manifestNodesToEndpoints(nodes, {fetchFn,logger})`
+→ `ConsortiumEndpoint[] {nodeId,pubkey,peerId,multiaddr}`, probing each node's `/bootstrap` in parallel,
+AVAILABILITY-AWARE (down node skipped, never a silent single-endpoint substitution). 22/22
+directory-bootstrap focused tests GREEN (15 existing + 7 new). typecheck 0, eslint 0.
+
+**Increment 2 — daemon wiring (cello-client commit `1b1a761`).** `daemon.ts startDaemon`: on a VERIFIED
+manifest, resolves the full node set + logs `directory.consortium.resolved {declaredNodes, resolvedNodes,
+peerIds}`. This is the roster DKG-1 fans out to. Daemon `dist` rebuilt (confirmed via grep). typecheck 0.
+
+**Resume pointer — DOD-MANIFEST-1 increment 3 (the spine proof + harness).** NEXT: extend the SPINE
+harness to prove the resolve end-to-end against 3 real binaries.
+- `packages/e2e-tests/src/spine/auth-manifest.ts` exports ONE deterministic node keypair
+  (`DIRECTORY_NODE_PRIVATE/PUBLIC_KEY_HEX`). ADD **N deterministic node keypairs** (an array/helper, e.g.
+  `nodeKeypair(i)`), keeping the existing single export for j-auth back-compat.
+- `live-harness.ts`: give each spine directory its OWN `CELLO_DIRECTORY_NODE_KEY_HEX` + distinct `NODE_ID`
+  (replace the SPINE-1 guard `directoryCount>1 && directoryNodeKeyHex throws` with real per-node keys —
+  the guard was the placeholder for exactly this). Expose each node's node-pubkey + add a helper that
+  builds a 3-node signed manifest post-spawn: `nodes[i] = {nodeId_i, pubkey=nodeKeyPub_i, endpoint =
+  directoryUrls[i]}` (endpoint = the http bootstrap base, per the DECISIONS convention), signed via
+  `makeSignedManifest`. NOTE: configuring the daemon with a manifest turns step-6 ON for the PRIMARY
+  signaling connect, so node 0's manifest pubkey MUST equal node 0's node key (else primary connect fails
+  step-6) — give all 3 matching per-node keys.
+- `j-tofn.spine.test.ts`: new `it()` — start a daemon configured with the 3-node manifest
+  (`writeConsortiumManifest` / `manifestEnv` → `startDaemon`), assert it logs `directory.consortium.resolved`
+  with `resolvedNodes:3` and the 3 `peerIds` matching the 3 directories' PeerIDs. (The resolve log fires at
+  startup right after manifest-verify, BEFORE the primary connect — so it's observable even before any
+  ceremony.) Then rejection asserts can reuse j-auth's forged/expired patterns if useful (rejection is
+  already covered by the load block + existing j-auth non-poll tests).
+- REBUILD already done for the daemon; after harness edits run `j-tofn` (spine), green → 3 reviewers →
+  fix → commit. Then DKG-1 threads `consortiumEndpoints` into the ceremony (registration-manager /
+  session-ceremony directoryNodes[]).
+
+**Pre-existing j-auth poll failure** still parked (DoD Parked decisions) — revisit during MANIFEST-1 close
+or after.
