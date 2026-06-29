@@ -9,6 +9,46 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🔍 Ground-truth reconciliation — 2026-06-29 (live audit, all 3 regions)
+
+A live audit of the directory + relay in all 3 regions was run during an M7 debugging session.
+STATE.md's per-region tables had drifted: CI/CD image swaps since the 2026-06-27 `deploy.sh` run
+do NOT update STATE.md. Current ground truth + material findings below. (Per `infra/CLAUDE.md`,
+ALB DNS names are always query-AWS — the snapshots below are point-in-time, not authoritative.)
+
+**Deployed images (ALL 3 regions): directory `cello-directory:04d95ad`, relay `cello-relay:c48deac`**
+(STATE tables previously said directory `d5d0424` / relay `791f9ce` — both stale, redeployed via CI/CD.)
+
+Per-region current state (taskdef rev / running task private IP / ALB DNS):
+- **us-east-1** — directory `:209` / `10.0.108.160` / `cello-dir-dev-85618485`; relay `:81` / `10.0.27.225` / `cello-relay-dev-913894764`. (Relay redeployed THIS session — see ops changes.)
+- **eu-central-1** — directory `:79` / `10.1.92.155` / `cello-dir-dev-114927676` (ALB recreated, was `…-1699677837`); relay `:34` / `10.1.54.12` / `cello-relay-dev-1538955378`. (Relay IP was `10.1.77.112` in STATE — stale.)
+- **ap-northeast-1** — directory `:70` / `10.2.36.20` / `cello-dir-dev-1500332624` (ALB recreated, was `…-1435901052`); relay `:29` / `10.2.112.232` / `cello-relay-dev-1984262345`. (Relay IP was `10.2.94.2` in STATE — stale → S3 manifest re-sign likely needed.)
+
+**🚨 CRITICAL — `directory-ap1.cello.mygentic.ai` returns NXDOMAIN (no A record).** The
+ap-northeast-1 directory has NO working public hostname — clients cannot reach it by DNS, even
+though STATE (L397) claims its Route53 record is `CREATE_COMPLETE`. Almost certainly the
+A-record purge bug (`infra/CLAUDE.md` → "Route53 A Records — CFN Owns Them, Never Purge Manually")
+hit the directory record like it hit the relay one, and CFN never recreated it. **One of three
+sovereign nodes is dark to clients.** Fix: recreate the directory-ap1 A record via deploy.sh/CFN.
+
+**Relay exposure model (consistent all 3 regions — previously undocumented):**
+- Relay ALB is **HTTP :80 only** (no HTTPS). ALB :80 → relay target port **4002** (client-facing WebSocket); health-check port 4000.
+- Relay SG inbound (all source-SG-scoped, NO CIDR/public rules): **4001 (libp2p, directory-facing) ← directory SG ONLY** (same-region, private — not ALB, not public); **4002 (client WS) ← ALB SG only** (public via ALB:80); **4000 (health) ← directory SG + ALB SG**.
+- So clients reach the relay on **4002 via the ALB (public)**; the directory reaches it on **4001 privately, same-region SG**. The directory→relay control channel (`recordAssignment` / `getSealLeaves` / `confirmSeal`) is same-region-private **by security group** — this is the structural reason cross-region directory→relay does not work (SGs cannot reference cross-region resources). Co-location was a **cost** decision (shared per-region VPC / NAT / ECS cluster); the directory and relay ALBs are actually **separate** per service.
+- Both directory and relay ALBs are HTTP :80 only in all regions (no 443). Directory ALB rules: default→8080, `/bootstrap`+`/agent-lookup`+`/manifest`→9090, `/internal/*`→8081.
+
+**Operational changes made THIS session (2026-06-29, manual — recorded per the STATE.md rule):**
+- **us-east-1 relay force-new-deployment** (`aws ecs update-service --force-new-deployment cello-relay-dev`) to recover `relay_unavailable`. Root cause = the documented relay-no-reconnect gap: the directory had restarted (task startedAt 12:22 UTC) and the relay never re-registered, so the directory's `recordAssignment` adapter stayed pinned to a wrong/unreachable relay. New relay task IP **10.0.27.225**. ⚠️ S3 relay manifest healthCheckUrl may now be stale — re-sign per `infra/CLAUDE.md` if clients report relay issues.
+- **demo agent (`i-0ad3e7c22470f266e`) `cello-daemon` + `cello-demo` restarted** to recover its standing receiver (it had silently died). Agent `default` (`bc94ead6…`) back online; a live session + bilateral seal succeeded afterward.
+
+**Client-side bug found (NOT infra — for the cello-client backlog): demo agent standing receiver
+dies after ONE inbound session.** `CELLO_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4001` (fixed port); a session
+consumes the receiver node, the immediate rebuild collides `EADDRINUSE` on 4001, and there is no
+retry/recreate loop. Any fixed-port agent accepts exactly one inbound session, then is dead until
+the process restarts.
+
+---
+
 ## 🌐 M8 operator portal — LIVE + OPERATOR-VERIFIED (deployed 2026-06-28; exercised 2026-06-29, us-east-1)
 
 > **2026-06-29 status:** the portal is live at **https://portal.cello.mygentic.ai** and Andre drove it
