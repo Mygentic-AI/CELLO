@@ -280,7 +280,14 @@ describe("DEPLOY-001A: AC-011 no manual aws cloudformation deploy instructions i
     // Read all .sh files in infra/ root — subdirectory scripts are ok (they're legacy)
     // deploy-peering.sh is an authorized deployment script added in FEDERATION-E2E-001
     // for cross-region VPC Peering stacks (not covered by deploy.sh which is single-region).
-    const AUTHORIZED_DEPLOY_SCRIPTS = new Set(["deploy.sh", "deploy-peering.sh"]);
+    // deploy-portal.sh (M8) is authorized for the same reason: it deploys the operator-portal
+    // stacks (ECR/CodeBuild, RDS/ACM, ALB/ECS) — a separate single-region app not covered by
+    // deploy.sh's 3-region directory/relay flow.
+    const AUTHORIZED_DEPLOY_SCRIPTS = new Set([
+      "deploy.sh",
+      "deploy-peering.sh",
+      "deploy-portal.sh",
+    ]);
     const infraFiles = readdirSync(INFRA_DIR).filter(
       (f) => f.endsWith(".sh") && !AUTHORIZED_DEPLOY_SCRIPTS.has(f)
     );
