@@ -20,7 +20,7 @@ description: >
 | FED-SPINE-001 (enforcer, build FIRST) | DOD-SPINE-1 | e2e | 🔨 substrate green | harness spawns 3 sovereign dir nodes (own key/transport/port/DB) — j-tofn GREEN; journey asserts (DKG/seal/suspend) accrue per-unit |
 | FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | ✅ spine-proven | resolver + daemon resolve+log + 3-node manifest spine proof + pairwise binding + forged-refusal; 3 reviewers clean (fixes: http(s) endpoint contract, severity-graded roster, key guards); j-tofn 4/4 GREEN |
 | FED-DKG-001 | DOD-DKG-1 | client+dir | ✅ spine-proven | multi-node 2-of-3 DKG fans to all 3 dirs (j-tofn-dkg GREEN); below-threshold gate + B1 fix (empty-roster refuses, no downgrade); 3 reviewers clean; MEDIUM count-gate parked |
-| FED-SIGN-001 | DOD-SIGN-1 | client+dir | 🟡 implemented both sides | client N-stubs (33338f9) + directory #primaryPubkeys store-seed (861c7aef); j-spine + j-loopback seal GREEN (back-compat); REMAINING: T-of-N seal spine proof (+ kill-a-node) + 3 reviewers |
+| FED-SIGN-001 | DOD-SIGN-1 | client+dir | 🟡 spine-green, reviewers running | client N-stubs (33338f9) + directory #primaryPubkeys store-seed (861c7aef) + j-sign T-of-N seal proof (c96f75e7: FROST + kill-a-node, GREEN); 3 reviewers pending |
 | FED-SUSPEND-001 | DOD-SUSPEND-1 | dir | ⬜ not started | quorum-aware refusal |
 | FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | ⬜ not started | share refresh / epoch rollover |
 | FED-RELAYSIG-001 | DOD-RELAYSIG-1 | relay+client | ⬜ not started | relay-signed ordering + PERSIST-012 live |
