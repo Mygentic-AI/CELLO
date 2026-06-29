@@ -164,3 +164,24 @@ at a time. The enforcer now EXISTS; everything downstream proves itself against 
 **Next red.** DOD-MANIFEST-1 — client loads + verifies the FULL set of N directory nodes from a real
 threshold-signed consortium manifest (replaces the single-endpoint resolver + placeholder one-node
 manifest); rejects forged / under-threshold / rolled-back manifests.
+
+### 2026-06-30 ~21:35 — DOD-SPINE-1 review round (3 read-only reviewers) — all findings fixed
+Reviewers on `a42ef342` (all read-only; main loop is the only coder):
+- **feature-dev:code-reviewer (opus) → BLOCKED→fixed:** orphan on mid-spawn failure — `new Proc()`
+  spawns the child in its ctor but I pushed to `spawnedDirs` only AFTER `waitForLine`; a startup-hang
+  timeout (child alive) would escape `abort()`. Fix: push BEFORE the await (`Proc.stop()` no-ops if
+  already exited). Everything else (node independence, count=1 back-compat, relay→node0 scoping,
+  restart/getter semantics) reviewed clean.
+- **cello-test-attacker → HOLLOW→fixed:** the migration assert queried `cello_spine_${i}` by NAME, never
+  proving proc i USES DB i (a harness pointing all procs at one DB passes). Replaced with a real DKG
+  registration against EACH node's bootstrap URL + cross-DB isolation assert (agent i in DB i, absent
+  elsewhere) — catches the `databaseUrls[0]`-for-all bug (a non-zero node's agent would land in DB 0)
+  and proves each URL reaches a live, distinct node.
+- **cello-fallback-finder → 1 MEDIUM landmine + 2 LOW, fixed; rest fail-loud (verified):** guard added
+  (`directoryCount>1 && directoryNodeKeyHex` now throws — would silently give N nodes one identity);
+  per-node `DEV_ENVELOPE_KEY` + per-node `audit-${i}.jsonl`. Finder verified DB provisioning, port
+  alloc, env DB assignment, abort/stop all fail loud (no silent fallback).
+
+Commit `f019790c`. `j-tofn` GREEN (2 tests, real binaries + 3 real DKGs, 89s). Back-compat `j-sig`
+(restart + per-node envelope key) GREEN. typecheck 0, eslint 0. FED-SPINE-001 substrate solid; the
+enforcer is trustworthy. Moving to DOD-MANIFEST-1.
