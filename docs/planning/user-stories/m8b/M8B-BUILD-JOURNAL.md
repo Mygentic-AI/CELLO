@@ -22,7 +22,7 @@ description: >
 | FED-DKG-001 | DOD-DKG-1 | client+dir | ✅ spine-proven | multi-node 2-of-3 DKG fans to all 3 dirs (j-tofn-dkg GREEN); below-threshold gate + B1 fix (empty-roster refuses, no downgrade); 3 reviewers clean; MEDIUM count-gate parked |
 | FED-SIGN-001 | DOD-SIGN-1 | client+dir | ✅ spine-proven | T-of-N seal: ≥2 dirs FROST-sign, kill-a-participant still seals, FROST-not-single-key (j-sign teeth); 3 reviewers clean (B1 fixed: session-signing store reconstruction); restart-path + REFRESH cache parked |
 | FED-SUSPEND-001 | DOD-SUSPEND-1 | dir+crypto | ✅ spine-green, 3 reviewers clean | j-suspend-tofn green (103s): 2-suspended ⇒ block w/ EXACT `ceremony_exhausted`+retry; 1-suspended ⇒ nodes 0,2 sign while node 1 emits FRESH refusal (route-AROUND proven); agent B signs through 1,2 ⇒ agent-scoped. Fixes: signer commit-round per-stub exclusion + per-node timeout/deadline (bcea30a/5cd2da2), directory nonce-replace (87d226c2, consume-once confirmed by all 3). Fallback HIGH made LOUD: frost.suspension.uncheckable + hasAgentProfile. Production quorum-binding → PRESENCE-1 (Tier C) |
-| FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | ⬜ not started | share refresh / epoch rollover |
+| FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | 🔨 design grounded (PSS), red-first next | Design settled (no fork): zero-constant-term proactive secret sharing — group key UNCHANGED, old shares die. @noble building blocks confirmed (generateSecretPolynomial secret=0 + utils.Fn + combineSecret). 4 layers mapped (crypto frost-resharing.ts → daemon runNetworkRefresh → directory refresh frames + persist #currentEpoch → cache invalidation). J-REFRESH journey + falsification in journal §design-note. NEXT: red-first crypto test |
 | FED-RELAYSIG-001 | DOD-RELAYSIG-1 | relay+client | ⬜ not started | relay-signed ordering + PERSIST-012 live |
 | FED-OPTIONB-SETUP-001 | DOD-OPTIONB-SETUP-1 | dir+relay+client | ⬜ not started | client-presented assignment; kill relay dial |
 | FED-OPTIONB-SEAL-001 | DOD-OPTIONB-SEAL-1 | dir+client | ⬜ not started | client-carried receipts; offline seal |
@@ -713,3 +713,76 @@ pinned (`cacheKey = agent:epochId`) — a real rollover must advance it. Write t
 (§6) first, falsify-first, then red on the spine (j-refresh: register → refresh → old-epoch share rejected,
 new-epoch signs, group pubkey byte-identical). The crypto file `frost-threshold-signer.ts` + directory
 `frost-handler.ts` (both just touched here) are the surface; the nonce/epoch machinery is fresh in context.
+
+### 2026-07-01 ~02:10 — DOD-REFRESH-1 design note (§6) — proactive share resharing (PSS), group key UNCHANGED
+**Investigation done (Explore map + key-rotation-design.md + @noble API).** The design is settled — NO
+fork to park; this is the standard zero-constant-term proactive secret sharing (Herzberg et al. 1995),
+the mechanism `2026-04-15_1100_key-rotation-design.md` already chose (lines 60-64: "remaining t-of-n nodes
+collectively regenerate shares without ever assembling K_server_X … periodic refresh invalidates leaked
+shares"). DOD-REFRESH-1 is the PERIODIC-refresh case: rotate ALL shares to epoch e+1, old shares dead,
+**group pubkey byte-identical**.
+
+**Why PSS and not re-DKG.** Plain `ed25519_FROST.DKG.round1` picks a RANDOM constant term → a fresh DKG
+produces a DIFFERENT group key (commitments[0]). The DoD requires the group key UNCHANGED, so re-DKG is
+out. Trusted-dealer resharing is out (reconstructs the secret at one party = sovereign-node violation).
+PSS is the only construction that satisfies all three: same group key, no party ever holds the joint
+secret, old shares die.
+
+**The math (each party = client + each directory node, T-of-N over the joint FROST key f, f(0)=joint
+secret, party i holds s_i=f(i)):**
+1. Each party i generates a degree-(T-1) polynomial δ_i with **constant term ZERO**:
+   `ed25519_FROST.utils.generateSecretPolynomial(signers, secret=0n, …)` → coeffs + VSS commitments C_i.
+   C_i[0] = 0·G = the curve IDENTITY — this is the cryptographic PROOF the refresh does not shift the secret.
+2. Each party i evaluates δ_i at every participant identifier j (`δ_i(j) = Σ_k coeffs[k]·j^k mod L` via
+   `utils.Fn`) and sends the sub-share δ_i(j) to party j (plus broadcasts C_i).
+3. Each party j VERIFIES every received sub-share against the sender's commitments (VSS: δ_i(j)·G ==
+   Σ_k j^k·C_i[k]) AND asserts **C_i[0] == identity** (rejects any party trying to shift the secret), then
+   computes its new share `s'_j = s_j + Σ_i δ_i(j) mod L`.
+4. New polynomial f' = f + Σ_i δ_i has f'(0) = f(0) + Σ 0 = joint secret ⇒ **commitments[0] (group key)
+   UNCHANGED**; the individual shares are fresh, so an attacker holding epoch-e s_i cannot combine it with
+   epoch-(e+1) shares s'_j to sign (the polynomials are inconsistent).
+
+**@noble/curves@2.2.0 primitives (real, no shortcut — cite in code):** `utils.generateSecretPolynomial`
+(zero-constant δ), `utils.Fn` (field mul/add mod L for evaluation), `validateSecret`/VSS Appendix C.2 for
+the sub-share check, `combineSecret` (TEST-ONLY: assert the joint secret is identical pre/post refresh),
+`DKG.round1/2/3` structure is the wiring template (orchestration mirrors `runNetworkDkg`).
+
+**Surfaces to build (4 layers):**
+- **crypto** (`core/crypto/src/frost/`): a NEW `frost-resharing.ts` — `generateRefreshContribution(signers,
+  myId, allIds)` → {subSharesById, commitments}; `verifyRefreshContribution(commitments, signers)` (assert
+  C[0]==identity + degree); `applyRefresh(oldSecret, receivedSubShares, allCommitments, signers)` →
+  newSecret. Pure, deterministic-testable with `combineSecret`. RED-FIRST HERE (no Docker, fast).
+- **daemon** (`core/daemon/src/network-directory-node.ts`): `runNetworkRefresh(agentPubkey, fromEpoch)` —
+  mirrors `runNetworkDkg`'s 3-round fan-out (broadcast C_i + route sub-shares + apply), advances client
+  `_localShares` + persists via db-identity-store, sets node bootstrap context to epoch e+1.
+- **directory** (`packages/directory/src/frost-handler.ts` + `directory-node.ts`): refresh frame handlers
+  (mirror dkgRound{1,2,3}); on apply, `storeShare(agent, :epoch:(N+1))`, `#currentEpoch.set(agent, N+1)`,
+  persist the new encrypted share (`agent_key_shares`, new epoch_id row), and — NEW — **persist
+  #currentEpoch** (today in-memory only) so a restart doesn't forget the rollover and re-accept epoch N.
+- **cache invalidation (DoD parked, MANDATORY here):** `#resolvePrimaryPubkey` keys on agent at fixed
+  `:epoch:1` and never invalidates. The group key is UNCHANGED by PSS so the cached value stays correct —
+  BUT the epoch advance must invalidate/re-seed any epoch-keyed state. Confirm: group pubkey cache is
+  safe (same bytes); the EPOCH itself is what advances. Audit `#primaryPubkeys` + the client seal cache for
+  any epoch assumption and invalidate on rollover.
+
+**J-REFRESH (the spine proof, red-first on the 3-dir spine):** register A (multi-node DKG, epoch 1) →
+capture group pubkey P1 → run refresh → (a) group pubkey P2 == P1 byte-identical; (b) a sign/seal with A
+SUCCEEDS post-refresh (new epoch-2 shares sign); (c) a sign attempt pinned to epoch 1 returns
+`EPOCH_EXPIRED` (old shares dead); (d) — the compromise-recovery teeth — an OLD epoch-1 share combined
+with NEW epoch-2 shares CANNOT produce a valid signature (a node compromised in e holds nothing usable in
+e+1). Falsify-first: assert the refresh is not a no-op (epoch-1 shares must actually stop working) and not
+a re-DKG (P2 must equal P1, not just "some valid key").
+
+**FALSIFICATION (before any code):** (1) Does `generateSecretPolynomial` accept `secret=0n` and return a
+commitment whose [0] is the identity? VERIFY empirically in the red test first — if it rejects a zero
+secret, evaluate the contribution polynomials with an explicit zero constant via `utils.Fn` directly.
+(2) Are participant identifiers in refresh the SAME derivation as DKG (`Identifier.derive(nodeId)` for
+dirs, the client identifier)? They MUST match or the sub-share evaluation lands on the wrong points.
+(3) Is T (threshold) for the refresh polynomials the SAME T as the group? PSS requires δ_i degree = T-1 so
+the refreshed sharing keeps the same reconstruction threshold.
+
+**RESUME → DOD-REFRESH-1 increment 1: RED-FIRST crypto.** Write `core/crypto/src/__tests__/frost-resharing.test.ts`:
+trustedDealer a 3-of-3 key → P1=combineSecret → run the PSS refresh in-process across the parties →
+assert combineSecret(new shares)==P1 (secret preserved), new shares ≠ old shares, and a mixed old+new
+share set does NOT reconstruct. Confirm red (no frost-resharing.ts yet), then implement until green, then
+gate, then 3 reviewers, then wire daemon/directory, then J-REFRESH on the spine.
