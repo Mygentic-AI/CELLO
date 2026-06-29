@@ -2063,3 +2063,26 @@ ceee554, live):
 
 LESSON: enrolling via the API helper in e2e meant the passkey NAME path was never exercised by a UI
 test — the hardcoded "test-device" shipped. UI affordances (naming) need a UI-level assertion.
+
+## 2026-06-29 — Burn proven live end-to-end + burned-row UI fix (Andre)
+
+Andre burned an orphan agent (be66b5b1 / agent_id 04faa2a5 — a stale dev/test registration on his
+account, not held by his daemon) through the deployed portal. VERIFIED FEDERATION-WIDE on the live
+directory (not just UI): step-up satisfied via passkey → portal.agent.suspend.requested mode:burn →
+directory burned=true; a correctly-shaped clear returns **409 burned_immutable** and the agent stays
+burned=true (monotonic/irreversible). Per-node K_server share zeroing rides the replicated burn flag
+(proven cross-process by lever-002-burn.live / share-destroy.live). First live burn through the full
+served portal → directory seam.
+
+UI BUG (Andre): the burned row showed BOTH an amber "PAUSED" badge AND "Burned" — contradictory, since
+burn is permanent. Cause: burn sets paused=true AND burned=true (burned is the stronger monotonic state),
+but page.tsx rendered the paused badge on a.paused without checking a.burned. FIX (cello-portal 776752d,
+live): burned supersedes paused — a RED "burned" badge when a.burned, the amber "paused" badge only when
+paused && !burned; SuspendLever's terminal text is "Burned · permanent" in danger-red (amber is now
+paused-only, per Andre). Regression test: seedDirectoryLeverAgent gains opts.burned; a j-lever case seeds
+a burned agent and asserts the red burned badge present + paused badge absent + terminal lever + no
+controls. Full real-dir gate 45 passed / 3 skipped.
+
+NOTE: the portal lists agents the DIRECTORY has bound to an account; cello status lists the LOCAL daemon's
+agents — the gap (an orphan registered in the directory with no local daemon) is expected, not a bug. A
+softer "archive/dismiss" affordance for orphans (vs Burn) is a possible future nicety (raised, not built).
