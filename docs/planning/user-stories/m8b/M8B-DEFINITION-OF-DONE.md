@@ -97,4 +97,14 @@ description: >
 - **J-LIVE** → DOD-DEPLOY-1: all of the above against the live dev cluster.
 
 ## Parked decisions (never silently dropped — RC-1)
-*(none yet — append here if the overnight run parks a genuine fork it can't decide alone)*
+- **PRE-EXISTING j-auth poll-test failures (NOT an M8B regression).** During DOD-SPINE-1 back-compat
+  checks, `j-auth.spine.test.ts` was found to fail 2 of 6 tests: *DOD-AUTH-2 (poll refresh)* and
+  *DOD-AUTH-2 (poll rejects forged)* — both time out in `waitForLine` on the daemon's manifest-poll log
+  events (`directory.auth.manifest.poll.*`). **Evidence it is pre-existing, not mine:** the M7-baseline
+  harness (`live-harness.ts` at commit `059134d2`, before any SPINE-1 change) fails the SAME 2 tests
+  identically (15s/21s timeouts). The other 4 j-auth tests + all of j-tofn/j-sig pass. Root cause not
+  yet diagnosed (likely a stale daemon dist binary missing the poll-dispatch path, or a poll-config/env
+  gap). **Disposition:** out of DOD-SPINE-1 scope; the manifest-POLL (auth refresh) path is orthogonal to
+  DOD-MANIFEST-1 (manifest-based N-endpoint RESOLUTION). Revisit during/after DOD-MANIFEST-1 (which works
+  in the same manifest area) or as a standalone fix. Logged here so it is never mistaken for federation
+  breakage and never silently dropped.

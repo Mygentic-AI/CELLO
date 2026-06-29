@@ -18,7 +18,7 @@ description: >
 | Unit | DoD line | Repo(s) | Status | Notes |
 |------|----------|---------|--------|-------|
 | FED-SPINE-001 (enforcer, build FIRST) | DOD-SPINE-1 | e2e | 🔨 substrate green | harness spawns 3 sovereign dir nodes (own key/transport/port/DB) — j-tofn GREEN; journey asserts (DKG/seal/suspend) accrue per-unit |
-| FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | ⬜ not started | signed N-node manifest + N-endpoint resolver |
+| FED-MANIFEST-001 | DOD-MANIFEST-1 | client+dir | 🔨 design note done | signed N-node manifest + N-endpoint resolver — seam mapped (resolver→N + manifestNodesToEndpoints), endpoint convention decided |
 | FED-DKG-001 | DOD-DKG-1 | client+dir | ⬜ not started | multi-node DKG (2-of-3) |
 | FED-SIGN-001 | DOD-SIGN-1 | client+dir | ⬜ not started | T-of-N session sign + seal; kill single-key fallback |
 | FED-SUSPEND-001 | DOD-SUSPEND-1 | dir | ⬜ not started | quorum-aware refusal |
@@ -185,3 +185,71 @@ Reviewers on `a42ef342` (all read-only; main loop is the only coder):
 Commit `f019790c`. `j-tofn` GREEN (2 tests, real binaries + 3 real DKGs, 89s). Back-compat `j-sig`
 (restart + per-node envelope key) GREEN. typecheck 0, eslint 0. FED-SPINE-001 substrate solid; the
 enforcer is trustworthy. Moving to DOD-MANIFEST-1.
+
+**Pre-existing failure found + parked (not a regression).** Running `j-auth` for back-compat surfaced 2
+failing tests (DOD-AUTH-2 poll-refresh + poll-rejects-forged) — `waitForLine` timeouts on the daemon's
+manifest-POLL events. Proven pre-existing: the M7-baseline harness (live-harness.ts @ `059134d2`) fails
+the SAME 2 identically. Out of SPINE-1 scope (manifest-poll auth-refresh ≠ MANIFEST-1 N-endpoint
+resolution). Full record in DoD "Parked decisions". Revisit during/after DOD-MANIFEST-1.
+
+### 2026-06-30 ~21:55 — DOD-MANIFEST-1 design note (§6) — manifest-driven N-endpoint resolution
+**Target.** The client must RESOLVE the full set of N directory nodes from a verified, threshold-signed
+consortium manifest — replacing the single-endpoint resolver (`directory-bootstrap.ts`) + the placeholder
+one-node `consortium-manifest.json` — and REFUSE forged / under-threshold / rolled-back manifests. This
+is the RESOLUTION layer; the DKG CEREMONY that fans out across those N endpoints is DOD-DKG-1.
+
+**What already exists (verified by Explore map, two-repo):**
+- Manifest type `ConsortiumNode {nodeId, pubkey, region, provider, endpoint}` + `ConsortiumManifest
+  {version, not_before, expires, nodes[], signatures[]}` (`core/protocol-types/src/manifest.ts`).
+- `verifyManifest(manifest, rootKeys, threshold)` — Ed25519, canonical-sorted body, ≥threshold unique
+  officer sigs (`core/crypto/src/manifest.ts`). Anti-rollback (version≥lastSeen) + validity window in
+  `daemon.ts:353-395`. **So forged / under-threshold / rolled-back rejection is ALREADY BUILT** — today
+  it's used for AUTH (verify the one directory's step-6 identity), NOT for resolution.
+- Consumers ALREADY take arrays: `registration-manager.ts:263 directoryNodes:[dirNode]`,
+  `session-ceremony.ts:166 directoryNodeStubs=[stub]`; `NetworkDirectoryNode` holds
+  `directoryMultiaddrs: string[]`. The single-element array is the only thing to widen — but that
+  widening (feeding N into `runNetworkDkg`) is DOD-DKG-1, not here.
+
+**The seam (smallest "resolve 1 → resolve N"), this unit:**
+- *Seam A — resolver returns N.* New `getDirectoryEndpoints(): Promise<DirectoryEndpoint[]>` built from
+  the verified manifest's node set, alongside the existing single `getDirectoryEndpoint` (kept for the
+  primary signaling stream until DKG-1 consumes the set). `types.ts:203` gains the array resolver.
+- *Seam B — manifest node → dial coordinate.* New `manifestNodesToEndpoints(nodes)`: for each node,
+  derive its bootstrap HTTP base from `endpoint`, GET `{base}/bootstrap` → multiaddr, parse peerId
+  (reuses `fetchBootstrapMultiaddr`/`parsePeerIdFromMultiaddr`). Returns N `{peerId, multiaddr}`.
+- *Seam C (NOT this unit).* Consumers build N `NetworkDirectoryNode` from the N endpoints and pass to the
+  ceremony — DOD-DKG-1.
+
+**DECISION (reversible, logged in DECISIONS) — the `endpoint`→bootstrap convention.** Manifest `endpoint`
+is documented as a `wss://host:port` libp2p hint, but the live resolution path is HTTP `{base}/bootstrap`
+(CELLO_DIRECTORY_URL + PRODUCTION_DIRECTORY_URL are both `http://…`). `manifestNodesToEndpoints` will
+treat `endpoint` as the node's HTTP base for `/bootstrap`: if `endpoint` starts `http`, use as-is; if
+`wss://host[:port]`, map → `http://host[:port]`. The spine 3-node manifest sets each node's `endpoint =
+http://127.0.0.1:{healthPort}` (the real bootstrap URL the harness already exposes as directoryUrls[i]).
+Chosen over adding a separate `bootstrapUrl` field (API-parsimony: don't add a field when the existing
+one carries exactly the node's reachable address) — but if production proves WSS-only with no HTTP
+bootstrap, revert to a dedicated field. Reversible: schema + one mapping fn.
+
+**Producer/consumer chain.** Producer of the N-node set = the verified manifest (file provider /
+http-poll). Consumer (this unit) = `getDirectoryEndpoints` → logs the resolved set. Consumer (DKG-1) =
+registration/session ceremony. The rejection producers (verifyManifest, anti-rollback) already exist;
+this unit must ensure resolution REFUSES to run on an unverified/forged/under-threshold/rolled-back
+manifest (no silent fallback to the single hardcoded endpoint — that would be a sovereignty-defeating
+silent fallback, exactly the class fallback-finder guards).
+
+**Harness work (e2e-tests).** auth-manifest.ts today exports ONE deterministic directory node keypair;
+MANIFEST-1 needs N. Add per-node deterministic keypairs + a 3-node signed-manifest builder. Replace the
+SPINE-1 guard (`directoryCount>1 && directoryNodeKeyHex` throws) with real PER-NODE node-identity keys
+passed to each directory (`CELLO_DIRECTORY_NODE_KEY_HEX` per node, distinct NODE_ID per node). Build the
+3-node manifest AFTER spawn (each node's `endpoint = directoryUrls[i]`), sign it, hand it to the daemon
+(`CELLO_CONSORTIUM_MANIFEST`).
+
+**Spine red (J-TOFN, grows).** Daemon configured with the 3-node signed manifest → assert it RESOLVES 3
+directory endpoints (logs the resolved set / 3 distinct peerIds matching the 3 directories), reaching
+each node's real `/bootstrap`. Plus focused rejection asserts: a forged / under-threshold / version-
+rolled-back manifest → daemon refuses to resolve (no fallback to the single hardcoded endpoint). RED
+until `getDirectoryEndpoints` + `manifestNodesToEndpoints` exist and the daemon binary is rebuilt.
+
+**Cross-repo note.** Changes land in cello-client (`core/daemon`: directory-bootstrap.ts, types.ts,
+manifest wiring). Local iteration rebuilds `core/daemon/dist` (the spine BINS.daemon) — NO publish needed
+until DOD-DEPLOY-1. Version bump + publish + trustless-cello package.json update happen at the deploy gate.

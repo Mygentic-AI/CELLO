@@ -56,6 +56,27 @@ Genuine undecidable forks are PARKED (journal + DoD "Parked decisions" + here), 
   Note: dozens of OTHER `*-postgres-1` containers exist in `Created` (not running) state from old
   worktrees — harmless (they hold no port); a future cleanup could `docker rm` them, not this unit's job.
 
+### 2026-06-30 ~21:55 — FED-MANIFEST-001 — manifest `endpoint` is the node's HTTP bootstrap base
+- Fork: a manifest `ConsortiumNode.endpoint` is documented as `wss://host:port`, but the live directory
+  resolution path is HTTP `{base}/bootstrap` → multiaddr. To resolve N nodes I need an HTTP bootstrap base
+  per node. Reuse `endpoint` vs add a new `bootstrapUrl` field?
+- Chose: **reuse `endpoint` as the node's HTTP base for `/bootstrap`** — if it starts `http`, use as-is;
+  if `wss://host[:port]`, map → `http://host[:port]`. Spine 3-node manifest sets `endpoint =
+  http://127.0.0.1:{healthPort}` (the real bootstrap URL = directoryUrls[i]).
+- Why: API-parsimony — `endpoint` already names the node's reachable address; the single-endpoint path
+  already treats CELLO_DIRECTORY_URL / PRODUCTION_DIRECTORY_URL as `http://…` bases. Adding a field for
+  the same intent is the continuation-bias trap.
+- Reverse: if production directories are WSS-only with no HTTP `/bootstrap`, add a dedicated
+  `bootstrapUrl` field to the manifest node + the mapping fn. Schema + one function — cheap.
+
+### 2026-06-30 ~21:50 — FED-SPINE-001 — pre-existing j-auth poll failures parked (not a regression)
+- Fork: j-auth fails 2/6 (DOD-AUTH-2 poll-refresh + poll-rejects-forged); is it my SPINE-1 harness change?
+- Chose: **PARK as pre-existing, continue.** Proven via the M7-baseline harness (`059134d2`) failing the
+  same 2 identically. Full record in DoD "Parked decisions". Out of SPINE-1/MANIFEST-1 resolution scope.
+- Why: not a federation regression; rabbit-holing a pre-existing M7 manifest-poll bug would stall the
+  milestone. Revisit during/after MANIFEST-1 (same manifest area).
+- Reverse: n/a (investigation deferral, not a code choice).
+
 <!-- Append below. Format:
 ### YYYY-MM-DD HH:MM — <unit-id> — <short title>
 - Fork: …  Chose: …  Why: …  Reverse: …
