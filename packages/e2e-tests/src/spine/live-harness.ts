@@ -455,14 +455,21 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
   // Each node gets its OWN fresh-migrated database. count===1 keeps the single-node DB
   // named `cello_spine` (every M7 spine test asserts against it); count>1 → cello_spine_${i}.
   const count = opts.directoryCount ?? 1;
+  // Guard a silent landmine (cello-fallback-finder DOD-SPINE-1 #1): directoryNodeKeyHex is a
+  // single scalar applied to EVERY node's env. With count>1 that would give all N "sovereign"
+  // nodes ONE shared node identity (same NODE_ID, same signing key) with no error — a falsely
+  // sovereign cluster. Per-node node-identity keys arrive with DOD-MANIFEST-1; until then, refuse.
+  if (count > 1 && opts.directoryNodeKeyHex) {
+    throw new Error(
+      "startSpineCluster: directoryCount>1 with directoryNodeKeyHex would give all N nodes one " +
+        "shared node identity (silent sovereignty violation). Per-node node-identity keys land in " +
+        "DOD-MANIFEST-1; refusing to spawn a falsely-sovereign cluster until then.",
+    );
+  }
   const dbNames = Array.from({ length: count }, (_, i) => (count === 1 ? SPINE_DB : `${SPINE_DB}_${i}`));
   const databaseUrls = dbNames.map(spineDbUrl);
   ensurePostgres(dbNames);
   const tmpDir = mkdtempSync(join(tmpdir(), "cello-jspine-"));
-
-  const auditLog = join(tmpDir, "audit.jsonl");
-  writeFileSync(auditLog, "");
-  const devEnvelopeKey = randomBytes(32).toString("hex");
 
   // L7: if any step throws after a child is spawned, stop ALL already-running children
   // (every directory spawned so far + the relay) and remove tmpDir, so we never orphan a
@@ -516,11 +523,20 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
       const dirPubkeyHex = Buffer.from(await dirKp.getPublicKey()).toString("hex");
       if (i === 0) dir0Pubkey = dirPubkeyHex;
       const healthPort = await freePort();
+      // Per-node at-rest envelope key + audit sink (cello-fallback-finder DOD-SPINE-1 #2/#3):
+      // sovereign nodes each encrypt their OWN K_server share with their OWN envelope key and
+      // write their OWN audit log (so a later test can attribute "node i did X"). Captured in
+      // directoryEnv ⇒ restartDirectory() re-spawns node 0 with the SAME key (it must decrypt
+      // the share it already persisted) + same audit file. For count===1 this is one key + one
+      // audit file, behaviourally identical to before (no test references either path).
+      const nodeEnvelopeKey = randomBytes(32).toString("hex");
+      const nodeAuditLog = join(tmpDir, `audit-${i}.jsonl`);
+      writeFileSync(nodeAuditLog, "");
       const directoryEnv: Record<string, string> = {
         CELLO_ENV: "local",
         DATABASE_URL: databaseUrls[i],
-        DEV_ENVELOPE_KEY: devEnvelopeKey,
-        AUDIT_LOG_PATH: auditLog,
+        DEV_ENVELOPE_KEY: nodeEnvelopeKey,
+        AUDIT_LOG_PATH: nodeAuditLog,
         CELLO_RELAY_MULTIADDR: relayMultiaddr,
         CELLO_DIRECTORY_KEY_FILE: dirKeyFile,
         CELLO_DIRECTORY_TRANSPORT_KEY_FILE: join(tmpDir, `directory-transport-key-${i}`),
@@ -549,9 +565,14 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
       };
       const name = count === 1 ? "directory" : `directory-${i}`;
       const proc = new Proc(name, BINS.directory, directoryEnv);
+      // Track BEFORE the await: `new Proc` already spawned the OS child (its ctor), so if
+      // waitForLine REJECTS while the child is still alive (e.g. a 30s startup-hang
+      // timeout), abort() must be able to stop it. Pushing only after the await would
+      // leave that child orphaned holding its ports/DB lock. Proc.stop() no-ops on an
+      // already-exited child, so this is also safe for the exit-before-line case.
+      spawnedDirs.push(proc);
       // BootstrapEndpoint line means /bootstrap is live — the daemon can discover us.
       await proc.waitForLine(/"adapterName":"BootstrapEndpoint"/, 30_000);
-      spawnedDirs.push(proc);
       dirEnvs.push(directoryEnv);
       directoryUrls.push(`http://127.0.0.1:${healthPort}`);
     }
