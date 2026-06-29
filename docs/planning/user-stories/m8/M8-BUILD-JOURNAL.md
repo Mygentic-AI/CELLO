@@ -1998,3 +1998,29 @@ invariant is preserved (the form's request response is unchanged; only the post-
 LESSON: a journey that signs in via the API helper does NOT prove the sign-in SCREEN works — the
 operator-facing UI step (entering the emailed code) had zero coverage and shipped broken. UI journeys
 must drive the real form, not just the endpoint. The two new j-spine UI cases close that gap.
+
+## 2026-06-29 — Live portal bugs round 2: agents-502 (directory) + WebAuthn env (portal)
+
+Andre logged in (link worked) but the Agents page showed "directory temporarily unreachable" + no
+agents, and the logs showed a WebAuthn config error. Two distinct bugs:
+
+1. **agents-by-account → 502 (directory).** The query SUCCEEDED (`agents.lookup.ok count:2`) but the
+   response serialization crashed: `a.lastSeenAt.toISOString is not a function` →
+   `directory.service.crashed` → ALB 502 → the portal's getAccountAgents marked the directory
+   unreachable (DOD-READ-3 degraded path). ROOT CAUSE: the directory node installs a GLOBAL pg parser
+   (pg-type-config.ts) returning TIMESTAMPTZ as a STRING; listAccountAgentsWithPresence typed
+   last_seen_at as Date and internal-api-server called `.toISOString()` on it. The local
+   internal-api-harness + the repo test pool did NOT install pg-type-config, so they returned Dates and
+   HID the bug (harness-diverges-from-prod). FIX (commit 469c2711, directory pipeline deploying ~25-30m):
+   normalize `new Date(r.last_seen_at)` at the repo boundary; configurePgTypes() in the harness + the
+   repo test (+ assert instanceof Date, V33-idempotent) so the e2e would now catch it. Account
+   resolution worked because account-by-email-stub returns no timestamp.
+2. **WebAuthn broken (portal).** `WEBAUTHN_RP_ID must be set outside CELLO_ENV=local` — I never set the
+   WebAuthn env in the task def, so passkey enroll/login errored (the magic-link path Andre used was
+   unaffected). FIX: added WEBAUTHN_RP_ID=portal.cello.mygentic.ai + WEBAUTHN_ORIGIN=https://portal.…
+   to cello-portal-app.yaml; app-stack update rolled it (no image rebuild).
+
+LESSON (reinforced): the test harness MUST match production's pg type config. A whole class of
+timestamp-serialization bugs is invisible when the harness returns Dates and prod returns strings.
+configurePgTypes() now runs in the internal-api-harness so the portal real-dir e2e exercises the real
+parser.
