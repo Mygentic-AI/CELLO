@@ -38,6 +38,7 @@ import {
   CONSORTIUM_THRESHOLD,
   DIRECTORY_NODE_PRIVATE_KEY_HEX,
   DIRECTORY_NODE_PUBLIC_KEY_HEX,
+  spineNodeId,
   type ConsortiumNodeEntry,
   type MakeManifestOpts,
 } from "./auth-manifest.js";
@@ -418,6 +419,15 @@ export interface StartSpineClusterOpts {
    */
   directoryNodeKeyHex?: string;
   /**
+   * DOD-MANIFEST-1: per-node step-5 signing seeds for a multi-node cluster — node i signs
+   * as `spineNodeId(i)` with `directoryNodeKeysHex[i]`. Length must equal directoryCount.
+   * This is the real per-node-identity path the SPINE-1 guard reserved; use
+   * `spineNodeKeypair(i).privateKeyHex` so a manifest built from `spineDirectoryNode(i, …)`
+   * verifies each node's step-6 identity. Distinct from the single `directoryNodeKeyHex`
+   * (the count===1 J-AUTH path).
+   */
+  directoryNodeKeysHex?: string[];
+  /**
    * J-UNILATERAL: shrink the directory's delivery_grace_seconds (default 600 = 10 min)
    * so a live unilateral-seal test does not have to wait out the real grace window. The
    * directory binary reads CELLO_DELIVERY_GRACE_SECONDS; e.g. 2 → A can seal unilaterally
@@ -455,15 +465,19 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
   // Each node gets its OWN fresh-migrated database. count===1 keeps the single-node DB
   // named `cello_spine` (every M7 spine test asserts against it); count>1 → cello_spine_${i}.
   const count = opts.directoryCount ?? 1;
-  // Guard a silent landmine (cello-fallback-finder DOD-SPINE-1 #1): directoryNodeKeyHex is a
-  // single scalar applied to EVERY node's env. With count>1 that would give all N "sovereign"
-  // nodes ONE shared node identity (same NODE_ID, same signing key) with no error — a falsely
-  // sovereign cluster. Per-node node-identity keys arrive with DOD-MANIFEST-1; until then, refuse.
-  if (count > 1 && opts.directoryNodeKeyHex) {
+  // Guard the silent landmine (cello-fallback-finder DOD-SPINE-1 #1): the SINGLE scalar
+  // directoryNodeKeyHex applied to EVERY node would give all N "sovereign" nodes ONE shared
+  // node identity with no error — a falsely sovereign cluster. For count>1, use the per-node
+  // array directoryNodeKeysHex (DOD-MANIFEST-1) instead. Refuse the ambiguous single-scalar case.
+  if (count > 1 && opts.directoryNodeKeyHex && !opts.directoryNodeKeysHex) {
     throw new Error(
-      "startSpineCluster: directoryCount>1 with directoryNodeKeyHex would give all N nodes one " +
-        "shared node identity (silent sovereignty violation). Per-node node-identity keys land in " +
-        "DOD-MANIFEST-1; refusing to spawn a falsely-sovereign cluster until then.",
+      "startSpineCluster: directoryCount>1 with the single directoryNodeKeyHex would give all N nodes " +
+        "one shared node identity (silent sovereignty violation). Pass per-node directoryNodeKeysHex[] instead.",
+    );
+  }
+  if (opts.directoryNodeKeysHex && opts.directoryNodeKeysHex.length !== count) {
+    throw new Error(
+      `startSpineCluster: directoryNodeKeysHex length (${opts.directoryNodeKeysHex.length}) must equal directoryCount (${count}).`,
     );
   }
   const dbNames = Array.from({ length: count }, (_, i) => (count === 1 ? SPINE_DB : `${SPINE_DB}_${i}`));
@@ -543,12 +557,14 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
         CELLO_DIRECTORY_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0",
         CELLO_DIRECTORY_WS_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0/ws",
         HEALTH_PORT: String(healthPort),
-        // J-AUTH: when a node signing key is supplied, the directory signs step-5 as
-        // nodeId "local" so a manifest-configured daemon can verify it at step-6. (Applied
-        // uniformly; only set by single-node J-AUTH today — DOD-MANIFEST-1 gives per-node keys.)
-        ...(opts.directoryNodeKeyHex
-          ? { CELLO_DIRECTORY_NODE_KEY_HEX: opts.directoryNodeKeyHex, NODE_ID: AUTH_DIRECTORY_NODE_ID }
-          : {}),
+        // Step-5 signing identity. count===1 (J-AUTH): the single directoryNodeKeyHex signs
+        // as nodeId "local". count>1 (DOD-MANIFEST-1): node i signs as spineNodeId(i) with its
+        // OWN seed directoryNodeKeysHex[i], so a 3-node manifest verifies each node at step-6.
+        ...(opts.directoryNodeKeysHex
+          ? { CELLO_DIRECTORY_NODE_KEY_HEX: opts.directoryNodeKeysHex[i], NODE_ID: spineNodeId(i) }
+          : opts.directoryNodeKeyHex
+            ? { CELLO_DIRECTORY_NODE_KEY_HEX: opts.directoryNodeKeyHex, NODE_ID: AUTH_DIRECTORY_NODE_ID }
+            : {}),
         // J-UNILATERAL: shrink the grace window so the unilateral-seal test can seal
         // shortly after the counterparty goes silent (default is 600s).
         ...(opts.deliveryGraceSeconds != null

@@ -29,9 +29,11 @@ import {
   cello,
   listenMultiaddr,
   psqlSpineN,
+  writeConsortiumManifest,
   type SpineCluster,
   type Proc,
 } from "./live-harness.js";
+import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -40,7 +42,13 @@ const agentDirs: string[] = [];
 beforeAll(async () => {
   // Three sovereign directory nodes — the minimum to prove "any T of N, no single
   // node mandatory" (T=2, N=3). Bringing up 3 binaries + migrating 3 DBs is slow.
-  cluster = await startSpineCluster({ directoryCount: 3 });
+  // Each node gets its OWN step-5 signing key (DOD-MANIFEST-1) so a 3-node consortium
+  // manifest can verify each node's identity; harmless for the no-manifest isolation
+  // tests (they run the M6 backward-compat path, step-6 off).
+  cluster = await startSpineCluster({
+    directoryCount: 3,
+    directoryNodeKeysHex: [0, 1, 2].map((i) => spineNodeKeypair(i).privateKeyHex),
+  });
 }, 300_000);
 
 afterAll(async () => {
@@ -147,4 +155,34 @@ describe("J-TOFN — 3-directory spine substrate (DOD-SPINE-1)", () => {
       }
     }
   }, 180_000);
+
+  it("daemon resolves the FULL 3-node consortium roster from a verified manifest (DOD-MANIFEST-1)", async () => {
+    // The client must learn ALL N directory nodes from the signed manifest, not just one.
+    // Build a 3-node consortium manifest: each entry's `endpoint` = that node's live bootstrap
+    // URL (directoryUrls[i]); each `pubkey` = that node's real step-5 key. The daemon verifies
+    // the officer threshold, then resolves each endpoint's /bootstrap to a live multiaddr.
+    const celloDir = mkdtempSync(join(tmpdir(), "cello-tofn-manifest-"));
+    agentDirs.push(celloDir);
+    await provisionAgent(celloDir, "resolver"); // a loadable identity so the daemon's keystone connects
+    const nodes = [0, 1, 2].map((i) => spineDirectoryNode(i, cluster.directoryUrls[i]));
+    const manifestEnv = writeConsortiumManifest(celloDir, "tofn-roster", nodes);
+    // Primary signaling → node 0 (its manifest pubkey matches node 0's step-5 key → step-6 verifies).
+    const daemon = await startDaemon(celloDir, cluster.directoryUrls[0], "tofn-roster", { manifestEnv });
+    daemons.push(daemon);
+
+    // On manifest-verify the daemon resolves the FULL node set and logs the roster (fires at
+    // startup, before the primary connect). This is the N-endpoint resolution that replaces the
+    // single-endpoint assumption — the roster a T-of-N ceremony (DOD-DKG-1) fans out to.
+    const resolved = await daemon.waitForLine(/"event":"directory\.consortium\.resolved"/, 20_000);
+    const parsed = JSON.parse(resolved) as { declaredNodes?: number; resolvedNodes?: number; peerIds?: string[] };
+    expect(parsed.declaredNodes, `manifest must declare 3 nodes: ${resolved}`).toBe(3);
+    expect(parsed.resolvedNodes, `all 3 consortium endpoints must resolve to live directories: ${resolved}`).toBe(3);
+
+    // The resolved peerIds are EXACTLY the 3 directories' real PeerIDs — not one endpoint, not
+    // duplicates. A single-endpoint resolver (the thing replaced) could never produce all three.
+    const dirPeerIds = cluster.directories.map((d) => peerId(listenMultiaddr(d, { ws: false })));
+    expect(new Set(parsed.peerIds), `resolved peerIds must equal the 3 directory PeerIDs: ${resolved}`).toEqual(
+      new Set(dirPeerIds),
+    );
+  }, 120_000);
 });

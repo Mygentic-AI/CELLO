@@ -64,10 +64,49 @@ export const CONSORTIUM_ROOT_KEYS: readonly string[] = OFFICER_SEEDS.map((s) =>
 export const CONSORTIUM_THRESHOLD = 3;
 
 // Directory per-node signing keypair — identical to TEST_DIRECTORY_NODE_KEYPAIR.
+// Used by the SINGLE-node J-AUTH path (nodeId "local").
 export const DIRECTORY_NODE_PRIVATE_KEY_HEX =
   "707a125efaed6d467e8cac1758b3a87af260a5b9c7a6f0d6a74d364c1d5dacd9";
 export const DIRECTORY_NODE_PUBLIC_KEY_HEX =
   "b93092dd6bf675c00a895abc05503dfd1214a170a2d945d97bab81fd5cfe6a1b";
+
+// ─── DOD-MANIFEST-1: N distinct per-node directory identities for a T-of-N spine ──
+// Each sovereign directory node needs its OWN node-identity key (step-5 signing) and a
+// matching consortium-manifest entry. These are deterministic so the harness is the
+// single source of truth for both the directory env (CELLO_DIRECTORY_NODE_KEY_HEX /
+// NODE_ID) and the manifest the daemon verifies. Seeds 0x10+i avoid the officer seeds
+// (0x01..0x05) and the single-node key above.
+
+/** Stable consortium nodeId for spine directory node i (matches its NODE_ID env). */
+export function spineNodeId(i: number): string {
+  return `spine-node-${i}`;
+}
+
+/** Deterministic Ed25519 node-identity keypair (32-byte seed) for spine directory node i. */
+export function spineNodeKeypair(i: number): { privateKeyHex: string; publicKeyHex: string } {
+  const seed = new Uint8Array(32).fill(0x10 + i);
+  return {
+    privateKeyHex: Buffer.from(seed).toString("hex"),
+    publicKeyHex: Buffer.from(ed25519.getPublicKey(seed)).toString("hex"),
+  };
+}
+
+/**
+ * A consortium-manifest node entry for spine directory node i, carrying its real
+ * node-identity pubkey and its live HTTP bootstrap `endpoint` (= the harness's
+ * directoryUrls[i]). The daemon resolves each entry's endpoint to a live multiaddr
+ * (manifestNodesToEndpoints) and verifies node i's step-5 identity against `pubkey`.
+ */
+export function spineDirectoryNode(i: number, endpoint: string): ConsortiumNodeEntry {
+  const providers: ConsortiumNodeEntry["provider"][] = ["aws", "gcp", "azure"];
+  return {
+    nodeId: spineNodeId(i),
+    pubkey: spineNodeKeypair(i).publicKeyHex,
+    region: `region-${i}`,
+    provider: providers[i % providers.length]!,
+    endpoint,
+  };
+}
 
 /**
  * JSON.stringify replacer that sorts object keys lexicographically at every level.
