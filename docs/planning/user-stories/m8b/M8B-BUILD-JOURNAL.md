@@ -81,3 +81,59 @@ consortium manifest must enumerate all 3; DECIDE per-node DB vs shared (T-of-N a
 node holds its own K_server share → per-node DB is fine; cross-node replication tests (PRESENCE/PICKUP)
 need shared/replicated PG — likely a separate harness mode). Write the DOD-SPINE-1 design note in this
 journal first (PROCEDURE §6), then red-first on a new `j-tofn.spine.test.ts`.
+
+### 2026-06-30 (overnight) — DOD-SPINE-1 design note (§6) — multi-directory spine harness
+**Target (this unit only).** `startSpineCluster` can spawn **N real directory binaries** on localhost
+(N=3 for T-of-N), each a sovereign node: own signing key, own transport key (→ distinct PeerID), own
+health port, own listen port, **own fresh-migrated Postgres database**. Expose them so a new
+`j-tofn.spine.test.ts` can drive a 3-node cluster. DOD-SPINE-1's *own* green deliverable is narrow:
+**3 distinct directory nodes come up, each with an independently-migrated DB, relay up, all reachable.**
+The deeper J-TOFN assertions (2-of-3 DKG, seal-with-a-node-down, suspend-quorum) are RED and get ADDED
+red-first INSIDE their own units (DOD-DKG-1, DOD-SIGN-1, DOD-SUSPEND-1) — not here — so the floor stays
+green per unit (PROCEDURE §2.6, §4 "grow it one journey at a time").
+
+**Why per-node DB (not one shared).** Sovereignty (CONTEXT.md): each directory node is independent; in
+production each is a different region with its OWN database. T-of-N DKG = each node stores its OWN
+K_server share locally — there is no shared store. So N independent fresh-migrated DBs
+(`cello_spine_0/1/2`) is the *correct* model, and it's what exposes a cross-node-coupling bug as a
+failure instead of hiding it. (Tier C PRESENCE/PICKUP later needs `cello_pub` logical replication
+BETWEEN these DBs — a separate harness mode added in those units, NOT now.)
+
+**Producer/consumer chain (what produces what).**
+- *Relay PeerID* — pre-derived from a fixed transport seed + fixed port (existing cycle-break, harness
+  `:449-453`). Unchanged: still ONE relay. For DOD-SPINE-1 the relay keeps pointing at directory[0] via
+  `CELLO_DIRECTORY_MULTIADDR` (its seal-callback wiring, SPINE-7). Option B (Tier B) DELETES that dial —
+  not this unit's job; noted so I don't prematurely rip it out.
+- *Directory[i] signing key* — `FileKeyProvider.load(dirKeyFile_i)` produces seed+pubkey in the binary's
+  format (existing pattern, one per node now). Consumer: each directory binary loads its own key file.
+- *Directory[i] DB* — `ensurePostgres(dbNames[])` provisions + fresh-migrates each. Consumer: directory[i]
+  reads `DATABASE_URL=…/cello_spine_i`. Distinct DBs ⇒ distinct K_server shares ⇒ true sovereignty.
+- *Directory[i] coordinates* — each Proc emits `BootstrapEndpoint` (health/bootstrap up) + `ListenAddr`
+  (libp2p multiaddr). Consumer: the daemon's resolver (today single-endpoint; DOD-MANIFEST-1 makes it
+  enumerate all N from the signed manifest — that's the NEXT unit, not this one).
+
+**Seam (where the change lands).** `packages/e2e-tests/src/spine/live-harness.ts` ONLY. It is the live
+binary harness — no library node construction (the dead-stack discipline). No directory/relay/daemon
+SOURCE changes in this unit; T-of-N wiring is DKG/SIGN. This unit is pure test-infra.
+
+**Back-compat (hard constraint — 17 existing spine tests).** Every caller uses `startSpineCluster()` /
+`{...}` + `cluster.directory` (singular) + `psqlSpine` (cello_spine) + exported `DATABASE_URL`. Default
+`directoryCount: 1` MUST reproduce today's behavior byte-for-byte: single DB named `cello_spine`,
+`cluster.directory`/`directoryUrl` as-is, `restartDirectory`/`stop` as-is. Multi-node path is additive:
+- New opt `directoryCount?: number` (default 1).
+- New cluster fields: `directories: Proc[]`, `directoryUrls: string[]`, `databaseUrls: string[]`
+  (`directory`/`directoryUrl` remain = `[0]`). New `psqlSpineN(i, sql)` for per-node DB reads
+  (`psqlSpine` stays = node 0 / `cello_spine`).
+- DB naming: `count === 1` → `cello_spine` (unchanged); `count > 1` → `cello_spine_${i}`. So the new path
+  can't touch the single-node DB the existing suite asserts against.
+
+**SIs this must satisfy.** (1) 3 directory procs run REAL `dist/bin/directory.js` (binary-anchored, no
+`createDirectoryNode`). (2) 3 distinct PeerIDs + 3 distinct health ports + 3 distinct DBs (no accidental
+sharing). (3) Each DB independently migrated V1→V{N} (matches fresh-region). (4) Orphan-safe: if node k
+fails to start, stop nodes 0..k-1 + relay + drop tmp (existing `abort` generalized to N). (5) The whole
+M7 suite stays green (default path untouched).
+
+**First red.** `j-tofn.spine.test.ts`: bring up `startSpineCluster({ directoryCount: 3 })`; assert
+`directories.length === 3`, 3 distinct listen multiaddrs/PeerIDs, 3 distinct `directoryUrls`, and each
+`cello_spine_${i}` reports `flyway_schema_history` present + a sane migration count. RED until the harness
+spawns N; GREEN when it does. The T-of-N ceremony assertions come with DKG/SIGN.
