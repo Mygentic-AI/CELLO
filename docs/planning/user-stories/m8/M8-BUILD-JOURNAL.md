@@ -1968,3 +1968,33 @@ So the portal-deploy task is COMPLETE and hardened; the rest of M8 is genuinely 
 ceremony-account live E2E. All trustless-cello infra/docs commits this session are LOCAL (push is Andre's
 call): 3677f37d, a254ef10, a4e9a9b1, 1efff80e, facc436f, 271d8404, 0625828f. cello-portal pushed: 8a2603b,
 f6a43d8.
+
+## 2026-06-29 — Live portal login bugs found by Andre + fixed (code entry, broken link, email)
+
+Andre tried the deployed portal and hit three login bugs. Root causes + fixes (cello-portal fd72536):
+
+1. **No OTP entry field.** Symptom: the email arrived with a 6-digit code but the sign-in page had
+   nowhere to enter it. Root cause: `SignInForm` only POSTed the request and dead-ended — the
+   code-entry step was never built; the e2e logs in via the API helper (`page.request.post`), so the
+   UI gap was never exercised (a hollow-coverage miss: the journey tested the API, not the screen).
+   Fix: `SignInForm` is now stepped (email → 6-digit code → session) and also completes an emailed
+   link (`?token=`) via POST.
+2. **Emailed link broken** (`https://ip-10-0-62-59.ec2.internal:3000/sign-in?error=link`). Two causes:
+   (a) the verify GET built its redirect from `new URL(req.url).origin`, which behind the ALB is the
+   container's internal host — unreachable by a browser. Fixed: redirects use the PUBLIC base URL
+   (new `src/server/base-url.ts portalBaseUrl()`, shared with email.ts). (b) the single-use token was
+   consumed by an email-scanner's GET prefetch → `error=link` on the real click. Fixed: the email link
+   now lands on `/sign-in?token=…` and completes via POST (scanners don't POST), so a prefetch can't
+   burn the token.
+3. **Email content.** Now a proper dark-themed HTML email: a prominent "Sign in →" button
+   (link-primary) with the 6-digit code as a clearly-separated alternative; removed the confusing
+   "or sign in directly" wording.
+
+Tests: new j-spine UI cases (form code-entry + token deep-link); email test updated for the
+`/sign-in?token=` link. **Full real-dir gate 44 passed / 3 skipped** (was 42/3 — +2 UI cases, no
+regression). Deployed: image fd72536 to the live portal (ECS rolling). The DOD-INV-1 no-enumeration
+invariant is preserved (the form's request response is unchanged; only the post-request UI step is new).
+
+LESSON: a journey that signs in via the API helper does NOT prove the sign-in SCREEN works — the
+operator-facing UI step (entering the emailed code) had zero coverage and shipped broken. UI journeys
+must drive the real form, not just the endpoint. The two new j-spine UI cases close that gap.
