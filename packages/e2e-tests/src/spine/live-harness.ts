@@ -229,7 +229,21 @@ export function listenMultiaddr(proc: Proc, opts: { ws?: boolean } = {}): string
 const SPINE_DB = "cello_spine";
 export const DATABASE_URL = `postgresql://postgres:dev@localhost:5433/${SPINE_DB}`;
 
-export function ensurePostgres(): void {
+/** The libpq URL for a harness-owned spine database (one per sovereign directory node). */
+export function spineDbUrl(dbName: string): string {
+  return `postgresql://postgres:dev@localhost:5433/${dbName}`;
+}
+
+/**
+ * Provision + fresh-migrate each named spine database. Each sovereign directory node
+ * gets its OWN database — T-of-N means every node holds its own K_server share; there
+ * is NO shared store (CONTEXT.md sovereignty). A 3-node cluster passes
+ * ["cello_spine_0","cello_spine_1","cello_spine_2"]; the default is the single-node
+ * `cello_spine` (back-compat with every M7 spine test). Every DB is dropped + recreated
+ * + migrated V1→V{N} from scratch — matching CI / a brand-new region. Never pushes
+ * anything anywhere; images are cached locally.
+ */
+export function ensurePostgres(dbNames: string[] = [SPINE_DB]): void {
   try {
     execFileSync("docker", ["info"], { stdio: "ignore" });
   } catch {
@@ -239,23 +253,25 @@ export function ensurePostgres(): void {
     );
   }
   execFileSync("docker", ["compose", "up", "-d", "--wait", "postgres"], { cwd: TRUSTLESS_ROOT, stdio: "inherit" });
-  // Fresh, isolated test DB: drop + recreate so the migration history is always clean.
-  execFileSync(
-    "docker",
-    [
-      "compose", "exec", "-T", "postgres",
-      "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1",
-      "-c", `DROP DATABASE IF EXISTS ${SPINE_DB} WITH (FORCE);`,
-      "-c", `CREATE DATABASE ${SPINE_DB};`,
-    ],
-    { cwd: TRUSTLESS_ROOT, stdio: "inherit" },
-  );
-  // Migrate the fresh DB from V1 — no repair needed (clean history).
-  execFileSync(
-    "docker",
-    ["compose", "run", "--rm", "-e", `FLYWAY_URL=jdbc:postgresql://postgres:5432/${SPINE_DB}`, "flyway"],
-    { cwd: TRUSTLESS_ROOT, stdio: "inherit" },
-  );
+  for (const dbName of dbNames) {
+    // Fresh, isolated test DB: drop + recreate so the migration history is always clean.
+    execFileSync(
+      "docker",
+      [
+        "compose", "exec", "-T", "postgres",
+        "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1",
+        "-c", `DROP DATABASE IF EXISTS ${dbName} WITH (FORCE);`,
+        "-c", `CREATE DATABASE ${dbName};`,
+      ],
+      { cwd: TRUSTLESS_ROOT, stdio: "inherit" },
+    );
+    // Migrate the fresh DB from V1 — no repair needed (clean history).
+    execFileSync(
+      "docker",
+      ["compose", "run", "--rm", "-e", `FLYWAY_URL=jdbc:postgresql://postgres:5432/${dbName}`, "flyway"],
+      { cwd: TRUSTLESS_ROOT, stdio: "inherit" },
+    );
+  }
 }
 
 // ─── Spine DB query (directory-side corroboration the daemon cannot fabricate) ──
@@ -264,28 +280,47 @@ export function ensurePostgres(): void {
 // unaligned, single command → the raw scalar/row text with no decoration. This is how
 // SPINE-4 asserts the directory's OWN writes (agent_profiles / user_accounts) rather
 // than trusting the daemon's self-report (reviewer H1 discipline).
-export function psqlSpine(sql: string): string {
+export function psqlDb(dbName: string, sql: string): string {
   const out = execFileSync(
     "docker",
     [
       "compose", "exec", "-T", "postgres",
-      "psql", "-U", "postgres", "-d", SPINE_DB, "-tAc", sql,
+      "psql", "-U", "postgres", "-d", dbName, "-tAc", sql,
     ],
     { cwd: TRUSTLESS_ROOT, encoding: "utf8" },
   );
   return out.trim();
 }
 
+/** Read node 0's DB — the single-node default `cello_spine` (every M7 spine test). */
+export function psqlSpine(sql: string): string {
+  return psqlDb(SPINE_DB, sql);
+}
+
+/** Read sovereign directory node i's OWN DB (`cello_spine_${i}`) in a multi-node cluster. */
+export function psqlSpineN(i: number, sql: string): string {
+  return psqlDb(`${SPINE_DB}_${i}`, sql);
+}
+
 // ─── The spine cluster: relay + directory, real binaries ────────────────────────
 export interface SpineCluster {
   tmpDir: string;
   relay: Proc;
-  /** The live directory proc. Follows restartDirectory() (getter-backed). */
+  /** The live directory proc (node 0). Follows restartDirectory() (getter-backed). */
   directory: Proc;
-  /** J-SIG recovery: re-spawn an identical directory on the same bootstrap URL. */
+  /**
+   * All live directory procs (length === directoryCount; node 0 follows
+   * restartDirectory). Single-node clusters expose exactly `[directory]`.
+   */
+  directories: Proc[];
+  /** J-SIG recovery: re-spawn an identical directory (node 0) on the same bootstrap URL. */
   restartDirectory: () => Promise<Proc>;
   relayMultiaddr: string;
-  directoryUrl: string; // http://127.0.0.1:<healthPort> — the daemon's CELLO_DIRECTORY_URL
+  directoryUrl: string; // http://127.0.0.1:<healthPort> — node 0's CELLO_DIRECTORY_URL
+  /** The bootstrap/health URL of every directory node (directoryUrls[0] === directoryUrl). */
+  directoryUrls: string[];
+  /** The Postgres URL of every sovereign node's OWN database (per-node K_server share). */
+  databaseUrls: string[];
   stop: () => Promise<void>;
 }
 
@@ -368,6 +403,15 @@ export function trustedDirectoryNode(): ConsortiumNodeEntry {
 
 export interface StartSpineClusterOpts {
   /**
+   * M8B (DOD-SPINE-1): number of sovereign directory nodes to spawn (default 1). With
+   * N>1 the harness spawns N real `directory.js` binaries, each with its OWN signing key,
+   * transport key (→ distinct PeerID), health/bootstrap port, listen port, and OWN
+   * fresh-migrated database (`cello_spine_${i}`). N=3 is the T-of-N substrate. The relay
+   * is still wired to node 0 for its seal callback (SPINE-7); per-node node-identity keys
+   * + the relay accepting any node arrive with DOD-MANIFEST-1 / Option B.
+   */
+  directoryCount?: number;
+  /**
    * J-AUTH: when set, the directory signs its step-5 challenge with this Ed25519 seed
    * (64-hex), enabling step-6 verification by a manifest-configured daemon. Use
    * AUTH_DIRECTORY_NODE_KEY_HEX so a manifest built from trustedDirectoryNode() verifies.
@@ -407,25 +451,26 @@ export interface StartSpineClusterOpts {
  * seal-callback wiring (SPINE-7) is resolved empirically when its assertion runs.
  */
 export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promise<SpineCluster> {
-  ensurePostgres();
+  // M8B (DOD-SPINE-1): N sovereign directory nodes (default 1 = exact M7 behavior).
+  // Each node gets its OWN fresh-migrated database. count===1 keeps the single-node DB
+  // named `cello_spine` (every M7 spine test asserts against it); count>1 → cello_spine_${i}.
+  const count = opts.directoryCount ?? 1;
+  const dbNames = Array.from({ length: count }, (_, i) => (count === 1 ? SPINE_DB : `${SPINE_DB}_${i}`));
+  const databaseUrls = dbNames.map(spineDbUrl);
+  ensurePostgres(dbNames);
   const tmpDir = mkdtempSync(join(tmpdir(), "cello-jspine-"));
-
-  // Provision the directory signing key in the binary's own format, read its pubkey.
-  const dirKeyFile = join(tmpDir, "directory-key");
-  const dirKp = await FileKeyProvider.load(dirKeyFile);
-  const dirPubkeyHex = Buffer.from(await dirKp.getPublicKey()).toString("hex");
 
   const auditLog = join(tmpDir, "audit.jsonl");
   writeFileSync(auditLog, "");
   const devEnvelopeKey = randomBytes(32).toString("hex");
 
-  // L7: if any step throws after a child is spawned, stop the already-running
-  // children (and remove tmpDir) so we never orphan a relay/directory/Postgres — an
-  // orphaned node holds ports/locks and corrupts the next run.
+  // L7: if any step throws after a child is spawned, stop ALL already-running children
+  // (every directory spawned so far + the relay) and remove tmpDir, so we never orphan a
+  // node — an orphan holds ports/locks and corrupts the next run.
   let relay: Proc | undefined;
-  let directory: Proc | undefined;
+  const spawnedDirs: Proc[] = [];
   const abort = async (err: unknown): Promise<never> => {
-    if (directory) await directory.stop();
+    for (const d of spawnedDirs) await d.stop();
     if (relay) await relay.stop();
     try {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -443,64 +488,83 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
     // the other's address — a cycle. We break it by PRE-DERIVING the relay's PeerID from a
     // fixed transport SEED (pure key crypto, not node construction) and binding the relay to
     // a FIXED port, so the relay's multiaddr is known BEFORE either process starts. Then we
-    // start the directory FIRST (it dials the relay lazily, at recordAssignment/seal time, by
-    // which point the relay is up), read its real multiaddr, and start the relay second with
-    // CELLO_DIRECTORY_MULTIADDR set — so #maybeProcessSeal → directory processSeal works.
+    // start the directories FIRST (they dial the relay lazily, at recordAssignment/seal time,
+    // by which point the relay is up), read node 0's real multiaddr, and start the relay
+    // second with CELLO_DIRECTORY_MULTIADDR set — so #maybeProcessSeal → directory processSeal works.
     const relaySeed = new Uint8Array(randomBytes(32));
     const relaySeedHex = Buffer.from(relaySeed).toString("hex");
     const relayPeerId = await peerIdFromTransportSeed(relaySeed);
     const relayPort = await freePort();
     const relayMultiaddr = `/ip4/127.0.0.1/tcp/${relayPort}/p2p/${relayPeerId}`;
 
-    // ── Directory (starts FIRST now; loads the signing key we provisioned) ──
-    // The env is captured so restartDirectory() can re-spawn an IDENTICAL directory
-    // (same identity key, same transport key → same peer id, same HEALTH_PORT → same
-    // bootstrap URL the daemon polls). The libp2p listen port is tcp/0 (new on restart),
-    // but the daemon re-resolves the multiaddr via /bootstrap on each reconnect, so a
-    // fresh port is fine. This is what J-SIG's recovery half needs (directory returns).
-    const healthPort = await freePort();
-    const directoryEnv: Record<string, string> = {
-      CELLO_ENV: "local",
-      DATABASE_URL,
-      DEV_ENVELOPE_KEY: devEnvelopeKey,
-      AUDIT_LOG_PATH: auditLog,
-      CELLO_RELAY_MULTIADDR: relayMultiaddr,
-      CELLO_DIRECTORY_KEY_FILE: dirKeyFile,
-      CELLO_DIRECTORY_TRANSPORT_KEY_FILE: join(tmpDir, "directory-transport-key"),
-      CELLO_DIRECTORY_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0",
-      CELLO_DIRECTORY_WS_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0/ws",
-      HEALTH_PORT: String(healthPort),
-      // J-AUTH: when a node signing key is supplied, the directory signs step-5 as
-      // nodeId "local" so a manifest-configured daemon can verify it at step-6.
-      ...(opts.directoryNodeKeyHex
-        ? { CELLO_DIRECTORY_NODE_KEY_HEX: opts.directoryNodeKeyHex, NODE_ID: AUTH_DIRECTORY_NODE_ID }
-        : {}),
-      // J-UNILATERAL: shrink the grace window so the unilateral-seal test can seal
-      // shortly after the counterparty goes silent (default is 600s).
-      ...(opts.deliveryGraceSeconds != null
-        ? { CELLO_DELIVERY_GRACE_SECONDS: String(opts.deliveryGraceSeconds) }
-        : {}),
-      // DOD-AUTH-2: serve a consortium manifest to polling clients (rotatable on disk).
-      ...(opts.directoryConsortiumManifestPath
-        ? { CELLO_DIRECTORY_CONSORTIUM_MANIFEST: opts.directoryConsortiumManifestPath }
-        : {}),
-      // DOD-LEG-2 negative test: make the directory publish an inflated (still-signed) frontier.
-      ...(opts.directoryInflateFrontierForTest
-        ? { CELLO_DIRECTORY_INFLATE_FRONTIER_FOR_TEST: String(opts.directoryInflateFrontierForTest) }
-        : {}),
-    };
-    directory = new Proc("directory", BINS.directory, directoryEnv);
-    // BootstrapEndpoint line means /bootstrap is live — the daemon can discover us.
-    await directory.waitForLine(/"adapterName":"BootstrapEndpoint"/, 30_000);
-    const directoryMultiaddr = listenMultiaddr(directory, { ws: false });
+    // ── Directories (start FIRST). Each is a sovereign node: own signing key + transport
+    // key (→ distinct PeerID) + health port + listen port + DATABASE_URL. Each node's env
+    // is captured so restartDirectory() can re-spawn an IDENTICAL node (same identity key,
+    // same transport key → same peer id, same HEALTH_PORT → same bootstrap URL the daemon
+    // polls). The libp2p listen port is tcp/0 (new on restart), but the daemon re-resolves
+    // the multiaddr via /bootstrap on each reconnect, so a fresh port is fine. ──
+    const dirEnvs: Array<Record<string, string>> = [];
+    const directoryUrls: string[] = [];
+    // node 0 drives the relay's directory-admin auth (CELLO_DIRECTORY_PUBKEY) + the relay's
+    // seal callback (SPINE-7). Per-node node-identity keys + the relay accepting any node
+    // arrive with DOD-MANIFEST-1 / Option B.
+    let dir0Pubkey = "";
+    for (let i = 0; i < count; i++) {
+      // Provision THIS node's signing key in the binary's own format, read its pubkey.
+      const dirKeyFile = join(tmpDir, `directory-key-${i}`);
+      const dirKp = await FileKeyProvider.load(dirKeyFile);
+      const dirPubkeyHex = Buffer.from(await dirKp.getPublicKey()).toString("hex");
+      if (i === 0) dir0Pubkey = dirPubkeyHex;
+      const healthPort = await freePort();
+      const directoryEnv: Record<string, string> = {
+        CELLO_ENV: "local",
+        DATABASE_URL: databaseUrls[i],
+        DEV_ENVELOPE_KEY: devEnvelopeKey,
+        AUDIT_LOG_PATH: auditLog,
+        CELLO_RELAY_MULTIADDR: relayMultiaddr,
+        CELLO_DIRECTORY_KEY_FILE: dirKeyFile,
+        CELLO_DIRECTORY_TRANSPORT_KEY_FILE: join(tmpDir, `directory-transport-key-${i}`),
+        CELLO_DIRECTORY_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0",
+        CELLO_DIRECTORY_WS_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0/ws",
+        HEALTH_PORT: String(healthPort),
+        // J-AUTH: when a node signing key is supplied, the directory signs step-5 as
+        // nodeId "local" so a manifest-configured daemon can verify it at step-6. (Applied
+        // uniformly; only set by single-node J-AUTH today — DOD-MANIFEST-1 gives per-node keys.)
+        ...(opts.directoryNodeKeyHex
+          ? { CELLO_DIRECTORY_NODE_KEY_HEX: opts.directoryNodeKeyHex, NODE_ID: AUTH_DIRECTORY_NODE_ID }
+          : {}),
+        // J-UNILATERAL: shrink the grace window so the unilateral-seal test can seal
+        // shortly after the counterparty goes silent (default is 600s).
+        ...(opts.deliveryGraceSeconds != null
+          ? { CELLO_DELIVERY_GRACE_SECONDS: String(opts.deliveryGraceSeconds) }
+          : {}),
+        // DOD-AUTH-2: serve a consortium manifest to polling clients (rotatable on disk).
+        ...(opts.directoryConsortiumManifestPath
+          ? { CELLO_DIRECTORY_CONSORTIUM_MANIFEST: opts.directoryConsortiumManifestPath }
+          : {}),
+        // DOD-LEG-2 negative test: make the directory publish an inflated (still-signed) frontier.
+        ...(opts.directoryInflateFrontierForTest
+          ? { CELLO_DIRECTORY_INFLATE_FRONTIER_FOR_TEST: String(opts.directoryInflateFrontierForTest) }
+          : {}),
+      };
+      const name = count === 1 ? "directory" : `directory-${i}`;
+      const proc = new Proc(name, BINS.directory, directoryEnv);
+      // BootstrapEndpoint line means /bootstrap is live — the daemon can discover us.
+      await proc.waitForLine(/"adapterName":"BootstrapEndpoint"/, 30_000);
+      spawnedDirs.push(proc);
+      dirEnvs.push(directoryEnv);
+      directoryUrls.push(`http://127.0.0.1:${healthPort}`);
+    }
+
+    const directoryMultiaddr = listenMultiaddr(spawnedDirs[0], { ws: false });
 
     // ── Relay (starts SECOND; bound to the fixed port + pre-derived seed so its real
-    // multiaddr equals relayMultiaddr. Given CELLO_DIRECTORY_MULTIADDR it wires the
+    // multiaddr equals relayMultiaddr. Given CELLO_DIRECTORY_MULTIADDR (node 0) it wires the
     // NetworkDirectoryAdapter + registers with the now-running directory). ──
     relay = new Proc("relay", BINS.relay, {
       NODE_ENV: "test",
       CELLO_ENV: "local",
-      CELLO_DIRECTORY_PUBKEY: dirPubkeyHex,
+      CELLO_DIRECTORY_PUBKEY: dir0Pubkey,
       CELLO_DIRECTORY_MULTIADDR: directoryMultiaddr,
       CELLO_RELAY_KEY_FILE: join(tmpDir, "relay-key"),
       CELLO_RELAY_TRANSPORT_KEY_HEX: relaySeedHex,
@@ -510,21 +574,21 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
     await relay.waitForLine(/"adapterName":"ListenAddr"/, 20_000);
 
     const relayRef = relay;
-    // The directory is replaceable (J-SIG recovery): currentDirectory always points at
-    // the live directory proc, so stop() and the `directory` getter follow a restart.
-    let currentDirectory = directory;
+    // The directory set is replaceable (J-SIG recovery): liveDirs always points at the live
+    // procs, so stop(), the `directory` getter, and `directories` follow a node-0 restart.
+    const liveDirs = [...spawnedDirs];
 
-    // J-SIG recovery: re-spawn an identical directory on the same bootstrap URL after a
-    // kill, so the daemon's resolver re-discovers it and reconnects. Returns the new proc.
+    // J-SIG recovery: re-spawn an identical node 0 on the same bootstrap URL after a kill,
+    // so the daemon's resolver re-discovers it and reconnects. Returns the new proc.
     const restartDirectory = async (): Promise<Proc> => {
-      const next = new Proc("directory", BINS.directory, directoryEnv);
+      const next = new Proc(count === 1 ? "directory" : "directory-0", BINS.directory, dirEnvs[0]);
       await next.waitForLine(/"adapterName":"BootstrapEndpoint"/, 30_000);
-      currentDirectory = next;
+      liveDirs[0] = next;
       return next;
     };
 
     const stop = async (): Promise<void> => {
-      await currentDirectory.stop();
+      for (const d of liveDirs) await d.stop();
       await relayRef.stop();
       try {
         rmSync(tmpDir, { recursive: true, force: true });
@@ -537,11 +601,16 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
       tmpDir,
       relay: relayRef,
       get directory(): Proc {
-        return currentDirectory;
+        return liveDirs[0];
+      },
+      get directories(): Proc[] {
+        return [...liveDirs];
       },
       restartDirectory,
       relayMultiaddr,
-      directoryUrl: `http://127.0.0.1:${healthPort}`,
+      directoryUrl: directoryUrls[0],
+      directoryUrls,
+      databaseUrls,
       stop,
     };
   } catch (err) {

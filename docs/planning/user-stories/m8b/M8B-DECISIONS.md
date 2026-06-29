@@ -45,6 +45,17 @@ Genuine undecidable forks are PARKED (journal + DoD "Parked decisions" + here), 
   push per-commit); cello-client + e2e/spine pushes are free.
 - Reverse: branch off main again if ever needed.
 
+### 2026-06-30 ~21:05 — FED-SPINE-001 — stopped a stale worktree postgres holding :5433
+- Fork: the spine harness needs local Postgres on `localhost:5433`, but the orphan container
+  `trustless-cello-m8-read001-postgres-1` (a long-closed M8-READ-001 worktree, Up 41h) still held
+  `0.0.0.0:5433`, so `docker compose up postgres` in the canonical repo failed to bind.
+- Chose: `docker stop trustless-cello-m8-read001-postgres-1` to free the port; the canonical
+  `trustless-cello` project's postgres then binds 5433 (where the harness expects it).
+- Why: M8-READ-001 is closed; the container is a stale leftover. Reversible + correct; never-block.
+- Reverse: `docker start trustless-cello-m8-read001-postgres-1` (but it should stay stopped — stale).
+  Note: dozens of OTHER `*-postgres-1` containers exist in `Created` (not running) state from old
+  worktrees — harmless (they hold no port); a future cleanup could `docker rm` them, not this unit's job.
+
 <!-- Append below. Format:
 ### YYYY-MM-DD HH:MM — <unit-id> — <short title>
 - Fork: …  Chose: …  Why: …  Reverse: …
