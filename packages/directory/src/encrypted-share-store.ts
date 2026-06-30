@@ -197,7 +197,8 @@ export class EncryptedPgShareStore {
       } catch (err: unknown) {
         const error = err instanceof Error ? err : new Error(String(err));
         this.#logger.error("key.decrypted.failed", error, { keyId, agentId: row.agent_id });
-        throw err;
+        // Skip undecryptable shares (stale envelope key, rotated key version) rather than
+        // crashing the entire directory. The caller (loadShares) already handles partial loads.
       }
     }
     return shares;
