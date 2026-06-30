@@ -164,3 +164,15 @@ self-consistent relay receipts; directory does the authoritative verification at
 the relay-registration check is not dropped, it lives where the receipts are consumed. No directory
 round-trip in RELAYSIG-1 ⇒ a focused daemon wiring (inject RelayReceiptStore into session-relay-client,
 verify+store in #dispatch, + a cello_get_relay_receipts query path for the spine).
+
+## 2026-07-01 — Sequencing: front-load the Opus-hard units (Andre directive)
+Andre may hit an Opus quota and downgrade the coder thread to Sonnet. Do the HARDEST / most
+design-and-crypto-critical units FIRST while on Opus: (1) OPTIONB-SETUP-1 (any-relay/any-directory —
+delete the directory→relay dial + relays[0] pin; client carries the FROST/directory-signed assignment;
+relay verifies vs the consortium; the recurring relay_unavailable root cause — high blast radius), then
+(2) OPTIONB-SEAL-1 (directory rebuilds + verifies the Merkle tree OFFLINE from client-carried relay
+receipts + FROST-seals with NO directory→relay call — crypto-adjacent, the hardest remaining). PRESENCE-1
++ PICKUP-1 (cross-node replication: cello_pub schema, REPLICA IDENTITY, UUID PK, sweep gating) are more
+mechanical and can survive a Sonnet downgrade. DEPLOY-1 is operational. The `feature-dev:code-reviewer`
+reviewers are pinned `model:'opus'`, so adversarial review stays Opus-grade even if the coder downgrades.
+This matches the DoD order (SETUP→SEAL→PRESENCE→PICKUP→DEPLOY), so no reordering needed — just keep pace.
