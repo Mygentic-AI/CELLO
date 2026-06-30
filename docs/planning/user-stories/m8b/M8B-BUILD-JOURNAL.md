@@ -1339,3 +1339,28 @@ IDENTITY confirmed for UPDATE replication); agent online on node A reads online 
 replication-infrastructure unit: (1) V38 migration: GRANT UPDATE on directory_nodes, set REPLICA IDENTITY on
 both tables; (2) add both to PUBLICATION_TABLES in setup-replication.sh; (3) spine proof: agent connects to
 node A → presence read from node B sees it online. Independent of Track A/B. Sonnet-safe (mechanical).
+
+### 2026-07-01 ~12:35 — DOD-PRESENCE-1 ✅ + DOD-PICKUP-1 ✅ — Track C COMPLETE
+**PRESENCE-1 (trustless `faa47bc2` + `aa2842b0`):**
+- V38 migration: GRANT UPDATE on directory_nodes + REPLICA IDENTITY on both tables.
+- setup-replication.sh: agent_presence + directory_nodes added (16 tables).
+- J-PRESENCE spine GREEN (27s): connect→write→seed→cross-node-read→schema-gate all pass.
+- Also resolves DOD-SUSPEND-1 parked production gap (agent_profiles + agent_suspensions already in
+  cello_pub; once deployed + replication refreshed, every node honors cross-node suspension).
+
+**PICKUP-1 (trustless `2aaf3374` + `b9acee6a` + `93efad9d`):**
+- V39 migration: BIGSERIAL→UUID PK + owning_node_id NOT NULL (DEFAULT 'us-east-1-legacy') + REPLICA
+  IDENTITY DEFAULT. No UPDATE DML (DB-001 lint satisfied).
+- setup-replication.sh: pickup_queue added (17 tables).
+- sweepUndeliverablePickups gated by `owning_node_id = $2`.
+- enqueuePickup takes owningNodeId; wired through internal-api-server + pg-directory-store.
+- Live test (trust-001-pickup-repository) GREEN: drain/ACK/supersede/sweep all work with UUID PK.
+- Cross-node drain path is DOD-DEPLOY-1 (requires live cluster replication).
+
+**Code-reviewer (opus) re-dispatched (SEAL-1 retry) — running.** Gates: directory 665, relay 165,
+typecheck clean, j-presence GREEN, all back-compat spines green. Both repos working-tree clean on main.
+
+**RESUME → DOD-SPINE-1 + invariants (Tier 0) + DOD-DEPLOY-1.** The enforcer (3-dir spine harness) IS
+built and has proven every Tier A/B/C unit. DOD-SPINE-1 can flip when the journeys are all run in one
+final pass. The Tier 0 invariants are proven by the existing journeys (INV-NODE by j-sign, INV-CHAIN by
+j-unilateral, etc.) — just need to tag them. Then DEPLOY-1 is the close gate (push + deploy + live proof).
