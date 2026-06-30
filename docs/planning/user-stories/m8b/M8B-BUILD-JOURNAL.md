@@ -24,7 +24,7 @@ description: >
 | FED-SUSPEND-001 | DOD-SUSPEND-1 | dir+crypto | ✅ spine-green, 3 reviewers clean | j-suspend-tofn green (103s): 2-suspended ⇒ block w/ EXACT `ceremony_exhausted`+retry; 1-suspended ⇒ nodes 0,2 sign while node 1 emits FRESH refusal (route-AROUND proven); agent B signs through 1,2 ⇒ agent-scoped. Fixes: signer commit-round per-stub exclusion + per-node timeout/deadline (bcea30a/5cd2da2), directory nonce-replace (87d226c2, consume-once confirmed by all 3). Fallback HIGH made LOUD: frost.suspension.uncheckable + hasAgentProfile. Production quorum-binding → PRESENCE-1 (Tier C) |
 | FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | ✅ spine-GREEN, 6 reviewers clean | Zero-constant PSS, group key UNCHANGED. J-REFRESH spine GREEN: refresh twice → digest CHANGES (proves rotation, kills the no-op) + group pubkey==P1 + all dirs applied + post-refresh seals. crypto published 0.0.13; daemon runNetworkRefresh + runAgentRefresh + cello refresh CLI; directory refreshRound1/2 (durable persist before epoch advance) + getMaxEpoch (expiry survives restart, unit-tested). 6 reviewers (3 crypto SOUND + 3 wiring no-blocking); fixed digest-teeth/HIGH-1/HIGH-2/M2/L7 + stale SUSPEND-1 nonce tests. directory 661/661, daemon 453/453, crypto 254/254, back-compat green. PARKED: cross-party atomicity (2-phase commit) + forward-secrecy delete — alpha fail-loud+manual-re-refresh |
 | FED-RELAYSIG-001 | DOD-RELAYSIG-1 | relay+client | ✅ spine-GREEN, 3 reviewers clean | Daemon PORT (relay-side ACK signing already live). relay-receipt-store.ts (verifyRelayAck + evaluateRelayAck + RelayReceiptStore, keyed on the attestation POSITION agent/session/seq, immutable) wired into session-relay-client #captureReceipt (verify→store; forged ACK rejected + rejects the submit) + cello receipts. J-RELAYSIG spine GREEN: A→B send → relay signs → daemon verifies + stores → cello receipts returns it AND the test re-verifies the Ed25519 signature. 3 reviewers: fixed position-key HIGH, verify-gates-store wiring test (blocking), loud silent-drops. daemon 458/458, 5 receipt units, back-compat j-sign green. Parked: registered-relay check → OPTIONB-SEAL; witnessed-bit. NO directory change (held for deploy unaffected) |
-| FED-OPTIONB-SETUP-001 | DOD-OPTIONB-SETUP-1 | dir+relay+client | ⬜ not started | client-presented assignment; kill relay dial |
+| FED-OPTIONB-SETUP-001 | DOD-OPTIONB-SETUP-1 | dir+relay+client | 🔨 investigation DONE, design decided (Design A), implementing | THE BUG: directory dials relay (recordAssignment dir-node.ts:3135) + relays[0]/#relay pin. Design A (journal §05:00): relay verifies the per-node relayDirSig vs ANY of N directory node pubkeys from the consortium manifest (no directory-consortium FROST key exists; frostedSig is the AGENT's session auth, relayDirSig is the directory's relay auth). 4 steps: relay manifest-verify (additive) → directory sends relay_directory_signature to client → client carries record_assignment + DELETE the dial → j-optionb-setup spine (zero dir→relay calls + non-node-0 directory works). NOT started coding |
 | FED-OPTIONB-SEAL-001 | DOD-OPTIONB-SEAL-1 | dir+client | ⬜ not started | client-carried receipts; offline seal |
 | FED-PRESENCE-001 | DOD-PRESENCE-1 | dir+infra | ⬜ not started | presence + directory_nodes → cello_pub |
 | FED-PICKUP-001 | DOD-PICKUP-1 | dir+infra | ⬜ not started | pickup_queue → UUID + cello_pub |
@@ -939,3 +939,72 @@ group key; DELETE the directory→relay dial + the relays[0] pin. Assume-code-ex
 / the relays[0] pin / #relay in the directory + relay, and the assignment-carry path. This touches the
 DIRECTORY + RELAY (deploy batch) — falsify-first, red on the spine (j-optionb: establish a session with
 ZERO directory→relay calls; any relay the client picks works).
+
+### 2026-07-01 ~05:00 — DOD-OPTIONB-SETUP-1 — investigation COMPLETE + design decided (pre-compaction)
+**The Explore agent died on an API connection drop mid-scan; I mapped the surface by hand.** Findings (all
+file:line verified):
+
+**THE BUG (M8B-SPEC.md:38):** the DIRECTORY dials the relay to register the session assignment —
+`recordAssignment` over port 4001, SG-locked to the same-region directory, pinned to `relays[0]`
+(alphabetical = ap1, often unreachable); only a local relay re-registration repoints it → breaks on every
+directory restart. THIS is the recurring `relay_unavailable` (memory project_relay_directory_any_to_any).
+
+**Exact code:**
+- DELETE: `directory-node.ts:3135` `const recorded = await this.#relay.recordAssignment(relayAssignment)`
+  inside `#processSessionRequest` (the directory→relay dial). + the `#relay` (RelayAdapter, :443) /
+  `#relayEndpoint` (:444) pin + the updateMultiaddr restart-workaround (:907-914). `network-relay-adapter.ts`
+  is the RPC adapter to delete as a directory→relay path.
+- The directory builds the relay assignment at `directory-node.ts:3115-3134`: relay TBS =
+  CBOR([session_id, initiatorPubkey, targetPubkey, session_timestamp, (initiator_session_peer_id,
+  counterparty_session_peer_id) when both present]); `relayDirSig = #keyProvider.sign(relayTbs)` (:3125) —
+  a PER-NODE signature (NOT FROST). `#keyProvider` IS the directory's per-node identity/step-5 signing key
+  (:335/:442/:470) == the manifest node pubkey.
+- The CLIENT-facing `session_assignment` frame (:3186) carries a DIFFERENT signature: `directory_signature
+  = frostedSig` (:3093) — the INITIATOR's FROST establishment signature over
+  `buildSessionEstablishmentTbsM7` (:3003, covers session_id + both pubkeys + both session peer ids/addrs +
+  timestamp + transport_mode). This is the AGENT authorizing the session (signed with the initiator's
+  primary_pubkey), NOT a directory authorization of the relay assignment.
+- RELAY side: `relay-node.ts:485-508` `recordAssignment` verifies `directory_signature` over the relay TBS
+  vs a SINGLE `#directoryPubkey` (from env `CELLO_DIRECTORY_PUBKEY`, relay.ts:73 → relay-node.ts:225/508).
+  The relay ALREADY has a `record_assignment` FRAME handler (:370-407) — a CLIENT can present
+  {session_id, participant_a/b, session_timestamp, assignment_signature} and the relay verifies it. But the
+  CLIENT (daemon) does NOT send it today (grep empty) — only the directory dials it. Client relay flow:
+  `session-relay-client.ts` `#connect`(:415)→`#authenticate`(:460) sends only `relay_auth_response`
+  (K_local proof), NO assignment.
+- SPINE: the relay's `CELLO_DIRECTORY_PUBKEY = dir0Pubkey` (live-harness.ts:668) → pinned to node 0 only =
+  the any-directory blocker.
+
+**DESIGN DECISION (Design A — per-node relay sig verified vs the consortium MANIFEST):** There is NO
+directory-consortium FROST group key — the agent's primary_pubkey FROST key authorizes the SEAL, not the
+relay assignment; the directories hold per-node keys + the agents' K_server shares. So the SPEC's "relay
+verifies vs the consortium group key" is realized as **"verify the directory's per-node relayDirSig vs ANY
+of the N directory node pubkeys in the threshold-signed consortium manifest"** — that IS the directory
+authorization, and any consortium directory can grant relay service. The agent's FROST establishment sig
+(frostedSig) authorizes the SESSION (peer↔peer), the per-node relayDirSig authorizes the RELAY ASSIGNMENT.
+Implementation (3 components — order matters to avoid breaking the live flow):
+  1. **Relay (additive, safe first):** load the consortium manifest (`CELLO_CONSORTIUM_MANIFEST` +
+     `CELLO_CONSORTIUM_ROOT_KEYS`, same as directories/client) → the N directory node pubkeys; in
+     `recordAssignment`, verify `directory_signature` vs ANY of them (keep the single `#directoryPubkey` as
+     a fallback for back-compat / unmanifested relays).
+  2. **Directory:** include the relay assignment (relayDirSig + the relay-TBS fields: session peer ids) in
+     the CLIENT-facing `session_assignment` frame, so the client can carry it. (The client already gets the
+     session_id/participants/peer ids; ADD the relayDirSig as a new field, e.g. `relay_directory_signature`
+     — name it explicitly per feedback_api_parsimony, never reuse `directory_signature` which is frostedSig.)
+  3. **Client (session-relay-client):** after `#authenticate`, send a `record_assignment` frame to the
+     chosen relay carrying {session_id, participant_a/b, session_timestamp, session peer ids,
+     assignment_signature = relay_directory_signature}. THEN DELETE the directory→relay dial (:3135) + the
+     `#relay` pin.
+  4. **Spine (j-optionb-setup):** prove a session establishes with ZERO directory→relay calls (assert the
+     directory log has NO recordAssignment dial; the relay logs an assignment_ok from the CLIENT), and —
+     the any-directory teeth — the relay verifies an assignment signed by a NON-node-0 directory (give the
+     relay the 3-node manifest, route the session-request through node 1 or 2).
+Falsify-first: confirm the client today receives the session peer ids in the assignment frame (it needs
+them for record_assignment); confirm `#keyProvider`.getPublicKey() == the manifest node-0 pubkey (the spine
+currently works only because dir0Pubkey == #keyProvider's pubkey for node 0).
+
+**RESUME → DOD-OPTIONB-SETUP-1 implementation (Design A above).** Start with the relay manifest verification
+(additive/safe), then the directory client-facing relay sig, then the client carry + delete the dial, then
+the j-optionb-setup spine. Touches DIRECTORY + RELAY + protocol-types (deploy batch — held). After SETUP:
+OPTIONB-SEAL-1 (the hardest remaining — directory rebuilds + verifies the Merkle tree OFFLINE from
+client-carried relay receipts + FROST-seals, NO directory→relay getSealLeaves/confirmSeal). Per the
+Opus-priority decision, do SETUP + SEAL on Opus before PRESENCE/PICKUP/DEPLOY.
