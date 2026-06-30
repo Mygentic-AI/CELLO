@@ -3553,6 +3553,12 @@ export class CelloDirectoryNode {
       }
       const s1Fields = decodeStructure1Fields(leaf.structure1_cbor);
       if (!s1Fields) return { ok: false, reason: "unilateral_root_unverifiable" };
+      // Defense-in-depth: the sender-signed content_hash (Structure1) must match the relay-assigned
+      // content_hash (Structure2). A compromised relay could deliver divergent values; the prev_root
+      // chain catches this downstream but an explicit check fails FAST with a clear reason.
+      if (!bufEqual(s1Fields.content_hash, leaf.s2.content_hash)) {
+        return { ok: false, reason: "unilateral_content_hash_mismatch" };
+      }
       if (!bufEqual(leaf.s2.prev_root, runningRoot)) {
         return { ok: false, reason: "unilateral_root_unverifiable" };
       }
@@ -3971,6 +3977,11 @@ export class CelloDirectoryNode {
       if (!s1Fields) {
         this.#notifySealRejected(sessionIdHex, sessionId, "leaf_signature_invalid");
         return { ok: false, reason: "leaf_signature_invalid" };
+      }
+      // Defense-in-depth: sender-signed content_hash (Structure1) must match relay's (Structure2).
+      if (!bufEqual(s1Fields.content_hash, leaf.s2.content_hash)) {
+        this.#notifySealRejected(sessionIdHex, sessionId, "leaf_signature_invalid" as import("./directory-types.js").SealRejectionReason);
+        return { ok: false, reason: "content_hash_mismatch" };
       }
 
       // (c) Verify prev_root chain
@@ -4713,6 +4724,7 @@ function bufEqual(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 interface Structure1Fields {
+  content_hash: Uint8Array;
   session_id: Uint8Array;
   last_seen_seq: number;
   timestamp: number | bigint;
@@ -4727,12 +4739,14 @@ function decodeStructure1Fields(cbor: Uint8Array): Structure1Fields | null {
     return null;
   }
   if (!Array.isArray(arr) || arr.length !== 6) return null;
-  const [, , , _sid, _lss, _ts] = arr;
+  const [, _ch, , _sid, _lss, _ts] = arr;
+  const chBytes = _ch instanceof Uint8Array ? _ch : Buffer.isBuffer(_ch) ? new Uint8Array(_ch as Buffer) : null;
+  if (!chBytes || chBytes.length !== 32) return null;
   const sidBytes = _sid instanceof Uint8Array ? _sid : Buffer.isBuffer(_sid) ? new Uint8Array(_sid as Buffer) : null;
   if (!sidBytes || sidBytes.length !== 16) return null;
   if (typeof _lss !== "number") return null;
   if (typeof _ts !== "number" && typeof _ts !== "bigint") return null;
-  return { session_id: sidBytes, last_seen_seq: _lss, timestamp: _ts };
+  return { content_hash: chBytes, session_id: sidBytes, last_seen_seq: _lss, timestamp: _ts };
 }
 
 /**
