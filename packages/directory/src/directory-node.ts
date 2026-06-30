@@ -107,12 +107,11 @@ import {
 } from "./agent-presence-repository.js";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash, buildRelayAckTbs } from "@cello-protocol/crypto";
+import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash } from "@cello-protocol/crypto";
 
 import type { KeyProvider, LeafInput, IThresholdSigner, RefreshContribution } from "@cello-protocol/crypto";
-import { encodeStructure2, computeGenesisPrevRoot, buildSealTbs, SCAN_RESULT_SENTINEL } from "@cello-protocol/protocol-types";
-import type { Structure2 } from "@cello-protocol/protocol-types";
-import type { SealUnilateralLeaf } from "./directory-types.js";
+import { encodeStructure2, computeGenesisPrevRoot, buildSealTbs } from "@cello-protocol/protocol-types";
+import { reconstructCarriedSealLeaves } from "./seal-unilateral-verify.js";
 import type { AgentProfile } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
 import type { CelloNode } from "@cello-protocol/transport";
@@ -3383,7 +3382,7 @@ export class CelloDirectoryNode {
     // verifies (content_hash→seq), the sequence is contiguous (no omission), and every present-party leaf is
     // receipt-witnessed. A missing/forged/non-contiguous carry is REJECTED — never seal on an unverified
     // reported_root.
-    const carried = this.#reconstructCarriedSealLeaves(frame.seal_leaves, senderHex);
+    const carried = reconstructCarriedSealLeaves(frame.seal_leaves, senderHex);
     if (!carried.ok) {
       this.#logger?.error("session.unilateral.verification.failed", {
         sessionId: sessionIdHex,
@@ -3527,60 +3526,6 @@ export class CelloDirectoryNode {
    * requiring EXACTLY ONE SEAL control leaf (kind "ctrl") from the present party (the absent
    * party has none). Read-only; no state mutation.
    */
-  /**
-   * FED-OPTIONB-SEAL-001: reconstruct + verify the CLIENT-CARRIED leaf chain for a unilateral seal (Option
-   * B — the directory no longer dials the relay's getSealLeaves). The carried leaves are UNTRUSTED (supplied
-   * by the present party), so this adds the teeth the relay's authoritative log used to provide:
-   *   - per OWN-party leaf: the relay's signed receipt over buildRelayAckTbs(content_hash, seq, ts) verifies
-   *     (the relay witnessed THIS content at THIS seq). Structure1 does NOT bind seq/prev_root, so without
-   *     this a present party could reorder/renumber its own leaves and still pass the sender-sig checks.
-   *   - CONTIGUITY: the carried sequences are exactly 1..N (a gap = an omitted leaf).
-   *   - EVERY present-party leaf MUST carry a valid receipt; counterparty leaves carry none (pinned by their
-   *     sender_signature, verified downstream, + contiguity against the receipt-pinned own leaves).
-   * Returns the reconstructed RelaySealLeaf[] for #verifyUnilateralChain (which then enforces
-   * content-root==reported_root, sender sigs, prev_root chain, the signed last_seen_seq causal order, and
-   * exactly-one-ctrl-from-the-present-party). Decoding then re-encoding Structure2 is byte-faithful — the
-   * canonical scan-result sentinel is rebuilt by encodeStructure2 — so the downstream merkle/chain hold.
-   */
-  #reconstructCarriedSealLeaves(
-    sealLeaves: SealUnilateralLeaf[] | undefined,
-    presentHex: string,
-  ): { ok: true; leaves: RelaySealData["leaves"] } | { ok: false; reason: string } {
-    if (!sealLeaves || sealLeaves.length === 0) return { ok: false, reason: "unilateral_leaves_unavailable" };
-    const u8 = (v: unknown): Uint8Array => (v instanceof Uint8Array ? v : Buffer.isBuffer(v) ? new Uint8Array(v) : new Uint8Array());
-    const leaves: RelaySealData["leaves"] = [];
-    for (let i = 0; i < sealLeaves.length; i++) {
-      const w = sealLeaves[i];
-      let arr: unknown[];
-      try { arr = cborDecode(w.structure2_cbor) as unknown[]; } catch { return { ok: false, reason: "unilateral_leaf_malformed" }; }
-      if (!Array.isArray(arr) || arr.length !== 6) return { ok: false, reason: "unilateral_leaf_malformed" };
-      const sequence_number = typeof arr[0] === "number" ? arr[0] : typeof arr[0] === "bigint" ? Number(arr[0]) : NaN;
-      const sender_pubkey = u8(arr[1]);
-      const content_hash = u8(arr[2]);
-      const sender_signature = u8(arr[3]);
-      const prev_root = u8(arr[5]);
-      if (!Number.isInteger(sequence_number) || sender_pubkey.length !== 32 || content_hash.length !== 32 || sender_signature.length !== 64 || prev_root.length !== 32) {
-        return { ok: false, reason: "unilateral_leaf_malformed" };
-      }
-      // The wire seq must match the relay-signed Structure2 seq (no relabel of the carried envelope).
-      if (sequence_number !== w.sequence_number) return { ok: false, reason: "unilateral_leaf_seq_mismatch" };
-      // CONTIGUITY: leaves arrive ordered; the relay sequence is 1-based, so require exactly 1..N (no gap).
-      if (sequence_number !== i + 1) return { ok: false, reason: "unilateral_chain_noncontiguous" };
-      const s2: Structure2 = { sequence_number, sender_pubkey, content_hash, sender_signature, scan_result: SCAN_RESULT_SENTINEL, prev_root };
-      // Present-party leaf → MUST carry a valid relay receipt (the seq-pinning teeth).
-      if (Buffer.from(sender_pubkey).toString("hex") === presentHex) {
-        if (!w.relay_id || w.relay_timestamp === undefined || !w.relay_signature) return { ok: false, reason: "unilateral_own_leaf_unwitnessed" };
-        if (!/^[0-9a-fA-F]{64}$/.test(w.relay_id)) return { ok: false, reason: "unilateral_receipt_bad_relay_id" };
-        const relayPubkey = new Uint8Array(Buffer.from(w.relay_id, "hex"));
-        if (!verify(relayPubkey, buildRelayAckTbs(content_hash, sequence_number, w.relay_timestamp), w.relay_signature)) {
-          return { ok: false, reason: "unilateral_receipt_invalid" };
-        }
-      }
-      leaves.push({ kind: w.leaf_kind === 0x02 ? "ctrl" : "msg", s2, structure1_cbor: w.structure1_cbor });
-    }
-    return { ok: true, leaves };
-  }
-
   #verifyUnilateralChain(
     leaves: RelaySealData["leaves"],
     reportedRoot: Uint8Array,

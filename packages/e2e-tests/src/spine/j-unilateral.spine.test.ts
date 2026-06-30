@@ -187,8 +187,16 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
     // old unsigned bookkeeping. session.unilateral.notarized fires only after a signed
     // SealNotarization is persisted with the counterparty ABSENT.
     expect(cluster.directory.output, `directory must emit session.unilateral.notarized (verified+FROST+persisted):${diag}`).toMatch(/session\.unilateral\.notarized/);
-    // The recomputed root was verified against the leaf chain fetched from the relay.
-    expect(cluster.directory.output, `directory must fetch the signed-leaf chain from the relay:${diag}`).toMatch(/get_seal_leaves|leaf.*fetch|unilateral.*leaves/i);
+    // FED-OPTIONB-SEAL-001 (Option B): the recomputed root was verified against the CLIENT-CARRIED leaf
+    // chain rebuilt OFFLINE — the directory did NOT dial the relay's getSealLeaves. Positive: the directory
+    // logs leaves.rebuilt with source=client_carried. Negative: it did NOT log the old leaves.fetched dial,
+    // and the relay never handled a get_seal_leaves frame.
+    expect(cluster.directory.output, `directory must rebuild the chain OFFLINE from client-carried leaves:${diag}`)
+      .toMatch(/"event":"session\.unilateral\.leaves\.rebuilt"[^}]*"source":"client_carried"/);
+    expect(cluster.directory.output, `directory must NOT dial getSealLeaves under Option B:${diag}`)
+      .not.toMatch(/session\.unilateral\.leaves\.fetched/);
+    expect(cluster.relay.output, `relay must NOT handle a get_seal_leaves frame under Option B:${diag}`)
+      .not.toMatch(/get_seal_leaves/);
 
     // DOD-SEAL-3: A verified the certificate signature over the rebuilt TBS against an
     // independently-trusted key BEFORE marking the session sealed (channel-independent).
