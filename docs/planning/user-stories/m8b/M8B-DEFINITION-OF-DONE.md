@@ -30,18 +30,42 @@ description: >
 
 ## Tier 0 — Invariants (must hold in every journey)
 - **DOD-INV-NODE** — No single directory node is mandatory for any ceremony (DKG, session sign, seal).
-  Kill any one of N and a T-of-N ceremony still completes. — ❌
+  Kill any one of N and a T-of-N ceremony still completes. — ✅ SPINE-PROVEN
+  (j-sign: kill a directory that PARTICIPATED in seal 1 → seal 2 still completes via surviving T−1;
+  j-suspend-tofn: 2-of-3 suspend → block (sub-threshold), un-suspend 1 → nodes 0,2 sign while node 1
+  emits fresh refusal → survivors route AROUND a genuinely-refusing node; j-tofn-dkg: DKG fans to all 3
+  and produces one group key. The threshold is FIXED — a degraded roster FAILS, never forges weaker.)
 - **DOD-INV-SOVEREIGN-WRITE** — Replicated state preserves sovereign write-ownership: only the owning
-  node writes a row; others read the replicated copy. — ❌
+  node writes a row; others read the replicated copy. — ✅ SPINE-PROVEN
+  (DOD-PRESENCE-1: agent_presence written only by the node the agent connects to; other nodes read via
+  logical replication. DOD-PICKUP-1: pickup_queue.owning_node_id gates sweepUndeliverablePickups — a node
+  only sweeps rows IT wrote (`WHERE owning_node_id = $2`); a non-converged replica cannot delete a
+  deliverable ciphertext. V38+V39 migrations add REPLICA IDENTITY + publication membership. j-presence
+  spine GREEN: cross-node visibility via replication seed, not cross-node write.)
 - **DOD-INV-RELAY-PLAINTEXT** — Relay never sees plaintext (only hashes / ciphertext); preserved through
-  Option B. — ❌ (carry-over from M7 ✅; re-prove under the new path)
+  Option B. — ✅ SPINE-PROVEN
+  (The relay processes `hash_submit` frames containing only content_hash (32-byte SHA-256); the Option B
+  seal carry (SealUnilateralLeaf) transmits Structure2 CBOR which contains content_hash + sender_pubkey +
+  sender_signature + prev_root — never plaintext content. Confirmed: `seal-unilateral-verify.ts` extracts
+  only `content_hash = u8(arr[2])` from Structure2; the relay receipt signs over
+  `buildRelayAckTbs(content_hash, seq, ts)` — hashes and metadata only. j-relaysig + j-unilateral +
+  j-optionb-setup all operate on this hash-only path. M7 carry-over re-proven under Option B.)
 - **DOD-INV-NO-DIR-RELAY** — Under Option B the directory makes ZERO network calls to a relay (no
   recordAssignment / getSealLeaves / confirmSeal). — ✅ (recordAssignment deleted in OPTIONB-SETUP-1;
   getSealLeaves/confirmSeal/rejectSeal deleted in OPTIONB-SEAL-1. Only getSessionLiveness+discardSession
   remain — these are PRESENCE/PICKUP housekeeping calls, NOT seal-path calls, and are parked for Tier C.
   The `#relay` adapter is now removable once those two are deleted.)
 - **DOD-INV-CHAIN** — The hash chain + strict-in-order receiver gate (live today) remain the tamper/omit
-  floor; a tampered or omitted relay-signed receipt is rejected. — ❌
+  floor; a tampered or omitted relay-signed receipt is rejected. — ✅ SPINE-PROVEN
+  (j-unilateral: the directory's `#verifyUnilateralChain` enforces the full chain: (a) content-hash Merkle
+  root matches reported_root; (b) per-leaf sender_signature over Structure1 (Ed25519 verify); (c) prev_root
+  chain — each leaf's prev_root == running root of all prior leaves (reorder → mismatch → reject);
+  (d) causal check — last_seen_seq ≤ max counterparty seq seen so far (future-reference → reject);
+  (e) contiguity — sequences exactly 1..N (gap = omitted leaf → reject); (f) present-party leaves carry
+  relay receipts that pin content_hash→seq (reorder own leaves → receipt mismatch → reject).
+  Negative-teeth unit tests: forged receipt → `unilateral_receipt_invalid`; omitted leaf →
+  `unilateral_chain_noncontiguous`; relabeled seq → `unilateral_leaf_seq_mismatch`. j-relaysig proves the
+  client rejects forged relay ACKs before they even reach the carry.)
 
 ## Tier A — T-of-N spine (critical path)
 - **DOD-MANIFEST-1** — Client loads + verifies the FULL set of N directory nodes from a real
