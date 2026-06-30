@@ -1109,3 +1109,51 @@ the RELAYSIG-1 client receipts at the seal. Assume-code-exists: the directory's 
 the relay's `get_seal_leaves`/`confirm_seal`/`reject_seal` frames are the surface to replace with a
 client-carried-receipts offline rebuild. Red-first on a j-optionb-seal spine (seal with zero directory→relay
 calls; tamper/omit a receipt → rejected).
+
+### 2026-07-01 ~05:40 — DOD-OPTIONB-SEAL-1 — DESIGN NOTE (procedure §6, design-significant; investigation complete)
+**Goal:** "Client carries relay-signed receipts to the directory; directory rebuilds + verifies the tree
+OFFLINE and FROST-seals (T-of-N); `getSealLeaves`/`confirmSeal` directory→relay calls deleted. Full seal
+with NO directory→relay connection; chain + strict-in-order preserved; tampered/omitted receipt rejected."
+Completes DOD-INV-NO-DIR-RELAY (then `#relay`/`#relayEndpoint`/updateMultiaddr are all removable).
+
+**Investigation (file:line verified):**
+- There are TWO seal paths in the directory:
+  1. **Bilateral** (`#processSealAttempt` directory-node.ts:3239 → `processSeal` :3932): the seal request frame
+     ALREADY carries `leaves` + `merkle_root` (directory-node.ts:974-986). The directory verifies the
+     client-supplied root by recomputing it. **No directory→relay call here — already Option B-shaped.**
+  2. **Unilateral** (`#processSealUnilateral` :3314, counterparty ABSENT): the `seal_unilateral` frame carries
+     only `reported_root` (no leaves), so the directory DIALS the relay `getSealLeaves` (:3383) to fetch the
+     leaf chain, then `#verifyUnilateralChain` (:3537) rebuilds the tree + checks it == reported_root, then
+     FROST-notarizes with B absent. **THIS is the directory→relay dial to delete.**
+- Relay `getSealLeaves` (relay-node.ts:661): returns `state.leaf_log` (the Structure2 leaves the relay
+  witnessed) + `merkle_root` rebuilt from the relay's own session state. `confirmSeal` (:684):
+  cleanup + `destroySession`. `rejectSeal` (:693): mark `seal_rejected`. **confirmSeal/rejectSeal are pure
+  relay housekeeping — the relay's idle-session sweep (`#idleSweepInterval`, already live) reclaims a
+  post-seal session with no directory call, so these two are DELETABLE under Option B.**
+
+**Design (the hard part — the unilateral offline rebuild):**
+- The `seal_unilateral` frame must CARRY the witnessed leaf chain + the relay's signatures, so the directory
+  rebuilds + verifies OFFLINE. Source on the client: the daemon's OWN session tree (the Structure2 leaves it
+  built as it sent/received) + the RELAYSIG-1 `RelayReceiptStore` (the relay's signed ordering receipts:
+  content_hash + sequence_number + relay_id + signature, keyed by (agent, session, sequence)).
+- The directory's offline verification (replaces the relay's word with the relay's SIGNATURE — sovereign-node
+  invariant): (a) rebuild the Merkle tree from the carried leaves, assert root == reported_root; (b) for each
+  leaf, verify the relay receipt signature over the relay TBS (the relay attested THIS content_hash at THIS
+  sequence) — a tampered/omitted leaf fails; (c) strict-in-order: sequences are contiguous + monotonic (no
+  gap = no omission), and the hash chain (prev_root linkage) holds. The directory must know the relay's
+  ack-signing pubkey to verify — carried in / resolvable from the receipts (relay_id = hex(pubkey)); the
+  AUTHORITATIVE registered-relay check (is relay_id the directory-registered relay for this session?) is the
+  piece RELAYSIG-1 explicitly deferred HERE (DoD RELAYSIG-1 Parked).
+- **OPEN (first impl step, falsify-first):** confirm the daemon's seal-unilateral send path + what it has in
+  hand (does it already hold the Structure2 leaves + the receipts for the session?), and define the exact
+  carry fields on `seal_unilateral` (leaves + per-leaf relay receipt {seq, relay_id, signature, timestamp}).
+  Then: directory `#verifyUnilateralChain` takes the carried leaves+receipts (no `getSealLeaves`); delete the
+  `#relay.getSealLeaves`/`confirmSeal`/`rejectSeal` calls; after all directory→relay calls are gone, remove
+  the `#relay` adapter + `#relayEndpoint` + updateMultiaddr (907-914) + the `network-relay-adapter.ts` RPC path.
+- **SIs:** the directory NEVER dials the relay at seal (DOD-INV-NO-DIR-RELAY complete); a tampered leaf
+  (wrong content_hash), an omitted leaf (sequence gap), or a forged relay signature → seal REJECTED; the
+  chain + strict-in-order gate stay the floor; relay never sees plaintext (only hashes — unchanged).
+- **Seam:** the LIVE daemon (session-relay-client / session-node-manager) + the live directory — NOT the dead
+  core/client. Touches directory + relay (delete) + daemon + protocol-types (seal_unilateral frame fields) →
+  deploy batch (held). Red-first on a j-optionb-seal spine: a unilateral seal completes with ZERO
+  directory→relay calls; tamper/omit a carried receipt → the seal is refused.
