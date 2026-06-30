@@ -1071,3 +1071,41 @@ SPINE-PROVEN + status board, THEN start DOD-OPTIONB-SEAL-1 (the hardest remainin
 verifies the Merkle tree OFFLINE from client-carried relay receipts + FROST-seals, deleting the
 getSealLeaves/confirmSeal directory→relay calls; `#relay` adapter fully removable after that completes
 DOD-INV-NO-DIR-RELAY).
+
+### 2026-07-01 ~05:25 — DOD-OPTIONB-SETUP-1 ✅ COMPLETE — all 3 reviewers in, every finding fixed, full gate GREEN
+Completion delta to the ~05:00 entry above. **code-reviewer (opus): APPROVED**, no blocking/high. Fixed:
+- **M1 (real bug):** `#doRecord` reset the SHARED relay stream on a CLEAN `assignment_invalid`, not just on
+  timeout — tearing down sibling sessions' in-flight submits + storming re-presents (esp. if a relay is
+  misconfigured without `CELLO_DIRECTORY_PUBKEYS`). Now distinguishes `rejected` (terminal: mark
+  `recordRejected`, do NOT reset the healthy stream, stop retrying) / `timeout` (reset for FIFO safety,
+  transient) / `closed` (stream dropped, transient). cello-client `1c8a1af`.
+- **L3:** relay `#processClientRecordAssignment` binds the authed client to session participation
+  (reject `not_a_participant` loud) — spine-verified the relay-auth pubkey == the assignment participant for
+  both A and B. **L4:** settle `#pendingRecord` on stream-gone/close (no 10s hang). **L6:** stale comment +
+  AC-011 title fixed. **M2:** `CELLO_DIRECTORY_PUBKEYS` IaC wiring is a hard DEPLOY-1 dep — parked + startup
+  log added. **L5:** informational, no change.
+**test-attacker: "TESTS HAVE TEETH"** (no hollow bypass — the relay frame suite rejects forged/non-consortium
+sigs, accepts a non-node-0 member, proves the recorded session functions). Closed both under-coverage gaps:
+3 relay `client_record_assignment` unit tests (any-directory accept / forged reject / hash_submit-after-record),
+2 daemon `#doRecord` tests (idempotency + assignment_invalid surfaced), 2 directory encoder regression-guards
+(relay_directory_signature present⇒on-wire / absent⇒off-wire — guards the whitelist-drop bug).
+**fallback-finder: NO HIGH** (verify is mandatory + fails CLOSED). Fixed the diagnosability MEDIUMs:
+`session.relay.assignment.signature.missing` warn (relay-mode w/o sig), `relay.startup.consortium-directories`
+log, stale comment.
+
+**Final gate (all GREEN):** relay 165/165, daemon 460/460, directory 662/662, typecheck+lint clean,
+reachability gate green, **J-OPTIONB-SETUP + J-RELAYSIG spine GREEN**. Commits: trustless `12780b2e`
+`3805ef5f` `c3471d3a` `a9af89c3`; cello-client `55f2b28` `1c8a1af`. DoD flipped ✅ SPINE-PROVEN;
+DOD-INV-NO-DIR-RELAY → 🟠 PARTIAL (recordAssignment gone; getSealLeaves/confirmSeal pending SEAL-1).
+Held unpushed (directory+relay → DOD-DEPLOY-1 batch); cello-client unpushed too (no publish yet).
+
+**RESUME → DOD-OPTIONB-SEAL-1** (the hardest remaining, Opus-priority). "Client carries relay-signed
+receipts to the directory; directory rebuilds + verifies the tree OFFLINE and FROST-seals (T-of-N);
+`getSealLeaves`/`confirmSeal` directory→relay calls deleted. Full seal with NO directory→relay connection;
+chain + strict-in-order preserved; tampered/omitted receipt rejected." This completes DOD-INV-NO-DIR-RELAY
+(then the `#relay` adapter + `#relayEndpoint` + updateMultiaddr workaround are all removable) and consumes
+the RELAYSIG-1 client receipts at the seal. Assume-code-exists: the directory's seal path
+(`#relay.getSealLeaves` at directory-node.ts:3394, `confirmSeal` at :3744/:4315, `rejectSeal` :4253) + q
+the relay's `get_seal_leaves`/`confirm_seal`/`reject_seal` frames are the surface to replace with a
+client-carried-receipts offline rebuild. Red-first on a j-optionb-seal spine (seal with zero directory→relay
+calls; tamper/omit a receipt → rejected).

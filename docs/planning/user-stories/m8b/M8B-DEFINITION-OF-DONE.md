@@ -36,7 +36,10 @@ description: >
 - **DOD-INV-RELAY-PLAINTEXT** — Relay never sees plaintext (only hashes / ciphertext); preserved through
   Option B. — ❌ (carry-over from M7 ✅; re-prove under the new path)
 - **DOD-INV-NO-DIR-RELAY** — Under Option B the directory makes ZERO network calls to a relay (no
-  recordAssignment / getSealLeaves / confirmSeal). — ❌
+  recordAssignment / getSealLeaves / confirmSeal). — 🟠 PARTIAL (recordAssignment dial DELETED in
+  OPTIONB-SETUP-1, proven by j-optionb-setup + directory unit `recordCalls===0`/`relay.recorded.length===0`;
+  getSealLeaves/confirmSeal/rejectSeal/discardSession still dial via `#relay` — OPTIONB-SEAL-1 removes them
+  to fully satisfy this invariant and make the `#relay` adapter removable.)
 - **DOD-INV-CHAIN** — The hash chain + strict-in-order receiver gate (live today) remain the tamper/omit
   floor; a tampered or omitted relay-signed receipt is rejected. — ❌
 
@@ -119,7 +122,22 @@ description: >
 - **DOD-OPTIONB-SETUP-1** — Client presents the directory-signed assignment to its chosen relay; relay
   verifies vs the group key; `recordAssignment`/`#relay` pin deleted. Session establishes with NO
   directory→relay dial; any relay the client picks works; `relays[0]` pin + restart-breakage gone.
-  *(FED-OPTIONB-SETUP-001)* — ❌
+  *(FED-OPTIONB-SETUP-001)* — ✅ SPINE-PROVEN
+  (The directory→relay `recordAssignment` dial is DELETED. The directory signs a per-node
+  `relay_directory_signature` over the relay TBS and ships it INSIDE the client-facing session_assignment;
+  the CLIENT presents it to ITS chosen relay via a new `client_record_assignment` frame (no admin-auth —
+  authority is the consortium signature); the relay verifies it against the consortium directory pubkey SET
+  (`CELLO_DIRECTORY_PUBKEYS`, fallback single) and fails LOUD on a non-consortium sig. **J-OPTIONB-SETUP
+  spine GREEN**: a session driven through a NON-node-0 directory is recorded on the relay by the CLIENT
+  (`relay.assignment.recorded source=client`) and a node-1-signed assignment is accepted (any-directory
+  teeth). J-RELAYSIG back-compat GREEN (receipts flow via the client-record path). The encoder whitelist
+  dropped the field initially (caught by j-relaysig regressing) — fixed + regression-guarded. 3 reviewers:
+  code-reviewer APPROVED (M1 reset-only-on-timeout, L3 participant check, L4 settle-on-close all fixed);
+  test-attacker "TESTS HAVE TEETH" (added #doRecord + encoder unit tests); fallback-finder NO HIGH (verify
+  is mandatory + fails CLOSED; diagnosability MEDIUMs fixed). Gates: relay 165, daemon 460, directory 662,
+  typecheck+lint clean. The `#relay` adapter STAYS for getSealLeaves/confirmSeal — DOD-OPTIONB-SEAL-1
+  removes those to complete DOD-INV-NO-DIR-RELAY. **DEPLOY-1 dependency:** `CELLO_DIRECTORY_PUBKEYS` must be
+  wired into the relay IaC (all sovereign node pubkeys) or any-directory is silently node-0-only — see Parked.)
 - **DOD-OPTIONB-SEAL-1** — Client carries relay-signed receipts to the directory; directory rebuilds +
   verifies the tree offline and FROST-seals (T-of-N); `getSealLeaves`/`confirmSeal` directory→relay calls
   deleted. Full seal with NO directory→relay connection; chain + strict-in-order preserved; tampered/omitted
@@ -254,3 +272,16 @@ description: >
   degradation is diagnosable; the result-shape bit is a follow-on. And `getRelayReceipts` returns `[]` before
   `initialize()` (pre-init, bounded). Revisit the relay-binding when OPTIONB-SEAL lands; the witnessed-bit as
   a standalone observability improvement.
+
+- **DOD-OPTIONB-SETUP-1 / DOD-DEPLOY-1 — `CELLO_DIRECTORY_PUBKEYS` must be wired into the relay IaC
+  (any-directory deploy dependency, code-review M2).** The relay verifies a client-presented assignment
+  against the consortium directory pubkey SET. In code it falls back to the single `CELLO_DIRECTORY_PUBKEY`
+  (node 0) when `CELLO_DIRECTORY_PUBKEYS` is unset — fails CLOSED (a non-listed sig is rejected), so no
+  forgery risk, but any-directory is then silently node-0-only: a session routed through a non-node-0
+  directory gets `assignment_invalid` client-side, reintroducing the `relay_unavailable`-class failure this
+  unit removed (relocated from the directory to the client). The relay now logs
+  `relay.startup.consortium-directories {count, anyDirectory}` so a single-key misconfig is visible. **Hard
+  DEPLOY-1 task:** the relay CloudFormation/SSM must enumerate EVERY sovereign node's directory-key pubkey
+  in `CELLO_DIRECTORY_PUBKEYS`, and STATE.md/templates must capture it. Region-expansion test: a brand-new
+  region's relay must get the full set with zero manual steps. Until wired, any-directory is off in
+  production — tracked, not dropped.

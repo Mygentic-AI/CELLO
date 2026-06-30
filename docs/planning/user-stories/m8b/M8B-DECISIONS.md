@@ -197,3 +197,31 @@ Two refinements to Design A after reading the relay auth model + the network-rel
    The deployment configures these (same trust source as today's single CELLO_DIRECTORY_PUBKEY). Reversible:
    full in-relay manifest verification is a parked hardening if wanted. Spine: give the relay all 3 node
    pubkeys so a non-node-0 directory's assignment verifies (the any-directory teeth).
+
+## 2026-07-01 ~05:25 — DOD-OPTIONB-SETUP-1 — reviewer-driven decisions
+- **Encoder whitelist is a silent field-drop trap (lesson, not a fork).** `encodeSessionAssignment` builds
+  an explicit field allow-list; setting `relay_directory_signature` on the assignment object was NOT enough —
+  the encoder dropped it before the wire, so the client always parsed `undefined` → no record → no receipt.
+  Caught by j-relaysig REGRESSING (a test with no apparent Option-B connection). Fix: add the field to the
+  encoder + a regression guard test. Rule: when adding a field to a frame that has a whitelisting encoder,
+  the encoder edit is mandatory and the spine is the enforcer that catches the omission.
+- **#doRecord resets the shared stream ONLY on timeout, never on a clean rejection (code-review M1).** Fork:
+  on `assignment_invalid`, reset the stream (uniform with timeout) vs don't. Chose: DON'T reset on a clean
+  reject — the ack already arrived, the stream is healthy, and `AgentRelayClient` is shared per (agent,
+  relay), so a reset tears down sibling sessions' in-flight submits + storms re-presents. Mark the session
+  `recordRejected` (terminal) so submits stop retrying; reset ONLY on timeout (the genuine FIFO-desync case).
+  Reverse: a one-line change to reset uniformly, but that reintroduces the storm. Why now: a misconfigured
+  relay (no `CELLO_DIRECTORY_PUBKEYS`) rejects every non-node-0 session — without this fix that disrupts even
+  healthy node-0 sessions sharing the stream.
+- **Relay verifies a client-presented assignment vs the CONFIGURED `CELLO_DIRECTORY_PUBKEYS` set, fails
+  CLOSED, and the set always includes the primary `CELLO_DIRECTORY_PUBKEY` (so it is never empty).** An empty
+  / missing set cannot fail-open (no pubkey ⇒ no `.some(verify)` passes ⇒ reject). A missing
+  `CELLO_DIRECTORY_PUBKEYS` silently disables any-directory (node-0-only) but stays safe — surfaced by the
+  `relay.startup.consortium-directories` log. The full in-relay threshold-manifest verification remains a
+  parked hardening (M8B-DECISIONS 2026-07-01 refinement #2). DEPLOY-1 must wire the set into the relay IaC
+  (DoD Parked).
+- **Relay binds the recording client to session participation (code-review L3, defense-in-depth).** Not
+  load-bearing (the assignment is consortium-signed/unforgeable; a non-participant can't submit leaves) but
+  the relay rejects `not_a_participant` rather than recording arbitrary sessions for an authenticated peer.
+  Spine-verified the relay-auth pubkey (K_local) == the assignment participant for both initiator and
+  counterparty, so legitimate records pass.
