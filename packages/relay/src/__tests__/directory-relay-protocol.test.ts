@@ -731,3 +731,121 @@ describe("SI-002: hash_submit before record_assignment → session_not_found (no
     streamA.close().catch(() => {});
   }, 10_000);
 });
+
+// ─── FED-OPTIONB-SETUP-001: client_record_assignment (Option B any-relay/any-directory) ──────────
+//
+// Under Option B the CLIENT (not the directory) presents the directory-signed assignment to its chosen
+// relay over its authenticated client stream — a `client_record_assignment` frame with NO directory-admin
+// body signature (a client cannot impersonate the directory). Its authority is `assignment_signature`,
+// the per-node directory signature over the relay TBS, which the relay verifies against the consortium
+// directory pubkey SET. These tests prove the any-directory acceptance (a NON-primary consortium node's
+// signature is accepted) AND the security teeth (a non-consortium / forged signature is REJECTED loud).
+
+/** Build a client_record_assignment frame; assignment_signature signs CBOR([session_id, pubA, pubB, ts]). */
+async function makeClientRecordAssignmentFrame(
+  sessionId: Uint8Array,
+  pubA: Uint8Array,
+  pubB: Uint8Array,
+  sessionTimestamp: number,
+  signerKp: ReturnType<typeof generateKeypair>,
+): Promise<Uint8Array> {
+  const tsEncoded = sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp;
+  const assignmentTbs = CBOR_ENC.encode([sessionId, pubA, pubB, tsEncoded]) as Uint8Array;
+  const assignment_signature = await signerKp.sign(assignmentTbs);
+  return CBOR_ENC.encode({
+    type: "client_record_assignment",
+    session_id: sessionId,
+    participant_a: pubA,
+    participant_b: pubB,
+    session_timestamp: tsEncoded,
+    assignment_signature,
+  }) as Uint8Array;
+}
+
+describe("FED-OPTIONB-SETUP-001: client_record_assignment — any-directory verify against the consortium set", () => {
+  let scope = createTestScope();
+  beforeEach(() => { scope = createTestScope(); });
+  afterEach(() => scope.run(async () => {}));
+
+  /** A relay whose consortium set is [node0, node1]; node0 is the primary (admin) directory pubkey. */
+  async function makeConsortiumRelay() {
+    const node0Kp = generateKeypair();
+    const node1Kp = generateKeypair();
+    const node0Pub = await node0Kp.getPublicKey();
+    const node1Pub = await node1Kp.getPublicKey();
+    const { relay, node, stop } = await createRelayNode({
+      directoryPubkey: node0Pub,
+      directoryPubkeys: [node0Pub, node1Pub],
+    });
+    scope.addCleanup(stop);
+    return { relay, node, relayPeerId: node.getPeerId(), relayAddr: node.listenAddresses()[0]!, node0Kp, node1Kp };
+  }
+
+  async function authedClientStream(relayPeerId: string, relayAddr: string, kp: ReturnType<typeof generateKeypair>) {
+    const cn = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await cn.start();
+    scope.addCleanup(async () => { await cn.stop(); });
+    await cn.dial(relayAddr);
+    const stream = await cn.newStream(relayPeerId, RELAY_PROTOCOL_ID);
+    const reader = new StreamReader(stream);
+    await performRelayAuth(reader, stream, kp);
+    return { stream, reader };
+  }
+
+  it("a NON-primary consortium node's (node1) client-presented assignment is ACCEPTED → assignment_ok (any-directory)", async () => {
+    const fix = await makeConsortiumRelay();
+    const clientKp = generateKeypair();
+    const pubA = await clientKp.getPublicKey();
+    const pubB = await generateKeypair().getPublicKey();
+    const { stream, reader } = await authedClientStream(fix.relayPeerId, fix.relayAddr, clientKp);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    // Signed by node1 — NOT the primary directoryPubkey. The old single-pubkey relay would reject this.
+    const frame = await makeClientRecordAssignmentFrame(sessionId, pubA, pubB, Date.now(), fix.node1Kp);
+    sendFrame(stream, frame);
+
+    const resp = await reader.readDecoded();
+    expect(resp["type"]).toBe("assignment_ok");
+    stream.close().catch(() => {});
+  }, 15_000);
+
+  it("a NON-consortium (forged) signature is REJECTED → assignment_invalid (fail loud, not fail open)", async () => {
+    const fix = await makeConsortiumRelay();
+    const clientKp = generateKeypair();
+    const pubA = await clientKp.getPublicKey();
+    const pubB = await generateKeypair().getPublicKey();
+    const { stream, reader } = await authedClientStream(fix.relayPeerId, fix.relayAddr, clientKp);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    // Signed by an OUTSIDER key that is in neither directoryPubkey nor directoryPubkeys.
+    const outsiderKp = generateKeypair();
+    const frame = await makeClientRecordAssignmentFrame(sessionId, pubA, pubB, Date.now(), outsiderKp);
+    sendFrame(stream, frame);
+
+    const resp = await reader.readDecoded();
+    expect(resp["type"]).toBe("assignment_invalid");
+    expect(resp["reason"]).toBe("directory_signature_invalid");
+    stream.close().catch(() => {});
+  }, 15_000);
+
+  it("after a client_record_assignment, the relay accepts the session's hash_submit (the session was recorded)", async () => {
+    const fix = await makeConsortiumRelay();
+    const clientKp = generateKeypair();
+    const pubA = await clientKp.getPublicKey();
+    const pubB = await generateKeypair().getPublicKey();
+    const { stream, reader } = await authedClientStream(fix.relayPeerId, fix.relayAddr, clientKp);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    sendFrame(stream, await makeClientRecordAssignmentFrame(sessionId, pubA, pubB, Date.now(), fix.node1Kp));
+    expect((await reader.readDecoded())["type"]).toBe("assignment_ok");
+
+    // The session is now recorded (by the CLIENT) — a hash_submit from A is witnessed + sequenced.
+    const contentHash = new Uint8Array(randomBytes(32));
+    const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, contentHash, clientKp, 0);
+    sendFrame(stream, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: 0x00, structure1_cbor, sender_signature }));
+    const ack = await reader.readDecoded();
+    expect(ack["type"]).toBe("hash_submit_ack");
+    expect(ack["sequence_number"]).toBe(1);
+    stream.close().catch(() => {});
+  }, 15_000);
+});
