@@ -3776,8 +3776,8 @@ export class CelloDirectoryNode {
       });
     }
 
-    // Clean up the relay's per-session state — the seal is final.
-    void this.#relay.confirmSeal(sessionId);
+    // FED-OPTIONB-SEAL-001 (Option B): the directory no longer dials the relay to confirm the seal. The
+    // relay reclaims the post-seal session via its own idle-session sweep — no directory→relay call.
 
     // Evict per-session maps (bounded growth on long-running nodes). #unilateralSeals is
     // retained as the in-process duplicate guard (durable dedup is the DB constraint).
@@ -4286,7 +4286,7 @@ export class CelloDirectoryNode {
       };
       this.#deliverOrEnqueue(pending.participantAHex, rejectedEvent, sessionIdHex);
       if (pending.participantBHex) this.#deliverOrEnqueue(pending.participantBHex, rejectedEvent, sessionIdHex);
-      void this.#relay.rejectSeal(frame.session_id, "seal_signature_invalid");
+      // FED-OPTIONB-SEAL-001 (Option B): no directory→relay rejectSeal dial — the relay idle-sweep reclaims.
       return;
     }
 
@@ -4347,8 +4347,8 @@ export class CelloDirectoryNode {
       });
     }
 
-    // Confirm relay (destroys relay per-session state — AC-008)
-    void this.#relay.confirmSeal(frame.session_id);
+    // FED-OPTIONB-SEAL-001 (Option B): no directory→relay confirmSeal dial — the relay idle-sweep reclaims
+    // the post-seal session (the AC-008 relay-state destroy is now the relay's own lifecycle concern).
 
     // OBS-001 AC-009: sealed log
     protocolLog("SEAL", `Sealed — session ${truncHex(sessionIdHex)}, root ${truncHex(Buffer.from(pending.sealedRoot).toString("hex"))}`);
