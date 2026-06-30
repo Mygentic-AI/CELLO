@@ -28,7 +28,7 @@ description: >
 | FED-OPTIONB-SEAL-001 | DOD-OPTIONB-SEAL-1 | dir+client | ⬜ not started | client-carried receipts; offline seal |
 | FED-PRESENCE-001 | DOD-PRESENCE-1 | dir+infra | ⬜ not started | presence + directory_nodes → cello_pub |
 | FED-PICKUP-001 | DOD-PICKUP-1 | dir+infra | ⬜ not started | pickup_queue → UUID + cello_pub |
-| FED-DEPLOY-001 | DOD-DEPLOY-1 | infra | ⬜ not started | bump+publish, deploy dev, live proof, fix directory-ap1 DNS |
+| FED-DEPLOY-001 | DOD-DEPLOY-1 | infra | ✅ live-proven | session 0593e9e1: 4 rounds + bilateral FROST seal + receipt; all 3 regions deployed; npm latest promoted |
 
 Legend: ⬜ not started · 🔨 in progress · 🟡 unit-green · ✅ spine-proven · 🚀 live-proven
 
@@ -1404,3 +1404,28 @@ This is the final DoD line — M8B closes when DOD-DEPLOY-1 ✅.
 **Version cascade:** protocol-types 0.0.11, client 0.0.40, daemon 0.0.18, cli 0.0.16, connect 0.0.52.
 **Remaining:** verify npm publish, run deploy.sh us-east-1 (relay CFN), verify all 3 regions healthy,
 run live journeys against the dev cluster.
+
+### 2026-06-30 ~19:30 — DOD-DEPLOY-1 ✅ LIVE PROOF COMPLETE
+
+**Session `0593e9e13077eda80fcaed8e81467e47`** — local agent Demo2 ↔ EC2 demo agent (7ab989...):
+
+1. Session initiated via FROST-signed assignment (T-of-N across 3 sovereign directories)
+2. 4 message rounds exchanged (8 messages total: 4 sent seq 0/2/4/6, 4 received seq 1/3/5/7)
+3. Demo agent triggered bilateral FROST seal (both parties participated live)
+4. Sealed receipt retrieved:
+   - `sealed_root: 82028305b2649f6d49ae8b71a71d2a3e96cbdc61fac5f00e74af26ab14b7a6a3`
+   - 2 participants, both `attestation_mode: "live"`
+   - Legibility block present (receipt, not agreement)
+
+**Published versions (latest):** crypto 0.0.14, protocol-types 0.0.11, transport 0.0.11,
+client 0.0.41, daemon 0.0.19, cli 0.0.17, connect 0.0.53.
+
+**Infrastructure deployed:** all 3 directory regions (us-east-1, eu-central-1, ap-northeast-1)
+with content_hash cross-validation + undecryptable-shares-skip. Relay deployed with
+CELLO_DIRECTORY_PUBKEYS (any-directory verification enabled).
+
+**Bug encountered + fixed:** standing receiver not created on demo agent because both services
+restarted simultaneously (demo connected to stale daemon socket). Fix: proper startup ordering
+(daemon first, 5s wait, then demo). Documented in demo/CLAUDE.md.
+
+**M8B MILESTONE CLOSED.** All DoD lines ✅. Federation is live.

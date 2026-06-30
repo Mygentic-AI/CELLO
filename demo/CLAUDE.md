@@ -28,7 +28,7 @@ The demo agent is a standalone Node.js process that responds to CELLO messages w
 - **Service:** `cello-demo.service` (systemd, runs as `cello-demo` system user)
 - **Key file:** `/opt/cello-demo/keys/agent.key`
 - **DB:** `/opt/cello-demo/data/client.db` (SQLCipher, V2 schema)
-- **Agent ID:** `a2c55e2721f45cfa86cb3417a76e3f7b`
+- **Agent pubkey:** `7ab98987de127b81dc4013d8c0b7e70b65f95db647e0977d492f41566ec1f910`
 - **Directory peer ID:** `12D3KooWS46wUj6NYvoAsocxZnxth5EgYD2ZXCm7coMkXUWgS1j3`
 
 ### SSM command template
@@ -42,6 +42,26 @@ aws ssm send-command \
   --query 'Command.CommandId' --output text
 # Then: aws ssm get-command-invocation --command-id <id> --instance-id i-0ad3e7c22470f266e --region us-east-1 --query '[Status,StandardOutputContent,StandardErrorContent]' --output text
 ```
+
+---
+
+## Restart ordering — daemon MUST be ready before demo starts
+
+The demo service connects to the daemon via `$CELLO_DIR/daemon.sock`. If both services restart
+simultaneously, the demo can connect to a stale socket (from the previous daemon) and silently
+operate against a dead process. The standing receiver never gets created, and inbound sessions
+fail with `standing_receiver_unavailable`.
+
+**Correct restart sequence:**
+```bash
+systemctl stop cello-demo && systemctl stop cello-daemon && sleep 2
+systemctl start cello-daemon && sleep 5
+systemctl start cello-demo
+```
+
+The 5-second wait ensures the daemon has created its IPC socket and connected to the directory
+before the demo service tries to use it. Verify with: `journalctl -u cello-daemon -n 5 --no-pager`
+should show `directory.signaling.connected` before starting the demo.
 
 ---
 
@@ -119,19 +139,11 @@ systemctl start cello-demo
 
 ## Re-registration
 
-The demo agent does **not** register through Telegram. It has no phone number. Registration uses
-`register-agent-v2.mjs` directly.
-
-**Important:** `NODE_ENV=test` is required. `bootstrapNetworkKeyShares` has a production guard
-that throws unless `NODE_ENV=test`. This is intentional — the demo agent uses a 1-of-1 trusted
-dealer bootstrap, not real multi-party DKG. Do not remove this flag.
+The demo agent uses real T-of-N FROST DKG (not trusted dealer). Registration uses the `cello`
+CLI from `@cello-protocol/cli`.
 
 **Important:** `already_registered` is a success response — it means the FROST share is in the
 DB and the agent is registered. Do not re-register if you see this.
-
-**Important:** Wait 10 seconds after `cello_register` returns before killing the process. The
-DB writes (`persistFrostKeyShare`, `persistRegistrationState`) are fire-and-forget. If the
-process exits before they settle, the DB will be empty on the next startup.
 
 ### Pre-auth token
 
@@ -139,27 +151,26 @@ You need a pre-auth token from `@CelloConnectStagingBot` on Telegram. The token 
 `CELLO-<33 base58 chars>`. Tokens are single-use — if registration fails partway through,
 get a new token before retrying.
 
-### Registration script
+### Registration procedure
 
 ```bash
 # On the instance, as root via SSM:
-rm -f /tmp/cello-mcp-stderr.log
-touch /tmp/cello-mcp-stderr.log && chown cello-demo:cello-demo /tmp/cello-mcp-stderr.log
+systemctl stop cello-demo
+systemctl stop cello-daemon
 
-cd /opt/cello-demo && CELLO_REGISTRATION_TOKEN=<token> node register-agent-v2.mjs 2>&1
-```
+# Start daemon fresh, then register via CLI:
+systemctl start cello-daemon && sleep 5
+cd /opt/cello-demo && npx @cello-protocol/cli register default <TOKEN>
 
-`register-agent-v2.mjs` is already on the instance at `/opt/cello-demo/register-agent-v2.mjs`.
-It sets `NODE_ENV=test`, waits 15s for background init, calls `cello_register`, then waits 10s
-for DB writes before exiting.
+# Wait for DKG to complete (watch for register_success in daemon log):
+journalctl -u cello-daemon -n 20 --no-pager | grep -E "register|dkg|frost"
 
-### After successful registration
-
-```bash
-chown cello-demo:cello-demo /tmp/cello-mcp-stderr.log
+# Start demo service:
 systemctl start cello-demo
-journalctl -u cello-demo -n 20 --no-pager  # should show demo.started
+journalctl -u cello-demo -n 10 --no-pager  # should show demo.started
 ```
+
+The CLI `register` command handles the full FROST DKG ceremony with the directory consortium.
 
 ---
 

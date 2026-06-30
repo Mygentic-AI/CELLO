@@ -211,7 +211,13 @@ description: >
   both unilateral and bilateral seal chains — verified by j-unilateral + j-sign green.)
 - **DOD-DEPLOY-1** — Cross-repo version bump + publish to beta; deploy changed directory + relay to dev
   (all 3 regions); recreate the missing `directory-ap1` A record; update STATE.md; re-run the journeys
-  against the **live dev 3-region cluster**. *(FED-DEPLOY-001)* — ❌
+  against the **live dev 3-region cluster**. *(FED-DEPLOY-001)* — ✅
+  (Live proof 2026-06-30: session `0593e9e13077eda80fcaed8e81467e47` between local agent Demo2 and EC2
+  demo agent `7ab989...`. 4 message rounds exchanged, bilateral FROST seal completed, sealed receipt
+  retrieved with root `82028305b2649f6d49ae8b71a71d2a3e96cbdc61fac5f00e74af26ab14b7a6a3`. Both
+  participants attested live. Published to latest: crypto 0.0.14, transport 0.0.11, client 0.0.41,
+  daemon 0.0.19, cli 0.0.17, connect 0.0.53. All 3 directory regions deployed with content_hash
+  cross-validation fix + undecryptable-shares-skip. Relay deployed with CELLO_DIRECTORY_PUBKEYS.)
 
 ---
 
