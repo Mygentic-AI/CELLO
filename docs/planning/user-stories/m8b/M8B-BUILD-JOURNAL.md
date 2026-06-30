@@ -22,7 +22,7 @@ description: >
 | FED-DKG-001 | DOD-DKG-1 | client+dir | ✅ spine-proven | multi-node 2-of-3 DKG fans to all 3 dirs (j-tofn-dkg GREEN); below-threshold gate + B1 fix (empty-roster refuses, no downgrade); 3 reviewers clean; MEDIUM count-gate parked |
 | FED-SIGN-001 | DOD-SIGN-1 | client+dir | ✅ spine-proven | T-of-N seal: ≥2 dirs FROST-sign, kill-a-participant still seals, FROST-not-single-key (j-sign teeth); 3 reviewers clean (B1 fixed: session-signing store reconstruction); restart-path + REFRESH cache parked |
 | FED-SUSPEND-001 | DOD-SUSPEND-1 | dir+crypto | ✅ spine-green, 3 reviewers clean | j-suspend-tofn green (103s): 2-suspended ⇒ block w/ EXACT `ceremony_exhausted`+retry; 1-suspended ⇒ nodes 0,2 sign while node 1 emits FRESH refusal (route-AROUND proven); agent B signs through 1,2 ⇒ agent-scoped. Fixes: signer commit-round per-stub exclusion + per-node timeout/deadline (bcea30a/5cd2da2), directory nonce-replace (87d226c2, consume-once confirmed by all 3). Fallback HIGH made LOUD: frost.suspension.uncheckable + hasAgentProfile. Production quorum-binding → PRESENCE-1 (Tier C) |
-| FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | 🔨 crypto core green (28/28), 3 reviewers running | Increment 1 DONE: core/crypto/src/frost/frost-resharing.ts (PSS, red-first, f312da8) — generate/verify/applyRefresh on real @noble Fn/Point; proves secret preserved (group key unchanged), shares rotate, old shares dead (mixed set fails), VSS rejects secret-shift + inconsistent sub-share. typecheck+lint clean. Reviewers (code-reviewer/test-attacker/fallback-finder) on the crypto. NEXT (after findings): daemon runNetworkRefresh + directory refresh frames + persist #currentEpoch + J-REFRESH spine |
+| FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | 🔨 crypto core ✅ 3-reviewer-clean (893fc9c); wiring next | Increment 1 DONE+HARDENED: core/crypto/src/frost/frost-resharing.ts (PSS). 3 reviewers found the construction SOUND (verified vs @noble source). Fixed: completeness gate (fromId + expectedParticipantIds — empty/partial/dup/stranger fail loud), non-triviality (reject zero polynomial), zero-identifier reject, equivocation precondition documented (daemon echo round owns it), Test 4 hollow → strengthened (2G/random/e2e-shift). 11 resharing tests, full crypto suite 253/253, typecheck+lint clean. NEXT: daemon runNetworkRefresh (+ echo/agreement round) → directory refresh frames + persist/reload #currentEpoch from agent_key_shares → client share rotation → J-REFRESH spine |
 | FED-RELAYSIG-001 | DOD-RELAYSIG-1 | relay+client | ⬜ not started | relay-signed ordering + PERSIST-012 live |
 | FED-OPTIONB-SETUP-001 | DOD-OPTIONB-SETUP-1 | dir+relay+client | ⬜ not started | client-presented assignment; kill relay dial |
 | FED-OPTIONB-SEAL-001 | DOD-OPTIONB-SEAL-1 | dir+client | ⬜ not started | client-carried receipts; offline seal |
@@ -816,3 +816,38 @@ assumed building block is WRONG and is now pivoted — caught at zero cost.
 RED test next: `core/crypto/src/__tests__/frost-resharing.test.ts` — trustedDealer 3-of-3 → refresh →
 combineSecret(new)==combineSecret(old), new≠old, mixed old+new does NOT reconstruct, VSS rejects a
 tampered/non-zero-constant contribution.
+
+### 2026-07-01 ~03:05 — DOD-REFRESH-1 increment 1 (crypto core) ✅ — 3 reviewers clean, construction SOUND
+**frost-resharing.ts hardened + committed (893fc9c).** All 3 crypto reviewers independently verified the
+zero-constant PSS construction is mathematically SOUND (code-reviewer checked it line-by-line against the
+@noble/curves@2.2.0 FROST source: secret preservation, the `commitment[0]==identity ⟺ a_0≡0` proof via G's
+prime order, the Feldman VSS Horner, the identity/zero-scalar guards being exact-not-exploitable, and the LE
+field round-trip). Findings all at the contract boundary, fixed:
+- **Completeness gate** (fallback HIGH + code-reviewer MEDIUM-LOW): `applyRefresh([])` returned the OLD share
+  as a "successful" refresh (dead-share no-op); partial/divergent sets silently diverged the joint key.
+  `RefreshContribution` now carries `fromId`; `applyRefresh(…, expectedParticipantIds)` rejects empty /
+  partial / duplicate / out-of-roster sets. A proactive refresh, like DKG, needs EVERY shareholder.
+- **Test 4 hollow** (test-attacker BLOCKING): only tampered `commitment[0]=G`, so a verify rejecting only G
+  passes while accepting 2G (real shift). Strengthened: 2G + random point + e2e shift through applyRefresh.
+- **Non-triviality** (code-reviewer LOW): reject the all-identity zero polynomial (free-rider, no randomness).
+- **Zero identifier** (code-reviewer LOW): `identifierScalar` rejects 0 (mirrors noble `validateIdentifier`).
+- **EQUIVOCATION (code-reviewer MEDIUM — load-bearing for the wiring):** the local primitive verifies each
+  sub-share only against the commitment in its OWN list. A malicious party can EQUIVOCATE — send party A
+  `(C,δ_A)` and party B a different internally-consistent `(C',δ_B)`, both with `commitment[0]=identity` —
+  so both pass locally but A,B land on DIFFERENT polynomials (Δ_A≠Δ_B): no secret shift, but the quorum can
+  no longer reconstruct/sign. The core CANNOT detect this alone (needs cross-party agreement). Docstring
+  corrected (was overclaiming) + precondition documented. **→ the daemon `runNetworkRefresh` MUST run an
+  ECHO/AGREEMENT round: every party broadcasts `H(commitment_i)` it received from each contributor i and
+  ABORTS on any mismatch, before applyRefresh. This is a mandatory part of the wiring increment, not
+  optional.** Prove it in J-REFRESH (an equivocating directory must abort the refresh, not diverge the key).
+
+**RESUME → DOD-REFRESH-1 increment 2 (daemon + directory wiring).** Template: `runNetworkDkg`
+(network-directory-node.ts:567-751) — the 3-round fan-out is the shape. `runNetworkRefresh(agentPubkey,
+fromEpochN)`: (R1) every party generates its contribution + broadcasts commitment digests (echo round);
+(R2) route each δ_i(j) sub-share to party j + verify the echo agreement; (R3) each party applyRefresh →
+new share at epoch N+1. Directory: refresh frame handlers mirror dkgRound{1,2,3}; on apply storeShare(agent,
+`:epoch:(N+1)`), `#currentEpoch.set(agent, N+1)`, persist the new encrypted share row (agent_key_shares,
+new epoch_id — table already has UNIQUE(agent_id,epoch_id)), and RELOAD `#currentEpoch` from the MAX
+epoch_id in agent_key_shares on startup (no new migration — the share rows ARE the epoch record). Client:
+rotate `_localShares` + db-identity-store `frost_*` columns to the new epoch. Trigger: a client-coordinated
+op (CLI `cello refresh <agent>` / MCP tool) — reversible design choice, testable from the spine.
