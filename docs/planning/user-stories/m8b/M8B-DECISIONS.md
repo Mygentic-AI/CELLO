@@ -139,3 +139,13 @@ Genuine undecidable forks are PARKED (journal + DoD "Parked decisions" + here), 
 ### YYYY-MM-DD HH:MM — <unit-id> — <short title>
 - Fork: …  Chose: …  Why: …  Reverse: …
 -->
+
+## 2026-07-01 — DOD-RELAYSIG-1: relay pubkey source = directory relay_pubkey_request (not the assignment)
+The daemon must verify the relay's ACK signature against a TRUSTED relay pubkey (never the pubkey from the
+ACK itself — circular). Two sources considered: (a) embed relay_pubkey in the directory-signed session
+assignment, (b) the existing `relay_pubkey_request`/`relay_pubkey_response` directory frame (directory-node.ts:951).
+**Chose (b)** — the directory side ALREADY exists (zero directory change ⇒ no deploy batching for RELAYSIG-1;
+keeps the unit a focused daemon-only port), and the manifest does NOT list relays. The daemon queries the
+directory (relay_id → public_key_hex) over its signaling stream, caches per relay_id. Reversible: embedding
+the pubkey in the assignment can be added in OPTIONB-SETUP-1 if a round-trip-free path is wanted. RELAYSIG-1
+is therefore a pure daemon port of the dead core/client receipt store + verifyRelayAck into the live daemon.
