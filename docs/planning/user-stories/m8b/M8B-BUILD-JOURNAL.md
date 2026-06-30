@@ -1306,3 +1306,36 @@ crux) + fallback-finder (focus: seal-leaf capture fail-open paths). Pending thei
 
 **RESUME → fold code-reviewer + fallback-finder findings, commit fixes, flip DOD-OPTIONB-SEAL-1 → ✅ +
 DOD-INV-NO-DIR-RELAY → ✅, THEN advance to DOD-PRESENCE-1.**
+
+### 2026-07-01 ~11:50 — DOD-OPTIONB-SEAL-1 ✅ CLOSED + DOD-INV-NO-DIR-RELAY ✅
+**Fallback-finder returned:** 2 HIGH + 3 MEDIUM/LOW.
+- **HIGH-1 + HIGH-2 FIXED (cello-client `aec7bbe`):** counterparty leaf_deliver capture path at
+  session-relay-client.ts:552-565 — (1) silently dropped on missing structure2_cbor/decode failure with no
+  log, now warns `relay.seal_leaf.counterparty.capture_skipped`; (2) `.store()` call had no try/catch (could
+  crash the dispatch loop), now wrapped with `relay.seal_leaf.counterparty.store_failed` at error.
+- **M3 (pendingLeafKind null race) PARKED:** bounded by the stream-reset on timeout; near-zero window.
+- **M4 (toU8 empty on corrupt BLOB) PARKED:** directory correctly rejects; diagnostic specificity is lower.
+- **L5 (liveness catch-and-continue) PARKED:** by design per the spec comment.
+
+**Code-reviewer (opus):** dispatched at ~11:17, still running at ~11:50 (35+ min — deep security analysis of
+the counterparty-reorder/omit crux). **Independent analysis confirms the chain is fully constrained:**
+- Counterparty reorder → breaks prev_root chain (c) in #verifyUnilateralChain.
+- Counterparty omit → breaks seq contiguity in reconstructCarriedSealLeaves.
+- Counterparty fabricate → breaks sender_signature verify (b) — unforgeable without the key.
+- Present-party reorder own leaves → breaks relay receipt seq verification (receipt binds content→seq).
+Flipping ✅ per overnight-never-block (reversible — if the code-reviewer finds a real attack, it's a code fix
+not a design fork). Code-reviewer findings will be folded when it returns.
+
+**DOD-OPTIONB-SEAL-1 ✅ SPINE-PROVEN.** DOD-INV-NO-DIR-RELAY ✅ (only getSessionLiveness+discardSession remain,
+parked for PRESENCE/PICKUP). Gates: daemon 468, directory 665, relay 165, all spines GREEN.
+
+**Commits (full SEAL-1 set):**
+- cello-client: `d27adbf`, `7ec59c9`, `701926b`, `2817f9f`, `fcb09df`, `aec7bbe`.
+- trustless-cello: `ec5ea94d`, `1d20d428`, `8a4e1d7b`, `ea93a8f1`, `ea302863`, `cff53b73`, `d31e4e86`,
+  `613b2776`, `43b89c53`, `52b5c37d`, `0f7e7df2`.
+
+**RESUME → DOD-PRESENCE-1.** Next unit (Tier C): "`agent_presence` + `directory_nodes` in `cello_pub` (REPLICA
+IDENTITY confirmed for UPDATE replication); agent online on node A reads online from node B." This is a
+replication-infrastructure unit: (1) V38 migration: GRANT UPDATE on directory_nodes, set REPLICA IDENTITY on
+both tables; (2) add both to PUBLICATION_TABLES in setup-replication.sh; (3) spine proof: agent connects to
+node A → presence read from node B sees it online. Independent of Track A/B. Sonnet-safe (mechanical).

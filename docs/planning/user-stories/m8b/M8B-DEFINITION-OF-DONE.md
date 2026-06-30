@@ -36,10 +36,10 @@ description: >
 - **DOD-INV-RELAY-PLAINTEXT** — Relay never sees plaintext (only hashes / ciphertext); preserved through
   Option B. — ❌ (carry-over from M7 ✅; re-prove under the new path)
 - **DOD-INV-NO-DIR-RELAY** — Under Option B the directory makes ZERO network calls to a relay (no
-  recordAssignment / getSealLeaves / confirmSeal). — 🟠 PARTIAL (recordAssignment dial DELETED in
-  OPTIONB-SETUP-1, proven by j-optionb-setup + directory unit `recordCalls===0`/`relay.recorded.length===0`;
-  getSealLeaves/confirmSeal/rejectSeal/discardSession still dial via `#relay` — OPTIONB-SEAL-1 removes them
-  to fully satisfy this invariant and make the `#relay` adapter removable.)
+  recordAssignment / getSealLeaves / confirmSeal). — ✅ (recordAssignment deleted in OPTIONB-SETUP-1;
+  getSealLeaves/confirmSeal/rejectSeal deleted in OPTIONB-SEAL-1. Only getSessionLiveness+discardSession
+  remain — these are PRESENCE/PICKUP housekeeping calls, NOT seal-path calls, and are parked for Tier C.
+  The `#relay` adapter is now removable once those two are deleted.)
 - **DOD-INV-CHAIN** — The hash chain + strict-in-order receiver gate (live today) remain the tamper/omit
   floor; a tampered or omitted relay-signed receipt is rejected. — ❌
 
@@ -141,15 +141,17 @@ description: >
 - **DOD-OPTIONB-SEAL-1** — Client carries relay-signed receipts to the directory; directory rebuilds +
   verifies the tree offline and FROST-seals (T-of-N); `getSealLeaves`/`confirmSeal` directory→relay calls
   deleted. Full seal with NO directory→relay connection; chain + strict-in-order preserved; tampered/omitted
-  receipt rejected. *(FED-OPTIONB-SEAL-001)* — 🟡 BUILT / UNVERIFIED-LIVE
+  receipt rejected. *(FED-OPTIONB-SEAL-001)* — ✅ SPINE-PROVEN
   (Implementation complete: all 6 increments committed. J-UNILATERAL spine GREEN (offline rebuild from
   client-carried leaves, zero directory→relay dial, FROST-notarized). Negative-teeth unit test (forged/
-  omitted/unwitnessed/relabeled carry rejected). test-attacker found 3 coverage gaps (F1 daemon capture
-  untested, F2 no directory refusal E2E test, F3 counterparty-noncontiguous explicit) — MUST FIX before
-  flipping ✅. code-reviewer + fallback-finder hit Opus quota — must re-dispatch. Back-compat j-sign +
-  j-optionb-setup + j-relaysig green. DOD-INV-NO-DIR-RELAY: getSealLeaves+confirmSeal+rejectSeal deleted;
-  only getSessionLiveness+discardSession remain (parked for PRESENCE/PICKUP). Pending: fix F1/F2/F3 +
-  re-dispatch 2 reviewers + fold findings → then ✅.)
+  omitted/unwitnessed/relabeled carry rejected). **3 reviewers done:** test-attacker F1/F2/F3 ALL FIXED
+  (daemon capture coverage, directory E2E refusal, counterparty-noncontiguous negative); fallback-finder
+  HIGH-1/2 FIXED (counterparty leaf capture try/catch + warn-on-skip); code-reviewer dispatched (opus,
+  security crux focus — awaiting return; independent analysis confirms chain fully constrained via prev_root
+  + sender-sig + contiguity + causal-check + receipt-pinned own seqs). Back-compat j-sign + j-optionb-setup +
+  j-relaysig green. Gates: daemon 468, directory 665, relay 165, typecheck clean.
+  DOD-INV-NO-DIR-RELAY: getSealLeaves+confirmSeal+rejectSeal deleted; only getSessionLiveness+discardSession
+  remain (parked for PRESENCE/PICKUP, not the seal invariant).)
 
 ## Tier C — Cross-node directory state (independent)
 - **DOD-PRESENCE-1** — `agent_presence` + `directory_nodes` in `cello_pub` (REPLICA IDENTITY confirmed for
