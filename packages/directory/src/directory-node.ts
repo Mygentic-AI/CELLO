@@ -4509,6 +4509,33 @@ export class CelloDirectoryNode {
     });
   }
 
+  /**
+   * Test hook (DOD-OPTIONB-SEAL-1 F2): invoke #processSealUnilateral with a CLIENT-CARRIED
+   * seal_leaves payload. Pre-seeds session state so the grace period passes and participants are known.
+   * Returns a Promise so the test can await the full handler and inspect logs/store after.
+   * Only available in NODE_ENV=test.
+   */
+  async triggerSealUnilateralWithLeavesForTest(
+    senderHex: string,
+    sessionId: Uint8Array,
+    reportedRoot: Uint8Array,
+    absentPartyHex: string,
+    sealLeaves: import("./directory-types.js").SealUnilateralLeaf[],
+    mockStream: import("@libp2p/interface").Stream,
+  ): Promise<void> {
+    if (process.env["NODE_ENV"] !== "test") throw new Error("test-only");
+    const sessionIdHex = Buffer.from(sessionId).toString("hex");
+    this.#sessionLastActivity.set(sessionIdHex, this.#clock.now() - (this.#deliveryGraceSeconds + 1) * 1000);
+    this.#sessionParticipants.set(sessionIdHex, { initiatorHex: senderHex, targetHex: absentPartyHex });
+    await this.#processSealUnilateral(mockStream, senderHex, {
+      type: "seal_unilateral",
+      session_id: sessionId,
+      reported_root: reportedRoot,
+      reported_seq: sealLeaves.length,
+      seal_leaves: sealLeaves,
+    });
+  }
+
   // ─── M6B-010: Startup state restoration ──────────────────────────────────────
 
   /**

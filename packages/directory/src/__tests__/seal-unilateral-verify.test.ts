@@ -83,4 +83,124 @@ describe("reconstructCarriedSealLeaves (DOD-OPTIONB-SEAL-1) — the offline-veri
     wrongRelay[0].relay_signature = await otherRelay.sign(buildRelayAckTbs(ch, 1, 10)); // signed by a key != relay_id
     expect(reconstructCarriedSealLeaves(wrongRelay, presentHex)).toMatchObject({ ok: false, reason: "unilateral_receipt_invalid" });
   });
+
+  it("F3: explicit counterparty-noncontiguous negative — a counterparty leaf with a gap is rejected", async () => {
+    const relay = generateKeypair();
+    const relayId = hex(await relay.getPublicKey());
+    const present = generateKeypair();
+    const presentHex = hex(await present.getPublicKey());
+    const counterpartyHex = hex(await generateKeypair().getPublicKey());
+
+    const mk = async (seq: number, kind: number, senderHex: string, withReceipt: boolean): Promise<SealUnilateralLeaf> => {
+      const content_hash = new Uint8Array(randomBytes(32));
+      const structure2_cbor = encodeStructure2({
+        sequence_number: seq,
+        sender_pubkey: Uint8Array.from(Buffer.from(senderHex, "hex")),
+        content_hash,
+        sender_signature: new Uint8Array(64),
+        scan_result: SCAN_RESULT_SENTINEL,
+        prev_root: new Uint8Array(32),
+      });
+      const ts = seq * 10;
+      const leaf: SealUnilateralLeaf = { sequence_number: seq, leaf_kind: kind, structure2_cbor, structure1_cbor: new Uint8Array([1, 2, 3]) };
+      if (withReceipt) {
+        leaf.relay_id = relayId;
+        leaf.relay_timestamp = ts;
+        leaf.relay_signature = await relay.sign(buildRelayAckTbs(content_hash, seq, ts));
+      }
+      return leaf;
+    };
+
+    // Counterparty leaf at seq 3 with no seq 2 in between (own at 1, gap, counterparty at 3)
+    // → contiguity break even though the counterparty leaf itself is well-formed.
+    const noncontiguous = [
+      await mk(1, 0, presentHex, true),      // own msg at seq 1 (receipted)
+      await mk(3, 0, counterpartyHex, false), // counterparty msg at seq 3 — seq 2 MISSING
+      await mk(4, 2, presentHex, true),       // own SEAL ctrl at seq 4 (receipted)
+    ];
+    const result = reconstructCarriedSealLeaves(noncontiguous, presentHex);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("unilateral_chain_noncontiguous");
+    }
+  });
+});
+
+describe("reconstructCarriedSealLeaves — F2 directory E2E refusal (forged carry → verification.failed)", () => {
+  // F2 blocking: the directory's CONSUMER path (#processSealUnilateral) must refuse a forged carry
+  // and emit session.unilateral.verification.failed, never session.unilateral.notarized. This exercises
+  // the full handler via the test hook, not just the pure function.
+  it("a forged carry → session.unilateral.verification.failed logged, no notarized event", async () => {
+    // We need createDirectoryNode + the new triggerSealUnilateralWithLeavesForTest hook.
+    const { createDirectoryNode } = await import("../directory-node.js");
+    const dirKp = generateKeypair();
+
+    interface LogEntry { event: string; context?: Record<string, unknown>; }
+    const logs: LogEntry[] = [];
+    const mockLogger = {
+      debug(event: string, ctx?: Record<string, unknown>) { logs.push({ event, context: ctx }); },
+      info(event: string, ctx?: Record<string, unknown>) { logs.push({ event, context: ctx }); },
+      warn(event: string, ctx?: Record<string, unknown>) { logs.push({ event, context: ctx }); },
+      error(event: string, ctx?: Record<string, unknown>) { logs.push({ event, context: ctx }); },
+    };
+
+    const mockRelay = {
+      recordAssignment: () => ({ ok: true as const }),
+      discardSession: () => {},
+      submitForSeal: () => ({ ok: false as const, reason: "not_implemented" }),
+      confirmSeal: () => {},
+      rejectSeal: () => {},
+    };
+
+    const { directory, stop } = await createDirectoryNode({
+      keyProvider: dirKp,
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      relay: mockRelay,
+      relayEndpoint: { peer_id: "relay-peer-id", multiaddrs: ["/ip4/127.0.0.1/tcp/0"] },
+      logger: mockLogger,
+      deliveryGraceSeconds: 0,
+    });
+
+    try {
+      const senderHex = randomBytes(32).toString("hex");
+      const absentPartyHex = randomBytes(32).toString("hex");
+      const sessionId = randomBytes(16);
+      const reportedRoot = randomBytes(32);
+      const mockStream = { send: () => {} } as unknown as import("@libp2p/interface").Stream;
+
+      // Feed a FORGED carry: an own leaf with a fake relay_signature (not a valid Ed25519 sig).
+      const content_hash = new Uint8Array(randomBytes(32));
+      const forgedLeaves: SealUnilateralLeaf[] = [{
+        sequence_number: 1,
+        leaf_kind: 0,
+        structure2_cbor: encodeStructure2({
+          sequence_number: 1,
+          sender_pubkey: Uint8Array.from(Buffer.from(senderHex, "hex")),
+          content_hash,
+          sender_signature: new Uint8Array(64),
+          scan_result: SCAN_RESULT_SENTINEL,
+          prev_root: new Uint8Array(32),
+        }),
+        structure1_cbor: new Uint8Array([1, 2, 3]),
+        relay_id: randomBytes(32).toString("hex"),
+        relay_timestamp: 100,
+        relay_signature: new Uint8Array(randomBytes(64)), // FORGED — won't verify
+      }];
+
+      await directory.triggerSealUnilateralWithLeavesForTest(
+        senderHex, sessionId, reportedRoot, absentPartyHex, forgedLeaves, mockStream,
+      );
+
+      // Assert: session.unilateral.verification.failed was logged (with a receipt-related reason).
+      const failed = logs.find((l) => l.event === "session.unilateral.verification.failed");
+      expect(failed, "must emit session.unilateral.verification.failed").toBeDefined();
+      expect(failed!.context?.["reason"]).toBe("unilateral_receipt_invalid");
+
+      // Assert: session.unilateral.notarized must NOT have been emitted.
+      const notarized = logs.find((l) => l.event === "session.unilateral.notarized");
+      expect(notarized, "must NOT emit session.unilateral.notarized on forged carry").toBeUndefined();
+    } finally {
+      await stop();
+    }
+  });
 });
