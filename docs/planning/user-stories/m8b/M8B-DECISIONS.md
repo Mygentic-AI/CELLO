@@ -176,3 +176,24 @@ receipts + FROST-seals with NO directory→relay call — crypto-adjacent, the h
 mechanical and can survive a Sonnet downgrade. DEPLOY-1 is operational. The `feature-dev:code-reviewer`
 reviewers are pinned `model:'opus'`, so adversarial review stays Opus-grade even if the coder downgrades.
 This matches the DoD order (SETUP→SEAL→PRESENCE→PICKUP→DEPLOY), so no reordering needed — just keep pace.
+
+## 2026-07-01 — DOD-OPTIONB-SETUP-1 design refinements (post-investigation)
+Two refinements to Design A after reading the relay auth model + the network-relay-adapter:
+1. **New client-presented frame (NOT the existing record_assignment).** The relay's `record_assignment`
+   frame is gated by DIRECTORY-ADMIN auth — a body-level `directory_signature` verified vs `#directoryPubkey`
+   (relay-node.ts:345-364) that only the directory can produce. A client cannot sign that. So add a NEW
+   `client_record_assignment` frame: after the client's K_local relay auth, it carries {session_id,
+   participant_a/b, session_timestamp, initiator/counterparty_session_peer_id, assignment_signature =
+   the directory's per-node relayDirSig over the 6-field relay TBS}. The relay verifies assignment_signature
+   over the reconstructed 6-field TBS (binds the peer ids) vs the consortium directory keys — NO admin-auth
+   body signature (the client isn't the directory). The directory provides relayDirSig to the client in the
+   session_assignment frame as `relay_directory_signature` (explicit new field; never reuse
+   `directory_signature` = frostedSig). The directory's relayDirSig at directory-node.ts:3125 is ALREADY
+   over the 6-field TBS — reuse it; the network-relay-adapter that re-signs a 4-field TBS is being DELETED.
+2. **Relay verifies vs a CONFIGURED set of directory pubkeys, not by parsing the manifest.** Adding full
+   threshold-manifest verification (officer root keys + sig) to the relay is a large lift. Minimal
+   any-directory: `CELLO_DIRECTORY_PUBKEYS` (comma-separated hex, the N consortium directory node pubkeys),
+   falling back to the single `CELLO_DIRECTORY_PUBKEY`. The relay verifies the assignment vs ANY of them.
+   The deployment configures these (same trust source as today's single CELLO_DIRECTORY_PUBKEY). Reversible:
+   full in-relay manifest verification is a parked hardening if wanted. Spine: give the relay all 3 node
+   pubkeys so a non-node-0 directory's assignment verifies (the any-directory teeth).
