@@ -84,7 +84,21 @@ description: >
   blind; production quorum-binding still gated on PRESENCE-1 replication, see Parked.)
 - **DOD-REFRESH-1** — Proactive share refresh / resharing + real epoch rollover: a refresh rotates all
   shares to a new epoch, old shares no longer sign, group pubkey unchanged; a node compromised in epoch e
-  holds nothing usable in e+1. *(FED-REFRESH-001)* — ❌
+  holds nothing usable in e+1. *(FED-REFRESH-001)* — ✅
+  (Zero-constant-term PSS (Herzberg 1995) over the joint FROST key — `core/crypto/frost-resharing.ts`,
+  crypto published 0.0.13. Daemon `runNetworkRefresh` (2-round client-coordinated uniform-relay) +
+  `runAgentRefresh` + `cello refresh` CLI / `cello_refresh_shares`; directory `refreshRound1/2` + frame
+  handlers (suspension honor-check). **J-REFRESH spine GREEN**: register epoch 1 → seal → refresh → group
+  pubkey UNCHANGED (P2==P1) + all 3 dirs `frost.refresh.applied` + post-refresh seal works; then REFRESH
+  AGAIN and assert the public verifyingShares DIGEST CHANGED — the observable that proves the shares
+  actually ROTATED (group key/epoch/log are all invariant to a no-op relabel). Crypto suite proves the
+  cryptographic "compromised in e → nothing usable in e+1" (a mixed old+new share set does NOT reconstruct).
+  6 reviewers total — 3 on the crypto core (construction SOUND vs @noble source), 3 on the wiring (NO
+  blocking; equivocation defense confirmed). Fixed: durable persist before epoch advance (HIGH-1,
+  storeShareDurable), epoch-expiry survives restart (HIGH-2, getMaxEpoch fallback + restart unit test),
+  pre-refresh group-key assert (M2), structured persist error (L7), completeness/non-triviality/zero-id
+  gates. Back-compat j-sign + j-tofn-dkg green; directory 661/661, daemon 453/453, crypto 254/254. See
+  Parked for the atomicity/forward-secrecy follow-ons.)
 
 ## Tier B — Directory↔relay (Option B) — depends on Tier A group key + DOD-MANIFEST-1
 - **DOD-RELAYSIG-1** — Relay signs its ordering record (Structure2) + PERSIST-012 signed-ACK + immutable
@@ -154,12 +168,32 @@ description: >
   case as a tracked follow-on. **Follow-up:** add a restart-resilience spine test (register → restart
   node 0 → wait reconnect → session-sign + seal still succeed via the store fallback). Tracked here, not
   dropped. Revisit with DOD-REFRESH-1 (which also touches the cache) or standalone.
-- **DOD-SIGN-1 / DOD-REFRESH-1 — `#resolvePrimaryPubkey` cache never invalidates (fallback-finder F2).**
-  The re-seeded in-memory cache will serve a STALE group key after a share-refresh/epoch rollover (it
-  keys on the agent, not the epoch, fixed at `:epoch:1`). Fails LOUD (seal verification rejects), not a
-  silent weaker seal — so out of SIGN-1's forgery scope. **DOD-REFRESH-1 MUST invalidate/re-seed this
-  cache on rotation.** Also noted: the store fallback does not consult revocation (revocations are
-  append-only, never touch `agent_profiles`); signing-time revocation enforcement lives elsewhere.
+- **DOD-SIGN-1 / DOD-REFRESH-1 — `#resolvePrimaryPubkey` cache (fallback-finder F2) — RESOLVED by REFRESH-1.**
+  The cache stores the GROUP KEY (`agent_profiles.primary_pubkey`). PSS resharing keeps the group key
+  BYTE-IDENTICAL across a refresh (only the shares + verifyingShares rotate; commitments[0] is invariant
+  and `runAgentRefresh` asserts it == the pre-refresh key, M2), so the cached value is never stale after a
+  rollover — no invalidation is needed. The earlier worry ("serves a stale group key after rollover")
+  assumed the key CHANGES on rotation; under PSS it does not. Also noted: the store fallback does not
+  consult revocation (revocations are append-only, never touch `agent_profiles`); signing-time revocation
+  enforcement lives elsewhere.
+
+- **DOD-REFRESH-1 — refresh is not cross-party ATOMIC; forward-secrecy of old shares is best-effort (review
+  H1/M1 + L4, all MEDIUM/LOW).** Each directory commits its epoch advance in `refreshRound2` before the
+  coordinator's group-key consistency check and before the client persists its own new share. If a later
+  node fails, the group-key check fails, or `persistFrostKeyShare` throws, the result is an epoch SPLIT
+  (some directories on N+1, client on N) and signing breaks until recovery. **Recovery exists and is safe
+  but MANUAL:** `refreshRound2` never deletes the epoch-N share, so re-running `cello refresh` re-drives
+  round 1 (which reads epoch N) and converges; the client fails LOUD (`ceremony_failed`/`persist_failed`),
+  never a false success. **Not fixed because true cross-party atomicity needs a 2-phase commit / abort
+  protocol (new protocol surface) — a deliberate design choice, not an overnight change; alpha tolerates
+  fail-loud + manual re-refresh.** Related (L4, parked): the directory does NOT delete the old-epoch share
+  after a confirmed refresh (it's what makes the retry-recovery work), so an attacker reading the store
+  over time collects multiple epochs' shares — all `EPOCH_EXPIRED` for signing, so no forgery, but it
+  weakens PSS forward-secrecy. Delete `fromEpochId` only after a confirmed-consistent cross-node refresh
+  (which needs the 2-phase protocol above). Also (L5/L6, LOW): no refresh-concurrency guard
+  (`already_in_progress` is declared but never produced) and a brief epoch-N→N+1 window where a signing
+  ceremony fired mid-refresh gets a transient `EPOCH_EXPIRED` — both low-risk with a single client
+  coordinator and self-resolving. Revisit together when the 2-phase refresh-commit protocol is designed.
 
 
 - **DOD-DKG-1 MEDIUM — the topology gate is COUNT-only (identity skew not caught).** The DKG refusal

@@ -22,7 +22,7 @@ description: >
 | FED-DKG-001 | DOD-DKG-1 | client+dir | ✅ spine-proven | multi-node 2-of-3 DKG fans to all 3 dirs (j-tofn-dkg GREEN); below-threshold gate + B1 fix (empty-roster refuses, no downgrade); 3 reviewers clean; MEDIUM count-gate parked |
 | FED-SIGN-001 | DOD-SIGN-1 | client+dir | ✅ spine-proven | T-of-N seal: ≥2 dirs FROST-sign, kill-a-participant still seals, FROST-not-single-key (j-sign teeth); 3 reviewers clean (B1 fixed: session-signing store reconstruction); restart-path + REFRESH cache parked |
 | FED-SUSPEND-001 | DOD-SUSPEND-1 | dir+crypto | ✅ spine-green, 3 reviewers clean | j-suspend-tofn green (103s): 2-suspended ⇒ block w/ EXACT `ceremony_exhausted`+retry; 1-suspended ⇒ nodes 0,2 sign while node 1 emits FRESH refusal (route-AROUND proven); agent B signs through 1,2 ⇒ agent-scoped. Fixes: signer commit-round per-stub exclusion + per-node timeout/deadline (bcea30a/5cd2da2), directory nonce-replace (87d226c2, consume-once confirmed by all 3). Fallback HIGH made LOUD: frost.suspension.uncheckable + hasAgentProfile. Production quorum-binding → PRESENCE-1 (Tier C) |
-| FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | 🟡 spine-GREEN end-to-end, 3 wiring reviewers running | Crypto core ✅ 3-reviewer-clean (893fc9c). WIRING built + J-REFRESH spine GREEN (61s): register epoch 1 → seal → `cello refresh` → group pubkey UNCHANGED (P2==P1), epoch 2, all 3 dirs frost.refresh.applied, post-refresh seal still works. Built: crypto published 0.0.13 (frost-resharing + client helpers); daemon runNetworkRefresh (2-round uniform-relay) + runAgentRefresh + cello_refresh_shares IPC + `cello refresh` CLI; reconstructThresholdSigner uses share.epochId (post-refresh signing fix, back-compat); directory refreshRound1/2 + frame handlers (suspension honor-check). Back-compat j-sign + j-tofn-dkg green. 3 wiring reviewers running (code/test-attacker/fallback). KNOWN GAPS: directory #currentEpoch in-memory (restart-reload TODO); client/dir epoch-split if persist fails after dirs advance |
+| FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | ✅ spine-GREEN, 6 reviewers clean | Zero-constant PSS, group key UNCHANGED. J-REFRESH spine GREEN: refresh twice → digest CHANGES (proves rotation, kills the no-op) + group pubkey==P1 + all dirs applied + post-refresh seals. crypto published 0.0.13; daemon runNetworkRefresh + runAgentRefresh + cello refresh CLI; directory refreshRound1/2 (durable persist before epoch advance) + getMaxEpoch (expiry survives restart, unit-tested). 6 reviewers (3 crypto SOUND + 3 wiring no-blocking); fixed digest-teeth/HIGH-1/HIGH-2/M2/L7 + stale SUSPEND-1 nonce tests. directory 661/661, daemon 453/453, crypto 254/254, back-compat green. PARKED: cross-party atomicity (2-phase commit) + forward-secrecy delete — alpha fail-loud+manual-re-refresh |
 | FED-RELAYSIG-001 | DOD-RELAYSIG-1 | relay+client | ⬜ not started | relay-signed ordering + PERSIST-012 live |
 | FED-OPTIONB-SETUP-001 | DOD-OPTIONB-SETUP-1 | dir+relay+client | ⬜ not started | client-presented assignment; kill relay dial |
 | FED-OPTIONB-SEAL-001 | DOD-OPTIONB-SEAL-1 | dir+client | ⬜ not started | client-carried receipts; offline seal |
@@ -851,3 +851,46 @@ new epoch_id — table already has UNIQUE(agent_id,epoch_id)), and RELOAD `#curr
 epoch_id in agent_key_shares on startup (no new migration — the share rows ARE the epoch record). Client:
 rotate `_localShares` + db-identity-store `frost_*` columns to the new epoch. Trigger: a client-coordinated
 op (CLI `cello refresh <agent>` / MCP tool) — reversible design choice, testable from the spine.
+
+### 2026-07-01 ~03:20 — DOD-REFRESH-1 ✅ — PSS refresh, 6 reviewers clean, J-REFRESH spine GREEN
+**The hardest crypto unit is closed.** Zero-constant-term proactive secret sharing (Herzberg 1995) over
+the joint FROST key: every shareholder adds a degree-(T−1) polynomial with constant term 0, so the group
+public key is BYTE-IDENTICAL while every share rotates. Built across 4 layers + published crypto 0.0.13.
+
+**6 reviewers total.** 3 on the crypto core (frost-resharing.ts) — all found the construction SOUND
+(code-reviewer verified line-by-line vs the @noble/curves@2.2.0 source); fixed the completeness gate,
+non-triviality, zero-identifier, equivocation precondition, hollow Test-4. 3 on the wiring — NO blocking,
+equivocation defense confirmed (uniform relay: the client narrows each contribution's subShares per
+recipient but relays the IDENTICAL commitment to all, so a directory can't equivocate). Fixed:
+- **test-attacker BLOCKING** — the spine couldn't distinguish a real refresh from a relabel-only NO-OP
+  (group key, epoch, applied-log all invariant to a no-op). Exposed `verifying_shares_digest` (public
+  s_j·G, SI-001-safe); J-REFRESH now refreshes TWICE and asserts the digest CHANGED — the one observable
+  that proves the shares actually rotated. The cryptographic "compromised in e → nothing in e+1" is proven
+  in the crypto unit suite (a mixed old+new share set does NOT reconstruct).
+- **HIGH-1 (durable persist)** — `refreshRound2` was fire-and-forget; a restart could lose the new-epoch
+  share → client/directory epoch split. Now async + AWAITs `storeShareDurable` BEFORE advancing the epoch,
+  fail-loud on persist failure (old-epoch share untouched ⇒ safe retry).
+- **HIGH-2 (expiry survives restart)** — `#currentEpoch` is in-memory; a restart lost it ⇒ old shares would
+  re-sign. `#isExpiredEpoch` now falls back to `ShareStore.getMaxEpoch` (the reloaded shares ARE the durable
+  epoch record). New restart-survival unit test (fresh handler over a store holding epoch 2 rejects epoch 1).
+- **M2** — `runAgentRefresh` asserts the post-refresh group key == the KNOWN pre-refresh key (catches a
+  uniform secret-shift the cross-node check can't). **L7** — structured `persist_failed` reason.
+- **Gate-miss caught:** the SUSPEND-1 nonce-replace (87d226c2) had left 2 directory unit tests asserting the
+  old `NONCE_ALREADY_PENDING` — stale since SUSPEND-1 (the spine+crypto passed but this directory unit suite
+  wasn't re-run). Updated to the reviewer-confirmed new behavior. Lesson: run the affected package's UNIT
+  suite, not just the spine, after a behavior change.
+
+**Gates:** crypto 254/254 (12 resharing incl. a real post-refresh FROST signature), daemon 453/453,
+directory 661/661, J-REFRESH spine GREEN (2-refresh digest-change), back-compat j-sign + j-tofn-dkg green.
+Parked (DoD): cross-party atomicity (needs a 2-phase refresh-commit protocol) + forward-secrecy old-share
+delete — alpha tolerates fail-loud + manual `cello refresh` re-drive.
+
+**Held unpushed:** trustless-cello directory changes batched for the DOD-DEPLOY-1 gate (each directory push
+triggers a ~25-30 min deploy). cello-client crypto is already published (0.0.13) + on main.
+
+**RESUME → DOD-RELAYSIG-1.** Next unit (Tier B, relay+client): "Relay signs its ordering record (Structure2)
++ PERSIST-012 signed-ACK + immutable receipt store ported from dead `core/client` into the live daemon;
+client verifies + durably stores the receipt; a forged sequence is rejected." Per the "assume code exists"
+discipline: the receipt store + Structure2 signing likely exist in the dead `core/client` (pre-REPOSPLIT) —
+LOCATE and adapt into the live daemon rather than rewrite. Falsify-first, red on the spine (j-relaysig:
+relay signs an ordering record → client verifies + stores → a tampered sequence number is rejected).
