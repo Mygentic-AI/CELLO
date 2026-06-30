@@ -113,12 +113,12 @@ export async function upsertIdentityHash(
  *  zero. (signal_kind is always set by the write seam; the NULL-kind partial-index edge cannot arise.) */
 export async function enqueuePickup(
   pool: Queryable,
-  args: { agentId: string; signalKind: string; ciphertext: Buffer },
+  args: { agentId: string; signalKind: string; ciphertext: Buffer; owningNodeId: string },
 ): Promise<void> {
   await pool.query(
-    `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext) VALUES ($1, $2, $3)
+    `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, owning_node_id) VALUES ($1, $2, $3, $4)
      ON CONFLICT (agent_id, signal_kind) WHERE acked_at IS NULL
      DO UPDATE SET ciphertext = EXCLUDED.ciphertext, created_at = now()`,
-    [args.agentId, args.signalKind, args.ciphertext],
+    [args.agentId, args.signalKind, args.ciphertext, args.owningNodeId],
   );
 }

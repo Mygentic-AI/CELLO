@@ -36,7 +36,7 @@ const logger = {
 };
 
 const pool = new pg.Pool({ connectionString: DB_URL });
-const server = createInternalApiServer({ pool, internalApiKey: API_KEY, logger });
+const server = createInternalApiServer({ pool, internalApiKey: API_KEY, logger, owningNodeId: process.env["NODE_ID"] ?? "local" });
 
 // Fail LOUD + fast on a bind error (e.g. an orphaned harness still holding the port) — otherwise the
 // caller's readiness probe just times out and the real cause is buried.

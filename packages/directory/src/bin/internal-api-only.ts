@@ -36,7 +36,7 @@ const logger = {
     process.stdout.write(JSON.stringify({ level: "error", event, ...context }) + "\n"),
 };
 
-const server = createInternalApiServer({ pool, internalApiKey, logger });
+const server = createInternalApiServer({ pool, internalApiKey, logger, owningNodeId: process.env["NODE_ID"] ?? "local" });
 server.listen(port, () => {
   // eslint-disable-next-line no-console -- standalone bin entrypoint.
   console.log(`[internal-api-only] listening on :${port}`);

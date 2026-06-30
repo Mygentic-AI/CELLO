@@ -350,6 +350,7 @@ describeIntegration("OPS-AGENT-001 integration: POST /internal/pre-authorize HTT
       pool,
       internalApiKey: VALID_API_KEY,
       logger: noopLogger,
+      owningNodeId: "test-node",
     });
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", () => {

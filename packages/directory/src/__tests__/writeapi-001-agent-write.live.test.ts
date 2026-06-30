@@ -71,7 +71,7 @@ describeLive("WRITEAPI-001 live — /internal/agent-write (real Postgres + HTTP)
       );
     }
 
-    server = createInternalApiServer({ pool, internalApiKey: API_KEY, logger: noopLogger });
+    server = createInternalApiServer({ pool, internalApiKey: API_KEY, logger: noopLogger, owningNodeId: "test-node" });
     await new Promise<void>((r) => server.listen(0, () => r()));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });

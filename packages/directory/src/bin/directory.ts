@@ -800,6 +800,7 @@ if (internalApiKey && pgPool) {
     pool: pgPool,
     internalApiKey,
     logger,
+    owningNodeId: nodeId,
   });
   internalApiServer.listen(internalApiPort, () => {
     logger.info("adapter.initialised", {

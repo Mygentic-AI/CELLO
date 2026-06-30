@@ -84,16 +84,17 @@ export async function ackPickupDelete(db: Queryable, id: string, agentId: string
  * ciphertext, and replicate that delete federation-wide. H2 MUST gate the sweep before publishing
  * pickup_queue — owning-node ownership of the sweep, or a convergence check — never per-node on a replicated queue.
  */
-export async function sweepUndeliverablePickups(db: Queryable, ttlHours = 24): Promise<number> {
+export async function sweepUndeliverablePickups(db: Queryable, owningNodeId: string, ttlHours = 24): Promise<number> {
   const res = await db.query(
     `DELETE FROM pickup_queue pq
       WHERE pq.acked_at IS NULL
+        AND pq.owning_node_id = $2
         AND pq.created_at < now() - make_interval(hours => $1)
         AND NOT EXISTS (
           SELECT 1 FROM identity_tree_entries it
            WHERE it.agent_id = pq.agent_id AND it.signal_kind = pq.signal_kind
         )`,
-    [ttlHours],
+    [ttlHours, owningNodeId],
   );
   return res.rowCount ?? 0;
 }

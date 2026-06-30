@@ -408,7 +408,7 @@ export class PgDirectoryStore implements DirectoryStore {
   }
 
   async sweepUndeliverablePickups(ttlHours = 24): Promise<number> {
-    return sweepUndeliverablePickups(this.#pool, ttlHours);
+    return sweepUndeliverablePickups(this.#pool, this.#nodeId, ttlHours);
   }
 
   /**

@@ -41,7 +41,7 @@ function makePool() {
 
 let server: Server | null = null;
 function start(pool: pg.Pool): Promise<string> {
-  server = createInternalApiServer({ pool, internalApiKey: API_KEY, logger: noopLogger });
+  server = createInternalApiServer({ pool, internalApiKey: API_KEY, logger: noopLogger, owningNodeId: "test-node" });
   return new Promise((resolve) => {
     server!.listen(0, () => {
       const { port } = server!.address() as AddressInfo;

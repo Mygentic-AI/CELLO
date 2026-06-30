@@ -52,6 +52,7 @@ export interface InternalApiServerOptions {
   pool: pg.Pool;
   internalApiKey: string;
   logger: Pick<Logger, "info" | "warn" | "error">;
+  owningNodeId: string;
 }
 
 /**
@@ -59,7 +60,7 @@ export interface InternalApiServerOptions {
  * Returns the server — caller must call .listen().
  */
 export function createInternalApiServer(opts: InternalApiServerOptions): Server {
-  const { pool, internalApiKey, logger } = opts;
+  const { pool, internalApiKey, logger, owningNodeId } = opts;
 
   const server = createServer(async (req, res) => {
     // Mint a correlation ID for every incoming request
@@ -393,7 +394,7 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
             await upsertIdentityHash(pool, { agentId, signalKind: w.signalKind, signalHash: w.signalHash });
             break;
           case "trust_signal_ciphertext":
-            await enqueuePickup(pool, { agentId, signalKind: w.signalKind, ciphertext: w.ciphertext });
+            await enqueuePickup(pool, { agentId, signalKind: w.signalKind, ciphertext: w.ciphertext, owningNodeId });
             break;
         }
       } catch (err: unknown) {

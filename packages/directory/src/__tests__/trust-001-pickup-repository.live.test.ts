@@ -44,8 +44,8 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
     // pair for a kind SUPERSEDES the first (covered by the next test).
     const ctWeb = Buffer.from(Uint8Array.from({ length: 64 }, (_, i) => (i * 7 + 1) % 256));
     const ctPhone = Buffer.from(Uint8Array.from({ length: 64 }, (_, i) => (i * 11 + 3) % 256));
-    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctWeb });
-    await enqueuePickup(pool, { agentId: AGENT, signalKind: "phone", ciphertext: ctPhone });
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctWeb, owningNodeId: "test-node" });
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "phone", ciphertext: ctPhone, owningNodeId: "test-node" });
 
     const drained = await drainPickupForAgent(pool, AGENT);
     expect(drained).toHaveLength(2);
@@ -87,8 +87,8 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
     // hash to the superseded anchor on every drain → permanent hash_mismatch that never ACKs.
     const ctOld = Buffer.from(Uint8Array.from({ length: 48 }, (_, i) => (i * 13 + 5) % 256));
     const ctNew = Buffer.from(Uint8Array.from({ length: 48 }, (_, i) => (i * 17 + 9) % 256));
-    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctOld });
-    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctNew });
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctOld, owningNodeId: "test-node" });
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctNew, owningNodeId: "test-node" });
 
     const drained = await drainPickupForAgent(pool, AGENT);
     const web = drained.filter((d) => d.signalKind === "webauthn");
@@ -96,8 +96,8 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
     expect(Buffer.compare(web[0].ciphertext, ctNew)).toBe(0);
 
     // Supersede is scoped to (agent, kind): a DIFFERENT kind enqueued alongside is untouched.
-    await enqueuePickup(pool, { agentId: AGENT, signalKind: "phone", ciphertext: ctOld });
-    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctNew });
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "phone", ciphertext: ctOld, owningNodeId: "test-node" });
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctNew, owningNodeId: "test-node" });
     const afterPhone = await drainPickupForAgent(pool, AGENT);
     expect(afterPhone.filter((d) => d.signalKind === "phone"), "a different kind is not superseded").toHaveLength(1);
     expect(afterPhone.filter((d) => d.signalKind === "webauthn")).toHaveLength(1);
@@ -106,8 +106,8 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
     // SURVIVE our enqueue (an unscoped DELETE would silently destroy other tenants' undelivered signals,
     // the cross-tenant twin of the H1 ACK guard). Seed OTHER_AGENT's webauthn pickup, then re-enqueue
     // AGENT's webauthn; OTHER_AGENT's row must remain.
-    await enqueuePickup(pool, { agentId: OTHER_AGENT, signalKind: "webauthn", ciphertext: ctOld });
-    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctNew });
+    await enqueuePickup(pool, { agentId: OTHER_AGENT, signalKind: "webauthn", ciphertext: ctOld, owningNodeId: "test-node" });
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctNew, owningNodeId: "test-node" });
     const otherDrain = await drainPickupForAgent(pool, OTHER_AGENT);
     expect(
       otherDrain.filter((d) => d.signalKind === "webauthn"),
@@ -164,7 +164,7 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
       [AGENT, ct],
     );
 
-    const swept = await sweepUndeliverablePickups(pool, 24);
+    const swept = await sweepUndeliverablePickups(pool, "test-node", 24);
     expect(swept, "exactly one orphaned row (the old anchor-less one) is swept").toBe(1);
 
     const remaining = await drainPickupForAgent(pool, AGENT);

@@ -167,7 +167,7 @@ done
 # only consumer is TRUST-001 (the daemon pickup), which will add it to the publication WITH the
 # sequence staggering when that journey lands. Adding it here now would arm a federation-wide
 # replication outage on the first cross-node insert.
-PUBLICATION_TABLES="agent_profiles,conversation_seals,conversation_seal_staging,directory_checkpoints,checkpoint_node_signatures,relay_registrations,sessions,pending_notifications,user_accounts,registrations,pre_authorization_tokens,agent_revocations,agent_suspensions,identity_tree_entries,agent_presence,directory_nodes"
+PUBLICATION_TABLES="agent_profiles,conversation_seals,conversation_seal_staging,directory_checkpoints,checkpoint_node_signatures,relay_registrations,sessions,pending_notifications,user_accounts,registrations,pre_authorization_tokens,agent_revocations,agent_suspensions,identity_tree_entries,agent_presence,directory_nodes,pickup_queue"
 TABLE_COUNT=$(echo "${PUBLICATION_TABLES}" | tr ',' '\n' | wc -l | tr -d ' ')
 
 # ── Step 1: Validate all ECS tasks are RUNNING before touching any DB ─────────

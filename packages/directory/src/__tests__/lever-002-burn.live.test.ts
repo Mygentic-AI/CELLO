@@ -43,7 +43,7 @@ describeLive("LEVER-002 live — burn is permanent; accountability survives", ()
        VALUES ($1, $2, 1, 'active', 'burn-chain', $3, $4)`,
       [KP, PP, ACCOUNT, AGENT],
     );
-    server = createInternalApiServer({ pool, internalApiKey: API_KEY, logger: noopLogger });
+    server = createInternalApiServer({ pool, internalApiKey: API_KEY, logger: noopLogger, owningNodeId: "test-node" });
     await new Promise<void>((r) => server.listen(0, () => r()));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });

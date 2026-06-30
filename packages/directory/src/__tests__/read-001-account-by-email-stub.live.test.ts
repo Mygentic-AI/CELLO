@@ -40,7 +40,7 @@ describeLive("READ-001 live — /internal/account-by-email-stub (real Postgres +
        VALUES ($1, $2, $3, $4)`,
       [ACCOUNT_ID, phoneStub, emailStub, "read-001-seed-chain"],
     );
-    server = createInternalApiServer({ pool, internalApiKey: API_KEY, logger: noopLogger });
+    server = createInternalApiServer({ pool, internalApiKey: API_KEY, logger: noopLogger, owningNodeId: "test-node" });
     await new Promise<void>((r) => server.listen(0, () => r()));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
