@@ -278,7 +278,7 @@ All six secrets imported via CFN resource import changeset `import-transport-key
 |---|---|---|---|
 | Telegram bot token (staging) | `cello/dev/ops-agent/telegram-bot-token` | POPULATED | @CelloConnectStagingBot token; swapped from prod→staging 2026-05-29 (dev env should use staging bot) |
 | directory-api-key / INTERNAL_API_KEY | `cello/dev/ops-agent/directory-api-key` | POPULATED | 256-bit random hex; shared by directory (INTERNAL_API_KEY) and ops-agent (DIRECTORY_API_KEY) |
-| Ops-agent RDS credentials | `cello/dev/ops-agent/rds-credentials` | POPULATED (rotated) | Rotation Lambda set real password for `cello_ops_agent` PostgreSQL role; re-rotated 2026-05-29 |
+| Ops-agent RDS credentials | `cello/dev/ops-agent/rds-credentials` | POPULATED (re-synced 2026-06-30) | `cello_ops_agent` role password re-synced to match Secrets Manager value via `ALTER ROLE` on 2026-06-30. The DB-side password had drifted from the stored secret sometime around 2026-06-28 (first auth failure logged 2026-06-28T00:29Z); likely caused by the M8 portal deploy work. The ops agent task (running since 2026-06-21) held a stale connection pool that worked until pg recycled connections. Fix: set DB password = Secrets Manager password + restart task. |
 | SES credentials | `cello/dev/ops-agent/ses-credentials` | POPULATED | IAM user `cello-ses-smtp-dev` access key; populated 2026-05-29 |
 
 #### Key Resources — dev us-east-1
