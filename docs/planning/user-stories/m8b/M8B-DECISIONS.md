@@ -149,3 +149,18 @@ keeps the unit a focused daemon-only port), and the manifest does NOT list relay
 directory (relay_id → public_key_hex) over its signaling stream, caches per relay_id. Reversible: embedding
 the pubkey in the assignment can be added in OPTIONB-SETUP-1 if a round-trip-free path is wanted. RELAYSIG-1
 is therefore a pure daemon port of the dead core/client receipt store + verifyRelayAck into the live daemon.
+
+## 2026-07-01 (revised) — DOD-RELAYSIG-1: verify ACK SELF-CONSISTENCY (relayId-derived pubkey), defer relay-registration check to OPTIONB-SEAL
+SUPERSEDES the earlier "relay_pubkey_request round-trip" decision. Found: the relay uses SEPARATE
+ack-signing + transport keys (relay.ts:196/200), `relayId = hex(ack-signing pubkey)` (relay.ts:197), and
+the daemon connects to the DIRECTORY-ATTESTED assigned relay over a transport-authenticated libp2p stream.
+So RELAYSIG-1's "client verifies" = verify the ACK is SELF-CONSISTENT: `relayPubkey = unhex(relay_id)`
+(reject non-64-hex), `verifyRelayAck(content_hash, seq, ts, sig, relayPubkey)` — a forged SEQUENCE changes
+the TBS so its signature fails (the DoD's "forged sequence is rejected"). The receipt stores relay_id +
+signature so the FULL trust binding (is relay_id the directory-REGISTERED relay for this session?) is done
+by the DIRECTORY at seal time — DOD-OPTIONB-SEAL-1 ("directory rebuilds + verifies the tree offline"),
+which is exactly where the receipts are carried. This is the any-relay separation (client stores
+self-consistent relay receipts; directory does the authoritative verification at seal), NOT a minimization:
+the relay-registration check is not dropped, it lives where the receipts are consumed. No directory
+round-trip in RELAYSIG-1 ⇒ a focused daemon wiring (inject RelayReceiptStore into session-relay-client,
+verify+store in #dispatch, + a cello_get_relay_receipts query path for the spine).
