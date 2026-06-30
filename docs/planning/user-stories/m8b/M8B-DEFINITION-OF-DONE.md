@@ -155,7 +155,15 @@ description: >
 
 ## Tier C — Cross-node directory state (independent)
 - **DOD-PRESENCE-1** — `agent_presence` + `directory_nodes` in `cello_pub` (REPLICA IDENTITY confirmed for
-  UPDATE replication); agent online on node A reads online from node B. *(FED-PRESENCE-001)* — ❌
+  UPDATE replication); agent online on node A reads online from node B. *(FED-PRESENCE-001)* — ✅ SPINE-PROVEN
+  (V38 migration: GRANT UPDATE on directory_nodes + REPLICA IDENTITY DEFAULT on agent_presence + REPLICA
+  IDENTITY USING INDEX directory_nodes_node_id_key. setup-replication.sh: both tables added to
+  PUBLICATION_TABLES (now 16). **J-PRESENCE spine GREEN**: agent connects to node 0 → presence written;
+  seeded to node 1 (simulated replication) → the full portal JOIN path reports online. Schema gate:
+  relreplident=d (agent_presence) + i (directory_nodes). Also resolves the DOD-SUSPEND-1 parked
+  production gap: agent_profiles + agent_suspensions are ALREADY in cello_pub, so once PRESENCE-1 deploys
+  and setup-replication.sh is re-run, every sovereign node can honor cross-node suspension flags.
+  Reviewers pending.)
 - **DOD-PICKUP-1** — `pickup_queue.id` → UUID; in `cello_pub`; `sweepUndeliverablePickups` gated to the
   owning node. Ciphertext written on node A drains on a daemon connected to node B; sweep never deletes a
   deliverable row on an unconverged replica. *(FED-PICKUP-001)* — ❌
