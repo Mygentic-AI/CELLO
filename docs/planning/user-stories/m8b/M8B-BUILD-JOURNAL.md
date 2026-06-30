@@ -1008,3 +1008,66 @@ the j-optionb-setup spine. Touches DIRECTORY + RELAY + protocol-types (deploy ba
 OPTIONB-SEAL-1 (the hardest remaining — directory rebuilds + verifies the Merkle tree OFFLINE from
 client-carried relay receipts + FROST-seals, NO directory→relay getSealLeaves/confirmSeal). Per the
 Opus-priority decision, do SETUP + SEAL on Opus before PRESENCE/PICKUP/DEPLOY.
+
+### 2026-07-01 ~05:00 — DOD-OPTIONB-SETUP-1 — IMPLEMENTED, spine GREEN (j-optionb-setup + j-relaysig), reviewers in progress
+**The any-relay/any-directory cutover.** Deleted the directory→relay `recordAssignment` dial (the
+`relays[0]`-pinned, SG-locked, restart-breaking `relay_unavailable` root cause — memory
+project_relay_directory_any_to_any). The directory now signs a per-node relay-assignment signature and
+ships it INSIDE the client-facing `session_assignment`; the CLIENT presents it to ITS chosen relay; the
+relay verifies it against the consortium directory pubkey SET. Design A + the 2 refinements, exactly as
+decided in M8B-DECISIONS.md. Files (both repos):
+- **protocol-types** `session.ts`: `relay_directory_signature?` on `SessionAssignmentCommon` (distinct
+  from `directory_signature` = the FROST session-establishment sig; this authorizes the RELAY ASSIGNMENT).
+- **directory** `directory-node.ts`: keep the relayDirSig compute, attach it to the client-facing
+  assignment (cast — the pinned published protocol-types type lacks the field until the DEPLOY-1 bump);
+  DELETE `this.#relay.recordAssignment(...)` (3135) + the `#relayAuthenticated` flag. `directory-frames.ts`
+  `encodeSessionAssignment`: include `relay_directory_signature` (it WHITELISTS fields — this was the
+  bug, see below). `#relay`/getSealLeaves/confirmSeal stay for OPTIONB-SEAL-1.
+- **relay** `relay-node.ts`: `#directoryPubkeys[]` (consortium set); `recordAssignment` verifies the TBS
+  vs ANY of them; NEW `#processClientRecordAssignment` handler on the authenticated CLIENT stream (no
+  admin-auth — authority is the assignment_signature vs the consortium set; fail loud `assignment_invalid`
+  /`relay.assignment.rejected`). `relay-frames.ts`/`relay-types.ts`: `client_record_assignment` frame +
+  decode. `bin/relay.ts`: parse `CELLO_DIRECTORY_PUBKEYS` (comma-hex, fallback single).
+- **client** `session-relay-client.ts`: `AgentRelayClient.registerSession` takes the assignment carry;
+  `#doRecord` sends `client_record_assignment` + awaits `assignment_ok` (single-in-flight on `#submitChain`,
+  stream-reset on timeout like submit); `#doSubmit` records before the first hash_submit; `#dispatch`
+  handles `assignment_ok`/`assignment_invalid`. `RelayConnectParams` + `buildRelayConnectParams`
+  (daemon.ts) thread participant pubkeys/timestamp/peer-ids/sig; `session-node-manager.ts` passes it.
+- **spine** `live-harness.ts`: relay gets all 3 node pubkeys via `CELLO_DIRECTORY_PUBKEYS`.
+  `j-optionb-setup.spine.test.ts`: routes the session through a NON-node-0 directory; asserts the relay
+  records `source:client` + a node-1-signed assignment is accepted (any-directory teeth).
+
+**THE BUG (producer gap, caught by j-relaysig regressing):** `encodeSessionAssignment` WHITELISTS the
+fields it encodes — my directory cast set `relay_directory_signature` on the object, but the encoder
+silently DROPPED it before the wire. The client always parsed `undefined` → no carry → no record → relay
+never learned the session → hash_submit rejected → no receipt. Fixed by adding the field to the encoder.
+Lesson: a frame encoder that whitelists is a silent field-drop trap — adding a field to the type/object
+is not enough; the encoder must include it. The spine (j-relaysig, which had nothing to do with Option B
+on its face) was the enforcer that caught it.
+
+**Falsify-first confirmed:** the spine sessions are RELAY-mode by default (`CELLO_ENV=local` →
+`LocalTransportSelectorStub` → `dialable:false`), so the path is exercised without forcing anything.
+
+**Gates:** relay 165/165 (incl. 3 new client_record_assignment unit tests: any-directory accept,
+forged-signature reject `directory_signature_invalid`, hash_submit-after-record), daemon 458/458,
+directory 660/660 (5 obsolete dial-contract tests rewritten to Option B, 1 retired warn-regression),
+typecheck + lint clean, reachability gate green. **J-OPTIONB-SETUP spine GREEN + J-RELAYSIG back-compat
+GREEN.** Commits: trustless `12780b2e` (feat) `3805ef5f` (directory tests) `c3471d3a` (relay tests);
+cello-client `55f2b28`. Held unpushed (directory+relay → DOD-DEPLOY-1 batch); cello-client unpushed too.
+
+**Reviewers (read-only):** `cello-fallback-finder` DONE — NO HIGH (the crypto verify is mandatory + fails
+CLOSED; no forged/non-consortium assignment can look healthy, no send settles ok without a witness on the
+sender path). 3 MEDIUM + 2 LOW, all about DIAGNOSABILITY of intended degradation — ALL FIXED: (#1) parser
+silently dropped a present-but-malformed sig → daemon `buildRelayConnectParams` now warns
+`session.relay.assignment.signature.missing` when transport_mode=relay but no sig (the only signal on a
+pure receiver); (#3) missing `CELLO_DIRECTORY_PUBKEYS` silently disabled any-directory → relay now logs
+`relay.startup.consortium-directories` {count, anyDirectory}; (#4) stale "relay has registered it" comment
+fixed; (#2/#5) the intended unwitnessed-degrade is now diagnosable via #1's warn. `feature-dev:code-reviewer`
+(opus) + `cello-test-attacker` still in flight — fixes + final gate re-run + DoD ✅ flip pending their return.
+
+**RESUME → finish DOD-OPTIONB-SETUP-1:** fold in code-reviewer + test-attacker findings, re-run the
+gate (relay+daemon+directory units + j-optionb-setup + j-relaysig), commit, flip the DoD line to ✅
+SPINE-PROVEN + status board, THEN start DOD-OPTIONB-SEAL-1 (the hardest remaining — directory rebuilds +
+verifies the Merkle tree OFFLINE from client-carried relay receipts + FROST-seals, deleting the
+getSealLeaves/confirmSeal directory→relay calls; `#relay` adapter fully removable after that completes
+DOD-INV-NO-DIR-RELAY).

@@ -1276,7 +1276,7 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
 
   // ─── SESSION-002 AC-011: stream close mid-establishment ───────────────────────
 
-  it("SESSION-002 AC-011: initiator stream closes after relay.recordAssignment and AFTER both clients received assignment → relay NOT discarded (session fully established)", async () => {
+  it("SESSION-002 AC-011: initiator stream closes AFTER both clients received the assignment → relay NOT discarded (session fully established)", async () => {
     // Happy path: both frames sent → session leaves provisional tracking.
     // Closing A's stream afterwards must NOT trigger discard or abandoned.
     const keyA = generateKeypair();

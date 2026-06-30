@@ -269,6 +269,28 @@ describe("M7-WIRE-001: encodeSessionAssignment with M7 fields", () => {
 
     expect(assignment["transport_mode"]).toBe("direct");
   });
+
+  // FED-OPTIONB-SETUP-001 — regression guard for the encoder whitelist-drop bug. encodeSessionAssignment
+  // builds an explicit field allow-list, so a field set on the assignment object is SILENTLY DROPPED
+  // unless the encoder includes it. That exact gap shipped relay_directory_signature off the wire, broke
+  // the client record + j-relaysig receipts. These pin: present ⇒ on the wire; absent ⇒ not on the wire.
+  it("FED-OPTIONB-SETUP-001: encodes relay_directory_signature into the CBOR when present", () => {
+    const frame = makeBaseAssignment();
+    const relayDirSig = makeSignature(0xab);
+    (frame.assignment as { relay_directory_signature?: Uint8Array }).relay_directory_signature = relayDirSig;
+    const decoded = decode(encodeSessionAssignment(frame)) as Record<string, unknown>;
+    const assignment = decoded["assignment"] as Record<string, unknown>;
+    const got = assignment["relay_directory_signature"];
+    expect(got).toBeInstanceOf(Uint8Array);
+    expect(Buffer.from(got as Uint8Array).equals(Buffer.from(relayDirSig))).toBe(true);
+  });
+
+  it("FED-OPTIONB-SETUP-001: omits relay_directory_signature when absent (direct-mode assignment)", () => {
+    const frame = makeBaseAssignment(); // no relay_directory_signature set → direct/legacy
+    const decoded = decode(encodeSessionAssignment(frame)) as Record<string, unknown>;
+    const assignment = decoded["assignment"] as Record<string, unknown>;
+    expect(assignment["relay_directory_signature"]).toBeUndefined();
+  });
 });
 
 describe("M7-WIRE-001: decodeOutboundSignalingFrame with M7 fields", () => {

@@ -3132,7 +3132,9 @@ export class CelloDirectoryNode {
         (assignment as { relay_directory_signature?: Uint8Array }).relay_directory_signature = relayDirSig;
       }
 
-      // Track as provisional: relay has registered it, but clients haven't yet received it.
+      // Track as provisional: the assignment is signed but clients haven't yet received it. (Under
+      // Option B / FED-OPTIONB-SETUP-001 the directory does NOT register the session with the relay —
+      // the CLIENT records it via client_record_assignment after receiving the assignment.)
       // If the initiator's stream closes before both frames are sent, AC-011 cleanup fires.
       const sessionIdHex = Buffer.from(session_id).toString("hex");
       this.#pendingSessions.set(sessionIdHex, {

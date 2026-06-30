@@ -173,6 +173,15 @@ if (dirPubkeysHex) {
     }
   }
 }
+// FED-OPTIONB-SETUP-001 (fallback-finder #3): make the any-directory wiring VISIBLE at startup. With a
+// single configured pubkey, any-directory is effectively OFF — assignments signed by other sovereign
+// directories are rejected. Without this log a forgotten CELLO_DIRECTORY_PUBKEYS looks like random
+// per-directory session failures rather than a config gap. Fails closed either way (a non-listed sig is
+// rejected), but the operator needs to SEE the consortium size.
+logger.info("relay.startup.consortium-directories", {
+  count: dirPubkeys.length,
+  anyDirectory: dirPubkeys.length > 1,
+});
 
 // ─── Signing key loading ────────────────────────────────────────────────────────
 //

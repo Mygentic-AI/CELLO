@@ -511,7 +511,18 @@ export class CelloRelayNode {
    * the directory). `session_already_exists` is success from the client's view — the OTHER party (or a
    * retry) already recorded the same assignment, which is the idempotent expected case.
    */
-  async #processClientRecordAssignment(stream: Stream, frame: ClientRecordAssignment): Promise<void> {
+  async #processClientRecordAssignment(stream: Stream, authedPubkeyHex: string, frame: ClientRecordAssignment): Promise<void> {
+    // Defense-in-depth (code-review L3): the authenticated client must be a PARTICIPANT of the session it
+    // is recording. The assignment is already consortium-signed (unforgeable) and a non-participant can't
+    // submit leaves, so this is not load-bearing — but it stops an authenticated peer from pre-recording
+    // arbitrary sessions it has no part in. Reject loud rather than silently record.
+    const participantAHex = Buffer.from(frame.participant_a).toString("hex");
+    const participantBHex = Buffer.from(frame.participant_b).toString("hex");
+    if (authedPubkeyHex !== participantAHex && authedPubkeyHex !== participantBHex) {
+      this.#logger.warn("relay.assignment.rejected", { sessionId: truncHex(Buffer.from(frame.session_id).toString("hex")), source: "client", reason: "not_a_participant" });
+      await this.#sendFrame(stream, CBOR_ENC.encode({ type: "assignment_invalid", reason: "not_a_participant" }) as Uint8Array);
+      return;
+    }
     const result = this.recordAssignment({
       session_id: frame.session_id,
       participant_a: frame.participant_a,
@@ -850,7 +861,7 @@ export class CelloRelayNode {
         } else if (parsed.type === "session_liveness_query") {
           await this.#processSessionLivenessQuery(stream, parsed);
         } else if (parsed.type === "client_record_assignment") {
-          await this.#processClientRecordAssignment(stream, parsed);
+          await this.#processClientRecordAssignment(stream, authedPubkeyHex!, parsed);
         }
       }
     } catch (err: unknown) {
