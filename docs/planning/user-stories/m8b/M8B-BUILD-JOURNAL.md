@@ -1282,3 +1282,27 @@ fallback-finder (the Opus quota should have reset by then — 6:40am Blantyre = 
 findings, commit, flip DoD to ✅ SPINE-PROVEN + DOD-INV-NO-DIR-RELAY ✅ (getSealLeaves+confirmSeal+rejectSeal
 all deleted; only getSessionLiveness + discardSession remain — parked for PRESENCE/PICKUP, not the seal invariant).
 THEN advance to DOD-PRESENCE-1 (cross-node replication, Track C — Sonnet-safe).
+
+### 2026-07-01 ~11:20 — DOD-OPTIONB-SEAL-1 — F1/F2/F3 FIXED, gates GREEN, 2 reviewers re-dispatched
+**All 3 test-attacker findings fixed:**
+- **F1 (blocking, cello-client `fcb09df`):** 3 new tests in session-relay-client.test.ts that construct
+  AgentRelayClient WITH a `sealLeafStore` + `receiptStore` (real Ed25519 relay signatures via
+  `buildRelayAckTbs` + `generateKeypair`). Proves: (a) own-leaf ack → store has receipt fields, (b)
+  counterparty leaf_deliver → store has no receipt, (c) own-echoed leaf_deliver → no duplicate receiptless
+  row (immutability). All three pass with valid crypto (no fake signatures).
+- **F2 (blocking, trustless-cello `52b5c37d`):** new `triggerSealUnilateralWithLeavesForTest` hook on
+  DirectoryNode (passes seal_leaves to #processSealUnilateral, returns Promise). Integration test: a
+  forged carry (random 64-byte relay_signature) → `session.unilateral.verification.failed` with reason
+  `unilateral_receipt_invalid` logged, no `session.unilateral.notarized` event.
+- **F3 (medium, trustless-cello `52b5c37d`):** explicit test — counterparty leaf at seq 3 with seq 2
+  missing → `unilateral_chain_noncontiguous` (contiguity catches counterparty omissions independently of
+  receipt-pinning).
+
+**Gates (post-F1/F2/F3):** daemon 468/468 (+3 from F1), directory 665/665 (+2 from F2/F3), relay 165/165,
+typecheck clean. **Spines:** j-unilateral 3/3 GREEN, j-optionb-setup GREEN, j-sign GREEN, j-relaysig GREEN.
+
+**Reviewers re-dispatched (running):** code-reviewer (model:'opus', focus: counterparty-reorder/omit security
+crux) + fallback-finder (focus: seal-leaf capture fail-open paths). Pending their return.
+
+**RESUME → fold code-reviewer + fallback-finder findings, commit fixes, flip DOD-OPTIONB-SEAL-1 → ✅ +
+DOD-INV-NO-DIR-RELAY → ✅, THEN advance to DOD-PRESENCE-1.**
