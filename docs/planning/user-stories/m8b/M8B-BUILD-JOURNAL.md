@@ -1227,3 +1227,18 @@ a receipt ⇒ refused):**
 6. j-optionb-seal spine + 3 reviewers + flip DoD + DOD-INV-NO-DIR-RELAY → ✅.
 
 This is the precise, unambiguous starting point for the SEAL-1 implementation (survives an Opus→Sonnet switch).
+
+### 2026-07-01 ~06:15 — DOD-OPTIONB-SEAL-1 — increment 1 ✅ (daemon leaf-log persistence)
+Increment 1 of the 6-step plan DONE + committed (cello-client `d27adbf`). RelayReceiptStore persists the
+per-leaf carry bytes (structure2_cbor + structure1_cbor + leaf_kind) alongside the receipt via a safe
+additive migration (nullable cols, PRAGMA-guarded idempotent ALTER); `getSealLeaves(agent, session)`
+returns the complete ordered chain; `#captureReceipt` threads them (+ a new `#pendingLeafKind` paired like
+`#pendingStructure1`). Red-first (2 store tests), daemon 462/462, build clean. **Remaining increments:**
+2. protocol-types: add `leaves` + `receipts` to the `seal_unilateral` frame. 3. daemon send (daemon.ts:2428):
+populate from `getSealLeaves`. 4. directory consume (`#processSealUnilateral`): take carried leaves+receipts,
+DELETE `#relay.getSealLeaves` (:3383), add the relay-receipt + CONTIGUITY verification (the omit/reorder
+teeth — verify each leaf's relay signature over buildRelayAckTbs vs the session's assigned relay pubkey +
+sequences contiguous). 5. DELETE confirmSeal/rejectSeal calls (idle-sweep reclaims) + remove
+`#relay`/`#relayEndpoint`/updateMultiaddr + network-relay-adapter. 6. j-optionb-seal spine + 3 reviewers +
+flip DoD + DOD-INV-NO-DIR-RELAY → ✅. The directory verify (4) is the security-critical piece (deserves the
+most care). All held unpushed for DOD-DEPLOY-1.
