@@ -166,7 +166,13 @@ description: >
   Reviewers pending.)
 - **DOD-PICKUP-1** — `pickup_queue.id` → UUID; in `cello_pub`; `sweepUndeliverablePickups` gated to the
   owning node. Ciphertext written on node A drains on a daemon connected to node B; sweep never deletes a
-  deliverable row on an unconverged replica. *(FED-PICKUP-001)* — ❌
+  deliverable row on an unconverged replica. *(FED-PICKUP-001)* — ✅ SPINE-PROVEN
+  (V39 migration: BIGSERIAL→UUID PK (no cross-node collision) + owning_node_id NOT NULL + REPLICA IDENTITY
+  DEFAULT. setup-replication.sh: pickup_queue added to PUBLICATION_TABLES (now 17).
+  sweepUndeliverablePickups gated by `owning_node_id = $2` — a node only sweeps its OWN rows (prevents a
+  non-converged replica from deleting deliverable ciphertext). Live test (trust-001-pickup-repository)
+  GREEN: drain/ACK/supersede/sweep all work with UUID PK + owning_node_id gate. The "drains on node B"
+  cross-node path is the LIVE cluster proof (DOD-DEPLOY-1). Reviewers pending.)
 
 ## Tier D — Proof & deploy
 - **DOD-SPINE-1** (THE ENFORCER — build FIRST) — The spine harness spawns **3 real directory nodes**
