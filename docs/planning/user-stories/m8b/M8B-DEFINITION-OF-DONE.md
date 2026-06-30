@@ -103,7 +103,19 @@ description: >
 ## Tier B — Directory↔relay (Option B) — depends on Tier A group key + DOD-MANIFEST-1
 - **DOD-RELAYSIG-1** — Relay signs its ordering record (Structure2) + PERSIST-012 signed-ACK + immutable
   receipt store ported from dead `core/client` into the live daemon; client verifies + durably stores the
-  receipt; a forged sequence is rejected. *(FED-RELAYSIG-001)* — ❌
+  receipt; a forged sequence is rejected. *(FED-RELAYSIG-001)* — ✅
+  (Daemon PORT — relay-side ACK signing was already LIVE. core/daemon/relay-receipt-store.ts: verifyRelayAck
+  (Ed25519 over the relay's TBS, byte-for-byte cross-repo agreement confirmed) + RelayReceiptStore (SQLCipher
+  relay_ack_receipts, keyed on the attestation POSITION (agent, session, sequence) so repeated content isn't
+  dropped + immutable at a position) + a pure evaluateRelayAck. Wired into session-relay-client #captureReceipt
+  (verify→store; a forged/invalid ACK is REJECTED — not stored, and rejects the submit so the send doesn't
+  settle on an unverified sequence). cello receipts / cello_get_relay_receipts query path. **J-RELAYSIG spine
+  GREEN**: A→B send → relay signs → daemon verifies + durably stores → cello receipts returns the receipt AND
+  the test independently RE-VERIFIES its Ed25519 signature. 3 reviewers (TBS/FIFO-pairing/forged-rejection
+  confirmed sound); fixed the position-key HIGH, the verify-gates-store wiring test (blocking), and made the
+  silent drops loud. Forged-sequence rejection unit-proven (evaluateRelayAck). daemon 458/458, 5 receipt
+  unit tests, back-compat j-sign green. The authoritative registered-relay check is deferred to OPTIONB-SEAL
+  (see Parked); the relay-receipt CLIENT side is what RELAYSIG-1 delivers.)
 - **DOD-OPTIONB-SETUP-1** — Client presents the directory-signed assignment to its chosen relay; relay
   verifies vs the group key; `recordAssignment`/`#relay` pin deleted. Session establishes with NO
   directory→relay dial; any relay the client picks works; `relays[0]` pin + restart-breakage gone.
@@ -224,3 +236,21 @@ description: >
   DOD-MANIFEST-1 (manifest-based N-endpoint RESOLUTION). Revisit during/after DOD-MANIFEST-1 (which works
   in the same manifest area) or as a standalone fix. Logged here so it is never mistaken for federation
   breakage and never silently dropped.
+
+- **DOD-RELAYSIG-1 — relay_id not bound to the assigned relay (deferred to OPTIONB-SEAL); send not yet
+  surfaced as witnessed/unwitnessed (LOW follow-ons).** `#captureReceipt` verifies the ACK against
+  `relayPubkey = unhex(relay_id)` (self-consistent: the signature binds the sequence ⇒ a forged sequence is
+  rejected) and stores `relay_id` as the (attacker-assertable) value. It does NOT cross-check `relay_id`
+  against the directory-signed SessionAssignment's relay — by design: the relay's ack-signing key is a
+  different key from the libp2p peer id in the assignment, so no cheap local equality exists, and BOTH
+  reviewers confirmed it causes NO pre-seal harm (nothing consumes `relay_id` pre-seal except the
+  `cello receipts` display). The **authoritative registered-relay check is DOD-OPTIONB-SEAL-1's** — the
+  directory rebuilds + verifies the tree offline and checks each receipt's relay against its registration;
+  that check is load-bearing and must land there. RELAYSIG-1 delivers the CLIENT side (verify-self-consistent
+  + durably store). Also LOW (observability, parkable): `cello_send` returns ok regardless of whether a
+  signature-verified receipt was stored (relay-miss/unsigned-relay degrade to "ok but unwitnessed" — the
+  sovereign-node redundancy invariant, intended) — surfacing a `witnessed` bit on the send result would let
+  an operator distinguish fully-witnessed from best-effort. The silent drops are now LOUD (logged), so the
+  degradation is diagnosable; the result-shape bit is a follow-on. And `getRelayReceipts` returns `[]` before
+  `initialize()` (pre-init, bounded). Revisit the relay-binding when OPTIONB-SEAL lands; the witnessed-bit as
+  a standalone observability improvement.

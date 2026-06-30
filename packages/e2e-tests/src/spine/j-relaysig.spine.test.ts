@@ -31,6 +31,9 @@ import {
   type McpConn,
 } from "./live-harness.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
+import { buildRelayAckTbs, verify } from "@cello-protocol/crypto";
+
+const unhex = (h: string): Uint8Array => Uint8Array.from(Buffer.from(h, "hex"));
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -134,12 +137,18 @@ describe("J-RELAYSIG — relay-signed ordering receipts (DOD-RELAYSIG-1)", () =>
     expect(receiptsOut.ok, `cello receipts failed: ${JSON.stringify(receiptsOut)}`).toBe(true);
     const receipts = receiptsOut.receipts ?? [];
     expect(receipts.length, `daemon must have stored ≥1 verified relay receipt after the send: ${JSON.stringify(receiptsOut)}`).toBeGreaterThanOrEqual(1);
-    const r0 = receipts[0];
-    // A stored receipt is signature-verified by construction; assert it is well-formed.
+    const r0 = receipts[0] as { hash_hex: string; relay_id: string; sequence_number: number; signature_hex: string; timestamp: number };
+    // Well-formed.
     expect(r0.hash_hex, `receipt hash: ${JSON.stringify(r0)}`).toMatch(/^[0-9a-f]{64}$/);
     expect(r0.relay_id, `receipt relay_id (= relay ack-signing pubkey hex): ${JSON.stringify(r0)}`).toMatch(/^[0-9a-f]{64}$/);
     expect(r0.signature_hex, `receipt signature (64-byte Ed25519): ${JSON.stringify(r0)}`).toMatch(/^[0-9a-f]{128}$/);
     expect(typeof r0.sequence_number, `receipt sequence number: ${JSON.stringify(r0)}`).toBe("number");
+    // END-TO-END TEETH: independently RE-VERIFY the stored receipt's Ed25519 signature over the relay's
+    // canonical TBS = SHA-256(hash || seq_BE4 || ts_BE8) against the relay_id-derived pubkey. The daemon
+    // stores ONLY signature-verified receipts (#captureReceipt/evaluateRelayAck), so a genuine signature
+    // here proves the daemon stored a real relay attestation — not a fabricated/garbage row.
+    const tbs = buildRelayAckTbs(unhex(r0.hash_hex), r0.sequence_number, r0.timestamp);
+    expect(verify(unhex(r0.relay_id), tbs, unhex(r0.signature_hex)), `the stored receipt's relay signature must re-verify: ${JSON.stringify(r0)}`).toBe(true);
 
     // The directory log confirms the relay actually signed (PERSIST-012) — the receipt is its attestation.
     const stored = daemon.output.split("\n").some((l) => /relay\.receipt\.stored/.test(l));

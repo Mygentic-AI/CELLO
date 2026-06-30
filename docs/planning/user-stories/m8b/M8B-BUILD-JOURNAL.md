@@ -23,7 +23,7 @@ description: >
 | FED-SIGN-001 | DOD-SIGN-1 | client+dir | ✅ spine-proven | T-of-N seal: ≥2 dirs FROST-sign, kill-a-participant still seals, FROST-not-single-key (j-sign teeth); 3 reviewers clean (B1 fixed: session-signing store reconstruction); restart-path + REFRESH cache parked |
 | FED-SUSPEND-001 | DOD-SUSPEND-1 | dir+crypto | ✅ spine-green, 3 reviewers clean | j-suspend-tofn green (103s): 2-suspended ⇒ block w/ EXACT `ceremony_exhausted`+retry; 1-suspended ⇒ nodes 0,2 sign while node 1 emits FRESH refusal (route-AROUND proven); agent B signs through 1,2 ⇒ agent-scoped. Fixes: signer commit-round per-stub exclusion + per-node timeout/deadline (bcea30a/5cd2da2), directory nonce-replace (87d226c2, consume-once confirmed by all 3). Fallback HIGH made LOUD: frost.suspension.uncheckable + hasAgentProfile. Production quorum-binding → PRESENCE-1 (Tier C) |
 | FED-REFRESH-001 | DOD-REFRESH-1 | client+dir+crypto | ✅ spine-GREEN, 6 reviewers clean | Zero-constant PSS, group key UNCHANGED. J-REFRESH spine GREEN: refresh twice → digest CHANGES (proves rotation, kills the no-op) + group pubkey==P1 + all dirs applied + post-refresh seals. crypto published 0.0.13; daemon runNetworkRefresh + runAgentRefresh + cello refresh CLI; directory refreshRound1/2 (durable persist before epoch advance) + getMaxEpoch (expiry survives restart, unit-tested). 6 reviewers (3 crypto SOUND + 3 wiring no-blocking); fixed digest-teeth/HIGH-1/HIGH-2/M2/L7 + stale SUSPEND-1 nonce tests. directory 661/661, daemon 453/453, crypto 254/254, back-compat green. PARKED: cross-party atomicity (2-phase commit) + forward-secrecy delete — alpha fail-loud+manual-re-refresh |
-| FED-RELAYSIG-001 | DOD-RELAYSIG-1 | relay+client | 🔨 design done (daemon PORT), building | Explore mapped it: relay-side DONE (relay signs Structure2 ACK, PERSIST-012, relay-node.ts:1129); receipt verify+store EXISTS in DEAD core/client (agent-hash-queue.ts verifyRelayAck + relay_ack_receipts schema); LIVE daemon receives the ACK (session-relay-client.ts:271) but never verifies/stores it. RELAYSIG-1 = pure DAEMON port: receipt store + verifyRelayAck + relay-pubkey lookup (directory relay_pubkey_request, already exists — decision logged) wired into #dispatch; reject forged sig. NO directory change. NEXT: receipt store → verify+store in #dispatch → relay-pubkey lookup → J-RELAYSIG spine |
+| FED-RELAYSIG-001 | DOD-RELAYSIG-1 | relay+client | ✅ spine-GREEN, 3 reviewers clean | Daemon PORT (relay-side ACK signing already live). relay-receipt-store.ts (verifyRelayAck + evaluateRelayAck + RelayReceiptStore, keyed on the attestation POSITION agent/session/seq, immutable) wired into session-relay-client #captureReceipt (verify→store; forged ACK rejected + rejects the submit) + cello receipts. J-RELAYSIG spine GREEN: A→B send → relay signs → daemon verifies + stores → cello receipts returns it AND the test re-verifies the Ed25519 signature. 3 reviewers: fixed position-key HIGH, verify-gates-store wiring test (blocking), loud silent-drops. daemon 458/458, 5 receipt units, back-compat j-sign green. Parked: registered-relay check → OPTIONB-SEAL; witnessed-bit. NO directory change (held for deploy unaffected) |
 | FED-OPTIONB-SETUP-001 | DOD-OPTIONB-SETUP-1 | dir+relay+client | ⬜ not started | client-presented assignment; kill relay dial |
 | FED-OPTIONB-SEAL-001 | DOD-OPTIONB-SEAL-1 | dir+client | ⬜ not started | client-carried receipts; offline seal |
 | FED-PRESENCE-001 | DOD-PRESENCE-1 | dir+infra | ⬜ not started | presence + directory_nodes → cello_pub |
@@ -894,3 +894,48 @@ client verifies + durably stores the receipt; a forged sequence is rejected." Pe
 discipline: the receipt store + Structure2 signing likely exist in the dead `core/client` (pre-REPOSPLIT) —
 LOCATE and adapt into the live daemon rather than rewrite. Falsify-first, red on the spine (j-relaysig:
 relay signs an ordering record → client verifies + stores → a tampered sequence number is rejected).
+
+### 2026-07-01 ~04:05 — DOD-RELAYSIG-1 ✅ — relay-receipt client port, J-RELAYSIG spine GREEN, 3 reviewers clean
+**A daemon-side PORT, not greenfield.** The relay already signs its ordering-record ACK (Structure2,
+PERSIST-012, relay-node.ts:1129); the verify+store logic existed in the dead pre-REPOSPLIT `core/client`;
+the live daemon received the ACK (session-relay-client.ts) but never verified or stored it. Ported into the
+live daemon: `relay-receipt-store.ts` (verifyRelayAck + evaluateRelayAck + RelayReceiptStore) wired into
+`#captureReceipt` + `cello receipts` query path. J-RELAYSIG spine GREEN (A→B send → relay signs → daemon
+verifies + durably stores → `cello receipts` returns it, and the test independently re-verifies the Ed25519
+signature end-to-end).
+
+**3 reviewers — all findings fixed:**
+- **code-reviewer HIGH (the important one):** the receipt PK was `(hash_hex, agent_pubkey)`, but
+  `content_hash` binds only the plaintext — identical messages ("ok") get the SAME hash at DIFFERENT valid
+  sequences, so `INSERT OR IGNORE` silently DROPPED legitimate attestations + broke the per-session query.
+  Re-keyed on the attestation POSITION `(agent_pubkey, session_id, sequence_number)` with the hash as
+  payload: repeated content is kept, the query is correct, and immutability now defends the REAL threat (a
+  relay rewriting the hash at an already-assigned position; equivocation logged loud). Lesson: a content
+  hash is NOT a unique ordering key — the position is.
+- **test-attacker BLOCKING:** `#captureReceipt`'s verify-gates-store WIRING was untested (delete the gate,
+  everything stayed green — the spine only proved "something stored"). Extracted a pure `evaluateRelayAck`
+  (store|unsigned|bad_relay_id|invalid_signature) and a direct unit test proving a forged/non-binding
+  signature → `invalid_signature`, never stored. Lesson: test the daemon's USE of the predicate, not just
+  the predicate.
+- **fallback-finder #1/#3/#4:** silent drops made loud (debug/warn/error), and a signed-but-INVALID ACK now
+  REJECTS the submit (`relay_ack_signature_invalid`) so the send doesn't settle ok on an unverified
+  sequence (it still completes via the direct path — sovereign-node redundancy).
+- **Sound (verified):** TBS byte-for-byte cross-repo agreement, `unhex(relay_id)` invalid-point safety,
+  ACK→pending FIFO pairing, forged-sequence rejection.
+
+**Gates:** daemon 458/458, 5 receipt unit tests, J-RELAYSIG spine GREEN, back-compat j-sign green.
+Parked (DoD): the authoritative registered-relay check is DOD-OPTIONB-SEAL-1's (the directory verifies each
+receipt's relay vs its registration at seal) — RELAYSIG-1 delivers the CLIENT side; + a send-result
+witnessed-bit (observability follow-on). NO directory/relay code change — the held trustless-cello batch is
+unaffected; cello-client pushed.
+
+**RESUME → DOD-OPTIONB-SETUP-1.** Next (Tier B, dir+relay+client): "Client presents the directory-signed
+assignment to its chosen relay; relay verifies vs the group key; recordAssignment/#relay pin DELETED.
+Session establishes with NO directory→relay dial; any relay the client picks works; relays[0] pin +
+restart-breakage gone." THIS is the any-relay/any-directory core (the recurring relay_unavailable root
+cause — memory project_relay_directory_any_to_any: us-east-1 pins recordAssignment to relays[0]=ap1). The
+client must carry the FROST-signed assignment to its chosen relay; the relay verifies vs the consortium
+group key; DELETE the directory→relay dial + the relays[0] pin. Assume-code-exists: locate recordAssignment
+/ the relays[0] pin / #relay in the directory + relay, and the assignment-carry path. This touches the
+DIRECTORY + RELAY (deploy batch) — falsify-first, red on the spine (j-optionb: establish a session with
+ZERO directory→relay calls; any relay the client picks works).
