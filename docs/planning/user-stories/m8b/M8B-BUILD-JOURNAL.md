@@ -1364,3 +1364,31 @@ typecheck clean, j-presence GREEN, all back-compat spines green. Both repos work
 built and has proven every Tier A/B/C unit. DOD-SPINE-1 can flip when the journeys are all run in one
 final pass. The Tier 0 invariants are proven by the existing journeys (INV-NODE by j-sign, INV-CHAIN by
 j-unilateral, etc.) — just need to tag them. Then DEPLOY-1 is the close gate (push + deploy + live proof).
+
+### 2026-07-01 ~14:20 — Tier 0 invariants ✅ + code-reviewer finding FIXED + DOD-SPINE-1 ✅
+**Code-reviewer (opus) COMPLETED — all 5 attack vectors BLOCKED, chain SOUND.** One defense-in-depth
+finding (85% confidence → 100%): the directory did not cross-validate Structure1.content_hash against
+Structure2.content_hash. Protected by prev_root chain already, but a compromised relay equivocation
+could theoretically deliver divergent values. **Fixed:** `decodeStructure1Fields` now extracts
+`content_hash` (index 1); both `#verifyUnilateralChain` and the bilateral processSeal chain now fail
+with `content_hash_mismatch` if the sender-signed hash ≠ relay-assigned hash. Defense-in-depth: fails
+FAST before the prev_root chain catches it downstream.
+- trustless-cello `e9c21bfb` — directory content_hash cross-validation
+- cello-client `11ab111` — protocol-types adds `content_hash_mismatch` to SealRejectionReason
+
+**Tier 0 invariants (commit `9163ce00`):**
+- DOD-INV-NODE ✅ — j-sign (kill participated directory → seal still completes)
+- DOD-INV-SOVEREIGN-WRITE ✅ — PRESENCE-1 + PICKUP-1 owning_node_id sweep gate
+- DOD-INV-RELAY-PLAINTEXT ✅ — Option B carries only content_hash (32B), never plaintext
+- DOD-INV-CHAIN ✅ — #verifyUnilateralChain enforces full chain (prev_root + sig + contiguity + causal)
+
+**DOD-SPINE-1 ✅ — final all-journeys pass GREEN:**
+j-tofn-dkg ✓ j-sign ✓ j-suspend-tofn ✓ j-relaysig ✓ j-optionb-setup ✓ j-unilateral ✓ j-presence ✓
+j-refresh ✓ (8 files, 10 tests). j-relaysig required isolated re-run (resource exhaustion in 1048s
+serial chain; passes clean alone in 62s). j-sign + j-unilateral GREEN post content_hash fix.
+
+**Gates:** directory 665/665, relay 165, typecheck 0, eslint 0.
+
+**RESUME → DOD-DEPLOY-1 (the close gate).** Push both repos, npm publish beta (protocol-types bump +
+cascade), deploy directory + relay to dev (all 3 regions), run journeys against live 3-region cluster.
+This is the final DoD line — M8B closes when DOD-DEPLOY-1 ✅.

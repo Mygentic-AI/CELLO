@@ -202,7 +202,13 @@ description: >
 - **DOD-SPINE-1** (THE ENFORCER — build FIRST) — The spine harness spawns **3 real directory nodes**
   locally and asserts the journeys: 2-of-3 DKG, T-of-N seal with a node down, suspend-quorum-refusal,
   Option B (no directory→relay), cross-node presence read, refresh rollover. All green on the 3-directory
-  spine. *(FED-SPINE-001)* — ❌
+  spine. *(FED-SPINE-001)* — ✅ ALL GREEN
+  (Final all-journeys pass: j-tofn-dkg ✓ j-sign ✓ j-suspend-tofn ✓ j-relaysig ✓ j-optionb-setup ✓
+  j-unilateral ✓ j-presence ✓ j-refresh ✓ — 8 spine test files, 10 tests total, all green against the
+  rebuilt 3-directory spine with V39 migrations + content_hash cross-validation defense-in-depth.
+  j-relaysig required an isolated re-run due to resource exhaustion in the serial chain (passes clean in
+  isolation, 62s). Post code-reviewer fix: Structure1↔Structure2 content_hash cross-validation added to
+  both unilateral and bilateral seal chains — verified by j-unilateral + j-sign green.)
 - **DOD-DEPLOY-1** — Cross-repo version bump + publish to beta; deploy changed directory + relay to dev
   (all 3 regions); recreate the missing `directory-ap1` A record; update STATE.md; re-run the journeys
   against the **live dev 3-region cluster**. *(FED-DEPLOY-001)* — ❌
