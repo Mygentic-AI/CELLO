@@ -403,11 +403,31 @@ export interface SealAttemptAck {
 /**
  * seal_unilateral: client → directory, requesting a unilateral seal after delivery_grace_seconds.
  */
+/**
+ * FED-OPTIONB-SEAL-001: a client-carried leaf for the directory's OFFLINE unilateral-tree rebuild. The
+ * relay receipt fields (relay_id/relay_timestamp/relay_signature) are present ONLY for the present party's
+ * own leaves (the relay signed an ACK over content_hash→seq → the teeth that pin order); the absent party's
+ * leaves carry none (pinned by their sender_signature + sequence contiguity).
+ */
+export interface SealUnilateralLeaf {
+  sequence_number: number;
+  leaf_kind: number;                 // 0x00 message / 0x02 control (SEAL)
+  structure2_cbor: Uint8Array;       // the relay's committed Structure2 (CBOR)
+  structure1_cbor: Uint8Array;       // the sender-signed Structure1 (CBOR)
+  relay_id?: string;                 // hex of the relay ack-signing pubkey (own leaves)
+  relay_timestamp?: number;          // Unix ms in the relay ACK TBS (own leaves)
+  relay_signature?: Uint8Array;      // 64-byte relay ACK signature (own leaves)
+}
+
 export interface SealUnilateral {
   type: "seal_unilateral";
   session_id: Uint8Array;     // 16 bytes
   reported_root: Uint8Array;  // 32-byte local Merkle root
   reported_seq: number;       // highest global sequence number in local tree
+  // FED-OPTIONB-SEAL-001 (Option B): the carried leaf chain (both parties) for the directory's offline
+  // tree rebuild. Optional for pre-M8B clients (the directory refuses a unilateral seal without it under
+  // Option B — there is no longer a directory→relay getSealLeaves fallback).
+  seal_leaves?: SealUnilateralLeaf[];
 }
 
 /**

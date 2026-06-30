@@ -506,7 +506,39 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     if (!session_id || session_id.length !== 16) return null;
     if (!reported_root || reported_root.length !== 32) return null;
     if (reported_seq === null) return null;
-    return { type: "seal_unilateral", session_id, reported_root, reported_seq };
+    // FED-OPTIONB-SEAL-001: the carried leaf chain for the directory's offline rebuild. Shape-validate
+    // strictly — a malformed entry voids the whole carry (the directory then refuses the seal), never
+    // silently drops a leaf (a dropped leaf would be an undetected omission). relay_* are optional
+    // (absent for the counterparty's leaves) but must be well-formed when present.
+    let seal_leaves: import("./directory-types.js").SealUnilateralLeaf[] | undefined;
+    const rawLeaves = o["seal_leaves"];
+    if (rawLeaves !== undefined) {
+      if (!Array.isArray(rawLeaves)) return null;
+      const parsed: import("./directory-types.js").SealUnilateralLeaf[] = [];
+      for (const raw of rawLeaves) {
+        if (typeof raw !== "object" || raw === null) return null;
+        const r = raw as Record<string, unknown>;
+        const sequence_number = typeof r["sequence_number"] === "number" ? r["sequence_number"] : null;
+        const leaf_kind = typeof r["leaf_kind"] === "number" ? r["leaf_kind"] : null;
+        const structure2_cbor = toUint8Array(r["structure2_cbor"]);
+        const structure1_cbor = toUint8Array(r["structure1_cbor"]);
+        if (sequence_number === null || leaf_kind === null) return null;
+        if (!structure2_cbor || structure2_cbor.length === 0) return null;
+        if (!structure1_cbor || structure1_cbor.length === 0) return null;
+        const relay_id = typeof r["relay_id"] === "string" ? r["relay_id"] : undefined;
+        const relay_timestamp = typeof r["relay_timestamp"] === "number" ? r["relay_timestamp"] : undefined;
+        const relay_signature = r["relay_signature"] !== undefined ? toUint8Array(r["relay_signature"]) ?? undefined : undefined;
+        // If any relay_* field is present, ALL three must be present + well-formed (a partial receipt is
+        // a malformed carry, not a counterparty leaf).
+        const anyRelay = relay_id !== undefined || relay_timestamp !== undefined || relay_signature !== undefined;
+        if (anyRelay) {
+          if (!relay_id || relay_timestamp === undefined || !relay_signature || relay_signature.length !== 64) return null;
+        }
+        parsed.push({ sequence_number, leaf_kind, structure2_cbor, structure1_cbor, relay_id, relay_timestamp, relay_signature });
+      }
+      seal_leaves = parsed;
+    }
+    return { type: "seal_unilateral", session_id, reported_root, reported_seq, seal_leaves };
   }
 
   // CELLO-M7-UPGRADE-001 (DOD-UP-1): returning absent party ratifies the unilateral seal.
