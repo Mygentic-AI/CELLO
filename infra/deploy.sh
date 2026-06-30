@@ -139,6 +139,19 @@ else
   echo "  RELAY_DIRECTORY_PUBKEY: derived ${RELAY_DIRECTORY_PUBKEY:0:16}... from node-private-key"
 fi
 
+# FED-OPTIONB-SETUP-001: consortium directory pubkeys for any-directory verification.
+# The relay verifies client-presented assignments against ANY consortium directory's sig.
+# Gather all sovereign node pubkeys from SSM across all 3 regions.
+CONSORTIUM_PUBKEYS=""
+for _CK_REGION in us-east-1 eu-central-1 ap-northeast-1; do
+  _CK_PK=$(aws ssm get-parameter --name "/cello/${ENVIRONMENT}/directory/manifest-signer-pubkey" \
+    --region "${_CK_REGION}" --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+  if [[ -n "${_CK_PK}" && "${_CK_PK}" != "None" ]]; then
+    CONSORTIUM_PUBKEYS="${CONSORTIUM_PUBKEYS:+${CONSORTIUM_PUBKEYS},}${_CK_PK}"
+  fi
+done
+echo "  CONSORTIUM_PUBKEYS: ${#CONSORTIUM_PUBKEYS} chars ($(echo "${CONSORTIUM_PUBKEYS}" | tr ',' '\n' | wc -l | tr -d ' ') nodes)"
+
 # CELLO-M6B-019: RELAY_MULTIADDR variable removed.
 # Relay addressing is now handled by the SSM node registry.
 # The directory reads /cello/{env}/nodes/relay/* at startup via GetParametersByPath.
@@ -943,6 +956,7 @@ deploy_stack "cello-ecs-relay-${ENVIRONMENT}" "cello-ecs-relay.yaml" \
   "Memory=${RELAY_MEM}" \
   "ImageUri=${RELAY_IMAGE}" \
   "DirectoryNodePubkey=${RELAY_DIRECTORY_PUBKEY}" \
+  "DirectoryConsortiumPubkeys=${CONSORTIUM_PUBKEYS}" \
   "DirectoryMultiaddr=${DIRECTORY_MULTIADDR}" \
   "RelayPublicMultiaddr=${RELAY_PUBLIC_MULTIADDR}"
 

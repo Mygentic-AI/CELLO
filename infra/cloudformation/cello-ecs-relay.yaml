@@ -27,6 +27,10 @@ Parameters:
   DirectoryNodePubkey:
     Type: String
     Description: "Hex-encoded Ed25519 public key of the directory node (64 chars)"
+  DirectoryConsortiumPubkeys:
+    Type: String
+    Description: "Comma-separated hex Ed25519 pubkeys of ALL sovereign directory nodes (any-directory verification)"
+    Default: ""
   DirectoryMultiaddr:
     Type: String
     Description: "Directory node multiaddr including /p2p/{peer-id} suffix (e.g. /dns4/directory-us1.cello.mygentic.ai/tcp/80/ws/p2p/12D3Koo...). Required — relay will not register with the directory and cannot participate in session assignment without this."
@@ -80,6 +84,9 @@ Resources:
               Value: /tmp
             - Name: CELLO_DIRECTORY_PUBKEY
               Value: !Ref DirectoryNodePubkey
+            # FED-OPTIONB-SETUP-001: all sovereign directory pubkeys so any-directory works.
+            - Name: CELLO_DIRECTORY_PUBKEYS
+              Value: !Ref DirectoryConsortiumPubkeys
             # CELLO-M6B-006: Directory multiaddr for auto-registration on startup.
             # The relay dials the directory and calls relay_register when this is set.
             - Name: CELLO_DIRECTORY_MULTIADDR
