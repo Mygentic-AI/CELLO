@@ -1469,7 +1469,7 @@ export class CelloDirectoryNode {
         } else {
           const toEpochId = req["toEpochId"] as string;
           const contributions = req["contributions"] as RefreshContribution[];
-          const result = this.#frostHandler.refreshRound2(agentPubkey, fromEpochId, toEpochId, signers, participantIds, contributions);
+          const result = await this.#frostHandler.refreshRound2(agentPubkey, fromEpochId, toEpochId, signers, participantIds, contributions);
           if (result.ok) {
             this.#logger?.info("frost.refresh.round2.ok", { agentShort: agentPubkey?.slice(0, 16), toEpoch: truncHex(toEpochId) });
           }

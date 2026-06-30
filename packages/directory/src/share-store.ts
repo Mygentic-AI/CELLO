@@ -74,6 +74,23 @@ export interface ShareStore {
   storeShare(agentPubkey: string, epochId: string, share: LocalShare): void;
 
   /**
+   * DOD-REFRESH-1: store a share AND await its durable persistence (unlike fire-and-forget storeShare).
+   * A proactive refresh ROTATES the share to a new epoch — if the new-epoch share is reported stored but
+   * never lands durably, a directory restart reverts to the old epoch and the client/directory epochs
+   * SPLIT (signing breaks). The refresh must therefore confirm the durable write before reporting success.
+   * Throws if the durable write fails. In-memory backends resolve immediately.
+   */
+  storeShareDurable(agentPubkey: string, epochId: string, share: LocalShare): Promise<void>;
+
+  /**
+   * DOD-REFRESH-1: the highest epoch N for which this node holds a share for `agentPubkey`, or undefined
+   * if none. The epoch-expiry guard derives the current epoch from this (the reloaded shares ARE the epoch
+   * record), so "old shares no longer sign" survives a directory restart even though the in-memory
+   * #currentEpoch counter does not. Parsed from the "…:epoch:N" store keys.
+   */
+  getMaxEpoch(agentPubkey: string): number | undefined;
+
+  /**
    * CELLO-M8-LEVER-002 (burn): destroy ALL K_server_X shares for an agent (every epoch). The
    * in-memory entries are removed; the persisted material is ZEROED (agent_key_shares is append-only —
    * row deletion is forbidden, so encrypted_share is overwritten empty: capability dies, the row /
@@ -104,6 +121,24 @@ export class InMemoryShareStore implements ShareStore {
 
   storeShare(agentPubkey: string, epochId: string, share: LocalShare): void {
     this.#shares.set(`${agentPubkey}:${epochId}`, share);
+  }
+
+  async storeShareDurable(agentPubkey: string, epochId: string, share: LocalShare): Promise<void> {
+    // In-memory store: there is no out-of-process durability to await — storing IS the commit.
+    this.#shares.set(`${agentPubkey}:${epochId}`, share);
+  }
+
+  getMaxEpoch(agentPubkey: string): number | undefined {
+    const prefix = `${agentPubkey}:`;
+    let max: number | undefined;
+    for (const key of this.#shares.keys()) {
+      if (!key.startsWith(prefix)) continue;
+      const m = /:epoch:(\d+)$/.exec(key);
+      if (!m) continue;
+      const n = parseInt(m[1], 10);
+      if (max === undefined || n > max) max = n;
+    }
+    return max;
   }
 
   async destroyShares(agentPubkey: string): Promise<void> {

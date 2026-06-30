@@ -202,6 +202,21 @@ export class PersistentShareStore implements ShareStore {
     );
   }
 
+  async storeShareDurable(agentPubkey: string, epochId: string, share: LocalShare): Promise<void> {
+    // DOD-REFRESH-1: unlike fire-and-forget storeShare, AWAIT the encrypted persist so a refresh confirms
+    // the new-epoch share landed durably before reporting success — else a restart reverts to the old
+    // epoch and the client/directory epochs split. Memory first (hot path), then await the durable write;
+    // a rejection propagates (the caller maps it to a loud refresh failure, no false success).
+    this.#memory.storeShare(agentPubkey, epochId, share);
+    await this.#encrypted.storeShare(agentPubkey, epochId, this.#serializeSecret(share));
+  }
+
+  getMaxEpoch(agentPubkey: string): number | undefined {
+    // After loadShares() rehydrates the in-memory cache on startup, the cache holds every persisted epoch,
+    // so the max there is the durable current epoch — this is what lets #isExpiredEpoch survive a restart.
+    return this.#memory.getMaxEpoch(agentPubkey);
+  }
+
   /**
    * Serialize FrostSecret to 32 bytes.
    * FrostSecret is an Ed25519 scalar — 32 bytes per RFC 8032.

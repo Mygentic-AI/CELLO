@@ -902,14 +902,14 @@ export class FrostDirectoryHandler {
    * rejected (EPOCH_EXPIRED). Returns the resulting (unchanged) group public key for the coordinator's
    * cross-party consistency check.
    */
-  refreshRound2(
+  async refreshRound2(
     agentPubkey: string,
     fromEpochId: string,
     toEpochId: string,
     signers: { min: number; max: number },
     participantIds: string[],
     contributions: RefreshContribution[],
-  ): { ok: true; shareCommitment: Uint8Array } | { ok: false; reason: "source_epoch_not_held" | "vss_check_failed" | "incomplete_roster" | "internal_error" } {
+  ): Promise<{ ok: true; shareCommitment: Uint8Array } | { ok: false; reason: "source_epoch_not_held" | "vss_check_failed" | "incomplete_roster" | "internal_error" }> {
     const share = this.#shareStore.getShare(agentPubkey, fromEpochId);
     if (!share) return { ok: false, reason: "source_epoch_not_held" };
     let newKey: ReturnType<typeof applyRefresh>;
@@ -929,7 +929,16 @@ export class FrostDirectoryHandler {
       return { ok: false, reason };
     }
     const newShare: LocalShare = { secret: newKey.secret, pub: newKey.public };
-    this.#shareStore.storeShare(agentPubkey, toEpochId, newShare);
+    // DURABLE persist BEFORE advancing the epoch (review HIGH-1): a refresh must confirm the new-epoch
+    // share landed durably before reporting success, else a restart reverts to the old epoch and the
+    // client/directory epochs split (signing breaks). If the durable write fails, do NOT advance the
+    // epoch and fail loud — the old epoch share is untouched, so the coordinator can safely retry.
+    try {
+      await this.#shareStore.storeShareDurable(agentPubkey, toEpochId, newShare);
+    } catch (err) {
+      this.#logger?.error("frost.refresh.persist.failed", { agentShort: agentPubkey?.slice(0, 16), error: err instanceof Error ? err.message : "unknown" });
+      return { ok: false, reason: "internal_error" };
+    }
     this.#currentEpoch.set(agentPubkey, parseEpochN(toEpochId) ?? this.#currentEpoch.get(agentPubkey) ?? 1);
     this.#logger?.info("frost.refresh.applied", { agentShort: agentPubkey?.slice(0, 16), toEpoch: parseEpochN(toEpochId) });
     const shareCommitment = new Uint8Array((newKey.public as unknown as { commitments: Uint8Array[] }).commitments[0]);
@@ -995,7 +1004,12 @@ export class FrostDirectoryHandler {
     const requestedN = parseEpochN(epochId);
     if (requestedN === null) return false;
 
-    const currentN = this.#currentEpoch.get(agentPubkey);
+    // Current epoch = the in-memory counter, or — after a restart that lost the counter — the highest
+    // epoch the share store holds (the reloaded shares ARE the durable epoch record). Without this
+    // fallback, a directory restart after a refresh would reset the counter to undefined and happily
+    // re-sign EXPIRED old-epoch requests, undoing the refresh's security purpose (DOD-REFRESH-1, review
+    // HIGH-2/M3: "old shares no longer sign" must survive a restart).
+    const currentN = this.#currentEpoch.get(agentPubkey) ?? this.#shareStore.getMaxEpoch(agentPubkey);
     if (currentN === undefined) return false; // agent unknown → not bootstrapped (different error)
 
     // If the requested epoch N < current epoch N, it's expired

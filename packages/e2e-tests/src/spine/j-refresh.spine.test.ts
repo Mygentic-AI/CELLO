@@ -6,9 +6,13 @@
  * public key stays BYTE-IDENTICAL. Flow: register agent A (multi-node DKG → epoch 1, capture P1) → seal a
  * session (signing works at epoch 1) → `cello refresh agentA` → assert (a) the returned group pubkey == P1
  * (unchanged — the defining property of PSS vs a re-keying), (b) it advanced to epoch 2, (c) ALL 3
- * directories applied the refresh (frost.refresh.applied), and (d) a seal STILL completes afterwards — the
- * rotated epoch-2 shares sign, and the directory's epoch advance means the old epoch-1 shares are dead
- * (signing now targets epoch 2; an epoch-1 request returns EPOCH_EXPIRED).
+ * directories applied the refresh (frost.refresh.applied), (d) a seal STILL completes afterwards (the
+ * rotated epoch-2 shares sign; the directory's #currentEpoch advance means an epoch-1 request returns
+ * EPOCH_EXPIRED within the process). Then REFRESH AGAIN → epoch 3 and assert the public verifyingShares
+ * DIGEST CHANGED — the one observable that distinguishes a genuine rotation from a relabel-only no-op
+ * (group key, epoch counter, and the applied-log are all invariant to a no-op). The cryptographic
+ * "a captured epoch-e share is unusable in e+1" property is proven directly in the crypto unit suite
+ * (frost-resharing.test.ts: a mixed old+new share set does NOT reconstruct).
  *
  * Anchored to the binaries — real cello-directory ×3 + relay + cello-daemon/cello/cello-mcp.
  */
@@ -150,22 +154,38 @@ describe("J-REFRESH — proactive share refresh / epoch rollover (DOD-REFRESH-1)
     // Seal once at epoch 1 — signing works before the refresh.
     expect(await sealSession(connA, connB, pubB, daemon)).toMatch(/^[0-9a-f]{64}$/);
 
-    // ─── REFRESH agent A: rotate the client + all 3 directories' shares to epoch 2 ───
-    const refresh = JSON.parse(cello(["refresh", "agentA"], env).stdout.trim()) as { ok?: boolean; epoch?: number; primary_pubkey?: string; reason?: string };
-    expect(refresh.ok, `refresh failed: ${JSON.stringify(refresh)}`).toBe(true);
+    // ─── REFRESH #1: rotate the client + all 3 directories' shares to epoch 2 ───
+    type Refresh = { ok?: boolean; epoch?: number; primary_pubkey?: string; verifying_shares_digest?: string; reason?: string };
+    const r1 = JSON.parse(cello(["refresh", "agentA"], env).stdout.trim()) as Refresh;
+    expect(r1.ok, `refresh #1 failed: ${JSON.stringify(r1)}`).toBe(true);
     // (a) the group public key is UNCHANGED — the defining property of PSS (not a re-key).
-    expect(refresh.primary_pubkey, `group pubkey must be byte-identical after refresh (P1=${p1})`).toBe(p1);
+    expect(r1.primary_pubkey, `group pubkey must be byte-identical after refresh (P1=${p1})`).toBe(p1);
     // (b) advanced to epoch 2.
-    expect(refresh.epoch, "epoch must advance to 2").toBe(2);
+    expect(r1.epoch, "epoch must advance to 2").toBe(2);
+    expect(r1.verifying_shares_digest, "refresh must report a verifyingShares digest").toMatch(/^[0-9a-f]{64}$/);
 
     // (c) ALL 3 directories applied the refresh (rotated their share to epoch 2). stdout lags — settle first.
     await sleep(2000);
     const appliedSet = [0, 1, 2].filter((i) => /"event":"frost\.refresh\.applied"/.test(cluster.directories[i].output));
     expect(appliedSet.length, `all 3 directories must apply the refresh; applied: ${appliedSet.join(",")}`).toBe(3);
 
-    // (d) a seal STILL completes after the refresh — the rotated epoch-2 shares sign (and signing now
-    // targets epoch 2; the old epoch-1 shares are dead). A failure here would mean the refresh produced
-    // inconsistent shares or the epoch advance broke signing.
-    expect(await sealSession(connA, connB, pubB, daemon), "a seal must still complete AFTER the refresh").toMatch(/^[0-9a-f]{64}$/);
+    // (d) a seal STILL completes after the refresh — the rotated epoch-2 shares sign, and signing now
+    // targets epoch 2 (the directory advanced #currentEpoch, so an epoch-1 request returns EPOCH_EXPIRED).
+    expect(await sealSession(connA, connB, pubB, daemon), "a seal must still complete AFTER refresh #1").toMatch(/^[0-9a-f]{64}$/);
+
+    // ─── REFRESH #2 → epoch 3: the shares ACTUALLY ROTATED (kills the no-op) ───
+    // The group key is invariant by design, the epoch is arithmetic, and the applied-log fires regardless —
+    // so none of those distinguish a real refresh from a relabel-only NO-OP. The verifyingShares (public,
+    // = s_j·G) MOVE only when the share material actually rotates. A genuine refresh changes the digest
+    // every epoch; a no-op (same secret relabeled) yields the SAME digest. Assert it CHANGED.
+    const r2 = JSON.parse(cello(["refresh", "agentA"], env).stdout.trim()) as Refresh;
+    expect(r2.ok, `refresh #2 failed: ${JSON.stringify(r2)}`).toBe(true);
+    expect(r2.epoch, "epoch must advance to 3").toBe(3);
+    expect(r2.primary_pubkey, "group pubkey must STILL be unchanged at epoch 3").toBe(p1);
+    expect(r2.verifying_shares_digest, `the verifyingShares digest MUST change across refreshes — equal digest ⇒ a no-op relabel that left the old shares intact (DoD: a node compromised in epoch e holds nothing usable in e+1). r1=${r1.verifying_shares_digest} r2=${r2.verifying_shares_digest}`).not.toBe(r1.verifying_shares_digest);
+
+    // and a seal STILL completes at epoch 3 — the twice-rotated shares are coherent.
+    await sleep(1000);
+    expect(await sealSession(connA, connB, pubB, daemon), "a seal must still complete after refresh #2").toMatch(/^[0-9a-f]{64}$/);
   }, 300_000);
 });
