@@ -1392,3 +1392,15 @@ serial chain; passes clean alone in 62s). j-sign + j-unilateral GREEN post conte
 **RESUME → DOD-DEPLOY-1 (the close gate).** Push both repos, npm publish beta (protocol-types bump +
 cascade), deploy directory + relay to dev (all 3 regions), run journeys against live 3-region cluster.
 This is the final DoD line — M8B closes when DOD-DEPLOY-1 ✅.
+
+### 2026-07-01 ~14:30 — DOD-DEPLOY-1 IN PROGRESS
+**Both repos pushed, pipelines running:**
+- trustless-cello `46306309` pushed → directory pipeline Build✓ StagingDeploy InProgress
+- cello-client `b0a6142` + tag `v0.0.60` pushed → CI Build in progress (lint fix applied)
+- IaC: `CELLO_DIRECTORY_PUBKEYS` wired into relay CFN template (deploy.sh gathers all 3 SSM pubkeys)
+- Requires deploy.sh run after pipelines complete (CFN template change, not just image swap)
+- directory-ap1 A record: will be addressed by deploy.sh in ap-northeast-1
+
+**Version cascade:** protocol-types 0.0.11, client 0.0.40, daemon 0.0.18, cli 0.0.16, connect 0.0.52.
+**Remaining:** verify npm publish, run deploy.sh us-east-1 (relay CFN), verify all 3 regions healthy,
+run live journeys against the dev cluster.
