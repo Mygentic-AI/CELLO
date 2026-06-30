@@ -337,23 +337,28 @@ describe("SI-002: nonce is consumed exactly once — RFC 9591 one-time-use", () 
     if (second.ok) return;
     expect(second.reason).toBe("AGENT_NOT_BOOTSTRAPPED");
 
-    // New commit → nonce cache repopulated; a third generateCommitment should be REJECTED (NONCE_ALREADY_PENDING)
+    // New commit → a fresh, unconsumed nonce is cached again.
     const commit2 = await handler.generateCommitment(agentPubkeyHex, epochId);
     expect(commit2.ok).toBe(true);
     if (!commit2.ok) return;
 
-    // Verify the nonce is cached again: a duplicate generateCommitment is rejected
+    // SUSPEND-1 (87d226c2, 3-reviewer-confirmed safe): a duplicate generateCommitment now REPLACES the
+    // still-pending (never-consumed) nonce and returns ok — an unconsumed nonce never signed, so discarding
+    // it leaks nothing, and this unblocks an honest coordinator's legitimate retry. Two-peer conflict
+    // detection lives in the #inFlight machinery (signRawMessage's peer check), not this peer-blind path.
     const dupCommit = await handler.generateCommitment(agentPubkeyHex, epochId);
-    expect(dupCommit.ok).toBe(false);
-    if (dupCommit.ok) return;
-    expect(dupCommit.reason).toBe("NONCE_ALREADY_PENDING");
+    expect(dupCommit.ok).toBe(true);
   });
 });
 
-// ─── HIGH-2 regression: duplicate generateCommitment rejected ─────────────────
+// ─── SUSPEND-1: duplicate generateCommitment REPLACES the unconsumed nonce ────
+// Supersedes the M6B-001 "HIGH-2" NONCE_ALREADY_PENDING guard. That guard was peer-blind and rejected an
+// honest coordinator's OWN legitimate retry (the bug fixed in 87d226c2). An unconsumed pending nonce never
+// signed — signRawMessage deletes it BEFORE signing (consume-once) — so replacing it leaks nothing. Real
+// two-peer conflict detection lives in #inFlight (signRawMessage's peer check), confirmed by 3 reviewers.
 
-describe("HIGH-2 regression: duplicate generateCommitment for same key rejected", () => {
-  it("second generateCommitment before consuming nonce returns NONCE_ALREADY_PENDING", async () => {
+describe("SUSPEND-1: duplicate generateCommitment replaces the unconsumed nonce (returns ok)", () => {
+  it("a second generateCommitment before consuming the nonce returns ok and replaces the pending nonce", async () => {
     const handler = makeHandler("dir-node-high2");
     const agentPubkeyHex = randomPubkeyHex();
     const { epochId } = await bootstrapHandler(agentPubkeyHex, handler);
@@ -362,8 +367,53 @@ describe("HIGH-2 regression: duplicate generateCommitment for same key rejected"
     expect(first.ok).toBe(true);
 
     const second = await handler.generateCommitment(agentPubkeyHex, epochId);
-    expect(second.ok).toBe(false);
-    if (second.ok) return;
-    expect(second.reason).toBe("NONCE_ALREADY_PENDING");
+    expect(second.ok).toBe(true);
+  });
+});
+
+// ─── DOD-REFRESH-1 HIGH-2: epoch expiry survives a directory restart ─────────
+// After a proactive refresh advances the epoch, a directory restart loses the in-memory #currentEpoch
+// counter. Without a fallback the expiry gate would return false (currentN undefined) and the node would
+// re-sign EXPIRED old-epoch requests — undoing the refresh's security purpose. The fix derives the current
+// epoch from the share store (getMaxEpoch) — the reloaded shares ARE the durable epoch record.
+describe("DOD-REFRESH-1 HIGH-2: epoch expiry survives a directory restart (getMaxEpoch fallback)", () => {
+  it("a FRESH handler over a store holding epoch:2 still rejects an epoch:1 request → EPOCH_EXPIRED", async () => {
+    const store = new InMemoryShareStore();
+    const agentPubkeyHex = randomPubkeyHex();
+    const epochId1 = `${agentPubkeyHex}:epoch:1`;
+    const epochId2 = `${agentPubkeyHex}:epoch:2`;
+
+    // Handler A bootstraps epoch 1 and (simulating a refresh) stores an epoch 2 share into the SHARED store.
+    const handlerA = new FrostDirectoryHandler({ nodeId: "nodeA", shareStore: store });
+    const stubs = createInProcessStubs(1);
+    await bootstrapKeyShares(Buffer.from(agentPubkeyHex, "hex"), { threshold: 2, participants: 1, directoryNodeStubs: stubs });
+    const share = stubs[0].getShareForTest()!;
+    handlerA.injectShareForTest(agentPubkeyHex, epochId1, share);
+    handlerA.injectShareForTest(agentPubkeyHex, epochId2, share);
+
+    // RESTART: a brand-new handler over the SAME store — its in-memory #currentEpoch is EMPTY, but the
+    // store still holds the epoch 1 + epoch 2 shares (as if reloaded from persistence on startup).
+    const handlerB = new FrostDirectoryHandler({ nodeId: "nodeA", shareStore: store });
+
+    // The old epoch is dead even though #currentEpoch was never set on handlerB (getMaxEpoch(store) = 2).
+    const expired = await handlerB.generateCommitment(agentPubkeyHex, epochId1);
+    expect(expired.ok).toBe(false);
+    if (expired.ok) return;
+    expect(expired.reason).toBe("EPOCH_EXPIRED");
+
+    // ...and the CURRENT epoch still works on the restarted handler.
+    const current = await handlerB.generateCommitment(agentPubkeyHex, epochId2);
+    expect(current.ok).toBe(true);
+  });
+
+  it("getMaxEpoch returns the highest stored epoch (and undefined for an unknown agent)", () => {
+    const store = new InMemoryShareStore();
+    const agentPubkeyHex = randomPubkeyHex();
+    expect(store.getMaxEpoch(agentPubkeyHex)).toBeUndefined();
+    const dummy = { secret: { identifier: "1", signingShare: new Uint8Array(32) }, pub: { signers: { min: 2, max: 2 }, commitments: [], verifyingShares: {} } } as never;
+    store.storeShare(agentPubkeyHex, `${agentPubkeyHex}:epoch:1`, dummy);
+    store.storeShare(agentPubkeyHex, `${agentPubkeyHex}:epoch:3`, dummy);
+    store.storeShare(agentPubkeyHex, `${agentPubkeyHex}:epoch:2`, dummy);
+    expect(store.getMaxEpoch(agentPubkeyHex)).toBe(3);
   });
 });
