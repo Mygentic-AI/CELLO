@@ -333,6 +333,34 @@ export function copyAgentProfileBetweenNodes(fromNode: number, toNode: number, k
   );
 }
 
+/** Copy an agent_presence row from one spine node DB to another (simulates cello_pub replication). */
+export function copyAgentPresenceBetweenNodes(fromNode: number, toNode: number, kLocalPubkeyHex: string): void {
+  const cols = "k_local_pubkey,owning_node_id,online,last_seen_at,updated_at";
+  execFileSync(
+    "docker",
+    [
+      "compose", "exec", "-T", "postgres", "bash", "-c",
+      `psql -U postgres -d ${SPINE_DB}_${fromNode} -c "COPY (SELECT ${cols} FROM agent_presence WHERE k_local_pubkey='${kLocalPubkeyHex}') TO STDOUT" | ` +
+        `psql -U postgres -d ${SPINE_DB}_${toNode} -v ON_ERROR_STOP=1 -c "COPY agent_presence (${cols}) FROM STDIN"`,
+    ],
+    { cwd: TRUSTLESS_ROOT, stdio: "inherit" },
+  );
+}
+
+/** Copy a directory_nodes row from one spine node DB to another (simulates cello_pub replication). */
+export function copyDirectoryNodeBetweenNodes(fromNode: number, toNode: number, nodeId: string): void {
+  const cols = "node_id,region,endpoint,status,created_at,last_heartbeat_at";
+  execFileSync(
+    "docker",
+    [
+      "compose", "exec", "-T", "postgres", "bash", "-c",
+      `psql -U postgres -d ${SPINE_DB}_${fromNode} -c "COPY (SELECT ${cols} FROM directory_nodes WHERE node_id='${nodeId}') TO STDOUT" | ` +
+        `psql -U postgres -d ${SPINE_DB}_${toNode} -v ON_ERROR_STOP=1 -c "COPY directory_nodes (${cols}) FROM STDIN"`,
+    ],
+    { cwd: TRUSTLESS_ROOT, stdio: "inherit" },
+  );
+}
+
 // ─── The spine cluster: relay + directory, real binaries ────────────────────────
 export interface SpineCluster {
   tmpDir: string;
