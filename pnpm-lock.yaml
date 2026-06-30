@@ -48,14 +48,14 @@ importers:
         specifier: 3.1051.0
         version: 3.1051.0
       '@cello-protocol/crypto':
-        specifier: ^0.0.7
-        version: 0.0.7
+        specifier: ^0.0.13
+        version: 0.0.13
       '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.4
-        version: 0.0.4
+        specifier: ^0.0.10
+        version: 0.0.10
       '@cello-protocol/transport':
         specifier: ^0.0.4
         version: 0.0.4
@@ -470,6 +470,10 @@ packages:
     engines: {node: '>=24'}
     hasBin: true
 
+  '@cello-protocol/crypto@0.0.13':
+    resolution: {integrity: sha512-WAAEivQcUk2WgFhHnAreIPWKXuC3wokrhZQPTk0cfQIhCT/SZp6pxFPsuoiSWTTjeyfuMks8wqKi2+fdanYZqw==}
+    engines: {node: '>=24'}
+
   '@cello-protocol/crypto@0.0.2':
     resolution: {integrity: sha512-dl9EC/r6UY/unvbDzyuAgWslJG8DE79EsbH2WuNIWdUwDbmOymqn30VN7Esvz4rXWkBGNuLq7DjcNEF43NAiGg==}
     engines: {node: '>=24'}
@@ -488,6 +492,10 @@ packages:
 
   '@cello-protocol/interfaces@0.0.3':
     resolution: {integrity: sha512-b4MmBEjOlj9E0QU/PIlM0GKznDIl11B03MAxB2V4vW/0bBxEoN/Tb8OLKApktiUJHIv38pm7HM5oZO0zo+ySrg==}
+    engines: {node: '>=24'}
+
+  '@cello-protocol/protocol-types@0.0.10':
+    resolution: {integrity: sha512-y8CSbT92NkyxYZFca6fwoF1SYs9qjPVCyWQHlYeHRrxugZrL6fgO75GJpQ8nxWnwPcR8Mw6d/Bdu0UQft0iG8A==}
     engines: {node: '>=24'}
 
   '@cello-protocol/protocol-types@0.0.2':
@@ -4026,6 +4034,12 @@ snapshots:
       - supports-color
       - utf-8-validate
 
+  '@cello-protocol/crypto@0.0.13':
+    dependencies:
+      '@noble/curves': 2.2.0
+      '@noble/hashes': 2.2.0
+      '@oqs/liboqs-js': 0.15.1
+
   '@cello-protocol/crypto@0.0.2':
     dependencies:
       '@noble/curves': 2.2.0
@@ -4053,6 +4067,11 @@ snapshots:
   '@cello-protocol/interfaces@0.0.3':
     dependencies:
       '@cello-protocol/protocol-types': 0.0.2
+
+  '@cello-protocol/protocol-types@0.0.10':
+    dependencies:
+      '@cello-protocol/crypto': 0.0.13
+      cbor-x: 1.6.4
 
   '@cello-protocol/protocol-types@0.0.2':
     dependencies:

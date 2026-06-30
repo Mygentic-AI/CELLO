@@ -109,7 +109,7 @@ import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash } from "@cello-protocol/crypto";
 
-import type { KeyProvider, LeafInput, IThresholdSigner } from "@cello-protocol/crypto";
+import type { KeyProvider, LeafInput, IThresholdSigner, RefreshContribution } from "@cello-protocol/crypto";
 import { encodeStructure2, computeGenesisPrevRoot, buildSealTbs } from "@cello-protocol/protocol-types";
 import type { AgentProfile } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
@@ -1439,6 +1439,48 @@ export class CelloDirectoryNode {
           await stream.close();
           return;
         }
+      }
+
+      // ─── M8B DOD-REFRESH-1: proactive share refresh frames ──────────────────
+      if (frameType === "frost_refresh_round1_request" || frameType === "frost_refresh_round2_request") {
+        const agentPubkey = req["agentPubkey"] as string;
+        const fromEpochId = req["fromEpochId"] as string;
+        const signers = req["signers"] as { min: number; max: number };
+        const participantIds = req["participantIds"] as string[];
+        const respType = frameType === "frost_refresh_round1_request"
+          ? "frost_refresh_round1_response"
+          : "frost_refresh_round2_response";
+
+        // LEVER-001 honor-check: refuse to rotate a suspended/burned agent's shares (server-side, fails
+        // closed). A refresh must not quietly keep a paused agent operational across the epoch boundary.
+        if (await this.#isAgentPaused(agentPubkey, fromEpochId)) {
+          stream.send(lp.encode.single(CBOR_ENC.encode({ type: respType, ok: false, reason: "agent_suspended" })));
+          await stream.close();
+          return;
+        }
+
+        if (frameType === "frost_refresh_round1_request") {
+          const result = this.#frostHandler.refreshRound1(agentPubkey, fromEpochId, signers, participantIds);
+          stream.send(lp.encode.single(CBOR_ENC.encode(
+            result.ok
+              ? { type: respType, ok: true, contribution: result.contribution }
+              : { type: respType, ok: false, reason: result.reason },
+          )));
+        } else {
+          const toEpochId = req["toEpochId"] as string;
+          const contributions = req["contributions"] as RefreshContribution[];
+          const result = this.#frostHandler.refreshRound2(agentPubkey, fromEpochId, toEpochId, signers, participantIds, contributions);
+          if (result.ok) {
+            this.#logger?.info("frost.refresh.round2.ok", { agentShort: agentPubkey?.slice(0, 16), toEpoch: truncHex(toEpochId) });
+          }
+          stream.send(lp.encode.single(CBOR_ENC.encode(
+            result.ok
+              ? { type: respType, ok: true, shareCommitment: result.shareCommitment }
+              : { type: respType, ok: false, reason: result.reason },
+          )));
+        }
+        await stream.close();
+        return;
       }
 
       // Unknown frame type — close without response

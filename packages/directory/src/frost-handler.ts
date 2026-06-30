@@ -77,6 +77,11 @@
 
 import { ed25519_FROST } from "@noble/curves/ed25519.js";
 import type { NonceCommitments } from "@noble/curves/abstract/frost.js";
+import {
+  generateRefreshContribution,
+  applyRefresh,
+  type RefreshContribution,
+} from "@cello-protocol/crypto";
 import type { FrostContext } from "@cello-protocol/crypto/frost/types.js";
 import type { Logger } from "@cello-protocol/interfaces";
 import type { ShareStore, LocalShare } from "./share-store.js";
@@ -864,6 +869,70 @@ export class FrostDirectoryHandler {
     // Return ONLY the group public key (commitments[0] = 32-byte Ed25519 point).
     // SECURITY: key.secret (the signing share) is stored in shareStore, never returned.
     const shareCommitment = new Uint8Array(key.public.commitments[0]);
+    return { ok: true, shareCommitment };
+  }
+
+  // ─── M8B DOD-REFRESH-1: proactive share resharing (PSS) ───────────────────────
+
+  /**
+   * Round 1: generate this node's zero-constant refresh contribution for the new epoch. The node must hold
+   * a share for `fromEpochId`. Stateless between rounds — the coordinator relays the full agreed set back
+   * in Round 2 (including this node's own, narrowed, contribution), so nothing is retained here.
+   */
+  refreshRound1(
+    agentPubkey: string,
+    fromEpochId: string,
+    signers: { min: number; max: number },
+    participantIds: string[],
+  ): { ok: true; contribution: RefreshContribution } | { ok: false; reason: "source_epoch_not_held" | "internal_error" } {
+    const share = this.#shareStore.getShare(agentPubkey, fromEpochId);
+    if (!share) return { ok: false, reason: "source_epoch_not_held" };
+    try {
+      const myId = (share.secret as unknown as { identifier: string }).identifier;
+      return { ok: true, contribution: generateRefreshContribution(signers, myId, participantIds) };
+    } catch (err) {
+      this.#logger?.error("frost.refresh.round1.failed", { agentShort: agentPubkey?.slice(0, 16), error: err instanceof Error ? err.message : "unknown" });
+      return { ok: false, reason: "internal_error" };
+    }
+  }
+
+  /**
+   * Round 2: apply the agreed contribution set, rotating this node's share to the new epoch (group key
+   * UNCHANGED), persist the new-epoch share, and advance the current epoch so old-epoch sign requests are
+   * rejected (EPOCH_EXPIRED). Returns the resulting (unchanged) group public key for the coordinator's
+   * cross-party consistency check.
+   */
+  refreshRound2(
+    agentPubkey: string,
+    fromEpochId: string,
+    toEpochId: string,
+    signers: { min: number; max: number },
+    participantIds: string[],
+    contributions: RefreshContribution[],
+  ): { ok: true; shareCommitment: Uint8Array } | { ok: false; reason: "source_epoch_not_held" | "vss_check_failed" | "incomplete_roster" | "internal_error" } {
+    const share = this.#shareStore.getShare(agentPubkey, fromEpochId);
+    if (!share) return { ok: false, reason: "source_epoch_not_held" };
+    let newKey: ReturnType<typeof applyRefresh>;
+    try {
+      newKey = applyRefresh(
+        { secret: share.secret, public: share.pub } as Parameters<typeof applyRefresh>[0],
+        contributions,
+        signers,
+        participantIds,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.#logger?.warn("frost.refresh.round2.rejected", { agentShort: agentPubkey?.slice(0, 16), error: msg });
+      const reason = /incomplete|missing|roster|duplicate|unexpected/.test(msg) ? "incomplete_roster"
+        : /VSS|identity|commitment|zero polynomial/.test(msg) ? "vss_check_failed"
+        : "internal_error";
+      return { ok: false, reason };
+    }
+    const newShare: LocalShare = { secret: newKey.secret, pub: newKey.public };
+    this.#shareStore.storeShare(agentPubkey, toEpochId, newShare);
+    this.#currentEpoch.set(agentPubkey, parseEpochN(toEpochId) ?? this.#currentEpoch.get(agentPubkey) ?? 1);
+    this.#logger?.info("frost.refresh.applied", { agentShort: agentPubkey?.slice(0, 16), toEpoch: parseEpochN(toEpochId) });
+    const shareCommitment = new Uint8Array((newKey.public as unknown as { commitments: Uint8Array[] }).commitments[0]);
     return { ok: true, shareCommitment };
   }
 
