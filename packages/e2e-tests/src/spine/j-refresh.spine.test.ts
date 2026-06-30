@@ -114,7 +114,7 @@ async function setup(label: string): Promise<{ celloDir: string; daemon: Proc; c
 }
 
 /** A→B: open a session, exchange, both close → bilateral seal. Returns the byte-identical root. */
-async function sealSession(connA: McpConn, connB: McpConn, pubB: string, daemon: Proc): Promise<string> {
+async function sealSession(connA: McpConn, connB: McpConn, pubB: string, _daemon: Proc): Promise<string> {
   const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
   let init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string; reason?: string };
   for (let i = 0; i < 20 && !init.ok && init.reason === "standing_receiver_unavailable"; i++) {
