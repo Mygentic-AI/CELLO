@@ -554,7 +554,12 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
 
   // ─── AC-009 (transport_mode): relay.recordAssignment call guard ──────────────
 
-  it("AC-009(a): transport_mode='relay' → relay.recordAssignment called exactly once", async () => {
+  it("AC-009(a): transport_mode='relay' → directory does NOT dial the relay (Option B); assignment still delivered", async () => {
+    // FED-OPTIONB-SETUP-001: under Option B the directory NEVER dials the relay to record the session
+    // (the relays[0]-pinned, restart-breaking recordAssignment dial is deleted). It instead attaches a
+    // per-node relay_directory_signature to the client-facing assignment; the CLIENT presents it to its
+    // chosen relay. So for a relay-mode session, recordAssignment is called ZERO times and the assignment
+    // is still delivered. (The end-to-end client-record path is proven on the 3-dir spine: j-optionb-setup.)
     let recordCalls = 0;
     const spyRelay: RelayAdapter = {
       recordAssignment(assignment: RelaySessionAssignment) {
@@ -601,7 +606,7 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     const { stream: streamA } = await authClient(keyA);
     const { reader: readerB, pubkeyHex: hexB } = await authClient(keyB);
 
-    // transport_mode is omitted → directory defaults to 'relay' → relay must be called
+    // transport_mode is omitted → directory defaults to 'relay'. Option B: the directory does NOT dial.
     sendFrame(streamA, CBOR_ENC.encode({
       type: "session_request",
       target_pubkey: Buffer.from(hexB, "hex"),
@@ -609,9 +614,11 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
       initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
-    await readerB.readDecoded(); // drain B's assignment
+    const bFrame = decodeOutboundSignalingFrame(await readerB.readDecoded()); // B's assignment
 
-    expect(recordCalls).toBe(1);
+    // Option B: the directory delivered the assignment WITHOUT any directory→relay dial.
+    expect(recordCalls).toBe(0);
+    expect(bFrame?.type).toBe("session_assignment");
   }, 15_000);
 
   it("AC-009(b): transport_mode='direct' → relay.recordAssignment called zero times", async () => {
@@ -675,15 +682,14 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     expect(recordCalls).toBe(0);
   }, 15_000);
 
-  // ─── AC-006: relay.recordAssignment returns before session_assignment is delivered ──
+  // ─── AC-006 (Option B): directory delivers assignments WITHOUT dialing the relay ──
 
-  it("AC-006: relay.recordAssignment completes before session_assignment frames are delivered", async () => {
-    // Ordering is verified via a call-order counter, not wall-clock timestamps.
-    // Wall-clock comparisons are unreliable under parallel test load because
-    // Date.now() resolution and event-loop scheduling lag can invert the observed order
-    // even when the code sequence is correct.
+  it("AC-006: relay-mode assignments are delivered to BOTH clients with no directory→relay dial", async () => {
+    // FED-OPTIONB-SETUP-001: the old contract was "recordAssignment completes BEFORE delivery". Under
+    // Option B that dial is deleted — the directory delivers both session_assignment frames and the
+    // CLIENT records the session with its chosen relay afterward. So recordAssignment is never called,
+    // and both frames still arrive.
     let recordCallOrder = 0;
-    let framesDeliveredAfterRecord = false;
     const timingRelay: RelayAdapter = {
       recordAssignment(assignment: RelaySessionAssignment) {
         recordCallOrder++;
@@ -758,11 +764,9 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
 
     const frameABytes = await readerA.readDecoded();
     const frameBBytes = await readerB.readDecoded();
-    // Both frames arrived → recordAssignment must have been called before any frame was sent
-    framesDeliveredAfterRecord = recordCallOrder > 0;
 
-    expect(recordCallOrder).toBe(1);
-    expect(framesDeliveredAfterRecord).toBe(true);
+    // Option B: both assignments delivered, and the directory dialed the relay ZERO times.
+    expect(recordCallOrder).toBe(0);
 
     const frameA = decodeOutboundSignalingFrame(frameABytes);
     const frameB = decodeOutboundSignalingFrame(frameBBytes);
@@ -771,9 +775,14 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
 
   }, 15_000);
 
-  // ─── AC-007: relay.recordAssignment fails → relay_unavailable ────────────────
+  // ─── AC-007 (Option B): a would-reject relay is NEVER dialed; the session still establishes ──
 
-  it("AC-007: relay.recordAssignment rejection returns relay_unavailable to initiator", async () => {
+  it("AC-007: directory delivers the assignment even if the relay would reject (relay never dialed)", async () => {
+    // FED-OPTIONB-SETUP-001: the old contract returned `relay_unavailable` when the directory→relay
+    // recordAssignment dial was rejected. That dial is deleted — the directory never asks the relay, so a
+    // relay that WOULD reject is irrelevant to session setup: the assignment is delivered to both parties.
+    // A relay rejection now happens CLIENT-side (assignment_invalid) when the client presents the
+    // assignment, and the relay's own redundancy means the send degrades gracefully — not a setup failure.
     const rejectingRelay = makeRelay({ rejectRecordAssignment: true });
     const rejectDirNode = await createDirectoryNode({
       keyProvider: dirKey,
@@ -818,102 +827,26 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
       initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
     }));
 
-    const responseBytes = await readerA.readDecoded();
-    const response = decodeOutboundSignalingFrame(responseBytes);
+    // A gets a session_assignment (NOT a relay_unavailable error) — the directory never dialed the relay.
+    const response = decodeOutboundSignalingFrame(await readerA.readDecoded());
+    expect(response?.type).toBe("session_assignment");
 
-    expect(response?.type).toBe("session_request_error");
-    if (response?.type === "session_request_error") {
-      expect(response.reason).toBe("relay_unavailable");
-    }
+    // B receives its session_assignment too — the session fully establishes.
+    const bFrame = decodeOutboundSignalingFrame(await readerB.readDecoded());
+    expect(bFrame?.type).toBe("session_assignment");
 
-    // B must NOT have received any session_assignment
-    let bGotAssignment = false;
-    const bRead = readerB.readDecoded().then(() => { bGotAssignment = true; }).catch(() => {});
-    await new Promise((r) => setTimeout(r, 50));
-    expect(bGotAssignment).toBe(false);
-    void bRead;
-
-    // relay holds no state for attempted session
+    // The directory never dialed the relay (Option B) — so the relay's would-be rejection never fired.
     expect(rejectingRelay.recorded.length).toBe(0);
   });
 
-  // ─── Regression: relay.record_assignment.failed logs actual reason ────────────
+  // ─── Regression (RETIRED by FED-OPTIONB-SETUP-001) ────────────────────────────
   //
-  // Before fix: directory-node.ts hardcoded "relay_unavailable" in both the
-  // protocolLog and the structured logger warn event, masking real failures like
-  // auth_invalid, directory_signature_invalid, etc.
-
-  it("Regression: relay.record_assignment.failed warn event contains actual recordAssignment reason", async () => {
-    const logEvents: Array<{ level: string; event: string; context: Record<string, unknown> }> = [];
-    const logger = {
-      debug(_event: string, _ctx: Record<string, unknown>) {},
-      info(_event: string, _ctx: Record<string, unknown>) {},
-      warn(event: string, context: Record<string, unknown>) { logEvents.push({ level: "warn", event, context }); },
-      error(_event: string, _ctx: Record<string, unknown>) {},
-    };
-
-    // Relay that returns a specific non-generic reason
-    const specificReason = "directory_signature_invalid";
-    const rejectingRelay: ReturnType<typeof makeRelay> & { recorded: RelaySessionAssignment[] } = {
-      ...makeRelay(),
-      recordAssignment(_: RelaySessionAssignment) {
-        return { ok: false as const, reason: specificReason };
-      },
-    };
-
-    const rejectDirNode = await createDirectoryNode({
-      keyProvider: dirKey,
-      relay: rejectingRelay,
-      relayEndpoint: { peer_id: "test", multiaddrs: [] },
-      logger,
-    });
-    scope.addCleanup(rejectDirNode.stop);
-
-    const keyA = generateKeypair();
-    const keyB = generateKeypair();
-
-    const authClient = async (key: ReturnType<typeof generateKeypair>) => {
-      const cn = await createNode({ keyProvider: key, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-      await cn.start();
-      scope.addCleanup(() => cn.stop());
-      await cn.dial(rejectDirNode.node.listenAddresses()[0]);
-      const s = await cn.newStream(rejectDirNode.node.getPeerId(), SIGNALING_PROTOCOL_ID);
-      const r = new StreamReader(s);
-      const cb = await r.readDecoded();
-      const ch = decodeOutboundSignalingFrame(cb);
-      if (!ch || ch.type !== "signaling_auth_challenge") throw new Error("no challenge");
-      const { pubkey, signature } = await signAuth(ch.nonce, AUTH_DOMAIN, key);
-      sendFrame(s, encodeAuthResponse(pubkey, signature));
-      const ackCb = await r.readDecoded();
-      const ackFrame = decodeOutboundSignalingFrame(ackCb);
-      if (!ackFrame || ackFrame.type !== "signaling_auth_ok") throw new Error(`expected signaling_auth_ok, got ${ackFrame?.type}`);
-      const hex = Buffer.from(pubkey).toString("hex");
-      rejectDirNode.directory.registerPeerInfo(hex, cn.getPeerId(), cn.listenAddresses());
-      rejectDirNode.directory.registerThresholdSigner(hex, new MockThresholdSigner());
-      return { stream: s, reader: r, pubkeyHex: hex };
-    };
-
-    const { stream: streamA, reader: readerA } = await authClient(keyA);
-    const { pubkeyHex: hexB } = await authClient(keyB);
-
-    sendFrame(streamA, CBOR_ENC.encode({
-      type: "session_request",
-      target_pubkey: Buffer.from(hexB, "hex"),
-      initiator_session_peer_id: "12D3KooWInitiatorSession",
-      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
-    }));
-
-    const responseBytes = await readerA.readDecoded();
-    const response = decodeOutboundSignalingFrame(responseBytes);
-    expect(response?.type).toBe("session_request_error");
-
-    // The structured log event must carry the actual reason, not "relay_unavailable"
-    const failedEvent = logEvents.find((e) => e.event === "relay.record_assignment.failed");
-    expect(failedEvent).toBeDefined();
-    expect(failedEvent?.level).toBe("warn");
-    expect(failedEvent?.context["reason"]).toBe(specificReason);
-    expect(failedEvent?.context["agentShort"]).toBeDefined();
-  });
+  // The former regression test asserted that the `relay.record_assignment.failed` warn event carried the
+  // actual recordAssignment rejection reason (not a hardcoded "relay_unavailable"). Under Option B the
+  // directory→relay recordAssignment dial is DELETED, so that warn event no longer exists and there is no
+  // directory-side relay-rejection path to mask. The replacement contract — the directory never dials the
+  // relay (AC-006/AC-007/AC-009a), and the relay verifies a CLIENT-presented assignment and fails LOUD
+  // (relay.assignment.rejected) on a bad signature — is covered by the relay unit suite + j-optionb-setup.
 
   // ─── AC-008: target offline → target_offline ──────────────────────────────────
 
@@ -1214,13 +1147,14 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
   // ─── SI-002: session_ids are unique (covered by AC-009) ──────────────────────
   // AC-009 covers SI-002 with 256 rapid sessions.
 
-  // ─── SI-003: relay.recordAssignment strictly before session_assignment delivery ──
+  // ─── SI-003 (Option B): the directory NEVER registers a session with the relay ──
 
-  it("SI-003: relay never registers a session after clients receive the assignment frame", async () => {
-    // Covered by AC-006 (timing check). This is the adversarial variant:
-    // if the relay throws, no assignment should be delivered (covered by AC-007).
-    // If the relay succeeds, its recorded timestamp must precede delivery (AC-006).
-    // Here we verify the recorded session_id matches what clients received.
+  it("SI-003: the directory never dials the relay to register a session (the CLIENT does)", async () => {
+    // FED-OPTIONB-SETUP-001: the old SI was "recordAssignment strictly BEFORE delivery". Inverted under
+    // Option B (DOD-INV-NO-DIR-RELAY): the directory makes ZERO network calls to a relay for session
+    // setup. It delivers the assignment (carrying relay_directory_signature) and the CLIENT presents it to
+    // its chosen relay. So `relay.recorded` stays EMPTY here; the relay learning the session from the
+    // client is proven end-to-end on the 3-dir spine (j-optionb-setup: relay.assignment.recorded source=client).
     const keyA = generateKeypair();
     const keyB = generateKeypair();
 
@@ -1239,11 +1173,8 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
 
     if (frameA?.type !== "session_assignment") throw new Error("no assignment");
 
-    // The relay must have the session registered
-    expect(relay.recorded.length).toBe(1);
-    const relaySessionId = Buffer.from(relay.recorded[0].session_id).toString("hex");
-    const clientSessionId = Buffer.from(frameA.assignment.session_id).toString("hex");
-    expect(relaySessionId).toBe(clientSessionId);
+    // Option B: the directory dialed the relay ZERO times — the relay holds no directory-recorded session.
+    expect(relay.recorded.length).toBe(0);
   });
 
   // ─── SI-004: directory recomputes sealed_root independently ──────────────────
