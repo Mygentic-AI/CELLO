@@ -55,8 +55,7 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
     expect(byKind.phone.signalHash).toBe(HASH_PHONE);
     expect(Buffer.compare(byKind.webauthn.ciphertext, ctWeb)).toBe(0);
     expect(Buffer.compare(byKind.phone.ciphertext, ctPhone)).toBe(0);
-    // Oldest-first: webauthn was enqueued before phone, so it has the smaller id AND drains first.
-    expect(Number(byKind.webauthn.id)).toBeLessThan(Number(byKind.phone.id));
+    // Oldest-first: webauthn was enqueued before phone, so it drains first (ORDER BY created_at).
     expect(drained[0].signalKind).toBe("webauthn");
 
     // H1 (account-scoping): an ACK from a DIFFERENT agent must NOT delete this agent's row, even with
@@ -118,7 +117,8 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
     // Cleanup for the shared agent rows.
     for (const d of afterPhone) await ackPickupDelete(pool, d.id, AGENT);
     for (const d of otherDrain) await ackPickupDelete(pool, d.id, OTHER_AGENT);
-    await ackPickupDelete(pool, (await drainPickupForAgent(pool, AGENT)).find((d) => d.signalKind === "webauthn")?.id ?? "0", AGENT);
+    const leftover = (await drainPickupForAgent(pool, AGENT)).find((d) => d.signalKind === "webauthn");
+    if (leftover) await ackPickupDelete(pool, leftover.id, AGENT);
   });
 
   it("the invariant is DB-ENFORCED: a raw duplicate pending INSERT (bypassing enqueuePickup) is rejected", async () => {
@@ -147,20 +147,20 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
     const ct = Buffer.from(Uint8Array.from({ length: 24 }, (_, i) => (i * 5 + 1) % 256));
     // (a) OLD anchor-less → must be swept.
     await pool.query(
-      `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, created_at)
-       VALUES ($1, 'orphan_kind', $2, now() - interval '48 hours')`,
+      `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, owning_node_id, created_at)
+       VALUES ($1, 'orphan_kind', $2, 'test-node', now() - interval '48 hours')`,
       [AGENT, ct],
     );
     // (b) FRESH anchor-less → must survive (its anchor may still be in flight).
     await pool.query(
-      `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, created_at)
-       VALUES ($1, 'orphan_fresh', $2, now())`,
+      `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, owning_node_id, created_at)
+       VALUES ($1, 'orphan_fresh', $2, 'test-node', now())`,
       [AGENT, ct],
     );
     // (c) OLD but ANCHORED (webauthn has an anchor) → must survive (it IS deliverable).
     await pool.query(
-      `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, created_at)
-       VALUES ($1, 'webauthn', $2, now() - interval '48 hours')`,
+      `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, owning_node_id, created_at)
+       VALUES ($1, 'webauthn', $2, 'test-node', now() - interval '48 hours')`,
       [AGENT, ct],
     );
 
