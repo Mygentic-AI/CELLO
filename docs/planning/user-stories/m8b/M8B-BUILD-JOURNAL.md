@@ -1157,3 +1157,33 @@ Completes DOD-INV-NO-DIR-RELAY (then `#relay`/`#relayEndpoint`/updateMultiaddr a
   core/client. Touches directory + relay (delete) + daemon + protocol-types (seal_unilateral frame fields) →
   deploy batch (held). Red-first on a j-optionb-seal spine: a unilateral seal completes with ZERO
   directory→relay calls; tamper/omit a carried receipt → the seal is refused.
+
+### 2026-07-01 ~05:50 — DOD-OPTIONB-SEAL-1 — design ADDENDUM (carry payload sharpened)
+Refined the OPEN item from the design note. **Structure2** (protocol-types/structure2.ts) =
+`[sequence_number, sender_pubkey, content_hash, sender_signature, scan_result, prev_root]`. The relay
+RECEIPTS (RelayReceiptStore: content_hash + sequence_number + relay_id + timestamp + relay signature) do
+NOT carry `sender_pubkey`/`sender_signature` (those are the Structure1 SENDER's), so receipts alone cannot
+rebuild Structure2. Therefore the **carry payload for `seal_unilateral` = the Structure2 LEAF LOG + the
+per-leaf relay receipts**:
+- The client already RECEIVES each leaf's `structure2_cbor` in the DOD-MSG-4 hash_submit_ack and the
+  relay-signed receipt in RELAYSIG-1. The directory's offline verify then: (1) rebuild the Merkle tree from
+  the carried Structure2 leaves (over `encodeStructure2`), assert root == `reported_root`; (2) per leaf,
+  verify the relay receipt signature over `buildRelayAckTbs(content_hash, seq, timestamp)` (the relay
+  witnessed THIS content at THIS seq — defeats tamper/omit); (3) verify each Structure2's `sender_signature`
+  (Structure1 authorship) + strict-in-order (contiguous seq) + prev_root chain. This is exactly what the
+  relay's `getSealLeaves`+`#verifyUnilateralChain` do today, but with the relay's WORD replaced by the
+  relay's SIGNATURE on each receipt (sovereign-node invariant).
+- **NEXT falsify-first question (first impl step):** does the daemon PERSIST the per-session Structure2 leaf
+  log (so a unilateral seal can carry it), or only the receipts? Trace the daemon's session tree
+  (session-node-manager `recordWitnessedSequence` + the daemon-owned tree / session-tree.ts) + where
+  structure2_cbor from acks lands. If the leaf log isn't persisted per session, the first increment is to
+  store it (alongside the RelayReceiptStore) so the unilateral path can carry it. The daemon currently sends
+  `seal_unilateral {reported_root, reported_seq}` (daemon.ts:2428) — extend it with `leaves` + `receipts`.
+- Then: directory `#processSealUnilateral`/`#verifyUnilateralChain` consume the carried leaves+receipts (no
+  `getSealLeaves`); DELETE `#relay.getSealLeaves` (:3383) + `confirmSeal`/`rejectSeal` calls (the relay
+  idle-sweep reclaims); then remove `#relay`/`#relayEndpoint`/updateMultiaddr + network-relay-adapter.
+
+**Session checkpoint:** DOD-OPTIONB-SETUP-1 ✅ COMPLETE (spine-proven, 3 reviewers, all fixed, docs current).
+DOD-OPTIONB-SEAL-1 designed + scoped + carry payload identified; implementation is the next stretch
+(red-first on a j-optionb-seal spine). All directory/relay changes held unpushed for the DOD-DEPLOY-1 batch;
+cello-client unpushed (no publish yet). Both repos: working tree clean, all gates green.
