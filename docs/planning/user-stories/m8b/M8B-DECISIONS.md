@@ -225,3 +225,42 @@ Two refinements to Design A after reading the relay auth model + the network-rel
   the relay rejects `not_a_participant` rather than recording arbitrary sessions for an authenticated peer.
   Spine-verified the relay-auth pubkey (K_local) == the assignment participant for both initiator and
   counterparty, so legitimate records pass.
+
+## 2026-07-01 ~06:30 — DOD-OPTIONB-SEAL-1 — carry spans BOTH parties' leaves; receipts only on own leaves (security core)
+**Finding (reshapes the carry).** A unilateral seal's `reported_root` is the present party's SessionTree
+root, which includes BOTH parties' message leaves (the daemon appends received leaves to its own tree). So
+the directory's offline tree rebuild needs the FULL leaf set — including the ABSENT counterparty's leaves.
+But the present party holds a relay-signed RECEIPT only for its OWN submits; the counterparty's leaves arrive
+via `leaf_deliver` (which carries structure1_cbor + structure2_cbor but NO relay ACK signature to the
+present party). So the carry is: present-party leaves WITH receipts + counterparty leaves WITHOUT receipts.
+
+**Why the relay receipts are load-bearing (the crux).** Structure1 (the sender-signed bytes) =
+`[1, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]` — it does NOT bind the relay's
+`sequence_number` or `prev_root`. Structure2 (which carries seq + prev_root) is NOT signed by the sender.
+So a party that SUPPLIES the leaves could reorder/renumber its own leaves into a different self-consistent
+chain and every sender-signature in `#verifyUnilateralChain` would still verify. Today's unilateral seal is
+safe ONLY because `getSealLeaves` returns the RELAY's authoritative ordered log (the supplier can't reorder).
+Under Option B the present party supplies the leaves, so the per-leaf relay signature over
+`buildRelayAckTbs(content_hash, seq, timestamp)` — binding content→seq — is the teeth that prevents
+reordering. The present party can't forge the absent party's `sender_signature` (so can't fabricate their
+leaves) and can't drop a non-trailing leaf without a sequence GAP; the SEAL ctrl leaf is the present party's
+OWN at the max seq (receipt-pinned), so a trailing counterparty leaf can't be truncated either.
+
+**OPEN (increment 4, needs adversarial review):** with receipts ONLY on present-party leaves, is the chain
+FULLY constrained against counterparty-leaf reorder/omit? The defenses are: (a) prev_root chain (order
+integrity within the carried set), (b) the SIGNED `last_seen_seq` causal check (each leaf saw the
+other-sender max before it), (c) present-party receipts pinning own-leaf absolute seqs, (d) contiguity
+(no seq gap 1..N), (e) the SEAL leaf is the present party's at max seq. Hypothesis: (a)+(b)+(c)+(d)+(e)
+together pin the full ordering, but this MUST be adversarially verified in the increment-4 review (the
+fallback-finder + test-attacker specifically asked to break a reordered/omitted counterparty chain).
+
+**Decision — dedicated leaf-log store (supersedes increment 1's RelayReceiptStore carry columns).** The
+RelayReceiptStore is semantically "my verified receipts" (the `cello receipts` query); storing the absent
+party's receiptless leaves there pollutes it. Use a dedicated `session_seal_leaves` store keyed (agent,
+session, seq): leaf_kind, sender_pubkey_hex, structure2_cbor, structure1_cbor, and NULLABLE
+(relay_id, relay_timestamp, relay_signature) for own leaves. Captured from BOTH #captureReceipt (own +
+receipt) and onLeafDeliver (received, no receipt). `getSealCarry(agent, session)` returns the full ordered
+chain. Increment 1's RelayReceiptStore carry columns become dormant (left in place — SQLite column-drop
+needs a table rebuild, not worth the churn; nullable + additive, harmless); the carry CAPTURE moves to the
+new store. Reverse: the columns can be reclaimed later. Why not block: this is the correct foundation and
+reversible; choosing it now keeps the unit moving.
