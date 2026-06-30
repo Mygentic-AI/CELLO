@@ -141,7 +141,15 @@ description: >
 - **DOD-OPTIONB-SEAL-1** — Client carries relay-signed receipts to the directory; directory rebuilds +
   verifies the tree offline and FROST-seals (T-of-N); `getSealLeaves`/`confirmSeal` directory→relay calls
   deleted. Full seal with NO directory→relay connection; chain + strict-in-order preserved; tampered/omitted
-  receipt rejected. *(FED-OPTIONB-SEAL-001)* — ❌
+  receipt rejected. *(FED-OPTIONB-SEAL-001)* — 🟡 BUILT / UNVERIFIED-LIVE
+  (Implementation complete: all 6 increments committed. J-UNILATERAL spine GREEN (offline rebuild from
+  client-carried leaves, zero directory→relay dial, FROST-notarized). Negative-teeth unit test (forged/
+  omitted/unwitnessed/relabeled carry rejected). test-attacker found 3 coverage gaps (F1 daemon capture
+  untested, F2 no directory refusal E2E test, F3 counterparty-noncontiguous explicit) — MUST FIX before
+  flipping ✅. code-reviewer + fallback-finder hit Opus quota — must re-dispatch. Back-compat j-sign +
+  j-optionb-setup + j-relaysig green. DOD-INV-NO-DIR-RELAY: getSealLeaves+confirmSeal+rejectSeal deleted;
+  only getSessionLiveness+discardSession remain (parked for PRESENCE/PICKUP). Pending: fix F1/F2/F3 +
+  re-dispatch 2 reviewers + fold findings → then ✅.)
 
 ## Tier C — Cross-node directory state (independent)
 - **DOD-PRESENCE-1** — `agent_presence` + `directory_nodes` in `cello_pub` (REPLICA IDENTITY confirmed for

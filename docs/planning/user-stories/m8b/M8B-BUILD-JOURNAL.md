@@ -1242,3 +1242,43 @@ sequences contiguous). 5. DELETE confirmSeal/rejectSeal calls (idle-sweep reclai
 `#relay`/`#relayEndpoint`/updateMultiaddr + network-relay-adapter. 6. j-optionb-seal spine + 3 reviewers +
 flip DoD + DOD-INV-NO-DIR-RELAY → ✅. The directory verify (4) is the security-critical piece (deserves the
 most care). All held unpushed for DOD-DEPLOY-1.
+
+### 2026-07-01 ~06:30 — DOD-OPTIONB-SEAL-1 — ALL 6 increments IMPLEMENTED, J-UNILATERAL spine GREEN, reviewers PARTIAL (quota-limited)
+**Implementation complete.** The carry design shifted to a DEDICATED `SessionSealLeafStore` (both parties'
+leaves; receipts only on own — see M8B-DECISIONS.md 2026-07-01 ~06:30 "carry spans both parties' leaves"
+decision). Increment 1's RelayReceiptStore carry columns go dormant (left in place). Commits:
+- cello-client: `d27adbf` (inc 1 receipt-store carry cols, dormant), `7ec59c9` (SessionSealLeafStore),
+  `701926b` (capture wiring: own+receipt via #captureReceipt, counterparty via leaf_deliver), `2817f9f`
+  (seal_unilateral send carries seal_leaves from getSealCarry).
+- trustless-cello: `ec5ea94d` (decision), `1d20d428` (journal), `8a4e1d7b` (definitive design),
+  `ea93a8f1` (addendum), `ea302863` (increment 4: offline verify #reconstructCarriedSealLeaves →
+  extracted to seal-unilateral-verify.ts; DELETE getSealLeaves dial), `cff53b73` (increment 5: DELETE
+  confirmSeal/rejectSeal dials), `d31e4e86` (j-unilateral GREEN), `613b2776` (increment 6: extract +
+  negative-teeth unit tests + Option B spine assertions).
+
+**Spine:** J-UNILATERAL 3/3 GREEN (j-unilateral.spine.test.ts: A seals offline → FROST-notarizes with B
+absent; asserts `leaves.rebuilt source=client_carried`, NOT `leaves.fetched`, relay never handles
+`get_seal_leaves`). Back-compat: j-sign (bilateral) GREEN, j-optionb-setup GREEN, j-relaysig GREEN.
+
+**Gates (pre-reviewer):** directory 663/663 (incl. 1 new seal-unilateral-verify), daemon 465/465 (incl. 3
+session-seal-leaf-store), relay 165/165, typecheck clean, j-unilateral+j-sign+j-optionb-setup+j-relaysig
+all green.
+
+**Reviewers: 1 of 3 completed (test-attacker), 2 hit Opus quota limit (code-reviewer + fallback-finder).**
+- **test-attacker verdict: "HOLLOW TESTS FOUND"** — the `reconstructCarriedSealLeaves` pure function has
+  genuine teeth (receipt seq-binding crux verified), BUT: **F1 (blocking):** daemon capture (the producer)
+  entirely untested — session-relay-client.test.ts never constructs the client with a sealLeafStore, so
+  own-with-receipt vs counterparty-without-receipt is unproven; **F2 (blocking):** no end-to-end directory
+  refusal test (only the pure function's unit test covers rejections; the directory consumer's actual
+  use is unexercised by any test); **F3 (medium):** counterparty-out-of-order case only transitively
+  tested (contiguity covers it, but no explicit negative for a counterparty leaf noncontiguous).
+- **code-reviewer + fallback-finder: INCOMPLETE (hit "session limit resets 6:40am" — the Opus quota).** Must
+  be re-dispatched post-compaction. The parked counterparty-reorder/omit security crux is flagged for
+  adversarial review by the code-reviewer specifically.
+
+**RESUME → fix the 3 test-attacker findings (F1: daemon capture test, F2: directory refusal end-to-end test,
+F3: explicit counterparty noncontiguous), re-run gates, THEN re-dispatch code-reviewer (model:'opus') +
+fallback-finder (the Opus quota should have reset by then — 6:40am Blantyre = next Opus cycle), fold in their
+findings, commit, flip DoD to ✅ SPINE-PROVEN + DOD-INV-NO-DIR-RELAY ✅ (getSealLeaves+confirmSeal+rejectSeal
+all deleted; only getSessionLiveness + discardSession remain — parked for PRESENCE/PICKUP, not the seal invariant).
+THEN advance to DOD-PRESENCE-1 (cross-node replication, Track C — Sonnet-safe).
