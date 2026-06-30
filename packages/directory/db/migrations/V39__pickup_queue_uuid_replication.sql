@@ -9,19 +9,14 @@
 --
 -- After this migration: pickup_queue can be added to cello_pub (setup-replication.sh).
 
--- 1. Add owning_node_id (NOT NULL for new rows; existing rows get a placeholder since all
---    current pickup_queue rows were written by the single us-east-1 node).
-ALTER TABLE pickup_queue ADD COLUMN IF NOT EXISTS owning_node_id TEXT;
-UPDATE pickup_queue SET owning_node_id = 'us-east-1-legacy' WHERE owning_node_id IS NULL;
-ALTER TABLE pickup_queue ALTER COLUMN owning_node_id SET NOT NULL;
+-- 1. Add owning_node_id with a DEFAULT (satisfies NOT NULL for existing rows without UPDATE DML).
+ALTER TABLE pickup_queue ADD COLUMN IF NOT EXISTS owning_node_id TEXT NOT NULL DEFAULT 'us-east-1-legacy';
 
 -- 2. Change the PK from BIGSERIAL to UUID.
---    - Add a uuid column (gen_random_uuid() for existing rows).
+--    - Add a uuid column with DEFAULT gen_random_uuid() (populates existing rows on ADD COLUMN).
 --    - Drop the old id column + sequence (the PK constraint drops with it).
 --    - Rename uuid_id → id and set as PK.
-ALTER TABLE pickup_queue ADD COLUMN uuid_id UUID DEFAULT gen_random_uuid();
-UPDATE pickup_queue SET uuid_id = gen_random_uuid() WHERE uuid_id IS NULL;
-ALTER TABLE pickup_queue ALTER COLUMN uuid_id SET NOT NULL;
+ALTER TABLE pickup_queue ADD COLUMN uuid_id UUID NOT NULL DEFAULT gen_random_uuid();
 ALTER TABLE pickup_queue DROP CONSTRAINT pickup_queue_pkey;
 ALTER TABLE pickup_queue DROP COLUMN id;
 ALTER TABLE pickup_queue RENAME COLUMN uuid_id TO id;
