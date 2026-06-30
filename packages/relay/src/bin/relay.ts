@@ -71,6 +71,12 @@ const wsListenAddr = process.env["CELLO_RELAY_WS_LISTEN_ADDR"] ?? "";
 const publicMultiaddrBase = process.env["CELLO_RELAY_PUBLIC_MULTIADDR"] ?? "";
 const healthPort = parseInt(process.env["CELLO_RELAY_HEALTH_PORT"] ?? "4000", 10);
 const dirPubkeyHex = process.env["CELLO_DIRECTORY_PUBKEY"];
+// FED-OPTIONB-SETUP-001 (any-directory): the consortium directory node pubkeys. Under Option B the
+// client (not the directory) presents the directory-signed session assignment to its chosen relay, so
+// the relay must accept an assignment signed by ANY of the N sovereign directory nodes — not just one.
+// Comma-separated 64-hex Ed25519 pubkeys; falls back to the single CELLO_DIRECTORY_PUBKEY for
+// single-node / pre-federation deployments. Same trust source as today's single pubkey (set by deploy).
+const dirPubkeysHex = process.env["CELLO_DIRECTORY_PUBKEYS"];
 const startedAt = Date.now();
 
 // Logger is injected, never imported directly. StdoutLogger emits structured JSON lines.
@@ -144,6 +150,28 @@ if (dirPubkeyHex) {
   logger.warn("relay.startup.ephemeral-key", {
     reason: "CELLO_DIRECTORY_PUBKEY not set; using ephemeral key (test mode only)",
   });
+}
+
+// FED-OPTIONB-SETUP-001: decode the consortium directory pubkey set. The relay verifies a
+// client-presented assignment signature against ANY of these. Always includes the single dirPubkey
+// (back-compat); CELLO_DIRECTORY_PUBKEYS adds the other sovereign nodes so a non-node-0 directory's
+// assignment is accepted. Invalid entries are fatal — a silently-dropped pubkey would make a legitimate
+// directory's assignments unverifiable (the any-directory teeth would fail closed without a clear cause).
+const dirPubkeys: Uint8Array[] = [dirPubkey];
+if (dirPubkeysHex) {
+  for (const entry of dirPubkeysHex.split(",").map((s) => s.trim()).filter((s) => s.length > 0)) {
+    if (!/^[0-9a-fA-F]{64}$/.test(entry)) {
+      logRelayServiceStartFailed(logger, {
+        reason: `CELLO_DIRECTORY_PUBKEYS entry must be 64-char hex (32-byte Ed25519 pubkey): ${entry.slice(0, 16)}…`,
+        region: awsRegion,
+      });
+      process.exit(1);
+    }
+    const pk = new Uint8Array(Buffer.from(entry, "hex"));
+    if (!dirPubkeys.some((existing) => Buffer.from(existing).equals(Buffer.from(pk)))) {
+      dirPubkeys.push(pk);
+    }
+  }
 }
 
 // ─── Signing key loading ────────────────────────────────────────────────────────
@@ -355,6 +383,7 @@ try {
   relayResult = await createRelayNode({
     listenAddresses: wsListenAddr ? [listenAddr, wsListenAddr] : [listenAddr],
     directoryPubkey: dirPubkey,
+    directoryPubkeys: dirPubkeys,
     keyProvider: kp,
     transportPrivateKey,
     directory: directoryAdapter,

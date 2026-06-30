@@ -20,6 +20,7 @@ import type {
   GapFillError,
   SessionLivenessQuery,
   SessionLivenessResponse,
+  ClientRecordAssignment,
 } from "./relay-types.js";
 
 const ENC = new Encoder({ tagUint8Array: false });
@@ -130,7 +131,7 @@ export function encodeSessionLivenessResponse(frame: SessionLivenessResponse): U
 
 // ─── Decode ───────────────────────────────────────────────────────────────────
 
-export type InboundRelayFrame = RelayAuthResponse | HashSubmit | GapFillRequest | SessionLivenessQuery;
+export type InboundRelayFrame = RelayAuthResponse | HashSubmit | GapFillRequest | SessionLivenessQuery | ClientRecordAssignment;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -190,6 +191,40 @@ export function decodeInboundFrame(bytes: Uint8Array): InboundRelayFrame | null 
     if (!session_id || session_id.length !== 16) return null;
     if (!counterparty_pubkey || counterparty_pubkey.length !== 32) return null;
     return { type: "session_liveness_query", session_id, counterparty_pubkey };
+  }
+
+  // FED-OPTIONB-SETUP-001: client-presented session assignment (Option B). Shape-validate only;
+  // the relay verifies assignment_signature over the reconstructed TBS against the consortium keys.
+  if (o["type"] === "client_record_assignment") {
+    const session_id = toUint8Array(o["session_id"]);
+    const participant_a = toUint8Array(o["participant_a"]);
+    const participant_b = toUint8Array(o["participant_b"]);
+    const assignment_signature = toUint8Array(o["assignment_signature"]);
+    const tsRaw = o["session_timestamp"];
+    const session_timestamp = typeof tsRaw === "number" ? tsRaw : typeof tsRaw === "bigint" ? Number(tsRaw) : null;
+    if (!session_id || session_id.length !== 16) return null;
+    if (!participant_a || participant_a.length !== 32) return null;
+    if (!participant_b || participant_b.length !== 32) return null;
+    if (!assignment_signature || assignment_signature.length !== 64) return null;
+    if (session_timestamp === null) return null;
+    const initiator_session_peer_id =
+      typeof o["initiator_session_peer_id"] === "string" && o["initiator_session_peer_id"] !== ""
+        ? (o["initiator_session_peer_id"] as string)
+        : undefined;
+    const counterparty_session_peer_id =
+      typeof o["counterparty_session_peer_id"] === "string" && o["counterparty_session_peer_id"] !== ""
+        ? (o["counterparty_session_peer_id"] as string)
+        : undefined;
+    return {
+      type: "client_record_assignment",
+      session_id,
+      participant_a,
+      participant_b,
+      session_timestamp,
+      initiator_session_peer_id,
+      counterparty_session_peer_id,
+      assignment_signature,
+    };
   }
 
   return null;

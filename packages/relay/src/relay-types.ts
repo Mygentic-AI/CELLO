@@ -233,3 +233,25 @@ export interface SessionLivenessResponse {
   liveness: "alive" | "gone" | "unknown";
   observed_at: number;
 }
+
+/**
+ * FED-OPTIONB-SETUP-001 (Option B, any-relay/any-directory): the CLIENT presents the
+ * directory-signed session assignment to its chosen relay over its already-authenticated client
+ * stream, replacing the old directory→relay `recordAssignment` dial. Unlike the directory-ADMIN
+ * `record_assignment` frame (which requires a body-level `directory_signature` only the directory can
+ * produce), this frame carries NO admin auth — the client cannot impersonate the directory. Its
+ * authority is `assignment_signature`: the per-node directory signature over the relay TBS
+ * ([session_id, participant_a, participant_b, session_timestamp, (initiator_peer_id,
+ * counterparty_peer_id)]). The relay verifies it against ANY consortium directory pubkey, so any
+ * sovereign directory can grant relay service.
+ */
+export interface ClientRecordAssignment {
+  type: "client_record_assignment";
+  session_id: Uint8Array;            // 16 bytes
+  participant_a: Uint8Array;         // 32-byte initiator pubkey
+  participant_b: Uint8Array;         // 32-byte counterparty pubkey
+  session_timestamp: number;         // Unix ms
+  initiator_session_peer_id?: string;
+  counterparty_session_peer_id?: string;
+  assignment_signature: Uint8Array;  // 64-byte per-node directory sig over the relay TBS (relayDirSig)
+}

@@ -586,6 +586,10 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
     // seal callback (SPINE-7). Per-node node-identity keys + the relay accepting any node
     // arrive with DOD-MANIFEST-1 / Option B.
     let dir0Pubkey = "";
+    // FED-OPTIONB-SETUP-001 (any-directory): every sovereign node's pubkey. The relay accepts a
+    // CLIENT-presented assignment signed by ANY of these, so a non-node-0 directory's assignment
+    // verifies (the any-directory teeth). Passed as CELLO_DIRECTORY_PUBKEYS.
+    const allDirPubkeys: string[] = [];
     // Pre-allocate every directory's health port BEFORE spawning, so the bootstrap URLs are
     // known up front (DOD-DKG-1): a consortium directory reads its manifest at STARTUP and
     // that manifest must carry these URLs, so onDirectoryUrlsReady writes it before any spawn.
@@ -599,6 +603,7 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
       const dirKp = await FileKeyProvider.load(dirKeyFile);
       const dirPubkeyHex = Buffer.from(await dirKp.getPublicKey()).toString("hex");
       if (i === 0) dir0Pubkey = dirPubkeyHex;
+      allDirPubkeys.push(dirPubkeyHex);
       const healthPort = healthPorts[i]!;
       // Per-node at-rest envelope key + audit sink (cello-fallback-finder DOD-SPINE-1 #2/#3):
       // sovereign nodes each encrypt their OWN K_server share with their OWN envelope key and
@@ -666,6 +671,10 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
       NODE_ENV: "test",
       CELLO_ENV: "local",
       CELLO_DIRECTORY_PUBKEY: dir0Pubkey,
+      // FED-OPTIONB-SETUP-001: the full consortium pubkey set so the relay accepts a client-presented
+      // assignment signed by any sovereign directory (any-directory). dir0Pubkey is included for the
+      // directory-ADMIN frame path (back-compat); the set adds nodes 1..N for the Option-B client path.
+      CELLO_DIRECTORY_PUBKEYS: allDirPubkeys.join(","),
       CELLO_DIRECTORY_MULTIADDR: directoryMultiaddr,
       CELLO_RELAY_KEY_FILE: join(tmpDir, "relay-key"),
       CELLO_RELAY_TRANSPORT_KEY_HEX: relaySeedHex,

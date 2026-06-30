@@ -478,8 +478,6 @@ export class CelloDirectoryNode {
   readonly #requireRegistration: boolean;
   // SESSION-006: enforce connection gate on session_request
   readonly #requireConnectionGate: boolean;
-  // OBS-001: log relay auth once on first successful recordAssignment
-  #relayAuthenticated = false;
   // SI-001 test injection: tamper with package_cbor before relay
   readonly #packageCborInterceptor: ((cbor: Uint8Array) => Uint8Array) | undefined;
   // CONNREQ-002: pending connection requests indexed by connection_request_id
@@ -3123,26 +3121,15 @@ export class CelloDirectoryNode {
         }
         const relayTbs = CBOR_ENC.encode(relayTbsFields) as Uint8Array;
         const relayDirSig = new Uint8Array(await this.#keyProvider.sign(relayTbs));
-        const relayAssignment: RelaySessionAssignment = {
-          session_id,
-          participant_a: new Uint8Array(initiatorPubkey),
-          participant_b: new Uint8Array(targetPubkey),
-          session_timestamp,
-          directory_signature: relayDirSig,
-          initiator_session_peer_id: initiatorSessionPeerId!,
-          counterparty_session_peer_id: counterpartySessionPeerId,
-        };
-        const recorded = await this.#relay.recordAssignment(relayAssignment);
-        if (recorded.ok && !this.#relayAuthenticated) {
-          this.#relayAuthenticated = true;
-          protocolLog("AUTH", `Relay ${truncHex(this.#relayEndpoint.peer_id)} authenticated`);
-        }
-        if (!recorded.ok) {
-          protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: ${recorded.reason}`);
-          this.#logger?.warn("relay.record_assignment.failed", { agentShort: truncHex(initiatorHex), reason: recorded.reason });
-          this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "relay_unavailable" }));
-          return;
-        }
+        // FED-OPTIONB-SETUP-001 (Option B): the directory NO LONGER dials the relay to record the
+        // assignment. The old `this.#relay.recordAssignment(...)` dial pinned to relays[0] (alphabetical
+        // = ap1, often cross-region/SG-locked/unreachable) and had to be repointed by a local relay
+        // re-registration on every directory restart — the recurring `relay_unavailable` root cause.
+        // Instead, attach the per-node relay-assignment signature to the client-facing assignment; the
+        // CLIENT carries it to ITS chosen relay (a client_record_assignment frame), which verifies it
+        // against any consortium directory pubkey. Under Option B the directory makes ZERO network calls
+        // to a relay for session setup (DOD-INV-NO-DIR-RELAY; getSealLeaves/confirmSeal go in SEAL-1).
+        (assignment as { relay_directory_signature?: Uint8Array }).relay_directory_signature = relayDirSig;
       }
 
       // Track as provisional: relay has registered it, but clients haven't yet received it.

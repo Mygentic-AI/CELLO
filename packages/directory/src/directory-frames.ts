@@ -137,6 +137,14 @@ export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Arr
   if (a.transport_mode && a.initiator_session_peer_id && a.counterparty_session_peer_id) {
     encodedAssignment["transport_mode"] = a.transport_mode;
   }
+  // FED-OPTIONB-SETUP-001 (Option B): the per-node directory signature over the relay TBS. Present only
+  // for relay-mode sessions (the directory sets it alongside the relay block). The CLIENT carries it to
+  // its chosen relay (client_record_assignment), replacing the directory→relay dial. Cast because the
+  // pinned @cello-protocol/protocol-types type may not yet declare the field (added in the DEPLOY-1 bump).
+  const relayDirSig = (a as { relay_directory_signature?: Uint8Array }).relay_directory_signature;
+  if (relayDirSig) {
+    encodedAssignment["relay_directory_signature"] = relayDirSig;
+  }
   return ENC.encode({ type: frame.type, assignment: encodedAssignment });
 }
 

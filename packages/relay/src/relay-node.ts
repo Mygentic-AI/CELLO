@@ -89,6 +89,7 @@ import type {
   HashSubmitErrorReason,
   GapFillRequest,
   SessionLivenessQuery,
+  ClientRecordAssignment,
 } from "./relay-types.js";
 import type { RelayStore } from "./relay-store.js";
 import { InMemoryRelayStore } from "./relay-store.js";
@@ -184,6 +185,14 @@ export interface DirectoryAdapter {
 export interface RelayNodeOptions {
   node: CelloNode;
   directoryPubkey: Uint8Array;
+  /**
+   * FED-OPTIONB-SETUP-001 (any-directory): the full set of sovereign consortium directory node
+   * pubkeys. Under Option B a client presents a directory-signed session assignment to its chosen
+   * relay; the relay accepts an assignment signed by ANY of these (not just `directoryPubkey`). When
+   * omitted, falls back to `[directoryPubkey]` (single-node / pre-federation). The directory-ADMIN
+   * frame path still authenticates against the single `directoryPubkey` only.
+   */
+  directoryPubkeys?: Uint8Array[];
   directory?: DirectoryAdapter;
   store?: RelayStore;
   logger?: Logger;
@@ -223,6 +232,8 @@ export interface RelayNodeOptions {
 export class CelloRelayNode {
   readonly #node: CelloNode;
   readonly #directoryPubkey: Uint8Array;
+  /** FED-OPTIONB-SETUP-001: consortium directory pubkeys a client-presented assignment may be signed by. */
+  readonly #directoryPubkeys: Uint8Array[];
   readonly #directory: DirectoryAdapter | null;
   readonly #store: RelayStore;
   readonly #logger: Logger;
@@ -270,6 +281,14 @@ export class CelloRelayNode {
   constructor(opts: RelayNodeOptions) {
     this.#node = opts.node;
     this.#directoryPubkey = opts.directoryPubkey;
+    // FED-OPTIONB-SETUP-001: the consortium set always contains the primary directoryPubkey, plus any
+    // additional sovereign nodes. Deduped so a repeated pubkey doesn't cost an extra verify attempt.
+    this.#directoryPubkeys = [opts.directoryPubkey];
+    for (const pk of opts.directoryPubkeys ?? []) {
+      if (!this.#directoryPubkeys.some((existing) => Buffer.from(existing).equals(Buffer.from(pk)))) {
+        this.#directoryPubkeys.push(pk);
+      }
+    }
     this.#directory = opts.directory ?? null;
     // Logger is optional for backward compatibility; defaults to a no-op for pre-M4 callers.
     // Initialise before #store so the default InMemoryRelayStore can receive the logger.
@@ -482,6 +501,39 @@ export class CelloRelayNode {
 
   // ─── In-process directory calls ─────────────────────────────────────────────
 
+  /**
+   * FED-OPTIONB-SETUP-001 (Option B): handle a CLIENT-presented session assignment over the
+   * authenticated client stream. This replaces the old directory→relay `recordAssignment` dial — the
+   * relay no longer has any inbound connection from the directory for session setup. The client's
+   * authority is the per-node directory signature (`assignment_signature`) carried in the frame; the
+   * shared `recordAssignment` below verifies it against ANY consortium directory pubkey and binds the
+   * session peer IDs. No directory-ADMIN body signature is required or accepted here (the client is not
+   * the directory). `session_already_exists` is success from the client's view — the OTHER party (or a
+   * retry) already recorded the same assignment, which is the idempotent expected case.
+   */
+  async #processClientRecordAssignment(stream: Stream, frame: ClientRecordAssignment): Promise<void> {
+    const result = this.recordAssignment({
+      session_id: frame.session_id,
+      participant_a: frame.participant_a,
+      participant_b: frame.participant_b,
+      session_timestamp: frame.session_timestamp,
+      directory_signature: frame.assignment_signature,
+      initiator_session_peer_id: frame.initiator_session_peer_id,
+      counterparty_session_peer_id: frame.counterparty_session_peer_id,
+    } as SessionAssignment);
+    const sidHex = Buffer.from(frame.session_id).toString("hex");
+    if (result.ok || result.reason === "session_already_exists") {
+      this.#logger.info("relay.assignment.recorded", { sessionId: truncHex(sidHex), source: "client", reason: result.ok ? "recorded" : "already_exists" });
+      protocolLog("RELAY", `Client-presented assignment recorded — session ${truncHex(sidHex)} (${result.ok ? "new" : "existing"})`);
+      await this.#sendFrame(stream, CBOR_ENC.encode({ type: "assignment_ok" }) as Uint8Array);
+      return;
+    }
+    // Verification failed (directory_signature_invalid) or a non-idempotent store failure: fail LOUD so
+    // a forged/non-consortium assignment is diagnosable, never silently accepted (any-directory teeth).
+    this.#logger.warn("relay.assignment.rejected", { sessionId: truncHex(sidHex), source: "client", reason: result.reason });
+    await this.#sendFrame(stream, CBOR_ENC.encode({ type: "assignment_invalid", reason: result.reason }) as Uint8Array);
+  }
+
   recordAssignment(assignment: SessionAssignment): { ok: true } | { ok: false; reason: string } {
     // Verify directory signature over canonical CBOR of
     //   [session_id, participant_a, participant_b, session_timestamp]
@@ -505,7 +557,11 @@ export class CelloRelayNode {
       tbsFields.push(assignment.initiator_session_peer_id, assignment.counterparty_session_peer_id);
     }
     const tbs = CBOR_ENC.encode(tbsFields);
-    if (!verify(this.#directoryPubkey, tbs, assignment.directory_signature)) {
+    // FED-OPTIONB-SETUP-001 (any-directory): the assignment may be signed by ANY sovereign consortium
+    // directory node — not just node 0. Accept if the signature verifies against any configured
+    // directory pubkey. In a single-node deployment this set is just [directoryPubkey] (unchanged).
+    const verified = this.#directoryPubkeys.some((pk) => verify(pk, tbs, assignment.directory_signature));
+    if (!verified) {
       return { ok: false, reason: "directory_signature_invalid" };
     }
 
@@ -793,6 +849,8 @@ export class CelloRelayNode {
           await this.#processGapFillRequest(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "session_liveness_query") {
           await this.#processSessionLivenessQuery(stream, parsed);
+        } else if (parsed.type === "client_record_assignment") {
+          await this.#processClientRecordAssignment(stream, parsed);
         }
       }
     } catch (err: unknown) {
@@ -1569,6 +1627,8 @@ export class CelloRelayNode {
 export interface CreateRelayNodeOptions {
   listenAddresses?: string[];
   directoryPubkey: Uint8Array;
+  /** FED-OPTIONB-SETUP-001: consortium directory pubkeys (any-directory). Falls back to [directoryPubkey]. */
+  directoryPubkeys?: Uint8Array[];
   directory?: DirectoryAdapter;
   keyProvider?: KeyProvider;
   store?: RelayStore;
@@ -1626,6 +1686,7 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
   const relay = new CelloRelayNode({
     node,
     directoryPubkey: opts.directoryPubkey,
+    directoryPubkeys: opts.directoryPubkeys,
     directory: opts.directory,
     store: opts.store,
     sessionWal: opts.sessionWal,
