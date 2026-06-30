@@ -1187,3 +1187,43 @@ per-leaf relay receipts**:
 DOD-OPTIONB-SEAL-1 designed + scoped + carry payload identified; implementation is the next stretch
 (red-first on a j-optionb-seal spine). All directory/relay changes held unpushed for the DOD-DEPLOY-1 batch;
 cello-client unpushed (no publish yet). Both repos: working tree clean, all gates green.
+
+### 2026-07-01 ~06:00 — DOD-OPTIONB-SEAL-1 — DEFINITIVE design (read #verifyUnilateralChain) + first increment
+Read `#verifyUnilateralChain` (directory-node.ts:3537). It consumes the FULL leaf records
+(`RelaySealData["leaves"]` = `{kind, s2: full Structure2, structure1_cbor}`): (a) content-hash root over
+`s2.content_hash` == reported_root; (b) per-leaf `verify(s2.sender_pubkey, structure1_cbor,
+s2.sender_signature)`; (c) `s2.prev_root` chain via `encodeStructure2`; (d) causal chain via
+`decodeStructure1Fields`; (e) exactly ONE ctrl SEAL leaf from the present party. Receipts (content_hash +
+seq + relay_sig) ALONE cannot satisfy this — the full leaf log is required.
+
+**The security crux (why receipts are load-bearing under Option B):** today the directory trusts the chain
+*because `getSealLeaves` came straight from the relay*. Under Option B the present (submitting) party carries
+the leaves — it CANNOT forge the absent party's `sender_signature` (no key), but it COULD OMIT or REORDER
+leaves to present a truncated/altered chain. So the **relay receipts are the new teeth**: the directory
+verifies, per leaf, the relay's signature over `buildRelayAckTbs(content_hash, seq, timestamp)` against the
+registered relay pubkey, AND that the sequences are CONTIGUOUS (1..N, no gap) — proving the carried chain is
+the COMPLETE, correctly-ordered relay-witnessed one. This is the authoritative registered-relay check
+RELAYSIG-1 deferred here. Without it, client-carried leaves would let a present party rewrite history.
+
+**Carry payload (final):** `seal_unilateral` gains `leaves` (`{kind, structure2_cbor, structure1_cbor}[]`)
++ `receipts` (`{sequence_number, relay_id, timestamp, signature}[]`, the RELAYSIG-1 receipts). The directory:
+reconstructs each `s2` from `structure2_cbor`, runs the EXISTING `#verifyUnilateralChain` on the carried
+leaves (no `getSealLeaves`), PLUS the new per-leaf relay-receipt + contiguity verification, then FROST-seals.
+
+**Increment plan (red-first on a j-optionb-seal spine — unilateral seal, zero directory→relay; tamper/omit
+a receipt ⇒ refused):**
+1. **Daemon persistence (first, the gap):** the daemon does NOT persist the full Structure2 leaf log today
+   (SessionTree stores only `{kind, hashHex}`; RelayReceiptStore stores content_hash+seq+sig). Persist the
+   per-(session,seq) `structure2_cbor` + `structure1_cbor` (extend RelayReceiptStore or a parallel store) so
+   the unilateral path can carry them. Source: the DOD-MSG-4 hash_submit_ack already returns structure2_cbor
+   to the client; capture + store it alongside the receipt in `#captureReceipt`.
+2. **protocol-types:** add `leaves` + `receipts` to the `seal_unilateral` frame.
+3. **Daemon send (daemon.ts:2428):** populate `leaves` + `receipts` from the new store for the session.
+4. **Directory consume (`#processSealUnilateral`):** take the carried leaves+receipts; DELETE the
+   `#relay.getSealLeaves` dial (:3383); add the relay-receipt + contiguity verification to (or alongside)
+   `#verifyUnilateralChain`; the registered-relay pubkey check uses the session's assigned relay.
+5. **Delete `confirmSeal`/`rejectSeal` calls** (directory-node.ts:3744/4253/4315) — the relay idle-sweep
+   reclaims; then remove `#relay`/`#relayEndpoint`/updateMultiaddr(907-914) + network-relay-adapter.
+6. j-optionb-seal spine + 3 reviewers + flip DoD + DOD-INV-NO-DIR-RELAY → ✅.
+
+This is the precise, unambiguous starting point for the SEAL-1 implementation (survives an Opus→Sonnet switch).
