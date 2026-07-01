@@ -360,7 +360,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 - ap-northeast-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-ap1.cello.mygentic.ai --type String --region ap-northeast-1`
 
 ### dev — eu-central-1
-*Last deployed: 2026-06-27
+*Last deployed: 2026-07-01
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -416,7 +416,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | SNS Topic — ops-warning | arn:aws:sns:eu-central-1:257394457473:cello-ops-warning-dev |
 
 ### dev — ap-northeast-1
-*Last deployed: 2026-06-27
+*Last deployed: 2026-07-01
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
