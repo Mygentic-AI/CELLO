@@ -296,3 +296,145 @@ CLI story, no protocol change.
 | Attended-aware standing receiver | Design + protocol | Both repos |
 
 First two are pre-requisites for channels to work at all. Rest are quality-of-life.
+
+---
+
+## Design Decisions and Refined Model (2026-07-01 continued)
+
+### Away response configuration
+
+When an agent is away (online but no live client attached), both inbound session
+requests and inbound messages need a response policy. This is an "answering
+machine" problem — the operator should be able to configure what happens.
+
+**Two distinct scenarios needing separate response templates:**
+
+1. **Inbound session request while away.** A counterparty tries to open a
+   session. Three possible outcomes exist: accepted (needs attendance), refused
+   (explicit decline), or unreachable (no response at all). A fourth outcome
+   is now added: "agent is away — daemon received the request but no operator
+   is currently attached."
+
+2. **Inbound message on an existing session while away.** Message arrives,
+   gets stored. Counterparty may be waiting for a reply.
+
+**Default behavior:**
+- Session requests: daemon acknowledges receipt, signals agent is away. The
+  counterparty knows: (a) the daemon is alive, (b) the agent exists, (c) it's
+  away right now. The request is queued and will be visible when the operator
+  reconnects.
+- Messages: same — acknowledge receipt, signal away status.
+
+**Configurable away message:** Operators should be able to set a custom away
+response string. Generic default: "Agent is currently away. Your request has
+been received and queued." Custom example: "Thank you for contacting Agent X.
+This session is currently unattended. Your message has been recorded."
+
+**Privacy option:** High-privacy mode — daemon behaves as if unreachable (no
+response). From the counterparty's perspective this is indistinguishable from
+a network failure. This hides the fact that the daemon received the request.
+Consistent with the CELLO privacy ethos but the default should be transparent
+(acknowledge + away signal), not silent.
+
+**Key insight:** There are exactly two distinguishable states from a
+counterparty's perspective:
+- *Unreachable*: no response from the daemon (network failure or privacy mode)
+- *Away*: bona fide daemon response saying the agent is not currently attended
+
+These map to two different operator trust levels. Default is "away" (transparent).
+Privacy mode is "unreachable" (opaque).
+
+---
+
+### Decisions on open design questions
+
+**Q1: Should `use_agent` absorb `start_agent`?**
+**Decision: Yes.** `cello_use_agent` auto-starts the agent if it isn't already
+online. The explicit `cello_start_agent` call remains available for the
+"bring a newly registered agent online without setting it as current" case, but
+it is no longer required in the common flow.
+
+**Q2: Should `cello login` auto-start all registered agents?**
+**Decision: Yes, with opt-out.** Solo operator common case becomes: login →
+use_agent → session. Opt-out is a per-agent config field (`autoStart: false`)
+for operators who want explicit control over which agents consume directory
+resources.
+
+**Q3: Notification broadcast vs targeted.**
+**Decision: Always targeted.** Notifications only reach IPC connections where
+the affected agent is set as current via `cello_use_agent`. No auto-broadcast.
+
+However: a **CLI query command** should exist for checking outstanding
+notifications across all agents without needing to use_agent each one. Intent:
+"I'm in a session working as Agent-1 and I want to know if Agent-2 has any
+pending session requests or messages." This is an initiated pull, not a push.
+The daemon has all the state; the CLI surfaces it on demand.
+
+**Q4: Polling interval for non-push clients.**
+**Decision: Not our scope.** Clients use loop/cron commands at their own
+cadence. We can document recommendations (2-3 min if anxious, 10-30 min for
+background work) but this is an operator choice, like checking WhatsApp. As
+long as the tool surface makes it easy to check, the interval is up to the
+operator.
+
+**Q5: Away state — visible to counterparties?**
+**Decision: Visible by default, configurable.** Default: daemon signals "agent
+is away" (transparent). Privacy option: daemon goes silent ("unreachable").
+Rationale: there are only two honest choices when a session request can't be
+accepted — refuse it or claim you weren't reachable. The default should be
+the honest one. The privacy mode exists for operators who want it, and is
+consistent with the CELLO ethos, but it shouldn't be the default.
+
+**Q6: Offline message storage — daemon or directory?**
+**Decision: Daemon-local is preferred. Relay as temporary hold. Directory
+does not store messages.**
+
+Preferred delivery model:
+- Message delivered to daemon → done. Stored in local SQLCipher DB.
+- Directory never stores message content.
+- Relay may temporarily hold undelivered frames (already exists — relay WAL
+  and pickup queue).
+
+For the "agent was fully offline (daemon not running)" case: on reconnect, the
+daemon contacts the directory, and the directory signals whether any relay nodes
+are holding undelivered frames for this agent. The daemon then pulls from the
+relay. This is a "check relay on wakeup" pattern — not directory storage, but
+directory-assisted discovery of what the relay is holding.
+
+This maps cleanly to existing infrastructure: `pickup_queue` table in the
+directory already handles the relay-side queuing. The missing piece is the
+"on reconnect, ask directory if relay has anything for me" step.
+
+---
+
+### Refined agent state model
+
+| State | Meaning | Visible to counterparties |
+|-------|---------|--------------------------|
+| **Registered** | Identity known to directory, FROST DKG complete | Yes (directory listing) |
+| **Online** | Daemon running, standing receiver active, reachable | Yes |
+| **Attended** | Online + live client session has claimed via `use_agent` | No (daemon-internal) |
+| **Away** | Online but no client attached — daemon responds, queues | Yes (configurable) |
+
+The `away` response behavior (transparent vs opaque) is an operator preference,
+not a protocol state. The protocol state is always one of the four above. The
+response policy is configuration layered on top of the `away` state.
+
+---
+
+### Stories needed (updated)
+
+| Area | Type | Scope |
+|------|------|-------|
+| Wire IPC notification forwarding + `claude/channel` capability | Implementation | cello-client only |
+| `cello_message` notification includes `session_id` | Implementation | cello-client only |
+| `use_agent` auto-starts agent if not online | Implementation | cello-client (CLI + daemon) |
+| `cello login` auto-starts all loaded agents (with opt-out config) | Implementation | cello-client (CLI) |
+| CLI query for pending notifications across all agents | Implementation | cello-client (CLI) |
+| Away response configuration (session request + message templates, privacy mode) | Design + impl | cello-client + protocol |
+| `since_seq` cursor on `cello_receive` for reconnect | Design + impl | cello-client |
+| "Check relay on wakeup" — directory-assisted relay discovery | Design + impl | Both repos |
+
+First two are pre-requisites for channels to work at all. `use_agent` auto-start
+and `login` auto-start are quick wins that reduce operator friction. The rest
+are quality-of-life and async messaging foundations.
