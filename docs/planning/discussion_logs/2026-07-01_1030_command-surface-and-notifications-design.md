@@ -252,6 +252,70 @@ See "Leave a Message" section above for the full model.
 
 ---
 
+## State Matrix — Full Coverage
+
+All daemon/agent/session state combinations and their handling:
+
+| Daemon | Agent state | Event | Handling |
+|--------|-------------|-------|----------|
+| Not running | — | Session request / message | Relay holds frames; daemon discovers on reconnect via directory-assisted relay check ("check relay on wakeup") |
+| Running | Registered, not started | Session request / message | Directory has no active connection for this agent — behaves as away (transparent default, opaque if privacy mode set) |
+| Running | Away (online, no client) | Inbound session request | Away response sent (configurable message); request queued |
+| Running | Away (online, no client) | Inbound message | Away response sent; message stored in DB |
+| Running | Attended | Inbound session request | Push notification (`cello_session_request`) to the attending client |
+| Running | Attended | Inbound message | Push notification (`cello_message`) to the attending client |
+| Any | Interrupted session (daemon was killed mid-session) | Counterparty's unilateral seal arrives | UPGRADE-001 auto-upgrades to bilateral on reconnect — no operator decision needed |
+
+The interrupted session case is fully implemented (UPGRADE-001, `seal-upgrade.ts`). When B
+returns, the daemon automatically recovers content hashes, verifies the chain, signs the
+ack leaf, and the directory promotes the unilateral seal to bilateral. No operator action
+required.
+
+The "registered but not started" row becomes a narrow edge case once login auto-start
+lands — it only applies to operators who opted out of auto-start, or who registered a new
+agent mid-session without starting it. The directory has no active signaling connection for
+the agent, so the away signal must originate from the directory itself rather than the
+daemon.
+
+---
+
+## Contact Model and Privacy
+
+**One operator per daemon.** A single human operator owns each daemon. One operator can
+run multiple daemons (different machines) but each daemon is exclusively theirs. There is
+no multi-operator daemon — the reputation and trust signals aggregate at the human level
+through the Account layer.
+
+**Contact whitelist — binary, operator-controlled:**
+- Anyone who knows an agent's address can attempt to contact it — no directory gatekeeping
+  on inbound attempts
+- Each agent maintains a binary whitelist: known (auto-accept) vs unknown
+- Future extension: three tiers (unknown / whitelisted / favorite) — not in scope now
+
+**What strangers learn — configurable, defaults to opaque:**
+- If sender is not on the recipient's whitelist, what they learn about their message is
+  controlled by the recipient's privacy settings
+- **Default:** sender learns only "dispatched" — no confirmation of receipt, no read
+  receipts, no away signal
+- **Public mode:** sender gets receipt confirmation — appropriate for public-facing agents
+  (businesses, open services)
+- Spam handling: unknown senders can be silently ignored — the recipient agent never
+  has to engage
+
+**Presence visibility — same whitelist boundary:**
+- Whitelisted contacts can see online/away status
+- Unknown agents cannot — they see only "reachable or not" from their own attempt
+- This ensures the away/opaque privacy setting is coherent: if you're in privacy mode,
+  unknown contacts can't learn you received their message AND can't see your presence
+
+**Interaction with away response:**
+- Transparent away (default): whitelisted contacts get the away signal; unknown senders
+  get nothing (default opaque)
+- Public mode: even unknown senders get receipt confirmation
+- Privacy mode: everyone gets silence, regardless of whitelist status
+
+---
+
 ## Stories Needed
 
 | Area | Type | Scope |
@@ -262,6 +326,7 @@ See "Leave a Message" section above for the full model.
 | `cello login` auto-starts all loaded agents (with opt-out config) | Implementation | cello-client (CLI) |
 | `cello_check_notifications({ scope })` MCP tool (default: current agent, opt-in: all) | Implementation | cello-client (daemon + adapter) |
 | Away response configuration (per-type templates, privacy mode) | Design + impl | cello-client + protocol |
+| Contact whitelist (binary known/unknown, per-agent privacy settings, presence visibility) | Design + impl | cello-client + directory |
 | `since_seq` cursor on `cello_receive` for reconnect | Design + impl | cello-client |
 | "Check relay on wakeup" — directory-assisted relay discovery | Design + impl | Both repos |
 
