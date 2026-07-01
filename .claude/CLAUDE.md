@@ -24,12 +24,53 @@ CELLO is a peer-to-peer identity and trust layer for agent-to-agent communicatio
 
 ---
 
+## Quick Commands
+
+**Gate sequence (run in order before every commit):**
+```bash
+pnpm run test
+pnpm run lint
+pnpm run typecheck
+pnpm run build
+```
+
+**Local dev (requires Docker):**
+```bash
+docker compose up -d          # Start Postgres
+CELLO_ENV=local pnpm run dev  # Start directory or relay locally
+```
+
+**Check published package versions:**
+```bash
+npm view @cello-protocol/connect@beta version
+npm view @cello-protocol/client@beta version
+```
+
+**Demo agent (EC2 us-east-1, instance `i-0ad3e7c22470f266e`):**
+```bash
+# Run a command on the demo agent instance
+CMD_ID=$(aws ssm send-command --instance-ids i-0ad3e7c22470f266e \
+  --document-name AWS-RunShellScript --region us-east-1 \
+  --parameters '{"commands":["YOUR COMMAND"]}' --output text --query 'Command.CommandId')
+sleep 5 && aws ssm get-command-invocation --command-id $CMD_ID \
+  --instance-id i-0ad3e7c22470f266e --region us-east-1 \
+  --query 'StandardOutputContent' --output text
+
+# Proper restart sequence — daemon must be ready before demo connects
+systemctl stop cello-demo && systemctl stop cello-daemon && sleep 2
+systemctl start cello-daemon && sleep 5 && systemctl start cello-demo
+```
+
+---
+
 ## Repository Structure
 
-CELLO is split across two repositories:
+CELLO spans five repositories:
 
 - **`trustless-cello`** (`/Users/andrep/Documents/code/trustless-cello`) — directory node, relay node, infrastructure (CloudFormation/IaC), operations agent, e2e tests, CI/CD pipelines. This is the server-side and infrastructure repo.
 - **`cello-client`** (`/Users/andrep/Documents/code/cello-client`) — protocol core (`core/client`), cryptography (`core/crypto`), transport (`core/transport`), and all adapters (`core/adapter-claude-code`, etc.). This is what operators install and run locally.
+- **`cello-portal`** (`/Users/andrep/Documents/code/cello-portal`) — the operator-facing portal web app (Next.js). Where registered users manage their agent, connections, and settings.
+- **`corp-cello-site`** (`/Users/andrep/Documents/code/corp-cello-site`) — the public-facing corporate/marketing site for CELLO and Mygentic AI (Next.js + Tailwind).
 
 Stories that touch both repos (e.g. a protocol change that requires a directory update AND a client update) require worktrees in both repos. The workflow creates them automatically. Never assume a change is confined to one repo until you have read both sides.
 
@@ -213,6 +254,18 @@ Before writing a single line of code, attempt to prove the fix is wrong. Specifi
 
 Only after failing to falsify: propose the fix and state which falsification attempts you made.
 
+### Demo agent: standing receiver is the first suspect
+
+When a live session fails (`standing_receiver_unavailable`, empty `counterparty_session_peer_id`,
+`Invalid peer ID: ""`), check for `session.node.created` in the daemon log before tracing code.
+The standing receiver is created only when `cello_start_agent` reaches the daemon — not at startup.
+
+Healthy daemon startup sequence:
+`agent.signaling.created` → `directory.signaling.connected` → `agent.online` → `session.node.created`
+
+If `agent.online` is absent, `cello_start_agent` never reached this daemon instance (stale socket
+from a simultaneous restart). Fix: stop both services, start daemon, wait 5s, start demo.
+
 ### When asked to "prove it"
 
 Format the proof as a numbered flow. Include:
@@ -224,6 +277,8 @@ Format the proof as a numbered flow. Include:
 ---
 
 ## npm Publishing — @cello-protocol/connect
+
+**Always run `/cello-publish` before publishing.** The skill at `trustless-cello/.claude/commands/cello-publish.md` is the authoritative procedure. Do not publish from memory or from the prose below — the skill supersedes this section.
 
 **NEVER run `npm publish`.** Use `pnpm publish` via CI only. `npm publish` ships raw `workspace:*` specifiers → broken package → version burned forever.
 
