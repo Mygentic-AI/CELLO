@@ -364,6 +364,30 @@ CELLO is split across two repos. `trustless-cello` (server-side) depends on pack
 
 ---
 
+## Compaction Protocol
+
+When Andre says "prepare for compaction" or "compact following the compaction protocol", produce
+three artifacts in this order:
+
+1. **Follow-through doc (current).** Verify the milestone build journal + any task-specific doc
+   reflects live state. Commit anything uncommitted first — compaction cannot recover it.
+
+2. **Compaction directive for `/compact`.** Four sections:
+   - **KEEP VERBATIM** — facts the lossy summary must not paraphrase (branch/commit hashes, exact IDs, live status, standing rules)
+   - **SUMMARIZE BRIEFLY** — background that can point to docs instead of being re-derived
+   - **DISCARD** — turn-by-turn dialogue, intermediate tool output, resolved back-and-forth
+   - **Follow-on instruction** — one paragraph: what the next context should do first
+
+3. **Post-compaction kickoff prompt.** Must always open with the three implementation pillars by
+   full path — the milestone **PROCEDURE**, **DEFINITION-OF-DONE**, and the **latest BUILD-JOURNAL
+   entry** — then any task-specific follow-through docs and a first verification step (e.g. confirm
+   crons survived).
+
+Good compact moments: a section/part is complete, reviewers have run, about to move to something
+new. Never mid-task.
+
+---
+
 ## Discussion Log Conventions
 
 Filename: `docs/planning/discussion_logs/YYYY-MM-DD_HHMM_short-slug.md`
