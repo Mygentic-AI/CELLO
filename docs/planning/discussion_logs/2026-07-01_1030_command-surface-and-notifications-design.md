@@ -171,21 +171,48 @@ is the doorbell (`type` + counterparty pubkey + `session_id`); `cello_receive` f
 No message content leaks into the wake — SI-001 content-minimization is preserved even while
 relaying.
 
-### Channel security (weigh hardest — this is financial trust infrastructure)
+### Channel security — handled by the M9 gateway, not by trusting Claude
 
 Piping untrusted natural language from a remote peer into a tool-wielding session is an injection
-surface. Two layers:
+surface. **The CELLO answer is the M9 security gateway — a separate program every message passes
+through — not an instruction to Claude to "relay verbatim and never obey."** Claude is never
+trusted to police injection; the content is screened deterministically at the daemon seam before
+it ever reaches the agent.
 
-- **Platform side (Telegram/Slack/…):** allowlist your own user ID only, or anyone can drive your
-  Claude.
-- **CELLO side:** sessions are pubkey-authenticated (good), but message *text* is still untrusted.
-  Instruct Claude to **relay verbatim and never obey instructions inside the content** — be a pipe,
-  not an agent that follows the peer.
+M9 is Phase-1 launch-complete on the `m9-build` branch (11/12 gate lines ✅, GATE-1 green against
+the real daemon + gateway; only the real-DeBERTa-model half of M9-IN-002 is deferred by decision).
+It is **deliberately not merged to main.** The decision (Andre): integrating the security layer
+before M7 and M8 were truly complete would have added an integration burden to milestones that were
+still moving. M9 was built and proven on its own branch, to be merged once the federation spine was
+done. With M8B now closed, **merging and wiring M9 to the live daemon seam is the natural next
+integration step** — and it is a hard prerequisite for the channel/relay work here, since the relay
+pipes untrusted peer content into a tool-wielding session. M9-CORE-001 attaches it at exactly the
+channel path:
+`screenInbound` at the daemon's `ingestReceivedContent`, `screenOutbound` at `cello_send`. Every
+inbound channel message is screened before Claude sees it; every `cello_send` is screened before it
+leaves.
+
+- **Inbound (prompt-injection defense):** M9-IN-001 deterministic sanitization (invisible-character
+  strip, RE2 patterns, entropy scoring, encoded-payload decode, special-token strip, size cap),
+  M9-IN-002 DeBERTa injection scanner (score ≥70 block / ≥35 flag), M9-IN-003 language allowlist.
+- **Outbound (leak defense):** M9-OUT-001 secret redaction (gitleaks + entropy), M9-OUT-002 PII
+  whitelist + warn, M9-OUT-003 exfiltration checks (invisible-char egress, zero-click image-exfil,
+  injection-artifacts-in-output → block), M9-OUT-004 rate limit keyed on agent identity.
+- **Disposition + records:** M9-FEED-001 (observe / redact / block / warn, blocking `cello_send`,
+  never-hang guarantee), M9-REC-001 (per-message records with fingerprints).
 
 This is the adapter's third responsibility (the "security surface differences" CONTEXT.md marks
-TBD), made concrete. The `claude/channel/permission` capability the Telegram plugin also declares
-(relaying permission prompts to the chat) is **out of scope** for CELLO's channel — a CELLO
-counterparty is not an operator and must never be offered a permission decision.
+TBD) — resolved by M9, not left to prompt discipline. Two platform-router notes remain, and they
+are the *only* channel-specific security additions:
+
+- **Platform-side allowlist** (Telegram user ID, Slack workspace, etc.) is the *bridge's* concern —
+  gate who can drive the router at the platform edge. This is separate from M9, which screens CELLO
+  message content regardless of which platform it's relayed to.
+- **The `claude/channel/permission` capability** the Telegram plugin declares (relaying permission
+  prompts to the chat) is **out of scope** for CELLO's channel — a CELLO counterparty is not an
+  operator and must never be offered a permission decision.
+
+See [[M9-DEFINITION-OF-DONE|M9 Definition of Done]] and [[2026-06-21_1600_m9-content-channel-seam-and-entry-plan|M9 Content-Channel Seam and Entry Plan]] for the gateway internals and the daemon attachment point. **This design doc must not re-invent inbound/outbound content screening — that is M9's job; the channel work only routes wakes and relays, and defers all content security to the gateway on the `ingestReceivedContent`/`cello_send` seam.**
 
 ### Multi-peer routing
 
@@ -256,12 +283,13 @@ each adapter differs only in how/when its runtime is woken and how it sends. Bui
 notification and tool surface once; let each adapter map it to its runtime's ingress. Do not bake
 Claude-Code assumptions into the daemon.
 
-The outbound content seam itself (`ingestReceivedContent` inbound / `sendContent` outbound) is being
-finalized as the M9 security-gateway attachment point — see
+The content seam itself (`ingestReceivedContent` inbound / `cello_send`/`sendContent` outbound) is
+the M9 security-gateway attachment point — every adapter's inbound and outbound content passes
+through M9 there, regardless of runtime. That "content channel" is a distinct concept from
+`claude/channel` (message-content pipeline vs push-notification ingress), but since every adapter's
+outbound send and inbound receive ride the same seam, M9 secures all of them uniformly — an adapter
+does not re-implement content screening. See "Channel security" above and
 [[2026-06-21_1600_m9-content-channel-seam-and-entry-plan|M9 Content-Channel Seam and Entry Plan]].
-That "content channel" is a distinct concept from `claude/channel` (message-content pipeline vs
-push-notification ingress) but the outbound adapter responsibility rides on the same `sendContent`
-seam, so the two must stay coherent.
 
 ---
 
@@ -553,26 +581,30 @@ the daemon persists what it receives, so unchecked it's a storage-exhaustion pro
 2. **Swarm DDoS** — an attacker registers many identities (buys N phone numbers, spins up N
    agents) and floods one victim. Each identity is individually valid; the volume is the attack.
 
-Controls, layered:
+**Reconcile with M9 first.** Some of what "abuse control" implies is already M9's job and must not
+be re-invented here: **per-message size/length cap is M9-IN-001**, and **outbound rate-limiting
+keyed on agent identity is M9-OUT-004**. M9 is *content* screening (per-message: sanitize, scan,
+size-cap; per-agent outbound rate). What M9 does **not** cover is **storage/queue-depth** — the
+persistence-exhaustion vector where the danger isn't any single message but the *accumulation* of
+many. Those are the genuinely new controls this doc adds:
 
-- **Per-message size limit** — configurable cap on payload size. Applies to text today; extends
-  to media (images, audio — modeled on the Telegram MCP channel's inbound attachment support)
-  when that lands. No video planned. The relay already enforces a wire-level `MAX_CONTENT_BYTES`;
-  this is a separate, operator-tunable policy cap at the daemon.
-- **Per-session size limit** — total bytes across a session, so nobody sends you a book one
-  chunk at a time and crashes your system. Configurable.
-- **Per-sender rate limit** — messages per window from a single pubkey. Handles the persistent
-  single-agent spammer.
+- **~~Per-message size limit~~** — already M9-IN-001. Media caps (images, audio — modeled on the
+  Telegram MCP channel's inbound attachments; no video planned) extend M9-IN-001's cap when media
+  lands, not a new subsystem.
+- **Per-session total size limit** — total bytes accumulated across a live session, so nobody
+  drip-feeds you a book one within-cap chunk at a time. This is a *session-accumulation* bound, not
+  a per-message check — outside M9's per-message scope. Configurable.
 - **Unknown-sender queue cap** — the Telegram "message requests" model. Unknown (non-whitelisted)
   senders land in a bounded queue; once it's full, further unknown-sender messages are silently
-  dropped. Your main inbox stays clean.
-- **Global unknown-sender queue cap** — a daemon-wide ceiling across all unknown senders
-  combined, so 100 agents each filling their per-sender allowance can't multiply into
-  100× the storage. This is the primary swarm-DDoS mitigation.
+  dropped. A *persistence* bound, not content screening.
+- **Global unknown-sender queue cap** — a daemon-wide ceiling across all unknown senders combined,
+  so 100 agents each filling their per-sender allowance can't multiply into 100× the storage. The
+  primary swarm-DDoS mitigation. Also a persistence bound.
 
-The whitelist boundary is what makes these coherent: whitelisted senders have no artificial
-limit (beyond disk); unknown senders are bounded. "Fills a capped requests queue" and "fills
-your database" are separated by whether the sender is known.
+The whitelist boundary is what makes the persistence bounds coherent: whitelisted senders have no
+artificial queue limit (beyond disk); unknown senders are bounded. "Fills a capped requests queue"
+and "fills your database" are separated by whether the sender is known. **Net new work here is the
+three persistence/queue-depth bounds; the per-message and outbound-rate pieces belong to M9.**
 
 ---
 
@@ -671,12 +703,18 @@ device-local. "Continuation" is a user-level concept, not a protocol primitive.
 ## Configuration Surface
 
 This document says "configurable" repeatedly — away messages, auto-start opt-out, privacy mode,
-session-request TTL, unknown-sender queue caps, message/session size limits, rate limits, primary
-transfer policy. **None of these has a setter today.** The CLI has `login`, `logout`, `register`,
-`status` — no way to read or write any of this. And several settings from earlier milestones that
-were *specified* as configurable (various TTLs) also have no surface.
+session-request TTL, unknown-sender queue caps, per-session size limit, primary transfer policy.
+**None of these has a setter today.** The CLI has `login`, `logout`, `register`, `status` — no way
+to read or write any of this. And several settings from earlier milestones that were *specified* as
+configurable (various TTLs) also have no surface.
 
-This is a load-bearing gap: without it, "configurable" is just a word in a design doc. Needed:
+**Build on M9-CFG-001, don't invent a parallel model.** M9 already establishes a config-storage
+pattern on the `m9-build` branch: a versioned (append-only rows) local SQLCipher DB, a
+**tighten-free / loosen-needs-confirmation** policy (loosening a guard requires explicit
+confirmation; tightening is free), and **Portal / CLI / file-import front-ends**. That is exactly
+the shape the settings in this doc need. The work here is not a new config subsystem — it's
+(a) extending M9-CFG-001's store to hold the command-surface / contact / abuse / primary-transfer
+settings, and (b) delivering the CLI front-end M9-CFG-001 already anticipates:
 
 ```
 cello config list                              # all settings + current values
@@ -686,10 +724,15 @@ cello config get --agent <name> [key]          # per-agent scope
 cello config set --agent <name> [key] [value]
 ```
 
+The tighten-free/loosen-confirm rule applies naturally: loosening privacy mode (opaque→transparent
+is fine; but widening who can reach you), raising a queue cap, or setting auto-relinquish primary
+transfer are "loosen" operations that should require confirmation; tightening any of them is free.
+
 Settings that already exist and lack a setter: away message, privacy mode, auto-start,
 primary-transfer policy. Settings introduced by this document that need one: session-request TTL,
-unknown-sender queue cap (per-sender and global), per-message size limit, per-session size limit,
-per-sender rate limit. Some are global, some per-agent — the `--agent` scope distinguishes them.
+unknown-sender queue cap (per-sender and global), per-session total size limit. (Per-message size
+cap and outbound rate limit are M9-IN-001 / M9-OUT-004 and get their setters through M9-CFG-001
+already.) Some are global, some per-agent — the `--agent` scope distinguishes them.
 
 ---
 
@@ -721,7 +764,8 @@ being restated here.
 | **Channel stage 1** — shim-only one-way channel: `claude/channel` capability + forward `session_state_changed` wake (Gaps 1–2 of the channel wiring list) | Implementation | cello-client (`connect` bump only) | — |
 | **Channel stage 2** — per-message daemon hook: content-arrival callback + `dispatchCelloMessage` + `session_id` in `cello_message` (Gaps 3–6) | Implementation | cello-client (daemon + adapter; publish cascade) | — |
 | **Channel stage 3** — platform relay: attach an allowlisted two-way bridge (Telegram/Slack/Discord/Webhook); Claude routes between it and CELLO | Design + impl | compose off-the-shelf bridge + CELLO MCP | — |
-| **Channel stage 4** — hardening: sender allowlists, relay-don't-obey framing, multi-peer addressing | Design + impl | cello-client + Claude instructions | — |
+| **Channel stage 4** — hardening: platform-side sender allowlists, multi-peer addressing (content-injection defense is M9, NOT this) | Design + impl | cello-client + platform bridge | — |
+| **Merge + wire M9 to the live daemon seam** (`screenInbound` at `ingestReceivedContent`, `screenOutbound` at `cello_send`) — hard prerequisite for any relay | Integration | cello-client (merge `m9-build`) | — |
 | Non-Claude-Code adapters (Hermes CELLO-as-a-channel, OpenClaw, IronClaw) + `ipc.connect` capability negotiation | Design + impl | cello-client (adapters + daemon) | — |
 | `use_agent` auto-starts agent if not online | Implementation | cello-client (daemon + CLI) | — |
 | `cello login` auto-starts all loaded agents (with opt-out config); partial-failure enumeration | Implementation | cello-client (CLI) | 8 |
@@ -730,10 +774,10 @@ being restated here.
 | `since_seq` cursor on `cello_receive` for reconnect + catch-up | Design + impl | cello-client | 1, 10 |
 | Away response configuration (per-type templates, privacy mode) | Design + impl | cello-client + protocol | 6 |
 | Contact whitelist (binary known/unknown, per-agent privacy, presence visibility) | Design + impl | cello-client + directory | — |
-| Abuse controls (message/session size caps, per-sender rate limit, bounded unknown-sender queue) | Design + impl | cello-client + protocol | 4 |
+| Abuse controls — persistence/queue-depth only (per-session total size, bounded unknown-sender queue per-sender + global). Per-message size cap = M9-IN-001; outbound rate = M9-OUT-004 | Design + impl | cello-client + protocol | 4 |
 | Primary/Standby: shared K_local via ECDH, DB sync, primary transfer offer (2-min TTL), per-daemon policy | Design + impl | Both repos | 7 |
 | Session portability: close → sync → new session; transcript-level continuity | Design + impl | cello-client | 5, 9 |
-| CLI configuration surface (`cello config get/set/list`, `--agent` scope) | Implementation | cello-client (CLI) | 3, 4 |
+| CLI configuration surface (`cello config get/set/list`, `--agent` scope) — extends M9-CFG-001's versioned store + tighten-free/loosen-confirm, not a new subsystem | Implementation | cello-client (CLI) | 3, 4 |
 | "Check relay on wakeup" — directory-assisted relay discovery | Design + impl | Both repos | — |
 
 **Sequencing.** Channel stage 1 is the smallest unlock (two shim edits, `connect` bump only) and
@@ -755,6 +799,16 @@ DEFINITION-OF-DONE with per-line spine/live enforcers, a BUILD-JOURNAL, and a DE
 that milestone is scoped, the "Stories Needed" table above is the raw material; the channel staging
 (1→4) and Primary/Standby are the two largest tracks and likely want their own DoD tiers.
 
+**M9 merge comes first.** M9 (the security gateway) was built and gate-proven on the `m9-build`
+branch and **deliberately held back from main** — integrating it while M7 and M8 were still moving
+would have added integration burden to unfinished milestones. Now that M8B is closed, merging M9 and
+wiring it to the live daemon seam (`screenInbound`/`screenOutbound`) is the prerequisite that
+unblocks the channel/relay work in this doc: the relay pipes untrusted peer content into a
+tool-wielding session, and M9 is the layer that makes that safe. Sequence: **merge M9 → then build
+channels on top of the secured seam.** This doc must not duplicate M9's content-screening,
+per-message size cap, outbound rate limit, or config-storage model — those are M9's, and are called
+out inline where this doc previously over-reached.
+
 The channel technical depth folded into this doc comes from the 2026-06-27 investigation; that log
 remains the code-level reference (exact file:line edit points, the `onNotification` template, the
 publish cascade), while this doc is authoritative for *what* the milestone builds.
@@ -765,8 +819,11 @@ publish cascade), while this doc is authoritative for *what* the milestone build
 
 - [[2026-06-27_0753_claude-code-channels-cello-integration|Claude Code Channels × CELLO — Integration Model]]
   — the channel-protocol technical reference (superseded by this doc for planning; authoritative for code-level detail)
+- [[M9-DEFINITION-OF-DONE|M9 Definition of Done]] — the security gateway that secures the channel
+  seam; Phase-1 launch-complete on the `m9-build` branch, deliberately unmerged pending M7/M8 close
+- [[overview|M9 Overview — Security and Governance Layer]] — what M9 is, its two phases, the story map
 - [[2026-06-21_1600_m9-content-channel-seam-and-entry-plan|M9 Content-Channel Seam and Entry Plan]]
-  — the daemon `ingestReceivedContent`/`sendContent` seam the outbound adapter rides on (distinct from `claude/channel`)
+  — the daemon `ingestReceivedContent`/`cello_send` seam M9 attaches to (distinct concept from `claude/channel`)
 - [[2026-07-01_0900_m8b-closed-e2e-testing-phase|M8B Closed — E2E Testing Phase]]
   — the follow-through doc where the notification-wiring gap was first surfaced post-M8B
 - [[CONTEXT]] — canonical glossary: agent adapter (3 responsibilities), Claude Code adapter, Hermes adapter
