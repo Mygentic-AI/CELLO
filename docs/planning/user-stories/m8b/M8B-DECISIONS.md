@@ -264,3 +264,25 @@ chain. Increment 1's RelayReceiptStore carry columns become dormant (left in pla
 needs a table rebuild, not worth the churn; nullable + additive, harmless); the carry CAPTURE moves to the
 new store. Reverse: the columns can be reclaimed later. Why not block: this is the correct foundation and
 reversible; choosing it now keeps the unit moving.
+
+---
+
+### 2026-07-01 — Retired the M8B autonomous build cron (milestone complete)
+
+**Decision.** Cancelled the recurring autonomous-loop cron (`95447ef2`, "M8B federation build",
+firing at :17 and :47 hourly). M8B is fully closed: every line in M8B-DEFINITION-OF-DONE.md is ✅
+(all Tier-0 invariants SPINE-PROVEN; MANIFEST/DKG/SIGN/SUSPEND/REFRESH/RELAYSIG/OPTIONB-SETUP/
+OPTIONB-SEAL/PRESENCE/PICKUP ✅; DOD-SPINE-1 ✅ ALL GREEN; DOD-DEPLOY-1 ✅ live dev cluster). The
+build loop's terminal condition ("all DoD lines ✅ on spine then 🚀 live dev") is satisfied, and the
+2026-07-01_0900 follow-through doc records the milestone closed with the next phase being E2E
+testing — not continued M8B build.
+
+**Why not just let it fire.** A build loop that keeps firing for a closed milestone either
+fabricates work under a done banner or churns — exactly the drift the checklist guards against.
+The trigger prompt itself states the docs are the source of truth and the cron is "only the
+trigger"; the docs say done.
+
+**Reversible.** A cron can be recreated with CronCreate if genuine M8B follow-up work appears.
+E2E-testing-phase work (see 2026-07-01_0900_m8b-closed-e2e-testing-phase.md) is a separate track
+and, if it wants an autonomous loop, should get its own trigger scoped to that phase — not a
+resurrected M8B-build loop.
