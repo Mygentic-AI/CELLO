@@ -207,6 +207,44 @@ aws ssm put-parameter \
 
 ---
 
+## Route53 CFN Drift — Stack Status Is Not Proof the Record Exists
+
+**A CFN stack in `CREATE_COMPLETE` or `UPDATE_COMPLETE` does NOT prove the physical Route53 record exists.** If the record is deleted out-of-band (manually, or by an errant purge), CFN sees no diff on subsequent deploys — `cello-route53-dev` reports "No changes" and the record stays gone. The relay crash-loops on DNS failures while CFN insists everything is fine.
+
+**How to detect drift — verify the A record directly, do not trust CFN status:**
+```bash
+for region in us-east-1 eu-central-1 ap-northeast-1; do
+  subdomain=$([ "$region" = "us-east-1" ] && echo "directory-us1" || \
+              [ "$region" = "eu-central-1" ] && echo "directory-eu1" || echo "directory-ap1")
+  result=$(dig @8.8.8.8 +short "${subdomain}.cello.mygentic.ai" 2>/dev/null)
+  [[ -n "$result" ]] && echo "$region ($subdomain): OK — $result" || echo "$region ($subdomain): MISSING — drift detected"
+done
+```
+
+**How to fix drift:** Restore the record directly in Route53 using the values from the live ALB (always query AWS, not STATE.md):
+```bash
+# Get current ALB DNS and zone
+ALB=$(aws elbv2 describe-load-balancers --region <region> \
+  --query 'LoadBalancers[?contains(LoadBalancerName,`cello-dir`)].{dns:DNSName,zone:CanonicalHostedZoneId}' \
+  --output json)
+
+# Restore the A record alias
+aws route53 change-resource-record-sets \
+  --hosted-zone-id Z02692523DOH7NW521CL8 \
+  --change-batch "{\"Changes\":[{\"Action\":\"CREATE\",\"ResourceRecordSet\":{
+    \"Name\":\"<subdomain>.cello.mygentic.ai\",\"Type\":\"A\",
+    \"AliasTarget\":{\"HostedZoneId\":\"<alb-zone>\",\"DNSName\":\"<alb-dns>\",\"EvaluateTargetHealth\":true}
+  }}]}"
+```
+
+**Mandatory pre-change health check:** Before any infrastructure change that touches VPC, subnets, security groups, or ECS tasks, verify all 6 DNS names resolve and all 6 ECS services are 1/1 running. If a region is already broken BEFORE your change, you need to know that — otherwise you will not be able to distinguish pre-existing failures from breakage caused by your work.
+
+**Known design fragility — relay startup retry window:** The relay retries directory registration 10 times over ~2 minutes, then exits (ECS restarts it). Route53 changes can take 60–90 seconds to propagate globally. This means a relay that starts up within ~1 minute of a Route53 change may fail all 10 retries (the container has cached the NXDOMAIN) and crash before the DNS propagates. The next ECS-launched task will do a fresh lookup and succeed. This is expected behavior — one crash cycle is normal after a DNS change. If the relay is still crash-looping after 5+ minutes, the DNS change itself did not propagate correctly.
+
+*Root cause: 2026-07-01 — directory-ap1.cello.mygentic.ai A record was drifted (deleted out-of-band); CFN route53 stack reported CREATE_COMPLETE; relay crash-looped on directory_unavailable after VPC endpoint removal triggered ECS task restarts and revealed the pre-existing gap.*
+
+---
+
 ## ALB DNS Names — Always Query AWS, Never Use STATE.md
 
 **Never use STATE.md as the source for ALB DNS names.** ALB DNS names change any time a load balancer is recreated (stack delete+create, name conflict, etc.). STATE.md is updated manually and will be stale.
@@ -283,6 +321,22 @@ Skipping step 3 means the new pipeline will never be triggered by GitHub pushes.
 **All CFN stack changes go through `deploy.sh`.** The CI/CD pipelines only swap Docker images — they do NOT deploy CloudFormation templates. Any change to task definitions (env vars, secrets, ports, IAM), ALBs, security groups, or any other CFN-managed resource requires running `deploy.sh`.
 
 **After modifying any `infra/cloudformation/*.yaml` template:** You must either run `deploy.sh` or explicitly document in the commit message that deploy.sh must be run before the changes take effect.
+
+---
+
+## New CFN Parameters Must Be Wired Into deploy.sh Immediately
+
+**Any time you add a new `Parameters:` entry to a CloudFormation template, you MUST also wire it into `deploy.sh` in the same commit.** A required parameter with no `Default:` that is not passed by deploy.sh causes every subsequent deploy to fail with `ValidationError: Parameters: [X] must have values`. The error is non-obvious because deploy.sh prints a different-looking error than the template's own validation, and the stack itself is unaffected (changeset is rejected before executing) — making it easy to assume the live service is fine while IaC is silently broken.
+
+**Invariant:** After any commit that modifies a `cello-*.yaml` template, verify that every `Parameters:` key with no `Default:` value is passed by the corresponding `deploy_stack` call in deploy.sh. For `NoEcho: true` parameters (secrets), the value must be read from SSM SecureString or Secrets Manager — never hardcoded, never left unset.
+
+**How to check for this gap before committing:**
+```bash
+# For each changed template, list parameters with no Default
+grep -A5 "^  [A-Za-z]*:$" infra/cloudformation/cello-cicd.yaml | grep -B3 "NoEcho\|Description" | grep -v Default
+```
+
+*Root cause: 2026-07-01 — `CelloClientWebhookSecret` (NoEcho, no Default) was added to `cello-cicd.yaml` in M7-CICD-001 but never wired into deploy.sh. Every deploy.sh run in us-east-1 failed with `ValidationError: Parameters: [CelloClientWebhookSecret] must have values`. The cicd stack was silently undeployable for 3+ weeks while pipelines continued to work (they don't use deploy.sh).*
 
 ---
 
@@ -377,6 +431,35 @@ aws ecs describe-services --cluster cello-dev --services <service-name> --region
 ## deploy.sh Must Not Block on Non-Critical Services
 
 **Make non-critical service deployments non-fatal in deploy.sh.** If a service like ops-agent fails to stabilize, deploy.sh should log the failure and continue to the next stack. Critical services (directory, relay) should remain fatal. The ops-agent is not required for CELLO protocol operation — it's a Telegram registration bot. Blocking relay and WAF deployment because of an ops-agent health check failure is unacceptable.
+
+---
+
+## Infrastructure Changes — Mandatory Pre/Post Health Check
+
+**Before AND after any infrastructure change that could restart ECS tasks, run a full health check across all 3 regions.** This is non-negotiable. Changes that touch VPC, subnets, security groups, route tables, or ECS task definitions cause ECS to replace running tasks — when those tasks restart, any pre-existing issue (missing DNS record, drifted config, stale registration) that was masked by the running container is suddenly exposed. If you don't check health before your change, you cannot distinguish breakage you caused from breakage that was already there.
+
+**Pre-change health check (run this before every deploy.sh):**
+```bash
+# 1. ECS service health — all 6 should be 1/1 COMPLETED
+for region in us-east-1 eu-central-1 ap-northeast-1; do
+  echo "=== $region ==="
+  aws ecs describe-services --cluster cello-dev \
+    --services cello-directory-dev cello-relay-dev --region $region \
+    --query 'services[*].{name:serviceName,running:runningCount,desired:desiredCount,rollout:deployments[0].rolloutState}' 2>&1
+done
+
+# 2. DNS resolution — all 6 names must resolve
+for host in directory-us1 directory-eu1 directory-ap1 relay-us1 relay-eu1 relay-ap1; do
+  result=$(dig @8.8.8.8 +short "${host}.cello.mygentic.ai" 2>/dev/null | head -1)
+  [[ -n "$result" ]] && echo "$host: OK" || echo "$host: MISSING — fix before proceeding"
+done
+```
+
+**If anything is unhealthy before your change:** stop. Fix the pre-existing issue first, record it in STATE.md, then proceed with your planned change. Never proceed with an infrastructure change into an already-degraded state.
+
+**Post-change health check:** Re-run the same checks. ECS task restarts take 1–3 minutes; wait for all services to reach `runningCount: 1` and `rolloutState: COMPLETED` before declaring success. Also check CloudWatch logs for the most recently started task in each region to confirm clean startup (`relay.service.started`, `agent.online`, etc.).
+
+*Root cause: 2026-07-01 — VPC endpoint removal triggered ECS task restarts across all regions. The ap-northeast-1 relay had been crash-looping on a missing DNS A record before our change. Without a pre-change health check, the crash loop appeared to be caused by the VPC change.*
 
 ---
 
