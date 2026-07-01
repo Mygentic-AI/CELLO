@@ -217,10 +217,24 @@ control over which agents consume directory resources.
 **Always targeted.** Notifications only reach IPC connections where the affected agent is set
 as current via `cello_use_agent`. No auto-broadcast.
 
-A **CLI query command** should exist for checking outstanding notifications across all agents
-without needing to use_agent into each one. Intended use: "I'm in a session working as
-Agent-1 and want to know if Agent-2 has any pending session requests or messages." This is
-an initiated pull, not a push. The daemon has all the state; the CLI surfaces it on demand.
+However, a **`cello_check_notifications` MCP tool** should exist for polling outstanding
+notifications on demand:
+
+```
+cello_check_notifications({ scope: "current" | "all" })
+```
+
+- `scope: "current"` (default) — returns pending session requests and unread messages for
+  the agent currently set on this connection. Safe default; works without knowing the
+  daemon's full agent roster.
+- `scope: "all"` — returns the same across every agent the daemon has loaded, labelled
+  by agent name. Intended use: "I'm in a session as Agent-1 and want to know if Agent-2
+  has anything waiting before I switch."
+
+This is an initiated pull, not a push. The daemon has all the state; the tool surfaces it
+on demand. An agent running on a non-push client (Bedrock, cron-based) uses this as its
+primary "check inbox" mechanism. A push-capable client can call it on reconnect to catch
+anything that arrived while it was away.
 
 **Q4: Polling interval for non-push clients?**
 **Not our scope.** Operators set cadence via loop/cron. We can document recommendations
@@ -246,7 +260,7 @@ See "Leave a Message" section above for the full model.
 | `cello_message` notification includes `session_id` | Implementation | cello-client only |
 | `use_agent` auto-starts agent if not online | Implementation | cello-client (daemon + CLI) |
 | `cello login` auto-starts all loaded agents (with opt-out config) | Implementation | cello-client (CLI) |
-| CLI query for pending notifications across all agents | Implementation | cello-client (CLI) |
+| `cello_check_notifications({ scope })` MCP tool (default: current agent, opt-in: all) | Implementation | cello-client (daemon + adapter) |
 | Away response configuration (per-type templates, privacy mode) | Design + impl | cello-client + protocol |
 | `since_seq` cursor on `cello_receive` for reconnect | Design + impl | cello-client |
 | "Check relay on wakeup" — directory-assisted relay discovery | Design + impl | Both repos |
