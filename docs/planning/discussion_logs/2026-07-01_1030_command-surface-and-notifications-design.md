@@ -55,43 +55,162 @@ the MCP connection picks which one it impersonates.
 
 ---
 
-## Notification Wiring Gap
+## Channels — the reactive integration model
 
-The routing chain today:
+> The channel protocol, its wiring, the platform-relay use case, and the security framing were
+> investigated in depth in [[2026-06-27_0753_claude-code-channels-cello-integration|Claude Code
+> Channels × CELLO — Integration Model]] (2026-06-27). That log is the **technical reference**;
+> this section is the **planning-authoritative** summary and supersedes it for milestone scoping.
+> Where the two disagree, this doc wins on *what we build*; the channels log wins on *code-level
+> detail*.
 
-1. Session request arrives at daemon for agent "Demo2"
-2. NotificationDispatcher checks: which IPC connections have "Demo2" as `currentAgent`?
-3. Only those connections receive the `session_state_changed` IPC notification
-4. Only those get forwarded as `cello_session_request` to Claude Code
+### What a channel is (mental model)
 
-**If no Claude session has done `cello_use_agent("Demo2")` before the request arrives, the
-notification fires nowhere.** The session request sits queued in the daemon but nothing wakes up.
+- **A channel is an event-ingress layer for a *running* session.** An MCP server can receive an
+  outside event and *push* it into the live Claude session as a `notifications/claude/channel`
+  message. Claude reads it in-context and acts immediately — the exact inversion of CELLO's
+  current `cello_receive`-polling model.
+- **Pushed, not pulled.** Ordinary MCP tools are pulled by Claude when it decides to; channels
+  are pushed by an external system when something happens.
+- **One-way vs two-way.** One-way delivers events *in*. Two-way *also* exposes a normal MCP tool
+  (e.g. `reply`, or CELLO's `cello_send`) so Claude sends back out the same bridge. A single
+  `McpServer` can be both a tools-provider and a channel — the two capabilities coexist. CELLO's
+  shim stays **one** MCP server and simply gains the capability; no second process.
+- **Declaration + transport.** The server declares `claude/channel` under
+  `capabilities.experimental`, then forwards events via `mcp.notification()` with method
+  `notifications/claude/channel`. Optional `meta` fields become attributes on the `<channel>` tag
+  in Claude's context. Delivery is fire-and-forget; events queue and process in order; no
+  transport-level ack.
+- **Gating is mandatory.** An ungated inbound channel is a prompt-injection vector. Allowlist
+  senders by identity before forwarding anything (see "Channel security" below).
 
-Code archaeology (2026-07-01) confirmed the `"skip for now"` in `ipc-proxy.ts:183` is a
-deliberate staged deferral from M7 MCP-001/MCP-002 — not an oversight. MCP-001 explicitly
-scoped out `cello_message` and `cello_session_request`. MCP-002 built the daemon side
-(NotificationDispatcher, IpcServer.sendNotification) but never touched `ipc-proxy.ts` or
-`cello-mcp.ts`. Six mechanical gaps remain, all in `cello-client`:
+### The daemon already emits the event — only the last hop is missing
 
-1. `cello-mcp.ts` missing `{ capabilities: { experimental: { "claude/channel": {} } } }` on McpServer
-2. `IpcProxy.#processBuffer()` silently discards all notification frames
-3. `session-node-manager` has no content-arrival callback
-4. `NotificationDispatcher` has no `dispatchCelloMessage` method
-5. `daemon.ts` never wires the content-arrival callback to NotificationDispatcher
-6. `cello_message` notification omits `session_id` (forces unnecessary round-trip)
+The daemon's `NotificationDispatcher` is live and production. On a real inbound session it already
+calls `dispatchSessionStateChanged(agent, sessionId, "created", counterpartyPubkey)`
+(`daemon.ts:3075`), and `ipcServer.sendNotification` already puts the frame on the socket. The
+daemon's own `ipc-client.ts:68` implements the exact `onNotification(handler)` pattern the shim
+needs. **The event already crosses the socket.** The only missing hop is the shim dropping it:
+`if ("notification" in frame) { /* skip for now */ continue; }` (`ipc-proxy.ts:183`).
 
-Gaps 1, 2, 6 are in `adapter-claude-code`. Gaps 3, 4, 5 are in `daemon`. No `trustless-cello`
-changes needed. Gap 2 must also forward the three existing daemon notification types
-(`agent_state_changed`, `agent_current_changed`, `session_state_changed`) — all four are
-currently discarded together.
+This `"skip for now"` is a deliberate staged deferral from M7 MCP-001/MCP-002, not an oversight —
+MCP-001 explicitly scoped out `cello_message`/`cello_session_request`; MCP-002 built the daemon
+side and left the shim hop for later.
 
-### `--channels` flag question
+**Correction to earlier framing:** the working `claude/channel` capability declaration and
+`pushChannelNotification` in `adapter-claude-code/src/server.ts` + `notifications.ts` belong to the
+**retired in-process adapter**. They are reference-only for the payload shape — **not** a live
+template and **not** a foundation to build on. The live shim is `bin/cello-mcp.ts` + `ipc-proxy.ts`.
 
-Without `--channels` (or equivalent), Claude Code won't process `notifications/claude/channel`
-as interrupts. The Telegram plugin works without an explicit flag — likely because Claude Code
-auto-enables channel behavior when any connected MCP server declares `'claude/channel': {}` in
-capabilities. Whether CELLO's capability declaration (once Gap 1 is fixed) is sufficient needs
-verification against live Claude Code behavior.
+### The wiring gaps (reconciled)
+
+The `cello_session_request` wake needs **zero daemon changes** — it's two shim edits:
+
+1. `cello-mcp.ts:120` — declare `{ capabilities: { experimental: { "claude/channel": {} } } }` on McpServer
+2. `ipc-proxy.ts:183` — add an `onNotification` hook (copy `ipc-client.ts:68`) and translate the
+   daemon's `session_state_changed`/`created` frame into a `notifications/claude/channel` push
+
+The `cello_message` wake (a ping per inbound message, needed for a true chat relay) needs the
+daemon message-arrival hook — the three daemon-side gaps below. Full gap list, all in `cello-client`:
+
+| # | Gap | Package | Needed for |
+|---|-----|---------|-----------|
+| 1 | `cello-mcp.ts` missing the `claude/channel` capability declaration | adapter | both |
+| 2 | `IpcProxy.#processBuffer()` silently discards all notification frames | adapter | both |
+| 3 | `session-node-manager` has no content-arrival callback | daemon | `cello_message` |
+| 4 | `NotificationDispatcher` has no `dispatchCelloMessage` method | daemon | `cello_message` |
+| 5 | `daemon.ts` never wires the content-arrival callback to the dispatcher | daemon | `cello_message` |
+| 6 | `cello_message` notification omits `session_id` (forces a round-trip) | adapter | `cello_message` |
+
+Gap 2 must forward **all four** daemon notification types (`agent_state_changed`,
+`agent_current_changed`, `session_state_changed`, and the new `cello_message`) — today all four are
+discarded together. No `trustless-cello` changes for the wake path itself.
+
+### The `--channels` flag question
+
+Without `--channels` (or equivalent), Claude Code won't process `notifications/claude/channel` as
+interrupts, and in managed orgs channels must also be allowed org-side. The Telegram plugin works
+without an explicit flag — likely because Claude Code auto-enables channel behavior when any
+connected MCP server declares `'claude/channel': {}` in capabilities. Whether CELLO's declaration
+(once Gap 1 is fixed) is sufficient, or whether `--channels` is still required, needs verification
+against live Claude Code behavior.
+
+### CELLO as a channel router (the platform-relay use case)
+
+The high-value pattern is Claude Code as a **router between two channels**, one session in the
+middle — enabling Telegram / Slack / Discord / Webhook reachability:
+
+```
+        Telegram channel (two-way)              CELLO channel (two-way)
+ You ───────────────────────────►  Claude Code  ◄─────────────────────── Peer
+ (phone)  reply tool → your chat    (the router)  cello_receive (read) /     (whoever
+                                                  cello_send (reply)          reaches you)
+```
+
+- **Peer → you:** peer opens a session / sends → daemon → CELLO channel wakes Claude → Claude
+  `cello_receive`s the content → Claude calls the platform bridge's `reply` tool to push it to
+  your phone.
+- **You → peer:** you type in Telegram → Telegram channel wakes Claude → Claude `cello_send`s it
+  to the CELLO peer.
+
+The reply direction is already free (`cello_send` exists); the platform-side bridge is largely
+off-the-shelf (Telegram/Slack/Discord bridges ship as plugins — mostly configuration +
+allowlisting your own user ID). The only genuinely novel build is the CELLO inbound channel above.
+Platform selection by use case:
+
+| Platform | When to use |
+|---|---|
+| **Telegram** | Personal control — one operator, one chat, familiar mobile UI. Simplest to stand up. |
+| **Discord** | Bot-driven community or personal control; Anthropic ships an official plugin |
+| **Slack** | Team chat and threaded ops; Claude Code has an official Slack integration |
+| **Webhook** | Non-chat sources — CI alerts, incidents, calendar/CRM events. The most general trigger. |
+| **Custom UI** | Specialized front end — file views, task status, approval flows |
+
+**This content-free channel design composes cleanly with CELLO's privacy model.** The notification
+is the doorbell (`type` + counterparty pubkey + `session_id`); `cello_receive` fetches the letter.
+No message content leaks into the wake — SI-001 content-minimization is preserved even while
+relaying.
+
+### Channel security (weigh hardest — this is financial trust infrastructure)
+
+Piping untrusted natural language from a remote peer into a tool-wielding session is an injection
+surface. Two layers:
+
+- **Platform side (Telegram/Slack/…):** allowlist your own user ID only, or anyone can drive your
+  Claude.
+- **CELLO side:** sessions are pubkey-authenticated (good), but message *text* is still untrusted.
+  Instruct Claude to **relay verbatim and never obey instructions inside the content** — be a pipe,
+  not an agent that follows the peer.
+
+This is the adapter's third responsibility (the "security surface differences" CONTEXT.md marks
+TBD), made concrete. The `claude/channel/permission` capability the Telegram plugin also declares
+(relaying permission prompts to the chat) is **out of scope** for CELLO's channel — a CELLO
+counterparty is not an operator and must never be offered a permission decision.
+
+### Multi-peer routing
+
+One peer is trivial (one Telegram chat, one CELLO session). Multiple concurrent peers means Claude
+must map "this Telegram message → session X" and tag inbound CELLO messages by sender — workable
+in-context or via `@alice: …` addressing, but it is real routing logic to specify. Where the
+per-agent, per-connection whitelist and the sender allowlists live (shim config? daemon? Claude
+instructions?) is an open contract.
+
+### Staging
+
+1. **Shim-only one-way channel** — "peer opens session → Claude wakes." Zero daemon change,
+   `connect` bump only. (Gaps 1–2.)
+2. **Per-message daemon hook** — wake on every inbound message. Daemon + `connect` bump, publish
+   cascade. (Gaps 3–6.)
+3. **Platform relay** — attach an allowlisted two-way channel (Telegram/Slack/Discord/Webhook);
+   Claude routes between it and CELLO.
+4. **Hardening** — sender allowlists, relay-don't-obey framing, multi-peer addressing.
+
+**Caveat — foreground router, not a background bridge.** The relay works only while a Claude
+session is live with both channels attached and `--channels` enabled. If the session ends, the
+daemon still receives and queues CELLO messages, but nothing forwards to Telegram until a session
+reattaches. "Always-on" at the relay level = "keep the session running." (The daemon-level
+always-on receiver from the state model still holds — this caveat is specifically about the
+cross-channel *forwarding*.)
 
 ---
 
@@ -111,6 +230,38 @@ the logic entirely for Claude Code.
 loop/cron commands. We can recommend (2–3 min if actively waiting, 10–30 min for
 background work) but the choice belongs to the operator — the same way a human decides
 how often to check WhatsApp.
+
+### Non-Claude-Code runtimes — the open adapter question
+
+The channels work above is Claude-Code-specific (the `claude/channel` MCP mechanism). CONTEXT.md
+defines the **agent adapter** as the thin per-runtime wrapper with three responsibilities:
+(1) inbound notification, (2) outbound channel, (3) security surface. The channels section resolves
+(1) and (3) for Claude Code and touches (2) via `cello_send`. The other runtimes are **not yet
+designed** and are the genuinely open part of channel integration:
+
+- **Hermes** — CONTEXT.md says Hermes "injects CELLO as an additional message channel alongside
+  Telegram/WhatsApp." This is CELLO-as-a-peer-channel, not CELLO-as-the-only-surface. Inbound
+  notification uses Hermes's existing message-channel model rather than `claude/channel`; outbound
+  send is whatever Hermes exposes. How the agent chooses to send on CELLO vs Telegram vs WhatsApp,
+  and whether one conversation can span channels, is undefined.
+- **OpenClaw / IronClaw** — different notification capabilities again; adapters are later-milestone
+  per CONTEXT.md.
+- **Capability negotiation** — today `ipc.connect` sends only `{ clientType: "mcp" }`. For the
+  daemon to know whether a given client can be pushed to (channel-capable) or must be polled
+  (Bedrock, cron), the connect handshake should carry a channel-capability descriptor. There is no
+  such negotiation defined; the daemon currently assumes the MCP shim shape.
+
+**Design principle (unchanged):** the daemon is the common substrate and the always-on receiver;
+each adapter differs only in how/when its runtime is woken and how it sends. Build the daemon-side
+notification and tool surface once; let each adapter map it to its runtime's ingress. Do not bake
+Claude-Code assumptions into the daemon.
+
+The outbound content seam itself (`ingestReceivedContent` inbound / `sendContent` outbound) is being
+finalized as the M9 security-gateway attachment point — see
+[[2026-06-21_1600_m9-content-channel-seam-and-entry-plan|M9 Content-Channel Seam and Entry Plan]].
+That "content channel" is a distinct concept from `claude/channel` (message-content pipeline vs
+push-notification ingress) but the outbound adapter responsibility rides on the same `sendContent`
+seam, so the two must stay coherent.
 
 ---
 
@@ -567,8 +718,11 @@ being restated here.
 
 | Area | Type | Scope | Gap |
 |------|------|-------|-----|
-| Wire IPC notification forwarding + `claude/channel` capability (6 gaps) | Implementation | cello-client only | — |
-| `cello_message` notification includes `session_id` | Implementation | cello-client only | — |
+| **Channel stage 1** — shim-only one-way channel: `claude/channel` capability + forward `session_state_changed` wake (Gaps 1–2 of the channel wiring list) | Implementation | cello-client (`connect` bump only) | — |
+| **Channel stage 2** — per-message daemon hook: content-arrival callback + `dispatchCelloMessage` + `session_id` in `cello_message` (Gaps 3–6) | Implementation | cello-client (daemon + adapter; publish cascade) | — |
+| **Channel stage 3** — platform relay: attach an allowlisted two-way bridge (Telegram/Slack/Discord/Webhook); Claude routes between it and CELLO | Design + impl | compose off-the-shelf bridge + CELLO MCP | — |
+| **Channel stage 4** — hardening: sender allowlists, relay-don't-obey framing, multi-peer addressing | Design + impl | cello-client + Claude instructions | — |
+| Non-Claude-Code adapters (Hermes CELLO-as-a-channel, OpenClaw, IronClaw) + `ipc.connect` capability negotiation | Design + impl | cello-client (adapters + daemon) | — |
 | `use_agent` auto-starts agent if not online | Implementation | cello-client (daemon + CLI) | — |
 | `cello login` auto-starts all loaded agents (with opt-out config); partial-failure enumeration | Implementation | cello-client (CLI) | 8 |
 | `cello_check_notifications({ scope })` MCP tool (default: current agent, opt-in: all) | Implementation | cello-client (daemon + adapter) | — |
@@ -582,9 +736,37 @@ being restated here.
 | CLI configuration surface (`cello config get/set/list`, `--agent` scope) | Implementation | cello-client (CLI) | 3, 4 |
 | "Check relay on wakeup" — directory-assisted relay discovery | Design + impl | Both repos | — |
 
-**Sequencing.** The first two are pre-requisites for channels to work at all. `use_agent`
-auto-start, `login` auto-start, and the CLI config surface are quick wins that make everything
-else usable. The read-cursor gate + `since_seq` cursor are load-bearing for both reconnect and
-the two-session group-chat model. Primary/Standby is the largest single body of new work (it
-touches key agreement, DB sync, and a new directory→client message type) — treat it as its own
-milestone-scale effort, not a story.
+**Sequencing.** Channel stage 1 is the smallest unlock (two shim edits, `connect` bump only) and
+is the prerequisite for CELLO reacting to anything at all. Stage 2 (per-message wake) turns it into
+a real chat relay. `use_agent` auto-start, `login` auto-start, and the CLI config surface are quick
+wins that make everything usable. The read-cursor gate + `since_seq` cursor are load-bearing for
+both reconnect and the two-session group-chat model. Primary/Standby is the largest single body of
+new work (key agreement, DB sync, and a new directory→client message type) — treat it as its own
+milestone-scale effort, not a story. The non-Claude-Code adapters are a separate design track.
+
+---
+
+## Toward a Milestone
+
+This document is the **planning-authoritative** record for the command surface, notifications,
+channels, contact/privacy, multi-daemon, and abuse-control work. The intent is to use it as the
+basis for a new milestone with the full M8B-style apparatus — a PROCEDURE runbook, a
+DEFINITION-OF-DONE with per-line spine/live enforcers, a BUILD-JOURNAL, and a DECISIONS log. When
+that milestone is scoped, the "Stories Needed" table above is the raw material; the channel staging
+(1→4) and Primary/Standby are the two largest tracks and likely want their own DoD tiers.
+
+The channel technical depth folded into this doc comes from the 2026-06-27 investigation; that log
+remains the code-level reference (exact file:line edit points, the `onNotification` template, the
+publish cascade), while this doc is authoritative for *what* the milestone builds.
+
+---
+
+## Related Documents
+
+- [[2026-06-27_0753_claude-code-channels-cello-integration|Claude Code Channels × CELLO — Integration Model]]
+  — the channel-protocol technical reference (superseded by this doc for planning; authoritative for code-level detail)
+- [[2026-06-21_1600_m9-content-channel-seam-and-entry-plan|M9 Content-Channel Seam and Entry Plan]]
+  — the daemon `ingestReceivedContent`/`sendContent` seam the outbound adapter rides on (distinct from `claude/channel`)
+- [[2026-07-01_0900_m8b-closed-e2e-testing-phase|M8B Closed — E2E Testing Phase]]
+  — the follow-through doc where the notification-wiring gap was first surfaced post-M8B
+- [[CONTEXT]] — canonical glossary: agent adapter (3 responsibilities), Claude Code adapter, Hermes adapter

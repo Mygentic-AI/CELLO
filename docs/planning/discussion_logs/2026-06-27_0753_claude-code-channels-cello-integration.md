@@ -15,6 +15,14 @@ description: >
 
 # Claude Code Channels × CELLO — Integration Model
 
+> **Planning status:** superseded for *milestone scoping* by
+> [[2026-07-01_1030_command-surface-and-notifications-design|Command Surface, Notifications, and
+> Async Messaging Design]] (2026-07-01), which folds this log's channel depth into the broader
+> command-surface / notifications / multi-daemon planning that will become a milestone. **This log
+> remains the authoritative code-level reference** — the exact `file:line` edit points, the
+> `onNotification` template, the retired-adapter caveat, and the publish cascade live here. Read
+> this for *how*; read the 2026-07-01 doc for *what we build and in what order*.
+
 ## 1. Purpose of this discussion log
 
 This document records what Claude Code "channels" are and how CELLO can use them to
