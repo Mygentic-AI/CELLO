@@ -252,6 +252,31 @@ See "Leave a Message" section above for the full model.
 
 ---
 
+## Multi-Agent Within a Single Session
+
+In M6, a single Claude session could operate as multiple agents — call `cello_receive` for
+agent B, then `cello_receive` for agent C, within the same session. This capability is
+preserved in M7 but the mechanism is now explicit.
+
+**M7 constraint:** `cello_use_agent` sets one current agent per IPC connection at a time.
+All tool calls route through whichever agent is current. To work as a different agent, you
+switch first.
+
+**Pattern:**
+1. `cello_check_notifications({ scope: "all" })` — one call, see which agents have pending items
+2. `cello_use_agent("B")` → handle B's session
+3. `cello_use_agent("C")` → handle C's session
+
+With `use_agent` auto-start, step 2 and 3 also bring the agent online if it isn't already —
+no separate `cello_start_agent` call needed.
+
+**What you can't do** that M6 technically allowed: two concurrent blocking `cello_receive`
+polls for different agents at the same instant. In practice this was never useful — a Claude
+session is single-threaded. The sequential switch model matches how the agent loop actually
+works: check what's pending, switch to the right agent, handle it, move on.
+
+---
+
 ## State Matrix — Full Coverage
 
 All daemon/agent/session state combinations and their handling:
