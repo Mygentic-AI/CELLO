@@ -9,6 +9,40 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🔍 Ground-truth reconciliation — 2026-07-02 ~20:55 UTC (M8B cascade-2 deploy — directory + relay)
+
+**M8B cascade-2 (FINDING-4/5/6) shipped.** cello-client published to beta AND promoted to `latest`
+(daemon `0.0.24`, cli `0.0.22`; connect unchanged `0.0.53`; tag `v0.0.65`, smoke-tag green). Directory
+redeployed with FINDING-5 (`frontier_leaves` on `seal_unilateral_confirmed`, SI-002) — the ONLY
+directory-side change; FINDING-4/6 are client-only.
+
+**Deployed images (ALL 3 regions): directory `cello-directory:7c66ba2`** (was `6f66557`; redeployed
+2026-07-02 ~20:25 UTC via `cello-directory-pipeline` exec `096d5486`, status **Succeeded**; sequential
+ProductionDeploy us-east-1 → eu-central-1 → ap-northeast-1, all rolled COMPLETED + steady, 0 crash loops).
+Relay image unchanged (`c48deac`) — force-new-deployed only, to re-register after the directory restart.
+
+**Per-region state after this deploy (verified live 2026-07-02 ~20:55 UTC):**
+- **us-east-1** — directory image `7c66ba2` (rollout COMPLETED, steady); relay force-new-deployed, new task `a2a5215a`, **new IP 10.0.71.218** (was 10.0.23.246); manifest re-signed **v49**; directory `relay.manifest.refreshed v49` + `relay.health.check.passed` (2-6ms) against new IP.
+- **eu-central-1** — directory image `7c66ba2` (COMPLETED, steady); relay new task `f71a8bf1`, **new IP 10.1.66.92** (was 10.1.75.110); manifest re-signed **v21**; directory refreshed v21 + health-check passing (2ms).
+- **ap-northeast-1** — directory image `7c66ba2` (COMPLETED, steady); relay new task `e752d221`, **new IP 10.2.96.205** (was 10.2.30.214); manifest re-signed **v12** (directory also auto-wrote v11 on re-registration with the new IP); directory refreshed v12 + health-check passing (5-6ms).
+
+**Post-deploy relay cascade (mandatory, done):** all 3 relays force-new-deployed → each re-registered
+(`[RELAY] Peer connected` to directory peer `12D3KooWS46w…` + `relay.already.registered`) → manifests
+re-signed with new IPs (`./infra/sign-manifest.sh dev <region> <defs>`) → directories refreshed +
+health-checking the new IPs. **All 6 ECS services 1/1 COMPLETED; all 6 DNS names resolve.**
+
+Note: this deploy observed the directory writing a fresh manifest (`relay.manifest.updated`) on relay
+re-registration with a changed IP (ap-northeast-1 v11) — i.e. the historical "already_registered skips
+re-sign" gap may be narrower than documented; the manual re-sign was still run to set the canonical
+signed version explicitly. ALB DNS names rotated (query AWS, never trust STATE for those).
+
+**Still Andre's (not done by the autonomous run):** the two live verifications — FINDING-4 kill-us1
+failover (also exercises #12/#13/#5; restore per `infra/CLAUDE.md`) and FINDING-6 B-reconnect →
+`cello_get_sealed_receipt(B)`. (latest-promotion + `npm i -g …@latest` + `cello login` + MCP reconnect
+were all completed by Andre during the session.)
+
+---
+
 ## 🔍 Ground-truth reconciliation — 2026-06-29 (live audit, all 3 regions)
 
 A live audit of the directory + relay in all 3 regions was run during an M7 debugging session.
