@@ -16,20 +16,23 @@ STATE.md's per-region tables had drifted: CI/CD image swaps since the 2026-06-27
 do NOT update STATE.md. Current ground truth + material findings below. (Per `infra/CLAUDE.md`,
 ALB DNS names are always query-AWS — the snapshots below are point-in-time, not authoritative.)
 
-**Deployed images (ALL 3 regions): directory `cello-directory:04d95ad`, relay `cello-relay:c48deac`**
-(STATE tables previously said directory `d5d0424` / relay `791f9ce` — both stale, redeployed via CI/CD.)
+**Deployed images (ALL 3 regions): directory `cello-directory:6f66557`, relay `cello-relay:c48deac`**
+(directory redeployed 2026-07-02 ~20:30 UTC via `cello-directory-pipeline` — FINDING-3 unilateral
+seal legibility + the M6B-014 stale-IaC-test fix; relay image unchanged, force-new-deployed for
+re-registration. Prior directory image `04d95ad`; STATE tables (below) say `d5d0424` — both stale.)
 
-Per-region current state (taskdef rev / running task private IP / ALB DNS):
-- **us-east-1** — directory `:209` / `10.0.108.160` / `cello-dir-dev-85618485`; relay `:81` / `10.0.27.225` / `cello-relay-dev-913894764`. (Relay redeployed THIS session — see ops changes.)
-- **eu-central-1** — directory `:79` / `10.1.92.155` / `cello-dir-dev-114927676` (ALB recreated, was `…-1699677837`); relay `:34` / `10.1.54.12` / `cello-relay-dev-1538955378`. (Relay IP was `10.1.77.112` in STATE — stale.)
-- **ap-northeast-1** — directory `:70` / `10.2.36.20` / `cello-dir-dev-1500332624` (ALB recreated, was `…-1435901052`); relay `:29` / `10.2.112.232` / `cello-relay-dev-1984262345`. (Relay IP was `10.2.94.2` in STATE — stale → S3 manifest re-sign likely needed.)
+Per-region current state (taskdef rev / running relay private IP / ALB DNS) — as of 2026-07-02 ~21:10 UTC:
+- **us-east-1** — directory `:215` / `cello-dir-dev-85618485`; relay `:82` / `10.0.23.246` / `cello-relay-dev-913894764`.
+- **eu-central-1** — directory `:82` / `cello-dir-dev-114927676`; relay `:35` / `10.1.75.110` / `cello-relay-dev-1538955378`.
+- **ap-northeast-1** — directory `:73` / `cello-dir-dev-1500332624`; relay `:30` / `10.2.30.214` / `cello-relay-dev-1984262345`.
+- All 3 relays force-new-deployed this session (re-register after directory redeploy); **S3 relay
+  manifests VERIFIED FRESH** — healthCheckUrl matches live relay IP in every region (directory re-signed
+  on re-registration; no manual re-sign needed).
 
-**🚨 CRITICAL — `directory-ap1.cello.mygentic.ai` returns NXDOMAIN (no A record).** The
-ap-northeast-1 directory has NO working public hostname — clients cannot reach it by DNS, even
-though STATE (L397) claims its Route53 record is `CREATE_COMPLETE`. Almost certainly the
-A-record purge bug (`infra/CLAUDE.md` → "Route53 A Records — CFN Owns Them, Never Purge Manually")
-hit the directory record like it hit the relay one, and CFN never recreated it. **One of three
-sovereign nodes is dark to clients.** Fix: recreate the directory-ap1 A record via deploy.sh/CFN.
+**✅ `directory-ap1.cello.mygentic.ai` RESOLVES — the prior CRITICAL NXDOMAIN note was STALE/RESOLVED.**
+Verified 2026-07-02: directory-ap1 → 35.79.146.148 / 54.199.0.195, and all 6 DNS names (directory ×3 +
+relay ×3) resolve. All 3 sovereign directory nodes are reachable by clients. (The 2026-07-01 A-record
+drift was fixed; deploy.sh/CFN owns the record and it is healthy.)
 
 **Relay exposure model (consistent all 3 regions — previously undocumented):**
 - Relay ALB is **HTTP :80 only** (no HTTPS). ALB :80 → relay target port **4002** (client-facing WebSocket); health-check port 4000.
@@ -491,9 +494,9 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | Secrets Manager Key Path | cello/dev/demo-agent/identity-key |
 | Agent pubkey (K_local) | bc94ead650acf8ed21747d9571ef0aa7fc9bfba5511dfeca13bb6cfa9fdc0b61 (current; the published demo identity per M7 write-up. Prior: 12ccbfd5… / c94dfa2e… directory agent_id — superseded) |
 | Daemon state dir (CELLO_DIR) | /opt/cello-demo/.cello — SQLCipher `sessions.db` (whole-DB encrypted, post-PERSIST-002). The old `/opt/cello-demo/data/client.db` is a dead M6 leftover (unused). |
-| @cello-protocol versions | **daemon 0.0.22 / cli 0.0.20 / connect 0.0.53** (+ crypto 0.0.14, transport 0.0.11, client 0.0.41, protocol-types 0.0.11) — updated 2026-07-02 ~16:20 UTC (M8B cascade-1 review follow-ups, tag v0.0.63: CLI --help precedence fix, cache-retention doc; earlier same day: 0.0.21/0.0.19 (cascade 1, v0.0.62), 0.0.20/0.0.18) |
+| @cello-protocol versions | **daemon 0.0.23 / cli 0.0.21 / connect 0.0.53** (+ crypto 0.0.14, transport 0.0.11, client 0.0.41, protocol-types 0.0.11) — updated 2026-07-02 ~21:05 UTC (M8B cascade-2 FINDING-3: unilateral seal persists+returns legibility receipt; tag v0.0.64; connect unchanged — no daemon dep). Prior: 0.0.22/0.0.20 ~16:20 UTC (cascade-1 review follow-ups, v0.0.63); 0.0.21/0.0.19 (cascade 1, v0.0.62) |
 | Architecture | M7 shim+daemon: `cello-daemon.service` (the node — key, SQLCipher DB, libp2p, directory connection) + `cello-demo.service` (the app → spawns `cello-mcp` → daemon socket). Both active. |
-| Service status | **UPDATED 2026-07-02 ~14:30 UTC to daemon 0.0.21 / cli 0.0.19 (M8B cascade 1: FINDING-1 seal-retry, F14 receiver re-arm, F13, F16, F15, F20)** — `cd /opt/cello-demo && npm install @cello-protocol/cli@0.0.19 @cello-protocol/daemon@0.0.21` as root, then `chown -R cello-demo` on node_modules (runuser can't exec npm for the system user). No DB migration; FROST share untouched. Restarted daemon→demo in sequence; both active; healthy startup fingerprint + `demo.started`. Live smoke afterward: inbound session + bilateral seal OK; **F14 re-arm observed live** (EADDRINUSE ×4 with backoff → `session.standing_receiver.dead` → teardown re-arm → 2nd inbound session accepted); crash-seal round-trip OK (daemon stopped mid-session → `counterparty_gone` on receive (F16) → close #1 `seal_counterparty_pending` "~484s" (F20) → close #2 after grace → **unilateral seal ok** (FINDING-1 closed)). Services restarted + healthy after the test. See discussion log 2026-07-02_1640. Prior: 0.0.20 earlier same day (Finding 1 + F2-a). |
+| Service status | **UPDATED 2026-07-02 ~21:00 UTC to daemon 0.0.23 / cli 0.0.21 (M8B cascade-2 FINDING-3: unilateral seal ships a retrievable legibility receipt)** — `cd /opt/cello-demo && npm install @cello-protocol/cli@0.0.21 @cello-protocol/daemon@0.0.23` as root, then `chown -R cello-demo node_modules`. No DB migration; FROST share untouched. Restarted daemon→demo in sequence; both `active`; healthy fingerprint (`agent.online`, `session.node.created`, `directory.signaling.connected`). Live FINDING-3 acceptance (unilateral close → `cello_get_sealed_receipt` returns cert with counterparty ABSENT) pending Andre's operator check from his local daemon (also updated to 0.0.23). Prior entry ↓. **UPDATED 2026-07-02 ~14:30 UTC to daemon 0.0.21 / cli 0.0.19 (M8B cascade 1: FINDING-1 seal-retry, F14 receiver re-arm, F13, F16, F15, F20)** — `cd /opt/cello-demo && npm install @cello-protocol/cli@0.0.19 @cello-protocol/daemon@0.0.21` as root, then `chown -R cello-demo` on node_modules (runuser can't exec npm for the system user). No DB migration; FROST share untouched. Restarted daemon→demo in sequence; both active; healthy startup fingerprint + `demo.started`. Live smoke afterward: inbound session + bilateral seal OK; **F14 re-arm observed live** (EADDRINUSE ×4 with backoff → `session.standing_receiver.dead` → teardown re-arm → 2nd inbound session accepted); crash-seal round-trip OK (daemon stopped mid-session → `counterparty_gone` on receive (F16) → close #1 `seal_counterparty_pending` "~484s" (F20) → close #2 after grace → **unilateral seal ok** (FINDING-1 closed)). Services restarted + healthy after the test. See discussion log 2026-07-02_1640. Prior: 0.0.20 earlier same day (Finding 1 + F2-a). |
 | Access | SSM Session Manager only - no key pair, no inbound SG rules |
 | Inbound rules | None |
 | Outbound rules | TCP 443 to 0.0.0.0/0 only |
