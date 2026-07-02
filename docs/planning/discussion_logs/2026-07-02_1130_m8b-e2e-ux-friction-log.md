@@ -1,0 +1,330 @@
+---
+name: M8B E2E UX friction log
+type: discussion
+date: 2026-07-02
+topics: [m8b, e2e-testing, ux, friction, operator-experience, developer-experience]
+status: active
+description: >
+  Running log of EVERY operator/developer friction point encountered during the M8B E2E testing
+  phase. Co-equal mission with the testing itself (Andre's directive 2026-07-02): friction is a
+  priceless signal for turning a good product into a great one. Record ALL of it — discoverability
+  gaps, confusion, multi-step workarounds, restart/lifecycle pain, ambiguous errors, and "seemed
+  like it wasn't working" moments — even friction that was solved. Solving friction does NOT mean
+  it shouldn't be recorded; the number of steps it took to solve IS the friction.
+---
+
+# M8B E2E UX Friction Log
+
+**Directive (Andre, 2026-07-02):** Friction logging is as important as finding/solving issues.
+Do not omit a friction point because "it didn't seem that bad" — that is not our judgment to make.
+Note frequently, durably (must survive compaction). Friction includes:
+- Things that were hard or required many steps (even if solved).
+- Things that were working but *didn't seem like they were working*.
+- Things where the next step was genuinely unclear (**confusion friction**).
+
+This log is NOT a fix list. We are recording, not fixing (yet).
+
+Severity tags: `discoverability` · `confusion` · `lifecycle/restart` · `error-message` · `stability` · `cleanup`
+
+Companion to [[2026-07-02_1122_m8b-e2e-test-results-journal]] and
+[[2026-07-01_0900_m8b-closed-e2e-testing-phase]].
+
+---
+
+## F1 — `cello refresh` is an undiscoverable CLI subcommand · `discoverability`
+
+**Context:** Testing #11 (share refresh). The CLI usage string is:
+`Usage: cello <login|logout|status|register|create-agent|remove-agent|sessions>` — `refresh` is
+**not listed**. I only discovered `cello refresh <agent>` works because `cello refresh --help`
+returned `agent_not_found: No agent named '--help'` — i.e. it parsed `--help` as an agent argument,
+revealing the subcommand exists.
+
+**Friction:** An operator has zero way to discover share refresh exists. Proactive key refresh is a
+security-relevant operation; it being invisible in `--help` means most operators will never run it.
+
+**Improvement idea (not fixing now):** Add `refresh` to the usage string; add a short description.
+
+---
+
+## F2 — CLI subcommands have no `--help`; flags parse as positional args · `confusion` · `error-message`
+
+**Context:** Same discovery path. `cello refresh --help` treated `--help` as the agent name and
+returned `{"ok":false,"reason":"agent_not_found","guidance":"No agent named '--help'. Create +
+register it first."}`. Tried `cello refresh-shares`, `cello rotate`, etc. — all fell back to the
+top-level usage string with no indication of correct syntax.
+
+**Friction:** No per-subcommand help. A wrong flag is silently coerced into a positional argument
+and produces a misleading "agent not found" error rather than a usage hint.
+
+**Improvement idea:** Support `--help`/`-h` on every subcommand; reject unknown flags with a usage
+message instead of coercing them into arguments.
+
+---
+
+## F3 — `cello_get_inclusion_proof` MCP tool exists but returns `not_implemented` · `confusion`
+
+**Context:** Testing #8. The tool is exposed in the MCP surface and callable, but returns
+`{"ok":false,"reason":"not_implemented"}`. (Known/tracked gap — the crypto tree exists, only the
+tool wiring is missing.)
+
+**Friction:** A tool that appears in the tool list but does nothing is confusion friction — an
+operator will try it, get nothing, and not know if they did something wrong or it's unbuilt. A
+tool that isn't ready is arguably better hidden than exposed as a dead end.
+
+**Improvement idea:** Either hide the tool until wired, or have its description explicitly say
+"(not yet available)".
+
+---
+
+## F4 — `cello_get_sealed_receipt` rejects short session IDs with an ambiguous error · `error-message`
+
+**Context:** Testing #8. Called `cello_get_sealed_receipt(session_id: "a001ca74")` (an abbreviated
+ID copied from the plan doc). Got `{"ok":false,"reason":"sealed_receipt_not_found","guidance":"No
+sealed certificate is recorded for this session. It may not be sealed yet, or the session_id is
+wrong — close it with cello_close_session..."}`.
+
+**Friction:** (a) Partial/abbreviated session IDs are not accepted, but the tool doesn't say that —
+it says "not found," conflating "wrong ID / not full-length" with "not sealed yet." (b) The
+guidance suggests calling `cello_close_session` on a session that may belong to a different agent.
+The operator can't tell which of three very different causes applies.
+
+**Improvement idea:** Distinguish "malformed/too-short session_id" from "session not sealed" from
+"unknown session" in the error reason. Consider accepting unique prefixes.
+
+---
+
+## F5 — `cello status` reports one agent `registered` and one `online` — unclear which is usable · `confusion`
+
+**Context:** Baseline. `cello status` showed Agent-1 `state: "online"` and Demo2 `state:
+"registered"` on the same healthy daemon. (Known cosmetic bug — daemon.ts:490 hardcodes state; see
+plan doc.)
+
+**Friction:** From a cold operator's view, two agents in different states with no explanation reads
+as "one of these is broken." Had to `cello_start_agent('Demo2')` before `cello_use_agent('Demo2')`
+would work (it failed with `agent_not_online` first). The status display and the actual
+startability are not obviously connected.
+
+**Improvement idea:** Fix the hardcoded state so `state` reflects reality; or add a hint in status
+like `"online agents can send/receive; registered agents need cello_start_agent first"`.
+
+---
+
+## F6 — No user-facing way to choose a directory node · `discoverability` · `confusion`
+
+**Context:** Testing #12/#13 (any-directory / cross-node). To route through eu-central-1 or
+ap-northeast-1 instead of the default us-east-1, there is **no CLI flag and no config setting**.
+The only lever is the env var `CELLO_DIRECTORY_URL`, which I found only by grepping the
+cello-client source (`core/daemon/src/directory-bootstrap.ts:31`, defaults to
+`http://directory-us1.cello.mygentic.ai`). It is not documented in `cello --help`, the MCP config,
+or any operator-facing doc I've seen.
+
+**Friction:** For a "federated system with sovereign nodes" whose entire value proposition is
+node choice/redundancy, the client's node selection is invisible and hard-coded to one region by
+default. Discovering how to point elsewhere required reading TypeScript source. This is significant
+friction against the core sovereign-node promise.
+
+**Improvement idea:** Surface directory selection as a first-class, documented control (CLI flag +
+config), and ideally auto-select/failover across the manifest's node set rather than a single baked
+default.
+
+---
+
+## F7 — Changing directory requires a full daemon restart, which drops all MCP connections · `lifecycle/restart`
+
+**Context:** Testing #12/#13. `CELLO_DIRECTORY_URL` is read only at daemon startup
+(`resolveDirectoryUrl(process.env)`), and the daemon is a **standalone, manually-started process**
+(pid 83645: `.../@cello-protocol/daemon/dist/bin/cello-daemon.js`) — **not** managed by launchd or
+systemd, so nothing restarts it automatically. It is shared by multiple MCP client connections.
+Changing the bootstrap directory therefore requires: kill the daemon → restart with the new env →
+every connected MCP client (including the live Claude session driving the test) loses its socket
+and must reconnect (`/mcp`) → re-`cello_start_agent` each agent (standing receivers are lost).
+
+**Friction:** There is no `cello daemon restart`, no `cello daemon reload`, and no way to change
+directory without a disruptive full-stack bounce that also strands other sessions on the shared
+daemon. This blocked #12/#13 from running inline — they now require a human to drive the `/mcp`
+reconnect. **This is the single biggest friction point so far.**
+
+**Improvement idea:** (a) A supported `cello daemon restart`/`reload` command. (b) Make directory
+selection changeable without killing the daemon. (c) Consider per-agent or per-session directory
+binding so one config change doesn't bounce every connection. (d) Auto-reattach MCP clients after a
+daemon restart.
+
+---
+
+## F8 — `claude mcp get cello` is inconsistent (returned config, then "no server") · `stability` (harness-side)
+
+**Context:** While planning the #12 config change. First `claude mcp get cello` returned the full
+config (`Scope: Local config`). Minutes later, from the same cwd, `claude mcp get cello` →
+"No MCP server named 'cello'." The cello tools were connected and working the entire time.
+
+**Friction:** This is Claude Code MCP-CLI flakiness rather than CELLO itself, but it directly
+undermines confidence in managing the cello MCP server via the CLI — which is the exact operator
+workflow for reconfiguring the directory (F6/F7). Made me distrust the config-edit path and pivot
+to hand-managing the daemon.
+
+**Improvement idea:** (Harness) investigate `claude mcp get` scope resolution. (CELLO) reduce
+reliance on MCP-config edits for reconfiguration (see F7).
+
+---
+
+## F9 — Orphan MCP/daemon processes accumulate on the shared daemon · `cleanup` · `lifecycle/restart`
+
+**Context:** `ps` showed two `cello-mcp` + `npm exec @cello-protocol/connect` process pairs: one
+from a prior session (10:03 PM, apparently abandoned) and one from the current session, both
+attached to the single daemon (83645). CELLO's own CLAUDE.md warns that "orphan processes compete
+for the [SQLite] lock and corrupt ceremony state."
+
+**Friction:** There is no visibility into who is connected to the daemon and no cleanup path for
+stale connections. An operator running multiple Claude sessions over time silently accumulates
+connections against one stateful daemon, with a documented corruption risk and no `cello daemon
+connections` / `cello daemon gc` to inspect or reap them.
+
+**Improvement idea:** Surface connected clients in `cello status`; provide a cleanup command; or
+detect and warn on stale connections.
+
+---
+
+## F10 — Interrupted sessions accumulate with no cleanup path · `cleanup`
+
+**Context:** Baseline `cello status` listed 3 `interrupted_sessions` on Demo2 (counterparty
+`bc94ead6…`) dating to 2026-06-29 / 07-01 — leftovers from prior testing.
+
+**Friction:** Interrupted sessions pile up in status output indefinitely. There's no obvious
+operator action to resolve, resume, or clear them, so `cello status` grows noisier over time and
+it's unclear whether these represent recoverable work or dead state.
+
+**Improvement idea:** A way to list/resume/discard interrupted sessions; auto-expire very old ones;
+or clarify in status whether they are actionable.
+
+---
+
+## F11 — Background signaling churn: periodic disconnect/reconnect looks like breakage · `stability` · `confusion`
+
+**Context:** The daemon log shows recurring cycles roughly every 40–70 min:
+`directory.signaling.reader.error` (`"The operation was aborted due to timeout"` /
+`"signaling_closed"`) → `directory.signaling.disconnected` (`"Cannot write to a stream that is
+closed"`) → `directory.signaling.reconnecting` → `connected`. Also repeated
+`directory.bootstrap.unavailable` → `using_last_known` warnings earlier in the day.
+
+**Friction:** To an operator tailing logs, this reads as an unstable/failing connection even though
+the daemon recovers each time. It's unclear whether these disconnects are expected keepalive
+churn or a real problem. "Working but doesn't look like it's working" = confusion friction. The
+`bootstrap.unavailable` warnings are especially alarming-looking.
+
+**Improvement idea:** Downgrade expected reconnect churn to debug/info with a clear "(expected)"
+note; distinguish a genuine sustained outage from routine stream cycling; confirm whether the
+~hourly disconnect is intended.
+
+---
+
+## F12 — `/mcp` reconnect does NOT change the directory; no signal of which node you're on · `confusion` · `lifecycle/restart`
+
+**Context:** For #12/#13 the operator (Andre) ran a `/mcp` reconnect expecting it to switch the
+client to a different directory. It did not — and reasonably so: `/mcp` reconnect only re-attaches
+the MCP client to the **already-running** daemon (still pid 83645, still bootstrapped to
+`directory-us1` per `~/.cello/daemon.log`). Directory is fixed at *daemon* startup, and the daemon
+lifecycle is fully decoupled from the MCP-client lifecycle.
+
+**Friction:** (a) A knowledgeable operator's mental model was "reconnect = re-pick directory," which
+is wrong — strong evidence the mechanism is non-obvious. (b) There is **no operator-visible
+indication of which directory the client is currently bound to** — `cello status` does not show the
+active directory URL/region/peerId. The only way I could confirm us1 was grepping the daemon log.
+Combined with F6/F7, an operator literally cannot tell, from any supported surface, which sovereign
+node they are talking to.
+
+**Improvement idea:** Show the bound directory (URL + region + peerId + manifest version) in
+`cello status`. Make directory switching an explicit command with clear feedback, distinct from MCP
+reconnect.
+
+---
+
+## F5-CORRECTION — agent `state` field conflates lifecycle with per-connection selection · `confusion`
+
+**Correction to F5:** My initial F5 attributed the `registered`/`online` display to the known
+daemon.ts:490 hardcode bug. That was inaccurate — Demo2 correctly transitioned
+`registered` → `online` after `cello_start_agent`, so the field *does* track lifecycle. However a
+real confusion remains: after `cello_use_agent('Demo2')`, `cello status` showed **Agent-1:
+`online`** and **Demo2: `current`**. Both are online; `current` only means "selected for this
+connection." So the single `state` field multiplexes two orthogonal concepts (lifecycle state vs.
+this-connection selection). An operator seeing one agent `online` and another `current` cannot tell
+that both are equally ready — it reads as a difference in health/readiness.
+
+**Improvement idea:** Separate the fields, e.g. `state: online` + `selected: true`, rather than
+overloading `state` with the value `current`.
+
+---
+
+## F13 — `cello_initiate_session` returns `ok` even when the counterparty aborts the offer · `error-message` · `confusion`
+
+**Context:** Testing #2. `cello_initiate_session(EC2 demo)` returned
+`{"ok":true,"sessionId":"09fa513e…","transportMode":"relay"}`. But the EC2 side had already
+**aborted** the offer (`session.offer.abort` / `session.inbound.accept.failed`). The initiator got
+a success with a session ID for a session the receiver never accepted. The failure only surfaced
+later, on `cello_send`, as `session_stream_unavailable`.
+
+**Friction:** `initiate_session` reports success before the counterparty has accepted, producing a
+false-positive session. The operator believes they have a live session; they actually have a
+one-sided phantom. Discovering the truth required a failed send plus reading the *remote* daemon
+log over SSM — not available to a normal operator at all.
+
+**Improvement idea:** Either make `initiate_session` await counterparty accept before returning ok,
+or return a `pending`/`unconfirmed` state and surface the abort back to the initiator (e.g.
+`session.offer.aborted` pushed to the initiator with the reason).
+
+---
+
+## F14 — Standing receiver silently dies after one session; agent looks healthy but is deaf · `stability` · `confusion` (**reliability finding**)
+
+**Context:** Testing #2. All inbound sessions to the EC2 demo agent failed with
+`reason: "standing_receiver_unavailable"`. Timeline from the EC2 daemon log:
+- 08:35:43 `daemon.started` (pid 23890); 08:35:48 `agent.online` + `session.node.created`
+  standing_receiver `c78f0509` (peer `12D3KooWJLz8…`).
+- 09:02:47 inbound session `a6a2f9af` **consumes** that same peer `12D3KooWJLz8…` (the standing
+  receiver becomes the session). Session succeeds (this is the "live acceptance test PASSED" from
+  the last commit).
+- **No new `session.node.created` for a standing receiver afterward.** Daemon never restarted
+  (both services `ActiveEnterTimestamp` = 08:35).
+- 09:37+ every inbound offer → `standing_receiver_unavailable`.
+
+**Root cause (evidence-based):** the standing receiver is consumed when it becomes a session and is
+**not re-armed** afterward. Net effect: the demo agent accepts exactly **one** inbound session per
+daemon lifetime, then goes permanently deaf — while `systemctl is-active` reports both
+`cello-daemon` and `cello-demo` as `active` and `cello status` looks healthy.
+
+**Friction / severity:** This is the worst kind — "looks like it's working but isn't." No
+operator-visible signal that the agent can no longer receive. CLAUDE.md already lists
+`standing_receiver_unavailable` as a known first-suspect with a manual restart fix, but the
+underlying *one-session-then-deaf* behavior (if confirmed as a re-arm gap rather than intended) is a
+real availability bug that directly violates the "availability is a first-class protocol concern"
+invariant. Also means #2 and #6 each need a fresh EC2 daemon restart (only one inbound session
+per lifetime).
+
+**To verify (follow-up):** after restoring, accept one session, seal it, then attempt a SECOND
+inbound session without restarting — if it fails, the re-arm gap is confirmed as a standing bug.
+
+**Improvement idea:** Re-arm the standing receiver immediately after it is consumed (and after each
+session seals). Surface standing-receiver health in `cello status` (the parked
+`standing_receiver_ready` field should reflect reality). Emit an alarm-worthy log event when an
+agent that should be receiving has no armed receiver.
+
+---
+
+## F15 — `assignment.unverified` warning fires on HEALTHY sessions, masking the real cause · `error-message` · `confusion`
+
+**Context:** While diagnosing F14, every inbound offer logged
+`session.inbound.assignment.unverified` with `note: "FROST assignment signature verification
+deferred to SESSION-004 re-home"`. This warning also appears on the **successful** 09:02 session —
+so it is benign deferred-verification noise, not a failure. It sat directly above the real cause
+(`standing_receiver_unavailable`) and initially looked like the culprit (I nearly chased a
+relay/manifest signature-verification rabbit hole).
+
+**Friction:** A `warn`-level event that fires on every session including healthy ones trains
+operators to either ignore warnings or misdiagnose. It actively misled the first pass of diagnosis.
+
+**Improvement idea:** Downgrade the deferred-verification note to `debug`, or clearly mark it
+`(expected until SESSION-004)`, so it doesn't read as the failure reason sitting next to real
+aborts.
+
+---
+
+## (running — append new entries below as encountered)
