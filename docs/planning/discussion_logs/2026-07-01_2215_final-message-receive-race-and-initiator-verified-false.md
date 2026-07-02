@@ -491,7 +491,16 @@ Gates green: **928 tests pass, lint clean, typecheck clean, build clean.**
 
 ## Still pending (require Andre's go)
 
-1. **Publish cascade + operator reinstall — OUTWARD-FACING, not done.** The changed package is `@cello-protocol/daemon` (`0.0.19`). Shipping the fix to the live daemon means the `/cello-publish` version cascade (daemon `0.0.20` → the packages that bundle it: `cli`, `connect`) + tag push (→ CI → beta) + reinstall. Left for the publish step per the `/cello-publish` skill (it is the authority; do not publish from prose). Until then the fix is in source only — the **running EC2/local daemons are unchanged**.
+1. **Publish cascade — DONE to `beta` (2026-07-02).** Cascade computed from the graph: only
+   `core/daemon/src` changed, and `cli` is its sole dependent (`connect` is a socket shim that
+   does not pin daemon), so the cascade is **daemon + cli only**. Bumped `daemon 0.0.19→0.0.20`,
+   `cli 0.0.17→0.0.18` (cello-client `main`, version-bump commit `1146e7f`), tag **`v0.0.61`**
+   (next free counter — the tag had drifted to v0.0.60). CI green incl. `smoke-tag`; verified
+   against the published tarball (`daemon@0.0.20` `dist/` contains `handleReceive`,
+   `peekTerminalMarker`, `session.receive.buffer.evicted`, all F2-a reasons; `cli@0.0.18` pins
+   `daemon@0.0.20`, a real version). **STILL ON `beta` ONLY** — `latest`-promotion +
+   operator reinstall are the remaining outward steps (the default `npx …@latest` install path
+   does not see `beta`), so the **running EC2/local daemons are still unchanged**.
 2. **Live re-verification (the real acceptance test).** After publish+reinstall, re-run Agent-1 ↔ demo with the responder sealing immediately after its final message: blocking `cello_receive` must return the message, then the `session_sealed` terminal answer; the initiator log must show `session.sealed.signature.checked {verified:false, reason:"signer_key_not_held"}` (now legible).
 3. **F2-b — symmetric counterparty-primary provisioning (cross-repo, deferred).** Directory hands each party the other's FROST group primary so either closing order verifies. Frame field + directory change + client change (both directions) + version cascade. Candidate for the E2E-hardening phase or the M9-merge era. Not started.
 4. **F1-e — `since_seq` durable-transcript cursor.** Belongs in the command-surface milestone, not this bugfix (unchanged).
