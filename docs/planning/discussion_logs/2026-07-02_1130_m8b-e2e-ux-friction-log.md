@@ -419,4 +419,25 @@ available in ~9m48s."
 
 ---
 
+## F21 — Stuck `seal_pending_bilateral` is undiagnosable; unilateral rejection paths are silent · `error-message` · `confusion` (paired with FINDING-1)
+
+**Context:** FINDING-1. When the unilateral seal fails to finalize, `cello_close_session` returns
+`seal_pending_bilateral` with "retry if the session remains unsealed" — the same response forever,
+with no reason, no progress indicator, and no terminal state. The operator cannot tell whether it
+will eventually finalize, is retrying usefully, or is permanently dead. The directory's
+`#processSealUnilateral` (`directory-node.ts:3315`) has ~5 distinct rejection branches that each
+`return` silently (some log an error server-side, but nothing actionable reaches the client).
+
+**Friction:** A stuck seal is a black box. "Retry forever" is not a state. There is no way, from any
+operator surface, to learn *why* a unilateral seal isn't completing — I had to read directory source
+to even know a unilateral path exists. For a receipt the operator may legally rely on, silent
+non-completion is serious.
+
+**Improvement idea:** Give `cello_close_session` a terminal failure state with a reason surfaced from
+the directory's rejection branch (e.g. `unilateral_root_unverifiable`, `participants_unknown`,
+`session_state_lost`). Emit client + directory events for each unilateral-seal attempt and its
+outcome. Consider a bounded retry with a clear "gave up / manual escalation" result.
+
+---
+
 ## (running — append new entries below as encountered)

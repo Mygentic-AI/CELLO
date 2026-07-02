@@ -48,7 +48,7 @@ documented restore cascade (see plan doc + `infra/CLAUDE.md`), so they run last 
 | 13 | Cross-node presence | A | ⏸ BLOCKED (needs reconnect) | Same daemon-restart dependency as #12; will run together. Plan: while bootstrapped to eu1, initiate local Demo2 → EC2 demo agent (home=us1) to prove cross-node presence resolution. |
 | 14 | Suspension | B | ⬜ pending | |
 | 2 | Session interrupted (EC2) | D | ✅ PASS (protocol) / ⚠️ GAP (observability) | Daemon DID detect peer drop instantly: `session.liveness.changed liveness:"gone"` at 10:04:32.250Z (same second as kill). BUT not surfaced to operator — `cello_receive` timed out `content:null`, `cello_status` did not list it interrupted. Transport had upgraded relay→direct, so this tested direct-path detection. See F16. |
-| 6 | Unilateral seal (EC2) | D | 🔬 IN PROGRESS (grace wait) | **Part A** (stop `cello-demo` only): seal completed **BILATERAL**, both `live` — daemon co-signs autonomously; app-down ≠ unilateral (finding). **Part B** (stop `cello-daemon`): `cello_close_session` → `seal_counterparty_pending` — unilateral seal is gated by a **600s delivery-grace window**; SEAL leaf recorded; awaiting grace to retry. See F19/F20. |
+| 6 | Unilateral seal (EC2) | D | ⚠️ FINDING — unilateral seal never completed | **Part A** (stop `cello-demo`): seal is **BILATERAL** (daemon co-signs autonomously; app-down ≠ unilateral). **Part B** (stop `cello-daemon`): during grace → `seal_counterparty_pending` (600s window); after grace → **stuck in `seal_pending_bilateral`** across 4 retries / ~12 min, never finalizes; restoring the counterparty daemon didn't help. Directory HAS a working unilateral path (`#processSealUnilateral`) but `cello_close_session` never reaches it. **Possible client-side bug/gap.** See FINDING-1, F19/F20/F21. |
 | 9 | Node down during DKG | C | ⬜ pending | |
 | 10 | Node down during seal | C | ⬜ pending | |
 | 5 | Directory reconnect | C | ⬜ pending | |
@@ -180,6 +180,54 @@ window. Default `deliveryGraceSeconds = 600` (10 min) — `directory-node.ts:616
 returns a `seal_unilateral_too_early` frame with `remaining_seconds`
 (`directory-frames.ts:1126`), but the MCP guidance does NOT surface the number (friction F20).
 
-**Next:** keep EC2 daemon DOWN, wait out the ~600s grace window, retry `cello_close_session
-(47d83ad1)` → expect a UNILATERAL seal (counterparty marked absent/unilateral, not `live`), then
-restore EC2.
+**Part B outcome (after the 600s wait):** retried `cello_close_session(47d83ad1)` — response
+changed from `seal_counterparty_pending` to:
+```
+ok:false, reason:"seal_pending_bilateral"
+"Your SEAL leaf is recorded (auto-acknowledged) and the bilateral seal is completing, but it did
+ not finalize within the wait window. ... retry cello_close_session if the session remains unsealed."
+```
+Retried 4× over ~12 min — **always `seal_pending_bilateral`, never finalized.** Restored the EC2
+`cello-daemon` (counterparty back online) and retried — **still `seal_pending_bilateral`** (the
+restored daemon is a new instance; the old session `47d83ad1` is not resumed, so it cannot co-sign).
+The session is permanently unsealable via `cello_close_session`. No unilateral certificate obtained.
+
+Local daemon log confirms: my SEAL leaf was submitted at 10:13:31Z (`session.seal.leaf.submitted
+seq 3`), after the peer went `gone` (10:13:12Z). The counterparty never submitted a SEAL leaf (it
+was killed before closing). Nothing finalized after.
+
+**See FINDING-1 below** — the directory is capable of a genuine counterparty-absent unilateral seal
+(`#processSealUnilateral`, `directory-node.ts:3315`), but the client's close flow never reaches it.
+
+**EC2 restored** (daemon+demo active, standing receiver re-armed). Session `47d83ad1` left unsealed
+(stuck); phantom sessions `09fa513e`, `ffcba2f7` from earlier failed-initiate attempts also linger.
+
+---
+
+## FINDINGS (functional, beyond friction)
+
+### FINDING-1 — Unilateral seal never completes when a counterparty daemon crashes mid-session (client stuck in `seal_pending_bilateral`)
+
+**Severity:** high — directly exercises the "availability/redundancy is a first-class protocol
+concern" invariant. A party that loses its counterparty cannot obtain its receipt.
+
+**Repro:** session established Demo2↔EC2; `systemctl stop cello-daemon` on EC2 (counterparty crashes
+WITHOUT closing); wait past the 600s delivery-grace window; `cello_close_session` on the local side.
+
+**Expected:** after grace, a genuine unilateral seal — a certificate signed by the present party's
+threshold with the counterparty recorded ABSENT (the directory's `#processSealUnilateral` /
+SESSION-002 does exactly this: reconstructs client-carried seal leaves, verifies the root, FROST-
+notarizes with the counterparty absent, records `gone → ABSENT`).
+
+**Actual:** `cello_close_session` stays in `seal_pending_bilateral` indefinitely (4 retries /
+~12 min); no certificate is ever produced. Restoring the counterparty daemon does not help.
+
+**Analysis (hypotheses, unconfirmed):** the client's close flow is not transitioning from bilateral
+completion to sending a `seal_unilateral` request after grace; OR it sends one and the directory
+silently rejects it — `#processSealUnilateral` has many silent `return` paths (unknown session /
+`lastActivity == null`, participants unknown, carried-leaf reconstruction fail, root verify fail),
+none of which surface a reason to the client. Needs: client close-flow trace + directory logs
+showing whether a `seal_unilateral` frame was received and which guard rejected it.
+
+**Note:** this is distinct from #2 (interruption *detection* works). Here *detection* works
+(`liveness:gone`) but *unilateral finalization* does not.
