@@ -59,6 +59,53 @@ standing receiver armed after last restart).
 `09fa513e` + `ffcba2f7` (aborted-offer, my side thinks open); 3 old interrupted Demo2 sessions
 (`bc94ead6…`). None affect further testing.
 
+## CONSOLIDATED FIX BACKLOG (ranked)
+
+Derived from FINDING-1/2 + friction F1–F21. "Scope" = where the fix physically lands. Because the
+demo agent runs verbatim published code (see architecture-verified section), every `product` fix
+below helps ALL operators, not just the demo. Full detail per row is in the friction log.
+
+| # | Issue | Symptom | Fix location | Scope |
+|---|-------|---------|--------------|-------|
+| 1 | **F14 / FINDING-2 — standing receiver not re-armed** | Demo (any always-on receiver) goes deaf after ONE inbound session → `standing_receiver_unavailable`; both services still `active` (silent). | `cello-client` `core/daemon/src/session-node-manager.ts` async replacement ~:903 / `#createStandingReceiver` :2916. **+ make replacement failure LOUD.** | product (daemon) |
+| 2 | **FINDING-1 — unilateral seal never completes** | Counterparty daemon crashes mid-session → `cello_close_session` stuck in `seal_pending_bilateral` forever; no certificate. | client close-flow (does it emit `seal_unilateral`?) + directory `#processSealUnilateral` `directory-node.ts:3315` (silent rejects). | product (client+dir) |
+| 3 | **F13 — false success on initiate** | `initiate_session` returns `ok`+sessionId even when counterparty aborts the offer; failure only shows on later `send`. | client/daemon — await accept or return `pending`. | product (client) |
+| 4 | **F16 — counterparty-gone invisible** | Daemon detects `liveness:gone` instantly but operator gets a null `receive` timeout; `cello_status` omits it. | client/daemon — surface liveness in `receive` + `status`. | product (client) |
+| 5 | **F7 — directory change needs full daemon restart** | Changing `CELLO_DIRECTORY_URL` requires killing the shared daemon → drops all MCP conns + standing receivers. No `cello daemon restart`. | `cello-client` daemon lifecycle. | product (daemon) |
+| 6 | **F6/F12 — directory selection invisible** | No CLI/config to pick a node (only undocumented env var); `cello status` doesn't show the bound directory. | client CLI + `cello_status`. | product (client) |
+| 7 | **F20/F21 — grace/stuck-seal undiagnosable** | `seal_..._pending` hides `remaining_seconds`; stuck seal has no terminal state/reason. | client surface `remaining_seconds`; terminal failure reason from directory branch. | product (client+dir) |
+| 8 | **F1/F2 — CLI discoverability** | `cello refresh` absent from usage; no `--help` on subcommands; wrong flags parse as agent names. | `@cello-protocol/cli`. | product (CLI) |
+| 9 | **F5-CORR/F17/F18 — status/state UX** | `state` conflates lifecycle vs `current` selection; `interrupted_sessions` inclusion rule unclear; current-agent lost on reconnect. | daemon `cello_status` + connection state. | product (daemon) |
+| 10 | **F3/F4/F11/F15 — noise & dead ends** | `inclusion_proof` tool returns `not_implemented`; ambiguous `sealed_receipt` error; signaling-churn + `assignment.unverified` warnings look like failures on healthy sessions. | hide/mark tool; error messages; log levels. | product (client+dir) |
+| — | **F9/F10 — orphan/interrupted accumulation** | Stale MCP connections + old interrupted sessions pile up with no visibility/cleanup. | daemon. | product (daemon) |
+| — | **Systemd ordering** | ALREADY FIXED on deployed EC2 unit; only sync stale repo `demo/cello-demo.service`. | demo repo (trivial). | demo |
+| — | **F8 — `claude mcp get` flaky** | Not CELLO — Claude Code MCP CLI. | harness | n/a |
+
+**Recommended first fix:** #1 (F14) — highest user impact, known location, silent-failure smell,
+and it's been forcing an EC2 restart between every live test. It's a `cello-client` change → full
+SPARC + version-bump/publish cascade (per repo CLAUDE.md npm-publish rules).
+
+## POST-COMPACTION KICKOFF (read these first)
+
+1. **Plan/scope:** `docs/planning/discussion_logs/2026-07-01_0900_m8b-closed-e2e-testing-phase.md`
+   (the test matrix + which tests need a separate device).
+2. **This journal** — read **SESSION PAUSE STATE**, **CONSOLIDATED FIX BACKLOG**, **FINDINGS**,
+   and **Demo agent architecture — VERIFIED** above.
+3. **Friction log:** `docs/planning/discussion_logs/2026-07-02_1130_m8b-e2e-ux-friction-log.md`
+   (F1–F21, the co-equal deliverable — Andre: friction logging is as important as the testing;
+   keep appending, never omit a friction point).
+4. **First action = verify live state (nothing may have changed, but confirm):**
+   - Cluster health: 6 ECS services 1/1 + 6 DNS resolve + 3 relays (baseline was clean).
+   - Local daemon: `cello_status` → daemon running, directory_signaling connected, agents Demo2
+     (`8999608f…`) + Agent-1 (`c51bb002…`). Daemon was pid 83645 on **us1** (`CELLO_DIRECTORY_URL`
+     default). Current-agent selection may need re-`cello_use_agent`.
+   - EC2 demo agent (`i-0ad3e7c22470f266e`, `7ab98987…`): daemon+demo `active`, standing receiver
+     armed — but per F14 it goes deaf after ONE inbound session, so restart before each live test:
+     `stop demo → stop daemon → start daemon → wait 5s → start demo`.
+5. **Then:** await Andre's decision — **fix F14 first** (recommended, in `cello-client`) OR continue
+   the test matrix (#12/#13 need Andre's daemon-restart-onto-eu1; #14 needs the Telegram ops bot;
+   Phase C node-down + Phase E relay-failover need go-ahead + the documented restore cascade).
+
 ## Results table
 
 | # | Scenario | Phase | Status | Result summary |
