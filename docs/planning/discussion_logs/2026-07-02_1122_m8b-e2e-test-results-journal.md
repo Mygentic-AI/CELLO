@@ -65,6 +65,16 @@ Derived from FINDING-1/2 + friction F1–F21. "Scope" = where the fix physically
 demo agent runs verbatim published code (see architecture-verified section), every `product` fix
 below helps ALL operators, not just the demo. Full detail per row is in the friction log.
 
+> **CASCADE-1 STATUS (2026-07-02) — supersedes the per-row "DIAGNOSED" notes below.**
+> Shipped to **daemon 0.0.22 / cli 0.0.20** (now `latest`) and closed: **FINDING-1** (row 2),
+> **F14/FINDING-2** (row 1), **F13** (row 3), **F16** (row 4), **F20** (row 7), **F1/F2** (row 8),
+> **F15** (row 10). **Live-verified this session:** F14 (demo re-arm — two sequential sealed
+> sessions, no restart) and F16 (operator `counterparty_gone` + `active_sessions` liveness).
+> FINDING-1 operator-side re-verify = **T2, pending** (this session). New this session:
+> **F22** (fixed-port 4001 → only one concurrent session) and the **durable-escalation** follow-up
+> (FINDING-1 mark is in-memory only). Still OPEN (future design/directory batches): rows 5, 6, 9 +
+> F9/F10 and F21/offer-reject forwarding. Full record: [[2026-07-02_1640_m8b-cascade-1-implementation-and-publish]].
+
 | # | Issue | Symptom | Fix location | Scope |
 |---|-------|---------|--------------|-------|
 | 1 | **F14 / FINDING-2 — standing receiver not re-armed** | Demo (any always-on receiver) goes deaf after ONE inbound session → `standing_receiver_unavailable`; both services still `active` (silent). | **DIAGNOSED 2026-07-02 — see [[2026-07-02_1514_m8b-fix-briefs-cascade-1]] Brief 2.** Root cause: fixed-port EADDRINUSE on immediate re-arm + no retry + inbound path never calls ensure. | product (daemon) |
@@ -115,7 +125,7 @@ SPARC + version-bump/publish cascade (per repo CLAUDE.md npm-publish rules).
 | 12 | Any-directory routing | A | ⏸ BLOCKED (needs reconnect) | Requires restarting local daemon with `CELLO_DIRECTORY_URL=eu1/ap1` → drops MCP conns → needs Andre's `/mcp` reconnect. Deferred until Andre available. See friction F6/F7. |
 | 13 | Cross-node presence | A | ⏸ BLOCKED (needs reconnect) | Same daemon-restart dependency as #12; will run together. Plan: while bootstrapped to eu1, initiate local Demo2 → EC2 demo agent (home=us1) to prove cross-node presence resolution. |
 | 14 | Suspension | B | ⬜ pending | |
-| 2 | Session interrupted (EC2) | D | ✅ PASS (protocol) / ⚠️ GAP (observability) | Daemon DID detect peer drop instantly: `session.liveness.changed liveness:"gone"` at 10:04:32.250Z (same second as kill). BUT not surfaced to operator — `cello_receive` timed out `content:null`, `cello_status` did not list it interrupted. Transport had upgraded relay→direct, so this tested direct-path detection. See F16. |
+| 2 | Session interrupted (EC2) | D | ✅ PASS + RE-VERIFIED on 0.0.22 | Detection was always instant (`liveness:"gone"`); the F16 observability GAP is now FIXED. Re-verified 2026-07-02 on daemon 0.0.22: killing the EC2 counterparty (16:37:38Z) → `cello_receive_session` returns `reason:"counterparty_gone", liveness:"gone"` + guidance, and `cello_status.active_sessions` lists the session `liveness:"gone"` (both silent on 0.0.20). Bonus: F14 demo re-arm verified — 2 sequential sessions A→close→B, no restart, both sealed bilaterally (`ad6c7bb0…`,`56403328…`). See F16 (resolved) + F22 (residual). |
 | 6 | Unilateral seal (EC2) | D | ⚠️ FINDING — unilateral seal never completed | **Part A** (stop `cello-demo`): seal is **BILATERAL** (daemon co-signs autonomously; app-down ≠ unilateral). **Part B** (stop `cello-daemon`): during grace → `seal_counterparty_pending` (600s window); after grace → **stuck in `seal_pending_bilateral`** across 4 retries / ~12 min, never finalizes; restoring the counterparty daemon didn't help. Directory HAS a working unilateral path (`#processSealUnilateral`) but `cello_close_session` never reaches it. **Possible client-side bug/gap.** See FINDING-1, F19/F20/F21. |
 | 9 | Node down during DKG | C | ⬜ pending | |
 | 10 | Node down during seal | C | ⬜ pending | |

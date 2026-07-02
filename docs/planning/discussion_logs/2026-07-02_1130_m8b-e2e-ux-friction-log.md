@@ -336,6 +336,18 @@ session seals). Surface standing-receiver health in `cello status` (the parked
 `standing_receiver_ready` field should reflect reality). Emit an alarm-worthy log event when an
 agent that should be receiving has no armed receiver.
 
+**✅ SHIPPED + VERIFIED LIVE (daemon 0.0.22 / cli 0.0.20, 2026-07-02):** cascade-1 fix — re-arm on
+all teardown paths + ensure-on-demand on the inbound path + bounded retry + loud
+`session.standing_receiver.dead` + per-agent `standing_receiver_ready` in `cello_status`.
+**Re-verified on the demo agent this session** with two *sequential* sessions (A → clean close → B),
+NO restart between: both accepted, both sealed bilaterally (roots `ad6c7bb0…`, `56403328…`). On
+0.0.20 session B returned `standing_receiver_unavailable`. Deployment confirmed: demo daemon
+`ExecMainStart 16:19:55` > 0.0.22 install `16:19:54`; the new `standing_receiver.dead (attempts:4)`
+event fires on the demo. **Method note:** an initial re-verify that *killed* the demo daemon instead
+of closing the session did NOT exercise the fix (re-arm lives on the teardown path) — the valid test
+is sequential clean-close. **Residual → see F22 below:** fixed port 4001 means no armed receiver
+*during* an active session; recovery is teardown/on-demand only (fine sequential, gap concurrent).
+
 ---
 
 ## F15 — `assignment.unverified` warning fires on HEALTHY sessions, masking the real cause · `error-message` · `confusion`
@@ -375,6 +387,12 @@ missing.
 distinct `session_interrupted`/`counterparty_gone` result (not a null timeout); reflect live
 liveness in `cello_status` per session; consider a push/event so a waiting operator is told the
 peer went away rather than waiting out the full timeout.
+
+**✅ SHIPPED + VERIFIED LIVE (daemon 0.0.22 / cli 0.0.20, 2026-07-02):** `cello_receive_session` now
+returns `{content:null, reason:"counterparty_gone", liveness:"gone"}` with actionable guidance, and
+`cello_status.active_sessions` lists the session with `liveness:"gone"`. Re-verified operator-side
+this session (Agent-1 ↔ demo, counterparty daemon killed mid-session at 16:37:38Z → both surfaces
+reported it). Both were silent on 0.0.20.
 
 ---
 
@@ -470,6 +488,30 @@ outcome. Consider a bounded retry with a clear "gave up / manual escalation" res
 ---
 
 ## (running — append new entries below as encountered)
+
+## F22 — Standing receiver binds a fixed port (4001); no armed receiver exists *during* an active session · `stability` (F14-adjacent, concurrency)
+
+**Context:** Verifying the F14 re-arm fix on daemon 0.0.22. The standing receiver and the active
+session node share the fixed `CELLO_LISTEN_ADDR` port 4001. When an inbound session is accepted the
+standing receiver *becomes* the session and keeps 4001, so the immediate re-arm cannot bind
+(`session.node.create.failed — EADDRINUSE 0.0.0.0:4001`), retries 4× and fires
+`session.standing_receiver.dead`. A fresh receiver is created only once that session tears down (or
+on-demand for the next inbound). Observed live this session: during session `747c922f` the demo's
+re-arm died EADDRINUSE while the session was active; after a later session's clean close it re-armed
+and served the next one (F14 pass).
+
+**Friction / severity:** For **sequential** onboarding (one user connects, verifies, disconnects)
+this is fine — recovery-on-teardown covers it. But a **concurrent** second inbound arriving *while a
+session is active* hits a window with no armed receiver, and the on-demand ensure would itself face
+the same port conflict against the live session node. The demo is a production onboarding surface
+taking continuous stranger traffic, so two near-simultaneous signups is realistic. Not a regression
+(0.0.20 was worse — deaf after one, forever) and not blocking, but the fixed-port design effectively
+caps the demo at one concurrent session.
+
+**Improvement idea:** Give the standing receiver its own listen port distinct from session nodes (or
+bind ephemeral and advertise the address via the directory), so a ready receiver can coexist with an
+active session and concurrent inbound is served without a teardown dependency. Pairs with the
+durable-escalation follow-up already noted for FINDING-1.
 
 ---
 
