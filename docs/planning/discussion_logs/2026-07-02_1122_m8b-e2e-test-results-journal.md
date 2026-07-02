@@ -126,7 +126,7 @@ SPARC + version-bump/publish cascade (per repo CLAUDE.md npm-publish rules).
 | 13 | Cross-node presence | A | ⏸ BLOCKED (needs reconnect) | Same daemon-restart dependency as #12; will run together. Plan: while bootstrapped to eu1, initiate local Demo2 → EC2 demo agent (home=us1) to prove cross-node presence resolution. |
 | 14 | Suspension | B | ⬜ pending | |
 | 2 | Session interrupted (EC2) | D | ✅ PASS + RE-VERIFIED on 0.0.22 | Detection was always instant (`liveness:"gone"`); the F16 observability GAP is now FIXED. Re-verified 2026-07-02 on daemon 0.0.22: killing the EC2 counterparty (16:37:38Z) → `cello_receive_session` returns `reason:"counterparty_gone", liveness:"gone"` + guidance, and `cello_status.active_sessions` lists the session `liveness:"gone"` (both silent on 0.0.20). Bonus: F14 demo re-arm verified — 2 sequential sessions A→close→B, no restart, both sealed bilaterally (`ad6c7bb0…`,`56403328…`). See F16 (resolved) + F22 (residual). |
-| 6 | Unilateral seal (EC2) | D | ⚠️ FINDING — unilateral seal never completed | **Part A** (stop `cello-demo`): seal is **BILATERAL** (daemon co-signs autonomously; app-down ≠ unilateral). **Part B** (stop `cello-daemon`): during grace → `seal_counterparty_pending` (600s window); after grace → **stuck in `seal_pending_bilateral`** across 4 retries / ~12 min, never finalizes; restoring the counterparty daemon didn't help. Directory HAS a working unilateral path (`#processSealUnilateral`) but `cello_close_session` never reaches it. **Possible client-side bug/gap.** See FINDING-1, F19/F20/F21. |
+| 6 | Unilateral seal (EC2) | D | ✅ FINDING-1 FIXED (0.0.22) / ⚠️ NEW FINDING-3 (receipt unretrievable) | Re-verified 2026-07-02 on 0.0.22: `cello_close_session` on a peer-gone session (`747c922f`, past the 600s grace) now returns `ok:true, seal_type:"unilateral"` (root `80e61434…`) — the call that deadlocked in `seal_pending_bilateral` forever on 0.0.20. Local daemon log confirms `session.seal.completed` + `session.unilateral.certificate.verified`. **BUT** `cello_get_sealed_receipt` returns `sealed_receipt_not_found` (3× over ~2 min; bilateral control retrieves fine) — the unilateral path skips the bilateral `session.sealed.received` storage step, so the verified cert is never persisted to the receipt store. Operator gets success but cannot retrieve the receipt. See **FINDING-3**. |
 | 9 | Node down during DKG | C | ⬜ pending | |
 | 10 | Node down during seal | C | ⬜ pending | |
 | 5 | Directory reconnect | C | ⬜ pending | |
@@ -375,6 +375,45 @@ Full chain + fix spec: [[2026-07-02_1514_m8b-fix-briefs-cascade-1]] Brief 2.
 **Framing correction (Andre):** the demo agent is a live product surface, not just a test rig — so
 these are production onboarding defects. The demo is the canary; the fixes belong in the
 client/daemon/directory and help all operators.
+
+**✅ SHIPPED + VERIFIED (daemon 0.0.22, 2026-07-02):** re-arm fix live-verified on the demo this
+session (two sequential sessions, no restart — see friction F14 + results row #2). Residual: F22
+(fixed-port 4001 caps concurrent sessions).
+
+### FINDING-3 — Unilateral seal completes but its certificate is not retrievable (`cello_get_sealed_receipt` → `not_found`)
+
+**Severity:** high — negates the *purpose* of the FINDING-1 fix. The point of a unilateral seal is
+that a party who loses its counterparty can still obtain a **durable, retrievable receipt** it can
+rely on. Here the close succeeds but the receipt cannot be fetched afterward.
+
+**Repro (2026-07-02, daemon 0.0.22):** session `747c922f` peer-gone since 16:37:38Z; after the 600s
+grace, `cello_close_session` → `{ok:true, sealed_root:"80e61434…", seal_type:"unilateral"}`.
+`cello_get_sealed_receipt(747c922f)` → `{ok:false, reason:"sealed_receipt_not_found"}` on **3
+attempts over ~2 min**. Bilateral control (session `48a48833`, same run) retrieves its full
+certificate fine — so this is unilateral-specific, not a general retrieval bug or propagation lag.
+
+**Evidence (local daemon log — producer/consumer):**
+- Bilateral close emits `session.sealed.received` → `session.sealed.signature.checked` →
+  `seal.certificate.frontier.verified` — the receive-and-store path that populates the sealed-receipt
+  store the retrieval tool reads.
+- Unilateral close emits `session.unilateral.certificate.verified` **instead**, and **none** of the
+  `session.sealed.received` storage events. The cert is verified in-flight but never persisted.
+- Consumer `cello_get_sealed_receipt` reads that store → finds nothing → `not_found`.
+
+**Also:** the unilateral `cello_close_session` response is thin — `{sealed_root, seal_type}` only, with
+no `participants`/`legibility`/`attestation_mode` block (bilateral returns the full inline cert). So
+the operator gets **neither** an inline certificate **nor** a retrievable one.
+
+**Hypothesis (unconfirmed — needs code trace):** the unilateral finalization verifies the
+FROST-notarized root but omits the persist-to-receipt-store step the bilateral `sealed.received`
+handler performs. Fix likely in the client/daemon unilateral-close path (persist the verified
+unilateral cert to the same store) and/or the close response (return the full cert inline as
+bilateral does). Distinct from the reviewer's in-memory-escalation residual (that's about surviving a
+daemon restart between retries; this is about persisting/exposing the receipt at all).
+
+**Does NOT undo FINDING-1:** the seal now COMPLETES (it never did on 0.0.20). But the receipt is not
+yet a retrievable artifact, so the feature is functionally incomplete for its stated purpose. Paired
+friction: F23.
 
 ---
 

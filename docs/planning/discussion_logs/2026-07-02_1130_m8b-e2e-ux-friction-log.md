@@ -489,6 +489,28 @@ outcome. Consider a bounded retry with a clear "gave up / manual escalation" res
 
 ## (running — append new entries below as encountered)
 
+## F23 — Unilateral seal returns `ok` + root but the receipt is unretrievable and the response carries no certificate · `stability` · `error-message` (paired with FINDING-3)
+
+**Context:** Re-verifying FINDING-1 on daemon 0.0.22. `cello_close_session` on a peer-gone session
+past the grace window now succeeds unilaterally (`ok:true, seal_type:"unilateral", sealed_root:…`) —
+the deadlock is gone. But the operator then hits two dead ends: (a) the close response is thin
+(`sealed_root` + `seal_type` only — no `participants`/`legibility` block that the bilateral close
+returns inline), and (b) `cello_get_sealed_receipt` returns `sealed_receipt_not_found` (verified 3×).
+The daemon log shows the unilateral path verifies the cert (`session.unilateral.certificate.verified`)
+but skips the bilateral `session.sealed.received` persist step, so nothing lands in the receipt store.
+
+**Friction / severity:** The whole reason to close unilaterally is to walk away with a receipt you can
+rely on when your counterparty vanished. Getting `ok:true` + a root but then being unable to retrieve
+the certificate — via either the response or `cello_get_sealed_receipt` — is a "looks done, isn't"
+gap on a legally-relevant artifact. It reads as success but leaves the operator empty-handed.
+
+**Improvement idea:** Persist the verified unilateral certificate to the same store the bilateral
+`sealed.received` handler writes, so `cello_get_sealed_receipt` returns it; and/or return the full
+certificate inline in the unilateral `cello_close_session` response (participants with the
+counterparty recorded ABSENT, legibility block) exactly as the bilateral close does. See FINDING-3.
+
+---
+
 ## F22 — Standing receiver binds a fixed port (4001); no armed receiver exists *during* an active session · `stability` (F14-adjacent, concurrency)
 
 **Context:** Verifying the F14 re-arm fix on daemon 0.0.22. The standing receiver and the active
