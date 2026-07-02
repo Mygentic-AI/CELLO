@@ -38,6 +38,27 @@ documented restore cascade (see plan doc + `infra/CLAUDE.md`), so they run last 
 - Note: 3 stale interrupted sessions on Demo2 (counterparty `bc94ead6…`, from 2026-06-29/07-01) —
   leftovers from prior testing, not relevant to this phase.
 
+## SESSION PAUSE STATE (2026-07-02 ~12:30 CAT)
+
+**Done:** #8 (✅ known gap), #11 (✅), #2 (✅ protocol / ⚠️ observability gap), #6 (⚠️ FINDING-1 —
+unilateral seal never completes). 21 friction entries (F1–F21) + FINDING-1 logged. 5 commits.
+
+**Blocked on Andre:**
+- #12/#13 (any-directory / cross-node): need local daemon restarted onto `CELLO_DIRECTORY_URL=eu1`.
+  A plain `/mcp` reconnect is NOT enough (F12) — the daemon process must restart with the env set.
+  Full procedure in the #12/#13 detail section below.
+- #14 (suspension): needs the Telegram ops bot (or an admin path) — not driveable autonomously.
+- Phase C (#9/#10/#5 node-down) + Phase E (#4 relay failover): disruptive to shared dev infra;
+  awaiting explicit go-ahead. Restore cascade + pre/post health-check discipline documented.
+
+**Live infra state:** cluster untouched & healthy (baseline still valid — all 6 ECS 1/1, all DNS
+ok, 3 relays). Local daemon still on us1, pid 83645. EC2 demo agent healthy (daemon+demo active,
+standing receiver armed after last restart).
+
+**Loose ends (non-blocking):** stuck session `47d83ad1` (unsealable, FINDING-1); phantom sessions
+`09fa513e` + `ffcba2f7` (aborted-offer, my side thinks open); 3 old interrupted Demo2 sessions
+(`bc94ead6…`). None affect further testing.
+
 ## Results table
 
 | # | Scenario | Phase | Status | Result summary |
