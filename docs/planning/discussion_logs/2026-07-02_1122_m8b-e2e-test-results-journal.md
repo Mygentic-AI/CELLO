@@ -67,8 +67,8 @@ below helps ALL operators, not just the demo. Full detail per row is in the fric
 
 | # | Issue | Symptom | Fix location | Scope |
 |---|-------|---------|--------------|-------|
-| 1 | **F14 / FINDING-2 — standing receiver not re-armed** | Demo (any always-on receiver) goes deaf after ONE inbound session → `standing_receiver_unavailable`; both services still `active` (silent). | `cello-client` `core/daemon/src/session-node-manager.ts` async replacement ~:903 / `#createStandingReceiver` :2916. **+ make replacement failure LOUD.** | product (daemon) |
-| 2 | **FINDING-1 — unilateral seal never completes** | Counterparty daemon crashes mid-session → `cello_close_session` stuck in `seal_pending_bilateral` forever; no certificate. | client close-flow (does it emit `seal_unilateral`?) + directory `#processSealUnilateral` `directory-node.ts:3315` (silent rejects). | product (client+dir) |
+| 1 | **F14 / FINDING-2 — standing receiver not re-armed** | Demo (any always-on receiver) goes deaf after ONE inbound session → `standing_receiver_unavailable`; both services still `active` (silent). | **DIAGNOSED 2026-07-02 — see [[2026-07-02_1514_m8b-fix-briefs-cascade-1]] Brief 2.** Root cause: fixed-port EADDRINUSE on immediate re-arm + no retry + inbound path never calls ensure. | product (daemon) |
+| 2 | **FINDING-1 — unilateral seal never completes** | Counterparty daemon crashes mid-session → `cello_close_session` stuck in `seal_pending_bilateral` forever; no certificate. | **DIAGNOSED 2026-07-02 — 100% client-side; directory behaved correctly. See [[2026-07-02_1514_m8b-fix-briefs-cascade-1]] Brief 1.** Retry path can never reach the unilateral escalation (`daemon.ts:2421` vs `:2429`). | product (daemon) |
 | 3 | **F13 — false success on initiate** | `initiate_session` returns `ok`+sessionId even when counterparty aborts the offer; failure only shows on later `send`. | client/daemon — await accept or return `pending`. | product (client) |
 | 4 | **F16 — counterparty-gone invisible** | Daemon detects `liveness:gone` instantly but operator gets a null `receive` timeout; `cello_status` omits it. | client/daemon — surface liveness in `receive` + `status`. | product (client) |
 | 5 | **F7 — directory change needs full daemon restart** | Changing `CELLO_DIRECTORY_URL` requires killing the shared daemon → drops all MCP conns + standing receivers. No `cello daemon restart`. | `cello-client` daemon lifecycle. | product (daemon) |
@@ -317,6 +317,16 @@ silently rejects it — `#processSealUnilateral` has many silent `return` paths 
 none of which surface a reason to the client. Needs: client close-flow trace + directory logs
 showing whether a `seal_unilateral` frame was received and which guard rejected it.
 
+**RESOLVED — ROOT CAUSE CONFIRMED (2026-07-02 15:14, diagnosis pass):** the FIRST hypothesis, and
+it is 100% client-side; the directory behaved correctly throughout. The unilateral escalation
+(`daemon.ts:2429+`) is reachable ONLY on the same call that first submits the SEAL leaf. Every
+retry gets `responder_seal_already_submitted` from the idempotency mark
+(`session-node-manager.ts:2062`), which carries no `reportedRootHex`, so the retry dead-ends at
+`daemon.ts:2421` → `seal_pending_bilateral`, never reaching `:2429`. The client never sent a
+second `seal_unilateral` frame (zero "unilateral" strings in the entire local daemon log).
+Full producer/consumer chain, falsification checks, fix spec, and red-first tests:
+[[2026-07-02_1514_m8b-fix-briefs-cascade-1]] Brief 1.
+
 **Note:** this is distinct from #2 (interruption *detection* works). Here *detection* works
 (`liveness:gone`) but *unilateral finalization* does not.
 
@@ -329,6 +339,16 @@ session (see friction F14, confirmed against `session-node-manager.ts:903`), the
 exactly **one** new user per daemon lifetime, then returns `standing_receiver_unavailable` to
 everyone after — a silently-broken first experience with no visible cause. Both systemd services
 report `active` throughout.
+
+**ROOT CAUSE CONFIRMED (2026-07-02 15:14, diagnosis pass):** NOT a silently-failing async
+replacement — the replacement fired and logged `session.node.create.failed — EADDRINUSE
+0.0.0.0:4001` (EC2 journald 09:02:47.911). Three compounding gaps: (1) fixed-port collision —
+the consumed receiver keeps `CELLO_LISTEN_ADDR` port 4001 as the session node, so the immediate
+re-arm can never bind; (2) `#ensureStandingReceiver` does not retry after a create failure;
+(3) the inbound path (`waitForStandingReceiver`, `daemon.ts:3220`) only polls readiness — it
+never invokes ensure, and `destroySessionNode` doesn't re-arm when the port frees. Local dev
+never repros because non-fixed-port receivers bind ephemeral loopback (`daemon.ts:262-266`).
+Full chain + fix spec: [[2026-07-02_1514_m8b-fix-briefs-cascade-1]] Brief 2.
 
 **Where the fixes land (evidence-based):**
 - **Standing-receiver re-arm (critical):** `cello-client` `core/daemon/src/session-node-manager.ts`

@@ -324,6 +324,13 @@ replacement path.
 around :903 / `#createStandingReceiver` :2916+). Must also fail LOUD — the silent failure is what
 made this invisible.
 
+**ROOT-CAUSE UPDATE (2026-07-02 15:14):** the replacement DID fire and DID log —
+`session.node.create.failed — EADDRINUSE 0.0.0.0:4001` (EC2 journald, 09:02:47.911). The consumed
+receiver keeps the fixed `CELLO_LISTEN_ADDR` port as the session node, so the immediate re-arm
+cannot bind; there is no retry after failure; and the inbound path only polls readiness without
+ever re-invoking ensure (nor does session teardown re-arm when the port frees). Diagnosis + fix
+spec: [[2026-07-02_1514_m8b-fix-briefs-cascade-1]] Brief 2.
+
 **Improvement idea:** Re-arm the standing receiver immediately after it is consumed (and after each
 session seals). Surface standing-receiver health in `cello status` (the parked
 `standing_receiver_ready` field should reflect reality). Emit an alarm-worthy log event when an
