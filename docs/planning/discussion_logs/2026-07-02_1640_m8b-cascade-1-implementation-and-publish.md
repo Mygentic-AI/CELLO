@@ -45,8 +45,10 @@ brief (Brief 1: clean + one hardening; Brief 2: one IMPORTANT finding — the
   `session.standing_receiver.dead`, `counterparty_unavailable`, `counterparty_gone`, and the
   seal-retry code; `cli@0.0.19` pins `daemon@0.0.21` (no `workspace:*`); `cli` dist contains
   `cli-args.js`.
-- **NOT promoted to latest** — operator-run step, awaiting Andre's go
-  (`npm dist-tag add @cello-protocol/{connect@0.0.53,cli@0.0.19,daemon@0.0.21,...} latest`).
+- **Promoted to `latest`** (Andre, 2026-07-02, after the v0.0.63 follow-ups): cli 0.0.20 and
+  daemon 0.0.22 newly tagged; connect 0.0.53 / client 0.0.41 / crypto 0.0.14 / transport 0.0.11 /
+  protocol-types 0.0.11 already current. All seven verified via `npm view @latest`. The default
+  operator install path now serves the cascade-1 fixes.
 
 ## Demo agent updated (i-0ad3e7c22470f266e, us-east-1)
 
