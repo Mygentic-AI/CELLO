@@ -3,7 +3,7 @@ name: "Final-Message Receive Race + Initiator-Side sealed.signature.checked veri
 type: discussion
 date: 2026-07-01
 topics: [M8B, seal, bilateral-seal, cello_receive, transcript, FROST, initiator, verified-false, investigation, demo-agent, relay, live-session]
-status: diagnosed
+status: implemented-f2b-deferred
 description: >
   Two findings from a live post-maintenance verification session (Agent-1 ↔ EC2 demo agent,
   session 05d8d39a) on 2026-07-01. (1) The counterparty's final message was received, decrypted,
@@ -16,6 +16,11 @@ description: >
 
 # Final-Message Receive Race + Initiator-Side `verified:false`
 
+> **IMPLEMENTED 2026-07-02 — F1 (all parts) + F2-a shipped to cello-client `main`
+> (commit `0df1bbb`); F2-b remains a deferred cross-repo story. See the
+> "Implementation" section at the very bottom for exactly what landed and what is
+> still pending (publish cascade + live re-verification).**
+>
 > **RESOLVED 2026-07-02 — both findings diagnosed at the code level.** See the
 > "Resolution" section at the bottom. Finding 2 is benign-by-design (accept-without-verify
 > when the seal signer's key is not held locally) with a misleading event shape; Finding 1
@@ -463,3 +468,30 @@ Publish cascade for F1-a/a2/b/c: daemon `0.0.20` + cli + connect bumps (client-r
 - Post-fix verification for F1-a requires a live re-run (falsification target 3's reproduction
   becomes the acceptance test: responder seals immediately after its final message → blocking
   `cello_receive` returns the message, then the sealed-terminal answer).
+
+---
+
+# Implementation (2026-07-02)
+
+Shipped to **cello-client `main`, commit `0df1bbb`** (all changes in `core/daemon`).
+Gates green: **928 tests pass, lint clean, typecheck clean, build clean.**
+
+## What landed
+
+| Fix | Change | File |
+|---|---|---|
+| **F1-a** | `cello_receive` now BLOCKS up to `timeout_ms` (default 30000), polling the received-content buffer, instead of a single non-blocking `buf.shift`. The daemon port had dropped the blocking receive the retired adapter shipped. | `daemon.ts` (`handleReceive`) |
+| **F1-a2** | `cello_receive_session` is a **true alias** of the same handler — removed from the `not_implemented` stub list (**collapse**, as recommended). One implementation, both names; the e2e tests targeting `cello_receive_session` are now live enforcers. | `daemon.ts` |
+| **F1-b** | `destroySessionNode(reason:"sealed")` records a terminal marker (with the count of unread buffered messages) **before** `#evictSessionCaches` wipes the buffer, so a blocking receive that raced the seal returns `{type:"session_sealed", unread_count, sealed_root}` instead of hanging. Content stays durable; guidance points to `cello_get_transcript`. | `session-node-manager.ts` (`#sessionTerminal`, `peekTerminalMarker`, `getSealedRootHex`) |
+| **F1-c** | `#evictSessionCaches` logs `session.receive.buffer.evicted { unreadCount }` when it drops a non-empty buffer (fires on both destroy and retire paths). | `session-node-manager.ts` |
+| **F1-d** | Transcript-after-seal documented as the contract — the receive tool's terminal + timeout guidance strings now direct callers to `cello_get_transcript`. | `daemon.ts` (guidance) |
+| **F2-a** | `verifyBilateralSealCertificate` returns a `reason` on every `verified:false` branch (`non_frost_certificate` / `no_frost_share` / `commitments_decode_failed` / `own_primary_unavailable` / `signer_key_not_held`); the daemon logs it on `session.sealed.signature.checked`. Stale "follow-on" comment corrected to the first-closer framing. | `session-ceremony.ts`, `daemon.ts` |
+
+**Tests added:** `session-ceremony-verify.test.ts` (F2-a reason contract, share-free branches + fail-closed) and four `it` blocks in `daemon-004-ipc.test.ts` (F1-a blocking-arrival, F1-a timeout, F1-a2 live alias, F1-b/c seal terminal + eviction log).
+
+## Still pending (require Andre's go)
+
+1. **Publish cascade + operator reinstall — OUTWARD-FACING, not done.** The changed package is `@cello-protocol/daemon` (`0.0.19`). Shipping the fix to the live daemon means the `/cello-publish` version cascade (daemon `0.0.20` → the packages that bundle it: `cli`, `connect`) + tag push (→ CI → beta) + reinstall. Left for the publish step per the `/cello-publish` skill (it is the authority; do not publish from prose). Until then the fix is in source only — the **running EC2/local daemons are unchanged**.
+2. **Live re-verification (the real acceptance test).** After publish+reinstall, re-run Agent-1 ↔ demo with the responder sealing immediately after its final message: blocking `cello_receive` must return the message, then the `session_sealed` terminal answer; the initiator log must show `session.sealed.signature.checked {verified:false, reason:"signer_key_not_held"}` (now legible).
+3. **F2-b — symmetric counterparty-primary provisioning (cross-repo, deferred).** Directory hands each party the other's FROST group primary so either closing order verifies. Frame field + directory change + client change (both directions) + version cascade. Candidate for the E2E-hardening phase or the M9-merge era. Not started.
+4. **F1-e — `since_seq` durable-transcript cursor.** Belongs in the command-surface milestone, not this bugfix (unchanged).
