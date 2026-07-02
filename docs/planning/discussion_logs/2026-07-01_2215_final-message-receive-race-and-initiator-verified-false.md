@@ -3,7 +3,7 @@ name: "Final-Message Receive Race + Initiator-Side sealed.signature.checked veri
 type: discussion
 date: 2026-07-01
 topics: [M8B, seal, bilateral-seal, cello_receive, transcript, FROST, initiator, verified-false, investigation, demo-agent, relay, live-session]
-status: open-investigation
+status: diagnosed
 description: >
   Two findings from a live post-maintenance verification session (Agent-1 ↔ EC2 demo agent,
   session 05d8d39a) on 2026-07-01. (1) The counterparty's final message was received, decrypted,
@@ -16,7 +16,13 @@ description: >
 
 # Final-Message Receive Race + Initiator-Side `verified:false`
 
-## ⚠️ Status: OPEN INVESTIGATION
+> **RESOLVED 2026-07-02 — both findings diagnosed at the code level.** See the
+> "Resolution" section at the bottom. Finding 2 is benign-by-design (accept-without-verify
+> when the seal signer's key is not held locally) with a misleading event shape; Finding 1
+> is mechanism (1)+(2): no blocking receive exists, and seal teardown evicts unread buffered
+> content. Fix proposals are in the Resolution section, pending Andre's decision.
+
+## ⚠️ Status: OPEN INVESTIGATION (superseded — kept for the record)
 
 This log captures two anomalies observed in a **real** live session so they can be investigated
 later. Neither is a protocol-correctness or data-integrity failure — the seal was bilateral, the
@@ -225,3 +231,145 @@ mechanisms above is real, since that decides whether the delay would ever have m
    teardown or document transcript-after-seal as the contract.
 3. Attempt reproduction: run a fresh Agent-1 ↔ demo session where the responder seals immediately
    after its final message; confirm both the receive race and the initiator `verified:false` recur.
+
+---
+
+# Resolution (2026-07-02)
+
+Both findings diagnosed at the code level against cello-client daemon `0.0.19` (repo main
+`cfc6af9` — verified: the last `daemon.ts` change, `2817f9f`, predates the publish commit, so
+source == running binary). Evidence: `~/.cello/daemon.log`, EC2 `journalctl -u cello-daemon`
+via SSM, and historical sessions `0593e9e1` / `a001ca74` / `7f50d4a1`.
+
+## Finding 2 — VERDICT: benign-by-design, misleadingly logged. Not a tolerated failure.
+
+`verified:false` does **not** mean "a signature check ran and failed." It means "this party
+holds no key it can independently verify the seal signature against, so it accepted the
+certificate on the strength of the authenticated Noise channel." A genuinely failed check
+takes a different path entirely: `verifyBilateralSealCertificate` returns
+`{ ok:false, reason:"signature_invalid" }`, the handler logs `session.sealed.signature.invalid`
+and **returns early — the session is never marked sealed** (`daemon.ts:1760-1763`). There is
+no tolerated-failure path.
+
+### The full produce/consume chain
+
+**Consume path (what ran on the initiator):**
+1. Demo (session responder) closed → demo daemon ran the FROST seal ceremony with **its own
+   group key** (EC2 log: `session.seal.ceremony.participated ok:true` +
+   `session.seal.frost.signature.sent`; local log shows Agent-1 only auto-acked —
+   `session.seal.autoacknowledged` — and never ran a ceremony).
+2. `session_sealed` arrives on Agent-1's stream carrying `signer_pubkey` = **demo's primary**.
+3. `verifyBilateralSealCertificate` (`session-ceremony.ts:511-565`): signer ≠ Agent-1's own
+   primary (loaded fine from its share); falls to the counterparty check.
+4. `counterpartyPrimaryHex` comes from the session record's `counterparty_primary_pubkey` —
+   **NULL** on Agent-1's side → final branch → `{ ok:true, verified:false }` (line 555-558,
+   the documented Noise-channel-accept).
+
+**Produce path (why the precondition was absent):** `recordCounterpartyPrimary` has exactly
+**one caller** — `acceptInboundAssignment` (`daemon.ts:3272-3274`), the **responder-side**
+inbound-accept, which records the *session initiator's* primary off the FROST-signed
+assignment's `signer_pubkey`. The **session-initiator side has no producer at all** — an
+initiator never learns/records the responder's primary.
+
+**The gap:** verifiability is asymmetric by construction. Whenever the **session responder**
+drives the seal (its group key signs), the **session initiator** cannot channel-independently
+verify — it accepts on Noise. The reverse direction works (responder recorded the initiator's
+primary at accept time).
+
+**Why both sides still converged on the same root:** the DOD-LEG-2 frontier verification
+(`seal.certificate.frontier.verified parties:2`) is independent of the FROST-cert check — it
+re-verifies per-leaf **sender signatures**, which both sides can always do.
+
+### Answers to the falsification targets
+
+1. **Always, not timing:** deterministic. Live-proof session `0593e9e1` (2026-06-30, local
+   initiated / demo closed) logged the same `verified:false` locally. Loopback sessions
+   `a001ca74` / `7f50d4a1` (responder accepted inbound → counterparty primary recorded) logged
+   `verified:true` **twice each** — both listeners verified. The pattern is fully explained by
+   "who closed" × "who has a recorded counterparty primary."
+2. **It checks the FROST threshold signature** over the legibility-bound TBS. The co-occurrence
+   with `finalMessageAnswered:false` is coincidence — unrelated fields on the same frame.
+3. **The frontier check verifies independently** (per-leaf sender sigs). A real
+   `signature_invalid` DOES gate the seal (early return, never sealed). The only
+   accept-without-check is the key-not-held branch, which is deliberate and commented.
+
+Also ruled out: share-load failure (paths returning `verified:false` at
+`session-ceremony.ts:529/539/541`) — in the loopback sessions Agent-1's listener returned
+`verified:true`, which requires its share to load successfully.
+
+### Proposed fixes (Finding 2)
+
+- **F2-a (observability, client-only, small):** make the unverified-accept legible. Return and
+  log a `reason` on every `verified:false` branch — e.g. `signer_key_not_held`, `no_frost_share`,
+  `non_frost_certificate` — so `session.sealed.signature.checked {verified:false,
+  reason:"signer_key_not_held"}` can never again read as a failed check. Also fix the stale
+  comment block in `session-ceremony.ts` (it still describes responder-verify as a follow-on;
+  responder-verify is built — the missing symmetry is the initiator side).
+- **F2-b (hardening, protocol addition, story-sized, cross-repo):** close the asymmetry — the
+  directory includes the **responder's** `primary_pubkey` in the session_assignment returned to
+  the initiator (it already resolves primaries via `#resolvePrimaryPubkey`); the initiator-side
+  assignment path records it via the existing `recordCounterpartyPrimary`. Then
+  `verifyBilateralSealCertificate`'s existing counterparty branch verifies responder-driven
+  seals, and SI-003 tightens for free (an unknown signer becomes
+  `signer_not_a_session_participant` → REJECT instead of accept-unverified). Needs a frame
+  field + directory change + client change + version cascade — a proper story, candidate for
+  the E2E-hardening phase or the M9-merge era.
+
+## Finding 1 — VERDICT: mechanism (1) is the proximate cause; mechanism (2) makes it permanent; mechanism (3) falsified.
+
+**Mechanism (3) falsified:** the message WAS enqueued into the live receive buffer.
+`#appendVerifiedContent` pushes to `#receivedContent` and then immediately emits
+`session.content.received` (`session-node-manager.ts:2367-2376`) — the 19:22:33.874 event
+proves the push happened.
+
+**Mechanism (1) confirmed — and worse than suspected: no blocking receive exists anywhere.**
+- The daemon's `cello_receive` handler (`daemon.ts:4139-4167`) reads **only** `session_id`.
+  The `timeout_ms` the MCP shim forwards is **silently ignored** — the handler is a
+  non-blocking `buf.shift()` (`takeReceivedContent`).
+- `cello_receive_session` — the "alias" the shim exposes with a `timeout_ms` parameter — hits
+  the `SESSION_TOOLS_REQUIRING_AGENT` **stub** (`daemon.ts:2112-2130`) and returns
+  `not_implemented` for every call with a current agent.
+- So the guidance string *"or use the blocking receive variant"* directs the client to a tool
+  that does not exist. The client polled non-blocking, got nulls before 33.874, followed the
+  guidance into a dead end, and stopped. Nothing wakes it (the content-arrival push is channel
+  Gap 3-5; the shim discards all notification frames anyway — Gap 2).
+
+**Mechanism (2) confirmed as the finisher:** `destroyNode(reason:"sealed")` →
+`#evictSessionCaches` → `#receivedContent.delete(key)` (`session-node-manager.ts:1249, 1295`)
+— unread buffered content is **silently** evicted at seal teardown. After 19:22:35.528 no poll
+could ever return seq 7 live. Durability held (DB transcript, `undecryptable:0`) — this is a
+delivery/UX gap, not data loss.
+
+**The 2s-delay assessment in this doc is confirmed:** the polls had already stopped before the
+message arrived; a demo-side delay would not have helped. Correctly rejected.
+
+### Proposed fixes (Finding 1)
+
+- **F1-a (the fix, daemon-only, no MCP-surface change):** implement blocking receive in the
+  existing `cello_receive` handler — honor the `timeout_ms` the shim already sends. Empty
+  buffer → register a waiter; resolved by the next `#appendVerifiedContent` push, by seal/
+  teardown (terminal answer: `{ ok:true, content:null, session_sealed:true, guidance:"session
+  sealed — read cello_get_transcript for the full history" }`), or by timeout. Bounded, never
+  hangs (INV-6 spirit). This kills the race for live clients AND makes the existing guidance
+  honest. Publish cascade: daemon 0.0.20 + cli + connect bumps.
+- **F1-b (observability, one line):** `#evictSessionCaches` logs
+  `session.receive.buffer.evicted { unreadCount }` when it drops a non-empty buffer — the
+  silent-drop of deliverable content becomes diagnosable.
+- **F1-c (contract, docs):** document transcript-after-seal as the contract regardless:
+  a sealed session's full history is always available via `cello_get_transcript`.
+- **F1-d (strategic, already parked in the command-surface design doc):** the `since_seq`
+  cursor on `cello_receive` reading from the durable transcript — makes post-seal catch-up
+  first-class and demotes the in-memory buffer to an optimization. Load-bearing for reconnect
+  and the two-session group-chat model; build it there, not here.
+- **Explicitly rejected:** the demo-side 2s pre-seal delay (masks the client bug; confirmed
+  ineffective for the observed mechanism).
+
+### What could not be proven from code alone
+
+- That Agent-1's session row for `05d8d39a` has `counterparty_primary_pubkey = NULL` was
+  proven by producer analysis (single caller, responder-only) + behavioral evidence across four
+  sessions — not by reading the encrypted SQLCipher row directly. A direct DB read would be
+  confirmatory but adds nothing the pattern doesn't already pin.
+- Post-fix verification for F1-a requires a live re-run (falsification target 3's reproduction
+  becomes the acceptance test: responder seals immediately after its final message → blocking
+  `cello_receive` returns the message, then the sealed-terminal answer).
