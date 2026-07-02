@@ -126,9 +126,15 @@ Net: FINDING-5's `frontier_leaves` is the ONLY directory change in the cascade-2
 - **Stub-session trap fixed:** `recordSealCertificate` is a silent-no-op `UPDATE` without a row;
   `recordSealCertificateEnsuringRow` INSERT-OR-IGNOREs a stub row (counterparty = notification
   `present_pubkey`) first.
-- Unit tests: `finding-6-absent-receipt.test.ts` (stub-row persistence + the pure flip). The named LIVE
-  check (B reconnect post-restart → `cello_get_sealed_receipt(B)` returns the cert) is task 4.
-- `feature-dev:code-reviewer` running on `946ab5d`.
+- Unit tests: `finding-6-absent-receipt.test.ts` (stub-row persistence + the pure flip + ratchet). The
+  named LIVE check (B reconnect post-restart → `cello_get_sealed_receipt(B)` returns the cert) is task 4.
+- **Reviewed (`feature-dev:code-reviewer` on `946ab5d`):** KERNEL invariant, stub-row/counterparty,
+  flip semantics, ordering — all clean. One correctness bug found + fixed (`18227df`): 3b was not
+  idempotent across notification re-delivery (a re-delivered notification re-persisted the 'absent'
+  snapshot, regressing an already-'recovered' receipt; the duplicate gets already_bilateral→rejected,
+  so nothing restored it). Fix: ONE-WAY RATCHET — `hasAbsentParticipant` guards the 3b persist; skip
+  the write if the stored cert is already upgraded (no 'absent' participant). Gate green (1457 tests).
+- **All FINDING-6 commits:** `946ab5d` (3a+3b) + `18227df` (ratchet).
 
 ## Batch publish / deploy / live-verify — NOT STARTED (task 4) — HUMAN-GATED
 
@@ -153,13 +159,26 @@ new field). **Deploy the directory BEFORE promoting the new client to latest** s
 meets an old (no-frontier_leaves) directory (avoids the FINDING-5 back-compat window). No Flyway
 migration (no schema change) → `OpsAgentExpectedMigrationVersion` unchanged.
 
-**Human-gated sequence (needs Andre + coordination owner):**
-1. Rebase `m8b-cascade-2` onto current main (both repos), merge to main. Coordinate with the concurrent
-   coder (push order — M5 rule: push after each merge).
-2. Version bump commit LAST + tag v0.0.65 (Andre's go via `/cello-publish`) → beta.
-3. Directory `deploy.sh` (Andre's go; ~30 min; disruptive to shared dev infra).
-4. Update EC2 demo agent + local stack to daemon 0.0.24/cli 0.0.22.
-5. LIVE verify (coordination owner holds infra + demo agent; do NOT perturb unannounced):
+**AUTONOMOUS RUN — authorized by Andre 2026-07-02 night.** "Publish and deploy to the directory; live
+verification will wait." Main is FROZEN (other coder finished+deployed+tested); work directly on main.
+Scope: publish to **beta** + deploy the directory. Do NOT promote to `latest`; do NOT live-verify (both
+need Andre). Directory code deploys via the **`cello-directory-pipeline`** (image swap on push to main),
+NOT `deploy.sh` (no CFN change). Sequence:
+1. cello-client: merge `m8b-cascade-2` → main (ff — main == branchpoint 15c3d29). trustless: merge
+   `m8b-cascade-2` → main (merge commit; main moved to c64cd9e3, docs-only, no conflict).
+2. Version bump (cello-client main): daemon 0.0.24, cli 0.0.22 (connect/client/crypto/transport/
+   protocol-types unchanged); `pnpm install`; commit LAST; push main; tag **v0.0.65**; push tag → CI
+   → beta. Monitor `smoke-tag`; verify beta==local + grep daemon@0.0.24 dist for the 4 new symbols.
+3. Directory deploy: PRE-CHANGE health check (all 6 ECS 1/1 + 6 DNS) → push trustless main → monitor
+   `cello-directory-pipeline` (CodeBuild → StagingDeploy us1 → ProductionDeploy eu+ap; poll ECS
+   `rolloutState` every 30s, ≤15 min/region; circuit breaker on) → **post-directory-redeploy cascade
+   (infra/CLAUDE.md): restart the relay in all 3 regions + re-sign manifests** (`sign-manifest.sh`) so
+   the cluster stays functional → POST-CHANGE health check → update `infra/STATE.md`.
+4. STOP. Leave a status. Do NOT promote latest, do NOT run the disruptive kill-us1 / B-reconnect live
+   tests (task-4 live verification — Andre + coordination owner).
+
+**Deferred to Andre (NOT autonomous):**
+- LIVE verify (coordination owner holds infra + demo agent; do NOT perturb unannounced):
    - **FINDING-4:** down the us-east-1 directory ECS task → client fails over to eu1/ap1, comes online,
      completes a real session + seal on the fallback (ALSO runs #12/#13/#5). Restore per `infra/CLAUDE.md`
      (relay re-register + sign-manifest.sh). If session/seal fails on the fallback even though signaling
