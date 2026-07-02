@@ -492,7 +492,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | IAM Instance Profile | cello-agent-ssm-role |
 | IAM Role | cello-agent-ssm-role |
 | Secrets Manager Key Path | cello/dev/demo-agent/identity-key |
-| Agent pubkey (K_local) | bc94ead650acf8ed21747d9571ef0aa7fc9bfba5511dfeca13bb6cfa9fdc0b61 (current; the published demo identity per M7 write-up. Prior: 12ccbfd5… / c94dfa2e… directory agent_id — superseded) |
+| Agent pubkey (K_local) | **7ab98987de127b81dc4013d8c0b7e70b65f95db647e0977d492f41566ec1f910** (agent `default`; CURRENT — confirmed live in the demo daemon log 2026-07-02 ~19:19 UTC, transacts sessions). Prior: `bc94ead6…` (was labelled "current" but is now STALE — an `initiate_session` to bc94 returns `target_offline`); earlier `12ccbfd5…` / `c94dfa2e…`. Always confirm the live identity from the demo daemon log (`agent.online` event), not this line. |
 | Daemon state dir (CELLO_DIR) | /opt/cello-demo/.cello — SQLCipher `sessions.db` (whole-DB encrypted, post-PERSIST-002). The old `/opt/cello-demo/data/client.db` is a dead M6 leftover (unused). |
 | @cello-protocol versions | **daemon 0.0.23 / cli 0.0.21 / connect 0.0.53** (+ crypto 0.0.14, transport 0.0.11, client 0.0.41, protocol-types 0.0.11) — updated 2026-07-02 ~21:05 UTC (M8B cascade-2 FINDING-3: unilateral seal persists+returns legibility receipt; tag v0.0.64; connect unchanged — no daemon dep). Prior: 0.0.22/0.0.20 ~16:20 UTC (cascade-1 review follow-ups, v0.0.63); 0.0.21/0.0.19 (cascade 1, v0.0.62) |
 | Architecture | M7 shim+daemon: `cello-daemon.service` (the node — key, SQLCipher DB, libp2p, directory connection) + `cello-demo.service` (the app → spawns `cello-mcp` → daemon socket). Both active. |
