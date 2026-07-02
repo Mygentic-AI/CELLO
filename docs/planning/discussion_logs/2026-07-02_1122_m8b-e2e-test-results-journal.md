@@ -225,6 +225,26 @@ was killed before closing). Nothing finalized after.
 
 ---
 
+## Demo agent architecture — VERIFIED (2026-07-02)
+
+Confirmed the demo agent runs the real shipped stack, not a divergent build (Andre wanted his
+mental model checked):
+- **EC2 installed versions == npm `latest` exactly:** connect 0.0.53, client 0.0.41, daemon 0.0.20,
+  cli 0.0.18, crypto 0.0.14, transport 0.0.11. Daemon `ExecStart` runs the published
+  `@cello-protocol/daemon` package in `node_modules` (not vendored/dev).
+- **No forked internals:** `demo/src/index.ts` imports only the MCP SDK + its own
+  `message-handler.js`; it spawns the published `cello-mcp` (connect) shim over stdio MCP and drives
+  the SAME tool surface Claude Code uses (`cello_start_agent`, `cello_use_agent`, `cello_status`,
+  `cello_await_session`, `cello_receive`, `cello_send`, `cello_close_session`).
+- **Behavior:** auto-accepts every inbound session, replies with a hardcoded 4-message sequence by
+  position (content-blind, SI-002), then seals via `cello_close_session`.
+- **Caveat:** launched via systemd units rather than `cello login` / Claude auto-spawn — same
+  binaries, different launch mechanism.
+
+**Implication:** demo failures = real bugs in the shipped client/daemon, affecting any operator
+doing the same flow. F14 lives in published daemon 0.0.20 (and was NOT covered by the "Finding 1 +
+F2-a" fixes that shipped in 0.0.20). This strengthens FINDING-1/FINDING-2 and F13/F16.
+
 ## FINDINGS (functional, beyond friction)
 
 ### FINDING-1 — Unilateral seal never completes when a counterparty daemon crashes mid-session (client stuck in `seal_pending_bilateral`)
