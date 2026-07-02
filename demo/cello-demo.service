@@ -1,7 +1,7 @@
 [Unit]
 Description=CELLO Demo Agent
-After=network-online.target
-Wants=network-online.target
+After=cello-daemon.service
+Requires=cello-daemon.service
 
 [Service]
 Type=simple
@@ -10,10 +10,9 @@ WorkingDirectory=/opt/cello-demo
 ExecStart=/usr/bin/node dist/index.js
 Restart=on-failure
 RestartSec=5
-Environment=NODE_ENV=production
-# Required: create /etc/systemd/system/cello-demo.service.d/env.conf before starting.
-# It must set CELLO_DIRECTORY_MULTIADDR, CELLO_KEY_FILE, and CELLO_ENV.
-# See runbook.md Step 6f. Without this override the agent will exit on startup.
+Environment=CELLO_DIR=/opt/cello-demo/.cello
+Environment=CELLO_AGENT_NAME=default
+Environment=CELLO_ENV=local
 
 [Install]
 WantedBy=multi-user.target
