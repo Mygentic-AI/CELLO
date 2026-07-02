@@ -131,11 +131,12 @@ describe("DEPLOY-001: AC-003 VPC endpoints and NAT Gateway", () => {
     );
 
     const raw = loadTemplateRaw("cello-vpc.yaml");
-    expect(raw).toContain("ecr.api");
-    expect(raw).toContain("ecr.dkr");
-    expect(raw).toContain("secretsmanager");
-    expect(raw).toContain("kms");
-    expect(raw).toContain("logs");
+    // M6B-014 stage 2 (commit adedcd4c): the ecr.api/ecr.dkr/secretsmanager/kms/logs
+    // interface endpoints were removed — the NAT Gateway now provides private-subnet
+    // egress to those services. Only the SsmMessages interface endpoint is kept (ECS
+    // Exec needs a persistent WebSocket that NAT alone cannot provide), plus the free
+    // S3 gateway endpoint. Assert what the architecture actually requires now.
+    expect(raw).toContain("ssmmessages");
     expect(raw).toContain(".s3");
 
     // S3 should be Gateway type
