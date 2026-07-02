@@ -78,6 +78,26 @@ Local operator stack updated too (`npm i -g @cello-protocol/cli@0.0.19`, daemon 
    restarted afterward and confirmed healthy (`agent.online`, `session.node.created`,
    `demo.started`).
 
+## Review follow-ups (same day, tag v0.0.63 — daemon 0.0.22 / cli 0.0.20)
+
+The reviewers' three sub-threshold observations were also fixed (cello-client `ad795a3` +
+cascade `b8d82ec`), plus one gate gap found while verifying:
+
+- **CLI help precedence**: `--help`/`-h` now wins from ANY argv position (dedicated pre-scan) —
+  previously an earlier unknown flag masked it, and `--limit -h` swallowed `-h` as the limit
+  value. Pinned by red-first tests.
+- **Cache retention on interruption**: analyzed rather than "fixed" — evicting session caches in
+  `markInterruptedWithDetails` would discard drainable unread messages after a transient blip
+  AND cancel the armed TTF park-backstop timers exactly when a dying session needs them
+  (MSG-001). The deliberate retention is now documented at the code site; caches are reclaimed
+  at seal or restart.
+- **Root-suite gate gap (found, fixed)**: `core/daemon` and `core/cli` had been missing from
+  `vitest.workspace.ts` since REPOSPLIT-002 — CI's Test step had NEVER run either suite
+  (507 tests invisible). Added to the workspace; the two daemon binary-spawn tests now pin the
+  child cwd to the package root so `--import tsx` resolves under a root run. v0.0.63's CI is the
+  first run to execute the full 1435-test suite.
+- Demo agent + local stack rolled to 0.0.22/0.0.20; live sanity session + bilateral seal green.
+
 ## What this unblocks
 
 - The j-unilateral journey's crash-path escalation defect is closed; a crashed counterparty can
