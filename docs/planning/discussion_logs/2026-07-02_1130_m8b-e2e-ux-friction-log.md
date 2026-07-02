@@ -381,4 +381,42 @@ a current agent fall back to the sole online agent when there's exactly one cand
 
 ---
 
+## F19 — "Stop cello-demo" does not remove the counterparty from sealing (daemon co-signs autonomously) · `confusion` (mental-model / docs)
+
+**Context:** Testing #6. Stopping `cello-demo` (the app) on the EC2 agent and then closing from the
+local side produced a **bilateral** seal (both parties `attestation_mode: "live"`) — because the
+`cello-daemon` co-signs the FROST seal on its own, independent of the app. The plan (and the
+implicit operator mental model) assumed stopping the demo app would take that party "offline" for
+sealing. It doesn't.
+
+**Friction:** The `cello-demo` (application) vs `cello-daemon` (protocol node) split is load-bearing
+but non-obvious. An operator reasoning about "is my counterparty online?" or "will this seal
+unilaterally?" will get it wrong if they think in terms of the app. The demo runbook and docs should
+make explicit that the **daemon** is what participates in sealing; killing the app changes nothing
+about seal participation.
+
+**Improvement idea:** Document the daemon-vs-app responsibility split prominently; consider surfacing
+in `cello status` which layer is up. Reframe #6's test method in the plan to target the daemon.
+
+---
+
+## F20 — Grace-window "too early" error hides the remaining wait time from the operator · `error-message`
+
+**Context:** Testing #6 Part B. `cello_close_session` on a peer-gone session returned
+`seal_counterparty_pending` with guidance "Retry after the grace period" — but **no duration**. The
+directory actually computes and returns `remaining_seconds` in its `seal_unilateral_too_early` frame
+(`directory-frames.ts:1126`), and the default window is 600s (`directory-node.ts:616`), but none of
+that reaches the operator through the MCP tool. I had to read the source to learn it's a 10-minute
+wait.
+
+**Friction:** "Retry later" with no "how much later" is a poor experience — the operator can't tell
+if it's 20 seconds or 10 minutes, so they either poll blindly or give up. The information exists one
+layer down and is simply not propagated.
+
+**Improvement idea:** Surface `remaining_seconds` (and the total grace window) in the
+`cello_close_session` response so the operator knows exactly when to retry, e.g. "unilateral seal
+available in ~9m48s."
+
+---
+
 ## (running — append new entries below as encountered)

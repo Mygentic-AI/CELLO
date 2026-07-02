@@ -48,7 +48,7 @@ documented restore cascade (see plan doc + `infra/CLAUDE.md`), so they run last 
 | 13 | Cross-node presence | A | ⏸ BLOCKED (needs reconnect) | Same daemon-restart dependency as #12; will run together. Plan: while bootstrapped to eu1, initiate local Demo2 → EC2 demo agent (home=us1) to prove cross-node presence resolution. |
 | 14 | Suspension | B | ⬜ pending | |
 | 2 | Session interrupted (EC2) | D | ✅ PASS (protocol) / ⚠️ GAP (observability) | Daemon DID detect peer drop instantly: `session.liveness.changed liveness:"gone"` at 10:04:32.250Z (same second as kill). BUT not surfaced to operator — `cello_receive` timed out `content:null`, `cello_status` did not list it interrupted. Transport had upgraded relay→direct, so this tested direct-path detection. See F16. |
-| 6 | Unilateral seal (EC2) | D | ⬜ pending | |
+| 6 | Unilateral seal (EC2) | D | 🔬 IN PROGRESS (grace wait) | **Part A** (stop `cello-demo` only): seal completed **BILATERAL**, both `live` — daemon co-signs autonomously; app-down ≠ unilateral (finding). **Part B** (stop `cello-daemon`): `cello_close_session` → `seal_counterparty_pending` — unilateral seal is gated by a **600s delivery-grace window**; SEAL leaf recorded; awaiting grace to retry. See F19/F20. |
 | 9 | Node down during DKG | C | ⬜ pending | |
 | 10 | Node down during seal | C | ⬜ pending | |
 | 5 | Directory reconnect | C | ⬜ pending | |
@@ -153,3 +153,33 @@ path (peer reachable only via relay, relay signals the drop) was NOT exercised a
 — worth a dedicated follow-up (would need to force relay-only transport).
 
 **EC2 restored** afterward (daemon+demo active, standing receiver re-armed).
+
+### #6 — Unilateral seal (EC2) — 🔬 IN PROGRESS (2026-07-02 ~12:1x)
+
+The plan's method ("stop `cello-demo`") turned out to be the wrong lever; the real lever is the
+counterparty **daemon**. Two sub-tests:
+
+**Part A — stop `cello-demo` only (app), daemon stays up.** Session `b4c56ae3` (Demo2↔EC2),
+one message each way, then `systemctl stop cello-demo`, then `cello_close_session`. Result: seal
+**succeeded BILATERALLY** — `sealed_root 65840db8…`, BOTH participants `attestation_mode: "live"`.
+**Finding:** stopping the app does NOT take the counterparty out of the seal — the EC2 **daemon**
+co-signs the FROST seal autonomously (the app is only the message responder; the protocol node holds
+the share and attests receipt on its own). This is defensible (the daemon did faithfully receive the
+transcript) but means "stop cello-demo" cannot produce a unilateral seal. Friction F19.
+
+**Part B — stop `cello-daemon` (full peer removal).** Restarted EC2 (fresh standing receiver),
+session `47d83ad1` (Demo2↔EC2), one message each way, then `systemctl stop cello-daemon` at
+10:13:13Z, then `cello_close_session`. Result:
+```
+ok:false, reason:"seal_counterparty_pending"
+"Your SEAL leaf is recorded, but the counterparty has not closed and the directory's
+ delivery-grace window has not yet elapsed, so a unilateral seal is not yet allowed."
+```
+So the unilateral seal path **exists and is correctly gated** by a directory-side delivery-grace
+window. Default `deliveryGraceSeconds = 600` (10 min) — `directory-node.ts:616`; the directory
+returns a `seal_unilateral_too_early` frame with `remaining_seconds`
+(`directory-frames.ts:1126`), but the MCP guidance does NOT surface the number (friction F20).
+
+**Next:** keep EC2 daemon DOWN, wait out the ~600s grace window, retry `cello_close_session
+(47d83ad1)` → expect a UNILATERAL seal (counterparty marked absent/unilateral, not `live`), then
+restore EC2.
