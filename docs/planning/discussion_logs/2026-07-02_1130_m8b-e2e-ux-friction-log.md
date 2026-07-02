@@ -327,4 +327,58 @@ aborts.
 
 ---
 
+## F16 — Counterparty `gone` is detected by the daemon but never surfaced to the operator · `confusion` · `stability` (**observability gap**)
+
+**Context:** Testing #2. When the EC2 counterparty daemon was killed mid-session, the local daemon
+detected it **immediately** — `session.liveness.changed … liveness:"gone", observedBy:
+"session_node"` at the same second. But nothing reached the operator:
+- `cello_receive_session` returned `{content:null}` — a plain timeout, byte-for-byte
+  indistinguishable from "the peer is alive but hasn't sent anything yet."
+- `cello_status.interrupted_sessions` did **not** include the session, even minutes later.
+
+**Friction:** The operator has no way to learn their counterparty dropped. The information exists
+in the daemon (the `liveness:"gone"` event) but is not exposed through any MCP surface. "Working but
+looks like it isn't" in reverse: it's *broken but looks like it's just quiet.* For a protocol whose
+whole point includes tolerating peer failure, the operator-facing signal for peer failure is
+missing.
+
+**Improvement idea:** Surface liveness transitions to the operator: make `cello_receive` return a
+distinct `session_interrupted`/`counterparty_gone` result (not a null timeout); reflect live
+liveness in `cello_status` per session; consider a push/event so a waiting operator is told the
+peer went away rather than waiting out the full timeout.
+
+---
+
+## F17 — `cello_status.interrupted_sessions` semantics are unclear and inconsistent with liveness · `confusion`
+
+**Context:** Testing #2. Many sessions logged `liveness:"gone"` (7f50d4a1, a6a2f9af, 09fa513e,
+091d2786, …) yet only three unrelated old sessions (`bc94ead6…`, messageCount 8) appear in
+`interrupted_sessions`. So `interrupted_sessions` ≠ "sessions whose peer is gone." Its actual
+inclusion rule (apparently: interrupted *with pending/unsent message state*) is undocumented and not
+obvious from the field name.
+
+**Friction:** An operator reading `cello_status` cannot tell what `interrupted_sessions` means or
+trust it as "these are the sessions that broke." It shows stale entries from days ago while a
+session that just lost its peer is absent.
+
+**Improvement idea:** Define and document the inclusion rule; or split into
+`interrupted_sessions` (peer gone, resumable) vs `pending_delivery` (queued unsent). Age out stale
+entries.
+
+---
+
+## F18 — Per-connection "current agent" selection is silently lost (e.g. after `/mcp` reconnect) · `confusion`
+
+**Context:** Testing #2. After the `/mcp` reconnect, `cello_initiate_session` failed with
+`no_current_agent` even though I had selected Agent-1 earlier in the session. The current-agent
+selection is per-connection ephemeral state and was silently reset; had to `cello_use_agent` again.
+
+**Friction:** No warning that the selection was cleared; the next tool call just fails. Minor, but
+one more "why did this stop working" moment after a reconnect (compounds F12).
+
+**Improvement idea:** Persist/restore the selected agent across reconnects, or have tools that need
+a current agent fall back to the sole online agent when there's exactly one candidate.
+
+---
+
 ## (running — append new entries below as encountered)

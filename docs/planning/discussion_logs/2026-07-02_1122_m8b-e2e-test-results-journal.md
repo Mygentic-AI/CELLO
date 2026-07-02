@@ -47,7 +47,7 @@ documented restore cascade (see plan doc + `infra/CLAUDE.md`), so they run last 
 | 12 | Any-directory routing | A | ⏸ BLOCKED (needs reconnect) | Requires restarting local daemon with `CELLO_DIRECTORY_URL=eu1/ap1` → drops MCP conns → needs Andre's `/mcp` reconnect. Deferred until Andre available. See friction F6/F7. |
 | 13 | Cross-node presence | A | ⏸ BLOCKED (needs reconnect) | Same daemon-restart dependency as #12; will run together. Plan: while bootstrapped to eu1, initiate local Demo2 → EC2 demo agent (home=us1) to prove cross-node presence resolution. |
 | 14 | Suspension | B | ⬜ pending | |
-| 2 | Session interrupted (EC2) | D | 🔬 IN PROGRESS | Live session `091d2786` (Agent-1↔EC2) established after re-arming EC2 standing receiver (see F14). Killed EC2 `cello-daemon` at 10:04:32Z. Local side did NOT detect interruption within 20s (receive timed out `content:null`; session absent from `interrupted_sessions`). Watching for delayed relay detection. |
+| 2 | Session interrupted (EC2) | D | ✅ PASS (protocol) / ⚠️ GAP (observability) | Daemon DID detect peer drop instantly: `session.liveness.changed liveness:"gone"` at 10:04:32.250Z (same second as kill). BUT not surfaced to operator — `cello_receive` timed out `content:null`, `cello_status` did not list it interrupted. Transport had upgraded relay→direct, so this tested direct-path detection. See F16. |
 | 6 | Unilateral seal (EC2) | D | ⬜ pending | |
 | 9 | Node down during DKG | C | ⬜ pending | |
 | 10 | Node down during seal | C | ⬜ pending | |
@@ -118,3 +118,38 @@ create-agent|remove-agent|sessions>` omits it). Syntax: `cello refresh <agent>`.
 
 No bug. Note for operators: `refresh` is missing from the CLI usage string — minor UX gap worth
 adding to the usage line.
+
+### #2 — Session interrupted (EC2) — ✅ PASS (protocol) / ⚠️ observability gap (2026-07-02 ~12:0x)
+
+**Setup friction first:** the EC2 standing receiver was found dead (accepts one inbound session
+per daemon lifetime — see F14). Restored via the documented `stop demo → stop daemon → start daemon
+→ wait 5s → start demo` sequence; a fresh `session.node.created` (standing receiver) confirmed armed.
+
+**Test:** established a live bilateral session `091d2786` (Agent-1 → EC2 demo). Sent msg (seq 0),
+received the demo agent's hardcoded welcome (seq 1) — confirmed live. Then `systemctl stop
+cello-daemon` on EC2 at 10:04:32Z (this also cascaded `cello-demo` to inactive).
+
+**Result — protocol layer PASS:** local daemon log shows, at `10:04:32.250Z` (same second as the
+kill):
+```
+session.liveness.changed sessionId:091d2786… counterpartyPubkey:7ab98987…
+  transportPath:"direct" liveness:"gone" observedBy:"session_node"
+```
+Interruption detection works and is immediate.
+
+**Result — observability GAP:** that `liveness:"gone"` is not exposed to the operator via MCP:
+- `cello_receive_session` returned `{content:null}` (a plain timeout — indistinguishable from
+  "no message yet"). No `session_interrupted` / `liveness_gone` signal.
+- `cello_status.interrupted_sessions` did NOT list `091d2786` (even 2+ min later). That list only
+  seems to hold sessions interrupted with pending message state (the 3 stale `bc94ead6…` entries,
+  messageCount 8), not idle sessions whose peer went `gone`.
+
+So an operator whose counterparty vanishes gets **silence**, not a signal. Recorded as friction F16.
+
+**Note — transport upgrade:** despite `initiate` reporting `transportMode:"relay"`, the session
+upgraded to a **direct** libp2p connection (`session.transport.connected addr:/ip4/32.196.100.165/
+tcp/4001/…`). So this exercised direct-path liveness detection. The relay-mediated interruption
+path (peer reachable only via relay, relay signals the drop) was NOT exercised and remains untested
+— worth a dedicated follow-up (would need to force relay-only transport).
+
+**EC2 restored** afterward (daemon+demo active, standing receiver re-armed).
