@@ -293,3 +293,13 @@ touched) and `cli`. Run `/cello-publish` — do not publish from memory. Full SP
 gate sequence (`test → lint → typecheck → build`) + code review before each commit. After
 publish: update the EC2 demo agent to the new versions and re-run a live inbound-session +
 crash-seal round-trip as the smoke test (the journal's restart sequence applies).
+
+---
+
+## Related Documents
+
+- [[2026-07-02_1122_m8b-e2e-test-results-journal|M8B E2E test-results journal]] — the live-test evidence (sessions `47d83ad1`, `a6a2f9af`) these root causes were diagnosed from; carries the consolidated fix backlog these briefs implement.
+- [[2026-07-02_1130_m8b-e2e-ux-friction-log|M8B E2E UX friction log]] — full detail for F13/F14/F16/F20 and the riders (F1/F2/F15); the friction entries are the requirements source for Briefs 2–4.
+- [[2026-07-01_0900_m8b-closed-e2e-testing-phase|M8B closed — E2E testing phase kickoff]] — the testing-phase plan whose scenarios (#2, #6) surfaced FINDING-1 and FINDING-2.
+- [[2026-07-01_2215_final-message-receive-race-and-initiator-verified-false|Final-message receive race + verified:false]] — the PRIOR fix cascade that produced daemon 0.0.20 (the exact version diagnosed here). Note: its "Finding 1" (receive race) is a different finding from this phase's FINDING-1 (unilateral seal deadlock).
+- [[M8B-SPEC|M8B Federation Spec]] — defines the j-unilateral journey; FINDING-1 (Brief 1) is a crash-path escalation defect that journey's test shape (retry after grace) did not cover.

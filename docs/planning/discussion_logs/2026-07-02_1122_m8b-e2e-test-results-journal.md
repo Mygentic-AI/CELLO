@@ -365,3 +365,12 @@ Full chain + fix spec: [[2026-07-02_1514_m8b-fix-briefs-cascade-1]] Brief 2.
 **Framing correction (Andre):** the demo agent is a live product surface, not just a test rig — so
 these are production onboarding defects. The demo is the canary; the fixes belong in the
 client/daemon/directory and help all operators.
+
+---
+
+## Related Documents
+
+- [[2026-07-01_0900_m8b-closed-e2e-testing-phase|M8B closed — E2E testing phase kickoff]] — the plan doc this journal executes; test matrix, phases, and restore-cascade discipline.
+- [[2026-07-02_1130_m8b-e2e-ux-friction-log|M8B E2E UX friction log]] — co-equal deliverable; F1–F21 referenced throughout this journal live there in full.
+- [[2026-07-02_1514_m8b-fix-briefs-cascade-1|M8B fix briefs — cascade 1]] — root-cause diagnoses + implementation-ready fix specs for FINDING-1, F14, F13, F16 and riders (the fix backlog's top rows, resolved to exact code).
+- [[2026-07-01_2215_final-message-receive-race-and-initiator-verified-false|Final-message receive race + verified:false]] — prior session's findings; its fixes shipped as daemon 0.0.20 and its acceptance test is session `a6a2f9af` — the same session whose receiver-consumption exposed F14 here.
