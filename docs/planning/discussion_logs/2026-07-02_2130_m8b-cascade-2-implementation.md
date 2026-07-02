@@ -60,9 +60,27 @@ Implements [[2026-07-02_2014_m8b-fix-briefs-cascade-2]] (the authoritative brief
   kill-us1 failover test is the real proof and also runs #12/#13/#5. If session/seal fails on the
   fallback even though signaling connected → log a NEW finding, do not paper over.
 
-## FINDING-5 — client re-derives the unilateral frontier (SI-002) — DONE, committed; reviewer running
+## FINDING-5 — client re-derives the unilateral frontier (SI-002) — DONE, committed, reviewed (2 rounds)
 
-**Commits: `02c6ad5f` (trustless-cello directory) + `49eeeac` (cello-client daemon).**
+**Commits: `02c6ad5f` (directory) + `49eeeac` + `1b42b4f` + `946ab5d`(partial) (cello-client daemon).**
+
+**Reviewer verdict (2 rounds): resolved via OVERRIDE-not-reject (the brief's "reject/override").**
+- Round 1 raised two Criticals: (1) the lenient no-leaves carve-out was inconsistent with the bilateral
+  fail-closed precedent (omission-bypass); (2) ANY client rejection of a unilateral cert is
+  UNRECOVERABLE — the directory's `#unilateralSeals` dedup guard is set before the client reacts and
+  never cleared, so a retry close is silently ignored (FINDING-1 dead-end, worse). Reject is the wrong
+  tool on the unilateral path.
+- Fix (`1b42b4f`): `checkUnilateralFrontier` now OVERRIDES an inflated CLIENT-VERIFIABLE ('live') frontier
+  DOWN to the re-derived value (directory can't forge signed leaves → derived = truth); never rejects →
+  never dead-ends; always persists. Statuses: verified / corrected / directory_attested (no leaves) /
+  leaves_invalid.
+- Round 2 found the `leaves_invalid` path left the inflated value UNCORRECTED (easier bypass). Fix
+  (`946ab5d`): forged/cross-session leaves = zero trustworthy evidence → 'live' frontier corrected DOWN
+  to 0 (strongest tamper → strongest correction), status stays leaves_invalid for the loud audit log.
+- Deferred (tracked below): the directory `#unilateralSeals` dead-end is a PRE-EXISTING issue (reachable
+  only via the pre-existing bad-FROST-signature rejection path, unchanged here); reviewer agreed to defer.
+
+Original commit prose:
 
 - **Directory** (`02c6ad5f`): `#processSealUnilateral` builds `frontier_leaves` from the verified
   carried leaves (same shape/source as the bilateral `processSeal`), threaded through both the
@@ -89,42 +107,84 @@ Implements [[2026-07-02_2014_m8b-fix-briefs-cascade-2]] (the authoritative brief
   degradation is logged). If the reviewer escalates → change to fail-closed for a `live` party
   claiming a frontier>0 with no leaves, and re-commit.
 
-## FINDING-6 — absent party (B) persists its receipt — NOT STARTED (client-focused)
+## FINDING-6 — absent party (B) persists its receipt — DONE, committed (client-only); review running
 
-**Design decision that DEVIATES from the brief (flagged to Andre; reversible):** the brief's sub-case
-3a says "add legibility to `seal_upgrade_confirmed`" (a directory change). But the directory does NOT
-persist the leaves/legibility anywhere reachable at upgrade time (`#processSealUpgradeRequest` only
-reads the storage-only `SealNotarization` row) — so the directory approach would need a new storage
-path + Flyway migration. Plan instead: **do 3a client-side** — on a *verified* `seal_upgrade_confirmed`,
-each party upgrades its OWN already-persisted unilateral receipt (flip the counterparty's
-`attestation_mode` absent→recovered). Correct, cheaper, needs NO directory change → **FINDING-5's
-`frontier_leaves` becomes the ONLY directory change in the cascade-2 deploy.**
+**Commit `946ab5d` (cello-client daemon). Client-only — no directory change (the 3a decision below held).**
 
-Planned client work (cello-client daemon):
-- **3b (unilateral receipt for B):** in the notification path, AFTER the KERNEL content-recovery/verify
-  gate passes (`attemptSealUpgradeImpl` returns `{sent:true}` iff the gate passed), `normalizeLegibility`
-  + `recordSealCertificate` the unilateral cert from the notification's legibility. NEVER persist before
-  the gate (a tampered/unrecoverable-content case must yield NO receipt).
-- **Stub-session trap:** `recordSealCertificate` is an `UPDATE ... WHERE` — a silent no-op if B has no
-  local `sessions` row. Ensure a row first (mirror the existing `#insertSessionRow`) using the
-  counterparty pubkey B can derive from the notification legibility.
-- **3a (bilateral upgrade):** on verified `seal_upgrade_confirmed`, upgrade B's (and A's) stored cert's
-  counterparty `attestation_mode` absent→recovered. B's own recovered frontier stays the honest
-  synthetic floor (0) unless we recompute from B's content tree (optional refinement; never overstate).
-- Red spine test: B reconnects post-restart → drains the durable notification → after the KERNEL gate →
-  `cello_get_sealed_receipt(B)` returns the cert; regression: tampered/unrecoverable content → NO receipt.
+**3a done CLIENT-SIDE (deviates from the brief, confirmed):** the brief's 3a says "add legibility to
+`seal_upgrade_confirmed`" (directory). But the directory does not persist the seal leaves/legibility
+anywhere reachable at upgrade time, so instead — on a VERIFIED `seal_upgrade_confirmed` — each party
+upgrades its OWN already-persisted receipt (`upgradeAbsentToRecovered`: counterparty 'absent' →
+'recovered'). 'recovered' is a valid attestation_mode (seal-legibility-tbs.ts: live=1/recovered=2/
+absent=3). The seal signatures don't bind the (unsigned) legibility, so the client-side flip is sound.
+Net: FINDING-5's `frontier_leaves` is the ONLY directory change in the cascade-2 deploy.
 
-## Batch publish / deploy / live-verify — NOT STARTED (task 4)
+- **3b (unilateral receipt for B):** the daemon `attemptSealUpgrade` wrapper captures the module's
+  `{sent}`; on `sent:true` (⟺ the KERNEL content-recovery/verify/completeness gate passed) it persists
+  B's unilateral cert from the notification's legibility via `recordSealCertificateEnsuringRow`. NEVER
+  persists on `sent:false` (tampered/unrecoverable/incomplete → NO receipt).
+- **Stub-session trap fixed:** `recordSealCertificate` is a silent-no-op `UPDATE` without a row;
+  `recordSealCertificateEnsuringRow` INSERT-OR-IGNOREs a stub row (counterparty = notification
+  `present_pubkey`) first.
+- Unit tests: `finding-6-absent-receipt.test.ts` (stub-row persistence + the pure flip). The named LIVE
+  check (B reconnect post-restart → `cello_get_sealed_receipt(B)` returns the cert) is task 4.
+- `feature-dev:code-reviewer` running on `946ab5d`.
 
-- ONE cello-client publish (via `/cello-publish`) for ALL daemon changes (F4 + F5-client + F6-client).
-  Coordinate the version bump with the concurrent FINDING-3 publisher (they hold daemon 0.0.23/cli
-  0.0.21 on main). Update `trustless-cello/packages/{directory,relay}/package.json` pins after.
-- ONE directory `deploy.sh` (all 3 regions, ~25-30 min) for the ONLY directory change: FINDING-5
-  `frontier_leaves`. (FINDING-6 3a is client-side → no directory change, per the decision above.)
-- Live verifications (do NOT mark done on green vitest): FINDING-4 kill-us1 failover (also runs
-  #12/#13/#5); FINDING-6 B-reconnect → `cello_get_sealed_receipt(B)` returns the cert. Coordinate with
-  the testing/coordination owner (they hold shared dev infra + the demo agent) — do not perturb the
-  cluster unannounced. Update `infra/STATE.md` if infra touched; mark findings resolved in the journal.
+## Batch publish / deploy / live-verify — NOT STARTED (task 4) — HUMAN-GATED
+
+**Baseline confirmed (2026-07-02):** the concurrent FINDING-3 publish LANDED + promoted to latest —
+daemon 0.0.23 / cli 0.0.21 / connect 0.0.53 / client 0.0.41 / crypto 0.0.14 / transport 0.0.11 /
+protocol-types 0.0.11 (all beta==latest). Highest cello-client tag `v0.0.64`.
+
+**Client publish plan (daemon-only changes → cascade-1 precedent):**
+- daemon 0.0.23 → **0.0.24**; cli 0.0.21 → **0.0.22** (re-pins daemon 0.0.24).
+- connect 0.0.53 **unchanged** (pure IPC shim; new result fields pass through). crypto/transport/
+  protocol-types/client **unchanged**.
+- Tag **v0.0.65** (next free after v0.0.64) → CI → beta. Verify daemon@0.0.24 dist greps:
+  `createRosterAwareEndpointResolver`, `checkUnilateralFrontier`, `recordSealCertificateEnsuringRow`,
+  `upgradeAbsentToRecovered`. cli@0.0.22 pins daemon@0.0.24 (never workspace:*).
+- **NO trustless-cello cross-repo pin update** — directory/relay pin crypto/transport/protocol-types/
+  client/connect; NONE changed. (This differs from the brief's generic version-bump AC, which assumed a
+  cross-repo package changed; here only `daemon` did, and directory/relay don't depend on daemon.)
+
+**Directory deploy plan:** ONE `deploy.sh` (all 3 regions, ~25-30 min) for the ONLY directory change —
+FINDING-5 `frontier_leaves` on `seal_unilateral_confirmed` (backward-compatible: old clients ignore the
+new field). **Deploy the directory BEFORE promoting the new client to latest** so a new client never
+meets an old (no-frontier_leaves) directory (avoids the FINDING-5 back-compat window). No Flyway
+migration (no schema change) → `OpsAgentExpectedMigrationVersion` unchanged.
+
+**Human-gated sequence (needs Andre + coordination owner):**
+1. Rebase `m8b-cascade-2` onto current main (both repos), merge to main. Coordinate with the concurrent
+   coder (push order — M5 rule: push after each merge).
+2. Version bump commit LAST + tag v0.0.65 (Andre's go via `/cello-publish`) → beta.
+3. Directory `deploy.sh` (Andre's go; ~30 min; disruptive to shared dev infra).
+4. Update EC2 demo agent + local stack to daemon 0.0.24/cli 0.0.22.
+5. LIVE verify (coordination owner holds infra + demo agent; do NOT perturb unannounced):
+   - **FINDING-4:** down the us-east-1 directory ECS task → client fails over to eu1/ap1, comes online,
+     completes a real session + seal on the fallback (ALSO runs #12/#13/#5). Restore per `infra/CLAUDE.md`
+     (relay re-register + sign-manifest.sh). If session/seal fails on the fallback even though signaling
+     connected → LOG A NEW FINDING (any-directory routing gap), do not paper over.
+   - **FINDING-6:** B reconnects post-restart → drains the durable notification → after the KERNEL gate →
+     `cello_get_sealed_receipt(B)` returns the cert (was not_found).
+6. Promote to latest (Andre): `npm dist-tag add @cello-protocol/{cli,daemon}@<new> latest` (+ the
+   unchanged transitive set stays as-is).
+7. Update `infra/STATE.md` if infra touched (directory deploy → deploy.sh auto-updates it; manual changes
+   by hand). Mark FINDING-4/5/6 resolved in the test-results journal.
+
+## Deferred follow-up findings (tracked, NOT this batch)
+
+- **Directory `#unilateralSeals` dead-end (cascade-2 reviewer Critical 2):** once a client REJECTS a
+  unilateral cert (the PRE-EXISTING bad-FROST-signature path — FINDING-5's override path never rejects),
+  the directory's in-memory `#unilateralSeals` dedup guard (set before the client reacts, never
+  TTL'd/swept) silently ignores any retry `seal_unilateral` → no receipt ever produced (FINDING-1
+  dead-end, worse). Fix options: TTL/eviction on `#unilateralSeals`, clear-on-rejection, or a distinct
+  terminal-failure signal. **Open question (unprovable from code):** is the guard per-node only (so
+  FINDING-4 failover to another node gets a fresh attempt) or does the durable `seal_notarizations`
+  UNIQUE(session_id) row block a retry cross-node? Resolve against the multi-region model before fixing.
+- **FINDING-5 residual omission (leaves-absent):** a directory that ships NO frontier_leaves + an inflated
+  'live' frontier is persisted directory-attested (logged), not corrected (nothing to derive from). Low
+  risk — the exposed value is the operator's own self-evident frontier; the dangerous absent-party value
+  is directory-attested regardless; a post-FINDING-5 directory always ships ≥1 leaf for the live party.
 
 ## Related Documents
 
