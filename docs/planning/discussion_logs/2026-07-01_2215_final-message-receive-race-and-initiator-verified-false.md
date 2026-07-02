@@ -170,6 +170,53 @@ kernel panic and the two findings above are independent and should be investigat
 
 ---
 
+## Considered mitigation — "demo waits 2s before sealing" (rejected as a fix; OK as a test aid)
+
+A proposal was raised: have the demo agent wait ~2 seconds after sending its 4th message before it
+begins sealing. Assessment: **it might make the demo pass more often, but it is not the fix — and
+whether it helps at all depends on which of the three mechanisms below is true.**
+
+**Whether the delay helps is mechanism-dependent** (we have not yet nailed down which applies — see
+Finding 1). On the local machine the message was recorded at `19:22:33.874` and the node not
+destroyed until `19:22:35.528`, so it was available for ~1.65s. Why `cello_receive` did not return
+it in that window is one of:
+
+1. **Polls preceded arrival, then polling stopped.** `cello_receive` returned `null` *immediately*
+   ("no content currently buffered") rather than blocking — the guidance itself said "or use the
+   blocking receive variant." The non-blocking polls came back empty before the message landed, then
+   polling stopped. → A 2s delay does **nothing** here unless something keeps polling in the wider
+   window.
+2. **Seal flushed/cleared the pending receive buffer on teardown.** → A 2s delay **helps** (more
+   time to deliver before the wipe).
+3. **Message reached transcript/DB but was never enqueued into the live receive buffer.** → A 2s
+   delay does **nothing** — there is nothing in the buffer to receive at any timing.
+
+Reaching for the delay before knowing which case we are in is a guess, not a fix.
+
+**Why the demo-side delay is the wrong layer even if it "works":**
+- It **masks a client bug using the very tool whose job is to surface client bugs.** The demo exists
+  so a new user can confirm their stack works. A real user-to-user session, where the sealing peer
+  does not insert a courtesy sleep, would still lose the final message live — the demo would go green
+  while the client path stays broken.
+- It is **counterparty-dependent.** The protocol cannot assume peers add arbitrary pre-seal delays;
+  correctness of *our* receive path must not depend on *their* timing.
+- It **does not touch Finding 2** (initiator `verified:false`) at all.
+- It is probabilistic — a slow relay or a client busy >2s re-opens the race.
+
+**Where the real fix belongs (client side):**
+1. **Use a blocking receive** — the receiver waits for the final message (up to timeout) instead of
+   poll-and-give-up. Likely resolves mechanism (1), which is the suspected dominant case here.
+2. **Seal drains pending inbound to the app before node teardown** — do not destroy the session node
+   until committed transcript content has been delivered to / made drainable by the app. Resolves
+   mechanisms (2) and (3).
+3. **Document transcript-after-seal as the contract** — `cello_get_transcript` already recovers
+   everything (`undecryptable:0`); clients should read it after a seal regardless.
+
+**Verdict:** do NOT ship the 2s delay as the fix. It is acceptable **only as a temporary test aid**
+— a wider window makes the race easier to observe and instrument during the investigation. The fix
+belongs in the client receive/seal path (options 1–2). Step 0 remains: determine which of the three
+mechanisms above is real, since that decides whether the delay would ever have mattered.
+
 ## Next actions
 
 1. **Finding 2 (priority):** read the code emitting `session.sealed.signature.checked`; explain the
