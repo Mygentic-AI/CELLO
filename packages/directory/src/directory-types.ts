@@ -458,6 +458,13 @@ export interface SealCertificateFields {
   // DELIVERED (alive / unknown fail-safe). Feeds DOD-LEG-3 attestation_mode in the cert.
   attestation_mode: "ABSENT" | "DELIVERED";
   seal_type: "UNILATERAL";
+  // M8B FINDING-3 (cascade-2): the receipt-not-assent legibility certificate — the SAME
+  // shape the bilateral session_sealed frame carries (per-party content frontiers, attestation
+  // modes, final_message), with the absent counterparty recorded attestation_mode 'absent'.
+  // The present party's daemon persists this (recordSealCertificate) so cello_get_sealed_receipt
+  // returns a durable, retrievable receipt for a unilateral close — the whole point of sealing
+  // when your counterparty has vanished. Optional for back-compat with pre-cascade-2 directories.
+  legibility?: SealLegibility;
 }
 
 /**

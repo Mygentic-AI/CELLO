@@ -434,6 +434,30 @@ persisting/exposing the receipt at all).
 yet a retrievable artifact, so the feature is functionally incomplete for its intended purpose.
 Paired friction: F23.
 
+**RESOLVED (cascade-2, 2026-07-02) — for the PRESENT party.** Two coordinated changes, TDD + full
+gates + live spine (real binaries + Postgres) all green:
+- **Directory** (`trustless-cello/packages/directory`): `#processSealUnilateral` derives the
+  receipt-not-assent legibility via `buildSealLegibility` (present party `live`, counterparty `absent`)
+  and — because a received-only counterparty authors no leaf — appends a synthetic zero-frontier
+  `absent` participant so the counterparty is ALWAYS named. Threaded through both the single-key and
+  FROST completion paths; attached to the cert on `seal_unilateral_confirmed` AND
+  `seal_unilateral_notification`, and (reviewer Critical 1) carried on the **durable** Pg
+  notification-queue payload too (`legibility_cbor_hex`, byte-lossless). New event
+  `session.unilateral.legibility.built`.
+- **Client daemon** (`cello-client/core/daemon`): the unilateral confirmation handler now
+  `normalizeLegibility`s the frame's legibility and `recordSealCertificate`s it (before node destroy),
+  and `cello_close_session` returns it inline — so `cello_get_sealed_receipt` returns a durable receipt
+  with the counterparty ABSENT.
+- **Live proof (spine):** `A seals while B is GONE` — close returns `legibility` inline with B recorded
+  `absent`, and `cello_get_sealed_receipt(A)` returns the persisted cert (was `sealed_receipt_not_found`).
+- **Provenance (ship condition, met):** the unilateral legibility is DIRECTORY-attested, not co-signed
+  by the counterparty nor client-re-derived — explicitly marked via per-participant `attestation_mode`
+  (`absent` = directory-attested), never presented as client-verified. Not cryptographic bilateral
+  parity. SI-002 hardening tracked as [[#FINDING-5 — Unilateral seal legibility is directory-attested, not client-re-derived (SI-002 asymmetry)|FINDING-5]].
+- **Absent party's own retrieval** (B's `cello_get_sealed_receipt` on reconnect) is NOT yet wired
+  client-side — tracked as FINDING-6. The directory already ships the cert to B; only the client
+  persistence remains (client-only, no further directory deploy).
+
 ### FINDING-4 — No entry-point directory failover: the signaling dialer ignores the resolved consortium roster (bootstrap SPOF)
 
 **Severity:** high — a direct violation of the sovereign-node **redundancy** invariant ("if a node
@@ -510,7 +534,46 @@ judges the frontier-trust exploitable enough to block, this escalates from follo
 must-fix-now.
 
 **Status:** tracked security follow-up to FINDING-3 (which ships the retrievable receipt now).
-`cello-client` daemon + directory.
+`cello-client` daemon + directory. **Reviewer verdict (2026-07-02, code-reviewer on the cascade-2
+diff):** "defensible to ship this fix first (a durable receipt existing at all is strictly better
+than the prior total absence), but it should not be presented as bilateral parity — it is not
+cryptographically equivalent." → does NOT escalate to must-fix-now; stays a follow-up. FINDING-3
+ships with provenance made explicit (per-participant `attestation_mode`; the absent party is `absent`,
+never presented as client-verified), satisfying the agreed ship condition.
+
+### FINDING-6 — Absent party's unilateral receipt is not persisted client-side on reconnect (`cello_get_sealed_receipt` → `not_found` for B)
+
+**Severity:** medium — surfaced by the cascade-2 code-reviewer (Critical 2). FINDING-3 gives the
+**present** party (the one who closed) a durable, retrievable receipt. The **absent** party (B) learns
+of the seal via `seal_unilateral_notification` on reconnect — the directory now ships the legibility
+on that frame over **both** delivery paths (in-memory `#pendingNotifications` **and**, per the
+reviewer's Critical 1, the durable Pg `#notificationQueue` via `legibility_cbor_hex` — fixed in
+cascade-2). BUT the client-side handler for `seal_unilateral_notification` is
+`registerUnilateralUpgradeListener` → `attemptSealUpgrade` (the DOD-UP-1 bilateral-upgrade path); it
+never calls `recordSealCertificate`. So B's `cello_get_sealed_receipt` still returns
+`sealed_receipt_not_found` even though the notification now carries the cert.
+
+**Why separable (not folded into FINDING-3):** B's receipt semantics are entangled with the upgrade
+flow, and getting them right needs its own design — (1) B **cannot** channel-independently verify the
+unilateral cert's FROST signature (it lacks the initiator's group key; `attemptSealUpgrade` notes this
+and accepts R1 on the authenticated Noise channel), so B's receipt has a **different trust basis** than
+A's; (2) B should arguably persist a receipt only **after** it recovers + integrity-verifies the
+content behind R1 (the KERNEL gate) — persisting before that risks a receipt for content B couldn't
+verify (a new "looks-done-but-isn't"); (3) on a **successful** upgrade the seal becomes bilateral and
+B should get the **bilateral** receipt (but `seal_upgrade_confirmed` carries no legibility today
+either). A naive `recordSealCertificate` in the notification handler would also silently no-op if B has
+no local `sessions` row (the stub-session lifecycle for a reconnecting absent party).
+
+**Fix sketch:** in the notification handler, after the KERNEL content-recovery/verify gate passes,
+`normalizeLegibility(frame["legibility"])` + `recordSealCertificate` against B's (possibly stub)
+session row; on a successful upgrade, prefer persisting the bilateral cert; add `legibility` to
+`seal_upgrade_confirmed`. Needs a red spine test: B reconnects post-restart → drains the durable
+notification → `cello_get_sealed_receipt(B)` returns the cert with A recorded present and B's own
+recovered frontier.
+
+**Status:** tracked follow-up to FINDING-3. `cello-client` daemon (+ possibly `seal_upgrade_confirmed`
+on the directory). The directory half (legibility on the notification, both paths) already shipped in
+cascade-2, so no further directory deploy is required to land FINDING-6 — it is a client-only change.
 
 ---
 

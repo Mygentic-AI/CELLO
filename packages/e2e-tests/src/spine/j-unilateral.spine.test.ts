@@ -170,6 +170,12 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
       sealed_root?: string;
       seal_type?: string;
       reason?: string;
+      legibility?: {
+        attests?: string;
+        implies_assent?: boolean;
+        participants?: Array<{ pubkey?: string; content_frontier_seq?: number; attestation_mode?: string }>;
+        final_message?: { answered?: boolean };
+      };
     };
 
     const diag =
@@ -205,6 +211,40 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
     // SI-002 (D-2): B (the absent party, pubkey ${pubB}) is NEVER a signer — the notarized
     // event records it ABSENT, and the directory never delivered it seal_verified.
     expect(cluster.directory.output, `the notarized event must record B (${pubB.slice(0, 16)}…) ABSENT:${diag}`).toMatch(/absent/i);
+
+    // ── M8B FINDING-3 (cascade-2): a unilateral close must yield a DURABLE, LEGIBLE, RETRIEVABLE
+    // receipt — the same one a bilateral close does — with the counterparty recorded ABSENT. ──
+
+    // (a) The close response carries the legibility certificate INLINE (bilateral parity) — not a
+    //     bare {sealed_root, seal_type}. Receipt-not-assent, per-party frontiers, attestation modes.
+    const legDiag =
+      `\nclose.legibility: ${JSON.stringify(close.legibility)}` +
+      `\n--- daemonA receipt persist ---\n${daemonA.output.split("\n").filter((l) => /unilateral\.receipt|recordSeal|legibility|sealed_receipt/i.test(l)).slice(-10).join("\n")}`;
+    expect(close.legibility, `unilateral close must return the legibility inline:${legDiag}`).toBeDefined();
+    expect(close.legibility!.attests, `legibility attests receipt (never assent):${legDiag}`).toBe("receipt");
+    expect(close.legibility!.implies_assent).toBe(false);
+    const inlineParticipants = close.legibility!.participants ?? [];
+    // The present party (A) is 'live'; the absent counterparty (B) is 'absent'. Both must appear.
+    expect(inlineParticipants.some((p) => p.attestation_mode === "live"), `present party must be 'live':${legDiag}`).toBe(true);
+    const inlineAbsent = inlineParticipants.find((p) => p.attestation_mode === "absent");
+    expect(inlineAbsent, `absent counterparty must be recorded 'absent' in the legibility:${legDiag}`).toBeDefined();
+    expect(inlineAbsent!.pubkey, `the 'absent' participant must be B (${pubB.slice(0, 16)}…):${legDiag}`).toBe(pubB);
+
+    // (b) THE FINDING-3 CORE: the receipt is RETRIEVABLE afterward via cello_get_sealed_receipt —
+    //     the read that returned sealed_receipt_not_found before the fix. Same store the bilateral
+    //     seal writes; works because the daemon now persists the verified unilateral cert.
+    const receipt = (await connA.call("cello_get_sealed_receipt", { session_id: sessionIdA })) as {
+      ok?: boolean;
+      reason?: string;
+      sealed_root?: string;
+      legibility?: { participants?: Array<{ pubkey?: string; attestation_mode?: string }> };
+    };
+    const rcptDiag = `\nreceipt: ${JSON.stringify(receipt)}${legDiag}`;
+    expect(receipt.ok, `cello_get_sealed_receipt must return the receipt (was sealed_receipt_not_found):${rcptDiag}`).toBe(true);
+    expect(receipt.sealed_root, `retrieved receipt must carry the sealed_root:${rcptDiag}`).toBe(close.sealed_root);
+    const persistedAbsent = (receipt.legibility?.participants ?? []).find((p) => p.attestation_mode === "absent");
+    expect(persistedAbsent, `retrieved receipt must record the counterparty 'absent':${rcptDiag}`).toBeDefined();
+    expect(persistedAbsent!.pubkey, `retrieved receipt's absent party must be B (${pubB.slice(0, 16)}…):${rcptDiag}`).toBe(pubB);
   }, 120_000);
 });
 

@@ -554,8 +554,9 @@ export class CelloDirectoryNode {
     correlationId: string;
     // M7-SESSION-004: legibility certificate derived at processSeal time (leaves are
     // verified there); attached to the SessionSealed frame when the FROST ceremony completes.
-    // Present on the BILATERAL path; absent on the SESSION-002 unilateral path (whose
-    // seal_unilateral_confirmed cert is a different frame that does not carry legibility yet).
+    // Present on the BILATERAL path AND (M8B FINDING-3, cascade-2) on the unilateral path — the
+    // FROST unilateral seal carries it here so #completeUnilateralNotarization attaches it to the
+    // seal_unilateral_confirmed / seal_unilateral_notification cert.
     legibility?: SealLegibility;
     // DOD-LEG-2 (SI-002): the signed leaves the legibility was derived from, carried to the
     // SessionSealed frame so the client can re-derive + verify the published frontier itself.
@@ -3439,6 +3440,37 @@ export class CelloDirectoryNode {
       correlationId,
     });
 
+    // M8B FINDING-3 (cascade-2): derive the receipt-not-assent legibility certificate from the
+    // verified unilateral leaves — the SAME derivation the bilateral processSeal path runs — so a
+    // unilateral close yields a durable, legible, retrievable receipt. NOTE this is DIRECTORY-attested,
+    // not co-signed by the counterparty nor client-re-derived — NOT cryptographic bilateral parity
+    // (the SI-002 asymmetry is tracked as FINDING-5). The provenance is made explicit on the cert via
+    // attestation_mode. The present (submitting) party produced the trailing SEAL ctrl leaf → 'live';
+    // the absent
+    // counterparty authored no ceremony leaf → 'absent'. We override the absent party explicitly
+    // (belt-and-suspenders + self-documenting): in a unilateral seal the counterparty DEFINITIONALLY
+    // did not co-sign, so it is never 'live' regardless of transcript shape. Carried on
+    // seal_unilateral_confirmed / seal_unilateral_notification and persisted CLIENT-SIDE — the
+    // directory persists nothing new (no Flyway migration).
+    const legibility = buildSealLegibility(leafData.leaves, {
+      attestationOverrides: new Map([[absentPartyHex, "absent"]]),
+    });
+    // The absent counterparty may have authored NO leaf in the sealed chain — it only ever
+    // RECEIVED (a receiver produces no leaf; only a sender does). buildSealLegibility derives
+    // participants from leaf authors, so such a counterparty would be missing entirely. The
+    // receipt's whole purpose is to record the counterparty ABSENT, so ensure it is named: a
+    // synthetic participant with content_frontier_seq 0 / last_authored_seq 0 — the HONEST,
+    // un-inflatable floor (we hold NO signed leaf attesting what it received, SI-002) — marked
+    // 'absent'. Never overstates delivery; states plainly "this party did not co-sign".
+    if (!legibility.participants.some((p) => Buffer.from(p.pubkey).toString("hex") === absentPartyHex)) {
+      legibility.participants.push({
+        pubkey: absentPubkey,
+        content_frontier_seq: 0,
+        last_authored_seq: 0,
+        attestation_mode: "absent",
+      });
+    }
+
     // In-flight guard: set now that verification passed so a concurrent duplicate
     // seal_unilateral frame is rejected (top of method) rather than double-FROST'd. The
     // durable dedup is the seal_notarizations UNIQUE(session_id) constraint (AC-008).
@@ -3477,6 +3509,7 @@ export class CelloDirectoryNode {
         frostSignature: notarizationSig,
         signatureType: "single",
         attestation,
+        legibility,
         correlationId,
       });
       return;
@@ -3497,6 +3530,9 @@ export class CelloDirectoryNode {
       correlationId,
       unilateral: true,
       attestation,
+      // M8B FINDING-3 (cascade-2): carry the legibility to the FROST completion so the
+      // seal_unilateral_confirmed cert ships it (single-key path attaches it directly above).
+      legibility,
     });
 
     const sealVerifiedEvent: SealVerified = {
@@ -3609,11 +3645,16 @@ export class CelloDirectoryNode {
     frostSignature: Uint8Array;
     signatureType: "frost" | "single";
     attestation: "ABSENT" | "DELIVERED";
+    // M8B FINDING-3 (cascade-2): the receipt-not-assent legibility, derived from the verified
+    // unilateral leaves in #processSealUnilateral and threaded through both the single-key and
+    // FROST completion paths. Attached to the cert so the present party persists a retrievable
+    // receipt. Optional so a hypothetical caller without it still completes the seal.
+    legibility?: SealLegibility;
     correlationId: string;
   }): Promise<void> {
     const {
       sessionId, sessionIdHex, sealedRoot, presentPubkey, absentPubkey, presentHex, absentHex,
-      closeTimestamp, leafCount, frostSignature, signatureType, attestation, correlationId,
+      closeTimestamp, leafCount, frostSignature, signatureType, attestation, legibility, correlationId,
     } = args;
 
     // Persist the notarization (participant_a = present, participant_b = ABSENT). The
@@ -3662,7 +3703,31 @@ export class CelloDirectoryNode {
     });
     protocolLog("SEAL", `Unilateral sealed — session ${truncHex(sessionIdHex)}, root ${truncHex(Buffer.from(sealedRoot).toString("hex"))} (counterparty ${attestation})`);
 
-    // The verifiable certificate carried on both frames.
+    // M8B FINDING-3 (cascade-2): observability for the legibility attached to the unilateral cert
+    // (mirrors the bilateral seal.certificate.legibility.built). Fires only when legibility is
+    // present, so its absence in a log stream flags a cert that would leave the operator with an
+    // unretrievable receipt.
+    if (legibility) {
+      const absentParticipant = legibility.participants.find(
+        (p) => Buffer.from(p.pubkey).toString("hex") === absentHex,
+      );
+      this.#logger?.info("session.unilateral.legibility.built", {
+        sessionId: sessionIdHex,
+        participantCount: legibility.participants.length,
+        finalMessageAnswered: legibility.final_message.answered,
+        absentAttestation: absentParticipant?.attestation_mode,
+        correlationId,
+      });
+    }
+
+    // The verifiable certificate carried on both frames. M8B FINDING-3: legibility is included so the
+    // present party persists a retrievable receipt. It is also carried on the absent party's
+    // reconnect notification (both delivery paths), but the CLIENT-side persistence for the absent
+    // party is NOT yet wired — tracked as FINDING-6 (its notification handler is the DOD-UP-1 upgrade
+    // path, whose receipt semantics need their own design). NOT bilateral parity: this legibility is
+    // FROST-notarized by the directory consortium, NOT co-signed by the counterparty, and the client
+    // does NOT re-derive its frontiers (SI-002 asymmetry, tracked as FINDING-5). The absent party's
+    // values are marked attestation_mode 'absent' precisely to signal that directory-attested provenance.
     const cert = {
       sealed_root: sealedRoot,
       leaf_count: leafCount,
@@ -3673,6 +3738,7 @@ export class CelloDirectoryNode {
       absent_pubkey: absentPubkey,
       attestation_mode: attestation,
       seal_type: "UNILATERAL" as const,
+      ...(legibility ? { legibility } : {}),
     };
 
     // Confirm to the present (submitting) party.
@@ -3716,6 +3782,13 @@ export class CelloDirectoryNode {
           present_pubkey_hex: Buffer.from(presentPubkey).toString("hex"),
           absent_pubkey_hex: Buffer.from(absentPubkey).toString("hex"),
           attestation_mode: attestation,
+          // M8B FINDING-3 (cascade-2): carry the legibility on the DURABLE path too, not just the
+          // in-memory #pendingNotifications. Directory restarts are routine (ECS deploys), and the
+          // absent party often reconnects AFTER one — the Pg queue is the delivery mechanism then.
+          // Dropping it here would strand the absent party's reconnect notification without the cert.
+          // CBOR-hex (not JSON.stringify): the participant pubkeys are Uint8Array, which JSON mangles
+          // into {"0":..} — CBOR round-trips the bytes losslessly so the rebuilt frame re-encodes cleanly.
+          ...(legibility ? { legibility_cbor_hex: Buffer.from(CBOR_ENC.encode(legibility)).toString("hex") } : {}),
         },
       }).catch((err: unknown) => {
         const reason = err instanceof Error ? err.message : String(err);
@@ -4263,6 +4336,7 @@ export class CelloDirectoryNode {
         frostSignature: new Uint8Array(frame.frost_signature),
         signatureType: "frost",
         attestation: pending.attestation ?? "ABSENT",
+        legibility: pending.legibility,
         correlationId: pending.correlationId,
       });
       return;
@@ -4755,7 +4829,9 @@ function decodeStructure1Fields(cbor: Uint8Array): Structure1Fields | null {
  * restart). Returns null if the payload predates the certificate fields — such a row
  * cannot be delivered as a verifiable cert and is acknowledged without delivery.
  */
-function unilateralNotificationFromPayload(
+// Exported for FINDING-3 (cascade-2) unit coverage of the legibility CBOR-hex round-trip on the
+// durable notification path. Pure function; no state.
+export function unilateralNotificationFromPayload(
   p: Record<string, unknown>,
 ): SealUnilateralNotification | null {
   const sessionIdHex = p["session_id_hex"];
@@ -4772,6 +4848,22 @@ function unilateralNotificationFromPayload(
   if (typeof presentHex !== "string" || typeof absentHex !== "string") return null;
   if (typeof leafCount !== "number" || typeof closeTs !== "number") return null;
   if (attestationMode !== "ABSENT" && attestationMode !== "DELIVERED") return null;
+  // M8B FINDING-3 (cascade-2): rebuild the legibility from the durable CBOR-hex, so a notification
+  // that survived a directory restart still carries the receipt (the in-memory cert is gone). A
+  // malformed/absent value degrades to no legibility rather than dropping the whole notification —
+  // the seal cert (root/signature) is still deliverable and verifiable without it.
+  const legHexRaw = p["legibility_cbor_hex"];
+  let legibility: SealLegibility | undefined;
+  if (typeof legHexRaw === "string" && legHexRaw.length > 0) {
+    try {
+      const decoded = cborDecode(new Uint8Array(Buffer.from(legHexRaw, "hex")));
+      if (decoded && typeof decoded === "object" && (decoded as Record<string, unknown>)["attests"] === "receipt") {
+        legibility = decoded as SealLegibility;
+      }
+    } catch {
+      /* leave legibility undefined — the cert still delivers */
+    }
+  }
   return {
     type: "seal_unilateral_notification",
     session_id: new Uint8Array(Buffer.from(sessionIdHex, "hex")),
@@ -4785,6 +4877,7 @@ function unilateralNotificationFromPayload(
     absent_pubkey: new Uint8Array(Buffer.from(absentHex, "hex")),
     attestation_mode: attestationMode,
     seal_type: "UNILATERAL",
+    ...(legibility ? { legibility } : {}),
   };
 }
 

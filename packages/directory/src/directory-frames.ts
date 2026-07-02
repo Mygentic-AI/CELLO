@@ -683,6 +683,10 @@ export function encodeSealUnilateralConfirmed(frame: SealUnilateralConfirmed): U
     absent_pubkey: frame.absent_pubkey,
     attestation_mode: frame.attestation_mode,
     seal_type: frame.seal_type,
+    // M8B FINDING-3 (cascade-2): the legibility certificate, so the present party's daemon persists a
+    // durable, retrievable receipt for a unilateral close. Directory-attested (NOT co-signed by the
+    // counterparty, NOT re-derived by the client) — see FINDING-5; not cryptographic bilateral parity.
+    legibility: frame.legibility,
   });
 }
 
@@ -701,6 +705,10 @@ export function encodeSealUnilateralNotification(frame: SealUnilateralNotificati
     absent_pubkey: frame.absent_pubkey,
     attestation_mode: frame.attestation_mode,
     seal_type: frame.seal_type,
+    // M8B FINDING-3 (cascade-2): the absent party RECEIVES the legibility on reconnect (carried on
+    // both the in-memory and durable delivery paths). Client-side persistence of it (so the absent
+    // party's cello_get_sealed_receipt returns) is tracked as FINDING-6.
+    legibility: frame.legibility,
   });
 }
 
@@ -726,6 +734,16 @@ function decodeSealCertFields(
   if (!present_pubkey || present_pubkey.length !== 32) return null;
   if (!absent_pubkey || absent_pubkey.length !== 32) return null;
   if (attestation_mode !== "ABSENT" && attestation_mode !== "DELIVERED") return null;
+  // M8B FINDING-3 (cascade-2): pass the legibility certificate through so the outbound
+  // decoder round-trips it (the real consumer is the client's generic CBOR decode). A
+  // structurally-implausible object is dropped rather than failing the whole frame — the
+  // seal is still valid without a receipt (a pre-cascade-2 directory ships none).
+  const legibilityRaw = o["legibility"];
+  const legibility =
+    legibilityRaw && typeof legibilityRaw === "object" &&
+    (legibilityRaw as Record<string, unknown>)["attests"] === "receipt"
+      ? (legibilityRaw as import("./directory-types.js").SealLegibility)
+      : undefined;
   return {
     sealed_root,
     leaf_count,
@@ -736,6 +754,7 @@ function decodeSealCertFields(
     absent_pubkey,
     attestation_mode,
     seal_type: "UNILATERAL",
+    ...(legibility ? { legibility } : {}),
   };
 }
 
