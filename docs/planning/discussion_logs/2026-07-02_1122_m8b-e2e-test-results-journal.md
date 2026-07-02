@@ -126,7 +126,7 @@ SPARC + version-bump/publish cascade (per repo CLAUDE.md npm-publish rules).
 | 13 | Cross-node presence | A | ⏸ BLOCKED (needs reconnect) | Same daemon-restart dependency as #12; will run together. Plan: while bootstrapped to eu1, initiate local Demo2 → EC2 demo agent (home=us1) to prove cross-node presence resolution. |
 | 14 | Suspension | B | ⬜ pending | |
 | 2 | Session interrupted (EC2) | D | ✅ PASS + RE-VERIFIED on 0.0.22 | Detection was always instant (`liveness:"gone"`); the F16 observability GAP is now FIXED. Re-verified 2026-07-02 on daemon 0.0.22: killing the EC2 counterparty (16:37:38Z) → `cello_receive_session` returns `reason:"counterparty_gone", liveness:"gone"` + guidance, and `cello_status.active_sessions` lists the session `liveness:"gone"` (both silent on 0.0.20). Bonus: F14 demo re-arm verified — 2 sequential sessions A→close→B, no restart, both sealed bilaterally (`ad6c7bb0…`,`56403328…`). See F16 (resolved) + F22 (residual). |
-| 6 | Unilateral seal (EC2) | D | ✅ FINDING-1 FIXED (0.0.22) / ⚠️ NEW FINDING-3 (receipt unretrievable) | Re-verified 2026-07-02 on 0.0.22: `cello_close_session` on a peer-gone session (`747c922f`, past the 600s grace) now returns `ok:true, seal_type:"unilateral"` (root `80e61434…`) — the call that deadlocked in `seal_pending_bilateral` forever on 0.0.20. Local daemon log confirms `session.seal.completed` + `session.unilateral.certificate.verified`. **BUT** `cello_get_sealed_receipt` returns `sealed_receipt_not_found` (3× over ~2 min; bilateral control retrieves fine) — the unilateral path skips the bilateral `session.sealed.received` storage step, so the verified cert is never persisted to the receipt store. Operator gets success but cannot retrieve the receipt. See **FINDING-3**. |
+| 6 | Unilateral seal (EC2) | D | ✅ FINDING-1 FIXED (0.0.22) / ✅ FINDING-3 FIXED + LIVE-VERIFIED (0.0.23, directory 6f66557) | **2026-07-02 ~21:35 UTC (0.0.23):** unilateral close now returns legibility inline (counterparty `attestation_mode:"absent"`) AND `cello_get_sealed_receipt` returns the durable cert (`sealed_root 3dd19ab4…`) — FINDING-3 closed end-to-end. History ↓. Re-verified 2026-07-02 on 0.0.22: `cello_close_session` on a peer-gone session (`747c922f`, past the 600s grace) now returns `ok:true, seal_type:"unilateral"` (root `80e61434…`) — the call that deadlocked in `seal_pending_bilateral` forever on 0.0.20. Local daemon log confirms `session.seal.completed` + `session.unilateral.certificate.verified`. **BUT** `cello_get_sealed_receipt` returns `sealed_receipt_not_found` (3× over ~2 min; bilateral control retrieves fine) — the unilateral path skips the bilateral `session.sealed.received` storage step, so the verified cert is never persisted to the receipt store. Operator gets success but cannot retrieve the receipt. See **FINDING-3**. |
 | 9 | Node down during DKG | C | ⬜ pending | |
 | 10 | Node down during seal | C | ⬜ pending | |
 | 5 | Directory reconnect | C | ⬜ pending | |
@@ -381,6 +381,17 @@ session (two sequential sessions, no restart — see friction F14 + results row 
 (fixed-port 4001 caps concurrent sessions).
 
 ### FINDING-3 — Unilateral seal completes but its certificate is not retrievable (`cello_get_sealed_receipt` → `not_found`)
+
+> **✅ RESOLVED & LIVE-VERIFIED 2026-07-02 ~21:35 UTC.** Fixed across both repos and shipped:
+> directory `6f66557` (legibility in the `seal_unilateral_confirmed` frame) live in all 3 regions;
+> daemon `0.0.23` (persist via `recordSealCertificate` + return legibility inline on
+> `cello_close_session`) on npm `latest`. Live acceptance from the local daemon 0.0.23: fresh session
+> `e3c167bd` (local `8999608f…` → demo agent `7ab98987…`), counterparty taken offline, close after
+> grace → `seal_type:"unilateral"` **with legibility inline** (counterparty `attestation_mode:"absent"`,
+> local `"live"`); **`cello_get_sealed_receipt` returned the durable cert** (`sealed_root 3dd19ab4…`) —
+> no longer `sealed_receipt_not_found`. Both halves of the original gap (no inline cert, no retrievable
+> cert) are closed. Reviewer Critical-1 (durable Pg payload) fixed; Critical-2 → [[#FINDING-6]] (absent-party
+> B-side persistence, tracked). See [[2026-07-02_1807_m8b-cascade-2-finding3-implementation-and-deploy-plan|cascade-2 implementation + deploy record]].
 
 **Severity:** high — negates the *purpose* of the FINDING-1 fix. The point of a unilateral seal is
 that a party who loses its counterparty can still obtain a **durable, retrievable receipt** it can
