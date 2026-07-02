@@ -404,16 +404,35 @@ certificate fine — so this is unilateral-specific, not a general retrieval bug
 no `participants`/`legibility`/`attestation_mode` block (bilateral returns the full inline cert). So
 the operator gets **neither** an inline certificate **nor** a retrievable one.
 
-**Hypothesis (unconfirmed — needs code trace):** the unilateral finalization verifies the
-FROST-notarized root but omits the persist-to-receipt-store step the bilateral `sealed.received`
-handler performs. Fix likely in the client/daemon unilateral-close path (persist the verified
-unilateral cert to the same store) and/or the close response (return the full cert inline as
-bilateral does). Distinct from the reviewer's in-memory-escalation residual (that's about surviving a
-daemon restart between retries; this is about persisting/exposing the receipt at all).
+**Test framing (confirmed intent):** T2 is a *genuine* unilateral-seal test — the counterparty
+daemon was deliberately killed (full peer removal) and never returned past the grace window.
+Unilateral is the CORRECT intended outcome here; a bilateral seal in this scenario would itself be a
+bug (the group co-signing for a provably-absent party — the F19 concern). So FINDING-3 is a gap in
+*intended unilateral behavior*, not a symptom of a missed bilateral seal.
+
+**ROOT CAUSE CONFIRMED (code, 2026-07-02, `cello-client` `core/daemon/src/daemon.ts`):**
+- Bilateral persists the receipt: `daemon.ts:1886` `recordSealCertificate(agentName, sidHex, rootHex, JSON.stringify(legibility))`,
+  read back by `cello_get_sealed_receipt` via `getSealCertificate` (`daemon.ts:2607`).
+- The unilateral confirmation handler (`daemon.ts:1943–1974`) verifies the cert
+  (`session.unilateral.certificate.verified`), destroys the session node, and resolves the waiter
+  with the root only — it **never calls `recordSealCertificate`** (grep: that call exists at exactly
+  ONE line in the file). So the unilateral cert is **not persisted at all** → `sealed_receipt_not_found`.
+- Deeper: the `seal_unilateral_confirmed` frame carries only
+  `sealed_root/frost_signature/leaf_count/close_timestamp/signature_type` — **no legibility object**.
+  There is no participant/ABSENT cert client-side to persist even if the call were added.
+
+**Fix target = intended behavior (not just the symptom):** a unilateral close must yield the same
+durable, legible receipt a bilateral close does, with the counterparty recorded **ABSENT**. That
+needs (1) a legibility cert on the unilateral path — most likely the directory including it in the
+`seal_unilateral_confirmed` frame (it already computes `gone → ABSENT` in `#processSealUnilateral`),
+and (2) the client persisting it via `recordSealCertificate` + returning it inline in the
+`cello_close_session` response. Client + directory change → cascade-2. Distinct from the reviewer's
+in-memory-escalation residual (that's surviving a daemon restart between retries; this is
+persisting/exposing the receipt at all).
 
 **Does NOT undo FINDING-1:** the seal now COMPLETES (it never did on 0.0.20). But the receipt is not
-yet a retrievable artifact, so the feature is functionally incomplete for its stated purpose. Paired
-friction: F23.
+yet a retrievable artifact, so the feature is functionally incomplete for its intended purpose.
+Paired friction: F23.
 
 ---
 
