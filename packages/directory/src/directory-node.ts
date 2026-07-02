@@ -3471,6 +3471,17 @@ export class CelloDirectoryNode {
       });
     }
 
+    // M8B FINDING-5 (cascade-2): the SIGNED leaves the legibility's frontiers were derived from —
+    // the SAME shape + source as the bilateral processSeal path (directory-node.ts processSeal). The
+    // present party's daemon re-derives each content_frontier_seq from these and REJECTS an inflated
+    // published value (SI-002). Carried ONLY on the present party's seal_unilateral_confirmed frame
+    // (threaded through both completion paths below); the absent party's notification is unchanged.
+    const frontierLeaves = leafData.leaves.map((l) => ({
+      structure1_cbor: l.structure1_cbor,
+      sender_pubkey: l.s2.sender_pubkey,
+      sender_signature: l.s2.sender_signature,
+    }));
+
     // In-flight guard: set now that verification passed so a concurrent duplicate
     // seal_unilateral frame is rejected (top of method) rather than double-FROST'd. The
     // durable dedup is the seal_notarizations UNIQUE(session_id) constraint (AC-008).
@@ -3510,6 +3521,7 @@ export class CelloDirectoryNode {
         signatureType: "single",
         attestation,
         legibility,
+        frontierLeaves,
         correlationId,
       });
       return;
@@ -3533,6 +3545,9 @@ export class CelloDirectoryNode {
       // M8B FINDING-3 (cascade-2): carry the legibility to the FROST completion so the
       // seal_unilateral_confirmed cert ships it (single-key path attaches it directly above).
       legibility,
+      // M8B FINDING-5 (cascade-2): carry the signed frontier leaves to the FROST completion so the
+      // confirm frame ships them for client-side frontier re-derivation.
+      frontierLeaves,
     });
 
     const sealVerifiedEvent: SealVerified = {
@@ -3650,11 +3665,15 @@ export class CelloDirectoryNode {
     // FROST completion paths. Attached to the cert so the present party persists a retrievable
     // receipt. Optional so a hypothetical caller without it still completes the seal.
     legibility?: SealLegibility;
+    // M8B FINDING-5 (cascade-2): the signed leaves the legibility's frontiers were derived from,
+    // attached to the present party's confirm frame ONLY (SI-002 client re-derivation). Derived in
+    // #processSealUnilateral and threaded through both the single-key and FROST completion paths.
+    frontierLeaves?: import("./directory-types.js").SealFrontierLeaf[];
     correlationId: string;
   }): Promise<void> {
     const {
       sessionId, sessionIdHex, sealedRoot, presentPubkey, absentPubkey, presentHex, absentHex,
-      closeTimestamp, leafCount, frostSignature, signatureType, attestation, legibility, correlationId,
+      closeTimestamp, leafCount, frostSignature, signatureType, attestation, legibility, frontierLeaves, correlationId,
     } = args;
 
     // Persist the notarization (participant_a = present, participant_b = ABSENT). The
@@ -3741,12 +3760,15 @@ export class CelloDirectoryNode {
       ...(legibility ? { legibility } : {}),
     };
 
-    // Confirm to the present (submitting) party.
+    // Confirm to the present (submitting) party. M8B FINDING-5: the confirm frame ALSO carries the
+    // signed frontier_leaves (attached here, NOT on the shared `cert`, so the absent party's
+    // notification is unchanged) — the present party's daemon re-derives + verifies each frontier.
     const confirmFrame = encodeSealUnilateralConfirmed({
       type: "seal_unilateral_confirmed",
       session_id: sessionId,
       sealed_at: closeTimestamp,
       ...cert,
+      ...(frontierLeaves ? { frontier_leaves: frontierLeaves } : {}),
     });
     const presentStream = this.#streams.get(presentHex);
     if (presentStream) {
@@ -4337,6 +4359,7 @@ export class CelloDirectoryNode {
         signatureType: "frost",
         attestation: pending.attestation ?? "ABSENT",
         legibility: pending.legibility,
+        frontierLeaves: pending.frontierLeaves,
         correlationId: pending.correlationId,
       });
       return;
@@ -4612,6 +4635,9 @@ export class CelloDirectoryNode {
     const sessionIdHex = Buffer.from(sessionId).toString("hex");
     this.#sessionLastActivity.set(sessionIdHex, this.#clock.now() - (this.#deliveryGraceSeconds + 1) * 1000);
     this.#sessionParticipants.set(sessionIdHex, { initiatorHex: senderHex, targetHex: absentPartyHex });
+    // Register the present party's stream so the seal_unilateral_confirmed frame is actually
+    // delivered to the passed mockStream (a capturing stream can then decode the sent frame).
+    this.#streams.set(senderHex, mockStream);
     await this.#processSealUnilateral(mockStream, senderHex, {
       type: "seal_unilateral",
       session_id: sessionId,

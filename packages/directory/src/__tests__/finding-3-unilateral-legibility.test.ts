@@ -29,7 +29,7 @@ import type { Logger } from "@cello-protocol/interfaces";
 import { createDirectoryNode, unilateralNotificationFromPayload, type RelayAdapter } from "../directory-node.js";
 import { encodeSealUnilateralConfirmed } from "../directory-frames.js";
 import { buildSealLegibility } from "../seal-legibility.js";
-import type { SealUnilateralLeaf } from "../directory-types.js";
+import type { SealUnilateralLeaf, SealFrontierLeaf } from "../directory-types.js";
 
 const ENC = new Encoder({ tagUint8Array: false });
 type Kp = ReturnType<typeof generateKeypair>;
@@ -369,5 +369,121 @@ describe("FINDING-3 (directory wire): the confirmed-frame encoder carries legibi
     expect(leg.attests).toBe("receipt");
     expect(Array.isArray(leg.participants)).toBe(true);
     expect(leg.participants).toHaveLength(2);
+  });
+});
+
+/**
+ * M8B FINDING-5 (cascade-2) — the present party must be able to INDEPENDENTLY re-derive each
+ * party's content_frontier_seq from the SIGNED leaves (SI-002), instead of trusting the directory's
+ * published frontier on the receipt-of-last-resort. The bilateral seal_verified/session_sealed
+ * frames already ship `frontier_leaves` for exactly this; the unilateral seal_unilateral_confirmed
+ * frame must carry them too so the present party's daemon can re-derive + reject an inflated frontier.
+ *
+ * Scope: only the seal_unilateral_confirmed frame (the PRESENT party, always live/in-memory). The
+ * absent party's notification is FINDING-6's concern and is left unchanged here.
+ *
+ * TDD Phase R — RED until #processSealUnilateral builds frontier_leaves from the verified carried
+ * leaves and threads them (single-key + FROST completion paths) onto the confirmed cert, and the
+ * encoder + SealUnilateralConfirmed type carry them.
+ */
+describe("FINDING-5 (directory): unilateral seal ships frontier_leaves for client re-derivation", () => {
+  /** Strip the it-length-prefixed varint frame written by #sendFrame(stream, lp.encode.single(bytes)). */
+  function lpUnwrap(framed: Uint8Array): Uint8Array {
+    let i = 0;
+    let shift = 0;
+    let len = 0;
+    for (;;) {
+      const b = framed[i++];
+      len |= (b & 0x7f) << shift;
+      if ((b & 0x80) === 0) break;
+      shift += 7;
+    }
+    return framed.slice(i, i + len);
+  }
+
+  it("encodeSealUnilateralConfirmed round-trips frontier_leaves on the wire", async () => {
+    const keyA = generateKeypair();
+    const keyB = generateKeypair();
+    const relayKp = generateKeypair();
+    const aHex = hex(new Uint8Array(await keyA.getPublicKey()));
+    const sessionId = new Uint8Array(randomBytes(16));
+    const { leaves } = await buildUnilateralCarry(keyA, keyB, relayKp, sessionId);
+    const { reconstructCarriedSealLeaves } = await import("../seal-unilateral-verify.js");
+    const carried = reconstructCarriedSealLeaves(leaves, aHex);
+    if (!carried.ok) throw new Error("carry");
+    const frontierLeaves: SealFrontierLeaf[] = carried.leaves.map((l) => ({
+      structure1_cbor: l.structure1_cbor,
+      sender_pubkey: l.s2.sender_pubkey,
+      sender_signature: l.s2.sender_signature,
+    }));
+
+    const bytes = encodeSealUnilateralConfirmed({
+      type: "seal_unilateral_confirmed",
+      session_id: sessionId,
+      sealed_at: 102,
+      sealed_root: new Uint8Array(randomBytes(32)),
+      leaf_count: 3,
+      close_timestamp: 102,
+      frost_signature: new Uint8Array(64),
+      signature_type: "single",
+      present_pubkey: new Uint8Array(await keyA.getPublicKey()),
+      absent_pubkey: new Uint8Array(await keyB.getPublicKey()),
+      attestation_mode: "ABSENT",
+      seal_type: "UNILATERAL",
+      frontier_leaves: frontierLeaves,
+    });
+
+    const decoded = decode(bytes) as Record<string, unknown>;
+    const fl = decoded["frontier_leaves"];
+    expect(Array.isArray(fl), "confirmed frame must carry frontier_leaves on the wire").toBe(true);
+    expect((fl as unknown[]).length).toBe(3);
+    const first = (fl as Array<Record<string, unknown>>)[0];
+    expect(first["structure1_cbor"]).toBeInstanceOf(Uint8Array);
+    expect(first["sender_pubkey"]).toBeInstanceOf(Uint8Array);
+    expect(first["sender_signature"]).toBeInstanceOf(Uint8Array);
+  });
+
+  it("#processSealUnilateral attaches frontier_leaves to the confirmed frame sent to the present party", async () => {
+    const logs: LogEntry[] = [];
+    const dirKp = generateKeypair();
+    const { directory, stop } = await createDirectoryNode({
+      keyProvider: dirKp,
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      relay: makeGoneRelay(),
+      relayEndpoint: { peer_id: "relay-peer-id", multiaddrs: ["/ip4/127.0.0.1/tcp/0"] },
+      logger: makeSpyLogger(logs),
+      deliveryGraceSeconds: 0,
+    });
+    try {
+      const keyA = generateKeypair();
+      const keyB = generateKeypair();
+      const relayKp = generateKeypair();
+      const aHex = hex(new Uint8Array(await keyA.getPublicKey()));
+      const bHex = hex(new Uint8Array(await keyB.getPublicKey()));
+      const sessionId = new Uint8Array(randomBytes(16));
+      const { leaves, reportedRoot } = await buildUnilateralCarry(keyA, keyB, relayKp, sessionId);
+
+      // Capturing stream registered as the present party's directory stream.
+      const captured: Uint8Array[] = [];
+      const capturingStream = {
+        send: (b: Uint8Array | { slice(): Uint8Array }) => {
+          captured.push(b instanceof Uint8Array ? b : b.slice());
+        },
+      } as unknown as import("@libp2p/interface").Stream;
+      await directory.triggerSealUnilateralWithLeavesForTest(aHex, sessionId, reportedRoot, bHex, leaves, capturingStream);
+
+      const confirm = captured
+        .map((framed) => {
+          try { return decode(lpUnwrap(framed)) as Record<string, unknown>; } catch { return null; }
+        })
+        .find((f) => f && f["type"] === "seal_unilateral_confirmed");
+      expect(confirm, `confirm frame must be sent: ${JSON.stringify(logs.map((l) => l.event))}`).toBeTruthy();
+      const fl = confirm!["frontier_leaves"];
+      expect(Array.isArray(fl), "confirmed frame must carry frontier_leaves").toBe(true);
+      // 3 carried leaves (A msg, B msg, A ctrl) → the client re-derives A=2, B=1 from these.
+      expect((fl as unknown[]).length).toBe(3);
+    } finally {
+      await stop();
+    }
   });
 });

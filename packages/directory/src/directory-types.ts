@@ -476,6 +476,12 @@ export interface SealUnilateralConfirmed extends SealCertificateFields {
   type: "seal_unilateral_confirmed";
   session_id: Uint8Array;
   sealed_at: number;         // Unix timestamp ms (== close_timestamp; kept for back-compat)
+  // M8B FINDING-5 (cascade-2): the signed leaves the legibility's per-party content_frontier_seq was
+  // derived from — the SAME shape the bilateral session_sealed frame carries. Shipped ONLY on the
+  // present party's confirm frame (not the absent party's notification) so the present party's daemon
+  // can INDEPENDENTLY re-derive each frontier and REJECT an inflated directory-published value (SI-002).
+  // Optional for back-compat with pre-FINDING-5 directories.
+  frontier_leaves?: SealFrontierLeaf[];
 }
 
 /**
