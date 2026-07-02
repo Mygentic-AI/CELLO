@@ -24,6 +24,14 @@ Note frequently, durably (must survive compaction). Friction includes:
 
 This log is NOT a fix list. We are recording, not fixing (yet).
 
+**Scope note (Andre, 2026-07-02):** the EC2 demo agent is NOT merely a test instrument — it is a
+**production onboarding surface**. Every new user connects to it right after signup as their first
+proof that their own stack works ("send a message, get a response — your install is good"), and it
+gates the beta→latest promotion. So friction/bugs that manifest on the demo agent are
+**production-facing onboarding defects**, not test-rig quirks. Most are rooted in the
+client/daemon/directory (the demo is the canary that takes continuous stranger traffic), so the
+fixes land in the product — which helps every operator, not just the demo.
+
 Severity tags: `discoverability` · `confusion` · `lifecycle/restart` · `error-message` · `stability` · `cleanup`
 
 Companion to [[2026-07-02_1122_m8b-e2e-test-results-journal]] and
@@ -299,8 +307,22 @@ real availability bug that directly violates the "availability is a first-class 
 invariant. Also means #2 and #6 each need a fresh EC2 daemon restart (only one inbound session
 per lifetime).
 
-**To verify (follow-up):** after restoring, accept one session, seal it, then attempt a SECOND
-inbound session without restarting — if it fails, the re-arm gap is confirmed as a standing bug.
+**CONFIRMED as a bug (2026-07-02, after reading the daemon source):** the daemon *does* intend to
+re-arm — `session-node-manager.ts:903` "If we consumed this agent's standing receiver, spin up a
+replacement (async — do NOT await)" (see also daemon.ts:3081, :3213). So a replacement receiver is
+supposed to be rebuilt after each consumption. On the EC2 demo agent it did **not** happen: after
+session `a6a2f9af` consumed the receiver at 09:02:47, no replacement `session.node.created` ever
+appeared, and every later inbound offer got `standing_receiver_unavailable`. The async replacement
+either never fired or failed silently. This is a real daemon bug, not intended behavior — and given
+the demo's production onboarding role (Scope note above) it is **the highest-impact defect found**:
+only the FIRST new user per daemon lifetime can verify their install; everyone after gets a failed
+first experience with zero visible cause. The demo's own code is correct (it runs a continuous
+`cello_await_session` loop) — the gap is entirely in the daemon's `#createStandingReceiver`
+replacement path.
+
+**Fix location:** `cello-client` `core/daemon/src/session-node-manager.ts` (the async replacement
+around :903 / `#createStandingReceiver` :2916+). Must also fail LOUD — the silent failure is what
+made this invisible.
 
 **Improvement idea:** Re-arm the standing receiver immediately after it is consumed (and after each
 session seals). Surface standing-receiver health in `cello status` (the parked

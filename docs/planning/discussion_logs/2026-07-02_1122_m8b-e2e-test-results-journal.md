@@ -252,3 +252,29 @@ showing whether a `seal_unilateral` frame was received and which guard rejected 
 
 **Note:** this is distinct from #2 (interruption *detection* works). Here *detection* works
 (`liveness:gone`) but *unilateral finalization* does not.
+
+### FINDING-2 — Demo agent onboarding is broken after the first user (standing receiver not re-armed)
+
+**Severity:** highest user-facing impact of this session. The demo agent is the **production
+onboarding surface** — every new signup connects to it to confirm their stack works (`demo/
+CLAUDE.md`). Because the daemon's standing receiver is not re-armed after it's consumed by one
+session (see friction F14, confirmed against `session-node-manager.ts:903`), the demo agent serves
+exactly **one** new user per daemon lifetime, then returns `standing_receiver_unavailable` to
+everyone after — a silently-broken first experience with no visible cause. Both systemd services
+report `active` throughout.
+
+**Where the fixes land (evidence-based):**
+- **Standing-receiver re-arm (critical):** `cello-client` `core/daemon/src/session-node-manager.ts`
+  — the async replacement (~:903 / `#createStandingReceiver` :2916+) failed silently on EC2. Fix +
+  make replacement failure LOUD. This is a **daemon/product** fix that benefits every operator.
+- **Systemd ordering:** ALREADY FIXED on the deployed EC2 unit — it has `After=cello-daemon.service`
+  + `Requires=cello-daemon.service` (the repo's `demo/cello-demo.service` is stale and should be
+  updated to match). No action needed on the instance.
+- **False-success on connect (F13):** a new user connecting while the receiver is deaf gets
+  `initiate_session` → `ok` + a session id, then silence — the worst onboarding signal. Client fix.
+- **Counterparty-gone invisible (F16):** if the demo drops mid-verification the user sees a hang,
+  not a signal. Client fix.
+
+**Framing correction (Andre):** the demo agent is a live product surface, not just a test rig — so
+these are production onboarding defects. The demo is the canary; the fixes belong in the
+client/daemon/directory and help all operators.
