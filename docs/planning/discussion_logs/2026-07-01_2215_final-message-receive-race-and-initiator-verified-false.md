@@ -21,6 +21,15 @@ description: >
 > when the seal signer's key is not held locally) with a misleading event shape; Finding 1
 > is mechanism (1)+(2): no blocking receive exists, and seal teardown evicts unread buffered
 > content. Fix proposals are in the Resolution section, pending Andre's decision.
+>
+> **Two corrections folded in after the initial write-up (from the 2026-07-02 review with
+> Andre) — the fix descriptions below supersede the earlier ones:**
+> - **Finding 2:** the seal signer is *whoever closes the session first* (not a fixed role),
+>   so the fix must be **symmetric** — the directory hands *each* party the *other's* FROST
+>   group primary. The earlier "responder gets the initiator's key" is only half of it.
+> - **Finding 1:** the real fix is **completing the `cello_receive_session` stub** — a
+>   fully-specced blocking receive that already worked in the retired in-process adapter and
+>   was dropped in the daemon split — not merely making `cello_receive` honor `timeout_ms`.
 
 ## ⚠️ Status: OPEN INVESTIGATION (superseded — kept for the record)
 
@@ -276,6 +285,39 @@ drives the seal (its group key signs), the **session initiator** cannot channel-
 verify — it accepts on Noise. The reverse direction works (responder recorded the initiator's
 primary at accept time).
 
+**Correction (2026-07-02 review) — the signer is the FIRST CLOSER, not a fixed role.** The
+directory designates the "seal initiator" as *the sender of the first SEAL ctrl leaf* — i.e.
+**whoever closes the session first** (`packages/directory/src/directory-node.ts:4049-4051`:
+"The seal initiator is the sender of the second-to-last leaf (the first SEAL ctrl leaf)"), and
+verifies + signs against *that* party's `primary_pubkey` (`#resolvePrimaryPubkey(initiatorHex)`,
+line 4073). In session `05d8d39a` the **demo closed first** (its seal leaf at `19:22:34.013`
+vs Agent-1's at `19:22:34.853`), so the **demo's** group key signed — which is why Agent-1, the
+*session* initiator, could not verify. This matters for the fix: because either party may be the
+first closer, and closing order is not known in advance, **both parties must hold both group
+primaries**. The current provisioning (responder holds the session-initiator's primary) covers
+exactly *one* of the two closing orders — it is half a design, not a coherent asymmetry.
+
+**Which key is missing (and which are not) — there are three distinct keys.** (1) *Identity
+keys (K_local)* — both parties always hold both; a session cannot exist otherwise. (2)
+*Per-message sender keys* — each content leaf carries its own `sender_pubkey`+`sender_signature`,
+so both parties verify every message the other sends (this is the "we co-sign the evolving
+transcript" property, and it is already symmetric). (3) *The FROST group primary* — a *different*
+key from the identity key (the joint DKG key: agent share + directory K_server shares), used only
+for the final seal. Only key (3) is missing, and only in one closing direction. The intuition
+"we sign each other's messages, so we must have each other's keys" is correct — for keys (1) and
+(2), which both parties do have; the seal uses key (3), which was never part of the identity
+exchange.
+
+**Is there a rationale for withholding key (3)? No.** It is a *public* key (registered at the
+directory); there is no secrecy to protect. Withholding it from the counterparty runs against
+CELLO's own thesis — the seal exists for non-repudiation and third-party verifiability (an
+arbitrator is *supposed* to verify), so the counterparty is the *last* party you would want
+unable to verify. Privacy gives no cover either: the counterparty already holds your identity
+key, so your group key adds no meaningful new linkage to them. A deniability rationale would run
+directly opposite to the protocol's non-repudiation goal. Conclusion: the asymmetry is an
+implementation-order artifact — and the code comment admits it, calling the missing direction
+"a follow-on."
+
 **Why both sides still converged on the same root:** the DOD-LEG-2 frontier verification
 (`seal.certificate.frontier.verified parties:2`) is independent of the FROST-cert check — it
 re-verifies per-leaf **sender signatures**, which both sides can always do.
@@ -305,15 +347,21 @@ Also ruled out: share-load failure (paths returning `verified:false` at
   reason:"signer_key_not_held"}` can never again read as a failed check. Also fix the stale
   comment block in `session-ceremony.ts` (it still describes responder-verify as a follow-on;
   responder-verify is built — the missing symmetry is the initiator side).
-- **F2-b (hardening, protocol addition, story-sized, cross-repo):** close the asymmetry — the
-  directory includes the **responder's** `primary_pubkey` in the session_assignment returned to
-  the initiator (it already resolves primaries via `#resolvePrimaryPubkey`); the initiator-side
-  assignment path records it via the existing `recordCounterpartyPrimary`. Then
-  `verifyBilateralSealCertificate`'s existing counterparty branch verifies responder-driven
-  seals, and SI-003 tightens for free (an unknown signer becomes
-  `signer_not_a_session_participant` → REJECT instead of accept-unverified). Needs a frame
-  field + directory change + client change + version cascade — a proper story, candidate for
-  the E2E-hardening phase or the M9-merge era.
+- **F2-b (hardening — SYMMETRIC key provisioning, protocol addition, story-sized, cross-repo).**
+  *Supersedes the earlier "responder gets the initiator's key" framing, which covered only one
+  closing order.* Because the seal is signed by **whoever closes first** (see Correction above),
+  **each party must hold the other's FROST group primary.** The directory already resolves both
+  parties' primaries when it brokers the session (`#resolvePrimaryPubkey`); the fix is for it to
+  ship **each party the counterparty's primary** — on the session_assignment (or on
+  `session_sealed`) — so *both* sides record it via the existing `recordCounterpartyPrimary`.
+  Then `verifyBilateralSealCertificate`'s counterparty branch verifies the seal regardless of who
+  closed, and SI-003 tightens for free (an unknown signer becomes
+  `signer_not_a_session_participant` → REJECT instead of accept-unverified). Today only the
+  responder-records-initiator direction exists (`daemon.ts:3272-3274`, inbound-accept only); the
+  new work is the **initiator-records-responder** direction plus the directory carrying the
+  counterparty primary on the initiator-facing path. Needs a frame field + directory change +
+  client change (both directions) + version cascade — a proper story, candidate for the
+  E2E-hardening phase or the M9-merge era.
 
 ## Finding 1 — VERDICT: mechanism (1) is the proximate cause; mechanism (2) makes it permanent; mechanism (3) falsified.
 
@@ -322,17 +370,36 @@ Also ruled out: share-load failure (paths returning `verified:false` at
 `session.content.received` (`session-node-manager.ts:2367-2376`) — the 19:22:33.874 event
 proves the push happened.
 
-**Mechanism (1) confirmed — and worse than suspected: no blocking receive exists anywhere.**
+**Mechanism (1) confirmed — and worse than suspected: no blocking receive exists anywhere in
+the live daemon path, because a fully-specced blocking receive was DROPPED in the split.**
 - The daemon's `cello_receive` handler (`daemon.ts:4139-4167`) reads **only** `session_id`.
   The `timeout_ms` the MCP shim forwards is **silently ignored** — the handler is a
   non-blocking `buf.shift()` (`takeReceivedContent`).
-- `cello_receive_session` — the "alias" the shim exposes with a `timeout_ms` parameter — hits
+- `cello_receive_session` — the tool the shim exposes with a `timeout_ms` parameter — hits
   the `SESSION_TOOLS_REQUIRING_AGENT` **stub** (`daemon.ts:2112-2130`) and returns
   `not_implemented` for every call with a current agent.
 - So the guidance string *"or use the blocking receive variant"* directs the client to a tool
   that does not exist. The client polled non-blocking, got nulls before 33.874, followed the
   guidance into a dead end, and stopped. Nothing wakes it (the content-arrival push is channel
   Gap 3-5; the shim discards all notification frames anyway — Gap 2).
+
+**Correction (2026-07-02 review) — `cello_receive_session` is not a blank stub; it is a
+regressed port.** The retired in-process adapter implements BOTH receive tools as **blocking**
+(`core/adapter-claude-code/src/server.ts:254-334`):
+- `cello_receive_session(session_id, timeout_ms)` — *"Blocks until a message arrives or the
+  timeout expires."* Session-locked. Returns a normal message, `counterparty_closing`, or
+  **`session_sealed` inline**, or `{type:"timeout"}`. This is the "blocking receive variant" the
+  guidance names.
+- `cello_receive(timeout_ms)` — same, but any-session (no `session_id`), with
+  `other_sessions_pending`.
+
+Both are specced and tested: **AC-003/AC-004** and `core/client/src/__tests__/session007.test.ts`
+cover the blocking + inline-`session_sealed` behavior; `trustless-cello`'s e2e-tests
+(`mcp-002.test.ts`, `node-004-e2e.test.ts`) still target `cello_receive_session` as the canonical
+session-locked receive. In the split, `cello_receive` was re-ported into the daemon with the
+**wrong semantics** (session-scoped *and* non-blocking — neither original), and
+`cello_receive_session` (the real blocking one) was left stubbed. So mechanism (1) is not "we
+never built a blocking receive" — it is "we built it, it worked, and the daemon port dropped it."
 
 **Mechanism (2) confirmed as the finisher:** `destroyNode(reason:"sealed")` →
 `#evictSessionCaches` → `#receivedContent.delete(key)` (`session-node-manager.ts:1249, 1295`)
@@ -345,24 +412,47 @@ message arrived; a demo-side delay would not have helped. Correctly rejected.
 
 ### Proposed fixes (Finding 1)
 
-- **F1-a (the fix, daemon-only, no MCP-surface change):** implement blocking receive in the
-  existing `cello_receive` handler — honor the `timeout_ms` the shim already sends. Empty
-  buffer → register a waiter; resolved by the next `#appendVerifiedContent` push, by seal/
-  teardown (terminal answer: `{ ok:true, content:null, session_sealed:true, guidance:"session
-  sealed — read cello_get_transcript for the full history" }`), or by timeout. Bounded, never
-  hangs (INV-6 spirit). This kills the race for live clients AND makes the existing guidance
-  honest. Publish cascade: daemon 0.0.20 + cli + connect bumps.
-- **F1-b (observability, one line):** `#evictSessionCaches` logs
+*Revised 2026-07-02: the core fix is COMPLETING THE STUB, not merely making `cello_receive`
+honor `timeout_ms`. The retired adapter is the reference implementation to port.*
+
+- **F1-a (the fix — port the blocking receive into the daemon, daemon-only).** Replace the
+  `cello_receive_session` `not_implemented` stub with a real handler that blocks up to
+  `timeout_ms`, polling `#receivedContent` (reference: retired `server.ts:254-302`). Empty buffer
+  → wait; resolved by the next `#appendVerifiedContent` push, a terminal seal/teardown answer, or
+  timeout. Never hangs (INV-6 spirit). This is the "blocking receive variant" the guidance already
+  names — completing it makes the guidance honest.
+- **F1-a2 (one-tool-or-two — DECISION, recommend COLLAPSE).** Today `cello_receive` (live,
+  session-scoped, non-blocking) and `cello_receive_session` (stub) are redundant by
+  signature — both take `(session_id, timeout_ms)`. **Recommended: collapse** — make
+  `cello_receive` the blocking handler and `cello_receive_session` a *true alias* to the same
+  handler (remove it from the stub list). One implementation, both names work, the e2e tests that
+  target `cello_receive_session` become live enforcers. *Deferred alternative:* restore the
+  original two-axis design (session-locked `cello_receive_session` vs any-session
+  `cello_receive(timeout_ms)` with `other_sessions_pending`) — the any-session variant overlaps
+  with `cello_check_notifications` and `since_seq` from the command-surface design doc, so it
+  belongs in **that** milestone, not this bugfix.
+- **F1-b (the one genuinely new piece of wiring — surface `session_sealed` into the receive
+  path).** Today the seal just calls `destroyNode(reason:"sealed")` → `#evictSessionCaches` →
+  `#receivedContent.delete(key)`, silently. The blocking receive needs a terminal answer when a
+  seal fires during its wait, so the daemon must **enqueue a `session_sealed` marker the receive
+  path can return** (the retired tool returned `{type:"session_sealed", session_id, sealed_root,
+  close_timestamp, checkpoint_status}` inline — `server.ts:282-291`). This IS the clean version
+  of "drain before teardown": the waiter returns the terminal seal answer instead of the buffer
+  being wiped out from under it. Any still-unread buffered content should be drainable before the
+  marker (or the marker carries "N unread — read cello_get_transcript").
+- **F1-c (observability, one line):** `#evictSessionCaches` logs
   `session.receive.buffer.evicted { unreadCount }` when it drops a non-empty buffer — the
-  silent-drop of deliverable content becomes diagnosable.
-- **F1-c (contract, docs):** document transcript-after-seal as the contract regardless:
+  silent-drop of deliverable content becomes diagnosable even on the non-blocking path.
+- **F1-d (contract, docs):** document transcript-after-seal as the contract regardless:
   a sealed session's full history is always available via `cello_get_transcript`.
-- **F1-d (strategic, already parked in the command-surface design doc):** the `since_seq`
+- **F1-e (strategic, already parked in the command-surface design doc):** the `since_seq`
   cursor on `cello_receive` reading from the durable transcript — makes post-seal catch-up
   first-class and demotes the in-memory buffer to an optimization. Load-bearing for reconnect
   and the two-session group-chat model; build it there, not here.
 - **Explicitly rejected:** the demo-side 2s pre-seal delay (masks the client bug; confirmed
   ineffective for the observed mechanism).
+
+Publish cascade for F1-a/a2/b/c: daemon `0.0.20` + cli + connect bumps (client-repo only).
 
 ### What could not be proven from code alone
 
