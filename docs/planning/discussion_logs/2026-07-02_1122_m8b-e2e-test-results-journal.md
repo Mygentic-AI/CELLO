@@ -434,6 +434,84 @@ persisting/exposing the receipt at all).
 yet a retrievable artifact, so the feature is functionally incomplete for its intended purpose.
 Paired friction: F23.
 
+### FINDING-4 — No entry-point directory failover: the signaling dialer ignores the resolved consortium roster (bootstrap SPOF)
+
+**Severity:** high — a direct violation of the sovereign-node **redundancy** invariant ("if a node
+is unreachable, the client falls back to others"). The configured/default directory node (us1) is a
+single point of failure for client startup: if it is unreachable, the client cannot come online at
+all — even though it already holds the addresses of the other nodes.
+
+**Evidence chain (`cello-client`, confirmed by code read 2026-07-02):**
+- Single entry coordinate: `resolveDirectoryUrl()` returns `CELLO_DIRECTORY_URL` or the hardcoded
+  `PRODUCTION_DIRECTORY_URL = "http://directory-us1.cello.mygentic.ai"`
+  (`core/daemon/src/directory-bootstrap.ts`). No list of alternates.
+- The client DOES know the other nodes: the consortium manifest is a **bundled JSON file**
+  (`core/transport/src/manifest-interfaces.ts:43`), and at startup `manifestNodesToEndpoints` probes
+  each node's `/bootstrap` and resolves the reachable ones into `consortiumEndpoints`
+  (`daemon.ts:403`) — so eu1/ap1 resolve even when us1 is down.
+- BUT the signaling dialer `createSignalingConnect` (`core/daemon/src/signaling-connect.ts`) consults
+  ONLY `getDirectoryEndpoint()` (the single us1 resolver). Its deps type has **no** roster/consortium
+  field at all. On failure it throws → `SignalingManager` reconnects → resolves the SAME single us1
+  URL → retries forever.
+- `signaling-manager.ts` has ZERO references to the roster (`getConsortiumEndpoints`); the roster is
+  consumed only by the ceremony/registration fan-out, which needs an already-established signaling
+  connection — useless precisely when us1 (the signaling entry) is the down node.
+
+**Net:** the client comes up, verifies the bundled manifest, resolves eu1/ap1 as alive — and still
+can't get online, because the signaling connection only ever dials us1. No signaling → no
+`agent.online` → nothing works. The failover *data* and ~90% of the machinery exist; the last wire
+(dial a reachable roster member when the primary is down) was never connected. So it is NOT "the
+client can't find the others" — it is "the client holds the others and refuses to dial them."
+
+**Fix (to reach intended behavior):** the signaling endpoint resolver / `connect()` should draw from
+the resolved `consortiumEndpoints` roster — try the configured node first, rotate to any reachable
+roster member on connect/reconnect failure. Roster is already computed and the manifest is bundled →
+wiring change in `signaling-connect.ts` + the endpoint resolver, no new protocol. **Caveat:** the
+fix's *sufficiency* depends on any-directory routing (presence / relay-assignment / ceremony against
+a non-home node) working end-to-end — untested (#12/#13). Verifying the fix (kill us1 → client fails
+over to eu1 → completes a real session/seal) simultaneously runs #12/#13/#5.
+
+**Status:** to be fixed in `cello-client` after FINDING-3 lands (both are daemon-package changes →
+batch into one publish). Reshapes #8: down a **non-us1** node for the threshold test until this ships.
+
+### FINDING-5 — Unilateral seal legibility is directory-attested, not client-re-derived (SI-002 asymmetry)
+
+**Severity:** medium (security hardening) — a scoped deviation from the stated invariant "the client
+does NOT trust the directory for the frontier VALUE, only for transporting signed bytes it
+re-checks." Bounded surface: affects only the legibility **frontier metadata**, not the sealed
+content (the `sealed_root` is FROST-signed and client-verified per SI-003).
+
+**Context:** surfaced by the FINDING-3 implementer. In the bilateral seal the client re-derives each
+party's `content_frontier_seq` from the signed leaves it carried and REJECTS an inflated directory
+frontier (`daemon.ts` DOD-LEG-2 / `reDeriveFrontiers` / `findInflatedFrontier`). In the unilateral
+seal the counterparty can't co-sign, so the legibility cert is FROST-notarized by the **directory
+consortium only**, and the client does not re-derive it → the directory is trusted for the frontier
+values on the receipt-of-last-resort.
+
+**Threat model:** a compromised/buggy directory consortium inflates the ABSENT party's
+received-frontier — forging evidence that the absent party received content it didn't, on exactly the
+receipt a wronged party relies on and which the absent party isn't present to contest. (The present
+party's OWN frontier is self-evident to it; the exposed value is the absent party's.)
+
+**Why separable (the real asymmetry):** bilateral re-derivation works because both parties' signed
+leaves are present. Unilaterally, the present party can re-derive its OWN frontier from carried
+leaves, but the ABSENT party's received-frontier evidence may live with the absent party (its acks)
+who never provided it — so part of it may be **inherently** directory-attested, not a simple reuse of
+the bilateral guard.
+
+**Ship condition (FINDING-3, agreed 2026-07-02):** ships scoped IFF the cert makes provenance
+explicit — the ABSENT party's values are unmistakably marked directory-attested
+(`attestation_mode: ABSENT`), never presented as client-verified. No silent seam.
+
+**Hardening (this finding):** re-derive every frontier the present party CAN from leaves it holds (at
+least its own) and reject/override inflation; directory-attest only the genuinely un-derivable
+remainder, explicitly marked. Fold in the running code-reviewer's verdict on this exact point — if it
+judges the frontier-trust exploitable enough to block, this escalates from follow-up to
+must-fix-now.
+
+**Status:** tracked security follow-up to FINDING-3 (which ships the retrievable receipt now).
+`cello-client` daemon + directory.
+
 ---
 
 ## Related Documents
