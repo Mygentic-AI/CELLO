@@ -3,7 +3,7 @@ name: "Final-Message Receive Race + Initiator-Side sealed.signature.checked veri
 type: discussion
 date: 2026-07-01
 topics: [M8B, seal, bilateral-seal, cello_receive, transcript, FROST, initiator, verified-false, investigation, demo-agent, relay, live-session]
-status: implemented-f2b-deferred
+status: verified-live-f2b-deferred
 description: >
   Two findings from a live post-maintenance verification session (Agent-1 ↔ EC2 demo agent,
   session 05d8d39a) on 2026-07-01. (1) The counterparty's final message was received, decrypted,
@@ -16,10 +16,12 @@ description: >
 
 # Final-Message Receive Race + Initiator-Side `verified:false`
 
-> **IMPLEMENTED 2026-07-02 — F1 (all parts) + F2-a shipped to cello-client `main`
-> (commit `0df1bbb`); F2-b remains a deferred cross-repo story. See the
-> "Implementation" section at the very bottom for exactly what landed and what is
-> still pending (publish cascade + live re-verification).**
+> **VERIFIED LIVE 2026-07-02 — F1 (all parts) + F2-a shipped (cello-client `main` `0df1bbb`),
+> published daemon 0.0.20 / cli 0.0.18 (tag `v0.0.61`, promoted to `latest`), both live daemons
+> reinstalled, and the acceptance test PASSED on session `a6a2f9af…` (blocking receive returned a
+> clean `session_sealed` terminal with `unread_count:1`; daemon log showed
+> `verified:false, reason:"signer_key_not_held"` and `session.receive.buffer.evicted`). F2-b
+> remains a deferred cross-repo story. See the "Implementation" section at the very bottom.**
 >
 > **RESOLVED 2026-07-02 — both findings diagnosed at the code level.** See the
 > "Resolution" section at the bottom. Finding 2 is benign-by-design (accept-without-verify
@@ -503,6 +505,20 @@ Gates green: **928 tests pass, lint clean, typecheck clean, build clean.**
    default install path (`npm i -g @cello-protocol/cli@latest`). **Operator reinstall of the
    running local + EC2 demo daemons is still pending** — until they reinstall + restart, those
    live daemons run the old 0.0.19 code.
-2. **Live re-verification (the real acceptance test).** After publish+reinstall, re-run Agent-1 ↔ demo with the responder sealing immediately after its final message: blocking `cello_receive` must return the message, then the `session_sealed` terminal answer; the initiator log must show `session.sealed.signature.checked {verified:false, reason:"signer_key_not_held"}` (now legible).
+2. **Live re-verification (the real acceptance test) — PASSED 2026-07-02.** Re-ran Agent-1 ↔ EC2
+   demo (both on daemon 0.0.20), four rounds over the relay, session
+   `a6a2f9af0feb548e9c8589ae3b12311f`, bilateral seal, root
+   `819334a74fe7993a44a2be642f620c36e5cb3b0188b1c21fc43caa325d34d225`, both `attestation_mode:"live"`.
+   The demo sealed ~0.88s after its final message (a *tighter* race than the original 1.65s), so
+   the blocking `cello_receive` returned the **`session_sealed` terminal answer directly** —
+   `{type:"session_sealed", sealed_root, unread_count:1, guidance:"…1 message(s) … call
+   cello_get_transcript…"}` — instead of the old silent loss / hang. `cello_get_transcript` then
+   returned all 8 leaves incl. seq 7 (`undecryptable:0`), confirming the "read the transcript"
+   contract. Local daemon log showed **both** new events exactly as designed:
+   `session.sealed.signature.checked {verified:false, reason:"signer_key_not_held"}` (F2-a — now
+   legible) and `session.receive.buffer.evicted {agentName:"Agent-1", unreadCount:1}` (F1-c). Note:
+   because seal timing is not controllable on the demo, this run exercised the **terminal-with-unread**
+   path (the harder case); a slower seal would have the blocking receive return the message *first*,
+   then the terminal — both are correct outcomes, and the fix's job (never silently lose/hang) held.
 3. **F2-b — symmetric counterparty-primary provisioning (cross-repo, deferred).** Directory hands each party the other's FROST group primary so either closing order verifies. Frame field + directory change + client change (both directions) + version cascade. Candidate for the E2E-hardening phase or the M9-merge era. Not started.
 4. **F1-e — `since_seq` durable-transcript cursor.** Belongs in the command-surface milestone, not this bugfix (unchanged).
