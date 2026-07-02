@@ -478,3 +478,4 @@ outcome. Consider a bounded retry with a clear "gave up / manual escalation" res
 - [[2026-07-02_1122_m8b-e2e-test-results-journal|M8B E2E test-results journal]] — companion record of the tests that generated every friction entry here; carries the consolidated fix backlog ranking F1–F21.
 - [[2026-07-01_0900_m8b-closed-e2e-testing-phase|M8B closed — E2E testing phase kickoff]] — the testing-phase plan this log runs alongside; the friction directive (co-equal mission) was set at its kickoff.
 - [[2026-07-02_1514_m8b-fix-briefs-cascade-1|M8B fix briefs — cascade 1]] — F13/F14/F16/F20 (+ riders F1/F2/F15) resolved to root causes and implementation-ready fix specs.
+- [[2026-07-02_1640_m8b-cascade-1-implementation-and-publish|M8B cascade 1 — implementation, publish, live verification]] — F13/F14/F16/F20 and riders F1/F2/F15 FIXED and live-verified (daemon 0.0.21 / cli 0.0.19); F5/F6/F7/F9/F10/F12/F17/F18/F21 remain open (design/directory batches).
