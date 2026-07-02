@@ -211,3 +211,13 @@ pre-existing degradation blocks the deploy.
 - `core/daemon/src/daemon.ts` (version bump to 0.0.23 happens at publish time, Step 1)
 
 Standing background machinery: NONE (no crons/watchdogs). Docker up locally.
+
+---
+
+## Related Documents
+
+- [[2026-07-02_2133_well-known-agent-discovery|Well-Known Agent Discovery]] — the demo-agent
+  identity-rotation / no-discovery-channel problem surfaced while running this doc's FINDING-3
+  live verify (an `initiate_session` to the stale published pubkey returned `target_offline`).
+- [[2026-07-02_1122_m8b-e2e-test-results-journal|M8B E2E Test Results Journal]] — FINDING-3
+  resolution recorded there; FINDING-5/6 tracked follow-ups.
