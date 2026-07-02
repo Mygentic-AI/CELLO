@@ -498,9 +498,11 @@ Gates green: **928 tests pass, lint clean, typecheck clean, build clean.**
    (next free counter — the tag had drifted to v0.0.60). CI green incl. `smoke-tag`; verified
    against the published tarball (`daemon@0.0.20` `dist/` contains `handleReceive`,
    `peekTerminalMarker`, `session.receive.buffer.evicted`, all F2-a reasons; `cli@0.0.18` pins
-   `daemon@0.0.20`, a real version). **STILL ON `beta` ONLY** — `latest`-promotion +
-   operator reinstall are the remaining outward steps (the default `npx …@latest` install path
-   does not see `beta`), so the **running EC2/local daemons are still unchanged**.
+   `daemon@0.0.20`, a real version). **Promoted to `latest` 2026-07-02** —
+   `daemon@latest=0.0.20`, `cli@latest=0.0.18` (connect stays 0.0.53). The fix is now on the
+   default install path (`npm i -g @cello-protocol/cli@latest`). **Operator reinstall of the
+   running local + EC2 demo daemons is still pending** — until they reinstall + restart, those
+   live daemons run the old 0.0.19 code.
 2. **Live re-verification (the real acceptance test).** After publish+reinstall, re-run Agent-1 ↔ demo with the responder sealing immediately after its final message: blocking `cello_receive` must return the message, then the `session_sealed` terminal answer; the initiator log must show `session.sealed.signature.checked {verified:false, reason:"signer_key_not_held"}` (now legible).
 3. **F2-b — symmetric counterparty-primary provisioning (cross-repo, deferred).** Directory hands each party the other's FROST group primary so either closing order verifies. Frame field + directory change + client change (both directions) + version cascade. Candidate for the E2E-hardening phase or the M9-merge era. Not started.
 4. **F1-e — `since_seq` durable-transcript cursor.** Belongs in the command-surface milestone, not this bugfix (unchanged).
