@@ -190,6 +190,22 @@ NOT `deploy.sh` (no CFN change). Sequence:
 7. Update `infra/STATE.md` if infra touched (directory deploy → deploy.sh auto-updates it; manual changes
    by hand). Mark FINDING-4/5/6 resolved in the test-results journal.
 
+## RELEASE COMPLETE — 2026-07-02 ~20:55 UTC
+
+Both repos merged to main; branches + worktrees cleaned up (m9-build worktrees untouched).
+
+- **cello-client:** main `4faf353` (FINDING-4 `e125cdc`, FINDING-5/6 `49eeeac`/`1b42b4f`/`946ab5d`/`18227df`,
+  version cascade `4faf353`), tag `v0.0.65` → CI smoke-tag green → **daemon 0.0.24 / cli 0.0.22 on beta AND
+  latest** (connect 0.0.53 unchanged). Binary-verified (4 symbols in daemon dist; cli→daemon real pin).
+- **trustless-cello:** main `7c66ba25` (merge of cascade-2; FINDING-5 directory `02c6ad5f`). Directory
+  redeployed `cello-directory:7c66ba2` in all 3 regions (pipeline exec `096d5486`, Succeeded, healthy).
+- **Relay cascade done + verified:** new relay IPs us-east-1 `10.0.71.218` (manifest v49), eu-central-1
+  `10.1.66.92` (v21), ap-northeast-1 `10.2.96.205` (v12); directories refreshed + health-checking. Full
+  6 ECS / 6 DNS healthy. See `infra/STATE.md` 2026-07-02 ~20:55 UTC block.
+- **Andre completed in-session:** latest-promotion (`npm dist-tag add cli@0.0.22 / daemon@0.0.24 latest`)
+  + `npm i -g …@latest` + `cello login` + MCP reconnect.
+- **Still Andre's (live, disruptive):** FINDING-4 kill-us1 failover; FINDING-6 B-reconnect receipt.
+
 ## Deferred follow-up findings (tracked, NOT this batch)
 
 - **Directory `#unilateralSeals` dead-end (cascade-2 reviewer Critical 2):** once a client REJECTS a

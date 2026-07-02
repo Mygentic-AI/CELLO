@@ -588,6 +588,30 @@ cascade-2, so no further directory deploy is required to land FINDING-6 — it i
 
 ---
 
+## FINDING-4/5/6 — SHIPPED + DIRECTORY-DEPLOYED (2026-07-02 ~20:55 UTC)
+
+Cascade-2 is live. All three fixes were code-complete + reviewed (2 rounds each) + gated
+(cello-client 1457 tests, lint, typecheck, build green); then:
+
+- **cello-client → beta AND latest.** daemon `0.0.24`, cli `0.0.22` (connect unchanged `0.0.53`);
+  tag `v0.0.65`, CI smoke-tag green. Binary-verified against the npm tarball: all four symbols present
+  in daemon `dist/` (`createRosterAwareEndpointResolver`, `checkUnilateralFrontier`,
+  `recordSealCertificateEnsuringRow`, `upgradeAbsentToRecovered`); `cli@0.0.22` → `daemon 0.0.24`
+  (real pin, not `workspace:*`). Andre promoted `cli`+`daemon` to `latest` and reinstalled/reconnected
+  his local stack during the session.
+- **Directory deployed (FINDING-5 only — client-only for F4/F6).** `cello-directory:7c66ba2` in all 3
+  regions via `cello-directory-pipeline` (exec `096d5486`, Succeeded); sequential ProductionDeploy, all
+  rolled COMPLETED + steady, 0 crash loops. Verified genuine per-region health (not merely "in progress").
+- **Mandatory relay cascade done.** All 3 relays force-new-deployed → re-registered with their new
+  directory tasks → manifests re-signed with the new relay IPs: us-east-1 `10.0.71.218` (v49),
+  eu-central-1 `10.1.66.92` (v21), ap-northeast-1 `10.2.96.205` (v12); each directory refreshed the
+  manifest + is health-checking the new IP (1-6ms). 6/6 ECS 1/1, 6/6 DNS resolve. Details in `infra/STATE.md`.
+
+**Remaining (Andre's — live, disruptive):** FINDING-4 kill-us1 failover (also exercises #12/#13/#5;
+restore per `infra/CLAUDE.md`) and FINDING-6 B-reconnect → `cello_get_sealed_receipt(B)`.
+
+---
+
 ## Related Documents
 
 - [[2026-07-01_0900_m8b-closed-e2e-testing-phase|M8B closed — E2E testing phase kickoff]] — the plan doc this journal executes; test matrix, phases, and restore-cascade discipline.
