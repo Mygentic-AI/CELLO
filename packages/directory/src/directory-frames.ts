@@ -669,7 +669,7 @@ export function encodeSealUpgradeRejected(frame: SealUpgradeRejected): Uint8Arra
 }
 
 export function encodeSealUnilateralConfirmed(frame: SealUnilateralConfirmed): Uint8Array {
-  return ENC.encode({
+  const encoded: Record<string, unknown> = {
     type: frame.type,
     session_id: frame.session_id,
     sealed_root: frame.sealed_root,
@@ -685,9 +685,14 @@ export function encodeSealUnilateralConfirmed(frame: SealUnilateralConfirmed): U
     seal_type: frame.seal_type,
     // M8B FINDING-3 (cascade-2): the legibility certificate, so the present party's daemon persists a
     // durable, retrievable receipt for a unilateral close. Directory-attested (NOT co-signed by the
-    // counterparty, NOT re-derived by the client) — see FINDING-5; not cryptographic bilateral parity.
+    // counterparty) — but with FINDING-5 the client re-derives its frontiers from frontier_leaves below.
     legibility: frame.legibility,
-  });
+  };
+  // M8B FINDING-5 (cascade-2): carry the signed leaves so the present party re-derives + verifies each
+  // party's content_frontier_seq and REJECTS an inflated published frontier (SI-002). Conditional so a
+  // frame built without them (e.g. a hypothetical caller) still encodes cleanly.
+  if (frame.frontier_leaves !== undefined) encoded["frontier_leaves"] = frame.frontier_leaves;
+  return ENC.encode(encoded);
 }
 
 export function encodeSealUnilateralNotification(frame: SealUnilateralNotification): Uint8Array {
