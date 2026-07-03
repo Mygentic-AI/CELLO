@@ -89,7 +89,7 @@ Evidence:
 | 11 | **Share refresh** | ⬜ not tested | `cello refresh` against live cluster, then seal post-refresh |
 | 12 | **Any-directory (non-us-east-1)** | ⬜ not tested | Initiate session resolving to eu-central-1 or ap-northeast-1 |
 | 13 | **Cross-node presence** | ⬜ not tested | Query presence from a non-home directory |
-| 14 | **Suspension** | ⬜ not tested | Suspend via ops bot, verify FROST refused, unsuspend, verify FROST proceeds |
+| 14 | **Suspension** | ⬜ not tested | Suspend via the front-end portal, verify FROST refused, unsuspend, verify FROST proceeds |
 
 #### Better with a separate daemon (EC2 demo agent)
 

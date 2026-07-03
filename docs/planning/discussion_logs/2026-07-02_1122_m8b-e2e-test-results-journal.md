@@ -47,7 +47,7 @@ unilateral seal never completes). 21 friction entries (F1–F21) + FINDING-1 log
 - #12/#13 (any-directory / cross-node): need local daemon restarted onto `CELLO_DIRECTORY_URL=eu1`.
   A plain `/mcp` reconnect is NOT enough (F12) — the daemon process must restart with the env set.
   Full procedure in the #12/#13 detail section below.
-- #14 (suspension): needs the Telegram ops bot (or an admin path) — not driveable autonomously.
+- #14 (suspension): driven via the front-end portal (not the Telegram ops bot) — not driveable autonomously.
 - Phase C (#9/#10/#5 node-down) + Phase E (#4 relay failover): disruptive to shared dev infra;
   awaiting explicit go-ahead. Restore cascade + pre/post health-check discipline documented.
 
@@ -113,7 +113,7 @@ SPARC + version-bump/publish cascade (per repo CLAUDE.md npm-publish rules).
      armed — but per F14 it goes deaf after ONE inbound session, so restart before each live test:
      `stop demo → stop daemon → start daemon → wait 5s → start demo`.
 5. **Then:** await Andre's decision — **fix F14 first** (recommended, in `cello-client`) OR continue
-   the test matrix (#12/#13 need Andre's daemon-restart-onto-eu1; #14 needs the Telegram ops bot;
+   the test matrix (#12/#13 need Andre's daemon-restart-onto-eu1; #14 is driven via the front-end portal;
    Phase C node-down + Phase E relay-failover need go-ahead + the documented restore cascade).
 
 ## Results table
