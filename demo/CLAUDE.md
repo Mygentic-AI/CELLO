@@ -111,29 +111,37 @@ for the current value.
 
 ---
 
-## Checking installed package versions
+## Checking + updating installed package versions
 
-There are two packages that must both be current. Check both — they version independently and
-`client` can be stale even when `connect` is up to date:
-
-```bash
-# On the instance:
-node -e "console.log('connect:', require('/opt/cello-demo/node_modules/@cello-protocol/connect/package.json').version)"
-node -e "console.log('client:', require('/opt/cello-demo/node_modules/@cello-protocol/client/package.json').version)"
-
-# On npm:
-npm view @cello-protocol/connect@beta version
-npm view @cello-protocol/client@beta version
-```
-
-If the instance is behind, update with:
+The demo installs LOCALLY at `/opt/cello-demo/node_modules` (not global). The package that carries the
+protocol logic post-M7 is **`@cello-protocol/daemon`** — the `cello-daemon.service` runs
+`node_modules/@cello-protocol/daemon/dist/bin/cello-daemon.js` directly. So updating `connect` alone is
+NOT enough; the daemon (and `cli`, which pins it) must also be current. `/opt/cello-demo/package.json`
+declares `@cello-protocol/{cli,connect,daemon}` — and note the `^0.0.x` ranges are EXACT-patch pins for
+0.0.z, so a bare `npm install` never upgrades them; you must install `@latest` explicitly.
 
 ```bash
-systemctl stop cello-demo
-cd /opt/cello-demo && npm install @cello-protocol/connect@<version>
-# Then fix /tmp/cello-mcp-stderr.log ownership (see Step 2 above)
-systemctl start cello-demo
+# On the instance — installed vs npm latest:
+cd /opt/cello-demo && npm ls @cello-protocol/daemon @cello-protocol/cli @cello-protocol/connect 2>/dev/null | grep cello-protocol
+npm view @cello-protocol/daemon@latest version; npm view @cello-protocol/cli@latest version
 ```
+
+Update (SSM runs as root — chown afterward or the `cello-demo` user can't read the new files):
+
+```bash
+systemctl stop cello-demo cello-daemon && sleep 2
+cd /opt/cello-demo && npm install @cello-protocol/daemon@latest @cello-protocol/cli@latest @cello-protocol/connect@latest
+chown -R cello-demo:cello-demo /opt/cello-demo
+chown cello-demo:cello-demo /tmp/cello-mcp-stderr.log 2>/dev/null   # Step 2 EACCES fix
+systemctl start cello-daemon && sleep 5 && systemctl start cello-demo
+```
+
+**Verify (do not trust this doc's pubkey — read it live):** the daemon log should show
+`daemon.manifest.bundled` → `directory.auth.challenge.verified` → `directory.signaling.connected` with
+`"verified":true` → `agent.online` → `session.node.created` (standing receiver), and the `agentPubkey`
+in those lines is the CURRENT identity (it persists across a client update — the DB/key file is
+untouched). The gold-standard check is a live session from another agent to this one (welcome message +
+bilateral seal).
 
 ---
 

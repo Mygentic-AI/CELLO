@@ -52,6 +52,18 @@ manifests FRESH (healthCheckUrl matches live relay IP: us1 `10.0.24.236`, eu1 `1
 force-new-deployed + re-registered. Directory task defs (all regions) now carry
 `CELLO_DIRECTORY_NODE_KEY_HEX`.
 
+**DEMO AGENT (`i-0ad3e7c22470f266e`) — updated to latest + verified 2026-07-03.** Local install at
+`/opt/cello-demo` bumped `@cello-protocol/daemon` 0.0.23→**0.0.26** and `cli` 0.0.21→**0.0.24** (connect
+already 0.0.53); `chown -R cello-demo:cello-demo /opt/cello-demo` after the root npm install; restarted
+in order (stop demo→daemon, start daemon, sleep 5, start demo). Verified: daemon logs
+`daemon.manifest.bundled` (3 nodes) → `directory.auth.challenge.verified` (us-east-1) →
+`signaling.connected verified:true` → `agent.online default` → standing receiver armed; then `demo.started`.
+Identity **preserved** — pubkey still `7ab98987…6ec1f910` (the DB/key file untouched). Full end-to-end
+re-verified: local Agent-1 → demo session (relay), demo's hardcoded welcome received, BILATERAL seal
+(`sealed_root 74a51ef7…`, both `attestation_mode:"live"`). NOTE: demo daemon runs `CELLO_ENV=local` with
+no `CELLO_DIRECTORY_URL`, so it resolves the bundled prod us1 node → FINDING-4 bundle + step-6 engage by
+default (runbook `demo/CLAUDE.md` is stale on "only connect/client matter" — the daemon carries the change).
+
 ---
 
 ## 🔍 Ground-truth reconciliation — 2026-07-02 ~20:55 UTC (M8B cascade-2 deploy — directory + relay)
