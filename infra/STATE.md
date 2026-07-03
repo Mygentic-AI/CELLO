@@ -9,6 +9,23 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## ⚠️ ACTIVE TEST — 2026-07-03 ~10:00 UTC (FINDING-4 kill-us1 failover — DELIBERATE, reversible)
+
+**IN PROGRESS — us-east-1 directory is INTENTIONALLY scaled to 0** to live-verify FINDING-4 (client
+signaling failover to a non-us1 roster member). This is a deliberate, reversible test with Andre's
+explicit go-ahead, NOT an outage.
+
+- **2026-07-03T09:59:47Z** — `cello-directory-dev` (us-east-1) `--desired-count 0` (was 1). Prior task
+  `c999f3a5e0c243a6afa3fae7bdab4e7b`. eu-central-1 + ap-northeast-1 directories and all 3 relays UNTOUCHED.
+- **RESTORE OWED** (per `infra/CLAUDE.md`): us1 directory back to desired-count 1 → us1 relay
+  force-new-deployment (re-register) → re-sign us1 manifest with new relay IP → 6-ECS/6-DNS health check.
+- Baseline before kill: 6 ECS 1/1, 6 DNS resolve; local daemon bound to us1 directory peer
+  `12D3KooWS46w…S1j3`, agents Agent-1 + Demo2 online.
+
+*(This banner is removed and folded into a normal reconciliation entry once the restore cascade completes.)*
+
+---
+
 ## 🔍 Ground-truth reconciliation — 2026-07-02 ~20:55 UTC (M8B cascade-2 deploy — directory + relay)
 
 **M8B cascade-2 (FINDING-4/5/6) shipped.** cello-client published to beta AND promoted to `latest`
