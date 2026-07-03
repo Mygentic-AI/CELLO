@@ -471,6 +471,23 @@ gates + live spine (real binaries + Postgres) all green:
 
 ### FINDING-4 — No entry-point directory failover: the signaling dialer ignores the resolved consortium roster (bootstrap SPOF)
 
+> **✅ RESOLVED & LIVE-VERIFIED 2026-07-03 — daemon `0.0.25` / cli `0.0.23` on `latest`.**
+> **The original analysis below was WRONG on one key point.** It claimed "the client already holds the
+> other nodes' addresses; the dialer refuses to dial them." The live kill-us1 test (2026-07-03) proved
+> the opposite: the resolver logic was correct (`staleFallback:false` → us1 resolves to `null`), but
+> **the consortium roster was EMPTY** — the daemon never loaded a manifest (only a fake 1-node staging
+> placeholder existed in-repo; dev directories served `/manifest`→503). The failover pump was wired to
+> an empty well. **Proper fix (no band-aid):** a real signed consortium manifest of the 3 sovereign
+> directories is now COMPILED INTO the client and loaded BY DEFAULT, WITH step-6 directory identity auth
+> (defeats a `/bootstrap` MITM redirecting failover to a rogue node), gated on `CELLO_DIRECTORY_URL`
+> being a bundled node so local dev / the spine harness stay on the M6 path. Directories deployed with
+> `CELLO_DIRECTORY_NODE_KEY_HEX` so they sign the step-6 challenge (officer key
+> `cello/dev/consortium/officer-key-0`; pubkey `8e9b99…64199` pinned in the client; regenerate via
+> `infra/scripts/sign-consortium-manifest.mjs`). **Verified live:** killed us1 → failover to eu1
+> `verified:true`; killed eu1 → failover to ap1 `verified:true`; survives 2 of 3 directories down; the
+> bundled default proven on a fresh `npm i -g @latest` (no env). 521 daemon tests + the j-spine DoD
+> enforcer pass. **Remaining gap:** [[#FINDING-7 — Session ceremonies are home-node-bound (`ceremony_exhausted` on a fallback directory)|FINDING-7]].
+
 **Severity:** high — a direct violation of the sovereign-node **redundancy** invariant ("if a node
 is unreachable, the client falls back to others"). The configured/default directory node (us1) is a
 single point of failure for client startup: if it is unreachable, the client cannot come online at
@@ -585,6 +602,35 @@ recovered frontier.
 **Status:** tracked follow-up to FINDING-3. `cello-client` daemon (+ possibly `seal_upgrade_confirmed`
 on the directory). The directory half (legibility on the notification, both paths) already shipped in
 cascade-2, so no further directory deploy is required to land FINDING-6 — it is a client-only change.
+
+### FINDING-7 — Session ceremonies are home-node-bound (`ceremony_exhausted` on a fallback directory)
+
+**Severity:** high — the second half of the sovereign-node **redundancy** invariant. FINDING-4 restores
+the ability to COME ONLINE against a fallback directory (verified `verified:true`), but the ability to
+**transact** (open a session, seal) against that fallback is NOT restored.
+
+**Surfaced by the FINDING-4 live failover test (2026-07-03).** With the daemon failed over to ap1
+(us1+eu1 killed, ap1 `verified:true`), a `cello_initiate_session` between two local agents reproducibly
+returned `ceremony_exhausted` (2 attempts, ~stable signaling). The session offer/accept succeeded
+(`session.offer.accepted`), but `session.ceremony.participated … ok:false` — the FROST session ceremony
+failed against the non-home directory.
+
+**Root-cause hypothesis (unconfirmed from directory logs; consistent with the architecture):** the
+directory co-signs the session seal with a per-agent server-side share (`K_server`) created at
+registration and held by the agent's HOME directory (us1 for these agents). Shares are NOT replicated
+across the sovereign nodes, so a fallback directory (ap1) cannot complete the threshold ceremony →
+`ceremony_exhausted`. Per infra/STATE.md this is blocked on the **unbuilt T-of-N protocol** (the daemon
+is the 2-of-2 stopgap; strict T-of-N across the consortium is not implemented).
+
+**Why separable from FINDING-4:** FINDING-4 is the bootstrap/roster SPOF (you couldn't even come online
+if your primary was down — total failure). That is fixed and is a strict, necessary improvement.
+FINDING-7 is the deeper "any-directory ceremony" layer (#12/#13) that the FINDING-4 brief explicitly
+flagged as *"untested — the fix's sufficiency depends on any-directory routing working end-to-end."* It
+is a milestone-scale protocol effort (share replication or true T-of-N), not a client wiring change.
+
+**Status:** OPEN. Tracked gap; not fixed. Blocks the "transact on a fallback directory" case (#12
+any-directory routing, #13 cross-node presence-to-seal). FINDING-4 shipped without it because coming
+online + directory auth is a genuine, verified improvement on its own.
 
 ---
 
