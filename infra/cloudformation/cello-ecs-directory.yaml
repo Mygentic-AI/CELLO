@@ -143,6 +143,17 @@ Resources:
             # It is NOT injected via RDS_CREDENTIALS_SECRET_ARN pattern.
             - Name: NODE_PRIVATE_KEY
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/node-private-key"
+            # CELLO_DIRECTORY_NODE_KEY_HEX: the directory's Ed25519 node signing key (64-hex seed) —
+            # the SAME secret as NODE_PRIVATE_KEY. Enables M7-MANIFEST-002 step-6 directory identity
+            # proof: the directory signs the client's auth challenge with this key so a
+            # manifest-configured client can cryptographically verify it reached the REAL consortium
+            # node for this nodeId (=AWS::Region) — defeating a MITM on the plaintext /bootstrap that
+            # would otherwise redirect failover to a rogue directory. Its public key equals
+            # /cello/{env}/directory/manifest-signer-pubkey and the `pubkey` for this nodeId in the
+            # signed consortium manifest bundled in the client. Backward-compatible: clients WITHOUT a
+            # manifest never request/verify the proof and connect on the M6 path unchanged.
+            - Name: CELLO_DIRECTORY_NODE_KEY_HEX
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/node-private-key"
             # DEV_ENVELOPE_KEY: 64-char hex AES-256 key used by LocalEnvelopeKeyProvider
             # for dev/staging (placeholder until KmsEnvelopeKeyProvider is wired in M5+).
             - Name: DEV_ENVELOPE_KEY

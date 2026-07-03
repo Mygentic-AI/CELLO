@@ -9,20 +9,27 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
-## ⚠️ ACTIVE TEST — 2026-07-03 ~10:00 UTC (FINDING-4 kill-us1 failover — DELIBERATE, reversible)
+## ⚠️ FINDING-4 root-cause + proper-fix IN PROGRESS — 2026-07-03 (us1 back up; relay re-register owed)
 
-**IN PROGRESS — us-east-1 directory is INTENTIONALLY scaled to 0** to live-verify FINDING-4 (client
-signaling failover to a non-us1 roster member). This is a deliberate, reversible test with Andre's
-explicit go-ahead, NOT an outage.
+**FINDING-4 kill-us1 failover test (2026-07-03T09:59:47Z) exposed a deeper gap, now being fixed properly.**
 
-- **2026-07-03T09:59:47Z** — `cello-directory-dev` (us-east-1) `--desired-count 0` (was 1). Prior task
-  `c999f3a5e0c243a6afa3fae7bdab4e7b`. eu-central-1 + ap-northeast-1 directories and all 3 relays UNTOUCHED.
-- **RESTORE OWED** (per `infra/CLAUDE.md`): us1 directory back to desired-count 1 → us1 relay
-  force-new-deployment (re-register) → re-sign us1 manifest with new relay IP → 6-ECS/6-DNS health check.
-- Baseline before kill: 6 ECS 1/1, 6 DNS resolve; local daemon bound to us1 directory peer
-  `12D3KooWS46w…S1j3`, agents Agent-1 + Demo2 online.
+- **09:59:47Z** — `cello-directory-dev` (us-east-1) scaled to 0 (deliberate test). Daemon (0.0.24) did NOT
+  fail over — it retried the dead us1 node 9× and never rotated to eu1/ap1.
+- **ROOT CAUSE (proven live):** the roster-aware failover resolver is correct (`staleFallback:false`
+  works — us1 resolved to `null`), but the **consortium roster is EMPTY**. The daemon only loads a
+  manifest when `CELLO_CONSORTIUM_MANIFEST` env is set (it isn't); the only in-repo manifest is a fake
+  1-node staging placeholder; dev directories serve `/manifest` → 503. So there is no list of the 3
+  directories to fail over to. FINDING-4 shipped a pump wired to an empty well. Redundancy invariant
+  NOT actually satisfied. Full write-up: test-results journal FINDING-4 + FINDING-7.
+- **PROPER FIX (in progress, no band-aid):** build a real signed consortium manifest of the 3 dev
+  directories (us1/eu1/ap1) + bundle it into the client, loaded BY DEFAULT (cold-boot SPOF survival).
+  Real node pubkeys: us1 `167ca6…27b5`, eu1 `8105b1…1b45`, ap1 `9b4b67…b984`.
+- **CLUSTER NOW:** us1 directory back UP (desired 1, running 1, task `46daa3c0…`, updatedAt 10:10:23Z —
+  NOT restored by this agent's tooling; source unconfirmed, likely operator). Daemon reconnected to us1
+  10:13:01Z. **OWED:** us1 relay force-new-deploy + re-sign (directory got a new task 10:10) — batched
+  into the final failover-verify cascade.
 
-*(This banner is removed and folded into a normal reconciliation entry once the restore cascade completes.)*
+*(Removed once the fix is published + failover verified end-to-end.)*
 
 ---
 
@@ -414,7 +421,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 - ap-northeast-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-ap1.cello.mygentic.ai --type String --region ap-northeast-1`
 
 ### dev — eu-central-1
-*Last deployed: 2026-07-01
+*Last deployed: 2026-07-03
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -470,7 +477,7 @@ Route53 drift note: purge_stale_dns_record() bug (fixed in commit 6d17b30) delet
 | SNS Topic — ops-warning | arn:aws:sns:eu-central-1:257394457473:cello-ops-warning-dev |
 
 ### dev — ap-northeast-1
-*Last deployed: 2026-07-01
+*Last deployed: 2026-07-03
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
