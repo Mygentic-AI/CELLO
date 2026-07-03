@@ -486,7 +486,9 @@ gates + live spine (real binaries + Postgres) all green:
 > `infra/scripts/sign-consortium-manifest.mjs`). **Verified live:** killed us1 → failover to eu1
 > `verified:true`; killed eu1 → failover to ap1 `verified:true`; survives 2 of 3 directories down; the
 > bundled default proven on a fresh `npm i -g @latest` (no env). 521 daemon tests + the j-spine DoD
-> enforcer pass. **Remaining gap:** [[#FINDING-7 — Session ceremonies are home-node-bound (`ceremony_exhausted` on a fallback directory)|FINDING-7]].
+> enforcer pass. **Remaining:** a narrow LIVE verification of T-of-N seal-survives-one-node-down on the
+> dev cluster (register a fresh agent → seal → kill exactly ONE directory → seal still completes). T-of-N
+> is already built + spine-proven (`j-sign` / `j-tofn-dkg`); see [[#FINDING-7 — ❌ RETRACTED (MISDIAGNOSIS): the `ceremony_exhausted` was correct below-threshold behavior, NOT a home-node-bound gap|FINDING-7 (RETRACTED)]] — my earlier "any-directory seal is T-of-N-blocked" claim was WRONG.
 
 **Severity:** high — a direct violation of the sovereign-node **redundancy** invariant ("if a node
 is unreachable, the client falls back to others"). The configured/default directory node (us1) is a
@@ -603,34 +605,51 @@ recovered frontier.
 on the directory). The directory half (legibility on the notification, both paths) already shipped in
 cascade-2, so no further directory deploy is required to land FINDING-6 — it is a client-only change.
 
-### FINDING-7 — Session ceremonies are home-node-bound (`ceremony_exhausted` on a fallback directory)
+### FINDING-7 — ❌ RETRACTED (MISDIAGNOSIS): the `ceremony_exhausted` was correct below-threshold behavior, NOT a home-node-bound gap
 
-**Severity:** high — the second half of the sovereign-node **redundancy** invariant. FINDING-4 restores
-the ability to COME ONLINE against a fallback directory (verified `verified:true`), but the ability to
-**transact** (open a session, seal) against that fallback is NOT restored.
+> **❌ THIS FINDING WAS WRONG. Retracted 2026-07-03.** It claimed the session ceremony is
+> "home-node-bound" and blocked on an "unbuilt T-of-N protocol." **Both claims are false.** T-of-N is
+> built and spine-proven, and the `ceremony_exhausted` I observed was the protocol working correctly.
+> Do not act on the original text below (kept struck-through for the record). The error came from
+> parroting a stale STATE.md phrase instead of checking the code + a flawed live test.
 
-**Surfaced by the FINDING-4 live failover test (2026-07-03).** With the daemon failed over to ap1
-(us1+eu1 killed, ap1 `verified:true`), a `cello_initiate_session` between two local agents reproducibly
-returned `ceremony_exhausted` (2 attempts, ~stable signaling). The session offer/accept succeeded
-(`session.offer.accepted`), but `session.ceremony.participated … ok:false` — the FROST session ceremony
-failed against the non-home directory.
+**What T-of-N actually is (built + green at M8B close):**
+- `j-tofn-dkg` (DOD-DKG-1): registration runs a **2-of-3 FROST DKG across all 3 directory nodes → one
+  group key**. Server-side shares are distributed across the consortium, NOT held by one home node.
+- `j-sign` (DOD-SIGN-1): *"consortium seal is FROST T-of-N (≥2 directories sign), **and survives a
+  participating node DOWN**"* — the test seals, asserts ≥2 directories FROST-sign, then **kills a
+  participating directory and seals again successfully.** The exact "transact on a fallback" case works.
+- `j-suspend-tofn` (DOD-SUSPEND-1): threshold suspension (2-of-3 suspended ⇒ no signature; 1 ⇒ signs).
+- Client side: `33338f9` DOD-SIGN-1 threads the consortium roster into the **session/seal** ceremonies;
+  `358f1f2` DOD-DKG-1 threads it into **registration**; `f312da8`/`2846215` add FROST proactive
+  resharing (PSS) + `cello refresh`.
 
-**Root-cause hypothesis (unconfirmed from directory logs; consistent with the architecture):** the
-directory co-signs the session seal with a per-agent server-side share (`K_server`) created at
-registration and held by the agent's HOME directory (us1 for these agents). Shares are NOT replicated
-across the sovereign nodes, so a fallback directory (ap1) cannot complete the threshold ceremony →
-`ceremony_exhausted`. Per infra/STATE.md this is blocked on the **unbuilt T-of-N protocol** (the daemon
-is the 2-of-2 stopgap; strict T-of-N across the consortium is not implemented).
+**Why the live test misled me — two mistakes:**
+1. In the FINDING-4 failover run I killed **us1 AND eu1**, leaving only **ap1 (1 of 3)** up. A 2-of-3
+   seal needs **2** nodes. `ceremony_exhausted` with 1 node up is **correct threshold refusal** — you
+   cannot produce a valid threshold signature below quorum. `j-sign` survives *one* node down, not two.
+   I never ran the actual redundancy case (kill exactly one, keep two).
+2. The test agents (Demo2/Agent-1) were **registered pre-FINDING-4**, when the client had no consortium
+   roster → registration took the single-node back-compat path, so their shares likely live only on
+   us1. A *fresh* agent registered now (with the bundled roster) gets the real 2-of-3.
 
-**Why separable from FINDING-4:** FINDING-4 is the bootstrap/roster SPOF (you couldn't even come online
-if your primary was down — total failure). That is fixed and is a strict, necessary improvement.
-FINDING-7 is the deeper "any-directory ceremony" layer (#12/#13) that the FINDING-4 brief explicitly
-flagged as *"untested — the fix's sufficiency depends on any-directory routing working end-to-end."* It
-is a milestone-scale protocol effort (share replication or true T-of-N), not a client wiring change.
+**FINDING-4's real relationship to T-of-N:** it is the **enabler**, not a separate layer. The DKG/seal
+ceremonies fan out to the consortium **roster**; with no roster they refuse or fall back to single-node
+(that is what STATE.md's "2-of-2 stopgap" meant — *no roster*, not *no protocol*). FINDING-4 populated
+the roster, so it **unlocked** client-coordinated T-of-N on the default path.
 
-**Status:** OPEN. Tracked gap; not fixed. Blocks the "transact on a fallback directory" case (#12
-any-directory routing, #13 cross-node presence-to-seal). FINDING-4 shipped without it because coming
-online + directory auth is a genuine, verified improvement on its own.
+**What actually remains (narrow verification, NOT a milestone):**
+- Live-verify on the dev cluster: register a **fresh** agent now → seal → kill **exactly one** directory
+  → confirm the seal still completes (the `j-sign` case, but live).
+- Decide whether existing agents get re-registered or **resharded** (`cello refresh` / PSS exists) to
+  gain T-of-N shares.
+
+<details><summary>Original (WRONG) text — kept for the record</summary>
+
+~~Session ceremonies are home-node-bound; the directory co-signs with a per-agent K_server held only by
+the home directory; shares are not replicated; blocked on the unbuilt T-of-N protocol; milestone-scale.~~
+All false — see the retraction above.
+</details>
 
 ---
 

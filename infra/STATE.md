@@ -37,10 +37,15 @@ directories down and cryptographically verifies the fallback. The bundled DEFAUL
 -g @latest`, no env) was proven: `daemon.manifest.bundled` → `directory.auth.challenge.verified` →
 `signaling.connected verified:true`.
 
-**KNOWN GAP (separate, NOT fixed — tracked as journal FINDING-7):** session FROST ceremonies are
-home-node-bound — a fallback directory returns `ceremony_exhausted` (it doesn't hold the agent's
-K_server share). Failover restores presence + directory auth, but not transacting on a fallback; that
-awaits the unbuilt T-of-N protocol.
+**CORRECTION (2026-07-03): the earlier "KNOWN GAP / FINDING-7" claim here was WRONG — retracted.** It
+said session ceremonies are home-node-bound and blocked on an unbuilt T-of-N protocol. Both false.
+T-of-N is built + spine-proven: `j-tofn-dkg` (2-of-3 DKG across all 3 nodes), `j-sign` (consortium seal
+is FROST T-of-N and SURVIVES a participating node DOWN), `j-suspend-tofn` (threshold suspension). The
+`ceremony_exhausted` in the FINDING-4 failover run was CORRECT below-threshold behavior — I had killed
+2 of 3 directories (only ap1 up = 1 of 3; a 2-of-3 seal needs 2), and the test agents were registered
+pre-FINDING-4 (single-node shares). FINDING-4 (the roster) is the ENABLER of client-coordinated T-of-N,
+not a separate blocked layer. **Remaining is a narrow LIVE check** (register a fresh agent → seal → kill
+exactly ONE directory → seal still completes), not a milestone. See journal FINDING-7 (RETRACTED).
 
 **Test fix:** `j-suspend-tofn.spine.test.ts` was missing `cello_start_agent(xtarget)` — a session target
 must be online, else the directory folds an empty counterparty endpoint → `counterparty_unavailable`.
@@ -303,6 +308,12 @@ verified.** Remaining cross-node DoD flips are gated on other work, not on the c
   dedicated throwaway agent needs a registration token (ceremony) + a real DKG against the live cluster.
   This is a sub-project; and DOD-INV-6/LEVER-3 (strict T-of-N) need the UNBUILT T-of-N protocol regardless
   (the daemon is the 2-of-2 stopgap), so the behavioral test would not flip those to ✅ on its own.
+  > **⚠️ STALE (2026-06-28 snapshot) — SUPERSEDED. Do not read "UNBUILT T-of-N protocol" as current.**
+  > T-of-N shipped by M8B close (2026-06-30): `j-tofn-dkg` (2-of-3 DKG across all 3 nodes), `j-sign`
+  > (consortium seal is FROST T-of-N, survives a node down), `j-suspend-tofn` (threshold suspension) are
+  > all green. "2-of-2 stopgap" meant the client had no consortium ROSTER, not that the protocol was
+  > missing — FINDING-4 (2026-07-03) populated the roster. This exact phrase seeded a later misdiagnosis
+  > (retracted FINDING-7). See the 2026-07-03 CORRECTION near the top of this file.
 
 ---
 
