@@ -45,8 +45,22 @@ benign CelloClientWebhookSecret issue, unrelated). All 3 directories log `direct
   us1 logged `directory.auth.nonce.conflict` (nonce bound to capX's pubkey). The code-review bypass
   (bind-to-agent not bind-to-epoch) is closed live.
 
-Remaining: seal + kill-one-node re-seal (FINDING-4 redundancy), reviewer-flagged tests, `latest` promotion
-(needs Andre — optional; client behavior unchanged).
+**Remaining follow-ups (documented for a focused session — NOT blocking; core feature is done):**
+- **FINDING-4 seal + kill-one-node redundancy test** — ATTEMPTED, blocked tonight. `capX` initiating a
+  session returns `frost_signer_not_configured`. Hypothesis (evidence: capX registered fine via DKG but
+  cannot open a seal session; not yet confirmed from directory logs): the directory registers FROST
+  threshold signers at STARTUP from persisted profiles (directory-node.ts loadPersistedState →
+  registerThresholdSigner), and capX registered AFTER the capability deploy restarted the directories, so
+  its signer isn't in memory. To test: restart the directories (reloads capX's signer) OR investigate
+  dynamic signer registration on DKG completion, then seal capX↔Agent-1 / kill one non-us1 directory /
+  re-seal. This is a SESSION-path concern, separate from the (proven) capability feature; the redundancy
+  property itself is spine-proven (`j-sign` survives a participating node down). Not a regression from
+  this work (signer-at-startup is pre-existing; capability changes don't touch signer loading).
+- **Reviewer unit tests** — core logic IS unit-tested (crypto capability 13 tests; DevNonceBinder
+  bind-to-agent single-use 4 tests); the directory round-1 gate + PgNonceBinder-over-SQL are LIVE-covered
+  (capX register + capY reject) but lack isolated unit tests (gate lives in a large stream handler;
+  PgNonceBinder needs a Postgres harness). Regression protection only.
+- **`latest` promotion** — optional (client behavior unchanged; beta is published + verified).
 
 ---
 
