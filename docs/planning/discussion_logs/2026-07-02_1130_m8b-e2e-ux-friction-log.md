@@ -491,6 +491,14 @@ outcome. Consider a bounded retry with a clear "gave up / manual escalation" res
 
 ## F23 — Unilateral seal returns `ok` + root but the receipt is unretrievable and the response carries no certificate · `stability` · `error-message` (paired with FINDING-3)
 
+> **✅ RESOLVED 2026-07-02 (daemon 0.0.23, rolled into 0.0.24 `latest`) — LIVE-VERIFIED.** The
+> context below documents the **0.0.22** state (the bug that motivated FINDING-3). It is fixed:
+> `cello_close_session` on a unilateral seal now returns the legibility inline (counterparty
+> `attestation_mode:"absent"`) AND `cello_get_sealed_receipt` returns the durable cert
+> (`sealed_root 3dd19ab4…`). Do NOT read the "Context" below as current live state. See the
+> FINDING-3 RESOLVED banner in the test-results journal (session `e3c167bd`, directory `6f66557`).
+> Residual live-unverified item is FINDING-6 (absent party **B**'s receipt), tracked separately.
+
 **Context:** Re-verifying FINDING-1 on daemon 0.0.22. `cello_close_session` on a peer-gone session
 past the grace window now succeeds unilaterally (`ok:true, seal_type:"unilateral", sealed_root:…`) —
 the deadlock is gone. But the operator then hits two dead ends: (a) the close response is thin
