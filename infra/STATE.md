@@ -31,10 +31,22 @@ a LOCAL idempotent nonce→agent binding. Design: `docs/planning/user-stories/m8
   Template `OpsAgentExpectedMigrationVersion` → 41; **live SSM must be bumped to 41** after the directory
   applies V41 (else ops-agent crash-loops).
 
-**Deploy status:** directory image with the capability code + V40/V41 building via cello-directory-pipeline
-(exec **d35a5eb6**, triggered 21:47 — the prior exec 98a1141a was Stopped after crash-looping on the V40
-checksum). A 4-min cron drives: build → bump migration SSM to 41 → `deploy.sh dev <all 3>` (CFN env vars +
-IAM grant) → live-verify. Until deploy.sh runs, the new image has no issuer env → legacy token path — no crash.
+**Deploy status:** SHIPPED + LIVE-VERIFIED (2026-07-03). Directory image (exec d35a5eb6) deployed to all 3
+regions; `deploy.sh dev <all 3>` applied the issuer env + IAM grant (us1 cicd-stack failure is the known
+benign CelloClientWebhookSecret issue, unrelated). All 3 directories log `directory.auth.capability.enabled`
+(issuer pubkey 16c9596…) + `PgNonceBinder` initialised. Live SSM expected-migration-version = 41.
+
+**✅ LIVE VERIFICATION PASSED (the whole point of this work):**
+- **Capability registration works** — a FRESH agent (`capX`, primary 12b27ef…) registered with a signed
+  capability; the DKG fanned across ALL 3 directories (stream.open.attempt+ok to us1/eu1/ap1),
+  `registration.frost.share.persisted`, **`registration.succeeded`**. This is exactly what FAILED with the
+  token (`dkg_failed`) — the T-of-N registration blocker is RESOLVED.
+- **Single-use enforced** — re-presenting the SAME capability for a DIFFERENT agent (`capY`) was REJECTED;
+  us1 logged `directory.auth.nonce.conflict` (nonce bound to capX's pubkey). The code-review bypass
+  (bind-to-agent not bind-to-epoch) is closed live.
+
+Remaining: seal + kill-one-node re-seal (FINDING-4 redundancy), reviewer-flagged tests, `latest` promotion
+(needs Andre — optional; client behavior unchanged).
 
 ---
 
