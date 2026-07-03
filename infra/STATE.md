@@ -9,6 +9,35 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🔑 M8B-PREAUTH-CAP — pre-auth capability infra (2026-07-03, deploy pending)
+
+Replaces the opaque single-use pre-auth token (which fails T-of-N registration — a replication race on
+the non-idempotent consume) with an ops-agent-SIGNED capability every directory verifies independently +
+a LOCAL idempotent nonce→agent binding. Design: `docs/planning/user-stories/m8b/2026-07-03_1618_tofn-registration-preauth-capability-design.md`.
+
+**Provisioned (all 3 regions, 2026-07-03):**
+- **Secrets Manager `cello/dev/preauth/issuer-key`** — Ed25519 issuer signing seed (32-byte hex). ONE
+  issuer identity, SAME value in all regions (NOT a per-region transport key). Injected as
+  `CELLO_PREAUTH_ISSUER_KEY_HEX` (directory ValueFrom, stage-2) — used at /internal/pre-authorize to sign.
+- **SSM `/cello/dev/preauth/issuer-pubkey`** = `16c9596923b4efbac7bba913ffcf31f6dbc467639e14ed289dfb070276240c51`
+  (same all regions). Injected as `CELLO_PREAUTH_ISSUER_PUBKEY` (directory `{{resolve:ssm}}`, stage-1) —
+  the pinned key DKG Round 1 verifies capabilities against.
+- **IAM** `cello-iam.yaml`: added `preauth/issuer-key*` to both directory secret lists (exec + task).
+- **Migrations V40 + V41** `pre_auth_nonce_bindings` (LOCAL, not in cello_pub) — nonce→bound_agent
+  single-use. **V40 shipped as `bound_epoch` and was applied to us-east-1 RDS by an intermediate build;
+  the security fix renamed the column, which tripped a Flyway checksum mismatch (directory crash-looped
+  in StagingDeploy).** Per the M5 rule (never modify an applied migration): V40 reverted to its exact
+  applied bytes (checksum matches) + **V41** `ALTER TABLE … RENAME COLUMN bound_epoch TO bound_agent`.
+  Template `OpsAgentExpectedMigrationVersion` → 41; **live SSM must be bumped to 41** after the directory
+  applies V41 (else ops-agent crash-loops).
+
+**Deploy status:** directory image with the capability code + V40/V41 building via cello-directory-pipeline
+(exec **d35a5eb6**, triggered 21:47 — the prior exec 98a1141a was Stopped after crash-looping on the V40
+checksum). A 4-min cron drives: build → bump migration SSM to 41 → `deploy.sh dev <all 3>` (CFN env vars +
+IAM grant) → live-verify. Until deploy.sh runs, the new image has no issuer env → legacy token path — no crash.
+
+---
+
 ## 🔍 Ground-truth reconciliation — 2026-07-03 (FINDING-4 PROPER FIX shipped + directory step-6 enabled)
 
 **FINDING-4 is fixed and LIVE on `latest`.** The kill-us1 failover test (2026-07-03) exposed that
