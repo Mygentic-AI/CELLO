@@ -277,8 +277,28 @@ this design change; tracked as its own cleanup.
    (the redundancy property FINDING-4 unlocked).
 4. Re-present the same capability → assert single-use rejection (`NONCE_ALREADY_BOUND`) at every node.
 
-## 13. Status
+## 13. Status — ✅ SHIPPED + LIVE-VERIFIED (2026-07-03)
 
-Root cause confirmed with live evidence. Cluster is consortium-configured and healthy (all three
-directories declare `participants: 3`, `/manifest` served, step-6 auth on). No code written for this
-design yet — awaiting the §9 availability decision before implementation.
+Implemented and deployed to all 3 regions. The §7 core (signed capability + local bind-to-agent
+single-use) is done; the §9 enrollment/quorum piece is deferred (registration still uses all-N DKG,
+which the live test exercised).
+
+**Shipped:**
+- crypto `signCapability`/`verifyCapability`/`encode`/`decode` (published crypto 0.0.15, 13 tests).
+- Directory round-1 gate: verify capability vs pinned issuer pubkey → `NonceBinder.bind(nonce,
+  agentPubkey)` (local, idempotent). `/internal/pre-authorize` signs + returns the capability.
+- Migrations V40 (`pre_auth_nonce_bindings`, local/not replicated) + V41 (rename `bound_epoch` →
+  `bound_agent` — the security fix; V40 was already applied so a rename migration was required).
+- Infra: dedicated Ed25519 issuer key in Secrets Manager (`cello/dev/preauth/issuer-key`), pubkey pinned
+  in SSM (`16c9596…`), CFN env vars + IAM grant, deployed via deploy.sh.
+
+**Live verification PASSED:** a fresh agent (`capX`) registered via a signed capability — the DKG fanned
+across all 3 directories, shares persisted, `registration.succeeded` (exactly what FAILED with the token).
+Single-use enforced: the same capability for a different agent (`capY`) was rejected with
+`directory.auth.nonce.conflict`.
+
+**Two review findings resolved:** (1) the swallowed `dkg_failed` catch is a separate cleanup still
+pending; (2) the bind-to-epoch single-use bypass was fixed to bind-to-agent (V41 + the gate) and proven
+live. **Remaining follow-ups:** seal + kill-one-node re-seal (FINDING-4 redundancy, now testable since
+`capX` holds real T-of-N shares); directory-node gate + PgNonceBinder unit tests (behavior is live-covered,
+these are regression protection); optional `latest` promotion (client behavior unchanged).
