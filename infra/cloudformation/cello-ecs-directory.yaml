@@ -129,6 +129,10 @@ Resources:
               Value: /tmp/consortium-manifest.json
             - Name: CELLO_DIRECTORY_CONSORTIUM_MANIFEST_B64
               Value: !Sub "{{resolve:ssm:/cello/${Environment}/directory/consortium-manifest}}"
+            # M8B-PREAUTH-CAP: pinned pre-auth issuer PUBLIC key — DKG Round 1 verifies a presented
+            # capability's signature against it (stateless, replaces the token validate/consume gate).
+            - Name: CELLO_PREAUTH_ISSUER_PUBKEY
+              Value: !Sub "{{resolve:ssm:/cello/${Environment}/preauth/issuer-pubkey}}"
             - Name: HOME
               Value: /tmp
             - Name: CELLO_AUDIT_BUCKET
@@ -192,6 +196,11 @@ Resources:
             # Without this, every deploy generates a new peer ID breaking all connected clients.
             - Name: CELLO_DIRECTORY_TRANSPORT_KEY_HEX
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/transport-key"
+            # M8B-PREAUTH-CAP: the pre-auth issuer SIGNING seed (Ed25519, 32-byte hex). Used at
+            # /internal/pre-authorize to sign capabilities. One issuer identity — the SAME value in every
+            # region (NOT a per-region transport key). Its public half is CELLO_PREAUTH_ISSUER_PUBKEY (SSM).
+            - Name: CELLO_PREAUTH_ISSUER_KEY_HEX
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/preauth/issuer-key"
           LogConfiguration:
             LogDriver: awslogs
             Options:

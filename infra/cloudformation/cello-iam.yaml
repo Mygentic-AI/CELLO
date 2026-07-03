@@ -61,6 +61,8 @@ Resources:
                   # INTERNAL_API_KEY: shared bearer key between directory and ops-agent.
                   # Secret is owned by the ops-agent namespace; directory reads it at launch.
                   - !Sub "arn:aws:secretsmanager:*:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/directory-api-key*"
+                  # M8B-PREAUTH-CAP: pre-auth issuer signing seed (read at /internal/pre-authorize).
+                  - !Sub "arn:aws:secretsmanager:*:${AWS::AccountId}:secret:cello/${Environment}/preauth/issuer-key*"
       Tags:
         - Key: Project
           Value: cello
@@ -117,6 +119,8 @@ Resources:
                   - !Sub "arn:aws:secretsmanager:*:${AWS::AccountId}:secret:cello/${Environment}/directory/transport-key*"
                   # INTERNAL_API_KEY: shared bearer key between directory and ops-agent.
                   - !Sub "arn:aws:secretsmanager:*:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/directory-api-key*"
+                  # M8B-PREAUTH-CAP: pre-auth issuer signing seed (read at /internal/pre-authorize).
+                  - !Sub "arn:aws:secretsmanager:*:${AWS::AccountId}:secret:cello/${Environment}/preauth/issuer-key*"
               - Sid: S3AuditPutOnly
                 Effect: Allow
                 Action:
