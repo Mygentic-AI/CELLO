@@ -101,8 +101,8 @@ DB-lookup secret, which cannot satisfy both at once.
 - **R3 — Single-use:** one authorization ⇒ exactly one agent registered. No replay into a second agent.
 - **R4 — Scale:** correct and efficient at N = 20, T = 10. T (the signing threshold) is **orthogonal**
   to registration authorization — it is set inside the DKG and must not enter the auth path.
-- **R5 — Availability:** aligns with the redundancy invariant. Registration should not require a
-  specific single node to be up (see the open decision in §9).
+- **R5 — Availability:** aligns with the redundancy invariant. Registration should not require any
+  specific node to be up — it proceeds among an available quorum (see §9).
 
 ## 6. Why the obvious fixes fail
 
@@ -177,59 +177,45 @@ per-node `consumed_at` race to the replicated, idempotent nonce binding.
 - **Sovereignty:** authorization is a cryptographic check against a pinned public key — no node trusts
   another's word. A compromised node still cannot forge the ops-agent signature.
 
-## 9. DKG ceremony availability — quorum ceremony + background enrollment (the design)
+## 9. DKG ceremony availability — quorum ceremony + background enrollment
 
-First, dispel a conflation: **T-of-N is the *signing* threshold** — T of the N directories sign each
-seal; the other N−T may be down. That is the recurring operation and is never in question here.
+Dispel one conflation up front: **T-of-N is the *signing* threshold** — T of the N directories sign each
+seal, and the other N−T may be down. That is the recurring operation and is never in question.
 
-The **DKG** is different: it is the one-time ceremony that *creates* the N shares. A share is a
-**secret** — no node ever sees another's, and no channel (including the write-seam federation) ever
-carries a plaintext share; that is the security model. Therefore a share can only be **born on the node
-that will hold it** — it cannot be replicated to a node the way a suspension flag can. Whichever nodes
-are to hold a share must obtain it through a ceremony (the initial DKG, or a later enrollment).
+The **DKG** is the one-time ceremony that *creates* the shares. A share is a **secret** — born on its
+holding node, never carried by any channel including the write-seam. So a node obtains its share only by
+taking part in a ceremony: the initial DKG, or a later enrollment.
 
-### Why "require all N present" is rejected
+**Registration DKGs among the available quorum**, chosen *larger than T* so the agent has signing
+redundancy immediately (N=20/T=10 → DKG among the 15 that are up → 10-of-15 at once). The agent is usable
+the instant this completes. **Absent nodes enroll asynchronously**, off the registration critical path,
+until coverage reaches full T-of-N. Registration therefore tolerates any (N − quorum) nodes being down;
+at large N, enrollment is the *normal* path, not an edge case.
 
-Requiring every directory present for the DKG **collapses as N grows** and violates the redundancy
-invariant. At N=3 a single node down already blocks every new registration; at the target N=20 it
-requires all 20 up at the same instant for every registration, which — given deploys, maintenance, and
-transient blips — is almost never true. Availability of an all-N ceremony is the *product* of per-node
-availability, so it degrades exponentially in N. It is not a viable design; at most it is a throwaway
-crutch at N=3 that bakes in a hard scaling wall. **Rejected.**
-
-### The design: quorum ceremony now, enroll the rest in the background
-
-- **DKG runs among the available quorum**, chosen *larger than T* so the agent has signing redundancy
-  immediately (e.g. at N=20/T=10, DKG among the 15 that are up → 10-of-15 at once). The agent is usable
-  the instant this completes — it does not wait for all N.
-- **Absent nodes enroll asynchronously**, off the registration critical path, until coverage reaches the
-  full T-of-N. Registration therefore tolerates any (N − quorum) nodes being down. At large N,
-  enrollment is not an edge case — it is the *normal* path, since you rarely have everyone up.
-
-### Enrollment is a real but bounded piece of work
+### Enrollment — net-new, but bounded
 
 - **It is not the existing `cello refresh`.** `frost-resharing.ts` is a *fixed-membership* zero-constant
-  refresh (re-randomize existing shareholders' shares); it assumes the recipient already holds a share
-  to add Δ to. A backfilled node has none. Enrollment is **dynamic resharing to a new access structure**
-  (Desmedt–Jajodia): the quorum reshares the *same* secret onto the expanded membership. Net-new
-  protocol, but a close cousin of what exists.
-- **It inherits every forgery protection** from §7/the refresh path: Feldman VSS commitments verified by
-  the recipient, the group public key provably preserved (constant term unchanged), the newcomer ends
-  with exactly one share (useless alone), threshold preserved, and the canonical `primary_pubkey`
-  anchored in every directory's `agent_profiles` so no divergent "version" can masquerade as the agent.
-- **Delivery can reuse existing infra.** The write-seam already carries *sealed ciphertext*
-  (`pickup_queue`: pull → openSeal → ACK → delete). An enrolled node's share rides the same pattern as
-  a ciphertext sealed to that node's key — DOD-INV-2-clean, because it is sealed, not plaintext.
+  refresh (re-randomize existing shareholders' shares); it assumes the recipient already holds a share to
+  add Δ to. A backfilled node has none. Enrollment is **dynamic resharing to a new access structure**
+  (Desmedt–Jajodia): the quorum reshares the *same* secret onto the expanded membership. A close cousin
+  of what exists.
+- **It inherits every forgery protection** from the refresh path: Feldman VSS commitments verified by the
+  recipient, the group public key provably preserved (constant term unchanged), the newcomer ends with
+  exactly one share (useless alone), threshold preserved, and the canonical `primary_pubkey` anchored in
+  every directory's `agent_profiles` so no divergent key can masquerade as the agent.
+- **Delivery reuses existing infra.** The write-seam already carries *sealed ciphertext* (`pickup_queue`:
+  pull → openSeal → ACK → delete). An enrolled node's share rides the same pattern as a ciphertext sealed
+  to that node's key — DOD-INV-2-clean, because it is sealed, not plaintext.
 
 ### Relationship to the pre-auth capability fix (§7)
 
-The two are independent and compose. The anti-replay marker in §7b is a *non-secret nonce*, so it rides
-the write-seam and enforces single-use globally regardless of which quorum ran the DKG. The capability
-work is correct as written; enrollment is the follow-on that makes registration outage-tolerant.
+Independent and composing. The anti-replay marker in §7b is a *non-secret nonce*, so it rides the
+write-seam and enforces single-use regardless of which quorum ran the DKG. The capability work is correct
+as written; enrollment is the follow-on that makes registration outage-tolerant.
 
-**Sequencing (open):** ship the pre-auth capability fix first (unblocks T-of-N registration when a
-quorum is up — already the common case at N=3), then land enrollment as the immediate follow-on before N
-grows. Or build them together. Andre's call on ordering — but all-N is off the table either way.
+**Sequencing (open):** ship the pre-auth capability fix first (unblocks T-of-N registration whenever a
+quorum is up), then enrollment as the immediate follow-on — or build them together. Ordering is Andre's
+call.
 
 ## 10. Implementation sketch (phases, no estimates)
 
