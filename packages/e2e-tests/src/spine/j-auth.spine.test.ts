@@ -22,7 +22,7 @@
  * Run: pnpm --filter @cello-protocol/e2e-tests test:spine
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -244,12 +244,17 @@ describe("J-AUTH — directory bidirectional auth, live (DOD-AUTH-1 / DOD-AUTH-2
     );
     expect(success).toMatch(/"oldVersion":1/);
 
-    // Anti-rollback persistence advanced: the daemon's version store now trusts v2.
-    const persisted = JSON.parse(readFileSync(join(celloDir, "manifest-version.json"), "utf8"));
-    expect(persisted.lastSeenVersion).toBe(2);
+    // Anti-rollback persistence advanced to v2. PERSIST-002 moved the version store from a plaintext
+    // manifest-version.json into the encrypted DB (manifest_state), so persistence is verified via the
+    // poll.success event — the daemon persistVersion(2)s BEFORE emitting it — not by reading a file
+    // that no longer exists.
+    expect(success).toMatch(/"newVersion":2/);
 
-    // The directory observed serving the poll (producer side, its own log).
-    expect(cluster.directory.output).toMatch(/"event":"directory\.manifest\.poll\.response"/);
+    // The poll is HTTP GET /manifest (health-server) — NOT the old signaling manifest_poll frame that
+    // logged `directory.manifest.poll.response` (directory-node.ts). The HTTP handler serves the
+    // manifest without a producer-side log line, so the directory-served proof is the client-side
+    // poll.success adoption above: the daemon could not have advanced v1→v2 unless the directory
+    // served v2 over /manifest.
   }, 60_000);
 
   it("DOD-AUTH-2 (poll rejects forged) — a FORGED manifest served by the directory is NOT adopted", async () => {
@@ -278,9 +283,9 @@ describe("J-AUTH — directory bidirectional auth, live (DOD-AUTH-1 / DOD-AUTH-2
     );
     expect(invalid).toMatch(/"manifestVersion":9/);
 
-    // It is NEVER adopted: no poll.success, and the persisted trusted version stays 1.
+    // It is NEVER adopted: no poll.success ⇒ the daemon never persisted a new version, so its trusted
+    // version stays at the startup v1. (PERSIST-002 moved the version store to the encrypted DB;
+    // non-adoption is proven by the absence of poll.success, since the daemon persists ONLY on adopt.)
     expect(daemon.output).not.toMatch(/"event":"directory\.auth\.manifest\.poll\.success"/);
-    const persisted = JSON.parse(readFileSync(join(celloDir, "manifest-version.json"), "utf8"));
-    expect(persisted.lastSeenVersion).toBe(1);
   }, 60_000);
 });
