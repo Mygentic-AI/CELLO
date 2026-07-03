@@ -134,11 +134,12 @@ PreAuthCapability = {
 }
 ```
 
-The issuer key is an ops-agent / officer key whose **public** half every directory pins locally (the
-same class of key already used to threshold-sign the consortium manifest — the signing infrastructure
-exists). Each directory, in DKG round-1, **verifies `sig` against the pinned issuer pubkey**. This is
-stateless, requires no DB lookup, and satisfies **R1** (independent verification) and **R2** (the
-capability is a signature, not a secret to guard — safe to hand to all N).
+The issuer key is a **dedicated Ed25519 pre-auth-issuer key**, separate from the manifest officer keys
+so a leak of one cannot forge the other. The private half lives in Secrets Manager; the public half is
+pinned to each directory via SSM — the same provisioning pattern as the directory node key. Each
+directory, in DKG round-1, **verifies `sig` against the pinned issuer pubkey**. This is stateless,
+requires no DB lookup, and satisfies **R1** (independent verification) and **R2** (the capability is a
+signature, not a secret to guard — safe to hand to all N).
 
 RFC reference for the signature: RFC 8032 (Ed25519), matching the manifest verification path.
 
@@ -227,8 +228,11 @@ call.
 - **Schema/migration:** new `pre_auth_nonce_bindings` table; add it to the write-seam publication with
   the standard `INCREMENT BY 3` sequence staggering (per V34's replication note). Update
   `OpsAgentExpectedMigrationVersion` in `cello-ssm-parameters.yaml` (M5 migration rule).
-- **Client:** carry the capability (already carries `preAuthToken`); minimal change — it presents the
-  capability to each directory as it already does. Version-bump + publish per the cross-repo rule.
+- **Client:** the round-1 `preAuthToken` field changes from a string to the structured capability — a
+  `protocol-types`/wire change, so crypto/protocol-types/client/connect version-bump + publish per the
+  cross-repo rule, and `cello register` takes the capability blob.
+- **Rollout:** the capability replaces the token outright — **no compatibility path** (alpha, single
+  operator). Directories switch to capability-only; the one client updates in step.
 - **Spine coverage:** extend `j-tofn-dkg` to assert a live-shaped path where the capability is verified
   independently by N nodes and single-use is enforced across a re-presentation.
 
