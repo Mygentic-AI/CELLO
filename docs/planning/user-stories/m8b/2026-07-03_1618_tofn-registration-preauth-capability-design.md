@@ -103,9 +103,9 @@ race regardless of which branch would have hit.
 - **R1 — Sovereignty:** every participating directory independently verifies the registration is
   authorized. No coordinator, no node vouching for another. A compromised node cannot forge a
   registration.
-- **R2 — Replication-safe authorization:** the authorization artifact is written at, and replicated to,
-  every node, so it must be safe to expose to all of them AND its consumption must survive concurrent,
-  asynchronously-replicated writes (i.e. be idempotent — the exact property `consumed_at = now()` lacks).
+- **R2 — No multi-writer replication conflict:** single-use must be enforceable WITHOUT N nodes
+  concurrently writing the same key to shared replicated state — logical replication halts on that
+  conflict, which is the very failure being fixed. It must be enforceable node-locally.
 - **R3 — Single-use:** one authorization ⇒ exactly one agent registered. No replay into a second agent.
 - **R4 — Scale:** correct and efficient at N = 20, T = 10. T (the signing threshold) is **orthogonal**
   to registration authorization — it is set inside the DKG and must not enter the auth path.
@@ -155,35 +155,41 @@ signature, not a secret to guard — safe to hand to all N).
 
 RFC reference for the signature: RFC 8032 (Ed25519), matching the manifest verification path.
 
-### 7b. Anti-replay — replicated, idempotent nonce→registration binding
+### 7b. Anti-replay — LOCAL, idempotent nonce→registration binding (not replicated)
 
-The capability's `nonce` is not secret, so its **consumption marker replicates** via the `cello_pub`
-logical-replication publication — the same publication that already replicates the tokens table. Add a
-replicated marker table, e.g. `pre_auth_nonce_bindings(nonce, bound_epoch, bound_at, chain_hash)`, and
-make consumption a **bind-to-registration** operation keyed by the DKG epoch (`epochId` =
-`agentPubkey:epoch:1` — one epoch ⇒ one agent):
+The binding must **not** be replicated. Logical replication cannot resolve a multi-writer same-key
+conflict — it halts the subscription — and every `cello_pub` table today avoids that by construction
+(staggered `INCREMENT BY N` sequences, or a single writer per key). A T-of-N registration is the exact
+opposite: all N nodes act on the **same** nonce concurrently. Replicating that binding would reproduce
+the very failure mode this design removes. So each directory keeps a **local** (non-`cello_pub`) marker
+table `pre_auth_nonce_bindings(nonce PRIMARY KEY, bound_epoch, ...)` and makes consumption a
+**bind-to-registration** operation keyed by the DKG epoch (`epochId` = `agentPubkey:epoch:1` — one epoch
+⇒ one agent), idempotent via `ON CONFLICT`:
 
 ```
-bind(nonce, epochId):
-  atomically:
-    if nonce unbound          → write nonce→epochId, return OK        (first node)
-    else if bound to epochId  → return OK                             (the other N-1, same registration)
+bind(nonce, epochId):        -- purely local; INSERT ... ON CONFLICT (nonce) DO NOTHING RETURNING
+    if nonce unbound          → write nonce→epochId, return OK        (first time this node sees it)
+    else if bound to epochId  → return OK                             (idempotent re-presentation, same agent)
     else (bound to epochId')  → reject NONCE_ALREADY_BOUND            (replay into a different agent)
 ```
 
-Because every node binds the **same** `nonce` to the **same** `epochId`, concurrent first-use binds do
-not conflict (they write identical values) and **replication lag cannot cause a false reject** — the
-idempotency is on the (nonce, epoch) pair, not on "who got there first." A later, different registration
-(different epoch) is rejected everywhere once the binding has replicated. This satisfies **R3**.
+**Why local binding is sufficient for single-use (R3):**
 
-The issuer still records local issuance/expiry for audit; the *single-use enforcement* moves from the
-per-node `consumed_at` race to the replicated, idempotent nonce binding.
+- **All-N ceremony (current):** every directory participates, so every directory binds the nonce
+  locally. A replay for a different epoch is rejected at *every* node — the DKG cannot complete.
+- **Quorum ceremony (§9):** with a required quorum > N/2, any two registration attempts share at least
+  one node (majority sets always intersect). That overlapping node bound the nonce to the first epoch,
+  so it rejects the second → the second DKG cannot complete. Single-use holds without any cross-node
+  coordination.
+
+There is **no replication, no coordinator, no cross-node write** — each node decides locally, which is
+also why it is race-free: the `consumed_at = now()` conflict simply cannot arise. The idempotency is on
+the `(nonce, epoch)` pair, so a legitimate re-presentation within the same registration is a no-op.
 
 ## 8. Why this scales (R4) and stays sovereign (R1)
 
-- **N = 20:** each node does one signature verify + one atomic idempotent write. No coordinator, no
-  fan-in bottleneck; 20 independent authorizations that provably agree because they bind identical
-  `(nonce, epoch)`.
+- **N = 20:** each node does one signature verify + one local idempotent `INSERT`. No coordinator, no
+  fan-in bottleneck, no cross-node write; 20 fully independent local authorizations.
 - **T = 10:** untouched. T is the FROST **signing** threshold configured inside the DKG (`signers.min`);
   it never enters the authorization path. Registration authorization is a per-registration fact,
   independent of how many signers later sign.
