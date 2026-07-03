@@ -177,22 +177,33 @@ per-node `consumed_at` race to the replicated, idempotent nonce binding.
 - **Sovereignty:** authorization is a cryptographic check against a pinned public key — no node trusts
   another's word. A compromised node still cannot forge the ops-agent signature.
 
-## 9. Open decision — availability vs. single-use substrate (needs Andre)
+## 9. A separate, later question — DKG ceremony availability (NOT part of this design)
 
-Does registration require **all N** nodes, or tolerate a minority being down (subset registration)?
+First, dispel a conflation: **T-of-N is the *signing* threshold** — T of the N directories sign each
+seal; the other N−T may be down. That is the recurring operation and is never in question here.
 
-- The current code requires an **exact** roster match (`registration-manager.ts`: `roster.length ===
-  participants`), which is itself a redundancy weakness — a fresh agent cannot register if any single
-  directory is down.
-- If registration must survive a node outage, single-use must be enforced in **replicated** state
-  (§7b as written) so two disjoint subsets cannot each mint a registration from one capability.
-- If registration is allowed to require a **majority** (> N/2), single-use also holds with purely
-  **per-node** nonce binding (no replication needed), since two disjoint majority subsets cannot exist.
-  Simpler, but ties registration availability to a majority quorum.
+The **DKG** is different: it is the one-time ceremony that *creates* the N shares. A share is a
+**secret** — no node ever sees another's, and no channel (including the write-seam federation) ever
+carries one; that is the security model. Therefore a share can only be **born on the node that will
+hold it** — it cannot be delivered to a node by replication the way a suspension flag can. Whichever
+nodes are to hold a share must take part in the ceremony that mints it.
 
-Recommendation: **replicated nonce binding + allow a configurable registration quorum** (default: a
-strong majority), which preserves single-use under subset registration *and* tolerates a minority
-outage. This is the R5-aligned choice.
+That gives a genuine but *separate* availability question about the DKG (not about signing, and not a
+fork in this pre-auth design):
+
+- **(a) all-N ceremony** — require all N present for the DKG. Simple; matches today's exact-roster
+  check (`registration-manager.ts`: `roster.length === participants`). Cost: a fresh agent cannot
+  register while any single directory is down.
+- **(b) quorum ceremony + PSS backfill** — run the DKG among an available quorum, then have the
+  consortium **reshare** the absent nodes their shares afterward via **proactive secret sharing**
+  (`cello refresh`), which adds a shareholder without exposing any secret. More available; more moving
+  parts. This is the "the nodes get what they need through federation" model — with the caveat that for
+  *shares* that "federation" is PSS resharing, not write-seam data replication.
+
+**This choice does not gate the pre-auth capability design.** The anti-replay marker in §7b is a
+*non-secret nonce*, so it *can* ride the write-seam and enforce single-use globally regardless of which
+subset ran the DKG. The capability work in §7 is correct under both (a) and (b). The (a)-vs-(b) call is
+a registration-availability enhancement to decide on its own timeline.
 
 ## 10. Implementation sketch (phases, no estimates)
 
