@@ -60,44 +60,52 @@ DKG_THROW: Error: dkgRound1 rejected: PRE_AUTH_TOKEN_CONSUMED
   present the same token concurrently."* — i.e. it was designed for **one presenter**, not N.
 - **Issuance:** the token is `INSERT`ed by the node that handles `POST /internal/pre-authorize`
   (`pre-auth-token-repository.ts`) — the node the ops-agent / portal talks to (us1 in practice).
-- **Replication:** the cross-node write-seam (`V34__write_seam_targets.sql`) replicates **only**
-  `agent_suspensions`, `identity_tree_entries`, `pickup_queue` (plus revocations/presence in their own
-  migrations) — "ONLY hashes, flags, and sealed ciphertext — **never plaintext, PII, or tokens**
-  (DOD-INV-2)." **`pre_authorization_tokens` is deliberately excluded.** A pre-auth token is a bearer
-  credential; replicating it to every sovereign node would widen the attack surface (any node's DB
-  compromise would leak every token).
+- **Replication:** `pre_authorization_tokens` **IS** replicated across the sovereign nodes via the
+  `cello_pub` logical-replication publication (`infra/setup-replication.sh`; added in commit `e3edf148`
+  *specifically* so every node can validate a token during a T-of-N DKG; replication is verified live in
+  `infra/STATE.md`). DOD-INV-2's "never … tokens" phrase is about the portal **write-seam endpoint**
+  (`/internal/agent-write`, which has no field a token could occupy) — **not** the replication
+  publication. (An earlier draft of this doc conflated the two and wrongly claimed tokens are not
+  replicated.)
 - **Validator reasons** (`adapters/pg-token-validator.ts`): `PRE_AUTH_TOKEN_NOT_FOUND` when the token
   is absent from the local DB; `PRE_AUTH_TOKEN_CONSUMED` when `consumed_at` is set.
 
-## 4. Root cause — two walls, one invariant
+## 4. Root cause — a non-idempotent single-use consume, raced across async replication
 
-The T-of-N DKG (`runNetworkDkg`, `network-directory-node.ts`) sends **round-1 with the same token to
-all N directories in parallel** (`Promise.all(directoryNodes.map(dkgRound1WithNode))`), and **each
-directory independently validates and consumes it** (directory-node.ts round-1 handler,
-`preauth.token.consumed`). Given the store model above:
+The T-of-N DKG (`runNetworkDkg`) sends **round-1 with the same token to all N directories in parallel**
+(`Promise.all(directoryNodes.map(dkgRound1WithNode))`), and **each directory independently validates and
+consumes** it via `UPDATE … SET consumed_at = now() WHERE token = $1 AND consumed_at IS NULL`. The token
+is replicated, but that consume is **non-idempotent** (each node writes a *different* `now()`), and
+logical replication is **asynchronous**. So the N concurrent consumes race, with only bad outcomes:
 
-1. **Distribution wall:** the token exists only in the issuer's DB. The other **N-1 directories return
-   `PRE_AUTH_TOKEN_NOT_FOUND`** — they have no way to see it, and (by DOD-INV-2) must not.
-2. **Single-use wall:** even if every node had the token, the per-node atomic consume means only the
-   first to run succeeds; the rest return `PRE_AUTH_TOKEN_CONSUMED`.
+- **Double-consume → replication conflict:** if two nodes each still see `consumed_at IS NULL` locally
+  (the other's write not yet replicated), both `UPDATE`s succeed with *different* timestamps on the same
+  primary key — a replication conflict that can halt the subscription. Registration may appear to
+  succeed while replication silently breaks.
+- **Reject:** if a node has already received the replicated consume — or, for a freshly-issued token,
+  has **not yet received the token's INSERT** (replication lag in the seconds between issuance and
+  `cello register`) — it returns `PRE_AUTH_TOKEN_CONSUMED` / `PRE_AUTH_TOKEN_NOT_FOUND`, `Promise.all`
+  rejects, and the DKG fails.
 
-`Promise.all` rejects on the first of these → `dkg_failed`. This fails for **every N > 1** and gets
-strictly worse as N grows. (In the captured trace, index 0 = the issuer returned `CONSUMED` because it
-was a retry of an already-spent token; on a first use the issuer consumes and the peers return
-`NOT_FOUND` — same outcome.)
+Which branch hits is timing-dependent — a race, not a clean wall.
 
-The invariant that makes this non-trivial: **a bearer token must not be replicated across sovereign
-nodes**, yet **every sovereign node must independently authorize the registration** (no node may vouch
-for another — a compromised node cannot be allowed to manufacture registrations). The current token is a
-DB-lookup secret, which cannot satisfy both at once.
+**Honesty note on the evidence:** a clean, isolated first-use registration was never captured. The live
+attempts were confounded by a polluted client node (stream-open failures) and, in the one attempt that
+reached round-1, a **retry of an already-consumed token** (hence the captured `PRE_AUTH_TOKEN_CONSUMED`
+at the issuer). This root cause is argued from the code plus the semantics of async logical replication
+over a non-idempotent single-use `UPDATE` — not from a clean repro. It does not change the fix: the
+capability replaces the DB-mutating consume with a **stateless signature check** plus an **idempotent**
+nonce→epoch bind (every node writes the identical value, so replication cannot conflict), removing the
+race regardless of which branch would have hit.
 
 ## 5. Requirements any solution must satisfy
 
 - **R1 — Sovereignty:** every participating directory independently verifies the registration is
   authorized. No coordinator, no node vouching for another. A compromised node cannot forge a
   registration.
-- **R2 — No replicated bearer secrets:** preserve DOD-INV-2. The authorization artifact carried to N
-  nodes must be safe to expose to all of them.
+- **R2 — Replication-safe authorization:** the authorization artifact is written at, and replicated to,
+  every node, so it must be safe to expose to all of them AND its consumption must survive concurrent,
+  asynchronously-replicated writes (i.e. be idempotent — the exact property `consumed_at = now()` lacks).
 - **R3 — Single-use:** one authorization ⇒ exactly one agent registered. No replay into a second agent.
 - **R4 — Scale:** correct and efficient at N = 20, T = 10. T (the signing threshold) is **orthogonal**
   to registration authorization — it is set inside the DKG and must not enter the auth path.
@@ -106,14 +114,18 @@ DB-lookup secret, which cannot satisfy both at once.
 
 ## 6. Why the obvious fixes fail
 
-- **Replicate the token to all nodes** → violates **R2** (replicating a bearer secret). Rejected.
-- **One "coordinator" directory consumes and vouches to the rest** → violates **R1** (the peers trust
-  the coordinator; a compromised coordinator forges registrations). Rejected.
-- **Present the token to only the issuer; peers skip auth** → the peers would participate in a DKG they
-  never authorized; a rogue client could DKG with the N-1 peers alone. Violates **R1**. Rejected.
-- **Make per-node consume idempotent by binding token→epoch** (my first instinct) → solves the
-  single-use wall but **not** the distribution wall: the peers still don't have the token to bind.
-  Insufficient on its own.
+- **Keep the token; retry / wait for replication on `NOT_FOUND`** → the lag window is unbounded (a user
+  can `cello register` immediately after issuance), and it does nothing about the double-consume
+  replication conflict. Band-aid. Rejected.
+- **Keep the token but make consumption idempotent** (bind token→epoch instead of `consumed_at = now()`)
+  → fixes the *consume* race, but the token is still a **DB-lookup** credential, so a freshly-issued
+  token not yet replicated to a peer still fails `NOT_FOUND`. Half the fix. The signed capability adds
+  the other half: authorization becomes a **stateless signature check** with no DB lookup, so replication
+  timing is irrelevant.
+- **One "coordinator" directory consumes and vouches to the rest** → violates **R1** (peers trust the
+  coordinator; a compromised coordinator forges registrations). Rejected.
+- **Present the token to only the issuer; peers skip auth** → peers would join a DKG they never
+  authorized; a rogue client could DKG with the N−1 peers alone. Violates **R1**. Rejected.
 
 ## 7. Proposed design — signed pre-auth capability + replicated nonce binding
 
@@ -145,8 +157,8 @@ RFC reference for the signature: RFC 8032 (Ed25519), matching the manifest verif
 
 ### 7b. Anti-replay — replicated, idempotent nonce→registration binding
 
-The capability's `nonce` is not secret, so its **consumption marker is safe to replicate** via the
-existing write-seam (the DOD-INV-2-compliant channel — it carries hashes/flags, never secrets). Add a
+The capability's `nonce` is not secret, so its **consumption marker replicates** via the `cello_pub`
+logical-replication publication — the same publication that already replicates the tokens table. Add a
 replicated marker table, e.g. `pre_auth_nonce_bindings(nonce, bound_epoch, bound_at, chain_hash)`, and
 make consumption a **bind-to-registration** operation keyed by the DKG epoch (`epochId` =
 `agentPubkey:epoch:1` — one epoch ⇒ one agent):
