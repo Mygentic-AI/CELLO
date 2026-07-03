@@ -9,27 +9,48 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
-## ⚠️ FINDING-4 root-cause + proper-fix IN PROGRESS — 2026-07-03 (us1 back up; relay re-register owed)
+## 🔍 Ground-truth reconciliation — 2026-07-03 (FINDING-4 PROPER FIX shipped + directory step-6 enabled)
 
-**FINDING-4 kill-us1 failover test (2026-07-03T09:59:47Z) exposed a deeper gap, now being fixed properly.**
+**FINDING-4 is fixed and LIVE on `latest`.** The kill-us1 failover test (2026-07-03) exposed that
+daemon 0.0.24's roster-aware failover resolver was correct but had NO roster to use — the client never
+loaded a consortium manifest (only a fake 1-node staging placeholder existed; dev directories served
+`/manifest`→503). The pump was wired to an empty well; the redundancy invariant was not satisfied.
 
-- **09:59:47Z** — `cello-directory-dev` (us-east-1) scaled to 0 (deliberate test). Daemon (0.0.24) did NOT
-  fail over — it retried the dead us1 node 9× and never rotated to eu1/ap1.
-- **ROOT CAUSE (proven live):** the roster-aware failover resolver is correct (`staleFallback:false`
-  works — us1 resolved to `null`), but the **consortium roster is EMPTY**. The daemon only loads a
-  manifest when `CELLO_CONSORTIUM_MANIFEST` env is set (it isn't); the only in-repo manifest is a fake
-  1-node staging placeholder; dev directories serve `/manifest` → 503. So there is no list of the 3
-  directories to fail over to. FINDING-4 shipped a pump wired to an empty well. Redundancy invariant
-  NOT actually satisfied. Full write-up: test-results journal FINDING-4 + FINDING-7.
-- **PROPER FIX (in progress, no band-aid):** build a real signed consortium manifest of the 3 dev
-  directories (us1/eu1/ap1) + bundle it into the client, loaded BY DEFAULT (cold-boot SPOF survival).
-  Real node pubkeys: us1 `167ca6…27b5`, eu1 `8105b1…1b45`, ap1 `9b4b67…b984`.
-- **CLUSTER NOW:** us1 directory back UP (desired 1, running 1, task `46daa3c0…`, updatedAt 10:10:23Z —
-  NOT restored by this agent's tooling; source unconfirmed, likely operator). Daemon reconnected to us1
-  10:13:01Z. **OWED:** us1 relay force-new-deploy + re-sign (directory got a new task 10:10) — batched
-  into the final failover-verify cascade.
+**Client fix — daemon `0.0.25` / cli `0.0.23` (published beta + promoted `latest`; tag `v0.0.66`,
+smoke-tag green; connect unchanged `0.0.53`).** A real signed consortium manifest of the 3 sovereign
+directories (real node pubkeys us1 `167ca6…27b5`, eu1 `8105b1…1b45`, ap1 `9b4b67…b984`; nodeId = region;
+endpoint = `/bootstrap` base) is COMPILED INTO the client and loaded BY DEFAULT, WITH step-6 directory
+identity auth — GATED on `CELLO_DIRECTORY_URL` being a bundled node (local dev / spine harness stay on
+the M6 path). Officer signing key: Secrets Manager `cello/dev/consortium/officer-key-0` (pubkey
+`8e9b99…64199` pinned in the client). Reproduce the manifest byte-identical via
+`infra/scripts/sign-consortium-manifest.mjs dev`.
 
-*(Removed once the fix is published + failover verified end-to-end.)*
+**Directory change — `CELLO_DIRECTORY_NODE_KEY_HEX` (= node-private-key secret) added to
+`cello-ecs-directory.yaml` and DEPLOYED to all 3 regions via `deploy.sh` 2026-07-03.** This makes each
+directory SIGN the step-6 challenge so a manifest-configured client can verify it reached the real
+consortium node (defeats a `/bootstrap` MITM). Backward-compatible: manifest-less clients never request
+the proof. Directory image unchanged (`7c66ba2`) — task-def env change only.
+
+**Failover VERIFIED LIVE (full prod posture, roster + step-6):** killed us1 → daemon failed over to eu1
+`verified:true`; killed eu1 (us1 still down) → failed over to ap1 `verified:true`. Client survives 2 of 3
+directories down and cryptographically verifies the fallback. The bundled DEFAULT (fresh `npm i
+-g @latest`, no env) was proven: `daemon.manifest.bundled` → `directory.auth.challenge.verified` →
+`signaling.connected verified:true`.
+
+**KNOWN GAP (separate, NOT fixed — tracked as journal FINDING-7):** session FROST ceremonies are
+home-node-bound — a fallback directory returns `ceremony_exhausted` (it doesn't hold the agent's
+K_server share). Failover restores presence + directory auth, but not transacting on a fallback; that
+awaits the unbuilt T-of-N protocol.
+
+**Test fix:** `j-suspend-tofn.spine.test.ts` was missing `cello_start_agent(xtarget)` — a session target
+must be online, else the directory folds an empty counterparty endpoint → `counterparty_unavailable`.
+Fixed; test green.
+
+**CLUSTER — clean + healthy (2026-07-03):** all 6 ECS 1/1 COMPLETED; all 6 DNS resolve; all 3 relay S3
+manifests FRESH (healthCheckUrl matches live relay IP: us1 `10.0.24.236`, eu1 `10.1.84.138`, ap1
+`10.2.96.205`). us1+eu1 directories were killed/restored during the failover test and their relays
+force-new-deployed + re-registered. Directory task defs (all regions) now carry
+`CELLO_DIRECTORY_NODE_KEY_HEX`.
 
 ---
 
