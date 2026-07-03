@@ -3,15 +3,16 @@ name: m8-totp-floor-stepup-inversion-remediation
 type: discussion
 date: 2026-06-28
 topics: [m8, authentication, totp, webauthn, step-up, spec-inversion, remediation, revocation, threat-model]
-status: open-pending-alignment
+status: resolved
 description: >
-  AUTHORITATIVE pick-up record (compaction-safe) for the M8 step-up spec inversion discovered 2026-06-28.
-  M8 step-up was built WebAuthn-only, contradicting journey-01 D6 (TOTP is the required recoverable FLOOR;
-  WebAuthn is a convenience LAYER). This blocks TOTP-only operators from EVERY sensitive action and blocks
-  the F1 onboarding happy-path. Captures: the mistake + how found, the revocation-forgery threat model, the
-  CORRECTED signed-revocation design (TOTP can't sign → two-layer portal+passkey), both audits' findings,
-  the DoD corrections made, the remediation plan (NOT yet started), and the open decisions for Andre.
-  NOTHING here is implemented yet — alignment first.
+  Remediation record for the M8 step-up spec inversion discovered 2026-06-28. M8 step-up had been
+  built WebAuthn-only, contradicting journey-01 D6 (TOTP is the required recoverable FLOOR; WebAuthn
+  is a convenience LAYER), which blocked TOTP-only operators from every sensitive action and the F1
+  onboarding happy-path. Captures: the mistake + how found, the revocation-forgery threat model, the
+  CORRECTED signed-revocation design (TOTP can't sign → two-layer portal+passkey), both audits'
+  findings, and the DoD corrections. RESOLVED: remediation complete — both inversions closed,
+  DOD-AUTH-2/DOD-LEVER-4/DOD-AUTH-4 restored to ✅ (see the STATUS banner + M8-BUILD-JOURNAL).
+  Historical M8 remediation record.
 ---
 
 # M8 — TOTP-floor step-up inversion: remediation record

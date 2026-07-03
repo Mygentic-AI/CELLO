@@ -3,16 +3,21 @@ name: M8 Cross-Node Presence Replication Fork
 type: discussion
 date: 2026-06-28
 topics: [presence, replication, sovereign-nodes, m8, directory, design-decision]
-status: open
+status: resolved
 description: >
-  Cross-node agent_presence read does not work today, and the M8 DoD ("replicated, readable
-  from a different node") contradicts the build journal ("deliberately NOT replicated"). This is
-  a real architectural fork touching the sovereign-node invariant. Captures the evidence, three
-  options, and a recommendation — for Andre to decide. NOT resolved unilaterally (it changes the
-  live federation's replication topology).
+  Cross-node agent_presence read did not work at M8 close, and the M8 DoD ("replicated, readable
+  from a different node") contradicted the build journal ("deliberately NOT replicated"). This
+  captured the evidence, three options, and a recommendation. RESOLVED: Option 1 was adopted and
+  shipped in M8B — agent_presence + directory_nodes added to cello_pub (V38/V39 migrations,
+  REPLICA IDENTITY confirmed), closing DOD-PRESENCE-1. Historical M8 architecture-decision record.
 ---
 
-# M8 Cross-Node Presence — Replication Fork (decision needed)
+# M8 Cross-Node Presence — Replication Fork (RESOLVED — Option 1 shipped in M8B)
+
+> **✅ RESOLVED — Option 1 adopted and shipped in M8B.** `agent_presence` + `directory_nodes` were
+> added to `cello_pub` with REPLICA IDENTITY confirmed (V38/V39 migrations; `PUBLICATION_TABLES` now
+> 16), closing **DOD-PRESENCE-1** (✅ SPINE-PROVEN in the M8B DoD). This doc is the historical
+> decision record; the "decision needed" framing below reflects the M8-close state, not current state.
 
 ## The problem, in one sentence
 
