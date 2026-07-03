@@ -72,6 +72,22 @@ Resources:
         - Name: directory
           Image: !Ref ImageUri
           Essential: true
+          # T-of-N (DOD-DKG-1) — the directory-side counterpart to the client's bundled roster: decode
+          # the signed consortium manifest (base64 from SSM via CELLO_DIRECTORY_CONSORTIUM_MANIFEST_B64)
+          # to a file the FileDirectoryManifestStore reads, so this directory declares the correct
+          # consortium participant count N in the registration DKG (directory-node.ts:
+          # consortiumNodeCount = manifest.nodes.length ?? 1). Without it the directory declares
+          # participants:1 (standalone) and a roster-aware client refuses to downgrade (dkg_below_threshold).
+          # Then run the ORIGINAL entrypoint unchanged (flyway migrate → node directory.js). Infra-only:
+          # no image rebuild; base image is node:24-slim (has /bin/sh + base64).
+          EntryPoint:
+            - /bin/sh
+            - -c
+            - >-
+              if [ -n "$CELLO_DIRECTORY_CONSORTIUM_MANIFEST_B64" ];
+              then printf '%s' "$CELLO_DIRECTORY_CONSORTIUM_MANIFEST_B64" | base64 -d > "${CELLO_DIRECTORY_CONSORTIUM_MANIFEST:-/tmp/consortium-manifest.json}";
+              fi;
+              exec /app/docker-entrypoint.sh
           PortMappings:
             # Port 8080: libp2p WebSocket listener (REPOSPLIT-001 AC-007).
             # ALB forwards external port 80 → container port 8080 (WS upgrade).
@@ -105,6 +121,14 @@ Resources:
             # Fetched from SSM Parameter Store for dynamic region expansion.
             - Name: CELLO_DIRECTORY_HOSTNAME
               Value: !Sub "{{resolve:ssm:/cello/${Environment}/directory/hostname}}"
+            # T-of-N consortium topology (see EntryPoint above). CELLO_DIRECTORY_CONSORTIUM_MANIFEST is
+            # the path the entrypoint decodes the manifest to; _B64 is the signed manifest (base64) held
+            # in SSM (public data; same for all regions — it lists all 3 nodes). The directory serves it
+            # to polling clients and derives the DKG participant count from its nodes[].length.
+            - Name: CELLO_DIRECTORY_CONSORTIUM_MANIFEST
+              Value: /tmp/consortium-manifest.json
+            - Name: CELLO_DIRECTORY_CONSORTIUM_MANIFEST_B64
+              Value: !Sub "{{resolve:ssm:/cello/${Environment}/directory/consortium-manifest}}"
             - Name: HOME
               Value: /tmp
             - Name: CELLO_AUDIT_BUCKET
