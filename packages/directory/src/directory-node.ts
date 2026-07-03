@@ -107,7 +107,7 @@ import {
 } from "./agent-presence-repository.js";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash } from "@cello-protocol/crypto";
+import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash, verifyCapability, decodeCapability } from "@cello-protocol/crypto";
 
 import type { KeyProvider, LeafInput, IThresholdSigner, RefreshContribution } from "@cello-protocol/crypto";
 import { encodeStructure2, computeGenesisPrevRoot, buildSealTbs } from "@cello-protocol/protocol-types";
@@ -117,7 +117,7 @@ import { createNode } from "@cello-protocol/transport";
 import type { CelloNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import type { SessionAbandoned, SessionSealRejected, SealVerified } from "@cello-protocol/protocol-types";
-import type { SealNotarization, ConversationSealRecord, ConversationCloseType, ConversationAttestation, Logger, NotificationQueue, ICheckpointTransport, CheckpointProposal, TokenValidator } from "@cello-protocol/interfaces";
+import type { SealNotarization, ConversationSealRecord, ConversationCloseType, ConversationAttestation, Logger, NotificationQueue, ICheckpointTransport, CheckpointProposal, TokenValidator, NonceBinder } from "@cello-protocol/interfaces";
 import type {
   SessionAssignment,
   SessionAssignmentFrame,
@@ -413,6 +413,17 @@ export interface DirectoryNodeOptions {
    */
   tokenValidator?: TokenValidator;
   /**
+   * M8B-PREAUTH-CAP: the pinned Ed25519 public key (hex) of the pre-auth capability issuer. When set
+   * (with nonceBinder), DKG Round 1 verifies the presented capability's signature against this key —
+   * stateless, no DB lookup — instead of the token-table validate/consume. Replaces tokenValidator.
+   */
+  capabilityIssuerPubkey?: string;
+  /**
+   * M8B-PREAUTH-CAP: local, idempotent single-use enforcement. After capability verification, Round 1
+   * binds the capability's nonce to the DKG epoch (one nonce ⇒ one agent). Never replicated (see V40).
+   */
+  nonceBinder?: NonceBinder;
+  /**
    * OPS-AGENT-001: Postgres pool for account deduplication (AC-005b).
    * When provided alongside tokenValidator, the directory links the new agent_profile
    * to an account after successful DKG Round 1, creating one if needed.
@@ -458,6 +469,9 @@ export class CelloDirectoryNode {
   readonly #checkpointTransport: ICheckpointTransport | undefined;
   // OPS-AGENT-001: TokenValidator for pre-authorization gate on DKG Round 1
   readonly #tokenValidator: TokenValidator | undefined;
+  // M8B-PREAUTH-CAP: pinned issuer pubkey + local nonce binder (replace the token validate/consume gate).
+  readonly #capabilityIssuerPubkey: string | undefined;
+  readonly #nonceBinder: NonceBinder | undefined;
   // OPS-AGENT-001: Postgres pool for account deduplication (AC-005b)
   readonly #pgPool: import("pg").Pool | undefined;
   // PRESENCE-001: per-node liveness heartbeat timer (refreshes directory_nodes.last_heartbeat_at).
@@ -620,6 +634,8 @@ export class CelloDirectoryNode {
     this.#relayPoolManager = opts.relayPoolManager;
     this.#checkpointTransport = opts.checkpointTransport;
     this.#tokenValidator = opts.tokenValidator;
+    this.#capabilityIssuerPubkey = opts.capabilityIssuerPubkey;
+    this.#nonceBinder = opts.nonceBinder;
     this.#pgPool = opts.pgPool;
     this.#directoryKeyProvider = opts.directoryKeyProvider;
     this.#directoryManifestStore = opts.directoryManifestStore;
@@ -1295,10 +1311,56 @@ export class CelloDirectoryNode {
       const dkgReq = decodeFrostDkgRequest(requestBytes);
       if (dkgReq) {
         if (dkgReq.type === "frost_dkg_round1_request") {
-          // OPS-AGENT-001: Token gate — FIRST operation before any crypto computation.
-          // Token must be consumed before any FROST crypto begins (AC-006: consumption-on-presentation).
-          // If tokenValidator is wired, the preAuthToken is mandatory.
-          if (this.#tokenValidator) {
+          // M8B-PREAUTH-CAP: capability gate — FIRST, before any FROST crypto. The round-1 preAuthToken
+          // field carries a base64url-encoded signed capability; verify it against the pinned issuer key
+          // (stateless, no DB lookup) and bind its nonce to this epoch (local, idempotent single-use).
+          // Preferred over the token gate; the token path below remains only for legacy tests.
+          if (this.#capabilityIssuerPubkey && this.#nonceBinder) {
+            const correlationId = Buffer.from(randomBytes(16)).toString("hex");
+            const blob = dkgReq.preAuthToken;
+            const agentId = truncHex(dkgReq.agentPubkey);
+
+            if (!blob || blob.length === 0) {
+              this.#logger?.warn("directory.auth.capability.missing", { remoteAgentId: agentId, correlationId });
+              stream.send(lp.encode.single(CBOR_ENC.encode({ type: "preauth_error", reason: "PRE_AUTH_TOKEN_MISSING" })));
+              await stream.close();
+              return;
+            }
+            const cap = decodeCapability(blob);
+            if (!cap) {
+              this.#logger?.warn("directory.auth.capability.malformed", { remoteAgentId: agentId, correlationId });
+              stream.send(lp.encode.single(CBOR_ENC.encode({ type: "preauth_error", reason: "PRE_AUTH_TOKEN_MISSING" })));
+              await stream.close();
+              return;
+            }
+            // Verify the issuer's Ed25519 signature + validity window. Stateless — every node does this
+            // independently, so replication timing is irrelevant (the token race is gone).
+            const verifyResult = verifyCapability(cap, this.#capabilityIssuerPubkey);
+            if (!verifyResult.ok) {
+              const errorCode = verifyResult.reason === "capability_expired" ? "PRE_AUTH_TOKEN_EXPIRED" : "PRE_AUTH_CAPABILITY_INVALID";
+              this.#logger?.warn("directory.auth.capability.rejected", { reason: verifyResult.reason, remoteAgentId: agentId, correlationId });
+              stream.send(lp.encode.single(CBOR_ENC.encode({ type: "preauth_error", reason: errorCode })));
+              await stream.close();
+              return;
+            }
+            // Local, idempotent single-use: bind the nonce to the AGENT being registered (one nonce ⇒
+            // one agent). Bind to agentPubkey, NOT the client-supplied epochId — the epoch is
+            // attacker-controlled on the wire, so binding to it would let one capability register two
+            // different agents under one reused epoch string (single-use bypass).
+            const bindResult = await this.#nonceBinder.bind(cap.nonce, dkgReq.agentPubkey);
+            if (!bindResult.bound) {
+              this.#logger?.warn("directory.auth.nonce.conflict", { noncePrefix: cap.nonce.slice(0, 8), remoteAgentId: agentId, correlationId });
+              stream.send(lp.encode.single(CBOR_ENC.encode({ type: "preauth_error", reason: "PRE_AUTH_TOKEN_CONSUMED" })));
+              await stream.close();
+              return;
+            }
+            this.#logger?.info("directory.auth.capability.verified", { agentId, noncePrefix: cap.nonce.slice(0, 8), correlationId });
+            // Stash the operator identity for post-DKG account linking (email domain fills the emailStub slot).
+            this.#pendingPreAuthData.set(dkgReq.agentPubkey, {
+              phoneStubHash: cap.phone_stub_hash,
+              emailStubHash: cap.email_domain,
+            });
+          } else if (this.#tokenValidator) {
             const correlationId = Buffer.from(randomBytes(16)).toString("hex");
             const token = dkgReq.preAuthToken;
             const agentId = truncHex(dkgReq.agentPubkey);
@@ -5153,6 +5215,10 @@ export interface CreateDirectoryNodeOptions {
    * CELLO_ENV=dev+: use PgTokenValidator backed by pre_authorization_tokens table.
    */
   tokenValidator?: TokenValidator;
+  /** M8B-PREAUTH-CAP: pinned issuer pubkey (hex) — DKG Round 1 verifies a signed capability against it. */
+  capabilityIssuerPubkey?: string;
+  /** M8B-PREAUTH-CAP: local idempotent nonce→agent binding (single-use). Pairs with capabilityIssuerPubkey. */
+  nonceBinder?: NonceBinder;
   /**
    * OPS-AGENT-001: Postgres pool for account deduplication (AC-005b).
    * When provided alongside tokenValidator, the directory links the new agent_profile
@@ -5210,6 +5276,8 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     relayPoolManager: opts.relayPoolManager,
     checkpointTransport: opts.checkpointTransport,
     tokenValidator: opts.tokenValidator,
+    capabilityIssuerPubkey: opts.capabilityIssuerPubkey,
+    nonceBinder: opts.nonceBinder,
     pgPool: opts.pgPool,
     directoryKeyProvider: opts.directoryKeyProvider,
     directoryManifestStore: opts.directoryManifestStore,

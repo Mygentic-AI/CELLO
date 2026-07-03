@@ -162,29 +162,35 @@ conflict — it halts the subscription — and every `cello_pub` table today avo
 (staggered `INCREMENT BY N` sequences, or a single writer per key). A T-of-N registration is the exact
 opposite: all N nodes act on the **same** nonce concurrently. Replicating that binding would reproduce
 the very failure mode this design removes. So each directory keeps a **local** (non-`cello_pub`) marker
-table `pre_auth_nonce_bindings(nonce PRIMARY KEY, bound_epoch, ...)` and makes consumption a
-**bind-to-registration** operation keyed by the DKG epoch (`epochId` = `agentPubkey:epoch:1` — one epoch
-⇒ one agent), idempotent via `ON CONFLICT`:
+table `pre_auth_nonce_bindings(nonce PRIMARY KEY, bound_agent, ...)` and makes consumption a
+**bind-to-agent** operation keyed by the agent's round-1 K_local pubkey (one nonce ⇒ one agent),
+idempotent via `ON CONFLICT`:
 
 ```
-bind(nonce, epochId):        -- purely local; INSERT ... ON CONFLICT (nonce) DO NOTHING RETURNING
-    if nonce unbound          → write nonce→epochId, return OK        (first time this node sees it)
-    else if bound to epochId  → return OK                             (idempotent re-presentation, same agent)
-    else (bound to epochId')  → reject NONCE_ALREADY_BOUND            (replay into a different agent)
+bind(nonce, agentPubkey):    -- purely local; INSERT ... ON CONFLICT (nonce) DO NOTHING RETURNING
+    if nonce unbound             → write nonce→agentPubkey, return OK   (first time this node sees it)
+    else if bound to agentPubkey → return OK                           (idempotent re-presentation, same agent)
+    else (bound to other agent)  → reject NONCE_ALREADY_BOUND          (replay into a different agent)
 ```
+
+> **Bind to `agentPubkey`, NOT the DKG `epochId`.** The epoch is a free-form string the client puts on
+> the wire (`frost_dkg_round1_request.epochId`); nothing forces it to equal the `agentPubkey:epoch:1`
+> convention. If we bound to it, an attacker with one capability could present the same nonce with the
+> same reused `epochId` for two *different* `agentPubkey`s — both bind idempotently → one capability
+> registers two agents. Binding to the agent identity closes that (a code review caught this before ship).
 
 **Why local binding is sufficient for single-use (R3):**
 
 - **All-N ceremony (current):** every directory participates, so every directory binds the nonce
-  locally. A replay for a different epoch is rejected at *every* node — the DKG cannot complete.
+  locally. A replay for a different agent is rejected at *every* node — the DKG cannot complete.
 - **Quorum ceremony (§9):** with a required quorum > N/2, any two registration attempts share at least
-  one node (majority sets always intersect). That overlapping node bound the nonce to the first epoch,
+  one node (majority sets always intersect). That overlapping node bound the nonce to the first agent,
   so it rejects the second → the second DKG cannot complete. Single-use holds without any cross-node
   coordination.
 
 There is **no replication, no coordinator, no cross-node write** — each node decides locally, which is
 also why it is race-free: the `consumed_at = now()` conflict simply cannot arise. The idempotency is on
-the `(nonce, epoch)` pair, so a legitimate re-presentation within the same registration is a no-op.
+the `(nonce, agentPubkey)` pair, so a legitimate re-presentation within the same registration is a no-op.
 
 ## 8. Why this scales (R4) and stays sovereign (R1)
 

@@ -48,8 +48,8 @@ importers:
         specifier: 3.1051.0
         version: 3.1051.0
       '@cello-protocol/crypto':
-        specifier: ^0.0.13
-        version: 0.0.13
+        specifier: ^0.0.15
+        version: 0.0.15
       '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
@@ -106,8 +106,8 @@ importers:
         specifier: ^0.0.30
         version: 0.0.30
       '@cello-protocol/crypto':
-        specifier: ^0.0.7
-        version: 0.0.7
+        specifier: ^0.0.15
+        version: 0.0.15
       '@cello-protocol/directory':
         specifier: workspace:*
         version: link:../directory
@@ -177,8 +177,8 @@ importers:
   packages/relay:
     dependencies:
       '@cello-protocol/crypto':
-        specifier: ^0.0.7
-        version: 0.0.7
+        specifier: ^0.0.15
+        version: 0.0.15
       '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
@@ -472,6 +472,10 @@ packages:
 
   '@cello-protocol/crypto@0.0.13':
     resolution: {integrity: sha512-WAAEivQcUk2WgFhHnAreIPWKXuC3wokrhZQPTk0cfQIhCT/SZp6pxFPsuoiSWTTjeyfuMks8wqKi2+fdanYZqw==}
+    engines: {node: '>=24'}
+
+  '@cello-protocol/crypto@0.0.15':
+    resolution: {integrity: sha512-eJkZ9dQG0wMPdNZVbK0pjpCJGpn1nFJDNR9TzNHW6ofEqMkVlQSogMFqH9O86LpRjJ8t3kQIxdwxg0U/RqkW4w==}
     engines: {node: '>=24'}
 
   '@cello-protocol/crypto@0.0.2':
@@ -4035,6 +4039,12 @@ snapshots:
       - utf-8-validate
 
   '@cello-protocol/crypto@0.0.13':
+    dependencies:
+      '@noble/curves': 2.2.0
+      '@noble/hashes': 2.2.0
+      '@oqs/liboqs-js': 0.15.1
+
+  '@cello-protocol/crypto@0.0.15':
     dependencies:
       '@noble/curves': 2.2.0
       '@noble/hashes': 2.2.0

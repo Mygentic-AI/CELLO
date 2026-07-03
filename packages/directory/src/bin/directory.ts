@@ -42,13 +42,14 @@ import { FileKeyProvider, InMemoryKeyProvider } from "@cello-protocol/crypto";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { createDirectoryNode, ClientDelegatedSigner } from "../directory-node.js";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
-import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler, LocalAuditLogShipper, InMemoryNotificationQueue, DevTokenValidator } from "@cello-protocol/interfaces/stubs";
-import type { AuditLogShipper, NotificationQueue, TokenValidator, DirectoryKeyProvider } from "@cello-protocol/interfaces";
+import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler, LocalAuditLogShipper, InMemoryNotificationQueue, DevTokenValidator, DevNonceBinder } from "@cello-protocol/interfaces/stubs";
+import type { AuditLogShipper, NotificationQueue, TokenValidator, NonceBinder, DirectoryKeyProvider } from "@cello-protocol/interfaces";
 // S3AuditLogShipper is imported dynamically below to avoid loading @aws-sdk/client-s3
 // in CELLO_ENV=local subprocesses where it causes tsx/esm resolution noise.
 import { createInternalApiServer } from "../internal-api-server.js";
 import { reconcileNodeOffline } from "../agent-presence-repository.js";
 import { PgTokenValidator } from "../adapters/pg-token-validator.js";
+import { PgNonceBinder } from "../adapters/pg-nonce-binder.js";
 import { InMemoryShareStore } from "../share-store.js";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { EncryptedPgShareStore } from "../encrypted-share-store.js";
@@ -783,6 +784,37 @@ const tokenValidator: TokenValidator = (() => {
   return v;
 })();
 
+// ─── M8B-PREAUTH-CAP: capability issuer pubkey + local nonce binder ───────────
+// When CELLO_PREAUTH_ISSUER_PUBKEY is set, DKG Round 1 verifies a signed pre-auth capability against it
+// (stateless) and binds the nonce LOCALLY (replaces the token validate/consume gate — see the design
+// doc + V40). local → DevNonceBinder (in-memory); dev+ → PgNonceBinder over pre_auth_nonce_bindings.
+const capabilityIssuerPubkey = process.env["CELLO_PREAUTH_ISSUER_PUBKEY"];
+const nonceBinder: NonceBinder | undefined = capabilityIssuerPubkey
+  ? (() => {
+      if (env === "local") {
+        logger.info("adapter.initialised", { adapterName: "NonceBinder", implementation: "DevNonceBinder", env });
+        return new DevNonceBinder();
+      }
+      if (!pgPool) {
+        logger.error("adapter.config.missing", { missingKey: "DATABASE_URL", adapterName: "PgNonceBinder", env });
+        process.exit(1);
+      }
+      logger.info("adapter.initialised", { adapterName: "NonceBinder", implementation: "PgNonceBinder", env });
+      return new PgNonceBinder(pgPool);
+    })()
+  : undefined;
+if (capabilityIssuerPubkey) {
+  logger.info("directory.auth.capability.enabled", { issuerPubkeyPrefix: capabilityIssuerPubkey.slice(0, 8) });
+}
+
+// M8B-PREAUTH-CAP: issuer SIGNING key for /internal/pre-authorize (used on the node the ops-agent calls
+// — us1 in practice; harmless elsewhere). One issuer identity, same key across regions (NOT a per-region
+// transport key); its public half is CELLO_PREAUTH_ISSUER_PUBKEY, pinned above for verification.
+const issuerKeySeedHex = process.env["CELLO_PREAUTH_ISSUER_KEY_HEX"];
+const issuerKeyProvider = issuerKeySeedHex
+  ? new InMemoryKeyProvider(Uint8Array.from(Buffer.from(issuerKeySeedHex, "hex")))
+  : undefined;
+
 // Internal API server: POST /internal/pre-authorize
 // Required env: INTERNAL_API_KEY (any non-empty string used as the bearer key)
 // Local: optional (skip if INTERNAL_API_KEY not set; backward compat for existing tests)
@@ -801,6 +833,7 @@ if (internalApiKey && pgPool) {
     internalApiKey,
     logger,
     owningNodeId: nodeId,
+    issuerKeyProvider,
   });
   internalApiServer.listen(internalApiPort, () => {
     logger.info("adapter.initialised", {
@@ -875,6 +908,8 @@ try {
     relayPoolManager,
     checkpointTransport,
     tokenValidator,
+    capabilityIssuerPubkey,
+    nonceBinder,
     directoryKeyProvider,
     directoryManifestStore,
     pgPool: pgPool ?? undefined,

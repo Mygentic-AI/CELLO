@@ -7,15 +7,15 @@
 import type { NonceBinder, NonceBindResult } from "../nonce-binder.js";
 
 export class DevNonceBinder implements NonceBinder {
-  readonly #bindings = new Map<string, string>(); // nonce → epochId
+  readonly #bindings = new Map<string, string>(); // nonce → agentPubkey
 
-  async bind(nonce: string, epochId: string): Promise<NonceBindResult> {
+  async bind(nonce: string, agentPubkey: string): Promise<NonceBindResult> {
     const existing = this.#bindings.get(nonce);
     if (existing === undefined) {
-      this.#bindings.set(nonce, epochId);
+      this.#bindings.set(nonce, agentPubkey);
       return { bound: true };
     }
-    if (existing === epochId) return { bound: true }; // idempotent — same registration
+    if (existing === agentPubkey) return { bound: true }; // idempotent — same agent
     return { bound: false, reason: "NONCE_ALREADY_BOUND" };
   }
 }

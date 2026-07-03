@@ -1,27 +1,34 @@
 /**
- * Tests for the idempotent bind-to-epoch single-use semantics (M8B-PREAUTH-CAP), against DevNonceBinder.
+ * Tests for the idempotent bind-to-AGENT single-use semantics (M8B-PREAUTH-CAP), against DevNonceBinder.
  * PgNonceBinder shares the exact same contract (verified live via the directory integration path).
+ *
+ * Binding is keyed on the agent K_local pubkey — NOT the client-supplied epoch — because the epoch is
+ * attacker-controlled on the wire. The "reject a second, different agent" test below is the exact
+ * single-use bypass a code review caught (one capability must never register two agents).
  */
 import { describe, it, expect } from "vitest";
 import { DevNonceBinder } from "../stubs/dev-nonce-binder.js";
 
-describe("NonceBinder — bind-to-epoch single-use", () => {
-  it("binds an unseen nonce", async () => {
+const AGENT_A = "a".repeat(64); // K_local pubkey hex
+const AGENT_B = "b".repeat(64);
+
+describe("NonceBinder — bind-to-agent single-use", () => {
+  it("binds an unseen nonce to an agent", async () => {
     const b = new DevNonceBinder();
-    expect(await b.bind("nonceA", "agent1:epoch:1")).toEqual({ bound: true });
+    expect(await b.bind("nonceA", AGENT_A)).toEqual({ bound: true });
   });
 
-  it("is idempotent when the SAME nonce is re-presented for the SAME epoch (the other N-1 nodes / retries)", async () => {
+  it("is idempotent when the SAME nonce is re-presented for the SAME agent (the other N-1 nodes / retries)", async () => {
     const b = new DevNonceBinder();
-    await b.bind("nonceA", "agent1:epoch:1");
-    expect(await b.bind("nonceA", "agent1:epoch:1")).toEqual({ bound: true });
-    expect(await b.bind("nonceA", "agent1:epoch:1")).toEqual({ bound: true });
+    await b.bind("nonceA", AGENT_A);
+    expect(await b.bind("nonceA", AGENT_A)).toEqual({ bound: true });
+    expect(await b.bind("nonceA", AGENT_A)).toEqual({ bound: true });
   });
 
-  it("rejects re-use of a nonce for a DIFFERENT epoch (replay into a second agent)", async () => {
+  it("rejects re-use of a nonce for a DIFFERENT agent (the single-use bypass — one capability, two agents)", async () => {
     const b = new DevNonceBinder();
-    await b.bind("nonceA", "agent1:epoch:1");
-    expect(await b.bind("nonceA", "agent2:epoch:1")).toEqual({
+    await b.bind("nonceA", AGENT_A);
+    expect(await b.bind("nonceA", AGENT_B)).toEqual({
       bound: false,
       reason: "NONCE_ALREADY_BOUND",
     });
@@ -29,7 +36,7 @@ describe("NonceBinder — bind-to-epoch single-use", () => {
 
   it("keeps distinct nonces independent", async () => {
     const b = new DevNonceBinder();
-    expect(await b.bind("nonceA", "agent1:epoch:1")).toEqual({ bound: true });
-    expect(await b.bind("nonceB", "agent2:epoch:1")).toEqual({ bound: true });
+    expect(await b.bind("nonceA", AGENT_A)).toEqual({ bound: true });
+    expect(await b.bind("nonceB", AGENT_B)).toEqual({ bound: true });
   });
 });

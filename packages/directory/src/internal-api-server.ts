@@ -34,7 +34,8 @@ import { createServer, type Server } from "node:http";
 import { randomBytes } from "node:crypto";
 import type pg from "pg";
 import type { Logger } from "@cello-protocol/interfaces";
-import { issuePreAuthToken } from "./pre-auth-token-repository.js";
+import type { KeyProvider } from "@cello-protocol/crypto";
+import { issuePreAuthToken, issuePreAuthCapability } from "./pre-auth-token-repository.js";
 import { listAccountAgentsWithPresence } from "./agent-presence-repository.js";
 import { validateWritePayload } from "./agent-write-validation.js";
 import {
@@ -53,6 +54,11 @@ export interface InternalApiServerOptions {
   internalApiKey: string;
   logger: Pick<Logger, "info" | "warn" | "error">;
   owningNodeId: string;
+  /**
+   * M8B-PREAUTH-CAP: when provided, /internal/pre-authorize issues a SIGNED CAPABILITY (verified
+   * independently by every directory) instead of an opaque token. Absent → legacy token issuance.
+   */
+  issuerKeyProvider?: KeyProvider;
 }
 
 /**
@@ -107,6 +113,35 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
       if (!phoneStubHash || !emailStubHash || !registrationId) {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "missing required fields: phoneStubHash, emailStubHash, registrationId" }));
+        return;
+      }
+
+      // Step 3 (M8B-PREAUTH-CAP): if an issuer key is wired, issue a SIGNED CAPABILITY and return it in
+      // the `token` field (the operator pastes it into `cello register`). Every directory verifies it
+      // independently — no consume race. Falls through to legacy token issuance when no issuer key.
+      if (opts.issuerKeyProvider) {
+        try {
+          const capResult = await issuePreAuthCapability(pool, opts.issuerKeyProvider, {
+            phoneStubHash,
+            emailStubHash,
+            registrationId,
+          });
+          logger.info("directory.auth.capability.issued", {
+            tokenId: capResult.tokenId,
+            phoneStubHashPrefix: phoneStubHash.slice(0, 8),
+            emailStubHash,
+            correlationId,
+          });
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ token: capResult.capability, expiresAt: capResult.expiresAt.toISOString() }));
+        } catch (err: unknown) {
+          const pgErr = err as { code?: string };
+          const isDbError = typeof pgErr.code === "string" && /^\d{5}$/.test(pgErr.code);
+          const reason = isDbError ? `database_error:${pgErr.code}` : err instanceof Error ? err.message : String(err);
+          logger.error("directory.auth.capability.issue.failed", { reason, correlationId });
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "capability issuance failed" }));
+        }
         return;
       }
 

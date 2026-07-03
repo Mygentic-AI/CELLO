@@ -27,6 +27,8 @@
 import { randomBytes, createHash, randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { Logger } from "@cello-protocol/interfaces";
+import { signCapability, encodeCapability } from "@cello-protocol/crypto";
+import type { KeyProvider } from "@cello-protocol/crypto";
 
 // ─── Bitcoin base58 alphabet (no 0/O/I/l) ─────────────────────────────────────
 
@@ -171,6 +173,82 @@ export async function issuePreAuthToken(
     }
   }
   throw lastError ?? new Error("Failed to insert token after 3 attempts");
+}
+
+// ─── Capability issuance (M8B-PREAUTH-CAP) ──────────────────────────────────────
+
+export interface IssuePreAuthCapabilityResult {
+  /** base64url-encoded signed capability — this is what the operator pastes into `cello register`. */
+  capability: string;
+  /** The capability's random 128-bit nonce (hex) — also the audit-row key in pre_authorization_tokens. */
+  nonce: string;
+  /** Database row UUID of the audit record. */
+  tokenId: string;
+  /** Expiry timestamp (24h TTL). */
+  expiresAt: Date;
+}
+
+/**
+ * Issue a signed pre-authorization CAPABILITY (M8B-PREAUTH-CAP). Replaces issuePreAuthToken for T-of-N
+ * registration: the returned blob is a permission slip every directory verifies independently against the
+ * pinned issuer pubkey (no DB lookup, no consume race). An audit row is still written to
+ * pre_authorization_tokens (keyed on the nonce, for issuance/expiry traceability); single-use is enforced
+ * downstream by the directory's local nonce→epoch binding, NOT by consuming this row.
+ *
+ * The capability's `nonce` is a fresh 128-bit CSPRNG value (crypto.randomBytes). Crypto: RFC 8032.
+ */
+export async function issuePreAuthCapability(
+  pool: pg.Pool,
+  issuerKeyProvider: KeyProvider,
+  params: IssuePreAuthTokenParams,
+): Promise<IssuePreAuthCapabilityResult> {
+  const TTL_MS = 24 * 60 * 60 * 1000;
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const nonce = randomBytes(16).toString("hex"); // 128-bit replay identity
+    const issuedAt = new Date();
+    const expiresAt = new Date(issuedAt.getTime() + TTL_MS);
+    const chainHash = createHash("sha256").update(nonce).update(issuedAt.toISOString()).digest("hex");
+
+    try {
+      const result = await pool.query<{ id: string }>(
+        `INSERT INTO pre_authorization_tokens
+           (token, phone_stub_hash, email_stub_hash, registration_id, issued_at, expires_at, consumed_at, chain_hash)
+         VALUES ($1, $2, $3, $4, $5, $6, NULL, $7)
+         RETURNING id`,
+        [
+          nonce, // the nonce is the audit-row key (the "token" column)
+          params.phoneStubHash,
+          params.emailStubHash,
+          params.registrationId,
+          issuedAt.toISOString(),
+          expiresAt.toISOString(),
+          chainHash,
+        ],
+      );
+      const tokenId = result.rows[0]!.id;
+      const cap = await signCapability(
+        {
+          nonce,
+          phone_stub_hash: params.phoneStubHash,
+          email_domain: params.emailStubHash,
+          issued_at: issuedAt.toISOString(),
+          expires_at: expiresAt.toISOString(),
+        },
+        issuerKeyProvider,
+      );
+      return { capability: encodeCapability(cap), nonce, tokenId, expiresAt };
+    } catch (err: unknown) {
+      const pgErr = err as { code?: string };
+      if (pgErr.code === "23505") {
+        lastError = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError ?? new Error("Failed to insert capability audit row after 3 attempts");
 }
 
 // ─── Token consumption ────────────────────────────────────────────────────────

@@ -25,7 +25,7 @@
   "dependencies": {
     "@cello-protocol/connect": "^0.0.30",
     "@cello-protocol/client": "^0.0.20",
-    "@cello-protocol/crypto": "^0.0.7",
+    "@cello-protocol/crypto": "^0.0.15",
     "@cello-protocol/directory": "workspace:*",
     "@cello-protocol/interfaces": "workspace:*",
     "@cello-protocol/protocol-types": "^0.0.3",
