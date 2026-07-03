@@ -14,6 +14,7 @@ export { InMemoryCheckpointTransport } from "./in-memory-checkpoint-transport.js
 export { CliAdapter } from "./cli-adapter.js";
 export { ConsoleOtpDeliveryProvider } from "./console-otp-delivery-provider.js";
 export { DevTokenValidator } from "./dev-token-validator.js";
+export { DevNonceBinder } from "./dev-nonce-binder.js";
 export { LocalPreAuthorizationClient } from "./local-pre-authorization-client.js";
 export { ConsoleSecurityAlertProvider } from "./console-security-alert-provider.js";
 
