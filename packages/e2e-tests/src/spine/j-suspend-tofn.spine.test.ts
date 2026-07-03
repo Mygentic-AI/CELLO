@@ -114,6 +114,12 @@ describe("J-SUSPEND-TOFN — quorum-aware suspension (DOD-SUSPEND-1)", () => {
     const connA = await connectMcp(celloDir, "suspn-A");
     mcpConns.push(connA);
     expect(((await connA.call("cello_start_agent", { name: "ainit" })) as { ok?: boolean }).ok).toBe(true);
+    // xtarget is the session TARGET, so it must be ONLINE: the standing receiver AND the
+    // session-offer handler (which advertises that receiver as the counterparty endpoint) are
+    // wired only when an agent goes online. Without this, the directory folds an EMPTY
+    // counterparty endpoint into the assignment and initiate returns counterparty_unavailable.
+    // xtarget is a passive receiver here (it never initiates), so no cello_use_agent is needed.
+    expect(((await connA.call("cello_start_agent", { name: "xtarget" })) as { ok?: boolean }).ok).toBe(true);
     expect(((await connA.call("cello_use_agent", { name: "ainit" })) as { ok?: boolean }).ok).toBe(true);
 
     // A's directory agent_id (from node 0, the registering node), then SEED A's profile to nodes 1,2
