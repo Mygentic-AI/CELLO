@@ -285,6 +285,22 @@ not just counts) → both repos + version bump + publish + directory deploy.
   directory. First run built nothing; the directory dist was fresh only from an earlier typecheck.
 - Rerun (correct build) = `b19gfgcaf` → `scratchpad/spine-p2-verify2.log`.
 
+### 2026-07-04 — spine GREEN (2/2); seal-targets-Q analysis
+
+- **Spine GREEN 2/2** (after the decoder fix + correct build): baseline + quorum kill-one. A green quorum
+  test can only occur with the decoder fix (old directory strips R and refuses), so it's trustworthy.
+  **Problem 2 registration-with-a-node-down is proven.** Committed.
+- **Seal-targets-Q (item 4) — satisfied in OUTCOME, no persist-Q needed for the DoD.** Checked
+  `session-ceremony.ts`: the seal reconstructs `directoryNodeStubs` from the **full roster** (not a
+  persisted Q) BY DESIGN (DOD-SIGN-1: fan to all, exclude down/non-holder nodes, reach the fixed T; can
+  never forge a lower-T sig). For a quorum agent the N−|Q| non-holders return `AGENT_NOT_BOOTSTRAPPED` →
+  excluded → the seal reaches T from the Q holders. So **the seal completes** (DoD "kill a non-holder →
+  seal still completes" is met). Persisting Q to *prefer* holders would only save retry budget at LARGE
+  N (small Q) — a client-side schema migration; **deferred as a large-N efficiency follow-up**, flagged
+  for Andre, not blocking beta. (verifyingShares identifiers know Q but are one-way hashes of nodeId, so
+  Q's dial info isn't recoverable without a new persisted field.)
+- Code review running (a49a6ad1) — corroborating this + checking threshold arithmetic / consistency / security.
+
 <details><summary>Original open questions (now answered)</summary>
 
 **⚠️ OPEN DESIGN DECISION (needs Andre — do NOT invent a protocol unilaterally):** how is Q determined and agreed?
