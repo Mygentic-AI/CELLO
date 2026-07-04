@@ -24,8 +24,8 @@ among the 2-node quorum). Both review Criticals fixed (persist-Q + refresh-forwa
 - **Directory DEPLOYED** `cello-directory:bb02899`, all 3 regions rolloutState=COMPLETED, 0 failed, no crash
   (verified rolloutState + failedTasks + startup logs, not just pipeline status). Relay cascade initiated
   ~12:15 UTC (all 3 relays stopped → re-registering).
-- ⚠️ **#2 SECURITY (needs Andre):** `majority(N)` lets a bare majority of directory operators forge offline
-  (was all-N). One-line change to tighten (`ceil(2N/3)`/`N-1`). Gates `latest`.
+- **Threshold = `majority(N)` — SETTLED, do not re-raise.** `T < N` is the whole point (redundancy). All-N
+  is decided against (one node down = whole system down = zero redundancy). Never propose reverting to all-N.
 - Follow-ups (Sprint B / noted): absent-node reconcile; enrollment; the legacy file-persistence backend
   doesn't read directoryNodeIds back (dead code on current wiring).
 

@@ -313,15 +313,14 @@ budget), real at N>3. Clean fix (no identifier crypto): persist Q's **nodeIds** 
 (registration-manager has roster=Q at persist time), and in `hydrateShareAndStubs` filter the live roster
 to `ep.nodeId ∈ persistedQ`. Needs a client-side FrostKeyShare schema field + migration. → IMPLEMENTING.
 
-**#2 (Important, SECURITY — needs Andre) — `majority(N)` threshold weakens directory-collusion resistance.**
-`T = floor(N/2)+1 ≤ N`, so a bare **majority of directory operators alone** (no client) hold enough real
-shares to forge a group signature offline — down from the old "all N directories." The protocol never
-invokes this path (client always coordinates), but cryptographically the collusion margin drops from
-"100% of directories" to "just over half." NOTE: this reduction is inherent to any T<N (which §9's
-"10-of-15" already chose); majority is a reasonable point aligned with §9's outage-tolerance intent, and
-it's a ONE-LINE formula change to tighten (e.g. `ceil(2N/3)` or `N-1`). **⚠️ Andre: sign off on `majority`
-or name a tighter policy — this is baked into every agent that registers, so it gates the `latest`
-promotion.** Proceeding with `majority` on beta; will not promote to latest without your call.
+**#2 — threshold = `majority(N)`. SETTLED (Andre, 2026-07-04). DO NOT RE-RAISE.**
+`T = floor(N/2)+1` (dev N=3 → T=2). `T < N` is the entire point: it is what lets registration and sealing
+survive a directory being down. **All-N is decided against — permanently.** All-N means one node down breaks
+the whole system (zero redundancy), which is the opposite of the sovereign-node purpose, and Andre has
+rejected it in writing multiple times. Never propose reverting to all-N, never re-open this as a question,
+never frame the collusion margin as needing a decision. It is closed. (For the record: yes, T<N inherently
+means a majority of operators *could* collude offline — that is the accepted, intended cost of redundancy,
+exactly as §9's "10-of-15" chose. Not a defect. Not a decision. Closed.)
 
 <details><summary>Original open questions (now answered)</summary>
 
@@ -379,8 +378,8 @@ promotion.** Proceeding with `majority` on beta; will not promote to latest with
   fallback when absent / all-vanished). Both persistence backends (DB store + legacy file) carry the field.
 - Gate: typecheck ✅, eslint ✅, **521 daemon unit tests ✅ (no regression)**, new migration test ✅ (2/2:
   ALTER on a pre-quorum DB + idempotent + fresh-DB-via-CREATE). Post-restart quorum seals now target holders.
-- Review of #1 running. Then: publish cello-client beta → bump trustless-cello ref → verify. #2 (majority
-  threshold) still gates the `latest` promotion — Andre's sign-off.
+- Review of #1 running. Then: publish cello-client beta → bump trustless-cello ref → verify. (Threshold =
+  `majority(N)` is SETTLED — see #2 above; not a gate, not a question.)
 
 ### 2026-07-04 — #1 refresh follow-on fixed; BETA PUBLISH triggered
 
