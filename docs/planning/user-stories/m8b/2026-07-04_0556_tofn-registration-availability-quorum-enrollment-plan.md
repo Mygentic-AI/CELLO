@@ -112,4 +112,27 @@ The fix is bookkeeping, not crypto: on every DKG participant the round-3 handler
 
 **Red test to write first:** extend `src/__tests__/e2e-003-frost-handler-network.test.ts` (or `directory-node.test.ts`) — drive DKG rounds on a participant node that does NOT receive `register_request`; assert the agent appears in `#thresholdSigners` (`getThresholdSignerForTest`) and has a profile (`getProfile`) afterward. It should fail on current code. Extend the existing harness / `session-fixture.ts`; no from-scratch fixture.
 
+**Refinement after reading the code (Problem 1 is even smaller than written):** a participant node
+should register the **in-memory signer only** — NOT write a profile row.
+- Reason: the coordinator's profile row needs fields a participant never receives (`ml_dsa_pubkey`,
+  `phone_stub_hash`, `account_id`, and a coordinator-minted `agent_id`) — these arrive only in
+  `register_request`. A participant can't build an equivalent row.
+- It doesn't need to. `#processSessionRequest` checks `#thresholdSigners` FIRST; registering the
+  in-memory `ClientDelegatedSigner` makes that hit → no `frost_signer_not_configured`. The participant
+  has everything for the signer: `k_local = dkgReq.agentPubkey`, `primary_pubkey = result.shareCommitment`
+  (its own locally-derived group key).
+- Durability across the participant's OWN restart is covered by replication + boot: the coordinator's
+  `agent_profiles` row replicates into the participant's DB, and boot `loadProfiles` + signer-restore
+  rebuilds the signer. So no participant-written profile is required.
+- **The fix:** in the round-3 `if (result.ok)` branch, after `#pendingDkgCommitments.set(...)`, mirror the
+  coordinator's signer registration (construct `ClientDelegatedSigner(dkgReq.agentPubkey,
+  result.shareCommitment)`, `setStreams`, `registerThresholdSigner`, `registerPrimaryPubkey`).
+  Idempotent with the coordinator path. ~5 lines.
+- **Red test:** at the `directory-node.test.ts` level, drive DKG round1/2/3 frost frames on a node that
+  does NOT receive `register_request`; assert `getThresholdSignerForTest(agentPubkey)` is populated
+  afterward (fails on current code).
+- **"load-what-I'm-missing" reconcile:** now clearly belongs to the *absent-node* case (down during the
+  ceremony, gets identity via replication while up), NOT the participant case. Keep it small, land after
+  the core signer fix.
+
 Problem 2 (cello-client quorum + share-holder-set targeting) follows Problem 1.
