@@ -192,3 +192,11 @@ This is cross-repo (directory decides Q + client honors it) and touches the `dkg
 - Quorum floor: register if available ≥ ? In dev N=3/T=3 (client + any 2 of 3 dirs), directory-signers needed = 2, so floor = 2 dirs; but Q>T for redundancy means all 3 in dev — quorum only really helps at N>3. Confirm the floor + whether dev exercises it at all.
 
 **Status: Problem 2 BLOCKED on this design decision.** Problem 1 is shipped and independent. Recommend pinning the Q-determination mechanism (a short design session) before TDD on Problem 2. Not proceeding on guesswork — a wrong guess here is a broken DKG protocol.
+
+### 2026-07-04 — Problem 1 auto-deploying; live-proof plan
+
+- The Problem 1 commit (`97bc68c9`, touches `packages/directory/`) **auto-triggered `cello-directory-pipeline`** (InProgress, started ~07:09 UTC). All 3 regions, ~25-30 min.
+- **Live proof of Problem 1 (next tick, after deploy COMPLETED + 6 ECS 1/1):** the deploy restarts the directories (they boot-restore signers for existing agents), so test with a FRESH agent: register a new agent (all-N; its coordinator = the node its daemon connects to), then point a daemon at a DIFFERENT (non-coordinator) directory and `cello_initiate_session` for that agent → expect success, NOT `frost_signer_not_configured`. That non-coordinator holds the signer ONLY because of the round-3 fix (it hasn't restarted since the agent registered). Confirm `directory.dkg.participant.signer.registered` in the non-coordinator's logs.
+- **After the deploy:** relay cascade (restart all 3 relays to re-register) per infra/CLAUDE.md; verify 6 ECS 1/1 + 6 DNS; update infra/STATE.md.
+
+**Loop note:** next cron tick = check pipeline done → run the live proof → relay cascade → STATE.md. Problem 2 stays parked until Andre pins the Q-determination design.
