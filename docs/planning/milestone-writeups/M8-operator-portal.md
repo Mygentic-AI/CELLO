@@ -232,3 +232,12 @@ agents (vs Burn); whether to hold directory-pipeline deploys for explicit go.
 **Net:** the M8 operator portal is deployed, live, and proven by the operator on the core path. What
 remains for DOD-E2E-1 ✅ is the automated cluster gate + the genuinely cross-node aspects (presence
 from-any-node, pickup-queue replication, strict T-of-N) — unchanged from the start.
+
+---
+
+## Related Documents
+
+- [[M7-daemon-architecture]] — M7 delivered the daemon architecture that M8 builds on
+- [[M8B-SPEC]] — M8B federation spec: extends M8's operator control to T-of-N
+- [[M8B-DEFINITION-OF-DONE]] — M8B's yardstick includes cross-node presence (M8 open point)
+- [[2026-07-04_0000_milestone-roadmap-summary]] — public roadmap showing M8 as complete, M8B in progress
