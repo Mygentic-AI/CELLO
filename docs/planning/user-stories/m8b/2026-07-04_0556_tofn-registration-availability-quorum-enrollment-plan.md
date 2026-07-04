@@ -253,6 +253,23 @@ not just counts) → both repos + version bump + publish + directory deploy.
    targets Q (not the full roster) after a daemon restart, else a post-restart seal for a quorum agent fans
    to non-holders. Check the signer-restore path; fix if it rebuilds stubs from the full roster.
 
+### 2026-07-04 — Problem 2 CORE IMPLEMENTED (both repos), spine test running
+
+- **Simplification (verify-before-asserting win):** dropped `dkg_ready.quorum_node_ids` entirely. Q = R ∩
+  manifest, and R = the client's resolved roster, so the client already knows Q's identities — only the
+  count crosses the wire (`participants = |Q|`). Sidesteps the frame-codec question. `roster.length ===
+  participants` validates agreement + catches manifest skew.
+- **Committed:** protocol-types (`register_request.reachable_node_ids`); daemon (sends R, fans to roster,
+  count check); directory (`#processRegisterRequest`: Q = R ∩ manifest, `participants = |Q|`, `threshold =
+  majority(N) = floor(N/2)+1`, refuse `directory.dkg.below_quorum` when |Q| < T). Finding B free (signer
+  stubs = Q). All typecheck + eslint green, both repos.
+- **Spine test (uncommitted until green):** updated `j-tofn-dkg` baseline (threshold 3→2, "N of M … quorum"
+  log) + added a kill-one quorum case (kill dir 2 → fresh agent registers among Q=2, T=2). Background build
+  of both repos + spine run = `bch47w1z2` → `scratchpad/spine-p2-verify.log`.
+- **Next after green:** commit the test → code-review (feature-dev:code-reviewer) → publish cello-client beta
+  (/cello-publish) → bump trustless-cello protocol-types ref → deploy directory → relay cascade → STATE.md.
+  Then persistence-of-Q check. If RED: fix impl, not the test.
+
 <details><summary>Original open questions (now answered)</summary>
 
 **⚠️ OPEN DESIGN DECISION (needs Andre — do NOT invent a protocol unilaterally):** how is Q determined and agreed?
