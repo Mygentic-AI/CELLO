@@ -381,3 +381,14 @@ promotion.** Proceeding with `majority` on beta; will not promote to latest with
   ALTER on a pre-quorum DB + idempotent + fresh-DB-via-CREATE). Post-restart quorum seals now target holders.
 - Review of #1 running. Then: publish cello-client beta → bump trustless-cello ref → verify. #2 (majority
   threshold) still gates the `latest` promotion — Andre's sign-off.
+
+### 2026-07-04 — #1 refresh follow-on fixed; BETA PUBLISH triggered
+
+- Review Critical follow-on FIXED: `runAgentRefresh` now forwards Q to persist (was wiping it to NULL on
+  every refresh). Typecheck + eslint + 523 daemon tests green. Everything else in the review clean.
+- **Beta publish: tag `v0.0.69` pushed** (cello-client). Cascade: protocol-types 0.0.13, transport 0.0.13,
+  client 0.0.43, daemon 0.0.28, cli 0.0.26, connect 0.0.55 (crypto unchanged 0.0.15). CI: Build →
+  publish-tag (beta) → smoke-tag. Polling for beta versions in the background.
+- Directory changes already deploying via the pipeline (majority(N) + decoder fix + pick-Q).
+- **After beta verified:** update trustless-cello protocol-types ref → verify directory deploy + 6 ECS 1/1
+  → ping Andre. `latest` promotion held for Andre's #2 (majority-threshold) sign-off.
