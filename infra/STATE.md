@@ -11,6 +11,25 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ## 🚀 M8B Sprint A — registration availability fix (in progress, 2026-07-04)
 
+### Problem 2 — QUORUM REGISTRATION — SHIPPED to beta + directory deployed (2026-07-04)
+
+**Register among the available quorum (not all-N).** Client sends its reachable nodeIds R; directory picks
+Q = R ∩ manifest, `participants = |Q|`, `threshold = majority(N) = floor(N/2)+1`, refuses `below_quorum` if
+|Q| < T. Client fans the DKG to Q; seal targets Q (persisted). Spine-verified GREEN (kill 1 of 3 → registers
+among the 2-node quorum). Both review Criticals fixed (persist-Q + refresh-forward).
+
+- **cello-client BETA published** (tag `v0.0.69`, smoke GREEN, binary-verified): protocol-types 0.0.13,
+  transport 0.0.13, client 0.0.43, daemon 0.0.28, cli 0.0.26, connect 0.0.55 (crypto 0.0.15). **`latest`
+  promotion PENDING Andre** (+ his #2 majority-threshold security sign-off).
+- **Directory DEPLOYED** `cello-directory:bb02899`, all 3 regions rolloutState=COMPLETED, 0 failed, no crash
+  (verified rolloutState + failedTasks + startup logs, not just pipeline status). Relay cascade initiated
+  ~12:15 UTC (all 3 relays stopped → re-registering).
+- ⚠️ **#2 SECURITY (needs Andre):** `majority(N)` lets a bare majority of directory operators forge offline
+  (was all-N). One-line change to tighten (`ceil(2N/3)`/`N-1`). Gates `latest`.
+- Follow-ups (Sprint B / noted): absent-node reconcile; enrollment; the legacy file-persistence backend
+  doesn't read directoryNodeIds back (dead code on current wiring).
+
+
 **Problem 1 (participant registers signer at round 3, FINDING-8) — DEPLOYED.** Directory image
 `cello-directory:97bc68c` live in all 3 regions (`cello-directory-pipeline` Succeeded; tasks started
 ~07:25 UTC). Commit `97bc68c9`. Fix: the DKG round-3 handler now registers the in-memory delegated signer
