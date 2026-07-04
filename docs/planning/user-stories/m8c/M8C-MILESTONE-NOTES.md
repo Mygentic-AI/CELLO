@@ -233,16 +233,26 @@ channels to a session surface on Telegram. A **noise/monitoring-level setting** 
 
 Mode 1 is passive: the operator watches, does not participate.
 
-### Mode 2 — Operator as a communicator (operator participates)
+### Mode 2 — Operator as a communicator (ONE mode, not two)
 
-The operator becomes an active party via Telegram. Two flavors:
+The operator becomes an active party via Telegram — a two-way operator↔session link layered on Mode 1's
+one-way mirror.
 
-- **(a) Chat with your own session** — simplest: the operator talks to their own Claude/agent session
-  through Telegram.
-- **(b) Operator as a third party in an agent↔agent session** — the compelling one. The agent relays
-  to the human, and the human's replies relay back into the session. Technically it is **another
-  incoming channel**: CELLO peer content in, Telegram (operator) content in, and the session choosing
-  what to relay back out to the operator.
+**There is no (a)/(b) split — that distinction was wrong.** An earlier draft separated "chat with your
+own session" from "operator as a third party in an agent↔agent session." Technically they are the
+**identical mechanism**. The primitive is always the same:
+
+- the session **sends to the operator** with a distinct verb — think **`cello_telegram_send`** vs
+  `cello_send` — addressing **its human operator/monitor**, not the CELLO peer; and
+- the session **receives the operator's messages back** — via channels, polling, or auto-embed on
+  receive; **the transport doesn't matter** — and every such message is **tagged by the daemon as
+  originating from your Telegram bot (the operator)**, never confused with agent- or peer-origin content.
+
+Because the inbound message always carries "this is from your operator, not the peer," the session
+always distinguishes operator-origin from peer-origin. So **"just chatting with my session" and
+"weighing in on an Alice↔Bob negotiation" are the same technical thing** — always a direct
+operator↔session link. Whether a CELLO peer also happens to be on the other side is context, not a mode.
+**It's always direct; it's always one mode.**
 
 **Canonical use — approvals / escalation.** Bob contacts Alice; you operate Alice. Bob's *reputation*
 almost meets your policy but not quite. Alice's agent messages you: *"Here's what Bob presented; it
@@ -251,9 +261,8 @@ him later."* That is an **approvals gate**. Same shape for mid-session escalatio
 the other side asked for Y; I found out Z — do you want me to proceed? If I don't hear back in N minutes
 I'll tell them I'll get back to them, close the session, and we reopen later."*
 
-**Technical shape:** a distinct send verb — think **`cello_telegram_send`** vs `cello_send` — where the
-session knows it is addressing **its human operator/monitor**, not the CELLO peer. Plus a **timeout +
-fallback policy** ("no operator response in N minutes → default action: deny / defer / close").
+**Timeout + fallback.** Operator-facing asks carry a **default action on no-response** ("no reply in N
+minutes → deny / defer / close"), so the session never hangs waiting on a human.
 
 ### Technicals
 
@@ -284,13 +293,15 @@ daemon-holds-the-bot design *narrows* that surface rather than widening it:
   operator's words injected into a live agent's free-form reasoning — the daemon can hold the pending
   session request, ask the operator on Telegram, await the yes/no on its own Telegram connection, and
   act. That path is runtime-agnostic too.
-- **The genuinely Claude-Code-specific pinch is narrow:** only *free-form* "operator whispers into a
-  *running* agent's ongoing reasoning mid-task" needs a push-into-live-session mechanism — which today
-  is Claude Code channels (or a per-runtime equivalent that doesn't exist yet). Everything else can be
-  daemon-mediated.
+- **Even free-form operator input is transport-agnostic.** The session receives an operator Telegram
+  message the same way it receives any CELLO content — by **polling on any runtime**, or by **channel
+  push on Claude Code**. So Claude Code's edge is *latency* (sub-second, unprompted push), **not
+  capability** — other runtimes poll and get the same message a cadence later. The only strictly
+  Claude-Code-shaped thing is real-time injection into a live session, which is a UX nicety, not a gate.
 
-So the concern is real but bounded: keep the *daemon* as the Telegram owner and the *gate logic*
-daemon-side, and only the free-form live-injection flavor stays Claude-Code-only.
+So the concern is real but **bounded to latency, not capability**: keep the *daemon* as the Telegram
+owner and the *gate logic* daemon-side, and every runtime can fully participate — Claude Code just gets
+real-time push where others poll.
 
 ### Open questions (resolve when the story is scoped)
 
@@ -298,8 +309,10 @@ daemon-side, and only the free-form live-injection flavor stays Claude-Code-only
   daemon, works cold, runtime-agnostic). Confirm this over the alternative where a live `claude
   --channels` session owns the Telegram bridge (router model — Claude-Code-only, only while a session
   runs). Load-bearing for everything above.
-- **OQ-2 — Mode 2b injection.** For free-form operator input into a *running* agent's reasoning on
-  non-Claude-Code runtimes, what is the mechanism (or is 2b explicitly Claude-Code-only for now)?
+- **OQ-2 — Real-time vs polled operator input.** Free-form operator input reaches a running agent via
+  polling (any runtime) or channel push (Claude Code). Decide the default receive cadence/mechanism per
+  runtime, and whether time-critical asks (the 2-min approval) should be **daemon-mediated** — so they
+  are real-time everywhere — rather than dependent on the agent loop's poll cycle.
 - **OQ-3 — Reply addressing beyond the appended header** — does the operator address replies by
   agent/session (@-addressing), or is context tracking enough for the common one-or-two-session case?
 - **OQ-4 — Settings surface** — the full knob list (bot key, per-agent/session monitoring level,
