@@ -26,6 +26,28 @@ Full plan, findings, and trail: `docs/planning/user-stories/m8b/2026-07-04_0556_
 
 ---
 
+## Launch Triage — read before suggesting work, deep-diving, or "going one step further"
+
+**We are low on runway. The goal is to launch soon.** Every piece of work is a triage call, and it is never easy. The test for any bug, fix, or feature:
+
+> At launch, if this is not done, will it **fundamentally ruin** a prospective customer — or is it something they could **forgive**?
+
+*Ruin* = they can't get the core value, or they lose trust. *Forgive* = a papercut, a rough edge, a nice-to-have. Most things are forgivable. Spend the runway on the unforgivable few.
+
+**Reason top-down from intent at every step.** Before you dig deeper or add to a list, ask whether it serves the launch intent. The intent is not "launch anything" — it is to launch a product that **delivers its fundamental value**:
+
+- Two agents **connect and communicate** — including when you control only *one* of them (the other belongs to a friend, partner, acquaintance, or someone you just heard about, whose agent is online).
+- It follows that your **own** two agents connect too — across different devices, or even two sessions on the same device.
+- And it is **relatively safe**: the security layer (screening, injection defense) and a **kill switch** are in place. That is the platform/portal's job.
+
+If a piece of work is not in service of that, it is probably forgivable at launch.
+
+**Beware the migration trap.** Some things *work* at launch and only look broken through a purist lens — but "fixing" them later forces migrating everything built on the old behavior. Example: the T-of-N threshold works at launch; change it and every agent registered under the old rule may no longer be serviceable by the majority of nodes (maybe only one node can serve it). "Improving" it is not free — it can strand existing users. Weigh the migration cost, not just the code diff.
+
+**Beware the rabbit hole.** Before going deeper into an investigation or fix, ask: am I burning tokens and time, and am I about to lead us somewhere we never meant to go — so that two hours later we ask "why are we even fixing this?" If you can't tie the current step back to the launch intent in one sentence, stop and surface it instead of pressing on.
+
+---
+
 ## Required Reading
 
 **Read `CONTEXT.md` at the repo root before any implementation work.** Canonical glossary — terms, package structure, interface contracts. Using terms not defined there is a bug.
