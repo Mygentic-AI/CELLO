@@ -58,17 +58,31 @@ Twenty distinct build items, grouped by area. No triage applied — this is the 
    privacy mode, TTLs, queue caps). Today none of them have a setter. (Extends M9-CFG-001's store —
    the store is M9's; the CLI front-end + the non-M9 settings are ours.)
 
-### B. Channels — Claude wakes instead of polling (the reactive core)
+### B. Channels — an event pushed into a *live* session (the reactive core)
 
-5. **Channel stage 1 — one-way wake on session open** — Claude Code wakes the instant a peer opens a
-   session, instead of polling `cello_receive`. *You get:* the reactive inversion. Smallest unlock;
-   prerequisite for CELLO reacting to anything. Nearly free: two shim edits, `connect` bump, **zero
-   daemon change** (the event already crosses the socket).
-6. **Channel stage 2 — wake on every inbound message** — *You get:* a real-time chat relay; Claude
-   reacts to each message as it arrives, not just session creation. **Real daemon build**
+> **What a channel actually is (precise mental model — the 2026-06-27 log is authoritative).** A
+> channel does NOT rouse a dormant Claude. Claude Code spawns the CELLO shim as a stdio subprocess;
+> that subprocess exists only *while a session is running*, and it emits `notifications/claude/channel`
+> **into that live session's context**, where Claude reads the `<channel>` tag in-context and acts. So
+> "the daemon wakes Claude" is the wrong picture — there must ALREADY be a live Claude session, started
+> with the **`--channels` flag** (and org-allowed in managed orgs; this is a documented *requirement*,
+> not a maybe). No live `--channels` session → the daemon still receives and queues, but **nothing
+> reaches the operator at all** — silent until a channels session attaches. Reactivity is a property of
+> a live `--channels` session, not of the daemon or the agent. This is exactly why "always-on = keep a
+> `claude --channels` session running," and it is the root of the Claude-Code-lock-in concern below.
+
+5. **Channel stage 1 — one-way in-context event on session open** — a *running* `--channels` session
+   receives a pushed event the instant a peer opens a session, instead of polling `cello_receive`.
+   *You get:* the reactive inversion (push, not poll). Smallest unlock; prerequisite for CELLO reacting
+   to anything. Nearly free: two shim edits, `connect` bump, **zero daemon change** (the event already
+   crosses the socket). Requires the operator to have launched Claude with `--channels`.
+6. **Channel stage 2 — event on every inbound message** — *You get:* a real-time chat relay; a running
+   session reacts to each message as it arrives, not just session creation. **Real daemon build**
    (content-arrival hook + `dispatchCelloMessage` + wiring + `session_id` in payload; Gaps 3–6).
 7. **Channel stage 3 — platform relay (Telegram/Slack/Discord/Webhook)** — *You get:* reach your CELLO
-   agent from your phone or team chat; Claude routes between the platform and CELLO both ways.
+   agent from your phone or team chat. See the expanded **Telegram operator relay** design below (the
+   old "reach me on my phone" fork), which supersedes the one-line framing here — the daemon-holds-the-
+   bot design changes the picture materially.
 8. **Channel stage 4 — relay hardening (sender allowlists, multi-peer addressing)** — *You get:*
    safely run multiple concurrent peers through one router and control who can drive it.
 9. **Non-Claude-Code adapters + capability negotiation** — Hermes/OpenClaw/etc. adapters + an
@@ -131,8 +145,12 @@ Twenty distinct build items, grouped by area. No triage applied — this is the 
 
 ## Dependency chains (facts, not triage)
 
-- **6 needs 5** · **7/8 need 6** · **17 builds on 16** · **19/20 sit on top of 18** · **11 is
+- **6 needs 5** · **8 needs 6** · **17 builds on 16** · **19/20 sit on top of 18** · **11 is
   load-bearing for both 6/10 (reconnect + catch-up)**.
+- **Telegram relay (#7) partially decouples under the daemon-owned-bot design** (see the Telegram
+  section): doorbell-level notifications can push off the daemon's existing event dispatch without the
+  Claude-Code channel stages, but **full-monitoring level reuses stage 2's message-arrival daemon hook
+  (#6)**. So #7 doorbell ⟂ channels; #7 full-monitoring shares #6's daemon work.
 - The design log flags **#18 (Primary/Standby) as milestone-scale on its own** and **#5 (channel
   stage 1) as the smallest, highest-leverage unlock.**
 
@@ -152,6 +170,13 @@ works. So channels is the push layer on top of a working pull — a legitimate *
 needs three other things first. Nothing more architecturally foundational is hiding underneath: no
 protocol change, no relay involvement, no directory work for stage 1.
 
+**But be precise about what "reactive" requires (see the section-B callout).** The event is pushed into
+a *live* Claude session started with `--channels`; it cannot rouse a dormant Claude. So "the first
+unlock" is really "the first unlock **for an operator sitting in a live `claude --channels` session**."
+That flag is a hard, documented requirement — the whole reactive track is gated behind the operator
+launching Claude in channels mode (persistently, for the always-on case). This is not a limitation to
+discover; it is a constraint to design around from line one.
+
 **Three refinements to the framing:**
 
 1. **It's two unlocks, not one — very different sizes.** Session-request wake (**stage 1**) is nearly
@@ -159,12 +184,13 @@ protocol change, no relay involvement, no directory work for stage 1.
    daemon build (Gaps 3–6). The *very* first unlock is specifically stage 1; stage 2 is right behind
    but is a proper build — don't let "channels" hide that one is an afternoon and the other is a build.
 
-2. **The actual first *action* is a de-risking spike, not a feature.** The design log leaves one thing
-   **unverified**: whether Claude Code processes `notifications/claude/channel` as an interrupt with
-   just the capability declaration, or whether it needs `--channels` (and org-side enablement in
-   managed orgs). If the wake doesn't fire in the target runtime, the whole reactive track stalls and
-   you've built a doorbell nobody hears. **~30-minute spike to prove a live Claude session actually
-   wakes** — before building on it. This is the real "beginning": a spike, not a story.
+2. **The actual first *action* is a de-risking spike, not a feature.** `--channels` being required is
+   *settled* (the 2026-06-27 log states it plainly) — so the spike is NOT "is the flag needed." The
+   open item is confirming CELLO's specific end-to-end wiring: does the shim's capability declaration +
+   `onNotification` forward actually surface the daemon's `session_state_changed` frame as an in-context
+   `notifications/claude/channel` event inside a live `claude --channels` session? **~30-minute spike:
+   launch `claude --channels`, trigger a real inbound session, confirm the event lands in-context** —
+   before building on it. This is the real "beginning": a spike, not a story.
 
 3. **Two companions make the first unlock *feel* real, not just technically work** (neither a hard
    blocker for a live-session demo, so don't gate channels on them — but expect to want them in the
@@ -178,44 +204,107 @@ protocol change, no relay involvement, no directory work for stage 1.
      today's workaround is `cello_get_transcript`, and `since_seq` is the clean fix.
 
 **Proposed first slice (for later triage):**
-`(0) spike: prove the wake fires → (1) stage-1 session-request wake → pair with use_agent auto-start
-→ (2) stage-2 message wake, with since_seq alongside.`
+`(0) spike: launch claude --channels + confirm the inbound-session event lands in-context → (1) stage-1
+session-request event → pair with use_agent auto-start → (2) stage-2 message event, with since_seq
+alongside.`
 
 ---
 
-## Open design questions
+## Telegram operator relay — design vision (Andre, 2026-07-04)
 
-### ODQ-1 — Relay delivery model: continuous live router vs. away-triggered escalation-to-phone
+This is the fleshed-out replacement for the earlier "reach me on my phone" fork. The steer: the **CELLO
+daemon itself holds the Telegram bot connection** (bot API key = a daemon setting), so Telegram is a
+**daemon-side capability**, not something bolted onto a live Claude session. That single choice is what
+makes most of this tractable and runtime-agnostic — see Technicals + the Claude-Code concern below.
 
-When "reach me on my phone" (channel stage 3, Telegram/Slack/etc.) is built, there is a genuine fork
-in *how* a peer's message reaches the operator's phone. It affects how much of Primary/Standby (#18)
-you need and what the daemon must be able to do.
+Sized as **fairly big, but not huge** — and **probably not launch-blocking; soon after launch.** It is
+completely local to the daemon and the hard part (talking to Telegram) is already solved by a vetted
+example (below), so what would have been complex no longer is.
 
-**Common ground (both models):** the daemon itself does NOT talk to Telegram. All platform delivery
-goes through a running Claude router session that calls the platform bridge's `reply`/send tool. If
-nothing is running to bridge, nothing reaches the phone — the message queues in the daemon and the
-away answering-machine (#12) responds to the peer.
+### Mode 1 — Notifications & monitoring (operator observes)
 
-- **Model A — continuous live router (what the design log currently specifies).** Claude Code sits in
-  the middle as a live two-way router. While the router session is up, EVERY inbound peer message is
-  forwarded to the phone as it arrives (not conditional on non-response); operator replies typed in
-  Telegram are relayed back to the peer via `cello_send`. Your phone becomes the live interface to the
-  agent. **Caveat — foreground router, not a background bridge:** works only while a session is live
-  with both channels attached and `--channels` enabled ("always-on" = keep the session running →
-  naturally wants the always-on EC2 / Primary daemon of #18). A continuous speakerphone.
-- **Model B — away-triggered escalation-to-phone (Andre's instinct; NOT currently designed).** A peer
-  reaches the agent, no live operator picks up (away state), and THEN a targeted "something needs you"
-  ping is pushed to the phone — a doorbell, not a speakerphone. Arguably the better UX for the "I'm out
-  and about" case. It is a DIFFERENT feature from Model A and needs one of: (a) the **daemon itself** to
-  hold a platform-push capability so it can ping directly on entering away-state, or (b) a lightweight
-  always-on router session whose sole job is to escalate on non-response. Both are new build surface not
-  described in the design log.
+Precondition: the operator has linked a Telegram bot to their daemon. Then, events flowing through
+channels to a session surface on Telegram. A **noise/monitoring-level setting** controls how much:
 
-**Why it matters / how to decide later:** Model A is closer to what's written and reuses the
-router/channel machinery, but demands a persistent foreground session (pushes you toward #18 early).
-Model B is a smaller, more phone-native "doorbell" but adds a daemon→platform push path that doesn't
-exist yet. The two are not mutually exclusive — B could layer on A later — but the FIRST relay build
-should pick one deliberately rather than drifting into A by default just because it's what's drawn.
+- **Doorbell level** — discrete, non-cascading events only: session requests, "you have messages
+  waiting," state changes. Low noise.
+- **Full-monitoring level** — every message *into* and *out of* a session is mirrored to Telegram, so
+  the operator can watch a conversation go back and forth live. High noise, opt-in per agent/session.
+
+Mode 1 is passive: the operator watches, does not participate.
+
+### Mode 2 — Operator as a communicator (operator participates)
+
+The operator becomes an active party via Telegram. Two flavors:
+
+- **(a) Chat with your own session** — simplest: the operator talks to their own Claude/agent session
+  through Telegram.
+- **(b) Operator as a third party in an agent↔agent session** — the compelling one. The agent relays
+  to the human, and the human's replies relay back into the session. Technically it is **another
+  incoming channel**: CELLO peer content in, Telegram (operator) content in, and the session choosing
+  what to relay back out to the operator.
+
+**Canonical use — approvals / escalation.** Bob contacts Alice; you operate Alice. Bob's *reputation*
+almost meets your policy but not quite. Alice's agent messages you: *"Here's what Bob presented; it
+doesn't quite match policy. Accept anyway? Reply within 2 minutes or I deny him — I can always re-reach
+him later."* That is an **approvals gate**. Same shape for mid-session escalation: *"They're offering X;
+the other side asked for Y; I found out Z — do you want me to proceed? If I don't hear back in N minutes
+I'll tell them I'll get back to them, close the session, and we reopen later."*
+
+**Technical shape:** a distinct send verb — think **`cello_telegram_send`** vs `cello_send` — where the
+session knows it is addressing **its human operator/monitor**, not the CELLO peer. Plus a **timeout +
+fallback policy** ("no operator response in N minutes → default action: deny / defer / close").
+
+### Technicals
+
+- **Bot API key = a daemon setting.** This is the load-bearing new config. Related settings ride
+  alongside (monitoring level, allowlisted operator chat ID, escalation timeouts, per-agent overrides)
+  — they need the CLI config surface (#4).
+- **The Telegram code is effectively already written.** Anthropic's vetted Telegram-channels
+  integration is **on the local disk** — a near copy-paste reference for the bot poll/send half.
+  (Corroboration: a Telegram MCP plugin is connected to *this very session*, so the mechanism is live
+  and proven.) The Telegram-connection complexity is retired; the CELLO-specific work is the daemon
+  wiring + settings + routing.
+- **Multi-session identification.** If several sessions use the relay, the operator must know who is
+  messaging. Simple proposal: the **daemon prepends a header line** to each outbound message —
+  e.g. `[Alice · session "acme-negotiation"]` — so one Telegram chat can carry many agents/sessions
+  legibly. (Fuller @-addressing of replies is a later refinement.)
+
+### The strategic concern (open, important)
+
+Andre's worry: this risks being **Claude-Code-only** — "optimized for Claude Code, everyone else screws
+off" — which cuts against CELLO's runtime-agnostic positioning (Hermes/OpenClaw/etc., #9). The
+daemon-holds-the-bot design *narrows* that surface rather than widening it:
+
+- **Outbound (daemon → operator's Telegram)** and **inbound receive (operator's Telegram → daemon)** are
+  **runtime-agnostic** — the daemon owns the bot, so Mode 1 notifications/monitoring and the agent's
+  escalation *questions* work regardless of which client the agent runs on, and even work **cold** (no
+  live agent session needed to push a notification).
+- **Structured gates can be fully daemon-mediated.** The approvals example doesn't strictly need the
+  operator's words injected into a live agent's free-form reasoning — the daemon can hold the pending
+  session request, ask the operator on Telegram, await the yes/no on its own Telegram connection, and
+  act. That path is runtime-agnostic too.
+- **The genuinely Claude-Code-specific pinch is narrow:** only *free-form* "operator whispers into a
+  *running* agent's ongoing reasoning mid-task" needs a push-into-live-session mechanism — which today
+  is Claude Code channels (or a per-runtime equivalent that doesn't exist yet). Everything else can be
+  daemon-mediated.
+
+So the concern is real but bounded: keep the *daemon* as the Telegram owner and the *gate logic*
+daemon-side, and only the free-form live-injection flavor stays Claude-Code-only.
+
+### Open questions (resolve when the story is scoped)
+
+- **OQ-1 — Daemon-owned bot vs. live-session router.** The steer is daemon-owned (settings on the
+  daemon, works cold, runtime-agnostic). Confirm this over the alternative where a live `claude
+  --channels` session owns the Telegram bridge (router model — Claude-Code-only, only while a session
+  runs). Load-bearing for everything above.
+- **OQ-2 — Mode 2b injection.** For free-form operator input into a *running* agent's reasoning on
+  non-Claude-Code runtimes, what is the mechanism (or is 2b explicitly Claude-Code-only for now)?
+- **OQ-3 — Reply addressing beyond the appended header** — does the operator address replies by
+  agent/session (@-addressing), or is context tracking enough for the common one-or-two-session case?
+- **OQ-4 — Settings surface** — the full knob list (bot key, per-agent/session monitoring level,
+  escalation timeouts + default actions, allowlisted operator chat ID) and how it maps onto #4 / the
+  tighten-free-loosen-confirm rule.
 
 ---
 
