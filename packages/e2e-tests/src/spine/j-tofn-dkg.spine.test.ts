@@ -131,6 +131,20 @@ describe("J-TOFN-DKG — multi-node 2-of-3 FROST DKG (DOD-DKG-1)", () => {
         /Round 1 commit from peer/,
       );
     }
+
+    // M8B Problem 1 (availability, FINDING-8): every DKG participant — not only the coordinator that
+    // fields register_request (node 0, the signaling node) — must register the agent's in-memory signer
+    // at round 3, so a NON-coordinator can serve a session-initiate for this agent without a reboot.
+    // Assert the two non-coordinator nodes (1 and 2) logged the participant signer registration.
+    const signerLogs = cluster.directories
+      .map((d, i) => `--- directory-${i} ---\n${d.output.split("\n").filter((l) => l.includes("participant.signer.registered")).join("\n")}`)
+      .join("\n");
+    for (let i = 1; i < 3; i++) {
+      expect(
+        cluster.directories[i].output,
+        `non-coordinator directory ${i} must register the agent's signer at round 3 (FINDING-8):\n${signerLogs}`,
+      ).toMatch(/directory\.dkg\.participant\.signer\.registered/);
+    }
   }, 120_000);
 
   // The below-threshold REFUSAL gate (resolved roster < the directory's declared N ⇒

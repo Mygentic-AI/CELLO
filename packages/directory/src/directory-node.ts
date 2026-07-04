@@ -1487,6 +1487,25 @@ export class CelloDirectoryNode {
           if (result.ok) {
             // Store the group public key temporarily for dkg_complete verification
             this.#pendingDkgCommitments.set(dkgReq.agentPubkey, result.shareCommitment);
+            // M8B Problem 1 (availability): register the in-memory delegated signer on EVERY DKG
+            // participant here — not only on the one node that later fields register_request. Without
+            // this, a non-coordinator node holds the share but has no #thresholdSigners entry, so it
+            // rejects a session-initiate for this agent with frost_signer_not_configured until it
+            // reboots (FINDING-8). The participant has everything the signer needs at round 3:
+            // k_local = agentPubkey, primary_pubkey = result.shareCommitment (its own locally-derived
+            // group key). It deliberately does NOT write an agent_profiles row (it lacks
+            // ml_dsa_pubkey/phone_stub_hash/account_id that arrive only in register_request); durability
+            // across its own restart is covered by the coordinator's replicated profile + boot restore.
+            // Idempotent with the coordinator path (register_request re-registers an equivalent signer).
+            const participantPrimary = new Uint8Array(result.shareCommitment);
+            const participantSigner = new ClientDelegatedSigner(dkgReq.agentPubkey, participantPrimary);
+            participantSigner.setStreams(this.#streams);
+            this.#delegatedSigners.set(dkgReq.agentPubkey, participantSigner);
+            this.registerThresholdSigner(dkgReq.agentPubkey, participantSigner);
+            this.registerPrimaryPubkey(dkgReq.agentPubkey, participantPrimary);
+            this.#logger?.info("directory.dkg.participant.signer.registered", {
+              agent: truncHex(dkgReq.agentPubkey), nodeId: this.#frostHandler.nodeId,
+            });
             stream.send(lp.encode.single(encodeFrostDkgRound3Response({
               type: "frost_dkg_round3_response", ok: true, shareCommitment: result.shareCommitment,
             })));

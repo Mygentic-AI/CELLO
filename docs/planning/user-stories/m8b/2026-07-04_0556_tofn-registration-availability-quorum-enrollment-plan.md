@@ -150,4 +150,26 @@ handler, so it can't cover Problem 1.)
    with `dkgReq.agentPubkey` + `result.shareCommitment`). Confirm green.
 4. Gate → feature-dev:code-reviewer → fix findings → commit.
 
+### 2026-07-04 (later) — Problem 1 fix IMPLEMENTED (pending review + live proof)
+
+- **Code:** `directory-node.ts` round-3 `if(result.ok)` branch now registers the in-memory
+  `ClientDelegatedSigner` on every participant (`k_local = dkgReq.agentPubkey`,
+  `primary_pubkey = result.shareCommitment`) + emits `directory.dkg.participant.signer.registered`.
+  ~15 lines incl. the explanatory comment. Idempotent with the coordinator path.
+- **Test:** `j-tofn-dkg.spine.test.ts` now asserts the two NON-coordinator nodes log the participant
+  signer registration (red on current binary, green after rebuild). Note: the round-3 path is
+  live-binary only — in-process tests use `injectShareForTest`, which bypasses it — so this is the
+  faithful assertion level (matches the file's own note about spine-vs-in-process).
+- **Gate:** typecheck ✅; directory unit tests 673 passed / 0 fail ✅ (no regression). One guess caught
+  by typecheck: used `this.#nodeId` (doesn't exist) → corrected to `this.#frostHandler.nodeId`.
+- **Review: PASSED, no findings.** Reviewer confirmed `shareCommitment` == the coordinator's verified
+  `primary_pubkey` (deterministic group key), no type mismatch, double-registration harmless (empty
+  ceremony map), round3 success is sufficient (VSS already verified), and the delegated signer does NOT
+  interfere with the co-signing path (co-signing uses the persisted share via frost-handler, not this
+  map). Test assertion meaningful, no false-positive risk.
+- **Gate: typecheck ✅, directory unit tests 673 ✅, eslint ✅, tsc build ✅.** COMMITTED to main.
+- **Remaining for Problem 1:** the small absent-node reconcile (down-during-ceremony, identity via
+  replication while up) + the live node-down proof (needs a directory build/deploy — batch with Problem 2's
+  directory changes to avoid a second 25-30 min deploy).
+
 Problem 2 (cello-client quorum + share-holder-set targeting) follows Problem 1.
