@@ -216,8 +216,42 @@ not just counts) → both repos + version bump + publish + directory deploy.
   registration always refuses. So "T" in Andre's "Q > T" = the **directory-signature count (t − 1)**.
   **Floor = Q > (t − 1), i.e. Q ≥ t directories** — at least one spare directory (redundancy from day one).
   Dev: Q ≥ 3 ⇒ all 3 (quorum can't help at N=3/t=3, expected). Scale N=20/t=10: Q ≥ 10 of 20.
-- ⚠️ Confirm with Andre (one word): floor = **Q ≥ t directories** (≥1 spare) — or did he want ≥2 spare
-  (Q ≥ t+1)? Coding the "≥ t" reading; it's a one-line change if he wants more.
+- **RESOLVED (Andre confirmed Q ≥ t; threshold model pinned from code 2026-07-04):** the shipped code
+  derives `dkgThreshold = N` (all dirs) and the manifest has **no** signing-threshold field. Rather than
+  add one (schema + re-sign), the directory computes a **fixed threshold policy** deterministically:
+  **T = majority(N) = floor(N/2)+1** (N = manifest node count), and uses **participants = |Q|** (the
+  available quorum), require **Q ≥ T**. No manifest change needed — T is a pure function of N that every
+  party derives identically, and the directory already ships T to the client in `dkg_ready.threshold`.
+  - dev N=3 → **T=2** = Andre's kill-1-of-3 test (Q after killing 1 = 2 ≥ T=2 → registers, client + any 1
+    of 2 dirs, tolerate 1 down). Scale N=20 → T=11 (Q≥11 → tolerate many down; the §9 resilience).
+  - The directory change: `dkgThreshold = floor(N/2)+1`; `dkgParticipants = |Q|`; refuse
+    `dkg_below_quorum` when |R ∩ manifest| < T.
+
+### 2026-07-04 — Problem 2 IMPLEMENTATION underway (cron 3f309e75, 3-min)
+
+**Committed (cello-client):**
+- `protocol-types`: `register_request.reachable_node_ids` + `dkg_ready.quorum_node_ids` (nodeId is the
+  shared identifier; client maps to peerId/multiaddr locally). Typecheck green.
+- `daemon/registration-manager`: sends `reachable_node_ids` (its resolved roster); the DKG step filters
+  the roster to `dkg_ready.quorum_node_ids` and fans the DKG to exactly Q (replaced the all-N
+  `roster.length !== participants` refuse). **Finding B falls out for free**: `runNetworkDkg(directoryNodes=Q)`
+  sets signer stubs = Q, so seals target Q. Typecheck + eslint green.
+
+**Next (exact):**
+1. **Directory (trustless-cello) pick-Q** — `#processRegisterRequest` topology block (~2467-2489): read
+   `frame["reachable_node_ids"]` (generic — directory uses PUBLISHED protocol-types); Q = R ∩ manifest
+   nodeIds (or all when R absent); `dkgThreshold = N===1?2:floor(N/2)+1`; `dkgParticipants = |Q|`; refuse
+   (log `directory.dkg.below_quorum`) if |Q| < T; emit `dkg_ready` with `quorum_node_ids = Q`.
+   ⚠️ **FIRST verify `encodeDkgReady` preserves the extra field** (grep found no explicit picker — likely
+   generic; if it STRIPS unknown fields, emit via the generic frame path or land the field in published
+   protocol-types). Do NOT ship a silently-dropped Q.
+2. Build directory + cello-client from source → **spine test N=3/t=2, kill 1 → registers among Q=2** (write
+   it). Green.
+3. Publish cello-client to beta (/cello-publish) → bump trustless-cello protocol-types ref → deploy directory
+   → relay cascade → live check.
+4. **Persistence-of-Q (verify, maybe fix):** spine doesn't restart the daemon — confirm the restored signer
+   targets Q (not the full roster) after a daemon restart, else a post-restart seal for a quorum agent fans
+   to non-holders. Check the signer-restore path; fix if it rebuilds stubs from the full roster.
 
 <details><summary>Original open questions (now answered)</summary>
 
