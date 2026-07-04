@@ -217,3 +217,16 @@ This is cross-repo (directory decides Q + client honors it) and touches the `dkg
   Andre's design decision (how Q is determined + agreed). Problem 1's live proof is non-blocking and
   finicky. **Nothing further advances autonomously until Andre pins the Problem 2 design.** Not burning
   cron ticks on a fragile live registration that gates nothing.
+
+### 2026-07-04 — Problem 1 spine test GREEN (TDD cycle complete)
+
+- Rebuilt directory+relay binaries with the fix, ran `j-tofn-dkg.spine.test.ts` (real 3-node FROST DKG,
+  real shipped binaries): **1 passed**. The added assertion — non-coordinator nodes (1,2) log
+  `directory.dkg.participant.signer.registered` — is GREEN. The string didn't exist pre-fix (reviewer
+  confirmed), so it's red-without-fix by construction. Problem 1 is now unit-gated + code-reviewed +
+  **spine-verified** + deployed to all 3 regions.
+- **Problem 1 = DONE for Sprint A** (mechanism proven with real binaries; live in all 3 regions). Only
+  untaken step: a live-AWS end-to-end (fresh registration → non-coordinator serves) — confirmatory,
+  non-blocking, finicky; left for a focused moment.
+- **Sprint A fully blocked on Andre** for Problem 2's Q-determination design. No autonomous work remains
+  that isn't blocked (Problem 2) or non-gating-and-finicky (Problem 1 live-AWS e2e).
