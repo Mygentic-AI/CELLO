@@ -87,8 +87,8 @@ Evidence:
 | 9 | **Node down during DKG** | ✅ ADDRESSED + SPINE-VERIFIED (M8B Problem 2, 2026-07-04) | Was the **all-N registration gap**: a node down → registration REFUSED (never completed). Now registers among the available quorum Q (Q ≥ t). Spine GREEN (`j-tofn-dkg`, real 3 nodes): kill 1 of 3 → registers among the 2-node quorum. Deployed all 3 regions (`bb02899`), client beta `v0.0.69`. Live-AWS demo pending (dev N=3 needs t=2 / cluster N>3 — optional). See results journal + [[2026-07-04_0556_tofn-registration-availability-quorum-enrollment-plan]]. |
 | 10 | **Node down during seal** | ⚠️ CODE-ADDRESSED, not live-verified | Seal now targets the recorded quorum Q (persist-Q); survive-node-down is DOD-SIGN-1 (`j-sign`) + exclude-and-retry. A live seal by a quorum-registered agent WITH a directory down still to run. |
 | 11 | **Share refresh** | ⬜ not tested | `cello refresh` against live cluster, then seal post-refresh |
-| 12 | **Any-directory (non-us-east-1)** | ⬜ not tested | Initiate session resolving to eu-central-1 or ap-northeast-1 |
-| 13 | **Cross-node presence** | ⬜ not tested | Query presence from a non-home directory |
+| 12 | **Any-directory (non-us-east-1)** | ✅ VERIFIED (FINDING-4 failover, 2026-07-03) | Directory selection is now AUTOMATIC (roster-aware failover), not a manual reconnect. Killed us1 → client ran on eu1 `verified:true`; killed eu1 → ap1 `verified:true`. See STATE.md 2026-07-03 + results journal. |
+| 13 | **Cross-node presence** | ✅ COVERED (FINDING-4 failover, 2026-07-03) | Client ran signaling/relay/ceremony against non-home eu1/ap1 during failover; dedicated non-home presence probe not separately logged. |
 | 14 | **Suspension** | ⬜ not tested | Suspend via the front-end portal, verify FROST refused, unsuspend, verify FROST proceeds |
 
 #### Better with a separate daemon (EC2 demo agent)

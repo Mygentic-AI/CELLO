@@ -119,6 +119,11 @@ like `"online agents can send/receive; registered agents need cello_start_agent 
 
 ## F6 — No user-facing way to choose a directory node · `discoverability` · `confusion`
 
+> **STATUS (2026-07-04) — the SPOF is FIXED; this is the residual MANUAL layer.** Automatic directory
+> failover shipped + live-verified 2026-07-03 (FINDING-4: kill us1 → client runs on eu1/ap1 `verified:true`;
+> survives 2 of 3 down — STATE.md 2026-07-03). What remains here is *deliberate* selection: no CLI flag to
+> pick a node (still env-var `CELLO_DIRECTORY_URL` only). Convenience/visibility, NOT redundancy.
+
 **Context:** Testing #12/#13 (any-directory / cross-node). To route through eu-central-1 or
 ap-northeast-1 instead of the default us-east-1, there is **no CLI flag and no config setting**.
 The only lever is the env var `CELLO_DIRECTORY_URL`, which I found only by grepping the
@@ -138,6 +143,11 @@ default.
 ---
 
 ## F7 — Changing directory requires a full daemon restart, which drops all MCP connections · `lifecycle/restart`
+
+> **STATUS (2026-07-04) — applies to MANUAL switching only.** Automatic failover needs NO restart: the
+> daemon reroutes around a dead directory live (FINDING-4 roster-aware resolver, verified 2026-07-03). The
+> restart pain remains only if an operator wants to *deliberately* pin a different node via
+> `CELLO_DIRECTORY_URL`. It is no longer on the redundancy path.
 
 **Context:** Testing #12/#13. `CELLO_DIRECTORY_URL` is read only at daemon startup
 (`resolveDirectoryUrl(process.env)`), and the daemon is a **standalone, manually-started process**
@@ -226,6 +236,11 @@ note; distinguish a genuine sustained outage from routine stream cycling; confir
 ---
 
 ## F12 — `/mcp` reconnect does NOT change the directory; no signal of which node you're on · `confusion` · `lifecycle/restart`
+
+> **STATUS (2026-07-04) — auto-failover shipped; VISIBILITY still open.** The client now fails over
+> directories automatically and logs `directory.bootstrap.failover` (FINDING-4, verified 2026-07-03). The
+> residual gap is purely visibility: `cello status` still does NOT show which node you're currently bound
+> to. That's the open item here — not the SPOF, which is fixed.
 
 **Context:** For #12/#13 the operator (Andre) ran a `/mcp` reconnect expecting it to switch the
 client to a different directory. It did not — and reasonably so: `/mcp` reconnect only re-attaches
