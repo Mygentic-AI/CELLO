@@ -345,3 +345,13 @@ description: >
   in `CELLO_DIRECTORY_PUBKEYS`, and STATE.md/templates must capture it. Region-expansion test: a brand-new
   region's relay must get the full set with zero manual steps. Until wired, any-directory is off in
   production — tracked, not dropped.
+
+---
+
+## Related Documents
+
+- [[M8B-SPEC]] — the design reference: T-of-N spine, all tracks and decisions
+- [[M8B-PROCEDURE]] — the runbook: per-unit loop, severity triage, oversight rules
+- [[M8B-BUILD-JOURNAL]] — the audit trail: work log updated daily, status board
+- [[M8B-DECISIONS]] — every fork and design decision with rationale
+- [[2026-07-04_0000_milestone-roadmap-summary]] — public roadmap; M8B is the federation milestone

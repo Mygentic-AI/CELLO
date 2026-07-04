@@ -90,3 +90,13 @@ The federation journeys (2-of-3 DKG, T-of-N seal with a node down, quorum suspen
 refresh, Option B with no directory→relay, cross-node presence + pickup) are GREEN — first on the local
 3-directory spine, then against the live dev 3-region cluster. No single node mandatory for any
 ceremony. STATE.md / journal / decisions current.
+
+---
+
+## Related Documents
+
+- [[M8B-DEFINITION-OF-DONE]] — the authoritative yardstick: every requirement and its status
+- [[M8B-PROCEDURE]] — the runbook: per-unit loop, severity triage, commit discipline
+- [[M8B-BUILD-JOURNAL]] — audit trail and status board, updated daily
+- [[M8B-DECISIONS]] — every fork in the design and the decision taken
+- [[M8-operator-portal]] — M8 established the portal's operator control surface; M8B adds federation trust to it

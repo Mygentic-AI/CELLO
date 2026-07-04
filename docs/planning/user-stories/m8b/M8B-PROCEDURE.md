@@ -178,3 +178,12 @@ Which journeys are green (DoD-IDs) with the spine-run OUTPUT (not a claim); the 
 target; branch + HEAD commit + whether the reviewer ran on everything to HEAD; anything parked (explicitly);
 anything that changes the DoD. Verified-green (unit + spine journey, then live) is the only "done." A claim
 without a run is not done.
+
+---
+
+## Related Documents
+
+- [[M8B-SPEC]] — the design: T-of-N spine, all tracks, decisions made
+- [[M8B-DEFINITION-OF-DONE]] — the yardstick: every requirement and status
+- [[M8B-BUILD-JOURNAL]] — the audit trail: daily work log and status board
+- [[M8B-DECISIONS]] — every design fork and decision rationale

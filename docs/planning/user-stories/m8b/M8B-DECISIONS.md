@@ -286,3 +286,12 @@ trigger"; the docs say done.
 E2E-testing-phase work (see 2026-07-01_0900_m8b-closed-e2e-testing-phase.md) is a separate track
 and, if it wants an autonomous loop, should get its own trigger scoped to that phase — not a
 resurrected M8B-build loop.
+
+---
+
+## Related Documents
+
+- [[M8B-SPEC]] — the design reference with all forks considered and resolved
+- [[M8B-DEFINITION-OF-DONE]] — the yardstick that lists every requirement
+- [[M8B-PROCEDURE]] — the runbook and work loop
+- [[M8B-BUILD-JOURNAL]] — the daily audit trail and status board

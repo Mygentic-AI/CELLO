@@ -1429,3 +1429,13 @@ restarted simultaneously (demo connected to stale daemon socket). Fix: proper st
 (daemon first, 5s wait, then demo). Documented in demo/CLAUDE.md.
 
 **M8B MILESTONE CLOSED.** All DoD lines ✅. Federation is live.
+
+---
+
+## Related Documents
+
+- [[M8B-SPEC]] — the design reference: T-of-N, all tracks and decisions
+- [[M8B-DEFINITION-OF-DONE]] — the authoritative yardstick: every DoD line and status
+- [[M8B-PROCEDURE]] — the runbook: per-unit loop, severity triage, oversight
+- [[M8B-DECISIONS]] — every design fork and the decision made
+- [[2026-07-04_0000_milestone-roadmap-summary]] — public roadmap showing M8B as complete

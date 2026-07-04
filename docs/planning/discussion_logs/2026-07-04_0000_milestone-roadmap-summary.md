@@ -45,3 +45,21 @@ Remove the mandatory single directory node. Multiple independent directory nodes
 
 **M9** (planned)
 Details to follow as M8B closes.
+
+---
+
+## Related Documents
+
+- [[M0-peer-to-peer-walking-skeleton]] — M0 proved peer-to-peer transport and signing
+- [[M1-session-layer]] — M1 proved sessions are verifiable (Merkle hash relay model)
+- [[M2-frost-threshold-layer]] — M2 proved threshold signing prevents forgery (FROST)
+- [[M3-connection-policy-and-registration]] — M3 proved strangers can negotiate policy
+- [[M4-persistence-foundation]] — M4 proved sessions are durable and tamper-evident
+- [[M5-infrastructure-deployment]] — M5 proved multi-region infrastructure works
+- [[M6-beta-launch]] — M6 proved installable client and public beta
+- [[M6B-beta-hardening]] — M6B proved operational stability
+- [[M7-daemon-architecture]] — M7 proved daemon model and content durability
+- [[M8-operator-portal]] — M8 proved operator control portal with ceremony gates
+- [[M8B-SPEC]] — M8B federation spec: T-of-N spine, any directory, any relay
+- [[M8B-DEFINITION-OF-DONE]] — M8B yardstick for federation
+- [[M8B-PROCEDURE]] — M8B runbook
