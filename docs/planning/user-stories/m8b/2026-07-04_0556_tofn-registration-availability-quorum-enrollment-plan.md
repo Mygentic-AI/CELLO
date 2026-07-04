@@ -299,7 +299,29 @@ not just counts) → both repos + version bump + publish + directory deploy.
   N (small Q) — a client-side schema migration; **deferred as a large-N efficiency follow-up**, flagged
   for Andre, not blocking beta. (verifyingShares identifiers know Q but are one-way hashes of nodeId, so
   Q's dial info isn't recoverable without a new persisted field.)
-- Code review running (a49a6ad1) — corroborating this + checking threshold arithmetic / consistency / security.
+### 2026-07-04 — code review DONE: 2 findings (1 Critical fix, 1 security sign-off)
+
+Reviewer verified clean: threshold arithmetic (no off-by-one), race handling, Q-selection integrity (a
+lying client can only shrink its own Q), back-compat. Two findings:
+
+**#1 (Critical, confidence 90) — persist Q for post-restart seals.** Worse than I'd assessed: stubs'
+`isReachable()` ALWAYS returns true, so the fast pre-check is neutralized; a post-restart quorum seal
+fans to the full live roster (incl. non-holders that came back online), which pad the count, and the
+ceremony burns the retry budget (default **3**) excluding them per round — at larger N it can EXHAUST
+retries and FAIL a seal the real quorum could complete. **Benign at dev N=3** (1 non-holder, enough retry
+budget), real at N>3. Clean fix (no identifier crypto): persist Q's **nodeIds** with the share
+(registration-manager has roster=Q at persist time), and in `hydrateShareAndStubs` filter the live roster
+to `ep.nodeId ∈ persistedQ`. Needs a client-side FrostKeyShare schema field + migration. → IMPLEMENTING.
+
+**#2 (Important, SECURITY — needs Andre) — `majority(N)` threshold weakens directory-collusion resistance.**
+`T = floor(N/2)+1 ≤ N`, so a bare **majority of directory operators alone** (no client) hold enough real
+shares to forge a group signature offline — down from the old "all N directories." The protocol never
+invokes this path (client always coordinates), but cryptographically the collusion margin drops from
+"100% of directories" to "just over half." NOTE: this reduction is inherent to any T<N (which §9's
+"10-of-15" already chose); majority is a reasonable point aligned with §9's outage-tolerance intent, and
+it's a ONE-LINE formula change to tighten (e.g. `ceil(2N/3)` or `N-1`). **⚠️ Andre: sign off on `majority`
+or name a tighter policy — this is baked into every agent that registers, so it gates the `latest`
+promotion.** Proceeding with `majority` on beta; will not promote to latest without your call.
 
 <details><summary>Original open questions (now answered)</summary>
 
