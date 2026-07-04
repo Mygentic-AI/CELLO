@@ -677,6 +677,72 @@ restore per `infra/CLAUDE.md`) and FINDING-6 B-reconnect → `cello_get_sealed_r
 
 ---
 
+### FINDING-8 — A non-home directory cannot serve a freshly-registered agent's session/seal until it restarts (in-memory signer/profile maps are boot-populated only)
+
+> **Discovered 2026-07-04**, while live-verifying FINDING-7's remaining "register fresh agent → seal →
+> kill one node" check. **Two results came out of it:** (1) the baseline seal is now **PROVEN LIVE**, and
+> (2) a real, code-confirmed directory-side gap — logged here. Distinct from the retracted FINDING-7:
+> the FROST *shares* ARE distributed across the consortium (that retraction stands); this is about the
+> directory's per-agent **signer/profile bookkeeping** on the session-initiate path — a different layer.
+
+**Severity:** medium-high — a genuine gap in the sovereign-node redundancy invariant (`DOD-INV-NODE`),
+but **code-confirmed only; not yet demonstrated to bite live** (see Status).
+
+**Baseline seal — PROVEN LIVE (first half of FINDING-7's remaining check, now done).** `capX` (fresh
+capability-registered T-of-N agent) → `cello_initiate_session` → `cello_close_session` completed:
+`sealed_root 8e69c4e47a75ba6f…`, both participants `attestation_mode:"live"`. Full path
+capability→registration→session→seal works end-to-end.
+
+**How the gap surfaced — a red herring first.** `capX` initially returned `frost_signer_not_configured`
+on initiate. That live symptom was **NOT a directory issue** — it was produced by a degraded LOCAL daemon
+(stuck at reconnect attempt 80, log frozen at 02:59:51Z, stale MCP socket; friction F7/F9/F11). A clean
+`cello logout`/`login` fixed it and the identical initiate then succeeded (above). **The earlier STATE.md
+hypothesis — "directories load FROST signers only at startup, so restart the directories" — is FALSIFIED:**
+registration registers the in-memory signer immediately (`directory-node.ts:2517`), before the DB write.
+
+**But tracing the error's directory-side producer (read-only) exposed a real defect.** Consumer:
+`#processSessionRequest` (`directory-node.ts:2882`) emits `frost_signer_not_configured`
+(`directory-node.ts:2960`) iff, on the node handling the request, BOTH:
+1. `#thresholdSigners.get(initiatorHex)` misses (in-memory Map, `directory-node.ts:514`; wiped on restart), and
+2. the fallback `#resolvePrimaryPubkey(initiatorHex)` → `#store.getProfile(initiatorHex)` returns nothing (`directory-node.ts:2938-2948`).
+
+Signer producers: registration registers in-memory **immediately but only on the one node that runs the
+register-reply** (`directory-node.ts:2517`); other DKG participants never run the reply → empty map for
+that agent (self-documented at `directory-node.ts:2932-2937`). Boot restore covers every active profile
+but **only at startup** (`bin/directory.ts:942`, gated on `PgDirectoryStore`). The fallback's `getProfile`
+is **in-memory-only — no live DB read**:
+```
+pg-directory-store.ts:1041-1043
+getProfile(pubkeyHex) { return this.#profilesByLocalKey.get(pubkeyHex) ?? this.#profilesByPrimaryKey.get(pubkeyHex); }
+```
+`#profilesByLocalKey` is written in exactly two places: `loadProfiles()` at boot (`SELECT … WHERE
+status='active'`, `pg-directory-store.ts:254`) and `setProfile()` on the home node only (`:835`). **No
+runtime refresh, LISTEN/NOTIFY, or replication consumer writes this map without a restart** (the only
+`federation.replication.*` code is a chain-hash verifier, `:1888-1955`, which never touches the profile maps).
+
+**Net:** a fresh agent's `agent_profiles` row replicates into a non-home node's Postgres (cello_pub), but
+that node's in-memory `getProfile` cache never sees it until the node restarts. So a directory that booted
+*before* the agent registered and did *not* run its register-reply will refuse that agent's session-initiate
+with `frost_signer_not_configured` — **even though the row is sitting in its own DB.**
+
+**Why it did NOT bite live:** `capX` routed to **us-east-1**, which had its profile (home or boot-loaded),
+so the fallback succeeded and the seal completed. The defect bites only when a fresh agent is served by a
+non-home node that hasn't reloaded since the agent registered — i.e. the cross-node-failover / any-directory
+case (#10/#12/#13).
+
+**Status:** CODE-CONFIRMED; NOT yet live-triggered. To demonstrate: force a fresh agent onto a non-home
+directory (register via one node, drive its session-initiate against another that booted earlier) and
+observe `frost_signer_not_configured` in *that directory's* log. That is the deliberate #10/failover test,
+distinct from the accidental (contaminated) one.
+
+**Fix direction (not implemented — for the fix session):** let a non-home node see a live-registered
+profile without a restart — e.g. `getProfile` falls back to a live single-row DB read on cache miss (model
+on the existing `hasAgentProfile`/`getAgentIdByPubkey` single-row SELECTs, `pg-directory-store.ts:363,394`),
+OR register the threshold signer on ALL DKG participants at round-3 completion, OR a replication-driven
+profile-cache refresh. Any one closes it. Directory-side; does not touch the capability feature.
+
+---
+
 ## Related Documents
 
 - [[2026-07-01_0900_m8b-closed-e2e-testing-phase|M8B closed — E2E testing phase kickoff]] — the plan doc this journal executes; test matrix, phases, and restore-cascade discipline.

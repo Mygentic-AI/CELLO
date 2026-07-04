@@ -46,16 +46,21 @@ benign CelloClientWebhookSecret issue, unrelated). All 3 directories log `direct
   (bind-to-agent not bind-to-epoch) is closed live.
 
 **Remaining follow-ups (documented for a focused session — NOT blocking; core feature is done):**
-- **FINDING-4 seal + kill-one-node redundancy test** — ATTEMPTED, blocked tonight. `capX` initiating a
-  session returns `frost_signer_not_configured`. Hypothesis (evidence: capX registered fine via DKG but
-  cannot open a seal session; not yet confirmed from directory logs): the directory registers FROST
-  threshold signers at STARTUP from persisted profiles (directory-node.ts loadPersistedState →
-  registerThresholdSigner), and capX registered AFTER the capability deploy restarted the directories, so
-  its signer isn't in memory. To test: restart the directories (reloads capX's signer) OR investigate
-  dynamic signer registration on DKG completion, then seal capX↔Agent-1 / kill one non-us1 directory /
-  re-seal. This is a SESSION-path concern, separate from the (proven) capability feature; the redundancy
-  property itself is spine-proven (`j-sign` survives a participating node down). Not a regression from
-  this work (signer-at-startup is pre-existing; capability changes don't touch signer loading).
+- **Baseline seal — PROVEN LIVE 2026-07-04.** `capX` (fresh capability-registered T-of-N agent) →
+  `cello_initiate_session` → `cello_close_session` completed: `sealed_root 8e69c4e4…`, both participants
+  `attestation_mode:"live"`. Full path capability→registration→session→seal works end-to-end.
+  ⚠️ **Correction:** the `frost_signer_not_configured` recorded here earlier was NOT a directory issue, and
+  the "directories load signers at STARTUP / restart the directories" hypothesis is **FALSIFIED** —
+  registration registers the in-memory signer immediately (`directory-node.ts:2517`). The live error was a
+  **degraded LOCAL daemon** (reconnect attempt 80, frozen log, stale MCP socket — friction F7/F9/F11); a
+  clean `cello logout`/`login` fixed it and the seal succeeded.
+- **#10 remaining piece:** kill EXACTLY ONE non-us1 directory + re-seal (the `j-sign` redundancy case,
+  live). Disruptive to shared dev infra — needs explicit go-ahead + restore cascade per `infra/CLAUDE.md`.
+- **FINDING-8 (new, code-confirmed):** a non-home directory cannot serve a freshly-registered agent's
+  session-initiate until it restarts (`getProfile` is in-memory-only, boot-populated; no runtime refresh —
+  `pg-directory-store.ts:1041`). Real gap in the redundancy invariant; not yet live-triggered (capX routed
+  to us1, which had its profile). Logged in the m8b e2e journal (FINDING-8). Directory-side; does not touch
+  the capability feature.
 - **Reviewer unit tests** — core logic IS unit-tested (crypto capability 13 tests; DevNonceBinder
   bind-to-agent single-use 4 tests); the directory round-1 gate + PgNonceBinder-over-SQL are LIVE-covered
   (capX register + capY reject) but lack isolated unit tests (gate lives in a large stream handler;
