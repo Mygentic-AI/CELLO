@@ -135,4 +135,19 @@ should register the **in-memory signer only** — NOT write a profile row.
   ceremony, gets identity via replication while up), NOT the participant case. Keep it small, land after
   the core signer fix.
 
+**Test harness located.** No node-level frost-frame harness in the directory tests (DKG tests in
+`e2e-003-frost-handler-network.test.ts` are handler-level). The **real multi-node DKG** is
+`packages/e2e-tests/src/spine/j-tofn-dkg.spine.test.ts` — extend THAT. (`session-fixture.ts` uses
+`bootstrapKeyShares`/`injectShareForTest`, i.e. test-injected shares — it does NOT run the round-3
+handler, so it can't cover Problem 1.)
+
+**Exact next step (next tick):**
+1. Read `j-tofn-dkg.spine.test.ts` to learn how it stands up the 3 nodes + drives the real DKG and which
+   node is the coordinator.
+2. Add a RED assertion: after the DKG, a **non-coordinator** node has the agent in `#thresholdSigners`
+   (`getThresholdSignerForTest(agentPubkey)` non-null) — fails on current code.
+3. Implement the ~5-line fix in the round-3 `if (result.ok)` branch (mirror directory-node.ts:2513-2518
+   with `dkgReq.agentPubkey` + `result.shareCommitment`). Confirm green.
+4. Gate → feature-dev:code-reviewer → fix findings → commit.
+
 Problem 2 (cello-client quorum + share-holder-set targeting) follows Problem 1.
