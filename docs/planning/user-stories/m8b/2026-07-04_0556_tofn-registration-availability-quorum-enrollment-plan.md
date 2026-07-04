@@ -405,3 +405,15 @@ exactly as §9's "10-of-15" chose. Not a defect. Not a decision. Closed.)
   Re-pushed `bb028997` → pipeline InProgress.
 - **Next:** monitor deploy → relay cascade → 6 ECS 1/1 → STATE.md → ping Andre (#2 majority-threshold
   sign-off gates `latest`).
+
+### 2026-07-04 — PROMOTED TO `latest` (Problem 2 fully shipped)
+
+- All 7 packages promoted beta → `latest`: crypto 0.0.15, protocol-types 0.0.13, transport 0.0.13,
+  client 0.0.43, daemon 0.0.28, cli 0.0.26, connect 0.0.55. New `npm i -g @latest` gets quorum registration
+  by default. Threshold `majority(N)` is SETTLED (not a gate — see #2 above).
+- Andre's local install updated (connect 0.0.55, cli 0.0.26 → daemon 0.0.28) + daemon restarted: clean boot
+  verified in `~/.cello/daemon.log` — `daemon.manifest.bundled` (3 nodes) → `directory.auth.challenge.verified`
+  (step-6) → `directory.signaling.connected` for all agents; no EADDRINUSE/crash.
+- **Problem 2 is DONE**: built, reviewed, spine-verified, deployed (directory bb02899 all 3 regions), published,
+  promoted, and running locally. Remaining M8B items are separate (Sprint B enrollment/reconcile; the narrow
+  live one-directory-down seal check; UX polish) and tracked in the e2e testing/friction docs.

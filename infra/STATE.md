@@ -11,16 +11,17 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ## 🚀 M8B Sprint A — registration availability fix (in progress, 2026-07-04)
 
-### Problem 2 — QUORUM REGISTRATION — SHIPPED to beta + directory deployed (2026-07-04)
+### Problem 2 — QUORUM REGISTRATION — SHIPPED + PROMOTED TO `latest` + directory deployed (2026-07-04)
 
 **Register among the available quorum (not all-N).** Client sends its reachable nodeIds R; directory picks
 Q = R ∩ manifest, `participants = |Q|`, `threshold = majority(N) = floor(N/2)+1`, refuses `below_quorum` if
 |Q| < T. Client fans the DKG to Q; seal targets Q (persisted). Spine-verified GREEN (kill 1 of 3 → registers
 among the 2-node quorum). Both review Criticals fixed (persist-Q + refresh-forward).
 
-- **cello-client BETA published** (tag `v0.0.69`, smoke GREEN, binary-verified): protocol-types 0.0.13,
-  transport 0.0.13, client 0.0.43, daemon 0.0.28, cli 0.0.26, connect 0.0.55 (crypto 0.0.15). **`latest`
-  promotion PENDING Andre** (+ his #2 majority-threshold security sign-off).
+- **cello-client PROMOTED TO `latest` 2026-07-04** (tag `v0.0.69`, smoke GREEN, binary-verified). All 7 on
+  `latest`: crypto 0.0.15, protocol-types 0.0.13, transport 0.0.13, client 0.0.43, daemon 0.0.28, cli 0.0.26,
+  connect 0.0.55. New `npm i -g @latest` installs get quorum registration by default. Andre's local install +
+  daemon updated + restarted (clean boot on 0.0.28: bundled 3-node manifest, step-6 `verified`, no crash).
 - **Directory DEPLOYED** `cello-directory:bb02899`, all 3 regions rolloutState=COMPLETED, 0 failed, no crash
   (verified rolloutState + failedTasks + startup logs, not just pipeline status). Relay cascade initiated
   ~12:15 UTC (all 3 relays stopped → re-registering).
@@ -103,7 +104,7 @@ benign CelloClientWebhookSecret issue, unrelated). All 3 directories log `direct
   bind-to-agent single-use 4 tests); the directory round-1 gate + PgNonceBinder-over-SQL are LIVE-covered
   (capX register + capY reject) but lack isolated unit tests (gate lives in a large stream handler;
   PgNonceBinder needs a Postgres harness). Regression protection only.
-- **`latest` promotion** — optional (client behavior unchanged; beta is published + verified).
+- **`latest` promotion** — DONE 2026-07-04 (all 7 packages; see the Problem 2 block above for versions).
 
 ---
 
