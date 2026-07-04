@@ -207,6 +207,18 @@ participants:3/threshold:3 = client + any 2 of 3 dirs). Nail during SPARC before
 **Scope:** cross-repo + a wire change (register_request carries R; dkg_ready carries the Q node list/slots,
 not just counts) → both repos + version bump + publish + directory deploy.
 
+**Threshold arithmetic — PINNED from code (`network-directory-node.ts:593-595`):**
+- The **client is itself a FROST participant.** Total participants = **Q directories + 1 (client)**.
+  `signers = { min: threshold, max: participants + 1 }`.
+- `threshold` (t) = signers needed **counting the client** ⇒ **directory signatures needed = t − 1**
+  (the client always signs). Dev manifest t=3 ⇒ any 2 of 3 dirs.
+- **Floor resolution:** the literal "Q > t" is WRONG — dev t=3 would need ≥4 dirs (only 3 exist) →
+  registration always refuses. So "T" in Andre's "Q > T" = the **directory-signature count (t − 1)**.
+  **Floor = Q > (t − 1), i.e. Q ≥ t directories** — at least one spare directory (redundancy from day one).
+  Dev: Q ≥ 3 ⇒ all 3 (quorum can't help at N=3/t=3, expected). Scale N=20/t=10: Q ≥ 10 of 20.
+- ⚠️ Confirm with Andre (one word): floor = **Q ≥ t directories** (≥1 spare) — or did he want ≥2 spare
+  (Q ≥ t+1)? Coding the "≥ t" reading; it's a one-line change if he wants more.
+
 <details><summary>Original open questions (now answered)</summary>
 
 **⚠️ OPEN DESIGN DECISION (needs Andre — do NOT invent a protocol unilaterally):** how is Q determined and agreed?
