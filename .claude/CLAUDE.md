@@ -16,6 +16,14 @@ CELLO is a peer-to-peer identity and trust layer for agent-to-agent communicatio
 
 `docs/planning/` is an **Obsidian vault** — the primary design record. All architectural decisions and discussion logs live here.
 
+**⏳ Deferred — M8B Sprint B (registration availability). Do not lose these.** Sprint A shipped quorum registration on 2026-07-04 (register among the available directories, not all-N; kill a node → registration still succeeds). Still owed:
+- **Threshold policy — OPEN DECISION (Andre):** registration uses `T = majority(N)`, which lets a bare majority of *directory operators alone* forge a signature offline (the old all-N code required every directory). Inherent to any T<N (§9's "10-of-15" accepts it). One-line change to tighten (`ceil(2N/3)` or `N-1`). **It is baked into every agent that registers — decide before real agents register at scale.**
+- **Enrollment (Problem 3):** a node that was down/absent during a DKG holds **no share** and can't co-sign for that agent until it gets one via a *resharing ceremony* (shares are secret, never replicated). Needs a signed "may-enroll" credential each holder verifies independently — mirror the pre-auth capability pattern.
+- **Absent-node reconcile:** a node that stayed up but wasn't in the quorum should pick up an agent's identity from replication into memory without a restart (today the in-memory profile cache only loads at boot).
+- **Optional hardening:** FROST binds a slot to a public label, not node identity — a stolen decrypted share works on any node (possession = authority). Add FROST-stream identity auth + slot→identity binding for defense-in-depth.
+
+Full plan, findings, and trail: `docs/planning/user-stories/m8b/2026-07-04_0556_tofn-registration-availability-quorum-enrollment-plan.md`.
+
 ---
 
 ## Required Reading
