@@ -9,6 +9,25 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🚀 M8B Sprint A — registration availability fix (in progress, 2026-07-04)
+
+**Problem 1 (participant registers signer at round 3, FINDING-8) — DEPLOYED.** Directory image
+`cello-directory:97bc68c` live in all 3 regions (`cello-directory-pipeline` Succeeded; tasks started
+~07:25 UTC). Commit `97bc68c9`. Fix: the DKG round-3 handler now registers the in-memory delegated signer
+on EVERY participant, so a non-coordinator can serve a session-initiate without a reboot. Plan/record:
+`docs/planning/user-stories/m8b/2026-07-04_0556_tofn-registration-availability-quorum-enrollment-plan.md`.
+
+**Relay cascade (2026-07-04, ~07:5x UTC):** all 3 relays `stop-task`'d to re-register with the new
+directory tasks (mandatory after a directory redeploy). ECS relaunching. **TODO next tick:** verify
+`relay.already.registered` + re-sign manifests per region (new relay IPs, per infra/CLAUDE.md) + verify
+6 ECS 1/1 + 6 DNS, then run Problem 1's live proof (fresh agent → initiate via a non-coordinator directory
+→ expect success, not `frost_signer_not_configured`).
+
+**Problem 2 (quorum registration) — NOT deployed; BLOCKED on a design decision** (how the available
+quorum Q is determined + agreed between client and directories — see the plan doc). Needs Andre.
+
+---
+
 ## 🔑 M8B-PREAUTH-CAP — pre-auth capability infra (2026-07-03, deploy pending)
 
 Replaces the opaque single-use pre-auth token (which fails T-of-N registration — a replication race on
