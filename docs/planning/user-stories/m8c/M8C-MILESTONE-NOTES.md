@@ -269,11 +269,32 @@ minutes → deny / defer / close"), so the session never hangs waiting on a huma
 - **Bot API key = a daemon setting.** This is the load-bearing new config. Related settings ride
   alongside (monitoring level, allowlisted operator chat ID, escalation timeouts, per-agent overrides)
   — they need the CLI config surface (#4).
-- **The Telegram code is effectively already written.** Anthropic's vetted Telegram-channels
-  integration is **on the local disk** — a near copy-paste reference for the bot poll/send half.
-  (Corroboration: a Telegram MCP plugin is connected to *this very session*, so the mechanism is live
-  and proven.) The Telegram-connection complexity is retired; the CELLO-specific work is the daemon
-  wiring + settings + routing.
+- **The Telegram code is effectively already written — located + read in full (2026-07-04).**
+  Anthropic's vetted `telegram` plugin (`claude-plugins-official`, v0.0.6) is on disk at
+  `~/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/telegram/server.ts` — **one
+  ~1040-line TypeScript file** (runs on `bun`, uses the `grammy` Bot framework; same TS ecosystem as the
+  CELLO daemon, so it drops in). **Transfers near-verbatim:** the grammy long-poll loop, the inbound →
+  notification payload shape (`{ content, meta: { chat_id, message_id, user, ts, … } }` → arrives to
+  Claude as `<channel source="telegram" …>`), and the `reply` / `react` / `edit_message` /
+  `download_attachment` tools (4096-char chunking, photo/doc/voice/video attachments, markdownv2,
+  typing + ack reactions).
+- **The daemon-owned design SIMPLIFIES the copy — it doesn't just relocate it.** The plugin carries
+  ~100 lines of per-session lifecycle cruft — PID file, stale-poller kill, 409-Conflict retry, orphan
+  watchdog — that exists *only because* Claude Code spawns a fresh poller per session and they contend
+  for the token (**Telegram allows exactly one `getUpdates` consumer per bot token**). A daemon-owned
+  bot is a single long-lived poller that uniquely owns the token, so all that contention handling
+  evaporates. Concrete evidence FOR the daemon-owned steer (OQ-1).
+- **What's genuinely CELLO-specific (the real build):** (a) bot lives in the daemon, token = daemon
+  setting; (b) operator↔session routing with the daemon **origin-tagging every inbound as
+  operator-origin**; (c) the `[agent · session]` multi-session header (plugin is single-session — new);
+  (d) an operator allowlist (the plugin's pairing/allowlist subsystem collapses to "only YOU drive your
+  agent"); (e) only the final hop into a *Claude* session uses `notifications/claude/channel` — the
+  grammy/Telegram half is **runtime-neutral**, which is exactly why the concern is latency-not-capability.
+- **Bonus reference — approvals UX is already built.** The plugin's `claude/channel/permission`
+  inline-keyboard (✅ Allow / ❌ Deny / See-more buttons, `bot.on('callback_query:data')`) is a
+  ready-made pattern for the **Mode-2 approvals gate**. Note the *capability itself* (relaying Claude's
+  own tool-permission prompts to a **counterparty**) stays out of scope per the 2026-07-01 doc — but the
+  button mechanism is directly reusable for operator approvals.
 - **Multi-session identification.** If several sessions use the relay, the operator must know who is
   messaging. Simple proposal: the **daemon prepends a header line** to each outbound message —
   e.g. `[Alice · session "acme-negotiation"]` — so one Telegram chat can carry many agents/sessions
@@ -308,7 +329,9 @@ real-time push where others poll.
 - **OQ-1 — Daemon-owned bot vs. live-session router.** The steer is daemon-owned (settings on the
   daemon, works cold, runtime-agnostic). Confirm this over the alternative where a live `claude
   --channels` session owns the Telegram bridge (router model — Claude-Code-only, only while a session
-  runs). Load-bearing for everything above.
+  runs). Load-bearing for everything above. **Reference-code readout reinforces daemon-owned:** the
+  single-`getUpdates`-consumer-per-token constraint means the per-session model needs ~100 lines of
+  token-contention handling that a single daemon poller eliminates (see Technicals + reference path).
 - **OQ-2 — Real-time vs polled operator input.** Free-form operator input reaches a running agent via
   polling (any runtime) or channel push (Claude Code). Decide the default receive cadence/mechanism per
   runtime, and whether time-critical asks (the 2-min approval) should be **daemon-mediated** — so they
@@ -320,6 +343,15 @@ real-time push where others poll.
   tighten-free-loosen-confirm rule.
 
 ---
+
+## Reference code (on local disk)
+
+- **Anthropic `telegram` plugin** (`claude-plugins-official`, v0.0.6) — the vetted, near-copy-paste
+  reference for the Telegram half of the operator relay:
+  - Source (marketplace clone): `~/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/telegram/server.ts` (~1040 lines, TypeScript/`bun`, `grammy`)
+  - Also: `server.ts` sibling skills `skills/access/SKILL.md` + `skills/configure/SKILL.md`, and `README.md` / `ACCESS.md` in the same dir
+  - Runtime state (this machine): `~/.claude/channels/telegram/` (`.env` holds `TELEGRAM_BOT_TOKEN`, `access.json` holds pairing/allowlist)
+  - Read in full 2026-07-04 — see the **Technicals** section for the transfers-verbatim vs. CELLO-specific breakdown.
 
 ## Related Documents
 
