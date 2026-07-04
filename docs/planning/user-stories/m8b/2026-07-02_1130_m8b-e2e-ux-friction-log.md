@@ -86,6 +86,15 @@ tool that isn't ready is arguably better hidden than exposed as a dead end.
 
 ## F4 — `cello_get_sealed_receipt` rejects short session IDs with an ambiguous error · `error-message`
 
+> **DECISION (2026-07-04, Andre) — do BOTH, skip prefix-matching:**
+> 1. **Never truncate on copy-from surfaces.** `cello_list_sessions` and `cello status` show the **full**
+>    session ID (the places you're meant to copy from), so what you see pastes back. Logs may still truncate.
+> 2. **Split the error anyway.** Replace the single `sealed_receipt_not_found` with distinct reasons —
+>    `session_id_too_short` (miscopy), `unknown_session`, `wrong_agent` (receipt is keyed per-agent),
+>    `not_sealed_yet` — and stop advising `cello_close_session` for a session that is already sealed.
+> Skip Option 3 (git-style unique-prefix lookup): unnecessary once IDs aren't truncated, and it adds an
+> ambiguity edge case. Small fix; the receipt is core value, so it's worth doing right.
+
 **Context:** Testing #8. Called `cello_get_sealed_receipt(session_id: "a001ca74")` (an abbreviated
 ID copied from the plan doc). Got `{"ok":false,"reason":"sealed_receipt_not_found","guidance":"No
 sealed certificate is recorded for this session. It may not be sealed yet, or the session_id is

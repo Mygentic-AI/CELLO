@@ -21,6 +21,12 @@ prospective customer, or can they forgive it? Numbering follows the priority lis
   **discrete coding session**: portal suspend → directories refuse to sign → unsuspend → signing resumes.
   Spine test `j-suspend-tofn` exists as the harness anchor.
 
+- **F4 — session-ID legibility on the receipt lookup** (DECIDED 2026-07-04). Do BOTH: (1) **never truncate**
+  session IDs on `cello_list_sessions` + `cello status` (the copy-from surfaces), so what you see pastes back;
+  (2) **split** `sealed_receipt_not_found` into `session_id_too_short` / `unknown_session` / `wrong_agent` /
+  `not_sealed_yet`, and stop advising `cello_close_session` for an already-sealed session. Skip prefix-matching.
+  Small; the receipt is core value.
+
 ## Soon (built but unverified — top of the not-yet-but-soon list)
 
 - **8 — relay failover** (#4). We believe it's built (directory failover carries you onto the fallback
