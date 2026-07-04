@@ -743,6 +743,33 @@ profile-cache refresh. Any one closes it. Directory-side; does not touch the cap
 
 ---
 
+### FINDING-9 — Session/seal after a directory FAILOVER is unproven (and a harness run suggests it may not work)
+
+**Surfaced 2026-07-04** while fixing `j-sign` for the `majority(N)` threshold. Under `t = majority(3) = 2`
+a seal uses **client + 1 directory**, and that one directory is the client's **signaling primary**. So the
+"seal survives its signing node dying" case now requires a FULL client failover (signaling → survivor)
+**plus re-establishing a session on that survivor** — a materially harder path than the old `t=3` test,
+which killed a non-primary co-signer while signaling stayed up.
+
+**Evidence:** in the local spine harness, killing the signing primary → the daemon's `directory_signaling`
+DID fail over to a survivor (`connected` again), and `cello_initiate_session` got past `signaling_lost`,
+but then stuck on **`target_offline`** for 50 retries over ~15s — the FAR agent's online presence did not
+re-propagate onto the survivor directory. So: signaling reconnects, but a **new session after failover**
+did not establish.
+
+**Scope / unknowns:** this was the LOCAL harness (client on a local directory). Production (bundled manifest,
+live AWS) has never tested a *new session* after failover either — the 2026-07-03 kill-us1 run only proved
+signaling reconnects (`verified:true`), not a session/seal afterward. So this is unproven everywhere, and the
+one attempt to prove it failed. Relates to #13 (cross-node presence) and FINDING-8 (in-memory profile/signer
+maps are boot-populated only).
+
+**What `j-sign` proves now (after the clean fix):** the T-of-N seal is a real threshold ceremony (≥1 directory
+FROST-signs, not single-key) AND the consortium seals with one **non-signing** directory down. It does NOT
+prove seal-survives-the-signing-node — that is this finding.
+
+**Not addressed. Needs a decision on priority** (weigh against launch: does a node dying mid-use, requiring a
+brand-new session immediately, ruin a customer, or is it forgivable while the cluster is healthy?).
+
 ## Related Documents
 
 - [[2026-07-01_0900_m8b-closed-e2e-testing-phase|M8B closed — E2E testing phase kickoff]] — the plan doc this journal executes; test matrix, phases, and restore-cascade discipline.
