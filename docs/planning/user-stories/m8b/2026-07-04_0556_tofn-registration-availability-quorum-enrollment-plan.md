@@ -200,3 +200,20 @@ This is cross-repo (directory decides Q + client honors it) and touches the `dkg
 - **After the deploy:** relay cascade (restart all 3 relays to re-register) per infra/CLAUDE.md; verify 6 ECS 1/1 + 6 DNS; update infra/STATE.md.
 
 **Loop note:** next cron tick = check pipeline done → run the live proof → relay cascade → STATE.md. Problem 2 stays parked until Andre pins the Q-determination design.
+
+### 2026-07-04 — Relay cascade verified; Problem 1 done pending live proof; LOOP BLOCKED on Andre
+
+- **Relay cascade COMPLETE + healthy.** 6 ECS 1/1, 6 DNS resolve. Relays relaunched ~08:00 UTC (new IPs
+  us1 10.0.29.23 / eu1 10.1.86.70 / ap1 10.2.126.254). S3 relay manifest is CURRENT (v54, re-signed
+  07:59:56 UTC); endpoints are stable `wss://` DNS URLs, so **no manual manifest re-sign needed**.
+- **Problem 1 status:** shipped `97bc68c9` → deployed all 3 regions → code-review passed → gate green
+  (typecheck/lint/build/673 unit) → spine assertion added. High confidence. The remaining item is a
+  **live end-to-end confirmation** (fresh agent registers → non-coordinator eu1/ap1 log
+  `directory.dkg.participant.signer.registered`, and/or a session-initiate via a non-coordinator succeeds).
+  That needs a fresh registration against the LIVE federated cluster (signed consortium manifest +
+  capability + daemon) — involved. Prereqs: recreate `scratchpad/mint-capability.mjs` (content is in the
+  git history of the earlier session / the m8b design doc), issuer seed reachable, crypto dist built.
+- **⛔ LOOP BLOCKED:** the substantive remaining work — Problem 2 (quorum registration) — is blocked on
+  Andre's design decision (how Q is determined + agreed). Problem 1's live proof is non-blocking and
+  finicky. **Nothing further advances autonomously until Andre pins the Problem 2 design.** Not burning
+  cron ticks on a fragile live registration that gates nothing.
