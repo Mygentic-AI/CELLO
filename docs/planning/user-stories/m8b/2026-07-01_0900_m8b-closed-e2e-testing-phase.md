@@ -84,8 +84,8 @@ Evidence:
 | 1 | **Basic session + messaging** | ✅ PASS | Proven by Scenario 0 |
 | 7 | **cello_get_transcript** | ✅ PASS | Both agents retrieved matching transcripts |
 | 8 | **cello_get_inclusion_proof** | ❌ NOT IMPLEMENTED | Tool returns `not_implemented` — cryptographic machinery exists but MCP tool not wired |
-| 9 | **Node down during DKG** | ⬜ not tested | Stop one directory ECS task, register a new agent — should complete via T-of-N |
-| 10 | **Node down during seal** | ⬜ not tested | Stop one directory, seal active session — should still seal |
+| 9 | **Node down during DKG** | ✅ ADDRESSED + SPINE-VERIFIED (M8B Problem 2, 2026-07-04) | Was the **all-N registration gap**: a node down → registration REFUSED (never completed). Now registers among the available quorum Q (Q ≥ t). Spine GREEN (`j-tofn-dkg`, real 3 nodes): kill 1 of 3 → registers among the 2-node quorum. Deployed all 3 regions (`bb02899`), client beta `v0.0.69`. Live-AWS demo pending (dev N=3 needs t=2 / cluster N>3 — optional). See results journal + [[2026-07-04_0556_tofn-registration-availability-quorum-enrollment-plan]]. |
+| 10 | **Node down during seal** | ⚠️ CODE-ADDRESSED, not live-verified | Seal now targets the recorded quorum Q (persist-Q); survive-node-down is DOD-SIGN-1 (`j-sign`) + exclude-and-retry. A live seal by a quorum-registered agent WITH a directory down still to run. |
 | 11 | **Share refresh** | ⬜ not tested | `cello refresh` against live cluster, then seal post-refresh |
 | 12 | **Any-directory (non-us-east-1)** | ⬜ not tested | Initiate session resolving to eu-central-1 or ap-northeast-1 |
 | 13 | **Cross-node presence** | ⬜ not tested | Query presence from a non-home directory |
