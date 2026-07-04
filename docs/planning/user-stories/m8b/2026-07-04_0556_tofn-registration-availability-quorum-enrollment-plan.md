@@ -371,3 +371,13 @@ promotion.** Proceeding with `majority` on beta; will not promote to latest with
   non-blocking, finicky; left for a focused moment.
 - **Sprint A fully blocked on Andre** for Problem 2's Q-determination design. No autonomous work remains
   that isn't blocked (Problem 2) or non-gating-and-finicky (Problem 1 live-AWS e2e).
+
+### 2026-07-04 — #1 (persist-Q) IMPLEMENTED + tested
+
+- Fix committed (cello-client): `agents.frost_directory_node_ids` (nullable) + additive ALTER migration;
+  persist Q's nodeIds at registration; `hydrateShareAndStubs` filters the seal roster to Q (full-roster
+  fallback when absent / all-vanished). Both persistence backends (DB store + legacy file) carry the field.
+- Gate: typecheck ✅, eslint ✅, **521 daemon unit tests ✅ (no regression)**, new migration test ✅ (2/2:
+  ALTER on a pre-quorum DB + idempotent + fresh-DB-via-CREATE). Post-restart quorum seals now target holders.
+- Review of #1 running. Then: publish cello-client beta → bump trustless-cello ref → verify. #2 (majority
+  threshold) still gates the `latest` promotion — Andre's sign-off.
