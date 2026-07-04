@@ -21,6 +21,10 @@ prospective customer, or can they forgive it? Numbering follows the priority lis
   **discrete coding session**: portal suspend → directories refuse to sign → unsuspend → signing resumes.
   Spine test `j-suspend-tofn` exists as the harness anchor.
 
+- **FINDING-6 — verify absent party B's unilateral receipt, BEFORE launch** (DECIDED 2026-07-04). Code is
+  shipped (cascade-2, daemon 0.0.24) but never live-verified: the party whose counterparty vanished (B) must
+  be able to retrieve its sealed receipt after reconnecting (`cello_get_sealed_receipt(B)`). Small — a live
+  verification, not a build — but it gates launch because a receipt you can't retrieve defeats the point.
 - **F4 — session-ID legibility on the receipt lookup** (DECIDED 2026-07-04). Do BOTH: (1) **never truncate**
   session IDs on `cello_list_sessions` + `cello status` (the copy-from surfaces), so what you see pastes back;
   (2) **split** `sealed_receipt_not_found` into `session_id_too_short` / `unknown_session` / `wrong_agent` /
@@ -60,6 +64,25 @@ prospective customer, or can they forgive it? Numbering follows the priority lis
   verification; customers don't need to call it day-1. (Hide it now — item 7 — build later.)
 - **11 — F19** (document the app-vs-daemon signing split so operators don't mis-reason "I stopped it so it's
   offline") and **F21** (give a stuck one-sided seal a clear terminal reason; core bug already fixed).
+
+## Tracked elsewhere — cross-referenced here so it isn't lost
+
+- **FINDING-8 — a non-home directory can't serve a freshly-registered agent's session until it restarts**
+  (in-memory profile map is boot-populated only). Problem 1 fixed the *signer* half; the *profile* half is
+  the **absent-node reconcile**, deferred to **Sprint B** (tracked in `.claude/CLAUDE.md` deferrals + the
+  T-of-N plan `2026-07-04_0556_...`). Listed here belt-and-suspenders so it isn't lost between docs.
+
+## Verdict pending
+
+- **FINDING-9 — session/seal after a directory FAILOVER is unproven (and a harness run failed).** Signaling
+  fails over, but a NEW session on the survivor got the far agent stuck `target_offline` (presence didn't
+  re-propagate). Verdict pending Andre after the flow walkthrough (2026-07-04). Relates to #13 + FINDING-8.
+
+## Out of scope — explicitly excluded (not silently dropped)
+
+- **F8 — `claude mcp get` flakiness** is a Claude Code CLI issue, **not CELLO**. Nothing for us to fix.
+- **#3 — stranger flow** (two truly-independent operators) is deferred to the **Hermes device** — one
+  machine can't run two independent operators. Out of the launch backlog by design.
 
 ## Already decided earlier (context)
 
