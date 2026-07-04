@@ -186,12 +186,37 @@ Checked the code before writing anything. The refuse gate (`roster.length !== pa
 
 This is cross-repo (directory decides Q + client honors it) and touches the `dkg_ready` semantics. Bigger than "MEDIUM."
 
+### ✅ Q-DETERMINATION DESIGN — PINNED 2026-07-04 (Andre)
+
+**Decided:** the client is the DKG driver (it exchanges every round directly with each directory), so the
+client's reachability is what matters. Mechanism — client proposes reachable set, directory disposes:
+
+1. Client computes **R** = the directories it can actually reach right now.
+2. Client sends R to its home directory (with register_request).
+3. Home directory picks **Q ⊆ R**, enforcing: **Q > T** (strict — redundancy from day one) AND every node
+   in the signed manifest; assigns each node its FROST slot.
+4. Directory broadcasts the agreed Q (node list + slots + threshold) to the client + participating
+   directories (extend `dkg_ready`).
+5. Client runs the DKG to exactly Q on the assigned slots.
+6. Q recorded as the agent's share-holder set; seal signer-selection targets Q (Finding B).
+
+**Floor:** Q > T. If the reachable set can't yield Q > T → refuse (needs ≥ T+1 reachable).
+**Implementation note:** pin the threshold arithmetic — the client itself is one signer, so confirm whether
+"T" for the floor is the full FROST threshold or the directory-share count (dev manifest is
+participants:3/threshold:3 = client + any 2 of 3 dirs). Nail during SPARC before coding.
+**Scope:** cross-repo + a wire change (register_request carries R; dkg_ready carries the Q node list/slots,
+not just counts) → both repos + version bump + publish + directory deploy.
+
+<details><summary>Original open questions (now answered)</summary>
+
 **⚠️ OPEN DESIGN DECISION (needs Andre — do NOT invent a protocol unilaterally):** how is Q determined and agreed?
 - Who computes Q — the coordinator directory (from who it can reach), or the client (from its resolved+reachable roster)?
 - How do both sides converge on the identical set + identifiers (e.g. coordinator probes the consortium, picks Q, echoes the exact node list + identifiers in `dkg_ready`; client validates against its own manifest and uses that list)?
 - Quorum floor: register if available ≥ ? In dev N=3/T=3 (client + any 2 of 3 dirs), directory-signers needed = 2, so floor = 2 dirs; but Q>T for redundancy means all 3 in dev — quorum only really helps at N>3. Confirm the floor + whether dev exercises it at all.
 
-**Status: Problem 2 BLOCKED on this design decision.** Problem 1 is shipped and independent. Recommend pinning the Q-determination mechanism (a short design session) before TDD on Problem 2. Not proceeding on guesswork — a wrong guess here is a broken DKG protocol.
+</details>
+
+**Status: Problem 2 UNBLOCKED 2026-07-04 — design PINNED above (directory picks Q ⊆ the client's reachable R; floor Q > T). Ready for SPARC + TDD; cross-repo + a `register_request`/`dkg_ready` wire change.**
 
 ### 2026-07-04 — Problem 1 auto-deploying; live-proof plan
 
