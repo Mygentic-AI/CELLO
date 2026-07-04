@@ -2465,21 +2465,42 @@ export class CelloDirectoryNode {
     }
 
     const epochId = `${frame.k_local_pubkey}:epoch:1`;
-    // DOD-DKG-1: derive the DKG topology from THIS directory's verified consortium manifest
-    // (topology consensus — neither the client nor any single node dictates N; the officer-
-    // signed manifest is the tamper-proof source). N = the manifest's node count; an absent or
-    // single-node manifest → the single-node 2-of-2 (M6/M7 back-compat).
-    const consortiumNodeCount = this.#directoryManifestStore?.getCurrentManifest()?.nodes.length ?? 1;
-    // Fork B threshold: N=1 keeps 2-of-2 (both mandatory); N≥2 → T=N (= max−1: client + any
-    // N−1 directory nodes; tolerates exactly ONE directory outage at SIGNING time; no single
-    // directory node mandatory). `participants` is the directory-node count — runNetworkDkg adds
-    // the client as +1, so FROST max = participants+1. DKG itself still needs all N+1 present.
-    const dkgParticipants = consortiumNodeCount;
-    const dkgThreshold = consortiumNodeCount === 1 ? 2 : consortiumNodeCount;
+    // DOD-DKG-1 + M8B quorum: derive the DKG topology from THIS directory's verified consortium manifest
+    // (topology consensus — the officer-signed manifest is the tamper-proof source of N). The client
+    // reports the nodeIds it can reach (register_request.reachable_node_ids = R); the DKG quorum is
+    // Q = R ∩ manifest, and we register among Q (+ client) with T = majority(N). So registration
+    // survives (N − |Q|) directory outages, and the agent seals with any T of Q+1. Absent R (older
+    // client / no manifest) → Q = all manifest nodes (all-N back-compat). Single-node manifest → 2-of-2.
+    const manifestNodes = this.#directoryManifestStore?.getCurrentManifest()?.nodes ?? [];
+    const consortiumNodeCount = manifestNodes.length || 1;
+    const reachableNodeIds = (frame as unknown as Record<string, unknown>)["reachable_node_ids"] as
+      | string[]
+      | undefined;
+    const manifestNodeIds = manifestNodes.map((n) => n.nodeId);
+    const quorumNodeIds =
+      reachableNodeIds !== undefined
+        ? manifestNodeIds.filter((id) => reachableNodeIds.includes(id))
+        : manifestNodeIds;
+    // T = majority(N): N=1 keeps 2-of-2 (single-node back-compat); N≥2 → floor(N/2)+1. T counts the
+    // client (runNetworkDkg adds it as +1), so directory signatures needed = T−1.
+    const dkgThreshold = consortiumNodeCount === 1 ? 2 : Math.floor(consortiumNodeCount / 2) + 1;
+    const dkgParticipants = quorumNodeIds.length;
+    // Floor: |Q| ≥ T. Too few reachable directories ⇒ refuse rather than DKG a below-quorum group.
+    if (consortiumNodeCount > 1 && dkgParticipants < dkgThreshold) {
+      this.#logger?.warn("directory.dkg.below_quorum", {
+        agent: truncHex(frame.k_local_pubkey),
+        reachable: dkgParticipants,
+        threshold: dkgThreshold,
+        manifestNodes: consortiumNodeCount,
+      });
+      this.#pendingPreAuthData.delete(frame.k_local_pubkey);
+      this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "dkg_failed" }));
+      return;
+    }
     // OBS-001 AC-004: DKG begin log
     protocolLog(
       "REG",
-      `DKG begin — agent ${truncHex(frame.k_local_pubkey)}, ${dkgParticipants} directory nodes, threshold ${dkgThreshold}`,
+      `DKG begin — agent ${truncHex(frame.k_local_pubkey)}, ${dkgParticipants} of ${consortiumNodeCount} directory nodes (quorum), threshold ${dkgThreshold}`,
     );
     this.#sendFrame(stream, encodeDkgReady({
       type: "dkg_ready",
