@@ -461,7 +461,13 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     const k_local_pubkey = typeof o["k_local_pubkey"] === "string" ? o["k_local_pubkey"] : null;
     const ml_dsa_pubkey = typeof o["ml_dsa_pubkey"] === "string" ? o["ml_dsa_pubkey"] : null;
     if (phone_stub === null || k_local_pubkey === null || ml_dsa_pubkey === null) return null;
-    return { type: "register_request", phone_stub, k_local_pubkey, ml_dsa_pubkey };
+    // M8B quorum: this typed allowlist decoder drops any field it doesn't explicitly reconstruct, so
+    // the client's reachable nodeIds (R) must be carried through here or #processRegisterRequest's
+    // pick-Q logic never sees it (and falls back to all-N, refusing when any node is down).
+    const reachable_node_ids = toStringArray(o["reachable_node_ids"]);
+    const frame = { type: "register_request", phone_stub, k_local_pubkey, ml_dsa_pubkey } as Record<string, unknown>;
+    if (reachable_node_ids) frame["reachable_node_ids"] = reachable_node_ids;
+    return frame as unknown as InboundSignalingFrame;
   }
 
   if (o["type"] === "dkg_complete") {
