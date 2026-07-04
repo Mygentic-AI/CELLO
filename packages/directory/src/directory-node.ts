@@ -2472,6 +2472,9 @@ export class CelloDirectoryNode {
     // survives (N − |Q|) directory outages, and the agent seals with any T of Q+1. Absent R (older
     // client / no manifest) → Q = all manifest nodes (all-N back-compat). Single-node manifest → 2-of-2.
     const manifestNodes = this.#directoryManifestStore?.getCurrentManifest()?.nodes ?? [];
+    // No consortium manifest → single-node back-compat (M6/M7): 1 directory, 2-of-2. The quorum logic
+    // only applies when a manifest with nodes exists (else quorumNodeIds is [] and participants would be 0).
+    const hasManifest = manifestNodes.length > 0;
     const consortiumNodeCount = manifestNodes.length || 1;
     const reachableNodeIds = (frame as unknown as Record<string, unknown>)["reachable_node_ids"] as
       | string[]
@@ -2484,7 +2487,8 @@ export class CelloDirectoryNode {
     // T = majority(N): N=1 keeps 2-of-2 (single-node back-compat); N≥2 → floor(N/2)+1. T counts the
     // client (runNetworkDkg adds it as +1), so directory signatures needed = T−1.
     const dkgThreshold = consortiumNodeCount === 1 ? 2 : Math.floor(consortiumNodeCount / 2) + 1;
-    const dkgParticipants = quorumNodeIds.length;
+    // Manifest present → the quorum size |Q|; no manifest → the single primary directory (2-of-2).
+    const dkgParticipants = hasManifest ? quorumNodeIds.length : 1;
     // Floor: |Q| ≥ T. Too few reachable directories ⇒ refuse rather than DKG a below-quorum group.
     if (consortiumNodeCount > 1 && dkgParticipants < dkgThreshold) {
       this.#logger?.warn("directory.dkg.below_quorum", {
