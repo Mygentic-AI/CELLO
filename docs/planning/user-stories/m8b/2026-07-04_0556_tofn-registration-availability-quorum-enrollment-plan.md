@@ -172,4 +172,23 @@ handler, so it can't cover Problem 1.)
   replication while up) + the live node-down proof (needs a directory build/deploy — batch with Problem 2's
   directory changes to avoid a second 25-30 min deploy).
 
-Problem 2 (cello-client quorum + share-holder-set targeting) follows Problem 1.
+### 2026-07-04 — Problem 2 spec: it's a coordinated client+directory protocol, NOT a one-line client change ⚠️ DESIGN DECISION NEEDED
+
+Checked the code before writing anything. The refuse gate (`roster.length !== participants` → `dkg_below_threshold`, registration-manager.ts) is a symptom, not the lever:
+
+- `participants` (N) and `threshold` (T) arrive in the **directory's `dkg_ready` frame** (registration-manager.ts:245-246) — the directory derives them from its OWN verified manifest.
+- `runNetworkDkg` is set up as **T-of-participants**. If the client just stops refusing and proceeds with a smaller roster, the DKG is still configured for N participants but only Q show up → the FROST polynomial is built for N identifiers, the ceremony breaks.
+
+**So a real quorum registration requires:**
+1. **Coordinator directory** determines the reachable quorum Q at ceremony time and sends `participants = Q` (Q ≥ T), not N-from-manifest.
+2. **Client** uses that Q — fans the DKG to exactly those Q nodes and records them as the share-holder set.
+3. **Every participant + the client must agree on the EXACT SAME Q set** (same nodes AND their FROST participant identifiers — the shares are points at specific identifiers; disagreement = broken DKG).
+
+This is cross-repo (directory decides Q + client honors it) and touches the `dkg_ready` semantics. Bigger than "MEDIUM."
+
+**⚠️ OPEN DESIGN DECISION (needs Andre — do NOT invent a protocol unilaterally):** how is Q determined and agreed?
+- Who computes Q — the coordinator directory (from who it can reach), or the client (from its resolved+reachable roster)?
+- How do both sides converge on the identical set + identifiers (e.g. coordinator probes the consortium, picks Q, echoes the exact node list + identifiers in `dkg_ready`; client validates against its own manifest and uses that list)?
+- Quorum floor: register if available ≥ ? In dev N=3/T=3 (client + any 2 of 3 dirs), directory-signers needed = 2, so floor = 2 dirs; but Q>T for redundancy means all 3 in dev — quorum only really helps at N>3. Confirm the floor + whether dev exercises it at all.
+
+**Status: Problem 2 BLOCKED on this design decision.** Problem 1 is shipped and independent. Recommend pinning the Q-determination mechanism (a short design session) before TDD on Problem 2. Not proceeding on guesswork — a wrong guess here is a broken DKG protocol.
