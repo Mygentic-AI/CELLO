@@ -392,3 +392,17 @@ promotion.** Proceeding with `majority` on beta; will not promote to latest with
 - Directory changes already deploying via the pipeline (majority(N) + decoder fix + pick-Q).
 - **After beta verified:** update trustless-cello protocol-types ref → verify directory deploy + 6 ECS 1/1
   → ping Andre. `latest` promotion held for Andre's #2 (majority-threshold) sign-off.
+
+### 2026-07-04 — BETA PUBLISHED + VERIFIED; directory deploy failed → fixed
+
+- **Beta publish VERIFIED against the binary:** daemon@0.0.28 tarball contains `reachable_node_ids` +
+  `frost_directory_node_ids`; cross-pins real (cli→daemon 0.0.28, connect→client 0.0.43, crypto 0.0.15);
+  smoke-tag GREEN. Tag v0.0.69. Client side shipped to beta.
+- **Directory pipeline FAILED** (Build → directory unit tests): my quorum change broke the single-node
+  back-compat — no manifest ⇒ manifestNodes=[] ⇒ quorumNodeIds=[] ⇒ participants=0, but consortiumNodeCount
+  falls back to 1 ⇒ threshold=2 ⇒ invalid FROST signers {min:2,max:1} (13 registration tests). **Process
+  miss:** I ran typecheck + the spine but NOT the directory PACKAGE tests before pushing — CI caught it.
+  Fixed (`hasManifest` guard; no-manifest ⇒ participants=1, 2-of-2). 673 directory tests green.
+  Re-pushed `bb028997` → pipeline InProgress.
+- **Next:** monitor deploy → relay cascade → 6 ECS 1/1 → STATE.md → ping Andre (#2 majority-threshold
+  sign-off gates `latest`).
