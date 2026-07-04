@@ -277,11 +277,17 @@ this design change; tracked as its own cleanup.
    (the redundancy property FINDING-4 unlocked).
 4. Re-present the same capability → assert single-use rejection (`NONCE_ALREADY_BOUND`) at every node.
 
-## 13. Status — ✅ SHIPPED + LIVE-VERIFIED (2026-07-03)
+## 13. Status — ⚠️ PARTIAL: capability core shipped; availability property (§9) NOT built
 
-Implemented and deployed to all 3 regions. The §7 core (signed capability + local bind-to-agent
-single-use) is done; the §9 enrollment/quorum piece is deferred (registration still uses all-N DKG,
-which the live test exercised).
+The §7 capability core (signed pre-auth capability + local bind-to-agent single-use) is implemented,
+deployed to all 3 regions, and live-verified. **But the core availability property this design exists
+for — §9 quorum registration + enrollment — is NOT built.** Registration still uses **all-N DKG and
+requires every node to be up** (it refuses if any node is down), which is exactly what R5/§9 argue
+against. The 2026-07-03 live run had all nodes up, so the node-down case was never exercised.
+
+Do not read this as "T-of-N registration is done." Signing/sealing redundancy (survive a node down
+*after* registration) works; **registration availability does not**. Corrected 2026-07-04. Fix plan:
+[[2026-07-04_0556_tofn-registration-availability-quorum-enrollment-plan]].
 
 **Shipped:**
 - crypto `signCapability`/`verifyCapability`/`encode`/`decode` (published crypto 0.0.15, 13 tests).
@@ -292,8 +298,9 @@ which the live test exercised).
 - Infra: dedicated Ed25519 issuer key in Secrets Manager (`cello/dev/preauth/issuer-key`), pubkey pinned
   in SSM (`16c9596…`), CFN env vars + IAM grant, deployed via deploy.sh.
 
-**Live verification PASSED:** a fresh agent (`capX`) registered via a signed capability — the DKG fanned
-across all 3 directories, shares persisted, `registration.succeeded` (exactly what FAILED with the token).
+**Live verification (all 3 nodes up — node-down NOT tested):** a fresh agent (`capX`) registered via a
+signed capability — the DKG fanned across all 3 directories (all-N), shares persisted,
+`registration.succeeded` (exactly what FAILED with the token).
 Single-use enforced: the same capability for a different agent (`capY`) was rejected with
 `directory.auth.nonce.conflict`.
 
