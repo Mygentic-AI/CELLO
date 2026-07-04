@@ -94,3 +94,22 @@ Outcome: register with nodes down, and any node that took part can serve — the
 ## Process rule (why this kept happening)
 
 A redundancy feature is **not done until the node-down case is the test that proves it**. No green checkmarks on the happy path alone. The original milestone was marked done on an all-nodes-up run; the deferral was a footnote under a "shipped" banner.
+
+---
+
+## Implementation log
+
+### 2026-07-04 — Sprint A started (cron `f67c5cd6` driving, 30-min cadence)
+
+**Problem 1 — spec ready, entry points located. Next: write the red test.**
+
+The fix is bookkeeping, not crypto: on every DKG participant the round-3 handler must do what only the coordinator does today — register the in-memory signer and write the agent's identity row — using values it already holds at round 3.
+
+- **Where the coordinator does it (to mirror onto every participant):** `#processRegisterRequest` calls `registerThresholdSigner` (directory-node.ts:2517) and `setProfile` (directory-node.ts:2595). Only the node that fields `register_request` runs this.
+- **Where every participant already has the data:** the round-3 handler (directory-node.ts:~1471-1503) already parks the group key via `#pendingDkgCommitments.set(agentPubkey, shareCommitment)` (directory-node.ts:1489), and the share is stored in `frost-handler.ts` round3. So `k_local_pubkey = agentPubkey`, `primary_pubkey = shareCommitment` (the locally-derived group key), share already persisted — everything `setProfile`/`registerThresholdSigner` need.
+- **The change:** in the round-3 handler, after the share is stored, also write the profile + register the in-memory signer (idempotent; the coordinator path can then no-op or stay as-is).
+- **Reconcile sub-item:** a node that received the identity only via replication after boot — small "load missing active profiles" path. If non-trivial, land it as a separate follow-up within Sprint A (note here), don't expand scope.
+
+**Red test to write first:** extend `src/__tests__/e2e-003-frost-handler-network.test.ts` (or `directory-node.test.ts`) — drive DKG rounds on a participant node that does NOT receive `register_request`; assert the agent appears in `#thresholdSigners` (`getThresholdSignerForTest`) and has a profile (`getProfile`) afterward. It should fail on current code. Extend the existing harness / `session-fixture.ts`; no from-scratch fixture.
+
+Problem 2 (cello-client quorum + share-holder-set targeting) follows Problem 1.
