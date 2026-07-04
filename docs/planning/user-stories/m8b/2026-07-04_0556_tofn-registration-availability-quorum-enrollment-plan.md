@@ -270,6 +270,21 @@ not just counts) → both repos + version bump + publish + directory deploy.
   (/cello-publish) → bump trustless-cello protocol-types ref → deploy directory → relay cascade → STATE.md.
   Then persistence-of-Q check. If RED: fix impl, not the test.
 
+### 2026-07-04 — spine run 1: baseline GREEN, quorum RED → root-caused + fixed
+
+- **Baseline (all 3 up) GREEN** — directory logs "3 of 3 … (quorum), threshold 2" (majority). Directory
+  quorum code works.
+- **Quorum kill-one RED** — `dkg_below_threshold`. Root cause (confirmed from code, not guessed): the
+  directory's `decodeInboundSignalingFrame` (directory-frames.ts) is a **typed allowlist decoder** that
+  reconstructs only known fields and drops the rest — it dropped `reachable_node_ids`, so the directory
+  saw no R → fell back to all-N (Q = full manifest, participants=3) → the client's 2-node roster ≠ 3 →
+  refused. **Fixed** (carry `reachable_node_ids` through the decoder) + committed. Confirmed the compiled
+  dist was fresh (not a staleness artifact) before concluding it was a real bug.
+- **Build gotcha:** `pnpm -r build` fails (no per-package `build` script); the build is `pnpm build`
+  (root = `tsc --build`) for cello-client, and `… run typecheck` (tsc --build emits dist) for the
+  directory. First run built nothing; the directory dist was fresh only from an earlier typecheck.
+- Rerun (correct build) = `b19gfgcaf` → `scratchpad/spine-p2-verify2.log`.
+
 <details><summary>Original open questions (now answered)</summary>
 
 **⚠️ OPEN DESIGN DECISION (needs Andre — do NOT invent a protocol unilaterally):** how is Q determined and agreed?

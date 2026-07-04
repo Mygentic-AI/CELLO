@@ -122,7 +122,8 @@ describe("J-TOFN-DKG — multi-node 2-of-3 FROST DKG (DOD-DKG-1)", () => {
     // threshold 3 (the DoD's "2-of-3": client + any 2 of 3 directory nodes).
     const dkgBeginLine =
       cluster.directories[0].output.split("\n").find((l) => l.includes("DKG begin")) ?? "(no DKG begin line)";
-    expect(dkgBeginLine, `primary DKG topology:\n${dirDkgLogs}`).toMatch(/3 directory nodes, threshold 3/);
+    // M8B quorum: with all 3 up the quorum is all 3; T = majority(3) = 2 (was all-N t=3).
+    expect(dkgBeginLine, `primary DKG topology:\n${dirDkgLogs}`).toMatch(/3 of 3 directory nodes \(quorum\), threshold 2/);
 
     // ALL 3 directory nodes ran the DKG ceremony — each received a FROST stream and ran round 1.
     // A single-node DKG (the thing replaced) would touch only the primary.
@@ -145,6 +146,61 @@ describe("J-TOFN-DKG — multi-node 2-of-3 FROST DKG (DOD-DKG-1)", () => {
         `non-coordinator directory ${i} must register the agent's signer at round 3 (FINDING-8):\n${signerLogs}`,
       ).toMatch(/directory\.dkg\.participant\.signer\.registered/);
     }
+  }, 120_000);
+
+  it("quorum: kill one directory → registration still succeeds among the 2-node quorum (T=majority(3)=2)", async () => {
+    // M8B Problem 2: kill directory index 2 (a NON-signaling node — the daemon connects to directory 0).
+    // A fresh agent's client resolves only the 2 live nodes (R = 2), reports them, and the coordinator
+    // registers among Q=2 with T=majority(3)=2. Under the old all-N code this REFUSED (dkg_below_threshold).
+    await cluster.directories[2].kill();
+    await sleep(1500);
+
+    const celloDir = mkdtempSync(join(tmpdir(), "cello-quorum-"));
+    agentDirs.push(celloDir);
+    const name = "quorumagent";
+    await provisionAgent(celloDir, name);
+    const manifestEnv = writeConsortiumManifest(
+      celloDir,
+      name,
+      [0, 1, 2].map((i) => spineDirectoryNode(i, cluster.directoryUrls[i])),
+    );
+    const daemon = await startDaemon(celloDir, cluster.directoryUrls[0], name, { manifestEnv });
+    daemons.push(daemon);
+    const env = { CELLO_DIR: celloDir };
+
+    let connected = false;
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      const r = cello(["status"], env);
+      try {
+        if ((JSON.parse(r.stdout.trim()) as { directory_signaling?: string }).directory_signaling === "connected") {
+          connected = true;
+          break;
+        }
+      } catch {
+        /* not JSON yet */
+      }
+      await sleep(250);
+    }
+    expect(connected, `signaling never connected\n${daemon.output.split("\n").slice(-30).join("\n")}`).toBe(true);
+
+    const token = `DEV-quorum-${randomBytes(6).toString("hex")}`;
+    const res = cello(["register", name, token], env);
+    expect(
+      res.status,
+      `quorum register failed (a node is down — should still register among the quorum): ${res.stdout}\n${daemon.output.split("\n").slice(-40).join("\n")}`,
+    ).toBe(0);
+    const parsed = JSON.parse(res.stdout.trim()) as { ok?: boolean; primary_pubkey?: string };
+    expect(parsed.ok, `quorum register not ok: ${res.stdout}`).toBe(true);
+    expect(parsed.primary_pubkey, "quorum DKG must produce a group key").toMatch(/^[0-9a-f]{64}$/);
+
+    await sleep(2000);
+    // The DKG ran among the 2-node quorum (dir 2 dead), threshold majority(3)=2. Take the latest DKG begin.
+    const dkgBeginLines = cluster.directories[0].output.split("\n").filter((l) => l.includes("DKG begin"));
+    const dkgBeginLine = dkgBeginLines[dkgBeginLines.length - 1] ?? "(no DKG begin line)";
+    expect(dkgBeginLine, `quorum DKG topology:\n${dkgBeginLines.join("\n")}`).toMatch(
+      /2 of 3 directory nodes \(quorum\), threshold 2/,
+    );
   }, 120_000);
 
   // The below-threshold REFUSAL gate (resolved roster < the directory's declared N ⇒
