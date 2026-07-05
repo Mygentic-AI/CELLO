@@ -93,18 +93,20 @@ describeLive("PRESENCE-001 — agent_presence repository + read rule (real schem
     expect(agents[0].lastSeenAt).toBeInstanceOf(Date);
   });
 
-  it("AC-003: node-liveness guard — a dark node ages the agent out to last-seen", async () => {
+  it("Option A (2026-07-05): a stale owning-node heartbeat NO LONGER darkens the agent — online is trusted", async () => {
     await upsertPresenceOnline(client, KPUB_A, NODE_X);
     expect((await readAgents())[0].online).toBe(true);
 
-    // Node X goes dark (stale heartbeat) WITHOUT a clean disconnect — the row still says online.
+    // Node X's heartbeat goes stale (the row still says online). Under the OLD READ-001 dark-node rule
+    // this aged the agent to offline — but that gate is cross-node-unreliable (directory_nodes
+    // heartbeats don't replicate), so it darkened every live REMOTE agent. Option A trusts ap.online.
     await client.query(
       `UPDATE directory_nodes SET last_heartbeat_at = now() - interval '1 hour' WHERE node_id = $1`,
       [NODE_X],
     );
     const agents = await readAgents();
-    expect(agents[0].online).toBe(false); // read rule: online row but stale node → not online
-    expect(agents[0].lastSeenAt).not.toBeNull(); // surfaces as last-seen
+    expect(agents[0].online).toBe(true); // Option A: trust the replicated online flag, ignore heartbeat freshness
+    expect(agents[0].lastSeenAt).not.toBeNull();
   });
 
   it("AC-004: sovereign write-ownership — only the owning node can flip the row", async () => {

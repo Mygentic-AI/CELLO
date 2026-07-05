@@ -164,6 +164,14 @@ export async function listAccountAgentsWithPresence(
   accountId: string,
   nodeFreshnessMs: number,
 ): Promise<AgentWithPresence[]> {
+  // CROSS-NODE LIVENESS (2026-07-05, Option A — mirrors resolveDiscoveryState): trust the replicated
+  // ap.online flag; do NOT gate on the owning node's directory_nodes heartbeat freshness. That gate is
+  // structurally unreliable cross-node (directory_nodes heartbeats don't replicate — BIGSERIAL id
+  // collision), so for a remote-homed owning node dn.last_heartbeat_at is NULL and the AND darkened
+  // every live remote agent → the portal showed a user's working agent as OFFLINE. Dropping the
+  // conjunct keeps this surface consistent with discovery. nodeFreshnessMs is now unused (kept in the
+  // signature for call-site/test stability).
+  void nodeFreshnessMs;
   const res = await db.query<{
     k_local_pubkey: string;
     agent_id: string | null;
@@ -176,20 +184,16 @@ export async function listAccountAgentsWithPresence(
   }>(
     `SELECT ag.k_local_pubkey,
             ag.agent_id,
-            COALESCE(
-              ap.online AND dn.last_heartbeat_at > now() - ($2::bigint * interval '1 millisecond'),
-              false
-            ) AS online,
+            COALESCE(ap.online, false) AS online,
             ap.last_seen_at,
             COALESCE(sus.paused, false) AS paused,
             COALESCE(sus.burned, false) AS burned
        FROM agent_profiles ag
        LEFT JOIN agent_presence ap ON ap.k_local_pubkey = ag.k_local_pubkey
-       LEFT JOIN directory_nodes dn ON dn.node_id = ap.owning_node_id
        LEFT JOIN agent_suspensions sus ON sus.agent_id = ag.agent_id
       WHERE ag.account_id = $1
       ORDER BY ag.k_local_pubkey`,
-    [accountId, nodeFreshnessMs],
+    [accountId],
   );
   return res.rows.map((r) => ({
     kLocalPubkey: r.k_local_pubkey,

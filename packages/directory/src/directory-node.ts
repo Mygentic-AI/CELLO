@@ -2973,8 +2973,11 @@ export class CelloDirectoryNode {
    *  - a DB error ⇒ discovery_lookup_error{reason:"lookup_failed"} (retryable) — NEVER a fabricated
    *    offline/unknown_agent, and NEVER a stream abort (this is the agent's home inbound; killing it
    *    over a read hiccup is disproportionate).
-   *  - the dark-node case (online row, stale owning-node heartbeat) collapses to `offline` on the
-   *    wire; the distinction survives only in the log (reason:"owning_node_dark").
+   *  - the stale-heartbeat case (online row, stale/missing owning-node heartbeat) is now TRUSTED as
+   *    `online` on the wire (2026-07-05 decision, Option A — see discovery-lookup.ts). The client's
+   *    bounded re-discover→retry is the liveness authority; a genuinely-dead node surfaces client-side
+   *    as terminal `counterparty_offline`, which is the discriminating signal (the directory-side
+   *    staleHeartbeat flag fires for every remote-homed online agent and is NOT a dead-node detector).
    */
   async #processDiscoveryLookup(stream: Stream, targetHex: string, targetPubkey: Uint8Array): Promise<void> {
     const correlationId = randomBytes(8).toString("hex");
@@ -2988,8 +2991,11 @@ export class CelloDirectoryNode {
         target: targetHex.slice(0, 16),
         state: decision.state,
         owningNode: decision.owningNodeIds[0] ?? null,
-        // online but the owning node's heartbeat is stale/missing — we trust it anyway (advisory +
-        // dial-retry). Grep this to spot a genuinely-dark node we're optimistically reporting online.
+        // online but the owning node's heartbeat is not fresh in THIS node's (replicated) view — we
+        // trust the online flag anyway (advisory + dial-retry). NOTE: this fires for ~every remote-
+        // homed online agent (directory_nodes heartbeats don't replicate cross-node), so it is NOT a
+        // dead-node detector — the real signal is the client's terminal counterparty_offline after
+        // cross-node retry exhaustion. Kept as a lightweight breadcrumb only.
         reason: decision.staleHeartbeat ? "owning_node_stale_heartbeat_trusted" : undefined,
         correlationId,
       });
