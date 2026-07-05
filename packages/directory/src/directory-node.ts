@@ -2988,7 +2988,9 @@ export class CelloDirectoryNode {
         target: targetHex.slice(0, 16),
         state: decision.state,
         owningNode: decision.owningNodeIds[0] ?? null,
-        reason: decision.darkNode ? "owning_node_dark" : undefined,
+        // online but the owning node's heartbeat is stale/missing — we trust it anyway (advisory +
+        // dial-retry). Grep this to spot a genuinely-dark node we're optimistically reporting online.
+        reason: decision.staleHeartbeat ? "owning_node_stale_heartbeat_trusted" : undefined,
         correlationId,
       });
       this.#sendFrame(stream, encodeDiscoveryLookupResult({
