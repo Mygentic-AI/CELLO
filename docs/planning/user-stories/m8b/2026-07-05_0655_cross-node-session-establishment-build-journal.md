@@ -175,6 +175,26 @@ npm i -g @cello-protocol/cli@0.0.27 @cello-protocol/connect@0.0.56
 ```
 `latest` promotion PENDING Andre's go (do AFTER Story C passes): `npm dist-tag add @cello-protocol/connect@0.0.56 latest` + cli@0.0.27 (+ transitive).
 
+## 🔴 STORY C LIVE — CRITICAL ROOT CAUSE (2026-07-05): presence never records the region node id
+
+**Symptom:** with the new client (daemon 0.0.29), `cello_initiate_session` (Agent-1 us1 → demo) returns `counterparty_offline` for BOTH a us1-homed and an ap1-homed demo. Directory log: `directory.discovery.lookup state:offline owningNode:null reason:"owning_node_dark"`; `directory.presence.transition owningNodeId:"12D3KooWS46w…"` (the us1 **libp2p peer id**, not "us-east-1").
+
+**Root cause (pre-existing bug my discover-first gate EXPOSED — 3 compounding gaps):**
+1. `bin/directory.ts:108` computes `nodeId = awsRegion` ("us-east-1") but the `createDirectoryNode({...})` call **omits `nodeId`** → `directory-node.ts:626` `nodeId: opts.nodeId ?? opts.node.getPeerId()` defaults to the **peer id**. So `#recordPresence` writes `owning_node_id = peerId` and `refreshNodeHeartbeat` targets `WHERE node_id = peerId`.
+2. `directory_nodes` has **no UPDATE RLS policy** for `cello_service` — V17 only made SELECT+INSERT policies; V38 `GRANT UPDATE` but no `CREATE POLICY … FOR UPDATE`. So the heartbeat UPDATE is RLS-blocked → `last_heartbeat_at` never refreshes (pg-directory-store:1358 confirms cello_service lacks UPDATE via RLS).
+3. `insertDirectoryNode` is **test-only** (`deploy-001-directory-nodes.test.ts` is the only caller) → no self-row exists in prod.
+⇒ the READ-001 freshness JOIN (`directory_nodes dn ON dn.node_id = ap.owning_node_id`, `dn.last_heartbeat_at > now()-120s`) is always NULL → EVERY agent ages to dark/offline → discovery always `offline` → new client's discover-first returns `counterparty_offline`, can't start ANY session. (Also silently broke portal online-status all along.)
+
+**Consequence:** the client on `latest` (connect 0.0.56/cli 0.0.27) can't establish sessions until the directory is fixed. Fix-forward chosen (client is correct).
+
+**THE FIX (directory-side, needs redeploy all 3 regions):**
+1. `bin/directory.ts`: pass `nodeId` to `createDirectoryNode` (→ presence owning_node_id + heartbeat use "us-east-1", which is manifest-resolvable by the client).
+2. `agent-presence-repository.ts` `refreshNodeHeartbeat`: make it a self-registering UPSERT — `INSERT INTO directory_nodes (node_id, region, status, last_heartbeat_at) VALUES ($1,$1,'active',now()) ON CONFLICT (node_id) DO UPDATE SET last_heartbeat_at=now()` (nodeId==region here). Runs at boot + on the timer.
+3. **Migration V42**: `CREATE POLICY directory_nodes_update ON directory_nodes FOR UPDATE TO cello_service USING(true) WITH CHECK(true)` (the missing policy so the upsert's DO UPDATE + the heartbeat work). Bump `cello-ssm-parameters.yaml` OpsAgentExpectedMigrationVersion → 42.
+4. Redeploy directory (batched, all 3 regions) + relay cascade.
+
+**LIVE PROOF captured so far (both stories work end-to-end at the wire, blocked only by this presence bug):** `directory.discovery.lookup` fires on the deployed directory with the correct correlationId + `directory.profile.read_through result:cache_hit` (Story A item 0/1 live); the new client sends discovery_lookup + surfaces the exact named code `counterparty_offline` (Story B live). The demo (7ab98987…) home node flips us1↔ap1 across restarts (resolver's pick) — useful for both same-node and cross-node once presence is fixed.
+
 ## Status log
 - **2026-07-05 0655** — Journal created. Read design doc + CONTEXT.md + STATE.md + infra/CLAUDE.md in full. Both repos clean on main. Recon complete. Docker brought up + local DB reset to V41.
 - **2026-07-05 ~0930** — Story A directory-side code + 28 tests complete, gate green. Dispatched both mandatory reviewers on the uncommitted diff.
