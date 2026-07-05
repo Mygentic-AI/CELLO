@@ -50,6 +50,24 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
   manifests auto-re-signed FRESH; (3) **PRESENCE FIX VERIFIED LIVE** — directory log shows
   `presence.transition owningNodeId:"us-east-1"` (the REGION, not the peer id) + ZERO `heartbeat.failed`
   errors (V42 upsert works). Cluster healthy; discovery now resolves agents online. Ready for retest.
+- **🔧 FEDERATION COUNTER-COLLISION FIX + FULL DB RESET (2026-07-05, commit `4328fcb1`).** Root cause:
+  replicated BIGSERIAL tables collided — logical replication copies rows but never advances the
+  subscriber's sequence, so a node that received rows via replication drew a `nextval()` that already
+  existed → duplicate-key on `_pkey` → local write failed / subscription wedged (broke the first
+  cross-node seal; wedged the ap1 subscription at 3590+ apply-errors). FIX: per-node sequence staggering
+  in `setup-replication.sh` Step 5c — each node mints ids in its own residue class (offset us1=1/eu1=2/
+  ap1=3, `INCREMENT BY 1000`; growth-safe to 1000 nodes), + `seal_notarizations` added to the publication
+  so cross-node seals federate. Executed a FULL FRESH DB RESET (all data was disposable test data):
+  dropped all 6 subs + 6 slots + publications (verified 0 replication objects on every node BEFORE any
+  truncate — no 2026-06-25-style cascade), TRUNCATEd all data tables on all 3 nodes (kept
+  flyway_schema_history), re-ran setup-replication.sh. POST-STATE (verified): 6 slots streaming, all
+  subscriptions **0 apply-errors** (ap1 un-wedged), sequences staggered (cs/notar/sess last_value = 1/2/3
+  by node), publication = 18 tables incl seal_notarizations. Reviewed by feature-dev:code-reviewer +
+  cello-fallback-finder (TOCTOU table-lock + positive STAGGER_DONE marker + serial-discovery fixes
+  applied). Consequence: all agents must re-register (profiles wiped). Plan/journal:
+  docs/planning/user-stories/m8b/2026-07-05_1500_cross-node-counter-collision-reset-fix-plan.md.
+  NOTE: directory_checkpoints federated-checkpoint layer is dormant (never produced a checkpoint) —
+  separate future activation, out of scope.
 - **🎉 CROSS-NODE SESSION ESTABLISHMENT — PROVEN LIVE (2026-07-05).** Directory `4714f244` deployed all
   3 regions (Option A: discovery trusts replicated agent_presence.online, no directory_nodes freshness
   gate; + portal presence read made consistent). Relay cascade done (us1 10.0.32.210 / eu1 10.1.6.130 /
