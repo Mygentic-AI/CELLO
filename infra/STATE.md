@@ -43,10 +43,13 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
   and nothing self-registered the node's row → freshness JOIN always NULL → every agent read
   dark/offline → discovery always `offline`. Fix: pass region nodeId to createDirectoryNode;
   self-registering heartbeat UPSERT (+ rowCount!==1 THROWS, heartbeat.failed→ERROR); **migration V42**
-  (directory_nodes UPDATE RLS policy). `cello-directory-pipeline` **InProgress** for `938f34cb`.
-  **POST-DEPLOY (MANDATORY):** (1) bump live SSM `/cello/dev/ops-agent/expected-migration-version`→**42**
-  (us-east-1 only) AFTER the directory applies V42, else ops-agent crash-loops; (2) relay cascade all 3
-  regions; (3) verify discovery returns `online` + re-run the cross-node session. Pre-change health GREEN.
+  (directory_nodes UPDATE RLS policy). **DEPLOYED + VERIFIED 2026-07-05** — pipeline `938f34cb` Succeeded,
+  all 3 regions COMPLETED 1/1, 0 failed (V42 applied cleanly). POST-DEPLOY DONE: (1) live SSM
+  `/cello/dev/ops-agent/expected-migration-version`→**42** (us-east-1), ops-agent restarted; (2) relay
+  cascade complete — new IPs us1 **10.0.58.209** / eu1 **10.1.8.222** / ap1 **10.2.103.93**, all 3 S3
+  manifests auto-re-signed FRESH; (3) **PRESENCE FIX VERIFIED LIVE** — directory log shows
+  `presence.transition owningNodeId:"us-east-1"` (the REGION, not the peer id) + ZERO `heartbeat.failed`
+  errors (V42 upsert works). Cluster healthy; discovery now resolves agents online. Ready for retest.
 - **Story C (live milestone-close) — IN PROGRESS.** LIVE-PROVEN so far: directory answers
   `discovery_lookup` (correlationId + `directory.profile.read_through`), client sends it + surfaces the
   named `counterparty_offline` (Story A+B work at the wire). Blocked on the presence fix above; once
