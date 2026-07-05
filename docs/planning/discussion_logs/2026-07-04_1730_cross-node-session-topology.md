@@ -4,7 +4,7 @@ type: design
 date: 2026-07-04
 topics: [cross-node, session-establishment, directory-topology, presence, sovereign-nodes, federation, discovery, handoff]
 status: active
-description: Topology for cross-node session establishment — discover the target's home node from replicated presence, open a second transient client connection to that node, then let the existing same-node session flow run. Directories never talk to each other. Chosen over every-agent-on-every-directory and over inter-directory messaging.
+description: Topology for cross-node session establishment — discover the target's home node from replicated presence, open a second transient client connection to that node, then let the existing same-node session flow run. Directories never talk to each other. Chosen over every-agent-on-every-directory and over inter-directory messaging. Reviewed 2026-07-05 — visiting-auth presence integrity identified as a third build item (blocker), discovery made advisory-with-retry, escalation branch and rollout/observability added.
 ---
 
 # Cross-node session establishment — topology design
@@ -13,8 +13,8 @@ description: Topology for cross-node session establishment — discover the targ
 
 To connect to an agent homed on a *different* directory node, the client **moves to the target's node** rather than routing across nodes:
 
-1. **Discover** the target's home node from replicated presence — ask your own directory "where is X?"
-2. **Open a second, transient signaling connection** from your client to the target's home directory (keeping your own home connection for your inbound).
+1. **Discover** the target's home node from replicated presence — ask your own directory "where is X?" The answer is **advisory** — the target node's own live check remains the authority; on miss, re-discover and retry (bounded).
+2. **Open a second, transient signaling connection** from your client to the target's home directory (keeping your own home connection for your inbound). The transient connection authenticates as **visiting** — it must NOT write presence, or it clobbers the agent's real home record (see "Visiting auth" below — this is a required build item, not hardening).
 3. Both agents are now locally present on that one directory → **the existing same-node session flow runs unchanged** (offer/accept → FROST-signed assignment → relay handoff).
 4. Drop the transient connection after the handoff; the conversation runs peer-to-peer over the relay.
 
@@ -35,7 +35,7 @@ Full replication means **verification data is already everywhere** — any node 
 Alice (homed to us1) wants Bob (homed to eu1):
 
 1. **Discover.** Alice's daemon asks us1 "where is Bob?" us1 answers from **replicated presence** (`agent_presence.owning_node_id`, replicated since V38): "Bob is on eu1." (New: a lookup handler; see "What's new".)
-2. **Second connection.** Alice's daemon opens a **second** authenticated signaling connection to **eu1**, keeping its us1 connection for Alice's own inbound. eu1 authenticates Alice with no special case — Alice's identity is already replicated to eu1. This connection is **transient** (for the setup only).
+2. **Second connection.** Alice's daemon opens a **second** authenticated signaling connection to **eu1**, keeping its us1 connection for Alice's own inbound. eu1 can verify Alice's identity — it is already replicated to eu1 — but the connection must authenticate as **visiting**: today's auth hook unconditionally upserts presence with this node as owner, which would falsely re-home Alice to eu1 (see "Visiting auth — presence integrity"). This connection is **transient** (for the setup only).
 3. **Same-node establishment.** From eu1's point of view, Alice and Bob are now two locally-connected agents — the current happy path. The **existing** flow runs unchanged: eu1 runs the offer/accept handshake with Bob, builds and FROST-signs the `SessionAssignment` (Bob's session endpoint + a relay rendezvous), and hands it to both. No new server-side session or relay machinery.
 4. **Relay handoff.** Alice and Bob establish over the relay exactly as they do today, and the directories drop out. Alice's transient eu1 connection can be released after the handoff.
 
@@ -78,6 +78,14 @@ An agent therefore holds: **one home connection** (its inbound anchor) **plus a 
 - Existence: `SELECT 1 FROM agent_profiles WHERE k_local_pubkey = $1` (`pg-directory-store.ts:365`).
 - Presence: `agent_presence` is keyed on `k_local_pubkey` (PK) with `owning_node_id`/`online`/`last_seen_at` — a trivial point read (`agent-presence-repository.ts`; upsert-on-connect at `:29`, dark-node freshness at READ-001 `:99`).
 
+**Discovery is advisory — the target node stays the authority.** Replicated presence lags (logical replication) and the target can re-home or go offline between discovery and the session request. The `#streams` check at the discovered node remains the only authoritative liveness test. Client rule: on `target_offline` at a node discovery pointed to, **re-discover → retry**, bounded (e.g. 2–3 attempts with backoff), then surface state 2 ("known but offline") to the caller. Never treat a discovery answer as a guarantee, and never fail hard on the first miss.
+
+**Response shape — list, not scalar.** Return `owning_node_ids: string[]` (length 1 today). The future `k>1` homing knob (below) then extends the payload, not the protocol. Costs nothing now; avoids a frame-format break later.
+
+**Existence oracle — deliberate.** The handler lets anyone holding a pubkey distinguish `offline` from `unknown_agent`, i.e. confirm an agent exists. This is accepted by design: the pubkey *is* the address (high-entropy, unguessable), so existence is only learnable by someone who was given the address — same disclosure model as the session request itself.
+
+**Validate before dialing.** The discovered `owning_node_id` must resolve through the **signed manifest** (`manifestNodesToEndpoints`) before the client dials. A lying or compromised directory can then at worst misdirect to another legitimate node (→ `target_offline` → retry elsewhere), never to an attacker endpoint.
+
 ## FROST ceremony and seal — who coordinates them (answering "is it EU1?")
 
 **No — neither the ceremony nor the seal is done by the broker directory.** They are **client-coordinated**. Each agent's own daemon reconstructs its threshold signer and opens fresh `/cello/frost/1.0.0` streams **directly to its own consortium roster** — the directories it registered its share with (its persist-Q holders) — not to whatever node brokered the session (`session-ceremony.ts:117` `hydrateShareAndStubs` → `getConsortiumEndpoints()` roster → `directoryNodeStubs`; the seal at `:325` `runSealCeremony` uses the same). This is why signing already survives a node outage and is unrelated to the target-presence gate.
@@ -86,13 +94,49 @@ Consequences for this topology (Alice on us1, transiently connected to eu1, reac
 - **Session-setup assignment signature:** coordinated by **Alice's** client (the broker delegates the signature back to the initiator via `ClientDelegatedSigner.participateInCeremony`). This round-trip runs over Alice's connection to eu1, so **the transient connection must stay up through setup** (until the assignment is signed and the relay handoff completes).
 - **The seal at close:** bilateral, and **each party seals over its own roster** — Alice over her share-holders (which include *her* home), Bob over his. **Neither depends on the transient eu1 connection.** So eu1 is the *broker/rendezvous* for setup, never "the node that seals."
 - **Therefore the transient connection's lifecycle is settled:** hold it through session setup; release it after the relay handoff. The seal needs nothing from it.
+- **Except the escalation branch.** The negotiation can block on a human (`escalation_expires_at` — potentially hours, over Telegram). Holding a cross-region transient connection for hours is the same state-holding problem that disqualified inter-directory proxying, relocated to the client. The lifecycle rule for this branch: on escalation, the client **releases the transient connection and re-initiates** when the escalation resolves (or expires) — the pending request lives with the *target's* daemon/human, not on the wire. What "notify on resolve" looks like (poll on retry vs. push via Alice's home inbound) is an implementation decision for the story; holding the connection open for the whole window is not an acceptable answer.
+
+## Visiting auth — presence integrity (blocker, verified in code 2026-07-05)
+
+The original draft claimed directory auth of a visiting agent "needs no change." **That is wrong.** The signaling auth hook (`directory-node.ts:1647–1649`) unconditionally calls `#recordPresence("online")` → `upsertPresenceOnline`, whose `ON CONFLICT` **reassigns `owning_node_id` to this node** (`agent-presence-repository.ts:29–37`). Two consortium-wide corruptions follow from Alice's transient eu1 connection:
+
+1. **Wrong-home:** Alice's presence row flips to `owning_node_id = eu1`. Anyone discovering Alice is now sent to eu1, where she has no standing inbound → `target_offline` for an online agent.
+2. **False-offline:** when Alice releases the transient connection, eu1's offline write *passes* the sovereign-scoping check (`WHERE owning_node_id = $2` — eu1 now owns the row) and marks her **offline consortium-wide while her real us1 home connection is alive**. Presence is edge-triggered (PRESENCE-001), so us1 never corrects it until she reconnects.
+
+**Fix:** the signaling auth handshake carries a **`visiting` flag** (client sets it on the transient connection). A visiting auth gets the `#streams` entry (so the same-node session flow sees the agent) but **skips both presence writes** — connect and disconnect. Only the designated-home connection writes presence. This is build item 3 below — required for correctness, not hardening.
 
 ## What's new to build
 
-1. **Discovery lookup handler** (see the table above) — directory-side signaling handler returning the 3-state answer from the two existing point-reads; client-side call before initiating when the target isn't already on the current node.
-2. **On-demand second directory connection.** Client-side: given the target's `owning_node_id`, open + authenticate a second signaling connection to that node (auth just works — identity is replicated), submit the session request there, hold through setup, release after the relay handoff. Copy the existing per-agent connection pattern.
+1. **Discovery lookup handler** (see the table above) — directory-side signaling handler returning the 3-state answer from the two existing point-reads; client-side call before initiating when the target isn't already on the current node, with the advisory-retry rule.
+2. **On-demand second directory connection.** Client-side: given the target's `owning_node_id` (manifest-validated), open + authenticate a second signaling connection to that node with the `visiting` flag, submit the session request there, hold through setup, release after the relay handoff (escalation branch: release + re-initiate). Copy the existing per-agent connection pattern.
+3. **Visiting-auth presence integrity** (section above) — `visiting` flag in the signaling auth; visiting connections get `#streams` but never write presence.
 
 Everything downstream (offer/accept, assignment, relay, FROST, seal) is reused as-is.
+
+## Edge cases the implementation must handle
+
+- **Connection-aware client dispatch.** Session-setup responses (offer/accept progress, assignment, the delegated-signer round-trip) arrive on the **transient** connection while home traffic continues on the other. The daemon's inbound frame routing must not assume one connection per agent — audit `SignalingManager` for singleton assumptions before "copying the pattern."
+- **FINDING-8 applies to the broker, not just the signer path.** If eu1 booted before Alice registered, any in-memory profile/registration-gated step on eu1 (`#requireRegistration`, connection gate, delegated-signer setup) can't see her despite the rows being in eu1's DB. A **cache-miss → DB read-through** on the broker (or the deferred absent-node reconcile) is a *dependency check* for this design — verify which broker-side steps consult boot-time caches before calling the reuse claim safe.
+- **Transient-connection refcounting.** Two concurrent outbound sessions to agents both homed on eu1: one shared transient connection, released when the *last* setup completes — or strictly per-session connections. Pick one and make release refcounted accordingly; a shared connection torn down by the first session to finish strands the second mid-setup.
+- **Simultaneous mutual initiation.** Alice→Bob and Bob→Alice at the same time ride two *different* brokers (eu1 and us1) — no single node sees both. Confirm duplicate-session handling doesn't assume one broker observes both directions; two parallel sessions is an acceptable outcome, a deadlock or crash is not.
+- **Mid-setup broker failure.** If eu1 dies during setup, Bob re-homes via existing failover; Alice's retry loop (re-discover → new owning node → new transient connection) must cover this without special-casing.
+
+## Rollout ordering and observability
+
+**Rollout.** The discovery frame is a new signaling frame type: **directories deploy first, client publishes second.** An old client against a new directory is unaffected (never sends the frame). A new client against an old directory must degrade gracefully (unknown-frame → treat as "discovery unavailable," fall back to today's behavior) — but the real rule is sequencing: batch the directory change, deploy all regions (~25–30 min), then publish the client. Bilateral compat is a blocking AC per the cross-repo rules.
+
+**Observability ACs (M4+ rules — the stories must carry these).** One correlationId minted at `cello_initiate_session`, threaded through the whole chain. Named events, minimum set:
+- `directory.discovery.lookup` (+ `.failed`) — target pubkey (short), 3-state answer, owning node, correlationId
+- `signaling.visiting.connected` / `signaling.visiting.released` — node id, reason (handoff-complete | escalation | failure), correlationId
+- `session.crossnode.initiated` / `.established` / `.failed` — initiator home, broker node, retry count, correlationId
+- Error paths: discovery-said-online-but-target_offline (the retry trigger), manifest-validation failure, visiting-auth failure.
+
+## Acceptance scenarios (the live test that closes this)
+
+1. **Cross-node session (FINDING-9 topology):** Alice homed us1, Bob homed eu1 — session establishes, conversation runs over the relay, both seals succeed. Multi-process, real regions.
+2. **Presence integrity:** after Alice's transient eu1 connection closes, Alice is still discoverable at us1 (state 1, `owning_node_id = us1`, online) — catches the visiting-auth blocker directly.
+3. **Stale-discovery retry:** kill Bob's home mid-window (after discovery, before the session request) — Bob re-homes, Alice's retry loop lands the session on the survivor.
+4. **Known-but-offline and unknown-agent:** discovery returns state 2 / state 3 respectively; the client surfaces distinct errors (no retry storm on state 3).
 
 ## Trust layer (M10/11) fit — designed to slot on, not retrofit
 
@@ -108,11 +152,12 @@ Covered by existing code (validated 2026-07-04): when the home stops responding,
 ## Open items, assumptions, dependencies
 
 - **Relay reachability (assumed; validated by art/tests).** The design assumes the target is dialable via the relay once assigned. Not re-litigated here — it's the existing same-node behavior and will be covered by acceptance tests.
-- **FINDING-8 (profile cache boot-only)** — the brokering node holds the target locally, but confirm the initiator-side signer path doesn't need a profile the brokering node lacks. Signer half fixed (Problem 1); profile half is the deferred absent-node reconcile.
-- **`k` redundancy knob (home to >1 node).** Baseline k=1; homing to 2–3 nodes for inbound redundancy (survive a home dying without a re-home window) is a future tunable, not needed for the first build.
+- **FINDING-8 (profile cache boot-only) — elevated to a dependency check** (see "Edge cases"): not just the initiator-side signer path — audit every broker-side step that consults a boot-time cache (registration gate, connection gate, delegated-signer setup) for an agent registered after the broker's boot. Read-through-on-miss or absent-node reconcile may be a prerequisite, not a deferred nicety.
+- **`k` redundancy knob (home to >1 node).** Baseline k=1; homing to 2–3 nodes for inbound redundancy (survive a home dying without a re-home window) is a future tunable, not needed for the first build. The lookup response is list-valued from day one so this lands without a protocol break.
 - **Presence write is best-effort / not retried** (`directory-node.ts:646`) — a DB hiccup during failover is logged and swallowed. Fine at small scale; a robustness follow-up if it ever bites.
+- **Visiting-connection rate limits.** A client can open transient connections to any node at will; caps/rate-limiting on visiting auths is post-launch hardening (forgivable), noted so it isn't forgotten.
 
-*(Resolved during design: the transient-connection lifecycle — hold through setup, release after the relay handoff; the seal is client-coordinated over each party's own roster and needs nothing from it. See "FROST ceremony and seal" above.)*
+*(Resolved during design: the transient-connection lifecycle — hold through setup, release after the relay handoff, with the escalation branch releasing early and re-initiating; the seal is client-coordinated over each party's own roster and needs nothing from it. See "FROST ceremony and seal" above. Resolved during review 2026-07-05: visiting auth must not write presence — promoted to build item 3.)*
 
 ## Implementation starting points (for a coder)
 
@@ -123,7 +168,10 @@ Covered by existing code (validated 2026-07-04): when the home stops responding,
 **New piece 2 — on-demand second directory connection:**
 - The existing per-agent connection is `createSignalingConnect` / `SignalingManager` (`cello-client/core/daemon/src/signaling-connect.ts:134` `connect()`, endpoint resolved at `:135`, auth handshake / `peer_info_announce` at `:236`). A second connection reuses this against a *chosen* endpoint (the target's home) instead of the failover resolver's pick.
 - Endpoint resolution: `directory-bootstrap.ts` (`manifestNodesToEndpoints`, `ConsortiumEndpoint`) maps a `node_id` from the manifest to a dialable `/bootstrap` endpoint — use it to turn the discovered `owning_node_id` into something to dial.
-- Directory auth of a "visiting" agent needs no change — the signaling auth hook already sets `#streams` + upserts presence on any authenticated agent (`directory-node.ts:1647`, `:657`).
+- Directory auth of a "visiting" agent **does need a change** (see "Visiting auth — presence integrity"): the auth hook (`directory-node.ts:1647`) sets `#streams` (keep) but also calls `#recordPresence` (`:1649` → `:650`) which reassigns `owning_node_id` (`agent-presence-repository.ts:31–32`) — gate both presence writes behind `!visiting`.
+
+**New piece 3 — visiting flag:**
+- Add `visiting?: boolean` to the client's auth response frame (`signaling-connect.ts` handshake / `directory-frames.ts`); the transient connection sets it. Directory-side: thread it to the `#recordPresence` calls on connect (`directory-node.ts:1649`) and disconnect, skipping both when visiting. `#streams` behavior unchanged.
 
 **Reused, do not touch:** `#processSessionRequest` offer/accept + assignment (`directory-node.ts:2926–3337`), the relay pool + circuit dial (`relay-pool-manager.ts`, `cello-client/core/daemon/src/cello-node-transport-dialer.ts`), the FROST ceremony + seal (`cello-client/core/daemon/src/session-ceremony.ts`), presence replication (`V38__presence_replication.sql`, `infra/setup-replication.sh`), failover/re-establish (`daemon.ts:474`, `signaling-connect.ts:135`, `directory-node.ts:657`).
 
