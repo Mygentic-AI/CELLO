@@ -37,6 +37,20 @@ crypto 0.0.15 · protocol-types 0.0.13 · transport 0.0.13 · client 0.0.43 · d
 
 Version cascade for Story B: bump `core/client` → `core/daemon` → `core/cli`/`core/connect`; re-pin published `@cello-protocol/client` in `trustless-cello/packages/directory` (never workspace:*).
 
+## Story B implementation — DONE (client-side), committed `ba570d1`, in review
+
+**Code (cello-client):**
+- `signaling-connect.ts`: `visiting?` deps flag → set in the ONE live auth-response site (:192). Legacy core/client SDK untouched.
+- `transport/signaling-manager.ts`: `get currentDirectoryNodeId()` (for same-node shortcut).
+- `session-assignment-parser.ts`: `parseDiscoveryLookupResult` + `discoveryLookupErrorReason` (client frame mirror).
+- `cross-node-negotiation.ts` (NEW): `classifyDiscoveryOutcome(disc, homeNodeId)` — pure decision (fallback/same_node/cross_node/unknown_agent/offline/retry). Unit-tested exhaustively.
+- `daemon.ts` negotiator: discover-first → classify → branch. `runDiscoveryLookup` (5s timeout→unsupported fallback), `runSessionRequestOverSignaling` (extracted core), `openVisitingConnection` (visiting=true + `wireSessionCeremonyHandler` only + logs signaling.visiting.connected/released), `runCrossNodeSetup` (manifest-resolve→visiting→session_request→stop() in finally). Retry loop max 3, backoff [1s,3s], single-flight preserved.
+- `types.ts`: added counterparty_offline | unknown_agent | discovery_node_unresolvable.
+
+**Tests — 17 new (daemon 540, transport 92, client 343, all typecheck+lint clean):** classifier 8, parser 8, signaling-connect visiting 1. Full cross-node flow (open visiting conn + ceremony over it) is covered LIVE by Story C (scenario 1).
+
+**Story B design decisions recorded:** (a) 5s discovery timeout → unsupported-fallback = rollout compat (prod directory answers fast, no timeout); (b) per-negotiation visiting connection, no refcount (single-flight makes it moot); (c) visiting connection wires ONLY wireSessionCeremonyHandler; stop() in finally on every path.
+
 ## Story B — client architecture map (from Explore, 2026-07-05; CORRECTS the design doc's client pointers)
 
 **CRITICAL correction:** the design doc's item-3 client sites `signaling-manager.ts:258/357/576` are the **DEAD legacy standalone SDK** (`@cello-protocol/client` `core/client/src/signaling-manager.ts`) — daemon.ts:903 explicitly calls that stack dead. Do NOT edit it. The LIVE daemon path:
