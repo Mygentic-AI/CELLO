@@ -29,9 +29,17 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
   ap-northeast-1 **10.2.4.239**). All 6 ECS services 1/1 COMPLETED. The directory re-signed on the
   unavailable→available transition — no manual `sign-manifest.sh` needed this cascade. **Cluster
   healthy; ready for Story C live cross-node testing.**
-- **Story B (client-side) NOT yet published** — cello-client commit `ba570d1`, in review; publish
-  (version cascade transport/client/daemon/cli/connect) pending. The directory does NOT consume the
-  client's discovery mirror, so no directory re-pin/redeploy is required for Story B.
+- **Story B (client-side) PUBLISHED to `beta` + binary-verified 2026-07-05.** cello-client tag
+  **`v0.0.70`** (CI green incl. smoke-tag). New versions: **transport 0.0.14, client 0.0.44,
+  daemon 0.0.29, cli 0.0.27, connect 0.0.56** (crypto 0.0.15 / protocol-types 0.0.13 unchanged).
+  Binary-verified: daemon@0.0.29 dist contains the cross-node code (cross-node-negotiation.js,
+  runCrossNodeSetup, discovery_lookup); cross-pins REAL (cli→daemon 0.0.29; connect→client 0.0.44,
+  crypto 0.0.15, transport 0.0.14; interfaces 0.0.3 pinned) — no workspace:*. Both reviewers' findings
+  fixed pre-publish. The directory does NOT consume the client's discovery mirror → no directory
+  re-pin/redeploy required. **`latest` promotion PENDING Andre's go** — Story C installs beta explicitly.
+- **Story C (live milestone-close) — PENDING.** Needs the new client installed + two agents homed on
+  DIFFERENT regions (Alice us1, Bob eu1). Plan in the build journal §"Story C". Directory + client both
+  shipped and unit-proven (incl. scenario 2 at unit level); live multi-process validation remains.
 
 ---
 
