@@ -100,8 +100,15 @@ code 2026-07-05** — see *Verification pass* near the end for verdicts and evid
    agent from your phone or team chat. See the expanded **Telegram operator relay** design below (the
    old "reach me on my phone" fork), which supersedes the one-line framing here — the daemon-holds-the-
    bot design changes the picture materially.
-8. **Channel stage 4 — relay hardening (sender allowlists, multi-peer addressing)** — *You get:*
-   safely run multiple concurrent peers through one router and control who can drive it.
+8. **Channel stage 4 — multi-peer message routing (sender tagging, reply addressing, allowlist
+   gate)** — plainly: inbound messages get labeled by which CELLO peer sent them, replies get
+   routed back to the right peer instead of an ambiguous single pipe, and an allowlist check
+   decides who's even allowed to reach you through the relay before any of that happens. *You
+   get:* safely run multiple concurrent peers through one router and control who can drive it.
+   (Previously mislabeled "relay hardening" — renamed 2026-07-05; it's message identification and
+   routing, not a security-hardening pass. The allowlist piece IS access control; the tagging/
+   addressing piece is plain routing logic. Kept as one item because both gate the same "more than
+   one peer talking to you at once" scenario.)
 9. **Non-Claude-Code adapters + capability negotiation** — Hermes/OpenClaw/etc. adapters + an
    `ipc.connect` handshake where a client declares whether it can be pushed or must be polled.
    *You get:* CELLO works across runtimes with different notification abilities; the daemon stops

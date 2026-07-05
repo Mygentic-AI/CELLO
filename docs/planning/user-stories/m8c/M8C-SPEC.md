@@ -117,8 +117,10 @@ PRIMARY touch trustless-cello (directory).
 
 - **Telegram full-monitoring level + Mode 2** (operator as communicator, approvals gate,
   reply addressing — OQ-2/OQ-3 park with it) → follow-on milestone's opening track.
-- **Channel stage 4 relay hardening** (multi-peer addressing, platform-side sender allowlists
-  beyond the operator allowlist TGDOOR needs) → follows Mode 2.
+- **Channel stage 4 — multi-peer message routing** (sender tagging on inbound, reply addressing
+  back to the right peer, platform-side sender allowlists beyond the single operator allowlist
+  TGDOOR needs) → follows Mode 2. Renamed 2026-07-05 from "relay hardening" — it's message
+  identification and routing, not a security-hardening pass.
 - **Non-Claude-Code adapters** (Hermes/OpenClaw/IronClaw) + `ipc.connect` capability negotiation
   → separate design track. Do not bake Claude-Code assumptions into the daemon meanwhile.
 - **Kill switch** — launch-critical but **portal's job, tracked outside M8C.** Recorded here so it
