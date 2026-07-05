@@ -23,10 +23,12 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
   handler + frames (`discovery_lookup`/`_result`/`_error`), item 3 visiting-auth presence integrity
   (`visiting` flag gates both presence writes). New log events: `directory.discovery.lookup(.failed)`,
   `directory.profile.read_through`, `directory.auth.visiting`.
-- **Relay cascade (MANDATORY after directory redeploy) — INITIATED 2026-07-05:** all 3 relays
-  `stop-task`'d to re-register with the new directory tasks (us-east-1 task 7daf788d, eu-central-1
-  eecf1ad8, ap-northeast-1 d8b42708 — all DEACTIVATING). **TODO: verify `relay.already.registered`
-  per region + re-sign manifests if relay IPs changed (infra/CLAUDE.md) + confirm 6 ECS 1/1.**
+- **Relay cascade (MANDATORY after directory redeploy) — COMPLETE + VERIFIED 2026-07-05:** all 3
+  relays `stop-task`'d → ECS relaunched → re-registered → **all 3 S3 manifests auto-re-signed FRESH**
+  (healthCheckUrl matches live relay IP: us-east-1 **10.0.109.112**, eu-central-1 **10.1.61.22**,
+  ap-northeast-1 **10.2.4.239**). All 6 ECS services 1/1 COMPLETED. The directory re-signed on the
+  unavailable→available transition — no manual `sign-manifest.sh` needed this cascade. **Cluster
+  healthy; ready for Story C live cross-node testing.**
 - **Story B (client-side) NOT yet published** — cello-client commit `ba570d1`, in review; publish
   (version cascade transport/client/daemon/cli/connect) pending. The directory does NOT consume the
   client's discovery mirror, so no directory re-pin/redeploy is required for Story B.
