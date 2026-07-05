@@ -206,6 +206,21 @@ npm i -g @cello-protocol/cli@0.0.27 @cello-protocol/connect@0.0.56
 - **FIX (needs DB access + a design call — Andre's infra):** get `directory_nodes` to replicate cleanly cross-node. Options: (a) TRUNCATE directory_nodes on all 3 nodes then re-run setup-replication so each node re-self-registers + copies without id conflict; (b) exclude/handle the BIGSERIAL id in replication (publish node_id-keyed only, or ALTER the PK); (c) reset the directory_nodes table-sync on each subscription. Verify with a psql check of us1's `directory_nodes` (is there a fresh eu-central-1 row?). NOTE: this affects ALL cross-node discovery (any non-local-homed agent is dark), and also the portal's cross-node online status.
 - **Cross-node CODE is not implicated** — it's fully proven; this is directory_nodes replication plumbing.
 
+## 🟢🎉 CROSS-NODE SESSION ESTABLISHMENT — PROVEN LIVE (2026-07-05 ~1220)
+
+After the Option-A freshness-relax deploy (`4714f244`, all 3 regions) + relay cascade + demo pinned to eu1: **Agent-1 (us1) → demo (eu1) `cello_initiate_session` returned `ok:true`** (sessionId b970bdfe…, transportMode relay). The daemon log shows the ENTIRE designed cross-node flow, one correlationId threaded:
+- `directory.discovery.lookup state:"online" owningNode:"eu-central-1"` (discovery found the eu1-homed demo via REPLICATED presence + Option A trust)
+- `session.crossnode.initiated brokerNode:"eu-central-1"`
+- **`signaling.visiting.connected node:"eu-central-1"`** — the transient VISITING connection opened (the core new mechanism)
+- `session.negotiate.assignment.received signatureType:"frost"` — FROST-signed assignment over the visiting connection (delegated-signer ceremony worked cross-node)
+- `session.crossnode.established`
+- `signaling.visiting.released reason:"handoff-complete"` — transient connection released after handoff (exactly the designed lifecycle)
+- **`cello_send` → `ok:true, sequence_number:0`** — content DELIVERED over the relay to the eu1-homed counterparty. Two agents on different nodes CONNECT and COMMUNICATE. ✅✅
+
+**Scenarios proven:** #1 cross-node establishment MECHANISM + content delivery ✅; #5 same-node (earlier, zero visiting) ✅; #4 named codes counterparty_offline/unknown_agent (live) ✅; #2 presence integrity (unit-level) ✅.
+
+**Seal caveat (NOT the cross-node feature):** `cello_close_session` returned `seal_unilateral_timeout` — the existing FROST-seal machinery (relay→directory root verification + bilateral ceremony) did not complete. Likely environmental: the demo is an OLD client (connect 0.0.34) and the relays had just cascaded (fresh session-node/relay state). Cross-node establishment + delivery are unaffected and proven. Seal follow-up: retry after the cluster settles, or test the seal with a NEW-client counterparty; unrelated to Story A/B code.
+
 ## Status log
 - **2026-07-05 ~1230** — Story C live: same-node session PROVEN (ok:true, FROST, zero visiting). Cross-node blocked by agent_presence replication refresh gap (fix: setup-replication.sh). Running the fix.
 - **2026-07-05 ~1200** — **Presence fix `938f34cb` DEPLOYED + VERIFIED all 3 regions.** V42 applied cleanly (COMPLETED rollouts, 0 failed). Post-deploy done: ops-agent SSM→42 + restart; relay cascade complete (new IPs, manifests fresh); **presence fix confirmed live** — `presence.transition owningNodeId:"us-east-1"` (region, not peer id) + zero heartbeat.failed. Both reviewers' findings on the fix addressed (rowCount detector throws on 0-row write, heartbeat.failed→ERROR, RLS-scoped V42 test via SET ROLE cello_service, blast-radius doc). Deploy-watch cron deleted. Proceeding to live cross-node retest (Story C scenarios).

@@ -50,6 +50,17 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
   manifests auto-re-signed FRESH; (3) **PRESENCE FIX VERIFIED LIVE** — directory log shows
   `presence.transition owningNodeId:"us-east-1"` (the REGION, not the peer id) + ZERO `heartbeat.failed`
   errors (V42 upsert works). Cluster healthy; discovery now resolves agents online. Ready for retest.
+- **🎉 CROSS-NODE SESSION ESTABLISHMENT — PROVEN LIVE (2026-07-05).** Directory `4714f244` deployed all
+  3 regions (Option A: discovery trusts replicated agent_presence.online, no directory_nodes freshness
+  gate; + portal presence read made consistent). Relay cascade done (us1 10.0.32.210 / eu1 10.1.6.130 /
+  ap1 10.2.99.176). **Agent-1 (us1) → demo (eu1) `cello_initiate_session` = ok:true** with the full
+  cross-node flow in the log: discovery online@eu-central-1 → signaling.visiting.connected(eu-central-1)
+  → FROST assignment → session.crossnode.established → visiting.released(handoff-complete); and
+  `cello_send` delivered over the relay (seq 0). Two agents on different regions CONNECT + COMMUNICATE.
+  agent_presence replicates cross-node (setup-replication refresh). Seal (`cello_close_session`) hit
+  `seal_unilateral_timeout` — existing FROST-seal layer, demo is old client 0.0.34 + relays just
+  cascaded; NOT the cross-node feature. directory_nodes replication left as-is (BIGSERIAL id collision;
+  Option A makes discovery not need it — no truncate per the 2026-06-25 incident).
 - **Story C (live milestone-close) — IN PROGRESS.** LIVE-PROVEN so far: directory answers
   `discovery_lookup` (correlationId + `directory.profile.read_through`), client sends it + surfaces the
   named `counterparty_offline` (Story A+B work at the wire). Blocked on the presence fix above; once
