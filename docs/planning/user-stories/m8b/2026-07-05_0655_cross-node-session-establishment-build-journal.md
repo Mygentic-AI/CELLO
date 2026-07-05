@@ -72,6 +72,28 @@ The broker's delegated-signer FROST round-trip (`ceremony_request`→`ceremony_r
 
 **Refcounting is moot:** the negotiator has a per-agent single-flight (`negotiationInProgress`), so one agent can't have two concurrent cross-node setups. Per-negotiation visiting connection (open → use → stop), no shared-connection refcount needed. Note it.
 
+## Story B review — findings to batch-fix before publish (fallback-finder, 2026-07-05)
+
+**Finding 1 (MEDIUM — fix before close, launch-critical).** `runDiscoveryLookup` collapses BOTH a 5s no-reply timeout AND a `sendRaw` failure into `{kind:"unsupported"}` → immediate home fallback, no retry. So a NEW directory that's merely slow/drops one reply, or a home stream momentarily reconnecting/lost, is misdiagnosed as "old directory" → a genuinely-online CROSS-NODE peer gets routed to home → `target_offline` → surfaced to the user as "offline." Defeats the core cross-node value. **Fix:** split `send_failed` (transport — retryable, surface real signaling_reconnecting/lost reason, NOT fallback) from `timeout` (retry, and only fall back to today's behavior after retries exhausted). Log timeout as warn "no discovery reply," not "old directory."
+**Finding 2 (MEDIUM).** Exhausted directory lookup-`error` returns `counterparty_offline` — the code lies (directory fault reported as counterparty offline). **Fix:** distinct reason `directory_unreachable` for exhausted directory-side lookup failure.
+**Finding 3 (LOW).** Malformed reply (parse null) → error→retry→counterparty_offline; a protocol bug hidden as availability. Log malformed distinctly. (partial)
+**Finding 4 (LOW).** `discoveryLookupErrorReason(frame)` called for no effect at the call site — remove the dead call.
+**Finding 5 (LOW).** Visiting-connect-failed uses `discovery_node_unresolvable` (same as node-not-in-manifest) — loses specificity but fails loud. Defer/note.
+Planned refactor: DiscoveryOutcome = result | error | timeout | send_failed; loop switches on kind (send_failed→retry→directory_unreachable; timeout→retry→fallback-last-resort; error→retry→directory_unreachable) and calls a pure result-classifier. + code-reviewer findings (pending).
+
+## Story B — PUBLISH in progress (2026-07-05)
+Both reviewers' findings fixed + committed (`0b7a33e`). Version cascade committed (`4d6c983`), pushed. **Tag `v0.0.70` pushed → CI publishing to `beta`.** New versions: transport 0.0.14, client 0.0.44, daemon 0.0.29, cli 0.0.27, connect 0.0.56 (crypto 0.0.15 / protocol-types 0.0.13 unchanged). interfaces stays 0.0.3 (client doesn't implement DirectoryStore; Story A's interface change is server-side only). Deps are workspace:* (auto-resolved at publish). Tag name (v0.0.70) ≠ connect version (0.0.56) — expected drift.
+**After CI green:** verify artifacts (npm pack daemon@0.0.29 → grep dist for classifyOnlineResult / runDiscoveryLookup; cli@0.0.27 deps show daemon 0.0.29; connect@0.0.56 deps show client 0.0.44 real versions, never workspace:*). **`latest` promotion needs Andre's go** — for Story C, install the beta versions explicitly (`npm i -g @cello-protocol/cli@0.0.27 @cello-protocol/connect@0.0.56`), no latest needed.
+
+## Story C — live execution plan (milestone-close gate; runs after Story B publish)
+Prereq: publish Story B cascade to beta+latest; update the local install / demo agent to the new client. Cluster is healthy (6 ECS 1/1, manifests fresh) as of 2026-07-05.
+- **Scenario 1 (cross-node + seals):** Alice homed us1, Bob homed eu1. Alice MUST be registered AFTER eu1's last boot (eu1 taskdef :91 booted at this deploy — register Alice fresh now → guaranteed after-boot, exercises the FINDING-8 read-through non-vacuously). Session establishes over relay, both seals succeed. Two live daemons, real regions.
+- **Scenario 2 (presence integrity):** after Alice's transient eu1 connection closes, Alice still discoverable at us1 (owning=us1, online). [Directory-side already proven at unit level; confirm live.]
+- **Scenario 3 (stale-discovery retry):** kill Bob's eu1 home mid-window → Bob re-homes → Alice's retry loop lands on the survivor.
+- **Scenario 4 (offline / unknown codes):** discovery state 2 → `counterparty_offline`; state 3 → `unknown_agent` (no retry storm).
+- **Scenario 5 (same-node regression):** two agents same node → existing path, ZERO visiting connections, ZERO new frames beyond one discovery_lookup.
+How to force homes to different nodes: set `CELLO_DIRECTORY_URL` per agent to the region node (or use node-selection). Demo agent (EC2 us-east-1 i-0ad3e7c22470f266e) is one candidate for a us1-homed agent; a second local/EC2 daemon homed eu1 for the counterparty.
+
 ## Story B re-pin decision (flag at publish)
 trustless-cello `packages/directory` pins `@cello-protocol/client@^0.0.31` (caret on 0.0.x LOCKS the patch → exactly 0.0.31; already stale vs published 0.0.43). The directory's frame codec is SELF-CONTAINED (Story A edited `packages/directory/src/directory-frames.ts` directly) — it does NOT consume the client's discovery-frame mirror. So publishing the Story B client cascade does NOT functionally require re-pinning + redeploying the directory (a 25-30 min deploy) for cross-node to work. Decision at publish: cascade-publish the client (client→daemon→cli/connect), update the local install for Story C, but do NOT trigger an extra directory redeploy solely for the client-version bump unless a functional need appears. (Not a workspace:* violation — already a pinned semver.)
 
