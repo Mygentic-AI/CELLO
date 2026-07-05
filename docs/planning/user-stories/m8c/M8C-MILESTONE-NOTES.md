@@ -36,11 +36,27 @@ seam (`screenInbound` at `ingestReceivedContent`, `screenOutbound` at `cello_sen
 integration task** — a hard prerequisite for the relay work, but NOT an M8C feature to design. These
 notes do not re-invent any M9 piece.
 
+> **Verified 2026-07-05 — the "known integration task" claim holds, with one semantic caveat.**
+> `m9-build` exists (local + `origin/m9-build`). The seams are real on both sides:
+> `ingestReceivedContent` at `core/daemon/src/daemon.ts:2335` on main; m9-build calls
+> `securityGateway.screenOutbound(...)` at its `daemon.ts:3301` and `screenInbound` symmetrically.
+> A `git merge-tree` dry-run of m9-build into main produces **zero textual conflicts**, even though
+> main moved 136 commits since divergence (+1,779 lines in `daemon.ts`, +614 in
+> `session-node-manager.ts`) — m9-build's +6,438 lines are mostly a self-contained new
+> `core/gateway` package (`@cello-protocol/gateway` 0.0.1). **Caveat:** textually clean ≠ proven.
+> Main's post-divergence work (M8B federation, cross-node sessions) may have added inbound/outbound
+> content paths m9-build never saw. The integration task must include one explicit AC: after merge,
+> every content path routes through the gateway — the `m9-core-001-seam.test.ts` grep-style
+> assertions (`.screenInbound(` / `.screenOutbound(` present at the seams) plus the full m9 gate
+> re-run against the merged daemon. Shallow merge, real verification.
+
 ---
 
 ## The feature inventory (what you get for building each)
 
 Twenty distinct build items, grouped by area. No triage applied — this is the list to work through.
+Every load-bearing "already built / nearly free / transfers verbatim" claim below was **verified in
+code 2026-07-05** — see *Verification pass* near the end for verdicts and evidence.
 
 ### A. Command surface — making it usable day-to-day
 
@@ -341,6 +357,85 @@ real-time push where others poll.
 - **OQ-4 — Settings surface** — the full knob list (bot key, per-agent/session monitoring level,
   escalation timeouts + default actions, allowlisted operator chat ID) and how it maps onto #4 / the
   tighten-free-loosen-confirm rule.
+
+---
+
+## Verification pass (2026-07-05) — load-bearing claims checked in code
+
+A hardening pass verified every claim that scope decisions rest on, in the actual repos (cello-client
+main + m9-build, trustless-cello main, the plugin on disk). Verdicts:
+
+| Claim | Verdict | Evidence |
+|---|---|---|
+| Stage 1 nearly free: two shim edits, `connect` bump, zero daemon change | ✅ CONFIRMED | `ipc-proxy.ts:183-185` drops notification frames (`// skip for now`); `cello-mcp.ts:120` `McpServer` declares no channel capability; daemon already dispatches `session_state_changed`/`created` on real inbound sessions — **`daemon.ts:3183`** (the documented `:3075` has drifted; also fires at `:3188`, `:3610`, `:4575`); `ipc-client.ts:68` is the `onNotification` template to copy |
+| Stage 2 is a real daemon build (Gaps 3–6) | ✅ CONFIRMED | `notification-dispatcher.ts` has exactly three dispatch methods — no `dispatchCelloMessage`; `session-node-manager.ts` has a session-*state* callback (M7-SESSION-001) but no content-arrival callback |
+| `--channels` requirement / dormant Claude cannot be roused | ✅ STRUCTURAL | The shim is a stdio subprocess of a running session — no session, no subprocess, nothing to push into. The in-context `notifications/claude/channel` mechanism is real (the on-disk Telegram plugin uses exactly it, working). The item-0 spike remains the end-to-end confirmation for CELLO's specific wiring |
+| M9 "known integration task" at the named seams | ✅ CONFIRMED (+ caveat) | See the verified callout in *Scope boundary* above — branch real, seams real, merge dry-run textually clean; semantic gate still required |
+| Telegram plugin ~1040 lines; single-`getUpdates`-consumer constraint | ✅ CONFIRMED | 1,038 lines at the documented path; grammy + bun; PID file (`server.ts:54`), stale-poller kill (`:56-69`), 409-Conflict retry (`:994-1032`), orphan watchdog (`:670-673`). The constraint is stated verbatim in a comment at `:56-59` — the OQ-1 daemon-owned steer's evidence is solid |
+| `since_seq` (#11) is new work | ✅ CONFIRMED | Zero hits for `since_seq`/`sinceSeq` anywhere in cello-client |
+| No capability negotiation on `ipc.connect` (#9) | ✅ CONFIRMED | Handshake carries only `clientType` (`daemon.ts:1254`, default `"cli"`); no channel-capability descriptor exists |
+| `pickup_queue` exists; ask-on-reconnect missing (#16) | ✅ CONFIRMED | `V34__write_seam_targets.sql`, `V35__pickup_queue_signal_kind.sql`, `pickup-repository` in trustless-cello; no daemon-side reconnect pull |
+| Dependency chains (6→5, 8→6, 17→16, 19/20→18, 11 load-bearing for 6/10) | ✅ CONFIRMED | Structural: stage 2 rides stage 1's forwarding hop (Gap 2 must forward all four frame types); the read-before-write refusal's guidance is literally "catch up via `since_seq`"; 17's enabling store is 16's discovery step |
+| #18 milestone-scale | ✅ CONFIRMED | See the scrutiny section below |
+
+### Missing points the notes didn't carry (fold into the SPEC)
+
+1. **Notifications are fire-and-forget with no ack — `cello_check_notifications` (#3) is the loss
+   reconciliation mechanism, not just a poll convenience.** A channel push can be missed (session
+   compacting, busy, restarting, shim respawn). The doorbell has no redelivery; #3 on reconnect/idle
+   is the catch-up that makes push safe to rely on. This materially strengthens #3's tier claim —
+   it belongs in the same slice as stage 1, not later.
+2. **Two `--channels` sessions, same agent = double-wake.** Dispatch is targeted at connections
+   where the agent is current; two connections both current on agent A both get the doorbell, both
+   may act. Ties directly into #10 (read-before-write) — until #10 lands, document "one attended
+   session per agent" as the supported launch shape.
+3. **The kill switch is in the launch intent but absent from this inventory.** CLAUDE.md's launch
+   lens names "security layer + kill switch" as platform/portal's job. It is not an M8C item — but
+   the M8C SPEC must state where it IS tracked, so it doesn't fall between milestones.
+4. **The daemon-owned Telegram bot adds a new outbound network surface to the heavy local node**
+   (long-poll to `api.telegram.org`). Token at rest in daemon config (SQLCipher — fine), but the
+   egress itself is new: today the daemon talks only to directories/relays/peers. Worth an explicit
+   line in the relay story's security section.
+5. **Directory→client push already exists** (the signaling stream delivers `session_request` etc. to
+   the Primary today), so #18's "one protocol addition" (the primary-transfer offer frame) is honestly
+   small — the frame is cheap; the machinery around it (below) is the milestone.
+6. **Line-drift discipline:** the 2026-06-27 log's `file:line` pins have drifted (e.g. `daemon.ts:3075`
+   → `:3183`). Stories should cite symbol names, not line numbers.
+
+### #18 Primary/Standby — scrutiny (sovereign-node + heavy-local-node lenses)
+
+**Verdict: own milestone, not an M8C item.** The evidence:
+
+- **Both repos, four subsystems:** ECDH device-linking handshake (new crypto surface), SQLCipher
+  DB sync (two hash-chained databases reconciling — a design problem by itself, not a file copy),
+  the directory Primary record + transfer-offer frame (trustless-cello), per-agent policy plumbing.
+- **Security-sensitive in a way nothing else here is:** K_local IS the agent. The device-linking
+  handshake is the attack surface — "how does daemon A authenticate that daemon B belongs to the
+  same operator?" is exactly the class of question that gets its own SPARC design log, not a story
+  AC. Mitigating structure: accepting a primary-transfer offer is only useful to a daemon that
+  already holds K_local, so a malicious directory cannot hand the agent to an attacker — but the
+  directory does gain a new power (Primary arbitration) that must stay consistent with the
+  sovereign-node posture (no single directory node should decide Primary unilaterally; it's
+  directory-*federation* state).
+- **Heavy-local-node reality:** one SQLite write lock per daemon is the current invariant; two
+  daemons sharing an agent's history is a new coherence regime.
+- **Migration-trap check — deferral is SAFE:** single-daemon setups are implicitly Primary; adding
+  Standby later strands nobody and changes no wire format for existing agents. This is the good
+  kind of deferral.
+
+### Edge cases unaddressed (carry into story ACs)
+
+- **Doorbell during session teardown:** peer opens a session and seals/aborts before the operator
+  reacts — the wake must tolerate `cello_receive` on an already-dead session gracefully.
+- **Shim restart under a live Claude session:** IPC reconnect exists, but the channel capability
+  re-declaration + missed-notification catch-up (#3) on re-attach needs an explicit AC.
+- **Away + stage 1 interplay:** if no client is attached, there is no connection to push to — the
+  doorbell and the away/queue model (#12) must agree on who answers when. Stage 1 stories should
+  state the no-attached-client behavior explicitly (daemon queues; nothing pushes; #3 reveals on
+  attach).
+- **Telegram relay with zero live sessions (Mode 1 doorbell):** works cold by design (daemon-owned
+  bot) — but full-monitoring level requires the stage-2 hook; the noise-level setting must degrade
+  gracefully when stage 2 events aren't flowing.
 
 ---
 
