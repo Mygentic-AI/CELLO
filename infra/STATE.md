@@ -9,6 +9,30 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🌐 Cross-node session establishment — Story A (directory-side) DEPLOYED (2026-07-05)
+
+**Directory-side of the cross-node topology deployed to all 3 regions** (design:
+`docs/planning/discussion_logs/2026-07-04_1730_cross-node-session-topology.md`; build journal:
+`docs/planning/user-stories/m8b/2026-07-05_0655_cross-node-session-establishment-build-journal.md`).
+
+- **Commit `bafed51a`**; pipeline `cello-directory-pipeline` (us-east-1) exec **SUCCEEDED**, all 3
+  regions rolloutState=COMPLETED, 1/1 running: **us-east-1 taskdef :231, eu-central-1 :91,
+  ap-northeast-1 :82**. Pre-change health check was GREEN (6/6 ECS, 6/6 DNS).
+- **What shipped (directory app code only — NO CFN/template/task-def change, so no deploy.sh needed):**
+  item 0 profile read-through (`getProfileWithReadThrough`, FINDING-8), item 1 discovery lookup
+  handler + frames (`discovery_lookup`/`_result`/`_error`), item 3 visiting-auth presence integrity
+  (`visiting` flag gates both presence writes). New log events: `directory.discovery.lookup(.failed)`,
+  `directory.profile.read_through`, `directory.auth.visiting`.
+- **Relay cascade (MANDATORY after directory redeploy) — INITIATED 2026-07-05:** all 3 relays
+  `stop-task`'d to re-register with the new directory tasks (us-east-1 task 7daf788d, eu-central-1
+  eecf1ad8, ap-northeast-1 d8b42708 — all DEACTIVATING). **TODO: verify `relay.already.registered`
+  per region + re-sign manifests if relay IPs changed (infra/CLAUDE.md) + confirm 6 ECS 1/1.**
+- **Story B (client-side) NOT yet published** — cello-client commit `ba570d1`, in review; publish
+  (version cascade transport/client/daemon/cli/connect) pending. The directory does NOT consume the
+  client's discovery mirror, so no directory re-pin/redeploy is required for Story B.
+
+---
+
 ## 🚀 M8B Sprint A — registration availability fix (in progress, 2026-07-04)
 
 ### Problem 2 — QUORUM REGISTRATION — SHIPPED + PROMOTED TO `latest` + directory deployed (2026-07-04)
