@@ -222,3 +222,6 @@ live-journey yardstick, to draft next), and **an M9 Build Journal started at fir
 - [[2026-05-16_1130_security-layer-improvements-from-production-reference]] — the six
   production gaps feeding M9 (RE2, entropy, PII types, honey tokens, policy gate, audit
   streaming)
+- [[M8C-MILESTONE-NOTES|M8C Milestone Notes]] — verified (2026-07-05) that the m9-build→main
+  merge is textually conflict-free but the seam needs a semantic re-prove post-merge (all
+  M8B-era content paths through the gateway)

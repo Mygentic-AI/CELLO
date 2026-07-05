@@ -819,6 +819,8 @@ publish cascade), while this doc is authoritative for *what* the milestone build
 
 - [[2026-06-27_0753_claude-code-channels-cello-integration|Claude Code Channels × CELLO — Integration Model]]
   — the channel-protocol technical reference (superseded by this doc for planning; authoritative for code-level detail)
+- [[M8C-MILESTONE-NOTES|M8C Milestone Notes]] — this log distilled into the M8C triage worksheet
+  (feature inventory + sequencing + Telegram-relay vision), with the 2026-07-05 code-verification pass
 - [[M9-DEFINITION-OF-DONE|M9 Definition of Done]] — the security gateway that secures the channel
   seam; Phase-1 launch-complete on the `m9-build` branch, deliberately unmerged pending M7/M8 close
 - [[overview|M9 Overview — Security and Governance Layer]] — what M9 is, its two phases, the story map

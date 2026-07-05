@@ -454,4 +454,5 @@ main + m9-build, trustless-cello main, the plugin on disk). Verdicts:
 - [[2026-06-27_0753_claude-code-channels-cello-integration|Claude Code Channels × CELLO — Integration Model]] — code-level channel-protocol reference (file:line edit points, the publish cascade)
 - [[M8B-SPEC]] — the federation milestone; M8C reuses its 5-doc apparatus shape
 - [[M9-DEFINITION-OF-DONE|M9 Definition of Done]] — the security gateway; its merge/wire is the excluded integration prerequisite
+- [[2026-06-21_1600_m9-content-channel-seam-and-entry-plan|M9 Content-Channel Seam and Entry Plan]] — the `ingestReceivedContent`/`cello_send` seam the verified-merge semantic gate must re-prove post-merge
 - [[2026-07-01_0900_m8b-closed-e2e-testing-phase|M8B Closed — E2E Testing Phase]] — where the notification-wiring gap was first surfaced post-M8B
