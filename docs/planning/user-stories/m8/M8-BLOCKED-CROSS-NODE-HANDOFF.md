@@ -206,3 +206,10 @@ cluster.
 Related: the cross-node presence fork
 (`discussion_logs/2026-06-28_2030_m8-cross-node-presence-replication-fork.md`), `M8-DEFINITION-OF-DONE.md`
 (the DoD lines above, with their current 🟡 notes), and the M8 build-journal cross-node entries.
+
+---
+
+## Related Documents
+
+- [[2026-07-04_1730_cross-node-session-topology|Cross-node session topology]] — the design that closes the reachability half of this ledger: discovery from replicated presence + a transient client connection to the target's home node (directories never talk to each other).
+- [[2026-06-28_2030_m8-cross-node-presence-replication-fork|M8 cross-node presence replication fork]] — item #1's decision record (replicate `agent_presence` + `directory_nodes` via `cello_pub`).

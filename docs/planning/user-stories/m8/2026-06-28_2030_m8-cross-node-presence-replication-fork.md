@@ -111,3 +111,6 @@ DOD-READ-1/2), and the M8 build journal cross-node entries.
 - [[2026-06-26_1030_per-agent-directory-connections-and-manifest-over-http|Per-agent directory connections]]
   — which node a daemon connects to / fails over to, i.e. why "the owning node" is not fixed and why
   cross-node read matters.
+- [[2026-07-04_1730_cross-node-session-topology|Cross-node session topology]] — the consumer of this
+  replication: discovery reads `agent_presence.owning_node_id` to route the client to the target's home;
+  its visiting-auth blocker exists precisely to preserve this fork's single-writer ownership model.

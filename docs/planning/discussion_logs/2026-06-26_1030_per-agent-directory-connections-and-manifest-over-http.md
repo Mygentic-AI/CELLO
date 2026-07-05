@@ -135,3 +135,4 @@ removed agent.
 - [[2026-06-11_1459_implementing-directory-bidirectional-authentication|Directory Bidirectional Auth]] — the challenge/response handshake that makes every signaling connection agent-scoped (the basis for the verification pass).
 - [[2026-06-25_2109_agent-identity-lifecycle-discovery|Agent Identity Lifecycle]] — the removal/retire model whose Demo1 stranding bug surfaced this redesign.
 - [[2026-06-11_0822_transport-security-audit-and-libp2p-primitives|Transport Security Audit]] — sovereign-node / relay-identity context for the manifest's self-authenticating trust model.
+- [[2026-07-04_1730_cross-node-session-topology|Cross-node session topology]] — extends the one-authenticated-stream-per-agent model to an on-demand second (visiting) connection to the target's home node for cross-node session setup.

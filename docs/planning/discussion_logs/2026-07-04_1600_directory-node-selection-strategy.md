@@ -95,3 +95,10 @@ P2C gets ~90% of the balancing benefit with none of the herding, and it is prova
 - Mitzenmacher, "The Power of Two Choices in Randomized Load Balancing."
 - Envoy `weighted least request` (P2C + EWMA), Nginx/HAProxy `random(2)`, Finagle P2CEwma — production
   precedents for coordinator-free client/proxy-side load balancing.
+
+---
+
+## Related Documents
+
+- [[2026-07-04_1730_cross-node-session-topology|Cross-node session topology]] — composes with this strategy: node selection answers "which home / which node to route through," the topology answers how a session reaches an agent homed elsewhere.
+- [[2026-06-26_1030_per-agent-directory-connections-and-manifest-over-http|Per-agent directory connections]] — the manifest + per-agent connection model the selection strategy picks endpoints from.
