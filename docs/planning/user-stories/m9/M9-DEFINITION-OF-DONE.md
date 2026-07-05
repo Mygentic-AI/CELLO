@@ -127,3 +127,11 @@ Built only when needed. Each has a home:
   can start now.
 - Until #5 (M9-ATTEST-001) is built, do not market the product as "tamper-proof" — that claim
   only becomes true once records are attested to the directory.
+
+---
+
+## Related Documents
+
+- [[M8C-DEFINITION-OF-DONE]] — DOD-M9INT-1 is the committed home for the m9-build merge + seam
+  wiring (Tier 0 of M8C); the semantic gate re-runs this DoD's gate against the merged daemon
+- [[2026-06-21_1600_m9-content-channel-seam-and-entry-plan|M9 Content-Channel Seam and Entry Plan]] — the daemon attachment point the merge wires
