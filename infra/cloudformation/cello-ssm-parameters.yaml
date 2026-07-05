@@ -34,7 +34,7 @@ Resources:
     Properties:
       Name: !Sub "/cello/${Environment}/ops-agent/expected-migration-version"
       Type: String
-      Value: "41"
+      Value: "42"
       Description: !Sub >
         Expected Flyway migration version for the CELLO ops-agent (${Environment}).
         Update after each schema migration, then restart the ECS task.

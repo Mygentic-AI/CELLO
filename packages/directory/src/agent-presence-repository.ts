@@ -111,11 +111,32 @@ export async function readPresenceForDiscovery(
   return { hasRow: true, rawOnline: r.online, owningNodeId: r.owning_node_id, nodeFresh: r.node_fresh === true };
 }
 
-/** Per-node liveness heartbeat — the only write on the periodic timer (~30-60s). */
+/**
+ * Per-node liveness heartbeat — the only write on the periodic timer (~30-60s). SELF-REGISTERING: the
+ * node ensures its OWN directory_nodes row exists (region == nodeId in this system — bin sets both from
+ * AWS_REGION) and keeps last_heartbeat_at fresh. A bare UPDATE no-ops when the row is absent, and
+ * insertDirectoryNode is test-only, so without this upsert directory_nodes never has a fresh self-row —
+ * which makes the READ-001 freshness JOIN age EVERY agent to dark/offline (presence + discovery both
+ * read offline). Needs the INSERT + UPDATE RLS policies for cello_service (V42 adds the missing UPDATE
+ * policy; V17's INSERT policy covers the insert path).
+ */
 export async function refreshNodeHeartbeat(db: PgExecutor, nodeId: string): Promise<void> {
-  await db.query(`UPDATE directory_nodes SET last_heartbeat_at = now() WHERE node_id = $1`, [
-    nodeId,
-  ]);
+  const res = await db.query(
+    `INSERT INTO directory_nodes (node_id, region, status, last_heartbeat_at)
+     VALUES ($1, $1, 'active', now())
+     ON CONFLICT (node_id) DO UPDATE SET last_heartbeat_at = now()`,
+    [nodeId],
+  );
+  // Loud detector for the EXACT incident class this fix addresses: a silent 0-row write (RLS blocks
+  // the ON CONFLICT DO UPDATE — e.g. V42's policy missing or a future policy regression, or any DB
+  // hiccup that RLS-filters instead of erroring) would age EVERY agent on this node to dark/offline
+  // federation-wide while the node still looks healthy. RLS filtering is not an error, so without this
+  // the failure is invisible. Throw so the caller logs it at error (and an alarm can fire) instead.
+  if ((res.rowCount ?? 0) !== 1) {
+    throw new Error(
+      `heartbeat_wrote_zero_rows: directory_nodes upsert for node '${nodeId}' affected ${res.rowCount ?? 0} rows (RLS UPDATE policy missing?)`,
+    );
+  }
 }
 
 export interface AgentWithPresence {

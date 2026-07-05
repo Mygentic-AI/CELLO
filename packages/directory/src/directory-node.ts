@@ -799,7 +799,11 @@ export class CelloDirectoryNode {
       const nodeId = this.#frostHandler.nodeId;
       const tick = () => {
         void refreshNodeHeartbeat(pool, nodeId).catch((err: unknown) => {
-          this.#logger?.warn("directory.node.heartbeat.failed", {
+          // ERROR, not warn: a failed/0-row heartbeat means this node's agents silently age to
+          // dark/offline federation-wide (discovery returns offline for all of them) while the node
+          // still serves traffic and passes health checks. This is the loud signal for an operator/
+          // alarm — the exact incident class the region-nodeId + V42 RLS fix repairs.
+          this.#logger?.error("directory.node.heartbeat.failed", {
             nodeId,
             reason: err instanceof Error ? err.message : String(err),
           });

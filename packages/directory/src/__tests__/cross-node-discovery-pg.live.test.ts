@@ -14,6 +14,7 @@ import {
   upsertPresenceOnline,
   upsertPresenceOffline,
   readPresenceForDiscovery,
+  refreshNodeHeartbeat,
 } from "../agent-presence-repository.js";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { configurePgTypes } from "../pg-type-config.js";
@@ -87,6 +88,92 @@ describeLive("cross-node discovery — presence read (real schema, rolled back)"
   it("state 2: an agent that never came online ⇒ hasRow:false", async () => {
     const p = await readPresenceForDiscovery(client, KPUB, FRESH_MS);
     expect(p).toEqual({ hasRow: false, rawOnline: false, owningNodeId: null, nodeFresh: false });
+  });
+});
+
+describeLive("cross-node presence fix — self-registering heartbeat (real schema, rolled back)", () => {
+  let pool: pg.Pool;
+  let client: pg.PoolClient;
+  const FRESH_NODE = "aws-selfreg-test-region";
+  const KPUB = "kpub-selfreg-a";
+  const ACCT = "00000000-0000-0000-0000-0000000000e3";
+
+  beforeAll(async () => { pool = new pg.Pool({ connectionString: DB_URL }); });
+  afterAll(async () => { await pool.end(); });
+  beforeEach(async () => {
+    client = await pool.connect();
+    await client.query("BEGIN");
+    // Deliberately do NOT pre-insert the directory_nodes row for FRESH_NODE — the whole point is that
+    // the heartbeat self-registers it (production has no other writer; insertDirectoryNode is test-only).
+    await client.query(
+      `INSERT INTO user_accounts (account_id, phone_stub_hash, email_stub_hash, chain_hash)
+       VALUES ($1, 'selfreg-phone', 'selfreg-email', 'selfreg-chain')`,
+      [ACCT],
+    );
+    await client.query(
+      `INSERT INTO agent_profiles (k_local_pubkey, primary_pubkey, account_id) VALUES ($1, $2, $3)`,
+      [KPUB, "ppub-selfreg-a", ACCT],
+    );
+  });
+  afterEach(async () => { await client.query("ROLLBACK"); client.release(); });
+
+  it("refreshNodeHeartbeat creates the node's OWN directory_nodes row when absent (region == node_id)", async () => {
+    const before = await client.query(`SELECT 1 FROM directory_nodes WHERE node_id = $1`, [FRESH_NODE]);
+    expect(before.rows.length).toBe(0); // no row yet
+    await refreshNodeHeartbeat(client, FRESH_NODE);
+    const after = await client.query<{ region: string; status: string; fresh: boolean }>(
+      `SELECT region, status, last_heartbeat_at > now() - interval '5 seconds' AS fresh FROM directory_nodes WHERE node_id = $1`,
+      [FRESH_NODE],
+    );
+    expect(after.rows.length).toBe(1);
+    expect(after.rows[0]).toMatchObject({ region: FRESH_NODE, status: "active", fresh: true });
+  });
+
+  it("end-to-end: after heartbeat + online, discovery sees the agent ONLINE (the bug that broke everything)", async () => {
+    // This is the exact chain that was silently returning offline: without a fresh directory_nodes row
+    // for the owning node, readPresenceForDiscovery reports nodeFresh:false (dark) for an online agent.
+    await refreshNodeHeartbeat(client, FRESH_NODE);       // node self-registers + is fresh
+    await upsertPresenceOnline(client, KPUB, FRESH_NODE);  // agent online, owned by this node
+    const p = await readPresenceForDiscovery(client, KPUB, 60_000);
+    expect(p).toEqual({ hasRow: true, rawOnline: true, owningNodeId: FRESH_NODE, nodeFresh: true });
+  });
+
+  it("a second heartbeat UPDATEs (does not duplicate) the row", async () => {
+    await refreshNodeHeartbeat(client, FRESH_NODE);
+    await refreshNodeHeartbeat(client, FRESH_NODE);
+    const count = await client.query(`SELECT count(*)::int AS n FROM directory_nodes WHERE node_id = $1`, [FRESH_NODE]);
+    expect(count.rows[0].n).toBe(1);
+  });
+});
+
+describeLive("cross-node presence fix — heartbeat upsert under the REAL cello_service RLS role (proves V42)", () => {
+  // The whole incident was RLS: V38 GRANTed UPDATE but no UPDATE *policy*, so the heartbeat's UPDATE
+  // path was silently RLS-blocked. The tests above run as postgres (bypass RLS) and can't catch that —
+  // this one uses SET LOCAL ROLE cello_service so the INSERT + ON CONFLICT DO UPDATE run under the app
+  // role's real grants + RLS policies (cello_service is neither owner nor BYPASSRLS, so RLS applies).
+  // Without V42's UPDATE policy the DO UPDATE path is denied → refreshNodeHeartbeat throws.
+  let pool: pg.Pool;
+  const NODE = "aws-rls-heartbeat-test-region";
+
+  beforeAll(async () => { pool = new pg.Pool({ connectionString: DB_URL }); });
+  afterAll(async () => { await pool.end(); });
+
+  it("under SET ROLE cello_service, the heartbeat INSERT + ON CONFLICT DO UPDATE both succeed (V42 policy present)", async () => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL ROLE cello_service"); // act as the restricted app role → RLS applies
+      // 1st: self-register (INSERT path — V17 insert policy). rowCount 1 or refreshNodeHeartbeat throws.
+      await refreshNodeHeartbeat(client, NODE);
+      const seen = await client.query(`SELECT 1 FROM directory_nodes WHERE node_id = $1`, [NODE]);
+      expect(seen.rows.length).toBe(1);
+      // 2nd: refresh (ON CONFLICT DO UPDATE — the EXACT write V38-grant-without-V42-policy silently
+      // blocked). Must NOT throw — proves the V42 UPDATE policy actually permits it under cello_service.
+      await expect(refreshNodeHeartbeat(client, NODE)).resolves.toBeUndefined();
+    } finally {
+      await client.query("ROLLBACK").catch(() => {});
+      client.release();
+    }
   });
 });
 

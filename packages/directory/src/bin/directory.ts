@@ -897,6 +897,21 @@ try {
 
   result = await createDirectoryNode({
     keyProvider: kp,
+    // Cross-node presence fix: pass the REGION node id ("us-east-1", = awsRegion) so #recordPresence
+    // records owning_node_id as the region (manifest-resolvable by clients + matches directory_nodes)
+    // rather than defaulting to the libp2p peer id. Without this, discovery/presence read every agent
+    // as dark/offline (the freshness JOIN on directory_nodes.node_id never matches a peer id).
+    //
+    // BLAST RADIUS (this repoints frostHandler.nodeId, not just presence — verified safe, region IS
+    // the intended value everywhere; the peer-id default was the latent bug):
+    //   • agent_presence.owning_node_id + the heartbeat's directory_nodes row (the fix's target)
+    //   • sessions.owning_node_id (writeSessionWithParticipants) — region matches the manifest, more correct
+    //   • the checkpoint commit-response nodeId label (was WRONGLY the peer id; the CheckpointCoordinator
+    //     + MANIFEST-002 signing already used the region — this aligns them)
+    //   • the FROST participant identifier is derived ONCE at DKG time and PERSISTED in the share; signing
+    //     reads it from the stored share, never re-derives from nodeId → NO migration trap for existing agents.
+    // (IaC sets NODE_ID = AWS::Region, unique per region — so nodeId is always a valid manifest node id.)
+    nodeId,
     listenAddresses,
     relay: networkRelay,
     relayEndpoint: { peer_id: relayPeerId, multiaddrs: relayMultiaddrs },
