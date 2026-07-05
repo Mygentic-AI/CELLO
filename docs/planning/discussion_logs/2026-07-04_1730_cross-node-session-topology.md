@@ -137,7 +137,8 @@ Everything downstream (offer/accept, assignment, relay, FROST, seal) is reused a
 1. **Cross-node session (FINDING-9 topology):** Alice homed us1, Bob homed eu1 — session establishes, conversation runs over the relay, both seals succeed. Multi-process, real regions. **Alice must be registered *after* the broker (eu1) last booted** — otherwise the boot-time cache masks the FINDING-8 read-through (build item 0) and the test passes vacuously.
 2. **Presence integrity:** after Alice's transient eu1 connection closes, Alice is still discoverable at us1 (state 1, `owning_node_id = us1`, online) — catches the visiting-auth blocker directly.
 3. **Stale-discovery retry:** kill Bob's home mid-window (after discovery, before the session request) — Bob re-homes, Alice's retry loop lands the session on the survivor.
-4. **Known-but-offline and unknown-agent:** discovery returns state 2 / state 3 respectively; the client surfaces distinct errors (no retry storm on state 3).
+4. **Known-but-offline and unknown-agent:** discovery returns state 2 / state 3 respectively; the client surfaces `counterparty_offline` / `unknown_agent` (exact codes, per the spec above; no retry storm on state 3).
+5. **Same-node regression:** two agents homed on the same node establish a session exactly as today — discovery returns the current node, the same-node shortcut takes the existing path, **zero visiting connections opened, zero new frames beyond the one `discovery_lookup`**. The design's premise ("existing flow untouched") is a checkable line, not an assumption.
 
 ## Trust layer (M10/11) fit — designed to slot on, not retrofit
 
@@ -180,12 +181,14 @@ Handled **post-auth** on the existing signaling stream (only authenticated agent
 - Request: `{ type: "discovery_lookup", target_pubkey: bytes }`
 - Response: `{ type: "discovery_lookup_result", target_pubkey: bytes, state: "online" | "offline" | "unknown_agent", owning_node_ids: string[] }` — `owning_node_ids` non-empty only when `state = "online"` (length 1 until the k-knob lands).
 - Handler logic: existence read (`pg-directory-store.ts:365`) → no row → `unknown_agent`. Row exists → presence point-read; `online = true` **and** owning node heartbeat fresh (READ-001 rule, `agent-presence-repository.ts:99`) → `online` + owning node. Otherwise → `offline`. **The dark-node case (state 4) collapses to `offline` on the wire** — the distinction is server-side logging only (`directory.discovery.lookup` with `reason: "owning_node_dark"`), the client's action is identical.
+- **Handler failure mode:** a DB error during the lookup returns `{ type: "discovery_lookup_error", reason: "lookup_failed" }` (+ `directory.discovery.lookup.failed` log) — never a fabricated `offline`/`unknown_agent`, and never a stream abort (the connection is the agent's home inbound; killing it over a read hiccup is disproportionate). Client treats it as retryable, same policy as `target_offline`.
 
 ### Item 2 — client flow (daemon-side)
 
 - **Always discover first.** On `cello_initiate_session` (`daemon.ts:2400`), issue `discovery_lookup` on the current home connection before any dial. If `owning_node_ids` includes the node the agent is already connected to → proceed exactly as today (same-node shortcut; **never open a visiting connection to a node you already have a connection on** — `#streams` is keyed by pubkey, a second auth would clobber the first stream entry).
 - **Otherwise:** resolve the owning node through the signed manifest (`directory-bootstrap.ts` `manifestNodesToEndpoints`) — unknown node id → hard error, not a dial; open the visiting connection (item 3 flag set); submit the session request there.
 - **Retry policy:** `target_offline` from the session request after discovery said online → re-discover → retry, **max 3 attempts, backoff 1s/3s** (covers re-home and replication lag); then surface state 2 to the caller. `unknown_agent` → no retry, distinct error.
+- **Named error codes at the MCP tool surface** (the F4 rule — never collapse distinct states into one string): state 2 / retries exhausted → `counterparty_offline`; state 3 → `unknown_agent`; manifest-resolution failure for a discovered node → `discovery_node_unresolvable`; old-directory fallback (unknown `discovery_lookup` frame) → proceed with today's local-only behavior, and if that fails, today's `target_offline` unchanged. ACs must assert the exact code per scenario, not "an error."
 - **Visiting-connection manager:** daemon-held map `node_id → { connection, refcount }`. Acquire on setup start (reuse if present), release on relay-handoff-complete / setup-failure / escalation (release + re-initiate on resolve). Refcounted so two concurrent setups brokered on the same node share one connection and the first to finish doesn't strand the second. Idle safety-net timeout (e.g. 5 min) so a leaked hold can't live forever.
 
 ### Item 3 — visiting flag
