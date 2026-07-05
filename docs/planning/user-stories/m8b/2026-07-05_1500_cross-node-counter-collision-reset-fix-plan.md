@@ -67,6 +67,32 @@ Every existing agent (demo, Agent-1, …) must **re-register** afterward — `ag
 ## Fixes in one pass
 Collision (live bug) · wedged ap1 subscription · `seal_notarizations` federation gap. Dormant federated checkpoint remains a separate future activation.
 
+## ✅ EXECUTION RESULT (2026-07-05, commit `4328fcb1` + reset)
+
+**Fix committed** (`4328fcb1`): setup-replication.sh Step 5c staggering (residue-safe, TOCTOU table-lock,
+positive STAGGER_DONE marker, serial-discovery by nextval default) + seal_notarizations in publication.
+Reviewed by feature-dev:code-reviewer + cello-fallback-finder; every finding fixed before commit.
+
+**Full reset executed, safe by construction:**
+- Phase 1: dropped all 6 subs + 6 slots + publications. **Safety gate verified: 0 replication objects on
+  every node BEFORE any truncate** (no 2026-06-25 cascade — replication was fully down first).
+- Phase 2: TRUNCATEd all data tables on all 3 nodes (kept flyway_schema_history).
+- Phase 3+4: re-ran setup-replication.sh → 6 slots streaming, publication=18 tables incl seal_notarizations.
+- Verified: sequences staggered (conversation_seals/seal_notarizations/sessions last_value = **1/2/3 by node**),
+  **all subscriptions 0 apply-errors** (ap1 un-wedged from 3590+).
+
+**Fix PROVEN LIVE — direct test on the exact table that collided (`conversation_seals`):**
+- Insert on eu1 → **id=2** (eu1 residue), insert on us1 → **id=1** (us1 residue).
+- **All 3 nodes see BOTH rows, no `_pkey` collision** — the precise scenario that failed pre-fix now
+  works bidirectionally. Deletes also replicated cleanly to all nodes (the 2026-06-25 failure mode is gone).
+- Live cross-node write of `agent_presence` (demo on eu1) also replicated to us1.
+
+**Follow-up (the documented consequence, NOT a fix gap):** all agents must **re-register** — their
+`agent_profiles` were wiped, and startup only writes presence, not a profile (no auto-reconcile — that's
+the deferred "absent-node reconcile" M8B item; there is no register MCP tool, it's the portal/ceremony
+flow). A full end-to-end cross-node SEAL re-test is gated on that re-registration. The underlying
+collision fix is proven directly at the DB level, so the seal will federate once agents re-register.
+
 ## Artifacts / touch points
 - `infra/setup-replication.sh` — add per-region sequence staggering + `seal_notarizations` in publication.
 - A reset runbook/script (idempotent, region-aware) for Phases 1–4.
