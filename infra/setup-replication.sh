@@ -157,18 +157,29 @@ for REGION in "${REGIONS[@]}"; do
   RDS_DB_NAMES["${REGION}"]="cello_${ENVIRONMENT}"
 done
 
-# Tables covered by the publication (all append-only tables, AC behavior)
-# V34 write-seam targets (WRITEAPI-001): everything written through /internal/agent-write replicates
-# to every sovereign node. agent_suspensions + identity_tree_entries use NATURAL keys (agent_id,
-# agent_id+signal_kind) and replicate cleanly. pickup_queue is DELIBERATELY EXCLUDED for now: its
-# BIGSERIAL id would collide across nodes unless pickup_queue_id_seq is staggered with the same
-# `ALTER SEQUENCE … INCREMENT BY 3 RESTART WITH {offset}` convention every other replicated BIGSERIAL
-# table uses (sessions, user_accounts, conversation_seals — see M5-infrastructure-deployment.md). Its
-# only consumer is TRUST-001 (the daemon pickup), which will add it to the publication WITH the
-# sequence staggering when that journey lands. Adding it here now would arm a federation-wide
-# replication outage on the first cross-node insert.
-PUBLICATION_TABLES="agent_profiles,conversation_seals,conversation_seal_staging,directory_checkpoints,checkpoint_node_signatures,relay_registrations,sessions,pending_notifications,user_accounts,registrations,pre_authorization_tokens,agent_revocations,agent_suspensions,identity_tree_entries,agent_presence,directory_nodes,pickup_queue"
+# Tables covered by the publication (all append-only + write-seam-replicated tables).
+# CROSS-NODE COUNTER COLLISION FIX (2026-07-05): every replicated table with a BIGSERIAL `id` collides
+# across nodes UNLESS its sequence is staggered. Logical replication copies rows but never advances the
+# subscriber's sequence, so a node that received its rows via replication draws a nextval() that already
+# exists -> duplicate-key on _pkey -> the local write fails and the subscription can wedge. This is not
+# theoretical: it wedged the ap-northeast-1 subscription (thousands of apply-errors) and broke the first
+# cross-node seal. Step 6 below now staggers EVERY BIGSERIAL sequence (per-node residue class,
+# INCREMENT BY SEQ_INCREMENT), so all of these replicate cleanly regardless of which node writes.
+# seal_notarizations is included so cross-node seals federate (its chain is never verified -> no fork).
+PUBLICATION_TABLES="agent_profiles,conversation_seals,conversation_seal_staging,seal_notarizations,directory_checkpoints,checkpoint_node_signatures,relay_registrations,sessions,pending_notifications,user_accounts,registrations,pre_authorization_tokens,agent_revocations,agent_suspensions,identity_tree_entries,agent_presence,directory_nodes,pickup_queue"
 TABLE_COUNT=$(echo "${PUBLICATION_TABLES}" | tr ',' '\n' | wc -l | tr -d ' ')
+
+# Per-node sequence-stagger config (applied in Step 6). Each node mints ids ≡ its offset
+# (mod SEQ_INCREMENT), so no two nodes ever generate the same id — collision-proof AND growth-safe:
+# supports up to SEQ_INCREMENT nodes; adding a node = give it the next free offset, touching no existing
+# node's ids. Offsets are STABLE per region FOREVER — never renumber an existing region. Adding a new
+# region REQUIRES adding its offset here (deliberate — a missing offset hard-errors in Step 6).
+SEQ_INCREMENT=1000
+declare -A NODE_SEQ_OFFSET=(
+  ["us-east-1"]=1
+  ["eu-central-1"]=2
+  ["ap-northeast-1"]=3
+)
 
 # ── Step 1: Validate all ECS tasks are RUNNING before touching any DB ─────────
 # AC-007: exit 1 before any psql commands if any task is not in RUNNING state.
@@ -672,6 +683,77 @@ while true; do
 
   echo "  Waiting for streaming state... (${ELAPSED}s elapsed, ${STREAMING_SLOTS[*]:-none} streaming so far)"
   sleep 5
+done
+
+# ── Step 5c: Stagger BIGSERIAL sequences per node (cross-node collision fix) ───
+# Each node's id sequences mint values in its own residue class (offset mod SEQ_INCREMENT), so no two
+# nodes ever generate the same id — the replicated BIGSERIAL _pkey collision cannot occur. Idempotent
+# and residue-safe: RESTART is computed ABOVE the current max(id), so this is safe to re-run on a
+# populated node (it only ever moves a sequence forward, never onto an existing id). On a freshly
+# truncated node the sequence restarts at the bare offset (1/2/3…).
+echo ""
+echo "── Staggering BIGSERIAL sequences on all nodes (INCREMENT BY ${SEQ_INCREMENT}) ──"
+for REGION in "${REGIONS[@]}"; do
+  OFF="${NODE_SEQ_OFFSET[${REGION}]:-}"
+  if [[ -z "${OFF}" ]]; then
+    log_error "infra.replication.setup.stagger_offset_missing" "{ \"region\": \"${REGION}\" }"
+    echo "ERROR: no sequence-stagger offset defined for region '${REGION}'. Add it to NODE_SEQ_OFFSET." >&2
+    exit 1
+  fi
+  RDS_EP="${RDS_ENDPOINTS[${REGION}]}"
+  DB_NAME="${RDS_DB_NAMES[${REGION}]}"
+  B64_MASTER=$(printf '%s' "${MASTER_PASSWORDS[${REGION}]}" | base64 | tr -d '\n')
+  # Discover serial columns by their nextval default (NOT a hard-coded 'id' column name, so a future
+  # BIGSERIAL PK under a different name can't be silently skipped), stagger each into this node's residue
+  # class, and ASSERT each landed there. The trailing SELECT emits STAGGER_DONE only on full success:
+  # ON_ERROR_STOP=1 means a RAISE EXCEPTION (verify failure / zero sequences found) OR a dead ECS-exec
+  # session yields NO STAGGER_DONE — so the caller fails loud on a POSITIVE confirmation instead of
+  # trusting the absence of an uppercase 'ERROR:' token (SSM-EOF and lowercase FATAL auth failures emit
+  # no such token and would otherwise be read as success on the flaky node this fix must protect).
+  STAGGER_SQL="DO \$stg\$
+DECLARE r record; mx bigint; startv bigint; lv bigint; node_off int := ${OFF}; inc int := ${SEQ_INCREMENT}; n int := 0;
+BEGIN
+  FOR r IN
+    SELECT c.relname AS tbl, a.attname AS col, pg_get_serial_sequence(c.relname, a.attname) AS seqname
+    FROM pg_class c
+    JOIN pg_namespace ns ON ns.oid = c.relnamespace AND ns.nspname = 'public'
+    JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+    WHERE c.relkind = 'r' AND c.relname <> 'flyway_schema_history'
+      AND pg_get_serial_sequence(c.relname, a.attname) IS NOT NULL
+    ORDER BY c.relname
+  LOOP
+    -- Lock the table so NO insert — local traffic OR the replication-apply worker — can consume ids
+    -- between the MAX read and the sequence RESTART. Without this, a concurrent insert in that TOCTOU
+    -- window could push past startv and re-collide, defeating the fix when the script is re-run against a
+    -- live/populated cluster. SHARE ROW EXCLUSIVE conflicts with the ROW EXCLUSIVE that inserts take; the
+    -- lock is held to the end of this DO block's single (implicit) transaction, and ORDER BY relname
+    -- gives a deterministic lock order so concurrent runs can't deadlock. (Reset usage pauses writes and
+    -- runs against empty tables where mx=0, so this is defense-in-depth for the idempotent re-run path.)
+    EXECUTE format('LOCK TABLE %I IN SHARE ROW EXCLUSIVE MODE', r.tbl);
+    EXECUTE format('SELECT COALESCE(max(%I),0) FROM %I', r.col, r.tbl) INTO mx;
+    IF mx = 0 THEN startv := node_off; ELSE startv := ((mx / inc) + 1) * inc + node_off; END IF;
+    EXECUTE format('ALTER SEQUENCE %s RESTART WITH %s INCREMENT BY %s', r.seqname, startv, inc);
+    EXECUTE format('SELECT last_value FROM %s', r.seqname) INTO lv;
+    IF (lv - node_off) % inc <> 0 OR lv <= mx THEN
+      RAISE EXCEPTION 'stagger_verify_failed tbl=% seq=% last_value=% off=% inc=% mx=%', r.tbl, r.seqname, lv, node_off, inc, mx;
+    END IF;
+    n := n + 1;
+  END LOOP;
+  IF n = 0 THEN
+    RAISE EXCEPTION 'stagger_no_sequences_found (wrong schema/search_path or empty DB?)';
+  END IF;
+  RAISE NOTICE 'staggered % sequences at offset %', n, node_off;
+END
+\$stg\$;
+SELECT 'STAGGER_DONE region=${REGION} offset=${OFF} inc=${SEQ_INCREMENT}';"
+  EXEC_OUTPUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${STAGGER_SQL}" 2>&1)
+  if ! echo "${EXEC_OUTPUT}" | grep -q "STAGGER_DONE"; then
+    log_error "infra.replication.setup.stagger_failed" "{ \"region\": \"${REGION}\", \"reason\": \"no_confirmation\" }"
+    echo "ERROR: sequence staggering did NOT confirm success in ${REGION} (no STAGGER_DONE — psql/session failure, auth error, or verify RAISE). Output below:" >&2
+    echo "${EXEC_OUTPUT}" >&2
+    exit 1
+  fi
+  echo "  Sequences staggered + verified on ${REGION} (offset ${OFF}, INCREMENT ${SEQ_INCREMENT})"
 done
 
 # ── Step 6: Print summary table ───────────────────────────────────────────────
