@@ -60,12 +60,39 @@ An agent therefore holds: **one home connection** (its inbound anchor) **plus a 
 - **The same-node session flow + relay:** offer/accept, FROST-signed assignment, location-independent relay pool (one signed S3 manifest read by all), circuit-relay dial — all existing and unchanged.
 - **The client already opens multiple directory connections at once** (the FROST ceremony fans streams to every node). A second, on-demand signaling connection extends an existing behavior, not a new paradigm.
 
+## Discovery — how the daemon asks "where is X?", and the states it must distinguish
+
+**Who does it ask? Its own directory — the one it is currently connected to. No polling.** Because identity and presence are *fully replicated*, whatever node the daemon is connected to (its home, or a survivor it already failed over to) can answer authoritatively for *any* agent. There is never a reason to poll all N directories.
+
+**Three distinct states** (today's `target_offline` wrongly collapses them — the same conflation as F4):
+
+| State | How the node determines it | Answer to the daemon |
+|---|---|---|
+| **1. Online — here's where** | `agent_profiles` has the pubkey **and** `agent_presence.online = true` **and** the owning node's heartbeat is fresh | `owning_node_id` (→ open a second connection there) |
+| **2. Known but offline** | `agent_profiles` has the pubkey, but `agent_presence.online = false` (or no presence row) | `offline` — the agent exists, just isn't reachable now (retry later / notify) |
+| **3. Unknown / wrong address** | `agent_profiles` has **no** row for the pubkey | `unknown_agent` — no such agent; a bad address, not a transient outage |
+
+**Edge (4th nuance, already handled by READ-001):** the presence row says online but the **owning node is dark** (stale/NULL `last_heartbeat_at`) — the agent's home died and it hasn't re-homed yet. Treat as "not currently reachable," distinct from a clean offline. The freshness rule lives in `agent-presence-repository.ts` (READ-001).
+
+**The readers already exist** — this is a new *handler* wrapping two existing point-reads, not new storage:
+- Existence: `SELECT 1 FROM agent_profiles WHERE k_local_pubkey = $1` (`pg-directory-store.ts:365`).
+- Presence: `agent_presence` is keyed on `k_local_pubkey` (PK) with `owning_node_id`/`online`/`last_seen_at` — a trivial point read (`agent-presence-repository.ts`; upsert-on-connect at `:29`, dark-node freshness at READ-001 `:99`).
+
+## FROST ceremony and seal — who coordinates them (answering "is it EU1?")
+
+**No — neither the ceremony nor the seal is done by the broker directory.** They are **client-coordinated**. Each agent's own daemon reconstructs its threshold signer and opens fresh `/cello/frost/1.0.0` streams **directly to its own consortium roster** — the directories it registered its share with (its persist-Q holders) — not to whatever node brokered the session (`session-ceremony.ts:117` `hydrateShareAndStubs` → `getConsortiumEndpoints()` roster → `directoryNodeStubs`; the seal at `:325` `runSealCeremony` uses the same). This is why signing already survives a node outage and is unrelated to the target-presence gate.
+
+Consequences for this topology (Alice on us1, transiently connected to eu1, reaching Bob on eu1):
+- **Session-setup assignment signature:** coordinated by **Alice's** client (the broker delegates the signature back to the initiator via `ClientDelegatedSigner.participateInCeremony`). This round-trip runs over Alice's connection to eu1, so **the transient connection must stay up through setup** (until the assignment is signed and the relay handoff completes).
+- **The seal at close:** bilateral, and **each party seals over its own roster** — Alice over her share-holders (which include *her* home), Bob over his. **Neither depends on the transient eu1 connection.** So eu1 is the *broker/rendezvous* for setup, never "the node that seals."
+- **Therefore the transient connection's lifecycle is settled:** hold it through session setup; release it after the relay handoff. The seal needs nothing from it.
+
 ## What's new to build
 
-1. **Discovery lookup.** Directory-side: a handler that answers "where is agent X?" from replicated `agent_presence` (returns `owning_node_id`, and — if adopted — a reachability hint). Client-side: call it before initiating when the target isn't on the current node.
-2. **On-demand second directory connection.** Client-side: given the target's home, open + authenticate a second signaling connection to that node, submit the session request there, and release it after the relay handoff. Manage its lifecycle alongside the home connection.
+1. **Discovery lookup handler** (see the table above) — directory-side signaling handler returning the 3-state answer from the two existing point-reads; client-side call before initiating when the target isn't already on the current node.
+2. **On-demand second directory connection.** Client-side: given the target's `owning_node_id`, open + authenticate a second signaling connection to that node (auth just works — identity is replicated), submit the session request there, hold through setup, release after the relay handoff. Copy the existing per-agent connection pattern.
 
-Everything downstream (offer/accept, assignment, relay) is reused as-is.
+Everything downstream (offer/accept, assignment, relay, FROST, seal) is reused as-is.
 
 ## Trust layer (M10/11) fit — designed to slot on, not retrofit
 
@@ -83,8 +110,22 @@ Covered by existing code (validated 2026-07-04): when the home stops responding,
 - **Relay reachability (assumed; validated by art/tests).** The design assumes the target is dialable via the relay once assigned. Not re-litigated here — it's the existing same-node behavior and will be covered by acceptance tests.
 - **FINDING-8 (profile cache boot-only)** — the brokering node holds the target locally, but confirm the initiator-side signer path doesn't need a profile the brokering node lacks. Signer half fixed (Problem 1); profile half is the deferred absent-node reconcile.
 - **`k` redundancy knob (home to >1 node).** Baseline k=1; homing to 2–3 nodes for inbound redundancy (survive a home dying without a re-home window) is a future tunable, not needed for the first build.
-- **Transient-connection lifecycle** — drop immediately after the relay handoff vs. hold for the session's lifetime (e.g. if any teardown/seal signaling wants it). Implementation detail; default to dropping after handoff, revisit if a signaling need surfaces.
 - **Presence write is best-effort / not retried** (`directory-node.ts:646`) — a DB hiccup during failover is logged and swallowed. Fine at small scale; a robustness follow-up if it ever bites.
+
+*(Resolved during design: the transient-connection lifecycle — hold through setup, release after the relay handoff; the seal is client-coordinated over each party's own roster and needs nothing from it. See "FROST ceremony and seal" above.)*
+
+## Implementation starting points (for a coder)
+
+**New piece 1 — discovery lookup:**
+- *Directory-side handler:* add a signaling-frame handler alongside session-request in `packages/directory/src/directory-node.ts` (`#processSessionRequest` at `:2926` is the sibling to model). It returns the 3-state answer from: existence read `SELECT 1 FROM agent_profiles WHERE k_local_pubkey` (`adapters/pg-directory-store.ts:365`) + a presence point-read on `agent_presence` (`agent-presence-repository.ts`; apply the READ-001 heartbeat-freshness rule at `:99`). Add the frame type in `directory-types.ts` / `directory-frames.ts`.
+- *Client-side:* call it from the `cello_initiate_session` path in `cello-client/core/daemon/src/daemon.ts:2400` before dialing, when the target isn't on the current node.
+
+**New piece 2 — on-demand second directory connection:**
+- The existing per-agent connection is `createSignalingConnect` / `SignalingManager` (`cello-client/core/daemon/src/signaling-connect.ts:134` `connect()`, endpoint resolved at `:135`, auth handshake / `peer_info_announce` at `:236`). A second connection reuses this against a *chosen* endpoint (the target's home) instead of the failover resolver's pick.
+- Endpoint resolution: `directory-bootstrap.ts` (`manifestNodesToEndpoints`, `ConsortiumEndpoint`) maps a `node_id` from the manifest to a dialable `/bootstrap` endpoint — use it to turn the discovered `owning_node_id` into something to dial.
+- Directory auth of a "visiting" agent needs no change — the signaling auth hook already sets `#streams` + upserts presence on any authenticated agent (`directory-node.ts:1647`, `:657`).
+
+**Reused, do not touch:** `#processSessionRequest` offer/accept + assignment (`directory-node.ts:2926–3337`), the relay pool + circuit dial (`relay-pool-manager.ts`, `cello-client/core/daemon/src/cello-node-transport-dialer.ts`), the FROST ceremony + seal (`cello-client/core/daemon/src/session-ceremony.ts`), presence replication (`V38__presence_replication.sql`, `infra/setup-replication.sh`), failover/re-establish (`daemon.ts:474`, `signaling-connect.ts:135`, `directory-node.ts:657`).
 
 ## Related documents
 
