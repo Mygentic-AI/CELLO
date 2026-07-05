@@ -33,6 +33,9 @@ import type {
   AgentRevocationError,
   TrustSignalPickup,
   TrustSignalAck,
+  DiscoveryLookup,
+  DiscoveryLookupResult,
+  DiscoveryLookupError,
 } from "./directory-types.js";
 
 const ENC = new Encoder({ tagUint8Array: false });
@@ -84,6 +87,27 @@ export function encodePong(ts: number): Uint8Array {
 /** Encode a manifest_poll_response frame from directory → client. */
 export function encodeManifestPollResponse(frame: ManifestPollResponse): Uint8Array {
   return ENC.encode({ type: "manifest_poll_response", manifest: frame.manifest });
+}
+
+// ─── Cross-node discovery lookup (item 1): directory → client responses ───────
+
+/** Encode discovery_lookup_result. owning_node_ids is non-empty only when state = "online". */
+export function encodeDiscoveryLookupResult(frame: DiscoveryLookupResult): Uint8Array {
+  return ENC.encode({
+    type: "discovery_lookup_result",
+    target_pubkey: frame.target_pubkey,
+    state: frame.state,
+    owning_node_ids: frame.owning_node_ids,
+  });
+}
+
+/**
+ * Encode discovery_lookup_error — returned on a DB error during the lookup. NEVER a fabricated
+ * `offline`/`unknown_agent` (those are authoritative answers), and the caller must NOT abort the
+ * stream (it is the agent's home inbound). The client treats this as retryable, same as target_offline.
+ */
+export function encodeDiscoveryLookupError(frame: DiscoveryLookupError): Uint8Array {
+  return ENC.encode({ type: "discovery_lookup_error", reason: frame.reason });
 }
 
 export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Array {
@@ -335,7 +359,7 @@ export type SealInterruptedAckFrame = { type: "seal_interrupted_ack"; sessionId:
 /** initiatorPubkey is included so the directory can route the rejection back to the initiator by direct lookup in #streams. */
 export type SealInterruptedRejectionFrame = { type: "seal_interrupted_rejection"; sessionId: string; initiatorPubkey: string; reason: string };
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck;
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck | DiscoveryLookup;
 
 /**
  * CELLO-M8-TRUST-001: encode a trust-signal pickup for delivery to the agent's daemon (OUTBOUND).
@@ -380,7 +404,16 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     const signature = toUint8Array(o["signature"]);
     if (!pubkey || pubkey.length !== 32) return null;
     if (!signature || signature.length !== 64) return null;
-    return { type: "signaling_auth_response", pubkey, signature };
+    // Cross-node item 3: carry the optional visiting flag through the typed allowlist. Only literal
+    // `true` counts; absent / false ⇒ a normal home connection (backward compatible with old clients).
+    const visiting = o["visiting"] === true ? true : undefined;
+    return { type: "signaling_auth_response", pubkey, signature, ...(visiting ? { visiting } : {}) };
+  }
+
+  if (o["type"] === "discovery_lookup") {
+    const target_pubkey = toUint8Array(o["target_pubkey"]);
+    if (!target_pubkey || target_pubkey.length !== 32) return null;
+    return { type: "discovery_lookup", target_pubkey };
   }
 
   if (o["type"] === "session_request") {

@@ -55,6 +55,47 @@ Version cascade for Story B: bump `core/client` → `core/daemon` → `core/cli`
 - cello-client `core/daemon/src/daemon.ts` — `cello_initiate_session` (~:2400); `signaling-connect.ts` — `connect()` (~:134), auth handshake (~:236).
 - cello-client `core/daemon/src/directory-bootstrap.ts` — `manifestNodesToEndpoints`.
 
+## Story A — finalized architecture (SPARC "A", verified against code 2026-07-05)
+
+**Interface additions (`packages/interfaces/src/directory-store.ts`), both land with stub + pg impl:**
+1. `getProfileWithReadThrough(kLocalPubkeyHex: string, correlationId?: string): Promise<AgentProfile | undefined>` — cache hit → return; miss → DB point-read `agent_profiles WHERE k_local_pubkey=$1 AND status='active'`, mirror `loadProfiles` row-map (agent_id fallback, `profile:{}`), populate all THREE maps (localKey, primaryKey, agentId), return; DB miss → undefined. Log `directory.profile.read_through {pubkey:short, result:"cache_hit"|"read_through_found"|"read_through_miss", correlationId}`.
+2. `getAgentPresenceForDiscovery(kLocalPubkeyHex: string, nodeFreshnessMs: number): Promise<{ hasRow: boolean; rawOnline: boolean; owningNodeId: string | null; nodeFresh: boolean }>` — point-read `agent_presence` LEFT JOIN `directory_nodes` for heartbeat freshness. Stub is in-memory.
+
+**Presence freshness:** export `PRESENCE_NODE_FRESHNESS_MS = 120_000` from `agent-presence-repository.ts`; `internal-api-server.ts` (local const today) + discovery both import it (one source of truth).
+
+**`#resolvePrimaryPubkey` → async read-through.** All 5 call sites are in async methods (2983 processSessionRequest, 3601 processSealUnilateral, 4075 processSealUpgradeRequest, 4274 processSeal, 4425 processSealFrostSignature) — add `await`. The read-through warms the cache so the adjacent `getProfile(...)!==undefined` checks at 3605/4281 hit for the same pubkey.
+
+**`#processConnectionRequest`:** fetch `senderProfile` ONCE at top via `await getProfileWithReadThrough(senderHex, cid)`; reuse for the requireRegistration gate (was `hasProfile` @2674) AND the sender context (was `getProfile` @2704). Target gate @2681 stays sync (`hasProfile`) — the target is home on the broker, always cache-warm. Registration existence check @2441 stays sync (miss-is-expected). Revoke-self @2370 left sync (not a cross-node session path — noted deferred FINDING-8 facet).
+
+**Discovery handler `#processDiscoveryLookup(stream, targetHex, cid)`** (new `else if (parsed.type==="discovery_lookup")` in the authenticated dispatch ~2040): `getProfileWithReadThrough` → undefined ⇒ `unknown_agent`; else `getAgentPresenceForDiscovery(target, PRESENCE_NODE_FRESHNESS_MS)` → `hasRow && rawOnline && nodeFresh` ⇒ `online` + `[owningNodeId]`; `rawOnline && !nodeFresh` ⇒ `offline` (log `reason:"owning_node_dark"`); else ⇒ `offline`. Store throw ⇒ `discovery_lookup_error {reason:"lookup_failed"}` + `directory.discovery.lookup.failed`, never abort stream. Log `directory.discovery.lookup {targetShort, state, owningNode, correlationId}`.
+
+**Frames (`directory-types.ts` + `directory-frames.ts`):** decode `discovery_lookup {target_pubkey:bytes(32)}`; encode `discovery_lookup_result {target_pubkey, state, owning_node_ids:string[]}` + `discovery_lookup_error {reason}`. Add `DiscoveryLookup` to `InboundSignalingFrame` union.
+
+**Visiting flag (item 3):** `SignalingAuthResponse.visiting?: boolean`; decode `o["visiting"]===true?true:undefined` (TBS unchanged — not signature-bound); `let visiting=false` in the stream handler set from `resp.visiting`; gate `#recordPresence("online")` @1649 and `#recordPresence("offline")` @2209 behind `!visiting`. `#streams` set/delete unchanged.
+
+**Testing:** pure-unit (run in `pnpm run test`): frame codec round-trips; discovery 3-state handler logic via `InMemoryDirectoryStore`; read-through via stub; visiting codec. pg-backed `describeLive` (CELLO_ENV=local + Docker): real read-through after boot-load (FINDING-8), visiting presence-skip on connect+disconnect. Docker is being brought up to run these; Story C is the live gate.
+
+## Story A implementation — DONE (directory-side), pending review + deploy
+
+**Code (all directory-side; client mirror is Story B):**
+- Item 0: `getProfileWithReadThrough` + `getAgentPresenceForDiscovery` on `DirectoryStore` (interface + `AgentPresenceLookup` type + barrel export); stub impls (+ `setPresenceForDiscovery` test seam); pg impls (read-through mirrors `loadProfiles` mapping, populates all 3 caches; presence read delegates to new `readPresenceForDiscovery` free fn). `#resolvePrimaryPubkey` → async read-through; 5 call sites `await`ed. `#processConnectionRequest` → one read-through up front (gate + sender context). `PRESENCE_NODE_FRESHNESS_MS` exported from repo, internal-api imports it.
+- Item 1: `discovery_lookup` decode + `discovery_lookup_result`/`_error` encoders (directory-frames + directory-types); `resolveDiscoveryState` pure resolver (`discovery-lookup.ts`); `#processDiscoveryLookup` handler wired into the authenticated dispatch; logs `directory.discovery.lookup`/`.failed`.
+- Item 3 dir half: `visiting?` on `signaling_auth_response` (decode, TBS unchanged); `let visiting` scoped in the stream handler; gates BOTH `#recordPresence` writes (connect @auth hook, disconnect @finally); `#streams` unchanged; logs `directory.auth.visiting`.
+
+**Tests — 28 new, all green (+ full directory suite 689/0 in the real `pnpm run test` gate):**
+- `cross-node-discovery-frames.test.ts` (10) — codec round-trips + visiting decode. Pure.
+- `cross-node-discovery-state.test.ts` (6) — the 3-state decision table. Pure.
+- `cross-node-discovery-pg.live.test.ts` (6, describeLive) — real-schema read-through incl. **FINDING-8 (register AFTER boot-load → getProfile misses, read-through hits)** + presence read (online/dark/offline/no-row).
+- `cross-node-discovery-handler.test.ts` (6) — discovery handler 3-state over the REAL wire (in-memory), + pg-backed **visiting presence integrity = Story C scenario 2 at unit level** (normal auth writes / visiting auth skips / visiting connect+disconnect over another-node-owned row leaves it untouched — proves both gates).
+
+**Gate:** `pnpm run test` (no CELLO_ENV) 689/0 ✓ · lint 0 errors ✓ · typecheck `tsc --build` ✓ · (no separate `build` script in repo). Under `CELLO_ENV=local` ~118 pre-existing infra-heavy live/docker tests fail (need real multi-region infra / container orchestration) — NOT my changes: all 28 cross-node tests + sampled untouched live tests (writeapi-001, read-001) pass; the real gate is `vitest run` without CELLO_ENV.
+
+**Design decision recorded — resolve-throw on DB error (fail-fast, consistent):** `#resolvePrimaryPubkey` is now async and can throw on a read-through DB error (cache-miss + DB blip). It does NOT catch/return-undefined (that would silently mask a DB error as "no profile" → single-key, the exact silent fallback the design forbids). A throw propagates like the pre-existing adjacent `await hasConnection`/`await isAgentSuspended` in the same method → `uncaughtException` handler → directory exit 1 → ECS restart → client fails over. This is the established DB-down posture and satisfies the sovereign-node availability invariant. No special-casing added (would be inconsistent). Reviewers asked to confirm.
+
+**Local dev DB note:** the docker-compose local pg had a dirty 6-week-old volume stuck at V29 (Flyway V30 partial + a V17 checksum drift). `docker compose down -v && up` re-migrated clean to V41. Not a code/migration change.
+
 ## Status log
-- **2026-07-05 0655** — Journal created. Read design doc + CONTEXT.md + STATE.md + infra/CLAUDE.md in full. Both repos clean on main. Starting Story A (SPARC: S done via design doc; beginning A-phase reconnaissance of exact code sites).
+- **2026-07-05 0655** — Journal created. Read design doc + CONTEXT.md + STATE.md + infra/CLAUDE.md in full. Both repos clean on main. Recon complete. Docker brought up + local DB reset to V41.
+- **2026-07-05 ~0930** — Story A directory-side code + 28 tests complete, gate green. Dispatched both mandatory reviewers on the uncommitted diff.
+- **2026-07-05 ~0945** — **Both reviewers CLEAN, no blocking findings.** code-reviewer: nothing ≥80 confidence; error quality, async migration (5 awaits), read-through mapping, visiting gating (no cross-stream leakage), test coverage all verified correct. cello-fallback-finder: **NO SILENT FALLBACKS**, no HIGH; all 6 suspect paths fail loud. Non-blocking notes DEFERRED (not fixed — scope/settled-design discipline): (a) dark-node logged at info per design; (b) resolve-throw on session/seal DB error is unhandled-rejection→crash→restart, but pre-existing & consistent with adjacent `await hasConnection`, and NEVER fabricates success — adding a new `session_request_error{lookup_failed}` would bleed into client compat (Story B); (c) `#processRevokeAgent` self-revoke still sync getProfile — out of Story A scope, matches doc's "leave miss-is-expected sync". Committing Story A directory-side; next: batched directory deploy (all 3 regions).
 </content>

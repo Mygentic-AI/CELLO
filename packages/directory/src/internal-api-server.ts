@@ -36,7 +36,7 @@ import type pg from "pg";
 import type { Logger } from "@cello-protocol/interfaces";
 import type { KeyProvider } from "@cello-protocol/crypto";
 import { issuePreAuthToken, issuePreAuthCapability } from "./pre-auth-token-repository.js";
-import { listAccountAgentsWithPresence } from "./agent-presence-repository.js";
+import { listAccountAgentsWithPresence, PRESENCE_NODE_FRESHNESS_MS } from "./agent-presence-repository.js";
 import { validateWritePayload } from "./agent-write-validation.js";
 import {
   isAgentOwnedByAccount,
@@ -45,9 +45,8 @@ import {
   enqueuePickup,
 } from "./agent-write-repository.js";
 
-// READ-001: a node is considered "fresh" for the presence read rule if it heartbeat within this
-// window (2× the 45s heartbeat cadence + slack). A staler owning node ages its agents to last-seen.
-const PRESENCE_NODE_FRESHNESS_MS = 120_000;
+// READ-001 freshness window is now shared from agent-presence-repository (one source of truth for
+// the account-presence read and the cross-node discovery lookup).
 
 export interface InternalApiServerOptions {
   pool: pg.Pool;

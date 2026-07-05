@@ -16,6 +16,26 @@ import type {
 } from "@cello-protocol/protocol-types";
 import type { AgentProfile, ConnectionEstablished, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
 
+// ─── Cross-node discovery (build item 1) ─────────────────────────────────────
+
+/**
+ * Raw facts from a discovery presence point-read (agent_presence LEFT JOIN directory_nodes). The
+ * 3-state discovery answer (online / offline / unknown_agent) is derived from this by
+ * resolveDiscoveryState — this type carries only what the SQL returns so the decision stays
+ * unit-testable without a database.
+ */
+export interface AgentPresenceLookup {
+  /** True iff an agent_presence row exists for the pubkey. */
+  hasRow: boolean;
+  /** The row's `online` column verbatim (before applying node-freshness). */
+  rawOnline: boolean;
+  /** The row's `owning_node_id` (the node the agent's home connection is on), or null. */
+  owningNodeId: string | null;
+  /** True iff the owning node's `last_heartbeat_at` is within nodeFreshnessMs (READ-001). A stale
+   *  heartbeat with rawOnline=true is a "dark node" → the agent ages out to not-currently-reachable. */
+  nodeFresh: boolean;
+}
+
 // ─── ACCOUNT-001: Account identity types ─────────────────────────────────────
 
 /**
@@ -211,6 +231,26 @@ export interface DirectoryStore {
    * Retrieve a profile by k_local_pubkey hex. Returns undefined if not registered.
    */
   getProfile(kLocalPubkeyHex: string): AgentProfile | undefined;
+
+  /**
+   * Cross-node topology (build item 0, FINDING-8). Like getProfile, but on a cache MISS it does a
+   * DB read-through against replicated agent_profiles and populates the in-memory cache before
+   * returning. `getProfile` is a synchronous in-memory read that only sees rows loaded at boot, so a
+   * broker node cannot serve any agent registered after its last boot — the exact failure the
+   * cross-node "move the client to the target's node" flow triggers (a visiting initiator registered
+   * after the broker booted). This is the profile half of the deferred absent-node reconcile,
+   * promoted to a prerequisite. Returns undefined only when the agent genuinely has no row (state 3,
+   * unknown_agent). correlationId (optional) threads into the directory.profile.read_through event.
+   */
+  getProfileWithReadThrough(kLocalPubkeyHex: string, correlationId?: string): Promise<AgentProfile | undefined>;
+
+  /**
+   * Cross-node topology (build item 1). A point-read of the replicated agent_presence row for the
+   * discovery lookup, plus the owning node's heartbeat freshness (READ-001). Returns raw facts; the
+   * 3-state decision lives in resolveDiscoveryState. `nodeFreshnessMs` bounds how stale the owning
+   * node's last_heartbeat_at may be before its agents age out to "not currently reachable".
+   */
+  getAgentPresenceForDiscovery(kLocalPubkeyHex: string, nodeFreshnessMs: number): Promise<AgentPresenceLookup>;
 
   /**
    * Return true if an agent with this k_local_pubkey has already registered.

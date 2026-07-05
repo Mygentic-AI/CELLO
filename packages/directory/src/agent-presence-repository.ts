@@ -15,9 +15,18 @@
  * tick; only refreshNodeHeartbeat runs on the periodic timer.
  */
 import type pg from "pg";
+import type { AgentPresenceLookup } from "@cello-protocol/interfaces";
 
 /** A pool or a pooled client — both expose `.query`, so tests can run the repo in a txn. */
 type PgExecutor = Pick<pg.Pool, "query">;
+
+/**
+ * How fresh an owning node's last_heartbeat_at must be for its agents to count as reachable
+ * (READ-001). A node whose heartbeat is older than this is "dark" — its agents age out to
+ * not-currently-reachable even though their presence row still reads online. One source of truth,
+ * shared by the account-presence read (internal API) and the cross-node discovery lookup.
+ */
+export const PRESENCE_NODE_FRESHNESS_MS = 120_000;
 
 /** Mark an agent online and claim ownership for this node (one write, on the connect transition). */
 export async function upsertPresenceOnline(
@@ -72,6 +81,34 @@ export async function reconcileNodeOffline(
     [owningNodeId],
   );
   return res.rowCount ?? 0;
+}
+
+/**
+ * Cross-node item 1: point-read the agent_presence row + the owning node's heartbeat freshness for a
+ * discovery lookup. Returns raw facts (resolveDiscoveryState derives the 3-state answer). A missing
+ * row ⇒ hasRow:false (the agent has a profile but never came online). rawOnline with a stale owning
+ * node heartbeat is a "dark node" — nodeFresh:false — which the caller collapses to offline on the
+ * wire. Mirrors the READ-001 freshness rule in listAccountAgentsWithPresence.
+ */
+export async function readPresenceForDiscovery(
+  db: PgExecutor,
+  kLocalPubkey: string,
+  nodeFreshnessMs: number,
+): Promise<AgentPresenceLookup> {
+  const res = await db.query<{ online: boolean; owning_node_id: string | null; node_fresh: boolean | null }>(
+    `SELECT ap.online,
+            ap.owning_node_id,
+            (dn.last_heartbeat_at > now() - ($2::bigint * interval '1 millisecond')) AS node_fresh
+       FROM agent_presence ap
+       LEFT JOIN directory_nodes dn ON dn.node_id = ap.owning_node_id
+      WHERE ap.k_local_pubkey = $1`,
+    [kLocalPubkey, nodeFreshnessMs],
+  );
+  if (res.rows.length === 0) {
+    return { hasRow: false, rawOnline: false, owningNodeId: null, nodeFresh: false };
+  }
+  const r = res.rows[0];
+  return { hasRow: true, rawOnline: r.online, owningNodeId: r.owning_node_id, nodeFresh: r.node_fresh === true };
 }
 
 /** Per-node liveness heartbeat — the only write on the periodic timer (~30-60s). */

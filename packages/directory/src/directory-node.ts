@@ -104,7 +104,9 @@ import {
   upsertPresenceOnline,
   upsertPresenceOffline,
   refreshNodeHeartbeat,
+  PRESENCE_NODE_FRESHNESS_MS,
 } from "./agent-presence-repository.js";
+import { resolveDiscoveryState } from "./discovery-lookup.js";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash, verifyCapability, decodeCapability } from "@cello-protocol/crypto";
@@ -145,6 +147,8 @@ import {
   encodeSessionSealed,
   encodeSessionSealRejected,
   encodeSessionRequestError,
+  encodeDiscoveryLookupResult,
+  encodeDiscoveryLookupError,
   encodeAgentRevocationAck,
   encodeAgentRevocationError,
   encodeNotAuthenticated,
@@ -1603,6 +1607,9 @@ export class CelloDirectoryNode {
 
     let authedPubkeyHex: string | null = null;
     let authed = false;
+    // Cross-node item 3: a VISITING connection suppresses BOTH presence writes (connect + disconnect)
+    // for the whole lifetime of this stream. Scoped here so the disconnect handler (finally) sees it.
+    let visiting = false;
 
     try {
       for await (const chunk of lp.decode(stream)) {
@@ -1644,9 +1651,20 @@ export class CelloDirectoryNode {
           }
 
           authedPubkeyHex = Buffer.from(resp.pubkey).toString("hex");
+          visiting = resp.visiting === true;
           this.#streams.set(authedPubkeyHex, stream);
-          // PRESENCE-001: edge-triggered — this node now owns this agent's connection → online.
-          this.#recordPresence("online", authedPubkeyHex);
+          // PRESENCE-001 + cross-node item 3: a VISITING connection (a client reaching into a node
+          // that is NOT its home to broker a cross-node session) gets the #streams entry so the
+          // same-node session flow sees it, but writes NO presence. Writing here would reassign
+          // owning_node_id to this node (upsertPresenceOnline's ON CONFLICT) and falsely re-home the
+          // agent — anyone discovering it would be sent here, where it has no standing inbound. Only a
+          // designated-home connection writes presence.
+          if (!visiting) {
+            // PRESENCE-001: edge-triggered — this node now owns this agent's connection → online.
+            this.#recordPresence("online", authedPubkeyHex);
+          } else {
+            this.#logger?.info("directory.auth.visiting", { agent: authedPubkeyHex.slice(0, 16), node: this.#frostHandler.nodeId });
+          }
 
           const existingDelegated = this.#delegatedSigners.get(authedPubkeyHex);
           this.#logger?.info("frost.debug.auth.setStreams", {
@@ -2038,6 +2056,11 @@ export class CelloDirectoryNode {
           // Run concurrently — ceremony_result frames must be processed by this same loop
           // while #processSessionRequest is suspended awaiting the ceremony round-trip.
           void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), parsedReq.connection_id, parsedReq.relay_rtt, parsedReq.initiator_session_peer_id, parsedReq.initiator_session_addrs, parsedReq.transport_mode, parsedReq.wants_session_offer === true);
+        } else if (parsed.type === "discovery_lookup") {
+          // Cross-node item 1: answer "where is agent X?" from fully-replicated state. Post-auth on
+          // the agent's home inbound stream. Advisory — the target node's own #streams check stays
+          // authoritative; a stale answer just triggers the client's re-discover→retry loop.
+          void this.#processDiscoveryLookup(stream, Buffer.from(parsed.target_pubkey).toString("hex"), parsed.target_pubkey);
         } else if (parsed.type === "session_offer_accept") {
           // M7-WIRE-001 AC-003: handle session offer acceptance from target (Bob)
           const acceptFrame = parsed as { session_id?: Uint8Array; counterparty_session_peer_id?: string; counterparty_session_addrs?: string[] };
@@ -2204,10 +2227,16 @@ export class CelloDirectoryNode {
       });
       if (authedPubkeyHex && this.#streams.get(authedPubkeyHex) === stream) {
         this.#streams.delete(authedPubkeyHex);
-        // PRESENCE-001: edge-triggered — the agent's stream closed → offline + last-seen (only if
-        // this node still owns the row; a stale stream that was already replaced no-ops in SQL).
-        this.#recordPresence("offline", authedPubkeyHex);
-        protocolLog("AUTH", `Removed stream from map — peer ${truncHex(authedPubkeyHex)}`);
+        // PRESENCE-001 + cross-node item 3: the agent's stream closed → offline + last-seen (only if
+        // this node still owns the row; a stale stream already replaced no-ops in SQL). A VISITING
+        // connection writes NOTHING: eu1 does not own Alice's row, so an offline write here would
+        // either no-op (harmless) OR — if the visiting auth had wrongly claimed ownership — mark her
+        // offline consortium-wide while her real home connection is alive. Suppressing both writes is
+        // the invariant that keeps presence honest.
+        if (!visiting) {
+          this.#recordPresence("offline", authedPubkeyHex);
+        }
+        protocolLog("AUTH", `Removed stream from map — peer ${truncHex(authedPubkeyHex)}${visiting ? " (visiting — no presence write)" : ""}`);
       }
 
       // AC-011: clean up any provisional sessions where this client was a participant
@@ -2318,10 +2347,14 @@ export class CelloDirectoryNode {
    * the M1 single-key notarization (the recurring "seal reads an unseeded in-memory map" bug). The
    * single-key path then fires ONLY when there is genuinely no profile (no DKG ever happened).
    */
-  #resolvePrimaryPubkey(kLocalPubkeyHex: string): Uint8Array | undefined {
+  async #resolvePrimaryPubkey(kLocalPubkeyHex: string, correlationId?: string): Promise<Uint8Array | undefined> {
     const cached = this.#primaryPubkeys.get(kLocalPubkeyHex);
     if (cached) return cached;
-    const profile = this.#store.getProfile(kLocalPubkeyHex);
+    // Cross-node item 0: read-through (not the boot-only getProfile) so a visiting initiator
+    // registered after this broker booted resolves its FROST group key instead of falsely dropping
+    // to the M1 single-key path. Populating the profile cache here also warms the adjacent
+    // getProfile()!==undefined signature-type checks in the seal paths for the same pubkey.
+    const profile = await this.#store.getProfileWithReadThrough(kLocalPubkeyHex, correlationId);
     if (profile?.primary_pubkey) {
       const bytes = new Uint8Array(Buffer.from(profile.primary_pubkey, "hex"));
       this.#primaryPubkeys.set(kLocalPubkeyHex, bytes); // re-seed for next lookup
@@ -2670,8 +2703,16 @@ export class CelloDirectoryNode {
     // CONNREQ-003 AC-001/AC-002: structured event so tests can assert transport-path evidence
     this.#logger?.info("connection.request.received", { senderPubkeyHex: senderHex, targetPubkeyHex: targetHex });
 
+    // Cross-node item 0: one read-through up front so a VISITING sender (registered after this broker
+    // booted) passes the registration gate AND gets correct sender context, instead of the boot-only
+    // getProfile's blind miss. Reused for gate 1 and the sender-context read below. (The target gate
+    // stays a sync hasProfile: the target is home on THIS broker — that is the whole topology — so its
+    // profile is always cache-warm.)
+    const connReqCorrelationId = randomBytes(8).toString("hex");
+    const senderProfile = await this.#store.getProfileWithReadThrough(senderHex, connReqCorrelationId);
+
     // Gate 1: sender must be registered if requireRegistration is set
-    if (this.#requireRegistration && !this.#store.hasProfile(senderHex)) {
+    if (this.#requireRegistration && !senderProfile) {
       protocolLog("CONN", `Pre-check failed: not_registered (sender: ${truncHex(senderHex)})`);
       this.#sendFrame(stream, encodeConnectionRequestError({ type: "connection_request_error", reason: "not_registered" }));
       return;
@@ -2700,8 +2741,7 @@ export class CelloDirectoryNode {
     // Assign a connection_request_id for Round 2 correlation
     const connectionRequestId = Buffer.from(randomBytes(16)).toString("hex");
 
-    // Get sender context from profile
-    const senderProfile = this.#store.getProfile(senderHex);
+    // Sender context from the profile read through above (cross-node item 0).
     const senderRegisteredAt = senderProfile?.registered_at ?? this.#clock.now();
     const senderIsProvisional = senderProfile?.status !== "active";
 
@@ -2921,6 +2961,50 @@ export class CelloDirectoryNode {
     }
   }
 
+  // ─── Cross-node discovery lookup (item 1) ────────────────────────────────────
+
+  /**
+   * Answer a discovery_lookup from replicated state (agent_profiles + agent_presence). Returns the
+   * settled 3-state answer via resolveDiscoveryState. Failure modes are deliberate:
+   *  - a DB error ⇒ discovery_lookup_error{reason:"lookup_failed"} (retryable) — NEVER a fabricated
+   *    offline/unknown_agent, and NEVER a stream abort (this is the agent's home inbound; killing it
+   *    over a read hiccup is disproportionate).
+   *  - the dark-node case (online row, stale owning-node heartbeat) collapses to `offline` on the
+   *    wire; the distinction survives only in the log (reason:"owning_node_dark").
+   */
+  async #processDiscoveryLookup(stream: Stream, targetHex: string, targetPubkey: Uint8Array): Promise<void> {
+    const correlationId = randomBytes(8).toString("hex");
+    try {
+      const profile = await this.#store.getProfileWithReadThrough(targetHex, correlationId);
+      const presence = profile
+        ? await this.#store.getAgentPresenceForDiscovery(targetHex, PRESENCE_NODE_FRESHNESS_MS)
+        : { hasRow: false, rawOnline: false, owningNodeId: null, nodeFresh: false };
+      const decision = resolveDiscoveryState(profile !== undefined, presence);
+      this.#logger?.info("directory.discovery.lookup", {
+        target: targetHex.slice(0, 16),
+        state: decision.state,
+        owningNode: decision.owningNodeIds[0] ?? null,
+        reason: decision.darkNode ? "owning_node_dark" : undefined,
+        correlationId,
+      });
+      this.#sendFrame(stream, encodeDiscoveryLookupResult({
+        type: "discovery_lookup_result",
+        target_pubkey: targetPubkey,
+        state: decision.state,
+        owning_node_ids: decision.owningNodeIds,
+      }));
+    } catch (err: unknown) {
+      this.#logger?.error("directory.discovery.lookup.failed", {
+        target: targetHex.slice(0, 16),
+        reason: err instanceof Error ? err.message : String(err),
+        correlationId,
+      });
+      // Do NOT abort the stream — it is the agent's home inbound. The client treats the error frame
+      // as retryable, same policy as target_offline.
+      this.#sendFrame(stream, encodeDiscoveryLookupError({ type: "discovery_lookup_error", reason: "lookup_failed" }));
+    }
+  }
+
   // ─── Session request processing ──────────────────────────────────────────────
 
   async #processSessionRequest(
@@ -2980,7 +3064,7 @@ export class CelloDirectoryNode {
     // fallback — so session signing survives a restart instead of hard-failing frost_signer_not_configured.
     // Only fall through to that error when there is genuinely no profile (no DKG ever happened).
     if (!signer) {
-      const primary = this.#resolvePrimaryPubkey(initiatorHex);
+      const primary = await this.#resolvePrimaryPubkey(initiatorHex);
       if (primary) {
         const reconstructed = new ClientDelegatedSigner(initiatorHex, new Uint8Array(primary));
         reconstructed.setStreams(this.#streams);
@@ -3598,7 +3682,7 @@ export class CelloDirectoryNode {
     });
 
     // DOD-SEAL-2: notarize with the counterparty ABSENT.
-    const initiatorPrimaryPubkey = this.#resolvePrimaryPubkey(senderHex);
+    const initiatorPrimaryPubkey = await this.#resolvePrimaryPubkey(senderHex);
     if (!initiatorPrimaryPubkey) {
       // fallback-finder SIGN-1 #1: profile-exists-but-no-primary is a split-brain anomaly (DKG'd
       // agent, group key missing on this node), not the legitimate no-DKG case — WARN loudly.
@@ -4072,7 +4156,7 @@ export class CelloDirectoryNode {
     // 5. Deliver the dual-attestation cert to BOTH parties. present_signature is A's original seal
     //    signature (the unilateral row's frost_signature); its type follows whether A's primary_pubkey
     //    is known (FROST) or the directory node key was used (single-key fallback).
-    const presentSignatureType: "frost" | "single" = this.#resolvePrimaryPubkey(presentHex) ? "frost" : "single";
+    const presentSignatureType: "frost" | "single" = (await this.#resolvePrimaryPubkey(presentHex)) ? "frost" : "single";
     const confirmedFrame = encodeSealUpgradeConfirmed({
       type: "seal_upgrade_confirmed",
       session_id: frame.session_id,
@@ -4271,7 +4355,7 @@ export class CelloDirectoryNode {
     const tbs = bindLegibilityToTbs(buildSealTbs(sessionId, recomputedRoot, leafCount, close_timestamp), legibility);
 
     // Look up the seal initiator's primary_pubkey (registered by SESSION-004 or test harness).
-    const initiatorPrimaryPubkey = this.#resolvePrimaryPubkey(initiatorHex);
+    const initiatorPrimaryPubkey = await this.#resolvePrimaryPubkey(initiatorHex);
 
     if (!initiatorPrimaryPubkey) {
       // fallback-finder SIGN-1 #1: a profile that EXISTS but yields no primary_pubkey is an ANOMALY —
@@ -4422,7 +4506,7 @@ export class CelloDirectoryNode {
 
     this.#pendingFrostSeals.delete(sessionIdHex);
 
-    const primaryPubkey = this.#resolvePrimaryPubkey(initiatorHex);
+    const primaryPubkey = await this.#resolvePrimaryPubkey(initiatorHex);
     if (!primaryPubkey) return; // Should not happen; initiator's key was present at processSeal time
 
     // Verify FROST signature (SI-002)

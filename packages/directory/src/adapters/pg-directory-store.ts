@@ -29,8 +29,10 @@ import type {
   CreateAccountParams,
   AgentRevocationRecord,
   PickupItem,
+  AgentPresenceLookup,
 } from "@cello-protocol/interfaces";
 import { drainPickupForAgent, ackPickupDelete, sweepUndeliverablePickups } from "../pickup-repository.js";
+import { readPresenceForDiscovery } from "../agent-presence-repository.js";
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
 import {
   computeChainHash,
@@ -1040,6 +1042,67 @@ export class PgDirectoryStore implements DirectoryStore {
 
   getProfile(pubkeyHex: string): AgentProfile | undefined {
     return this.#profilesByLocalKey.get(pubkeyHex) ?? this.#profilesByPrimaryKey.get(pubkeyHex);
+  }
+
+  /**
+   * Cross-node item 0 (FINDING-8). Read-through: cache hit → return; miss → point-read the replicated
+   * agent_profiles row and populate the cache before returning. The in-memory maps are loaded ONLY at
+   * boot (loadProfiles), so getProfile is blind to any agent registered after this node started — the
+   * exact case the cross-node flow hits (a visiting initiator registered after the broker booted).
+   * The row is present via replication (modulo lag); miss in DB ⇒ genuinely unknown (state 3).
+   * Fixing it at the store layer fixes every getProfile consumer at once.
+   */
+  async getProfileWithReadThrough(pubkeyHex: string, correlationId?: string): Promise<AgentProfile | undefined> {
+    const cached = this.getProfile(pubkeyHex);
+    if (cached) {
+      this.#logger.info("directory.profile.read_through", { pubkey: pubkeyHex.slice(0, 16), result: "cache_hit", correlationId });
+      return cached;
+    }
+    const result = await this.#pool.query<{
+      k_local_pubkey: string;
+      primary_pubkey: string;
+      ml_dsa_pubkey: string;
+      phone_stub_hash: string;
+      registered_at: number;
+      status: string;
+      agent_id: string | null;
+    }>(
+      `SELECT k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, agent_id
+         FROM agent_profiles WHERE k_local_pubkey = $1 AND status = 'active'`,
+      [pubkeyHex],
+    );
+    if (result.rows.length === 0) {
+      this.#logger.info("directory.profile.read_through", { pubkey: pubkeyHex.slice(0, 16), result: "read_through_miss", correlationId });
+      return undefined;
+    }
+    const row = result.rows[0];
+    // Mirror loadProfiles() row-mapping EXACTLY, including the pre-V27 agent_id fallback.
+    const agentId = row.agent_id ?? createHash("sha256").update(row.k_local_pubkey, "utf8").digest("hex").slice(0, 32);
+    const profile: AgentProfile = {
+      k_local_pubkey: row.k_local_pubkey,
+      primary_pubkey: row.primary_pubkey,
+      ml_dsa_pubkey: row.ml_dsa_pubkey,
+      phone_stub_hash: row.phone_stub_hash,
+      registered_at: Number(row.registered_at),
+      status: row.status as "active",
+      agent_id: agentId,
+      profile: {},
+    };
+    // Populate all three maps so every subsequent consumer (localKey / primaryKey / agentId) is warm.
+    this.#profilesByLocalKey.set(row.k_local_pubkey, profile);
+    this.#profilesByPrimaryKey.set(row.primary_pubkey, profile);
+    this.#profilesByAgentId.set(agentId, profile);
+    this.#logger.info("directory.profile.read_through", { pubkey: pubkeyHex.slice(0, 16), result: "read_through_found", correlationId });
+    return profile;
+  }
+
+  /**
+   * Cross-node item 1: point-read the replicated agent_presence row + the owning node's heartbeat
+   * freshness (READ-001) for a discovery lookup. Returns raw facts; resolveDiscoveryState derives the
+   * 3-state answer. A missing row ⇒ hasRow:false (the agent has a profile but never came online here).
+   */
+  async getAgentPresenceForDiscovery(pubkeyHex: string, nodeFreshnessMs: number): Promise<AgentPresenceLookup> {
+    return readPresenceForDiscovery(this.#pool, pubkeyHex, nodeFreshnessMs);
   }
 
   hasProfile(pubkeyHex: string): boolean {

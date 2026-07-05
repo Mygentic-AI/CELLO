@@ -9,7 +9,7 @@
  */
 
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
-import type { DirectoryStore, DirectoryNotification, SealNotarization, ConversationSealRecord, AccountRow, CreateAccountParams, AgentRevocationRecord, PickupItem } from "../directory-store.js";
+import type { DirectoryStore, DirectoryNotification, SealNotarization, ConversationSealRecord, AccountRow, CreateAccountParams, AgentRevocationRecord, PickupItem, AgentPresenceLookup } from "../directory-store.js";
 
 const NOTIFICATION_QUEUE_BOUND = 256;
 const PENDING_CONNECTION_REQUEST_BOUND = 32;
@@ -150,6 +150,27 @@ export class InMemoryDirectoryStore implements DirectoryStore {
 
   getProfile(kLocalPubkeyHex: string): AgentProfile | undefined {
     return this.#profiles.get(kLocalPubkeyHex);
+  }
+
+  // Cross-node item 0: the in-memory stub has no boot/runtime split, so a read-through is exactly the
+  // synchronous read. (The real FINDING-8 read-through is proven against Postgres — see the pg store's
+  // describeLive tests.) correlationId is accepted for interface parity and ignored here.
+  async getProfileWithReadThrough(kLocalPubkeyHex: string, _correlationId?: string): Promise<AgentProfile | undefined> {
+    return this.getProfile(kLocalPubkeyHex);
+  }
+
+  // Cross-node item 1: presence point-read for discovery. Tests seed it via setPresenceForDiscovery.
+  // nodeFreshnessMs is unused in the stub (no heartbeat model) — nodeFresh is set directly per-row so
+  // the 3-state resolver can be exercised without Postgres; the real heartbeat SQL is pg-tested.
+  readonly #discoveryPresence = new Map<string, AgentPresenceLookup>();
+
+  /** Test seam: set the presence row a discovery lookup will see for this pubkey. */
+  setPresenceForDiscovery(kLocalPubkeyHex: string, row: Omit<AgentPresenceLookup, "hasRow">): void {
+    this.#discoveryPresence.set(kLocalPubkeyHex, { hasRow: true, ...row });
+  }
+
+  async getAgentPresenceForDiscovery(kLocalPubkeyHex: string, _nodeFreshnessMs: number): Promise<AgentPresenceLookup> {
+    return this.#discoveryPresence.get(kLocalPubkeyHex) ?? { hasRow: false, rawOnline: false, owningNodeId: null, nodeFresh: true };
   }
 
   hasProfile(kLocalPubkeyHex: string): boolean {

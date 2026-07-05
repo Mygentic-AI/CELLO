@@ -21,6 +21,39 @@ export interface SignalingAuthResponse {
   type: "signaling_auth_response";
   pubkey: Uint8Array;    // 32-byte Ed25519 K_local public key
   signature: Uint8Array; // 64-byte Ed25519 signature over "CELLO-DIR-AUTH-v1" || nonce || pubkey
+  /**
+   * Cross-node topology (item 3): set true ONLY on a transient "visiting" connection (a client
+   * reaching into a node that is NOT its home to broker a cross-node session). A visiting auth still
+   * gets a #streams entry (so the same-node flow sees it) but writes NO presence — connect or
+   * disconnect — so it never clobbers the agent's real home ownership. NOT signature-bound: the TBS
+   * ("CELLO-DIR-AUTH-v1" || nonce || pubkey) is unchanged; the flag rides the encrypted libp2p
+   * channel and its only effect is suppressing presence writes. Absent ⇒ a normal home connection.
+   */
+  visiting?: boolean;
+}
+
+// ─── Cross-node discovery lookup (item 1) ────────────────────────────────────
+// A post-auth "where is agent X?" query answered from FULLY-REPLICATED state (agent_profiles +
+// agent_presence). Advisory — the target node's own #streams check stays authoritative.
+
+export type DiscoveryLookupState = "online" | "offline" | "unknown_agent";
+
+export interface DiscoveryLookup {
+  type: "discovery_lookup";
+  target_pubkey: Uint8Array; // 32-byte K_local pubkey (the address)
+}
+
+export interface DiscoveryLookupResult {
+  type: "discovery_lookup_result";
+  target_pubkey: Uint8Array;
+  state: DiscoveryLookupState;
+  /** Non-empty only when state = "online" (length 1 until the k>1 homing knob lands). */
+  owning_node_ids: string[];
+}
+
+export interface DiscoveryLookupError {
+  type: "discovery_lookup_error";
+  reason: "lookup_failed";
 }
 
 export type DirAuthFailedReason =

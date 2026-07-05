@@ -1,4 +1,4 @@
-export type { DirectoryStore, DirectoryNotification, SealNotarization, ConversationSealRecord, ConversationCloseType, ConversationAttestation, AccountRow, CreateAccountParams, AgentRevocationRecord, PickupItem } from "./directory-store.js";
+export type { DirectoryStore, DirectoryNotification, SealNotarization, ConversationSealRecord, ConversationCloseType, ConversationAttestation, AccountRow, CreateAccountParams, AgentRevocationRecord, PickupItem, AgentPresenceLookup } from "./directory-store.js";
 export type { Logger, LogLevel, LogContext } from "./logger.js";
 export type { EnvelopeKeyProvider } from "./envelope-key-provider.js";
 export type { SigningKeyProvider, SigningPublicKey, SigningSignature, SignOptions } from "./signing-key-provider.js";
