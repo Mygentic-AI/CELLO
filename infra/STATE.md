@@ -37,9 +37,20 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
   crypto 0.0.15, transport 0.0.14; interfaces 0.0.3 pinned) — no workspace:*. Both reviewers' findings
   fixed pre-publish. The directory does NOT consume the client's discovery mirror → no directory
   re-pin/redeploy required. **`latest` promotion PENDING Andre's go** — Story C installs beta explicitly.
-- **Story C (live milestone-close) — PENDING.** Needs the new client installed + two agents homed on
-  DIFFERENT regions (Alice us1, Bob eu1). Plan in the build journal §"Story C". Directory + client both
-  shipped and unit-proven (incl. scenario 2 at unit level); live multi-process validation remains.
+- **🔴 CROSS-NODE PRESENCE FIX — DEPLOYING (2026-07-05, commit `938f34cb`).** Story C live testing found
+  the cross-node feature blocked: the directory recorded its libp2p PEER ID (not the region) as
+  `agent_presence.owning_node_id`, the heartbeat was RLS-blocked (no `directory_nodes` UPDATE policy),
+  and nothing self-registered the node's row → freshness JOIN always NULL → every agent read
+  dark/offline → discovery always `offline`. Fix: pass region nodeId to createDirectoryNode;
+  self-registering heartbeat UPSERT (+ rowCount!==1 THROWS, heartbeat.failed→ERROR); **migration V42**
+  (directory_nodes UPDATE RLS policy). `cello-directory-pipeline` **InProgress** for `938f34cb`.
+  **POST-DEPLOY (MANDATORY):** (1) bump live SSM `/cello/dev/ops-agent/expected-migration-version`→**42**
+  (us-east-1 only) AFTER the directory applies V42, else ops-agent crash-loops; (2) relay cascade all 3
+  regions; (3) verify discovery returns `online` + re-run the cross-node session. Pre-change health GREEN.
+- **Story C (live milestone-close) — IN PROGRESS.** LIVE-PROVEN so far: directory answers
+  `discovery_lookup` (correlationId + `directory.profile.read_through`), client sends it + surfaces the
+  named `counterparty_offline` (Story A+B work at the wire). Blocked on the presence fix above; once
+  deployed, re-run scenarios 1–5. Demo agent (7ab98987…) home flips us1↔ap1 across restarts (resolver).
 
 ---
 
