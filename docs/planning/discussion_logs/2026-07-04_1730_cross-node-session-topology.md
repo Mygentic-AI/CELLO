@@ -160,6 +160,53 @@ Covered by existing code (validated 2026-07-04): when the home stops responding,
 
 *(Resolved during design: the transient-connection lifecycle — hold through setup, release after the relay handoff, with the escalation branch releasing early and re-initiating; the seal is client-coordinated over each party's own roster and needs nothing from it. See "FROST ceremony and seal" above. Resolved during review 2026-07-05: visiting auth must not write presence — promoted to build item 3.)*
 
+## Implementation specification — settled contracts (do not re-derive)
+
+These are the decisions a coder would otherwise have to make mid-story. They are settled here; verified against code 2026-07-05.
+
+### Item 0 — profile read-through (the interface constraint)
+
+`getProfile` is **sync** on the `DirectoryStore` interface (`packages/interfaces/src/directory-store.ts:213`) — a DB read-through cannot go inside it. The fix is a **new async method**, not a signature change:
+
+- **Interface:** add `getProfileWithReadThrough(kLocalPubkeyHex: string): Promise<AgentProfile | undefined>` to `DirectoryStore` (`packages/interfaces`); the in-memory stub (`packages/interfaces/stubs/`) implements it as `async () => this.getProfile(...)` — adapter-pattern rules apply, both land together.
+- **Pg implementation** (`pg-directory-store.ts`): cache hit → return; miss → point-read `agent_profiles WHERE k_local_pubkey = $1 AND status = 'active'` (same row-mapping as `loadProfiles()` at `:230`, including the agent_id fallback) → populate **both** maps (`#profilesByLocalKey`, `#profilesByPrimaryKey`) → return. Miss in DB → `undefined` (state 3, genuinely unknown).
+- **Call-site migration:** `#resolvePrimaryPubkey` (`directory-node.ts:2321`) becomes async (its two call sites `:2983` and `:3601` are already in async methods). Audit the remaining `getProfile` consumers (`:2370`, `:2441`, `:2704`) and migrate those where a *visiting* agent is a legitimate caller; leave miss-is-expected paths (e.g. the registration existence check at `:2441`) sync.
+- **Log event:** `directory.profile.read_through` (pubkey short, hit/miss, correlationId) — a spike in read-throughs is the signal that a node's boot cache is stale at scale.
+
+### Item 1 — discovery frame contract
+
+Handled **post-auth** on the existing signaling stream (only authenticated agents may query). Encoder/decoder in `packages/directory/src/directory-frames.ts` + `directory-types.ts`, mirrored client-side.
+
+- Request: `{ type: "discovery_lookup", target_pubkey: bytes }`
+- Response: `{ type: "discovery_lookup_result", target_pubkey: bytes, state: "online" | "offline" | "unknown_agent", owning_node_ids: string[] }` — `owning_node_ids` non-empty only when `state = "online"` (length 1 until the k-knob lands).
+- Handler logic: existence read (`pg-directory-store.ts:365`) → no row → `unknown_agent`. Row exists → presence point-read; `online = true` **and** owning node heartbeat fresh (READ-001 rule, `agent-presence-repository.ts:99`) → `online` + owning node. Otherwise → `offline`. **The dark-node case (state 4) collapses to `offline` on the wire** — the distinction is server-side logging only (`directory.discovery.lookup` with `reason: "owning_node_dark"`), the client's action is identical.
+
+### Item 2 — client flow (daemon-side)
+
+- **Always discover first.** On `cello_initiate_session` (`daemon.ts:2400`), issue `discovery_lookup` on the current home connection before any dial. If `owning_node_ids` includes the node the agent is already connected to → proceed exactly as today (same-node shortcut; **never open a visiting connection to a node you already have a connection on** — `#streams` is keyed by pubkey, a second auth would clobber the first stream entry).
+- **Otherwise:** resolve the owning node through the signed manifest (`directory-bootstrap.ts` `manifestNodesToEndpoints`) — unknown node id → hard error, not a dial; open the visiting connection (item 3 flag set); submit the session request there.
+- **Retry policy:** `target_offline` from the session request after discovery said online → re-discover → retry, **max 3 attempts, backoff 1s/3s** (covers re-home and replication lag); then surface state 2 to the caller. `unknown_agent` → no retry, distinct error.
+- **Visiting-connection manager:** daemon-held map `node_id → { connection, refcount }`. Acquire on setup start (reuse if present), release on relay-handoff-complete / setup-failure / escalation (release + re-initiate on resolve). Refcounted so two concurrent setups brokered on the same node share one connection and the first to finish doesn't strand the second. Idle safety-net timeout (e.g. 5 min) so a leaked hold can't live forever.
+
+### Item 3 — visiting flag
+
+- **Wire:** add optional `visiting?: boolean` to `signaling_auth_response`. Client constructs this frame in **three places** (`cello-client/core/client/src/signaling-manager.ts:258`, `:357`, `:576`) — only the visiting-connection path sets `true`; the others omit it. Directory decoder at `directory-frames.ts:378` passes it through.
+- **Not signature-bound, by design:** the auth TBS (`domain || nonce || pubkey`) is unchanged — no breaking auth-format change. Safe because the flag rides an encrypted libp2p channel; flipping it requires transport compromise, and its only effect is suppressing presence writes.
+- **Directory:** thread `visiting` to both presence writes — connect (`directory-node.ts:1649`) and disconnect (`:2209`) — skipping both when set. `#streams` set/delete unchanged. Old directories never see `visiting: true` (deploy sequencing below); the decoder change ships with the handler.
+
+### Cross-repo delivery checklist (blocking ACs per repo rules)
+
+| # | Change | Repo / package |
+|---|---|---|
+| 0 | `getProfileWithReadThrough` + stub + call-site migration | trustless-cello: `packages/interfaces`, `packages/directory` |
+| 1 | Discovery frames + handler | trustless-cello: `packages/directory`; cello-client: frame mirror in `core/client` |
+| 2 | Discover-first flow + visiting-connection manager | cello-client: `core/daemon` (`daemon.ts`, `signaling-connect.ts`) |
+| 3 | Visiting flag | cello-client: `core/client` (`signaling-manager.ts`); trustless-cello: `packages/directory` decoder + presence gating |
+
+- **Version cascade (cello-client):** bump `core/client` → `core/daemon` → `core/cli` / `core/connect`, per `/cello-publish`; trustless-cello `packages/directory` re-pins the published `@cello-protocol/client` — never `workspace:*`.
+- **Sequencing:** items 0+1+3-directory-half are **one batched directory deploy** (all regions, ~25–30 min). Client publishes after. A new client must tolerate an old directory only during its own rollout gap — unknown-frame on `discovery_lookup` → fall back to today's behavior.
+- **Story shape:** Story A = items 0 + 1 + 3 directory-side (one deploy); Story B = items 2 + 3 client-side + publish; Story C = the four acceptance scenarios live (multi-process, real regions — the milestone-close gate).
+
 ## Implementation starting points (for a coder)
 
 **New piece 1 — discovery lookup:**
