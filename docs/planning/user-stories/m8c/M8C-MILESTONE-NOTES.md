@@ -16,10 +16,11 @@ description: >
 
 # M8C Milestone Notes — Command Surface, Notifications, Reactive Messaging
 
-> **Status: milestone notes, not a spec.** This is the triage worksheet — the full inventory of
-> candidate features and the first-unlock discussion. It does NOT yet commit scope, tiers, or a
-> definition of done. When scope is settled, this feeds an M8C-SPEC + M8C-DEFINITION-OF-DONE built
-> on the M8B 5-doc apparatus (SPEC / DEFINITION-OF-DONE / PROCEDURE / BUILD-JOURNAL / DECISIONS).
+> **Status: SUPERSEDED for scope (2026-07-05) — scope is now settled and committed.** This
+> worksheet fed the M8C apparatus: [[M8C-SPEC]] (tiers + architecture), [[M8C-DEFINITION-OF-DONE]]
+> (the yardstick), [[M8C-PROCEDURE]] (runbook), [[M8C-BUILD-JOURNAL]], [[M8C-DECISIONS]] (the
+> 2026-07-05 scope decisions D1–D4). This doc remains authoritative for the raw inventory, the
+> Telegram design vision, and the **verification pass** (evidence for every "already built" claim).
 
 ## Source
 

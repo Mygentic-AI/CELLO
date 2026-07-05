@@ -1,0 +1,148 @@
+---
+name: M8C Milestone — Spec
+type: spec
+date: 2026-07-05
+milestone: M8C
+status: active
+topics: [command-surface, notifications, channels, reactive-messaging, telegram-relay, async-messaging, multi-daemon, contact-privacy, abuse-controls, config-surface]
+description: >
+  The design reference for M8C — command surface, notifications, and reactive messaging.
+  Goal: CELLO stops being poll-only. A running Claude session is woken by inbound events,
+  the command surface collapses to "login → talk", the operator is reachable on their phone,
+  and the async/multi-daemon foundations land in ordered tiers. Scope settled with Andre
+  2026-07-05 (see M8C-DECISIONS). Pairs with M8C-DEFINITION-OF-DONE (yardstick),
+  M8C-PROCEDURE (runbook), M8C-BUILD-JOURNAL (audit trail), M8C-DECISIONS (forks + choices).
+---
+
+# M8C Milestone — Spec
+
+## 1. The goal
+
+Make CELLO **reactive**. Today every inbound event — a peer opening a session, a message arriving —
+sits silently until the operator polls. M8C inverts that: the daemon pushes, a live `--channels`
+Claude session wakes in-context, the operator's phone rings via a daemon-owned Telegram bot, and
+non-push clients get a first-class pull surface (`cello_check_notifications`, `since_seq`). On top
+of the reactive core: the command surface collapses to "login → talk", away/contact/abuse policies
+make an unattended daemon a good citizen, and the async-messaging + multi-daemon foundations land
+as the final tiers.
+
+**The launch gate is end of Tier 1** (reactive doorbell + usable command surface). M8C continues
+past launch through Tier 5 — the milestone is bigger than the launch slice, deliberately
+(Andre, 2026-07-05: keep it all in one milestone with strict tier ordering).
+
+## 2. Current reality (verified in code 2026-07-05 — build on this, do not re-derive)
+
+Full verdict table + evidence: [[M8C-MILESTONE-NOTES]] §Verification pass. The load-bearing facts:
+
+- **The daemon already pushes; the shim drops it.** `NotificationDispatcher` dispatches
+  `session_state_changed`/`created` on real inbound sessions (`daemon.ts:3183` — line numbers
+  drift; cite symbols in stories); frames cross the IPC socket; the shim discards every
+  notification frame at `ipc-proxy.ts:183-185` (`// skip for now`, a deliberate M7 deferral).
+  Stage 1 = two shim edits + `connect` bump, **zero daemon change**. `ipc-client.ts:68` is the
+  `onNotification` template.
+- **Stage 2 (per-message wake) is a real daemon build.** No `dispatchCelloMessage`, no
+  content-arrival callback on `session-node-manager`. Gaps 3–6 of the 2026-07-01 log.
+- **`--channels` is a hard requirement** for the in-context wake; a dormant Claude cannot be
+  roused (the shim is a stdio subprocess of a running session). Settled — the Tier 1 spike
+  confirms CELLO's specific end-to-end wiring, not the flag.
+- **M9 merge is textually clean** (`git merge-tree` dry-run: zero conflicts; m9-build = +6,438
+  lines, mostly the self-contained `core/gateway` package) but needs a **semantic gate**: prove
+  every M8B-era content path routes through `screenInbound`/`screenOutbound` post-merge, and
+  re-run the m9 gate.
+- **The Telegram half is already written.** Anthropic's vetted plugin (1,038 lines, grammy/bun,
+  on disk) transfers near-verbatim; the single-`getUpdates`-consumer-per-token constraint (stated
+  verbatim in its code) is the evidence that decided OQ-1 for daemon-owned.
+- **`since_seq` has zero hits** in cello-client; **`ipc.connect` carries only `clientType`**
+  (no capability negotiation); **relay `pickup_queue` exists** (V34/V35) with the
+  ask-on-reconnect step confirmed missing.
+- **Notifications are fire-and-forget** — no ack, no redelivery. `cello_check_notifications` is
+  the loss-reconciliation mechanism, which is why it is Tier 1, not a convenience.
+
+## 3. Target architecture (decisions baked — see M8C-DECISIONS)
+
+**Channels as the reactive core (CONFIRMED).** The daemon is the always-on receiver and the
+common substrate; each adapter differs only in how its runtime is woken. The channel push is a
+**content-free doorbell** (type + counterparty pubkey + `session_id`); `cello_receive` fetches the
+letter — SI-001 content-minimization holds through every wake. Every push has a pull equivalent;
+nothing assumes Claude Code (Bedrock/cron clients poll the same state).
+
+**Daemon-owned Telegram bot (DECIDED — OQ-1 closed 2026-07-05).** The daemon holds the bot
+connection; the token is a daemon setting. One long-lived poller uniquely owns the token (kills
+~100 lines of per-session contention handling), works **cold** (no live agent session needed), and
+is runtime-agnostic — Claude Code's edge is push latency, not capability. M8C ships **Mode 1
+doorbell level only**; full-monitoring + Mode 2 (operator as communicator, approvals gate) are the
+follow-on milestone's opening track. Inbound operator messages are daemon-tagged operator-origin.
+
+**M9 is the security floor, merged first (Tier 0).** All content screening (injection defense,
+redaction, size caps, rate limits) is M9's, attached at `screenInbound`/`ingestReceivedContent`
+and `screenOutbound`/`cello_send`. No channel or relay work lands before the seam is live and
+semantically re-proven. M8C never re-invents an M9 piece.
+
+**Multi-daemon = Primary/Standby (Tier 5).** Same K_local on both daemons; exactly one Primary
+(standing receiver + FROST); directory arbitrates via a one-time primary-transfer offer (2-min
+TTL). The ECDH device-linking handshake ("how does daemon A authenticate that daemon B belongs to
+the same operator?") gets its **own design log before any code** — it is a crypto attack surface.
+DB sync is user-initiated. Sessions never migrate live: close → sync → new session.
+
+## 4. Tiers & dependency order (units → DoD lines in M8C-DEFINITION-OF-DONE)
+
+- **Tier 0 — Prerequisites:** SPIKE (the ~30-min `claude --channels` end-to-end confirmation —
+  the very first action) → M9INT (merge m9-build + wire the seam + semantic gate).
+- **Tier 1 — LAUNCH GATE (reactive doorbell):** WAKE (channel stage 1, session-request wake) →
+  AUTOSTART (`use_agent` auto-starts) → INBOX (`cello_check_notifications`, the push-loss
+  reconciler). Live smoke closes the tier.
+- **Tier 2 — Full reactivity + command surface:** MSGWAKE (stage 2 per-message wake, daemon build)
+  + SINCESEQ (`since_seq` on `cello_receive`) → LOGINSTART (`cello login` auto-start, opt-out) →
+  CONFIG (CLI config surface on M9-CFG-001's store) → CURSOR (per-connection read cursor +
+  `session_not_current` gate).
+- **Tier 3 — Reachability + protection:** AWAY (answering machine, transparent/opaque) →
+  CONTACT (whitelist + privacy) → ABUSE (persistence bounds: per-session total size,
+  unknown-sender queue caps per-sender + global) → TTL (session-request TTL) → TGDOOR (Telegram
+  Mode 1 doorbell, daemon-owned bot).
+- **Tier 4 — Async foundation:** RELAYWAKE (check relay on wakeup — directory-assisted discovery,
+  both repos) → LEAVEMSG (offline message receipt + surfacing).
+- **Tier 5 — Multi-daemon:** PRIMARY-DESIGN (the device-linking design log — gate for the rest) →
+  PRIMARY (Primary/Standby + transfer offer) → POLICY (per-daemon policies) → PORTAB (session
+  portability: close → sync → re-open).
+
+Dependencies: MSGWAKE rides WAKE's forwarding hop; TGDOOR's doorbell is decoupled from channel
+stages (daemon-owned bot) but its full-monitoring level (excluded) would need MSGWAKE; CURSOR's
+refusal guidance is SINCESEQ; LEAVEMSG builds on RELAYWAKE; POLICY/PORTAB sit on PRIMARY.
+
+**Repo center of gravity: cello-client** (daemon, shim, MCP tools, CLI — publish cascade applies
+to every daemon-touching unit). Exceptions: CONTACT's presence-visibility edge, RELAYWAKE, and
+PRIMARY touch trustless-cello (directory).
+
+## 5. Out of scope (M8C)
+
+- **Telegram full-monitoring level + Mode 2** (operator as communicator, approvals gate,
+  reply addressing — OQ-2/OQ-3 park with it) → follow-on milestone's opening track.
+- **Channel stage 4 relay hardening** (multi-peer addressing, platform-side sender allowlists
+  beyond the operator allowlist TGDOOR needs) → follows Mode 2.
+- **Non-Claude-Code adapters** (Hermes/OpenClaw/IronClaw) + `ipc.connect` capability negotiation
+  → separate design track. Do not bake Claude-Code assumptions into the daemon meanwhile.
+- **Kill switch** — launch-critical but **portal's job, tracked outside M8C.** Recorded here so it
+  cannot fall between milestones (see M8C-DECISIONS).
+- Three-tier contacts (favorite), shared artifacts, media caps beyond M9-IN-001's extension.
+
+## 6. Definition of done
+
+The journeys are GREEN in ordered tiers — daemon-level proofs on the e2e fixtures (extend
+`packages/e2e-tests/src/session-fixture.ts` / the spine harness; never a from-scratch fixture),
+the in-context hop proven in a **live `claude --channels` session** (the milestone-close smoke —
+Vitest green ≠ done), Tier 4/5 directory pieces proven on the spine then live dev. Every story
+carries observability ACs (named `domain.noun.verb` events, correlationId threading, error paths).
+See [[M8C-DEFINITION-OF-DONE]].
+
+---
+
+## Related Documents
+
+- [[M8C-DEFINITION-OF-DONE]] — the yardstick: every requirement, ordered, status-tagged
+- [[M8C-PROCEDURE]] — the runbook: per-unit loop, severity triage, publish cascade, commit discipline
+- [[M8C-BUILD-JOURNAL]] — audit trail and status board
+- [[M8C-DECISIONS]] — the 2026-07-05 scope/tier decisions, OQ-1 resolution, parked OQs
+- [[M8C-MILESTONE-NOTES]] — the triage worksheet this spec commits: inventory, Telegram vision, verification pass
+- [[2026-07-01_1030_command-surface-and-notifications-design|Command Surface, Notifications, and Async Messaging Design]] — the planning-authoritative design substance
+- [[2026-06-27_0753_claude-code-channels-cello-integration|Claude Code Channels × CELLO]] — code-level channel reference (cite symbols, not line numbers)
+- [[M9-DEFINITION-OF-DONE|M9 Definition of Done]] — the security gateway Tier 0 merges and wires
