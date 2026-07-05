@@ -154,9 +154,31 @@ trustless-cello `packages/directory` pins `@cello-protocol/client@^0.0.31` (care
 
 **Local dev DB note:** the docker-compose local pg had a dirty 6-week-old volume stuck at V29 (Flyway V30 partial + a V17 checksum drift). `docker compose down -v && up` re-migrated clean to V41. Not a code/migration change.
 
+## OVERALL STATUS (2026-07-05) — build+ship COMPLETE for both stories; Story C (live) is the remaining gate
+
+**DONE + SHIPPED:**
+- **Story A (directory-side):** items 0/1/3, 28 tests, both reviewers clean, DEPLOYED all 3 regions (us1 taskdef :231, eu1 :91, ap1 :82, commit `bafed51a`), relay cascade complete + manifests fresh, cluster healthy.
+- **Story B (client-side):** item 2 + item 3-client, 22 tests, both reviewers' findings fixed, PUBLISHED to beta (cello-client tag `v0.0.70`; transport 0.0.14 / client 0.0.44 / daemon 0.0.29 / cli 0.0.27 / connect 0.0.56), binary-verified (dist has the code; cross-pins real).
+
+**REMAINING: Story C (live multi-process, real regions) — the milestone-close gate.** Needs the new client installed + two agents homed on DIFFERENT regions. No isolated-home support in the cli (fixed `~/.cello/`), so running it means either (a) driving the primary local daemon (upgrade+restart+register — disruption/lock risk to a working setup) or (b) dedicated agents across nodes (e.g. demo EC2 us1 + a second daemon on eu1). This touches live/personal infra → surfaced to Andre for the approach. To run once decided:
+```
+# install the published beta client (initiator side needs the new client; target can be old)
+npm i -g @cello-protocol/cli@0.0.27 @cello-protocol/connect@0.0.56
+# home Alice on eu1, Bob on us1 (demo) — force homes via CELLO_DIRECTORY_URL per agent:
+#   directory-us1.cello.mygentic.ai / directory-eu1.cello.mygentic.ai / directory-ap1.cello.mygentic.ai
+# Scenario 1: register Alice AFTER eu1's last boot (eu1 taskdef :91 booted at this deploy — a fresh
+#   registration now is guaranteed after-boot → exercises the FINDING-8 read-through non-vacuously).
+#   Alice (eu1) → cello_initiate_session(Bob@us1) → expect cross-node session + BOTH seals.
+# Watch daemon logs for: directory.discovery.lookup, signaling.visiting.connected/released,
+#   session.crossnode.initiated/established. Directory logs: directory.discovery.lookup,
+#   directory.auth.visiting (no presence write for the visiting conn).
+```
+`latest` promotion PENDING Andre's go (do AFTER Story C passes): `npm dist-tag add @cello-protocol/connect@0.0.56 latest` + cli@0.0.27 (+ transitive).
+
 ## Status log
 - **2026-07-05 0655** — Journal created. Read design doc + CONTEXT.md + STATE.md + infra/CLAUDE.md in full. Both repos clean on main. Recon complete. Docker brought up + local DB reset to V41.
 - **2026-07-05 ~0930** — Story A directory-side code + 28 tests complete, gate green. Dispatched both mandatory reviewers on the uncommitted diff.
+- **2026-07-05 ~1045** — Story B reviewed (both agents), findings fixed (`0b7a33e`), version cascade (`4d6c983`), tag `v0.0.70` published to beta, binary-verified. STATE.md updated. Directory deploy + relay cascade confirmed complete earlier. **Build+ship complete for both stories.** Story C (live) surfaced to Andre for the execution approach (touches live/personal daemon infra). Compaction-safe: journal + STATE.md fully current.
 - **2026-07-05 ~0950** — Story A committed `bafed51a`, pushed to origin. **Directory pipeline `cello-directory-pipeline` (us-east-1) InProgress** for `bafed51a` — batched deploy of items 0+1+3-dir-half to all 3 regions (~25-30 min). Pre-change health check GREEN (6/6 ECS 1/1, 6/6 DNS). After deploy: MANDATORY relay cascade (restart all 3 relays to re-register) + update STATE.md + re-sign manifests if relay IPs changed. Then Story C can run against live. Writing Story B (cello-client) during the deploy window.
 - **2026-07-05 ~0945** — **Both reviewers CLEAN, no blocking findings.** code-reviewer: nothing ≥80 confidence; error quality, async migration (5 awaits), read-through mapping, visiting gating (no cross-stream leakage), test coverage all verified correct. cello-fallback-finder: **NO SILENT FALLBACKS**, no HIGH; all 6 suspect paths fail loud. Non-blocking notes DEFERRED (not fixed — scope/settled-design discipline): (a) dark-node logged at info per design; (b) resolve-throw on session/seal DB error is unhandled-rejection→crash→restart, but pre-existing & consistent with adjacent `await hasConnection`, and NEVER fabricates success — adding a new `session_request_error{lookup_failed}` would bleed into client compat (Story B); (c) `#processRevokeAgent` self-revoke still sync getProfile — out of Story A scope, matches doc's "leave miss-is-expected sync". Committing Story A directory-side; next: batched directory deploy (all 3 regions).
 </content>
