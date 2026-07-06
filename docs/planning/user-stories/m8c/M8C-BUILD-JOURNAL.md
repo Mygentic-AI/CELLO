@@ -18,7 +18,7 @@ description: >
 |---|---|---|
 | I — Invariants | INV-CONTENTFREE, INV-GATEWAY (activates w/ M9, deferred), INV-PUSHPULL, INV-HONEST-STATES, INV-ONE-PRIMARY | ❌ all |
 | 0 — Prerequisites | SPIKE-1 | ✅ |
-| 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | 🟡 ❌ ❌ ❌ |
+| 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | 🟡 🟡 ❌ ❌ |
 | 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | ❌ all |
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | ❌ all |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | ❌ all |
@@ -30,7 +30,11 @@ description: >
 DOD-M9INT-1 was moved out of Tier 0 and deferred to after the M8C channel tiers. A post-compaction
 context must not conclude M9 needs merging first — it does not.
 
-**Next unit:** DOD-AUTOSTART-1 — see Entry 7 design note below.
+**Next unit:** DOD-INBOX-1 — `cello_check_notifications({ scope })`: the push-loss reconciliation
+mechanism + primary inbox for poll-only clients (unread watermark `last_delivered_seq`; a missed
+doorbell is discoverable via INBOX on reattach) + the F4 rider (split `sealed_receipt_not_found`
+into distinct reasons; full session IDs on copy surfaces). DAEMON-side (§5). SPIKE-1 ✅, WAKE-1 🟡,
+AUTOSTART-1 🟡 (both flip ✅ at LIVE-1). M9INT DEFERRED (D11) — not a gate.
 
 **Resume pointer:** SPIKE-1 ✅ (Entry 3), WAKE-1 🟡 (Entry 6 — built commit `d5fd5ec`, unit +
 real-binary integration green, reviewer SPEC-FAITHFUL, flips ✅ at LIVE-1's live `--channels`
@@ -464,6 +468,52 @@ online + none selected → still `no_current_agent`), A5 (status: current agent 
 `selected:true`, never `"current"`).
 
 **Next:** red-first tests → implement → gate → `cello-unit-reviewer`.
+
+---
+
+### 2026-07-06 — Entry 8: DOD-AUTOSTART-1 built + reviewed → 🟡
+
+**Built (commits `245c7b2` impl, `08b9dae` review fixes; cello-client main).** DAEMON-side (§5).
+- `startAgentInternal(name)` extracted from `cello_start_agent` — **CONN-001 keystone preserved
+  byte-for-byte** (reviewer verified against `245c7b2^`): `getAgentSignaling` → the fire-and-forget
+  `ensureStandingReceiverForAgent → flushAwaitingContent → autoRecoverForAgent` chain, unchanged.
+- `cello_use_agent` auto-starts a loaded-but-offline agent then selects it (A1); `cello_start_agent`
+  delegates to the shared fn (A2). Selection is set only AFTER a successful start (A3 — no
+  half-selected state). `not_registered` is a NON-BLOCKING warning on the OK response (D12).
+- `resolveCurrentAgent` (F18): sole-online fallback at the `?? currentAgent` sites; two-online +
+  none-selected still `no_current_agent` (daemon-global read). F5: `state:"online"` + `selected:true`,
+  never `"current"`; `AgentInfo.selected` added.
+
+**Tests:** `m8c-autostart-1.test.ts` (8 — A1–A5 + the negative not_registered case) + `mcp-001-
+agent-lifecycle.test.ts` rewritten to the new contract (`state:"current"` → `selected`;
+`agent_not_online` → auto-start; strict `toEqual({ok:true})` relaxed where the warning rides).
+Full gate green (1511 tests).
+
+**`cello-unit-reviewer` (245c7b2) — SPEC: DEVIATIONS FOUND (legal, journaled); NO SILENT FALLBACKS;
+HOLLOW TEST found (blocking). All three findings fixed in `08b9dae`:**
+- **F1 [non-blocking deviation] — `agent_start_failed` is unreachable.** The `agent_not_found`
+  pre-check catches nonexistence before auto-start, and permissive `startAgentInternal` (D12) has
+  no other synchronous failure — so the structured envelope never fires. Aligns with D12 (no
+  synchronous start-failure reason exists). Resolution: kept as the **reserved** structured-failure
+  surface (reachable when D12's reverse adds a bounded signaling wait → `directory_unreachable`),
+  documented in-code + here. `agent_not_found` is `use_agent`'s real failure surface today.
+- **F2 [BLOCKING test-teeth] — no negative `not_registered` test.** A hardcoded-warning impl passed
+  the whole suite. Fixed: a REGISTERED agent (seeded via `cello_create_agent` +
+  `persistRegistrationState`, DB via `handle.getSessionNodeManager().getDb()`) asserts the warning
+  is ABSENT. **Teeth verified** — an unconditional-warning bypass turns it red.
+- **F3 [LOW] — registration-read failure dropped the signal silently on the surface** (loud in
+  log). Fixed: a read failure now surfaces a softer `registration_unknown` warning so the surface
+  isn't falsely clean.
+
+**Deviations from the literal DoD, all journaled (legal per §2b):** `not_registered` non-blocking
+(D12, migration trap — 19 test files start agents, 6 register); `directory_unreachable` not
+synchronously surfaced (D12); F18 scoped to the cited name-defaulting sites (broader session-tool
+guards deliberately out).
+
+**Status:** DOD-AUTOSTART-1 → **🟡 BUILT / UNVERIFIED-LIVE** (daemon-layer proven; flips ✅ at the
+live `--channels` smoke, DOD-LIVE-1, with the publish cascade).
+
+**Next unit:** DOD-INBOX-1 (`cello_check_notifications` — push-loss reconciler + F4 rider).
 
 ---
 

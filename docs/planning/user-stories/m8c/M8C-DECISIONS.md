@@ -321,6 +321,20 @@ PARKED (journal + DoD "Parked decisions" + here).
   keeps the launch-critical `login → use_agent` collapse snappy.
 - **Reverse:** add a bounded `waitForSignalingConnected` in `startAgentInternal` (option c) if
   `directory_unreachable` must surface at `use_agent` time.
+- **REVISION (same session, after falsify-first blast-radius check):** `not_registered` is
+  **NON-BLOCKING**, not a blocking `agent_start_failed`. Falsify-first found **19 daemon/adapter
+  test files start/use agents, only 6 seed registration** — "online without registration" is an
+  established capability, and `cello_start_agent` gates on registration nowhere. Making auto-start
+  REQUIRE registration would break ~13 test files and change a real contract (the migration trap
+  CLAUDE.md warns about). **Final design:** auto-start is PERMISSIVE (mirrors `cello_start_agent`,
+  preserves behavior + tests); `agent_start_failed` is the structured wrapper returned iff
+  `startAgentInternal` returns `!ok` (with selection left unchanged — the load-bearing "no
+  half-selected state" guarantee, tested via the `agent_not_found` path); `not_registered` is
+  surfaced as a NON-BLOCKING `warning` on the `use_agent` OK response (agent selected + "run
+  `cello register` to enable sessions" guidance) via a one-row `DbRegistrationPersistence`
+  `loadRegistrationState()` read. This honors the DoD's onboarding intent without stranding the
+  online-without-registration contract. Reverse: to block, gate `startAgentInternal` on
+  `reg_status==='active'` and update the ~13 fixtures.
 
 ---
 
