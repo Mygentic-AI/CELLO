@@ -200,7 +200,7 @@ description: >
   SPEC-FAITHFUL, no silent fallbacks, teeth + since_seq:0 boundary locked. Flips ✅ when exercised live.)
 - **DOD-LOGINSTART-1** — `cello login` auto-starts all registered agents; per-agent
   `autoStart: false` opt-out; login always completes with failed agents enumerated by reason
-  (design-review #8). — ❌
+  (design-review #8). — 🟡 CORE (2026-07-06, Entry 19 — built `69fe1ea`/`b7f5f16`, login-command orchestration, ZERO daemon change; auto-start-all + always-complete + failure-enumeration; reviewer SPEC-FAITHFUL, hollow-test fix w/ teeth. The per-agent `autoStart:false` opt-out is PARKED on M9-CFG-001, D14. Flips ✅ live.)
 - **DOD-CONFIG-1** — `cello config list/get/set [--agent <name>]` on M9-CFG-001's versioned
   store (extend, never a parallel subsystem); tighten-free/loosen-needs-confirmation enforced;
   every M8C-introduced setting (away message, privacy mode, auto-start, TTL, queue caps,

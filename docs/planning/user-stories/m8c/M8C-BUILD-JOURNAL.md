@@ -20,7 +20,7 @@ description: >
 | 0 — Prerequisites | SPIKE-1 | ✅ |
 | 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | 🟡 🟡 🟡 ❌ |
 | 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | 🟡 all (built+reviewed; ✅ at LIVE-1) |
-| 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | 🟡 🟡 ❌ 🅿️CFG(D14) ❌ |
+| 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | 🟡 🟡 🟡CORE 🅿️CFG(D14) ❌ |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | ❌ all |
 | 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | ❌ ❌ |
 | 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ❌ all |
@@ -618,6 +618,39 @@ All fixed in `22de42c`:**
 DOD-LIVE-1 with the publish cascade).
 
 **Next unit:** the ONBOARD-* rider cluster — see Entry 10 design note (repro R4 first).
+
+---
+
+### 2026-07-06 — Entry 19: DOD-LOGINSTART-1 CORE built + reviewed → 🟡 (opt-out parked, D14)
+
+**Built (commits `69fe1ea` impl, `b7f5f16` review fix; cello-client main).** CLI-side (login command),
+ZERO daemon change (design-review #8 orchestration lives in `cello login`). `autoStartAllAgents(client)`
+helper: `cello_list_agents` → `cello_start_agent` each, collecting `{ started, failed:[{name,reason}] }`,
+one bad agent never aborts the loop. `login` calls it after `connectOrStart` and appends a
+`formatLoginSummary` (extracted, pure) that enumerates each failure by name+reason. login ALWAYS
+returns exit 0 — even a total auto-start failure degrades to a loud one-line reason (the daemon IS up).
+Idempotent (start is idempotent → re-login safe).
+
+**Design choice (Entry 18):** login-COMMAND orchestration, NOT daemon boot — matches the DoD's literal
+"cello login auto-starts" and keeps the daemon's boot contract (and its many offline-start tests) intact.
+
+**Tests:** `m8c-loginstart-1.test.ts` (5): all-online + idempotent second pass; zero-agents clean;
+the **failure path** (stub client forcing a `{ok:false}` + a throw → both enumerated by `{name,reason}`,
+good agent still started); `formatLoginSummary` enumeration string; `login()` boundary (real in-process
+daemon via `acquireLock` → exit 0 + summary). Full gate green (1537).
+
+**`cello-unit-reviewer` (69fe1ea) — SPEC FAITHFUL (L1/L2/L3; L4 opt-out is the legal D14 park), NO
+SILENT FALLBACKS. Blocking HOLLOW-TEST (F1) fixed in `b7f5f16`:** the failure-enumeration path — the
+reason this DoD exists — had zero coverage (every test asserted `failed:[]`); a hollow impl with the
+`failed.push`/`catch` removed passed. Now forced + asserted. F2 (login() boundary uncovered) also
+closed. F3 (LOW, unreachable) noted, no fix.
+
+**Status:** DOD-LOGINSTART-1 CORE → **🟡 BUILT / UNVERIFIED-LIVE**; the per-agent `autoStart:false`
+opt-out remains PARKED on M9-CFG-001 (D14).
+
+**Next unit:** DOD-CURSOR-1 (Tier 2, §6 design-significant — per-connection read cursor +
+`session_not_current` gate; M9-independent). Terrain partly mapped (perConnectionState `daemon.ts:878`,
+cello_send handler `:4796`). Design note owed before code.
 
 ---
 
