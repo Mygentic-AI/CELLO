@@ -235,7 +235,7 @@ description: >
   cap (anti-swarm). Whitelisted senders bounded only by disk. Per-message cap + outbound rate are
   M9's — not rebuilt here. — 🟡 (2026-07-06, Entry 24 — built, daemon-side: per-session cumulative-received-byte cap in the ingestReceivedContent funnel + per-sender/global active-session acceptance bounds in acceptInboundAssignment, both exempting known CONTACT-1 contacts entirely; review pending.)
 - **DOD-TTL-1** — Receiver-side session-request TTL (24h default, configurable); expired requests
-  leave the queue and are visible as expired in INBOX. — ❌
+  leave the queue and are visible as expired in INBOX. — 🟡CORE (2026-07-06, Entry 24 — built `e1ddb18`, daemon-side: INBOUND_SESSION_TTL_MS (24h) + lazy reap-on-read + expired_session_requests in cello_check_notifications; review pending. Per-agent override PARKED on M9-CFG-001, D17. Flips ✅ live.)
 - **DOD-TGDOOR-1** — Telegram Mode 1, doorbell level: daemon-owned bot (token = daemon setting,
   single long-lived `getUpdates` poller), allowlisted operator chat ID, discrete events only
   (session requests, messages-waiting, state changes) pushed to the operator's phone — including
