@@ -22,9 +22,9 @@ description: >
 | 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | 🟡 all (built+reviewed; ✅ at LIVE-1) |
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | 🟡 🟡 🟡CORE 🅿️CFG(D14) 🟡 |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡CORE 🟡 🟡CORE 🟡 (**TIER 3 DONE, reviewed+fixed**) |
-| 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | 🟡CORE ❌ (needs M9 merge first) |
+| 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | 🟡CORE ❌ (M9 merged, unblocked — next) |
 | 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ❌ all |
-| Post-channel — deferred | M9INT-1 (do AFTER channel tiers — D11; NOT a prerequisite) | ❌ deferred |
+| Post-channel — deferred | M9INT-1 (do AFTER channel tiers — D11; NOT a prerequisite) | 🟡 MERGED (commit pending) |
 
 **⛔ M9 IS NOT A PREREQUISITE (D11, 2026-07-06).** Do NOT merge `m9-build` before the channel work.
 DOD-M9INT-1 was moved out of Tier 0 and deferred to after the M8C channel tiers. A post-compaction
@@ -633,6 +633,101 @@ All fixed in `22de42c`:**
 DOD-LIVE-1 with the publish cascade).
 
 **Next unit:** the ONBOARD-* rider cluster — see Entry 10 design note (repro R4 first).
+
+---
+
+### 2026-07-07 — Entry 28: DOD-M9INT-1 — m9-build merged to main (commit pending this entry)
+
+**Sequencing note:** per D11/§5, this merge is correctly timed — ALL M8C channel tiers (1-4) were
+code-complete (Entry 27) before this ran, and DOD-LEAVEMSG-1's own DoD text requires the merge
+"before DOD-LEAVEMSG-1 at the latest." Not a rehash of the settled D11 decision — just confirming
+the trigger condition was met.
+
+**Pre-merge baseline (the DoD's own "also unverified" ask):** checked out `m9-build` in a separate
+worktree (`cello-client-m9`). `m9-gate-1.test.ts` — 2/2 green. Full m9-build package test run: 1038
+passed, 3 pre-existing failures, all attributable to staleness vs. main (a static source-string
+check predating M8C-SINCESEQ-1's `cello_send`/`cello_receive` shape change; two `core/client`
+persist-024 tests calling a `core/transport` `createNode({})` signature that changed after
+m9-build's fork point) — none are m9-build's own defects.
+
+**Merge scope reality-check:** the DoD text's "4 conflicts" estimate was stale (predates this
+session's full Tier 1-4 build, which touched `daemon.ts`/`session-node-manager.ts` extensively).
+Actual `git merge m9-build`: `daemon.ts` (3 conflict blocks), `session-node-manager.ts` (5),
+`types.ts` (1), `tsconfig.json`, `vitest.workspace.ts` — 71 diverged main commits' worth of new
+M8C code vs. m9-build's 34 commits' gateway package + seam wiring. m9-build's own diff was almost
+entirely ADDITIVE (`core/gateway/` — a whole new package, 6438 lines) with the seam wiring
+concentrated in the same handful of files M8C also touched all night.
+
+**Conflict resolutions (all preserve BOTH sides' intent, not a one-sided pick):**
+- Imports/fields/constructor options in `types.ts`/`session-node-manager.ts`/`daemon.ts`: purely
+  additive on both sides — kept both.
+- `DaemonDatabase` (main's newer SQLCipher wrapper type) kept over m9-build's `DatabaseSync` (a
+  structurally-compatible subset per `sqlcipher-db.ts`'s own doc comment) — no behavior change.
+- `ingestReceivedContent`: CURSOR-1's ABUSE-1 size-cap check (cheap, sync) ordered BEFORE M9's
+  `screenInbound` seam (async, more expensive) — both are independent gates; either rejects on its
+  own criteria, so the ordering choice doesn't affect correctness, just fail-fast economics.
+- `cello_send`: CURSOR-1's read-before-write gate ordered BEFORE M9's `governance_decisions`
+  parsing — an access-control short-circuit belongs before unrelated prep work for a send that may
+  not even be allowed to proceed.
+- `sessionNodeManager` construction: m9-build's copy at the OLD construction site (deep in
+  `startDaemon`) was a stale duplicate — main had already moved construction earlier (PERSIST-002,
+  before this session). Removed the duplicate; moved M9's `securityGateway` local + the
+  `security.gateway.connected` startup log up to the real (earlier) construction call instead.
+- `vitest.workspace.ts`/`tsconfig.json`: both sides added different new packages (`core/daemon`+
+  `core/cli` on main, `core/gateway` on m9-build) — kept all three.
+
+**One real merge bug found (self-caught, not reviewer-found) and fixed before commit:** `cello_send`'s
+sent-transcript record (`recordTranscriptMessage`) used the pre-redaction `contentBytes` instead of
+the actually-sent `sendBytes` — on a `redact` verdict this would have written the ORIGINAL,
+un-redacted draft into the durable transcript even though the wire send and the Merkle leaf both
+correctly used the redacted bytes. This line didn't exist in m9-build (main-only, added after the
+fork point for DOD-LOG-1), so there was no "other side" to diff against — traced from M9's own
+stated seam invariant ("the transcript records what was actually sent") and fixed.
+
+**Breaking API surfaced by the merge:** `ingestReceivedContent` became `async` (must `await`
+`screenInbound`). Production call sites were already correct (m9-build's own changes). ~25 test call
+sites across `daemon-004-ipc.test.ts` and every M8C Tier 2-4 test file (CURSOR-1, AWAY-1, CONTACT-1,
+ABUSE-1, TGDOOR-1, MSGWAKE-1) called it synchronously and needed `await` added — fixed.
+
+**Two real test bugs found and fixed (neither a merge artifact — pre-existing on their respective
+sides, surfaced by running everything together for the first time):**
+1. `mcp-001-proxy.test.ts`'s static source-string assertion was stale against BOTH M8C-SINCESEQ-1's
+   and M9-FEED-001's changes to `cello-mcp.ts`'s `cello_send`/`cello_receive` forwarding shape
+   (`governance_decisions` param added, call reformatted multi-line) — updated to match current source.
+2. m9-build's own `m9-core-001-seam.test.ts`: 16 `cello_receive` polling calls (in loops expecting
+   ABSENCE of content — the warn/block scenarios) omitted `timeout_ms`, silently relying on
+   m9-build's fork-point-era NON-BLOCKING `cello_receive` (instant return, no polling). Main's
+   `cello_receive` was upgraded to a 30s-default BLOCKING receive (DAEMON-004 F1-a, predates this
+   session). Under the new semantics each poll-for-absence call blocked the full 30s default instead
+   of returning instantly, blowing well past the test's own 90s budget — NOT a resource-contention
+   issue as first suspected (ruled out via a lengthy false trail: killed genuinely-orphaned vitest
+   worker processes, tried the `forks` pool for full OS-process isolation, bumped timeouts to 90s —
+   none of it changed the identical 8/19 failure pattern, which was the tell that it wasn't
+   environmental). Root-caused by reading the actual failing test code and comparing m9-build's OLD
+   inline `cello_receive` handler (a simple non-blocking buffer pop, no `timeout_ms` handling at
+   all) against main's current one. Fixed: `timeout_ms: 0` on all 16 calls, matching the test's own
+   manual-polling design intent. Confirmed: 19/19 green standalone (was 11/19), 77/77 files green in
+   the full daemon package (was hanging 300-770s with 8 failures; now 31s clean).
+
+**Content-path audit (the DoD's explicit ask):** `#handleContentStream` (direct inbound) and
+`recoverParkedFromRelay` (RELAYWAKE-1's relay-pull) both funnel through `ingestReceivedContent` —
+the single inbound chokepoint `screenInbound` now guards. `cello_send`'s IPC handler is the sole
+outbound funnel `screenOutbound` guards. AWAY-1/CONTACT-1's canned auto-responses
+(`sendAwayResponse`) call `sessionNodeManager.sendContent` directly, bypassing the IPC-level
+`cello_send` (and therefore `screenOutbound`) — audited as CORRECT, not a gap: these send only
+fixed, hardcoded system literals ("Agent is currently away...", "Dispatched."), never user-authored
+content, so there is nothing for PII/secrets/injection screening to check. Doorbells (WAKE/MSGWAKE/
+TGDOOR) are content-free by DOD-INV-CONTENTFREE and carry no screenable payload at all.
+
+**Gate:** full monorepo `pnpm run test` (1733 passed, 164 files, 12 skipped, 3 todo) → `lint` (clean)
+→ `typecheck` (clean) → `build` (clean).
+
+**Status:** DOD-M9INT-1 → **🟡 MERGED** (activates DOD-INV-GATEWAY). `cello-unit-reviewer` dispatch
+pending immediately after this commit, per the standard per-unit loop (§2 step 8) — this is being
+treated as one unit despite being a merge, since real code changes (the redact-transcript fix, the
+construction de-dup) were made resolving it, not just mechanical conflict-marker removal.
+
+**Next:** DOD-LEAVEMSG-1 (Tier 4) — now unblocked.
 
 ---
 

@@ -297,12 +297,30 @@ description: >
   (`screenInbound` at `ingestReceivedContent`, `screenOutbound` at `cello_send`); the **semantic
   gate** passes: m9 gate (`m9-gate-1.test.ts`) re-run green against the merged daemon AND an
   explicit audit that all content paths (M8B-era + every path M8C added) route through the gateway.
-  **Merge is NOT clean anymore** (verified 2026-07-06: 4 conflicts — `daemon.ts`,
-  `session-node-manager.ts`, `tsconfig.json`, `vitest.workspace.ts` — main drifted since the
-  2026-07-05 dry-run); resolving them preserves BOTH main's seal-liveness work AND m9-build's seam
-  wiring. **Also unverified:** the M9 build journal was not maintained across the 34 build commits,
-  so confirm `m9-gate-1.test.ts` is actually green on `m9-build` as the pre-merge baseline before
-  merging. Activates DOD-INV-GATEWAY. — ❌ (deferred)
+  Activates DOD-INV-GATEWAY. — 🟡 (2026-07-07, Entry 28 — merged, commit pending in this session;
+  pre-merge baseline confirmed (`m9-gate-1.test.ts` 2/2 green on `m9-build` before merge). Real
+  conflicts (not the stale 4 predicted — main had drifted further): `daemon.ts` (3),
+  `session-node-manager.ts` (5), `types.ts` (1), `tsconfig.json`, `vitest.workspace.ts` — all
+  resolved preserving BOTH main's M8C additions and m9-build's seam wiring (CURSOR-1's gate ordered
+  before governance_decisions parsing in `cello_send`; ABUSE-1's size cap ordered before the M9
+  screening seam in `ingestReceivedContent`; sessionNodeManager construction de-duplicated —
+  m9-build's copy was stale/pre-dated a main refactor that moved construction earlier). One real
+  merge bug found+fixed: the sent-transcript record used pre-redaction `contentBytes` instead of
+  the actually-sent `sendBytes` on a `redact` verdict — fixed before commit. `ingestReceivedContent`
+  became async (M9's screening await) — ~25 call sites across CURSOR/AWAY/CONTACT/ABUSE/TTL/TGDOOR
+  test files needed `await` added; all fixed. One stale pre-M8C test assertion
+  (`mcp-001-proxy.test.ts`'s static source-string check) updated for both SINCESEQ-1's and M9-FEED-
+  001's `cello_send`/`cello_receive` shape changes. One genuine test bug found in m9-build's OWN
+  `m9-core-001-seam.test.ts` (not a merge artifact): 16 `cello_receive` polling calls omitted
+  `timeout_ms`, silently relying on m9-build's OLD non-blocking receive semantics (pre-dates main's
+  DAEMON-004 F1-a blocking-receive fix) — fixed to `timeout_ms: 0` matching the test's own
+  poll-for-absence intent. Full gate green: 1733 tests/164 files, lint, typecheck, build. Content-
+  path audit: `#handleContentStream` and `recoverParkedFromRelay` (RELAYWAKE-1) both funnel through
+  `ingestReceivedContent`; `cello_send`'s IPC handler is the sole outbound funnel. AWAY-1/CONTACT-1's
+  canned auto-responses (`sendAwayResponse`) call `sessionNodeManager.sendContent` directly,
+  bypassing `screenOutbound` — audited as CORRECT: these send only fixed, hardcoded system literals
+  ("Agent is currently away...", "Dispatched."), never user-authored content, so there is nothing
+  for PII/secrets/injection screening to check. `cello-unit-reviewer` dispatch pending post-commit.)
 
 ## Tracked, not M8C-fruit (bigger friction — own items, NOT folded in as riders)
 
