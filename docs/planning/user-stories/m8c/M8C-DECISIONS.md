@@ -401,6 +401,43 @@ PARKED (journal + DoD "Parked decisions" + here).
 - **Reverse:** same escape hatch as D14 — if opaque mode / custom text is wanted before M9 merges,
   extract `core/gateway/src/config/config-store.ts` as a standalone package (a deliberate partial
   M9 forward-port), then wire AWAY-1's two parked clauses onto the real store.
+- **D15 addendum (cello-unit-reviewer a619ca33, 2026-07-06):** this fork's text names only
+  `DOD-AWAY-1`; `DOD-CONTACT-1`'s own "silence in privacy mode" sub-clause (for unknown senders)
+  rides the SAME opaque-mode gap and is covered by this same D15 entry — not a separate decision,
+  just noted here for hygiene so a future reader doesn't conclude it was missed.
+
+### D16 — DOD-CONTACT-1's presence-visibility clause is deferred — requires a NEW cross-repo protocol, contacts don't sync to the directory today (2026-07-06, autonomous D10)
+
+- **Fork (reviewer a619ca33 finding, HIGH/blocking):** the DoD line's "presence visible to
+  whitelisted contacts only" clause was unimplemented with no decision trail — confirmed a silent,
+  unjournaled scope gap the reviewer correctly flagged (the same class of issue AWAY-1's opaque-mode
+  claim had, except here there wasn't even a false "journaled" claim — just silence).
+- **Why this can't be a quick fix:** verified directly (`grep -rn "contact" packages/directory/src/`
+  in trustless-cello) — the directory has ZERO awareness of contacts. `DOD-CONTACT-1`'s whitelist is
+  stored ONLY in the client daemon's local SQLite (`contacts` table, cello-client). Presence — who is
+  shown as online for a given agent — is served entirely by the DIRECTORY today, unconditionally, to
+  any querier. Gating presence by contact status would require: (1) a NEW sync mechanism so the
+  directory learns (some representation of) each agent's whitelist — itself a privacy-sensitive
+  design question (do we sync raw pubkeys? a hash? per-node or federated?); (2) directory-side query
+  logic that checks the REQUESTER's identity against the TARGET's synced whitelist before returning
+  presence. This is a genuine new protocol surface spanning both repos, not an extension of existing
+  code — the kind of work `M8C-PROCEDURE` §6 calls "design-significant" and gates on a design note
+  BEFORE code, same as `DOD-PRIMARY-DESIGN-1`.
+- **Choice (D10):** ship `DOD-CONTACT-1` CORE (whitelist mechanism, auto-add, minimal-response
+  gating, CLI surface — all client-local, real, complete) now. DEFER the presence-visibility clause
+  as its own tracked cross-repo item — NOT silently, and NOT folded into an M9-CFG-001 park (this
+  isn't a config-store dependency; it's a protocol-surface gap). Board marker: `🟡CORE`, matching
+  AWAY-1/LOGINSTART's convention for "core shipped, a named clause intentionally deferred."
+- **Why now vs. block:** the core CONTACT-1 value (agents connect coherently; strangers get minimal
+  info; known contacts are trusted) does not depend on presence-gating — an agent's mere
+  online/offline status leaking to a non-contact is a privacy hardening gap, not a break in the
+  core connect-and-communicate promise M8C exists to prove (repo CLAUDE.md Launch Triage: a
+  "forgivable" papercut, not "ruins" the experience). Blocking the whole unit on a cross-repo
+  protocol design would cost far more than it protects at this stage.
+- **Follow-on:** tracked as its own future story (directory-side presence ACL) — needs a design note
+  (sync mechanism, privacy model for what the directory learns about an agent's contact list) before
+  any code, per §6. Do NOT fold into CONFIG-1/M9-CFG-001 — this is directory-repo work, independent
+  of the client-side config store.
 
 ---
 

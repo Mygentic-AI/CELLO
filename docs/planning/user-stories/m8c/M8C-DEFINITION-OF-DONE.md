@@ -223,17 +223,17 @@ description: >
 
 - **DOD-AWAY-1** — Away response: unattended Primary answers session requests + messages with the
   configured (or default transparent) away text and queues them; opaque privacy mode = full
-  silence, indistinguishable from unreachable; per-type (request vs message) templates. — ❌
+  silence, indistinguishable from unreachable; per-type (request vs message) templates. — 🟡CORE (2026-07-06, Entry 22/23 — built `10d2d01`/`6bed679`, isAttended + per-type templates + coalescing (cleared on use_agent) + queueing via existing inboundSessionQueues; reviewer (aa5928e2/a9099571) SPEC-FAITHFUL on the core clauses, 3 findings fixed (get_transcript safeCursorAdvance, dedup-clear-on-failure, D15 properly journaled). Opaque-mode + custom-text PARKED on M9-CFG-001, D15. Flips ✅ live.)
 - **DOD-CONTACT-1** — Binary per-agent contact whitelist: known = auto-accept; unknown senders
   learn only "dispatched" by default, receipt confirmation in public mode, silence in privacy
   mode; presence visible to whitelisted contacts only. Management (D6): contacts are added by
   operator action — initiating a session to X adds X, accepting X's request adds X — plus
   `cello contact add/remove/list [--agent <name>]`; identity pins to the pubkey at add time
-  (directory name = the human handle, resolved then pinned); known stays known until removed. — ❌
+  (directory name = the human handle, resolved then pinned); known stays known until removed. — 🟡CORE (2026-07-06, Entry 23 — built `6bed679`, real `contacts` table + auto-add (K2/K3) + minimal-response gating (K4/K5) + CLI/IPC surface (K1/K6); reviewer (a619ca33) SPEC-FAITHFUL on the client-local clauses, added_at test-teeth fixed. "Silence in privacy mode" PARKED on M9-CFG-001 (D15); "presence visible to whitelisted contacts only" PARKED as a cross-repo directory protocol gap (D16, own future story). Flips ✅ live (client-local clauses only).)
 - **DOD-ABUSE-1** — Persistence bounds (the non-M9 remainder): per-session total-size limit
   (anti-drip-feed), bounded unknown-sender queue per sender, global daemon-wide unknown-sender
   cap (anti-swarm). Whitelisted senders bounded only by disk. Per-message cap + outbound rate are
-  M9's — not rebuilt here. — ❌
+  M9's — not rebuilt here. — 🟡 (2026-07-06, Entry 24 — built, daemon-side: per-session cumulative-received-byte cap in the ingestReceivedContent funnel + per-sender/global active-session acceptance bounds in acceptInboundAssignment, both exempting known CONTACT-1 contacts entirely; review pending.)
 - **DOD-TTL-1** — Receiver-side session-request TTL (24h default, configurable); expired requests
   leave the queue and are visible as expired in INBOX. — ❌
 - **DOD-TGDOOR-1** — Telegram Mode 1, doorbell level: daemon-owned bot (token = daemon setting,
@@ -334,7 +334,14 @@ own story) deliberately, never smuggled in as a rider. Source:
 - **D15 parks (2026-07-06):** DOD-AWAY-1's operator-configurable away-text override AND its
   opaque-privacy-mode switch (full silence) — both gated on M9-CFG-001's config store, same reason
   as D14. AWAY-1 CORE (transparent-default auto-response + per-type templates + coalescing) is
-  M9-independent and ships now. See [[M8C-DECISIONS]] D15.
+  M9-independent and ships now. Also covers DOD-CONTACT-1's "silence in privacy mode" sub-clause
+  (same opaque-mode gap). See [[M8C-DECISIONS]] D15.
+- **D16 parks (2026-07-06):** DOD-CONTACT-1's "presence visible to whitelisted contacts only"
+  clause — requires a NEW cross-repo protocol (the directory has zero contact-awareness today;
+  contacts live only in the client daemon's local SQLite). Not an M9-CFG-001 dependency — a
+  directory-side design surface of its own, tracked as a future story (needs its own §6 design
+  note before code). CONTACT-1 CORE (whitelist, auto-add, minimal-response gating, CLI) is
+  client-local and ships now. See [[M8C-DECISIONS]] D16.
 - OQ-2 (operator-input cadence: daemon-mediated real-time gates vs agent-loop poll), OQ-3 (reply
   @-addressing) — parked WITH Mode 2 (out of M8C, follow-on milestone).
 - OQ-4 (full Telegram settings knob list) — resolves inside DOD-CONFIG-1 + DOD-TGDOOR-1 scoping.
