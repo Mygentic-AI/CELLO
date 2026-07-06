@@ -186,6 +186,26 @@ option and keep going** — never block. Genuine undecidable forks are PARKED (j
     channels — this is the request/response direction.
 - **Reverse:** each applied item is a self-contained block/clause; strike independently.
 
+### D8 — ONE per-unit reviewer instead of three (2026-07-06, Andre)
+- **Fork:** step 8 dispatched three parallel read-only reviewers per unit
+  (`feature-dev:code-reviewer` + `cello-test-attacker` + conditional `cello-fallback-finder`),
+  each re-reading the same diff, tests, and intent — triple context cost per unit.
+- **Choice (Andre):** consolidate into a single **`cello-unit-reviewer`**
+  (`.claude/agents/sparc/cello-unit-reviewer.md`) — one pass, four lenses, one report: code
+  review, spec fidelity (per-clause verdicts, D7), failure integrity (D7 error-fidelity + the
+  fallback-finder's four patterns and high-danger shapes carried over near-VERBATIM — Andre's
+  explicit condition), and test teeth (the test-attacker's bypass question + hollow shapes).
+  Fallback checks now run on EVERY unit (no longer conditional on seam-adjacency) — free once
+  it's one pass.
+- **Unchanged:** `cello-done-auditor` at tier boundaries (different cadence, different job).
+  The three original agent files stay on disk for other milestones/skills; M8C's procedure
+  simply stops dispatching them.
+- **Why:** token cost — the diff + tests + DoD line get read once instead of three times.
+  Accepted trade-off: one context juggling four lenses loses some independent-perspective
+  redundancy; the lens prompts are kept verbatim to minimize dilution.
+- **Reverse:** revert PROCEDURE step 8/§2b/§5 to the three-agent dispatch; the original agents
+  are untouched.
+
 ---
 
 ## Related Documents

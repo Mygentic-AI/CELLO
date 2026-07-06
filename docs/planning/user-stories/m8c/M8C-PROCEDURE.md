@@ -63,12 +63,12 @@ architecture (verified 2026-07-05; don't re-derive). Then start the loop (§2).
 6. **Floor holds** — all tests green; `pnpm run test` → `lint` → `typecheck` → build; Vitest ONE
    worker, foreground, timeout, filtered. Reachability gate unchanged.
 7. **Commit** (constantly — §3).
-8. **Review — three READ-ONLY subagents on the unit's diff, in parallel:**
-   `feature-dev:code-reviewer` (`model:'opus'`) attacks the CODE; `cello-test-attacker` attacks
-   the TESTS (hollow = blocking); `cello-fallback-finder` whenever the unit touches the gateway
-   seam, notifications/queues, config, persistence, crypto, or the Telegram egress — exactly where
-   a dropped frame / skipped screen / silently-full queue hides as "looks healthy." Fix EVERY
-   finding; commit fixes. At tier boundaries, `cello-done-auditor` audits every ✅ flip.
+8. **Review — ONE read-only reviewer on the unit's diff: `cello-unit-reviewer` (D8).** One pass,
+   four lenses in a single report: code review, spec fidelity (per-clause verdicts), failure
+   integrity (buried/generic errors + the silent-fallback hunt — the full fallback-finder
+   pattern set is baked into its prompt), and test teeth (hollow-test bypasses). Dispatch per
+   §2b. Fix EVERY finding; commit fixes. At tier boundaries, `cello-done-auditor` audits every
+   ✅ flip (unchanged — different cadence, different job).
 9. **Update docs** — flip the DoD tag, journal entry, status board.
 10. Back to 1.
 
@@ -84,14 +84,15 @@ M8C is cello-client-heavy; most units touch daemon or shim, and **a line needing
 - trustless-cello references to cello-client packages stay **pinned semver** — a `workspace:*`
   there is a bug.
 
-## 2b. Reviewer dispatch — what every review subagent is TOLD (D7)
-These defect classes recur across milestones; every step-8 dispatch prompt includes them as
-explicit instructions, not vibes:
-- **Spec fidelity (the worst recurring failure).** The dispatch includes the DoD line text
-  VERBATIM (with its D6 clauses) plus the coder's clause checklist from step 2. The reviewer
-  returns a per-clause verdict: implemented / deviated / missing. A silent simplification — the
-  code does something simpler than a clause says — is a BLOCKING finding even if every test
-  passes. Deviations are legal only when they point at a journaled/DECISIONS entry.
+## 2b. Reviewer dispatch — what the unit reviewer is TOLD (D7, consolidated per D8)
+One `cello-unit-reviewer` dispatch per unit. Its prompt already carries the lenses; the DISPATCH
+must supply the unit-specific inputs: the DoD line text VERBATIM (with D6 clauses), the coder's
+clause checklist from step 2, and the diff (commit range or files). The defect classes it
+enforces (recurring across milestones — instructions, not vibes):
+- **Spec fidelity (the worst recurring failure).** The reviewer returns a per-clause verdict:
+  implemented / deviated / missing. A silent simplification — the code does something simpler
+  than a clause says — is a BLOCKING finding even if every test passes. Deviations are legal
+  only when they point at a journaled/DECISIONS entry.
 - **Error fidelity.** Inspect every new or modified `catch` in the diff. A bare `catch {}`, a
   swallowed error, or a rethrow that collapses the upstream reason into a generic message
   ("something failed") is BLOCKING. An error crossing a boundary carries the upstream code +
@@ -125,7 +126,7 @@ Then the loop from DOD-WAKE-1.
 
 ## 5. Hard rules (non-negotiable)
 - **One thread. One coder (the main loop). NO parallel implementation agents.** Read-only
-  subagents only (reviewer / test-attacker / fallback-finder / done-auditor / explorer).
+  subagents only (unit-reviewer / done-auditor / explorer).
 - **Work directly on `main` in both repos** (Andre 2026-06-29, carried forward). Commit often;
   batch directory/relay pushes; cello-client + e2e pushes are free (but respect §2a batching for
   publishes).
