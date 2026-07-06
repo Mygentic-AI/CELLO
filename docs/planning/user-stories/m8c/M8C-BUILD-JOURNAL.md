@@ -579,6 +579,53 @@ crafted inputs → four distinct reasons; list/status full IDs.
 
 ---
 
+### 2026-07-06 — Entry 10: ONBOARD-* riders design note (terrain mapped; before code)
+
+**Unit cluster:** DOD-ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 (Tier 1, launch-critical
+first-impression). Mostly **CLI text** (`core/cli/src`) + one daemon log-level change — cheap, not a
+rebuild. Serves BOTH human and AI operators (an AI driving the CLI self-corrects from clear
+errors + next-step guidance). Terrain mapped 2026-07-06:
+- **CLI:** `core/cli/src/bin/cello.ts` (entry), `core/cli/src/commands.ts` (handlers + Usage
+  strings — `register` at `:85`), `core/cli/src/cli-args.ts` (the `HELP` per-command map `:26-35`
+  + arg parsing; already answers `--help`/`-h` per F2).
+- **F11 log:** `signaling-connect.ts:323` — `logger.warn("directory.signaling.reader.error")`.
+
+**Clause checklist:**
+- **HELP-1 (F24, R1, R2, R5):** enrich the `cli-args.ts HELP` map — `create-agent` states the name
+  rule `^[a-zA-Z0-9_-]{1,64}$`; `register` shows a worked example, the create-agent(local)→register
+  (directory, needs token) two-step, quoting-only-for-spaces note, and the `CELLO_PREAUTH_TOKEN`
+  env-var one-liner. `cello --help` + `cello <cmd> --help` give REAL help (what it does, example,
+  every param + constraint), not a bare list.
+- **ERRORS-1 (R3, R4):** **REPRODUCE R4 FIRST** — `cello register agent CELLO_PREAUTH_TOKEN` today
+  reportedly returns NO output (silent failure on the core onboarding path); repro before fixing.
+  Then register-path errors are specific: missing token → "you're missing the pre-auth token" (not
+  the Usage line at `commands.ts:94`); malformed token → "that isn't a pre-auth token — they start
+  with `CELLO-`"; unknown agent → "no agent named X; create it first".
+- **NEXTSTEP-1 (R7):** every command output carries succinct next-step guidance + state legibility.
+  After `register`: "run `cello status` to confirm." Explain state words (`connecting` normal ~1-2
+  min; `connected` = ready; stuck disconnected → logout/login; never logged in → login). Covers
+  register / login / status / use_agent.
+- **WARN-1 (R6):** right-size the pre-auth exposure warning to what the token IS (single-use, 24h,
+  consumed-on-success — verified directory-side). Drop the durable-secret klaxon; at most one calm
+  line naming the real narrow risk (the seconds-long pre-redemption window). Stop pushing the
+  env-var form as a *security* fix (shell history + environ still expose it).
+- **LOGNOISE-1 (F11):** `signaling-connect.ts:323` warn → quieter level + marked expected (routine
+  reconnect churn ~40-70 min, always recovers); a genuine sustained outage still stands out.
+
+**Test strategy:** `cli-args`/`commands` unit tests assert help richness (name rule present, worked
+example, env-var form) + register-error specificity (each of missing/malformed/unknown → its
+distinct message, NOT a Usage dump); a test reproduces R4's silent path then asserts the specific
+error; F11 asserts the event's level. The cold `create-agent → register → status` run completable
+from tool output alone is part of DOD-LIVE-1's launch smoke.
+
+**Decision (D10):** implement HELP/NEXTSTEP/WARN/LOGNOISE as CLI-text/log changes (no daemon
+protocol change); ERRORS-1 may need the daemon register handler to return a structured reason the
+CLI maps to specific text — keep the split (daemon owns the reason, CLI owns the phrasing), §5-clean.
+
+**Next:** after INBOX-1 closes (reviewer) — repro R4 → red-first CLI tests → implement → gate → review.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
