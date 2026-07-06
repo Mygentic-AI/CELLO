@@ -636,6 +636,63 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-06 — Entry 25: DOD-TGDOOR-1 design note (§6, before code)
+
+**Scope (DoD, re-stated precisely):** daemon-owned Telegram bot, single long-lived `getUpdates`
+poller, allowlisted operator chat ID, DISCRETE events only (session request / message-waiting /
+state change) pushed cold-capable, `[agent · session]` header, content-free
+(DOD-INV-CONTENTFREE). Inbound: allowlisted chat → canned notify-only ack
+(`telegram.inbound.acknowledged`); any other chat → silent drop
+(`telegram.inbound.rejected`), nothing touches CELLO content paths. Coalescing: ring-once-
+until-read per session (keyed on INBOX's unread watermark); session requests + state changes
+ALWAYS ring (never coalesced). Telegram is the ONLY stage-3 platform in M8C. NO channel
+machinery — this is the daemon talking to the Telegram Bot API directly, unrelated to the
+`claude/channel` MCP capability from Tiers 1-2.
+
+**Producer/consumer chain:**
+- Producer of the bot's OWN outbound pushes: the SAME three dispatch points AWAY-1/MSGWAKE-1
+  already hook — `acceptInboundAssignment` (session request), `setOnContentArrived` (message-
+  waiting), `notificationDispatcher.dispatchSessionStateChanged` call sites (state change). One
+  more subscriber added to each, not new architecture.
+- Producer of inbound Telegram updates: the bot API's `getUpdates` long-poll response.
+- Consumer of outbound pushes: Telegram's `sendMessage` API, one allowlisted chat ID.
+- Consumer of inbound updates: the daemon's own inbound handler (ack or silent-drop by chat ID
+  match) — CELLO's session/content paths are NEVER a consumer of Telegram inbound (D6 is explicit
+  on this; a stray inbound Telegram message must not become a CELLO session or message).
+
+**Adapter pattern (M4+ rule, "never call an external dependency directly"):** a `TelegramBotClient`
+interface (`getUpdates`, `sendMessage`) + a real HTTP implementation (`fetch` against
+`api.telegram.org`) + an injectable point in `DaemonConfig` (matching the existing
+`sessionNodeFactory`/`sessionNegotiator`/`signalingConnect` test-injection convention already used
+throughout this milestone — NOT the separate `packages/interfaces` mechanism, which is this
+repo's OWN convention, distinct from trustless-cello's server-side one). Tests inject a
+`FakeTelegramBotClient` (in-memory, records sent messages, lets a test push inbound updates) — no
+real network, matching every other unit tonight.
+
+**Persistence — a NEW, narrow, dedicated table (justified, not a parallel config store):** bot
+token + allowlisted chat ID have NO sensible default (a token MUST be operator-supplied) — unlike
+AWAY/TTL/CONTACT, which all shipped real, correct defaults and could legitimately defer
+configurability to M9-CFG-001. A required credential cannot be deferred the same way. One singleton
+row, daemon-wide (DoD: "token = daemon setting", not per-agent): `telegram_settings(id=1, bot_token,
+allowlisted_chat_id, updated_at)`.
+
+**Poller lifecycle:** started once, when settings exist at daemon boot (or immediately after being
+set); a single in-flight `getUpdates` loop per daemon (guarded so a second start is a no-op);
+stopped on daemon shutdown. Tier 5 note (per DoD, not built now): "poller is Primary-only" — with
+no Tier 5 yet, a single daemon IS always Primary, so this is trivially satisfied, not deferred.
+
+**Coalescing implementation:** a `telegramRungUnread: Set<agent:session>` — ring on the FIRST
+message-waiting event since the session was last fully read (mirrors AWAY-1's dedup-Set pattern);
+cleared when `advanceLastDeliveredSeq`/INBOX's watermark shows the session's unread count returns
+to 0. Session-request and state-change events bypass this Set entirely — DoD says they always ring.
+
+**CLI surface:** `cello telegram set-token <token> <chat_id>` (or equivalent) to persist settings —
+narrow, dedicated, not folded into the parked `cello config` surface.
+
+Proceeding to the red-first loop now.
+
+---
+
 ### 2026-07-06 — Entry 24: DOD-ABUSE-1 + DOD-TTL-1 built, both reviewed, both had HIGH findings fixed (commits `b28e6d3`→`014a8bc`, `e1ddb18`→`af8a701`)
 
 **DOD-ABUSE-1 built (`b28e6d3`).** Per-session cumulative-received-byte cap (25MB, anti-drip-feed)
