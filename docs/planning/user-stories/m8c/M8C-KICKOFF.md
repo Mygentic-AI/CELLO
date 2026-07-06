@@ -77,20 +77,23 @@ boundaries, explorers as needed.
 
 ## First actions (order matters)
 
-1. **Verify state.** `git pull` both repos. Confirm trustless-cello HEAD includes the D6–D8 doc
-   commits (through `e23815e3`). Read the journal's status board — the next unit should be
-   DOD-SPIKE-1; if the board says otherwise, trust the board.
-2. **DOD-SPIKE-1** — the ~30-minute de-risking spike, before anything else: launch
+1. **Verify state.** `git pull` both repos. Confirm trustless-cello HEAD includes M8C-DECISIONS
+   through D9. Read the journal's status board — the next unit should be DOD-SPIKE-1; if the
+   board says otherwise, trust the board.
+2. **Arm the heartbeat cron now (PROCEDURE §3b, Cron 2)** — before any code work. It runs for
+   the whole milestone; re-arm it after every compaction/restart, and arm the deploy-watchdog
+   cron (Cron 1) additionally whenever a deploy/pipeline run starts.
+3. **DOD-SPIKE-1** — the ~30-minute de-risking spike, before anything else: launch
    `claude --channels` with a locally-patched shim, trigger a real inbound session, confirm the
    daemon's `session_state_changed` frame surfaces in-context as a
    `notifications/claude/channel` event. Journal the outcome — exact flag behavior, event
    shape, surprises — BEFORE building anything. If the event does NOT land, STOP and journal:
    the reactive track needs redesign, and that must be known on day 0. Do not build on an
    unproven hop.
-3. **DOD-M9INT-1** — merge `m9-build`, wire the gateway seam, run the full semantic gate
+4. **DOD-M9INT-1** — merge `m9-build`, wire the gateway seam, run the full semantic gate
    (m9 gate green against the merged daemon + explicit audit that every M8B-era content path
    routes through the gateway).
-4. Then the loop from **DOD-WAKE-1**, one DoD line at a time.
+5. Then the loop from **DOD-WAKE-1**, one DoD line at a time.
 
 ## What ✅ means (do not soften this)
 

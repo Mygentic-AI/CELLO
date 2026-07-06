@@ -212,6 +212,29 @@ option and keep going** — never block. Genuine undecidable forks are PARKED (j
   One deliberate deviation from its rubric: pre-existing defects are NOT suppressed as false
   positives — reported `[pre-existing]`, per Andre's standing fix-errors-when-found rule.
 
+### D9 — Two watchdog crons specified, PROCEDURE §3b (2026-07-06, Andre)
+- **Fork:** PROCEDURE §3a referenced "a session cron" being armed but never specified setting
+  one up, its cadence, or what it checks — and had no second mechanism at all for the
+  observed failure mode where the autonomous coder stops for a frivolous reason (an obvious
+  decision, an unneeded confirmation) despite being told not to, and then can't self-resume.
+- **Choice (Andre):** two distinct crons, both specified in new PROCEDURE §3b:
+  1. **Deploy/pipeline watchdog** — armed only while a deploy is in flight (directory/relay
+     deploys, ~25–30 min); every 4 min; checks REAL health (CodePipeline per-stage status, ECS
+     `rolloutState` + task stop/restart counts) — not just top-level "InProgress," because a
+     crash loop can read as in-progress indefinitely. Genuine failure/crash-loop → stop and
+     surface immediately; terminal state → self-deletes via `CronDelete`.
+  2. **30-min heartbeat / anti-stall nudge** — armed for the whole milestone; re-reads
+     PROCEDURE/DoD if compaction dropped them from context, reaffirms commit-often and
+     review-every-unit, and re-enters a stalled session (a fired cron prompt is enqueued like
+     any instruction, which is exactly what un-sticks an idle session per this environment's
+     cron semantics — jobs fire only while idle, never mid-query).
+- **Why this shape:** cron jobs here are session-only (gone on restart/compaction) and
+  auto-expire after 7 days — both facts are stated explicitly in §3b as the single point of
+  failure to guard against (re-arm both after every restart/compaction; check both at every
+  tier-boundary checkpoint). The 4-min/30-min cadences and the crash-loop-vs-in-progress
+  distinction are Andre's own operational experience, not derived.
+- **Reverse:** §3b is self-contained; strike it and revert §3a's cron sentence.
+
 ---
 
 ## Related Documents

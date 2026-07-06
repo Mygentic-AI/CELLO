@@ -113,10 +113,47 @@ enforces (recurring across milestones — instructions, not vibes):
 ## 3a. Autonomous-mode rules (if running overnight — same as M8B)
 NEVER `AskUserQuestion`, never end a turn waiting overnight. Reversible choice → decide, log in
 M8C-DECISIONS, proceed (redo > block, always). Genuine undecidable fork → PARK (journal + DoD
-"Parked decisions" + DECISIONS) and pull the next unit, saying so. If a session cron is armed,
-re-arm after any restart/compaction; this doc is the durable record, the cron only the trigger.
-Kickoff self-audit at every fire: (a) stalled on a decision? pick + log + proceed; (b) awaiting
-confirmation? unwanted — continue; (c) committing often? commit now.
+"Parked decisions" + DECISIONS) and pull the next unit, saying so. **Two crons enforce this —
+see §3b; arm both at kickoff, re-arm both after every restart/compaction.**
+
+## 3b. Watchdog crons — arm both, D9 (2026-07-06)
+Cron jobs in this environment are **session-only**: gone on restart or compaction, fire ONLY
+while the session is idle (not mid-query) — which is exactly what makes the heartbeat cron able
+to un-stick a stalled session: a fired cron prompt is enqueued like any new instruction, so it
+resumes a session that stopped. **Re-arm BOTH crons immediately after every compaction and every
+session restart** — this is the single point of failure for the whole mechanism; if you forget,
+the session goes silent again with nothing to wake it. Recurring jobs also auto-expire after 7
+days — at every tier-boundary checkpoint (§3), `CronList` and recreate anything missing.
+
+**Cron 1 — Deploy/pipeline watchdog (armed ONLY while a deploy is in flight).** Arm the moment
+you run `infra/deploy.sh` or push something that triggers a CodePipeline run (directory/relay
+deploys: ~25–30 min, all 3 regions in parallel). Cadence `*/4 * * * *` (every 4 min — an active
+wait, not idle sleep). The fired prompt must check REAL health, not top-level status alone:
+- **CodePipeline:** `aws codepipeline get-pipeline-state` — check per-STAGE status. A stage can
+  read `InProgress` while its ECS deployment is crash-looping underneath (task starts, fails
+  health check, stops, restarts, forever) — "in progress" is not evidence of health.
+- **ECS:** `aws ecs describe-services` → `deployments[].rolloutState`, plus task stop
+  reasons/restart counts (`describe-tasks` / CloudWatch) for the crash-loop signature (same task
+  definition revision repeatedly stopping and restarting).
+- Genuine failure or crash-loop found → STOP waiting, surface it now, diagnose per CLAUDE.md
+  Debugging Discipline (producer/consumer, not the error string). Healthy and progressing → log
+  one line, keep polling. Terminal (success or confirmed failure) → the prompt calls `CronDelete`
+  on itself. (This is separate from the existing tight 30s-interval foreground poll loop for a
+  single already-triggered ECS rollout, per repo CLAUDE.md M5 rule 9 — that stays unchanged; this
+  cron is for the outer 25–30 min wait so the session isn't burning a turn sleeping through it.)
+
+**Cron 2 — 30-min heartbeat / anti-stall nudge (armed for the WHOLE milestone).** Cadence
+roughly every 30 min at an off-minute, e.g. `12,42 * * * *` (never `0,30` — see CronCreate's own
+guidance). Recurring. The fired prompt is the self-audit:
+1. Is M8C-PROCEDURE / M8C-DEFINITION-OF-DONE actually in context right now? If compaction
+   dropped them, re-read both before doing anything else.
+2. Stalled on a decision? Pick the reversible option, log it in M8C-DECISIONS, proceed.
+3. Waiting for confirmation on something already authorized (code changes, AWS/publish actions
+   per the REALITY CHECK)? Unwanted — continue now, do not wait further.
+4. >15 min since the last commit? Commit now.
+5. Did the last unit go green without a `cello-unit-reviewer` dispatch? Dispatch it now.
+6. State one line of current status (DoD line, red/green) so a human skimming later can see the
+   session was alive and unstuck at this timestamp.
 
 ## 4. First actions (order matters)
 1. **DOD-SPIKE-1** — the ~30-min live spike, before anything else. If the in-context event does
