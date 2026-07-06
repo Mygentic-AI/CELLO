@@ -167,7 +167,7 @@ description: >
   enforced" + `preauth.token.reuse.rejected`). Drop the durable-secret klaxon — at most one calm
   line naming the real, narrow risk: the seconds-long pre-redemption window. Stop pushing the
   env-var form as a *security* fix (shell history + process environ still expose it); if reducing
-  exposure actually matters, read from a file/stdin. (R6) — 🟡 (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL; ✅ at DOD-LIVE-1)
+  exposure actually matters, read from a file/stdin. (R6) **REVISED 2026-07-06 (Andre): the warning is REMOVED ENTIRELY, not right-sized — a single-use/24h/consumed token has no meaningful exposure risk, so the note only drew attention to a non-issue (pure onboarding noise). No warning is correct.** — 🟡 (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL; ✅ at DOD-LIVE-1)
 - **DOD-ONBOARD-LOGNOISE-1** — routine directory-signaling reconnect churn
   (`directory.signaling.reader.error` at `warn`, ~every 40–70 min, always recovers —
   `signaling-connect.ts:323`) is logged quietly and marked expected, so a healthy daemon doesn't
