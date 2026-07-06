@@ -192,7 +192,7 @@ description: >
   bridge forwards the daemon `data` blob verbatim — INV-CONTENTFREE is enforced UPSTREAM. When
   `cello_message` routes through that generic hop, re-prove content-freeness against the REAL
   `cello_message` producer, not the bridge; the doorbell must carry type + `session_id` + pubkey
-  only, never message content.) — ❌
+  only, never message content.) — 🟡 (2026-07-06, Entry 16 — built `e4af837`/`5c4071e`, daemon-side, rides WAKE's bridge; reviewer SPEC-FAITHFUL 6/6, held-release + dedup no-double-wake tests w/ teeth, F1 sender_unresolved loud. Flips ✅ at the live --channels smoke.)
 - **DOD-SINCESEQ-1** — `cello_receive({ since_seq })`: stateless catch-up from any gap size, no
   replay race; replaces the `cello_get_transcript` workaround for away-then-return. — ❌
 - **DOD-LOGINSTART-1** — `cello login` auto-starts all registered agents; per-agent

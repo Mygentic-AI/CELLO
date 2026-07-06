@@ -621,6 +621,48 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-06 — Entry 16: DOD-MSGWAKE-1 built + reviewed → 🟡; + live Tier-1 verification
+
+**Built (commits `e4af837` impl, `5c4071e` review fixes; cello-client main).** DAEMON-side (§5),
+rides WAKE's generic bridge (zero shim change). `#appendVerifiedContent` → `#onContentArrived` →
+`dispatchCelloMessage` → content-free `cello_message` frame (type + from + session_id), routed to
+current-agent connections. `cello_message` rides the shim's WAKE bridge to a live `--channels`
+session.
+
+**Tests:** `m8c-msgwake-1.test.ts` (3, all driving the REAL funnel via `ingestReceivedContent`):
+direct path (content-free + routing, teeth-verified — removing the fire → red); **held out-of-order
+→ wakes once at RELEASE** (0 at hold, 2 after filler); **deduped replay → zero extra wakes** (1 not
+2). Full gate green (1528).
+
+**`cello-unit-reviewer` (e4af837) — SPEC FAITHFUL 6/6, NO SILENT FALLBACKS. Fixed in `5c4071e`:**
+- **Hollow-test gap [blocking].** Direct path had teeth; the "AND recovered" (M1) + no-premature-wake
+  (M4) properties did not — a doorbell fired BEFORE the dedup/hold gates would pass the old test yet
+  wake prematurely/spuriously. Added the held-release + dedup tests (above); impl was already correct
+  (fire is inside `#appendVerifiedContent`, after both gates).
+- **F1 [LOW, pre-existing].** The `"unknown"` senderPubkey fallback now logs
+  `session.content.sender_unresolved` (warn) so a chronic miss is visible, not silently shipped as
+  `from:"unknown"` on every doorbell.
+
+**Live Tier-1 verification (2026-07-06, against the PUBLISHED build daemon 0.0.31/connect 0.0.58 on
+Andre's machine after `npm i -g @latest` + logout/login + `/mcp` reconnect):**
+- **AUTOSTART F5** ✅ live — `cello_status` reports `state` + distinct `selected` (never `"current"`).
+- **AUTOSTART A1** ✅ live — `cello_use_agent` on an OFFLINE agent auto-started it
+  (`state:online, selected:true, standing_receiver_ready:true`); pre-change it errored `agent_not_online`.
+- **AUTOSTART A3** ✅ live — no `not_registered` warning on a registered agent.
+- **INBOX + connect 0.0.58** ✅ live — the `cello_check_notifications` tool is present in the
+  reconnected MCP (didn't exist pre-0.0.58); its description is the exact INBOX proxy text.
+- The full doorbell-into-context (WAKE/MSGWAKE) still needs a PEER session (directory was wiped —
+  peer re-registration pending) → the remaining DOD-LIVE-1 live step.
+- (Aside: cleaned 5 stale pre-session local agents from Andre's daemon at his request, keeping
+  Ms_Chelly — via `cello remove-agent`, verified live. Not a code change.)
+
+**Status:** DOD-MSGWAKE-1 → **🟡 BUILT / UNVERIFIED-LIVE** (daemon layer proven; the in-context
+per-message wake flips ✅ on the same live `--channels` smoke as WAKE).
+
+**Next unit:** DOD-SINCESEQ-1 (Entry 15 design note) — the `since_seq` catch-up branch in handleReceive.
+
+---
+
 ### 2026-07-06 — Entry 15: DOD-SINCESEQ-1 design note (terrain from INBOX; before code)
 
 **Unit:** DOD-SINCESEQ-1 (Tier 2). DAEMON build (§5). `cello_receive({ since_seq })` — stateless
