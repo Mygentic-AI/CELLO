@@ -50,6 +50,19 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
   manifests auto-re-signed FRESH; (3) **PRESENCE FIX VERIFIED LIVE** — directory log shows
   `presence.transition owningNodeId:"us-east-1"` (the REGION, not the peer id) + ZERO `heartbeat.failed`
   errors (V42 upsert works). Cluster healthy; discovery now resolves agents online. Ready for retest.
+- **🎟️ #2b SHORT CLAIM-CODE + REDEEM — DEPLOYING (2026-07-06, commit `70c4f41c`).** The operator now gets
+  a short `CELLO-`+base58 code instead of the ~570-char capability blob; the agent passes it through raw as
+  preAuthToken (NO client change) and the directory redeems it server-side at the DKG round-1 gate before
+  decodeCapability (additive — a raw `eyJ…` blob is unchanged; a real capability never starts `CELLO-`).
+  V43 `capability_claim_codes` (natural TEXT key → replication-safe, RLS) added to PUBLICATION_TABLES;
+  OpsAgentExpectedMigrationVersion 42→43. Both reviewers: replication-race fix = the gate retries not_found
+  ~2s (5×400ms) to absorb cross-region lag; expired distinguished from unknown. Directory + ops-agent
+  pipelines InProgress on 70c4f41c. Deploy-watch cron fc618ee5. POST-DEPLOY (cron does): bump ops-agent SSM
+  →43 as soon as V43 lands (crash-loop guard), re-run setup-replication.sh (add table to publication),
+  restart relays, verify table replicates. Full end-to-end short-code REGISTRATION test needs a Telegram
+  registration (Andre). #1 seal-liveness + #2a token-parse already shipped + promoted to latest (v0.0.71:
+  connect 0.0.57 / daemon 0.0.30 / crypto 0.0.16). Spec: docs/planning/user-stories/m8b/2026-07-06_0300_
+  token-ux-short-claim-code-spec.md.
 - **🔧 FEDERATION COUNTER-COLLISION FIX + FULL DB RESET (2026-07-05, commit `4328fcb1`).** Root cause:
   replicated BIGSERIAL tables collided — logical replication copies rows but never advances the
   subscriber's sequence, so a node that received rows via replication drew a `nextval()` that already
