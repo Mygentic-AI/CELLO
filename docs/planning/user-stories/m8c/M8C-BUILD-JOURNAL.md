@@ -513,7 +513,69 @@ guards deliberately out).
 **Status:** DOD-AUTOSTART-1 → **🟡 BUILT / UNVERIFIED-LIVE** (daemon-layer proven; flips ✅ at the
 live `--channels` smoke, DOD-LIVE-1, with the publish cascade).
 
-**Next unit:** DOD-INBOX-1 (`cello_check_notifications` — push-loss reconciler + F4 rider).
+**Next unit:** DOD-INBOX-1 — see Entry 9 design note.
+
+---
+
+### 2026-07-06 — Entry 9: DOD-INBOX-1 design note + clause checklist (falsify-first done; before code)
+
+**Unit:** DOD-INBOX-1 (Tier 1). DAEMON-side (§5) — the shim adds one thin `cello_check_notifications`
+proxy; all logic in the daemon. The **push-loss reconciler** (notifications are fire-and-forget) +
+the primary inbox for poll-only clients.
+
+**Code terrain (verified 2026-07-06, symbols):**
+- **cello_receive = `handleReceive`** (`daemon.ts:4838`). Drains ONE buffered message per call via
+  `sessionNodeManager.takeReceivedContent(agent, sessionId)` → `{ contentHex, sequenceNumber,
+  senderPubkey }` (`:4864`). **This is the watermark-advance point** (delivery marks read).
+- **Transcript** = `sessionNodeManager.readTranscript(agent, sessionId)` →
+  `messages: { sequence, direction: "sent"|"received", text, createdAt }[]`
+  (`session-node-manager.ts:659`). `sequence` is relay-assigned — SAME space as
+  `takeReceivedContent.sequenceNumber` (falsify: confirm at build). Unread counts
+  **received-direction only**.
+- **Pending session requests** = in-memory `inboundSessionQueues: Map<agentName, InboundSessionEvent[]>`
+  (`daemon.ts:3742`), drained by `cello_await_session` (`:4206`). INBOX READS it non-destructively —
+  must NOT drain (await_session owns draining) → may need a peek accessor.
+- **Schema** = `CREATE TABLE IF NOT EXISTS` blocks in `session-node-manager.ts` (~`:436-531`). Add
+  the watermark table here (additive; client-DB wipe-and-recreate is fine at alpha — D7).
+- **F4 site** = `cello_get_sealed_receipt` (`daemon.ts:3188`), single `sealed_receipt_not_found`
+  (`:3203`). Loaded agents for scope:"all" = `loadedAgents`.
+
+**Clause checklist (reviewer yardstick):**
+- **N1** — `cello_check_notifications({ scope?: "current" | "all" })`: daemon IPC handler + thin
+  `cello-mcp.ts` proxy. Default `"current"` → connection's current agent (no current + not
+  sole-online → `no_current_agent` via `resolveCurrentAgent`, F18); `"all"` → every loaded agent,
+  LABELLED. Returns `{ ok, agents: [{ agent, pending_session_requests, unread: [{ session_id,
+  unread_count, last_seq }] }] }` (finalized at build; content-free — IDs/counts, never text).
+- **N2** — unread = COUNT of `readTranscript` rows `direction==="received"` AND
+  `sequence > last_delivered_seq(agent, session)`. New table
+  `message_watermarks(agent_name, session_id, last_delivered_seq, PRIMARY KEY(agent_name, session_id))`
+  + `SessionNodeManager.getLastDeliveredSeq` (0 if absent) / `advanceLastDeliveredSeq` (MONOTONIC —
+  max(old, seq), never lowers).
+- **N3** — `handleReceive`, on a `takeReceivedContent` hit (`:4864`), advances the watermark to that
+  message's `sequenceNumber` before returning. Delivery marks read; no ack verb.
+- **N4** — INBOX derives ONLY from the watermark + `inboundSessionQueues`. No separate notification
+  store; no ack. (Distinct from CURSOR's per-connection cursor, Tier 2.)
+- **N5 (AC)** — a doorbell missed while the shim was down/busy is discoverable via INBOX on
+  reattach: a persisted-but-undrained received message shows unread; after `cello_receive` it clears.
+- **F4** — `cello_get_sealed_receipt` splits `sealed_receipt_not_found` → `session_id_too_short` /
+  `unknown_session` / `wrong_agent` / `not_sealed_yet`; PLUS `cello_list_sessions` + `cello_status`
+  surface FULL `session_id` (verify no truncation; if truncated, stop).
+- **Obs** — `inbox.checked` (scope, agentCount, totalUnread), `message.watermark.advanced`. No console.log.
+
+**Falsify-first:** (a) confirm `takeReceivedContent.sequenceNumber` and `transcript.sequence` share
+the relay-assigned space before trusting `>`. (b) INBOX reads `inboundSessionQueues`
+non-destructively (peek, not drain). (c) watermark advance monotonic (replayed/out-of-order receive
+must not lower). (d) unread = received-only. (e) F4 `session_id_too_short` uses the canonical min
+hex length other handlers validate against.
+
+**Test strategy:** daemon fixture (`startDaemon`+`connectToDaemon`); seed a session + received
+transcript rows → assert unread count; drain via `cello_receive` → unread clears + watermark
+advanced + monotonic; queue an `InboundSessionEvent` → appears as pending AND INBOX did not drain
+it (subsequent `await_session` still returns it); `scope:"all"` labels multiple agents; F4 four
+crafted inputs → four distinct reasons; list/status full IDs.
+
+**Next:** red-first tests → implement (schema + methods first, then handler + proxy + F4) → gate →
+`cello-unit-reviewer`.
 
 ---
 
