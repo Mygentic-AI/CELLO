@@ -439,6 +439,20 @@ PARKED (journal + DoD "Parked decisions" + here).
   any code, per §6. Do NOT fold into CONFIG-1/M9-CFG-001 — this is directory-repo work, independent
   of the client-side config store.
 
+### D17 — DOD-TTL-1 ships the 24h default TTL; per-agent configurability is parked on M9-CFG-001 (2026-07-06, autonomous D10)
+
+- **Fork:** `DOD-TTL-1`'s text specifies a "24h default, **configurable**" session-request TTL —
+  the configurability is the same shape of gap as D14/D15: a genuine per-agent operator preference
+  with no home until `M9-CFG-001`'s store exists.
+- **Choice (D10):** ship the CORE mechanism now — `INBOUND_SESSION_TTL_MS` (24h, hardcoded, the
+  DoD's own stated default), lazy reap-on-read (no background timer needed), expired requests
+  surface via `cello_check_notifications`'s new `expired_session_requests` array rather than
+  vanishing silently. PARK the per-agent override on `M9-CFG-001`, board marker `🟡CORE`.
+- **Why:** identical reasoning to D14/D15 — the correct default behavior (requests DO expire
+  after 24h, and expiry is visible, not silent) is real and complete without configurability;
+  waiting for M9 to ship ANY TTL would be strictly worse.
+- **Reverse:** same escape hatch as D14/D15/D16.
+
 ---
 
 ## Related Documents

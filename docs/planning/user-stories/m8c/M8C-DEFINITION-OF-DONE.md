@@ -342,6 +342,9 @@ own story) deliberately, never smuggled in as a rider. Source:
   directory-side design surface of its own, tracked as a future story (needs its own §6 design
   note before code). CONTACT-1 CORE (whitelist, auto-add, minimal-response gating, CLI) is
   client-local and ships now. See [[M8C-DECISIONS]] D16.
+- **D17 parks (2026-07-06):** DOD-TTL-1's per-agent configurable TTL override — gated on
+  M9-CFG-001, same reason as D14/D15/D16. TTL-1 CORE (24h default, lazy reap, expired-visible-in-
+  INBOX) is M9-independent and ships now. See [[M8C-DECISIONS]] D17.
 - OQ-2 (operator-input cadence: daemon-mediated real-time gates vs agent-loop poll), OQ-3 (reply
   @-addressing) — parked WITH Mode 2 (out of M8C, follow-on milestone).
 - OQ-4 (full Telegram settings knob list) — resolves inside DOD-CONFIG-1 + DOD-TGDOOR-1 scoping.
