@@ -288,6 +288,76 @@ TDD + pull twin). SPIKE-1 already proved the hop; WAKE makes it real.
 
 ---
 
+### 2026-07-06 — Entry 5: DOD-WAKE-1 clause checklist + falsify-first (before code)
+
+**Unit:** DOD-WAKE-1 (Tier 1, launch gate). Shim-only change; **zero daemon change** (the daemon
+already dispatches — SPIKE-1 proved it; WAKE stops the shim from dropping the frames). This is
+legitimately shim-side, NOT a §5 violation: the daemon owns the *behavior* (dispatch); the shim
+owns the adapter-specific *wire translation* (daemon IPC frame → MCP `notifications/claude/channel`),
+which every adapter does differently.
+
+**Clause checklist (the reviewer's yardstick — per-clause verdict required):**
+- **C1 — capability.** The live shim (`bin/cello-mcp.ts`) declares `claude/channel`:
+  `new McpServer({name,version}, { capabilities: { experimental: { "claude/channel": {} } } })`
+  (mirrors legacy `server.ts:131`). Proven by the `initialize` response advertising it.
+- **C2 — forward, don't drop.** `ipc-proxy.ts:183-185` stops dropping notification frames; it
+  invokes a registered handler instead. Branch stays BEFORE response correlation and never touches
+  `#pending` (D7 porting trap).
+- **C3 — all frame types.** The bridge forwards every daemon notification type generically —
+  `agent_state_changed`, `agent_current_changed`, `session_state_changed` today; `cello_message`
+  rides free once MSGWAKE (Tier 2) makes the daemon emit it (no per-type allowlist that would drop
+  a future type).
+- **C4 — MCP event shape.** Each becomes `server.server.notification({ method: "notifications/claude/channel", params })`.
+  `params` is the daemon frame's content-free `data` (agent, type, agentName, sessionId, state,
+  counterpartyPubkey). **INV-CONTENTFREE:** no message content, no content-derived text — assert it.
+- **C5 — error fidelity (D7 trap, BLOCKING if missed).** `server.server.notification()` can reject
+  if the transport closed. The legacy `notifications.ts` swallowed this with a bare `catch {}`. The
+  port MUST log it — `notification.push.failed` at debug with the reason — never a silent bare
+  catch, and never let one failed push kill the proxy read loop.
+- **C6 — observability.** A `domain.noun.verb` event on forward (e.g. `notification.channel.forwarded`
+  with type + agent), plus C5's failure event. No `console.log`. (Shim has no injected logger today
+  — it writes diagnostics to the stderr tee; use that channel, structured, not `console.log`.)
+- **C7 — edge: seal/abort-before-react.** A `session_state_changed` with state `sealed` /
+  `aborted` / `interrupted` forwards gracefully (the bridge is state-agnostic — it forwards
+  whatever the daemon dispatched; no crash, no special-casing).
+- **C8 — edge: no-attached-client + INV-PUSHPULL.** With no MCP client attached, the daemon
+  dispatches to nobody (existing behavior — dispatcher only writes to connected connections) and
+  loses no state; the queued inbound session is still recoverable via the EXISTING pull path
+  (`cello_await_session` / `cello_list_sessions`) on a later attach. WAKE ADDS push without
+  removing any pull, so INV-PUSHPULL holds; "INBOX reveals on attach" is INBOX-1's richer surface,
+  not owed here.
+- **C9 — publish rides LIVE-1 (D6).** No `connect` publish now; prove against a locally-linked
+  shim. The bump ships with the Tier 1 close cascade (PROCEDURE §2a).
+
+**Falsify-first (CLAUDE.md Debugging Discipline):**
+- *Method on the interface?* `proxy.onNotification(fn)` — new method I add to `IpcProxy` (a class,
+  the shim holds the concrete instance, not an interface). `server.server.notification(...)` —
+  exists (legacy `notifications.ts` uses exactly this). ✔
+- *Responsibility here?* Yes — adapter-specific wire translation is the shim's job. ✔
+- *Redundancy?* No — the daemon dispatches once; the shim translates once; no double-send. ✔
+- *What breaks?* (a) notification branch must run before id-correlation (it does, line 183 < 189)
+  and not touch `#pending` — a concurrent in-flight request must still resolve. (b) A throwing
+  `notification()` must not kill the read loop. Both become explicit red tests.
+
+**Test strategy (enforcers by layer):**
+- **Unit (kept, red-first) — `mcp-001-proxy.test.ts` pattern** (fake `net` server + real
+  `IpcProxy`): (1) a `{notification,data}` frame fires the registered handler with the frame;
+  (2) `#pending` untouched — a concurrent `proxy.call` still resolves while notification frames
+  interleave; (3) a notification arriving between a malformed frame and a response keeps
+  correlation correct.
+- **Integration (kept) — real in-process daemon + real shim over stdio**, home `core/daemon`
+  (has daemon access; spawn the shim from SOURCE via `tsx` to avoid the test-before-build gate
+  ordering). Asserts: `initialize` advertises `claude/channel`; a `__test_emit_session_event`
+  for the current agent surfaces as a `notifications/claude/channel` on the shim's stdout with the
+  content-free params; a `sealed`-state emit also forwards (C7).
+- **Live enforcer (LIVE-1, human):** the `--channels` in-context visual — not owed until the Tier
+  1 close smoke.
+
+**Next:** write the red unit tests → red for the right reason → implement the two-file change →
+integration test → gate → `cello-unit-reviewer`.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
