@@ -20,8 +20,8 @@ description: >
 | 0 — Prerequisites | SPIKE-1 | ✅ |
 | 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | 🟡 🟡 🟡 ❌ |
 | 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | 🟡 all (built+reviewed; ✅ at LIVE-1) |
-| 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | 🟡 🟡 🟡CORE 🅿️CFG(D14) ❌ |
-| 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | ❌ all |
+| 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | 🟡 🟡 🟡CORE 🅿️CFG(D14) 🟡 |
+| 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡 ❌ ❌ ❌ |
 | 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | ❌ ❌ |
 | 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ❌ all |
 | Post-channel — deferred | M9INT-1 (do AFTER channel tiers — D11; NOT a prerequisite) | ❌ deferred |
@@ -633,6 +633,36 @@ All fixed in `22de42c`:**
 DOD-LIVE-1 with the publish cascade).
 
 **Next unit:** the ONBOARD-* rider cluster — see Entry 10 design note (repro R4 first).
+
+---
+
+### 2026-07-06 — Entry 23: AWAY-1 reviewer fixes + DOD-CONTACT-1 built (commit `6bed679`)
+
+**AWAY-1 reviewer (a9099571) on `10d2d01`: three findings, all fixed.** (1) HIGH — `cello_get_transcript`'s
+cursor advance still trusted a raw max, reachable in principle via `recordTranscriptMessage`'s
+silent DB-write-failure swallow (same bug class as the original CURSOR-1 HIGH finding, through the
+one path that commit left untouched); fixed by routing it through `safeCursorAdvance` too. (2) HIGH
+spec/blocking — the opaque-mode deviation was claimed "journaled, D14-pattern" in a code comment
+with no actual `M8C-DECISIONS.md` entry; fixed with a real **D15** (mirrors D14) + the DoD's
+Parked-decisions bullet — a deviation is only legal once the artifact exists. (3) MEDIUM — the
+away-ack dedup guard never cleared on send failure, permanently silencing the rest of an away
+period after one transient failure; fixed (`awayAckSent.delete` in both the failure branch and
+catch). Test-teeth gaps closed: per-session dedup isolation, failure-then-retry.
+
+**DOD-CONTACT-1 built.** New `contacts` table (a real ACL, not a config-store setting) +
+isContact/addContact/removeContact/listContacts. Auto-add (D6): `cello_initiate_session` success
+adds the target; `acceptInboundAssignment` adds the initiator, ordered AFTER `sendAwayResponse`'s
+synchronous isContact check so a stranger's first contact is judged unknown (gets a minimal
+"Dispatched." reply) but becomes known for every interaction after. CLI: `cello contact
+add/remove/list [--agent <name>]`. Composes with AWAY-1 rather than duplicating its attended-gate.
+
+**Cross-unit interactions found + fixed (again):** two pre-existing AWAY-1 tests used unknown
+counterparties, now correctly routed to "Dispatched." by CONTACT-1 — pre-registered them as known
+so those tests stay focused on AWAY-1's own templates; the known/unknown branching is covered by
+the new CONTACT-1 test file. `cli-args.test.ts`'s `KNOWN_COMMANDS` assertion updated (+"contact").
+
+**Tests:** `m8c-contact-1.test.ts` new (6). Full gate green (1556). `cello-unit-reviewer` dispatched
+for CONTACT-1 (agent `a619ca33...`), continuing to DOD-ABUSE-1 while it runs.
 
 ---
 

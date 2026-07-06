@@ -378,6 +378,30 @@ PARKED (journal + DoD "Parked decisions" + here).
   then CONFIG-1/opt-out unblock without the full gateway. That is a real decision (a partial M9
   forward-port), not a silent parallel build.
 
+### D15 — DOD-AWAY-1 ships transparent-only; opaque privacy mode is parked on M9-CFG-001, same as D14 (2026-07-06, autonomous D10)
+
+- **Fork:** `DOD-AWAY-1`'s text specifies THREE things: (a) the away response mechanism +
+  per-type templates, (b) "the **configured** (or default transparent) away text" — implying an
+  operator-settable override, (c) "**opaque privacy mode** = full silence, indistinguishable from
+  unreachable." (b) and (c) are both genuine per-agent OPERATOR PREFERENCES with no sensible
+  hardcoded default of their own — they need a persisted, per-agent settings surface to exist at
+  all, which is exactly what `M9-CFG-001`'s versioned config store (inside the deferred M9 gateway,
+  D11) is for. Building a parallel one-off store for just these two knobs is the same forbidden
+  move D14 already ruled out for `DOD-CONFIG-1`.
+- **Choice (D10):** ship AWAY-1's CORE now — the auto-response mechanism, per-type templates,
+  attended/unattended detection, coalescing — using ONLY the DoD's own explicitly-stated default
+  (transparent). This is a real, complete, non-fake behavior on its own (the DoD text itself names
+  transparent as the default, not a placeholder). PARK the custom-text override and the
+  opaque-privacy-mode switch on `M9-CFG-001`, identically to D14's treatment of `DOD-CONFIG-1` and
+  `DOD-LOGINSTART-1`'s opt-out. Recorded in the DoD's "Parked decisions" section.
+- **Why:** an unattended CELLO agent must not go silent by default at launch (that's the core
+  reachability promise AWAY-1 exists for) — waiting for M9 to ship ANY away behavior would be
+  strictly worse than shipping the correct default now and adding the configurability layer when
+  the store exists. Mirrors D14's reasoning exactly, just for a different Tier-3 unit.
+- **Reverse:** same escape hatch as D14 — if opaque mode / custom text is wanted before M9 merges,
+  extract `core/gateway/src/config/config-store.ts` as a standalone package (a deliberate partial
+  M9 forward-port), then wire AWAY-1's two parked clauses onto the real store.
+
 ---
 
 ## Related Documents

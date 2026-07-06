@@ -331,6 +331,10 @@ own story) deliberately, never smuggled in as a rider. Source:
   inside the deferred M9 gateway package (D11). LOGINSTART CORE (auto-start all at login) is
   M9-independent and ships now; the opt-out is added when M9 lands. No parallel config store (DoD
   forbids). See [[M8C-DECISIONS]] D14.
+- **D15 parks (2026-07-06):** DOD-AWAY-1's operator-configurable away-text override AND its
+  opaque-privacy-mode switch (full silence) — both gated on M9-CFG-001's config store, same reason
+  as D14. AWAY-1 CORE (transparent-default auto-response + per-type templates + coalescing) is
+  M9-independent and ships now. See [[M8C-DECISIONS]] D15.
 - OQ-2 (operator-input cadence: daemon-mediated real-time gates vs agent-loop poll), OQ-3 (reply
   @-addressing) — parked WITH Mode 2 (out of M8C, follow-on milestone).
 - OQ-4 (full Telegram settings knob list) — resolves inside DOD-CONFIG-1 + DOD-TGDOOR-1 scoping.
