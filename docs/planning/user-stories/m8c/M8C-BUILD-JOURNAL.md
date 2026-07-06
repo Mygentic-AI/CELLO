@@ -636,6 +636,36 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-06 — Entry 21: OVERNIGHT AUTONOMOUS RUN begins (Andre asleep) — full DoD scope authorized
+
+Andre confirmed FROST is fixed (live end-to-end conversation completed, including the channel
+doorbell — the exact DOD-LIVE-1 journey). He then authorized full autonomous overnight work
+across **the entire M8C-DEFINITION-OF-DONE** (Tiers 2–5 + the M9 merge gating LEAVEMSG), with an
+explicit instruction: never stop for anything except the two named human-only steps (`latest`
+promotion, `/mcp` reconnect for a live test); deploys and the beta `/cello-publish` cascade are
+fully authorized and should be run proactively, not deferred to "when there's a live test excuse."
+If one unit is blocked, skip to the next and keep going through every tier. Heartbeat cron
+re-armed (`64a27e37`, `13,43 * * * *`) with this full authorization list baked into every firing,
+plus an explicit instruction to Read (not grep) PROCEDURE + DoD in full if compaction drops them.
+
+**DOD-CURSOR-1 — built, commit `01e9b5e`, review in flight.** Design (§6, design-significant):
+per-connection (`connectionCursors: Map<connectionId, Map<sessionId, seq>>`, in-memory,
+connection-scoped) read-before-write gate on `cello_send`. `current_seq = record.message_count - 1`
+(already kept in sync with the tree's leaf count on every append, both directions — DAEMON-004
+finding #2). Gate sits right after the `session_not_active` check, before any transmission. Own
+sends auto-advance the sender's own cursor. `since_seq`/live-drain `cello_receive` both advance
+the cursor for the common case, but `since_seq` is received-only by its own (already-shipped)
+spec, so it CANNOT unblock a connection stuck behind a message a DIFFERENT LOCAL connection sent
+on the same agent — only `cello_get_transcript` (the one reader covering both directions) does;
+the gate's guidance points there. This is the real substance of the "WhatsApp-group-chat model."
+Fixed one pre-existing test (`daemon-004-ipc.test.ts`) that sent blind after an unread inbound
+message was buffered before the connection attached — it now reads first, which is the correct,
+intended new contract, not a workaround. 5 new tests (`m8c-cursor-1.test.ts`); full gate green
+(1542). `cello-unit-reviewer` dispatched (agent `aa5928e2...`), continuing to DOD-AWAY-1 while it
+runs rather than waiting idle.
+
+---
+
 ### 2026-07-06 — Entry 20: SESSION CAPSTONE + compaction point (read this first on resume)
 
 **We decided to compact here** — a clean boundary (SINCESEQ + LOGINSTART-core built/reviewed/committed;
