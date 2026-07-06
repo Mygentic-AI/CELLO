@@ -30,16 +30,31 @@ description: >
 DOD-M9INT-1 was moved out of Tier 0 and deferred to after the M8C channel tiers. A post-compaction
 context must not conclude M9 needs merging first — it does not.
 
-**Next unit:** DOD-INBOX-1 — `cello_check_notifications({ scope })`: the push-loss reconciliation
-mechanism + primary inbox for poll-only clients (unread watermark `last_delivered_seq`; a missed
-doorbell is discoverable via INBOX on reattach) + the F4 rider (split `sealed_receipt_not_found`
-into distinct reasons; full session IDs on copy surfaces). DAEMON-side (§5). SPIKE-1 ✅, WAKE-1 🟡,
-AUTOSTART-1 🟡 (both flip ✅ at LIVE-1). M9INT DEFERRED (D11) — not a gate.
+**⚠️ RESUME STATE (2026-07-06, compacted here — read Entry 20 for the full capstone). Two threads:**
 
-**Resume pointer:** SPIKE-1 ✅ (Entry 3), WAKE-1 🟡 (Entry 6 — built commit `d5fd5ec`, unit +
-real-binary integration green, reviewer SPEC-FAITHFUL, flips ✅ at LIVE-1's live `--channels`
-session). M9INT is DEFERRED (Entry 4 / D11) — NOT next, NOT a gate. Read M8C-PROCEDURE §0 read
-order, then take DOD-AUTOSTART-1.
+**Thread 1 — the LIVE SMOKE is BLOCKED by a non-M8C FROST issue (handed to another session).**
+`cello_initiate_session` fails `ceremony_exhausted` in BOTH directions between two fresh post-wipe
+agents (Ms_Chelly `178d420b…`, CELLO_Support `2ee9bed9…`) — SYSTEMIC. The directory nodes all sign;
+the client's `signer.participateInCeremony` returns `ok:false` (aggregate doesn't verify against
+`primary_pubkey`). Root layer = FROST session establishment (M2/M6B + the recent **federation**
+commits `bafed51a`/`a1153471`/`0bb2ed95`/`8d750ea5` + the directory DB wipe), NOT M8C. A full
+problem brief was written and handed to the session that built federation. **The M8C doorbell code
+(WAKE/MSGWAKE) is proven (SPIKE + tests) but its in-context LIVE proof (DOD-LIVE-1) can't complete
+until sessions establish again.** Do NOT debug FROST here — it's the other session's.
+
+**Thread 2 — M8C code is otherwise DONE through Tier-2's M9-independent units.** Published on `latest`:
+`daemon@0.0.31`, `cli@0.0.29`, `connect@0.0.58`. AUTOSTART (F5/A1/A3) + INBOX verified LIVE on the
+published build. **Next M8C code unit: DOD-CURSOR-1** (Tier 2, §6 design-significant — per-connection
+read cursor + `session_not_current` gate; M9-independent). Terrain partly mapped (Entry 19 pointer:
+`perConnectionState` `daemon.ts:878`, cello_send `:4796`). **Owes a design note before code.** After
+CURSOR, Tier 2's M9-independent work is done; CONFIG-1 + LOGINSTART opt-out are PARKED on M9-CFG-001
+(D14); M9INT deferred (D11). Then Tiers 3–5.
+
+**FIRST ACTIONS on resume:** (1) **re-arm the heartbeat cron** — it's session-only, wiped by
+compaction (PROCEDURE §3b Cron 2, cadence `12,42 * * * *`). (2) Check whether the other session fixed
+FROST (can two agents establish a session? `cello_status` → try `cello_initiate_session`). If YES →
+retry the live doorbell smoke (Entry 20 has the exact steps). If not-yet → take DOD-CURSOR-1
+(design note first). Working trees are CLEAN, everything committed + pushed.
 
 ---
 
@@ -618,6 +633,58 @@ All fixed in `22de42c`:**
 DOD-LIVE-1 with the publish cascade).
 
 **Next unit:** the ONBOARD-* rider cluster — see Entry 10 design note (repro R4 first).
+
+---
+
+### 2026-07-06 — Entry 20: SESSION CAPSTONE + compaction point (read this first on resume)
+
+**We decided to compact here** — a clean boundary (SINCESEQ + LOGINSTART-core built/reviewed/committed;
+about to move on) — **and we are mid-investigation of a FROST session-establishment issue that is
+NOT M8C's** (see Thread 1 in the resume pointer above + the brief handed to the federation session).
+
+**What shipped this session (cello-client `main`, all committed + pushed; the WARN removal is HEAD
+`1e8702d`).** Published to `latest`: **`@cello-protocol/daemon@0.0.31`, `cli@0.0.29`, `connect@0.0.58`**
+(tag `v0.0.73`, smoke-tag green, binary cross-pins verified).
+
+| Unit | Status | Commits |
+|---|---|---|
+| SPIKE-1 | ✅ (Entry 3) | reactive hop de-risked; throwaway patch reverted |
+| WAKE-1 | 🟡 (Entry 6) | `d5fd5ec` + T1 fix — shim forwards daemon frames as `notifications/claude/channel` |
+| AUTOSTART-1 (+F5/F18) | 🟡 (Entry 8) — **LIVE-verified** | `245c7b2`/`08b9dae` — use_agent auto-starts; F5 state/selected; F18 sole-online |
+| INBOX-1 (+F4) | 🟡 (Entry 11) — **LIVE tool present** | `dfc02e8`/`22de42c` — `cello_check_notifications` + watermark + F4 4-way split |
+| ONBOARD ×5 | 🟡 (Entry 12) | `448c362`/`af6d9b7` — help/errors/next-step/lognoise; WARN **removed entirely** `1e8702d` |
+| MSGWAKE-1 | 🟡 (Entry 16) | `e4af837`/`5c4071e` — per-message `cello_message` doorbell |
+| SINCESEQ-1 | 🟡 (Entry 17) | `a404d3a` — `cello_receive({since_seq})` stateless catch-up |
+| LOGINSTART-1 CORE | 🟡 (Entry 19) | `69fe1ea`/`b7f5f16` — login auto-starts all agents; opt-out PARKED (D14) |
+| **LIVE-1** | 🟠 **publish done; live doorbell BLOCKED by FROST** | v0.0.73 published+verified |
+| CURSOR-1 | ❌ **next M8C code unit** (design note owed) | — |
+
+**Every 🟡 flips ✅ at DOD-LIVE-1** (the live `--channels` doorbell). All are unit + real-binary green;
+reviewers ran on every unit (SPEC-FAITHFUL throughout; each blocking test-teeth finding fixed with
+teeth verified).
+
+**Live verification done (published build, Andre's machine, `--channels` reconnected):** AUTOSTART
+F5 (`state`+`selected`, never `"current"`) ✅, A1 (`use_agent` auto-starts an offline agent) ✅, A3
+(registered → no warning) ✅; INBOX (`cello_check_notifications` tool present) ✅. The **WAKE/MSGWAKE
+in-context doorbell** is the ONLY unproven-live piece — blocked by the FROST issue below.
+
+**THE BLOCKER (not M8C — handed off).** `cello_initiate_session` → `ceremony_exhausted` both
+directions (systemic) between fresh post-wipe agents; client `participateInCeremony` returns `ok:false`
+(FROST aggregate fails vs `primary_pubkey`). Trigger = directory DB wipe + fresh DKG, interacting with
+recent **federation** commits. Full brief given to the federation session. `~/.cello/daemon.log` has the
+raw trace. **Do not debug it in the M8C thread.**
+
+**Decisions this session:** D11 (M9 merged AFTER channels, not first — do NOT merge `m9-build`),
+D12 (auto-start permissive + `not_registered` non-blocking), D13 (token prefix-only client check),
+D14 (CONFIG-1 + LOGINSTART opt-out parked on M9-CFG-001 — the config store is inside the deferred M9
+gateway). All in [[M8C-DECISIONS]].
+
+**Live doorbell smoke — exact steps to retry once FROST is fixed:** (1) two registered agents online
++ `standing_receiver_ready:true`; (2) receiver runs `claude --dangerously-load-development-channels
+server:cello` + `cello_use_agent <receiver>`; (3) from a second connection (or this session)
+`cello_use_agent <peer>` + `cello_initiate_session <receiver_pubkey>`; (4) the receiver's window
+wakes on its own with a `<channel source="cello">` / `notifications/claude/channel` event =
+DOD-LIVE-1 WAKE proof; send a message → MSGWAKE doorbell on the same channel.
 
 ---
 
