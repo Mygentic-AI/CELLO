@@ -636,6 +636,100 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-07 — Entry 29: DOD-LEAVEMSG-1 design note (before code)
+
+**Target (one sentence):** `cello_send` on a session whose counterparty is genuinely unreachable
+succeeds with a "dispatched to relay" outcome instead of a raw stream-failure error, and the
+recipient's daemon applies CONTACT/ABUSE gates to that relay-recovered content exactly as it does
+to any other inbound content.
+
+**Clause checklist (DOD-LEAVEMSG-1, full text expanded):**
+1. Topology (D6): no daemon ever stores messages for someone else's agents — the SENDER deposits,
+   the RECIPIENT pulls; never a third party holding plaintext.
+2. Sender: deposits the signed, hashed message at a relay (`pickup_queue`), encrypted to the
+   recipient, when the directory reports the recipient unreachable.
+3. Recipient: pulls it via RELAYWAKE on reconnect.
+4. Recipient half: verify signature/hash, apply CONTACT access control + ABUSE bounds, store in own
+   DB, surface via INBOX.
+5. Sender-facing: `cello_send` to an offline known contact returns "dispatched to relay," not an error.
+
+**What already exists (terrain, verified by reading the code, not assumed):**
+- **Clauses 1-3 are already built** — from CELLO-M7-MSG-001 (3b) and R1, predating M8C entirely:
+  `sessionNodeManager.sendContent`'s catch block (direct stream failure) already (a) witnesses the
+  message hash to the relay FIRST regardless of direct-delivery outcome (R1 — so an offline
+  recipient still gets a canonical sequence), then (b) seals the content E2E to the recipient
+  (`sealToRecipient` — the relay never sees plaintext, INV-3) and deposits it to the relay's
+  store-and-forward mailbox via `#parkContent` → the injected `contentParkHook` → `ContentParkClient`.
+  This is topologically IDENTICAL to what DOD-LEAVEMSG-1 clause 2 asks for. RELAYWAKE-1 (Entry 27,
+  tonight) already re-triggers the pull (`recoverParkedFromRelay`) on every signaling reconnect, not
+  just agent-start — satisfying clause 3.
+- **Clause 4 (recipient-side gates) is ALSO already satisfied** — `recoverParkedFromRelay` funnels
+  through `sessionNodeManager.ingestReceivedContent` (verified during the M9INT-1 merge's content-
+  path audit, Entry 28) — the SAME chokepoint ABUSE-1's per-session size cap and per-sender/global
+  acceptance bounds already gate, with the SAME `isContact` exemption CONTACT-1 built. Signature/hash
+  verification already happens in the park-recovery path (the sealed envelope is opened + the
+  content hash cross-checked before `ingestReceivedContent` is called — this is the pre-existing
+  M7 recovery contract, unchanged). INBOX-1's unread-watermark mechanism already surfaces anything
+  that lands in `ingestReceivedContent` regardless of arrival path. **Net: clause 4 needs no new
+  code** — it was already true the moment RELAYWAKE-1 landed, because both units were built to
+  funnel through the same chokepoints all along (D11/§5 seam-readiness paying off exactly as designed).
+
+**What is genuinely missing — the real scope of this unit:** clause 5, response shaping, and ONLY
+that. Today, `sendContent`'s catch block deposits to the relay (best-effort, fire-and-forget —
+`#parkContent` returns `void`, `.catch()`s its own errors, never surfaces success/failure to the
+caller) and then UNCONDITIONALLY returns `{ok:false, reason:"session_stream_unavailable", error}` —
+even on the exact code path where the content WAS successfully parked and the recipient WILL
+recover it. The operator/agent sees a raw failure for something that actually succeeded (from the
+protocol's perspective — the message IS in flight, just not direct). This is misleading, not merely
+incomplete: it under-reports success as failure, which could cause the operator to believe a
+message was lost when it wasn't, or to retry an already-in-flight send unnecessarily.
+
+**Design decision (D10 — best-practice choice, not the merely-reversible one):** make the relay
+park OBSERVABLE (return its outcome to the caller instead of fire-and-forget) and let `sendContent`
+return a THIRD outcome distinct from `{ok:true}` (direct delivery) and `{ok:false}` (nothing
+recoverable): `{ok:true, delivered:false, parked:true}`. `cello_send`'s handler maps this to a
+success-shaped response (`ok:true, delivered:false, reason:"dispatched_to_relay"`, with guidance
+naming the relay-recovery path) instead of today's `ok:false`. This is the SAME "make an existing
+best-effort side channel observable" pattern used earlier tonight for AWAY-1/TGDOOR-1's ack
+plumbing — not a new mechanism, a thin, low-risk change to an existing one's contract.
+
+**Why NOT a session-less "cold message to a contact" mechanism:** DOD-LEAVEMSG-1's own text
+("cello_send to an offline known contact") reads at first as if it might require sending WITHOUT
+any existing session at all. Rejected: `cello_send` structurally requires `session_id` + an
+existing session record (`session_not_found` otherwise) — introducing a parallel sessionless-send
+capability would be a materially larger, riskier, differently-shaped feature (new IPC surface, new
+directory-unreachable-at-initiate-time signal, no reuse of the battle-tested R1/3b witness+park
+path) for a scenario the DoD's own worked example doesn't actually require: an "offline known
+contact" in practice is someone you already have a session with (active or interrupted) whose
+direct connection has simply dropped — exactly what `sendContent`'s existing catch path already
+handles. If a genuinely sessionless case surfaces later (message a contact you've NEVER
+session'd with), that is its own future story, not smuggled into this one.
+
+**SIs this must satisfy:**
+- No new content-path bypass of `ingestReceivedContent`/`screenOutbound` (M9INT-1's invariant,
+  just activated) — clause 5's change is purely on the RESPONSE side of an existing call;
+  `screenOutbound` already ran earlier in `cello_send` before `sendContent` is ever reached, so the
+  parked content was already screened before deposit. No new unscreened path is introduced.
+- `#parkContent`'s existing callers (the live 3b hook AND the startup-flush re-park, `#3078`) both
+  need the signature change — audit both, not just the live path.
+- Never silently swallow a park FAILURE as if it were a success — if `#parkContent` now reports
+  false, `cello_send` must still return the honest `session_stream_unavailable` today's code
+  returns, not a false "dispatched to relay."
+
+**Test strategy:** red-first at the `sessionNodeManager.sendContent` level (a direct-stream-failure
+unit test asserting the new `{ok:true, delivered:false, parked:true}` shape when the park hook
+resolves true, and the existing `{ok:false, reason:"session_stream_unavailable"}` shape preserved
+when the park hook resolves false or throws) — extending, not replacing, the existing MSG-001-3b
+test coverage (falls under fixture-harness discipline: reuse the existing session-fixture, no
+from-scratch fixture). Then a `cello_send`-level e2e test (real two-daemon session, kill the direct
+stream, assert `cello_send` returns `ok:true, delivered:false, reason:"dispatched_to_relay"`, then
+bring the recipient back and assert `cello_receive`/`cello_check_notifications` surfaces it —
+proving clause 4's already-built gates fire on this exact path end to end, not just by inspection).
+
+**Next:** red tests, then implement.
+
+---
+
 ### 2026-07-07 — Entry 28: DOD-M9INT-1 — m9-build merged to main (commit pending this entry)
 
 **Sequencing note:** per D11/§5, this merge is correctly timed — ALL M8C channel tiers (1-4) were
