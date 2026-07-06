@@ -19,7 +19,7 @@ description: >
 | I — Invariants | INV-CONTENTFREE, INV-GATEWAY (activates w/ M9, deferred), INV-PUSHPULL, INV-HONEST-STATES, INV-ONE-PRIMARY | ❌ all |
 | 0 — Prerequisites | SPIKE-1 | ✅ |
 | 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | 🟡 🟡 🟡 ❌ |
-| 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | ❌ all |
+| 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | 🟡 all (built+reviewed; ✅ at LIVE-1) |
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | ❌ all |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | ❌ all |
 | 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | ❌ ❌ |
@@ -618,6 +618,48 @@ All fixed in `22de42c`:**
 DOD-LIVE-1 with the publish cascade).
 
 **Next unit:** the ONBOARD-* rider cluster — see Entry 10 design note (repro R4 first).
+
+---
+
+### 2026-07-06 — Entry 12: DOD-ONBOARD-* cluster built + reviewed → 🟡 (all 5 riders)
+
+**Built (commits `448c362` impl, `af6d9b7` fixes; cello-client main).** CLI-side (`core/cli`) + one
+daemon log-level change; no daemon protocol change.
+- **HELP-1:** `cli-args.ts` register + create-agent help now real (two-step, worked example, token
+  format `CELLO-`+33, env-var form, exact name rule `^[a-zA-Z0-9_-]{1,64}$`).
+- **ERRORS-1:** `commands.register` client-side validation BEFORE the daemon — specific
+  missing-token + malformed-token messages (the `CELLO_PREAUTH_TOKEN` typo → "starts with CELLO-"),
+  no Usage dump, no pointless DKG round-trip. **R4 was already resolved upstream** (bogus token →
+  structured `dkg_failed`, reproduced live — not silent); this adds client specificity.
+  Unknown-agent stays the daemon's (`agent_not_found`).
+- **NEXTSTEP-1:** register success appends "run `cello status`… connecting is normal…" guidance.
+- **WARN-1:** the pre-auth exposure warning right-sized to a single-use/24h token (one calm line;
+  stops pushing env-var as a security fix).
+- **LOGNOISE-1:** `directory.signaling.reader.error`/`stream.ended` warn→debug + `expected:true`;
+  sustained outage still escalates loudly (reviewer verified: `reconnect.failed` error + `lost` state).
+
+**Tests:** `cli-args` (help richness) + `commands` (missing/malformed/valid distinct + the NEXTSTEP
+success path). Full gate green (1525). **Live UX verified** (help, the typo error, missing-token).
+
+**`cello-unit-reviewer` (448c362) — SPEC FAITHFUL (5/5), NO SILENT FALLBACKS, TESTS HAVE TEETH.
+Findings + Andre correction all fixed in `af6d9b7`:**
+- **Andre:** token source is the CELLO Operations Agent on **Telegram**, not a "portal" — fixed all
+  4 copy references.
+- **F2 [MEDIUM cross-repo coupling].** Client hard-coded the exact `CELLO-`+33-base58 format — a
+  future directory format bump would strand valid tokens behind a client "malformed." **Relaxed to
+  the stable `CELLO-` prefix only** (D13); directory stays the format authority.
+- **F3 [LOW].** The WARN note printed before validation (reassured about a non-token). Now gated on
+  `startsWith("CELLO-")`.
+- **F1 [LOW test-gap].** NEXTSTEP success path was unasserted. Added a fake-IPC-daemon test
+  asserting the guidance string.
+
+**Status:** all 5 ONBOARD riders → **🟡 BUILT / UNVERIFIED-LIVE**. The cold `create-agent → register
+→ status` onboarding run completable from tool output alone is proven at DOD-LIVE-1's launch smoke.
+
+**Next unit:** DOD-LIVE-1 (Tier 1 close / launch gate) — the multi-package publish cascade
+(`@cello-protocol/daemon` + `connect` + `cli`, via `/cello-publish`) + the live `--channels`
+doorbell smoke + cold-onboarding bar. The live channels visual + `/mcp` reconnect are the human-only
+steps (§2c); everything else (beta publish, tag, demo-agent update) is autonomous.
 
 ---
 

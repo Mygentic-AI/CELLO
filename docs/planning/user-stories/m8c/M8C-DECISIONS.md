@@ -336,6 +336,22 @@ PARKED (journal + DoD "Parked decisions" + here).
   online-without-registration contract. Reverse: to block, gate `startAgentInternal` on
   `reg_status==='active'` and update the ~13 fixtures.
 
+### D13 — Client validates only the token's brand prefix; the directory is the format authority (2026-07-06, ONBOARD reviewer F2)
+
+- **Fork:** ONBOARD-ERRORS-1's client-side malformed-token check — validate the FULL format
+  (`CELLO-` + 33 base58, hard-coded regex) for the nicest error, or only the stable `CELLO-`
+  brand prefix?
+- **Choice (D10):** **prefix only.** The full-format regex is a cross-repo coupling with no shared
+  constant — if the directory ever bumps the token version/length/alphabet, valid tokens would hit
+  a client-side "malformed" and the user could NEVER register, with nothing pinning the directory to
+  today's shape. The `CELLO-` prefix is a stable brand marker (extremely unlikely to change), catches
+  the actual R4 friction (pasting the literal words `CELLO_PREAUTH_TOKEN`), and leaves the daemon /
+  directory as the authority on the exact format (a wrong-length `CELLO-` token reaches the daemon
+  and gets a structured reason). Also fixes the Telegram-vs-portal copy (Andre: the token comes from
+  the CELLO Operations Agent on Telegram, not a portal).
+- **Reverse:** re-add a stricter client check, ideally importing a SHARED format constant from
+  protocol-types rather than duplicating the regex.
+
 ---
 
 ## Related Documents

@@ -149,29 +149,29 @@ description: >
   the actual `^[a-zA-Z0-9_-]{1,64}$`, today invisible); `register` shows a worked example, says
   quoting is only needed for spaces/metacharacters, explains the create-agent (local) → register
   (directory, needs token) two-step, and documents the `CELLO_PREAUTH_TOKEN` env-var form with a
-  real one-liner (it works today via `cello.ts:82` but is invisible in help). (F24, R1, R2, R5) — ❌
+  real one-liner (it works today via `cello.ts:82` but is invisible in help). (F24, R1, R2, R5) — 🟡 (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL; ✅ at DOD-LIVE-1)
 - **DOD-ONBOARD-ERRORS-1** — register-path errors are specific and actionable, never a generic
   Usage dump or silence: missing token → "you're missing the pre-auth token" (not the Usage line);
   malformed token → "that isn't a pre-auth token — they start with `CELLO-`"; unknown agent →
   "no agent named X; create it first". **REPRODUCE R4 first** — a bogus token
   (`cello register agent CELLO_PREAUTH_TOKEN`) today returns NO output at all, a silent failure on
-  the core onboarding path; repro before the fix. (R3, R4) — ❌
+  the core onboarding path; repro before the fix. (R3, R4) — 🟡 (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL; ✅ at DOD-LIVE-1)
 - **DOD-ONBOARD-NEXTSTEP-1** — every command output carries succinct next-step guidance + state
   legibility. After `register`: "run `cello status` to confirm your agent is there." State words
   explained: "`connecting` is normal — registration takes a minute or two; `connected` = ready;
   stuck disconnected → `cello logout` then `cello login`; never logged in → `cello login`." Covers
   register / login / status / use_agent at minimum. This is the connective principle under every
-  R-item and is what lets an AI operator self-correct. (R7) — ❌
+  R-item and is what lets an AI operator self-correct. (R7) — 🟡 (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL; ✅ at DOD-LIVE-1)
 - **DOD-ONBOARD-WARN-1** — the pre-auth exposure warning is right-sized to what the token IS: a
   single-use, 24h, consumed-on-success token (verified: directory `consumed_at` + "single-use is
   enforced" + `preauth.token.reuse.rejected`). Drop the durable-secret klaxon — at most one calm
   line naming the real, narrow risk: the seconds-long pre-redemption window. Stop pushing the
   env-var form as a *security* fix (shell history + process environ still expose it); if reducing
-  exposure actually matters, read from a file/stdin. (R6) — ❌
+  exposure actually matters, read from a file/stdin. (R6) — 🟡 (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL; ✅ at DOD-LIVE-1)
 - **DOD-ONBOARD-LOGNOISE-1** — routine directory-signaling reconnect churn
   (`directory.signaling.reader.error` at `warn`, ~every 40–70 min, always recovers —
   `signaling-connect.ts:323`) is logged quietly and marked expected, so a healthy daemon doesn't
-  look like it's failing; a genuine sustained outage still stands out. (F11) — ❌
+  look like it's failing; a genuine sustained outage still stands out. (F11) — 🟡 (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL; ✅ at DOD-LIVE-1)
 
 - **DOD-LIVE-1 (Tier 1 close / launch gate)** — The live doorbell journey: real daemon, real
   published shim, live `claude --channels` session; a real peer (second daemon) opens a session;
