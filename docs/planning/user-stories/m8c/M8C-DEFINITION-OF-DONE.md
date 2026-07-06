@@ -44,15 +44,16 @@ description: >
 ## Tier I — Invariants (must hold in every journey, every tier)
 
 - **DOD-INV-CONTENTFREE** — Every notification/wake is a content-free doorbell: `type` +
-  counterparty pubkey + `session_id` only. No message content ever rides a push (SI-001), through
-  every tier including Telegram doorbell. — ❌
+  counterparty pubkey + `session_id`, plus routing metadata (agent name, session label — D6).
+  No message content or content-derived text ever rides a push (SI-001), through every tier
+  including Telegram doorbell. — ❌
 - **DOD-INV-GATEWAY** — Every inbound content path passes `screenInbound` and every outbound
   passes `screenOutbound` — including paths added by M8B after m9-build diverged, and every new
   path M8C adds. No channel/relay feature bypasses the gateway. — ❌
 - **DOD-INV-PUSHPULL** — Every push capability has a pull equivalent. A poll-only client
   (Bedrock, cron) can reach every M8C feature; nothing hard-requires Claude Code push. Push loss
   is always recoverable via `cello_check_notifications` / `since_seq`. — ❌
-- **DOD-INV-HONEST-STATES** — A counterparty sees exactly two distinguishable non-answer states:
+- **DOD-INV-HONEST-STATES** — (Tier 3 activation) A counterparty sees exactly two distinguishable non-answer states:
   *away* (bona fide daemon response) or *unreachable* (silence). Transparent is default; opaque is
   the configured privacy mode; nothing fakes a third state. — ❌
 - **DOD-INV-ONE-PRIMARY** — (Tier 5 activation) At most one Primary daemon per agent at any
@@ -78,12 +79,16 @@ description: >
   notification frames (all four types — `agent_state_changed`, `agent_current_changed`,
   `session_state_changed`, and later `cello_message`) instead of dropping them; a live
   `--channels` session receives an in-context event the instant a peer opens a session. Zero
-  daemon change; `connect` bump published. Edge ACs: no-attached-client (daemon queues, nothing
+  daemon change; the `connect` bump ships with the Tier 1 close cascade (LIVE-1, per PROCEDURE
+  §2a) — WAKE proves against a locally-linked shim until then (D6). Edge ACs: no-attached-client (daemon queues, nothing
   pushes, INBOX reveals on attach); doorbell for a session that seals/aborts before the operator
   reacts is handled gracefully. — ❌
 - **DOD-AUTOSTART-1** — `cello_use_agent` auto-starts the agent if not online (Q1 decided);
   `cello_start_agent` remains for bring-online-without-claiming. The 3-step incantation collapses
-  to `login → use_agent`. — ❌
+  to `login → use_agent`. Failure path (D6): a failed auto-start returns a structured
+  `agent_start_failed` with the reason (`directory_unreachable` / `not_registered` / …) plus
+  next-step guidance (ONBOARD-NEXTSTEP style) and leaves the current-agent selection unchanged —
+  no half-selected state. — ❌
   - **Friction riders (F5, F18 — first-run legibility, verified open 2026-07-06):**
     - **F18** — when exactly one agent is online and none is selected, tools that need a current
       agent USE it instead of returning `no_current_agent` (today `daemon.ts:2566` and siblings
@@ -95,7 +100,12 @@ description: >
   session requests + unread messages for the current agent (default) or all loaded agents
   (labelled). This is the **push-loss reconciliation mechanism** (notifications are
   fire-and-forget) and the primary inbox for poll-only clients. AC: a doorbell missed while the
-  shim was down/busy is discoverable via INBOX on reattach. — ❌
+  shim was down/busy is discoverable via INBOX on reattach. Unread mechanism (D6): unread =
+  transcript seq > a per-agent, per-session `last_delivered_seq` watermark persisted in the daemon
+  DB; a `cello_receive` that returns messages advances it (delivery marks read — no ack verb, no
+  separate notification store; INBOX derives from this watermark + the already-stateful pending
+  session requests). Distinct from CURSOR's per-connection cursor (Tier 2, read-before-write
+  gating). — ❌
   - **Friction rider (F4 — rides free on this surface, verified open 2026-07-06):** split the
     single `sealed_receipt_not_found` into distinct reasons — `session_id_too_short` /
     `unknown_session` / `wrong_agent` / `not_sealed_yet` — and show FULL session IDs on the copy
@@ -190,7 +200,10 @@ description: >
   silence, indistinguishable from unreachable; per-type (request vs message) templates. — ❌
 - **DOD-CONTACT-1** — Binary per-agent contact whitelist: known = auto-accept; unknown senders
   learn only "dispatched" by default, receipt confirmation in public mode, silence in privacy
-  mode; presence visible to whitelisted contacts only. — ❌
+  mode; presence visible to whitelisted contacts only. Management (D6): contacts are added by
+  operator action — initiating a session to X adds X, accepting X's request adds X — plus
+  `cello contact add/remove/list [--agent <name>]`; identity pins to the pubkey at add time
+  (directory name = the human handle, resolved then pinned); known stays known until removed. — ❌
 - **DOD-ABUSE-1** — Persistence bounds (the non-M9 remainder): per-session total-size limit
   (anti-drip-feed), bounded unknown-sender queue per sender, global daemon-wide unknown-sender
   cap (anti-swarm). Whitelisted senders bounded only by disk. Per-message cap + outbound rate are
@@ -204,7 +217,11 @@ description: >
   never rides the doorbell (DOD-INV-CONTENTFREE). Full-monitoring + Mode 2 are OUT (follow-on
   milestone). **Telegram is the ONLY stage-3 platform in M8C** — Slack / Discord / Webhook are
   OUT (follow-on; the daemon-owned-bot pattern extends to each as another adapter, no new
-  architecture). See M8C-SPEC §5. — ❌
+  architecture). See M8C-SPEC §5. Inbound in M8C (D6): allowlisted operator chat → canned
+  notify-only one-liner (logged `telegram.inbound.acknowledged`); any other chat → silent drop
+  (`telegram.inbound.rejected`); nothing enters CELLO content paths. Doorbell coalescing (D6):
+  ring-once-until-read per session (keyed on INBOX's unread watermark); session requests and
+  state changes always ring. Tier 5 note: the poller is Primary-only — see DOD-PRIMARY-1. — ❌
 
 ## Tier 4 — Async foundation
 
@@ -212,9 +229,13 @@ description: >
   any relay holds undelivered frames for its agents (pickup_queue exists; this adds the
   ask-on-reconnect + pull). Messages that arrived while the daemon was fully offline reach the
   operator. Both repos; spine-proven then live. — ❌
-- **DOD-LEAVEMSG-1** — Leave a message: daemon accepts + stores (signed, hashed) messages for
-  known-contact agents that are offline, surfaces them on reconnect via INBOX; access control per
-  CONTACT; persistence per ABUSE bounds. — ❌
+- **DOD-LEAVEMSG-1** — Leave a message (topology per D6 — no daemon ever stores messages for
+  someone else's agents): the SENDER's daemon deposits the signed, hashed message at a relay
+  (pickup_queue, encrypted to the recipient) when the directory reports the recipient
+  unreachable; the RECIPIENT's daemon pulls it via RELAYWAKE on reconnect, then this unit's
+  recipient half runs — verify signature/hash, apply CONTACT access control + ABUSE bounds,
+  store in own DB, surface via INBOX. Sender half: `cello_send` to an offline known contact
+  returns "dispatched to relay," not an error. — ❌
 
 ## Tier 5 — Multi-daemon (Primary/Standby)
 
@@ -225,7 +246,10 @@ description: >
 - **DOD-PRIMARY-1** — Same K_local on two daemons via the designed handshake; exactly one Primary
   (directory-arbitrated record); primary-transfer offer (one-time, 2-min TTL) in both directions
   (Standby requests baton; directory offers on unreachable-Primary); user-initiated DB sync;
-  DOD-INV-ONE-PRIMARY holds under kill-the-Primary tests. — ❌
+  DOD-INV-ONE-PRIMARY holds under kill-the-Primary tests. Telegram poller is Primary-only (D6):
+  Standby holds the token (settings sync) but polls cold; baton transfer stops the old poller and
+  starts the new (handoff overlap absorbed by the 409-retry) — preserves the
+  single-`getUpdates`-consumer constraint that decided OQ-1. — ❌
 - **DOD-POLICY-1** — Per-daemon policies: same agent, different persona by which daemon is
   Primary (falls out of policies being daemon-local; prove, document, test the transfer
   boundary). — ❌

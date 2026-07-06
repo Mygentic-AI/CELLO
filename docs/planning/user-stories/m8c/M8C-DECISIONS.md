@@ -121,6 +121,42 @@ option and keep going** — never block. Genuine undecidable forks are PARKED (j
 - **Reverse:** riders are additive on their host units; drop any (F6 is the explicit
   keep-or-cut) or re-tier the ONBOARD group by moving lines — pure ordering, no rework.
 
+### D6 — Doc-review gap sweep: nine missing decisions pinned (2026-07-06, Andre approved all)
+- **Fork:** a review of the M8C apparatus found nine places where a story would stall on an
+  unmade decision or an auditor would trip on inconsistent wording. Andre's rule: propose the
+  sensible default per precedent/"usual way it works," no decision fatigue. All nine applied to
+  the DoD lines they live on (each tagged "D6" in place):
+  1. **Unread mechanism (INBOX-1):** unread = transcript seq > per-agent, per-session
+     `last_delivered_seq` watermark in the daemon DB; `cello_receive` advances it (delivery marks
+     read; no ack verb, no notification store). The email/IMAP model; daemon-side so poll-only
+     clients get it free; the primitive SINCESEQ/CURSOR later refine.
+  2. **Contact management (CONTACT-1):** auto-add on operator action (initiate or accept a
+     session) + manual `cello contact add/remove/list`; identity pins to pubkey at add time,
+     directory name is the handle. Matches the messenger mental model and the whitelist's own
+     known=auto-accept semantics.
+  3. **LEAVEMSG topology:** reworded to the design log's decided model — sender's daemon deposits
+     at a relay (pickup_queue), recipient pulls via RELAYWAKE; LEAVEMSG is the recipient-side
+     verify/gate/store/surface half + "dispatched to relay" sender UX. No daemon stores for
+     foreign agents (the old wording invited exactly that misbuild).
+  4. **TGDOOR inbound + coalescing:** Mode 1 inbound = canned notify-only reply to the allowlisted
+     operator, silent drop + log for everyone else, nothing enters content paths; doorbell rings
+     once-until-read per session (keyed on the unread watermark), requests/state changes always ring.
+  5. **Telegram poller is Primary-only (PRIMARY-1):** Standby holds the token but polls cold;
+     baton transfer moves the poller. Anything else re-creates the single-`getUpdates`-consumer
+     contention that decided OQ-1 (D4).
+  6. **INV-HONEST-STATES tagged "(Tier 3 activation)"** — mirrors ONE-PRIMARY's tag so the
+     done-auditor doesn't fail an invariant that isn't yet satisfiable.
+  7. **INV-CONTENTFREE reworded** to allow routing metadata (agent name, session label) — makes
+     TGDOOR's `[agent · session]` header legal without weakening "never content."
+  8. **AUTOSTART failure path:** structured `agent_start_failed` + reason + next-step guidance;
+     current-agent selection unchanged on failure.
+  9. **WAKE-1 publish clause:** the `connect` bump rides the Tier 1 close cascade (LIVE-1) per
+     PROCEDURE §2a — removes the mid-tier-publish contradiction.
+- **Also resolved, no doc change:** the Telegram plugin license concern is dead — MIT, and it is
+  reference-only for our own code, not a copy (Andre, 2026-07-06).
+- **Reverse:** each is a sentence or two on its host DoD line; strike the D6 clause to revert any
+  single one independently.
+
 ---
 
 ## Related Documents
