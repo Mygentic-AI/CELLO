@@ -621,6 +621,55 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-06 — Entry 18: DOD-LOGINSTART-1 CORE design note (M9-independent half; before code)
+
+**Unit:** DOD-LOGINSTART-1 CORE (Tier 2). The per-agent `autoStart: false` opt-out is PARKED (D14 —
+needs the M9 config store). CORE = `cello login` auto-starts all registered agents; login always
+completes with failed agents enumerated by reason.
+
+**Design fork (decided):** WHERE does auto-start-all live?
+- **(a) daemon boot** — auto-start every loaded agent in `startDaemon` after setup. REJECTED as the
+  default: agents load offline today (`loadAgents`, `daemon.ts:507`) and **many daemon tests assume
+  agents start offline** (mcp-002 starts alice explicitly and asserts `agent_state_changed`);
+  blanket boot-autostart breaks them. A `DaemonConfig.autoStartAgents` flag set only by login avoids
+  that, but needs plumbing through the `cello-daemon` bin env (`cello-daemon.ts:42` reads
+  `CELLO_DIR` etc.) + risks any real-binary-spawning test.
+- **(b) the `cello login` command** — after `connectOrStart` brings the daemon up, the login command
+  connects over IPC, `cello_list_agents`, and `cello_start_agent` each, collecting failures.
+  **CHOSEN.** Matches the DoD's literal "**cello login** auto-starts"; zero daemon-boot regression
+  (daemon startup unchanged); login is THE operator entry point (the only daemon spawner —
+  `connectOrStart`/`spawnDaemon`; the MCP shim never spawns). `cello_start_agent` is idempotent, so
+  re-login on an already-running daemon is safe. Note: a daemon started by some non-login path won't
+  auto-start — acceptable, since login is how operators start it, and it keeps the daemon's boot
+  contract (and its tests) intact.
+
+**Clause checklist (CORE):**
+- **L1** — `cello login`, after the daemon is up, starts every loaded agent (`cello_list_agents` →
+  `cello_start_agent` per agent). `login → all agents online` with no per-agent commands.
+- **L2** — login ALWAYS completes: a failed start does not abort login; failures are collected, not
+  thrown. Enumerated in the login output by `{ name, reason }` (design-review #8).
+- **L3** — idempotent: already-online agents are a no-op (start is idempotent); re-login is safe.
+- **L4 (parked, D14)** — the per-agent `autoStart: false` opt-out is NOT in core; core starts all.
+  When M9-CFG-001 lands, the login loop consults the config per agent.
+- **Obs** — the login command logs/prints the auto-start summary (started count + failures). No
+  console.log in daemon impl (this is CLI output — the login command already prints to stdout).
+
+**Falsify-first:** (a) after `connectOrStart` the daemon IPC is READY (spawnDaemon waits on the lock
+file, written after IPC listens) — so `connectToDaemon` + `cello_list_agents` succeeds. (b) the login
+loop must not throw on a per-agent failure (wrap each start; collect). (c) `cello_start_agent` failure
+modes for a loaded agent are near-nil (agent_not_found can't happen for a listed agent) — so failures
+are rare, but the enumeration path must still be exercised by a test (inject a failure or assert the
+shape). (d) NO daemon-boot behavior change → existing daemon tests untouched.
+
+**Test strategy:** CLI test (like `commands.test.ts`) — a real `startDaemon` + seed 2 loaded agents;
+call the login command (or its auto-start helper) → assert both agents report `online` in
+`cello_status` afterward, and the output enumerates counts; a login with zero agents completes
+cleanly. (The auto-start-all is best extracted into a testable helper the login command calls.)
+
+**Next:** red-first test → implement the login auto-start-all + enumeration → gate → review.
+
+---
+
 ### 2026-07-06 — Entry 17: DOD-SINCESEQ-1 built + reviewed → 🟡; D14 (config units gated on M9-CFG-001)
 
 **Built (commit `a404d3a`; cello-client main).** DAEMON-side (§5) + one optional shim param.
