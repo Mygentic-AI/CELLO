@@ -194,7 +194,10 @@ description: >
   `cello_message` producer, not the bridge; the doorbell must carry type + `session_id` + pubkey
   only, never message content.) — 🟡 (2026-07-06, Entry 16 — built `e4af837`/`5c4071e`, daemon-side, rides WAKE's bridge; reviewer SPEC-FAITHFUL 6/6, held-release + dedup no-double-wake tests w/ teeth, F1 sender_unresolved loud. Flips ✅ at the live --channels smoke.)
 - **DOD-SINCESEQ-1** — `cello_receive({ since_seq })`: stateless catch-up from any gap size, no
-  replay race; replaces the `cello_get_transcript` workaround for away-then-return. — ❌
+  replay race; replaces the `cello_get_transcript` workaround for away-then-return. — 🟡
+  (2026-07-06, Entry 17 — built `a404d3a`, daemon-side + 1 optional shim param; distinct early
+  since_seq branch, durable-transcript batch, watermark-advance, no-regression; reviewer
+  SPEC-FAITHFUL, no silent fallbacks, teeth + since_seq:0 boundary locked. Flips ✅ when exercised live.)
 - **DOD-LOGINSTART-1** — `cello login` auto-starts all registered agents; per-agent
   `autoStart: false` opt-out; login always completes with failed agents enumerated by reason
   (design-review #8). — ❌
@@ -323,6 +326,11 @@ own story) deliberately, never smuggled in as a rider. Source:
 ## Parked decisions
 *(None yet. Genuine undecidable forks get parked here + journal + DECISIONS — never silently dropped.)*
 
+- **D14 parks (2026-07-06):** DOD-CONFIG-1 (entirely) + its F6/F12 riders, AND DOD-LOGINSTART-1's
+  per-agent `autoStart: false` opt-out clause — all gated on M9-CFG-001's config store, which lives
+  inside the deferred M9 gateway package (D11). LOGINSTART CORE (auto-start all at login) is
+  M9-independent and ships now; the opt-out is added when M9 lands. No parallel config store (DoD
+  forbids). See [[M8C-DECISIONS]] D14.
 - OQ-2 (operator-input cadence: daemon-mediated real-time gates vs agent-loop poll), OQ-3 (reply
   @-addressing) — parked WITH Mode 2 (out of M8C, follow-on milestone).
 - OQ-4 (full Telegram settings knob list) — resolves inside DOD-CONFIG-1 + DOD-TGDOOR-1 scoping.

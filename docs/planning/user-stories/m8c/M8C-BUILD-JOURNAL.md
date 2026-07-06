@@ -20,7 +20,7 @@ description: >
 | 0 — Prerequisites | SPIKE-1 | ✅ |
 | 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | 🟡 🟡 🟡 ❌ |
 | 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | 🟡 all (built+reviewed; ✅ at LIVE-1) |
-| 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | ❌ all |
+| 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | 🟡 🟡 ❌ 🅿️CFG(D14) ❌ |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | ❌ all |
 | 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | ❌ ❌ |
 | 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ❌ all |
@@ -618,6 +618,39 @@ All fixed in `22de42c`:**
 DOD-LIVE-1 with the publish cascade).
 
 **Next unit:** the ONBOARD-* rider cluster — see Entry 10 design note (repro R4 first).
+
+---
+
+### 2026-07-06 — Entry 17: DOD-SINCESEQ-1 built + reviewed → 🟡; D14 (config units gated on M9-CFG-001)
+
+**Built (commit `a404d3a`; cello-client main).** DAEMON-side (§5) + one optional shim param.
+`cello_receive({ since_seq })` — a distinct early branch in `handleReceive` (after ownership checks,
+before the timeout/drain loop): returns a batch of RECEIVED transcript messages with `sequence >
+since_seq` (durable transcript, not the ephemeral buffer — no replay race), advances the read
+watermark to the max returned seq (clears INBOX unread). Plain receive path entirely unchanged (S4).
+
+**Tests:** `m8c-sinceseq-1.test.ts` (4) — batch-beyond-cursor (ordered, content, from, count,
+watermark-advance via INBOX unread-cleared); empty-at-latest; `since_seq:0` boundary (batches, not
+falsy); S4 no-regression (plain receive → null-content, no `messages` field).
+
+**`cello-unit-reviewer` (a404d3a) — SPEC FAITHFUL, NO SILENT FALLBACKS, TESTS HAVE TEETH.** No
+HIGH/MEDIUM findings. Two hollow-impl bypasses (ignore-cursor → returns whole transcript;
+include-sent) both caught. Only actionable item: the recommended `since_seq:0` coverage add
+(committed after `a404d3a`). LOW notes (no-fix): no-advance-when-empty is spec-consistent; negative
+since_seq = "everything" is natural.
+
+**D14 — config-store dependency surfaced + decided (follows from D11):** the config store is
+`core/gateway/src/config/config-store.ts`, INSIDE the deferred M9 gateway package. So `DOD-CONFIG-1`
+(entirely) and `DOD-LOGINSTART-1`'s per-agent `autoStart: false` opt-out are **gated on M9-CFG-001**.
+Decision (M8C-DECISIONS D14): build the M9-INDEPENDENT Tier-2 units now (LOGINSTART CORE, CURSOR);
+**PARK** CONFIG-1 + the opt-out clause until M9-CFG-001 lands with the M9 merge. NO parallel config
+store (DoD forbids). Reverse: a deliberate forward-port of just `config-store.ts` if config is wanted
+before M9.
+
+**Status:** DOD-SINCESEQ-1 → **🟡 BUILT / UNVERIFIED-LIVE**.
+
+**Next unit:** DOD-LOGINSTART-1 CORE (M9-independent: `cello login` auto-starts all registered
+agents, login completes with failures enumerated; the `autoStart:false` opt-out is parked, D14).
 
 ---
 
