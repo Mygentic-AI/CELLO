@@ -21,7 +21,7 @@ description: >
 | 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | 🟡 🟡 🟡 ❌ |
 | 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | 🟡 all (built+reviewed; ✅ at LIVE-1) |
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | 🟡 🟡 🟡CORE 🅿️CFG(D14) 🟡 |
-| 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡CORE 🟡 🟡CORE ❌ |
+| 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡CORE 🟡 🟡CORE 🟡 (**TIER 3 CODE-COMPLETE**) |
 | 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | ❌ ❌ |
 | 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ❌ all |
 | Post-channel — deferred | M9INT-1 (do AFTER channel tiers — D11; NOT a prerequisite) | ❌ deferred |
@@ -633,6 +633,38 @@ All fixed in `22de42c`:**
 DOD-LIVE-1 with the publish cascade).
 
 **Next unit:** the ONBOARD-* rider cluster — see Entry 10 design note (repro R4 first).
+
+---
+
+### 2026-07-06 — Entry 26: DOD-TGDOOR-1 built (commit `99d6a53`) — TIER 3 CODE-COMPLETE
+
+Built per the Entry 25 design note. `TelegramBotClient` interface + `HttpTelegramBotClient` (M4+
+adapter pattern, injectable via `DaemonConfig.telegramBotClient` matching this repo's existing
+test-injection convention). New dedicated `telegram_settings` table (bot token has no sensible
+default — unlike AWAY/TTL/CONTACT, can't defer to M9-CFG-001). Single long-lived `getUpdates`
+poller, guarded by a GENERATION COUNTER rather than a boolean (a boolean stop-then-restart would
+let the old loop's while-condition still pass, running two concurrent pollers). Cold-capable —
+starts at daemon boot if settings already exist.
+
+Three event hooks reuse AWAY-1/MSGWAKE-1's existing dispatch points: session-request
+(`acceptInboundAssignment`) and state-change (`dispatchSessionStateChangedWithTelegram`, wrapping
+`notificationDispatcher.dispatchSessionStateChanged` at all 4 call sites) ALWAYS ring; message-
+waiting (`setOnContentArrived`) is coalesced (ring-once-until-read, cleared wherever
+`cello_receive`/`since_seq` advances the read watermark). Inbound: allowlisted chat → canned ack;
+any other chat → silent drop, never touching CELLO content paths. Content-free: every doorbell is
+a fixed per-kind label, never message text. CLI: `cello telegram set-token`.
+
+**Tests:** `m8c-tgdoor-1.test.ts` new (4), via a `FakeTelegramBotClient` — no real network. Full
+gate green (1571). `cello-unit-reviewer` dispatch next.
+
+**This closes Tier 3 (Reachability + protection) code-complete** — AWAY-1, CONTACT-1, ABUSE-1,
+TTL-1, TGDOOR-1 all built (CONFIG-1's own line remains parked, D14). TGDOOR-1 is the one Tier-3
+unit that cannot be smoke-tested even locally beyond the fake client — it needs a REAL Telegram
+bot token for the live proof (flagged upfront as a live-test dependency).
+
+**Next: Tier 4 (Async foundation)** — DOD-RELAYWAKE-1 (M9-independent, build now) then
+DOD-LEAVEMSG-1 (needs the M9 merge first, per the DoD's own note "before DOD-LEAVEMSG-1 at the
+latest" — D11/D16's deferred M9 merge happens between these two units).
 
 ---
 

@@ -249,7 +249,7 @@ description: >
   ring-once-until-read per session (keyed on INBOX's unread watermark); session requests and
   state changes always ring. Tier 5 note: the poller is Primary-only — see DOD-PRIMARY-1. NO
   channel machinery anywhere in this unit — the daemon talks to the Telegram Bot API directly;
-  "stage 3" is historical numbering (see SPEC §2, channels mental model). — ❌
+  "stage 3" is historical numbering (see SPEC §2, channels mental model). — 🟡 (2026-07-06, Entry 25/26 — built `99d6a53`, design note first (§6); TelegramBotClient interface + HttpTelegramBotClient (M4+ adapter pattern) + injectable test override; new dedicated telegram_settings table; generation-counter-guarded single poller (cold-capable); session-request/state-change always ring, message-waiting coalesced (ring-once-until-read, cleared on cello_receive/since_seq); inbound allowlist-ack vs silent-drop; content-free fixed-label text. Review pending — needs a REAL Telegram bot token for the live proof, so this is the ONLY Tier-3 unit that can't be smoke-tested even locally beyond the FakeTelegramBotClient tests.)
 
 ## Tier 4 — Async foundation
 
