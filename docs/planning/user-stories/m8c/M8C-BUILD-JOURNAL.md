@@ -22,9 +22,9 @@ description: >
 | 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | 🟡 all (built+reviewed; ✅ at LIVE-1) |
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | 🟡 🟡 🟡CORE 🅿️CFG(D14) 🟡 |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡CORE 🟡 🟡CORE 🟡 (**TIER 3 DONE, reviewed+fixed**) |
-| 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | 🟡CORE ❌ (M9 merged, unblocked — next) |
-| 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ❌ all |
-| Post-channel — deferred | M9INT-1 (do AFTER channel tiers — D11; NOT a prerequisite) | 🟡 MERGED (commit pending) |
+| 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | 🟡CORE 🟡CORE (**TIER 4 DONE**, reviewer pending) |
+| 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ❌ all — NEXT |
+| Post-channel — deferred | M9INT-1 (do AFTER channel tiers — D11; NOT a prerequisite) | 🟡 MERGED (`d47227c`, reviewed, 1 HIGH fixed) |
 
 **⛔ M9 IS NOT A PREREQUISITE (D11, 2026-07-06).** Do NOT merge `m9-build` before the channel work.
 DOD-M9INT-1 was moved out of Tier 0 and deferred to after the M8C channel tiers. A post-compaction
@@ -633,6 +633,61 @@ All fixed in `22de42c`:**
 DOD-LIVE-1 with the publish cascade).
 
 **Next unit:** the ONBOARD-* rider cluster — see Entry 10 design note (repro R4 first).
+
+---
+
+### 2026-07-07 — Entry 30: DOD-M9INT-1 reviewer HIGH fixed + DOD-LEAVEMSG-1 built (commit `5967793`) — TIER 4 DONE
+
+**M9INT-1 merge review (dispatched Entry 28, returned this cycle):** `cello-unit-reviewer` on
+`d47227c` — SPEC FAITHFUL on every DOD-M9INT-1 clause, gate re-run independently confirmed
+(1733/164). One HIGH finding: making `ingestReceivedContent` async (to await `screenInbound`)
+opened a race the merge's own B1 dedup-fix comment didn't extend to ABUSE-1's size cap — two
+concurrent ingests (e.g. a live direct arrival racing a `recoverParkedFromRelay` pull on
+reconnect) could each pass the pre-await cap check using the SAME stale byte totals, then both
+append/hold, jointly exceeding `ABUSE_MAX_SESSION_RECEIVED_BYTES`. Paired LOW finding: no test
+would have caught it. **Fixed:** a size-cap re-check added in the same synchronous window as the
+existing post-screen dedup re-check (symmetric mechanism) — `session-node-manager.ts`. **Verified
+with teeth:** wrote the regression test (two concurrent different-content ingests via
+`Promise.all`, each under cap, summing over it), confirmed it FAILS without the fix (2 accepted,
+not 1) by temporarily reverting the fix and re-running, then restored the fix and confirmed green.
+
+**DOD-LEAVEMSG-1 built per Entry 29's design note.** Terrain audit (Entry 29) found clauses 1-4
+(topology, sender deposit, recipient pull, recipient-side gates) already satisfied by existing
+M7/M8C machinery with ZERO new code — RELAYWAKE-1's `recoverParkedFromRelay` already funnels
+through `ingestReceivedContent`, the same chokepoint ABUSE-1/CONTACT-1 already gate. Genuine scope:
+clause 5, sender-facing response shaping. `#parkContent` (`session-node-manager.ts`) changed from
+fire-and-forget `void` to `async Promise<boolean>` — both call sites audited: the live
+`sendContent` catch-block now awaits it and returns `{ok:true, delivered:false, parked:true}` on a
+genuine park success (was unconditionally `{ok:false, reason:"session_stream_unavailable"}` even
+when the deposit succeeded — misreporting an in-flight message as lost); the TTF-expiry backstop
+(`#handleTtfExpiry`) stays correctly fire-and-forget (`void this.#parkContent(...)`) since no
+synchronous IPC caller is still waiting by the time that timer fires. `cello_send` (`daemon.ts`)
+now branches on `sendResult.delivered` AFTER the shared leaf-append/transcript/cursor-advance code
+(both outcomes commit the SAME leaf position — the relay witness assigns the sequence via R1
+before direct delivery is even attempted) and surfaces `ok:true, delivered:false,
+reason:"dispatched_to_relay"` with recovery guidance for the parked case; the existing no-relay
+`{ok:false}` path is unchanged and regression-locked.
+
+**4 new tests** (`m8c-leavemsg-1.test.ts`): park-succeeds → new shape; no-relay-configured →
+unchanged `{ok:false}` (regression lock); park-hook rejects → still honest `{ok:false}`, never a
+false positive; full `cello_send` IPC-level end-to-end (`dispatched_to_relay` + leaf committed).
+Discovered during implementation (not from a test failure, from reading the code): `AgentRelayClient`
+construction + `registerSession` are synchronous LOCAL bookkeeping (no network dial) — only
+`submitMessageHash`/`deposit` touch the network, and `sendContent`'s hash-witness attempt already
+catches+logs a relay-unreachable failure as non-fatal — so `entry.relayPeerId`/`relayAddrs` can be
+set via `createSessionNode`'s `relay` param with a FAKE relay address in a unit test, without ever
+needing a real relay server. This made the sender-half fully testable at the daemon/
+SessionNodeManager level; no e2e/spine-level real-relay test was needed.
+
+**Gate:** 1738 tests / 165 files, lint, typecheck, build — all clean. `cello-unit-reviewer` dispatch
+in flight for this commit (covers both the ABUSE-1 fix sanity-check and LEAVEMSG-1's full 4 lenses,
+including an independent re-verification of the "recipient half needs no new code" claim).
+
+**Status:** DOD-LEAVEMSG-1 → **🟡CORE**. **TIER 4 (Async foundation) IS NOW DONE** (RELAYWAKE-1 +
+LEAVEMSG-1 both 🟡CORE). DOD-M9INT-1 → 🟡 MERGED, reviewed, HIGH finding fixed.
+
+**Next:** Tier 5 (Multi-daemon). DOD-PRIMARY-DESIGN-1 is a HARD GATE (§6) — no Tier 5 code until
+its design log exists and is journaled. Starting that now.
 
 ---
 

@@ -263,7 +263,23 @@ description: >
   unreachable; the RECIPIENT's daemon pulls it via RELAYWAKE on reconnect, then this unit's
   recipient half runs — verify signature/hash, apply CONTACT access control + ABUSE bounds,
   store in own DB, surface via INBOX. Sender half: `cello_send` to an offline known contact
-  returns "dispatched to relay," not an error. — ❌
+  returns "dispatched to relay," not an error. — 🟡CORE (2026-07-07, Entry 29/30 — design note
+  first (§6-spirit): terrain audit found the deposit mechanism (seal+witness+park via CELLO-M7-
+  MSG-001 3b) and the recipient-half gates (verify/CONTACT/ABUSE/INBOX, all via RELAYWAKE-1's
+  existing `recoverParkedFromRelay` → `ingestReceivedContent` funnel) already existed — genuine
+  new scope was ONLY the sender-facing response shaping. Built: `#parkContent` made observable
+  (was fire-and-forget `void`, now `async` returning whether the deposit succeeded);
+  `sendContent` returns a new `{ok:true, delivered:false, parked:true}` outcome distinct from
+  direct delivery, preserving the exact prior `{ok:false}` shape when no relay is configured or
+  the park itself fails (regression-locked); `cello_send` surfaces `dispatched_to_relay` with
+  guidance, committing the same leaf/transcript position a direct delivery would (the relay
+  witness already assigned the sequence via R1 before direct delivery was even attempted). 4 new
+  tests (park-succeeds, no-relay regression lock, park-hook-rejects honesty check, full IPC-level
+  `cello_send` end-to-end). `cello-unit-reviewer` dispatch pending. Also in this pass: a
+  cello-unit-reviewer HIGH finding from the DOD-M9INT-1 merge review — `ingestReceivedContent`
+  becoming async opened a race where two concurrent ingests could jointly exceed ABUSE-1's
+  per-session size cap using stale totals — fixed with a post-screen re-check symmetric to the
+  existing dedup re-check, verified with a regression test proven to fail without the fix.
 
 ## Tier 5 — Multi-daemon (Primary/Standby)
 
