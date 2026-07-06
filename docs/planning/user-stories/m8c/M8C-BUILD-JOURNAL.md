@@ -30,10 +30,7 @@ description: >
 DOD-M9INT-1 was moved out of Tier 0 and deferred to after the M8C channel tiers. A post-compaction
 context must not conclude M9 needs merging first — it does not.
 
-**Next unit:** DOD-AUTOSTART-1 — `cello_use_agent` auto-starts the agent if not online (Q1); the
-3-step incantation collapses to `login → use_agent`. Structured `agent_start_failed` failure path
-(D6) + F5/F18 riders (sole-online fallback; `state:online`+`selected:true`). New behavior lands in
-the DAEMON (PROCEDURE §5), shim forwards.
+**Next unit:** DOD-AUTOSTART-1 — see Entry 7 design note below.
 
 **Resume pointer:** SPIKE-1 ✅ (Entry 3), WAKE-1 🟡 (Entry 6 — built commit `d5fd5ec`, unit +
 real-binary integration green, reviewer SPEC-FAITHFUL, flips ✅ at LIVE-1's live `--channels`
@@ -405,6 +402,68 @@ real-binary integration). The in-context hop enforcer is a live `claude --channe
 is DOD-LIVE-1 (Tier 1 close) — WAKE flips ✅ there, with the `connect` publish cascade (D6/C9).
 
 **Next unit:** DOD-AUTOSTART-1 (`cello_use_agent` auto-starts the agent; F5/F18 riders).
+
+---
+
+### 2026-07-06 — Entry 7: DOD-AUTOSTART-1 design note + clause checklist (before code)
+
+**Unit:** DOD-AUTOSTART-1 (Tier 1). DAEMON-side (PROCEDURE §5 — the shim already forwards
+`cello_use_agent`). Design fork resolved as **D12** (fast auto-start + `not_registered` precondition,
+no signaling block).
+
+**Code terrain (verified, cello-client HEAD; symbols not line numbers):**
+- `cello_start_agent` handler (~`daemon.ts:1540`): pre-checks (`missing_params`, `agent_not_found`);
+  idempotent if already online; else adds to `onlineAgents`, establishes the agent's directory
+  signaling (`getAgentSignaling`), fires the standing-receiver ensure + flush + auto-recover
+  (fire-and-forget, failures logged not returned), dispatches `agent_state_changed`. → EXTRACT the
+  body into `startAgentInternal(name): { ok } | { ok:false, reason, guidance }`; both handlers call it.
+- `cello_use_agent` handler (~`:1838`): today returns `agent_not_online` when `!onlineAgents.has(name)`
+  (~`:1847`). → REPLACE that early-return with the auto-start.
+- `no_current_agent` sites use `params.name ?? connState.currentAgent; if(!agentName) → no_current_agent`:
+  `cello_refresh_shares` (~`:2566`), `cello_get_relay_receipts` (~`:2599`); `cello_send` /
+  `cello_receive` / `cello_await_session` have their own inline guards (comment ~`:2634-2639`). F18
+  applies to all.
+- `getAgentsForConnection` (~`:1440-1447`) sets `state="current"` when current+online — the ONLY
+  emit site; no other cello-client consumer reads `"current"` (grep-verified). F5 target.
+- Registration is detectable via `DbIdentityStore` (already imported/used in daemon.ts) —
+  `reg_status='active'` / `reg_primary_pubkey` mark a directory-registered agent.
+
+**Clause checklist (reviewer yardstick — per-clause verdict):**
+- **A1** — `cello_use_agent` on a loaded-but-offline agent AUTO-STARTS it (via `startAgentInternal`)
+  then sets it current. `login → use_agent` works with no explicit `cello_start_agent`.
+- **A2** — `cello_start_agent` unchanged in behavior (bring-online-without-claiming); now delegates
+  to the shared `startAgentInternal` (no duplication; identical semantics — idempotent, same events).
+- **A3** — auto-start failure returns structured `agent_start_failed { reason, guidance }` (ONBOARD-
+  NEXTSTEP style) and leaves `connState.currentAgent` UNCHANGED (no half-selected state). Reason set:
+  `not_registered` (identity store `reg_status !== 'active'`) with register guidance; `agent_not_found`
+  stays its own reason (pre-check). Per D12, `directory_unreachable` is NOT synchronously surfaced
+  (async/self-healing) — guidance points to `cello status` `directory_signaling`.
+- **A4 (F18)** — a shared `resolveCurrentAgent(connState, explicitName)` returns
+  `explicitName ?? currentAgent ?? (onlineAgents.size===1 ? theSoleOnline : null)`. Applied at every
+  `?? currentAgent` site (refresh_shares, get_relay_receipts, send, receive, await_session). Sole-
+  online is USED, not `no_current_agent`. (Sole-online means exactly one agent in `onlineAgents`.)
+- **A5 (F5)** — `getAgentsForConnection` emits `state: "online"` + a distinct `selected: true` for
+  the current agent, never `state: "current"`. Add `selected?: boolean` to `AgentInfo`. Leave
+  `"current"` in the `AgentState` union (unused now) to avoid needless blast radius.
+- **Obs** — `agent.autostart.attempted` / `agent.autostart.failed` (with reason); reuse
+  `agent.online` on success. No `console.log`.
+- **§5** — all logic in the daemon; the shim's `cello_use_agent` proxy is untouched.
+
+**Falsify-first:** (a) extracting `startAgentInternal` must preserve the fire-and-forget standing-
+receiver/flush/auto-recover chain EXACTLY (regression risk: a started receiver with no stream never
+receives inbound — the CONN-001 keystone). (b) F18 sole-online must read `onlineAgents` (daemon-
+global) not per-connection — two agents online but none selected must STILL error (ambiguous), only
+exactly-one-online auto-selects. (c) A3 selection-unchanged: set `currentAgent` only AFTER a
+successful start, never before.
+
+**Test strategy:** extend the daemon fixture pattern (real `startDaemon` + `connectToDaemon`, as in
+`mcp-002-notifications.test.ts`): A1 (use_agent offline → online+current, one call), A2 (start_agent
+still works), A3 (unregistered agent → `agent_start_failed{not_registered}`, `cello_list_agents`
+shows selection unchanged), A4 (sole-online: a name-defaulting tool works with no use_agent; two
+online + none selected → still `no_current_agent`), A5 (status: current agent is `state:online` +
+`selected:true`, never `"current"`).
+
+**Next:** red-first tests → implement → gate → `cello-unit-reviewer`.
 
 ---
 

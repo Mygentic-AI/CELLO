@@ -298,6 +298,30 @@ PARKED (journal + DoD "Parked decisions" + here).
 - **Reverse:** if M9 must precede channels again, move DOD-M9INT-1 back to Tier 0, re-tag
   INV-GATEWAY as a live invariant, and restore the §4/§5/SPEC "seam first" wording. Pure reorder.
 
+### D12 — AUTOSTART failure path: fast auto-start + registration precondition, no signaling block (2026-07-06, autonomous D10)
+
+- **Fork:** `cello_use_agent`'s new auto-start — how much does it verify/block to produce the
+  structured `agent_start_failed` reasons the DoD lists (`directory_unreachable` / `not_registered`
+  / …)? (a) fire-and-forget like `cello_start_agent`, only `agent_not_found`; (b) fast auto-start +
+  synchronous registration precondition, surface `directory_unreachable` via `cello status`
+  guidance; (c) block up to 15s on `waitForSignalingConnected` to detect `directory_unreachable` at
+  `use_agent` time (the `cello_refresh_shares` pattern).
+- **Choice (D10 best-practice): (b).** `cello_use_agent` on a loaded-but-offline agent calls the
+  extracted `startAgentInternal(name)` (same path as `cello_start_agent`, returns fast). Synchronous
+  failure = `not_registered` — detected from the identity store (`reg_status !== 'active'` /
+  no `reg_primary_pubkey`; `DbIdentityStore` is already wired in `daemon.ts`) — returned as
+  `agent_start_failed { reason: "not_registered", guidance: <register next-step> }` with the
+  current-agent selection UNCHANGED (no half-selected state). `directory_unreachable` is NOT blocked
+  on: signaling connects asynchronously and self-heals, so it is surfaced via `cello status`'
+  `directory_signaling` + ONBOARD-NEXTSTEP guidance ("`connecting` is normal…"), not a scary 15s
+  hang on an interactive command.
+- **Why:** `use_agent` is an interactive command-surface call driven by a human OR an AI operator;
+  a 15s block per call is bad UX and worse for an agent loop. `not_registered` is the high-value
+  PERMANENT failure that guidance can actually resolve; `directory_unreachable` is transient. This
+  keeps the launch-critical `login → use_agent` collapse snappy.
+- **Reverse:** add a bounded `waitForSignalingConnected` in `startAgentInternal` (option c) if
+  `directory_unreachable` must surface at `use_agent` time.
+
 ---
 
 ## Related Documents
