@@ -18,7 +18,7 @@ description: >
 |---|---|---|
 | I — Invariants | INV-CONTENTFREE, INV-GATEWAY (activates w/ M9, deferred), INV-PUSHPULL, INV-HONEST-STATES, INV-ONE-PRIMARY | ❌ all |
 | 0 — Prerequisites | SPIKE-1 | ✅ |
-| 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | 🟡 🟡 ❌ ❌ |
+| 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | 🟡 🟡 🟡 ❌ |
 | 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | ❌ all |
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | ❌ all |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | ❌ all |
@@ -576,6 +576,48 @@ crafted inputs → four distinct reasons; list/status full IDs.
 
 **Next:** red-first tests → implement (schema + methods first, then handler + proxy + F4) → gate →
 `cello-unit-reviewer`.
+
+---
+
+### 2026-07-06 — Entry 11: DOD-INBOX-1 built + reviewed → 🟡
+
+**Built (commits `dfc02e8` impl, `22de42c` review fixes; cello-client main).** DAEMON-side (§5).
+- New persisted `message_watermarks` table + `SessionNodeManager.getLastDeliveredSeq` /
+  `advanceLastDeliveredSeq` (monotonic MAX) / `getUnreadSummary` (received-only COUNT/MAX SQL, no
+  decrypt). `handleReceive` advances the watermark on a `takeReceivedContent` hit (N3, delivery
+  marks read). `cello_check_notifications({scope})` handler (current via `resolveCurrentAgent`
+  F18 / all→loadedAgents labelled) + thin shim proxy. F4: `cello_get_sealed_receipt` splits into
+  `not_sealed_yet`/`wrong_agent`/`session_id_too_short`/`unknown_session` (list/status already
+  return full ids).
+- **Falsify-first confirmed:** `takeReceivedContent.sequenceNumber === transcript.sequence ===
+  leafIndex` (one sequence space), so the watermark `>` comparison is sound.
+
+**Tests:** `m8c-inbox-1.test.ts` (8 — N1 scope current/all + F18, N2 received-only, N3 monotonic +
+the live-receive coupling, N4 non-destructive, N5 reconciliation, F4 four reasons). Full gate green
+(1519).
+
+**`cello-unit-reviewer` (dfc02e8) — SPEC FAITHFUL (7/7), NO SILENT FALLBACKS, HOLLOW TEST (blocking).
+All fixed in `22de42c`:**
+- **F1 [BLOCKING test-teeth].** N3's `handleReceive → advanceLastDeliveredSeq` coupling had zero
+  coverage — every test drove the primitive directly; a hollowed `handleReceive` passed all 7.
+  Fixed: a test drives a LIVE `cello_receive` (via a `__test_buffer_received` hook +
+  `pushReceivedContentForTest`) and asserts the watermark advanced. **Teeth verified** — deleting
+  the advance line turns it red.
+- **F2 [MEDIUM, pre-existing].** `recordTranscriptMessage` swallowed write failures at `warn`.
+  Since INBOX-1 the transcript is the AUTHORITY for unread, a swallowed RECEIVED-row write silently
+  undercounts unread + loses the message on restart (masked by live buffer delivery). Fixed:
+  received-row failures now log at `error` with `impact=unread_reconciliation_may_undercount`
+  (sent-row failures stay `warn`). Fixed-when-found per the standing rule.
+- **F3 [LOW — TRACKED, not fixed].** The watermark is only advanced by live buffered delivery, so a
+  message persisted-but-undelivered at daemon restart, or unread rows at seal, stay "unread"
+  forever. **Over-reports in the SAFE direction** (never hides a missed message) and the content is
+  recoverable via `cello_get_transcript` — a UX papercut, launch-forgivable. **Home:** a later fix
+  lets `cello_get_transcript` / seal-eviction advance the watermark for rows it surfaces.
+
+**Status:** DOD-INBOX-1 → **🟡 BUILT / UNVERIFIED-LIVE** (daemon layer proven; flips ✅ at
+DOD-LIVE-1 with the publish cascade).
+
+**Next unit:** the ONBOARD-* rider cluster — see Entry 10 design note (repro R4 first).
 
 ---
 

@@ -121,7 +121,10 @@ description: >
   DB; a `cello_receive` that returns messages advances it (delivery marks read — no ack verb, no
   separate notification store; INBOX derives from this watermark + the already-stateful pending
   session requests). Distinct from CURSOR's per-connection cursor (Tier 2, read-before-write
-  gating). — ❌
+  gating). — 🟡 (2026-07-06, Entry 11 — built `dfc02e8`/`22de42c`, daemon-side; message_watermarks
+  table + getUnreadSummary + handleReceive advance + F4 4-way split; reviewer SPEC FAITHFUL 7/7, no
+  silent fallbacks, F1 N3-coupling test w/ teeth + F2 received-write error-fidelity fixed, F3
+  over-report tracked LOW. Flips ✅ at DOD-LIVE-1.)
   - **Friction rider (F4 — rides free on this surface, verified open 2026-07-06):** split the
     single `sealed_receipt_not_found` into distinct reasons — `session_id_too_short` /
     `unknown_session` / `wrong_agent` / `not_sealed_yet` — and show FULL session IDs on the copy
