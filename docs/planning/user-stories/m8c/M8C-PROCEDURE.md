@@ -50,7 +50,10 @@ architecture (verified 2026-07-05; don't re-derive). Then start the loop (§2).
 
 ## 2. The core loop (one unit = one DoD line)
 1. **Find the red** — lowest non-✅ DoD line. Don't skip ahead.
-2. **State the target** — one sentence of observable behavior.
+2. **State the target** — one sentence of observable behavior, PLUS expand the full DoD line
+   (every clause, including D6 clauses) into a clause checklist in the journal. That checklist is
+   the yardstick every reviewer receives (§2b) — it is what makes "silently built something
+   simpler" visible instead of silent.
 3. **Falsify first** (CLAUDE.md Debugging Discipline) — call site has the method on the INTERFACE?
    Responsibility lives here? Redundancy? What else breaks? Only then code.
 4. **Red-first** — assertion in the fixture harness (+ a focused in-process test). Red for the
@@ -80,6 +83,24 @@ M8C is cello-client-heavy; most units touch daemon or shim, and **a line needing
   `workspace:*`); pin the local install to the exact version.
 - trustless-cello references to cello-client packages stay **pinned semver** — a `workspace:*`
   there is a bug.
+
+## 2b. Reviewer dispatch — what every review subagent is TOLD (D7)
+These defect classes recur across milestones; every step-8 dispatch prompt includes them as
+explicit instructions, not vibes:
+- **Spec fidelity (the worst recurring failure).** The dispatch includes the DoD line text
+  VERBATIM (with its D6 clauses) plus the coder's clause checklist from step 2. The reviewer
+  returns a per-clause verdict: implemented / deviated / missing. A silent simplification — the
+  code does something simpler than a clause says — is a BLOCKING finding even if every test
+  passes. Deviations are legal only when they point at a journaled/DECISIONS entry.
+- **Error fidelity.** Inspect every new or modified `catch` in the diff. A bare `catch {}`, a
+  swallowed error, or a rethrow that collapses the upstream reason into a generic message
+  ("something failed") is BLOCKING. An error crossing a boundary carries the upstream code +
+  message + context all the way to the surface the operator/agent sees.
+- **Trace one error path end-to-end.** The reviewer picks one failure path through the diff and
+  QUOTES the exact message the operator/agent would see. If the real cause is buried in a debug
+  log while the surface says something generic, that is the finding.
+- **Done-auditor angle.** The auditor judges against the DoD line TEXT, never against what the
+  tests assert (hollow tests are cello-test-attacker's angle; the auditor's is the text).
 
 ## 3. Cadence
 - **Commit constantly** — never >~15 min without one. CELLO docs commit straight to main.

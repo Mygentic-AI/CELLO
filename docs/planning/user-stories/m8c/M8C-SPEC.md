@@ -57,6 +57,29 @@ Full verdict table + evidence: [[M8C-MILESTONE-NOTES]] §Verification pass. The 
   ask-on-reconnect step confirmed missing.
 - **Notifications are fire-and-forget** — no ack, no redelivery. `cello_check_notifications` is
   the loss-reconciliation mechanism, which is why it is Tier 1, not a convenience.
+- **TWO MCP server surfaces exist — do not confuse them (verified in code 2026-07-06, D7).** The
+  LIVE daemon shim is `core/adapter-claude-code/src/bin/cello-mcp.ts` (bare `McpServer`, no
+  channel capability, every tool a thin `proxy.call()` over the IPC socket) — WAKE edits THIS
+  file. `src/server.ts` in the same package (647 lines, exported as `createMcpServer`) is the
+  LEGACY pre-daemon in-process adapter — NOT on the daemon path — but it already contains the
+  complete stage-1 pattern to port: the `claude/channel` capability declaration and
+  `notifications.ts` (`pushSessionRequestNotification` / `pushChannelNotification`). Do not edit
+  `server.ts` thinking it's live, and do not grep-find `notifications.ts` and conclude stage 1 is
+  already built — it is built for the wrong (legacy) server.
+- **Two porting traps in that reference code (D7):** `notifications.ts` swallows push failures
+  with a bare `catch {}` — the port must log the failure (`notification.push.failed`, debug);
+  fire-and-forget is the design, invisible is not. And `IpcProxy` has NO reconnect (socket close
+  = `ipc_connection_lost` forever; recovery is a fresh shim process + INBOX on attach, never an
+  in-place reconnect), and its malformed-frame handler resolves the OLDEST pending request — the
+  notification-forwarding branch must run BEFORE response correlation and never touch `#pending`.
+- **The channels mental model (Andre, 2026-07-06 — everyone who looks at this gets it wrong;
+  don't).** `--channels` is a Claude Code STARTUP FLAG; a channel's one power is injecting events
+  into a live Claude Code session. M8C builds exactly ONE channel: daemon → shim → Claude
+  session. Telegram is NOT a channel — the daemon implements the Telegram Bot API directly (its
+  own long-poll egress to api.telegram.org), entirely outside channel machinery. The Anthropic
+  plugin is REFERENCE for both patterns independently (how to use channels; how to use the bot
+  API) — nothing is "ported as a Telegram channel," and "stage 3" in the inventory is historical
+  numbering, not channel plumbing.
 
 ## 3. Target architecture (decisions baked — see M8C-DECISIONS)
 

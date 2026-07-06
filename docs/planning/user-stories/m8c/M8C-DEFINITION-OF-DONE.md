@@ -113,16 +113,6 @@ description: >
     still unshipped (`daemon.ts:3141` returns the one conflated reason and still advises
     `cello_close_session`). Not launch-blocking on its own; folded here because INBOX/list is
     where full IDs surface.
-- **DOD-LIVE-1 (Tier 1 close / launch gate)** — The live doorbell journey: real daemon, real
-  published shim, live `claude --channels` session; a real peer (second daemon) opens a session;
-  the operator's Claude wakes in-context, `use_agent` auto-started the agent beforehand, and the
-  full receive→reply flow completes. One attended session per agent is the documented launch
-  shape (double-wake with two attended sessions is CURSOR's, Tier 2). — ❌
-  - **Onboarding legibility bar (see the ONBOARD-* riders below):** the Tier 1 launch smoke
-    includes a COLD onboarding run — a fresh operator does `create-agent → register → status`
-    with no prior CELLO knowledge and can complete it from the tool output alone (help, errors,
-    next-step guidance), without reading source. This is part of the launch gate, not Tier 2.
-
 ### Tier 1 riders — onboarding & command-surface legibility (LAUNCH-CRITICAL first impression)
 
 > Onboarding is the one moment you don't get twice — the first-connect path is where a prospective
@@ -163,6 +153,16 @@ description: >
   (`directory.signaling.reader.error` at `warn`, ~every 40–70 min, always recovers —
   `signaling-connect.ts:323`) is logged quietly and marked expected, so a healthy daemon doesn't
   look like it's failing; a genuine sustained outage still stands out. (F11) — ❌
+
+- **DOD-LIVE-1 (Tier 1 close / launch gate)** — The live doorbell journey: real daemon, real
+  published shim, live `claude --channels` session; a real peer (second daemon) opens a session;
+  the operator's Claude wakes in-context, `use_agent` auto-started the agent beforehand, and the
+  full receive→reply flow completes. One attended session per agent is the documented launch
+  shape (double-wake with two attended sessions is CURSOR's, Tier 2). — ❌
+  - **Onboarding legibility bar (see the ONBOARD-* riders above — ordered before this line because the launch smoke includes them):** the Tier 1 launch smoke
+    includes a COLD onboarding run — a fresh operator does `create-agent → register → status`
+    with no prior CELLO knowledge and can complete it from the tool output alone (help, errors,
+    next-step guidance), without reading source. This is part of the launch gate, not Tier 2.
 
 ## Tier 2 — Full reactivity + command surface
 
@@ -221,7 +221,9 @@ description: >
   notify-only one-liner (logged `telegram.inbound.acknowledged`); any other chat → silent drop
   (`telegram.inbound.rejected`); nothing enters CELLO content paths. Doorbell coalescing (D6):
   ring-once-until-read per session (keyed on INBOX's unread watermark); session requests and
-  state changes always ring. Tier 5 note: the poller is Primary-only — see DOD-PRIMARY-1. — ❌
+  state changes always ring. Tier 5 note: the poller is Primary-only — see DOD-PRIMARY-1. NO
+  channel machinery anywhere in this unit — the daemon talks to the Telegram Bot API directly;
+  "stage 3" is historical numbering (see SPEC §2, channels mental model). — ❌
 
 ## Tier 4 — Async foundation
 

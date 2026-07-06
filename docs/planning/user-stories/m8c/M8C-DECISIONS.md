@@ -157,6 +157,32 @@ option and keep going** — never block. Genuine undecidable forks are PARKED (j
 - **Reverse:** each is a sentence or two on its host DoD line; strike the D6 clause to revert any
   single one independently.
 
+### D7 — Handoff hardening for the Opus 4.8 implementer (2026-07-06, Andre ruled per item)
+- **Fork:** M8C will be implemented by Opus 4.8; a Fable 5 review proposed six doc changes to
+  set it up. Andre's rulings:
+  - **APPLIED — DoD ordering fix:** the ONBOARD-* riders moved ABOVE DOD-LIVE-1 (the launch smoke
+    includes the cold-onboarding bar, so "lowest non-✅ line" must reach them first).
+  - **APPLIED — code-verified terrain notes in SPEC §2:** the two-MCP-server-surfaces trap (live
+    shim = `bin/cello-mcp.ts`; legacy `server.ts` already holds the stage-1 pattern to port —
+    don't edit it, don't conclude "already built"), the `notifications.ts` bare-`catch{}` and
+    `IpcProxy` no-reconnect/oldest-pending porting traps, and the **channels mental model**
+    (Andre, verbatim intent: `--channels` is a Claude Code startup flag; ONE channel exists —
+    daemon → shim → Claude session; Telegram is NOT a channel, it's the daemon speaking the
+    Telegram Bot API directly; the Anthropic plugin is reference for both patterns
+    independently). Echoed on DOD-TGDOOR-1.
+  - **APPLIED — PROCEDURE §2b reviewer-dispatch block:** every review dispatch carries the DoD
+    line verbatim + the coder's clause checklist; per-clause verdicts; error-fidelity (buried /
+    generic-wrapped errors = blocking); trace-one-error-path-and-quote-it; done-auditor judges
+    the DoD text, never the tests.
+  - **APPLIED — loop step 2 extension:** the coder expands the DoD line into a clause checklist
+    in the journal before coding (the anti-"silently build something simpler" measure).
+  - **REJECTED — schema-reservation block:** alpha, one user, nothing valuable in any local
+    daemon DB, and implementation is serial — wipe-and-recreate is acceptable. Do not re-propose
+    client-DB migration ceremony until there are real operators.
+  - **PENDING — "behavior lives in the daemon, never the shim" hard rule:** awaiting Andre's
+    ruling after a flow walkthrough of the AUTOSTART shim-vs-daemon trap.
+- **Reverse:** each applied item is a self-contained block/clause; strike independently.
+
 ---
 
 ## Related Documents
