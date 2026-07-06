@@ -91,7 +91,10 @@ description: >
   daemon change; the `connect` bump ships with the Tier 1 close cascade (LIVE-1, per PROCEDURE
   §2a) — WAKE proves against a locally-linked shim until then (D6). Edge ACs: no-attached-client (daemon queues, nothing
   pushes, INBOX reveals on attach); doorbell for a session that seals/aborts before the operator
-  reacts is handled gracefully. — ❌
+  reacts is handled gracefully. — 🟡 (2026-07-06, Entry 6 — built commit `d5fd5ec`,
+  shim-only/zero-daemon-change; unit + real-daemon+real-shim integration green; reviewer SPEC
+  FAITHFUL all 9 clauses, T1 test-teeth fix applied, F1 startup-window drop tracked LOW/pull-
+  recoverable. Flips ✅ at DOD-LIVE-1 — the live `--channels` in-context hop + `connect` publish.)
 - **DOD-AUTOSTART-1** — `cello_use_agent` auto-starts the agent if not online (Q1 decided);
   `cello_start_agent` remains for bring-online-without-claiming. The 3-step incantation collapses
   to `login → use_agent`. Failure path (D6): a failed auto-start returns a structured
@@ -178,7 +181,11 @@ description: >
 - **DOD-MSGWAKE-1** — Channel stage 2: content-arrival callback on `session-node-manager` +
   `dispatchCelloMessage` on the dispatcher + wired in `daemon.ts` + `session_id` in the payload
   (Gaps 3–6). A live session gets an in-context event per inbound message — a real-time chat
-  relay. Daemon + adapter bump, publish cascade. — ❌
+  relay. Daemon + adapter bump, publish cascade. **(WAKE-1 reviewer flag F2, 2026-07-06:** the shim
+  bridge forwards the daemon `data` blob verbatim — INV-CONTENTFREE is enforced UPSTREAM. When
+  `cello_message` routes through that generic hop, re-prove content-freeness against the REAL
+  `cello_message` producer, not the bridge; the doorbell must carry type + `session_id` + pubkey
+  only, never message content.) — ❌
 - **DOD-SINCESEQ-1** — `cello_receive({ since_seq })`: stateless catch-up from any gap size, no
   replay race; replaces the `cello_get_transcript` workaround for away-then-return. — ❌
 - **DOD-LOGINSTART-1** — `cello login` auto-starts all registered agents; per-agent

@@ -18,7 +18,7 @@ description: >
 |---|---|---|
 | I — Invariants | INV-CONTENTFREE, INV-GATEWAY (activates w/ M9, deferred), INV-PUSHPULL, INV-HONEST-STATES, INV-ONE-PRIMARY | ❌ all |
 | 0 — Prerequisites | SPIKE-1 | ✅ |
-| 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | ❌ all |
+| 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | 🟡 ❌ ❌ ❌ |
 | 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | ❌ all |
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | ❌ all |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | ❌ all |
@@ -30,16 +30,15 @@ description: >
 DOD-M9INT-1 was moved out of Tier 0 and deferred to after the M8C channel tiers. A post-compaction
 context must not conclude M9 needs merging first — it does not.
 
-**Next unit:** DOD-WAKE-1 — channel stage 1: the shim declares `claude/channel` and forwards the
-daemon notification frames instead of dropping them (`ipc-proxy.ts:183` today drops them). This is
-the properly-built, TDD version of what SPIKE-1 proved as a throwaway patch, plus the pull twin
-(INV-PUSHPULL) and the edge ACs.
+**Next unit:** DOD-AUTOSTART-1 — `cello_use_agent` auto-starts the agent if not online (Q1); the
+3-step incantation collapses to `login → use_agent`. Structured `agent_start_failed` failure path
+(D6) + F5/F18 riders (sole-online fallback; `state:online`+`selected:true`). New behavior lands in
+the DAEMON (PROCEDURE §5), shim forwards.
 
-**Resume pointer:** DOD-SPIKE-1 is ✅ (Entry 3 — PASS, reactive track de-risked; the exact
-`notifications/claude/channel` event shape is recorded there for WAKE's param contract). M9INT is
-DEFERRED (Entry 4 / D11) — not next, not a gate. Read M8C-PROCEDURE §0 read order, then take
-DOD-WAKE-1. Milestone otherwise greenfield except what the verification pass proved already live
-(daemon dispatch, IPC frames, the on-disk Telegram reference).
+**Resume pointer:** SPIKE-1 ✅ (Entry 3), WAKE-1 🟡 (Entry 6 — built commit `d5fd5ec`, unit +
+real-binary integration green, reviewer SPEC-FAITHFUL, flips ✅ at LIVE-1's live `--channels`
+session). M9INT is DEFERRED (Entry 4 / D11) — NOT next, NOT a gate. Read M8C-PROCEDURE §0 read
+order, then take DOD-AUTOSTART-1.
 
 ---
 
@@ -355,6 +354,57 @@ which every adapter does differently.
 
 **Next:** write the red unit tests → red for the right reason → implement the two-file change →
 integration test → gate → `cello-unit-reviewer`.
+
+---
+
+### 2026-07-06 — Entry 6: DOD-WAKE-1 built + reviewed → 🟡 (unit/integration green; LIVE-1 owed)
+
+**Built (commit `d5fd5ec`, cello-client main).** Two-file shim change, ZERO daemon change:
+- `ipc-proxy.ts`: `onNotification(handler)` + forward in the notification branch (before response
+  correlation, never touches `#pending`; defensive try/catch so a throwing handler can't kill the
+  read loop).
+- `bin/cello-mcp.ts`: declares the `claude/channel` capability; bridges each daemon frame to an MCP
+  `notifications/claude/channel` event (content-free `data` as params) generically — no per-type
+  allowlist. C5 error fidelity: a failed push logs `notification.push.failed` with the real reason
+  (never a bare `catch{}` — the D7 legacy trap avoided); C6: `notification.channel.forwarded` on
+  success. Structured events to the stderr tee (stdout is the MCP channel); no `console.log`.
+
+**Tests (kept):** `mcp-wake-001.test.ts` (unit — forward / no-`#pending`-consumption / content-free)
++ `m8c-wake-1-integration.test.ts` (real daemon + real shim over stdio via `tsx`-from-source —
+capability advertised in `initialize`, three distinct types surface, created+sealed, content-free,
+C6 event fires). **Full gate green** (1503 tests, lint, typecheck, build).
+
+**`cello-unit-reviewer` (commit d5fd5ec) — verdicts: SPEC FAITHFUL (all 9 clauses implemented),
+NO SILENT FALLBACKS, HOLLOW TEST found (blocking).**
+- **T1 [BLOCKING, fixed — commit after d5fd5ec].** The integration test asserted only
+  `session_state_changed`, so a per-type allowlist bridge (violating C3) would pass every test.
+  Fixed: the test now asserts all THREE types (session_state_changed + agent_state_changed +
+  agent_current_changed, already triggered by start/use_agent) surface through the one bridge.
+  **Teeth proven:** temporarily applying the allowlist bypass turns the test red at the
+  `agent_state_changed` assertion; reverted.
+- **F1 [LOW — TRACKED, not fixed; deferral has a home].** Startup window: `proxy.connect()` starts
+  the socket read loop before the handler is registered (after `server.connect`); a daemon push in
+  that sub-ms window (e.g. another client starts an agent → broadcast `agent_state_changed`) is
+  dropped. Reviewer rated LOW + not-blocking-for-stage-1 — it is **pull-recoverable** (INV-PUSHPULL:
+  `cello_await_session` / `cello_list_sessions` retained), so it is a reconcilable drop, not the
+  dangerous unreconciled kind. The clean fix (buffer-until-transport-ready, or gate dispatch on the
+  client's `notifications/initialized`) touches MCP lifecycle timing and belongs with a
+  connection-lifecycle unit (relates to F7/F9 in the tracked-separately section), not smuggled into
+  WAKE. Not launch-blocking. **Home:** here + revisit at the lifecycle work.
+- **F2 [Observation — flag carried to MSGWAKE].** The shim is a blind pass-through; INV-CONTENTFREE
+  is enforced UPSTREAM in the daemon (the bridge forwards `data` verbatim). Correct today
+  (daemon frames are content-free; `cello_message` not yet wired). **DOD-MSGWAKE-1 must re-prove
+  content-freeness against the REAL `cello_message` producer**, not assume it from this generic
+  bridge. Recorded for that unit.
+- **T2 [weak, acceptable — no change].** The unit content-free test is somewhat tautological
+  (asserts on a frame the test constructs); redeemed by the integration test asserting
+  content-freeness on real daemon-produced frames.
+
+**Status:** DOD-WAKE-1 → **🟡 BUILT / UNVERIFIED-LIVE.** Daemon/IPC layer is proven (unit +
+real-binary integration). The in-context hop enforcer is a live `claude --channels` session, which
+is DOD-LIVE-1 (Tier 1 close) — WAKE flips ✅ there, with the `connect` publish cascade (D6/C9).
+
+**Next unit:** DOD-AUTOSTART-1 (`cello_use_agent` auto-starts the agent; F5/F18 riders).
 
 ---
 
