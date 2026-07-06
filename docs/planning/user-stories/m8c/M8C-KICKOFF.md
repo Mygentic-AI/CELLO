@@ -71,9 +71,18 @@ boundaries, explorers as needed.
   non-breaking `opts`); **vitest one worker, foreground, timeout, filtered**.
 - **Publish only via `/cello-publish`** (load the skill, never from memory), batched per tier
   (§2a). NEVER `npm publish`. NEVER push Docker images from local.
-- **Autonomous mode:** never `AskUserQuestion`, never end a turn waiting. Reversible fork →
-  decide, log in DECISIONS, proceed. Genuine undecidable fork → PARK (DoD Parked decisions +
-  journal + DECISIONS) and pull the next unit.
+- **Autonomous mode:** never `AskUserQuestion`, never end a turn waiting. On a fork, pick what
+  you believe is common best practice — the choice a competent engineer would recommend if
+  asked, NOT merely the one that's cheapest to undo (D10) — decide, log in DECISIONS, proceed.
+  Genuine undecidable fork → PARK (DoD Parked decisions + journal + DECISIONS) and pull the next
+  unit.
+- **Publish/deploy sequencing (PROCEDURE §2c):** always via `/cello-publish`, loaded fresh each
+  time. Only `latest`-tag promotion and (likely) `/mcp` reconnect are human-only — everything
+  else (beta publish, `deploy.sh`, tagging, AWS/SSM) you run yourself. If a unit needs both a
+  directory/relay deploy and a client publish, start the deploy first (slower), publish while it
+  runs. Push as far as possible before touching a live-test dependency (demo agent, `/mcp`
+  reconnect); when you do hit a human-only step, say so in one line and move to the next unit —
+  that is a correct stop, not a stall.
 
 ## First actions (order matters)
 

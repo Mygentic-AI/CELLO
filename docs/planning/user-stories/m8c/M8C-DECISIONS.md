@@ -13,9 +13,11 @@ description: >
 
 # M8C — Decisions Log
 
-Every fork is recorded: the fork, the choice, why, how to reverse. Rule: **pick the reversible
-option and keep going** — never block. Genuine undecidable forks are PARKED (journal + DoD
-"Parked decisions" + here).
+Every fork is recorded: the fork, the choice, why, how to reverse. Rule (D10, revised
+2026-07-06): **pick what you believe is the common best practice — the choice a competent
+engineer would recommend if asked, and least likely to need reversing — not the choice that is
+merely cheapest to undo.** Log it, keep going — never block. Genuine undecidable forks are
+PARKED (journal + DoD "Parked decisions" + here).
 
 ## Pre-resolved with Andre (2026-07-05, scope-settling session)
 
@@ -234,6 +236,29 @@ option and keep going** — never block. Genuine undecidable forks are PARKED (j
   tier-boundary checkpoint). The 4-min/30-min cadences and the crash-loop-vs-in-progress
   distinction are Andre's own operational experience, not derived.
 - **Reverse:** §3b is self-contained; strike it and revert §3a's cron sentence.
+
+### D10 — Decision rubric corrected + publish/deploy sequencing specified (2026-07-06, Andre)
+- **Fork 1 — the autonomous decision rubric was wrong.** Every prior "never block" instruction
+  (this doc's intro, PROCEDURE §3a/§3b) told the loop to pick the REVERSIBLE option on a fork.
+  Andre's correction: reversibility is the wrong criterion — in most cases, if asked directly for
+  a recommendation he'd pick the objectively right answer, not the cheapest-to-undo one. **New
+  rubric: pick what you believe is common best practice — the choice a competent engineer would
+  recommend if asked, and least likely to need reversing.** Applied everywhere "reversible
+  choice/option/fork" appeared as the selection criterion (this doc's intro rule, PROCEDURE
+  §3a, §3b heartbeat item 2, M8C-KICKOFF). The per-decision "Reverse:" audit field (how to undo
+  a choice if it turns out wrong) is UNCHANGED — that's documentation discipline, not the
+  selection rubric, and stays on every entry.
+- **Fork 2 — publish/deploy sequencing was underspecified.** New PROCEDURE §2c: `/cello-publish`
+  loaded fresh every time; only `latest`-tag promotion and (likely) `/mcp` reconnect are
+  human-only, everything else in the publish/deploy path (beta publish, `deploy.sh`, tagging,
+  AWS/SSM) runs via bash, no permission-asking. When both a directory/relay deploy and a
+  cello-client publish are needed, start the (slower) deploy first, publish while it runs — pairs
+  with arming the §3b Cron 1 deploy watchdog right after. Live-test dependencies (demo agent
+  update, `/mcp` reconnect) get pushed to the end — do everything else in the unit first, touch
+  them only when the enforcer actually needs them. Hitting a human-only step is a CORRECT stop:
+  state it in one line, move to the next unit; §3b's heartbeat must not treat this as a stall.
+- **Reverse:** rubric — revert the four "reversible" sentences. Sequencing — §2c is
+  self-contained; strike it.
 
 ---
 

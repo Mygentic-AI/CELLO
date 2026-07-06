@@ -103,6 +103,36 @@ enforces (recurring across milestones — instructions, not vibes):
 - **Done-auditor angle.** The auditor judges against the DoD line TEXT, never against what the
   tests assert (hollow tests are cello-test-attacker's angle; the auditor's is the text).
 
+## 2c. Publish + deploy sequencing, and the manual-step exceptions (D10)
+**Load `/cello-publish` and follow it — never publish a daemon/shim update from memory or
+prose.** This applies every time, not just at tier close.
+
+**Only two steps in this whole area are human-only; everything else is bash-executable and the
+autonomous loop does it directly, no permission-asking:**
+- **Promoting a published version to the `latest` dist-tag** — always waits for Andre's explicit
+  go (root CLAUDE.md publishing rules). Beta publishes (the normal cascade — bump, tag, push,
+  CI publishes to `beta`) are NOT this exception; do those yourself.
+- **`/mcp` reconnect** — reloading a live Claude Code session's MCP tool list to pick up a newly
+  published shim likely needs a human at that keyboard; treat as manual unless you find a
+  scriptable equivalent. Everything else — `deploy.sh`, `git tag`+push, `npm view` checks,
+  pinning the local install (`claude mcp remove`/`add`), AWS/SSM commands — is yours to run.
+
+**Sequencing when a unit needs BOTH a directory/relay deploy AND a cello-client publish:**
+start the deploy first (`deploy.sh` / the CodePipeline-triggering push) — it's the slower path
+(~25–30 min) — THEN run the `/cello-publish` cascade while the deploy is in flight. Arm the
+Cron 1 deploy watchdog (§3b) right after kicking off the deploy so its health is monitored while
+you work the publish.
+
+**Live-test dependencies (demo agent, `/mcp` reconnect) — push as far as possible without them,
+then batch.** If a live smoke needs the demo agent (EC2 `i-0ad3e7c22470f266e`), it must be
+updated first (`git pull` + the documented daemon/demo restart sequence, repo CLAUDE.md) — but
+default to doing every non-live-test part of the unit first, and only reach for a live/manual
+step at the point the DoD line's enforcer actually requires it (matches "batch publishes per
+tier," §2a). When you do hit one of the two human-only steps above, STOP CLEANLY and say so in
+one line — e.g. "Blocked on `latest` promotion for vX.Y.Z — needs Andre's go" — then continue
+with the next available unit rather than idling on it. This is a genuine, correct stop, distinct
+from the frivolous stalls §3b's heartbeat exists to catch.
+
 ## 3. Cadence
 - **Commit constantly** — never >~15 min without one. CELLO docs commit straight to main.
 - **Review every unit** on its diff, right after green. Never batch reviews.
@@ -111,8 +141,10 @@ enforces (recurring across milestones — instructions, not vibes):
   checkpoint; only EARNED stays ✅. Journal summary, commit. Tier 1's checkpoint IS the launch gate.
 
 ## 3a. Autonomous-mode rules (if running overnight — same as M8B)
-NEVER `AskUserQuestion`, never end a turn waiting overnight. Reversible choice → decide, log in
-M8C-DECISIONS, proceed (redo > block, always). Genuine undecidable fork → PARK (journal + DoD
+NEVER `AskUserQuestion`, never end a turn waiting overnight. **Decision rubric (D10): pick what
+you believe is common best practice — the choice a competent engineer would recommend if asked,
+and least likely to need reversing — not merely the choice that's cheapest to undo.** Decide, log
+in M8C-DECISIONS, proceed (redo > block, always). Genuine undecidable fork → PARK (journal + DoD
 "Parked decisions" + DECISIONS) and pull the next unit, saying so. **Two crons enforce this —
 see §3b; arm both at kickoff, re-arm both after every restart/compaction.**
 
@@ -147,9 +179,12 @@ roughly every 30 min at an off-minute, e.g. `12,42 * * * *` (never `0,30` — se
 guidance). Recurring. The fired prompt is the self-audit:
 1. Is M8C-PROCEDURE / M8C-DEFINITION-OF-DONE actually in context right now? If compaction
    dropped them, re-read both before doing anything else.
-2. Stalled on a decision? Pick the reversible option, log it in M8C-DECISIONS, proceed.
+2. Stalled on a decision? Pick the best-practice choice (D10 — not merely the reversible one),
+   log it in M8C-DECISIONS, proceed.
 3. Waiting for confirmation on something already authorized (code changes, AWS/publish actions
-   per the REALITY CHECK)? Unwanted — continue now, do not wait further.
+   per the REALITY CHECK)? Unwanted — continue now, do not wait further. EXCEPTION: genuinely
+   waiting on a named manual-only step (§2c) — state it plainly and that is a real stop, not a
+   frivolous one; this cron firing is not a signal to fake progress past it.
 4. >15 min since the last commit? Commit now.
 5. Did the last unit go green without a `cello-unit-reviewer` dispatch? Dispatch it now.
 6. State one line of current status (DoD line, red/green) so a human skimming later can see the
