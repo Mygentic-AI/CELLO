@@ -133,6 +133,11 @@ Then the loop from DOD-WAKE-1.
   logger, `domain.noun.verb` events).
 - **Every push needs its pull twin in the same unit** (DOD-INV-PUSHPULL) — a Claude-Code-only
   capability is a design bug, not a stage.
+- **New behavior lands in the DAEMON; the shim only forwards** (D7). The shim is one of several
+  daemon clients (CLI, future adapters share the socket). A feature implemented shim-side —
+  e.g. use_agent auto-start as catch-error-then-retry in `cello-mcp.ts` — works in Claude Code,
+  passes tests, and is invisible to every other client. Design bug, not a shortcut. Applies to
+  AUTOSTART, INBOX, CONFIG, and everything after.
 - **M9 seam is untouchable:** no M8C unit adds a content path that bypasses
   `screenInbound`/`screenOutbound`. cello-fallback-finder checks this on every seam-adjacent unit.
 - **Vitest: one worker, foreground, timeout, filtered.** Never background a test process.

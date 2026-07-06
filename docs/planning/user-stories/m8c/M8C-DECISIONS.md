@@ -179,8 +179,11 @@ option and keep going** — never block. Genuine undecidable forks are PARKED (j
   - **REJECTED — schema-reservation block:** alpha, one user, nothing valuable in any local
     daemon DB, and implementation is serial — wipe-and-recreate is acceptable. Do not re-propose
     client-DB migration ceremony until there are real operators.
-  - **PENDING — "behavior lives in the daemon, never the shim" hard rule:** awaiting Andre's
-    ruling after a flow walkthrough of the AUTOSTART shim-vs-daemon trap.
+  - **APPLIED (after flow walkthrough, Andre agreed 2026-07-06) — "behavior lands in the daemon,
+    never the shim" hard rule (PROCEDURE §5):** the shim is one of several daemon clients; logic
+    implemented shim-side (e.g. auto-start as catch-then-retry in `cello-mcp.ts`) is invisible to
+    the CLI and every future adapter while passing all Claude-Code-path tests. Note: unrelated to
+    channels — this is the request/response direction.
 - **Reverse:** each applied item is a self-contained block/clause; strike independently.
 
 ---
