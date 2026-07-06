@@ -621,6 +621,53 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-06 — Entry 15: DOD-SINCESEQ-1 design note (terrain from INBOX; before code)
+
+**Unit:** DOD-SINCESEQ-1 (Tier 2). DAEMON build (§5). `cello_receive({ since_seq })` — stateless
+catch-up from any gap size, no replay race; replaces the `cello_get_transcript` workaround for
+away-then-return.
+
+**Code terrain (mapped via INBOX-1, symbols):**
+- `handleReceive` (`daemon.ts:4838`) — today drains ONE buffered message per call via
+  `takeReceivedContent` (ephemeral buffer). A buffer-drain catch-up races new arrivals; `since_seq`
+  reads the DURABLE transcript deterministically instead.
+- `readTranscript(agent, session)` (`session-node-manager.ts`) → `{ sequence, direction, text }[]`
+  ordered by sequence — the durable source for the batch.
+- Watermark methods (INBOX-1): `getLastDeliveredSeq` / `advanceLastDeliveredSeq` (monotonic).
+
+**Clause checklist:**
+- **S1** — `cello_receive({ session_id, since_seq })` returns a BATCH of RECEIVED transcript messages
+  with `sequence > since_seq`, ordered ascending: `{ ok, messages: [{ sequence, content, from }], count }`.
+  (Received-direction — the messages you'd have gotten live; `cello_get_transcript` still gives both
+  directions for full context.) `from` = the session's counterparty pubkey.
+- **S2** — STATELESS + no replay race: the client supplies `since_seq`; the read is from the durable
+  transcript (`readTranscript`), not the ephemeral `#receivedContent` buffer — so concurrent arrivals
+  don't shift what a given `since_seq` returns.
+- **S3** — advances the read watermark to the max returned sequence (delivery marks read; consistent
+  with INBOX N3 — a since_seq fetch clears those messages from `cello_check_notifications` unread).
+- **S4 — NO REGRESSION:** `cello_receive` WITHOUT `since_seq` behaves EXACTLY as today (buffer drain,
+  single message, timeout/terminal/liveness branches unchanged). `since_seq` is a distinct early
+  branch at the top of `handleReceive`.
+- **Obs** — `session.receive.since_seq` (session, since_seq, count). No console.log.
+
+**Falsify-first:** (a) the `since_seq` branch must NOT touch the `#receivedContent` buffer or the
+timeout loop — it's a pure transcript read + watermark advance, returning immediately. (b) received-
+only (a `since_seq` catch-up shouldn't echo the operator's own sent messages as "received"). (c)
+`since_seq` at or beyond the latest returns an empty batch, not an error. (d) advancing the watermark
+here must be monotonic (reuse `advanceLastDeliveredSeq`).
+
+**Test strategy:** daemon fixture — seed received transcript rows (0..N) via
+`recordTranscriptMessage`; `cello_receive({ session_id, since_seq: k })` → messages k+1..N in order,
+content present; assert `cello_check_notifications` unread cleared for those (watermark advanced);
+a `since_seq` at N → empty; `cello_receive` without `since_seq` still drains the live buffer (no
+regression). Teeth: a hollow impl returning the whole transcript (ignoring since_seq) fails the
+"k+1..N only" + "empty at N" assertions.
+
+**Next:** after MSGWAKE-1 closes (reviewer) — red-first tests → implement the since_seq branch in
+handleReceive → gate → review.
+
+---
+
 ### 2026-07-06 — Entry 14: DOD-MSGWAKE-1 design note (§6 design-significant; before code)
 
 **Unit:** DOD-MSGWAKE-1 (Tier 2, channel stage 2 — per-message wake). DAEMON build (§5). Started
