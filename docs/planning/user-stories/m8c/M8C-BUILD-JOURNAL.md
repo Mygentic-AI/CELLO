@@ -621,6 +621,52 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-06 — Entry 13: DOD-LIVE-1 — publish cascade DONE + verified; live smoke is human-only
+
+**The Tier-1 close's autonomous half is complete.** Published the multi-package cascade to beta and
+verified against the binaries (skill step 5). The remaining DOD-LIVE-1 enforcer — the operator's
+Claude waking IN-CONTEXT in a live `claude --channels` session + the `/mcp` reconnect — is the named
+human-only step (§2c); handed to Andre with a runbook.
+
+**Publish (tag `v0.0.73`, cello-client main `9448324`):**
+- Cascade: **daemon 0.0.30→0.0.31, cli 0.0.28→0.0.29, connect 0.0.57→0.0.58** (the 3 changed this
+  milestone; crypto/protocol-types/transport/client unchanged and not depended-on by the changed
+  set → no stale-pin). Tag counter `v0.0.73` (drifted from connect 0.0.58 per the skill — used the
+  next free counter, not the connect version).
+- CI **all green**: Build+Test ✓, Publish ✓, **smoke-tag ✓** (clean-installs cli+connect@beta,
+  loads the daemon/client module graphs — the real success signal).
+- **Binary-verified:** beta = daemon 0.0.31 / cli 0.0.29 / connect 0.0.58; cross-pins are REAL
+  versions (`connect`→client 0.0.45/transport 0.0.15/crypto 0.0.16/interfaces 0.0.3;
+  `cli`→daemon 0.0.31), never `workspace:*`.
+
+**One CI hiccup fixed en route (`v0.0.72` → `v0.0.73`):** the first tag's Build+Test timed out at
+30s on `m8c-wake-1-integration.test.ts` — it spawned the shim via `tsx`-from-source, which
+cold-compiles on a loaded CI runner and hung the `initialize` handshake (1.1s local vs >30s CI = a
+hang). Fixed (`9448324`): spawn the BUILT `dist/bin/cello-mcp.js` with plain `node` (no compile), a
+`beforeAll` incremental `tsc --build` so the dist reflects current source in both CI-builds-first and
+local-test-first orderings, and a per-request 15s timeout that fails fast with the shim's stderr.
+v0.0.72 never published (Test failed first), so v0.0.73 reused the same versions.
+
+**Tracked, NOT dismissed — pre-existing flake (not mine, did NOT block the publish):**
+`session-node-manager.test.ts > AC-009 (binary): SIGTERM marks active sessions interrupted` failed on
+the MAIN-branch CI run for the same commit but PASSED in the authoritative tag run. A timing-sensitive
+SIGTERM/daemon-restart binary test, untouched by M8C. **Home:** a stabilization pass (raise its
+process-wait tolerance / poll for the interrupted state instead of a fixed sleep) — flagged for a
+follow-up, not stabilized during the launch publish.
+
+**Demo agent (`i-0ad3e7c22470f266e`):** currently on a stale `@cello-protocol/connect@0.0.34` (both
+`cello-daemon`+`cello-demo` services active). Needs updating to the new versions to serve as the
+live-smoke PEER — deliberately NOT reinstalled unilaterally (live resource, possibly mid-demo; the
+documented stop→reinstall→restart sequence is Andre's call, and the smoke needs him coordinating
+both sides anyway).
+
+**Status:** DOD-LIVE-1 → 🟠 PARTIAL (publish done + binary-verified; the four Tier-1 units
+(WAKE/AUTOSTART/INBOX/ONBOARD) flip ✅ once the live `--channels` smoke passes). **Human-only steps
+remaining (§2c):** (1) `latest` promotion (script provided); (2) reinstall Andre's machine + the demo
+agent to the new versions; (3) the live doorbell smoke + cold-onboarding run + `/mcp` reconnect.
+
+---
+
 ### 2026-07-06 — Entry 12: DOD-ONBOARD-* cluster built + reviewed → 🟡 (all 5 riders)
 
 **Built (commits `448c362` impl, `af6d9b7` fixes; cello-client main).** CLI-side (`core/cli`) + one
