@@ -26,9 +26,10 @@ boundaries, explorers as needed.
 2. `docs/planning/user-stories/m8c/M8C-DEFINITION-OF-DONE.md` — the yardstick. Lowest non-✅
    line = your next unit. Never skip ahead.
 3. `docs/planning/user-stories/m8c/M8C-BUILD-JOURNAL.md` — last entries + status board.
-4. `docs/planning/user-stories/m8c/M8C-DECISIONS.md` — D1–D8 are SETTLED. Never re-open a
-   settled fork; never re-raise the T-of-N threshold (see repo CLAUDE.md — that question is
-   closed permanently).
+4. `docs/planning/user-stories/m8c/M8C-DECISIONS.md` — D1–D11 are SETTLED. **D11 (2026-07-06) is
+   load-bearing: M9 is merged AFTER the channel tiers, never before — do not merge `m9-build` as a
+   prerequisite.** Never re-open a settled fork; never re-raise the T-of-N threshold (see repo
+   CLAUDE.md — that question is closed permanently).
 5. `docs/planning/user-stories/m8c/M8C-SPEC.md` — §2 "Current reality" and §3 architecture.
    §2's terrain notes are code-verified traps recorded specifically for you; when your instinct
    disagrees with a terrain note, the note wins until you have contrary evidence in code.
@@ -64,7 +65,11 @@ boundaries, explorers as needed.
   message + context to the surface the operator sees. No bare `catch {}`, no generic
   "something failed" wrappers, no papering over a failure to keep going. When a required thing
   is missing, fail loud with a reason — never silently substitute something simpler.
-- **The M9 seam is untouchable.** No content path bypasses `screenInbound`/`screenOutbound`.
+- **Seam-readiness, not seam-live (D11).** M9 is merged AFTER the channel tiers, so the gateway
+  does not exist on main during M8C. Build every new content path so the later merge wires cleanly:
+  new inbound through the single `ingestReceivedContent` funnel, new outbound through `cello_send`.
+  DOD-LEAVEMSG-1 is the one channel unit adding a real inbound content path — it must funnel there.
+  Do NOT merge M9 to satisfy this.
 - **Every push needs its pull twin in the same unit** (DOD-INV-PUSHPULL).
 - **No `console.log`** (injected logger, `domain.noun.verb` events); **no mocks for crypto**;
   **no from-scratch fixtures** (extend `packages/e2e-tests/src/session-fixture.ts` with
@@ -87,8 +92,8 @@ boundaries, explorers as needed.
 ## First actions (order matters)
 
 1. **Verify state.** `git pull` both repos. Confirm trustless-cello HEAD includes M8C-DECISIONS
-   through D9. Read the journal's status board — the next unit should be DOD-SPIKE-1; if the
-   board says otherwise, trust the board.
+   through D11 (D11 = M9-merged-after, not first). Read the journal's status board — as of
+   2026-07-06 SPIKE-1 is ✅ and the next unit is DOD-WAKE-1; trust the board.
 2. **Arm the heartbeat cron now (PROCEDURE §3b, Cron 2)** — before any code work. It runs for
    the whole milestone; re-arm it after every compaction/restart, and arm the deploy-watchdog
    cron (Cron 1) additionally whenever a deploy/pipeline run starts.
@@ -96,13 +101,16 @@ boundaries, explorers as needed.
    `claude --channels` with a locally-patched shim, trigger a real inbound session, confirm the
    daemon's `session_state_changed` frame surfaces in-context as a
    `notifications/claude/channel` event. Journal the outcome — exact flag behavior, event
-   shape, surprises — BEFORE building anything. If the event does NOT land, STOP and journal:
-   the reactive track needs redesign, and that must be known on day 0. Do not build on an
-   unproven hop.
-4. **DOD-M9INT-1** — merge `m9-build`, wire the gateway seam, run the full semantic gate
-   (m9 gate green against the merged daemon + explicit audit that every M8B-era content path
-   routes through the gateway).
-5. Then the loop from **DOD-WAKE-1**, one DoD line at a time.
+   shape, surprises — BEFORE building anything. **(DONE ✅ 2026-07-06 — PASS; BUILD-JOURNAL Entry
+   3. The reactive track is de-risked.)**
+4. Then the loop from **DOD-WAKE-1**, one DoD line at a time.
+
+> **⛔ M9 IS NOT MERGED FIRST (D11, 2026-07-06 — this supersedes any earlier "step 4: merge M9"
+> instruction).** DOD-M9INT-1 (the `m9-build` merge + gateway seam + semantic gate) was moved OUT
+> of Tier 0 and **deferred to AFTER the M8C channel tiers**. Do NOT merge `m9-build` before the
+> channel work. If a fresh or post-compaction context reads this milestone and thinks M9 must be
+> merged before WAKE/AUTOSTART/INBOX — it is wrong; it must not. The channel tiers owe only
+> **seam-readiness** (PROCEDURE §5), not a live gateway. See M8C-DECISIONS D11.
 
 ## What ✅ means (do not soften this)
 

@@ -47,9 +47,13 @@ description: >
   counterparty pubkey + `session_id`, plus routing metadata (agent name, session label — D6).
   No message content or content-derived text ever rides a push (SI-001), through every tier
   including Telegram doorbell. — ❌
-- **DOD-INV-GATEWAY** — Every inbound content path passes `screenInbound` and every outbound
-  passes `screenOutbound` — including paths added by M8B after m9-build diverged, and every new
-  path M8C adds. No channel/relay feature bypasses the gateway. — ❌
+- **DOD-INV-GATEWAY** — **(activation: when M9INT lands, AFTER the channel tiers — see D11.)**
+  Every inbound content path passes `screenInbound` and every outbound passes `screenOutbound`.
+  The gateway does NOT exist on main until DOD-M9INT-1 is done (deferred — see the Post-channel
+  section), so this invariant is not yet satisfiable and the done-auditor must not fail it before
+  then. The M8C obligation meanwhile is **seam-readiness**: build every new content path so the
+  later M9 merge wires it cleanly (in particular DOD-LEAVEMSG-1 funnels its relay pull through
+  `ingestReceivedContent`). — ❌ (not yet activatable)
 - **DOD-INV-PUSHPULL** — Every push capability has a pull equivalent. A poll-only client
   (Bedrock, cron) can reach every M8C feature; nothing hard-requires Claude Code push. Push loss
   is always recoverable via `cello_check_notifications` / `since_seq`. — ❌
@@ -62,6 +66,12 @@ description: >
 
 ## Tier 0 — Prerequisites
 
+> **⛔ M9 IS NOT A PREREQUISITE. Do NOT merge `m9-build` before the channel work.** The M9 seam
+> merge (DOD-M9INT-1) was moved OUT of Tier 0 on 2026-07-06 (Andre — D11). It is now **deferred to
+> AFTER the M8C channel tiers** (see the "Post-channel — deferred" section at the bottom). A fresh
+> or post-compaction context must not read this milestone and conclude M9 must be merged first — it
+> must not. After DOD-SPIKE-1, the next unit is **DOD-WAKE-1**.
+
 - **DOD-SPIKE-1** — The ~30-min de-risking spike: launch `claude --channels` with the live shim,
   trigger a real inbound session, and confirm the daemon's `session_state_changed` frame surfaces
   as an in-context `notifications/claude/channel` event (with a locally-patched shim; no publish
@@ -71,11 +81,6 @@ description: >
   surfaced as `notifications/claude/channel` on the shim's stdout; `claude/channel` capability
   negotiated in `initialize`; exact event shape recorded for WAKE. Residual human step: visual
   confirmation inside a live `--channels` chat — flagged, non-blocking, per SPEC §2.)
-- **DOD-M9INT-1** — `m9-build` merged to cello-client main (dry-run verified conflict-free
-  2026-07-05); gateway wired at the live seam (`screenInbound` at `ingestReceivedContent`,
-  `screenOutbound` at `cello_send`); the **semantic gate** passes: m9 gate re-run green against
-  the merged daemon AND an explicit audit that all M8B-era content paths route through the
-  gateway (the m9-core-001-seam assertions extended to the current daemon). — ❌
 
 ## Tier 1 — LAUNCH GATE: reactive doorbell
 
@@ -263,6 +268,25 @@ description: >
   transcript context; interrupted-session seal auto-upgrade (UPGRADE-001) re-proven under the
   multi-daemon setup. — ❌
 
+## Post-channel — deferred (do AFTER the M8C channel tiers; NOT a prerequisite — D11)
+
+> Moved here from Tier 0 on 2026-07-06 (Andre — D11). M9 is done **after** the channel work, not
+> before it. The channel tiers do NOT depend on the gateway existing; they only owe **seam-
+> readiness** (build content paths so this merge wires cleanly). Recommended landing: soon after
+> the Tier 1 launch, and **before DOD-LEAVEMSG-1** at the latest (the one channel unit that adds a
+> genuinely new inbound content path).
+
+- **DOD-M9INT-1** — `m9-build` merged to cello-client main; gateway wired at the live seam
+  (`screenInbound` at `ingestReceivedContent`, `screenOutbound` at `cello_send`); the **semantic
+  gate** passes: m9 gate (`m9-gate-1.test.ts`) re-run green against the merged daemon AND an
+  explicit audit that all content paths (M8B-era + every path M8C added) route through the gateway.
+  **Merge is NOT clean anymore** (verified 2026-07-06: 4 conflicts — `daemon.ts`,
+  `session-node-manager.ts`, `tsconfig.json`, `vitest.workspace.ts` — main drifted since the
+  2026-07-05 dry-run); resolving them preserves BOTH main's seal-liveness work AND m9-build's seam
+  wiring. **Also unverified:** the M9 build journal was not maintained across the 34 build commits,
+  so confirm `m9-gate-1.test.ts` is actually green on `m9-build` as the pre-merge baseline before
+  merging. Activates DOD-INV-GATEWAY. — ❌ (deferred)
+
 ## Tracked, not M8C-fruit (bigger friction — own items, NOT folded in as riders)
 
 These surfaced in the same friction sweep but are NOT cheap ride-alongs — each is real work with
@@ -298,4 +322,4 @@ own story) deliberately, never smuggled in as a rider. Source:
 - [[M8C-BUILD-JOURNAL]] — audit trail and status board
 - [[M8C-DECISIONS]] — the scope/tier decisions and OQ resolutions
 - [[M8C-MILESTONE-NOTES]] — inventory + verification pass (evidence for every "already built" claim)
-- [[M9-DEFINITION-OF-DONE|M9 Definition of Done]] — Tier 0 merges this; its gate re-run is DOD-M9INT-1's semantic gate
+- [[M9-DEFINITION-OF-DONE|M9 Definition of Done]] — DOD-M9INT-1 (deferred, post-channel — D11, NOT a prerequisite) merges this; its gate re-run is DOD-M9INT-1's semantic gate

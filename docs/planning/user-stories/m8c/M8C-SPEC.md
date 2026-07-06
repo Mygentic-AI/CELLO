@@ -45,10 +45,13 @@ Full verdict table + evidence: [[M8C-MILESTONE-NOTES]] §Verification pass. The 
 - **`--channels` is a hard requirement** for the in-context wake; a dormant Claude cannot be
   roused (the shim is a stdio subprocess of a running session). Settled — the Tier 1 spike
   confirms CELLO's specific end-to-end wiring, not the flag.
-- **M9 merge is textually clean** (`git merge-tree` dry-run: zero conflicts; m9-build = +6,438
-  lines, mostly the self-contained `core/gateway` package) but needs a **semantic gate**: prove
-  every M8B-era content path routes through `screenInbound`/`screenOutbound` post-merge, and
-  re-run the m9 gate.
+- **M9 merge** (deferred — post-channel, D11; NOT a prerequisite). As of 2026-07-06 it is **no
+  longer conflict-free**: main drifted since the 2026-07-05 dry-run and there are now 4 conflicts
+  (`daemon.ts`, `session-node-manager.ts` — the seam files — plus `tsconfig.json`,
+  `vitest.workspace.ts`). m9-build = +6,438 lines, mostly the self-contained `core/gateway`
+  package. When it eventually lands it needs a **semantic gate**: prove every content path routes
+  through `screenInbound`/`screenOutbound` post-merge, and re-run `m9-gate-1.test.ts` (also confirm
+  it is green on `m9-build` first — the M9 journal never recorded it).
 - **The Telegram half is already written.** Anthropic's vetted plugin (1,038 lines, grammy/bun,
   on disk) transfers near-verbatim; the single-`getUpdates`-consumer-per-token constraint (stated
   verbatim in its code) is the evidence that decided OQ-1 for daemon-owned.
@@ -96,10 +99,15 @@ is runtime-agnostic — Claude Code's edge is push latency, not capability. M8C 
 doorbell level only**; full-monitoring + Mode 2 (operator as communicator, approvals gate) are the
 follow-on milestone's opening track. Inbound operator messages are daemon-tagged operator-origin.
 
-**M9 is the security floor, merged first (Tier 0).** All content screening (injection defense,
+**M9 is the security floor — merged AFTER the channel work, NOT first (D11, 2026-07-06 — supersedes
+the earlier "Tier 0 / merged first" framing).** All content screening (injection defense,
 redaction, size caps, rate limits) is M9's, attached at `screenInbound`/`ingestReceivedContent`
-and `screenOutbound`/`cello_send`. No channel or relay work lands before the seam is live and
-semantically re-proven. M8C never re-invents an M9 piece.
+and `screenOutbound`/`cello_send`. **Do NOT merge `m9-build` before the channel tiers** — DOD-M9INT-1
+is deferred to after them (see M8C-DEFINITION-OF-DONE "Post-channel — deferred" and [[M8C-DECISIONS]]
+D11). The channel tiers owe only **seam-readiness**: build every new content path (notably
+LEAVEMSG's relay pull) through the single `ingestReceivedContent` inbound funnel / `cello_send`
+outbound point, so the later merge attaches the gateway at exactly two places and screens
+everything. M8C never re-invents an M9 piece.
 
 **Multi-daemon = Primary/Standby (Tier 5).** Same K_local on both daemons; exactly one Primary
 (standing receiver + FROST); directory arbitrates via a one-time primary-transfer offer (2-min
@@ -110,7 +118,8 @@ DB sync is user-initiated. Sessions never migrate live: close → sync → new s
 ## 4. Tiers & dependency order (units → DoD lines in M8C-DEFINITION-OF-DONE)
 
 - **Tier 0 — Prerequisites:** SPIKE (the ~30-min `claude --channels` end-to-end confirmation —
-  the very first action) → M9INT (merge m9-build + wire the seam + semantic gate).
+  the very first action; DONE ✅ 2026-07-06). **M9INT is NO LONGER here** — moved to
+  post-channel/deferred (D11, 2026-07-06). After SPIKE, go straight to Tier 1 WAKE.
 - **Tier 1 — LAUNCH GATE (reactive doorbell):** WAKE (channel stage 1, session-request wake) →
   AUTOSTART (`use_agent` auto-starts) → INBOX (`cello_check_notifications`, the push-loss
   reconciler). Live smoke closes the tier. **+ onboarding/command-surface friction riders**
@@ -178,4 +187,4 @@ See [[M8C-DEFINITION-OF-DONE]].
 - [[M8C-MILESTONE-NOTES]] — the triage worksheet this spec commits: inventory, Telegram vision, verification pass
 - [[2026-07-01_1030_command-surface-and-notifications-design|Command Surface, Notifications, and Async Messaging Design]] — the planning-authoritative design substance
 - [[2026-06-27_0753_claude-code-channels-cello-integration|Claude Code Channels × CELLO]] — code-level channel reference (cite symbols, not line numbers)
-- [[M9-DEFINITION-OF-DONE|M9 Definition of Done]] — the security gateway Tier 0 merges and wires
+- [[M9-DEFINITION-OF-DONE|M9 Definition of Done]] — the security gateway DOD-M9INT-1 merges and wires (deferred to post-channel — D11, NOT a prerequisite)

@@ -16,25 +16,30 @@ description: >
 
 | Tier | Lines | Status |
 |---|---|---|
-| I — Invariants | INV-CONTENTFREE, INV-GATEWAY, INV-PUSHPULL, INV-HONEST-STATES, INV-ONE-PRIMARY | ❌ all |
-| 0 — Prerequisites | SPIKE-1, M9INT-1 | ✅ ❌ |
+| I — Invariants | INV-CONTENTFREE, INV-GATEWAY (activates w/ M9, deferred), INV-PUSHPULL, INV-HONEST-STATES, INV-ONE-PRIMARY | ❌ all |
+| 0 — Prerequisites | SPIKE-1 | ✅ |
 | 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | ❌ all |
 | 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | ❌ all |
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | ❌ all |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | ❌ all |
 | 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | ❌ ❌ |
 | 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ❌ all |
+| Post-channel — deferred | M9INT-1 (do AFTER channel tiers — D11; NOT a prerequisite) | ❌ deferred |
 
-**Next unit:** DOD-M9INT-1 — merge `m9-build` to cello-client main, wire the gateway seam
-(`screenInbound` at `ingestReceivedContent`, `screenOutbound` at `cello_send`), run the semantic
-gate (m9 gate green against merged daemon + audit that every M8B-era content path routes through
-the gateway). No channel code before the seam is live (PROCEDURE §4).
+**⛔ M9 IS NOT A PREREQUISITE (D11, 2026-07-06).** Do NOT merge `m9-build` before the channel work.
+DOD-M9INT-1 was moved out of Tier 0 and deferred to after the M8C channel tiers. A post-compaction
+context must not conclude M9 needs merging first — it does not.
+
+**Next unit:** DOD-WAKE-1 — channel stage 1: the shim declares `claude/channel` and forwards the
+daemon notification frames instead of dropping them (`ipc-proxy.ts:183` today drops them). This is
+the properly-built, TDD version of what SPIKE-1 proved as a throwaway patch, plus the pull twin
+(INV-PUSHPULL) and the edge ACs.
 
 **Resume pointer:** DOD-SPIKE-1 is ✅ (Entry 3 — PASS, reactive track de-risked; the exact
-`notifications/claude/channel` event shape is recorded there for WAKE's param contract). Read
-M8C-PROCEDURE §0 read order, then take DOD-M9INT-1. Milestone otherwise greenfield except what the
-verification pass proved already live (daemon dispatch, IPC frames, M9 gateway on `m9-build`, the
-on-disk Telegram reference).
+`notifications/claude/channel` event shape is recorded there for WAKE's param contract). M9INT is
+DEFERRED (Entry 4 / D11) — not next, not a gate. Read M8C-PROCEDURE §0 read order, then take
+DOD-WAKE-1. Milestone otherwise greenfield except what the verification pass proved already live
+(daemon dispatch, IPC frames, the on-disk Telegram reference).
 
 ---
 
@@ -236,8 +241,50 @@ channel-injection). The headless real-binary proof above IS the spike's de-riski
 ✅ on the wiring. Recommended when Andre next runs a live session; not a launch gate and not a
 blocker for M9INT/WAKE.
 
-**Status flip:** DOD-SPIKE-1 → ✅. **Next unit:** DOD-M9INT-1 (Tier 0 — merge `m9-build`, wire the
-gateway seam, run the semantic gate). No channel code before the seam is live (PROCEDURE §4).
+**Status flip:** DOD-SPIKE-1 → ✅.
+
+---
+
+### 2026-07-06 — Entry 4: M9 merge DEFERRED to after the channel tiers (D11) — NOT a prerequisite
+
+**Directive (Andre, 2026-07-06).** After SPIKE-1 the implementer took the next DoD line
+(DOD-M9INT-1) at face value and began preparing the `m9-build` merge. Andre interrupted:
+**"That must be leftover. If it says you need to merge M9 beforehand, make sure those instructions
+are superseded. We're gonna do M9 afterwards."** And: **"Don't want any confusion with anyone
+thinking after compaction M9 needs to be merged. It does not."**
+
+**Nothing was merged.** Only a read-only `git merge-tree` dry-run + inspection ran; cello-client
+`main` is clean, `m9-build` untouched, no install/commit touched M9.
+
+**What I found while inspecting (recorded so the eventual merge isn't surprised):**
+- The merge is **no longer conflict-free** — main gained 8 commits since the 2026-07-05 dry-run
+  (seal-liveness + token-parse), producing **4 conflicts**: `core/daemon/src/daemon.ts`,
+  `core/daemon/src/session-node-manager.ts` (the seam files), `tsconfig.json`,
+  `vitest.workspace.ts`. The DoD's "dry-run conflict-free 2026-07-05" note is stale.
+- **M9-GATE-1 green is unverified** — the M9 build journal stops at "first build step"; it was not
+  maintained across the 34 build commits on `m9-build`. Before any future merge, confirm
+  `core/daemon/src/__tests__/m9-gate-1.test.ts` is actually green on `m9-build` as the baseline.
+- Gateway package deps are light (`re2-wasm` + optional native `re2`) — no heavy model download.
+
+**Decision D11 applied across the apparatus (this is the anti-confusion measure):**
+- **DoD:** DOD-M9INT-1 moved OUT of Tier 0 into a new **"Post-channel — deferred"** section; Tier 0
+  is now SPIKE-1 only (✅). `DOD-INV-GATEWAY` re-tagged **"(activation: when M9INT lands, after the
+  channel tiers)"** — not satisfiable until the gateway exists on main; done-auditor must not fail
+  it before then. A ⛔ banner sits at the top of the Tier 0 section.
+- **PROCEDURE §4:** step 2 is now DOD-WAKE-1 (was M9INT), with a ⛔ banner. **§5:** "M9 seam
+  untouchable" reworded to **seam-readiness** (build new content paths through the single
+  `ingestReceivedContent` funnel / `cello_send` so the later merge wires cleanly; do NOT merge M9).
+- **SPEC §3/§4, KICKOFF first-actions + non-negotiables + DECISIONS-through-D11:** "M9 merged
+  first / Tier 0" language superseded with explicit ⛔ callouts.
+- **The one real caveat:** DOD-LEAVEMSG-1 (Tier 4) is the only channel unit that adds a genuinely
+  new inbound content path — it must funnel through `ingestReceivedContent` (seam-ready) so M9
+  screens it when it lands. Recommended M9 landing: soon after the Tier 1 launch, before LEAVEMSG.
+- **Launch-pillar note (Andre's call, surfaced not silently dropped):** deferring M9 means the
+  Tier 1 launch gate ships without content screening / injection defense. Legitimate at alpha (one
+  trusted operator); recorded as a conscious decision.
+
+**Next unit:** DOD-WAKE-1 (Tier 1 — channel stage 1, the doorbell forwarding, built properly with
+TDD + pull twin). SPIKE-1 already proved the hop; WAKE makes it real.
 
 ---
 

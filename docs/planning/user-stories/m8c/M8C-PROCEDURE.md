@@ -192,9 +192,14 @@ guidance). Recurring. The fired prompt is the self-audit:
 
 ## 4. First actions (order matters)
 1. **DOD-SPIKE-1** — the ~30-min live spike, before anything else. If the in-context event does
-   NOT land, the reactive track needs redesign — know that on day 0, not after Tier 0.
-2. **DOD-M9INT-1** — the M9 merge + semantic gate. No channel code before the seam is live.
-Then the loop from DOD-WAKE-1.
+   NOT land, the reactive track needs redesign — know that on day 0, not after Tier 0. **(DONE ✅
+   2026-07-06 — PASS; see BUILD-JOURNAL Entry 3.)**
+2. **DOD-WAKE-1** — then straight into the Tier 1 loop.
+
+> **⛔ M9 is NOT merged first (D11, 2026-07-06 — supersedes the old step 2).** DOD-M9INT-1 (the
+> M9 merge + semantic gate) was moved OUT of Tier 0 and **deferred to AFTER the channel tiers**.
+> Do NOT merge `m9-build` before the channel work — a fresh/post-compaction context must not
+> conclude otherwise. The channel tiers owe only **seam-readiness** (§5), not a live gateway.
 
 ## 5. Hard rules (non-negotiable)
 - **One thread. One coder (the main loop). NO parallel implementation agents.** Read-only
@@ -211,8 +216,14 @@ Then the loop from DOD-WAKE-1.
   e.g. use_agent auto-start as catch-error-then-retry in `cello-mcp.ts` — works in Claude Code,
   passes tests, and is invisible to every other client. Design bug, not a shortcut. Applies to
   AUTOSTART, INBOX, CONFIG, and everything after.
-- **M9 seam is untouchable:** no M8C unit adds a content path that bypasses
-  `screenInbound`/`screenOutbound`. cello-fallback-finder checks this on every seam-adjacent unit.
+- **Seam-readiness, NOT seam-live (D11, 2026-07-06).** M9 is merged AFTER the channel tiers, so
+  the `screenInbound`/`screenOutbound` gateway does not exist on main during M8C. The rule is
+  therefore: **build every new content path so the later M9 merge wires cleanly** — route new
+  inbound content through the single `ingestReceivedContent` funnel and new outbound through
+  `cello_send`, so DOD-M9INT-1 attaches the gateway at exactly two points and screens everything.
+  The one channel unit that adds a genuinely new inbound content path is **DOD-LEAVEMSG-1** (relay
+  pull) — it MUST funnel through `ingestReceivedContent`. Most other pushes are content-free
+  doorbells and add no content path. (Do NOT claim the seam is live or merge M9 to satisfy this.)
 - **Vitest: one worker, foreground, timeout, filtered.** Never background a test process.
 - **Deferrals get a home** — DoD "Parked decisions" + journal + DECISIONS. No silent deferral.
 

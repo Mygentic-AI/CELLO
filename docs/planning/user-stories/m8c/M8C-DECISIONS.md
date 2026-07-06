@@ -78,7 +78,8 @@ PARKED (journal + DoD "Parked decisions" + here).
 - **OQ-4** — full Telegram settings knob list → resolves inside DOD-CONFIG-1 + DOD-TGDOOR-1 scoping.
 
 ### Standing scope boundaries (from the notes, not re-litigated)
-- **M9 is excluded as a feature** — it is Tier 0's merge/wire integration, never re-invented.
+- **M9 is excluded as a feature** — it is the deferred merge/wire integration (post-channel, D11 —
+  NOT Tier 0, NOT a prerequisite), never re-invented.
 - **`--channels` is required** for the in-context wake (settled 2026-06-27); the spike confirms
   wiring, not the flag.
 - **Kill switch is portal's job** — launch-critical, tracked OUTSIDE M8C. Recorded here so it has
@@ -259,6 +260,43 @@ PARKED (journal + DoD "Parked decisions" + here).
   state it in one line, move to the next unit; §3b's heartbeat must not treat this as a stall.
 - **Reverse:** rubric — revert the four "reversible" sentences. Sequencing — §2c is
   self-contained; strike it.
+
+### D11 — M9 is done AFTER the channel work, NOT merged first (2026-07-06, Andre — SUPERSEDES the Tier-0 "M9 first" instruction)
+
+- **Fork:** the original M8C apparatus put **DOD-M9INT-1** (merge `m9-build` + wire the
+  `screenInbound`/`screenOutbound` seam + semantic gate) as **Tier 0, before any channel code**,
+  with PROCEDURE §4/§5 and SPEC §3/§4 all repeating "no channel code before the seam is live." When
+  the implementer reached that line it tried to start the merge.
+- **Choice (Andre, explicit):** **STOP — do not merge M9 now. M9 is done AFTER the M8C channel
+  tiers.** The "merge M9 first" instruction is stale leftover and is **superseded**. Nobody —
+  including a fresh context after compaction — should read the apparatus and conclude M9 must be
+  merged before the channel work. It must not.
+- **What changed in the docs (all applied 2026-07-06):**
+  - **DoD:** DOD-M9INT-1 moved OUT of Tier 0 into a new **"Post-channel — deferred (do AFTER the
+    M8C tiers)"** section; Tier 0 is now SPIKE-1 only (✅). `DOD-INV-GATEWAY` re-tagged
+    **"(activation: when M9INT lands, after the channel tiers)"** — same pattern as
+    INV-HONEST-STATES (Tier 3) and INV-ONE-PRIMARY (Tier 5); it is not satisfiable until the
+    gateway exists on main, so the done-auditor must not fail it before then.
+  - **PROCEDURE §4:** first action after SPIKE-1 is now **DOD-WAKE-1**, not M9INT.
+  - **PROCEDURE §5:** the "M9 seam is untouchable" hard rule is reworded to a **seam-readiness**
+    rule — new content paths are built so the later M9 merge wires cleanly; the seam is NOT claimed
+    live yet.
+  - **SPEC §3/§4, KICKOFF first-actions:** "M9 merged first / Tier 0" language superseded.
+- **The one real caveat (recorded, not a blocker):** among the M8C channel tiers, most new pushes
+  are **content-free doorbells** (WAKE/MSGWAKE/TGDOOR) or reuse the **existing** inbound/outbound
+  points (INBOX/SINCESEQ via `cello_receive`), so they create little-to-no merge debt. The **one
+  genuinely new inbound content path is DOD-LEAVEMSG-1 (Tier 4)** — a relay pull that deposits
+  content into the recipient's DB. When M9 lands afterward it must route that path through
+  `ingestReceivedContent`/`screenInbound`. So: **build LEAVEMSG seam-ready** (funnel its pull
+  through `ingestReceivedContent`, the single inbound funnel), and the later M9 merge screens it
+  for free. This is a design constraint on LEAVEMSG, not a reason to pull M9 forward.
+- **Launch-pillar note (surfaced, Andre's call):** deferring M9 means the **Tier 1 launch gate
+  ships without content screening / injection defense** (the "relatively safe" launch pillar). At
+  alpha (one trusted operator) that is a legitimate triage call; recorded here so it is a conscious
+  decision, not a silent drop. Recommend M9 land soon after launch and **before LEAVEMSG** at the
+  latest.
+- **Reverse:** if M9 must precede channels again, move DOD-M9INT-1 back to Tier 0, re-tag
+  INV-GATEWAY as a live invariant, and restore the §4/§5/SPEC "seam first" wording. Pure reorder.
 
 ---
 
