@@ -90,7 +90,11 @@ DB sync is user-initiated. Sessions never migrate live: close → sync → new s
   the very first action) → M9INT (merge m9-build + wire the seam + semantic gate).
 - **Tier 1 — LAUNCH GATE (reactive doorbell):** WAKE (channel stage 1, session-request wake) →
   AUTOSTART (`use_agent` auto-starts) → INBOX (`cello_check_notifications`, the push-loss
-  reconciler). Live smoke closes the tier.
+  reconciler). Live smoke closes the tier. **+ onboarding/command-surface friction riders**
+  (ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE + F5/F18 on AUTOSTART, F4 on INBOX): the
+  first-connect path is launch-critical first-impression — folded in per D5 (2026-07-06). The
+  launch smoke includes a cold `create-agent → register → status` run completable from tool
+  output alone. See M8C-DEFINITION-OF-DONE and [[M8C-DECISIONS]] D5.
 - **Tier 2 — Full reactivity + command surface:** MSGWAKE (stage 2 per-message wake, daemon build)
   + SINCESEQ (`since_seq` on `cello_receive`) → LOGINSTART (`cello login` auto-start, opt-out) →
   CONFIG (CLI config surface on M9-CFG-001's store) → CURSOR (per-connection read cursor +

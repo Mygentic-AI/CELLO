@@ -90,6 +90,37 @@ option and keep going** — never block. Genuine undecidable forks are PARKED (j
 
 *(Append below: timestamp / unit / fork / choice / why / reverse.)*
 
+### D5 — Fold the onboarding/command-surface friction sweep into M8C (2026-07-06, Andre)
+- **Fork:** the M8B UX friction backlog ([[2026-07-02_1130_m8b-e2e-ux-friction-log]]) plus a
+  2026-07-06 live registration walkthrough surfaced ~a dozen friction points. Leave them for a
+  later polish pass, or fold the cheap ones into M8C now (which already rebuilds those exact
+  surfaces: `cello status`, per-connection agent selection, CLI/config, the command surface)?
+- **Choice (Andre):** fold the cheap ones in now, as **rider ACs on the units already touching
+  those surfaces** — not new tiers. Re-verified each against current code first (the log is 4
+  days stale): **F3, F10, F17 were already fixed since the log and dropped**; F1/F2/F13–F16/F20/
+  F23 shipped earlier. Survivors folded:
+  - **Tier 1 (launch-critical — see rationale):** DOD-ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1
+    (F24 help; R1 quoting, R2 two-step, R3 missing-token error, R4 silent bad-token failure,
+    R5 invisible env-var form, R6 misframed single-use-token warning, R7 next-step guidance;
+    F11 log noise) + F5/F18 riders on AUTOSTART + F4 rider on INBOX.
+  - **Tier 2:** F6/F12 riders on CONFIG (directory choice + which-node visibility).
+- **Why Tier 1 (not a later polish pass):** onboarding is the first-connect path — the one moment
+  you don't get twice. Per the CLAUDE.md launch-triage lens, a confusing first run is
+  *unforgivable* (no core value / trust lost), so it gates launch. And CELLO's operator is often
+  an **AI** driving the CLI: next-step guidance + clear errors are how it self-corrects without a
+  human — load-bearing, not polish. Cost is low (better help/errors/guidance, less ceremony), so
+  it fits the launch slice without a rebuild.
+- **Verified facts baked in:** agent-name rule is `^[a-zA-Z0-9_-]{1,64}$` (no spaces); the env-var
+  form works (`cello.ts:82` falls back to `process.env.CELLO_PREAUTH_TOKEN`) — the other AI's
+  advice was correct, Andre's "won't work" was the token being single-use/already-consumed;
+  pre-auth tokens are single-use + 24h (directory `consumed_at` / `preauth.token.reuse.rejected`),
+  which is why the exposure warning is over-framed (R6/DOD-ONBOARD-WARN-1).
+- **NOT folded (own items, not fruit):** F7 (daemon restart/reload), F9 (connected-client
+  visibility + reap), F21 (terminal unilateral-seal failure), F22 (standing-receiver own port).
+  Listed in the DoD "Tracked, not M8C-fruit" section.
+- **Reverse:** riders are additive on their host units; drop any (F6 is the explicit
+  keep-or-cut) or re-tier the ONBOARD group by moving lines — pure ordering, no rework.
+
 ---
 
 ## Related Documents
