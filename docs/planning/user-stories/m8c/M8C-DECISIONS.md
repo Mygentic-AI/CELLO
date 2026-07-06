@@ -453,6 +453,31 @@ PARKED (journal + DoD "Parked decisions" + here).
   waiting for M9 to ship ANY TTL would be strictly worse.
 - **Reverse:** same escape hatch as D14/D15/D16.
 
+### D19 — DOD-RELAYWAKE-1 covers known-relay reconnects only; a brand-new counterparty with no prior session remains undiscoverable until a NEW directory API exists (2026-07-06, autonomous D10)
+
+- **Fork:** the DoD text says "on reconnect the daemon asks the directory whether any relay holds
+  undelivered frames for its agents." Investigated thoroughly (both repos): the actual
+  content-recovery PULL mechanism (`ContentParkClient` / `content_park_pull_request`, keyed by
+  RECIPIENT pubkey) already exists and already works. What's genuinely missing is knowing WHICH
+  relay(s) to even ask. Today (`getAgentRelayEndpoints`) that's derived ENTIRELY from the agent's
+  own local session history — relays it has PRIOR sessions with. For a counterparty this agent has
+  NEVER had a session with, there is no local record of any relay to check, and neither repo has a
+  directory API today for "which relay(s) serve agent X" independent of session history (verified:
+  no relay-assignment field in identity/registration persistence; the consortium manifest lists
+  only DIRECTORY nodes, never relay nodes).
+- **Choice (D10):** ship the buildable, real-value CORE now — `SignalingManager.onConnected` (a new
+  transport-level hook) wired to re-run `autoRecoverForAgent` on EVERY signaling reconnect, not
+  just the first agent-start. This closes the common, literal "on reconnect" case: a message
+  parked while signaling was merely down (network blip, directory node restart) for an agent the
+  daemon ALREADY has relay history with. The brand-new-counterparty case is NOT solved and is
+  explicitly deferred as its own cross-repo item, not silently narrowed.
+- **Why:** matches the D16 pattern exactly (CONTACT-1's presence-visibility gap) — a genuine new
+  protocol surface needing its own design note (§6) belongs as tracked follow-on work, not as
+  something built ad hoc under time pressure or silently dropped from the DoD's scope.
+- **Follow-on:** a future story needs to design (a) how the directory learns/serves relay
+  assignment per agent (a privacy-sensitive question — what does the directory get to know?), and
+  (b) the daemon-side query + pull-from-newly-discovered-relay flow. Tracked, not yet designed.
+
 ---
 
 ## Related Documents

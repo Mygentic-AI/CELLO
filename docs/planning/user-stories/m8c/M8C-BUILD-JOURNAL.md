@@ -21,8 +21,8 @@ description: >
 | 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | 🟡 🟡 🟡 ❌ |
 | 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | 🟡 all (built+reviewed; ✅ at LIVE-1) |
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | 🟡 🟡 🟡CORE 🅿️CFG(D14) 🟡 |
-| 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡CORE 🟡 🟡CORE 🟡 (**TIER 3 CODE-COMPLETE**) |
-| 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | ❌ ❌ |
+| 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡CORE 🟡 🟡CORE 🟡 (**TIER 3 DONE, reviewed+fixed**) |
+| 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | 🟡CORE ❌ (needs M9 merge first) |
 | 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ❌ all |
 | Post-channel — deferred | M9INT-1 (do AFTER channel tiers — D11; NOT a prerequisite) | ❌ deferred |
 
@@ -633,6 +633,44 @@ All fixed in `22de42c`:**
 DOD-LIVE-1 with the publish cascade).
 
 **Next unit:** the ONBOARD-* rider cluster — see Entry 10 design note (repro R4 first).
+
+---
+
+### 2026-07-06 — Entry 27: TGDOOR-1 reviewer fixes + DOD-RELAYWAKE-1 built (commit `446fb74`)
+
+**TGDOOR-1 reviewer (a60d68ed) on `99d6a53`: 2 HIGH + 2 hollow-test findings, all fixed.**
+(1) `HttpTelegramBotClient.getUpdates` silently collapsed a Telegram API rejection (`ok:false`,
+e.g. a revoked token) into an empty array — indistinguishable from "no updates," so a dead bot ran
+forever with zero observable signal. Fixed: throws on `ok:false`, engaging the poller's existing
+catch/backoff/log path. (2) `telegramRungUnread` had no cleanup at all — same unbounded-growth
+class as TTL-1's already-fixed `expiredSessionRequests` leak. Fixed: cleared on every state-change
+event. (3) MEDIUM: the generation counter allowed a one-call overlap + offset contamination across
+a token rotation; fixed by capturing the client as a loop-local parameter and resetting the offset
+only on an actual token/chat change. Hollow tests fixed: G1 (session-request ring) now exercises
+the real `acceptInboundAssignment` path via an injected assignment frame; G7 (cold-capable) now
+proves settings persisted by a PRIOR daemon run wake a fresh boot with zero IPC connections;
+per-session coalescing isolation added.
+
+**DOD-RELAYWAKE-1 built.** `SignalingManager` (core/transport) gained an `onConnected` callback —
+fires on the first connect AND every reconnect after a drop, best-effort. Wired into
+`getAgentSignaling`'s per-agent manager to call `autoRecoverForAgent` on every reconnect, not just
+agent-start (the real gap: a message parked while signaling was merely down — network blip,
+directory node restart — was previously undiscoverable until the next full agent restart).
+Investigated both repos thoroughly before building: the content-recovery PULL mechanism already
+exists and works; what's missing is knowing WHICH relay to ask, which today is derived only from
+local session history. A brand-new counterparty (no prior session) remains undiscoverable — this
+needs a NEW directory API neither repo has today, journaled as **D19** (own future story, matches
+the D16 pattern) rather than silently narrowed or half-built.
+
+Proven with a REAL forced reconnect at the transport level (heartbeat timeout, not a simulated
+failure) — 3 tests. Daemon-level wiring is a direct 3-line pass-through with no dedicated
+reconnect-simulation test (honestly noted: no daemon test in this repo forces a real per-agent
+signaling reconnect today — building that harness from scratch was disproportionate to this unit).
+
+Full gate green (1577). `cello-unit-reviewer` dispatch next for RELAYWAKE-1.
+
+**Next: DOD-LEAVEMSG-1 — needs the M9 merge first**, per the DoD's own note ("before
+DOD-LEAVEMSG-1 at the latest"). Doing the M9 merge now.
 
 ---
 

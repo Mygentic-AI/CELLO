@@ -249,14 +249,14 @@ description: >
   ring-once-until-read per session (keyed on INBOX's unread watermark); session requests and
   state changes always ring. Tier 5 note: the poller is Primary-only — see DOD-PRIMARY-1. NO
   channel machinery anywhere in this unit — the daemon talks to the Telegram Bot API directly;
-  "stage 3" is historical numbering (see SPEC §2, channels mental model). — 🟡 (2026-07-06, Entry 25/26 — built `99d6a53`, design note first (§6); TelegramBotClient interface + HttpTelegramBotClient (M4+ adapter pattern) + injectable test override; new dedicated telegram_settings table; generation-counter-guarded single poller (cold-capable); session-request/state-change always ring, message-waiting coalesced (ring-once-until-read, cleared on cello_receive/since_seq); inbound allowlist-ack vs silent-drop; content-free fixed-label text. Review pending — needs a REAL Telegram bot token for the live proof, so this is the ONLY Tier-3 unit that can't be smoke-tested even locally beyond the FakeTelegramBotClient tests.)
+  "stage 3" is historical numbering (see SPEC §2, channels mental model). — 🟡 (2026-07-06, Entry 25/26 — built `99d6a53`, design note first (§6); TelegramBotClient interface + HttpTelegramBotClient (M4+ adapter pattern) + injectable test override; new dedicated telegram_settings table; generation-counter-guarded single poller (cold-capable); session-request/state-change always ring, message-waiting coalesced (ring-once-until-read, cleared on cello_receive/since_seq); inbound allowlist-ack vs silent-drop; content-free fixed-label text. Reviewer (a60d68ed) found 2 HIGH silent fallbacks (getUpdates ok:false→[] collapse; unbounded telegramRungUnread) + 2 hollow tests (G1/G7 unexercised), all fixed `446fb74`. Needs a REAL Telegram bot token for the live proof — the ONLY Tier-3 unit that can't be smoke-tested even locally beyond the FakeTelegramBotClient tests. Flips ✅ live.)
 
 ## Tier 4 — Async foundation
 
 - **DOD-RELAYWAKE-1** — Check relay on wakeup: on reconnect the daemon asks the directory whether
   any relay holds undelivered frames for its agents (pickup_queue exists; this adds the
   ask-on-reconnect + pull). Messages that arrived while the daemon was fully offline reach the
-  operator. Both repos; spine-proven then live. — ❌
+  operator. Both repos; spine-proven then live. — 🟡CORE (2026-07-06, Entry 27 — built `446fb74`, transport+daemon: SignalingManager.onConnected (fires on every connect/reconnect, best-effort) wired to autoRecoverForAgent on every per-agent signaling reconnect, not just agent-start. Proven at the transport level with a REAL forced reconnect (heartbeat timeout, not simulated) — 3 tests. Covers known-relay reconnects only; the brand-new-counterparty case needs a NEW directory API that doesn't exist in either repo today — PARKED, D19. Flips ✅ live (known-relay case).)
 - **DOD-LEAVEMSG-1** — Leave a message (topology per D6 — no daemon ever stores messages for
   someone else's agents): the SENDER's daemon deposits the signed, hashed message at a relay
   (pickup_queue, encrypted to the recipient) when the directory reports the recipient
@@ -345,6 +345,11 @@ own story) deliberately, never smuggled in as a rider. Source:
 - **D17 parks (2026-07-06):** DOD-TTL-1's per-agent configurable TTL override — gated on
   M9-CFG-001, same reason as D14/D15/D16. TTL-1 CORE (24h default, lazy reap, expired-visible-in-
   INBOX) is M9-independent and ships now. See [[M8C-DECISIONS]] D17.
+- **D19 parks (2026-07-06):** DOD-RELAYWAKE-1's brand-new-counterparty case (a message from a
+  sender this agent has NO prior session with) — needs a NEW directory API for relay discovery
+  independent of session history, which does not exist in either repo today; a real cross-repo
+  protocol design, own future story. RELAYWAKE-1 CORE (re-check known relays on EVERY signaling
+  reconnect, not just agent-start) ships now. See [[M8C-DECISIONS]] D19.
 - OQ-2 (operator-input cadence: daemon-mediated real-time gates vs agent-loop poll), OQ-3 (reply
   @-addressing) — parked WITH Mode 2 (out of M8C, follow-on milestone).
 - OQ-4 (full Telegram settings knob list) — resolves inside DOD-CONFIG-1 + DOD-TGDOOR-1 scoping.
