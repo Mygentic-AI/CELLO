@@ -352,6 +352,32 @@ PARKED (journal + DoD "Parked decisions" + here).
 - **Reverse:** re-add a stricter client check, ideally importing a SHARED format constant from
   protocol-types rather than duplicating the regex.
 
+### D14 — Config-store-dependent Tier-2 work is gated on M9-CFG-001 (deferred with M9); build the M9-independent units, park the rest (2026-07-06, autonomous D10 — follows from D11)
+
+- **Fork (surfaced during Tier 2):** `DOD-CONFIG-1` is spec'd "on M9-CFG-001's versioned store
+  (extend, never a parallel subsystem)", and `DOD-LOGINSTART-1`'s per-agent `autoStart: false`
+  opt-out needs that same config store. But the store is `core/gateway/src/config/config-store.ts`
+  — it lives INSIDE the deferred M9 gateway package (D11). So those units can't be built cleanly
+  without either merging M9 early (contradicts D11) or building a parallel store (the DoD forbids
+  it).
+- **Choice (D10):** **do NOT build a parallel config store; do NOT pull M9 forward.** Split the
+  Tier-2 units by M9-CFG-001 dependency:
+  - **M9-independent — build now:** `DOD-MSGWAKE-1` (done), `DOD-SINCESEQ-1` (done),
+    **`DOD-LOGINSTART-1` CORE** (login auto-starts all registered agents + enumerate failures — no
+    config store needed), **`DOD-CURSOR-1`** (per-connection read cursor + `session_not_current`
+    gate — no config).
+  - **PARKED until M9-CFG-001 lands (with the M9 merge, post-channel-tiers):** `DOD-CONFIG-1`
+    (entirely — it IS the config CLI surface on that store) + its F6/F12 riders, AND
+    `DOD-LOGINSTART-1`'s per-agent `autoStart: false` opt-out clause (core ships without it; the
+    opt-out is added when the store exists). Recorded in the DoD "Parked decisions" section.
+- **Why:** preserves LOGINSTART's launch value (login → all agents online) without a forbidden
+  parallel subsystem or contradicting D11. When M9 merges (bringing `core/gateway` + the config
+  store to main), CONFIG-1 + the opt-out are built on the real store as intended.
+- **Reverse:** if the config store is wanted before M9, extract `core/gateway/src/config/
+  config-store.ts` into a standalone package on main (a deliberate forward-port from m9-build) —
+  then CONFIG-1/opt-out unblock without the full gateway. That is a real decision (a partial M9
+  forward-port), not a silent parallel build.
+
 ---
 
 ## Related Documents
