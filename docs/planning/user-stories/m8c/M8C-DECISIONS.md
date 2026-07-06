@@ -205,6 +205,12 @@ option and keep going** — never block. Genuine undecidable forks are PARKED (j
   redundancy; the lens prompts are kept verbatim to minimize dilution.
 - **Reverse:** revert PROCEDURE step 8/§2b/§5 to the three-agent dispatch; the original agents
   are untouched.
+- **Addendum (same day):** Andre asked whether `feature-dev:code-reviewer`'s actual prompt had
+  been read before merging — it hadn't (Lens 1 was written from its one-line description). Read
+  in full; folded in what was missing: the 0–100 confidence rubric with report-only-≥80 (scoped
+  to Lens 1 — lenses 2–4 are exhaustive by design) and a concrete fix suggestion per finding.
+  One deliberate deviation from its rubric: pre-existing defects are NOT suppressed as false
+  positives — reported `[pre-existing]`, per Andre's standing fix-errors-when-found rule.
 
 ---
 

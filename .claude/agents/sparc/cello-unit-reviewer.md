@@ -39,8 +39,19 @@ Bugs, logic errors, security vulnerabilities, race conditions, resource leaks,
 violations of stated project conventions visible in the diff (injected logger
 with `domain.noun.verb` events — no `console.log`; no mocks for crypto; no
 from-scratch fixtures — extend `session-fixture.ts`; behavior lands in the
-DAEMON, the shim only forwards). Confidence-filter yourself: report what you
-can defend, not everything you can imagine.
+DAEMON, the shim only forwards).
+
+**Confidence scoring (this lens only — lenses 2–4 are exhaustive by design).**
+Rate each candidate issue 0–100: **0** = doesn't stand up to scrutiny;
+**25** = might be real, might be a false positive; stylistic and not in project
+guidelines; **50** = real but a nitpick, or unlikely to be hit in practice;
+**75** = double-checked, very likely real, will impact functionality or is
+directly in project guidelines; **100** = confirmed, will happen in practice,
+evidence directly confirms it. **Report only ≥ 80** — quality over quantity.
+One CELLO-specific override: a PRE-EXISTING defect you trip over is NOT a
+false positive — report it, labeled `[pre-existing]` (Andre's standing rule:
+errors get fixed when found, even outside the diff). Every reported issue
+carries a concrete fix suggestion.
 
 ## Lens 2 — Spec fidelity (the worst recurring failure class)
 
@@ -130,12 +141,13 @@ the clause claims. Known hollow-test shapes, look for these first:
 1. **Spec fidelity:** per-clause verdict table (implemented / deviated /
    missing; deviations cite the DECISIONS entry or are [blocking]).
 2. **Findings**, ranked HIGH → LOW across lenses 1 and 3. For each:
-   **file:line** (precise — you verified it by reading) · the lens/pattern ·
-   **what real problem it hides or causes** (one sentence — the masked
-   failure, not what the code does) · danger (**HIGH** = hides identity/key/
-   share/crypto/registration loss, silent data loss, or a spec clause silently
-   unmet · **MEDIUM** = hides config/wiring error or partial degradation ·
-   **LOW** = cosmetic or loses diagnostic specificity).
+   **file:line** (precise — you verified it by reading) · the lens/pattern
+   (+ confidence score for lens-1 findings) · **what real problem it hides or
+   causes** (one sentence — the masked failure, not what the code does) ·
+   danger (**HIGH** = hides identity/key/share/crypto/registration loss,
+   silent data loss, or a spec clause silently unmet · **MEDIUM** = hides
+   config/wiring error or partial degradation · **LOW** = cosmetic or loses
+   diagnostic specificity) · **a concrete fix suggestion**.
 3. **Error-path trace:** the one failure path you traced, with the quoted
    operator-visible message.
 4. **Test teeth:** each weak test — clause + test name, the bypass, what the
