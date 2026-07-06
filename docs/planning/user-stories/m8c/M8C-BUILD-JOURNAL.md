@@ -621,6 +621,56 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-06 — Entry 14: DOD-MSGWAKE-1 design note (§6 design-significant; before code)
+
+**Unit:** DOD-MSGWAKE-1 (Tier 2, channel stage 2 — per-message wake). DAEMON build (§5). Started
+while DOD-LIVE-1 sits at its human-only stop (§2c: continue with the next available unit). MSGWAKE
+rides WAKE's forwarding hop — the shim's bridge already forwards EVERY notification type generically,
+so a `cello_message` frame reaches Claude's context the moment the daemon emits it; no shim change.
+
+**Producer/consumer chain (mirrors the session-state callback exactly):**
+- **Producer (new):** `SessionNodeManager.#appendVerifiedContent` (`session-node-manager.ts` ~2544)
+  is the SINGLE funnel where a verified received message is buffered for `cello_receive` (direct +
+  released-from-hold + recovered/parked all pass here — the M9-seam single-inbound-funnel). After it
+  buffers, fire a new `#onContentArrived(agentName, sessionId, senderPubkey)` callback — content-free
+  (sender + session only, never the plaintext). Setter `setOnContentArrived` mirrors
+  `setOnSessionStateChanged` (:839 setter, :1773 invoke).
+- **Dispatcher (new):** `NotificationDispatcher.dispatchCelloMessage(agentName, sessionId, from)` —
+  emits `{ notification: "cello_message", data: { agent, type: "cello_message", from, session_id } }`
+  routed to connections where the agent is current (same routing as `dispatchSessionStateChanged`).
+- **Wiring:** `daemon.ts` (~:5057, next to `setOnSessionStateChanged`):
+  `sessionNodeManager.setOnContentArrived((a,s,from) => notificationDispatcher.dispatchCelloMessage(a,s,from))`.
+- **Consumer (unchanged):** the shim's generic `proxy.onNotification` bridge (WAKE) forwards the
+  `cello_message` frame as `notifications/claude/channel` with `params = data`. A live session gets an
+  in-context event per inbound message — a real-time chat relay.
+
+**Clause checklist:**
+- **M1** — content arrival fires `dispatchCelloMessage` → a `cello_message` notification per inbound
+  message (direct AND recovered), routed to the current-agent connection(s).
+- **M2** — the frame carries `session_id` (payload gap from the 2026-07-01 log) + `from`
+  (senderPubkey) + type; the operator calls `cello_receive({ session_id })` to fetch content.
+- **M3 (INV-CONTENTFREE — the WAKE F2 flag, re-proven HERE against the REAL producer):** the
+  `cello_message` `data` blob has NO content / message / text / plaintext field — assert against the
+  frame the real `#appendVerifiedContent` path emits, not a hand-built one.
+- **M4** — no double-wake / no interference with a blocked `cello_receive`: the doorbell is a
+  notification; the blocked receive drains the buffer independently.
+- **Obs** — `notification.cello_message.dispatched` (or reuse dispatcher's existing event shape); no console.log.
+- **§5** — all logic daemon-side; shim untouched (generic bridge already handles it).
+
+**Falsify-first:** (a) `#appendVerifiedContent` is the SINGLE received-content funnel (verify no other
+path buffers to `#receivedContent` without passing here — else some messages wouldn't wake). (b) the
+callback must fire AFTER the buffer push (so a woken receive finds the content). (c) content-free: the
+callback signature carries only agent/session/senderPubkey — never the content bytes.
+
+**Test strategy:** daemon fixture — set `onContentArrived` (or use a real `connectToDaemon` client +
+`__test_buffer_received`-style injection through the real append path) → assert a `cello_message`
+notification arrives at the current-agent connection with `{from, session_id}` and NO content; a
+non-current connection does NOT receive it (routing); INV-CONTENTFREE assertion on the real frame.
+
+**Next:** red-first tests → implement (callback + dispatcher + wiring) → gate → `cello-unit-reviewer`.
+
+---
+
 ### 2026-07-06 — Entry 13: DOD-LIVE-1 — publish cascade DONE + verified; live smoke is human-only
 
 **The Tier-1 close's autonomous half is complete.** Published the multi-package cascade to beta and
