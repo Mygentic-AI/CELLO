@@ -636,6 +636,41 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-06 — Entry 22: DOD-CURSOR-1 reviewer HIGH fix + DOD-AWAY-1 built (commit `10d2d01`)
+
+**CURSOR-1 reviewer (aa5928e2) on `01e9b5e`: SPEC DEVIATIONS + SILENT FALLBACK FOUND (blocking),
+confirmed by live reproduction.** The since_seq/live-drain "advance cursor to max sequence
+observed" logic let a connection silently skip an unread message a DIFFERENT local connection had
+sent, whenever a later counterparty-received message arrived first — negating C4/C5, the exact
+WhatsApp-group-chat guarantee. Fixed with `safeCursorAdvance()`: walks forward from the
+connection's actual cursor through only a contiguous run of delivered sequence numbers, stopping
+at the first gap (leaf indices are strictly contiguous across both directions, so this needs no
+extra DB read). Wired into both receive-side advance sites. `cello_get_transcript`'s advance is
+unaffected — it already covers the full bidirectional transcript, so "max seen" has no gap by
+construction (verified, not just asserted). MEDIUM finding (missing `session.send.blocked` log)
+also fixed. New tests C7 (live reproduction of the exact reported bypass) + C8 (per-session
+isolation within one connection).
+
+**DOD-AWAY-1 built.** Unattended Primary auto-acks (a) a fresh inbound session request and (b) an
+inbound message on an existing session, with distinct per-type default text, coalesced (one ack
+per away period, cleared on `cello_use_agent`). `isAttended()` matches the design doc's own
+definition (Agent State Model: Attended = Primary + a live client claimed it via use_agent).
+**Deviation (journaled, D14-pattern):** opaque privacy mode (full silence) is PARKED on
+M9-CFG-001 — a genuine per-agent operator preference needing the deferred config store; transparent
+is the DoD's own stated default, so CORE ships complete and non-fake without it.
+
+**Discovered + fixed two genuine cross-unit interactions:** seeding an inbound message while
+unattended now ALSO produces an AWAY-1 auto-ack leaf, so any test/caller that reads only the
+received-content buffer (`cello_receive`) without also reading the full transcript
+(`cello_get_transcript`) undercounts what CURSOR-1 requires before allowing a send. Fixed in
+`daemon-004-ipc.test.ts` (production test) and reflected in `m8c-cursor-1.test.ts`'s C8 setup.
+
+**Tests:** `m8c-cursor-1.test.ts` now 7 (C7/C8 added); `m8c-away-1.test.ts` new, 4 tests. Full gate
+green (1548). `cello-unit-reviewer` dispatched for AWAY-1 + the CURSOR-1 fix (agent `a9099571...`),
+continuing to DOD-CONTACT-1 while it runs.
+
+---
+
 ### 2026-07-06 — Entry 21: OVERNIGHT AUTONOMOUS RUN begins (Andre asleep) — full DoD scope authorized
 
 Andre confirmed FROST is fixed (live end-to-end conversation completed, including the channel
