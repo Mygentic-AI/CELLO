@@ -121,6 +121,10 @@ PRIMARY touch trustless-cello (directory).
 
 - **Telegram full-monitoring level + Mode 2** (operator as communicator, approvals gate,
   reply addressing — OQ-2/OQ-3 park with it) → follow-on milestone's opening track.
+- **Non-Telegram platform relays — Slack / Discord / Webhook** (the rest of channel stage 3's
+  "platform relay" from the notes; M8C ships Telegram as the one stage-3 platform, doorbell only)
+  → follow-on. The daemon-owned-bot pattern (token = daemon setting, single long-lived poller,
+  works cold, runtime-agnostic) extends to each; no new architecture, just another adapter.
 - **Channel stage 4 — multi-peer message routing** (sender tagging on inbound, reply addressing
   back to the right peer, platform-side sender allowlists beyond the single operator allowlist
   TGDOOR needs) → follows Mode 2. Renamed 2026-07-05 from "relay hardening" — it's message

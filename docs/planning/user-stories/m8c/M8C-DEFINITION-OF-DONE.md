@@ -202,7 +202,9 @@ description: >
   (session requests, messages-waiting, state changes) pushed to the operator's phone — including
   **cold** (no live agent session). `[agent · session]` header prepended by the daemon. Content
   never rides the doorbell (DOD-INV-CONTENTFREE). Full-monitoring + Mode 2 are OUT (follow-on
-  milestone). — ❌
+  milestone). **Telegram is the ONLY stage-3 platform in M8C** — Slack / Discord / Webhook are
+  OUT (follow-on; the daemon-owned-bot pattern extends to each as another adapter, no new
+  architecture). See M8C-SPEC §5. — ❌
 
 ## Tier 4 — Async foundation
 
