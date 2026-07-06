@@ -132,7 +132,13 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
             correlationId,
           });
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ token: capResult.capability, expiresAt: capResult.expiresAt.toISOString() }));
+          // #2b: also return the short claim-code. `token` stays the full capability for back-compat; the
+          // ops-agent now relays `claim_code` (short) to the operator, and the agent redeems it.
+          res.end(JSON.stringify({
+            token: capResult.capability,
+            claim_code: capResult.claimCode,
+            expiresAt: capResult.expiresAt.toISOString(),
+          }));
         } catch (err: unknown) {
           const pgErr = err as { code?: string };
           const isDbError = typeof pgErr.code === "string" && /^\d{5}$/.test(pgErr.code);

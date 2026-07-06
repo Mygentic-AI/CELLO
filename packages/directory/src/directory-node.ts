@@ -190,7 +190,7 @@ import {
   encodeFrostDkgRound3Response,
 } from "./frost-dkg-frames.js";
 import { protocolLog, truncId, truncHex } from "./protocol-log.js";
-import { resolveAccountId } from "./pre-auth-token-repository.js";
+import { resolveAccountId, redeemClaimCode } from "./pre-auth-token-repository.js";
 import type { MmrStore } from "./mmr-store.js";
 import type { RelayPoolManager } from "./relay-pool-manager.js";
 
@@ -1334,7 +1334,23 @@ export class CelloDirectoryNode {
               await stream.close();
               return;
             }
-            const cap = decodeCapability(blob);
+            // #2b: the operator may present a short claim-code ("CELLO-" + base58) instead of the raw
+            // ~570-char capability. Redeem it server-side (replicated capability_claim_codes, so any node
+            // can) for the capability blob before decoding. Whitespace-trim a pasted code. Additive: a raw
+            // capability blob (no "CELLO-" prefix) flows through unchanged. Each DKG-quorum node redeems
+            // independently; the capability's nonce remains the single-use gate at the nonce binder.
+            let capBlob = blob.trim();
+            if (capBlob.startsWith("CELLO-") && this.#pgPool) {
+              const redeemed = await redeemClaimCode(this.#pgPool, capBlob);
+              if (!redeemed) {
+                this.#logger?.warn("directory.auth.claimcode.invalid", { remoteAgentId: agentId, correlationId });
+                stream.send(lp.encode.single(CBOR_ENC.encode({ type: "preauth_error", reason: "CLAIM_CODE_INVALID" })));
+                await stream.close();
+                return;
+              }
+              capBlob = redeemed.capability;
+            }
+            const cap = decodeCapability(capBlob);
             if (!cap) {
               this.#logger?.warn("directory.auth.capability.malformed", { remoteAgentId: agentId, correlationId });
               stream.send(lp.encode.single(CBOR_ENC.encode({ type: "preauth_error", reason: "PRE_AUTH_TOKEN_MISSING" })));

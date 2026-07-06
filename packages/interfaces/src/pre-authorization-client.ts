@@ -67,5 +67,5 @@ export interface PreAuthorizationClient {
    * The full PreAuthorizationToken (TTL, timestamps) is managed by the directory
    * and is not surfaced to the Operations Agent.
    */
-  requestToken(phoneStubHash: string, emailStubHash: string, registrationId: string): Promise<{ token: string }>;
+  requestToken(phoneStubHash: string, emailStubHash: string, registrationId: string): Promise<{ token: string; claimCode?: string }>;
 }

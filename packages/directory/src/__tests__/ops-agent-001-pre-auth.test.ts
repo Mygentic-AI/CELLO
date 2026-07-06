@@ -47,6 +47,7 @@ import {
   issuePreAuthToken,
   consumePreAuthToken,
   validatePreAuthTokenForDkg,
+  redeemClaimCode,
 } from "../pre-auth-token-repository.js";
 import { createInternalApiServer } from "../internal-api-server.js";
 import { DevTokenValidator } from "@cello-protocol/interfaces/stubs";
@@ -769,5 +770,40 @@ describeIntegration("OPS-AGENT-001 AC-008-integration-gate: Flyway zero checksum
     const v25 = result.rows.find((r) => r.version === "25");
     expect(v25).toBeDefined();
     expect(v25!.success).toBe(true);
+  });
+});
+
+// ─── #2b: capability claim-code redeem (short code -> capability) ─────────────
+describeIntegration("#2b capability_claim_codes: redeemClaimCode", () => {
+  let pool: pg.Pool;
+  beforeAll(() => { pool = new pg.Pool({ connectionString: DATABASE_URL }); });
+  afterAll(async () => { await pool.end(); });
+
+  it("round-trips the capability, sets redeemed_at, and stays redeemable until expiry", async () => {
+    const code = "CELLO-" + randomBytes(10).toString("hex");
+    const capability = "eyJub25jZSI6InRlc3QifQ"; // opaque blob stand-in
+    const expiresAt = new Date(Date.now() + 3600_000);
+    await pool.query(
+      `INSERT INTO capability_claim_codes (code, capability, expires_at) VALUES ($1, $2, $3)`,
+      [code, capability, expiresAt.toISOString()],
+    );
+    const r1 = await redeemClaimCode(pool, code);
+    expect(r1?.capability).toBe(capability);
+    const after = await pool.query<{ redeemed_at: string | null }>(
+      `SELECT redeemed_at FROM capability_claim_codes WHERE code = $1`, [code]);
+    expect(after.rows[0]!.redeemed_at).not.toBeNull();
+    // Multi-fetch until expiry (each DKG-quorum node redeems the same code); still returns the capability.
+    const r2 = await redeemClaimCode(pool, code);
+    expect(r2?.capability).toBe(capability);
+  });
+
+  it("returns null for an unknown code and for an expired code", async () => {
+    expect(await redeemClaimCode(pool, "CELLO-does-not-exist")).toBeNull();
+    const code = "CELLO-" + randomBytes(10).toString("hex");
+    await pool.query(
+      `INSERT INTO capability_claim_codes (code, capability, expires_at) VALUES ($1, $2, now() - interval '1 hour')`,
+      [code, "expired-cap"],
+    );
+    expect(await redeemClaimCode(pool, code)).toBeNull();
   });
 });

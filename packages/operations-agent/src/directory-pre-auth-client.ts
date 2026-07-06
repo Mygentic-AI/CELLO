@@ -85,7 +85,7 @@ export class DirectoryPreAuthorizationClient implements PreAuthorizationClient {
     phoneStubHash: string,
     emailStubHash: string,
     registrationId: string,
-  ): Promise<{ token: string }> {
+  ): Promise<{ token: string; claimCode?: string }> {
     let response: Response;
     try {
       response = await this.#fetch(this.#url, {
@@ -110,7 +110,7 @@ export class DirectoryPreAuthorizationClient implements PreAuthorizationClient {
       );
     }
 
-    const body = await response.json() as { token: string };
-    return { token: body.token };
+    const body = await response.json() as { token: string; claim_code?: string };
+    return { token: body.token, claimCode: body.claim_code };
   }
 }

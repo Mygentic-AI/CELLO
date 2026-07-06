@@ -178,8 +178,12 @@ export async function issuePreAuthToken(
 // ─── Capability issuance (M8B-PREAUTH-CAP) ──────────────────────────────────────
 
 export interface IssuePreAuthCapabilityResult {
-  /** base64url-encoded signed capability — this is what the operator pastes into `cello register`. */
+  /** base64url-encoded signed capability — the self-verifying credential the agent presents at DKG. */
   capability: string;
+  /** #2b: the short, typeable claim-code the operator sets as CELLO_REGISTRATION_TOKEN ("CELLO-" + 33
+   *  base58). The agent redeems it (redeem_claim_code) for `capability`, so the operator never handles
+   *  the ~570-char blob. Stored in capability_claim_codes keyed by this code. */
+  claimCode: string;
   /** The capability's random 128-bit nonce (hex) — also the audit-row key in pre_authorization_tokens. */
   nonce: string;
   /** Database row UUID of the audit record. */
@@ -238,7 +242,16 @@ export async function issuePreAuthCapability(
         },
         issuerKeyProvider,
       );
-      return { capability: encodeCapability(cap), nonce, tokenId, expiresAt };
+      // #2b: mint a short claim-code and store {code -> capability} so the operator handles a short
+      // typeable string instead of the ~570-char blob. Reuses generatePreAuthToken() ("CELLO-" + 33
+      // base58). The code is a redeem lookup key; the capability itself is still the self-verifying gate.
+      const capability = encodeCapability(cap);
+      const claimCode = generatePreAuthToken();
+      await pool.query(
+        `INSERT INTO capability_claim_codes (code, capability, expires_at) VALUES ($1, $2, $3)`,
+        [claimCode, capability, expiresAt.toISOString()],
+      );
+      return { capability, claimCode, nonce, tokenId, expiresAt };
     } catch (err: unknown) {
       const pgErr = err as { code?: string };
       if (pgErr.code === "23505") {
@@ -531,5 +544,27 @@ export async function linkAgentToAccount(
   );
 
   return accountId;
+}
+
+/**
+ * #2b: redeem a claim-code for its capability. Returns null if the code is unknown or already expired.
+ * Sets redeemed_at on first redeem (audit only — the capability's nonce is the single-use gate at DKG,
+ * so a re-fetch of the same still-valid code is harmless). Reads replicated state, so it works from
+ * whichever sovereign node the agent is connected to.
+ */
+export async function redeemClaimCode(
+  pool: pg.Pool,
+  code: string,
+): Promise<{ capability: string; expiresAt: Date } | null> {
+  const res = await pool.query<{ capability: string; expires_at: string }>(
+    `UPDATE capability_claim_codes
+        SET redeemed_at = COALESCE(redeemed_at, now())
+      WHERE code = $1 AND expires_at > now()
+      RETURNING capability, expires_at`,
+    [code],
+  );
+  const row = res.rows[0];
+  if (!row) return null;
+  return { capability: row.capability, expiresAt: new Date(row.expires_at) };
 }
 

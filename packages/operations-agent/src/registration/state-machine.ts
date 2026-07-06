@@ -482,7 +482,9 @@ export class RegistrationStateMachine {
         emailConfirmed.emailStubHash ?? "",
         record.id,
       );
-      token = result.token;
+      // #2b: deliver the short claim-code the operator types; falls back to the full capability blob if
+      // the directory didn't return a claim_code (older directory). `token` is only relayed + logged here.
+      token = result.claimCode ?? result.token;
     } catch (err) {
       const httpStatus = err instanceof PreAuthRequestError ? err.httpStatus : 0;
       logger.error("registration.preauth.request.failed", err instanceof Error ? err : new Error(String(err)), {
@@ -550,7 +552,9 @@ export class RegistrationStateMachine {
         record.emailStubHash ?? "",
         record.id,
       );
-      token = result.token;
+      // #2b: deliver the short claim-code the operator types; falls back to the full capability blob if
+      // the directory didn't return a claim_code (older directory). `token` is only relayed + logged here.
+      token = result.claimCode ?? result.token;
     } catch (err) {
       const httpStatus = err instanceof PreAuthRequestError ? err.httpStatus : 0;
       logger.error("registration.preauth.request.failed", err instanceof Error ? err : new Error(String(err)), {

@@ -565,7 +565,10 @@ describe("AC-002 + AC-003 + SI-001: re-registration check", () => {
     // AC-004 assertion 5 (IAM): the ssm:GetParameters resource is scoped to ops-agent path
     // The Resource ARN must reference parameter/cello/ and ops-agent
     const iamLines = iamTemplate.split("\n");
-    const ssmActionIndex = iamLines.findIndex((l) => l.includes("ssm:GetParameters"));
+    // Match the EXACT `ssm:GetParameters` action list-item — NOT `ssm:GetParametersByPath` (a separate
+    // statement scoped to the nodes/* path). Plain includes() matched ByPath first (it's a superstring)
+    // and checked the wrong statement's resource; the ops-agent GetParameters grant is correct.
+    const ssmActionIndex = iamLines.findIndex((l) => /-\s*ssm:GetParameters\s*$/.test(l));
     expect(ssmActionIndex, "ssm:GetParameters must exist in IAM template").toBeGreaterThan(-1);
     // Find the Resource lines after ssm:GetParameters (within 5 lines: Action block → Resource block)
     const ssmContext = iamLines.slice(ssmActionIndex, ssmActionIndex + 10).join("\n");
