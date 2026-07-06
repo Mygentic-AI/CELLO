@@ -116,6 +116,66 @@ M8C-DECISIONS (D5), M8C-SPEC (Tier 1 note), this journal + status board. No code
 
 ---
 
+### 2026-07-06 — Entry 2: DOD-SPIKE-1 design note + journey script (before building)
+
+**Unit:** DOD-SPIKE-1 (Tier 0). Opus 4.8 implementer, main loop, autonomous.
+
+**Terrain re-verified in code (2026-07-06, cello-client HEAD `f1d5e67`):** the daemon→shim→Claude
+hop, all three legs located:
+1. **Daemon emits** — `NotificationDispatcher.dispatchSessionStateChanged`
+   (`core/daemon/src/notification-dispatcher.ts:124`) builds the IPC frame
+   `{ notification: "session_state_changed", data: { agent, type, agentName, sessionId, state, counterpartyPubkey } }`
+   and writes it to every connection whose `currentAgent === agentName`.
+2. **Shim drops it** — `IpcProxy.#processBuffer` (`core/adapter-claude-code/src/ipc-proxy.ts:183-185`):
+   `if ("notification" in frame) { /* skip for now */ continue; }`. This is the ONE unproven hop.
+3. **Target event** — legacy `notifications.ts` shows the shape to emit: an MCP JSON-RPC
+   notification `method: "notifications/claude/channel"`, content-free params. The
+   `claude/channel` capability is declared on the `McpServer` as
+   `{ capabilities: { experimental: { "claude/channel": {} } } }` (`server.ts:131`). The LIVE shim
+   `cello-mcp.ts:120` does NOT declare it yet — WAKE adds it; the spike patches it.
+
+**What is ALREADY proven (so the spike need not re-prove it):**
+- Daemon→real-IPC-socket delivery of `session_state_changed`: `mcp-002-notifications.test.ts`
+  AC-004/012 (real `startDaemon` + real `connectToDaemon`, asserts the frame arrives).
+- Legacy in-process adapter → MCP `notifications/claude/channel` → MCP `Client` receipt:
+  `adapter-002.test.ts`. Proves translation + client receipt, but for the LEGACY server, not the
+  live shim over real stdio.
+- Therefore the spike's de-risking target narrows to exactly: **does the real `cello-mcp.js`
+  binary, patched to forward, translate a real daemon `session_state_changed` IPC frame into a
+  `notifications/claude/channel` JSON-RPC notification on its stdout — the exact bytes
+  `--channels` consumes?** If yes, the reactive track is de-risked. If no, redesign on day 0.
+
+**Journey script (headless, faithful — real daemon + real shim binary + raw MCP stdio):**
+1. Patch the two real files minimally (throwaway; reverted after capture — WAKE reimplements with
+   tests): `ipc-proxy.ts` gains `onNotification(fn)` + calls it in the notification branch
+   (BEFORE response correlation, never touching `#pending` — the D7 porting trap); `cello-mcp.ts`
+   declares the `claude/channel` capability and, after `server.connect`, registers
+   `proxy.onNotification(frame => server.server.notification({ method: "notifications/claude/channel", params: frame.data }))`.
+2. `pnpm run build`.
+3. Spike harness (`scratchpad/spike/`): `startDaemon` (CELLO_ENV=test, temp CELLO_DIR, alice
+   agent seeded like `setupWithAgents`); spawn real `dist/bin/cello-mcp.js` with `CELLO_DIR`=temp
+   as a stdio subprocess; drive raw MCP JSON-RPC on its stdin (`initialize` → inspect whether the
+   response advertises `claude/channel` → `notifications/initialized` → `tools/call cello_start_agent`
+   + `cello_use_agent alice`); from a SECOND raw `connectToDaemon` client emit
+   `__test_emit_session_event { type:"created", sessionId, agentName:"alice", counterpartyPubkey }`;
+   watch the shim's stdout for a `notifications/claude/channel` line; print the exact JSON.
+4. Assert it landed; record exact flag/event shape + surprises here BEFORE any WAKE code.
+5. Revert the two-file patch (`git checkout`).
+
+**The one genuinely-human leg (flagged, not blocking):** visually confirming the event appears
+*inside an interactive `claude --channels` chat context* (Anthropic's channel-injection feature)
+needs a human at the keyboard. Per SPEC §2 that flag is settled — "the spike confirms CELLO's
+specific end-to-end wiring, not the flag." The headless proof above IS the spike's de-risking
+verdict; the interactive visual is a manual confirmation for Andre, noted on close.
+
+**INV-CONTENTFREE check:** `session_state_changed` `data` carries no message content (only
+type/agent/sessionId/state/counterpartyPubkey) — forwarding `data` wholesale is content-free.
+The exact WAKE param contract is WAKE's design; the spike forwards `data` to record the real shape.
+
+**Next:** patch → build → run → journal outcome.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
