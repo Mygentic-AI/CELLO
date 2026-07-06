@@ -21,7 +21,7 @@ description: >
 | 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | 🟡 🟡 🟡 ❌ |
 | 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | 🟡 all (built+reviewed; ✅ at LIVE-1) |
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | 🟡 🟡 🟡CORE 🅿️CFG(D14) 🟡 |
-| 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡 ❌ ❌ ❌ |
+| 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡CORE 🟡 🟡CORE ❌ |
 | 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | ❌ ❌ |
 | 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ❌ all |
 | Post-channel — deferred | M9INT-1 (do AFTER channel tiers — D11; NOT a prerequisite) | ❌ deferred |
@@ -633,6 +633,43 @@ All fixed in `22de42c`:**
 DOD-LIVE-1 with the publish cascade).
 
 **Next unit:** the ONBOARD-* rider cluster — see Entry 10 design note (repro R4 first).
+
+---
+
+### 2026-07-06 — Entry 24: DOD-ABUSE-1 + DOD-TTL-1 built, both reviewed, both had HIGH findings fixed (commits `b28e6d3`→`014a8bc`, `e1ddb18`→`af8a701`)
+
+**DOD-ABUSE-1 built (`b28e6d3`).** Per-session cumulative-received-byte cap (25MB, anti-drip-feed)
+in the content funnel; per-sender + global anti-swarm acceptance bounds via
+`checkUnknownSenderAcceptanceBound`, checked first in `acceptInboundAssignment`. Known contacts
+exempt from all of it ("bounded only by disk").
+
+**Reviewer (aeffb82f): two HIGH, attacker-controlled bypasses, both fixed (`014a8bc`).** (1) The
+size cap ran AFTER the out-of-order hold-branch's early return — held content skipped it entirely,
+and `#releaseHeld` appended it later with no re-check; a sender fully controls delivery timing and
+could drip-feed unbounded bytes this way. Fixed: moved the check before the hold-branch, now also
+accounting for currently-held bytes (not just committed). (2) Both acceptance-bound queries counted
+`status = 'active'` only — a counterparty can trivially force `'interrupted'` just by disconnecting
+(a session that still accepts content), evading both bounds for free, indefinitely, by
+open/disconnect/repeat. Fixed: both queries now count `active` + `interrupted`. Two regression
+tests added, proving each exact bypass is closed.
+
+**DOD-TTL-1 built (`e1ddb18`).** 24h default TTL (`INBOUND_SESSION_TTL_MS`), lazy reap-on-read (no
+background timer), expired requests surface via `cello_check_notifications`'s new
+`expired_session_requests` rather than vanishing. Per-agent override parked on M9-CFG-001 (D17).
+
+**Reviewer (aed2d71f): SPEC FAITHFUL on T1-T3, one HIGH found + fixed (`af8a701`).**
+`expiredSessionRequests` was append-only with no drain — and a whitelisted CONTACT-1 contact is
+EXEMPT from ABUSE-1's bounds, so they could push unlimited accepted sessions the operator never
+claims, each becoming a permanent entry every 24h for the daemon's whole lifetime (the exact
+resource-leak class `STATUS_RESUMABLE_CAP` already exists in this file to prevent, just not applied
+here). Fixed: capped at 20/agent (keep-newest-N) + `totalExpired` added to the INBOX log line for
+observability. Regression test added.
+
+**Both fixes are closed bugs, not scope deviations — no new D-decision needed** (D-entries are for
+parked/deferred scope; these gaps are now fully, correctly implemented per the DoD text).
+
+Full gate green (1567) after all four fix commits. Continuing to DOD-TGDOOR-1 (§6
+design-significant — the last Tier-3 unit) with a design note first.
 
 ---
 

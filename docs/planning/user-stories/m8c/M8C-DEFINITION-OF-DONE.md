@@ -233,9 +233,9 @@ description: >
 - **DOD-ABUSE-1** — Persistence bounds (the non-M9 remainder): per-session total-size limit
   (anti-drip-feed), bounded unknown-sender queue per sender, global daemon-wide unknown-sender
   cap (anti-swarm). Whitelisted senders bounded only by disk. Per-message cap + outbound rate are
-  M9's — not rebuilt here. — 🟡 (2026-07-06, Entry 24 — built, daemon-side: per-session cumulative-received-byte cap in the ingestReceivedContent funnel + per-sender/global active-session acceptance bounds in acceptInboundAssignment, both exempting known CONTACT-1 contacts entirely; review pending.)
+  M9's — not rebuilt here. — 🟡 (2026-07-06, Entry 24 — built `b28e6d3`, daemon-side: per-session cumulative-received-byte cap in ingestReceivedContent + per-sender/global active-session acceptance bounds in acceptInboundAssignment, both exempting known CONTACT-1 contacts entirely; reviewer (aeffb82f) found 2 HIGH attacker-controlled bypasses (held-content skipped the cap; 'interrupted' status evaded both acceptance bounds), both fixed `014a8bc` w/ regression tests. Flips ✅ live.)
 - **DOD-TTL-1** — Receiver-side session-request TTL (24h default, configurable); expired requests
-  leave the queue and are visible as expired in INBOX. — 🟡CORE (2026-07-06, Entry 24 — built `e1ddb18`, daemon-side: INBOUND_SESSION_TTL_MS (24h) + lazy reap-on-read + expired_session_requests in cello_check_notifications; review pending. Per-agent override PARKED on M9-CFG-001, D17. Flips ✅ live.)
+  leave the queue and are visible as expired in INBOX. — 🟡CORE (2026-07-06, Entry 24 — built `e1ddb18`, daemon-side: INBOUND_SESSION_TTL_MS (24h) + lazy reap-on-read + expired_session_requests in cello_check_notifications; reviewer (aed2d71f) SPEC-FAITHFUL, found 1 HIGH (unbounded expired-log growth via contact-exempt senders), fixed `af8a701` (capped 20/agent) w/ regression test. Per-agent override PARKED on M9-CFG-001, D17. Flips ✅ live.)
 - **DOD-TGDOOR-1** — Telegram Mode 1, doorbell level: daemon-owned bot (token = daemon setting,
   single long-lived `getUpdates` poller), allowlisted operator chat ID, discrete events only
   (session requests, messages-waiting, state changes) pushed to the operator's phone — including
