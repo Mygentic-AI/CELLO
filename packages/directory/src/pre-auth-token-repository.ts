@@ -546,25 +546,31 @@ export async function linkAgentToAccount(
   return accountId;
 }
 
+/** #2b: outcome of a claim-code redeem — distinguishes "unknown code" from "expired" (review finding 2:
+ *  the raw-capability path surfaces PRE_AUTH_TOKEN_EXPIRED, so the short-code path must too). */
+export type RedeemClaimCodeResult =
+  | { status: "ok"; capability: string; expiresAt: Date }
+  | { status: "expired" }
+  | { status: "not_found" };
+
 /**
- * #2b: redeem a claim-code for its capability. Returns null if the code is unknown or already expired.
- * Sets redeemed_at on first redeem (audit only — the capability's nonce is the single-use gate at DKG,
- * so a re-fetch of the same still-valid code is harmless). Reads replicated state, so it works from
- * whichever sovereign node the agent is connected to.
+ * #2b: redeem a claim-code for its capability. Matches by code alone (regardless of expiry) so the caller
+ * can tell "unknown" (maybe not-yet-replicated on this node — see the DKG-gate retry) apart from "expired".
+ * Sets redeemed_at as audit only — the capability's nonce is the real single-use gate at the nonce binder,
+ * so a concurrent multi-node redeem or a re-fetch while valid is harmless. Reads replicated state, so it
+ * works from whichever sovereign node the agent is connected to.
  */
-export async function redeemClaimCode(
-  pool: pg.Pool,
-  code: string,
-): Promise<{ capability: string; expiresAt: Date } | null> {
-  const res = await pool.query<{ capability: string; expires_at: string }>(
+export async function redeemClaimCode(pool: pg.Pool, code: string): Promise<RedeemClaimCodeResult> {
+  const res = await pool.query<{ capability: string; expires_at: string; expired: boolean }>(
     `UPDATE capability_claim_codes
         SET redeemed_at = COALESCE(redeemed_at, now())
-      WHERE code = $1 AND expires_at > now()
-      RETURNING capability, expires_at`,
+      WHERE code = $1
+      RETURNING capability, expires_at, (expires_at <= now()) AS expired`,
     [code],
   );
   const row = res.rows[0];
-  if (!row) return null;
-  return { capability: row.capability, expiresAt: new Date(row.expires_at) };
+  if (!row) return { status: "not_found" };
+  if (row.expired) return { status: "expired" };
+  return { status: "ok", capability: row.capability, expiresAt: new Date(row.expires_at) };
 }
 

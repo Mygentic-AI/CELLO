@@ -1341,10 +1341,24 @@ export class CelloDirectoryNode {
             // independently; the capability's nonce remains the single-use gate at the nonce binder.
             let capBlob = blob.trim();
             if (capBlob.startsWith("CELLO-") && this.#pgPool) {
-              const redeemed = await redeemClaimCode(this.#pgPool, capBlob);
-              if (!redeemed) {
-                this.#logger?.warn("directory.auth.claimcode.invalid", { remoteAgentId: agentId, correlationId });
-                stream.send(lp.encode.single(CBOR_ENC.encode({ type: "preauth_error", reason: "CLAIM_CODE_INVALID" })));
+              // Absorb sub-second replication lag (review finding 1): a code issued on ANOTHER node may not
+              // have landed on THIS quorum node yet — retry not_found a few times before rejecting, so a
+              // transient replication delay isn't misreported as a bad code (the raw-capability path has no
+              // such race). "expired" is distinguished from "unknown" (finding 2) for an accurate reason.
+              // Budget ~2s of retry: the code is minted on one node and replicates; the client fans DKG
+              // round-1 to ALL quorum nodes and fails the whole registration if ANY returns preauth_error,
+              // so a single lagging node must be given time to catch up rather than hard-fail a valid code.
+              // (In the human flow the code is typed seconds-to-minutes after minting, so it is already
+              // replicated; this covers scripted/immediate registration and cross-region apply lag.)
+              let redeemed = await redeemClaimCode(this.#pgPool, capBlob);
+              for (let i = 0; i < 5 && redeemed.status === "not_found"; i++) {
+                await new Promise((r) => setTimeout(r, 400));
+                redeemed = await redeemClaimCode(this.#pgPool, capBlob);
+              }
+              if (redeemed.status !== "ok") {
+                const reason = redeemed.status === "expired" ? "CLAIM_CODE_EXPIRED" : "CLAIM_CODE_INVALID";
+                this.#logger?.warn("directory.auth.claimcode.rejected", { remoteAgentId: agentId, status: redeemed.status, correlationId });
+                stream.send(lp.encode.single(CBOR_ENC.encode({ type: "preauth_error", reason })));
                 await stream.close();
                 return;
               }

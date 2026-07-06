@@ -788,22 +788,22 @@ describeIntegration("#2b capability_claim_codes: redeemClaimCode", () => {
       [code, capability, expiresAt.toISOString()],
     );
     const r1 = await redeemClaimCode(pool, code);
-    expect(r1?.capability).toBe(capability);
+    expect(r1).toEqual(expect.objectContaining({ status: "ok", capability }));
     const after = await pool.query<{ redeemed_at: string | null }>(
       `SELECT redeemed_at FROM capability_claim_codes WHERE code = $1`, [code]);
     expect(after.rows[0]!.redeemed_at).not.toBeNull();
     // Multi-fetch until expiry (each DKG-quorum node redeems the same code); still returns the capability.
     const r2 = await redeemClaimCode(pool, code);
-    expect(r2?.capability).toBe(capability);
+    expect(r2).toEqual(expect.objectContaining({ status: "ok", capability }));
   });
 
-  it("returns null for an unknown code and for an expired code", async () => {
-    expect(await redeemClaimCode(pool, "CELLO-does-not-exist")).toBeNull();
+  it("distinguishes an unknown code (not_found) from an expired code (expired)", async () => {
+    expect((await redeemClaimCode(pool, "CELLO-does-not-exist")).status).toBe("not_found");
     const code = "CELLO-" + randomBytes(10).toString("hex");
     await pool.query(
       `INSERT INTO capability_claim_codes (code, capability, expires_at) VALUES ($1, $2, now() - interval '1 hour')`,
       [code, "expired-cap"],
     );
-    expect(await redeemClaimCode(pool, code)).toBeNull();
+    expect((await redeemClaimCode(pool, code)).status).toBe("expired");
   });
 });
