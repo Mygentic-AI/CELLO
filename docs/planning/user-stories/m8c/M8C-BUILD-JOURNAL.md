@@ -17,7 +17,7 @@ description: >
 | Tier | Lines | Status |
 |---|---|---|
 | I — Invariants | INV-CONTENTFREE, INV-GATEWAY, INV-PUSHPULL, INV-HONEST-STATES, INV-ONE-PRIMARY | ❌ all |
-| 0 — Prerequisites | SPIKE-1, M9INT-1 | ❌ ❌ |
+| 0 — Prerequisites | SPIKE-1, M9INT-1 | ✅ ❌ |
 | 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | ❌ all |
 | 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | ❌ all |
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | ❌ all |
@@ -25,11 +25,16 @@ description: >
 | 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | ❌ ❌ |
 | 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ❌ all |
 
-**Next unit:** DOD-SPIKE-1 — the ~30-min live `claude --channels` spike. The very first action.
+**Next unit:** DOD-M9INT-1 — merge `m9-build` to cello-client main, wire the gateway seam
+(`screenInbound` at `ingestReceivedContent`, `screenOutbound` at `cello_send`), run the semantic
+gate (m9 gate green against merged daemon + audit that every M8B-era content path routes through
+the gateway). No channel code before the seam is live (PROCEDURE §4).
 
-**Resume pointer:** read M8C-PROCEDURE §0 read order, then take DOD-SPIKE-1. No code exists yet;
-the milestone is greenfield except everything the verification pass proved already live
-(daemon dispatch, IPC frames, M9 gateway on `m9-build`, the on-disk Telegram reference).
+**Resume pointer:** DOD-SPIKE-1 is ✅ (Entry 3 — PASS, reactive track de-risked; the exact
+`notifications/claude/channel` event shape is recorded there for WAKE's param contract). Read
+M8C-PROCEDURE §0 read order, then take DOD-M9INT-1. Milestone otherwise greenfield except what the
+verification pass proved already live (daemon dispatch, IPC frames, M9 gateway on `m9-build`, the
+on-disk Telegram reference).
 
 ---
 
@@ -173,6 +178,66 @@ type/agent/sessionId/state/counterpartyPubkey) — forwarding `data` wholesale i
 The exact WAKE param contract is WAKE's design; the spike forwards `data` to record the real shape.
 
 **Next:** patch → build → run → journal outcome.
+
+---
+
+### 2026-07-06 — Entry 3: DOD-SPIKE-1 RESULT — PASS, reactive track de-risked ✅
+
+**Verdict: PASS. The hop works. No redesign needed.** The reactive track is sound; WAKE can build
+on it.
+
+**What was run (real binaries, headless).** Real daemon (`startDaemon`, CELLO_ENV=test) + the real
+shim binary `dist/bin/cello-mcp.js` spawned as a stdio subprocess, minimally patched to forward
+notification frames (`ipc-proxy.ts` `onNotification` + `cello-mcp.ts` `claude/channel` capability
+and a `proxy.onNotification → server.server.notification("notifications/claude/channel")` bridge).
+Drove raw MCP JSON-RPC on the shim's stdin; a `session_state_changed` dispatch was triggered from a
+SECOND raw IPC client via `__test_emit_session_event`. Harness:
+`scratchpad/spike/spike.mjs` (throwaway). **The two-file patch was reverted after capture and the
+tree rebuilt clean — WAKE reimplements it properly with TDD + the pull twin after M9INT.**
+
+**Evidence — 3/3 notification types surfaced on the shim's stdout as `notifications/claude/channel`
+(the exact bytes a `--channels` session consumes):**
+- **Capability negotiated.** `initialize` response advertised:
+  `capabilities.experimental = { "claude/channel": {} }` (alongside `tools.listChanged`). The
+  shim really does declare the channel capability once the constructor arg is added.
+- **Target frame (`session_state_changed`):**
+  `{"method":"notifications/claude/channel","params":{"agent":"alice","type":"session_state_changed","agentName":"alice","sessionId":"spike-sess-001","state":"created","counterpartyPubkey":"deadbeefcafe"},"jsonrpc":"2.0"}`
+- Also `agent_state_changed` (from `cello_start_agent`) and `agent_current_changed` (from
+  `cello_use_agent`) surfaced identically.
+
+**Exact event shape (for WAKE's param-contract design).** The forwarded MCP notification is
+`{ jsonrpc:"2.0", method:"notifications/claude/channel", params: <the daemon frame's `data` blob> }`.
+The daemon `data` blob is content-free — `agent`, `type`, `agentName`, `sessionId`, `state`,
+`counterpartyPubkey` — no message content (INV-CONTENTFREE holds). WAKE will decide the precise
+param field set (the spike forwarded `data` wholesale to record ground truth); the daemon already
+supplies exactly the content-free doorbell fields the DoD wants.
+
+**Flag behavior confirmed.** No `--channels`-specific daemon/shim behavior is needed for the frame
+to reach stdout — the shim emits the JSON-RPC notification unconditionally once it declares the
+capability and forwards. `--channels` is the Claude Code STARTUP FLAG that makes Claude Code
+*negotiate* the `claude/channel` capability and inject the event into the model's context; per
+SPEC §2 that is Anthropic's settled feature and out of CELLO's wiring scope.
+
+**Surprises / findings for WAKE (recorded, not blocking):**
+1. **Self-echo.** `agent_current_changed` is routed by the daemon to the *triggering* connection
+   (`dispatchAgentCurrentChanged` targets the caller). So a session that calls `cello_use_agent`
+   receives a `claude/channel` event for its own action. Harmless and per-spec (WAKE-1 forwards
+   all four types), but WAKE should be aware a session can be "woken" by its own tool call.
+2. **Ordering trap held.** The notification branch (`ipc-proxy.ts:183`) runs BEFORE response
+   correlation and never touches `#pending` — the D7 porting trap. Forwarding there is correct.
+3. **No reconnect (D7).** Unchanged by the spike: socket close = `ipc_connection_lost` forever;
+   recovery is a fresh shim + INBOX on reattach. WAKE's edge ACs (no-attached-client → daemon
+   queues → INBOX reveals) cover this; nothing here contradicts it.
+
+**Residual HUMAN step (flagged, non-blocking).** The literal visual confirmation that the event
+renders *inside an interactive `claude --channels` chat* needs a human at the keyboard (Anthropic's
+channel-injection). The headless real-binary proof above IS the spike's de-risking substance
+(SPEC §2: "the spike confirms CELLO's specific end-to-end wiring, not the flag"), so SPIKE-1 is
+✅ on the wiring. Recommended when Andre next runs a live session; not a launch gate and not a
+blocker for M9INT/WAKE.
+
+**Status flip:** DOD-SPIKE-1 → ✅. **Next unit:** DOD-M9INT-1 (Tier 0 — merge `m9-build`, wire the
+gateway seam, run the semantic gate). No channel code before the seam is live (PROCEDURE §4).
 
 ---
 

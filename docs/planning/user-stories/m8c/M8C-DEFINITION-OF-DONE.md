@@ -66,7 +66,11 @@ description: >
   trigger a real inbound session, and confirm the daemon's `session_state_changed` frame surfaces
   as an in-context `notifications/claude/channel` event (with a locally-patched shim; no publish
   needed). Outcome journaled: exact flag behavior, event shape, any surprises. **This is the very
-  first action of the milestone.** — ❌
+  first action of the milestone.** — ✅ (2026-07-06, Entry 3 — PASS. Real daemon + real shim
+  binary over raw MCP stdio: all 3 notification types, incl. the target `session_state_changed`,
+  surfaced as `notifications/claude/channel` on the shim's stdout; `claude/channel` capability
+  negotiated in `initialize`; exact event shape recorded for WAKE. Residual human step: visual
+  confirmation inside a live `--channels` chat — flagged, non-blocking, per SPEC §2.)
 - **DOD-M9INT-1** — `m9-build` merged to cello-client main (dry-run verified conflict-free
   2026-07-05); gateway wired at the live seam (`screenInbound` at `ingestReceivedContent`,
   `screenOutbound` at `cello_send`); the **semantic gate** passes: m9 gate re-run green against
