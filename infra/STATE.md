@@ -56,9 +56,13 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
   tables incl capability_claim_codes, 6 slots streaming, 0 apply-errors. Issuance PROVEN LIVE: Andre's
   Telegram registration got a short `CELLO-`-code (not the blob), minted+stored on us1. The one-time
   initial-copy gap (code minted before the table was published) fixed by a delete+re-insert on us1 →
-  replicated → code now on all 3 nodes, redeemable across the DKG quorum. Relays restarted. Remaining:
-  the actual `cello register <agent>` with the code (needs Andre's agent name; code single-use).
-  Entry below (DEPLOYING) superseded.
+  replicated → code now on all 3 nodes, redeemable across the DKG quorum. Relays restarted, manifests
+  fresh on all 3. **PROVEN END-TO-END (2026-07-06 09:57): Andre registered agent `Ms_Chelly`
+  (pubkey 178d420b…, agent_id 99829b4f…) using the short code CELLO-NrVs… → cello register ok:true;
+  profile landed in agent_profiles on ALL 3 nodes; claim code redeemed_at=09:57:59.** One registration
+  proves both the short-code path AND the counter-collision fix (profile replicated to all 3, no
+  collision). NOTE: the local daemon still caches pre-reset zombie agents (Agent-1/Demo2/capX/capY/tofn1)
+  with no directory profile — harmless, `cello remove-agent` to clean. Entry below (DEPLOYING) superseded.
 - **🎟️ #2b SHORT CLAIM-CODE + REDEEM — DEPLOYING (2026-07-06, commit `70c4f41c`).** The operator now gets
   a short `CELLO-`+base58 code instead of the ~570-char capability blob; the agent passes it through raw as
   preAuthToken (NO client change) and the directory redeems it server-side at the DKG round-1 gate before
