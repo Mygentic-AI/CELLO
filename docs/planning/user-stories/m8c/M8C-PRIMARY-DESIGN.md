@@ -4,7 +4,7 @@ type: design
 date: 2026-07-07
 milestone: M8C
 topics: [multi-daemon, primary-standby, device-linking, frost, db-sync, threat-model]
-status: reviewed
+status: reviewed-one-open-item
 description: >
   DOD-PRIMARY-DESIGN-1's full design log — hard gate for all Tier 5 code. Covers the device-linking
   handshake (how daemon B proves it belongs to the same operator as daemon A), the threat model, and
@@ -16,7 +16,10 @@ description: >
   pattern; DB-sync ordering/atomicity was asserted, not defined); (2) after a follow-up code-level
   investigation found the review's OWN proposed fix ("quorum commit") doesn't match how this
   codebase actually achieves multi-node agreement anywhere (no cross-node RPC exists) — corrected
-  to the real, existing client-coordinated per-node pattern DKG already uses.
+  to the real, existing client-coordinated per-node pattern DKG already uses. ONE OPEN BLOCKING ITEM
+  found while drafting the actual wire frames (Decision 3): the "share released" attestation cannot
+  be a K_local signature since both daemons share K_local — needs a FROST-share-based proof, not
+  yet designed. No implementation code exists pending this; see Decision 3's final note.
 ---
 
 # M8C Tier 5 — Primary/Standby Device-Linking Design
@@ -253,6 +256,45 @@ necessary) — worth closing, but a hygiene matter, not an invariant-correctness
 hygiene (not a correctness requirement): after the local delete, run `PRAGMA secure_delete = ON`
 (or an explicit overwrite) before the delete and follow with `VACUUM` to reduce the chance the
 share persists in reclaimable SQLCipher pages.
+
+**⛔ BLOCKING GAP found during implementation attempt (2026-07-07) — the "share released
+attestation" cannot be a K_local signature. NOT YET RESOLVED — this blocks starting
+DOD-PRIMARY-1's wire-protocol code.** While drafting the actual `primary_transfer_request` wire
+frame, realized: Decision 1 establishes that BOTH daemons hold the SAME K_local after pairing. A
+signature "proving the old Primary released its share" that is produced using K_local is therefore
+**forgeable by the new daemon itself** — it also holds K_local and could sign a message claiming
+the old daemon released, whether or not that actually happened. K_local signing proves "a daemon
+holding this identity's key," never "which specific physical device." This is exactly the same
+category of mistake Decision 4's Pass-1 fix made (reaching for the nearest available primitive
+without checking it actually distinguishes the two parties) — caught here by the same self-check
+discipline before writing more code, not by an external reviewer this time.
+
+**What the real fix needs:** the release attestation must be provable ONLY by whichever device
+currently holds the FROST share — since per Decision 3, that is the ONE piece of material genuinely
+NOT shared between the two daemons. Candidate approaches, none yet fully designed:
+- Have the old Primary produce a real (or release-scoped) FROST partial-signature-like proof over
+  a "release" message, using its actual share fragment for each node it's releasing to — provable
+  by the SAME per-node share-commitment verification the directory already does during DKG
+  (`directory-node.ts`'s `#pendingDkgCommitments` check is the closest existing analog). This
+  reuses FROST's own machinery (matching this design's overall preference for reuse over invention)
+  but needs the exact scoped-proof construction worked out — is a full ceremony round required, or
+  can a lighter-weight proof suffice since this isn't producing a signature over real content?
+- Alternatively, bind "who may claim to be releasing" to the directory's OWN already-authenticated
+  connection state rather than a portable signature: each node already knows (from its own
+  `primary_holder` row) which `daemon_id` is its current holder; if release can only be asserted
+  over the SPECIFIC live signaling connection that node associates with that holder (transport-
+  layer identity, not an app-level signature that could be replayed from any device), a device that
+  was never Primary cannot produce it regardless of what it knows or holds. This avoids new FROST
+  cryptography but needs the connection-identity binding worked out precisely (is the signaling
+  stream itself keyed to daemon_id, or would this need a new per-transfer session token issued at
+  the moment a daemon last became Primary?).
+
+**This is genuinely new design work, not an implementation detail — it must be resolved (with the
+SAME rigor as Decisions 1-4 above, likely its own adversarial check) before any DOD-PRIMARY-1 wire
+protocol or directory-node.ts handler code is written.** No frames, migration, or handler code has
+been committed pending this — the `primary_holder` table's OWN schema (Decision 4) remains valid
+regardless of which fix is chosen (it stores "who is currently the holder" either way), but the
+protocol that WRITES to it safely does not exist yet.
 
 ## Decision 4 — Directory-enforced Primary arbitration, CLIENT-COORDINATED per-node (not a cross-node commit protocol)
 
