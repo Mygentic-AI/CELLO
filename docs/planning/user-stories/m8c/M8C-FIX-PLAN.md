@@ -120,14 +120,17 @@ crisp handoff for the live checks.
 
 ### ▶ RESUME STATE — keep current (the single anchor for a cut-off resume)
 **Done:** CC-1 (cc `eae50fb`) · OA-1 (tc `4ce5cfe7`) · CC-2 (cc `e73c421`) · OA-2 (tc `c1189f42`) · CC-3 (cc
-`da28e12`) · CC-6/7/8 CLI cluster (cc `f486e32`) — all reviewed. **Next unit: CC-9** (expose
-`cello_contact_list/add/remove` as MCP tools in the connect shim — add 3 `server.tool(...)` in
-`core/adapter-claude-code/src/bin/cello-mcp.ts` forwarding via `proxy.call` [pattern: cello_use_agent
-:154; params `pubkey` + optional `agent`, mirroring daemon handlers cello_contact_add/remove/list]).
-That is the LAST 🟠. Then 🟢 CC-4 (drop empty `connections` field) + CC-5 (F21 full). Then ONE cello-client
-`/cello-publish` cascade + ONE us-east-1 ops-agent redeploy (OA-1+OA-2), then the live-verification stop.
-Nothing published/redeployed yet. When resuming cold: read this directive + the per-fix `STATUS:` lines +
-`git log` in both repos, continue from the first non-✅ fix.
+`da28e12`) · CC-6/7/8 CLI cluster (cc `f486e32`) · CC-9 (cc `d9c5569`) — all reviewed. **All 🔴+🟠 DONE.**
+**Next unit: CC-4** (🟢 — drop the always-empty `connections` field from status: remove from
+`DaemonStatusResponse` [`types.ts:135`], the `const connections = []` decl [`daemon.ts:610-611`] + its use
+in `getStatus` [~1792] and `cello_status`, and the 4 test assertions [daemon.test.ts:168/186/213,
+commands.test.ts:97]; `ConnectionInfo` may become unused). Then **CC-5** (🟢 — F21 full, design-significant:
+(a) don't-strand — receiver session conditional on initiator confirmation OR reap `messageCount:0`
+half-open sessions after timeout, pick cleaner + log; (b) terminal-escape — unilateral force-abandon
+marking the session terminal locally with a surfaced reason. Write a design note in the journal FIRST per
+PROCEDURE §6). Then ONE cello-client `/cello-publish` cascade + ONE us-east-1 ops-agent redeploy
+(OA-1+OA-2), then the live-verification stop. Nothing published/redeployed yet. When resuming cold: read
+this directive + the per-fix `STATUS:` lines + `git log` in both repos, continue from the first non-✅ fix.
 
 ---
 
@@ -242,6 +245,7 @@ Nothing published/redeployed yet. When resuming cold: read this directive + the 
 - **Difficulty:** Easy once located.
 
 ### CC-9 — Contact management is not on the MCP tool surface 🟠
+**STATUS: ✅ done** — cello-client `d9c5569`. Added `cello_contact_list/add/remove` as `server.tool` forwards in `bin/cello-mcp.ts` (`proxy.call`, params `pubkey`+optional `agent` matching the daemon handlers; omit-agent → daemon sole-online fallback; no-agent → loud `no_current_agent`). No shim unit test (bin connects at import — untestable, like all ~20 bin tools; daemon handlers covered by m8c-contact-1). Connect suite green (108), typecheck/lint/build. Reviewer SPEC FAITHFUL / NO FALLBACKS / TEETH. Live `/mcp` reconnect is the enforcer. NOT yet published (end-of-run cascade).
 - **What/why:** the daemon has `cello_contact_list/add/remove` handlers (`daemon.ts:5585/5597/5609`;
   `resolveContactAgent` at `:5570`), but the **connect shim never forwards them as MCP tools** — so an agent
   driving via MCP can't see or manage its own whitelist (CLI-only, `cello contact ...`). Central now that

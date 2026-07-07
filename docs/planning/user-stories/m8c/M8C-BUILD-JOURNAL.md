@@ -2637,6 +2637,40 @@ end-of-run cello-client `/cello-publish` cascade.
 
 ---
 
+### 2026-07-07 — Entry 56: M8C-FIX-RUN CC-9 — expose contact management as MCP tools (last 🟠)
+
+**Seventh unit.** cello-client `d9c5569`.
+
+**What:** the daemon has `cello_contact_add/remove/list` handlers, but the connect shim never forwarded
+them — so an agent driving via MCP couldn't see or manage its own contact whitelist (CLI-only,
+`cello contact …`). That whitelist is load-bearing after CC-1/D21: a known contact is fast-tracked and
+exempt from unknown-sender screening + the ABUSE-1 acceptance caps, so an MCP-only operator had no way to
+grant/revoke trust.
+
+**Fix:** three `server.tool(...)` registrations in `bin/cello-mcp.ts` forwarding via `proxy.call`, mirroring
+the ~20 sibling bin tools. Params match the daemon handlers EXACTLY: `pubkey` (required on add/remove) +
+optional `agent` (list/add/remove), omitted when absent so the daemon's `resolveContactAgent` falls back to
+the current/sole-online agent. No current agent → daemon returns `no_current_agent` with actionable
+guidance (fails loud, no empty-list mask).
+
+**Test — none at the shim (justified):** `bin/cello-mcp.ts` does a top-level `await proxy.connect()` at
+import, so it's untestable in isolation — the same reason none of the ~20 sibling bin tools are shim-tested.
+The underlying handlers are covered by `m8c-contact-1.test.ts` (add/remove/list, INSERT-OR-IGNORE, per-agent,
+`added_at` pinning). Full connect suite green (108, incl. the subprocess-startup test that spawns the bin);
+typecheck/lint/build clean. Enforcer = live `/mcp` reconnect + invoke, batched to the end-of-run stop.
+
+**Reviewer:** SPEC FAITHFUL / NO SILENT FALLBACKS / TESTS HAVE TEETH (no test justified by the
+untestable-at-import shim boundary + daemon-layer coverage). No findings.
+
+**Milestone marker:** with CC-9, ALL 🔴 (CC-1, OA-1, CC-2) and ALL 🟠 (OA-2, CC-3, CC-6, CC-7, CC-8, CC-9)
+fixes are DONE + reviewed + committed + pushed. Remaining: 🟢 CC-4 (drop empty `connections`) + CC-5 (F21
+full), then the batched ship (ONE cello-client publish cascade + ONE ops-agent redeploy) and the live stop.
+
+**Unblocks:** MCP-driven whitelist management. NOT yet published — batched into the single end-of-run
+cello-client `/cello-publish` cascade.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
