@@ -513,6 +513,25 @@ PARKED (journal + DoD "Parked decisions" + here).
 
 ---
 
+### D21 — Unknown-sender treatment is a 4-level, per-agent screening policy, not a binary (2026-07-07, Andre)
+
+- **Decision:** how an agent treats inbound is a **4-level policy**, escalating by notification
+  intrusiveness: **L1 Ignore** (silence — not queued, no trace) · **L2 Queue-silent** (queued, no
+  interrupt; operator checks on their own schedule) · **L3 Queue + notify-on-return** (queued, surfaced
+  when the operator next comes online, still no mid-task interrupt) · **L4 Fast-track** (real-time,
+  interrupts welcome). **Known contacts are always L4; for unknown senders the operator selects 1/2/3
+  per agent.** Supersedes the current binary known/unknown model with its single fixed `"Dispatched."`
+  unknown-sender response.
+- **Home:** the selector is a **CONFIG-1 setting** (M9-CFG-001, parked per D14). L1 is the opaque/silence
+  mode parked per **D15**. **L3's "notify-on-return"** is a genuinely new primitive — and the same one
+  the 2b live test needed (proactive-wake-on-reconnect). L4 and (roughly) L2 exist today.
+- **Companion gap:** every level ≥2 only queues if the agent was **online (even if unattended)** when the
+  stranger knocked; a **fully offline** agent bounces the stranger with nothing queued — the **D19**
+  relay-discovery hole. Closing D19 is required for the support-style "reach me even when I'm down" case.
+- **Full design + built-vs-parked mapping:** [[2026-07-07_1700_four-level-screening-policy]].
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design these decisions are baked into
