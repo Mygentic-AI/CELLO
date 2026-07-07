@@ -123,16 +123,14 @@ crisp handoff for the live checks.
 `da28e12`) · CC-6/7/8 CLI cluster (cc `f486e32`) · CC-9 (cc `d9c5569`) — all reviewed. **ALL FIX ITEMS DONE + REVIEWED + SHIPPED (beta).** CC-1/2/3/4/5/6/7/8/9 + OA-1/2 all committed+pushed+reviewed
 (CC-5 = cc `146ac74`+`cc4e5ce`). (Deferred by directive: SEC-2/DIR-1, full D21.)
 **SHIP STATE:**
-- **cello-client cascade** — bumped daemon 0.0.35 / cli 0.0.32 / connect 0.0.61 (cc `f239c64`), tagged
-  **`v0.0.81`**, pushed → CI publishing to **beta**. **First tag run FAILED on a FLAKY test** (nothing
-  published): `session-node-manager.test.ts` "AC-009 (binary): SIGTERM marks active sessions interrupted"
-  — a real-process SIGTERM/DB timing race, NOT CC-5 (traced: the seeded rows are fresh so the age>5min
-  reaper can't touch them, and they were left `active` not `abandoned`, proving the reaper never ran; the
-  SIGTERM-interrupt path is unchanged). **Decisive:** the SAME commit `f239c64` PASSED on its main-branch
-  CI run — identical code, non-deterministic → flaky. **Re-ran the tag CI** (`gh run rerun 28895290870`;
-  nothing was published so no version burned). Watchdog cron `c3bb42cb` (every 4m) is verifying the re-run
-  → beta binaries (versions + real cross-pins + CC-5 symbol in the daemon tarball), then self-deletes +
-  refreshes this line. **NOT promoted to `latest`** (needs Andre's go).
+- **cello-client cascade — ✅ PUBLISHED + VERIFIED to `beta`.** daemon **0.0.35** / cli **0.0.32** / connect
+  **0.0.61** (cc `f239c64`, tag **`v0.0.81`**). CI green incl. the smoke-tag (clean-installs cli@beta +
+  connect@beta). **Binary-verified** (not just CI): beta versions correct; cross-pins are real versions
+  (cli→daemon 0.0.35; connect→client 0.0.46/crypto 0.0.18/transport 0.0.16 — NO `workspace:*`); and the
+  CC-5 code (`abandonSession`, `reapDeadHalfOpen`, `abandoned` status) confirmed present in the shipped
+  daemon@0.0.35 tarball dist. *(First tag run failed on a FLAKY binary SIGTERM test — traced NOT to CC-5;
+  same commit passed on main; re-ran, no version burned. Flaky-test follow-up noted below.)*
+  **NOT promoted to `latest`** (needs Andre's go). Watchdog cron `c3bb42cb` retired.
   **↳ Follow-up (post-launch, not blocking):** that binary SIGTERM test has a cross-connection visibility
   race — it INSERTs the synthetic rows on a separate SQLCipher connection then SIGTERMs, so the daemon's
   shutdown query can run before the INSERT is durable/visible. Worth hardening (e.g. confirm the daemon
