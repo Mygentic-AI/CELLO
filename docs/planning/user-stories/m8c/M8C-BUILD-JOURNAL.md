@@ -12,6 +12,16 @@ description: >
 
 # M8C — Build Journal
 
+> 🚨 **READ FIRST (2026-07-07): SEC-2 — pre-existing CRITICAL forgery hole in the FROST signing
+> path.** Found while scoping DOD-PRIMARY-1's ceremony-gate; confirmed by three independent
+> code-reads. The `/cello/frost/1.0.0` signing frames are unauthenticated and the directory blindly
+> signs arbitrary client-supplied bytes; T directory shares alone meet threshold, so anyone knowing
+> an agent's **public** key can forge its group signatures (sessions, seals). **Pre-existing, not
+> M8C's doing; possibly launch-blocking — your call on severity + fix.** NOT fixed headless (it's a
+> cross-repo hot-path auth change that breaks every deployed client unless rolled out in lockstep).
+> Full writeup: DoD "Tracked, not M8C-fruit" → SEC-2, and BUILD-JOURNAL Entry 39. Proposed fix:
+> K_local-authenticate the frost signing stream (same challenge the signaling stream already uses).
+
 ## Status board (update in place)
 
 | Tier | Lines | Status |
@@ -23,7 +33,7 @@ description: >
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | 🟡 🟡 🟡CORE 🅿️CFG(D14) 🟡 |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡CORE 🟡 🟡CORE 🟡 (**TIER 3 DONE, reviewed+fixed**) |
 | 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | 🟡CORE 🟡CORE (**TIER 4 DONE**, reviewer pending) |
-| 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ✅ 🟠 ❌ ❌ — DESIGN done (release-attestation resolved, Entry 35); **PRIMARY-1 directory-side arbitration BUILT+real-FROST-tested (Entry 36/37, 16 tests green)** — still owes ceremony-gate (next), daemon-side pairing/DB-sync/Telegram-gating, + kill-the-Primary live proof (needs Andre's multi-daemon spine) |
+| 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ✅ 🟠 ❌ ❌ — DESIGN done (Entry 35); **PRIMARY-1 directory arbitration BUILT+real-FROST-tested+reviewed (Entries 36-38, all findings fixed, 16 tests green)**. **REMAINDER ANDRE-GATED:** ceremony-gate 🅿️ PARKED on **SEC-2** (D20 — frost-signing-stream is unauthenticated, a pre-existing critical forgery hole, see 🚨 banner above); pairing/DB-sync/Telegram-gating/kill-the-Primary need a live multi-device spine |
 | Post-channel — deferred | M9INT-1 (do AFTER channel tiers — D11; NOT a prerequisite) | 🟡 MERGED (`d47227c`, reviewed, 1 HIGH fixed) |
 
 **⛔ M9 IS NOT A PREREQUISITE (D11, 2026-07-06).** Do NOT merge `m9-build` before the channel work.
@@ -633,6 +643,97 @@ All fixed in `22de42c`:**
 DOD-LIVE-1 with the publish cascade).
 
 **Next unit:** the ONBOARD-* rider cluster — see Entry 10 design note (repro R4 first).
+
+---
+
+### 2026-07-07 — Entry 39: 🚨 SEC-2 — pre-existing CRITICAL forgery hole in the FROST signing path (found while scoping the ceremony-gate); ceremony-gate PARKED on it
+
+**This is the most important thing found this session. Read the SEC-2 block in the DoD
+("Tracked, not M8C-fruit") in full. It is pre-existing (NOT introduced by M8C or this Tier-5 work)
+and is arguably launch-critical — Andre's call on severity + fix.**
+
+**How it was found.** DOD-PRIMARY-1's reviewer (Entry 38, HIGH-1) noted `primary_holder` has no
+consumer yet — the **ceremony-gate** (directory refuses to co-sign for a non-current `daemon_id`)
+is what actually enforces DOD-INV-ONE-PRIMARY. I dispatched a feasibility investigation, which
+found the gate is narrow (2 call sites: `directory-node.ts:1257` `generateCommitment`, `:1297`
+`signRawMessage`) BUT requires two things that don't exist: a minted/persisted `daemon_id`, and —
+critically — **the FROST *signing* stream is unauthenticated.** That last point isn't a Tier-5
+gap; it's a core-signing-path hole. Two further read-only passes (a FROST-threshold-model check and
+an adversarial confirm-or-refute) confirmed it across code with file:line at every decision point.
+
+**SEC-2, in one paragraph.** The `/cello/frost/1.0.0` signing frames (`frost_commit_request`,
+`frost_sign_request`) carry NO authentication — only an `#isAgentPaused` honor-check
+(`directory-node.ts:1249, 1289`); there is no K_local challenge (unlike the signaling stream's
+`CELLO-DIR-AUTH-v1`), no `remotePeer` check, no capability. The directory signs the **arbitrary
+client-supplied `framedMsg` bytes verbatim** (`frost-handler.ts:592-598`) with no binding to a
+session it brokered or a message it authorized. And the FROST group is `(T, N+1)` — N directories
++ 1 client — with `T = majority(N) ≤ N` and the directory enforcing quorum `|Q| ≥ T`, so **T
+directory partials alone meet threshold without the client's share.** Net: a party knowing only an
+agent's **public** `k_local_pubkey` + epoch can run its own coordinator, drive T directories through
+commit+sign over an arbitrary message, and aggregate a valid signature against the agent's
+`primary_pubkey` — forging session-establishment / seal / any group signature. Confirmed by three
+independent code-reads; no live proof-of-concept was executed.
+
+**Severity-determining open question for Andre** (I could not resolve it from the directory code
+alone): is `/cello/frost/1.0.0` reachable by arbitrary internet parties, or is there network-level
+gating (ALB/security-group/relay) on who can dial the frost protocol? If publicly dial-able (as
+legitimate clients do), the exploit is fully open. If dialing is gated to enrolled/connected peers
+out of band, severity drops. No in-code gate exists either way.
+
+**Proposed fix direction (NOT implemented — parked for Andre).** Require the frost *signing* stream
+to be K_local-authenticated with the same `CELLO-DIR-AUTH-v1` challenge the signaling stream uses:
+the legitimate daemon holds K_local's private key and can answer the challenge; an attacker holding
+only the public key cannot. That closes the public-key-forgery hole AND is the prerequisite for the
+Tier-5 ceremony-gate (which then adds the finer `daemon_id` distinction on top). Possibly also bind
+`framedMsg` to a directory-brokered session as defense-in-depth. **Why not done headless:** this is
+the single most sensitive hot path (every agent, every session, every seal) and a CROSS-REPO
+change — if the directory starts REQUIRING auth before deployed clients send it, EVERY existing
+agent breaks (can't establish sessions or seal). It needs a coordinated client-then-directory
+phased rollout, i.e. a genuine architectural/migration decision (PROCEDURE §3a → PARK; CLAUDE.md
+launch-triage "migration trap"). A botched headless fix here breaks the whole product.
+
+**Ceremony-gate: PARKED (D20).** It is gated on SEC-2's fix (can't gate ceremony participation on
+`daemon_id` when the ceremony stream isn't authenticated as the agent at all — frost-stream auth is
+the prerequisite). Its remaining prerequisites (mint/persist/send a `daemon_id`; seed `primary_holder`
+at registration) are also downstream of the auth decision, since an unauthenticated `daemon_id` is
+self-reported and forgeable. Terrain fully mapped in this entry for whoever picks it up.
+
+**Consequence for Tier 5 / the session.** DOD-PRIMARY-1's remaining work is now comprehensively
+Andre-gated on two independent grounds: (1) the ceremony-gate (the security core) is blocked on
+SEC-2; (2) the other pieces — pairing handshake, user-initiated DB sync, kill-the-Primary proof —
+need a live multi-device setup. The directory-side transfer arbitration (built + real-FROST tested
++ reviewed + all findings fixed, Entries 36-38) stands as the completed, headless-achievable
+portion. See the session status summary for the full "what's done / what needs Andre" picture.
+
+---
+
+### 2026-07-07 — Entry 38: DOD-PRIMARY-1 handler reviewer findings all fixed (commits `798e86f` [client], `807817c0` [directory])
+
+`cello-unit-reviewer` on the transfer handler (`7933002b`) returned **SPEC: FAITHFUL / NO SILENT
+FALLBACKS / TESTS HAVE TEETH** — it verified the FROST verification is cryptographically sound
+(bogus/wrong-tbs/wrong-context sigs all rejected; `{threshold:1,participants:1}` config irrelevant
+to a pure verify, same pattern as the existing seal path), the verification key is firmly bound to
+the already-authed identity, and the nonce-before-verify ordering is safe (attacker must already
+hold K_local + know the current holder to burn a nonce, and the bind is idempotent for the same
+new_daemon_id). Three actionable findings, all fixed:
+
+- **MEDIUM-1 (error fidelity):** transient failures (persist failed / no pool) surfaced as
+  `not_registered`, indistinguishable from a permanent holder-mismatch — a tallying daemon couldn't
+  tell "retry me" from "you're not the holder." Added a distinct retriable `internal_error` to the
+  `PrimaryTransferError` wire enum (protocol-types 0.0.17→0.0.18, published beta `v0.0.79`, verified
+  live, smoke-tag green); both transient branches now return it.
+- **LOW-1 (input validation):** a non-numeric `timestamp` made `NaN > window` false and BYPASSED
+  the freshness check. Added `!Number.isFinite(frame.timestamp)` guard → `stale_request`.
+- **LOW (teeth gap):** added a step-5 tbs-field-binding test (genuine right-context signature over a
+  DIFFERENT new_daemon_id than the frame carries → `release_not_verified`, proving the sig binds all
+  tbs fields not just context) + a non-finite-timestamp test. Handler suite now 9/9 green vs. real
+  Postgres.
+
+**HIGH-1 was NOT a handler defect** — it flagged that `primary_holder` has no CONSUMER yet: the
+**ceremony-gate** (directory refusing to co-sign for a non-current daemon_id) is what actually
+enforces DOD-INV-ONE-PRIMARY, and it's a separate unit. Investigated its feasibility (see Entry 39)
+— and that investigation surfaced a **potential pre-existing security question bigger than Tier 5**,
+written up next.
 
 ---
 

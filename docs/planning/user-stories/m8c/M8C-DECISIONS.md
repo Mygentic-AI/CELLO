@@ -478,6 +478,39 @@ PARKED (journal + DoD "Parked decisions" + here).
   assignment per agent (a privacy-sensitive question — what does the directory get to know?), and
   (b) the daemon-side query + pull-from-newly-discovered-relay flow. Tracked, not yet designed.
 
+### D20 — DOD-PRIMARY-1's ceremony-gate is PARKED on SEC-2 (the frost-signing-stream auth fix); the directory-side transfer arbitration ships independently (2026-07-07, autonomous D10)
+
+- **Fork:** DOD-PRIMARY-1 requires a "ceremony-gate" — the directory refusing to contribute its
+  FROST share to a signing ceremony unless the requesting daemon is the current Primary
+  (`primary_holder.holding_daemon_id`). This is the actual enforcement of DOD-INV-ONE-PRIMARY; the
+  `primary_holder` record built this session is inert without it. Scoping it (feasibility
+  investigation, file:line) revealed the gate is narrow (2 call sites) but requires two absent
+  prerequisites — a minted/persisted `daemon_id`, and authentication of the frost signing stream —
+  and that the frost signing stream is UNAUTHENTICATED today (**SEC-2**, a pre-existing critical
+  forgery hole, see DoD "Tracked, not M8C-fruit" and BUILD-JOURNAL Entry 39).
+- **Choice (D10):** PARK the ceremony-gate. It is genuinely blocked: you cannot gate ceremony
+  participation on `daemon_id` when the ceremony stream is not authenticated as the agent at all —
+  frost-stream K_local auth (SEC-2's fix) is the prerequisite, and the `daemon_id` mint/persist/send
+  + registration-seed sub-steps are themselves downstream of that auth decision (an unauthenticated
+  `daemon_id` is self-reported and forgeable, so building it first would likely need rework). SEC-2's
+  fix is a cross-repo hot-path change with a forced client/directory compatibility break — a genuine
+  architectural/migration decision that must be Andre's, not slammed in headless (PROCEDURE §3a;
+  CLAUDE.md launch-triage "migration trap": a botched fix breaks every deployed agent).
+- **What SHIPPED independently:** the directory-side transfer *arbitration* — `primary_holder` (V44)
+  + `primary_transfer_nonce_bindings` (V45) + `#processPrimaryTransferRequest` verifying a genuine
+  `CONTEXT_PRIMARY_RELEASE` FROST signature — built, real-FROST tested (16 tests vs. real Postgres),
+  reviewed (SPEC-FAITHFUL, all findings fixed). It's correct and self-contained; it just has no
+  consumer (the gate) until SEC-2 is resolved.
+- **Why:** this is the same discipline as D16/D19 — a genuine new/blocking surface belongs as tracked
+  follow-on with its terrain mapped (Entry 39), not built ad hoc under a dependency that isn't
+  resolved. Redo > block, but here the block is real (SEC-2) and the fork is architectural.
+- **Follow-on (needs Andre):** (1) decide SEC-2's severity (is the frost protocol network-gated?) and
+  its fix + rollout; (2) then the ceremony-gate: `daemon_id` minting (daemon SQLCipher), add it to
+  `RegisterRequest`, seed `primary_holder` at registration (`upsertPrimaryHolder` after `setProfile`,
+  `directory-node.ts:2814`), add `daemon_id` to the (now-authenticated) frost signing frames, gate
+  the 2 call sites (`directory-node.ts:1257`, `:1297`). The rest of DOD-PRIMARY-1 (pairing handshake,
+  user-initiated DB sync, kill-the-Primary proof) needs a live multi-device setup.
+
 ---
 
 ## Related Documents

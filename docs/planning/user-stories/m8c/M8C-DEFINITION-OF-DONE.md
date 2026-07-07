@@ -399,8 +399,58 @@ own story) deliberately, never smuggled in as a rider. Source:
   signature to the park protocol. Flagging prominently — this is real production crypto-protocol
   attack surface, not a nice-to-have.
 
+- **SEC-2 (2026-07-07, found while scoping DOD-PRIMARY-1's ceremony-gate) — 🚨 pre-existing CRITICAL
+  forgery hole in the FROST signing path. Possibly launch-blocking — Andre's call on severity + fix.**
+  **NOT introduced by M8C or the Tier-5 work — pre-exists in the M2/M6B/federation FROST signing
+  path and affects EVERY agent.** Confirmed by three independent code-reads (a ceremony-gate
+  feasibility pass, a FROST-threshold-model check, and an adversarial confirm-or-refute that
+  specifically hunted for a saving gate and found none); file:line at every decision point; no live
+  proof-of-concept executed.
+  - **The hole:** the `/cello/frost/1.0.0` *signing* frames (`frost_commit_request`,
+    `frost_sign_request`) are UNAUTHENTICATED — the only gate is an `#isAgentPaused` honor-check
+    (`directory-node.ts:1249, 1289`). No K_local challenge (the signaling stream HAS one,
+    `CELLO-DIR-AUTH-v1`), no `remotePeer` check, no capability. The directory then signs the
+    **arbitrary client-supplied `framedMsg` bytes verbatim** (`frost-handler.ts:592-598`) with no
+    binding to a session it brokered or a message it authorized (`peerIdString` is a self-declared
+    frame field, never checked against the connection).
+  - **Why the client's share doesn't save it:** the FROST group is `(T, N+1)` — N directory nodes +
+    1 client — with `T = majority(N) ≤ N`, and the directory enforces quorum `|Q| ≥ T`
+    (`directory-node.ts:2676`). So **T directory partials alone reach threshold** without the
+    client's share. The honest coordinator always includes its own partial, but that's
+    honest-path behavior, not a cryptographic requirement.
+  - **The forgery:** a party knowing only an agent's **public** `k_local_pubkey` + epoch (any
+    enrolled agent's is discoverable) opens `/cello/frost/1.0.0` to T directories, runs commit then
+    sign over an ARBITRARY `framedMsg`, and aggregates a valid signature against the agent's
+    `primary_pubkey` — forging session-establishment, seals, any group signature. The sole
+    exception is the degenerate single-directory (N=1) 2-of-2 back-compat config, where the client
+    share IS required.
+  - **Severity-determining open question (needs Andre / infra):** is `/cello/frost/1.0.0` reachable
+    by arbitrary internet parties, or network-gated (ALB / security group / relay) to
+    enrolled/connected peers? No in-code gate exists; if publicly dial-able (as legitimate clients
+    do), the exploit is fully open.
+  - **Proposed fix direction (NOT implemented — PARKED):** require the frost signing stream to be
+    K_local-authenticated with the same `CELLO-DIR-AUTH-v1` challenge the signaling stream uses (a
+    public-key-only attacker cannot answer it; the legitimate daemon can). Optionally also bind
+    `framedMsg` to a directory-brokered session. **Not fixed headless** because it is the most
+    sensitive hot path (every agent/session/seal) and a CROSS-REPO change: enforcing auth on the
+    directory before deployed clients send it breaks EVERY existing agent — it needs a coordinated
+    client-then-directory phased rollout, a genuine migration decision (PROCEDURE §3a → PARK).
+  - This fix is ALSO the prerequisite for DOD-PRIMARY-1's ceremony-gate (D20). Related: SEC-1 (the
+    relay-park bare-content auth gap) is a different, narrower pre-existing gap; SEC-2 is the
+    signing path itself.
+
 ## Parked decisions
-*(None yet. Genuine undecidable forks get parked here + journal + DECISIONS — never silently dropped.)*
+*(Genuine undecidable forks get parked here + journal + DECISIONS — never silently dropped.)*
+
+- **D20 parks (2026-07-07):** DOD-PRIMARY-1's **ceremony-gate** (directory refuses to co-sign for a
+  non-current `daemon_id`, enforcing DOD-INV-ONE-PRIMARY) — gated on **SEC-2**'s fix. You cannot
+  meaningfully gate ceremony participation on `daemon_id` when the ceremony stream is not
+  authenticated as the agent at all; frost-stream K_local auth (SEC-2's fix) is the prerequisite,
+  and its downstream prerequisites (mint/persist/send a `daemon_id`, seed `primary_holder` at
+  registration) are themselves downstream of that auth decision (an unauthenticated `daemon_id` is
+  self-reported and forgeable). The directory-side transfer arbitration (record + verified transfer
+  handler) is BUILT + tested independently of the gate; the gate is what remains, blocked. Terrain
+  fully mapped in BUILD-JOURNAL Entry 39. See [[M8C-DECISIONS]] D20.
 
 - **D14 parks (2026-07-06):** DOD-CONFIG-1 (entirely) + its F6/F12 riders, AND DOD-LOGINSTART-1's
   per-agent `autoStart: false` opt-out clause — all gated on M9-CFG-001's config store, which lives
