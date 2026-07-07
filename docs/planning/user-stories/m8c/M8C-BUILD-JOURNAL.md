@@ -42,31 +42,28 @@ description: >
 DOD-M9INT-1 was moved out of Tier 0 and deferred to after the M8C channel tiers. A post-compaction
 context must not conclude M9 needs merging first — it does not.
 
-**⚠️ RESUME STATE (2026-07-06, compacted here — read Entry 20 for the full capstone). Two threads:**
+**✅ RESUME STATE (2026-07-07, compaction point — see Entry 47 for the capstone; the OLD blockers
+below are RESOLVED).** The FROST `ceremony_exhausted` blocker that stalled the earlier compaction
+is **fixed** (commit `6499a74`, region-not-peerId) — sessions establish reliably; proven live in
+Entries 40/45/46. **Coding for M8C is DONE.**
 
-**Thread 1 — the LIVE SMOKE is BLOCKED by a non-M8C FROST issue (handed to another session).**
-`cello_initiate_session` fails `ceremony_exhausted` in BOTH directions between two fresh post-wipe
-agents (Ms_Chelly `178d420b…`, CELLO_Support `2ee9bed9…`) — SYSTEMIC. The directory nodes all sign;
-the client's `signer.participateInCeremony` returns `ok:false` (aggregate doesn't verify against
-`primary_pubkey`). Root layer = FROST session establishment (M2/M6B + the recent **federation**
-commits `bafed51a`/`a1153471`/`0bb2ed95`/`8d750ea5` + the directory DB wipe), NOT M8C. A full
-problem brief was written and handed to the session that built federation. **The M8C doorbell code
-(WAKE/MSGWAKE) is proven (SPIKE + tests) but its in-context LIVE proof (DOD-LIVE-1) can't complete
-until sessions establish again.** Do NOT debug FROST here — it's the other session's.
+**Current reality:**
+- **Doorbell PROVEN live** (Entries 44/45/46) — `buildChannelParams` fix, connect 0.0.60. DOD-WAKE-1
+  + DOD-MSGWAKE-1 → ✅; DOD-LIVE-1 → 🟠 (doorbell half proven).
+- **Full M8C build on `latest` + installed + running** (daemon 0.0.34, cli 0.0.31, connect 0.0.60,
+  + transitive crypto 0.0.18 / protocol-types 0.0.18 / transport 0.0.16 / client 0.0.46). The
+  default install path carries the entire milestone.
+- **SEC-2** (pre-existing FROST-signing forgery hole) documented: standalone finding +
+  fix-proposal docs. Andre's decision on launch-blocker-vs-fast-follow.
 
-**Thread 2 — M8C code is otherwise DONE through Tier-2's M9-independent units.** Published on `latest`:
-`daemon@0.0.31`, `cli@0.0.29`, `connect@0.0.58`. AUTOSTART (F5/A1/A3) + INBOX verified LIVE on the
-published build. **Next M8C code unit: DOD-CURSOR-1** (Tier 2, §6 design-significant — per-connection
-read cursor + `session_not_current` gate; M9-independent). Terrain partly mapped (Entry 19 pointer:
-`perConnectionState` `daemon.ts:878`, cello_send `:4796`). **Owes a design note before code.** After
-CURSOR, Tier 2's M9-independent work is done; CONFIG-1 + LOGINSTART opt-out are PARKED on M9-CFG-001
-(D14); M9INT deferred (D11). Then Tiers 3–5.
+**WHAT'S LEFT — the plain tick-box list is `M8C-LIVE-TEST-CHECKLIST.md`. Start there.**
+It's a **live-test pass** (no new code): cold onboarding, auto-start + inbox, the 3a–3j confirm-live
+batch — plus the SEC-2 decision. Tier 5 multi-device + M9-parked settings are after-launch.
 
-**FIRST ACTIONS on resume:** (1) **re-arm the heartbeat cron** — it's session-only, wiped by
-compaction (PROCEDURE §3b Cron 2, cadence `12,42 * * * *`). (2) Check whether the other session fixed
-FROST (can two agents establish a session? `cello_status` → try `cello_initiate_session`). If YES →
-retry the live doorbell smoke (Entry 20 has the exact steps). If not-yet → take DOD-CURSOR-1
-(design note first). Working trees are CLEAN, everything committed + pushed.
+**FIRST ACTIONS on resume:** (1) open `M8C-LIVE-TEST-CHECKLIST.md` — do NOT re-derive scope. (2) If
+running the heartbeat/autonomous loop, re-arm the crons (PROCEDURE §3b). (3) Working trees clean,
+everything committed + pushed. The milestone's hard part (reactive core proven live) is done —
+remaining work is proving-live + one decision, not engineering.
 
 ---
 
@@ -695,6 +692,42 @@ doorbell test it describes.
 
 **Not done here:** `latest` promotion (connect+cli) — per Entry 44, still the remaining human-only
 step.
+
+---
+
+### 2026-07-07 — Entry 47: DOORBELL PROVEN + FULL M8C BUILD SHIPPED TO `latest` — compaction point; only a live-test pass + the SEC-2 decision remain
+
+**Session-close state. A fresh context can start from here + the M8C-LIVE-TEST-CHECKLIST.**
+
+**What landed this session:**
+- **Doorbell root-caused + fixed + proven live.** Entry 43 hard-failed (no `<channel>` push); Entry 44
+  found the cause (the shim omitted Claude Code's required `content` field) and shipped
+  `buildChannelParams` as connect 0.0.60; Entries 45/46 proved it live in a real two-agent
+  `--channels` run — the receiver's turn auto-wakes with zero polling, both directions, both event
+  types, matching sealed root. **DOD-WAKE-1 and DOD-MSGWAKE-1 flipped ✅.** DOD-LIVE-1 → 🟠 (doorbell
+  half proven).
+- **Full M8C client promoted to `latest` and installed** (2026-07-07). All 7 packages promoted:
+  crypto 0.0.18, protocol-types 0.0.18, transport 0.0.16, client 0.0.46, daemon 0.0.34, cli 0.0.31,
+  connect 0.0.60. Andre reinstalled globally + `cello logout/login` → running daemon 0.0.34, both
+  agents (CELLO_Support, Ms_Chelly) up. **The default install path now carries the entire M8C build.**
+  (Earlier caution — pin-to-beta-then-promote — was dropped per Andre: one user, alpha, speed wins.)
+- **SEC-2 fully documented** — a standalone problem-statement doc
+  (`discussion_logs/2026-07-07_1030_sec-2-frost-signing-forgery-finding.md`) + the fix-proposal doc
+  (`..._0640_sec-2-frost-signing-auth-fix-proposal.md`). Pre-existing FROST-signing forgery hole;
+  Andre's decision on launch-blocker-vs-fast-follow.
+- **DOD-PRIMARY-1 (Tier 5) directory-side arbitration** built + real-FROST tested + reviewed earlier
+  this session (Entries 35-38); ceremony-gate parked on SEC-2 (D20); rest needs live multi-device.
+
+**What remains (ALL in `M8C-LIVE-TEST-CHECKLIST.md` — the plain tick-box list):**
+- A **live-test pass** to flip the built-and-shipped units green: cold onboarding (item 1), auto-start
+  + inbox (2a/2b), and the 3a–3j confirm-live batch. **No new code — this is "prove it live."**
+- The **SEC-2 decision** (item 4) — a call, not a task.
+- Tier 5 multi-device + the M9-parked settings work — after launch.
+
+**Standing state for a fresh context:** both repos clean + pushed (cello-client HEAD `8502855`
+region; trustless-cello current). Directories deployed V43, healthy (only the un-deployed V44/V45 are
+Tier-5). `latest` = the full build. Coding is done; the milestone's hard part (proving the reactive
+core live) is done. **Start at M8C-LIVE-TEST-CHECKLIST, not by re-deriving scope.**
 
 ---
 
