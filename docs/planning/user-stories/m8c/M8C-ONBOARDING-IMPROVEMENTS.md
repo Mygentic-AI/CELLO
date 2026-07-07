@@ -196,6 +196,25 @@ three steps completed from the command guidance alone, no source-reading. Rough 
 
 ---
 
+- ⬜ **P2-3. Extend F18 sole-online auto-select to the session-action tools (`no_current_agent` papercut).**
+  *(cello-client daemon)* — surfaced UNPROMPTED by an agent dogfooding the feedback channel (Ms_Chelly →
+  CELLO_Feedback, BUILD-JOURNAL Entries 48/49 + [[agent-conversation-m8c-2026-07-07-unprompted-product-feedback]]).
+  - **Issue:** `cello_initiate_session` (and siblings) return `no_current_agent` on a fresh connection even
+    when the agent is online — forcing an explicit `cello_use_agent` on every cold start.
+  - **Root cause — CONFIRMED (code-read):** F18's `resolveCurrentAgent` (daemon.ts:1865 — explicit name →
+    conn current → sole-online → null) was wired into the **receive/inbox** tools (2901, 2934, 5529, 5574)
+    but NOT the **session-action** tools, which still hard-fail on `!connState.currentAgent`:
+    `cello_initiate_session` (3013), `cello_send` (5164), `cello_await_session` (4618),
+    `cello_close_session` (3154), `cello_list_sessions` (3600), `cello_receive_session` (3473/3529/5401).
+    Incomplete F18 rollout, not a deliberate exclusion.
+  - **FIX — moderate, established pattern.** Replace each `if (!connState || !connState.currentAgent)
+    return NO_CURRENT_AGENT_RESPONSE;` with `const agentName = resolveCurrentAgent(connState, params?.name);
+    if (!agentName) return NO_CURRENT_AGENT_RESPONSE;` and thread `agentName` downstream (some handlers
+    read `connState.currentAgent` later — update those). ~6 handlers + tests. Copy the exact shape at 2901.
+  - **Scope note:** helps the common SINGLE-agent case (sole-online fires); a daemon with 2+ agents online
+    and none selected stays ambiguous → still `no_current_agent` (correct — guessing between peers misroutes).
+  - **Deploy:** cello-client daemon → same publish path as P2-2.
+
 ## Implementation notes (for the one-shot sprint)
 
 - **Files:** `packages/operations-agent/src/registration/engine.ts` (item 1),
