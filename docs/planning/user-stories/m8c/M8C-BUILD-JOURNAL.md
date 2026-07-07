@@ -636,6 +636,57 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-07 — Entry 33: DOD-PRIMARY-DESIGN-1 adversarially reviewed + revised (3 blocking gaps closed)
+
+Before writing any DOD-PRIMARY-1 code against Entry 32's design, dispatched an independent
+security-focused adversarial review of [[M8C-PRIMARY-DESIGN]] specifically — this design gates
+FROST double-sign prevention, the highest-stakes invariant in the whole milestone, so it earned an
+extra check beyond the standard per-unit `cello-unit-reviewer` (which reviews code diffs, not
+design docs with no diff to review).
+
+**The review found 3 genuine BLOCKING gaps + 1 documentation-precision issue — all closed, revision
+committed to the design doc inline with dated "adversarial review" markers (not silently rewritten):**
+
+1. **Decision 1 (pairing) had no sender authentication.** The link-request round trip used a
+   one-directional sealed box (by design, per Terrain #5 — anyone can encrypt TO a known pubkey);
+   this means whoever redeems an intercepted token FIRST gets K_local, not necessarily the
+   operator's real second device — a race, not a benign interception, and undefended against
+   device-code phishing (operator's physical action is genuine, intent is manipulated). **Fixed:**
+   added a mandatory Signal-style mutual fingerprint confirmation the operator must visually match
+   before A transfers K_local.
+2. **Decision 4 (directory arbitration) was modeled on the wrong existing pattern.** `agent_presence`
+   is node-local by nature (an agent connects to ONE directory node); `primary_holder`'s "who is
+   current Primary" must be agreed CONSISTENTLY across ALL of CELLO's sovereign, federated directory
+   nodes — modeling it on per-node replication would let a node that hasn't heard about a transfer
+   yet keep serving the OLD Primary's ceremony requests, reopening the exact split-brain the decision
+   claims to close. **This was the most serious finding** — it directly undermined the "structural
+   guarantee" claim for DOD-INV-ONE-PRIMARY. **Fixed:** reuse CELLO's own EXISTING quorum-registration
+   mechanism (M8B's `T = majority(N)`, already proven — "register among the available quorum Q...
+   record the quorum as the share-holder set") instead of inventing new replication.
+3. **Decision 2 (DB-sync) asserted atomicity/ordering without defining either.** "Authoritative and
+   unambiguous" isn't automatic against a live, possibly-WAL-mode SQLCipher process, and nothing
+   sequenced "stop routing to old Primary" relative to "read the snapshot." **Fixed:** an explicit
+   6-step transfer sequence (quiesce → WAL checkpoint → `VACUUM INTO` atomic backup → share-released
+   attestation → quorum commit → resume), with messages arriving mid-transfer parked via the
+   EXISTING relay mechanism (DOD-LEAVEMSG-1, built earlier tonight) rather than a new buffer.
+4. **Decision 3 overstated local deletion as the safety mechanism** (documentation precision, not a
+   protocol hole) — a signed "share released" attestation proves a claim, not a verified action;
+   the review correctly identified Decision 4's gate as what's ACTUALLY load-bearing, independent of
+   whether local deletion succeeds. **Fixed:** reworded; added `secure_delete`/`VACUUM` as hygiene,
+   explicitly not a correctness requirement.
+
+**Verification discipline:** before citing "CELLO's existing quorum-registration mechanism" in the
+fix for #2, grepped the M8B build history to confirm `T = majority(N)` and the "register among
+available quorum Q, record the quorum as the share-holder set" pattern are real and already shipped
+(M8B Problem 2, spine-verified 2026-07-04) — not asserted from memory.
+
+**Status:** DOD-PRIMARY-DESIGN-1 remains ✅ — design log revised, re-grounded, and re-journaled.
+Tier 5 code (DOD-PRIMARY-1) may now begin against the REVISED design.
+
+**Next:** DOD-PRIMARY-1 build.
+
+---
+
 ### 2026-07-07 — Entry 32: DOD-PRIMARY-DESIGN-1 — full design log written (hard Tier 5 gate)
 
 Full design log: [[M8C-PRIMARY-DESIGN]]. Grounded in a dedicated research pass (not speculation) —
