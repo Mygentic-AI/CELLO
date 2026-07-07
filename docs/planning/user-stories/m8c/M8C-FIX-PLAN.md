@@ -47,6 +47,46 @@ description: >
 
 ---
 
+## 🌙 AUTONOMOUS RUN DIRECTIVE (Andre, 2026-07-07) — READ FIRST
+
+**Scope:** implement ALL cello-client fixes (CC-1…CC-9) + both ops-agent items (OA-1, OA-2). **DEFER**
+SEC-2/DIR-1 (needs a coordinated client-then-directory rollout + Andre's severity call) and the full D21
+model (M9 feature). Do NOT touch the directory.
+
+**How to run — under [[M8C-PROCEDURE]]:** autonomous-mode rules (§3a — NEVER `AskUserQuestion`;
+decide→log in [[M8C-DECISIONS]]→proceed; redo > block). Per-unit: red-first test → implement → full gate
+`pnpm test → lint → typecheck → build` → `cello-unit-reviewer` on the diff → fix every finding → commit
+with the fix ID. Arm BOTH watchdog crons at kickoff (§3b). Commit constantly (never >15 min). Work in the
+priority-summary order: **CC-1, OA-1, CC-2 first**, then the 🟠 set (OA-2, CC-3, CC-6, CC-7, CC-8, CC-9),
+then CC-4, then CC-5.
+
+**Batch the ships:** ALL cello-client fixes → ONE `/cello-publish` cascade at the END (bump changed
+`core/*` + dependents, tag, CI → beta; verify the binary). Both ops-agent items → ONE us-east-1 redeploy.
+**Never publish/redeploy per-fix.** Then update `trustless-cello` package.json pins + `pnpm install`.
+
+**Resolved forks — DO NOT re-ask:**
+- **CC-1 = operator-engagement-only promotion.** Remove the inbound auto-add (`daemon.ts:4418`). Promote a
+  counterparty to "known" ONLY on: (a) outbound `initiate_session` (KEEP `:3137`); (b) the operator sending
+  a reply INTO an inbound-originated session — add `addContact` in the `cello_send` path when the session's
+  counterparty initiated and isn't yet a contact; or (c) explicit `cello contact add`. An **unattended
+  stranger is NEVER auto-whitelisted.** Tests (with teeth): a stranger stays unknown after knocking (and
+  therefore stays subject to the ABUSE-1 caps); becomes known only after the operator replies.
+- **CC-5/F21 = FULL.** (a) *Don't-strand:* make the receiver's durable session conditional on the initiator
+  confirming establishment, OR reap `messageCount:0` half-open sessions with no counterparty liveness after
+  a timeout — pick the cleaner, log the choice. (b) *Terminal-escape:* add a unilateral force-abandon for a
+  session whose bilateral seal is impossible (`seal_interrupted_rejected_by_counterparty` / counterparty
+  unavailable) — mark it terminal locally with a surfaced reason so it leaves the open list (no bilateral
+  seal needed — nothing to notarize on a dead half-open session).
+- **CC-4 = drop the empty `connections` field** from status (simplest, anti-mock). Real client-visibility
+  (F9) is a fast-follow; leave `perConnectionState` in place.
+
+**The ONLY legitimate stop conditions** (everything else = decide-log-proceed): (1) `latest`-tag promotion
+— do the beta publish, then STOP and say "needs Andre's go for `latest`"; (2) `/mcp` reconnect + the live
+`--channels`/two-agent verification — needs a human at the keyboard. Do every non-live part first; leave a
+crisp handoff for the live checks.
+
+---
+
 ## cello-client — daemon (`core/daemon/src/daemon.ts`, `session-node-manager.ts`)
 
 ### CC-1 — Gate the inbound contact auto-add 🔴  *(the security fix — restores screening AND anti-spam)*
@@ -60,11 +100,11 @@ description: >
   in the inbound-accept path (right after `sendAwayResponse(...,"request")` at :4417). **KEEP** the OTHER
   auto-add at `daemon.ts:3137` (outbound `initiate_session` → adds the target — that IS deliberate operator
   action). `addContact` itself is `INSERT OR IGNORE` (session-node-manager.ts:~858).
-- **Fix:** remove/guard the `:4418` auto-add so promotion to "known" happens only on **operator action**
-  — i.e. the operator explicitly accepts the request (or `cello_contact_add`, or an outbound initiate).
-  Minimum viable: delete the `:4418` line (inbound no longer auto-whitelists); "accept" then needs an
-  operator affordance (a `cello_accept`/attend-and-accept path) — coordinate with D21. Separate "accept the
-  *connection*" (standing receiver) from "trust the *sender*" (whitelist).
+- **Fix — LOCKED (see Autonomous Run Directive above):** operator-engagement-only promotion. Remove the
+  `:4418` inbound auto-add; promote to "known" only on outbound `initiate_session` (keep `:3137`), on the
+  operator replying INTO an inbound-originated session (add in the `cello_send` path), or explicit
+  `cello contact add`. Unattended stranger is never auto-whitelisted. Separate "accept the *connection*"
+  from "trust the *sender*."
 - **Difficulty:** the removal is 1 line. The design nuance — *what should promote a sender to known* — is
   the real content; it's the seed of the D21 model, but the security-restoring gate does NOT need the full
   M9 config. Ship the gate now, layer levels later.
@@ -116,10 +156,12 @@ description: >
 - **Where:** receiver-side session creation from an offer — inbound-accept path near `daemon.ts:4412–4418`;
   close/seal path `daemon.ts:3250` (active) / the seal-interrupted flow. `close_session` is current-agent-
   scoped (`daemon.ts:3176`) — must `use_agent` the owner first (this is correct, not the bug).
-- **Fix:** two parts — (a) don't strand a durable session from an abandoned offer (or reap it), and (b) a
-  **terminal-escape**: let the owner force-abandon/unilaterally-terminate a half-open session with a
-  surfaced reason (the F21 ask). Investigate the receiver-side create ordering first.
-- **Difficulty:** Moderate (needs a small design pass on the terminal state).
+- **Fix — LOCKED FULL (see Autonomous Run Directive above):** (a) don't-strand — make the receiver's
+  durable session conditional on initiator confirmation, OR reap `messageCount:0` half-open sessions after a
+  timeout (pick the cleaner, log it); (b) terminal-escape — unilateral force-abandon for a session whose
+  bilateral seal is impossible, marks it terminal locally with a surfaced reason (no seal needed). Investigate
+  the receiver-side create ordering first.
+- **Difficulty:** Moderate — the two design calls are made (directive); implementable autonomously.
 
 ---
 
