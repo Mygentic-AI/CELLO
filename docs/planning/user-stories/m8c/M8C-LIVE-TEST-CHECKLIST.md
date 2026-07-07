@@ -53,6 +53,12 @@ No new code needed. Detail lives in M8C-DEFINITION-OF-DONE; this is the quick li
     shouldn't strand a durable session from an abandoned offer, and/or (b) there needs a way to
     force-abandon a half-open session. NOTE: `close_session` is scoped to the CURRENT agent
     (daemon.ts:3176) — you must `use_agent` the owning agent before closing, else `session_not_owned`.
+  - **Exact error (2026-07-07, Support genuinely `selected:true`):** `cello_close_session` on `5749859a`
+    returns **`seal_interrupted_rejected_by_counterparty`** — Support's seal request reaches Ms_Chelly's
+    daemon, which ACTIVELY REJECTS it (she has no matching session). This **disconfirms the "switching
+    agents breaks close" hypothesis** (the session WAS found on the owner; the failure is at the seal
+    step, not the lookup) and confirms the half-open cause. No terminal escape exists → the ghost session
+    is un-closeable today. Practical: skip it; a fresh knock is a new session_id and doesn't collide.
   - **Unverified context (do NOT state as fact):** `"Dispatched."` is CONTACT-1's minimal response to an
     UNKNOWN sender, and contacts are PER-AGENT — Ms_Chelly's prior chat was with CELLO_*Feedback* (a
     different agent's whitelist), so nothing implies she is/isn't in CELLO_*Support*'s. Support's contact
