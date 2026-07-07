@@ -71,6 +71,32 @@ checks" only catches what arrived *while support was online-but-unattended*, not
 send while it was down. For a real support agent that takes cold inbound around the clock, **closing
 the offline-queuing hole (D19 / relay store-and-forward) is the companion piece** to this policy.
 
+## Open implementation issue — auto-add-on-knock undermines the boundary (found live 2026-07-07)
+
+**Verified in code + live.** The contact whitelist has TWO auto-add sites:
+- `daemon.ts:3137` — outbound `initiate_session` adds the target. Correct (deliberate operator action).
+- `daemon.ts:4418` — the **inbound-accept path adds the requester AUTOMATICALLY** when the standing
+  receiver accepts the offer (comment at :4412 — "best-effort, must not block acceptance"; not gated on
+  the operator being present or accepting).
+
+**Consequence:** any sender who knocks *once* is promoted to "known" → **Level 4 fast-track thereafter.**
+The screening (L1/L2/L3) only ever applies to a sender's **very first** message. After that they're
+whitelisted, regardless of whether the operator ever saw or wanted them.
+
+**Live proof:** Ms_Chelly (an outside customer) was auto-added to CELLO_Support's whitelist
+(`added_at 1783436124520`) purely by sending a session offer to an **unattended** Support that only
+auto-replied `"Dispatched."` — Agent B never accepted her. She is now a Level-4 contact of both Support
+and Feedback.
+
+**This contradicts D21.** "Known" must be a deliberate trust boundary, not auto-filled by anyone who
+contacts you once — otherwise the screening layer is defeated after the first message (a spammer knocks
+once, then is fast-tracked forever). **Decision needed:** promotion to "known"/L4 should require
+**operator action** (explicit accept, or an outbound initiate), NOT the standing receiver's automatic
+session-accept. Separate "accept the *connection*" from "trust the *sender*."
+
+**Testing note:** Ms_Chelly is now whitelisted on both Support and Feedback, so she can no longer serve
+as an "unknown sender" — future unknown-sender / screening tests need a FRESH throwaway agent.
+
 ## Why this matters (CELLO's core value)
 
 Screening unknown inbound is not a nicety — it's the trust/safety layer that is CELLO's reason to
