@@ -582,6 +582,25 @@ PARKED (journal + DoD "Parked decisions" + here).
 - **Redo > block:** if a persistent per-CLI-session current agent is ever added, revisit surfacing
   `selected` there.
 
+### D25 — CC-5/F21: reap-on-read (not protocol handshake) + a `force` close param + new terminal `"abandoned"` status; the reap criterion is 0-RECEIVED (not the directive's literal messageCount:0) (2026-07-07, autonomous D10)
+
+- **Discovery that reshaped the fix:** the F21 ghost is an `active` session whose auto-`Dispatched.` ack
+  appended a leaf, so its **`message_count` is ≥ 1** — the 🌙 directive's literal "reap **messageCount:0**
+  half-open sessions" would MISS it. The correct half-open signal is **counterparty-never-established**:
+  `getSessionLiveness !== "alive"` AND **0 RECEIVED** messages AND age > grace TTL. Full map in
+  [[M8C-BUILD-JOURNAL]] Entry 58.
+- **(a) don't-strand = REAP-ON-READ** (of the directive's two options). Chosen over the
+  initiator-confirmation protocol handshake because it matches the codebase's established compute-on-read
+  expiry pattern (`reapExpiredInboundSessions`, "no background sweep needed"), is additive, and touches no
+  wire protocol.
+- **(b) terminal-escape = `{ force: true }` on `cello_close_session`** — an additive early branch (before
+  the seal branches) that marks the session terminal locally (`"abandoned"`) with a surfaced reason, no
+  bilateral seal. Also on the connect shim.
+- **New terminal `SessionStatus` value `"abandoned"`** (→ `classifySession` `"closed"`). Small blast
+  radius: the ~19 specific-status `===` checks exclude it; it drops from `active`/`open` surfaces.
+- **Redo > block:** all additive; if the live F21 re-run shows a gap, refine the reap predicate — no
+  existing seal-flow code is modified.
+
 ---
 
 ## Related Documents

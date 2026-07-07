@@ -2702,6 +2702,59 @@ diff, no danger zones). Daemon 635 / CLI 30 green, lint/typecheck/build.
 
 ---
 
+### 2026-07-07 — Entry 58: M8C-FIX-RUN CC-5 — F21 half-open sessions — DESIGN NOTE (§6, before code)
+
+**Ninth/last unit. Design-significant → design note first (PROCEDURE §6).**
+
+**Producer/consumer map (evidence-based):**
+- The standing receiver's `acceptInboundAssignment` creates a durable **`active`** session from an inbound
+  offer — even when the initiator ABANDONED (its `initiate_session` returned `counterparty_unavailable`,
+  so the initiator holds nothing). The unattended agent auto-sends `"Dispatched."` via `sendAwayResponse`
+  → `appendSessionLeaf` (daemon.ts:989) → **`message_count` becomes ≥ 1** (its own SENT ack).
+- The counterparty never establishes → `getSessionLiveness` stays `"unknown"` (or `"gone"`). The session
+  stays `active` forever → `classifySession("active", ·) = "open"` → it clutters `cello status` and
+  `buildActiveSessions` (which queries status `active`).
+- Closing it hits the **active branch** of `cello_close_session` (daemon.ts:3279), which fires the
+  **bilateral seal** (submit SEAL leaf → await `session_sealed` → bilateral timeout → unilateral escalation
+  needing directory grace). The absent/rejecting counterparty can't complete it →
+  `seal_interrupted_rejected_by_counterparty` (live) / timeout → **stuck, no terminal escape.**
+
+**KEY DISCOVERY (invalidates the directive's literal wording):** the ghost has **`message_count ≥ 1`**
+(the auto-`Dispatched.` leaf), so the directive's literal "reap **messageCount:0** half-open sessions"
+would **MISS the real ghost**. The correct half-open signal is **"counterparty never established"**:
+`getSessionLiveness !== "alive"` AND **0 RECEIVED** messages (the counterparty never sent anything) AND
+age past a grace TTL. (message_count counts our own sent ack; RECEIVED-count is the right discriminator.)
+
+**Design — both locked halves, corrected, ADDITIVE (no change to the existing seal flow):**
+- **New terminal status `"abandoned"`** (`SessionStatus` union + `classifySession` → `"closed"`). Small
+  blast radius: the ~19 `=== "active"/"interrupted"/"sealed"` switch sites naturally exclude it;
+  `getSessionsByStatus("active")` stops surfacing it; `classifySession` maps it to a terminal bucket so it
+  drops out of the `open` list.
+- **(b) terminal-escape** → `cello_close_session` gains `{ force: true }`: an additive **early branch**
+  (BEFORE the bilateral-seal branches) that retires the session node + sets status `"abandoned"` + returns
+  a surfaced reason. Works regardless of `message_count` (the seal-rejected ghost has ≥1). Also exposed on
+  the connect shim (add `force` to the `cello_close_session` tool).
+- **(a) don't-strand** → **REAP-ON-READ** (chosen over the protocol-handshake option: it matches the
+  codebase's compute-on-read expiry pattern — `reapExpiredInboundSessions`, daemon.ts:4184 "no background
+  sweep needed" — and is additive). `reapDeadHalfOpenSessions(agent)` runs on the `cello_list_sessions`
+  read: for each `active` session with **0 RECEIVED** messages AND `getSessionLiveness !== "alive"` AND
+  age > `HALF_OPEN_TTL_MS` → retire node + set `"abandoned"`. Needs a `countReceivedMessages(agent, sid)`
+  snm helper (mirrors the existing `direction = 'received'` queries at snm:841/886).
+
+**Safety invariants (SIs) the tests must enforce:**
+- A LIVE or FRESH active session is NEVER reaped: `getSessionLiveness === "alive"`, OR any RECEIVED
+  message, OR age ≤ TTL → survives (a genuine just-opened session must not be abandoned).
+- `force` is idempotent and owner-scoped (only the owning agent, via the existing agent-scoped lookup).
+- An `"abandoned"` session never re-enters `open`/`active` and cannot be re-sealed.
+
+**Enforcer:** unit tests (reap abandons a dead half-open on read; a live/fresh active survives; `force`
+abandons a stuck session and drops it from `open`) + the live F21 re-run (open a session to an offline
+agent, then confirm the receiver's ghost is reaped/force-abandonable) at the batched verification stop.
+
+**Chosen (a)=reap-on-read, (b)=force param — logged as [[M8C-DECISIONS|D25]].** Implementing next.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
