@@ -152,7 +152,10 @@ description: >
   the actual `^[a-zA-Z0-9_-]{1,64}$`, today invisible); `register` shows a worked example, says
   quoting is only needed for spaces/metacharacters, explains the create-agent (local) → register
   (directory, needs token) two-step, and documents the `CELLO_PREAUTH_TOKEN` env-var form with a
-  real one-liner (it works today via `cello.ts:82` but is invisible in help). (F24, R1, R2, R5) — 🟡 (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL; ✅ at DOD-LIVE-1)
+  real one-liner (it works today via `cello.ts:82` but is invisible in help). (F24, R1, R2, R5) — 🟡 (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL.
+  **2026-07-07 partially exercised live:** per-command help (`cello create-agent --help`) is REAL + good
+  (name rule + next step); but top-level `cello --help` is STILL a bare command list — HELP-1 requires
+  BOTH to give real help, so it's half-met. Remaining gap = P2-5 in [[M8C-ONBOARDING-IMPROVEMENTS]]. Stays 🟡.)
 - **DOD-ONBOARD-ERRORS-1** — register-path errors are specific and actionable, never a generic
   Usage dump or silence: missing token → "you're missing the pre-auth token" (not the Usage line);
   malformed token → "that isn't a pre-auth token — they start with `CELLO-`"; unknown agent →
@@ -164,7 +167,12 @@ description: >
   explained: "`connecting` is normal — registration takes a minute or two; `connected` = ready;
   stuck disconnected → `cello logout` then `cello login`; never logged in → `cello login`." Covers
   register / login / status / use_agent at minimum. This is the connective principle under every
-  R-item and is what lets an AI operator self-correct. (R7) — 🟡 (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL; ✅ at DOD-LIVE-1)
+  R-item and is what lets an AI operator self-correct. (R7) — ✅ (2026-07-07 — PROVEN LIVE during the cold-onboarding walk: the `register`
+  output (agent `CELLO_Feedback`) carried the `cello status` pointer + the `connecting`/`connected`/
+  stuck-disconnected legibility, verbatim to this spec, and it successfully guided the operator through
+  registration. Built Entry 12 `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL. Non-blocking follow-ups:
+  P2-1 makes the run-on line multi-line; the `login`/`use_agent` guidance clauses were not separately
+  re-observed in this walk. See [[M8C-ONBOARDING-IMPROVEMENTS]].)
 - **DOD-ONBOARD-WARN-1** — the pre-auth exposure warning is right-sized to what the token IS: a
   single-use, 24h, consumed-on-success token (verified: directory `consumed_at` + "single-use is
   enforced" + `preauth.token.reuse.rejected`). Drop the durable-secret klaxon — at most one calm
@@ -185,9 +193,13 @@ description: >
   daemon + real published shim + live `--channels` session + real peer opens session + in-context
   wake + full receive→reply→bilateral seal, both directions, zero polling. `latest` promotion DONE
   (2026-07-07 — `npm dist-tag add @cello-protocol/connect@0.0.60 latest`; default unpinned install
-  now = the proven combo connect 0.0.60 + cli 0.0.30 → daemon 0.0.32). **One thing still owed before
-  ✅:** the COLD onboarding run below — Entries 45/46 used pre-existing agents, so the
-  create-agent→register→status-from-tool-output-alone half is not yet exercised.)
+  now = the proven combo connect 0.0.60 + cli 0.0.30 → daemon 0.0.32). **Cold-onboarding half —
+  2026-07-07 WALKED LIVE:** create-agent→register→status succeeded from the command guidance alone
+  (agent `CELLO_Feedback`), so the CLI mechanics are PROVEN. But the gate is NOT clean yet — the walk
+  surfaced blockers: the Telegram handoff still names the wrong env var (`CELLO_REGISTRATION_TOKEN`,
+  which the CLI does not read) so a literal follower is stuck, plus the register-doesn't-arm-the-
+  standing-receiver bug (P2-2). Gate flips ✅ when the onboarding mini-sprint ships. See
+  [[M8C-ONBOARDING-IMPROVEMENTS]].)
   - **Onboarding legibility bar (see the ONBOARD-* riders above — ordered before this line because the launch smoke includes them):** the Tier 1 launch smoke
     includes a COLD onboarding run — a fresh operator does `create-agent → register → status`
     with no prior CELLO knowledge and can complete it from the tool output alone (help, errors,

@@ -232,6 +232,21 @@ three steps completed from the command guidance alone, no source-reading. Rough 
     the real answer") argues against leaving an always-empty placeholder in user-facing output. Lean (a).
   - **Deploy:** cello-client daemon (same publish path as P2-2/P2-3).
 
+- ⬜ **P2-5. Top-level `cello --help` is still a bare command list — give it real orientation.** *(cello-client CLI)*
+  - **Observed 2026-07-07:** `cello --help` →
+    ```
+    Usage: cello <login|logout|status|register|create-agent|remove-agent|refresh|receipts|sessions|contact|telegram>
+    Run 'cello <command> --help' for command-specific usage.
+    ```
+    A bare list. By contrast `cello create-agent --help` is GOOD — real help (what it does, the name
+    rule, the next step). So the per-command layer satisfies HELP-1; the **top-level does not**.
+  - **This is the DOD-ONBOARD-HELP-1 gap:** the line requires BOTH `cello --help` AND `cello <cmd> --help`
+    to give real help, "not a bare command list." Only the per-command half is met.
+  - **Proposed:** top-level `cello --help` opens with one line on what CELLO is + the onboarding path
+    (`login → create-agent → register → status`) + "run `cello <command> --help` for details." Keep the
+    command list, add the orientation a first-time user needs.
+  - **Deploy:** cello-client CLI (same publish path as P2-2/P2-3/P2-4).
+
 ## Implementation notes (for the one-shot sprint)
 
 - **Files:** `packages/operations-agent/src/registration/engine.ts` (item 1),
