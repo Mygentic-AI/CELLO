@@ -78,13 +78,25 @@ cello_send({ session_id: "SESSION_ID", content: "your opening message" })
 
 ### If you are the **responder** — listen first (you start WAITING)
 
-The initiator connects to you; your standing receiver auto-accepts. Block until their opening arrives:
+You do **not** have a session ID yet — only the initiator gets one, from `cello_initiate_session`. You cannot call `cello_receive` until you have a real one, so do not invent or guess a session_id.
+
+Get the real session ID first:
 
 ```
-cello_receive({ session_id: "SESSION_ID", timeout_ms: 60000 })
+cello_list_sessions()
 ```
 
-Note the `sessionId` from the response. If it times out, check `cello_list_sessions()` for the active session, then receive again. When their message arrives you are now HOLDING — compose a reply and send it.
+If `totalMatched` is 0, the initiator hasn't connected yet — call `cello_list_sessions()` again after a few seconds. Do not reach for `Bash sleep` loops, background monitors, or any tool outside `cello_*` — none of them can see MCP session state, and `cello_receive`'s own `timeout_ms` is the intended wait mechanism, not a substitute for polling `cello_list_sessions()` first.
+
+**Ignore stale sessions.** `cello_status()`'s `active_sessions` list can contain leftover entries from a prior run marked `liveness: "gone"` — these are dead and calling `cello_receive` on one returns `session_not_found`. The only trustworthy source for your session ID is `cello_list_sessions()` showing `status: "active"`.
+
+Once `cello_list_sessions()` shows an active session for your agent, block on its real `sessionId`:
+
+```
+cello_receive({ session_id: "SESSION_ID", timeout_ms: 30000 })
+```
+
+If it times out, call `cello_list_sessions()` again, then `cello_receive` again. When their message arrives you are now HOLDING — compose a reply and send it.
 
 ---
 
@@ -185,8 +197,11 @@ Normal — the other agent hasn't sent yet. Loop and receive again. **Never rese
 **`cello_receive` returns `reason: "counterparty_gone"`**
 The other agent's connection dropped — no more content will arrive on the direct path. Call `cello_close_session` to seal; if they never co-close, a unilateral seal becomes available after the directory's delivery-grace window.
 
+**`session_not_found` when the responder calls `cello_receive`**
+You used a stale session ID — likely one seen with `liveness: "gone"` in `cello_status()`'s `active_sessions` list. That field can hold dead leftovers from a prior run. Always source the session ID from `cello_list_sessions()` showing `status: "active"`, never from `cello_status`.
+
 **Session doesn't appear for the responder**
-The responder's standing receiver wasn't created. Verify `cello_use_agent` was called for their agent. Check the daemon log for `session.node.created` with their agent name.
+Keep polling `cello_list_sessions()` — an empty result just means the initiator hasn't connected yet, it is not an error. If it stays empty for a while, verify `cello_use_agent` was called for their agent, and check the daemon log for `session.node.created` with their agent name.
 
 **Seal doesn't complete / one side hangs on close**
 `cello_close_session` blocks until *both* parties close. If one agent forgot to close, the other waits 30s then falls back to a unilateral seal. Make sure **both** agents called `cello_close_session`. The seal also needs the directory reachable — confirm `directory_signaling: "connected"` in `cello_status`.

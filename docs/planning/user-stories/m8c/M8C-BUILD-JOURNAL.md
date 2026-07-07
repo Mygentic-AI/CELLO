@@ -648,6 +648,126 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-07 — Entry 42: channels pre-flight check — Claude Code `--channels` + Telegram plugin confirmed functional
+
+**Why this matters:** unrelated to the M8C protocol work above — this is a harness-level
+pre-flight check, run in a session started with the `--channels` flag and the Anthropic Telegram
+plugin enabled, to confirm the channels feature itself (not CELLO) is wired up and working before
+relying on it.
+
+**What was checked:** bot process alive (`bun server.ts`, confirmed via `bot.pid`), Telegram
+access policy (`allowlist` DM policy, one approved user ID, no pending pairings). A real message
+sent from the allowlisted Telegram account arrived in-session as a `<channel
+source="plugin:telegram:telegram">` tag with the expected `chat_id`/`message_id`/`user` fields, and
+the `reply` tool successfully sent a threaded response back to that chat.
+
+**Result:** full round-trip confirmed — inbound Telegram message → Claude Code session → outbound
+reply → delivered back to Telegram. Channels + Telegram plugin integration is functional.
+
+---
+
+### 2026-07-07 — Entry 41: responder-side view of Entry 40's smoke — one real error Entry 40 doesn't count, root-caused to a `/cello-walkie-talkie` skill bug (now fixed), NOT a protocol defect
+
+**Why this matters:** Entry 40 documents the initiator's (Ms_Chelly's) exact command sequence and
+reports "zero errors, zero retries beyond one normal receive-timeout loop." That's accurate for
+those commands, but it's a half-picture — it never captures the responder (CELLO_Support) setup,
+which was run by a separate Claude Code session and did hit a real error before the conversation
+could start. Recording the other half so "zero errors" isn't read as covering the full bilateral
+handshake.
+
+**What happened on the responder side, in order:**
+1. `cello_use_agent({ name: "CELLO_Support" })` → ok.
+2. `cello_status()` → surfaced the same stale `active_sessions` entry Entry 40 mentions
+   (`sessionId: a68c8fed1b5de830590a54440133fe85`, `liveness:"gone"`) — confirms this is
+   daemon-global state visible to both agents, not a per-agent artifact.
+3. The `/cello-walkie-talkie` skill, **as written at the time**, told the responder's first move to
+   be `cello_receive({ session_id: "SESSION_ID", timeout_ms: 60000 })` — but the responder never
+   receives a session_id from anywhere at that point; only `cello_initiate_session` (the
+   initiator's call) returns one. The instruction was unfollowable as literally written.
+4. Not recognizing that gap in the moment, the responder session mistakenly reused the stale
+   `gone` session ID from step 2 → `cello_receive` returned `{"ok":false,"reason":"session_not_found"}`.
+   **This is a real error Entry 40's count doesn't include**, because that count only reflects the
+   initiator's command sequence.
+5. Recovered by calling `cello_list_sessions()`, which surfaced the real active session
+   (`661b82b465842acbc664f9758f153949`, `messageCount:1` — Ms_Chelly's opening had already
+   arrived). `cello_receive` on that ID succeeded, and the rest of the exchange (3 sends, 3
+   receives, mutual `[[WRAP]]`, bilateral close) proceeded exactly as Entry 40 describes, same
+   `sealed_root: 64e3bca7517273274f7b758e1272d208c0fe5e9a6b29353e0e27efa94ecf6337` on both sides.
+
+**Assessment: not a protocol defect.** Session establishment, message delivery, and the bilateral
+FROST seal all worked correctly and match Entry 40's account exactly once the responder had the
+real session ID. The `session_not_found` was self-inflicted by following a broken instruction, not
+a directory/relay/FROST fault. This is a **skill-instruction bug**, isolated to
+`.claude/commands/cello-walkie-talkie.md`: the responder section (a) called for a session_id the
+responder cannot possibly have, and (b) buried `cello_list_sessions()` as a timeout-fallback one
+line later instead of stating it as the mandatory first step, and (c) never warned that
+`cello_status()`'s `active_sessions` can carry dead `liveness:"gone"` entries that must not be
+reused.
+
+**Fix applied (same session, this entry):** `cello-walkie-talkie.md` responder section rewritten
+to state plainly that the responder has no session_id and must not guess one; polling
+`cello_list_sessions()` is now the mandatory first step to obtain the real ID; reusing a
+`liveness:"gone"` entry from `cello_status()` is explicitly called out as wrong; and ad-hoc
+`Bash sleep` / `Monitor`-based waiting is explicitly forbidden since neither can observe MCP
+session state — `cello_receive`'s own `timeout_ms` plus re-polling `cello_list_sessions()` is the
+only correct wait mechanism. Added a matching `session_not_found` troubleshooting entry.
+
+**Correction to Entry 40's framing:** read "zero errors, zero retries" as scoped to the initiator's
+exact command sequence only. The full bilateral session had one setup-side error on the responder
+side, now understood and fixed at the skill-doc level — the underlying CELLO protocol behavior
+itself showed no defect in either direction.
+
+---
+
+### 2026-07-07 — Entry 40: LIVE walkie-talkie smoke, Ms_Chelly↔CELLO_Support — full session SUCCEEDS (does NOT reproduce Thread 1's `ceremony_exhausted`)
+
+**Why this matters:** this session ran a live two-agent CELLO conversation using the **exact same
+pubkeys** named in Entry 20's Thread-1 blocker — Ms_Chelly (`178d420b86beb…`) and CELLO_Support
+(`2ee9bed99385…`). That blocker reported `cello_initiate_session` failing `ceremony_exhausted` in
+both directions, SYSTEMIC, between these two agents post-wipe. **This run did not reproduce that
+failure** — session establishment, message exchange, and the bilateral FROST seal all completed
+cleanly on the first attempt. Logging this as raw evidence for whoever picks up Thread 1 / the live
+DOD-LIVE-1 smoke — it may mean the underlying FROST session-establishment issue is now resolved
+(the federation commits it was attributed to may have since been fixed forward), or it may mean
+conditions differ (e.g. directory/daemon state since the post-wipe repro). Not asserting resolution;
+recording the fact plus every command so it's independently checkable.
+
+**Context:** driven via the `/cello-walkie-talkie` protocol, Claude Code session acting as
+Ms_Chelly (initiator) against a separate Claude Code session acting as CELLO_Support (responder).
+
+**Exact command sequence (MCP tool calls, in order):**
+
+1. `mcp__cello__cello_use_agent({ name: "Ms_Chelly" })` → `{"ok":true}`
+2. `mcp__cello__cello_status()` → both agents `state:"online"`, `directory_signaling:"connected"`;
+   surfaced one **stale** `active_sessions` entry (`sessionId: a68c8fed1b5de830590a54440133fe85`,
+   `liveness:"gone"`) — left alone, not reused.
+3. `mcp__cello__cello_initiate_session({ target_pubkey: "2ee9bed99385bf7d63950d3836d1b017c6cbd1692351fd6c21309971c3ae8689" })`
+   → `{"ok":true,"sessionId":"661b82b465842acbc664f9758f153949","transportMode":"relay","correlationId":"131a7e08-56c6-46d0-8c95-23194ceb0621"}`
+   — **no `ceremony_exhausted`, no retry needed.**
+4. `mcp__cello__cello_send({ session_id, content: "Hi, this is Ms. Chelly... how do trust and identity verification actually work..." })` → `sequence_number 0`
+5. `mcp__cello__cello_receive({ session_id, timeout_ms: 30000 })` → timed out (`content:null`, normal per protocol) — looped, did not resend.
+6. `mcp__cello__cello_receive({ session_id, timeout_ms: 30000 })` → `sequence_number 1`, CELLO_Support explained Ed25519 identity + FROST threshold signing (share split across independent directory nodes) + tamper-evident hash chain + prompt-injection screening.
+7. `mcp__cello__cello_send({ session_id, content: "...what happens if one directory node is unreachable, not compromised..." })` → `sequence_number 2`
+8. `mcp__cello__cello_receive({ session_id, timeout_ms: 30000 })` → `sequence_number 3`, CELLO_Support confirmed `T < N` (majority-of-3 in dev) means the client falls back to remaining healthy nodes — redundancy by design, not an edge case.
+9. `mcp__cello__cello_send({ session_id, content: "...thanks for the clear walkthrough... [[WRAP]]" })` → `sequence_number 4`
+10. `mcp__cello__cello_receive({ session_id, timeout_ms: 30000 })` → `sequence_number 5`, CELLO_Support replied `"Glad it helped — reach out anytime. [[WRAP]]"` — mutual close-request satisfied.
+11. `mcp__cello__cello_close_session({ session_id: "661b82b465842acbc664f9758f153949" })` →
+    `{"ok":true,"sealed_root":"64e3bca7517273274f7b758e1272d208c0fe5e9a6b29353e0e27efa94ecf6337", ...}`
+    — bilateral FROST seal completed immediately (both sides had closed), `legibility.attests:"receipt"`,
+    both participants' `attestation_mode:"live"`.
+12. `mcp__cello__cello_get_transcript({ session_id })` → 6 messages (3 sent, 3 received), `undecryptable: 0`, sequence 0-5, matching the live exchange exactly.
+
+**Result:** full walkie-talkie protocol round-trip (initiate → send/receive ×3 → mutual `[[WRAP]]` →
+bilateral close → sealed root) completed with **zero errors, zero retries beyond one normal
+receive-timeout loop**, using the identical agent pair Entry 20 reported as systemically broken.
+
+**Not done here:** no code change, no root-cause investigation of why Thread 1 failed originally —
+this is a data point, not a fix. Whoever resumes DOD-LIVE-1 / the FROST session-establishment thread
+should treat "does this still repro `ceremony_exhausted` right now, on current directory state" as
+the first falsification step, since this run says no (at least once, today).
+
+---
+
 ### 2026-07-07 — Entry 39: 🚨 SEC-2 — pre-existing CRITICAL forgery hole in the FROST signing path (found while scoping the ceremony-gate); ceremony-gate PARKED on it
 
 **This is the most important thing found this session. Read the SEC-2 block in the DoD
