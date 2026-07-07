@@ -247,6 +247,19 @@ three steps completed from the command guidance alone, no source-reading. Rough 
     command list, add the orientation a first-time user needs.
   - **Deploy:** cello-client CLI (same publish path as P2-2/P2-3/P2-4).
 
+- ⬜ **P2-6. Contact management is CLI-only — not on the MCP tool surface.** *(cello-client — connect shim)*
+  - **Confirmed 2026-07-07:** the daemon has `cello_contact_list/add/remove` handlers (`daemon.ts:5609`+),
+    but the connect shim does NOT expose them as MCP tools (no `cello_contact_*` in the shim). So an agent
+    driving via MCP (Claude Code) **cannot see or manage its own whitelist** — only the CLI `cello contact
+    list/add/remove [--agent]` can.
+  - **Why it matters:** the agent-operated path is load-bearing, and the **D21** screening policy makes the
+    whitelist central — an AI agent that can't inspect who it trusts can't run that policy. This is the
+    inverse of the procedure's "shim only forwards" rule: a daemon capability the shim *doesn't* forward is
+    invisible to the MCP client.
+  - **Fix:** expose `cello_contact_list/add/remove` as MCP tools (mirror the existing daemon handlers). Small
+    — the handlers already exist; just add the shim tool definitions + forwarding.
+  - **Deploy:** cello-client connect shim (publish; same path as P2-2/…/P2-5).
+
 ## Implementation notes (for the one-shot sprint)
 
 - **Files:** `packages/operations-agent/src/registration/engine.ts` (item 1),
