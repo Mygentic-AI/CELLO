@@ -183,9 +183,10 @@ description: >
   shape (double-wake with two attended sessions is CURSOR's, Tier 2). — 🟠 PARTIAL (2026-07-07,
   Entries 45/46 — the **core doorbell journey is LIVE PROVEN** on published connect 0.0.60: real
   daemon + real published shim + live `--channels` session + real peer opens session + in-context
-  wake + full receive→reply→bilateral seal, both directions, zero polling. **Still owed before ✅:**
-  (1) `latest` promotion of connect 0.0.60 so the DEFAULT unpinned install path carries it, not just
-  a pinned test; (2) the COLD onboarding run below — Entries 45/46 used pre-existing agents, so the
+  wake + full receive→reply→bilateral seal, both directions, zero polling. `latest` promotion DONE
+  (2026-07-07 — `npm dist-tag add @cello-protocol/connect@0.0.60 latest`; default unpinned install
+  now = the proven combo connect 0.0.60 + cli 0.0.30 → daemon 0.0.32). **One thing still owed before
+  ✅:** the COLD onboarding run below — Entries 45/46 used pre-existing agents, so the
   create-agent→register→status-from-tool-output-alone half is not yet exercised.)
   - **Onboarding legibility bar (see the ONBOARD-* riders above — ordered before this line because the launch smoke includes them):** the Tier 1 launch smoke
     includes a COLD onboarding run — a fresh operator does `create-agent → register → status`
