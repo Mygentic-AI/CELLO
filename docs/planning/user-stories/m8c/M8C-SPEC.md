@@ -113,7 +113,10 @@ everything. M8C never re-invents an M9 piece.
 (standing receiver + FROST); directory arbitrates via a one-time primary-transfer offer (2-min
 TTL). The ECDH device-linking handshake ("how does daemon A authenticate that daemon B belongs to
 the same operator?") gets its **own design log before any code** — it is a crypto attack surface.
-DB sync is user-initiated. Sessions never migrate live: close → sync → new session.
+DB sync is user-initiated. Sessions never migrate live: close → sync → new session. Full design:
+[[M8C-PRIMARY-DESIGN]] (2026-07-07) — the FROST share is MOVED never copied (the load-bearing
+decision for DOD-INV-ONE-PRIMARY), device pairing reuses the existing pre-auth-capability pattern,
+and a new directory table mirrors `agent_presence` for network-enforced ceremony gating.
 
 ## 4. Tiers & dependency order (units → DoD lines in M8C-DEFINITION-OF-DONE)
 

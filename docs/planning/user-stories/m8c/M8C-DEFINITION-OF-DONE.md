@@ -296,7 +296,14 @@ description: >
 - **DOD-PRIMARY-DESIGN-1** — The device-linking design log exists BEFORE any Tier 5 code: how
   daemon B proves to daemon A it belongs to the same operator (the ECDH handshake's
   authentication story), threat model, and the DB-sync conflict model for two hash-chained
-  SQLCipher databases. This is a gate — no PRIMARY code until it's written and journaled. — ❌
+  SQLCipher databases. This is a gate — no PRIMARY code until it's written and journaled. — ✅
+  (2026-07-07, Entry 32 — full design log: [[M8C-PRIMARY-DESIGN]]. Grounded in a dedicated research
+  pass over existing K_local/FROST storage, directory schema, hash-chain structure, and existing
+  crypto primitives. Four decisions: operator-mediated pairing reusing the existing pre-auth-
+  capability pattern; one-directional DB-sync snapshot at transfer time (no CRDT); the FROST share
+  is MOVED never copied (the load-bearing decision for DOD-INV-ONE-PRIMARY); a new directory table
+  `primary_holder` mirroring the existing `agent_presence` pattern for network-enforced ceremony
+  gating. Full 5-threat model + explicit INV-ONE-PRIMARY traceability in the linked doc.)
 - **DOD-PRIMARY-1** — Same K_local on two daemons via the designed handshake; exactly one Primary
   (directory-arbitrated record); primary-transfer offer (one-time, 2-min TTL) in both directions
   (Standby requests baton; directory offers on unreachable-Primary); user-initiated DB sync;

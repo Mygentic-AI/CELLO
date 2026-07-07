@@ -23,7 +23,7 @@ description: >
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | 🟡 🟡 🟡CORE 🅿️CFG(D14) 🟡 |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡CORE 🟡 🟡CORE 🟡 (**TIER 3 DONE, reviewed+fixed**) |
 | 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | 🟡CORE 🟡CORE (**TIER 4 DONE**, reviewer pending) |
-| 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ❌ all — NEXT |
+| 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ✅ ❌ ❌ ❌ — design done, code next |
 | Post-channel — deferred | M9INT-1 (do AFTER channel tiers — D11; NOT a prerequisite) | 🟡 MERGED (`d47227c`, reviewed, 1 HIGH fixed) |
 
 **⛔ M9 IS NOT A PREREQUISITE (D11, 2026-07-06).** Do NOT merge `m9-build` before the channel work.
@@ -633,6 +633,49 @@ All fixed in `22de42c`:**
 DOD-LIVE-1 with the publish cascade).
 
 **Next unit:** the ONBOARD-* rider cluster — see Entry 10 design note (repro R4 first).
+
+---
+
+### 2026-07-07 — Entry 32: DOD-PRIMARY-DESIGN-1 — full design log written (hard Tier 5 gate)
+
+Full design log: [[M8C-PRIMARY-DESIGN]]. Grounded in a dedicated research pass (not speculation) —
+K_local + FROST share storage (`db-identity-store.ts:40-79`, one `agents` row holds BOTH), the
+directory's `agent_profiles` uniqueness constraints (confirms the directory cannot distinguish two
+daemons sharing one identity — this is the crux of the whole design problem), the per-session hash-
+chain structure (`session_tree_leaves` PK is per-session, not global — cross-session DB merge is
+naturally conflict-free; same-session concurrent writes are the one architectural danger to
+prevent, not repair), the existing one-directional ECDH sealed-box primitive (`content-seal.ts`,
+already reused tonight for LEAVEMSG-1), the existing `agent_presence` "exactly one owner" directory
+pattern (directly reusable template), the existing M8B-PREAUTH-CAP signed-capability primitive
+(directly reusable for the pairing token), and UPGRADE-001's existing seal-ratification gate (which
+DB-sync must feed, not modify).
+
+**Four decisions, each reusing proven existing infrastructure rather than inventing new crypto:**
+1. Device-linking is operator-mediated pairing (short-lived signed capability + out-of-band QR/
+   paste transfer, mirroring the existing pre-auth token UX) — not a device-to-device trust
+   protocol, since B has no identity yet and CELLO has no PKI.
+2. DB-sync is a one-directional, integrity-verified snapshot copy at a coordinated transfer moment
+   — never continuous bidirectional merge. No CRDT/vector-clock machinery needed.
+3. **The FROST share is MOVED, never copied** — the single load-bearing decision that makes
+   "no double-sign" structural rather than a coordination hope. A device that was never Primary
+   never possesses the share; transfer requires the old Primary's signed "share released"
+   attestation before the directory recognizes a new one.
+4. A new directory table, `primary_holder` (mirrors `agent_presence`'s shape exactly, keyed by a
+   fresh per-device `daemon_id` instead of the shared K_local pubkey), lets the directory REFUSE
+   ceremony participation from any non-current daemon — network-enforced, not just client
+   discipline.
+
+Full threat model (5 threats: token interception, device impersonation, split-brain, DB replay/
+rollback, compromised-Standby key exposure) and explicit DOD-INV-ONE-PRIMARY traceability (each of
+the three invariant clauses maps to a specific decision above) are in the linked doc. Open items
+deliberately deferred to DOD-PRIMARY-1's own implementation-time design note: exact wire schemas,
+the migration version reservation, and the unreachable-Primary (non-cooperative) transfer case —
+named explicitly so a future context doesn't have to rediscover that gap.
+
+**Status:** DOD-PRIMARY-DESIGN-1 → ✅ (the gate is a design log existing and being journaled — both
+done). Tier 5 code (DOD-PRIMARY-1) may now begin.
+
+**Next:** DOD-PRIMARY-1 build, following this design.
 
 ---
 
