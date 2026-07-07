@@ -30,9 +30,9 @@ description: >
 |---|---|---|
 | I — Invariants | INV-CONTENTFREE, INV-GATEWAY (activates w/ M9, deferred), INV-PUSHPULL, INV-HONEST-STATES, INV-ONE-PRIMARY | ❌ all |
 | 0 — Prerequisites | SPIKE-1 | ✅ |
-| 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | 🟡 🟡 🟡 ❌ |
-| 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | 🟡 all (built+reviewed; ✅ at LIVE-1) |
-| 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | 🟡 🟡 🟡CORE 🅿️CFG(D14) 🟡 |
+| 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | **✅** 🟡 🟡 🟠 — **WAKE-1 LIVE PROVEN** (doorbell, Entries 45/46); LIVE-1 doorbell-half proven, owes latest-promotion + cold-onboarding |
+| 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | 🟡 all (built+reviewed; ✅ at the cold-onboarding run, LIVE-1) |
+| 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | **✅** 🟡 🟡CORE 🅿️CFG(D14) 🟡 — **MSGWAKE-1 LIVE PROVEN** (per-message doorbell, both directions, Entries 45/46) |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡CORE 🟡 🟡CORE 🟡 (**TIER 3 DONE, reviewed+fixed**) |
 | 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | 🟡CORE 🟡CORE (**TIER 4 DONE**, reviewer pending) |
 | 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ✅ 🟠 ❌ ❌ — DESIGN done (Entry 35); **PRIMARY-1 directory arbitration BUILT+real-FROST-tested+reviewed (Entries 36-38, all findings fixed, 16 tests green)**. **REMAINDER ANDRE-GATED:** ceremony-gate 🅿️ PARKED on **SEC-2** (D20 — frost-signing-stream is unauthenticated, a pre-existing critical forgery hole, see 🚨 banner above); pairing/DB-sync/Telegram-gating/kill-the-Primary need a live multi-device spine |

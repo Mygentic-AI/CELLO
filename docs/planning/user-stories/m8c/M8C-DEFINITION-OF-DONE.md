@@ -91,10 +91,13 @@ description: >
   daemon change; the `connect` bump ships with the Tier 1 close cascade (LIVE-1, per PROCEDURE
   §2a) — WAKE proves against a locally-linked shim until then (D6). Edge ACs: no-attached-client (daemon queues, nothing
   pushes, INBOX reveals on attach); doorbell for a session that seals/aborts before the operator
-  reacts is handled gracefully. — 🟡 (2026-07-06, Entry 6 — built commit `d5fd5ec`,
-  shim-only/zero-daemon-change; unit + real-daemon+real-shim integration green; reviewer SPEC
-  FAITHFUL all 9 clauses, T1 test-teeth fix applied, F1 startup-window drop tracked LOW/pull-
-  recoverable. Flips ✅ at DOD-LIVE-1 — the live `--channels` in-context hop + `connect` publish.)
+  reacts is handled gracefully. — ✅ (2026-07-07, Entries 45/46 — LIVE PROVEN on connect 0.0.60: in
+  a real two-agent `--channels` session, the receiver's Claude Code turn auto-woke from an unprompted
+  `<channel source="cello" type="session_state_changed">` the instant the peer opened the session,
+  zero polling, both directions, receive→reply→bilateral seal (matching `sealed_root d80d0ede…`).
+  Reverses Entry 43's hard fail; the fix was connect 0.0.60's `buildChannelParams` — the shim had
+  omitted Claude Code's required `content` field, Entry 44. Built Entry 6 `d5fd5ec`; unit+integration
+  green throughout.)
 - **DOD-AUTOSTART-1** — `cello_use_agent` auto-starts the agent if not online (Q1 decided);
   `cello_start_agent` remains for bring-online-without-claiming. The 3-step incantation collapses
   to `login → use_agent`. Failure path (D6): a failed auto-start returns a structured
@@ -177,7 +180,13 @@ description: >
   published shim, live `claude --channels` session; a real peer (second daemon) opens a session;
   the operator's Claude wakes in-context, `use_agent` auto-started the agent beforehand, and the
   full receive→reply flow completes. One attended session per agent is the documented launch
-  shape (double-wake with two attended sessions is CURSOR's, Tier 2). — ❌
+  shape (double-wake with two attended sessions is CURSOR's, Tier 2). — 🟠 PARTIAL (2026-07-07,
+  Entries 45/46 — the **core doorbell journey is LIVE PROVEN** on published connect 0.0.60: real
+  daemon + real published shim + live `--channels` session + real peer opens session + in-context
+  wake + full receive→reply→bilateral seal, both directions, zero polling. **Still owed before ✅:**
+  (1) `latest` promotion of connect 0.0.60 so the DEFAULT unpinned install path carries it, not just
+  a pinned test; (2) the COLD onboarding run below — Entries 45/46 used pre-existing agents, so the
+  create-agent→register→status-from-tool-output-alone half is not yet exercised.)
   - **Onboarding legibility bar (see the ONBOARD-* riders above — ordered before this line because the launch smoke includes them):** the Tier 1 launch smoke
     includes a COLD onboarding run — a fresh operator does `create-agent → register → status`
     with no prior CELLO knowledge and can complete it from the tool output alone (help, errors,
@@ -192,7 +201,13 @@ description: >
   bridge forwards the daemon `data` blob verbatim — INV-CONTENTFREE is enforced UPSTREAM. When
   `cello_message` routes through that generic hop, re-prove content-freeness against the REAL
   `cello_message` producer, not the bridge; the doorbell must carry type + `session_id` + pubkey
-  only, never message content.) — 🟡 (2026-07-06, Entry 16 — built `e4af837`/`5c4071e`, daemon-side, rides WAKE's bridge; reviewer SPEC-FAITHFUL 6/6, held-release + dedup no-double-wake tests w/ teeth, F1 sender_unresolved loud. Flips ✅ at the live --channels smoke.)
+  only, never message content.) — ✅ (2026-07-07, Entries 45/46 — LIVE PROVEN on connect 0.0.60: a
+  second, independent `<channel source="cello" type="cello_message">` push arrived unprompted per
+  inbound message (distinct from the session-open wake), in BOTH directions, zero polling —
+  the real-time chat-relay claim holds end-to-end. Content-freeness re-proven at the real producer:
+  the push carries type + session_id + pubkey only (Entry 44's `buildChannelParams` puts routing in
+  `meta` + a fixed content-free announcement in `content`; message text never rides). Built Entry 16
+  `e4af837`/`5c4071e`; reviewer SPEC-FAITHFUL 6/6.)
 - **DOD-SINCESEQ-1** — `cello_receive({ since_seq })`: stateless catch-up from any gap size, no
   replay race; replaces the `cello_get_transcript` workaround for away-then-return. — 🟡
   (2026-07-06, Entry 17 — built `a404d3a`, daemon-side + 1 optional shim param; distinct early
