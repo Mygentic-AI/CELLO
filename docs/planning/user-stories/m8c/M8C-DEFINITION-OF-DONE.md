@@ -103,11 +103,15 @@ description: >
   to `login → use_agent`. Failure path (D6): a failed auto-start returns a structured
   `agent_start_failed` with the reason (`directory_unreachable` / `not_registered` / …) plus
   next-step guidance (ONBOARD-NEXTSTEP style) and leaves the current-agent selection unchanged —
-  no half-selected state. — 🟡 (2026-07-06, Entry 8 — built `245c7b2`/`08b9dae`, daemon-side;
+  no half-selected state. — ✅ (2026-07-06, Entry 8 — built `245c7b2`/`08b9dae`, daemon-side;
   auto-start via extracted startAgentInternal (CONN-001 preserved byte-for-byte), F18 sole-online,
   F5 state/selected split; reviewer NO SILENT FALLBACKS, 3 findings fixed incl. negative not_registered
   test with teeth. D12 deviations (not_registered non-blocking, directory_unreachable async) journaled.
-  Flips ✅ at DOD-LIVE-1.)
+  **2026-07-07 — AUTO-START PROVEN LIVE:** `cello_use_agent CELLO_Support` on an OFFLINE agent (Agent B
+  session) brought it online by itself — status → `state:"online"` + `standing_receiver_ready:true`,
+  `agent_state_changed→online/started` push fired, no separate start call. Success path proven; the
+  failure-path edge (`agent_start_failed` on a failed auto-start) was NOT exercised. See
+  [[M8C-LIVE-TEST-CHECKLIST]] 2a.)
   - **Friction riders (F5, F18 — first-run legibility, verified open 2026-07-06):**
     - **F18** — when exactly one agent is online and none is selected, tools that need a current
       agent USE it instead of returning `no_current_agent` (today `daemon.ts:2566` and siblings

@@ -29,8 +29,25 @@ No new code needed. Detail lives in M8C-DEFINITION-OF-DONE; this is the quick li
     is blocked. The full walk surfaced a batch of fixes (copy + the `register` receiver-arming bug + F18
     gaps + the `connections` stub) collected in **[[M8C-ONBOARDING-IMPROVEMENTS]]**. Gate flips ✅ when that
     onboarding mini-sprint ships (ops-agent copy redeploy + one cello-client publish).
-- [ ] **2a. Auto-start on select** — `cello_use_agent` on an OFFLINE agent brings it online by itself.
-- [ ] **2b. Inbox** — `cello_check_notifications` returns pending requests + unread messages.
+- [x] **2a. Auto-start on select** — `cello_use_agent` on an OFFLINE agent brings it online by itself.
+  **PROVEN LIVE 2026-07-07** (Agent B: `use_agent CELLO_Support` offline→online, push fired, no start call).
+  DOD-AUTOSTART-1 flipped ✅ (success path; failure-path edge not exercised).
+- [~] **2b. Inbox** — `cello_check_notifications` returns pending requests + unread messages.
+  **PARTIAL 2026-07-07:** `check_notifications` correctly *pulled* a pending session request. Still owed:
+  (i) the **unread-message** half (no message was actually delivered in the run), and (ii) the
+  **proactive-wake-on-reconnect** question — we preempted it by instructing the check, so we only proved
+  the inbox is pullable, not pushed when an agent comes online. Re-test: bring an agent online with
+  something waiting and watch whether it surfaces *unbidden*. DOD-INBOX-1 stays 🟡.
+- **Finding (leave-a-message, 3i/3j):** Ms_Chelly (a NEW counterparty, unknown to CELLO_Support)
+  `initiate_session` to the OFFLINE CELLO_Support hard-failed `counterparty_unavailable` — no message was
+  ever sent; the relay-park path did not engage. Consistent with the **D19 parked** limitation (new-
+  counterparty + offline recipient needs the unbuilt relay-discovery API). Run was racy (support came
+  online mid-attempt), leaving a ghost half-open session with an auto-sent `"Dispatched."` (CONTACT-1) that
+  the customer's side never sees — worth a look. So 3i/3j are NOT proven; the clean leave-a-message case is
+  KNOWN-contact-with-an-existing-session (cello_send parks), not new-counterparty-cold.
+- **Finding (status legibility):** MCP `cello_status` shows `state:"online"` + `selected` (F5 live), but the
+  **CLI** `cello status` still shows `"registered"` with no `selected` — CLI/MCP status diverge; the human-
+  facing CLI is the stale one. Fold into the onboarding sprint (F5/CLI).
 
 ## Confirm-live pass — everything else that's built
 - [ ] **3a. Catch up after away** — `cello_receive({ since_seq })` returns everything missed in one batch.
