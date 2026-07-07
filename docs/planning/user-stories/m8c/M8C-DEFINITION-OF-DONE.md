@@ -275,7 +275,17 @@ description: >
   guidance, committing the same leaf/transcript position a direct delivery would (the relay
   witness already assigned the sequence via R1 before direct delivery was even attempted). 4 new
   tests (park-succeeds, no-relay regression lock, park-hook-rejects honesty check, full IPC-level
-  `cello_send` end-to-end). `cello-unit-reviewer` dispatch pending. Also in this pass: a
+  `cello_send` end-to-end). **Reviewer (2026-07-07) found 1 BLOCKING HIGH: the park hook's
+  success/failure contract was throw-vs-resolve, but the production hook never throws on its two
+  main failure branches — it logged and resolved normally, so `parked:true`/"dispatched_to_relay"
+  could be reported for a message that was never deposited (silent, unrecoverable loss dressed as
+  success — worse than pre-LEAVEMSG-1 behavior, since the retry_queue backstop only fires on an
+  honest `{ok:false}`). Fixed (`f887dd7`): the hook now returns a typed `{ok:true}|{ok:false,
+  reason}` mirroring RetryQueue's ParkFn; a new test drives the exact untested resolved-`{ok:false}`
+  shape, confirmed to fail without the fix. Reviewer also flagged a PRE-EXISTING (not introduced
+  here, M7-era) HIGH: bare-content parked envelopes skip Ed25519 signature verification, combined
+  with relay deposit being intentionally unauthenticated by design — see "Tracked, not M8C-fruit"
+  below, PARKED as its own security finding, not silently dropped.** Also in this pass: a
   cello-unit-reviewer HIGH finding from the DOD-M9INT-1 merge review — `ingestReceivedContent`
   becoming async opened a race where two concurrent ingests could jointly exceed ABUSE-1's
   per-session size cap using stale totals — fixed with a post-screen re-check symmetric to the
@@ -356,6 +366,19 @@ own story) deliberately, never smuggled in as a rider. Source:
   (fixed port 4001 caps the demo at one concurrent onboarding). Concurrency redesign.
 - **R4 repro** — the bad-token silent-output bug feeding DOD-ONBOARD-ERRORS-1 needs a live
   reproduction before its fix; tracked on that line, noted here.
+- **SEC-1 (2026-07-07, flagged by cello-unit-reviewer during DOD-LEAVEMSG-1) — relay-parked
+  content authentication gap.** Bare-content parked envelopes (those without the DOD-MSG-4 ordering
+  Structure1/2 — the fallback shape `decodeParkEnvelope` accepts) skip Ed25519 signature
+  verification entirely; combined with the relay deposit protocol being intentionally
+  unauthenticated by design (anyone can seal-and-deposit to a known public identity key —
+  `content-park-client.ts`'s own documented design), this means a party who knows a target
+  agent's public Ed25519 identity key could in principle inject content into that agent's relay
+  mailbox that gets attributed to a real counterparty on recovery. Pre-existing since CELLO-M7-
+  MSG-001 (3b) — NOT introduced by M8C or the M9 merge, and not something M8C's channel/reachability
+  work touches. Needs its own design pass: either reject bare-content envelopes on recovery
+  (requiring every parked entry to carry the ordering record) or add a genuine per-message sender
+  signature to the park protocol. Flagging prominently — this is real production crypto-protocol
+  attack surface, not a nice-to-have.
 
 ## Parked decisions
 *(None yet. Genuine undecidable forks get parked here + journal + DECISIONS — never silently dropped.)*

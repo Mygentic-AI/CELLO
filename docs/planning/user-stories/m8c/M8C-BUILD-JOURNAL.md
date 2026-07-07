@@ -636,6 +636,71 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-07 — Entry 31: LEAVEMSG-1 reviewer HIGH fixed (commit `f887dd7`) + beta publish cascade — ⚠️ ONE BLOCKER (Andre 2FA)
+
+**LEAVEMSG-1 reviewer (dispatched Entry 30, returned this cycle) on `5967793`.** Part A (ABUSE-1
+size-cap re-check) confirmed clean. Part B found a real BLOCKING HIGH: `#parkContent`'s new
+success/failure contract was throw-vs-resolve, but the REAL production `contentParkHook`
+(`daemon.ts`) never throws on its two main failure branches (standing receiver unavailable; relay
+explicitly rejects) — it logs and resolves normally. That meant `sendContent`/`cello_send` could
+report `dispatched_to_relay` for a message that was NEVER deposited anywhere — worse than pre-
+LEAVEMSG-1 behavior, since the durable `retry_queue` backstop only fires on an honest `{ok:false}`,
+so this was silent, unrecoverable message loss dressed as success. **Fixed** (`f887dd7`): the hook
+now returns a typed `{ok:true}|{ok:false,reason}` (mirrors `RetryQueue`'s existing `ParkFn`
+pattern), `#parkContent` checks the result instead of only catching throws, and the production hook
+(`daemon.ts`, all 3 branches) honors the new contract. New test drives the exact untested shape
+(hook resolves `{ok:false}` rather than throwing) — confirmed it fails without the fix by
+temporarily reverting to a throw-only check, then restored. Reviewer separately flagged a real
+PRE-EXISTING (not introduced by this diff, M7-era) HIGH: bare-content parked envelopes (no ordering
+Structure1/2) skip Ed25519 signature verification entirely, and relay deposit is intentionally
+open/unauthenticated by design — meaning anyone who knows a target's public identity key could in
+principle inject unauthenticated content into their mailbox. **Not fixed tonight** — this is a
+deeper M7 content-park protocol gap (reject bare envelopes vs. add real per-message sender
+signatures), cross-cutting with already-shipped MSG-001-3b/RELAYWAKE-1 functionality; a rushed fix
+at this hour risks breaking working systems more than it protects. **PARKED as its own tracked
+security finding**, NOT silently dropped — needs its own design pass. See "Tracked, not M8C-fruit"
+in the DoD; flagging here prominently since Andre should see this first.
+
+**Beta publish cascade (heartbeat rule 4 — overdue, ~Tier-3/4-close batch per §2a):** bumped all
+seven packages (crypto 0.0.17, protocol-types 0.0.15, transport 0.0.16, client 0.0.46, daemon
+0.0.33→0.0.34 after the reviewer fix, cli 0.0.31, connect 0.0.59). Also discovered and fixed a REAL
+CI gap while doing this: `@cello-protocol/gateway` (the new M9-merge package) was wired into root
+`tsconfig.json` references but had NO publish line in `ci.yml` — the repo's own Publish-completeness
+guard would have failed on the next CI run regardless, and since `daemon` has a genuine
+`workspace:*` dependency on `gateway`, daemon's own publish would eventually have broken silently.
+Added gateway to the tarball-check list, both publish jobs (dependency order — before daemon), and
+both version-verify loops (`c9dcf1f`).
+
+**⚠️ Genuine blocker found (Andre-only, same category as the `latest`-promotion stop): gateway's
+FIRST-EVER npm publish requires interactive 2FA/OTP.** Tag `v0.0.75`'s CI run published 6/7
+packages successfully to `beta` (protocol-types/crypto/transport/client/daemon@0.0.33 — the
+PRE-reviewer-fix buggy version/cli/connect) but failed specifically on gateway
+(`npm error EOTP — This operation requires a one-time password`, confirmed by attempting the exact
+same `pnpm publish` command locally with my own authenticated npm session — same OTP wall). This
+appears to be npm's standard heightened-auth requirement for creating a brand-new package name
+(vs. publishing a new version of an existing one — confirmed daemon's OWN publish, an existing
+package, went through fine with no OTP prompt). **Time-sensitive follow-up:** because `v0.0.75`
+already put buggy `daemon@0.0.33` on `beta` before the reviewer fix landed, tag `v0.0.76` was
+pushed immediately after committing the fix (`f887dd7` → daemon bumped to 0.0.34, `04368c6`) so the
+corrected version supersedes it on `beta` — in flight as this entry is written. **Action needed from
+Andre:** run `pnpm publish --filter @cello-protocol/gateway --access public --no-git-checks --tag beta`
+from `cello-client` root with 2FA in hand (one-time, first-publish only — subsequent gateway
+versions should publish fine via CI's automation token once the package exists). Until then,
+`@cello-protocol/gateway` does not exist on npm at all — anyone installing a fresh `daemon@beta`
+that references it will fail to resolve the dependency. This does NOT block local development
+(gateway resolves via `workspace:*` locally) but DOES block a clean `npm install` of the published
+`daemon`/`cli` packages.
+
+**Status:** Publish cascade 6/7 done automatically; gateway blocked on Andre's one-time 2FA. Per
+procedure §2c, stating this plainly and moving to the next unit rather than idling.
+
+**Next:** Tier 5 — DOD-PRIMARY-DESIGN-1 (hard gate, §6). Research fork already returned grounding
+findings (K_local/FROST-share storage, directory's agent_profiles uniqueness, per-session hash-
+chain structure, existing ECDH/sealed-box primitives, the `agent_presence` "exactly one owner"
+pattern, UPGRADE-001). Writing the design log next.
+
+---
+
 ### 2026-07-07 — Entry 30: DOD-M9INT-1 reviewer HIGH fixed + DOD-LEAVEMSG-1 built (commit `5967793`) — TIER 4 DONE
 
 **M9INT-1 merge review (dispatched Entry 28, returned this cycle):** `cello-unit-reviewer` on
