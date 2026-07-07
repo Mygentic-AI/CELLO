@@ -2525,6 +2525,49 @@ renaming to `registration.standing_receiver.arm_initiated`.
 
 ---
 
+### 2026-07-07 — Entry 53: M8C-FIX-RUN OA-2 — onboarding copy overhaul (registration flow messages)
+
+**Fourth unit.** trustless-cello `c1189f42`.
+
+**What:** the full set of Telegram registration-flow copy fixes agreed while walking the flow — all
+message-string changes in the ops-agent.
+- **Item 1** (`engine.ts`): split the existing-account warning into TWO sends (explanation, then the
+  CONFIRM instruction).
+- **Item 2** (`state-machine.ts`): phone-ask gains a **directory-scoped** privacy note via shared
+  `PHONE_PRIVACY_NOTE` const (new "Welcome to CELLO!", returning "Welcome back"). Claims only what the
+  DIRECTORIES store (irreversible hashes), never "CELLO as a whole" — the portal recoverable-email model
+  is preserved (D-PROMISE / [[project_no_pii_in_directory_hash_only]]).
+- **Item 3** (`state-machine.ts`): email-ask branches on `expectedEmailStubHash` — returning users reuse
+  their original email; new users get the plain ask. No email-prefix hint (D-PII: registration is
+  hash-only).
+- **O1**: the pre-auth server-error copy no longer claims "not something you can fix by retrying" — the
+  record stays EMAIL_CONFIRMED and the next message triggers `#retryPreAuth` (state-machine.ts:177), so
+  the honest message invites a retry (shared `PREAUTH_SERVER_ERROR_MSG` const). This corrected m6b-011
+  AC-001, which enforced the false non-retryable premise — logged as **D23**.
+- **O2/O3/O4**: standardized the 3 OTP-failure phrasings + stated the 15-min code lifetime; rate-limit
+  message adds the 1-hour wait; email-continuity rejection explains the "same account = same email" why.
+
+**Anti-drift:** the two strings that lived at two sites each (privacy note, pre-auth error) are now single
+shared consts — the exact OA-1 root-cause class, structurally prevented.
+
+**Tests:** `m6b-016` asserts the item-1 split as TWO DISTINCT sends (reviewer F1 teeth — a recombined
+single message is now rejected) + the O4 continuity reject; `m6b-011` AC-001 corrected per **D23** (the
+retry path at state-machine.ts:177 genuinely re-runs requestToken). Full ops-agent gate green (121 tests,
+lint/typecheck/build).
+
+**Reviewer:** SPEC FAITHFUL / NO SILENT FALLBACKS. Confirmed the privacy note does NOT over-claim
+(D-PROMISE satisfied). One BLOCKING hollow-test finding (F1: the split test passed against a single
+recombined message) — FIXED before commit (assert `explainMsg !== confirmMsg` + neither message contains
+the other's marker).
+
+**Env note (carried from Entry 51):** the local Docker Postgres dev-role passwords were re-applied to run
+the ops-agent integration suite — ephemeral local state.
+
+**Unblocks:** cold onboarding (with OA-1 + CC-6/7/8). NOT yet redeployed — batched with OA-1 into ONE
+us-east-1 ops-agent redeploy at end of run.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

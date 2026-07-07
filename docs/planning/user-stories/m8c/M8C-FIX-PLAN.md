@@ -119,12 +119,16 @@ crisp handoff for the live checks.
 - **Cron 1 (deploy watchdog)** arms during the ops-agent redeploy + the cello-client publish CI (unchanged).
 
 ### ▶ RESUME STATE — keep current (the single anchor for a cut-off resume)
-**CC-1 ✅** (cello-client `eae50fb`) · **OA-1 ✅** (trustless-cello `4ce5cfe7`) · **CC-2 ✅** (cello-client
-`e73c421`) — all reviewed. **Next unit: CC-3** (F18 sole-online auto-select on the session-action tools —
-replace the `no_current_agent` hard-fails with `resolveCurrentAgent`; re-grep the sites, line numbers
-drifted after CC-1/CC-2 edits). Nothing published/redeployed yet (all cello-client → ONE publish cascade;
-OA-1+OA-2 → ONE us-east-1 redeploy — both at end of run). When resuming cold: read this directive + the
-per-fix `STATUS:` lines + `git log` in both repos, then continue from the first non-✅ fix.
+**Done:** CC-1 (cello-client `eae50fb`) · OA-1 (trustless-cello `4ce5cfe7`) · CC-2 (cello-client `e73c421`) ·
+OA-2 (trustless-cello `c1189f42`) — all reviewed. **Next unit: CC-3** (F18 sole-online auto-select on the
+session-action tools — replace `no_current_agent` hard-fails with `resolveCurrentAgent`, thread the
+resolved `agentName` downstream). **Drift-corrected sites (daemon.ts):** initiate_session 3032, close_session
+3173, get_sealed_receipt 3492, get_transcript 3548, list_sessions 3619, await_session 4640, send 5185,
+receive path (handleReceive) 5430 — plus check cello_status 3008 separately (likely leave). Helper
+`resolveCurrentAgent` at daemon.ts:1867; correct pattern already at 2919/2952. Nothing published/redeployed
+yet (all cello-client → ONE publish cascade; OA-1+OA-2 → ONE us-east-1 redeploy — both at end of run). When
+resuming cold: read this directive + the per-fix `STATUS:` lines + `git log` in both repos, continue from
+the first non-✅ fix.
 
 ---
 
@@ -258,6 +262,7 @@ per-fix `STATUS:` lines + `git log` in both repos, then continue from the first 
 - **Difficulty:** Trivial (string). **Ship:** rebuild + redeploy ops-agent (us-east-1 only).
 
 ### OA-2 — Onboarding copy overhaul (items 1–3, O1–O5) 🟠
+**STATUS: ✅ done** — trustless-cello `c1189f42`. Items 1 (engine.ts split into 2 msgs), 2 (phone-ask directory-scoped privacy note — shared `PHONE_PRIVACY_NOTE` const, new/returning openers), 3 (email-ask branches on `expectedEmailStubHash`, no prefix hint), O1 (pre-auth error now honestly retryable — shared `PREAUTH_SERVER_ERROR_MSG` const; **corrected m6b-011 AC-001 → D23**), O2 (3 OTP phrasings standardized + 15-min lifetime), O3 (rate-limit adds 1h), O4 (continuity reject explains why). Full ops-agent gate green (121 tests, lint/typecheck/build). Reviewer SPEC FAITHFUL / NO FALLBACKS; one BLOCKING hollow-test finding (F1: m6b-016 split test passed a recombined single message) FIXED (asserts two distinct sends) before commit. NOT yet redeployed (batched with OA-1 → ONE us-east-1 redeploy).
 - **What/why:** the full set of Telegram registration-flow improvements agreed while walking the flow. All
   are message-string changes in the ops-agent. **Exact copy + rationale + file:line for every one is in
   [[M8C-ONBOARDING-IMPROVEMENTS]]** — do not re-derive; implement from there. Summary:

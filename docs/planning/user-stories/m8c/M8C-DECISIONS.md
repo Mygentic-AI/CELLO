@@ -548,6 +548,22 @@ PARKED (journal + DoD "Parked decisions" + here).
 - **Redo > block:** if the live smoke shows register still doesn't arm, the fix is a one-line move, not
   a redesign.
 
+### D23 — OA-2/O1 corrects m6b-011 AC-001: the pre-auth server error IS retryable, so the message invites a retry (2026-07-07, autonomous D10)
+
+- **Context:** on a `PreAuthRequestError` the registration record stays in `EMAIL_CONFIRMED`, and the
+  user's NEXT message triggers `#retryPreAuth` (`state-machine.ts:177`) — the system genuinely retries.
+  The old copy said *"This is not something you can fix by retrying"* and m6b-011 AC-001 enforced that
+  the message must NOT contain "try again."
+- **Decision:** the old AC-001 was based on a false premise (that the error is non-retryable) and
+  contradicted the code's own retry path (which the same test file's second case exercises). O1's honest
+  message names the server error, **invites a retry** ("Reply anything to try again"), and points to
+  support if it persists. Updated both m6b-011 assertions from `toBeUndefined()` to `toBeDefined()` on
+  `/try again/i`, plus the file's AC-001 docstring. The server-error + support assertions are unchanged.
+- **Why this is honest, not lying:** telling the user retry may help is TRUE here — sending any message
+  re-attempts the token. The prior copy was the dishonest one (claimed retry was futile when it isn't).
+- **Redo > block:** narrow, well-evidenced test correction; if ever the retry path is removed, revert
+  the copy and the assertions together.
+
 ---
 
 ## Related Documents
