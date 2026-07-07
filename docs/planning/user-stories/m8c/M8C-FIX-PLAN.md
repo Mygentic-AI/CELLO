@@ -85,6 +85,34 @@ then CC-4, then CC-5.
 `--channels`/two-agent verification — needs a human at the keyboard. Do every non-live part first; leave a
 crisp handoff for the live checks.
 
+### Tracking & documentation — QUOTA-CRITICAL (the run may be cut off mid-way; weekly quota resets tomorrow 9 PM)
+- **THIS fix-plan is the single source of truth for run progress — NOT the DoD.** Do not "work the DoD"
+  during this run (looking at both is confusing). Mark each fix's status inline in its section
+  (`STATUS: ⬜ todo / 🔨 in-progress / ✅ done <commit>`) and keep the ▶ RESUME line below current. Touch a
+  DoD line ONLY when a fix genuinely completes it, then note it. **Fix→DoD map:** OA-1/OA-2 + CC-6/CC-7/CC-8
+  → ONBOARD-* riders + cold-onboarding/LIVE-1; CC-2 → AUTOSTART-1/LIVE-1; CC-1 → CONTACT-1/ABUSE-1 hardening
+  + D21.
+- **Append an M8C-BUILD-JOURNAL entry per fix** — the audit trail + the frequent-documentation mechanism.
+- **Document + COMMIT after EVERY fix — no batching.** The commit is the durable record. Quota may end the
+  run at ANY moment; a fresh context must resume from the commits + this doc ALONE. NEVER leave a completed
+  fix undocumented/uncommitted. **Push is best-effort** — attempt `git push` after each commit, but a
+  quota-blocked/failed push must NOT block progress (committed-but-not-pushed is acceptable). This applies
+  to BOTH repos (cello-client for CC-*, trustless-cello for OA-* + all docs).
+- **When budget feels low:** STOP starting new work → finish documenting + committing the current fix →
+  update the ▶ RESUME line → then idle. Documented state beats one more fix.
+
+### Watchdog crons — specialized for THIS run (extends PROCEDURE §3b)
+- **Cron 2 (heartbeat, ~30 min) — quota-hardened.** Each cycle, BEFORE anything else: (a) if a fix completed
+  since the last commit, commit it now (status + journal entry) in the right repo; (b) `git push`
+  (best-effort, ignore failure) in both repos; (c) refresh the ▶ RESUME line. THEN the standard §3a
+  self-audit (re-read PROCEDURE/FIX-PLAN if compaction dropped them; commit if >15 min since last; dispatch
+  the unit-reviewer if a unit went green without one). Documentation is the priority.
+- **Cron 1 (deploy watchdog)** arms during the ops-agent redeploy + the cello-client publish CI (unchanged).
+
+### ▶ RESUME STATE — keep current (the single anchor for a cut-off resume)
+**Not started.** Next unit: **CC-1**. Nothing committed yet for the fix run. When resuming cold: read this
+directive + the per-fix `STATUS:` lines + `git log` in both repos, then continue from the first non-✅ fix.
+
 ---
 
 ## cello-client — daemon (`core/daemon/src/daemon.ts`, `session-node-manager.ts`)
