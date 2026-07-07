@@ -120,8 +120,24 @@ crisp handoff for the live checks.
 
 ### ▶ RESUME STATE — keep current (the single anchor for a cut-off resume)
 **Done:** CC-1 (cc `eae50fb`) · OA-1 (tc `4ce5cfe7`) · CC-2 (cc `e73c421`) · OA-2 (tc `c1189f42`) · CC-3 (cc
-`da28e12`) · CC-6/7/8 CLI cluster (cc `f486e32`) · CC-9 (cc `d9c5569`) — all reviewed. **ALL FIX ITEMS DONE + REVIEWED.** CC-1/2/3/4/5/6/7/8/9 + OA-1/2 all committed+pushed+reviewed
-(CC-5 = cc `146ac74`+`cc4e5ce`). (Deferred by directive: SEC-2/DIR-1, full D21.) **Next after CC-5 review:** the BATCHED SHIP — (1) ONE `/cello-publish` cascade for all
+`da28e12`) · CC-6/7/8 CLI cluster (cc `f486e32`) · CC-9 (cc `d9c5569`) — all reviewed. **ALL FIX ITEMS DONE + REVIEWED + SHIPPED (beta).** CC-1/2/3/4/5/6/7/8/9 + OA-1/2 all committed+pushed+reviewed
+(CC-5 = cc `146ac74`+`cc4e5ce`). (Deferred by directive: SEC-2/DIR-1, full D21.)
+**SHIP STATE:**
+- **cello-client cascade** — bumped daemon 0.0.35 / cli 0.0.32 / connect 0.0.61 (cc `f239c64`), tagged
+  **`v0.0.81`**, pushed → CI publishing to **beta** (GitHub Actions in progress). Watchdog cron `c3bb42cb`
+  (every 4m) verifies the beta binaries (versions + real cross-pins + CC-5 symbol in the daemon tarball),
+  then self-deletes and refreshes this line. **NOT promoted to `latest`** (needs Andre's go).
+- **ops-agent (OA-1+OA-2)** — us-east-1 pipeline `cello-operations-agent-pipeline` already ran to
+  ProductionDeploy **Succeeded** at source `7cb8cf60` (after the OA-2 code commit `c1189f42`), auto-triggered
+  by the run's pushes → **deployed**. No separate redeploy needed.
+**⛔ STOPPED at the two legitimate stops (both need a human):**
+1. **`latest`-tag promotion** for cello-client (connect + cli + daemon at the new versions) — needs Andre's
+   explicit go after the beta smoke-tag is green.
+2. **Live `/mcp` reconnect + two-agent verification** — reinstall connect+cli@latest (or @0.0.61/@0.0.32),
+   `cello login`, reconnect MCP, then verify live: cold onboarding (fresh token → the new register copy →
+   receive without restart, CC-2), CC-1 (a stranger stays unknown; anti-spam cap holds), CC-3 sole-online,
+   and F21 (open a session to an offline agent → the receiver's ghost is reaped after ~5min OR
+   `cello_close_session { force:true }` abandons it). **Next after CC-5 review:** the BATCHED SHIP — (1) ONE `/cello-publish` cascade for all
 cello-client fixes (bump changed core/* [daemon, cli, connect] + dependents' pins, tag, CI→beta, verify the
 binary); (2) ONE us-east-1 ops-agent redeploy for OA-1+OA-2. THEN the two legitimate STOPS: `latest`-tag
 promotion (needs Andre's go) and the live `/mcp`-reconnect + two-agent verification (F21 reap/force +
