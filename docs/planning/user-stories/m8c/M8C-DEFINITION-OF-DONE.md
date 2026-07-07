@@ -227,8 +227,10 @@ description: >
   `meta` + a fixed content-free announcement in `content`; message text never rides). Built Entry 16
   `e4af837`/`5c4071e`; reviewer SPEC-FAITHFUL 6/6.)
 - **DOD-SINCESEQ-1** — `cello_receive({ since_seq })`: stateless catch-up from any gap size, no
-  replay race; replaces the `cello_get_transcript` workaround for away-then-return. — 🟡
-  (2026-07-06, Entry 17 — built `a404d3a`, daemon-side + 1 optional shim param; distinct early
+  replay race; replaces the `cello_get_transcript` workaround for away-then-return. — ✅
+  (PROVEN LIVE 2026-07-07 — `cello_receive({since_seq:2})` returned a BATCH of exactly the 3 messages that
+  piled up (seq 3/4/5, in order, received-only, no dupes/gaps, one call); see [[M8C-LIVE-TEST-CHECKLIST]] 3a.
+  Built 2026-07-06, Entry 17 — `a404d3a`, daemon-side + 1 optional shim param; distinct early
   since_seq branch, durable-transcript batch, watermark-advance, no-regression; reviewer
   SPEC-FAITHFUL, no silent fallbacks, teeth + since_seq:0 boundary locked. Flips ✅ when exercised live.)
 - **DOD-LOGINSTART-1** — `cello login` auto-starts all registered agents; per-agent

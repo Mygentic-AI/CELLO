@@ -80,7 +80,10 @@ No new code needed. Detail lives in M8C-DEFINITION-OF-DONE; this is the quick li
   facing CLI is the stale one. Fold into the onboarding sprint (F5/CLI).
 
 ## Confirm-live pass — everything else that's built
-- [ ] **3a. Catch up after away** — `cello_receive({ since_seq })` returns everything missed in one batch.
+- [x] **3a. Catch up after away** — `cello_receive({ since_seq })` returns everything missed in one batch.
+  **PROVEN LIVE 2026-07-07:** 3 messages piled up (seq 3/4/5); one `cello_receive({since_seq:2})` returned
+  all 3 in a batch, in order, received-only, no dupes/gaps/polling. DOD-SINCESEQ-1 → ✅. (Doorbell also
+  fired 3× — MSGWAKE per-message reconfirmed.)
 - [ ] **3b. Login = all agents online** — `cello login` brings every registered agent online at once.
 - [ ] **3c. Two windows in sync** — same agent in two sessions; read-before-write (no talking over each other).
 - [ ] **3d. Away auto-reply** — unattended agent answers with the away note and queues messages.
