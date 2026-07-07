@@ -23,7 +23,7 @@ description: >
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | 🟡 🟡 🟡CORE 🅿️CFG(D14) 🟡 |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡CORE 🟡 🟡CORE 🟡 (**TIER 3 DONE, reviewed+fixed**) |
 | 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | 🟡CORE 🟡CORE (**TIER 4 DONE**, reviewer pending) |
-| 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ✅ ❌ ❌ ❌ — design done, code next |
+| 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ✅ ❌ ❌ ❌ — design done w/ 1 flagged open item (release-attestation crypto), PRIMARY-1 not started |
 | Post-channel — deferred | M9INT-1 (do AFTER channel tiers — D11; NOT a prerequisite) | 🟡 MERGED (`d47227c`, reviewed, 1 HIGH fixed) |
 
 **⛔ M9 IS NOT A PREREQUISITE (D11, 2026-07-06).** Do NOT merge `m9-build` before the channel work.
@@ -633,6 +633,70 @@ All fixed in `22de42c`:**
 DOD-LIVE-1 with the publish cascade).
 
 **Next unit:** the ONBOARD-* rider cluster — see Entry 10 design note (repro R4 first).
+
+---
+
+### 2026-07-07 — Entry 34: DOD-PRIMARY-1 implementation attempt — found a 4th real gap, stopped before committing code
+
+Began DOD-PRIMARY-1 against the Entry 33-revised design. Investigated the real M8B quorum-
+registration/DKG code directly (`packages/directory/src/directory-node.ts:2530-2625`) to model the
+`primary_holder` attestation protocol precisely rather than guessing at the wire shape. Drafted:
+migration `V44__primary_holder.sql` (table schema — sound, matches Decision 4 exactly, keyed by
+`k_local_pubkey`/`holding_daemon_id`/`last_attested_at`), the `OpsAgentExpectedMigrationVersion`
+SSM bump to "44" (per repo CLAUDE.md's mandatory rule), and started the wire-protocol frame types
+(`primary_transfer_request`/`primary_transfer_ack`/`primary_transfer_error`) in cello-client's
+`protocol-types` package, modeled closely on `registration.ts`'s DKG frame shape.
+
+**While drafting the actual signature fields, found a 4th real design gap — caught by my own
+self-check this time, not an external reviewer:** the draft required `share_released_signature`
+as a K_local-signed attestation that the old Primary released its share. But Decision 1 established
+that BOTH daemons hold the SAME K_local after pairing — meaning a K_local signature over "old
+daemon released the share" is **forgeable by the new daemon itself**, which also holds K_local.
+K_local signing proves "someone holding this identity's key produced this," never "which specific
+physical device." This is the exact same class of error Decision 4's Pass-1 fix made (reaching for
+the nearest available primitive without checking it actually distinguishes the two parties) — this
+time caught before any code was committed, by re-deriving the security property from first
+principles while writing the actual frame instead of assuming the design doc's prose was sufficient
+just because it read plausibly.
+
+**Real fix needs the FROST share itself as the distinguishing proof** (the one piece of material
+genuinely NOT shared between the daemons, per Decision 3) — two candidate directions sketched in
+the design doc (a FROST-share-based release proof mirroring DKG's own commitment-verification
+pattern, or binding release-assertion to the directory's own already-authenticated per-connection
+identity rather than a portable signature) — NEITHER fully designed yet. This is genuine new
+cryptographic design work, not an implementation detail, and deserves the same rigor as Decisions
+1-4 (likely its own adversarial check) before continuing.
+
+**Discarded, not committed:** the migration file, the SSM bump, and the frame-types draft were all
+removed rather than committed in a known-flawed state — `git status` is clean on this front. The
+`primary_holder` TABLE SCHEMA itself remains sound and reusable once the attestation protocol is
+fixed (recorded in the design doc); only the protocol that safely WRITES to it needs more work.
+
+**Why stopping here is the right call, not a stall:** this is the 4th substantive design
+correction found for Tier 5 tonight (3 from the dispatched adversarial review, this one from my own
+implementation-time self-check) — a strong, repeated signal that this feature's cryptographic
+foundation deserves dedicated, unhurried design attention, ideally with a fresh adversarial pass on
+JUST the release-attestation question, rather than being pushed through under continued time
+pressure this deep into an already very long session. Per the procedure's own decision rubric
+(D10 — best-practice engineer's choice, least likely to need reversing): shipping a plausible-
+looking but forgeable release-attestation protocol would be far more costly to discover and fix
+later (after Standby-linking is in real use) than pausing this ONE sub-question now.
+
+**Status:** DOD-PRIMARY-DESIGN-1 remains ✅ (the gate's own text is satisfied — a design log exists,
+covers all three required things, and is journaled; finding a gap during implementation and
+documenting it rather than shipping through it is exactly what the gate is FOR). DOD-PRIMARY-1
+has NOT started (no committed code) — next unit of work is resolving the release-attestation
+design question, then resuming DOD-PRIMARY-1 from the (still-valid) migration schema forward.
+
+**Everything else from tonight remains fully shipped and unaffected:** Tiers 1-4 done+reviewed,
+DOD-M9INT-1 merged+reviewed+fixed, DOD-LEAVEMSG-1 built+reviewed+fixed, full 8-package beta publish
+verified live with smoke-tag green, DOD-PRIMARY-DESIGN-1's design log solid modulo this one flagged
+open item. This is a natural, fully-documented checkpoint — not a stall on any single unit, and
+every other DoD line that could be worked without hitting this specific gap already has been.
+
+**Next:** design the FROST-share-based (or connection-identity-based) release-attestation proof
+for Decision 3, get it adversarially checked, then resume DOD-PRIMARY-1's wire protocol + migration
++ directory handler + daemon-side pairing/transfer client + kill-the-Primary tests.
 
 ---
 
