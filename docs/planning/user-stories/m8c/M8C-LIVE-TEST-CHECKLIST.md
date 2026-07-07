@@ -38,13 +38,20 @@ No new code needed. Detail lives in M8C-DEFINITION-OF-DONE; this is the quick li
   **proactive-wake-on-reconnect** question — we preempted it by instructing the check, so we only proved
   the inbox is pullable, not pushed when an agent comes online. Re-test: bring an agent online with
   something waiting and watch whether it surfaces *unbidden*. DOD-INBOX-1 stays 🟡.
-- **Finding (leave-a-message, 3i/3j):** Ms_Chelly (a NEW counterparty, unknown to CELLO_Support)
-  `initiate_session` to the OFFLINE CELLO_Support hard-failed `counterparty_unavailable` — no message was
-  ever sent; the relay-park path did not engage. Consistent with the **D19 parked** limitation (new-
-  counterparty + offline recipient needs the unbuilt relay-discovery API). Run was racy (support came
-  online mid-attempt), leaving a ghost half-open session with an auto-sent `"Dispatched."` (CONTACT-1) that
-  the customer's side never sees — worth a look. So 3i/3j are NOT proven; the clean leave-a-message case is
-  KNOWN-contact-with-an-existing-session (cello_send parks), not new-counterparty-cold.
+- **Finding (leave-a-message, 3i/3j) — NOT proven; an UNRESOLVED inconsistency (do not over-explain it):**
+  - **Facts only:** Ms_Chelly's `initiate_session` to the OFFLINE CELLO_Support returned
+    `counterparty_unavailable` (no session on her side, no message sent). Yet after Support came online,
+    `check_notifications` showed a PENDING session request from Ms_Chelly on session `5749859a`, whose only
+    content is an OUTBOUND `"Dispatched."` from Support — and NO inbound message from Ms_Chelly.
+  - **Unexplained:** how a sender-side failure (`counterparty_unavailable`) left a receiver-side pending
+    request + auto-response. Resolving it needs the daemon session-event ordering. The earlier "race /
+    came online mid-attempt" note was an UNVERIFIED inference — retracted.
+  - **Unverified context (do NOT state as fact):** `"Dispatched."` is CONTACT-1's minimal response to an
+    UNKNOWN sender, and contacts are PER-AGENT — Ms_Chelly's prior chat was with CELLO_*Feedback* (a
+    different agent's whitelist), so nothing implies she is/isn't in CELLO_*Support*'s. Support's contact
+    list was NOT checked.
+  - So 3i/3j remain unproven. Per the LEAVEMSG design the clean leave-a-message case is a KNOWN contact
+    with an existing session (`cello_send` parks) — that specific case is what still needs a live run.
 - **Finding (status legibility):** MCP `cello_status` shows `state:"online"` + `selected` (F5 live), but the
   **CLI** `cello status` still shows `"registered"` with no `selected` — CLI/MCP status diverge; the human-
   facing CLI is the stale one. Fold into the onboarding sprint (F5/CLI).
