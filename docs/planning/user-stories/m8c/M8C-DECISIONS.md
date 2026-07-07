@@ -564,6 +564,24 @@ PARKED (journal + DoD "Parked decisions" + here).
 - **Redo > block:** narrow, well-evidenced test correction; if ever the retry path is removed, revert
   the copy and the assertions together.
 
+### D24 — CC-8 fixes the CLI status `state` field only; `selected` is intentionally NOT added to the daemon-wide surface (2026-07-07, autonomous D10)
+
+- **Context:** the CLI `cello status` showed every agent as `state: "registered"` even when online, while
+  the MCP `cello_status` (F5) shows `online`/`registered` + `selected`. Root cause: the CLI calls the
+  `"status"` IPC method → `getStatus()` (daemon-wide), which spread the stale stored `agents[].state`
+  ("registered" — `startAgentInternal` only adds to `onlineAgents`, never mutates the record), whereas
+  the MCP path calls `getAgentsForConnection()` which derives `online` from `onlineAgents`.
+- **Decision:** fix the `state` derivation in `getStatus()` (online vs registered from `onlineAgents`,
+  preserving `load_failed`) — this is **connection-independent**, so `handle.getStatus()` and the IPC
+  `"status"` response stay identical (daemon.test.ts's equality assertion holds). Do **NOT** add a
+  per-connection `selected` to the daemon-wide surface: `selected` is meaningful only for a connection
+  that ran `cello_use_agent`, and the CLI opens an ephemeral connection per `cello status` invocation
+  that never selects — a daemon-wide `selected` would be meaningless (always false) or break the
+  handle==IPC equality. The reported live defect (can't tell online from offline via the CLI) is fully
+  resolved by the `state` fix.
+- **Redo > block:** if a persistent per-CLI-session current agent is ever added, revisit surfacing
+  `selected` there.
+
 ---
 
 ## Related Documents

@@ -120,14 +120,14 @@ crisp handoff for the live checks.
 
 ### ▶ RESUME STATE — keep current (the single anchor for a cut-off resume)
 **Done:** CC-1 (cc `eae50fb`) · OA-1 (tc `4ce5cfe7`) · CC-2 (cc `e73c421`) · OA-2 (tc `c1189f42`) · CC-3 (cc
-`da28e12`) — all reviewed. **Next unit: CC-6** (CLI register next-step run-on line → multi-line;
-`core/cli/src/commands.ts:199`). Then **CC-7** (top-level `cello --help` → orientation; `cli-args.ts:28`),
-**CC-8** (CLI `cello status` shows `registered` not online/selected — trace CLI status formatter in
-`commands.ts` vs daemon F5), **CC-9** (expose `cello_contact_list/add/remove` as MCP tools in the connect
-shim, `core/adapter-claude-code/src/`). All CLI/shim → part of the single end-of-run cello-client publish
-cascade. Exact copy for CC-6/7 in [[M8C-ONBOARDING-IMPROVEMENTS]] (P2-1, P2-5). Nothing published/redeployed
-yet. When resuming cold: read this directive + the per-fix `STATUS:` lines + `git log` in both repos,
-continue from the first non-✅ fix.
+`da28e12`) · CC-6/7/8 CLI cluster (cc `f486e32`) — all reviewed. **Next unit: CC-9** (expose
+`cello_contact_list/add/remove` as MCP tools in the connect shim — add 3 `server.tool(...)` in
+`core/adapter-claude-code/src/bin/cello-mcp.ts` forwarding via `proxy.call` [pattern: cello_use_agent
+:154; params `pubkey` + optional `agent`, mirroring daemon handlers cello_contact_add/remove/list]).
+That is the LAST 🟠. Then 🟢 CC-4 (drop empty `connections` field) + CC-5 (F21 full). Then ONE cello-client
+`/cello-publish` cascade + ONE us-east-1 ops-agent redeploy (OA-1+OA-2), then the live-verification stop.
+Nothing published/redeployed yet. When resuming cold: read this directive + the per-fix `STATUS:` lines +
+`git log` in both repos, continue from the first non-✅ fix.
 
 ---
 
@@ -215,12 +215,14 @@ continue from the first non-✅ fix.
 ## cello-client — CLI (`core/cli/src/`)
 
 ### CC-6 — `register` next-step guidance is a run-on line 🟠
+**STATUS: ✅ done** — cello-client `f486e32` (CLI cluster). Multi-line heading + 3 bulleted cues; cues aligned to real `cello status` output (agent state `online` + directory_signaling `connected`) per reviewer LOW. Copy-only success-path (live-verified, D22-class).
 - **What/why:** the `register` output packs the whole "run cello status / connecting is normal / logout-login
   if stuck" into one dense line. P2-1. (The guidance CONTENT is correct — DOD-ONBOARD-NEXTSTEP-1 is ✅; this
   is formatting only.)
 - **Fix:** break it multi-line (see [[M8C-ONBOARDING-IMPROVEMENTS]] P2-1 for the exact layout). Trivial.
 
 ### CC-7 — Top-level `cello --help` is a bare command list 🟠
+**STATUS: ✅ done** — cello-client `f486e32` (CLI cluster). `USAGE` opens with what CELLO is + the onboarding path (login → create-agent → register → status), keeps the full command list + per-command pointer. Teeth test asserts the path order.
 - **What/why:** `cello --help` prints only `Usage: cello <login|...>` + "run cello <cmd> --help". Per-command
   help IS good (`cello create-agent --help`). DOD-ONBOARD-HELP-1 requires BOTH to give real help. P2-5.
 - **Where:** `core/cli/src/cli-args.ts` (top-level usage string, ~line 28).
@@ -228,6 +230,7 @@ continue from the first non-✅ fix.
   status) + the per-command pointer. Keep the list, add orientation. Easy.
 
 ### CC-8 — CLI `cello status` shows `state:"registered"`, never `online`/`selected` 🟠
+**STATUS: ✅ done** — cello-client `f486e32` (CLI cluster). Root cause: CLI `status` → `"status"` IPC → `getStatus()` (daemon-wide) spread the stale stored `agents[].state`. Fixed `getStatus` to derive state from `onlineAgents` (preserving `load_failed`), matching the MCP F5 surface; connection-independent (handle==IPC equality holds). `selected` intentionally omitted daemon-wide → **D24**. Teeth test: offline→registered, online→online. Reviewer SPEC FAITHFUL / NO FALLBACKS / TEETH.
 - **What/why:** the running daemon's **MCP** `cello_status` correctly shows `state:"online"` + `selected`
   (the F5 legibility fix, `daemon.ts:1712`), but the **CLI** `cello status` output shows `state:"registered"`
   always and no `selected` field — so you can't tell online vs offline from the CLI. Confirmed live (CLI vs

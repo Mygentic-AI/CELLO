@@ -2603,6 +2603,40 @@ batched into the single end-of-run cello-client `/cello-publish` cascade.
 
 ---
 
+### 2026-07-07 — Entry 55: M8C-FIX-RUN CC-6/7/8 — CLI onboarding legibility cluster
+
+**Sixth unit (3 fixes, one cluster).** cello-client `f486e32`.
+
+- **CC-6** (`core/cli/src/commands.ts`): the `register` success "Next: run cello status…" guidance was one
+  dense run-on line → a heading + three bulleted cues. Cues aligned to REAL `cello status` output (agent
+  `state: online` + `directory_signaling: connected`) per a reviewer LOW — the old "connecting/connected"
+  words never appeared in the actual output.
+- **CC-7** (`core/cli/src/cli-args.ts`): top-level `cello --help` was a bare command list → now opens with
+  what CELLO is + the first-time onboarding path (login → create-agent → register → status), then the full
+  command list + per-command pointer (DOD-ONBOARD-HELP-1; the per-command half was already good).
+- **CC-8** (`core/daemon/src/daemon.ts` `getStatus`): the CLI `cello status` (calls the `"status"` IPC
+  method → `getStatus()`, daemon-wide) showed every agent as `state: "registered"` even when online,
+  because `getStatus` spread the stale stored `agents[].state` (`startAgentInternal` only adds to
+  `onlineAgents`, never mutates the record). Fixed `getStatus` to DERIVE state from `onlineAgents`
+  (`online ? "online" : "registered"`), preserving `load_failed` (a broken agent stays visibly broken).
+  Matches the MCP `getAgentsForConnection` F5 surface. **Connection-independent** → the
+  `handle.getStatus() == IPC "status"` equality (daemon.test.ts) holds. `selected` is intentionally NOT
+  added to the daemon-wide surface (per-connection concept; the CLI opens an ephemeral connection that
+  never selects) — **D24**.
+
+**Tests (teeth):** CC-7 asserts the onboarding-path ORDER in `USAGE` (a bare/reversed list fails); CC-8
+asserts offline→`registered` then online→`online` over a real IPC start (inverts pre-CC-8). CC-6's
+success output is copy-only in a branch needing the full directory/DKG ceremony (D22-class) —
+live-verified, not unit-tested. Daemon suite green (636), CLI green (30), lint/typecheck/build.
+
+**Reviewer:** SPEC FAITHFUL / NO SILENT FALLBACKS / TESTS HAVE TEETH. No HIGH/MEDIUM. One non-blocking LOW
+(CC-6 cues vs real output) — FIXED (amended into the commit) before push.
+
+**Unblocks:** cold-onboarding legibility (with OA-1/OA-2). NOT yet published — batched into the single
+end-of-run cello-client `/cello-publish` cascade.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
