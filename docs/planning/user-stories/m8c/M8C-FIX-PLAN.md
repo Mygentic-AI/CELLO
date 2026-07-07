@@ -124,9 +124,19 @@ crisp handoff for the live checks.
 (CC-5 = cc `146ac74`+`cc4e5ce`). (Deferred by directive: SEC-2/DIR-1, full D21.)
 **SHIP STATE:**
 - **cello-client cascade** — bumped daemon 0.0.35 / cli 0.0.32 / connect 0.0.61 (cc `f239c64`), tagged
-  **`v0.0.81`**, pushed → CI publishing to **beta** (GitHub Actions in progress). Watchdog cron `c3bb42cb`
-  (every 4m) verifies the beta binaries (versions + real cross-pins + CC-5 symbol in the daemon tarball),
-  then self-deletes and refreshes this line. **NOT promoted to `latest`** (needs Andre's go).
+  **`v0.0.81`**, pushed → CI publishing to **beta**. **First tag run FAILED on a FLAKY test** (nothing
+  published): `session-node-manager.test.ts` "AC-009 (binary): SIGTERM marks active sessions interrupted"
+  — a real-process SIGTERM/DB timing race, NOT CC-5 (traced: the seeded rows are fresh so the age>5min
+  reaper can't touch them, and they were left `active` not `abandoned`, proving the reaper never ran; the
+  SIGTERM-interrupt path is unchanged). **Decisive:** the SAME commit `f239c64` PASSED on its main-branch
+  CI run — identical code, non-deterministic → flaky. **Re-ran the tag CI** (`gh run rerun 28895290870`;
+  nothing was published so no version burned). Watchdog cron `c3bb42cb` (every 4m) is verifying the re-run
+  → beta binaries (versions + real cross-pins + CC-5 symbol in the daemon tarball), then self-deletes +
+  refreshes this line. **NOT promoted to `latest`** (needs Andre's go).
+  **↳ Follow-up (post-launch, not blocking):** that binary SIGTERM test has a cross-connection visibility
+  race — it INSERTs the synthetic rows on a separate SQLCipher connection then SIGTERMs, so the daemon's
+  shutdown query can run before the INSERT is durable/visible. Worth hardening (e.g. confirm the daemon
+  observed the rows before SIGTERM, or WAL-checkpoint before kill).
 - **ops-agent (OA-1+OA-2)** — us-east-1 pipeline `cello-operations-agent-pipeline` already ran to
   ProductionDeploy **Succeeded** at source `7cb8cf60` (after the OA-2 code commit `c1189f42`), auto-triggered
   by the run's pushes → **deployed**. No separate redeploy needed.
