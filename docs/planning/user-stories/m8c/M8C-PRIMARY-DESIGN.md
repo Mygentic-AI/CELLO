@@ -10,39 +10,50 @@ description: >
   handshake (how daemon B proves it belongs to the same operator as daemon A), the threat model, and
   the DB-sync conflict model for two hash-chained SQLCipher databases. Grounded in a research pass
   over existing K_local/FROST storage, the directory's registration schema, the per-session hash-
-  chain structure, and existing crypto primitives — not speculative. Revised after an independent
-  adversarial security review found 3 blocking gaps (pairing had no sender authentication /
-  phishing resistance; the directory-arbitration mechanism was modeled on the wrong existing
-  pattern for a federated multi-node directory; DB-sync ordering/atomicity was asserted, not
-  defined) — all four fixes incorporated below, inline, dated.
+  chain structure, and existing crypto primitives — not speculative. Revised twice: (1) after an
+  independent adversarial security review found 3 blocking gaps (pairing had no sender
+  authentication/phishing resistance; directory-arbitration was modeled on the wrong existing
+  pattern; DB-sync ordering/atomicity was asserted, not defined); (2) after a follow-up code-level
+  investigation found the review's OWN proposed fix ("quorum commit") doesn't match how this
+  codebase actually achieves multi-node agreement anywhere (no cross-node RPC exists) — corrected
+  to the real, existing client-coordinated per-node pattern DKG already uses.
 ---
 
 # M8C Tier 5 — Primary/Standby Device-Linking Design
 
-## Revision note (2026-07-07)
+## Revision notes (2026-07-07, two passes)
 
-The first draft of this design was adversarially reviewed (a security-focused independent pass,
-specifically tasked with trying to break it before any Tier 5 code gets built) before being
-accepted as the Tier 5 gate. The review found three genuine, blocking gaps and one documentation-
-precision issue — all fixed inline below (search "adversarial review" for each correction):
+**Pass 1 — adversarial security review**, before accepting this as the Tier 5 gate. The review
+found three genuine, blocking gaps and one documentation-precision issue — fixed inline (search
+"adversarial review" for each):
 
 1. **Decision 1 (pairing handshake)** had no sender authentication on the link-request round trip —
    whoever redeemed an intercepted token first would receive K_local, and the design had no defense
-   against device-code-phishing (the operator's physical action is genuine, but their intent is
-   manipulated). **Fixed:** added a mandatory mutual fingerprint confirmation step.
+   against device-code-phishing. **Fixed:** added a mandatory mutual fingerprint confirmation step.
 2. **Decision 4 (directory arbitration)** was modeled on `agent_presence`, a node-local pattern —
-   but the "exactly one Primary" fact must be agreed CONSISTENTLY across all of CELLO's sovereign
-   directory nodes, and best-effort replication would reopen the exact split-brain window this
-   decision claims to close. **Fixed:** reuse CELLO's existing quorum-registration mechanism
-   (T = majority(N), already proven in M8B) instead of inventing per-node replication.
+   but the "exactly one Primary" fact must be agreed consistently across CELLO's sovereign directory
+   nodes. **First fix (later corrected — see Pass 2):** proposed reusing a "quorum-commit"
+   mechanism attributed to M8B's registration work.
 3. **Decision 2 (DB-sync)** asserted the snapshot is "authoritative and unambiguous" without
-   defining the ordering between quiescing the old Primary, taking the snapshot, and committing the
-   transfer, or naming an atomic backup mechanism for a live SQLCipher/WAL database. **Fixed:** an
-   explicit 6-step transfer sequence with a named atomic-backup primitive (`VACUUM INTO`) and reuse
-   of the existing relay-park mechanism for messages arriving mid-transfer.
+   defining ordering or naming an atomic backup mechanism. **Fixed:** an explicit transfer sequence
+   with a named atomic-backup primitive (`VACUUM INTO`) and reuse of the existing relay-park
+   mechanism for messages arriving mid-transfer.
 4. **Decision 3 (share moved, never copied)** overstated local deletion as the safety mechanism.
-   **Fixed:** reworded — deletion is hygiene; Decision 4's quorum-agreed gate is what's actually
+   **Fixed:** reworded — deletion is hygiene; Decision 4's node-side gate is what's actually
    load-bearing, independent of whether the old Primary's local delete succeeds.
+
+**Pass 2 — code-level follow-up investigation**, before writing any DOD-PRIMARY-1 code. Pass 1's
+fix for finding #2 cited "M8B's quorum-commit mechanism" from planning-doc grep hits alone, never
+the actual implementation. Reading the real code (`packages/directory/src/directory-node.ts`'s DKG
+coordination) found **no cross-node RPC or consensus exists anywhere in this codebase** — CELLO's
+directory nodes are genuinely separate databases (confirmed via infra config, one RDS per region),
+and "quorum agreement" for DKG registration is actually CLIENT-COORDINATED: the daemon itself dials
+each of T-of-N nodes directly and each node independently writes its own local row, with FROST's
+own threshold math (not a database-level commit) providing the actual guarantee. Decision 4 (and
+its downstream references in Decisions 2/3 and the threat model) is corrected to this real pattern
+— search "follow-up" for each correction. This is a MORE grounded design than Pass 1's fix, not a
+weaker one: it reuses an already-proven mechanism instead of inventing a new one this codebase has
+never implemented.
 
 ## Purpose and scope
 
@@ -182,30 +193,41 @@ have been idle on session/content activity (same "polls cold" idle-until-transfe
 already established for the Telegram poller) — so there is no divergent state on the Standby side
 to reconcile against the incoming snapshot.
 
-**Explicit transfer sequence and atomicity (added after adversarial review, 2026-07-07).**
-"Authoritative and unambiguous" was previously asserted without pinning down ordering relative to
-Decision 4's daemon_id gate, or how the DB copy is made atomic against a live, possibly WAL-mode
-SQLCipher process. Both are correctness preconditions for this decision's own claim, not
-implementation detail to leave open. The sequence:
+**Explicit transfer sequence and atomicity (added after adversarial review, 2026-07-07; sequence
+corrected to the client-coordinated model, 2026-07-07 follow-up — see Decision 4).** "Authoritative
+and unambiguous" was previously asserted without pinning down ordering relative to Decision 4's
+daemon_id gate, or how the DB copy is made atomic against a live, possibly WAL-mode SQLCipher
+process. Both are correctness preconditions for this decision's own claim, not implementation
+detail to leave open. There is no single directory to "flip" a state on (Decision 4) — the
+NEW-Primary daemon drives the whole sequence, exactly as it already drives DKG:
 
-1. Directory flips `primary_holder` to a `transferring` state for this agent — from this instant,
-   the directory refuses to route *new* session/message activity to the old Primary's `daemon_id`
-   (extends Decision 4's gate with an intermediate state, not just holder/no-holder).
+1. New Primary (the daemon completing the transfer) begins attesting the transfer directly to each
+   of the T-of-N directory nodes holding this agent's FROST shares (dialing each independently, per
+   Decision 4). As each node accepts, THAT node individually stops routing new session/ceremony
+   activity to the old Primary's `daemon_id` — there is no global "transferring" state, only each
+   node's own local transition, same as every other per-node write in this system.
 2. Old Primary finishes any in-flight session writes and checkpoints its WAL
    (`PRAGMA wal_checkpoint(TRUNCATE)`), so the on-disk file reflects a consistent, complete state.
 3. New Primary reads the snapshot via an atomic backup primitive — `VACUUM INTO` (or SQLite's
    online backup API) against the checkpointed file, never a raw filesystem copy of a
    possibly-open database.
-4. Old Primary submits the signed "share released" attestation (Decision 3).
-5. Directory commits the new `holding_daemon_id` (via the quorum mechanism in Decision 4's revision
-   below) — only now does the transfer complete from the directory's perspective.
-6. New Primary resumes: it may now hold a live session node and attempt a FROST ceremony.
+4. Old Primary submits its signed "share released" attestation (Decision 3) — carried as part of
+   the same per-node attestation in step 1 (the new Primary's claim and the old Primary's release
+   travel together, so a node never accepts one without the other).
+5. New Primary tallies its own per-node acceptances (exactly as it already tallies DKG round
+   successes) and does NOT proceed to step 6 until it has confirmed acceptance from T-of-N nodes.
+   An incomplete transfer (fewer than T accepted) is not yet usable — the daemon retries the
+   remaining nodes rather than attempting a ceremony prematurely.
+6. New Primary resumes once T-of-N is confirmed: it may now hold a live session node and attempt a
+   FROST ceremony (which itself only succeeds if it can reach T-of-N nodes that agree it is
+   current — the same T threshold, doing double duty as both the transfer-completion bar and the
+   signing bar).
 
-Any relay-delivered message for this agent arriving between steps 1 and 6 is parked via the
-EXISTING relay store-and-forward mechanism (Terrain #5 / DOD-LEAVEMSG-1, built earlier this
-milestone) rather than being routed to whichever daemon happens to be reachable — the new Primary
-recovers it via the existing RELAYWAKE pull once it resumes at step 6. This reuses proven
-machinery instead of inventing a transfer-window-specific buffer.
+Any relay-delivered message for this agent arriving during this window is parked via the EXISTING
+relay store-and-forward mechanism (Terrain #5 / DOD-LEAVEMSG-1, built earlier this milestone)
+rather than being routed to whichever daemon happens to be reachable — the new Primary recovers it
+via the existing RELAYWAKE pull once it resumes at step 6. This reuses proven machinery instead of
+inventing a transfer-window-specific buffer.
 
 ## Decision 3 — The FROST share is MOVED, never copied
 
@@ -232,44 +254,59 @@ hygiene (not a correctness requirement): after the local delete, run `PRAGMA sec
 (or an explicit overwrite) before the delete and follow with `VACUUM` to reduce the chance the
 share persists in reclaimable SQLCipher pages.
 
-## Decision 4 — Directory-enforced Primary arbitration, QUORUM-agreed (not per-node replicated)
+## Decision 4 — Directory-enforced Primary arbitration, CLIENT-COORDINATED per-node (not a cross-node commit protocol)
 
 A new table, `primary_holder`, is keyed by `k_local_pubkey` with a `holding_daemon_id` column (a
 fresh per-device UUID minted at pairing time — NOT the shared K_local pubkey, since multiple
-daemons now share that identity) and a heartbeat-freshness gate. Every daemon connection to the
-directory now carries its own `daemon_id`. The directory refuses to route a FROST ceremony request
-for an agent unless the requesting connection's `daemon_id` matches `primary_holder.holding_daemon_id`
-with a fresh heartbeat.
+daemons now share that identity) and a per-node heartbeat-freshness gate. Every daemon connection to
+the directory now carries its own `daemon_id`. Each directory node refuses to let a ceremony request
+for an agent proceed through ITS OWN participation unless the requesting connection's `daemon_id`
+matches THAT NODE's own locally-stored `primary_holder.holding_daemon_id` with a fresh heartbeat.
 
-**Correction after adversarial review (2026-07-07): this must be QUORUM-agreed, not modeled on
-`agent_presence`'s per-node replication.** The original text modeled `primary_holder` directly on
-`agent_presence` (Terrain #3), but that pattern is node-local by nature — an agent connects to one
-specific directory node, so no cross-node agreement is ever required for `agent_presence` to be
-correct. `primary_holder.holding_daemon_id` is the opposite: it is a single fact that must be true
-CONSISTENTLY across ALL of CELLO's sovereign directory nodes, because a ceremony request can land
-on any of them. If updates propagated by unspecified best-effort replication, a node that hasn't
-yet heard about a transfer could validly serve the OLD Primary's ceremony request after the
-transfer is supposed to be complete — reopening exactly the split-brain this decision claims to
-close, especially combined with Decision 3's now-corrected point that the old Primary's share may
-still be physically present locally.
+**Correction after adversarial review (2026-07-07): must be agreed consistently, not modeled on
+`agent_presence`'s single-node-local pattern.** [Superseded below — see the second correction.] The
+original text modeled `primary_holder` directly on `agent_presence` (Terrain #3), but that pattern
+is node-local by nature — an agent connects to one specific directory node, so no cross-node
+agreement is ever required for `agent_presence` to be correct. `primary_holder.holding_daemon_id`
+needs to be true consistently enough across CELLO's sovereign directory nodes that a ceremony
+cannot complete against a stale/superseded holder.
 
-**The fix reuses CELLO's own existing quorum-agreement mechanism, not a new one.** M8B's
-quorum-registration work already established the pattern this needs: `T = majority(N)`, the client
-drives an operation that must be recorded durably across a QUORUM Q (Q ≥ T) of directory nodes
-before it is considered official (see the M8B quorum-registration plan — "register among the
-available quorum Q... record the quorum as the share-holder set"). Primary-transfer reuses this
-directly: the transfer's `holding_daemon_id` update is submitted to the SAME recorded quorum Q for
-that agent (not an arbitrary/best-effort subset of nodes), and is only complete once ≥T of Q have
-durably committed it. Each directory node's OWN ceremony-participation gate reads only its own
-durably-committed local value — never a value still in flight — so a node that hasn't yet
-committed the transfer simply has no record of a NEW holder yet, and (combined with the transfer
-sequence in Decision 2, which already refuses new routing to the old Primary from step 1) cannot
-be tricked into serving the old Primary either. This is directory-ENFORCED at quorum strength (the
-same strength CELLO already trusts for registration and sealing), not a single node's opinion and
-not best-effort replication — combined with Decision 3 (a device that was never Primary never
-receives the share in the first place), a compromised or buggy Standby cannot complete a ceremony:
-it lacks the share, and even a retained-but-stale old Primary is refused once quorum has committed
-the transfer.
+**Second correction, grounded in the ACTUAL codebase (2026-07-07, follow-up investigation): there is
+no cross-node commit protocol anywhere in this system to reuse — the first correction's "quorum
+commit" framing does not match how CELLO actually achieves multi-node agreement.** Investigated the
+real M8B quorum-registration implementation directly (`packages/directory/src/directory-node.ts`,
+DKG coordination) rather than trusting the planning-doc citation. Directory nodes are genuinely
+separate, independently-deployed databases (confirmed via `infra/cloudformation/cello-ecs-directory.yaml`
++ `infra/STATE.md` — one RDS instance per region, 3 regions, no shared backing store). **Critically,
+there is no node-to-node RPC or consensus anywhere in this codebase.** "Quorum agreement" for DKG
+registration works like this: the CLIENT (daemon) reports its reachable-node list; each directory
+node INDEPENDENTLY computes its own local quorum view (Q = reachable ∩ its own manifest, T =
+majority(N)); the client itself then dials EACH of the T-of-N nodes DIRECTLY over its own
+`/cello/frost/1.0.0` stream and drives the DKG protocol with each independently; each node
+independently verifies the client's cryptographic proof and writes its OWN local row to its OWN
+local Postgres. `V33__agent_presence.sql`'s own design comment confirms this is the system's
+general pattern: "Sovereign write-ownership (load-bearing)... Cross-node writes are prevented in
+application code" — no table in this codebase today has, or is intended to have, a cross-node
+consensus write path.
+
+**`primary_holder` therefore follows the SAME shape as DKG, not an invented quorum-commit RPC:** the
+daemon claiming Primary status independently attests to EACH of the T-of-N directory nodes that
+hold this agent's FROST shares (client dials each node directly, mirroring the existing DKG dial
+pattern) with a signed primary-claim; each node independently verifies the signature and the
+transfer's legitimacy (the old Primary's "share released" attestation, Decision 3) and writes its
+OWN local `primary_holder` row. A node's ceremony-participation gate reads ONLY its own local row
+— exactly like every other per-node check in this system. **The "no double-sign" guarantee does not
+come from an atomic cross-node commit (none exists) — it comes from FROST's own threshold math**:
+a ceremony needs T valid partial signatures to complete. If the daemon successfully attests the
+transfer to T-of-N nodes before attempting a ceremony as the new Primary, at least T nodes now gate
+on the NEW daemon_id — meaning the OLD daemon_id can gather at most (N − T) participating nodes
+from among those T (assuming the attestation actually reached all T), which is by definition fewer
+than the T required, and cannot complete a ceremony. The daemon (not the directory) is responsible
+for reaching enough nodes before treating a transfer as usable — mirroring exactly how DKG already
+places this responsibility on the client, not on inter-node coordination. A transfer that only
+reaches fewer than T nodes is incomplete and the new Primary must not attempt a ceremony until it
+has confirmed T-of-N acceptances (each node's attestation-write response confirms this locally;
+the daemon tallies its own successes, exactly as it already does when driving DKG rounds).
 
 ## Threat model
 
@@ -298,18 +335,22 @@ the transfer.
   operator's real second device, giving the operator a concrete, visible mismatch to notice.
 - **T3 — split-brain: both daemons believe they are Primary simultaneously.** Mitigated in depth:
   (a) the FROST share is moved, never copied (Decision 3) — a device that was never Primary simply
-  cannot sign, and Decision 3 no longer overstates local deletion as the safety net; (b) the
-  directory's `primary_holder` record, agreed at QUORUM strength (Decision 4, corrected), refuses
-  ceremony participation from a non-matching `daemon_id` — this is what actually closes the
-  invariant, not client-side coordination; (c) the explicit transfer sequence (Decision 2) refuses
-  new routing to the old Primary from the moment transfer begins, before any snapshot or share
-  release occurs.
+  cannot sign, and Decision 3 no longer overstates local deletion as the safety net; (b) each
+  directory node's own local `primary_holder` row refuses ceremony participation from a
+  non-matching `daemon_id` (Decision 4, corrected to the client-coordinated per-node model); (c)
+  the guarantee is FROST's own threshold math, not a cross-node commit — the new Primary must reach
+  T-of-N nodes before a ceremony can succeed under the new identity, which by construction leaves
+  the old daemon_id with fewer than T available participants; (d) the explicit transfer sequence
+  (Decision 2) has each accepting node individually stop routing to the old Primary as it accepts,
+  narrowing the window node-by-node rather than assuming an instantaneous global flip.
 - **T4 — DB replay/rollback.** An attacker with filesystem access to an old DB snapshot restores it
   to make a daemon falsely believe it is still (or again) Primary after a legitimate transfer.
-  Mitigated: `primary_holder`'s freshness is directory-witnessed at quorum strength (a restored
-  snapshot's stale heartbeat ages out immediately), and the FROST ceremony gate is checked at the
-  DIRECTORY's quorum-committed state — never trusted from a daemon's local claim about its own
-  Primary status.
+  Mitigated: each directory node's own `primary_holder` row and heartbeat-freshness check is
+  independent local state (a restored snapshot's stale heartbeat ages out immediately against that
+  node's own clock), and the FROST ceremony gate at each node is checked against that node's own
+  durably-written local row — never trusted from a daemon's local claim about its own Primary
+  status. A restored old-Primary daemon can at best convince nodes it hasn't yet reached during a
+  transfer, which is bounded by the SAME T-of-N threshold argument as T3.
 - **T5 — a compromised Standby attempts to read/exfiltrate the K_local it legitimately holds.**
   Out of scope for this design specifically (K_local possession is inherent to being a linked
   device at all, by definition — the same exposure a single compromised daemon already has today).
@@ -333,12 +374,13 @@ the transfer.
 ## Relation to DOD-INV-ONE-PRIMARY
 
 This design makes DOD-INV-ONE-PRIMARY ("no double-accept, no FROST double-sign, no live session
-migration") hold by construction: FROST double-sign is prevented primarily by Decision 4's
-quorum-agreed directory gate (a device without the share cannot sign regardless, per Decision 3,
-but the gate is what closes the split-brain window during a transfer — see the T3 correction
-above); double-accept is prevented by Decision 4's same gate applied to session negotiation; live
-session migration is explicitly excluded by Decision 2's explicit transfer sequence (sessions only
-ever live on the current Primary; a transfer syncs state through a defined quiesce→snapshot→commit
+migration") hold by construction: FROST double-sign is prevented by the combination of Decision 3
+(a device that was never Primary never has the share, full stop) and Decision 4's per-node gate
+plus FROST's own T-of-N threshold math (the old daemon_id cannot gather T participating nodes once
+the new Primary has attested to T-of-N of them — see the T3 correction above); double-accept is
+prevented by each node's same local gate applied to session negotiation; live session migration is
+explicitly excluded by Decision 2's explicit transfer sequence (sessions only ever live on the
+current Primary; a transfer syncs state through a defined quiesce→snapshot→per-node-attest
 ordering, it does not migrate a live session).
 
 ---
