@@ -88,6 +88,17 @@ whitelisted, regardless of whether the operator ever saw or wanted them.
 auto-replied `"Dispatched."` — Agent B never accepted her. She is now a Level-4 contact of both Support
 and Feedback.
 
+**Confirmed again in a CONTROLLED run (2026-07-07, Phase 3/4):** Ms_Chelly was explicitly REMOVED from
+Support's contacts (`contacts: []`), then knocked (Support online + unattended). Within the ONE session
+(`dd7493…`): seq 0 = `"Dispatched."` (judged unknown), then she was **auto-re-added** (`added_at
+1783442938087`, verified via `cello contact list`), then her actual message (seq 1) got the **known**
+`"Agent is currently away…"` reply (seq 2). So the promotion happens **mid-session** — screening applies to
+literally the first frame, after which the sender is Level-4. Worse: her message was **accepted and
+queued** (`delivered:true`, surfaced in `check_notifications` as unread) — so there is **no content
+screening at all today**; the only thing that varies by known/unknown is the wording of the auto-ack. The
+D21 levels (esp. L1 Ignore and any real content gate) do not exist yet — the current system is ~a fixed,
+leaky L2.
+
 **This contradicts D21.** "Known" must be a deliberate trust boundary, not auto-filled by anyone who
 contacts you once — otherwise the screening layer is defeated after the first message (a spammer knocks
 once, then is fast-tracked forever). **Decision needed:** promotion to "known"/L4 should require

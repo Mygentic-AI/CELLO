@@ -128,7 +128,8 @@ description: >
   DB; a `cello_receive` that returns messages advances it (delivery marks read — no ack verb, no
   separate notification store; INBOX derives from this watermark + the already-stateful pending
   session requests). Distinct from CURSOR's per-connection cursor (Tier 2, read-before-write
-  gating). — 🟡 (2026-07-06, Entry 11 — built `dfc02e8`/`22de42c`, daemon-side; message_watermarks
+  gating). — ✅ (PROVEN LIVE 2026-07-07 — `check_notifications` returned a pending request + the unread
+  message, discovered on reattach; see [[M8C-LIVE-TEST-CHECKLIST]] 2b. Built 2026-07-06, Entry 11 — `dfc02e8`/`22de42c`, daemon-side; message_watermarks
   table + getUnreadSummary + handleReceive advance + F4 4-way split; reviewer SPEC FAITHFUL 7/7, no
   silent fallbacks, F1 N3-coupling test w/ teeth + F2 received-write error-fidelity fixed, F3
   over-report tracked LOW. Flips ✅ at DOD-LIVE-1.)
@@ -249,13 +250,18 @@ description: >
 - **DOD-CURSOR-1** — Per-connection, per-session read cursor; `cello_send` refused with
   `session_not_current` + `current_seq`/`last_read_seq` + guidance when the caller hasn't caught
   up; two attended sessions on one agent collaborate coherently (read-before-write, the
-  WhatsApp-group-chat model). — ❌
+  WhatsApp-group-chat model). — ✅ (2026-07-07 — read-before-write gate PROVEN LIVE: a `cello_send` was
+  refused `session_not_current` + `current_seq:0`/`last_read_seq:-1` + catch-up guidance until the caller
+  `receive`d. The prior ❌ was STALE — the gate is built and now live-verified. Two-attended-windows
+  collaboration scenario not separately run. See [[M8C-LIVE-TEST-CHECKLIST]].)
 
 ## Tier 3 — Reachability + protection
 
 - **DOD-AWAY-1** — Away response: unattended Primary answers session requests + messages with the
   configured (or default transparent) away text and queues them; opaque privacy mode = full
-  silence, indistinguishable from unreachable; per-type (request vs message) templates. — 🟡CORE (2026-07-06, Entry 22/23 — built `10d2d01`/`6bed679`, isAttended + per-type templates + coalescing (cleared on use_agent) + queueing via existing inboundSessionQueues; reviewer (aa5928e2/a9099571) SPEC-FAITHFUL on the core clauses, 3 findings fixed (get_transcript safeCursorAdvance, dedup-clear-on-failure, D15 properly journaled). Opaque-mode + custom-text PARKED on M9-CFG-001, D15. Flips ✅ live.)
+  silence, indistinguishable from unreachable; per-type (request vs message) templates. — ✅CORE (PROVEN LIVE 2026-07-07 — an unattended agent
+  auto-replied the AWAY text to a known contact's message and queued it (surfaced as unread in the inbox);
+  see [[M8C-LIVE-TEST-CHECKLIST]] 3d. Opaque-mode + custom-text still PARKED, D15. Built 2026-07-06, Entry 22/23 — built `10d2d01`/`6bed679`, isAttended + per-type templates + coalescing (cleared on use_agent) + queueing via existing inboundSessionQueues; reviewer (aa5928e2/a9099571) SPEC-FAITHFUL on the core clauses, 3 findings fixed (get_transcript safeCursorAdvance, dedup-clear-on-failure, D15 properly journaled). Opaque-mode + custom-text PARKED on M9-CFG-001, D15. Flips ✅ live.)
 - **DOD-CONTACT-1** — Binary per-agent contact whitelist: known = auto-accept; unknown senders
   learn only "dispatched" by default, receipt confirmation in public mode, silence in privacy
   mode; presence visible to whitelisted contacts only. Management (D6): contacts are added by

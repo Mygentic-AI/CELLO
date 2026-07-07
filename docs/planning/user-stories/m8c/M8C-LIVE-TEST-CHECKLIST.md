@@ -32,12 +32,22 @@ No new code needed. Detail lives in M8C-DEFINITION-OF-DONE; this is the quick li
 - [x] **2a. Auto-start on select** — `cello_use_agent` on an OFFLINE agent brings it online by itself.
   **PROVEN LIVE 2026-07-07** (Agent B: `use_agent CELLO_Support` offline→online, push fired, no start call).
   DOD-AUTOSTART-1 flipped ✅ (success path; failure-path edge not exercised).
-- [~] **2b. Inbox** — `cello_check_notifications` returns pending requests + unread messages.
-  **PARTIAL 2026-07-07:** `check_notifications` correctly *pulled* a pending session request. Still owed:
-  (i) the **unread-message** half (no message was actually delivered in the run), and (ii) the
-  **proactive-wake-on-reconnect** question — we preempted it by instructing the check, so we only proved
-  the inbox is pullable, not pushed when an agent comes online. Re-test: bring an agent online with
-  something waiting and watch whether it surfaces *unbidden*. DOD-INBOX-1 stays 🟡.
+- [x] **2b. Inbox** — `cello_check_notifications` returns pending requests + unread messages.
+  **PROVEN LIVE 2026-07-07 (Phase 3/4 screening run):** on CELLO_Support, `check_notifications` returned
+  BOTH the pending session request AND the unread **message** (`total_unread:1`, `unread:[{dd7493…, count
+  1, last_seq 1}]`), **discovered on reattach** (Support was unattended/on-Feedback when the message
+  arrived, then switched back). Push-loss reconciliation holds end-to-end. DOD-INBOX-1 → ✅. *(The separate
+  proactive-wake-on-return — L3 in D21 — remains unbuilt; that's a different primitive, not INBOX-1.)*
+- **Phase 3/4 screening run (2026-07-07) — what else it proved / broke:**
+  - **DOD-AWAY-1 (3d) → ✅CORE** — unattended Support auto-replied the AWAY text (seq 2) + queued the message.
+  - **DOD-CURSOR-1 → ✅** — read-before-write gate fired live: Ms_Chelly's `send` refused `session_not_current`
+    + `current_seq:0`/`last_read_seq:-1` + guidance until she `receive`d Support's unread seq-0 reply. *(The
+    DoD had this ❌ NOT BUILT — stale; it's built and now proven. Two-attended-windows scenario not run.)*
+  - **DOD-CONTACT-1 gating fired** — known vs unknown produced different acks ("Dispatched" vs AWAY text).
+  - **🚨 D21 auto-add hole — CONFIRMED LIVE:** Ms_Chelly (removed→unknown) knocked → "Dispatched." (seq 0,
+    unknown) → **auto-re-added** (`added_at 1783442938087`) → her next message got the KNOWN AWAY text (seq
+    2). Screening touched one frame, then she was whitelisted. Her content was **accepted + queued
+    regardless** (delivered, seq 1) — **no content screening exists today**, only ack wording differs.
 - **Finding (leave-a-message, 3i/3j) — NOT proven; an UNRESOLVED inconsistency (do not over-explain it):**
   - **Facts only:** Ms_Chelly's `initiate_session` to the OFFLINE CELLO_Support returned
     `counterparty_unavailable` (no session on her side, no message sent). Yet after Support came online,
