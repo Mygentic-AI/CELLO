@@ -714,28 +714,28 @@ guard would have failed on the next CI run regardless, and since `daemon` has a 
 Added gateway to the tarball-check list, both publish jobs (dependency order — before daemon), and
 both version-verify loops (`c9dcf1f`).
 
-**⚠️ Genuine blocker found (Andre-only, same category as the `latest`-promotion stop): gateway's
-FIRST-EVER npm publish requires interactive 2FA/OTP.** Tag `v0.0.75`'s CI run published 6/7
-packages successfully to `beta` (protocol-types/crypto/transport/client/daemon@0.0.33 — the
-PRE-reviewer-fix buggy version/cli/connect) but failed specifically on gateway
-(`npm error EOTP — This operation requires a one-time password`, confirmed by attempting the exact
-same `pnpm publish` command locally with my own authenticated npm session — same OTP wall). This
-appears to be npm's standard heightened-auth requirement for creating a brand-new package name
-(vs. publishing a new version of an existing one — confirmed daemon's OWN publish, an existing
-package, went through fine with no OTP prompt). **Time-sensitive follow-up:** because `v0.0.75`
-already put buggy `daemon@0.0.33` on `beta` before the reviewer fix landed, tag `v0.0.76` was
-pushed immediately after committing the fix (`f887dd7` → daemon bumped to 0.0.34, `04368c6`) so the
-corrected version supersedes it on `beta` — in flight as this entry is written. **Action needed from
-Andre:** run `pnpm publish --filter @cello-protocol/gateway --access public --no-git-checks --tag beta`
-from `cello-client` root with 2FA in hand (one-time, first-publish only — subsequent gateway
-versions should publish fine via CI's automation token once the package exists). Until then,
-`@cello-protocol/gateway` does not exist on npm at all — anyone installing a fresh `daemon@beta`
-that references it will fail to resolve the dependency. This does NOT block local development
-(gateway resolves via `workspace:*` locally) but DOES block a clean `npm install` of the published
-`daemon`/`cli` packages.
+**Transient gateway publish issue — RESOLVED, not a lasting blocker.** Tag `v0.0.75`'s CI run
+published 6/7 packages successfully to `beta` (...daemon@0.0.33, the PRE-reviewer-fix buggy
+version...) but failed on gateway's first-ever publish (`npm error EOTP — This operation requires a
+one-time password`), reproduced identically via a local `pnpm publish` attempt with my own
+authenticated npm session. **Time-sensitive fix:** since `v0.0.75` already put buggy `daemon@0.0.33`
+on `beta`, tag `v0.0.76` was pushed immediately after the reviewer fix landed (`f887dd7` → daemon
+0.0.34, `04368c6`). **Its CI run succeeded completely, including gateway** — the OTP wall did not
+recur on retry (evidently a one-time npm-side confirmation for the brand-new package name, not a
+standing requirement). Verified directly against the registry, not just CI's green checkmark:
 
-**Status:** Publish cascade 6/7 done automatically; gateway blocked on Andre's one-time 2FA. Per
-procedure §2c, stating this plainly and moving to the next unit rather than idling.
+```
+crypto: 0.0.17  protocol-types: 0.0.15  transport: 0.0.16  client: 0.0.46
+daemon: 0.0.34  cli: 0.0.31  connect: 0.0.59  gateway: 0.0.1
+```
+
+`Published-artifact smoke test (tag)` job — green (the real success signal, per `/cello-publish`).
+Local MCP pinned to the verified version: `claude mcp remove cello` /
+`claude mcp add cello -- npx --yes @cello-protocol/connect@0.0.59`. A LIVE verification of this pin
+needs an `/mcp` reconnect — the other named human-only step; not attempted from here.
+
+**Status:** Full beta publish cascade DONE — all 8 packages (7 + the new gateway) on `beta` at the
+versions above, smoke-tag green, local install pinned.
 
 **Next:** Tier 5 — DOD-PRIMARY-DESIGN-1 (hard gate, §6). Research fork already returned grounding
 findings (K_local/FROST-share storage, directory's agent_profiles uniqueness, per-session hash-
