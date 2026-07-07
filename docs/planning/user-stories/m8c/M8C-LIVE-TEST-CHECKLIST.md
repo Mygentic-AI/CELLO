@@ -43,9 +43,16 @@ No new code needed. Detail lives in M8C-DEFINITION-OF-DONE; this is the quick li
     `counterparty_unavailable` (no session on her side, no message sent). Yet after Support came online,
     `check_notifications` showed a PENDING session request from Ms_Chelly on session `5749859a`, whose only
     content is an OUTBOUND `"Dispatched."` from Support — and NO inbound message from Ms_Chelly.
-  - **Unexplained:** how a sender-side failure (`counterparty_unavailable`) left a receiver-side pending
-    request + auto-response. Resolving it needs the daemon session-event ordering. The earlier "race /
-    came online mid-attempt" note was an UNVERIFIED inference — retracted.
+  - **RESOLVED (2026-07-07, code-verified):** the receiver's **standing receiver creates a durable
+    session** (`status:active`) from an inbound offer — and auto-adds the contact (daemon.ts:4418) + sends
+    `"Dispatched."` — **even when the initiator's `initiate_session` failed/abandoned** (`counterparty_
+    unavailable` on the sender side). So the sender has nothing while the receiver holds a **half-open
+    session**. That half-open session **cannot be cleanly closed**: `cello_close_session` on an `active`
+    session (daemon.ts:3250) fires a **bilateral seal that awaits the (absent) counterparty** → it times
+    out. It also survived a logout/login. This is a real bug (F21 stuck-seal family): (a) the receiver
+    shouldn't strand a durable session from an abandoned offer, and/or (b) there needs a way to
+    force-abandon a half-open session. NOTE: `close_session` is scoped to the CURRENT agent
+    (daemon.ts:3176) — you must `use_agent` the owning agent before closing, else `session_not_owned`.
   - **Unverified context (do NOT state as fact):** `"Dispatched."` is CONTACT-1's minimal response to an
     UNKNOWN sender, and contacts are PER-AGENT — Ms_Chelly's prior chat was with CELLO_*Feedback* (a
     different agent's whitelist), so nothing implies she is/isn't in CELLO_*Support*'s. Support's contact
