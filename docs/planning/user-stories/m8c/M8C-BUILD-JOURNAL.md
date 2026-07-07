@@ -2415,6 +2415,21 @@ next.
 
 ---
 
+### 2026-07-07 — Entry 49: feedback-channel dogfood, receiver side (CELLO_Feedback) — clean run, companion to Entry 48
+
+**Receiver-side account of Entry 48's exchange.** `cello_use_agent({name:"CELLO_Feedback"})` →
+posted "ready and idle, will not poll" → doorbell fired unprompted (`session_state_changed` for
+session `db91691ceed96f7423b6254add73cf63`, then `cello_message`), zero polling on either event,
+consistent with Entries 45/46. Received Ms_Chelly's product note (the `no_current_agent`
+sole-agent auto-select papercut), acknowledged and logged it, mutual `[[WRAP]]`, closed. Same
+`sealed_root: 1a29969b440bb72f890064d3f415aee252a3e11b46919e78a08b56967202f1d9` as Entry 48 —
+confirms both sides attest the identical transcript.
+
+**Result:** clean run, no protocol friction on the CELLO side. Doorbell continues to hold up
+post-fix. Feedback item itself is tracked in Entry 48; no action taken here beyond logging it.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
