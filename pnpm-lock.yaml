@@ -54,8 +54,8 @@ importers:
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.17
-        version: 0.0.17
+        specifier: ^0.0.18
+        version: 0.0.18
       '@cello-protocol/transport':
         specifier: ^0.0.4
         version: 0.0.4
@@ -115,8 +115,8 @@ importers:
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.17
-        version: 0.0.17
+        specifier: ^0.0.18
+        version: 0.0.18
       '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
@@ -145,8 +145,8 @@ importers:
   packages/interfaces:
     dependencies:
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.17
-        version: 0.0.17
+        specifier: ^0.0.18
+        version: 0.0.18
       '@noble/curves':
         specifier: 2.2.0
         version: 2.2.0
@@ -183,8 +183,8 @@ importers:
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.17
-        version: 0.0.17
+        specifier: ^0.0.18
+        version: 0.0.18
       '@cello-protocol/transport':
         specifier: ^0.0.4
         version: 0.0.4
@@ -232,8 +232,8 @@ importers:
   packages/test-fixtures:
     dependencies:
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.17
-        version: 0.0.17
+        specifier: ^0.0.18
+        version: 0.0.18
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
@@ -490,8 +490,8 @@ packages:
     resolution: {integrity: sha512-b4MmBEjOlj9E0QU/PIlM0GKznDIl11B03MAxB2V4vW/0bBxEoN/Tb8OLKApktiUJHIv38pm7HM5oZO0zo+ySrg==}
     engines: {node: '>=24'}
 
-  '@cello-protocol/protocol-types@0.0.17':
-    resolution: {integrity: sha512-l1T4kFo2/y9ajDuJq0G3KH7KiTIJRHzJwq/FqqLW2mUybSvM3zUTfRCp3LhcBD2LyejE/3/kUzNAEqWKJMG0tw==}
+  '@cello-protocol/protocol-types@0.0.18':
+    resolution: {integrity: sha512-M3H3iCvuF4JP54b7o6ECeU6/ua3wvA/w8hY+QoiaDbOxPpS3X+vB6ZvS+/YgRxhR0xPu/Fy2uXQWut4L2BcUVw==}
     engines: {node: '>=24'}
 
   '@cello-protocol/protocol-types@0.0.2':
@@ -4054,7 +4054,7 @@ snapshots:
     dependencies:
       '@cello-protocol/protocol-types': 0.0.2
 
-  '@cello-protocol/protocol-types@0.0.17':
+  '@cello-protocol/protocol-types@0.0.18':
     dependencies:
       '@cello-protocol/crypto': 0.0.18
       cbor-x: 1.6.4

@@ -28,7 +28,7 @@
     "@cello-protocol/crypto": "^0.0.18",
     "@cello-protocol/directory": "workspace:*",
     "@cello-protocol/interfaces": "workspace:*",
-    "@cello-protocol/protocol-types": "^0.0.17",
+    "@cello-protocol/protocol-types": "^0.0.18",
     "@cello-protocol/relay": "workspace:*",
     "@cello-protocol/transport": "^0.0.4",
     "@claude-flow/testing": "3.0.0-alpha.6",

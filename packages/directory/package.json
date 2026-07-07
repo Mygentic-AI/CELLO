@@ -44,7 +44,7 @@
     "@aws-sdk/client-ssm": "3.1051.0",
     "@cello-protocol/crypto": "^0.0.18",
     "@cello-protocol/interfaces": "workspace:*",
-    "@cello-protocol/protocol-types": "^0.0.17",
+    "@cello-protocol/protocol-types": "^0.0.18",
     "@cello-protocol/transport": "^0.0.4",
     "@libp2p/interface": "^3.0.0",
     "@noble/curves": "2.2.0",

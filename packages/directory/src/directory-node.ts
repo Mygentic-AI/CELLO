@@ -2516,8 +2516,11 @@ export class CelloDirectoryNode {
     }
 
     // Freshness (pure computation, no I/O) — bounds the replay window before any DB/crypto work.
+    // Number.isFinite guard (reviewer LOW-1): a missing/non-numeric timestamp makes Math.abs(...)
+    // NaN and `NaN > window` false, which would BYPASS the freshness check and let a malformed
+    // request reach (and burn a nonce at) the crypto step. Treat non-finite as stale outright.
     const PRIMARY_TRANSFER_FRESHNESS_MS = 5 * 60 * 1000;
-    if (Math.abs(Date.now() - frame.timestamp) > PRIMARY_TRANSFER_FRESHNESS_MS) {
+    if (!Number.isFinite(frame.timestamp) || Math.abs(Date.now() - frame.timestamp) > PRIMARY_TRANSFER_FRESHNESS_MS) {
       this.#sendFrame(stream, encodePrimaryTransferError({ type: "primary_transfer_error", reason: "stale_request" }));
       this.#logger?.warn("primary_transfer.rejected", { agentId: frame.k_local_pubkey.slice(0, 16), reason: "stale_request" });
       return;
@@ -2525,8 +2528,11 @@ export class CelloDirectoryNode {
 
     const pool = this.#pgPool;
     if (!pool) {
-      // No DB configured (e.g. a bare test harness) — cannot verify or persist. Fail closed.
-      this.#sendFrame(stream, encodePrimaryTransferError({ type: "primary_transfer_error", reason: "not_registered" }));
+      // No DB configured (e.g. a bare test harness) — cannot verify or persist. Fail closed with a
+      // RETRIABLE reason (reviewer MEDIUM-1): this is an infrastructure fault on THIS node, not a
+      // judgement that the claim is invalid, so the tallying daemon must retry, not drop this node
+      // from its quorum as a genuine holder-mismatch would.
+      this.#sendFrame(stream, encodePrimaryTransferError({ type: "primary_transfer_error", reason: "internal_error" }));
       this.#logger?.warn("primary_transfer.rejected", { agentId: frame.k_local_pubkey.slice(0, 16), reason: "no_pg_pool" });
       return;
     }
@@ -2581,8 +2587,11 @@ export class CelloDirectoryNode {
     try {
       await upsertPrimaryHolder(pool, frame.k_local_pubkey, frame.new_daemon_id);
     } catch (err) {
+      // Reviewer MEDIUM-1: a transient persist fault is NOT a holder-mismatch — return the
+      // retriable internal_error so the tallying daemon retries this node instead of dropping it
+      // from its quorum. The true cause is still logged at error for the operator/alarm path.
       this.#logger?.error("primary_transfer.persist_failed", { agentId: frame.k_local_pubkey.slice(0, 16), error: err instanceof Error ? err.message : String(err) });
-      this.#sendFrame(stream, encodePrimaryTransferError({ type: "primary_transfer_error", reason: "not_registered" }));
+      this.#sendFrame(stream, encodePrimaryTransferError({ type: "primary_transfer_error", reason: "internal_error" }));
       return;
     }
 
