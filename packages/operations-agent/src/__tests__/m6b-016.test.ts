@@ -252,9 +252,9 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
     // Submit the OTP — it verifies correctly but email continuity check rejects
     await channelState.injectMessage(userId, otpEntry.otp);
 
-    // The rejection message should have been sent
+    // The rejection message should have been sent (OA-2 O4: now explains the why)
     const rejectionMsg = channelState.sent.find((m) =>
-      m.message.includes("same email address as your original registration"),
+      m.message.includes("same email as your original registration"),
     );
     expect(rejectionMsg).toBeDefined();
 
@@ -370,13 +370,24 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
     // Trigger re-registration warning
     await channelState.injectMessage(userId, "hello");
 
-    // Find the warning message
-    const warningMsg = channelState.sent.find(
+    // OA-2 item 1: the warning is now TWO messages — ① explanation, ② the CONFIRM instruction.
+    const explainMsg = channelState.sent.find(
+      (m) => m.message.includes("register additional") && m.to === userId,
+    );
+    const confirmMsg = channelState.sent.find(
       (m) => m.message.includes("CONFIRM") && m.to === userId,
     );
-    expect(warningMsg).toBeDefined();
-    expect(warningMsg!.message).not.toContain("until it reconnects");
-    expect(warningMsg!.message).toContain("independently under the same account");
+    expect(explainMsg).toBeDefined();
+    expect(confirmMsg).toBeDefined();
+    // Teeth (reviewer F1): they must be TWO DISTINCT sends — a regression that recombined item 1 into
+    // one dense message containing both "register additional" and "CONFIRM" would otherwise satisfy
+    // every assertion (both finds return the same object). Enforce the split explicitly.
+    expect(explainMsg).not.toBe(confirmMsg);
+    expect(explainMsg!.message).not.toContain("CONFIRM"); // the explanation is its own message
+    expect(confirmMsg!.message).not.toContain("register additional"); // the instruction is its own message
+    expect(confirmMsg!.message).not.toContain("until it reconnects");
+    expect(explainMsg!.message).toContain("same account");
+    expect(confirmMsg!.message).toContain("same phone number and email");
   });
 
   // ─── AC-007 ─────────────────────────────────────────────────────────────────

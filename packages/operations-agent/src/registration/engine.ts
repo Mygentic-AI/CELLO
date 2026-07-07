@@ -298,11 +298,16 @@ export class RegistrationEngine {
           channelUserId: from,
           existingRegistrationAge,
         });
+        // OA-2 item 1: split the explanation from the instruction into two sequential messages.
         await this.#opts.channel.send(
           from,
-          "You already have a CELLO agent registered to this number. Both agents will work " +
-            "independently under the same account. To register an additional agent, reply CONFIRM. " +
-            "Otherwise, ignore this message.",
+          "There are already one or more agents registered to this account. You can register additional " +
+            "agents, but each must use the same account — the same phone number and the same email you " +
+            "registered with before.",
+        );
+        await this.#opts.channel.send(
+          from,
+          "Reply CONFIRM to proceed using that same phone number and email. Otherwise, ignore this message.",
         );
         return null;
       }

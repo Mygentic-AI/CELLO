@@ -3,9 +3,13 @@
  *
  * SPECIFICATION (from story YAML):
  *
- * AC-001: The error message sent when requestToken throws a PreAuthRequestError must NOT
- *   contain "try again" or "few minutes". It must indicate a server error and suggest
- *   contacting support. Verified by asserting channel.send argument does not match /try again/i.
+ * AC-001 (CORRECTED by OA-2 / O1, 2026-07-07 — see M8C-DECISIONS D23): the pre-auth error IS
+ *   retryable. On a PreAuthRequestError the record stays in EMAIL_CONFIRMED and the NEXT message
+ *   triggers #retryPreAuth (state-machine.ts:177). So the honest message names the server error,
+ *   INVITES a retry, and points to support if it persists. The original AC asserted the message must
+ *   NOT say "try again" — that was based on the false premise that the error is non-retryable; it
+ *   contradicted the code's own retry path (which this test's second case exercises). Now verified by
+ *   asserting the message DOES match /try again/i AND mentions server error + support.
  *
  * AC-002: When a user whose most recent registration has state PRE_AUTH_TOKEN_ISSUED (within
  *   30 days) messages the bot, channel.send is called with a message containing "already"
@@ -268,8 +272,11 @@ describe("AC-001: pre-auth failure sends honest error message", () => {
 
     await sm.handleMessage(record, "123456", "user1");
 
-    // AC-001: message must NOT contain "try again" or "few minutes"
-    // Find the error message sent
+    // O1 (2026-07-07): the pre-auth server error IS retryable — the record stays EMAIL_CONFIRMED and
+    // the next message triggers #retryPreAuth (state-machine.ts:177). The honest message names the
+    // server error, INVITES a retry, and points to support if it persists. (The old copy claimed "not
+    // something you can fix by retrying" — which contradicted the actual retry behavior this test's
+    // own second case exercises.)
     const serverErrorMsg = sent.find((m) => m.message.toLowerCase().includes("server error"));
     expect(serverErrorMsg, "Should send a message mentioning server error").toBeDefined();
 
@@ -277,7 +284,7 @@ describe("AC-001: pre-auth failure sends honest error message", () => {
     expect(contactSupportMsg, "Should send a message mentioning support").toBeDefined();
 
     const tryAgainMsg = sent.find((m) => /try again/i.test(m.message));
-    expect(tryAgainMsg, "Must NOT send 'try again' message").toBeUndefined();
+    expect(tryAgainMsg, "SHOULD invite a retry — the pre-auth error is retryable").toBeDefined();
   });
 
   it("does not send 'try again' message when requestToken throws PreAuthRequestError in #retryPreAuth (EMAIL_CONFIRMED state)", async () => {
@@ -346,9 +353,10 @@ describe("AC-001: pre-auth failure sends honest error message", () => {
 
     await sm.handleMessage(record, "anything", "user1");
 
-    // AC-001: must NOT contain "try again"
+    // O1: even in the retry path the error is retryable (another #retryPreAuth on the next message),
+    // so the honest message invites a retry.
     const tryAgainMsg = sent.find((m) => /try again/i.test(m.message));
-    expect(tryAgainMsg, "Must NOT send 'try again' message in retryPreAuth path").toBeUndefined();
+    expect(tryAgainMsg, "SHOULD invite a retry — the pre-auth error is retryable").toBeDefined();
 
     // Must contain server error and support references
     const serverErrorMsg = sent.find((m) => m.message.toLowerCase().includes("server error"));

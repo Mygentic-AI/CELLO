@@ -73,6 +73,22 @@ const OTP_RATE_LIMIT_PER_HOUR = 5;
 /** OTP rate limit window — 1 hour */
 const OTP_RATE_WINDOW_MS = 60 * 60 * 1_000;
 
+// OA-2 (2026-07-07): shared registration copy, defined once so duplicated sites can never drift
+// (the OA-1 root-cause class). PHONE_PRIVACY_NOTE claims ONLY what the DIRECTORIES store (hashes),
+// never "CELLO as a whole" — the portal holds a recoverable email; see the no-PII-in-directory model.
+const PHONE_PRIVACY_NOTE =
+  "A note on privacy: the directories where your agent can be found never hold your actual phone " +
+  "number or email — only irreversible hashes of them. Those hashes keep each unique to you while " +
+  "leaving nothing in the shared, federated records worth stealing. No one, CELLO staff included, " +
+  "will ever call you — the registration system holds a hash of your number, never the number itself.";
+
+// O1: the pre-auth server error is RETRYABLE — the record stays in EMAIL_CONFIRMED and the next
+// message triggers #retryPreAuth. The old copy ("not something you can fix by retrying") contradicted
+// the actual behavior. Defined once; used by both the primary and the retry path.
+const PREAUTH_SERVER_ERROR_MSG =
+  "CELLO hit a temporary server error finishing your registration. Reply anything to try again. " +
+  "If it keeps happening, please contact support.";
+
 // ─── Rate limit state ─────────────────────────────────────────────────────────
 
 /** In-memory rate limiter: emailDomain → { count, windowStart } */
@@ -196,10 +212,11 @@ export class RegistrationStateMachine {
 
     const awaitingRecord = await repository.transition(record.id, "AWAITING_CONTACT");
 
-    // Send request_contact prompt
+    // Send request_contact prompt (OA-2 item 2: welcome + directory-scoped privacy note)
     await this.#deps.channel.send(
       channelUserId,
-      `${CONTACT_PROMPT_PREFIX}Welcome! Please share your phone number to begin registration.`,
+      `${CONTACT_PROMPT_PREFIX}Welcome to CELLO! Let's set up your agent. To begin, share your phone ` +
+        `number using the button below.\n\n${PHONE_PRIVACY_NOTE}`,
     );
 
     return awaitingRecord;
@@ -250,10 +267,11 @@ export class RegistrationStateMachine {
 
     const awaitingRecord = await repository.transition(record.id, "AWAITING_CONTACT");
 
-    // Send request_contact prompt
+    // Send request_contact prompt (OA-2 item 2: returning-user welcome + same privacy note)
     await this.#deps.channel.send(
       channelUserId,
-      `${CONTACT_PROMPT_PREFIX}Welcome! Please share your phone number to begin registration.`,
+      `${CONTACT_PROMPT_PREFIX}Welcome back to CELLO! Let's set up another agent. To begin, share your ` +
+        `phone number using the button below.\n\n${PHONE_PRIVACY_NOTE}`,
     );
 
     return awaitingRecord;
@@ -314,7 +332,16 @@ export class RegistrationStateMachine {
       // Immediately transition to AWAITING_EMAIL
       const awaitingEmail = await repository.transition(phoneConfirmed.id, "AWAITING_EMAIL");
 
-      await channel.send(from, "Phone verified! Please provide your email address.");
+      // OA-2 item 3: a returning user (re-registration) must reuse their original email (continuity is
+      // enforced when they submit it) — tell them up front; a new user gets the plain ask. NO email
+      // prefix hint (D-PII: the registration side stores only the irreversible email hash).
+      const expectedEmailHash = (await repository.getStateDataField(record.id, "expectedEmailStubHash")) as string | null;
+      await channel.send(
+        from,
+        expectedEmailHash
+          ? "Phone verified! Please enter the same email address you registered with the first time."
+          : "Phone verified! Next, please provide your email address.",
+      );
 
       return awaitingEmail;
     }
@@ -344,7 +371,7 @@ export class RegistrationStateMachine {
     // Check OTP rate limit (AC-009)
     const rateLimited = this.#isRateLimited(emailDomain, record.id, correlationId);
     if (rateLimited) {
-      await channel.send(from, "Too many verification code requests. Please wait before trying again.");
+      await channel.send(from, "Too many verification code requests. Please wait up to an hour before trying again.");
       return record;
     }
 
@@ -371,7 +398,7 @@ export class RegistrationStateMachine {
     // Deliver OTP only after DB write succeeds
     await this.#deps.otpDelivery.sendOtp(email, otp);
 
-    await channel.send(from, `A 6-digit verification code has been sent to ${email}. Please enter it here.`);
+    await channel.send(from, `A 6-digit verification code has been sent to ${email} — it's valid for 15 minutes. Please enter it here.`);
 
     return updated;
   }
@@ -391,21 +418,21 @@ export class RegistrationStateMachine {
 
     // 1. If OTP hash is null/empty (cleared sentinel) — prompt to re-enter email
     if (!record.otpHash) {
-      await channel.send(from, "Your verification code was invalidated. Please provide your email address again to receive a new code.");
+      await channel.send(from, "Your verification code was invalidated. Please re-enter your email address to get a new code.");
       return record;
     }
 
     // 2. Check OTP expiry (AC-006)
     if (record.otpExpiresAt < new Date()) {
       logger.info("registration.otp.expired", { registrationId: record.id, correlationId });
-      await channel.send(from, "Your verification code has expired. Please request a new one.");
+      await channel.send(from, "Your verification code has expired. Please re-enter your email address to get a new code.");
       return record;
     }
 
     // Fetch salt from DB (not in RegistrationRecord — design decision)
     const salt = await repository.getOtpSalt(record.id);
     if (!salt) {
-      await channel.send(from, "Verification failed. Please provide your email address again to receive a new code.");
+      await channel.send(from, "Verification failed. Please re-enter your email address to get a new code.");
       return record;
     }
 
@@ -453,7 +480,7 @@ export class RegistrationStateMachine {
         });
         await channel.send(
           from,
-          "You must use the same email address as your original registration. Please try again.",
+          "For security, additional agents on this account must use the same email as your original registration. Please re-enter that email.",
         );
         // Transition back to AWAITING_EMAIL so user can retry with correct email
         const awaitingEmail = await repository.transition(record.id, "AWAITING_EMAIL", {
@@ -494,7 +521,7 @@ export class RegistrationStateMachine {
       });
       await channel.send(
         from,
-        "Registration failed due to a server error. This is not something you can fix by retrying. Please contact support if this persists.",
+        PREAUTH_SERVER_ERROR_MSG,
       );
       // Return the EMAIL_CONFIRMED record unchanged — user can retry by re-entering their OTP
       return emailConfirmed;
@@ -590,7 +617,7 @@ export class RegistrationStateMachine {
       });
       await channel.send(
         from,
-        "Registration failed due to a server error. This is not something you can fix by retrying. Please contact support if this persists.",
+        PREAUTH_SERVER_ERROR_MSG,
       );
       return record;
     }
