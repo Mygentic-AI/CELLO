@@ -2459,6 +2459,42 @@ the single end-of-run cello-client `/cello-publish` cascade with the rest of CC-
 
 ---
 
+### 2026-07-07 — Entry 51: M8C-FIX-RUN OA-1 — registration token message named the wrong env var (cold-onboarding blocker)
+
+**Second unit.** trustless-cello `4ce5cfe7`.
+
+**What:** the registration-complete Telegram message told the user to "Set this as
+CELLO_REGISTRATION_TOKEN on your agent" — an env var the CLI reads NOWHERE (it takes the token as a
+positional arg `cello register <agent> <token>`, or via `CELLO_PREAUTH_TOKEN`). A brand-new user
+following it literally was dead in the water. The message lived at TWO identical sites
+(`state-machine.ts` primary completion + retry path) — cross-site string drift is the root-cause class.
+
+**Fix:** one shared `#sendTokenDelivery(from, token)` helper called by both paths (drift now
+structurally impossible). Delivery is TWO messages: ① runnable instructions with the token inlined
+into the real `cello register [YOUR_NAME] <token>` command (+ `cello create-agent [YOUR_NAME]`,
+`cello login` prereq, `cello status` verify); ② the bare token alone for one-tap copy. `[YOUR_NAME]`
+uses square brackets deliberately — they fail the CLI name charset `^[a-zA-Z0-9_-]{1,64}$` (daemon.ts
+enforces it on both create-agent and register), so a blind paste is cleanly rejected instead of
+creating a junk agent. Telegram sends plain text (no parse_mode) → no backticks/fences. Also corrected
+2 pre-existing docstrings that named the same dead env var (`pre-auth-token-repository.ts`,
+`pre-authorization-client.ts`), surfaced by the reviewer — same drift source, "fix errors when found."
+
+**Tests (teeth):** `engine.test.ts` AC-004 — instructions message exists, has NO
+CELLO_REGISTRATION_TOKEN, contains the real command, and a bare-token message === the token; `m6b-016`
+re-registration counts deliveries by the instructions marker (= 2), not raw token-bearing messages
+(which would now be 4). Full ops-agent gate green (121 tests, lint/typecheck/build). Reviewer: SPEC
+FAITHFUL / NO SILENT FALLBACKS / TESTS HAVE TEETH.
+
+**Env note:** the running local Docker Postgres predated
+`docker/postgres/initdb/01-dev-role-passwords.sql`, so the `cello_ops_agent` role had no matching
+password and every ops-agent integration test failed on auth. Applied the initdb script's
+`ALTER ROLE … PASSWORD …_dev` to the live container — ephemeral local state, not a repo/infra change.
+
+**Unblocks:** cold onboarding (with OA-2 + CC-6/7/8). NOT yet redeployed — batched with OA-2 into ONE
+us-east-1 ops-agent redeploy.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

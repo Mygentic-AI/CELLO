@@ -119,10 +119,11 @@ crisp handoff for the live checks.
 - **Cron 1 (deploy watchdog)** arms during the ops-agent redeploy + the cello-client publish CI (unchanged).
 
 ### ▶ RESUME STATE — keep current (the single anchor for a cut-off resume)
-**CC-1 ✅ done** (cello-client `eae50fb`, reviewed). **Next unit: OA-1** (ops-agent token env-var fix, in
-progress — helper drafted), then **CC-2**. Nothing published/redeployed yet (both ships batched to end
-of run). When resuming cold: read this directive + the per-fix `STATUS:` lines + `git log` in both repos,
-then continue from the first non-✅ fix.
+**CC-1 ✅** (cello-client `eae50fb`) · **OA-1 ✅** (trustless-cello `4ce5cfe7`) — both reviewed. **Next unit:
+CC-2** (register success path → arm the standing receiver via `startAgentInternal(name)` at daemon.ts
+~2338; placement + falsification prepped). Nothing published/redeployed yet (all cello-client → ONE
+publish cascade; OA-1+OA-2 → ONE us-east-1 redeploy — both at end of run). When resuming cold: read this
+directive + the per-fix `STATUS:` lines + `git log` in both repos, then continue from the first non-✅ fix.
 
 ---
 
@@ -244,6 +245,7 @@ then continue from the first non-✅ fix.
 ## operations-agent (`packages/operations-agent/src/`, in trustless-cello)
 
 ### OA-1 — Token message names the WRONG env var 🔴  *(blocks cold onboarding)*
+**STATUS: ✅ done** — trustless-cello `4ce5cfe7`. Shared `#sendTokenDelivery` helper (both sites, no drift); two-message delivery (runnable `cello register [YOUR_NAME] <token>` + bare token); `[YOUR_NAME]` bracket fail-safe. Also fixed 2 pre-existing docstrings naming the dead env var. Full ops-agent gate green (121 tests, lint/typecheck/build); reviewer SPEC FAITHFUL / NO FALLBACKS / TEETH. NOT yet redeployed (batched with OA-2 into ONE us-east-1 redeploy). *(Local note: the running Docker Postgres predated `docker/postgres/initdb/01-dev-role-passwords.sql`; ran `ALTER ROLE cello_ops_agent/cello_service/cello_analytics PASSWORD …_dev` to unblock the ops-agent integration tests — ephemeral local-container state, not repo/infra.)*
 - **What/why:** the registration-complete message says *"Set this as `CELLO_REGISTRATION_TOKEN`"* — a var
   the CLI reads **nowhere**. The CLI takes the token as a positional arg (`cello register <agent> <token>`)
   or `CELLO_PREAUTH_TOKEN`. A brand-new user following it literally is stuck. Cross-repo drift.
