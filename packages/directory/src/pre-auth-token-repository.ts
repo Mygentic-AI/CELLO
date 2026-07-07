@@ -180,7 +180,8 @@ export async function issuePreAuthToken(
 export interface IssuePreAuthCapabilityResult {
   /** base64url-encoded signed capability — the self-verifying credential the agent presents at DKG. */
   capability: string;
-  /** #2b: the short, typeable claim-code the operator sets as CELLO_REGISTRATION_TOKEN ("CELLO-" + 33
+  /** #2b: the short, typeable claim-code the operator passes to `cello register <agent> <token>` (or
+   *  via CELLO_PREAUTH_TOKEN) ("CELLO-" + 33
    *  base58). The agent redeems it (redeem_claim_code) for `capability`, so the operator never handles
    *  the ~570-char blob. Stored in capability_claim_codes keyed by this code. */
   claimCode: string;

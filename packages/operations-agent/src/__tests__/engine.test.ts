@@ -296,9 +296,18 @@ describeIntegration("RegistrationEngine integration", () => {
     );
     expect(rawResult.rows[0].state).toBe("PRE_AUTH_TOKEN_ISSUED");
 
-    // Token was sent to user
-    const tokenMsg = channelState.sent.find((m) => m.message.includes("DEV-CELLO-"));
-    expect(tokenMsg).toBeDefined();
+    // OA-1: the token is delivered as TWO messages — ① runnable instructions with the token inlined
+    // into the real `cello register` command, ② the bare token alone for clean one-tap copy.
+    const instr = channelState.sent.find((m) => m.message.includes("cello register [YOUR_NAME] DEV-CELLO-"));
+    expect(instr).toBeDefined();
+    // teeth: the old copy named CELLO_REGISTRATION_TOKEN (an env var the CLI reads nowhere) and gave
+    // no runnable command — a literal follower was dead in the water. Both must be gone/present now.
+    expect(instr!.message).not.toContain("CELLO_REGISTRATION_TOKEN");
+    expect(instr!.message).toContain("cello create-agent [YOUR_NAME]");
+    // ② the bare-token message exists, equal to just the token (one-tap copy).
+    const token = instr!.message.match(/DEV-CELLO-\S+/)![0];
+    const bareToken = channelState.sent.find((m) => m.message === token);
+    expect(bareToken).toBeDefined();
 
     // Observability
     const emailVerified = loggerState.events.find((e) => e.event === "registration.email.verified");

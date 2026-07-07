@@ -295,8 +295,10 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
 
     // Should have completed successfully — second token issued
     expect(preAuthState.calls.length).toBe(2); // first registration + re-registration
-    const tokenMsg = channelState.sent.filter((m) => m.message.includes("DEV-CELLO-"));
-    expect(tokenMsg.length).toBe(2);
+    // OA-1: each token delivery is now TWO messages (① runnable instructions with the token inlined,
+    // ② the bare token). Count the instructions message per delivery → exactly one per registration.
+    const deliveries = channelState.sent.filter((m) => m.message.includes("cello register [YOUR_NAME] DEV-CELLO-"));
+    expect(deliveries.length).toBe(2);
   });
 
   // ─── AC-004 ─────────────────────────────────────────────────────────────────

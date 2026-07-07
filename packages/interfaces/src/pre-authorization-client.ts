@@ -4,7 +4,7 @@
  *
  * Phase A — Architecture note:
  *   The Operations Agent state machine calls this interface after EMAIL_CONFIRMED
- *   to obtain the token that the operator sets in CELLO_REGISTRATION_TOKEN.
+ *   to obtain the token that the operator passes to `cello register <agent> <token>` (or via CELLO_PREAUTH_TOKEN).
  *
  *   Local stub: LocalPreAuthorizationClient (returns 'DEV-CELLO-' + 16 hex chars;
  *               uses crypto.randomBytes(8) — no network, no config required)

@@ -532,13 +532,39 @@ export class RegistrationStateMachine {
       correlationId,
     });
 
-    // Deliver token to user
-    await channel.send(
-      from,
-      `Registration complete! Your pre-authorization token is:\n\n${token}\n\nSet this as CELLO_REGISTRATION_TOKEN on your agent.`,
-    );
+    // OA-1: deliver the token with real, runnable next steps (see #sendTokenDelivery).
+    await this.#sendTokenDelivery(from, token);
 
     return completed;
+  }
+
+  /**
+   * OA-1 (2026-07-07): deliver the pre-authorization token as TWO messages —
+   *   ① copy-pasteable instructions with the token inlined into the real `cello register` command;
+   *   ② the bare token alone, for clean one-tap copy (the token is the error-prone part).
+   * The prior copy told the user to "Set this as CELLO_REGISTRATION_TOKEN" — an env var the CLI reads
+   * NOWHERE (it takes the token as a positional arg or CELLO_PREAUTH_TOKEN), so a literal follower was
+   * dead in the water (cross-repo drift). `[YOUR_NAME]` uses square brackets deliberately: they fail
+   * the CLI name charset ^[a-zA-Z0-9_-]{1,64}$, so a blind paste is cleanly REJECTED with the name-rule
+   * error instead of creating a junk-named agent literally called `[YOUR_NAME]`. Telegram sends plain
+   * text (no parse_mode), so the commands are written bare — no backticks or code fences.
+   * Both #completeRegistration and #retryPreAuth call this ONE method, so the two paths can never drift.
+   */
+  async #sendTokenDelivery(from: string, token: string): Promise<void> {
+    const { channel } = this.#deps;
+    await channel.send(
+      from,
+      "Registration complete 🎉 Your CELLO agent pre-authorization token is ready — valid for 24 hours, single use.\n\n" +
+        'On a device with the CELLO CLI installed and logged in (run "cello login" first), run these two commands:\n\n' +
+        "# Replace [YOUR_NAME] with a name for your agent — letters, numbers, _ and - only, no spaces.\n" +
+        "cello create-agent [YOUR_NAME]\n\n" +
+        "# Use the SAME name; the token is already filled in.\n" +
+        `cello register [YOUR_NAME] ${token}\n\n` +
+        'Then run "cello status" to confirm your agent is online.\n\n' +
+        "Thank you for choosing CELLO — happy agent-to-agent communicating!",
+    );
+    // ② the bare token, for clean one-tap copy.
+    await channel.send(from, token);
   }
 
   async #retryPreAuth(record: RegistrationRecord, from: string): Promise<RegistrationRecord> {
@@ -598,10 +624,8 @@ export class RegistrationStateMachine {
       correlationId,
     });
 
-    await channel.send(
-      from,
-      `Registration complete! Your pre-authorization token is:\n\n${token}\n\nSet this as CELLO_REGISTRATION_TOKEN on your agent.`,
-    );
+    // OA-1: same real-next-steps delivery as the primary path (shared helper — no drift).
+    await this.#sendTokenDelivery(from, token);
 
     return completed;
   }
