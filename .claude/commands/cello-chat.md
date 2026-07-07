@@ -1,11 +1,11 @@
 ---
 name: cello-chat
-description: Enter a CELLO peer-to-peer conversation as one agent. Two Claude sessions each run this command with their assigned role (initiator or responder), agent name, counterparty pubkey, and a topic. They chat autonomously until one seals.
+description: Enter a CELLO peer-to-peer conversation as one agent. Two Claude sessions each run this command with their assigned role (initiator or responder), agent name, counterparty pubkey, and a topic. They chat autonomously until both close and it seals.
 ---
 
 # CELLO Chat — Peer-to-Peer Agent Conversation
 
-You are entering a live CELLO session as one agent. Another Claude session is running the other agent. You will chat about the given topic, then one of you will seal the session.
+You are one agent in a live CELLO session. Another Claude session is the other agent. You will talk about a topic, then **both** of you close and the session seals.
 
 **You will be told:**
 1. Your role: `initiator` or `responder`
@@ -15,115 +15,138 @@ You are entering a live CELLO session as one agent. Another Claude session is ru
 
 ---
 
+## The one rule that governs everything: this is a walkie-talkie
+
+At every moment you are in **exactly one** of two states. There is no third state and you never do two things at once.
+
+- **HOLDING (your turn):** compose and send **exactly one** message, then immediately switch to WAITING.
+- **WAITING (their turn):** you are blocked on `cello_receive`. Do nothing else until it returns.
+
+Transitions — memorize these, they are the whole protocol:
+
+| In state | Event | Do this | New state |
+|----------|-------|---------|-----------|
+| HOLDING | — | `cello_send` **one** message | → WAITING |
+| WAITING | `receive` returns a message | read it, compose a reply | → HOLDING |
+| WAITING | `receive` **times out** | loop and `receive` again. **Do NOT resend.** | → WAITING |
+| WAITING | `receive` returns `type: "session_sealed"` | conversation is over, report the root | done |
+
+**The two invariants you must never break:**
+
+1. **Never send twice in a row.** After every `cello_send` you MUST block on `cello_receive` before sending again. Sending two messages back-to-back desyncs both agents permanently.
+2. **A timeout is not a lost message — it means the other agent is still thinking.** On timeout you loop and receive again. **You never re-send your last message.** A resend puts two inbound messages on the other side and breaks the alternation.
+
+The only asymmetry between the two roles: the **initiator starts in HOLDING** (it speaks first), the **responder starts in WAITING** (it listens first). After the first turn they are identical.
+
+---
+
 ## Setup (both roles)
 
-### Step 1 — Start your agent
-
-```
-cello_start_agent({ name: "YOUR_AGENT_NAME" })
-```
-
-### Step 2 — Set yourself as current
+### Step 1 — Select your agent (this also brings it online)
 
 ```
 cello_use_agent({ name: "YOUR_AGENT_NAME" })
 ```
 
-### Step 3 — Confirm status
+`cello_use_agent` **auto-starts** the agent if it isn't already online — there is no separate start step. (`cello_start_agent` exists only to bring an agent online *without* selecting it; you don't need it here.)
+
+### Step 2 — Confirm status
 
 ```
 cello_status()
 ```
 
-Verify your agent shows `state: "online"` (or at minimum appears in the agents list). Verify `directory_signaling: "connected"`.
+Verify your agent shows `state: "online"` and `directory_signaling: "connected"`. If not, wait 3s and re-check — the auto-start may still be connecting.
 
 ---
 
-## Path 1: Initiator
+## First turn
 
-### Step 4 — Initiate session
+### If you are the **initiator** — open the session, then speak (you start HOLDING)
 
 ```
 cello_initiate_session({ target_pubkey: "COUNTERPARTY_PUBKEY" })
 ```
 
-Note the `sessionId`. If it returns `standing_receiver_unavailable`, the responder hasn't started yet — wait 5 seconds and retry.
+Note the `sessionId`. If it returns `standing_receiver_unavailable`, the responder hasn't selected their agent yet — wait 5s and retry.
 
-### Step 5 — Send opening message
-
-Compose a message related to the topic. Keep it conversational (1-3 sentences).
+Then send your opening message (1–3 sentences, on-topic), and switch to WAITING:
 
 ```
-cello_send({ session_id: "SESSION_ID", content: "your message" })
+cello_send({ session_id: "SESSION_ID", content: "your opening message" })
 ```
 
-### Step 6 — Conversation loop
+### If you are the **responder** — listen first (you start WAITING)
 
-Repeat:
-1. `cello_receive({ session_id: "SESSION_ID", timeout_ms: 30000 })`
-2. On message: read it, compose a reply on-topic, send it
-3. On timeout: say "Listening..." and loop again
-
-**Message style:** Be direct, curious, conversational. 1-3 sentences. Don't pad. React to what the other agent actually said.
-
-### Step 7 — Seal (after 4-8 exchanges)
-
-After a natural conversational endpoint (4-8 total messages exchanged, or when the topic feels explored), send a final message like "Good conversation. Sealing now." and then:
+The initiator connects to you; your standing receiver auto-accepts. Block until their opening arrives:
 
 ```
-cello_close_session({ session_id: "SESSION_ID" })
+cello_receive({ session_id: "SESSION_ID", timeout_ms: 60000 })
 ```
 
-This triggers the bilateral FROST seal ceremony. Report the `sealed_root`.
+Note the `sessionId` from the response. If it times out, check `cello_list_sessions()` for the active session, then receive again. When their message arrives you are now HOLDING — compose a reply and send it.
 
 ---
 
-## Path 2: Responder
+## The conversation
 
-### Step 4 — Wait for the session
-
-The initiator will connect to you. Your standing receiver auto-accepts.
+Run the walkie-talkie loop. In WAITING:
 
 ```
-cello_receive({ timeout_ms: 60000 })
+cello_receive({ session_id: "SESSION_ID", timeout_ms: 30000 })
 ```
 
-This will return the first message from the initiator (the session was auto-accepted when they initiated). Note the `sessionId` from the response.
+- **Message returned** → read it, compose an on-topic reply, `cello_send` it, go back to WAITING.
+- **Timeout** (`content: null`) → loop and `cello_receive` again. Do not resend.
+- **`type: "session_sealed"`** → jump to *After the conversation*.
 
-If it times out, check `cello_list_sessions()` for an active session.
+**Message style:** direct, curious, conversational. 1–3 sentences. React to what the other agent actually said. Don't pad. One message per turn.
 
-### Step 5 — Reply
+---
 
-Read the initiator's message. Compose a reply on-topic (1-3 sentences). Send it:
+## Ending — a two-close handshake, not a unilateral seal
 
-```
-cello_send({ session_id: "SESSION_ID", content: "your reply" })
-```
+Ending is **mutual**. The signal that a conversation is over is that **both agents close** — the seal completing *is* the shared acknowledgment. You never have to wonder whether the other side "got" your goodbye.
 
-### Step 6 — Conversation loop
+**How to end (either agent may propose it):**
 
-Same as initiator Step 6:
-1. `cello_receive({ session_id: "SESSION_ID", timeout_ms: 30000 })`
-2. On message: read it, compose a reply, send it
-3. On timeout: loop again
+1. When the topic feels explored (roughly 4–8 total messages), send your final message and end it with the token **`[[WRAP]]`**. This is a *request to end*, not the end.
 
-### Step 7 — Detect seal
+   ```
+   cello_send({ session_id: "SESSION_ID", content: "Good conversation — I think we've covered it. [[WRAP]]" })
+   ```
 
-You do NOT call `cello_close_session`. The initiator will seal when the conversation reaches a natural end. When the FROST ceremony completes, your next `cello_receive` returns:
+   Then go to WAITING as normal.
 
-```json
-{ "type": "session_sealed", "sealed_root": "<hex>" }
-```
+2. **If you *receive* a message ending in `[[WRAP]]`:** the other agent wants to close. Send one final reply that also ends in `[[WRAP]]`, then **close**:
 
-Report the sealed_root. The session is closed.
+   ```
+   cello_send({ session_id: "SESSION_ID", content: "Agreed. Good talk. [[WRAP]]" })
+   cello_close_session({ session_id: "SESSION_ID" })
+   ```
 
-**If instead you receive a message like "Sealing now" followed by the seal:** that's the normal flow. The initiator sent a courtesy message, then called `cello_close_session`. Your next receive will be the `session_sealed` event.
+3. **After you have sent your own `[[WRAP]]` and received the other side's `[[WRAP]]` back**, you close too:
+
+   ```
+   cello_close_session({ session_id: "SESSION_ID" })
+   ```
+
+**Both agents call `cello_close_session`.** This is the intended path: `cello_close_session` blocks until *both* parties have closed, then the bilateral FROST seal fires and returns `sealed_root` to both of you. Whichever agent closes first simply blocks a little longer waiting for the other — that is normal, not an error.
+
+**Why both must close (don't skip your close):** a close is a blocking *rendezvous*, not an instant teardown. The session cannot seal until both SEAL leaves are in. If only one agent closes, it waits 30s and then falls back to a slower unilateral seal. Two closes = a clean, immediate seal. So: if you sent or received a `[[WRAP]]` and exchanged the acknowledgment, **you close.**
+
+**Ordering is safe** — you cannot "lose" a final message to the seal:
+- Your close blocks; it does not seal until the other side also closes, so your last message is always readable first.
+- `cello_receive` drains buffered content *before* it ever surfaces `session_sealed`. Content always wins.
+
+Read every message as it arrives (the walkie-talkie loop already does this) and nothing is ever missed.
 
 ---
 
 ## After the conversation
 
-Report:
+When your `cello_close_session` returns `sealed_root` (first-closer), or your `cello_receive` returns `type: "session_sealed"` (second-closer/waiter), report:
+
 ```
 Session complete.
   Agent:        <your agent name>
@@ -132,6 +155,8 @@ Session complete.
   Messages:     <count sent + received>
   Sealed root:  <hex>
 ```
+
+The `sealed_root` both agents report must match.
 
 ---
 
@@ -149,19 +174,25 @@ Update this table after registering new agents.
 ## Troubleshooting
 
 **`standing_receiver_unavailable`**
-The responder's agent isn't online yet. Have them run `cello_start_agent` first.
+The responder hasn't selected their agent yet. Have them run `cello_use_agent` first (that brings the agent online), then retry `cello_initiate_session`.
 
 **`ipc_connection_lost`**
-MCP disconnected from daemon. Run `/mcp` to reconnect, then retry.
+MCP disconnected from the daemon. Run `/mcp` to reconnect, then retry.
 
-**`cello_receive` timeout**
-The other agent hasn't sent yet. Loop and try again. If persistent, check their session is running (`cello_list_sessions`).
+**`cello_receive` timeout (`content: null`)**
+Normal — the other agent hasn't sent yet. Loop and receive again. **Never resend your last message.** If it persists for several timeouts, check their session is alive (`cello_list_sessions`).
 
-**Session doesn't appear for responder**
-The responder's standing receiver may not have been created. Verify `cello_start_agent` was called for their agent name. Check daemon log for `session.node.created` with their agent name.
+**`cello_receive` returns `reason: "counterparty_gone"`**
+The other agent's connection dropped — no more content will arrive on the direct path. Call `cello_close_session` to seal; if they never co-close, a unilateral seal becomes available after the directory's delivery-grace window.
 
-**Seal fails or times out**
-FROST ceremony requires the directory to be reachable. Check `directory_signaling: "connected"` in `cello_status`.
+**Session doesn't appear for the responder**
+The responder's standing receiver wasn't created. Verify `cello_use_agent` was called for their agent. Check the daemon log for `session.node.created` with their agent name.
+
+**Seal doesn't complete / one side hangs on close**
+`cello_close_session` blocks until *both* parties close. If one agent forgot to close, the other waits 30s then falls back to a unilateral seal. Make sure **both** agents called `cello_close_session`. The seal also needs the directory reachable — confirm `directory_signaling: "connected"` in `cello_status`.
+
+**`seal_counterparty_pending` / `seal_unilateral_too_early`**
+You closed but the other agent hasn't, and the directory's delivery-grace window hasn't elapsed yet. Either wait for them to close (preferred — it seals immediately) or retry your close after the grace period.
 
 **Both agents on the same daemon**
-This is normal and expected. The daemon multiplexes agents. Each Claude session uses `cello_use_agent` to route calls to their agent. Transport still goes through the relay (even locally) because both agents are behind NAT.
+Normal and expected. The daemon multiplexes agents; each Claude session uses `cello_use_agent` to route its calls. Transport still goes through the relay (even locally) because both agents are behind NAT.
