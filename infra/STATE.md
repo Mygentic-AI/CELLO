@@ -9,6 +9,33 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🔧 Ops-agent migration-version skew fixed — SSM 43→45 (2026-07-07, manual, pre-cold-onboarding check)
+
+**Found during a pre-cold-onboarding "is the ops-agent on latest code" audit; fixed same session.**
+
+- **Ground truth (live):** directory image **`807817c`** (current HEAD directory code) running 1/1 in all
+  3 regions; DB **at V45** — the directory's Flyway boot log (us-east-1 task started 2026-07-07 08:43) reads
+  `Current version of schema "public": 45 … No migration necessary`. V44 (`primary_holder`) + V45
+  (`primary_transfer_nonce_bindings`) — the DOD-PRIMARY-1 Tier-5 tables — were auto-applied by Flyway when
+  the PRIMARY-1 directory image shipped via **CI/CD image swap** (not deploy.sh), so STATE was never updated.
+  ⚠️ The M8C checklist's "V44/V45 un-deployed" note is inaccurate about the SCHEMA: the migrations ARE
+  applied in the live DB. The Tier-5 *feature/handlers* remain gated (SEC-2/D20); only the schema is live.
+- **The skew:** ops-agent image **`70c4f41`** (latest `packages/operations-agent` code — unchanged since the
+  #2b short-claim-code deploy) booted 2026-07-06 09:04 when the DB was still V43, and its SSM
+  `/cello/dev/ops-agent/expected-migration-version` was **43**. The ops-agent checks the version only ONCE
+  at boot (`server.ts:384`, strict `!==` → `exit(1)`); its runtime `/health` returns 200 regardless. So it
+  ran fine post-drift ONLY because it never restarted — **a restart would have read V45 ≠ 43 → crash-loop →
+  no pre-auth claim codes could be minted → cold onboarding blocked.** Classic CI/CD-vs-SSM hazard
+  (infra/CLAUDE.md → "SSM Parameters and Migrations").
+- **Fix:** `aws ssm put-parameter … expected-migration-version = 45 --region us-east-1` (live value only;
+  running task deliberately NOT restarted — it's healthy and V44/V45 are additive tables the ops-agent never
+  queries, so the next natural restart boots clean on 45). Template default in `cello-ssm-parameters.yaml`
+  was already `"45"` (correct — shipped with the migrations); only the live parameter was stale.
+- **Net:** onboarding-path services are on current code; the version-skew landmine is defused. Optional: a
+  `force-new-deployment` on the ops-agent would prove a clean boot on 45 now, but is not required.
+
+---
+
 ## 🌐 Cross-node session establishment — Story A (directory-side) DEPLOYED (2026-07-05)
 
 **Directory-side of the cross-node topology deployed to all 3 regions** (design:
