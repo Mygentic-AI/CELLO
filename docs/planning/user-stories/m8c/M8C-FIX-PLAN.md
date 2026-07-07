@@ -102,11 +102,20 @@ crisp handoff for the live checks.
   update the ▶ RESUME line → then idle. Documented state beats one more fix.
 
 ### Watchdog crons — specialized for THIS run (extends PROCEDURE §3b)
-- **Cron 2 (heartbeat, ~30 min) — quota-hardened.** Each cycle, BEFORE anything else: (a) if a fix completed
-  since the last commit, commit it now (status + journal entry) in the right repo; (b) `git push`
-  (best-effort, ignore failure) in both repos; (c) refresh the ▶ RESUME line. THEN the standard §3a
-  self-audit (re-read PROCEDURE/FIX-PLAN if compaction dropped them; commit if >15 min since last; dispatch
-  the unit-reviewer if a unit went green without one). Documentation is the priority.
+- **Cron 2 (heartbeat, ~30 min) — quota-hardened + ANTI-DRIFT. Each cycle, IN THIS ORDER:**
+  1. **FULLY RE-ANCHOR ON THE DOCS (most important — compaction is exactly what drops them).** Confirm the
+     ENTIRE [[M8C-PROCEDURE]] **and** this ENTIRE [[M8C-FIX-PLAN]] (this directive + every per-fix detail)
+     are actually in context. If there is ANY doubt either was dropped or summarized — **RE-READ BOTH IN
+     FULL before doing anything else.** Never work from a half-remembered summary; the file:line refs, the
+     locked forks (CC-1/CC-5/CC-4), the batch-publish rule, and the stop conditions all matter and are easy
+     to lose.
+  2. **Commit progress.** If a fix completed since the last commit, commit it now (its `STATUS:` line + an
+     M8C-BUILD-JOURNAL entry) in the right repo; `git push` (best-effort, ignore failure) in BOTH repos;
+     refresh the ▶ RESUME line. Commit anyway if >15 min since the last commit.
+  3. **Standard §3a self-audit:** stalled on a decision → pick best practice, log in M8C-DECISIONS, proceed;
+     a unit went green without a `cello-unit-reviewer` → dispatch it; state one line of status so a human
+     skimming later sees the run was alive and unstuck.
+  **Full-doc re-anchoring + documentation are the priorities over pressing forward.**
 - **Cron 1 (deploy watchdog)** arms during the ops-agent redeploy + the cello-client publish CI (unchanged).
 
 ### ▶ RESUME STATE — keep current (the single anchor for a cut-off resume)
