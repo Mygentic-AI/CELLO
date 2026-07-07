@@ -120,8 +120,13 @@ crisp handoff for the live checks.
 
 ### ▶ RESUME STATE — keep current (the single anchor for a cut-off resume)
 **Done:** CC-1 (cc `eae50fb`) · OA-1 (tc `4ce5cfe7`) · CC-2 (cc `e73c421`) · OA-2 (tc `c1189f42`) · CC-3 (cc
-`da28e12`) · CC-6/7/8 CLI cluster (cc `f486e32`) · CC-9 (cc `d9c5569`) — all reviewed. **All 🔴+🟠 DONE + CC-4 DONE** (cc `5deef4b`).
-**Next unit: CC-5** (🟢 — F21 full, design-significant, LAST fix:
+`da28e12`) · CC-6/7/8 CLI cluster (cc `f486e32`) · CC-9 (cc `d9c5569`) — all reviewed. **ALL 13 FIX ITEMS IMPLEMENTED.** CC-1/2/3/4/6/7/8/9 + OA-1/2 reviewed+done; **CC-5 done, review-in-progress**
+(cc `146ac74`). **Next after CC-5 review:** the BATCHED SHIP — (1) ONE `/cello-publish` cascade for all
+cello-client fixes (bump changed core/* [daemon, cli, connect] + dependents' pins, tag, CI→beta, verify the
+binary); (2) ONE us-east-1 ops-agent redeploy for OA-1+OA-2. THEN the two legitimate STOPS: `latest`-tag
+promotion (needs Andre's go) and the live `/mcp`-reconnect + two-agent verification (F21 reap/force +
+cold-onboarding). Prior notes for CC-5 (now done, superseded):
+**(was) CC-5** (🟢 — F21 full, design-significant, LAST fix:
 (a) don't-strand — receiver session conditional on initiator confirmation OR reap `messageCount:0`
 half-open sessions after timeout, pick cleaner + log; (b) terminal-escape — unilateral force-abandon
 marking the session terminal locally with a surfaced reason. Write a design note in the journal FIRST per
@@ -196,6 +201,7 @@ this directive + the per-fix `STATUS:` lines + `git log` in both repos, continue
 - **Difficulty:** Easy.
 
 ### CC-5 — Half-open sessions are uncloseable + stranded on abandon (F21) 🟢
+**STATUS: 🔨 done, review-in-progress** — cello-client `146ac74`. Design note = Entry 58; decision = **D25**. (b) terminal-escape: `cello_close_session { force }` early branch → `abandonSession` (new terminal status `"abandoned"` → classify `"failed"`), no seal; on the shim too. (a) don't-strand: `reapDeadHalfOpenSessions` on read (buildActiveSessions + list_sessions) abandons active + **0-RECEIVED** (not msgCount:0 — the ghost carries its own Dispatched ack) + liveness≠alive + age>5min; `abandonSession` flips DB status synchronously so a non-awaited reap shows in the same read. Tests (teeth): reap fires on msgCount=1/0-received; force drops from open→--all; 2 SIs block over-reaping. Daemon 639 / connect 108 green, lint/typecheck/build. `cello-unit-reviewer` running (committed ahead of verdict for quota safety). NOT yet published (end-of-run cascade).
 - **What/why:** a failed/abandoned `initiate_session` (`counterparty_unavailable` on the sender side) leaves
   a durable `active` session on the RECEIVER (the standing receiver created it + auto-added + sent
   "Dispatched" even though the initiator gave up). That half-open session **cannot be closed** — closing an
