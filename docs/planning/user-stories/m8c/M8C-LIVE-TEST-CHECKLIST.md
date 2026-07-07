@@ -20,9 +20,15 @@ No new code needed. Detail lives in M8C-DEFINITION-OF-DONE; this is the quick li
 - [x] Full M8C build promoted to `latest` + installed + running (daemon 0.0.34)
 
 ## Launch gate — do these to close the launch bar
-- [ ] **1. Cold onboarding** — as a brand-new operator (with a fresh pre-auth token), do
+- [~] **1. Cold onboarding** — as a brand-new operator (with a fresh pre-auth token), do
   `create-agent → register → status` using only what the tool output tells you, no docs/source.
   (Flips DOD-LIVE-1 and the five ONBOARD-* riders.)
+  - **2026-07-07 — WALKED LIVE. CLI mechanics PROVEN** (agent `CELLO_Feedback` created→registered→status,
+    all from the command guidance alone). But the **gate is NOT yet met**: the current Telegram handoff
+    still says `CELLO_REGISTRATION_TOKEN` (a var the CLI doesn't read) → a fresh user following it literally
+    is blocked. The full walk surfaced a batch of fixes (copy + the `register` receiver-arming bug + F18
+    gaps + the `connections` stub) collected in **[[M8C-ONBOARDING-IMPROVEMENTS]]**. Gate flips ✅ when that
+    onboarding mini-sprint ships (ops-agent copy redeploy + one cello-client publish).
 - [ ] **2a. Auto-start on select** — `cello_use_agent` on an OFFLINE agent brings it online by itself.
 - [ ] **2b. Inbox** — `cello_check_notifications` returns pending requests + unread messages.
 
