@@ -17,8 +17,10 @@ description: >
 > code-reads. The `/cello/frost/1.0.0` signing frames are unauthenticated and the directory blindly
 > signs arbitrary client-supplied bytes; T directory shares alone meet threshold, so anyone knowing
 > an agent's **public** key can forge its group signatures (sessions, seals). **Pre-existing, not
-> M8C's doing; possibly launch-blocking — your call on severity + fix.** NOT fixed headless (it's a
-> cross-repo hot-path auth change that breaks every deployed client unless rolled out in lockstep).
+> M8C's doing. Severity resolved UP: the frost protocol is internet-reachable (ALB is
+> internet-facing, libp2p multiplexes all protocols, no gate) — no network mitigation stands
+> between an attacker and the oracle. Likely launch-blocking — your call.** NOT fixed headless (it's
+> a cross-repo hot-path auth change that breaks every deployed client unless rolled out in lockstep).
 > Full writeup: DoD "Tracked, not M8C-fruit" → SEC-2, and BUILD-JOURNAL Entry 39. Proposed fix:
 > K_local-authenticate the frost signing stream (same challenge the signaling stream already uses).
 

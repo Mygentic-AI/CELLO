@@ -424,10 +424,15 @@ own story) deliberately, never smuggled in as a rider. Source:
     `primary_pubkey` — forging session-establishment, seals, any group signature. The sole
     exception is the degenerate single-directory (N=1) 2-of-2 back-compat config, where the client
     share IS required.
-  - **Severity-determining open question (needs Andre / infra):** is `/cello/frost/1.0.0` reachable
-    by arbitrary internet parties, or network-gated (ALB / security group / relay) to
-    enrolled/connected peers? No in-code gate exists; if publicly dial-able (as legitimate clients
-    do), the exploit is fully open.
+  - **Severity-determining question — NOW RESOLVED (2026-07-07), and it RAISES severity: the frost
+    protocol IS reachable by arbitrary internet parties.** The directory ALB is `internet-facing`
+    (`cello-ecs-directory.yaml:223`) with the libp2p listener on the public endpoint
+    (`/ip4/0.0.0.0/tcp/8080/ws`), and libp2p multiplexes ALL protocols over one connection. Any
+    internet party completes the Noise handshake (which authenticates peers but does not AUTHORIZE —
+    no allowlist) and can then open `/cello/frost/1.0.0`; there is no ALB per-libp2p-protocol filter
+    and no in-code gate (SEC-2 confirmed). So the exploit is open to anyone who can reach the
+    directory = the internet. No network-level mitigation stands between an attacker and the blind
+    signing oracle.
   - **Proposed fix direction (NOT implemented — PARKED):** require the frost signing stream to be
     K_local-authenticated with the same `CELLO-DIR-AUTH-v1` challenge the signaling stream uses (a
     public-key-only attacker cannot answer it; the legitimate daemon can). Optionally also bind
