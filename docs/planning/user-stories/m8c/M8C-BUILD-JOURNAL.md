@@ -636,6 +636,43 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-07 — Entry 36: DOD-PRIMARY-1 foundation built + reviewed (3 commits: `87b5e72`, `1ced95f`/`2ff0dff`, `208bbb08`)
+
+Building DOD-PRIMARY-1 incrementally, same red-first discipline as every other unit, on top of
+Entry 35's resolved design:
+
+1. **`CONTEXT_PRIMARY_RELEASE`** (cello-client `87b5e72`, reviewed, 2 minor refinements applied
+   `2ff0dff`): the new FROST domain-separation constant. `cello-unit-reviewer` confirmed: no
+   exhaustive-switch hazard anywhere in either repo (every consumer treats context as opaque,
+   grepped both codebases); domain separation is cryptographically REAL (`frameMessage` bakes
+   context into the actual signed bytes, verified empirically via a real cross-context ceremony
+   test, not just read from code); the "no local share → throws" property traced to the exact
+   first-line guard in `frost-threshold-signer.ts`, not an incidental failure. Refinements: the
+   no-share test now asserts the specific "not bootstrapped" message (was a bare `.toThrow()`);
+   fixed a stale "two contexts (M2 only)" doc comment.
+2. **`primary_transfer_request`/`_ack`/`_error` wire frames** (cello-client `1ced95f`): mirrors
+   `registration.ts`'s DKG shape exactly. `old_daemon_id` checked against each node's own recorded
+   holder BEFORE any cryptographic verification (cheap check first); `release_signature` is the
+   real FROST signature from item 1, never a K_local signature.
+3. **`primary_holder` migration V44** (trustless-cello `208bbb08`): mirrors `agent_presence` (V33)
+   exactly — sovereign-write-owned, one row per agent per node, no cross-node consensus. Verified
+   by test-applying against the local Docker Postgres (all DDL succeeded), then cleaned up to keep
+   the local DB Flyway-consistent. `OpsAgentExpectedMigrationVersion` bumped 43→44 per repo
+   CLAUDE.md's mandatory rule.
+
+Full gate green after every commit (1742 tests/165 files, lint, typecheck, build — cello-client
+side; migration verified separately against real Postgres — trustless-cello side).
+
+**Status:** DOD-PRIMARY-1 foundation (crypto primitive + wire types + migration) built and
+reviewed. Still needed: `directory-node.ts`'s attestation handler (verify + upsert), the ceremony-
+gate check extension (refuse participation from a non-current `daemon_id`), the daemon-side
+pairing (`cello device link`) + transfer client, and kill-the-Primary integration tests proving
+DOD-INV-ONE-PRIMARY holds.
+
+**Next:** `directory-node.ts`'s primary-transfer attestation handler, red-first.
+
+---
+
 ### 2026-07-07 — Entry 35: DOD-PRIMARY-1 release-attestation gap RESOLVED — no new crypto needed
 
 Follow-up to Entry 34. Investigated whether CELLO's existing FROST partial-signature ceremony
