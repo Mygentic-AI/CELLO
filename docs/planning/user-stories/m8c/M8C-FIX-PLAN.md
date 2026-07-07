@@ -119,14 +119,17 @@ crisp handoff for the live checks.
 - **Cron 1 (deploy watchdog)** arms during the ops-agent redeploy + the cello-client publish CI (unchanged).
 
 ### ▶ RESUME STATE — keep current (the single anchor for a cut-off resume)
-**Not started.** Next unit: **CC-1**. Nothing committed yet for the fix run. When resuming cold: read this
-directive + the per-fix `STATUS:` lines + `git log` in both repos, then continue from the first non-✅ fix.
+**CC-1 ✅ done** (cello-client `eae50fb`, reviewed). **Next unit: OA-1** (ops-agent token env-var fix, in
+progress — helper drafted), then **CC-2**. Nothing published/redeployed yet (both ships batched to end
+of run). When resuming cold: read this directive + the per-fix `STATUS:` lines + `git log` in both repos,
+then continue from the first non-✅ fix.
 
 ---
 
 ## cello-client — daemon (`core/daemon/src/daemon.ts`, `session-node-manager.ts`)
 
 ### CC-1 — Gate the inbound contact auto-add 🔴  *(the security fix — restores screening AND anti-spam)*
+**STATUS: ✅ done** — cello-client `eae50fb`. Removed inbound auto-add + added operator-engagement promote-on-reply in `cello_send`; tests flipped + teeth (m8c-contact-1 K3 stays-unknown + reply-promotes; m8c-abuse-1 live-3f regression). Full daemon gate green (632 tests, lint/typecheck/build). `cello-unit-reviewer`: SPEC FAITHFUL / NO SILENT FALLBACKS / TESTS HAVE TEETH — one LOW (stale comment) fixed. NOT yet published (batched into the end-of-run cello-client cascade).
 - **What/why:** an **inbound** session offer auto-adds the sender to the contact whitelist **automatically**
   on accept — even for an unattended agent that only auto-replied "Dispatched." So a stranger who knocks
   once is promoted to "known" and thereafter is fast-tracked, exempt from the ≤3-session cap, exempt from

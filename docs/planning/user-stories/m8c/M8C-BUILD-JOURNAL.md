@@ -2430,6 +2430,35 @@ post-fix. Feedback item itself is tracked in Entry 48; no action taken here beyo
 
 ---
 
+### 2026-07-07 — Entry 50: M8C-FIX-RUN CC-1 — operator-engagement-only contact promotion (security fix)
+
+**First unit of the autonomous M8C-FIX-PLAN run.** cello-client `eae50fb`.
+
+**What:** the inbound-accept path auto-added the requester to the contact whitelist on accept
+(`daemon.ts`, right after `sendAwayResponse(...,"request")`). A stranger who knocked once became a
+"known" Level-4 contact, which exempted them from BOTH the screening layer AND the ABUSE-1
+acceptance caps (`checkUnknownSenderAcceptanceBound` exempts contacts). Confirmed live 2026-07-07
+(test 3f: an unknown sender opened 4 sequential accepted sessions; mid-session Dispatched→AWAY
+promotion). **Root:** one line conflated "accept the connection" with "trust the sender."
+
+**Fix:** removed the accept-path auto-add. Promotion to "known" now requires operator engagement:
+outbound `cello_initiate_session` (kept, `daemon.ts:3137`), the operator replying INTO the session
+via `cello_send` (added — `addContact` on a committed send, past the read-before-write gate;
+idempotent no-op for outbound), or explicit `cello_contact_add`. Unattended stranger never
+auto-whitelisted. Ships the security-restoring gate now; the full D21 four-level model stays M9.
+
+**Tests (teeth):** `m8c-contact-1` K3 — stranger stays unknown after knocking (inverts the old
+`isContact===true`) + operator `cello_send` reply promotes them; `m8c-abuse-1` live-3f regression —
+CAP+1 real sequential knocks from one unknown sender, the CAP+1'th refused with the specific
+`abuse_bound_sessions_per_sender`, sender never auto-added. Full daemon gate green (632 tests,
+lint/typecheck/build). `cello-unit-reviewer`: SPEC FAITHFUL / NO SILENT FALLBACKS / TESTS HAVE
+TEETH; one LOW (a stale D6 comment at `daemon.ts:~973`) fixed before commit.
+
+**Unblocks:** CONTACT-1/ABUSE-1 hardening + the D21 security floor. NOT yet published — batched into
+the single end-of-run cello-client `/cello-publish` cascade with the rest of CC-*.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
