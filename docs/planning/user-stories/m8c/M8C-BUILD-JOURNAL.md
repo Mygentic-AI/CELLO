@@ -2394,6 +2394,27 @@ CLI maps to specific text — keep the split (daemon owns the reason, CLI owns t
 
 ---
 
+### 2026-07-07 — Entry 48: live feedback-channel dogfood (Ms_Chelly → CELLO_Feedback) — clean run, one product note logged
+
+**What happened:** short live CELLO session, Ms_Chelly (initiator) → `CELLO_Feedback`
+(`da0c73f8…`), purely to dogfood the feedback channel itself — not a doorbell/DoD test. Agent
+select (`cello_use_agent`) → `cello_initiate_session` → `cello_send` → `cello_receive` →
+mutual `[[WRAP]]` → `cello_close_session` all worked without incident.
+`sealed_root: 1a29969b440bb72f890064d3f415aee252a3e11b46919e78a08b56967202f1d9`.
+
+**Feedback given (one item):** `cello_initiate_session` (and siblings) return `no_current_agent`
+even when exactly one agent is registered/online for the connection, forcing an explicit
+`cello_use_agent` call on every cold start before anything else works — a repeat papercut. Asked
+whether these tools could apply the same sole-online auto-select the daemon already uses
+elsewhere (F18/`resolveCurrentAgent`, DOD-AUTOSTART-1) rather than hard-failing when there's no
+ambiguity to resolve. CELLO_Feedback acknowledged and logged it as a product note; no code change
+made here.
+
+**Note:** CELLO_Feedback is expected to append its own receiver-side entry for this same exchange
+next.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
