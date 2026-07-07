@@ -23,7 +23,7 @@ description: >
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | 🟡 🟡 🟡CORE 🅿️CFG(D14) 🟡 |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡CORE 🟡 🟡CORE 🟡 (**TIER 3 DONE, reviewed+fixed**) |
 | 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | 🟡CORE 🟡CORE (**TIER 4 DONE**, reviewer pending) |
-| 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ✅ ❌ ❌ ❌ — design done w/ 1 flagged open item (release-attestation crypto), PRIMARY-1 not started |
+| 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ✅ 🟠 ❌ ❌ — DESIGN done (release-attestation resolved, Entry 35); **PRIMARY-1 directory-side arbitration BUILT+real-FROST-tested (Entry 36/37, 16 tests green)** — still owes ceremony-gate (next), daemon-side pairing/DB-sync/Telegram-gating, + kill-the-Primary live proof (needs Andre's multi-daemon spine) |
 | Post-channel — deferred | M9INT-1 (do AFTER channel tiers — D11; NOT a prerequisite) | 🟡 MERGED (`d47227c`, reviewed, 1 HIGH fixed) |
 
 **⛔ M9 IS NOT A PREREQUISITE (D11, 2026-07-06).** Do NOT merge `m9-build` before the channel work.
@@ -633,6 +633,60 @@ All fixed in `22de42c`:**
 DOD-LIVE-1 with the publish cascade).
 
 **Next unit:** the ONBOARD-* rider cluster — see Entry 10 design note (repro R4 first).
+
+---
+
+### 2026-07-07 — Entry 37: DOD-PRIMARY-1 directory transfer handler built + real-FROST tested (commits `1ced95f`, `14f7390` [client]; `0516d1a8`, `7933002b` [directory])
+
+The directory side of the primary-transfer protocol is now built and tested end-to-end with REAL
+FROST cryptography. This is the security-critical heart of the Standby-requests-baton transfer
+path. On top of Entry 36's foundation (crypto context, wire frames, migration, repositories):
+
+**Client repo (cello-client):**
+- `buildPrimaryTransferTbs` canonical TBS builder (`14f7390`, protocol-types 0.0.16→0.0.17,
+  published beta `v0.0.78`, verified live on npm). Domain-tagged CBOR array mirroring
+  `buildAgentRevocationTbs`; 9 determinism/field-independence tests including the
+  new/old-daemon-swap-must-not-collide case.
+
+**Directory repo (trustless-cello):**
+- `#processPrimaryTransferRequest` (`7933002b`) — the accept/reject decision. Five checks,
+  cheapest-first (DoS hygiene): (1) authed stream identity == frame.k_local_pubkey; (2) 5-min
+  timestamp freshness; (3) old_daemon_id == this node's own recorded primary_holder; (4) nonce
+  single-use bind; (5) release_signature is a REAL FROST threshold sig under CONTEXT_PRIMARY_RELEASE
+  verified against this node's recorded primary_pubkey. Only after all five: upsert new holder, ack.
+  Persist failure never silently acks (mirrors #processRevokeAgent's await-before-ack).
+- 7 in-process protocol tests through REAL libp2p + REAL directory + REAL FROST ceremony (the
+  release_signature is genuine `participateInCeremony(..., CONTEXT_PRIMARY_RELEASE)` output, not a
+  stub): happy-path accept; wrong old_daemon_id; replayed nonce; bogus 64-byte sig; genuine-but-
+  WRONG-context (CONTEXT_SEAL) sig; stale timestamp; authed-identity ≠ claim. Every rejection
+  asserts the holder row is UNCHANGED. + 9 transaction-rolled-back repository tests. All 16 green
+  against local Postgres.
+- Closed the reviewer-flagged dormant cross-module version drift: aligned crypto (`^0.0.18`) and
+  protocol-types (`^0.0.17`) pins across ALL trustless-cello packages (directory/interfaces/relay/
+  e2e-tests/test-fixtures), not just the one that broke.
+
+Directory suite green in standard mode (692 passed; new live-DB tests correctly skipped without a
+DB). All 5 packages typecheck + lint clean. `cello-unit-reviewer` on the handler: dispatched,
+running.
+
+**What DOD-PRIMARY-1 still owes (assessed against the full DoD line this session):**
+- **Ceremony-gate** — the directory must consult `primary_holder` before participating in a NORMAL
+  (session/seal) ceremony, refusing a non-current daemon_id. THIS is the load-bearing enforcement
+  of DOD-INV-ONE-PRIMARY; without it the `primary_holder` record is inert (a superseded daemon that
+  kept its share could still gather T signers). Feasibility investigation dispatched (needs: does a
+  stable per-daemon daemon_id exist today? where's the FROST-participation gate point? blast
+  radius?). This is the next build target if tractable.
+- **Pairing handshake** (daemon-side, cello-client) — creating a second daemon with the same
+  K_local. Decision 1's operator-mediated pairing. Not built.
+- **User-initiated DB sync** (daemon-side SQLCipher snapshot, Decision 2). Not built.
+- **Telegram poller Primary-only** + baton handoff. Not built.
+- **kill-the-Primary integration test** — genuinely needs the live multi-daemon / 3-directory
+  spine; a candidate for the "needs Andre" bucket alongside DOD-LIVE-1.
+
+**Next:** ceremony-gate feasibility result → build it if tractable; else proceed to the daemon-side
+transfer client. Honest note for Andre: the daemon-side pairing + DB-sync + kill-the-Primary proof
+increasingly need a live multi-device setup only you can drive — the directory-side arbitration
+(the security core) is what's fully buildable+testable headless, and it's done.
 
 ---
 

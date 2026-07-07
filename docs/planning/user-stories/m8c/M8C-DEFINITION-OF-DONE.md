@@ -310,7 +310,19 @@ description: >
   DOD-INV-ONE-PRIMARY holds under kill-the-Primary tests. Telegram poller is Primary-only (D6):
   Standby holds the token (settings sync) but polls cold; baton transfer stops the old poller and
   starts the new (handoff overlap absorbed by the 409-retry) — preserves the
-  single-`getUpdates`-consumer constraint that decided OQ-1. — ❌
+  single-`getUpdates`-consumer constraint that decided OQ-1. — 🟠 PARTIAL (2026-07-07, Entry 36/37 —
+  the **directory-side arbitration is BUILT + real-FROST tested** (the security core): `primary_holder`
+  record (V44) + `primary_transfer_nonce_bindings` (V45) + `#processPrimaryTransferRequest`
+  verifying a genuine CONTEXT_PRIMARY_RELEASE ceremony signature, 16 tests green vs. real Postgres,
+  reviewer running. Uses the resolved release-attestation design (Entry 35 — reuses the FROST
+  ceremony, no new crypto). **STILL OWED**: the **ceremony-gate** (directory consults primary_holder
+  before co-signing a normal ceremony — the actual INV-ONE-PRIMARY enforcement, next target);
+  daemon-side pairing handshake; user-initiated DB sync; Telegram Primary-only gating; and the
+  kill-the-Primary integration proof (needs the live multi-daemon spine — a "needs Andre" item
+  alongside DOD-LIVE-1). The Standby-requests-baton transfer direction is built; directory-offers-
+  on-unreachable-Primary remains its own deferred sub-design (M8C-PRIMARY-DESIGN "Open items" — a
+  live ceremony structurally requires the old Primary reachable, so that path needs a distinct
+  non-cooperative design).)
 - **DOD-POLICY-1** — Per-daemon policies: same agent, different persona by which daemon is
   Primary (falls out of policies being daemon-local; prove, document, test the transfer
   boundary). — ❌
