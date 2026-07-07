@@ -104,6 +104,19 @@ pre-auth token. All copy lives in `packages/operations-agent/src/`.
     >
     > Thank you for choosing CELLO — happy agent-to-agent communicating!
   - **Proposed — message ② (token only, for clean one-tap copy):** just the raw token, nothing else.
+  - **Refinement (Andre, 2026-07-07): inline the REAL token; use `[YOUR_NAME]` bracket placeholders for
+    the name.** The token is the error-prone part (bake it in, verbatim); the name is the user's own
+    choice (leave it a placeholder). Show the commands with a one-line "replace this" comment above each:
+    ```
+    # Replace [YOUR_NAME] with a name for your agent — letters, numbers, _ and - only, no spaces.
+    cello create-agent [YOUR_NAME]
+    # Use the SAME name; the token is already filled in.
+    cello register [YOUR_NAME] CELLO-kJaZQVqMpuVx2A5bE2kzNemwvH6LNbxT5
+    ```
+    **Why brackets, not `<angle>`:** `[` and `]` fail the name charset `^[a-zA-Z0-9_-]{1,64}$`, so a
+    blind copy-paste is cleanly REJECTED (with the name-rule error) instead of creating a junk-named
+    agent literally called `[YOUR_NAME]` — a built-in fail-safe. (Open shape for message ②: keep it the
+    bare token, or make it the bare inlined `cello register [YOUR_NAME] CELLO-kJaZ…` line for one-tap copy.)
   - **Verified accurate:** name rule `^[a-zA-Z0-9_-]{1,64}$` (cli-args.ts:45); register takes the token
     positionally (cli.ts:81); `cello login` required before create-agent/register (commands.ts:221).
 
@@ -134,11 +147,52 @@ pre-auth token. All copy lives in `packages/operations-agent/src/`.
 
 ---
 
-## Phase 2 — CLI agent registration (to come)
+## Phase 2 — CLI agent registration (`cello create-agent → register → status`)
 
-> Placeholder. Next we walk `cello create-agent → register → status` live and append every improvement
-> here (this is the M8C cold-onboarding item 1, where the actual M8C onboarding riders — real `--help`,
-> specific errors, next-step guidance — get exercised for the first time).
+Walked live 2026-07-07 with token `CELLO-kJaZ…` → agent **`CELLO_Feedback`** (pubkey `da0c73f8…`,
+agentId `29d7488a…`, directory agent_id `3511df08…`). **Cold onboarding fundamentally WORKED** — all
+three steps completed from the command guidance alone, no source-reading. Rough edges:
+
+- ⬜ **P2-1. `register` next-step guidance is one long run-on line — make it multi-line.** *(cello-client CLI, `register` output)*
+  - **Now:** *"Next: run 'cello status' to confirm 'CELLO_Feedback' is registered. 'connecting' is
+    normal — registration takes a minute or two; 'connected' means ready. If it stays disconnected, run
+    'cello logout' then 'cello login'."* — one dense line.
+  - **Proposed:** break it up —
+    ```
+    Next: run  cello status  to confirm 'CELLO_Feedback' is registered.
+      • 'connecting' is normal — registration takes a minute or two.
+      • 'connected' means ready.
+      • if it stays disconnected, run  cello logout  then  cello login.
+    ```
+
+- ⬜ **P2-2. FUNCTIONAL BUG — a freshly-registered agent is `standing_receiver_ready: false` and can't
+  receive until a daemon restart.** *(cello-client daemon)*
+  - **Observed:** right after `cello register CELLO_Feedback`, `cello status` showed CELLO_Feedback
+    `standing_receiver_ready: false` while the two boot-time agents (CELLO_Support, Ms_Chelly) showed
+    `true`. A `cello logout` → `cello login` (full daemon restart) armed it → `true`. **Recurring**
+    (Andre has hit this before).
+  - **Root cause — CONFIRMED (2026-07-07, code-read, producer/consumer):**
+    - *Producer* of `standing_receiver_ready`: `startAgentInternal(name)` → `ensureStandingReceiverForAgent(name)`
+      (`core/daemon/src/daemon.ts:1841`) — adds the agent to `onlineAgents`, reuses/opens its signaling,
+      arms the standing receiver, fires `agent_state_changed`. Called by `cello_start_agent` (:1879),
+      `cello_use_agent` (:2148), and login's auto-start-all.
+    - *The gap*: the `cello_register` handler's success path (`daemon.ts:2333–2359`) persists the identity,
+      logs `registration.succeeded`, returns `ok` — but **never calls `startAgentInternal`**. Registration
+      opens the agent's signaling stream for the DKG, but the agent is never added to `onlineAgents` and
+      its receiver is never armed → `standing_receiver_ready: false` until the next daemon boot (which is
+      why `cello login` — auto-starts all agents — fixed it).
+  - **FIX — EASY (one line).** In the register success path (after `registration.succeeded`, before the
+    `return { ok: true, … }`), call the already-existing idempotent `startAgentInternal(name)` — the exact
+    shared start path login/use_agent use. Arms the receiver, marks online, fires `agent_state_changed`.
+    Eliminates the logout/login workaround. Register bringing the agent online is *consistent* with login
+    and use_agent both auto-starting — the current offline-after-register is the inconsistency.
+  - **Deploy note:** this is a **cello-client daemon** change → needs a publish cascade + local re-pin
+    (heavier than the ops-agent copy redeploy). So the onboarding sprint spans BOTH repos.
+  - **Impact if unfixed:** a brand-new user's very first agent can't receive inbound sessions until they
+    logout/login — looks broken at the most important moment. The `register` next-step text already hints
+    at the logout/login workaround (P2-1), which is the fallback if we don't ship the fix.
+  - **Related:** [[project_mcp_stale_socket_after_daemon_restart]]; demo-agent standing-receiver notes in
+    repo CLAUDE.md (receiver created only when the start path reaches the daemon — exactly this).
 
 ---
 
