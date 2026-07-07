@@ -105,6 +105,16 @@ once, then is fast-tracked forever). **Decision needed:** promotion to "known"/L
 **operator action** (explicit accept, or an outbound initiate), NOT the standing receiver's automatic
 session-accept. Separate "accept the *connection*" from "trust the *sender*."
 
+**It also defeats ABUSE-1 anti-spam (confirmed live 2026-07-07, test 3f).** `checkUnknownSenderAcceptance
+Bound` exempts known contacts (session-node-manager.ts:937), and the ≤3-sessions-per-unknown cap counts
+only *unknown*-sender sessions. Because auto-add promotes the sender to "known" at session-1's accept,
+sessions 2+ are exempt: a removed (unknown) Ms_Chelly opened **4 sequential sessions to Support, all
+accepted, no ABUSE rejection**. The 25 MB per-session byte cap is per-session and also exempts known, so
+it's bypassed identically. **So the auto-add-on-knock is the single root of BOTH the screening gap AND the
+anti-spam gap.** This ELEVATES the fix: gating the inbound auto-add (daemon.ts:4418 — promote only on
+operator action) is a **small, high-value fix that restores both defenses at once**, and is separable from
+the larger D21 config/levels work. It should NOT wait for the full M9 CONFIG build.
+
 **Testing note:** Ms_Chelly is now whitelisted on both Support and Feedback, so she can no longer serve
 as an "unknown sender" — future unknown-sender / screening tests need a FRESH throwaway agent.
 

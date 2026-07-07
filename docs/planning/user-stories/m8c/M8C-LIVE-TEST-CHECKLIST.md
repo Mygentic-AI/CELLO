@@ -88,7 +88,15 @@ No new code needed. Detail lives in M8C-DEFINITION-OF-DONE; this is the quick li
 - [ ] **3c. Two windows in sync** — same agent in two sessions; read-before-write (no talking over each other).
 - [ ] **3d. Away auto-reply** — unattended agent answers with the away note and queues messages.
 - [ ] **3e. Contacts whitelist** — known contact auto-accepts; a stranger gets the limited response.
-- [ ] **3f. Anti-spam limits** — oversized / flooding message is capped (per-message, per-session, per-stranger).
+- [~] **3f. Anti-spam limits** — oversized / flooding message is capped (per-message, per-session, per-stranger).
+  **3f run 2026-07-07 — the ≤3-per-unknown-sender session cap DID NOT HOLD (confirmed defect).** An unknown
+  Ms_Chelly (removed from Support) opened **4 sequential sessions** to Support — ALL accepted, no ABUSE
+  rejection on #4 — and she was auto-re-added (`added_at 1783446042779`). Root cause = the D21 auto-add:
+  `checkUnknownSenderAcceptanceBound` exempts contacts (session-node-manager.ts:937), and auto-add promotes
+  the sender to "known" at session-1 accept, so sessions 2–4 bypass the cap. The 25 MB per-session byte cap
+  is likewise per-session + exempts known (impractical to trip by hand). **So the auto-add-on-knock defeats
+  BOTH screening AND anti-spam — same root bug, one easy fix.** (Aftermath: Support now holds 6 open
+  half-open sessions — accumulating F21 debris.)
 - [ ] **3g. Request expiry** — an unanswered session request shows expired after the TTL (24h).
 - [ ] **3h. Telegram alerts** — a phone ping fires on a real event. *(Needs a real Telegram bot token.)*
 - [ ] **3i. Grab-on-reconnect** — a message parked while offline is pulled automatically on reconnect.
