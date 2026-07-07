@@ -2755,6 +2755,56 @@ agent, then confirm the receiver's ghost is reaped/force-abandonable) at the bat
 
 ---
 
+### 2026-07-07 — Entry 59: M8C-FIX-RUN CC-5 — F21 implemented (force-abandon + reap) — ALL FIX ITEMS DONE
+
+**Ninth/last unit — implemented.** cello-client `146ac74` (impl) + `cc4e5ce` (reviewer follow-up).
+
+**Implemented exactly per the Entry-58 design / D25:**
+- New terminal `SessionStatus` `"abandoned"` (`classifySession` → `"failed"`; drops from open + active
+  surfaces; the ~19 specific-status `===` checks exclude it; `getSessionsByStatus` never queries it).
+- **(b) terminal-escape:** `cello_close_session { force: true }` — additive early branch BEFORE the seal
+  branches → `sessionNodeManager.abandonSession` (retire node + set `"abandoned"`, no bilateral seal),
+  owner-scoped + idempotent (already-abandoned → `already_abandoned` no-op), surfaced `force_abandoned`
+  reason. Exposed on the connect shim (`cello_close_session` gains optional `force`).
+- **(a) don't-strand — reap-on-read:** `reapDeadHalfOpenSessions` runs on `buildActiveSessions` (both
+  status surfaces) + `cello_list_sessions`; abandons an `active` session that is provably dead —
+  **0 RECEIVED** (`countReceivedMessages`, NOT `message_count` which counts the agent's own `Dispatched.`
+  ack) AND `getSessionLiveness !== "alive"` AND age > `HALF_OPEN_TTL_MS` (5min, env-overridable).
+  `abandonSession` flips the DB status synchronously before its async node teardown, so a non-awaited
+  reap is visible to the same read (reviewer confirmed the ordering holds — no read-before-write race).
+
+**Reviewer (extra rigor on over-reaping + sync-flip):** SPEC FAITHFUL / NO SILENT FALLBACKS. Verified:
+sync-flip ordering holds; mid-loop mutation safe (`getSessionsByStatus` returns a materialized array);
+predicate AND-semantics correct; a normal (non-force) close on an `abandoned` session → `session_not_closeable`
+(no seal, no re-abandon); reaper `.catch` fails loud (warn) without breaking the read path. **One BLOCKING
+hollow-test (F-1):** the `liveness === "alive"` gate had zero teeth (deleting it failed no test) — FIXED in
+`cc4e5ce`: added `markSessionLivenessForTest` seam (getDb-style) + a 5th test where an OLD, 0-received,
+LIVE session must survive (the sole case where age+received both point to reap, so it now pins the gate).
+**One LOW (F-2):** `#updateSessionStatus` logged every failure as `session.interrupt.db.write.failed` though
+it now writes `"abandoned"` too — renamed to `session.status.write.failed` + status in context.
+
+**Tests (teeth):** reap fires on `message_count=1` + 0-received (proves the criterion is 0-RECEIVED, not
+msgCount-0 — a msgCount-based reaper would MISS the real ghost); `force` drops from `open` → `--all`
+`abandoned`; three SIs block over-reaping (young survives; old-with-received survives; old-0-received-LIVE
+survives). Daemon 640 / connect 108 green, lint/typecheck/build.
+
+**Enforcer still owed:** the live F21 re-run (open a session to an offline agent, confirm the receiver's
+ghost is reaped after the grace / force-abandonable) at the batched verification stop.
+
+---
+
+## 🏁 ALL M8C-FIX-RUN ITEMS COMPLETE
+
+CC-1, OA-1, CC-2 (🔴) · OA-2, CC-3, CC-6, CC-7, CC-8, CC-9 (🟠) · CC-4, CC-5 (🟢) — all implemented,
+gated, `cello-unit-reviewer`-passed, committed, pushed. Deferred by directive: SEC-2/DIR-1 (coordinated
+rollout + Andre's severity call) and the full D21 model (M9). **Remaining run work = the BATCHED SHIP +
+the two legitimate stops** (see the FIX-PLAN ▶ RESUME STATE): ONE `/cello-publish` cascade (daemon
+0.0.34→35, cli 0.0.31→32, connect 0.0.60→61) → beta + verify the binary; ONE us-east-1 ops-agent redeploy
+(OA-1+OA-2); THEN stop for `latest`-tag promotion (Andre's go) and the live `/mcp`-reconnect + two-agent
+verification (F21 reap/force + cold onboarding).
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
