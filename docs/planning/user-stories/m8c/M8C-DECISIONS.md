@@ -530,6 +530,24 @@ PARKED (journal + DoD "Parked decisions" + here).
   relay-discovery hole. Closing D19 is required for the support-style "reach me even when I'm down" case.
 - **Full design + built-vs-parked mapping:** [[2026-07-07_1700_four-level-screening-policy]].
 
+### D22 — CC-2's register-arms-the-receiver fix is enforced by the LIVE register-then-receive smoke, not a daemon unit test (2026-07-07, autonomous D10)
+
+- **Context:** CC-2 makes `cello_register` call `startAgentInternal(name)` on success so a brand-new
+  agent's standing receiver is armed immediately (today it reports `standing_receiver_ready:false`
+  until a logout/login). The fix is one wiring line into an already-well-tested idempotent path.
+- **Decision:** do NOT add a daemon unit test that drives register to success. The daemon test harness
+  has **no fake-directory registration-success path** — a real success requires the FROST DKG ceremony
+  against a directory, and faking it end-to-end would be a from-scratch fixture (forbidden by
+  [[M8C-PROCEDURE]] §Test fixture discipline) and a large build for one wiring line. Every register
+  failure branch returns before the new code, so no unit path reaches the arm.
+- **Enforcer:** CC-2 is an **AUTOSTART-1 / LIVE-1 rider** — its true enforcer is the live
+  register-then-receive smoke (register a fresh agent, then receive inbound with NO restart), batched
+  into the end-of-run live-verification stop. The armed path itself (`startAgentInternal`) is already
+  covered by the AUTOSTART-1 unit tests; CC-2 only adds the call site. Full daemon suite stays green
+  (632) — regression-guarded, not success-path-asserted.
+- **Redo > block:** if the live smoke shows register still doesn't arm, the fix is a one-line move, not
+  a redesign.
+
 ---
 
 ## Related Documents

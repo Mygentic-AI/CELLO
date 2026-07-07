@@ -2495,6 +2495,36 @@ us-east-1 ops-agent redeploy.
 
 ---
 
+### 2026-07-07 — Entry 52: M8C-FIX-RUN CC-2 — register arms the standing receiver (fresh agent receivable without a restart)
+
+**Third unit.** cello-client `e73c421`.
+
+**What:** after `cello_register` succeeded, the new agent's standing receiver was NOT armed
+(`standing_receiver_ready:false`) — it could not receive inbound until the operator restarted
+(logout/login), so a brand-new registration looked broken. Confirmed live 2026-07-07 (CELLO_Feedback).
+
+**Fix:** on the register success path (after the durable persist, before both success returns) call
+`startAgentInternal(name)` — the SAME idempotent arm path `cello login` and `cello_use_agent` use
+(onlineAgents + directory signaling + `ensureStandingReceiverForAgent` + `agent_state_changed`).
+Register bringing the agent online is consistent with both of those auto-starting. An arm failure is a
+warning (`registration.standing_receiver.arm_failed`), never fails the already-committed registration.
+
+**Test — deferred to live (D22):** no daemon success-path unit test. The harness has no fake-directory
+registration success (a real one needs the FROST DKG ceremony); faking it end-to-end would be a
+forbidden from-scratch fixture for one wiring line. `startAgentInternal` is already covered by AUTOSTART-1
+tests, so CC-2 adds only a call into tested code. Full daemon suite green (632). Enforcer = the live
+register-then-receive smoke (register a fresh agent, receive with NO restart), batched to end-of-run.
+
+**Reviewer:** SPEC FAITHFUL / NO SILENT FALLBACKS / TESTS HAVE TEETH. Verified `ctx.dispose()` in the
+register `finally` does not tear down the just-armed signaling/SR (it only unregisters the reg-reply
+router). One LOW (the success log `armed` was optimistic — the SR ensure is fire-and-forget) fixed by
+renaming to `registration.standing_receiver.arm_initiated`.
+
+**Unblocks:** AUTOSTART-1 / cold-onboarding LIVE-1 (fresh agent receivable immediately). NOT yet published
+— batched into the single end-of-run cello-client `/cello-publish` cascade.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

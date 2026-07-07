@@ -119,11 +119,12 @@ crisp handoff for the live checks.
 - **Cron 1 (deploy watchdog)** arms during the ops-agent redeploy + the cello-client publish CI (unchanged).
 
 ### ▶ RESUME STATE — keep current (the single anchor for a cut-off resume)
-**CC-1 ✅** (cello-client `eae50fb`) · **OA-1 ✅** (trustless-cello `4ce5cfe7`) — both reviewed. **Next unit:
-CC-2** (register success path → arm the standing receiver via `startAgentInternal(name)` at daemon.ts
-~2338; placement + falsification prepped). Nothing published/redeployed yet (all cello-client → ONE
-publish cascade; OA-1+OA-2 → ONE us-east-1 redeploy — both at end of run). When resuming cold: read this
-directive + the per-fix `STATUS:` lines + `git log` in both repos, then continue from the first non-✅ fix.
+**CC-1 ✅** (cello-client `eae50fb`) · **OA-1 ✅** (trustless-cello `4ce5cfe7`) · **CC-2 ✅** (cello-client
+`e73c421`) — all reviewed. **Next unit: CC-3** (F18 sole-online auto-select on the session-action tools —
+replace the `no_current_agent` hard-fails with `resolveCurrentAgent`; re-grep the sites, line numbers
+drifted after CC-1/CC-2 edits). Nothing published/redeployed yet (all cello-client → ONE publish cascade;
+OA-1+OA-2 → ONE us-east-1 redeploy — both at end of run). When resuming cold: read this directive + the
+per-fix `STATUS:` lines + `git log` in both repos, then continue from the first non-✅ fix.
 
 ---
 
@@ -152,6 +153,7 @@ directive + the per-fix `STATUS:` lines + `git log` in both repos, then continue
 - **Design home:** [[2026-07-07_1700_four-level-screening-policy]] (D21) — "Open implementation issue."
 
 ### CC-2 — `register` doesn't arm the standing receiver 🔴
+**STATUS: ✅ done** — cello-client `e73c421`. Register success path calls `startAgentInternal(name)` (same idempotent arm as login/use_agent); arm-fail is a warning, never fails the persisted registration. Daemon suite green (632), lint/typecheck/build. No success-path unit test by design — **D22** (harness has no fake-directory registration success; enforcer is the live register-then-receive smoke, batched). Reviewer SPEC FAITHFUL / NO FALLBACKS / TEETH; one LOW (optimistic `armed` event) fixed → `arm_initiated`. NOT yet published (end-of-run cello-client cascade).
 - **What/why:** after `cello_register`, the agent is registered but its standing receiver is NOT armed —
   `standing_receiver_ready:false` — so it **cannot receive inbound until a daemon restart** (login).
   A brand-new user's first agent looks broken until they `cello logout`/`login`. Confirmed live (agent
