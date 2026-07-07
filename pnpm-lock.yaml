@@ -54,8 +54,8 @@ importers:
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.16
-        version: 0.0.16
+        specifier: ^0.0.17
+        version: 0.0.17
       '@cello-protocol/transport':
         specifier: ^0.0.4
         version: 0.0.4
@@ -106,8 +106,8 @@ importers:
         specifier: ^0.0.30
         version: 0.0.30
       '@cello-protocol/crypto':
-        specifier: ^0.0.15
-        version: 0.0.15
+        specifier: ^0.0.18
+        version: 0.0.18
       '@cello-protocol/directory':
         specifier: workspace:*
         version: link:../directory
@@ -115,8 +115,8 @@ importers:
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.3
-        version: 0.0.3
+        specifier: ^0.0.17
+        version: 0.0.17
       '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
@@ -145,8 +145,8 @@ importers:
   packages/interfaces:
     dependencies:
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.16
-        version: 0.0.16
+        specifier: ^0.0.17
+        version: 0.0.17
       '@noble/curves':
         specifier: 2.2.0
         version: 2.2.0
@@ -177,14 +177,14 @@ importers:
   packages/relay:
     dependencies:
       '@cello-protocol/crypto':
-        specifier: ^0.0.15
-        version: 0.0.15
+        specifier: ^0.0.18
+        version: 0.0.18
       '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.3
-        version: 0.0.3
+        specifier: ^0.0.17
+        version: 0.0.17
       '@cello-protocol/transport':
         specifier: ^0.0.4
         version: 0.0.4
@@ -232,8 +232,8 @@ importers:
   packages/test-fixtures:
     dependencies:
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.3
-        version: 0.0.3
+        specifier: ^0.0.17
+        version: 0.0.17
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
@@ -470,10 +470,6 @@ packages:
     engines: {node: '>=24'}
     hasBin: true
 
-  '@cello-protocol/crypto@0.0.15':
-    resolution: {integrity: sha512-eJkZ9dQG0wMPdNZVbK0pjpCJGpn1nFJDNR9TzNHW6ofEqMkVlQSogMFqH9O86LpRjJ8t3kQIxdwxg0U/RqkW4w==}
-    engines: {node: '>=24'}
-
   '@cello-protocol/crypto@0.0.18':
     resolution: {integrity: sha512-lrxRxbGDC0J1wbgiLRfVxkorYnwULOpEZKAcKQ6ROkexVH16ogU6P/BsbQzGZ4pjVoZm2DCdYroDyEeHioh6LQ==}
     engines: {node: '>=24'}
@@ -494,8 +490,8 @@ packages:
     resolution: {integrity: sha512-b4MmBEjOlj9E0QU/PIlM0GKznDIl11B03MAxB2V4vW/0bBxEoN/Tb8OLKApktiUJHIv38pm7HM5oZO0zo+ySrg==}
     engines: {node: '>=24'}
 
-  '@cello-protocol/protocol-types@0.0.16':
-    resolution: {integrity: sha512-tJy3MPM0iOh9CeQoOPavjMk8UW0KFqcFGbn1C3YdrcbP0PUKjjZsc114PvOu9Wn1wGhj6QBgF7mXwok5Kcl3Ig==}
+  '@cello-protocol/protocol-types@0.0.17':
+    resolution: {integrity: sha512-l1T4kFo2/y9ajDuJq0G3KH7KiTIJRHzJwq/FqqLW2mUybSvM3zUTfRCp3LhcBD2LyejE/3/kUzNAEqWKJMG0tw==}
     engines: {node: '>=24'}
 
   '@cello-protocol/protocol-types@0.0.2':
@@ -4030,12 +4026,6 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@cello-protocol/crypto@0.0.15':
-    dependencies:
-      '@noble/curves': 2.2.0
-      '@noble/hashes': 2.2.0
-      '@oqs/liboqs-js': 0.15.1
-
   '@cello-protocol/crypto@0.0.18':
     dependencies:
       '@noble/curves': 2.2.0
@@ -4064,7 +4054,7 @@ snapshots:
     dependencies:
       '@cello-protocol/protocol-types': 0.0.2
 
-  '@cello-protocol/protocol-types@0.0.16':
+  '@cello-protocol/protocol-types@0.0.17':
     dependencies:
       '@cello-protocol/crypto': 0.0.18
       cbor-x: 1.6.4

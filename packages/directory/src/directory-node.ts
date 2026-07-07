@@ -106,13 +106,15 @@ import {
   refreshNodeHeartbeat,
   PRESENCE_NODE_FRESHNESS_MS,
 } from "./agent-presence-repository.js";
+import { getPrimaryHolder, upsertPrimaryHolder } from "./primary-holder-repository.js";
+import { bindPrimaryTransferNonce } from "./primary-transfer-nonce-repository.js";
 import { resolveDiscoveryState } from "./discovery-lookup.js";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash, verifyCapability, decodeCapability } from "@cello-protocol/crypto";
+import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, CONTEXT_PRIMARY_RELEASE, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash, verifyCapability, decodeCapability } from "@cello-protocol/crypto";
 
 import type { KeyProvider, LeafInput, IThresholdSigner, RefreshContribution } from "@cello-protocol/crypto";
-import { encodeStructure2, computeGenesisPrevRoot, buildSealTbs } from "@cello-protocol/protocol-types";
+import { encodeStructure2, computeGenesisPrevRoot, buildSealTbs, buildPrimaryTransferTbs } from "@cello-protocol/protocol-types";
 import { reconstructCarriedSealLeaves } from "./seal-unilateral-verify.js";
 import type { AgentProfile } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
@@ -151,6 +153,8 @@ import {
   encodeDiscoveryLookupError,
   encodeAgentRevocationAck,
   encodeAgentRevocationError,
+  encodePrimaryTransferAck,
+  encodePrimaryTransferError,
   encodeNotAuthenticated,
   encodeSealVerified,
   encodeSessionFrostSealed,
@@ -2033,6 +2037,9 @@ export class CelloDirectoryNode {
         } else if (parsed.type === "revoke_agent") {
           // CELLO-M7-REMOVE-001 DOD-REMOVE-2: record a self-signed agent revocation.
           void this.#processRevokeAgent(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "primary_transfer_request") {
+          // M8C-PRIMARY-1: a daemon claiming Primary status attests a device-transfer to THIS node.
+          void this.#processPrimaryTransferRequest(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "trust_signal_ack") {
           // CELLO-M8-TRUST-001: the daemon opened + verified + stored a pickup → DELETE the row so no
           // sealed ciphertext lingers (AC-002). ACCOUNT-SCOPED: resolve the ACK'ing agent's agent_id
@@ -2481,6 +2488,106 @@ export class CelloDirectoryNode {
     }
     this.#logger?.info("agent.revocation.recorded", { agentId: frame.agent_id });
     this.#sendFrame(stream, encodeAgentRevocationAck({ type: "agent_revocation_ack", agent_id: frame.agent_id }));
+  }
+
+  /**
+   * M8C-PRIMARY-1: verify + record a THIS-NODE-ONLY primary-transfer attestation. Per
+   * docs/planning/user-stories/m8c/M8C-PRIMARY-DESIGN.md (Decision 4, revised across 3 passes) —
+   * NOT a cross-node commit. The daemon becoming Primary dials each of T-of-N nodes independently
+   * and tallies acks itself; this method's ONLY job is deciding whether THIS node accepts the
+   * claim, and if so, persisting it. Checks run cheapest-first (SI-004 / DoS hygiene): a stream
+   * authentication check, then a pure-computation freshness check, then a DB read (old_daemon_id
+   * match), then a DB write (nonce bind), then the FROST ceremony verification (crypto, the most
+   * expensive step by far) — a flood of stale/wrong-daemon requests is rejected before any crypto
+   * runs.
+   */
+  async #processPrimaryTransferRequest(
+    stream: Stream,
+    authedPubkeyHex: string,
+    frame: import("./directory-types.js").PrimaryTransferRequest,
+  ): Promise<void> {
+    // The stream is authenticated as K_local (the same identity a Standby shares with the old
+    // Primary post-pairing) — a transfer request must be submitted under the SAME K_local it names,
+    // never a different agent's claim riding on this connection.
+    if (authedPubkeyHex !== frame.k_local_pubkey) {
+      this.#sendFrame(stream, encodePrimaryTransferError({ type: "primary_transfer_error", reason: "not_registered" }));
+      this.#logger?.warn("primary_transfer.rejected", { reason: "authed_pubkey_mismatch" });
+      return;
+    }
+
+    // Freshness (pure computation, no I/O) — bounds the replay window before any DB/crypto work.
+    const PRIMARY_TRANSFER_FRESHNESS_MS = 5 * 60 * 1000;
+    if (Math.abs(Date.now() - frame.timestamp) > PRIMARY_TRANSFER_FRESHNESS_MS) {
+      this.#sendFrame(stream, encodePrimaryTransferError({ type: "primary_transfer_error", reason: "stale_request" }));
+      this.#logger?.warn("primary_transfer.rejected", { agentId: frame.k_local_pubkey.slice(0, 16), reason: "stale_request" });
+      return;
+    }
+
+    const pool = this.#pgPool;
+    if (!pool) {
+      // No DB configured (e.g. a bare test harness) — cannot verify or persist. Fail closed.
+      this.#sendFrame(stream, encodePrimaryTransferError({ type: "primary_transfer_error", reason: "not_registered" }));
+      this.#logger?.warn("primary_transfer.rejected", { agentId: frame.k_local_pubkey.slice(0, 16), reason: "no_pg_pool" });
+      return;
+    }
+
+    // old_daemon_id must match THIS node's own recorded holder — cheap DB read before any crypto.
+    // A missing row (agent never had a Primary attested here) and a mismatched daemon_id are both
+    // "not_registered" from this node's point of view: it has no record of old_daemon_id being the
+    // current holder, so it cannot accept a release attestation relative to it.
+    const currentHolder = await getPrimaryHolder(pool, frame.k_local_pubkey);
+    if (!currentHolder || currentHolder.holdingDaemonId !== frame.old_daemon_id) {
+      this.#sendFrame(stream, encodePrimaryTransferError({ type: "primary_transfer_error", reason: "not_registered" }));
+      this.#logger?.warn("primary_transfer.rejected", { agentId: frame.k_local_pubkey.slice(0, 16), reason: "not_registered" });
+      return;
+    }
+
+    // Single-use nonce, scoped to new_daemon_id (SI-002).
+    const nonceResult = await bindPrimaryTransferNonce(pool, frame.nonce, frame.new_daemon_id);
+    if (!nonceResult.bound) {
+      this.#sendFrame(stream, encodePrimaryTransferError({ type: "primary_transfer_error", reason: "nonce_reused" }));
+      this.#logger?.warn("primary_transfer.rejected", { agentId: frame.k_local_pubkey.slice(0, 16), reason: "nonce_reused" });
+      return;
+    }
+
+    // The FROST group public key for this agent — needed to verify the release signature.
+    const primaryPubkey = await this.#resolvePrimaryPubkey(frame.k_local_pubkey);
+    if (!primaryPubkey) {
+      this.#sendFrame(stream, encodePrimaryTransferError({ type: "primary_transfer_error", reason: "not_registered" }));
+      this.#logger?.warn("primary_transfer.rejected", { agentId: frame.k_local_pubkey.slice(0, 16), reason: "no_primary_pubkey" });
+      return;
+    }
+
+    // SI-001: verify the release_signature is a REAL FROST threshold signature under
+    // CONTEXT_PRIMARY_RELEASE — never a K_local signature (see M8C-PRIMARY-DESIGN Decision 3 for
+    // why a K_local signature cannot distinguish the genuine old Primary from a Standby).
+    const tbs = buildPrimaryTransferTbs(frame.k_local_pubkey, frame.new_daemon_id, frame.old_daemon_id, frame.nonce, frame.timestamp);
+    let sigBytes: Uint8Array;
+    try {
+      sigBytes = new Uint8Array(Buffer.from(frame.release_signature, "hex"));
+    } catch {
+      sigBytes = new Uint8Array(0);
+    }
+    const verifier = new FrostThresholdSigner({ threshold: 1, participants: 1 }, Buffer.from(frame.k_local_pubkey, "hex"));
+    const sigValid = sigBytes.length === 64 && verifier.verifySignature(sigBytes, tbs, CONTEXT_PRIMARY_RELEASE, primaryPubkey);
+    if (!sigValid) {
+      this.#sendFrame(stream, encodePrimaryTransferError({ type: "primary_transfer_error", reason: "release_not_verified" }));
+      this.#logger?.warn("primary_transfer.rejected", { agentId: frame.k_local_pubkey.slice(0, 16), reason: "release_not_verified" });
+      return;
+    }
+
+    // Verified — persist THIS node's acceptance. A persist failure must not silently ack (mirrors
+    // #processRevokeAgent's own await-before-ack discipline for the same durability reason).
+    try {
+      await upsertPrimaryHolder(pool, frame.k_local_pubkey, frame.new_daemon_id);
+    } catch (err) {
+      this.#logger?.error("primary_transfer.persist_failed", { agentId: frame.k_local_pubkey.slice(0, 16), error: err instanceof Error ? err.message : String(err) });
+      this.#sendFrame(stream, encodePrimaryTransferError({ type: "primary_transfer_error", reason: "not_registered" }));
+      return;
+    }
+
+    this.#logger?.info("primary_transfer.accepted", { agentId: frame.k_local_pubkey.slice(0, 16), newDaemonId: frame.new_daemon_id, oldDaemonId: frame.old_daemon_id, nodeId: this.#frostHandler.nodeId });
+    this.#sendFrame(stream, encodePrimaryTransferAck({ type: "primary_transfer_ack", node_id: this.#frostHandler.nodeId }));
   }
 
   async #processRegisterRequest(

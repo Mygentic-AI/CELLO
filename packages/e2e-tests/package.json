@@ -25,10 +25,10 @@
   "dependencies": {
     "@cello-protocol/connect": "^0.0.30",
     "@cello-protocol/client": "^0.0.20",
-    "@cello-protocol/crypto": "^0.0.15",
+    "@cello-protocol/crypto": "^0.0.18",
     "@cello-protocol/directory": "workspace:*",
     "@cello-protocol/interfaces": "workspace:*",
-    "@cello-protocol/protocol-types": "^0.0.3",
+    "@cello-protocol/protocol-types": "^0.0.17",
     "@cello-protocol/relay": "workspace:*",
     "@cello-protocol/transport": "^0.0.4",
     "@claude-flow/testing": "3.0.0-alpha.6",
