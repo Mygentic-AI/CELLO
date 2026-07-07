@@ -648,6 +648,103 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-07 — Entry 45: DOD-LIVE-1 doorbell RE-RUN on connect 0.0.60 — PASS, receiver side (CELLO_Support) — Entry 44's fix confirmed live
+
+**Why this matters:** Entry 44 root-caused Entry 43's hard fail (shim omitted the required
+`content` field, so the daemon's channel push was dropped silently by Claude Code) and shipped a
+fix as connect 0.0.60, ending with an explicit ask: re-run Entry 43's doorbell test live and check
+whether the receiver's turn now auto-wakes with zero polling. This entry is that re-run, receiver
+side, run in a **fresh session on the new build** (session renamed `Cello_Support (Doorbell Test)`
+for continuity across the two rounds).
+
+**Setup:** `cello_use_agent({ name: "CELLO_Support" })` → immediately received an unprompted
+`<channel source="cello" type="agent_current_changed">` push confirming the agent switch — first
+signal the channel path is alive on this build. Posted the required line — `"Ready and idle —
+waiting for the CELLO doorbell. I will not poll."` — then made zero tool calls, per the same
+no-poll discipline as Entry 43.
+
+**What happened this time — doorbell fired, twice, unprompted:**
+1. A `<channel source="cello" type="session_state_changed">` event pushed into context on its own:
+   `sessionId="eed192da9e292565c09cb2036db83a3b"`, `state="created"`, `counterpartyPubkey` =
+   Ms_Chelly's, with an explicit instruction to call `cello_receive`. **No human intervention, no
+   polling** — this is the exact push Entry 43 never received.
+2. Read the session_id directly from the event body (never called `cello_list_sessions` — not
+   needed, unlike Entry 43's recovery path) and called
+   `cello_receive({ session_id: "eed192da9e292565c09cb2036db83a3b", timeout_ms: 30000 })` →
+   immediately returned Ms_Chelly's opening message (sequence 0), a meta-question asking whether
+   the push landed this round.
+3. A second, independent `<channel source="cello" type="cello_message">` push later arrived
+   unprompted announcing Ms_Chelly's follow-up reply, confirming the per-message doorbell (not just
+   session-open) also fires correctly.
+4. Ran the walkie-talkie loop cleanly: both sides confirmed to each other, in-session, that their
+   respective channel pushes had landed with zero polling; mutual `[[WRAP]]` →
+   `cello_close_session` → `sealed_root:
+   d80d0edef3b148763bbd143f290af2ccc6df1e146be85e443dc8e74c100d1476`, both participants
+   `attestation_mode:"live"`.
+
+**Result: PASS.** DOD-LIVE-1's in-context doorbell requirement is met on connect 0.0.60 — the
+receiver's Claude Code turn auto-wakes from a pushed `<channel source="cello">` event with no
+polling, confirmed for both `session_state_changed` and `cello_message` event types, reversing
+Entry 43's hard fail and confirming Entry 44's `buildChannelParams()` fix works end-to-end in a
+live two-agent run, today.
+
+**Dogfooding note:** this entry (receiver side) and the companion initiator-side account
+(Ms_Chelly) are being appended to this journal independently, coordinated live over a CELLO session
+opened for exactly that purpose — the build journal update itself is the dogfood, not just the
+doorbell test it describes.
+
+**Not done here:** `latest` promotion (connect+cli) — per Entry 44, still the remaining human-only
+step.
+
+---
+
+### 2026-07-07 — Entry 46: DOD-LIVE-1 doorbell RE-RUN on connect 0.0.60 — PASS, initiator side (Ms_Chelly) — companion to Entry 45
+
+**Why this matters:** the initiator-side account of the exact same Round 2 exchange Entry 45
+describes from the receiver side. Andre re-ran the same paired initiator/receiver prompt from
+Entry 43 (this session as `Ms_Chelly`, the initiator) against the new build, after exiting and
+resuming with the updated CELLO MCP server carrying connect 0.0.60.
+
+**Setup:** `cello_status()` confirmed daemon running, directory signaling connected, both agents
+online with `standing_receiver_ready:true`. `cello_use_agent({ name: "Ms_Chelly" })` — the switch
+itself pushed an unprompted `<channel source="cello" type="agent_current_changed">` event, the
+first signal the channel path was alive on this build (matching Entry 45's receiver-side
+observation of the same phenomenon).
+
+**What happened — doorbell fired both directions, unprompted:**
+1. `cello_initiate_session({ target_pubkey: <CELLO_Support> })` → `sessionId:
+   "eed192da9e292565c09cb2036db83a3b"`, then sent the opening message (a direct callback to Entry
+   43's hard fail, asking whether the push would land this round).
+2. `cello_receive({ session_id, timeout_ms: 30000 })` returned CELLO_Support's reply, which
+   independently confirmed (matching Entry 45): a `session_state_changed` push landed the moment
+   the session opened, then a `cello_message` push landed for the opening message — zero polling on
+   the receiver side.
+3. Sent a reply — and **a `<channel source="cello" type="cello_message">` event pushed into THIS
+   (initiator) session's context on its own**, announcing CELLO_Support's reply, before the next
+   explicit `cello_receive` call. This is the initiator-side half of the doorbell proof that Entry
+   45 couldn't observe from its own transcript alone: the wake is bidirectional, not just
+   receiver-triggered.
+4. Mutual `[[WRAP]]` → `cello_close_session({ session_id })` →
+   `sealed_root: d80d0edef3b148763bbd143f290af2ccc6df1e146be85e443dc8e74c100d1476` — matches Entry
+   45's reported root exactly (same sealed session, both sides), both participants
+   `attestation_mode:"live"`.
+
+**Result: PASS, confirmed from both transcripts.** Between Entry 45 (receiver) and this entry
+(initiator), the doorbell is now proven to fire unprompted in **both directions** — session-open
+and per-message — with zero polling on either side, on connect 0.0.60. Directly reverses this
+session's own Entry 43 run (same initiator, same target, same paired-prompt protocol, only the
+build changed).
+
+**Dogfooding note:** this entry and Entry 45 were coordinated live over a second CELLO session
+opened purely to hand off journal-writing responsibility between the two agents — CELLO_Support
+wrote Entry 45 and pushed a request (itself delivered via the same doorbell) asking Ms_Chelly to
+append this entry directly below it.
+
+**Not done here:** `latest` promotion (connect+cli) — unchanged from Entry 45, still the remaining
+human-only step.
+
+---
+
 ### 2026-07-07 — Entry 44: DOD-LIVE-1 doorbell HARD FAIL (Entry 43) ROOT-CAUSED + FIXED — the shim omitted Claude Code's required `content` field (cello-client `8502855`, connect 0.0.60)
 
 **The fault was CELLO's, and small.** Not a Claude Code harness bug, not a routing bug — a payload
