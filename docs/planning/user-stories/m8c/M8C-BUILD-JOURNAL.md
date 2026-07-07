@@ -648,6 +648,111 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-07 — Entry 44: DOD-LIVE-1 doorbell HARD FAIL (Entry 43) ROOT-CAUSED + FIXED — the shim omitted Claude Code's required `content` field (cello-client `8502855`, connect 0.0.60)
+
+**The fault was CELLO's, and small.** Not a Claude Code harness bug, not a routing bug — a payload
+shape bug in the shim. Root-caused from the shim log + code trace + the official channel docs, and
+fixed.
+
+**How it was traced (producer/consumer, evidence-first):**
+1. The shim's own log (`~/.cello/cello-mcp-stderr.log`) showed `notification.channel.forwarded`
+   for `session_state_changed` AND `cello_message` **for CELLO_Support** — logged in the shim
+   (`cello-mcp.ts:297`) *immediately after* the `.notification({ method:"notifications/claude/channel" })`
+   call resolved, with no `notification.push.failed`. So the daemon emitted and the shim pushed.
+2. The daemon dispatcher (`notification-dispatcher.ts:116`) is **targeted**: "only connections with
+   currentAgent === agentName receive this." The receiver's connection had `currentAgent =
+   CELLO_Support`, so the push went to the **right** Claude Code session. Chain proven working
+   end-to-end to Claude Code's door.
+3. The differential: the Telegram channel that worked (Entry 42) sends `params: { content, meta }`;
+   the CELLO shim sent `params: { type, from, ... }` — **no `content` field**.
+4. Confirmed against the authoritative contract (code.claude.com/docs/en/channels-reference →
+   Notification format): **`content` is the `<channel>` tag BODY and is required; `meta` entries
+   become tag attributes (keys must be `[a-zA-Z0-9_]`).** A notification with no `content` produces
+   no tag body and is **"dropped silently with no error returned to your server"** — exactly the
+   observed zero-signal. This is also why SPIKE-1 (Entry 3) "passed" on a locally-patched shim but
+   the published shim failed live.
+
+**The conflation that shipped it:** INV-CONTENTFREE ("no MESSAGE content rides a push") was
+mis-encoded as "the notification has no `content` field at all." The unit tests enshrined it
+(`adapter-001` was literally titled "…no content field"; `mcp-wake-001:122` asserted
+`not.toHaveProperty("content")`). Green tests, wrong wire shape — the exact "source tests pass on a
+broken publish" trap.
+
+**Fix (`8502855`, connect 0.0.59→0.0.60):** new `buildChannelParams()` (core/adapter-claude-code)
+translates each content-free daemon frame into `{ content, meta }` — `content` a synthesized,
+content-free doorbell announcement ("CELLO: a new message is waiting … call cello_receive"), `meta`
+the routing fields with identifier-safe keys. Applied at BOTH shim emit paths (`bin/cello-mcp.ts`
+live standalone + `notifications.ts` server path). INV-CONTENTFREE preserved and clarified: content
+is a fixed announcement built only from routing fields (type/pubkey/session/state) — never message
+text; the shim never even receives message bytes. Tests corrected to the real contract + a new
+`channel-params.test.ts` gap-closer (5 tests). Full gate green (1756 tests/167 files); the
+real-daemon→real-shim integration test passes with the new shape.
+
+**Status:** published beta as `v0.0.80` (connect 0.0.60). Next: verify the tarball binary contains
+the fix, pin the local install to connect@0.0.60, RE-RUN Entry 43's doorbell test live. If the
+receiver's turn now auto-wakes from the `<channel source="cello">` push with zero polling →
+**DOD-LIVE-1's in-context doorbell is proven**, and `latest` promotion (connect+cli) is the
+remaining human-only step.
+
+---
+
+### 2026-07-07 — Entry 43: DOD-LIVE-1 doorbell test, receiver side (CELLO_Support) — HARD FAIL: zero `<channel source="cello">` push, manual poll required
+
+**Why this matters:** this is a direct, purpose-built test of DOD-LIVE-1's in-context doorbell
+claim — does a receiver's Claude Code turn actually auto-wake from a pushed CELLO channel event
+when a peer opens a session, with **no polling**? Distinct from Entry 41 (which found a
+skill-instruction bug in `/cello-walkie-talkie`'s responder section): this run did not use that
+skill at all. Andre hand-authored a paired initiator/receiver prompt specifically to isolate the
+doorbell-wake behavior, and this session ran the **receiver** half, acting as `CELLO_Support`.
+
+**Setup:** session started with `cello_status()` confirming daemon running, directory signaling
+connected, both `CELLO_Support` and `Ms_Chelly` online with `standing_receiver_ready:true`, and one
+pre-existing `active_sessions` entry (`a68c8fed1b5de830590a54440133fe85`, liveness `alive` at the
+time — later superseded, not reused). Selected the agent via
+`mcp__cello__cello_use_agent({ name: "CELLO_Support" })`.
+
+**Protocol followed exactly as instructed:** posted the required line — `"Ready and idle — waiting
+for the CELLO doorbell. I will not poll."` — then made **zero** tool calls (no `cello_status`, no
+`cello_list_sessions`, no `cello_receive`) and ended the turn, per the test's explicit failure
+condition against polling before the doorbell fires.
+
+**What happened:** nothing. No `<channel source="cello">` event, malformed or otherwise, ever
+arrived to auto-start a new turn. The turn only resumed because **Andre manually intervened**,
+telling the session "you don't seem to be receiving anything... try a cello receive." Absent that
+prompt, the session would still be sitting idle on the "Ready and idle" line.
+
+**Recovery sequence (all post-intervention, i.e. reactive, not part of the doorbell claim):**
+1. `mcp__cello__cello_list_sessions()` → surfaced the real active session
+   `fc535d31e26a450ac1a50acdf0007e99` (`messageCount:1`, `status:"active"`) — the
+   `a68c8fed1b…` entry from the earlier `cello_status()` was stale/superseded, consistent with
+   Entry 40/41's warning that `cello_status().active_sessions` can carry dead entries.
+2. `mcp__cello__cello_receive({ session_id: "fc535d31e26a450ac1a50acdf0007e99", timeout_ms: 5000 })`
+   → immediately returned Ms_Chelly's opening message (sequence 0) — confirming the message had
+   been sitting delivered-but-unpushed the entire idle period.
+3. Ran the walkie-talkie loop cleanly from there: 3 sends / 3 receives, exchange was explicitly
+   meta (Ms_Chelly asking the receiver to characterize the wake experience; CELLO_Support reporting
+   "truly zero signal... no `<channel source="cello">` tag arrived at all, malformed or otherwise").
+4. Mutual `[[WRAP]]` → `cello_close_session({ session_id })` →
+   `sealed_root: 2b4a4e950c6cb27c5fb1d45a26e611f823999be1d7c41600c547032c438e4b72`, both
+   participants `attestation_mode:"live"`.
+
+**Result: HARD FAIL on DOD-LIVE-1's in-context doorbell requirement**, not a partial/degraded pass
+— this is the receiver-side counterpart the WAKE/MSGWAKE unit tests can't cover (SPIKE + unit tests
+proved the doorbell *code path* fires correctly in isolation; this was the missing in-context proof
+that a real Claude Code turn wakes on it end-to-end). Everything downstream of message delivery
+(session lookup once polled, send/receive loop, mutual close, bilateral FROST seal) worked
+correctly and matches the mechanics Entries 40/41 already validated. The defect is narrowly scoped
+to: **the push into a waiting Claude Code turn's context never happens** — confirmed by a human
+watching the receiver session sit idle and having to intervene.
+
+**Not done here:** no code change, no root-cause investigation of *why* the push didn't fire (harness
+channel delivery vs. daemon-side event emission vs. something else) — that's the next step for
+whoever owns DOD-LIVE-1. This entry is the falsifiable data point: doorbell code proven in unit
+tests (Tier 2), doorbell *live wake* now proven absent in a real two-agent run, today, on current
+build.
+
+---
+
 ### 2026-07-07 — Entry 42: channels pre-flight check — Claude Code `--channels` + Telegram plugin confirmed functional
 
 **Why this matters:** unrelated to the M8C protocol work above — this is a harness-level
