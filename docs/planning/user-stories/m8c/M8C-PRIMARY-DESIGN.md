@@ -4,27 +4,27 @@ type: design
 date: 2026-07-07
 milestone: M8C
 topics: [multi-daemon, primary-standby, device-linking, frost, db-sync, threat-model]
-status: reviewed-one-open-item
+status: reviewed
 description: >
   DOD-PRIMARY-DESIGN-1's full design log — hard gate for all Tier 5 code. Covers the device-linking
   handshake (how daemon B proves it belongs to the same operator as daemon A), the threat model, and
   the DB-sync conflict model for two hash-chained SQLCipher databases. Grounded in a research pass
   over existing K_local/FROST storage, the directory's registration schema, the per-session hash-
-  chain structure, and existing crypto primitives — not speculative. Revised twice: (1) after an
+  chain structure, and existing crypto primitives — not speculative. Revised three times: (1) an
   independent adversarial security review found 3 blocking gaps (pairing had no sender
   authentication/phishing resistance; directory-arbitration was modeled on the wrong existing
-  pattern; DB-sync ordering/atomicity was asserted, not defined); (2) after a follow-up code-level
+  pattern; DB-sync ordering/atomicity was asserted, not defined); (2) a follow-up code-level
   investigation found the review's OWN proposed fix ("quorum commit") doesn't match how this
   codebase actually achieves multi-node agreement anywhere (no cross-node RPC exists) — corrected
-  to the real, existing client-coordinated per-node pattern DKG already uses. ONE OPEN BLOCKING ITEM
-  found while drafting the actual wire frames (Decision 3): the "share released" attestation cannot
-  be a K_local signature since both daemons share K_local — needs a FROST-share-based proof, not
-  yet designed. No implementation code exists pending this; see Decision 3's final note.
+  to the real, existing client-coordinated per-node pattern DKG already uses; (3) an implementation
+  attempt found the release-attestation couldn't be a K_local signature (both daemons share
+  K_local) — resolved by reusing the existing FROST partial-signature ceremony with a new
+  domain-separation context, verified against the actual ceremony code, no new cryptography.
 ---
 
 # M8C Tier 5 — Primary/Standby Device-Linking Design
 
-## Revision notes (2026-07-07, two passes)
+## Revision notes (2026-07-07, three passes)
 
 **Pass 1 — adversarial security review**, before accepting this as the Tier 5 gate. The review
 found three genuine, blocking gaps and one documentation-precision issue — fixed inline (search
@@ -57,6 +57,16 @@ its downstream references in Decisions 2/3 and the threat model) is corrected to
 — search "follow-up" for each correction. This is a MORE grounded design than Pass 1's fix, not a
 weaker one: it reuses an already-proven mechanism instead of inventing a new one this codebase has
 never implemented.
+
+**Pass 3 — implementation-attempt self-check**, caught while drafting the actual wire frames (no
+code was committed with the flaw). Decision 3's "share released attestation" was drafted as a
+K_local signature — but K_local is shared between both daemons after pairing (Decision 1), so it
+cannot distinguish the genuine old Primary from the new daemon forging the same claim. Resolved by
+reusing CELLO's existing FROST partial-signature ceremony (`participateInCeremony`/`verifySignature`,
+verified against the actual code, not assumed) with a new domain-separation context — no new
+cryptography. This also confirmed the already-deferred "unreachable-Primary" transfer case is a
+genuinely separate, harder sub-problem (a live ceremony requires the old Primary to be reachable),
+not something this fix accidentally papers over.
 
 ## Purpose and scope
 
@@ -257,44 +267,51 @@ hygiene (not a correctness requirement): after the local delete, run `PRAGMA sec
 (or an explicit overwrite) before the delete and follow with `VACUUM` to reduce the chance the
 share persists in reclaimable SQLCipher pages.
 
-**⛔ BLOCKING GAP found during implementation attempt (2026-07-07) — the "share released
-attestation" cannot be a K_local signature. NOT YET RESOLVED — this blocks starting
-DOD-PRIMARY-1's wire-protocol code.** While drafting the actual `primary_transfer_request` wire
-frame, realized: Decision 1 establishes that BOTH daemons hold the SAME K_local after pairing. A
-signature "proving the old Primary released its share" that is produced using K_local is therefore
-**forgeable by the new daemon itself** — it also holds K_local and could sign a message claiming
-the old daemon released, whether or not that actually happened. K_local signing proves "a daemon
-holding this identity's key," never "which specific physical device." This is exactly the same
-category of mistake Decision 4's Pass-1 fix made (reaching for the nearest available primitive
-without checking it actually distinguishes the two parties) — caught here by the same self-check
-discipline before writing more code, not by an external reviewer this time.
+**Gap found during implementation attempt (2026-07-07): the "share released attestation" cannot be
+a K_local signature.** While drafting the actual `primary_transfer_request` wire frame, realized:
+Decision 1 establishes that BOTH daemons hold the SAME K_local after pairing. A signature "proving
+the old Primary released its share" that is produced using K_local is therefore **forgeable by the
+new daemon itself** — it also holds K_local and could sign a message claiming the old daemon
+released, whether or not that actually happened. K_local signing proves "a daemon holding this
+identity's key," never "which specific physical device." This is the same category of mistake
+Decision 4's Pass-1 fix made — caught here by self-check before writing more code, not by an
+external reviewer this time.
 
-**What the real fix needs:** the release attestation must be provable ONLY by whichever device
-currently holds the FROST share — since per Decision 3, that is the ONE piece of material genuinely
-NOT shared between the two daemons. Candidate approaches, none yet fully designed:
-- Have the old Primary produce a real (or release-scoped) FROST partial-signature-like proof over
-  a "release" message, using its actual share fragment for each node it's releasing to — provable
-  by the SAME per-node share-commitment verification the directory already does during DKG
-  (`directory-node.ts`'s `#pendingDkgCommitments` check is the closest existing analog). This
-  reuses FROST's own machinery (matching this design's overall preference for reuse over invention)
-  but needs the exact scoped-proof construction worked out — is a full ceremony round required, or
-  can a lighter-weight proof suffice since this isn't producing a signature over real content?
-- Alternatively, bind "who may claim to be releasing" to the directory's OWN already-authenticated
-  connection state rather than a portable signature: each node already knows (from its own
-  `primary_holder` row) which `daemon_id` is its current holder; if release can only be asserted
-  over the SPECIFIC live signaling connection that node associates with that holder (transport-
-  layer identity, not an app-level signature that could be replayed from any device), a device that
-  was never Primary cannot produce it regardless of what it knows or holds. This avoids new FROST
-  cryptography but needs the connection-identity binding worked out precisely (is the signaling
-  stream itself keyed to daemon_id, or would this need a new per-transfer session token issued at
-  the moment a daemon last became Primary?).
+**RESOLVED (2026-07-07, follow-up investigation): reuse the existing FROST partial-signature
+ceremony, not new cryptography.** Investigated the actual ceremony code before proposing this —
+`participateInCeremony(ceremonyId, tbs, context)` (`core/crypto/src/frost/frost-threshold-signer.ts`,
+interface in `types.ts:78-84`) is genuinely message-agnostic: `tbs` is arbitrary payload bytes,
+`context` is a plain string-union domain-separation constant (currently `CONTEXT_SESSION_ESTABLISHMENT`
+and `CONTEXT_SEAL`, `types.ts:21-27` — trivially extended with a new `CONTEXT_PRIMARY_RELEASE`).
+Critically, it requires the caller's own local FROST share to actually be loaded
+(`_localShares.get(agentPubkeyHex)`, throws if not bootstrapped) — **impossible to run without
+genuinely holding the share**, which is exactly the property K_local signing lacked. Directory-side
+verification (`IThresholdSigner.verifySignature(signature, tbs, context, publicKey)`,
+`types.ts:106-119`) checks only the final combined signature against the well-known group
+`primary_pubkey` — no long-lived per-node secret state needs to be retained between DKG and a later
+release ceremony, and directory-side signing (`frost-handler.ts`'s `signRawMessage`) is equally
+content-agnostic, confirming this is a clean reuse, not a restructuring.
 
-**This is genuinely new design work, not an implementation detail — it must be resolved (with the
-SAME rigor as Decisions 1-4 above, likely its own adversarial check) before any DOD-PRIMARY-1 wire
-protocol or directory-node.ts handler code is written.** No frames, migration, or handler code has
-been committed pending this — the `primary_holder` table's OWN schema (Decision 4) remains valid
-regardless of which fix is chosen (it stores "who is currently the holder" either way), but the
-protocol that WRITES to it safely does not exist yet.
+**The release attestation IS a real FROST ceremony, not a lightweight proof — this is the one
+assumption that didn't hold, and it usefully sharpens an already-deferred open item.**
+`participateInCeremony` is a full, synchronous, two-round-trip multi-party protocol requiring T-of-N
+directory nodes reachable AT THE SAME TIME as the old Primary — exactly as heavy as producing a
+real seal, not a cheap side-channel. This is fine for the cooperative transfer this decision
+covers (the old Primary is, by definition, live and initiating its own graceful handoff). It also
+confirms why the "unreachable-Primary, directory-initiated" transfer case (already listed under
+Open Items below, deferred before this investigation even started) is genuinely a separate, harder
+sub-problem: an unreachable old Primary categorically cannot produce a live ceremony-based release
+signature, so that path needs its own resolution regardless of which release-proof mechanism is
+chosen — this was already correctly scoped out, not newly broken by settling on this fix.
+
+**Concrete mechanism:** the old Primary, while releasing, runs `participateInCeremony` with
+`context: CONTEXT_PRIMARY_RELEASE` and `tbs` = canonical-bytes(k_local_pubkey, new_daemon_id,
+old_daemon_id, nonce, timestamp) against the SAME T-of-N directory nodes it needs to reach anyway
+(the new Primary's per-node attestation dial, Decision 4). The resulting single combined signature
+travels in `primary_transfer_request.share_released_signature`, verified by each node via the
+existing `verifySignature(..., CONTEXT_PRIMARY_RELEASE, primary_pubkey)` — no new crypto primitive,
+no new verification code path, just a new domain-separated message type through infrastructure
+that already exists and is already trusted for producing real seals.
 
 ## Decision 4 — Directory-enforced Primary arbitration, CLIENT-COORDINATED per-node (not a cross-node commit protocol)
 
@@ -409,7 +426,11 @@ the daemon tallies its own successes, exactly as it already does when driving DK
   get a live "share released" attestation from the old Primary, so it needs its own sub-design:
   likely a directory-witnessed timeout + the OLD primary's share being unrecoverable rather than
   actively released, which is a materially different trust story from the cooperative case and
-  deserves its own short design note at DOD-PRIMARY-1's implementation time, not invented here).
+  deserves its own short design note at DOD-PRIMARY-1's implementation time, not invented here.
+  **Confirmed, not just anticipated, by Pass 3**: the release attestation is a real, synchronous
+  FROST ceremony requiring the old Primary live — an unreachable old Primary cannot produce one by
+  construction, so this deferred sub-design is not optional polish, it is the ONLY path for that
+  case and must exist before "directory offers on unreachable-Primary" can ship at all.).
 - DOD-POLICY-1's exact policy schema (falls out of policies already being daemon-local per the DoD
   text — no new mechanism, just proving/testing the transfer boundary).
 
