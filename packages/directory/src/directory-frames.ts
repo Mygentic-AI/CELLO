@@ -284,6 +284,18 @@ export function encodeDkgReady(frame: DkgReady): Uint8Array {
   return ENC.encode({ type: frame.type, epochId: frame.epochId, participants: frame.participants, threshold: frame.threshold });
 }
 
+// ─── M8C-PRIMARY-1: Primary/Standby transfer frame encoders ──────────────────
+
+import type { PrimaryTransferAck, PrimaryTransferError } from "@cello-protocol/protocol-types";
+
+export function encodePrimaryTransferAck(frame: PrimaryTransferAck): Uint8Array {
+  return ENC.encode({ type: frame.type, node_id: frame.node_id });
+}
+
+export function encodePrimaryTransferError(frame: PrimaryTransferError): Uint8Array {
+  return ENC.encode({ type: frame.type, reason: frame.reason });
+}
+
 // ─── CONNREQ-002: Connection frame encoders (directory → client) ──────────────
 
 import type {
@@ -344,7 +356,7 @@ export function encodeDisclosureResponseInbound(frame: DisclosureResponseInbound
 
 // ─── Decode (client → directory) ─────────────────────────────────────────────
 
-import type { RegisterRequest, DkgComplete, ConnectionRequest, ConnectionResponse, DisclosureRequest, DisclosureResponse } from "@cello-protocol/protocol-types";
+import type { RegisterRequest, DkgComplete, ConnectionRequest, ConnectionResponse, DisclosureRequest, DisclosureResponse, PrimaryTransferRequest } from "@cello-protocol/protocol-types";
 
 import type { SealAttempt, SealRejectedTreeMismatch, SealAttemptAck, SealUnilateral, SealUnilateralTooEarly, SealUnilateralConfirmed, SealUnilateralNotification, ManifestPollRequest, SealUpgradeRequest, SealUpgradeConfirmed, SealUpgradeRejected } from "./directory-types.js";
 
@@ -359,7 +371,7 @@ export type SealInterruptedAckFrame = { type: "seal_interrupted_ack"; sessionId:
 /** initiatorPubkey is included so the directory can route the rejection back to the initiator by direct lookup in #streams. */
 export type SealInterruptedRejectionFrame = { type: "seal_interrupted_rejection"; sessionId: string; initiatorPubkey: string; reason: string };
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck | DiscoveryLookup;
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck | DiscoveryLookup | PrimaryTransferRequest;
 
 /**
  * CELLO-M8-TRUST-001: encode a trust-signal pickup for delivery to the agent's daemon (OUTBOUND).
@@ -507,6 +519,18 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     const primary_pubkey = typeof o["primary_pubkey"] === "string" ? o["primary_pubkey"] : null;
     if (primary_pubkey === null) return null;
     return { type: "dkg_complete" as const, primary_pubkey };
+  }
+
+  if (o["type"] === "primary_transfer_request") {
+    // M8C-PRIMARY-1: per docs/planning/user-stories/m8c/M8C-PRIMARY-DESIGN.md Decision 4/3.
+    const k_local_pubkey = typeof o["k_local_pubkey"] === "string" ? o["k_local_pubkey"] : null;
+    const new_daemon_id = typeof o["new_daemon_id"] === "string" ? o["new_daemon_id"] : null;
+    const old_daemon_id = typeof o["old_daemon_id"] === "string" ? o["old_daemon_id"] : null;
+    const release_signature = typeof o["release_signature"] === "string" ? o["release_signature"] : null;
+    const nonce = typeof o["nonce"] === "string" ? o["nonce"] : null;
+    const timestamp = typeof o["timestamp"] === "number" ? o["timestamp"] : null;
+    if (k_local_pubkey === null || new_daemon_id === null || old_daemon_id === null || release_signature === null || nonce === null || timestamp === null) return null;
+    return { type: "primary_transfer_request" as const, k_local_pubkey, new_daemon_id, old_daemon_id, release_signature, nonce, timestamp };
   }
 
   if (o["type"] === "revoke_agent") {

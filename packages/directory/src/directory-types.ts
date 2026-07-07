@@ -381,6 +381,10 @@ export interface NotAuthenticated {
 
 export type { RegisterRequest, DkgComplete, RegisterSuccess, RegisterError, RegisterErrorReason } from "@cello-protocol/protocol-types";
 
+// ─── M8C-PRIMARY-1: Primary/Standby transfer frame types ─────────────────────
+
+export type { PrimaryTransferRequest, PrimaryTransferAck, PrimaryTransferError } from "@cello-protocol/protocol-types";
+
 // ─── CONNREQ-002: Connection request frame types (re-exported from protocol-types) ───
 
 export type {
