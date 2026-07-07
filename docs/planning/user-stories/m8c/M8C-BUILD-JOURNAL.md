@@ -636,6 +636,48 @@ DOD-LIVE-1 with the publish cascade).
 
 ---
 
+### 2026-07-07 — Entry 35: DOD-PRIMARY-1 release-attestation gap RESOLVED — no new crypto needed
+
+Follow-up to Entry 34. Investigated whether CELLO's existing FROST partial-signature ceremony
+could serve as the release-attestation proof (my hypothesis: reuse `participateInCeremony` instead
+of inventing new crypto), grounding it against the actual code rather than assuming.
+
+**Confirmed:** `participateInCeremony(ceremonyId, tbs, context)` (`core/crypto/src/frost/
+frost-threshold-signer.ts`) is genuinely message-agnostic — `tbs` is arbitrary payload bytes,
+`context` a plain string-union domain constant, trivially extended with a new
+`CONTEXT_PRIMARY_RELEASE`. It requires the caller's OWN local FROST share to be loaded or it
+throws — exactly the property needed (impossible to produce without genuinely holding the share).
+Directory-side `verifySignature` checks only the final combined signature against the well-known
+group `primary_pubkey` — no long-lived per-node secret state to retain. Clean reuse, not a
+restructuring.
+
+**One assumption corrected, not broken:** this is a full, synchronous, two-round-trip ceremony
+(same weight as producing a real seal), not a lightweight side-channel proof. Fine for the
+cooperative-transfer case (the old Primary is by definition live, initiating its own handoff) —
+and this usefully CONFIRMS (rather than newly discovers) that the already-deferred
+"unreachable-Primary, directory-initiated" transfer case is a genuinely separate, harder
+sub-problem: an unreachable old Primary categorically cannot produce a live ceremony signature, so
+that path was correctly scoped out in Entry 32/33, not accidentally broken by this fix.
+
+**Mechanism, concretely:** old Primary runs `participateInCeremony` with
+`context: CONTEXT_PRIMARY_RELEASE`, `tbs` = canonical-bytes(k_local_pubkey, new_daemon_id,
+old_daemon_id, nonce, timestamp), against the SAME T-of-N nodes the new Primary is dialing anyway
+(Decision 4). The resulting signature travels in `primary_transfer_request.share_released_signature`,
+verified via the existing `verifySignature(..., CONTEXT_PRIMARY_RELEASE, primary_pubkey)` — zero new
+crypto, zero new verification code path, just a new domain-separated message type through
+infrastructure already trusted for real seals.
+
+**Status:** DOD-PRIMARY-DESIGN-1's design log is now fully resolved for the cooperative-transfer
+case (which is what DOD-PRIMARY-1 itself covers). Resuming DOD-PRIMARY-1 code from here — the
+migration schema, protocol-types frames, and directory handler that were discarded in Entry 34 can
+now be rebuilt on solid ground.
+
+**Next:** rebuild `V44__primary_holder.sql`, the `primary_transfer_request`/`_ack`/`_error` wire
+frames (protocol-types), `directory-node.ts`'s attestation handler, and the daemon-side
+pairing/transfer client — following the SAME red-first TDD loop as every other unit tonight.
+
+---
+
 ### 2026-07-07 — Entry 34: DOD-PRIMARY-1 implementation attempt — found a 4th real gap, stopped before committing code
 
 Began DOD-PRIMARY-1 against the Entry 33-revised design. Investigated the real M8B quorum-
