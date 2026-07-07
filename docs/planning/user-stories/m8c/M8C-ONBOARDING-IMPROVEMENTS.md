@@ -215,6 +215,23 @@ three steps completed from the command guidance alone, no source-reading. Rough 
     and none selected stays ambiguous → still `no_current_agent` (correct — guessing between peers misroutes).
   - **Deploy:** cello-client daemon → same publish path as P2-2.
 
+- ⬜ **P2-4. `connections` in `cello status` is a permanently-empty stub — wire it or drop it.** *(cello-client daemon)*
+  - **Root cause — CONFIRMED (code-read):** `connections` is hardcoded `const connections: ConnectionInfo[] = []`
+    (daemon.ts:610–611, comment "Stub: all connections marked as 'unverified' until connection validation
+    is wired") and passed straight into the status response (:1778). It is ALWAYS empty — `[]` does NOT
+    mean "no connections," it means the feature was never wired. Conveys nothing to the user today.
+  - **Intended:** friction **F9** (connected-client visibility + reap — "`cello status` shows who's
+    attached; cleanup path for stale connections"), in the DoD "Tracked, not M8C-fruit" list, unbuilt.
+  - **Fix options:**
+    - **(a) Wire the visibility half** from the existing `perConnectionState` map (connectionId →
+      `{currentAgent, clientType}`) — show attached clients (count + clientType + current agent). Cheap,
+      real data; genuine diagnostic value for orphan-process / SQLite-lock contention. (The "reap stale
+      connections" half is the harder, deferrable part.)
+    - **(b) Drop the field** from status output until F9 is built — stop shipping a misleading empty stub.
+  - Global CLAUDE.md anti-mock rule ("no placeholder implementations … return empty `[]` only when that's
+    the real answer") argues against leaving an always-empty placeholder in user-facing output. Lean (a).
+  - **Deploy:** cello-client daemon (same publish path as P2-2/P2-3).
+
 ## Implementation notes (for the one-shot sprint)
 
 - **Files:** `packages/operations-agent/src/registration/engine.ts` (item 1),
