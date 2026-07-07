@@ -119,16 +119,15 @@ crisp handoff for the live checks.
 - **Cron 1 (deploy watchdog)** arms during the ops-agent redeploy + the cello-client publish CI (unchanged).
 
 ### ▶ RESUME STATE — keep current (the single anchor for a cut-off resume)
-**Done:** CC-1 (cello-client `eae50fb`) · OA-1 (trustless-cello `4ce5cfe7`) · CC-2 (cello-client `e73c421`) ·
-OA-2 (trustless-cello `c1189f42`) — all reviewed. **Next unit: CC-3** (F18 sole-online auto-select on the
-session-action tools — replace `no_current_agent` hard-fails with `resolveCurrentAgent`, thread the
-resolved `agentName` downstream). **Drift-corrected sites (daemon.ts):** initiate_session 3032, close_session
-3173, get_sealed_receipt 3492, get_transcript 3548, list_sessions 3619, await_session 4640, send 5185,
-receive path (handleReceive) 5430 — plus check cello_status 3008 separately (likely leave). Helper
-`resolveCurrentAgent` at daemon.ts:1867; correct pattern already at 2919/2952. Nothing published/redeployed
-yet (all cello-client → ONE publish cascade; OA-1+OA-2 → ONE us-east-1 redeploy — both at end of run). When
-resuming cold: read this directive + the per-fix `STATUS:` lines + `git log` in both repos, continue from
-the first non-✅ fix.
+**Done:** CC-1 (cc `eae50fb`) · OA-1 (tc `4ce5cfe7`) · CC-2 (cc `e73c421`) · OA-2 (tc `c1189f42`) · CC-3 (cc
+`da28e12`) — all reviewed. **Next unit: CC-6** (CLI register next-step run-on line → multi-line;
+`core/cli/src/commands.ts:199`). Then **CC-7** (top-level `cello --help` → orientation; `cli-args.ts:28`),
+**CC-8** (CLI `cello status` shows `registered` not online/selected — trace CLI status formatter in
+`commands.ts` vs daemon F5), **CC-9** (expose `cello_contact_list/add/remove` as MCP tools in the connect
+shim, `core/adapter-claude-code/src/`). All CLI/shim → part of the single end-of-run cello-client publish
+cascade. Exact copy for CC-6/7 in [[M8C-ONBOARDING-IMPROVEMENTS]] (P2-1, P2-5). Nothing published/redeployed
+yet. When resuming cold: read this directive + the per-fix `STATUS:` lines + `git log` in both repos,
+continue from the first non-✅ fix.
 
 ---
 
@@ -171,6 +170,7 @@ the first non-✅ fix.
 - **Difficulty:** Easy (1 line).
 
 ### CC-3 — F18 sole-online auto-select is missing on the session-action tools 🟠
+**STATUS: ✅ done** — cello-client `da28e12`. 8 handlers route through `resolveCurrentAgent` (explicit `{name}` > current > sole-online): initiate_session, close_session, get_sealed_receipt, get_transcript, list_sessions, await_session, send, handleReceive (receive/receive_session). Downstream `connState.currentAgent` threaded to resolved `agentName` (ownership checks preserved). `cello_status` + dead stub loop untouched. 2+-online-none-selected still `no_current_agent`. Daemon suite green (635, +3 teeth: sole-online resolves / 2-online ambiguous / explicit name pins the agent), lint/typecheck/build. Reviewer SPEC FAITHFUL / NO FALLBACKS / TEETH; LOW test-hardening (pin selected agent) applied. NOT yet published (end-of-run cello-client cascade).
 - **What/why:** `cello_initiate_session` (and siblings) return `no_current_agent` on a fresh connection
   even with one agent online — forcing an explicit `cello_use_agent` every cold start. F18's
   `resolveCurrentAgent` was wired into the receive/inbox tools but not the session-action tools. Agent-

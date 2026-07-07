@@ -2568,6 +2568,41 @@ us-east-1 ops-agent redeploy at end of run.
 
 ---
 
+### 2026-07-07 — Entry 54: M8C-FIX-RUN CC-3 — F18 sole-online auto-select on the session-action tools
+
+**Fifth unit.** cello-client `da28e12`.
+
+**What:** F18's `resolveCurrentAgent` (explicit `{name}` > this connection's current > sole online agent)
+was wired into the receive/inbox tools but NOT the session-action tools, which hard-failed
+`no_current_agent` even with exactly one agent online — forcing an explicit `cello_use_agent` on every
+cold start / after a `/mcp` reconnect (agent-surfaced live: Ms_Chelly→CELLO_Feedback).
+
+**Fix:** routed all 8 through `resolveCurrentAgent` and threaded the resolved `agentName` downstream
+(replacing each handler's later `connState.currentAgent` reads): `cello_initiate_session`,
+`cello_close_session`, `cello_get_sealed_receipt`, `cello_get_transcript`, `cello_list_sessions`,
+`cello_await_session`, `cello_send`, and `handleReceive` (registered as `cello_receive` +
+`cello_receive_session`). The send/close ownership checks (`getSessionRecord(agentName,…)` +
+`record.agent_name !== agentName`) are preserved, so a resolved agent that doesn't own a session still
+gets `session_not_found`/`session_not_owned`. `cello_status` and the dead empty `SESSION_TOOLS_REQUIRING_
+AGENT` stub loop were left untouched. **2+ online with none selected still returns `no_current_agent`** —
+it refuses to guess between peers (misroute risk), the correct fail-fast.
+
+**Tests (teeth):** sole-online resolves where pre-CC-3 it returned `no_current_agent`;
+2-online-none-selected stays `no_current_agent`; explicit `{name}` PINS that agent (a bob-owned session
+is visible under `{name:bob}`, invisible under `{name:alice}` — proves selection, not mere non-failure).
+Existing AC-007 guard tests still pass (`setupWithAgents` brings 0 agents online → resolver returns null).
+Daemon suite green (635), lint/typecheck/build.
+
+**Reviewer:** SPEC FAITHFUL / NO SILENT FALLBACKS / TESTS HAVE TEETH. Confirmed no handler dereferences
+`connState` post-resolve (no NPE with undefined connState + explicit name), and the ambiguous branch fails
+loud. One LOW test-hardening (explicit-name test asserted only non-failure) — APPLIED (now pins the
+selected agent).
+
+**Unblocks:** the `no_current_agent` cold-start papercut for single-agent operators. NOT yet published —
+batched into the single end-of-run cello-client `/cello-publish` cascade.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
