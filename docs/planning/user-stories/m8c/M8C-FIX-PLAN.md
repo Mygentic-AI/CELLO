@@ -120,11 +120,8 @@ crisp handoff for the live checks.
 
 ### ▶ RESUME STATE — keep current (the single anchor for a cut-off resume)
 **Done:** CC-1 (cc `eae50fb`) · OA-1 (tc `4ce5cfe7`) · CC-2 (cc `e73c421`) · OA-2 (tc `c1189f42`) · CC-3 (cc
-`da28e12`) · CC-6/7/8 CLI cluster (cc `f486e32`) · CC-9 (cc `d9c5569`) — all reviewed. **All 🔴+🟠 DONE.**
-**Next unit: CC-4** (🟢 — drop the always-empty `connections` field from status: remove from
-`DaemonStatusResponse` [`types.ts:135`], the `const connections = []` decl [`daemon.ts:610-611`] + its use
-in `getStatus` [~1792] and `cello_status`, and the 4 test assertions [daemon.test.ts:168/186/213,
-commands.test.ts:97]; `ConnectionInfo` may become unused). Then **CC-5** (🟢 — F21 full, design-significant:
+`da28e12`) · CC-6/7/8 CLI cluster (cc `f486e32`) · CC-9 (cc `d9c5569`) — all reviewed. **All 🔴+🟠 DONE + CC-4 DONE** (cc `5deef4b`).
+**Next unit: CC-5** (🟢 — F21 full, design-significant, LAST fix:
 (a) don't-strand — receiver session conditional on initiator confirmation OR reap `messageCount:0`
 half-open sessions after timeout, pick cleaner + log; (b) terminal-escape — unilateral force-abandon
 marking the session terminal locally with a surfaced reason. Write a design note in the journal FIRST per
@@ -189,6 +186,7 @@ this directive + the per-fix `STATUS:` lines + `git log` in both repos, continue
   selected stays ambiguous → still `no_current_agent` (correct).
 
 ### CC-4 — `connections` in `cello status` is an always-empty stub 🟢
+**STATUS: ✅ done** — cello-client `5deef4b`. Dropped the empty `connections` field from `DaemonStatusResponse` + both status builders + the `const connections=[]` decl + unused import; kept the exported `ConnectionInfo` type (F9 placeholder) + `perConnectionState`. Tests updated (AC-019 asserts NO `connections`). Also repaired a CC-6 register-test that shipped red in `f486e32` (amend changed the copy; ran eslint not the CLI suite — CC-4's gate caught it). Daemon 635 / CLI 30 green, lint/typecheck/build. Reviewer SPEC FAITHFUL / NO FALLBACKS / TEETH; f486e32 red confirmed fully resolved. NOT yet published (end-of-run cascade).
 - **What/why:** `const connections: ConnectionInfo[] = []` (`daemon.ts:610-611`, "until connection
   validation is wired") is passed straight into status (`:1778`). Always empty — conveys nothing. Was
   meant to be F9 connected-client visibility. P2-4.

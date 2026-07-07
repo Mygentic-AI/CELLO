@@ -2671,6 +2671,37 @@ cello-client `/cello-publish` cascade.
 
 ---
 
+### 2026-07-07 — Entry 57: M8C-FIX-RUN CC-4 — drop the always-empty `connections` status stub (+ CC-6 test repair)
+
+**Eighth unit.** cello-client `5deef4b`.
+
+**What:** the `connections` field in the daemon status response was an always-empty stub
+(`const connections: ConnectionInfo[] = []`, "until connection validation is wired" — the F9
+connected-client-visibility feature that was never built). An empty placeholder conveys nothing and
+reads as a mock. Dropped it from both status surfaces (`getStatus` daemon-wide + the `cello_status` MCP
+handler), from `DaemonStatusResponse`, plus the now-unused `ConnectionInfo` import. Kept the
+`ConnectionInfo` interface exported (types.ts + index.ts) as the shape F9 will populate later; per-connection
+state still lives in `perConnectionState`. Real client-visibility (F9) is a future fast-follow.
+
+**Tests:** AC-019 now asserts `cello_status` does NOT have `connections` (teeth: re-adding the empty field
+fails it); removed the connections assertions + the obsolete "connections are empty" test.
+
+**CC-6 regression repaired (caught here):** the CC-6 amend in `f486e32` (already pushed) changed the
+register success guidance copy per a reviewer note, but the amend was gated with `eslint` only, not the
+CLI vitest suite — so the MOCKED register-success test (`commands.test.ts`, drives success via a fake
+daemon socket) that asserted the old `.toContain("connecting")` shipped RED. CC-4's full gate run caught
+it; fixed to assert the new ready-state cue `online` (+ keeps connected / cello status / cello login).
+This also corrects an earlier wrong claim: CC-6's success output IS unit-tested (via the socket mock), not
+ceremony-gated. Reviewer confirmed no other test asserts the old copy — the `f486e32` red is fully
+resolved. **Lesson: run the actual test suite (not just lint) after a copy amend, even a "trivial" one.**
+
+**Reviewer:** SPEC FAITHFUL / NO SILENT FALLBACKS / TESTS HAVE TEETH. No findings above bar (stub-deletion
+diff, no danger zones). Daemon 635 / CLI 30 green, lint/typecheck/build.
+
+**Remaining:** only **CC-5** (F21 full, design-significant) then the batched ship + live stop.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
