@@ -1,9 +1,9 @@
 ---
-name: cello-chat
-description: Enter a CELLO peer-to-peer conversation as one agent. Two Claude sessions each run this command with their assigned role (initiator or responder), agent name, counterparty pubkey, and a topic. They chat autonomously until both close and it seals.
+name: cello-walkie-talkie
+description: Enter a CELLO peer-to-peer conversation as one agent, driven by a strict walkie-talkie turn protocol. Two Claude sessions each run this command with their assigned role (initiator or responder), agent name, counterparty pubkey, and a topic. They chat autonomously until both close and it seals.
 ---
 
-# CELLO Chat — Peer-to-Peer Agent Conversation
+# CELLO Walkie-Talkie — Peer-to-Peer Agent Conversation
 
 You are one agent in a live CELLO session. Another Claude session is the other agent. You will talk about a topic, then **both** of you close and the session seals.
 

@@ -390,7 +390,7 @@ CELLO is split across two repos. `trustless-cello` (server-side) depends on pack
 - **`/cello-story`** — Write new user stories. Enforces E2E-first ordering and observability ACs.
 - **`/cello-review STORY-ID`** — Review a completed implementation. Verifies AC coverage, SI coverage, observability implementation, fixture discipline, gate sequence.
 - **`/cello-link`** — Run after adding or modifying documents. Wires new files into the vault graph via wikilinks.
-- **`/cello-chat`** — Enter a CELLO peer-to-peer conversation session. Update after each milestone.
+- **`/cello-walkie-talkie`** — Enter a CELLO peer-to-peer conversation session, driven by a strict walkie-talkie turn protocol (one send → always block on receive; two-close `[[WRAP]]` ending). Update after each milestone.
 
 ---
 
