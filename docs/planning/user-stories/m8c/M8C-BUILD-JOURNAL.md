@@ -2841,6 +2841,33 @@ publishing mid-run restarts the daemon, which is exactly the event that mints th
 
 ---
 
+### 2026-07-08 — Entry 61: 🏁 M8C FIX RUN CLOSED — CC-10 shipped (v0.0.82), promoted to `latest`, all 5 A/B phases PASS
+
+**Ship (v0.0.82).** CC-10 cascade: daemon 0.0.35→**0.0.36**, cli 0.0.32→**0.0.33** (connect unchanged at
+0.0.61 — it doesn't depend on daemon). Version bump cc `a963737`, tag `v0.0.82`, CI green incl. smoke-tag.
+Binary-verified against the tarball AND the installed running daemon dist (reaper scans `interrupted`,
+reap-before-bound call, `abandonSession` returns write outcome). Promoted all 7 to `latest` with Andre's go
+(daemon+cli needed npm OTP browser-auth; other 5 already `latest`). Verified `npm view @latest`: cli 0.0.33 /
+daemon 0.0.36 / connect 0.0.61. Andre reinstalled cli+connect@latest, `cello login` (4 agents online),
+reconnected MCP.
+
+**Live verification — all 5 A/B phases PASS** ([[M8C-LIVE-AB-TEST-PROTOCOL]]):
+- Phase 0 ✅ sanity + new shim (CC-2/4/8/9) · Phase 1 ✅ force-abandon the F21 ghost (CC-5)
+- Phase 2 ✅ **re-run after CC-10** — the abuse-cap ghost block is gone; stranger stays unknown on knock,
+  promotes only on Support's reply (CC-1) · Phase 3 ✅ full convo/doorbell/read-before-write/seal vs Feedback
+- Phase 4 ✅ cold onboarding (OA-1/OA-2/CC-2/6/7/8) — with the email-recovery papercut logged for triage.
+
+**Two post-launch follow-ups logged (NOT blocking, in [[M8C-FIX-PLAN]] RESUME STATE):** (1) Phase-4
+email-recovery papercut (no on-file-email match-check before OTP dispatch; no escape from OTP-entry but
+burning 3 attempts; `/start` swallowed as a wrong-code guess); (2) initiator-side rejection-signal gap
+(`cello_initiate_session` returns `ok:true` even when the receiver silently rejects — visible only in the
+daemon log). Both need a severity call before story-writing.
+
+**M8C fix run is closed.** 11 directive fixes + CC-10, all committed/reviewed/shipped/promoted/live-verified.
+Deferred by directive (unchanged): SEC-2/DIR-1, full D21 model.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

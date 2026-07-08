@@ -119,37 +119,55 @@ crisp handoff for the live checks.
 - **Cron 1 (deploy watchdog)** arms during the ops-agent redeploy + the cello-client publish CI (unchanged).
 
 ### ▶ RESUME STATE — keep current (the single anchor for a cut-off resume)
+
+> **✅✅ M8C FIX RUN COMPLETE — 2026-07-08.** All 11 fixes (CC-1…CC-9, OA-1/OA-2) **+ CC-10** shipped
+> to `latest` and **live-verified**: all 5 A/B phases PASS (Phase 0 ✅ · Phase 1 ✅ force-abandon ·
+> Phase 2 ✅ re-run, CC-10 fixed the abuse-cap ghost bug · Phase 3 ✅ vs Feedback · Phase 4 ✅ cold
+> onboarding). Both legitimate stops cleared (latest promoted w/ Andre's go; live /mcp two-agent run
+> done). Live stack: **daemon 0.0.36 · cli 0.0.33 · connect 0.0.61** (tag `v0.0.82`). Evidence:
+> [[M8C-LIVE-AB-TEST-PROTOCOL]]. **Two post-launch follow-ups logged, NOT blocking** (see end of this
+> section): (1) Phase-4 email-recovery papercut (triage-open); (2) initiator-side rejection-signal gap.
+> Nothing left blocking for launch on the agent-connect path.
+
 **Done:** CC-1 (cc `eae50fb`) · OA-1 (tc `4ce5cfe7`) · CC-2 (cc `e73c421`) · OA-2 (tc `c1189f42`) · CC-3 (cc
-`da28e12`) · CC-6/7/8 CLI cluster (cc `f486e32`) · CC-9 (cc `d9c5569`) — all reviewed. **ALL FIX ITEMS DONE + REVIEWED + SHIPPED (beta).** CC-1/2/3/4/5/6/7/8/9 + OA-1/2 all committed+pushed+reviewed
-(CC-5 = cc `146ac74`+`cc4e5ce`). (Deferred by directive: SEC-2/DIR-1, full D21.)
-**SHIP STATE:**
-- **cello-client cascade — ✅ PUBLISHED + VERIFIED to `beta`.** daemon **0.0.35** / cli **0.0.32** / connect
-  **0.0.61** (cc `f239c64`, tag **`v0.0.81`**). CI green incl. the smoke-tag (clean-installs cli@beta +
-  connect@beta). **Binary-verified** (not just CI): beta versions correct; cross-pins are real versions
-  (cli→daemon 0.0.35; connect→client 0.0.46/crypto 0.0.18/transport 0.0.16 — NO `workspace:*`); and the
-  CC-5 code (`abandonSession`, `reapDeadHalfOpen`, `abandoned` status) confirmed present in the shipped
-  daemon@0.0.35 tarball dist. *(First tag run failed on a FLAKY binary SIGTERM test — traced NOT to CC-5;
-  same commit passed on main; re-ran, no version burned. Flaky-test follow-up noted below.)*
-  **NOT promoted to `latest`** (needs Andre's go). Watchdog cron `c3bb42cb` retired.
-  **↳ Follow-up (post-launch, not blocking):** that binary SIGTERM test has a cross-connection visibility
-  race — it INSERTs the synthetic rows on a separate SQLCipher connection then SIGTERMs, so the daemon's
-  shutdown query can run before the INSERT is durable/visible. Worth hardening (e.g. confirm the daemon
+`da28e12`) · CC-6/7/8 CLI cluster (cc `f486e32`) · CC-9 (cc `d9c5569`) · **CC-10 (cc `79030e3`)** — all reviewed. **ALL FIX ITEMS DONE + REVIEWED + SHIPPED + PROMOTED + LIVE-VERIFIED.** CC-1/2/3/4/5/6/7/8/9/10 + OA-1/2 all committed+pushed+reviewed
+(CC-5 = cc `146ac74`+`cc4e5ce`; CC-10 = cc `79030e3`, version cascade `a963737`). (Deferred by directive: SEC-2/DIR-1, full D21.)
+**SHIP STATE — ✅ COMPLETE:**
+- **cello-client cascade — ✅ PUBLISHED + BINARY-VERIFIED + PROMOTED to `latest`.** Final live versions:
+  daemon **0.0.36** / cli **0.0.33** / connect **0.0.61** (CC-10 cascade cc `a963737`, tag **`v0.0.82`**,
+  green smoke-tag). Binary-verified in the *installed running* daemon dist (not just CI): CC-10 markers
+  present (`getSessionsByStatus("interrupted")` in the reaper, `reapDeadHalfOpenSessions(agentName)`
+  reap-before-bound call, `abandonSession` returns write outcome). cli→daemon pin = real `0.0.36` (not
+  `workspace:*`). All 7 promoted to `latest` w/ Andre's go (daemon/cli needed OTP browser-auth; the other 5
+  were already `latest`). *(Prior beta ship of CC-1…CC-9 = daemon 0.0.35/cli 0.0.32, tag `v0.0.81` —
+  superseded by v0.0.82.)*
+  **↳ Follow-up (post-launch, not blocking):** the binary SIGTERM test (session-node-manager AC-009) has a
+  cross-connection visibility race — INSERTs synthetic rows on a separate SQLCipher connection then SIGTERMs,
+  so the daemon's shutdown query can run before the INSERT is durable/visible. Harden (confirm the daemon
   observed the rows before SIGTERM, or WAL-checkpoint before kill).
-- **ops-agent (OA-1+OA-2)** — us-east-1 pipeline `cello-operations-agent-pipeline` already ran to
-  ProductionDeploy **Succeeded** at source `7cb8cf60` (after the OA-2 code commit `c1189f42`), auto-triggered
-  by the run's pushes → **deployed**. No separate redeploy needed.
-**⛔ STOPPED at the two legitimate stops (both need a human):**
-1. **`latest`-tag promotion** for cello-client (connect + cli + daemon at the new versions) — needs Andre's
-   explicit go after the beta smoke-tag is green.
-2. **Live `/mcp` reconnect + two-agent verification** — reinstall connect+cli@latest (or @0.0.61/@0.0.32),
-   `cello login`, reconnect MCP, then verify live: cold onboarding (fresh token → the new register copy →
-   receive without restart, CC-2), CC-1 (a stranger stays unknown; anti-spam cap holds), CC-3 sole-online,
-   and F21 (open a session to an offline agent → the receiver's ghost is reaped after ~5min OR
-   `cello_close_session { force:true }` abandons it). **Next after CC-5 review:** the BATCHED SHIP — (1) ONE `/cello-publish` cascade for all
-cello-client fixes (bump changed core/* [daemon, cli, connect] + dependents' pins, tag, CI→beta, verify the
-binary); (2) ONE us-east-1 ops-agent redeploy for OA-1+OA-2. THEN the two legitimate STOPS: `latest`-tag
-promotion (needs Andre's go) and the live `/mcp`-reconnect + two-agent verification (F21 reap/force +
-cold-onboarding). Prior notes for CC-5 (now done, superseded):
+- **ops-agent (OA-1+OA-2)** — us-east-1 pipeline ran to ProductionDeploy **Succeeded** at source `7cb8cf60`
+  → **deployed**.
+**✅ BOTH legitimate stops CLEARED (2026-07-08):**
+1. **`latest`-tag promotion** — DONE. Andre gave the go; daemon 0.0.36 + cli 0.0.33 promoted (OTP auth),
+   verified `npm view @latest` = cli 0.0.33 / daemon 0.0.36 / connect 0.0.61.
+2. **Live `/mcp` reconnect + two-agent verification** — DONE. All 5 A/B phases PASS (see
+   [[M8C-LIVE-AB-TEST-PROTOCOL]]). Reinstalled cli+connect@latest, `cello login` (4 agents online),
+   MCP reconnected.
+
+**🔭 POST-LAUNCH FOLLOW-UPS (surfaced by the live run — logged, NOT blocking, need a triage call):**
+1. **Phase-4 email-recovery papercut** — a mistyped email during Telegram registration has no clean
+   recovery: (a) no match-check between the typed email and the account's on-file email before dispatching
+   an OTP (any email-shaped string gets a code); (b) no escape from OTP-entry back to email-entry except
+   burning all 3 attempts, and `/start` is swallowed as a wrong-code guess. Recoverable-with-effort, not a
+   hard block — Andre completed registration. Onboarding is launch-critical (agent connect), so needs an
+   explicit severity call before writing a story. Full transcript in [[M8C-LIVE-AB-TEST-PROTOCOL]] Phase 4.
+2. **Initiator-side rejection-signal gap** — `cello_initiate_session` returns `ok:true` even when the
+   receiver silently rejects the inbound (e.g. abuse cap): the initiator gets no signal, the receiver gets
+   no notification/session-list entry, and the rejection is only visible in the daemon log. Both the
+   original ABUSE-1 test and the Phase-2 block looked identical (`ok:true`) from A's side regardless of
+   acceptance. Consider surfacing a rejection reason to the initiator. Details in Phase 2 RESULTS.
+
+Prior notes for CC-5 (now done, superseded):
 **(was) CC-5** (🟢 — F21 full, design-significant, LAST fix:
 (a) don't-strand — receiver session conditional on initiator confirmation OR reap `messageCount:0`
 half-open sessions after timeout, pick cleaner + log; (b) terminal-escape — unilateral force-abandon
