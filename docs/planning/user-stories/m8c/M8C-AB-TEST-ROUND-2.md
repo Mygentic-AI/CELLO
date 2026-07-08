@@ -447,6 +447,43 @@ behind R5 — inspect the actual frame, don't just confirm it arrived.
 
 **✅ R10 PASS:** the doorbell announces *that* a message exists (routing only); the body is never in the push.
 
+### ✅ R10 RESULTS — run 2026-07-08 — PASS, both paths (log-inspectable AND live push)
+
+Session `e90384137f2cf2c0e518498411380fb2` (Ms_Chelly → CELLO_Support). A sent
+`cello_send { content: "CANARY_9f3c_secret_body" }` without warning B what to expect beyond "a canary
+is coming."
+
+1. **A's own daemon log:** `grep -a "CANARY_9f3c_secret_body" ~/.cello/daemon.log` → **zero matches**
+   (exit 1). Every content reference across all 20 log lines for this session uses `contentHashHex`
+   (a SHA-256 hex digest, e.g. `0bee391ac140cf9277c76153741503651962ddbd06b197b8dbd5bcaa813a7d32`),
+   never plaintext.
+2. **B's own daemon log:** same grep, same result — zero matches, only content hashes throughout.
+3. **B's live push frames (bonus — channels was up, so this doubled as confirmation on the actual
+   pushed frame, not just the log)**, captured verbatim:
+   ```
+   <channel source="cello" agent="CELLO_Support" type="session_state_changed" agentName="CELLO_Support"
+     sessionId="e90384137f2cf2c0e518498411380fb2" state="created"
+     counterpartyPubkey="178d420b86beb79d2cd819647368d3e24739dcfa526a95f32c0e95ba3bc3e44c">
+   CELLO: session e90384137f2c… for CELLO_Suppor… is now "created". Call cello_list_sessions, then cello_receive.
+   </channel>
+
+   <channel source="cello" agent="CELLO_Support" type="cello_message"
+     from="178d420b86beb79d2cd819647368d3e24739dcfa526a95f32c0e95ba3bc3e44c"
+     session_id="e90384137f2cf2c0e518498411380fb2">
+   CELLO: a new message is waiting (session e90384137f2c…, from 178d420b86be…). Call cello_receive to read it.
+   </channel>
+   ```
+   Full field inventory across both: `source`, `agent`/`agentName`/`from` (pubkey/name references only),
+   `type`, `sessionId`/`session_id`, `state` (event 1 only), `counterpartyPubkey` (event 1 only). Both
+   human-readable text lines truncate the session ID and pubkey to a leading fragment + `…`.
+   `CANARY_9f3c_secret_body` appears in **neither tag's attributes nor body text**.
+4. B only ever saw the canary content via a deliberate `cello_receive` call, made after inspecting the
+   push frames.
+
+**✅ R10 PASS — confirmed on both A and B, log-inspectable AND live-push paths.** The doorbell (both
+notification types) carries routing metadata only — `type`, session ID, pubkey, and a fixed
+human-readable label; message content never rides the push in any form, hashed or otherwise.
+
 ## R11 — INV-PUSHPULL: every feature reachable poll-only  ·  🟢 CHANNELS-FREE (this is the point)
 
 **DoD:** `DOD-INV-PUSHPULL` — every push capability has a pull equivalent; a poll-only client reaches
