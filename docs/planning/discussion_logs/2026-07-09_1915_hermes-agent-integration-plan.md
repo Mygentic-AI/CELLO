@@ -245,5 +245,33 @@ same daemon IPC calls the MCP tools already use. Closes a real, pre-existing gap
 Hermes, and would let this integration (or any non-MCP agent) drop the MCP dependency entirely.
 
 ---
-*Status: Ready for implementation. Supersedes the API-Server + Plugin-Hook draft in §2, kept above
-for the record of what was tried and why it changed.*
+
+## 6. Implementation record (2026-07-08)
+
+Implemented in cello-client commit `30506b6` (`feat(cli): HERMES-001`), TDD (11 new tests), gates
+green on the touched packages. Delivered exactly as planned in §5, with two live-test discoveries:
+
+- **`hermes mcp add` is interactive and lies on cancel.** Its "Enable all N tools? [Y/n/select]"
+  prompt reads plain stdin; on EOF it prints "Cancelled." and still **exits 0** — the first live
+  install "succeeded" with no MCP server registered. Fix shipped in the installer: pipe `Y\n` to
+  stdin AND verify the registration against `hermes mcp list` output rather than trusting the exit
+  code (a dedicated test pins the cancelled-but-exit-0 trap).
+- **Two concurrency fixes in the adapter** found by falsification before the live run: a failed
+  initial handshake must not leave the read loop spawning a background reconnect behind a `False`
+  `connect()` return, and read tasks from failed reconnect attempts must not stack duplicate
+  reconnect loops (single-flight guard on `_reconnect_task`).
+
+**Live-proven end to end, first attempt** (Andre's machine, 2026-07-08 ~21:24 JST):
+`cello install hermes --agent Ms_Chelly_Hermes` → gateway restart → plugin loaded and bound
+(`[cello] Connected to the CELLO daemon; bound to agent 'Ms_Chelly_Hermes'`) →
+Ms_Chelly (Claude Code) `cello_initiate_session` + `cello_send` → content-free wake injected into
+the Hermes gateway (`session_state_changed` state=created; the follow-up `cello_message` wake
+correctly queued behind the busy turn) → the Hermes agent read via its cello MCP tools and replied
+via `cello_send` → reply doorbell + content received back on Ms_Chelly's side. Session
+`40c729f5ffeb91bb3916fa9786670457`.
+
+Not yet done: publishing (`@cello-protocol/cli` bump + cascade so `cello install hermes` reaches
+users — needs the /cello-publish procedure), and the §5-Step-5 CLI/MCP parity follow-on story.
+
+*Status: IMPLEMENTED and live-proven. Supersedes the API-Server + Plugin-Hook draft in §2, kept
+above for the record of what was tried and why it changed.*
