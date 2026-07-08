@@ -202,6 +202,50 @@ export const SIGNALING_PROTOCOL_ID = "/cello/signaling/1.0.0";
 const AUTH_DOMAIN = "CELLO-DIR-AUTH-v1";
 const NONCE_TTL_MS = 30_000;
 
+// SEC-2: the frost signing stream (/cello/frost/1.0.0) is unauthenticated apart from the honor-check
+// pause gate — so a party knowing only an agent's PUBLIC k_local key could drive T directories to sign
+// arbitrary bytes (the FROST group is (T, N+1) with T = majority(N) ≤ N, so T directory partials reach
+// threshold without the client's share). Fix: every commit/sign request must carry an Ed25519 signature,
+// made with K_local priv, over SHA-256(FROST_AUTH_DOMAIN || agentPubkeyBytes || utf8(epochId) || tail) —
+// tail = utf8("commit") for a commit, the framedMsg for a sign (binding the auth to the exact message,
+// which is what defeats forging an arbitrary framedMsg). Verified against agentPubkey BEFORE the share is
+// touched. Mirrors the signaling stream's CELLO-DIR-AUTH-v1 challenge; stateless (no extra round-trip).
+const FROST_AUTH_DOMAIN = "CELLO-FROST-AUTH-v1";
+const FROST_AUTH_COMMIT_TAIL = new Uint8Array(Buffer.from("commit", "utf8"));
+
+/** SEC-2: returns a refusal reason if the frost request's K_local auth is missing/invalid, else null. */
+function verifyFrostAuth(
+  agentPubkeyHex: string,
+  epochId: string,
+  tail: Uint8Array,
+  authSig: unknown,
+): "AUTH_REQUIRED" | "AUTH_INVALID" | null {
+  if (authSig === undefined || authSig === null) return "AUTH_REQUIRED";
+  const sig = authSig instanceof Uint8Array ? authSig : new Uint8Array(authSig as ArrayBuffer);
+  let pubkeyBytes: Uint8Array;
+  try {
+    pubkeyBytes = Uint8Array.from(Buffer.from(agentPubkeyHex, "hex"));
+  } catch {
+    return "AUTH_INVALID";
+  }
+  if (pubkeyBytes.length !== 32) return "AUTH_INVALID";
+  const h = new Uint8Array(
+    createHash("sha256")
+      .update(Buffer.concat([
+        Buffer.from(FROST_AUTH_DOMAIN, "utf8"),
+        Buffer.from(pubkeyBytes),
+        Buffer.from(epochId, "utf8"),
+        Buffer.from(tail),
+      ]))
+      .digest(),
+  );
+  try {
+    return verify(pubkeyBytes, h, sig) ? null : "AUTH_INVALID";
+  } catch {
+    return "AUTH_INVALID";
+  }
+}
+
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
 /**
@@ -1245,6 +1289,18 @@ export class CelloDirectoryNode {
           epochIdType: typeof epochId,
         });
 
+        // SEC-2: prove K_local possession before this node contributes its share. Checked BEFORE the
+        // pause gate so an unauthenticated request is refused without any agent-state lookup.
+        const commitAuthFail = verifyFrostAuth(agentPubkey, epochId, FROST_AUTH_COMMIT_TAIL, req["authSig"]);
+        if (commitAuthFail) {
+          this.#logger?.warn("frost.auth.refused", { frame: "commit", agentShort: agentPubkey?.slice(0, 16), epochId, reason: commitAuthFail });
+          stream.send(lp.encode.single(
+            CBOR_ENC.encode({ type: "frost_commit_response", ok: false, reason: commitAuthFail })
+          ));
+          await stream.close();
+          return;
+        }
+
         // LEVER-001 honor-check: refuse this node's share if the agent is paused (DOD-INV-6, SI-001).
         if (await this.#isAgentPaused(agentPubkey, epochId)) {
           stream.send(lp.encode.single(
@@ -1283,6 +1339,20 @@ export class CelloDirectoryNode {
           peerIdStringShort: peerIdString?.slice(0, 16),
           rawFrameKeys: Object.keys(req),
         });
+
+        // SEC-2: prove K_local possession, bound to THIS framedMsg, before this node signs. Binding to
+        // the framedMsg is what defeats the forgery — an attacker without K_local priv cannot produce a
+        // valid signature over their arbitrary message. Checked before the pause gate and before signing.
+        const signFramedMsg = framedMsg instanceof Uint8Array ? framedMsg : new Uint8Array(framedMsg as unknown as ArrayBuffer);
+        const signAuthFail = verifyFrostAuth(agentPubkey, epochId, signFramedMsg, req["authSig"]);
+        if (signAuthFail) {
+          this.#logger?.warn("frost.auth.refused", { frame: "sign", agentShort: agentPubkey?.slice(0, 16), epochId, ceremonyId, reason: signAuthFail });
+          stream.send(lp.encode.single(
+            CBOR_ENC.encode({ type: "frost_sign_response", ok: false, reason: signAuthFail })
+          ));
+          await stream.close();
+          return;
+        }
 
         // LEVER-001 honor-check: refuse this node's signature share if the agent is paused. The
         // block is server-side — a valid client share does not help (DOD-INV-6, SI-001).

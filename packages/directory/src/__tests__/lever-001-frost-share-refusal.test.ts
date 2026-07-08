@@ -22,7 +22,7 @@ import {
 import type { TestScope } from "@claude-flow/testing";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { generateKeypair } from "@cello-protocol/crypto";
 import { bootstrapKeyShares } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
 import { createInProcessStubs } from "@cello-protocol/crypto/frost/stubs.js";
@@ -37,6 +37,32 @@ import type { RelayAdapter } from "../directory-node.js";
 setupV3Tests();
 
 const CBOR = new Encoder({ tagUint8Array: false });
+
+// SEC-2: the K_local auth binding the frost signing stream now requires. Mirrors the directory's
+// verification: Ed25519(SHA-256("CELLO-FROST-AUTH-v1" || agentPubkeyBytes || utf8(epochId) || tail)),
+// tail = utf8("commit") for a commit request, framedMsg for a sign request. Signed with K_local priv.
+const FROST_AUTH_DOMAIN = "CELLO-FROST-AUTH-v1";
+function frostAuthHash(agentPubkeyHex: string, epochId: string, tail: Uint8Array): Uint8Array {
+  return new Uint8Array(
+    createHash("sha256")
+      .update(Buffer.concat([
+        Buffer.from(FROST_AUTH_DOMAIN, "utf8"),
+        Buffer.from(agentPubkeyHex, "hex"),
+        Buffer.from(epochId, "utf8"),
+        Buffer.from(tail),
+      ]))
+      .digest(),
+  );
+}
+async function frostAuthSig(
+  signer: { sign(h: Uint8Array): Promise<Uint8Array> },
+  agentPubkeyHex: string,
+  epochId: string,
+  tail: Uint8Array,
+): Promise<Uint8Array> {
+  return signer.sign(frostAuthHash(agentPubkeyHex, epochId, tail));
+}
+const COMMIT_TAIL = new Uint8Array(Buffer.from("commit", "utf8"));
 
 // Minimal relay stub — a frost_commit refusal never touches the relay; only construction needs it.
 function makeRelay(): RelayAdapter {
@@ -85,7 +111,10 @@ describe("LEVER-001/002 — FROST share gate refusal + burn share-destruction (S
     const shareStore = new InMemoryShareStore();
 
     // A real, valid K_server share (so a refusal/destroy is NOT "no share" but the honor-check / burn).
-    const agentPubkeyHex = Buffer.from(randomBytes(32)).toString("hex");
+    // SEC-2: agentPubkey is now a REAL K_local keypair (not bare random bytes) so the frost request can
+    // carry a K_local Ed25519 auth signature the directory verifies against agentPubkey.
+    const agentKp = generateKeypair();
+    const agentPubkeyHex = Buffer.from(await agentKp.getPublicKey()).toString("hex");
     const epochId = `${agentPubkeyHex}:epoch:1`;
     const stubs = createInProcessStubs(1);
     await bootstrapKeyShares(Buffer.from(agentPubkeyHex, "hex"), { threshold: 2, participants: 1, directoryNodeStubs: stubs });
@@ -114,47 +143,143 @@ describe("LEVER-001/002 — FROST share gate refusal + burn share-destruction (S
       logger,
     });
     scope.addCleanup(dirNode.stop);
-    return { store, shareStore, dirNode, agentPubkeyHex, epochId, events };
+    return { store, shareStore, dirNode, agentKp, agentPubkeyHex, epochId, events };
   }
 
-  // Dial the node and send a raw frost_commit_request, returning the response frame.
+  // Dial the node and send a raw frost_commit_request, returning the response frame. SEC-2: by default
+  // it attaches a VALID K_local auth signature (over the "commit" tail). `auth` overrides that:
+  //   "omit"  → send NO authSig (the pre-fix unauthenticated request)
+  //   Uint8Array → send that exact (e.g. wrong-key / tampered) authSig
   async function sendFrostCommit(
     dirNode: Awaited<ReturnType<typeof buildNode>>["dirNode"],
+    agentKp: { sign(h: Uint8Array): Promise<Uint8Array> },
     agentPubkeyHex: string,
     epochId: string,
+    auth: "omit" | Uint8Array | "valid" = "valid",
   ): Promise<Record<string, unknown>> {
     const clientNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await clientNode.start();
     scope.addCleanup(() => clientNode.stop());
     await clientNode.dial(dirNode.node.listenAddresses()[0]);
     const stream = await clientNode.newStream(dirNode.node.getPeerId(), FROST_PROTOCOL_ID);
-    stream.send(lp.encode.single(CBOR.encode({ type: "frost_commit_request", agentPubkey: agentPubkeyHex, epochId })));
+    const frame: Record<string, unknown> = { type: "frost_commit_request", agentPubkey: agentPubkeyHex, epochId };
+    if (auth !== "omit") {
+      frame["authSig"] = auth === "valid" ? await frostAuthSig(agentKp, agentPubkeyHex, epochId, COMMIT_TAIL) : auth;
+    }
+    stream.send(lp.encode.single(CBOR.encode(frame)));
+    return readFrame(stream);
+  }
+
+  // SEC-2: send a raw frost_sign_request over the given framedMsg. `auth` follows the same convention;
+  // a "valid" auth signs over THIS framedMsg. `authMsg` lets a test sign over a DIFFERENT message than
+  // the one sent (the tampered-framedMsg attack).
+  async function sendFrostSign(
+    dirNode: Awaited<ReturnType<typeof buildNode>>["dirNode"],
+    agentKp: { sign(h: Uint8Array): Promise<Uint8Array> },
+    agentPubkeyHex: string,
+    epochId: string,
+    framedMsg: Uint8Array,
+    opts: { auth?: "omit" | Uint8Array | "valid"; authMsg?: Uint8Array } = {},
+  ): Promise<Record<string, unknown>> {
+    const auth = opts.auth ?? "valid";
+    const clientNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await clientNode.start();
+    scope.addCleanup(() => clientNode.stop());
+    await clientNode.dial(dirNode.node.listenAddresses()[0]);
+    const stream = await clientNode.newStream(dirNode.node.getPeerId(), FROST_PROTOCOL_ID);
+    const frame: Record<string, unknown> = {
+      type: "frost_sign_request", agentPubkey: agentPubkeyHex, epochId,
+      framedMsg, commitmentList: [], ceremonyId: "test-ceremony", peerIdString: "test-ceremony",
+    };
+    if (auth !== "omit") {
+      frame["authSig"] = auth === "valid"
+        ? await frostAuthSig(agentKp, agentPubkeyHex, epochId, opts.authMsg ?? framedMsg)
+        : auth;
+    }
+    stream.send(lp.encode.single(CBOR.encode(frame)));
     return readFrame(stream);
   }
 
   it("SI-001: a PAUSED agent's frost_commit_request is refused AGENT_SUSPENDED — despite a valid share", async () => {
-    const { dirNode, agentPubkeyHex, epochId } = await buildNode("suspended");
-    const resp = await sendFrostCommit(dirNode, agentPubkeyHex, epochId);
+    const { dirNode, agentKp, agentPubkeyHex, epochId } = await buildNode("suspended");
+    // Valid auth so the refusal is pinned to suspension, not the SEC-2 auth gate (which sits before it).
+    const resp = await sendFrostCommit(dirNode, agentKp, agentPubkeyHex, epochId);
     expect(resp.type).toBe("frost_commit_response");
     expect(resp.ok).toBe(false);
     expect(resp.reason).toBe("AGENT_SUSPENDED");
   });
 
-  it("positive control: a NON-paused agent's frost_commit_request succeeds (refusal is pinned to suspension)", async () => {
-    const { dirNode, agentPubkeyHex, epochId } = await buildNode("none");
-    const resp = await sendFrostCommit(dirNode, agentPubkeyHex, epochId);
+  it("positive control: a NON-paused agent's frost_commit_request (WITH valid K_local auth) succeeds", async () => {
+    const { dirNode, agentKp, agentPubkeyHex, epochId } = await buildNode("none");
+    const resp = await sendFrostCommit(dirNode, agentKp, agentPubkeyHex, epochId);
     expect(resp.type).toBe("frost_commit_response");
-    expect(resp.ok, `non-paused must not be refused: ${JSON.stringify(resp)}`).toBe(true);
+    expect(resp.ok, `non-paused with valid auth must not be refused: ${JSON.stringify(resp)}`).toBe(true);
+  });
+
+  // ─── SEC-2: FROST signing-path K_local authentication ───
+  describe("SEC-2: frost signing stream requires proof of K_local possession", () => {
+    it("commit WITHOUT authSig is refused AUTH_REQUIRED (the pre-fix unauthenticated request)", async () => {
+      const { dirNode, agentKp, agentPubkeyHex, epochId } = await buildNode("none");
+      const resp = await sendFrostCommit(dirNode, agentKp, agentPubkeyHex, epochId, "omit");
+      expect(resp.type).toBe("frost_commit_response");
+      expect(resp.ok).toBe(false);
+      expect(resp.reason).toBe("AUTH_REQUIRED");
+    });
+
+    it("commit with a WRONG-KEY authSig is refused AUTH_INVALID — the exact SEC-2 forgery (public key is not enough)", async () => {
+      const { dirNode, agentKp, agentPubkeyHex, epochId } = await buildNode("none");
+      const attacker = generateKeypair(); // knows the PUBLIC agentPubkeyHex, but not K_local priv
+      const forged = await frostAuthSig(attacker, agentPubkeyHex, epochId, COMMIT_TAIL);
+      const resp = await sendFrostCommit(dirNode, agentKp, agentPubkeyHex, epochId, forged);
+      expect(resp.ok).toBe(false);
+      expect(resp.reason).toBe("AUTH_INVALID");
+    });
+
+    it("sign WITHOUT authSig is refused AUTH_REQUIRED", async () => {
+      const { dirNode, agentKp, agentPubkeyHex, epochId } = await buildNode("none");
+      const resp = await sendFrostSign(dirNode, agentKp, agentPubkeyHex, epochId, new Uint8Array([1, 2, 3, 4]), { auth: "omit" });
+      expect(resp.type).toBe("frost_sign_response");
+      expect(resp.ok).toBe(false);
+      expect(resp.reason).toBe("AUTH_REQUIRED");
+    });
+
+    it("sign with a WRONG-KEY authSig is refused AUTH_INVALID (forging an arbitrary framedMsg)", async () => {
+      const { dirNode, agentKp, agentPubkeyHex, epochId } = await buildNode("none");
+      const attacker = generateKeypair();
+      const framedMsg = new Uint8Array([9, 9, 9, 9]);
+      const forged = await frostAuthSig(attacker, agentPubkeyHex, epochId, framedMsg);
+      const resp = await sendFrostSign(dirNode, agentKp, agentPubkeyHex, epochId, framedMsg, { auth: forged });
+      expect(resp.ok).toBe(false);
+      expect(resp.reason).toBe("AUTH_INVALID");
+    });
+
+    it("sign whose authSig was made over a DIFFERENT framedMsg is refused AUTH_INVALID (tamper binding)", async () => {
+      const { dirNode, agentKp, agentPubkeyHex, epochId } = await buildNode("none");
+      // Auth signed over msg A (with the REAL key), but the frame carries msg B → the binding fails.
+      const resp = await sendFrostSign(dirNode, agentKp, agentPubkeyHex, epochId, new Uint8Array([2, 2, 2, 2]), {
+        authMsg: new Uint8Array([1, 1, 1, 1]),
+      });
+      expect(resp.ok).toBe(false);
+      expect(resp.reason).toBe("AUTH_INVALID");
+    });
+
+    it("sign WITH a valid authSig passes the auth gate (does not fail AUTH_*)", async () => {
+      const { dirNode, agentKp, agentPubkeyHex, epochId } = await buildNode("none");
+      const resp = await sendFrostSign(dirNode, agentKp, agentPubkeyHex, epochId, new Uint8Array([7, 7, 7, 7]));
+      // It may still fail downstream (no in-flight ceremony for this hand-built request) — but NOT on auth.
+      expect(resp.reason).not.toBe("AUTH_REQUIRED");
+      expect(resp.reason).not.toBe("AUTH_INVALID");
+    });
   });
 
   // LEVER-002 gap (test-attacker): the EAGER-on-observe destruction at the frost gate had no coverage —
   // deleting it left every test green. Drive a frost_commit against a BURNED agent: it must be refused
   // AND the gate must ZERO this node's share as a result (fire-and-forget, so poll for it).
   it("LEVER-002 eager-on-observe: a BURNED agent's frost_commit is refused AND its share is destroyed", async () => {
-    const { shareStore, dirNode, agentPubkeyHex, epochId } = await buildNode("burned");
+    const { shareStore, dirNode, agentKp, agentPubkeyHex, epochId } = await buildNode("burned");
     expect(shareStore.getShare(agentPubkeyHex, epochId), "precondition: the share exists").toBeDefined();
 
-    const resp = await sendFrostCommit(dirNode, agentPubkeyHex, epochId);
+    const resp = await sendFrostCommit(dirNode, agentKp, agentPubkeyHex, epochId);
     expect(resp.ok).toBe(false);
     expect(resp.reason).toBe("AGENT_SUSPENDED");
 
