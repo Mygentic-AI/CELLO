@@ -144,6 +144,33 @@ is separately unit-pinned; it can't be freed here.)
 that's the "awkward on all-online loopback" case Round-1 flagged — the genuinely-remote peer from **R1**
 (one you can actually disconnect) is the cleaner stage for this.
 
+### ✅ R2 PART A RESULTS — run 2026-07-08 — PASS (via full daemon restart, not `cello_stop_agent` alone)
+
+Staged `S1 = 1baad2a4b63cc6948e6637ee8de10da6` (B clean-counted first, A knocked, sent nothing).
+**First attempt:** `cello_stop_agent { name: "Ms_Chelly" }` alone did **not** kill the underlying
+libp2p transport on loopback — `S1` stayed `liveness: alive` past 5s TTL, exactly the "awkward on
+all-online loopback" case this doc predicted. **Second attempt:** a full daemon restart (`cello logout`
+→ `login`, unrelated to this test — done for other reasons) genuinely killed the transport, and the
+reaper fired correctly on its own, independently verified from `~/.cello/daemon.log`:
+
+```
+15:34:21-22  session.liveness.changed → alive (both sides)
+15:38:08     session.liveness.changed → gone (both sides); session.node.destroyed reason=interrupted
+15:39:28     session.half_open.reaped  agentName=CELLO_Support  priorStatus=interrupted  ageMs=309405
+15:39:28     session.half_open.reaped  agentName=Ms_Chelly      priorStatus=interrupted  ageMs=309404
+```
+
+**✅ R2 PART A PASS** — the automatic reaper fired on the next read, on its own, once liveness genuinely
+went non-alive, on both sides symmetrically. The earlier "transport lingers" observation was a correct
+diagnosis of *why* it hadn't fired yet, not a defect — a real disconnect resolved it exactly as expected.
+
+**R2 Part B — deferred, not attempted.** Staging 3 aged ghosts requires the same genuine-disconnect
+condition Part A needed, which `cello_stop_agent` doesn't provide on loopback — reaching it would mean
+3 more full daemon restarts, which is disruptive and out of proportion here. Part A already proves the
+reap-on-read mechanism live; Part B's remaining claim (reap runs before the accept-cap check) is a
+code-path ordering assertion better verified by a targeted unit/integration test than more manual
+restarts. Decision: skip Part B this round.
+
 ---
 
 ## R3 — CC-3 sole-online auto-resolve, live  ·  🟢 CHANNELS-FREE
@@ -206,6 +233,24 @@ session with **zero** polling — the channel itself. (Already green in Round-1 
 
 **✅ R5 PASS:** the message surfaces on the peer with no poll call. **Proves:** the single CELLO channel
 (daemon → shim → Claude). Low priority; do it only to re-confirm once channels returns.
+
+### ✅ R5 RESULTS — run 2026-07-08 — PASS (run early, opportunistically, while channels was up)
+
+Session `14912ff8bddfa41cd1a87931672cceb8` (A→B). B did **not** call `cello_receive` beforehand; A sent
+`cello_send { content: "doorbell ping" }`. B received the unprompted push with zero preceding poll:
+
+```
+<channel source="cello" agent="CELLO_Support" type="cello_message" from="178d420b86be…" session_id="14912ff8bddf…">
+CELLO: a new message is waiting (session 14912ff8bddf…, from 178d420b86be…). Call cello_receive to read it.
+</channel>
+```
+
+B also confirmed the earlier `session_state_changed` push fired unprompted on A's initiate, same
+session — both notification types zero-poll. B then called `cello_receive` and confirmed the content
+matched ("doorbell ping") exactly.
+
+**✅ R5 PASS — confirmed on both A and B.** Both push types (`session_state_changed`,
+`cello_message`) fire unprompted with zero polling; content matches on receive.
 
 ---
 
