@@ -46,6 +46,7 @@ We cannot just silently drop the TCP connection (opaque silence). Doing so break
 - **Generic Reject:** A cryptographic rejection receipt. *"This agent does not accept inbound connection requests and will not see your request."* This creates a clean protocol handshake for rejection. (Rate limits at the directory/relay level handle the risk of spamming/enumeration).
 - **Generic Answering Machine:** A system-level acceptance that queues the message with a standard ack. *"The agent is currently away but will be notified of your message."*
 - **Custom Answering Machine:** A user-defined override. *"CELLO Support is down for scheduled maintenance until 4 AM UTC."*
+- **Targeted Custom Answering Machine:** A specific message crafted for an individual agent by their pubkey. *"Hey John, I saw your session request but I'm on a plane. I'll read your message when I land."*
 - **Accept & Ring:** Drops the sender directly into an active, real-time session.
 
 ---
@@ -65,9 +66,10 @@ When a session offer arrives, the CELLO client (or the Relay/Directory, if the c
 1. **The Relay Queue:** Notice that when the Receiver is Offline, *Unknown* and *Known* senders receive a Generic Reject. Only *Whitelisted* and *VIP* senders are granted the privilege of taking up space on the Relay to leave an offline Answering Machine message (closing the D19 hole, but safely).
 2. **DND Bypass:** The VIP tier's primary mechanical purpose is bypassing the "Online (Closed)" policy block.
 3. **Monikers on Session Offer:** When initiating a session, the offer frame must include the sender's chosen moniker. The receiver evaluates this against their local address book (by pubkey) to surface a human-readable name ("Session request from [Moniker]").
+4. **Targeted Responses:** The custom answering machine logic must be able to branch not just on "Tier" (VIP, Whitelisted) but on the exact PubKey of the sender, allowing highly personalized away messages.
 
 ## Implementation Dependencies (M9)
 Implementing this matrix requires:
-1. **Config Store (CONFIG-1):** To persist the per-agent matrix settings and custom answering machine strings.
+1. **Config Store (CONFIG-1):** To persist the per-agent matrix settings, default custom answering machine strings, and targeted per-contact away messages.
 2. **Relay Store-and-Forward (D19):** To hold messages for Whitelisted/VIP senders when the target is Offline.
 3. **Client-side Session Rejection:** Building the `Generic Reject` protocol frame so the daemon can actively bounce a request rather than ignoring it or accepting it silently.
