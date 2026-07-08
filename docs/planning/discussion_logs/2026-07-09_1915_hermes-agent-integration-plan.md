@@ -280,3 +280,17 @@ users — needs the /cello-publish procedure), and the §5-Step-5 CLI/MCP parity
 
 *Status: IMPLEMENTED and live-proven. Supersedes the API-Server + Plugin-Hook draft in §2, kept
 above for the record of what was tried and why it changed.*
+
+---
+
+## Related Documents
+
+- [[M8C-DEFINITION-OF-DONE|M8C Definition of Done]] — tracks this work as DOD-HERMES-1 (second
+  runtime, ✅ live-proven here) and DOD-HERMES-2 (off-device via the AWS Hermes instance, ❌ pending
+  publish); the launch-use-case tier this plan realizes.
+- [[M8C-TEST-COVERAGE-LEDGER|M8C Test Coverage Ledger]] — the HERMES-1/2 rows and the cross-machine
+  tests (R1, RELAYWAKE-1, LEAVEMSG-1) that DOD-HERMES-2 unblocks once the bridge is on AWS Hermes.
+- [[M8C-AB-TEST-ROUND-2|M8C A/B Test Round 2]] — R1 (two identities on two machines) was skipped
+  there for lack of a second device; the AWS Hermes daemon is that device.
+- [[M8C-AB-TEST-ROUND-3-INFRA-STAGED|M8C A/B Test Round 3 (infra-staged)]] — S1/S2 (relay wake,
+  leave-a-message) become runnable against a real remote peer once DOD-HERMES-2 lands.
