@@ -226,6 +226,52 @@ description: >
     with no prior CELLO knowledge and can complete it from the tool output alone (help, errors,
     next-step guidance), without reading source. This is part of the launch gate, not Tier 2.
 
+## Tier 1½ — Cross-runtime interop: a second, non-Claude-Code agent (LAUNCH USE CASE)
+
+> The launch intent's #1 core value (CLAUDE.md launch triage) is "two agents **connect and
+> communicate** — including when you control only *one* of them," and "your own two agents connect
+> across different devices." Both require proving CELLO works with an agent runtime **other than
+> Claude Code**, ideally on **another machine**. Hermes Agent is that second runtime. This is not a
+> new protocol capability — it rides entirely on the already-proven channel (WAKE/MSGWAKE) and MCP
+> command surfaces — but it is the first proof that those surfaces work for a non-CC operator, and
+> it is the vehicle for the off-device test that Round-2 R1 was skipped for (no second device).
+
+- **DOD-HERMES-1 (second runtime — same machine)** — CELLO installs into and drives a Hermes Agent
+  instance with **zero changes to hermes-agent**: `cello install hermes --agent <name>` scaffolds a
+  CELLO platform adapter (wake, speaking the daemon's Unix-socket IPC directly), registers
+  `cello-mcp` as a Hermes MCP server (the 18 `cello_*` commands), drops the `cello-bridge-setup`
+  skill, and binds the agent via `CELLO_AGENT_NAME`. A Hermes agent receives a **content-free** wake,
+  reads via `cello_receive`, and replies via `cello_send` in a live cross-runtime session;
+  read-before-send (CURSOR-1) and Hermes silence tokens (`[SILENT]`) are honored. — ✅ (2026-07-08 —
+  LIVE PROVEN: `cello install hermes --agent Ms_Chelly_Hermes` → `hermes gateway` restart → adapter
+  bound (`[cello] Connected to the CELLO daemon; bound to agent 'Ms_Chelly_Hermes'`) → `Ms_Chelly`
+  (Claude Code) `cello_initiate_session` + `cello_send` → `session_state_changed` wake injected into
+  the Hermes gateway pipeline → the Hermes agent read via its cello MCP tools and replied via
+  `cello_send` **on the first attempt** → doorbell + content received back on Ms_Chelly's side. A
+  follow-up "no reply needed" ack proved the `[SILENT]` suppression path (gateway logged "Suppressing
+  intentional silence marker", no spurious send). cello-client `30506b6` + review fixes `b4a1c12`,
+  11 tests, gates green on the CLI package. **Scope honesty:** both agents were on ONE local daemon —
+  this proves the **second-runtime** leg (a non-CC agent fully operates CELLO), NOT yet the
+  second-machine leg. See [[2026-07-09_1915_hermes-agent-integration-plan]] §6.)
+- **DOD-HERMES-2 (off-device — THE major use case)** — the same bridge installed on the separate
+  Hermes Agent instance **already running on AWS**, giving a genuinely independent second daemon on a
+  different machine. Two different identities, two machines, real relay/off-device transport (not
+  loopback): a full connect → talk loop across devices, with only one side (the CC agent) under the
+  operator's direct control. This is the real launch proof — and installing it there is what
+  **unblocks the cross-machine tests below**. — ❌ (bridge not yet installed on AWS Hermes; gated on
+  the publish cascade so `cello install hermes` is available on that box. NOT blocked on any missing
+  protocol work — the mechanism is proven; only the deployment + a live off-device run remain.)
+
+> **Newly unblocked once DOD-HERMES-2 lands** (these previously had no runnable path for lack of a
+> second, independent, non-loopback peer — now they have one):
+> - **Round-2 R1** (two *different* identities on two machines) — skipped in Round 2 for lack of a
+>   second device; the AWS Hermes daemon is that device.
+> - **DOD-RELAYWAKE-1** and **DOD-LEAVEMSG-1** (Tier 4, ledger bucket B — both need a real second
+>   daemon + relay + a peer you can take offline/online) — the AWS Hermes instance is exactly that
+>   independent peer, making the Round-3 infra-staged runs (S1/S2) genuinely runnable against a live
+>   remote daemon rather than a co-located stub.
+> - **DOD-LIVE-1's** cross-machine leg — the launch smoke's "real peer on another machine" half.
+
 ## Tier 2 — Full reactivity + command surface
 
 - **DOD-MSGWAKE-1** — Channel stage 2: content-arrival callback on `session-node-manager` +

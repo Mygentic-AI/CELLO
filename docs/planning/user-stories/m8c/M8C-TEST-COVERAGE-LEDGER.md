@@ -29,6 +29,8 @@ Purpose: **no area untested = no area uncategorized.** Every DoD line below sits
 
 | DoD line | DoD status | Bucket | Where / why |
 |---|---|---|---|
+| **HERMES-1** (2nd runtime) | ✅ | ✅ PROVEN | 2026-07-08 live cross-runtime loop, Ms_Chelly ↔ Ms_Chelly_Hermes (same daemon); non-CC agent fully operates CELLO |
+| **HERMES-2** (off-device) | ❌ | **B→ready** | needs `cello install hermes` on the AWS Hermes box (post-publish); then a real 2nd daemon on a 2nd machine — the enabler for R1 / RELAYWAKE-1 / LEAVEMSG-1 |
 | **INV-CONTENTFREE** | ✅ | ✅ PROVEN | R10 (canary absent from log + live push frame, both sides) |
 | **INV-PUSHPULL** | ✅ | ✅ PROVEN | R11 (poll-only reconciliation, 3 msgs, zero pushes consumed) |
 | **INV-HONEST-STATES** | ✅CORE | ✅ PROVEN | R9 (away vs unreachable, transparent path); opaque-mode half → C (D15) |
@@ -54,8 +56,8 @@ Purpose: **no area untested = no area uncategorized.** Every DoD line below sits
 | **ABUSE-1** | ✅ | ✅ PROVEN | R4 (per-sender cap, exactly 3 admitted + 4th refused server-side) + R2 (CC-10 interaction) |
 | **TTL-1** | 🟡CORE | **A** | R8 — SKIPPED this round (Andre: not worth a code change + ship cascade just to test-window an expiry check); needs 1-line env enabler; per-agent override → C, D17 |
 | **TGDOOR-1** | 🟡 | **B** | S3 (real bot token) |
-| **RELAYWAKE-1** | 🟡CORE | **B** | S1; brand-new-counterparty case → C (D19) |
-| **LEAVEMSG-1** | 🟡CORE | **B** | S1 (happy) + S2 (honest degradation) |
+| **RELAYWAKE-1** | 🟡CORE | **B** | S1 — now has a real remote peer via **HERMES-2** (AWS Hermes daemon); brand-new-counterparty case → C (D19) |
+| **LEAVEMSG-1** | 🟡CORE | **B** | S1 (happy) + S2 (honest degradation) — real offline/online remote peer via **HERMES-2** (AWS Hermes) |
 | **PRIMARY-DESIGN-1** | ✅ | ✅ PROVEN | design doc (Entry 32) |
 | **PRIMARY-1** | 🟠 | **C** | daemon pairing + ceremony-gate unbuilt; SEC-2-gated (D20) |
 | **POLICY-1** | ❌ | **C** | not built |
