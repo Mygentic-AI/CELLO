@@ -193,6 +193,27 @@ lone agent instead of failing `no_current_agent` (F18). Unit-verified in Round-1
 **✅ R3 PASS:** 1 online + none selected → auto-resolves the sole agent; 2 online + none selected →
 `no_current_agent`. Both F18 branches, live.
 
+### ✅ R3 RESULTS — run 2026-07-08 — PASS, both branches
+
+1. **A:** stopped `CELLO_Support`, `CELLO_Feedback`, `Ms_Chelly_Hermes` — `cello_status` confirmed only
+   `Ms_Chelly` `state: "online"`.
+2. **A's CLI `cello sessions --open`** turned out **not** to be a valid fresh-unselected-connection
+   vehicle — it returned sessions for `CELLO_Support` too, even while offline, meaning the CLI bypasses
+   agent-selection scoping entirely rather than exercising it. Used an **MCP reconnect** instead (which
+   resets `selected: false` for this connection) as the genuine unselected state.
+3. **A**, on the freshly-reconnected, never-`cello_use_agent`'d connection: `cello_list_sessions {}` →
+   `{"ok":true,"filter":"open","totalMatched":4,"sessions":[...all scoped to agentName: "Ms_Chelly"...]}`
+   — ✅ **auto-resolved the sole online agent**, no `no_current_agent`. A follow-up `cello_status` on the
+   same connection showed `Ms_Chelly` still `selected: false` — the resolution is ambient per-call, not
+   a permanent bind, so the same connection stayed valid for the contrast step.
+4. **A:** `cello_start_agent { name: "CELLO_Support" }` (2 online, none selected) → `cello_list_sessions {}`
+   on the same unselected connection → `{"ok":false,"reason":"no_current_agent",...}` — ✅ **the
+   ambiguous guard correctly refused to guess** between two candidates.
+5. **A:** restored `CELLO_Feedback` and `Ms_Chelly_Hermes`, re-selected `Ms_Chelly` on this connection.
+
+**✅ R3 PASS — confirmed live, both F18 branches**, on an actual unselected MCP connection (not the CLI,
+which doesn't exercise this gate at all).
+
 ---
 
 ## R4 — ABUSE-1 acceptance cap, live  ·  🟢 CHANNELS-FREE
