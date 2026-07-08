@@ -29,9 +29,9 @@ Purpose: **no area untested = no area uncategorized.** Every DoD line below sits
 
 | DoD line | DoD status | Bucket | Where / why |
 |---|---|---|---|
-| **INV-CONTENTFREE** | ❌ | **A** | R10 (doorbell frame carries routing only) |
-| **INV-PUSHPULL** | ❌ | **A** | R11 (every feature reachable poll-only) |
-| **INV-HONEST-STATES** | ❌ | **A** | R9 (away vs unreachable; opaque-mode half → C) |
+| **INV-CONTENTFREE** | ✅ | ✅ PROVEN | R10 (canary absent from log + live push frame, both sides) |
+| **INV-PUSHPULL** | ✅ | ✅ PROVEN | R11 (poll-only reconciliation, 3 msgs, zero pushes consumed) |
+| **INV-HONEST-STATES** | ✅CORE | ✅ PROVEN | R9 (away vs unreachable, transparent path); opaque-mode half → C (D15) |
 | **INV-GATEWAY** | ❌ | **C** | M9 screening not merged/active (D11) |
 | **INV-ONE-PRIMARY** | ❌ | **C** | needs PRIMARY-1 (unbuilt + SEC-2-gated) |
 | **SPIKE-1** | ✅ | ✅ PROVEN | Entry 3 |
@@ -39,20 +39,20 @@ Purpose: **no area untested = no area uncategorized.** Every DoD line below sits
 | **AUTOSTART-1** (F18/F5) | ✅ | ✅ PROVEN | checklist 2a; F18=CC-3 (R3), F5=CC-8 (R1 Ph0) — failure-path edge → A (R7-adjacent) |
 | **INBOX-1** | ✅ | ✅ PROVEN | checklist 2b + R11 |
 | **ONBOARD-HELP-1** | 🟡 | ✅ PROVEN | top-level CC-7 (R1 Ph4 s1) + per-command earlier |
-| **ONBOARD-ERRORS-1** | 🟡 | **A** | R12 (incl. the R4 bad-token silent-output repro) |
+| **ONBOARD-ERRORS-1** | ✅ | ✅ PROVEN | R12 (all 3 bad paths, incl. the R4 bad-token silent-output repro — now speaks) |
 | **ONBOARD-NEXTSTEP-1** | ✅ | ✅ PROVEN | R1 Ph4 |
-| **ONBOARD-WARN-1** | 🟡 | **A** | R12 (no secret-klaxon) |
-| **ONBOARD-LOGNOISE-1** | 🟡 | **A** | R12 (reconnect churn quiet) |
+| **ONBOARD-WARN-1** | ✅ | ✅ PROVEN | R12 (no secret-klaxon in a real register output) |
+| **ONBOARD-LOGNOISE-1** | ✅ | ✅ PROVEN | R12 (reconnect churn is `debug`+`expected:true`, quieter than the ❌ description assumed) |
 | **LIVE-1** (Tier-1 gate) | 🟠 | ✅ PROVEN* | doorbell + cold onboarding done; *email-recovery papercut = triage follow-up |
 | **MSGWAKE-1** | ✅ | ✅ PROVEN | R1 Ph3 |
 | **SINCESEQ-1** | ✅ | ✅ PROVEN | checklist 3a + R11 |
-| **LOGINSTART-1** | 🟡 | **A** | R7 |
+| **LOGINSTART-1** | ✅CORE | ✅ PROVEN | R7 (login enumerated + started all 4 agents; failure-path branch unexercised, no failure occurred) |
 | **CONFIG-1** (+F6/F12) | ❌ | **C** | M9-CFG-001 store not built (D14) |
 | **CURSOR-1** | ✅ | ✅ PROVEN | R1 Ph3 (read-before-write); two-attended-windows edge → A option |
 | **AWAY-1** | ✅CORE | ✅ PROVEN | checklist 3d + R9; opaque-mode/custom-text → C (D15) |
 | **CONTACT-1** | 🟡CORE | ✅ PROVEN | R1 Ph2 (CC-1); "presence-to-contacts" → C (D16), "privacy silence" → C (D15) |
-| **ABUSE-1** | 🟡 | **A** | R4 (per-sender cap) + R2 (CC-10 interaction) |
-| **TTL-1** | 🟡CORE | **A** | R8 (needs 1-line env enabler; per-agent override → C, D17) |
+| **ABUSE-1** | ✅ | ✅ PROVEN | R4 (per-sender cap, exactly 3 admitted + 4th refused server-side) + R2 (CC-10 interaction) |
+| **TTL-1** | 🟡CORE | **A** | R8 — SKIPPED this round (Andre: not worth a code change + ship cascade just to test-window an expiry check); needs 1-line env enabler; per-agent override → C, D17 |
 | **TGDOOR-1** | 🟡 | **B** | S3 (real bot token) |
 | **RELAYWAKE-1** | 🟡CORE | **B** | S1; brand-new-counterparty case → C (D19) |
 | **LEAVEMSG-1** | 🟡CORE | **B** | S1 (happy) + S2 (honest degradation) |

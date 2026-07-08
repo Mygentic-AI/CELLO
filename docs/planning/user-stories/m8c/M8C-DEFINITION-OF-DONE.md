@@ -46,7 +46,12 @@ description: >
 - **DOD-INV-CONTENTFREE** — Every notification/wake is a content-free doorbell: `type` +
   counterparty pubkey + `session_id`, plus routing metadata (agent name, session label — D6).
   No message content or content-derived text ever rides a push (SI-001), through every tier
-  including Telegram doorbell. — ❌
+  including Telegram doorbell. — ✅ (2026-07-08, Round-2 R10 — PROVEN LIVE: a canary payload
+  (`CANARY_9f3c_secret_body`) sent through an open session appeared in NEITHER the daemon log
+  (only its SHA-256 hash, on both A and B's independent greps) NOR the live `<channel source="cello">`
+  push frames captured verbatim on both `session_state_changed` and `cello_message` — both carry only
+  `type`/`agentName`/`sessionId`/`counterpartyPubkey`/`from` and a fixed label. Telegram doorbell tier
+  not separately re-verified this round — see [[M8C-AB-TEST-ROUND-2]] R10.)
 - **DOD-INV-GATEWAY** — **(activation: when M9INT lands, AFTER the channel tiers — see D11.)**
   Every inbound content path passes `screenInbound` and every outbound passes `screenOutbound`.
   The gateway does NOT exist on main until DOD-M9INT-1 is done (deferred — see the Post-channel
@@ -56,10 +61,21 @@ description: >
   `ingestReceivedContent`). — ❌ (not yet activatable)
 - **DOD-INV-PUSHPULL** — Every push capability has a pull equivalent. A poll-only client
   (Bedrock, cron) can reach every M8C feature; nothing hard-requires Claude Code push. Push loss
-  is always recoverable via `cello_check_notifications` / `since_seq`. — ❌
+  is always recoverable via `cello_check_notifications` / `since_seq`. — ✅ (2026-07-08, Round-2
+  R11 — PROVEN LIVE: 3 messages sent while B deliberately ignored every doorbell push; full
+  reconciliation via `cello_check_notifications` (correct pending + unread count) then
+  `cello_receive({since_seq})` (all 3, in order, no dupes/gaps) with zero channel pushes consumed.
+  Surfaced and fixed a test-script sentinel error along the way (`since_seq:-1` for full history,
+  not `0` — `since_seq` means strictly-greater-than) — logged as a residual product note that the
+  parameter description should state this. See [[M8C-AB-TEST-ROUND-2]] R11.)
 - **DOD-INV-HONEST-STATES** — (Tier 3 activation) A counterparty sees exactly two distinguishable non-answer states:
   *away* (bona fide daemon response) or *unreachable* (silence). Transparent is default; opaque is
-  the configured privacy mode; nothing fakes a third state. — ❌
+  the configured privacy mode; nothing fakes a third state. — ✅CORE (2026-07-08, Round-2 R9 —
+  PROVEN LIVE (transparent path): an unattended known contact produced the real request-kind and
+  message-kind away texts verbatim, queued and confirmed present in the agent's own inbox; a fully
+  offline agent produced a clean `counterparty_unavailable` rejection with no away text and no
+  session created — no third, fabricated state observed either way. Opaque privacy mode remains
+  untestable — M9-CFG-001-gated, D15. See [[M8C-AB-TEST-ROUND-2]] R9.)
 - **DOD-INV-ONE-PRIMARY** — (Tier 5 activation) At most one Primary daemon per agent at any
   moment, directory-arbitrated; no double-accept, no FROST double-sign, no live session
   migration. — ❌
@@ -166,7 +182,7 @@ description: >
   malformed token → "that isn't a pre-auth token — they start with `CELLO-`"; unknown agent →
   "no agent named X; create it first". **REPRODUCE R4 first** — a bogus token
   (`cello register agent CELLO_PREAUTH_TOKEN`) today returns NO output at all, a silent failure on
-  the core onboarding path; repro before the fix. (R3, R4) — 🟡 (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL; ✅ at DOD-LIVE-1)
+  the core onboarding path; repro before the fix. (R3, R4) — ✅ (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL. **2026-07-08, Round-2 R12 — PROVEN LIVE:** all 3 bad paths speak clearly and actionably — bogus token literal now explains the `CELLO-` format (was silent, the R4 repro), unknown agent names itself + says create-first, missing token gives a worked example + env-var alternative. See [[M8C-AB-TEST-ROUND-2]] R12.)
 - **DOD-ONBOARD-NEXTSTEP-1** — every command output carries succinct next-step guidance + state
   legibility. After `register`: "run `cello status` to confirm your agent is there." State words
   explained: "`connecting` is normal — registration takes a minute or two; `connected` = ready;
@@ -183,11 +199,11 @@ description: >
   enforced" + `preauth.token.reuse.rejected`). Drop the durable-secret klaxon — at most one calm
   line naming the real, narrow risk: the seconds-long pre-redemption window. Stop pushing the
   env-var form as a *security* fix (shell history + process environ still expose it); if reducing
-  exposure actually matters, read from a file/stdin. (R6) **REVISED 2026-07-06 (Andre): the warning is REMOVED ENTIRELY, not right-sized — a single-use/24h/consumed token has no meaningful exposure risk, so the note only drew attention to a non-issue (pure onboarding noise). No warning is correct.** — 🟡 (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL; ✅ at DOD-LIVE-1)
+  exposure actually matters, read from a file/stdin. (R6) **REVISED 2026-07-06 (Andre): the warning is REMOVED ENTIRELY, not right-sized — a single-use/24h/consumed token has no meaningful exposure risk, so the note only drew attention to a non-issue (pure onboarding noise). No warning is correct.** — ✅ (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL. **2026-07-08, Round-2 R12 — PROVEN LIVE:** the already-captured Round-1 Phase 4 `register` output (`Ms_Chelly_Hermes`) carries no durable-secret klaxon — just `{"ok":true,...}` and the multi-line next-step guidance. See [[M8C-AB-TEST-ROUND-2]] R12.)
 - **DOD-ONBOARD-LOGNOISE-1** — routine directory-signaling reconnect churn
   (`directory.signaling.reader.error` at `warn`, ~every 40–70 min, always recovers —
   `signaling-connect.ts:323`) is logged quietly and marked expected, so a healthy daemon doesn't
-  look like it's failing; a genuine sustained outage still stands out. (F11) — 🟡 (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL; ✅ at DOD-LIVE-1)
+  look like it's failing; a genuine sustained outage still stands out. (F11) — ✅ (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL. **2026-07-08, Round-2 R12 — PROVEN LIVE:** every `directory.signaling.reader.error` entry in the live daemon log is `"level":"debug"` (not `warn`) and carries `"expected":true` explicitly. See [[M8C-AB-TEST-ROUND-2]] R12.)
 
 - **DOD-LIVE-1 (Tier 1 close / launch gate)** — The live doorbell journey: real daemon, real
   published shim, live `claude --channels` session; a real peer (second daemon) opens a session;
@@ -235,7 +251,7 @@ description: >
   SPEC-FAITHFUL, no silent fallbacks, teeth + since_seq:0 boundary locked. Flips ✅ when exercised live.)
 - **DOD-LOGINSTART-1** — `cello login` auto-starts all registered agents; per-agent
   `autoStart: false` opt-out; login always completes with failed agents enumerated by reason
-  (design-review #8). — 🟡 CORE (2026-07-06, Entry 19 — built `69fe1ea`/`b7f5f16`, login-command orchestration, ZERO daemon change; auto-start-all + always-complete + failure-enumeration; reviewer SPEC-FAITHFUL, hollow-test fix w/ teeth. The per-agent `autoStart:false` opt-out is PARKED on M9-CFG-001, D14. Flips ✅ live.)
+  (design-review #8). — ✅CORE (2026-07-06, Entry 19 — built `69fe1ea`/`b7f5f16`, login-command orchestration, ZERO daemon change; auto-start-all + always-complete + failure-enumeration; reviewer SPEC-FAITHFUL, hollow-test fix w/ teeth. The per-agent `autoStart:false` opt-out is PARKED on M9-CFG-001, D14. **2026-07-08, Round-2 R7 — PROVEN LIVE (incidental):** captured from a real `cello logout`/`cello login` cycle done for R2's setup — "Started 4 agent(s): CELLO_Feedback, CELLO_Support, Ms_Chelly, Ms_Chelly_Hermes.", all 4 confirmed online via `cello_status` immediately after, no manual `cello_start_agent`. No failure occurred so the failure-enumeration branch is still unexercised. See [[M8C-AB-TEST-ROUND-2]] R7.)
 - **DOD-CONFIG-1** — `cello config list/get/set [--agent <name>]` on M9-CFG-001's versioned
   store (extend, never a parallel subsystem); tighten-free/loosen-needs-confirmation enforced;
   every M8C-introduced setting (away message, privacy mode, auto-start, TTL, queue caps,
@@ -273,7 +289,7 @@ description: >
 - **DOD-ABUSE-1** — Persistence bounds (the non-M9 remainder): per-session total-size limit
   (anti-drip-feed), bounded unknown-sender queue per sender, global daemon-wide unknown-sender
   cap (anti-swarm). Whitelisted senders bounded only by disk. Per-message cap + outbound rate are
-  M9's — not rebuilt here. — 🟡 (2026-07-06, Entry 24 — built `b28e6d3`, daemon-side: per-session cumulative-received-byte cap in ingestReceivedContent + per-sender/global active-session acceptance bounds in acceptInboundAssignment, both exempting known CONTACT-1 contacts entirely; reviewer (aeffb82f) found 2 HIGH attacker-controlled bypasses (held-content skipped the cap; 'interrupted' status evaded both acceptance bounds), both fixed `014a8bc` w/ regression tests. Flips ✅ live.)
+  M9's — not rebuilt here. — ✅ (2026-07-06, Entry 24 — built `b28e6d3`, daemon-side: per-session cumulative-received-byte cap in ingestReceivedContent + per-sender/global active-session acceptance bounds in acceptInboundAssignment, both exempting known CONTACT-1 contacts entirely; reviewer (aeffb82f) found 2 HIGH attacker-controlled bypasses (held-content skipped the cap; 'interrupted' status evaded both acceptance bounds), both fixed `014a8bc` w/ regression tests. **2026-07-08, Round-2 R4 (+ R2's CC-10 interaction) — PROVEN LIVE:** exactly 3 concurrent unknown-sender sessions admitted, a 4th refused server-side (`session.inbound.accept.failed`/`abuse_bound_sessions_per_sender`) despite the initiator seeing `ok:true` — the known initiator-signal gap directly evidenced. See [[M8C-AB-TEST-ROUND-2]] R4.)
 - **DOD-TTL-1** — Receiver-side session-request TTL (24h default, configurable); expired requests
   leave the queue and are visible as expired in INBOX. — 🟡CORE (2026-07-06, Entry 24 — built `e1ddb18`, daemon-side: INBOUND_SESSION_TTL_MS (24h) + lazy reap-on-read + expired_session_requests in cello_check_notifications; reviewer (aed2d71f) SPEC-FAITHFUL, found 1 HIGH (unbounded expired-log growth via contact-exempt senders), fixed `af8a701` (capped 20/agent) w/ regression test. Per-agent override PARKED on M9-CFG-001, D17. Flips ✅ live.)
 - **DOD-TGDOOR-1** — Telegram Mode 1, doorbell level: daemon-owned bot (token = daemon setting,
