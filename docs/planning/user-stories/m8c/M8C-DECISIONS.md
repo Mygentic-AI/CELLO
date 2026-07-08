@@ -601,6 +601,25 @@ PARKED (journal + DoD "Parked decisions" + here).
 - **Redo > block:** all additive; if the live F21 re-run shows a gap, refine the reap predicate — no
   existing seal-flow code is modified.
 
+### D26 — CC-10: reap `interrupted` ghosts too + reap before the acceptance bound; accepted residual = the per-sender cap becomes a RATE limit for content-less churn (2026-07-08)
+
+- **Context:** live A/B Phase-2 block ([[M8C-BUILD-JOURNAL]] Entry 60): invisible
+  `interrupted`+0-received ghosts permanently consumed a stranger's per-sender abuse budget —
+  the CC-5 reaper only scanned `'active'`, while D18 deliberately counts `'interrupted'`.
+- **Chosen:** extend the reaper's scan to `('active','interrupted')` with all gates unchanged, AND
+  call it in `acceptInboundAssignment` before `checkUnknownSenderAcceptanceBound`. Rejected
+  alternative: excluding 0-received interrupted rows in the count SQL — same admission outcome but
+  leaves immortal invisible rows in the DB and splits the "what counts" logic across two places.
+- **D18 interaction (why this is safe):** the disconnect-evasion attacker is defined by *delivered
+  content* — their sessions always have RECEIVED rows on the victim's side, so the 0-received reap
+  gate can never free their slots. Pinned by the CC-10/D18 guard test.
+- **Accepted residual (reviewer MEDIUM):** for a stranger who opens sessions and never sends a
+  byte, the cap is now a rate limit, not a lifetime lock — dead ghosts reap every
+  `HALF_OPEN_TTL_MS` (5 min), so ≈3 accepted knocks (and 3 un-coalesced Telegram doorbells) per
+  5 min per stranger, forever. Accepted deliberately: 0-received = zero delivered abuse, and a
+  lifetime lock is exactly the defect CC-10 fixes. If doorbell spam materializes, the fix belongs
+  in doorbell coalescing/screening (D21 territory), not in re-tightening the bound.
+
 ---
 
 ## Related Documents

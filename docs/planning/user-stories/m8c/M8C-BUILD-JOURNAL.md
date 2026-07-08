@@ -2805,6 +2805,42 @@ verification (F21 reap/force + cold onboarding).
 
 ---
 
+### 2026-07-08 — Entry 60: CC-10 — dead INTERRUPTED ghosts permanently ate the abuse budget (live A/B Phase-2 block)
+
+**Found live, not by tests.** A/B Phase 2 (CC-1 screening) blocked: Ms_Chelly's fresh knock at
+CELLO_Support was rejected `abuse_bound_sessions_per_sender` even after Phase 1's force-abandon.
+Root cause (from source, not logs): the per-sender cap is a live DB query counting
+`('active','interrupted')` — deliberate, D18 — but the CC-5 reaper only scanned `'active'`
+(`daemon.ts:1758`), and `classifySession(interrupted, 0)` → `"failed"` hides such sessions from
+every list. The daemon-restart event had flipped 4 dead half-opens from Ms_Chelly to `interrupted`:
+invisible, unreapable, uncloseable-by-eye, each counting against her cap of 3 **forever**. A
+stranger whose first 3 handshakes die is silently locked out of that operator permanently — a
+"can't connect" failure. Full diagnosis: [[M8C-LIVE-AB-TEST-PROTOCOL]] § PHASE 2 BLOCK.
+
+**Unblock (live state):** the 4 ghosts (`e3384957…`, `a2359c8b…`, `42bb8a07…`, `96dc658c…`)
+force-abandoned by full ID over daemon IPC (`ipc.connect` → `cello_use_agent CELLO_Support` →
+`cello_close_session { force: true }` ×4, all `ok:true`); `dd7493…` untouched. Count now 1/3 —
+Phase 2 re-runs on the current binary.
+
+**Fix (cello-client `79030e3`, TDD red→green):**
+- `reapDeadHalfOpenSessions` scans **both** `('active','interrupted')`; every gate unchanged
+  (age > TTL on `created_at`, liveness ≠ `alive`, **0 RECEIVED**). Reap event gains `priorStatus`.
+- `acceptInboundAssignment` reaps for the agent **before** `checkUnknownSenderAcceptanceBound` —
+  admission sees reaped-clean state without waiting for someone to read a list
+  (`abandonSession`'s status flip is synchronous pre-await, so the same-tick bound query sees it).
+- **D18 preserved and pinned by test:** the disconnect-evasion attacker's sessions carry received
+  content and are never reaped (CC-10/D18 guard: cap'd interrupted sessions WITH received rows →
+  knock still refused, rows still `interrupted`).
+- Reviewer (SPEC FAITHFUL / NO SILENT FALLBACKS / TESTS HAVE TEETH), all 3 findings fixed:
+  `priorStatus` asserted; `session.half_open.reaped` now logged **only if** the status write
+  actually landed (`abandonSession` → `Promise<boolean>`); MEDIUM residual journaled as **D26**.
+
+**Gate:** 1771 passed / lint / typecheck / build clean. **Ship:** held for the ONE batched
+post-A/B-run cascade (per D26 note in [[M8C-DECISIONS]] / the fix decision in the protocol doc) —
+publishing mid-run restarts the daemon, which is exactly the event that mints these ghosts.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
