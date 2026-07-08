@@ -211,7 +211,11 @@ const NONCE_TTL_MS = 30_000;
 // which is what defeats forging an arbitrary framedMsg). Verified against agentPubkey BEFORE the share is
 // touched. Mirrors the signaling stream's CELLO-DIR-AUTH-v1 challenge; stateless (no extra round-trip).
 const FROST_AUTH_DOMAIN = "CELLO-FROST-AUTH-v1";
-const FROST_AUTH_COMMIT_TAIL = new Uint8Array(Buffer.from("commit", "utf8"));
+// SEC-2 review (LOW — domain separation): a 1-byte frame-type prefix in the hashed tail makes commit
+// and sign requests cryptographically disjoint regardless of framedMsg contents (0x00 = commit alone;
+// 0x01 || framedMsg = sign). Prevents a captured commit authSig from ever being a valid sign authSig.
+const FROST_AUTH_COMMIT_TAIL = new Uint8Array([0x00]);
+const FROST_AUTH_SIGN_PREFIX = 0x01;
 
 /** SEC-2: returns a refusal reason if the frost request's K_local auth is missing/invalid, else null. */
 function verifyFrostAuth(
@@ -221,7 +225,11 @@ function verifyFrostAuth(
   authSig: unknown,
 ): "AUTH_REQUIRED" | "AUTH_INVALID" | null {
   if (authSig === undefined || authSig === null) return "AUTH_REQUIRED";
-  const sig = authSig instanceof Uint8Array ? authSig : new Uint8Array(authSig as ArrayBuffer);
+  // SEC-2 review (MEDIUM): NEVER coerce an untrusted CBOR value — `new Uint8Array(n)` on a CBOR integer
+  // would allocate n bytes (a small-request → large-allocation DoS on this internet-facing pre-gate path).
+  // A legitimate client always sends a byte string; anything else is refused outright.
+  if (!(authSig instanceof Uint8Array)) return "AUTH_INVALID";
+  const sig = authSig;
   let pubkeyBytes: Uint8Array;
   try {
     pubkeyBytes = Uint8Array.from(Buffer.from(agentPubkeyHex, "hex"));
@@ -1344,7 +1352,8 @@ export class CelloDirectoryNode {
         // the framedMsg is what defeats the forgery — an attacker without K_local priv cannot produce a
         // valid signature over their arbitrary message. Checked before the pause gate and before signing.
         const signFramedMsg = framedMsg instanceof Uint8Array ? framedMsg : new Uint8Array(framedMsg as unknown as ArrayBuffer);
-        const signAuthFail = verifyFrostAuth(agentPubkey, epochId, signFramedMsg, req["authSig"]);
+        const signTail = Buffer.concat([Buffer.from([FROST_AUTH_SIGN_PREFIX]), Buffer.from(signFramedMsg)]);
+        const signAuthFail = verifyFrostAuth(agentPubkey, epochId, signTail, req["authSig"]);
         if (signAuthFail) {
           this.#logger?.warn("frost.auth.refused", { frame: "sign", agentShort: agentPubkey?.slice(0, 16), epochId, ceremonyId, reason: signAuthFail });
           stream.send(lp.encode.single(

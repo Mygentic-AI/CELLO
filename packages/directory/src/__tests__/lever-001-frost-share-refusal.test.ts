@@ -62,7 +62,11 @@ async function frostAuthSig(
 ): Promise<Uint8Array> {
   return signer.sign(frostAuthHash(agentPubkeyHex, epochId, tail));
 }
-const COMMIT_TAIL = new Uint8Array(Buffer.from("commit", "utf8"));
+// SEC-2 domain separation: 0x00 = commit; 0x01 || framedMsg = sign.
+const COMMIT_TAIL = new Uint8Array([0x00]);
+function signTail(framedMsg: Uint8Array): Uint8Array {
+  return Buffer.concat([Buffer.from([0x01]), Buffer.from(framedMsg)]);
+}
 
 // Minimal relay stub — a frost_commit refusal never touches the relay; only construction needs it.
 function makeRelay(): RelayAdapter {
@@ -193,7 +197,7 @@ describe("LEVER-001/002 — FROST share gate refusal + burn share-destruction (S
     };
     if (auth !== "omit") {
       frame["authSig"] = auth === "valid"
-        ? await frostAuthSig(agentKp, agentPubkeyHex, epochId, opts.authMsg ?? framedMsg)
+        ? await frostAuthSig(agentKp, agentPubkeyHex, epochId, signTail(opts.authMsg ?? framedMsg))
         : auth;
     }
     stream.send(lp.encode.single(CBOR.encode(frame)));
