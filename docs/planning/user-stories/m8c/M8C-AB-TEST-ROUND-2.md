@@ -318,6 +318,14 @@ judged before it's written as a story. Needs the ops-agent Telegram bot (`CelloC
 on-file-email match before OTP dispatch, (b) no escape from OTP-entry except burning all 3 attempts +
 `/start` swallowed. **Produces the evidence for the severity/triage call; fixes nothing.**
 
+### ✅ R6 — SATISFIED BY CROSS-REFERENCE, not re-run
+
+Round-1 Phase 4 already reproduced both defects with a full verbatim transcript (registering
+`Ms_Chelly_Hermes` as a second agent on Andre's account) — see
+[[M8C-LIVE-AB-TEST-PROTOCOL]] Phase 4 results. Nothing about the bug has changed since (not fixed,
+not re-scoped), so re-running it here would just repeat the same Telegram flow for no new evidence.
+Treated as covered; not re-executed this round.
+
 ---
 
 ---
@@ -341,6 +349,25 @@ failures by reason.
 3. `cello_status` → ✅ all registered agents `state: "online"` with no manual `cello_start_agent`.
 
 **✅ R7 PASS:** one `login` returns every agent online; failures (if any) are named, not silent.
+
+### ✅ R7 RESULTS — run 2026-07-08 — PASS (incidental, from R2's setup restart)
+
+Captured live from the daemon restart done for R2's TTL setup — no need to repeat another disruptive
+`logout`/`login` cycle:
+
+```
+$ cello logout
+Daemon stopped.
+$ CELLO_HALF_OPEN_TTL_MS=5000 cello login
+Daemon started.
+Started 4 agent(s): CELLO_Feedback, CELLO_Support, Ms_Chelly, Ms_Chelly_Hermes.
+```
+
+Immediate `cello_status` (A) confirmed all 4 agents `state: "online"` — no manual `cello_start_agent`
+calls were made. Login enumerated every registered agent by name in one line; no failures occurred so
+the failure-naming branch wasn't exercised, but the success enumeration is confirmed live.
+
+**✅ R7 PASS — confirmed live.** One `login` returned all 4 agents online, named explicitly.
 
 ## R8 — TTL-1: inbound session-request expiry  ·  🟢 CHANNELS-FREE  ·  ⚠️ needs a 1-line enabler
 
