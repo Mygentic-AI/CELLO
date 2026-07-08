@@ -126,13 +126,46 @@ npm view @cello-protocol/connect@{ver} dependencies  # client/crypto/transport m
 ### 6. Promote to `latest` — REQUIRED (operator-run)
 
 `beta` is what CI publishes; the default install path (`npx @cello-protocol/connect`, `npm i -g ...@latest`)
-uses `latest`. Promotion is manual and human-run. **The two that matter are `connect` and `cli`** (installed
-by name); the rest are transitive (pinned) but promote for consistency.
+uses `latest`. Promotion is manual and human-run (needs Andre's explicit go). **WE PROMOTE, WE DO NOT PIN**
+— pinning exact versions on operator machines is fragile and error-prone (Andre, 2026-07-07); the whole
+point of `latest` is that nobody has to pin. `connect` and `cli` are the two installed by name; the rest
+are transitive but **promote ALL SEVEN at their current published versions** so the whole `latest` graph is
+consistent (unchanged packages just print a `latest is already set` warning — harmless).
+
+Promote every package to `latest` at its exact published version — the canonical command set
+(fill in the actual versions from step 5's verify; this is the real 2026-07-07 run):
 
 ```bash
-npm dist-tag add @cello-protocol/connect@{ver} latest
-npm dist-tag add @cello-protocol/cli@{ver} latest
-# + daemon, client, crypto, transport, protocol-types at their new versions
+npm dist-tag add @cello-protocol/connect@0.0.61 latest
+npm dist-tag add @cello-protocol/cli@0.0.32 latest
+npm dist-tag add @cello-protocol/daemon@0.0.35 latest
+npm dist-tag add @cello-protocol/client@0.0.46 latest
+npm dist-tag add @cello-protocol/crypto@0.0.18 latest
+npm dist-tag add @cello-protocol/transport@0.0.16 latest
+npm dist-tag add @cello-protocol/protocol-types@0.0.18 latest
+```
+
+`npm dist-tag add` may prompt for a browser auth (`Authenticate your account at: https://…`) the first time
+per session — press ENTER, complete it, done. A `+latest: @cello-protocol/<pkg>@<ver>` line confirms each.
+
+Verify `latest` resolves to the promoted versions:
+
+```bash
+for p in connect cli daemon client crypto transport protocol-types; do echo "$p latest: $(npm view @cello-protocol/$p@latest version)"; done
+```
+
+**Propagation-lag caveat:** `npm view @…@latest version` hits an npm CDN cache that can lag ~1–2 min behind a
+just-set dist-tag — so a package can briefly still read the OLD version right after promotion even though the
+tag WAS set (the `+latest: …@<newver>` line is the authoritative confirmation). Re-run the verify loop after
+a minute; it settles. This never blocks the operator install anyway, because `cli` pins `daemon` at an
+**exact** version (e.g. cli@0.0.32 → daemon@0.0.35), so `npm i -g @cello-protocol/cli@latest` pulls the
+correct daemon regardless of daemon's dist-tag propagation.
+
+**Operators then just install `@latest`** — no pinning, ever:
+```bash
+npm i -g @cello-protocol/cli@latest @cello-protocol/connect@latest
+cello logout && cello login   # restart the daemon onto the new binary (CLI lifecycle, not pkill)
+# then reconnect the MCP: /mcp  (or restart Claude Code)
 ```
 
 If a version was published empty by mistake, `npm deprecate @cello-protocol/<pkg>@<bad> "..."` it after
