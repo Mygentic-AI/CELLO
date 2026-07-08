@@ -308,7 +308,12 @@ Format the proof as a numbered flow. Include:
 
 ## npm Publishing — @cello-protocol/connect
 
-**Always run `/cello-publish` before publishing.** The skill at `trustless-cello/.claude/commands/cello-publish.md` is the authoritative procedure. Do not publish from memory or from the prose below — the skill supersedes this section.
+> ### 🚨 STOP — before ANY version bump, `git tag v*`, `git push … v*`, `npm dist-tag add`, or `pnpm/npm publish`:
+> **Invoke the `/cello-publish` skill FIRST — for THIS publish.**
+> - **Loading it earlier in the session does NOT count.** Re-invoke it *every* publish. The known failure mode is exactly "I loaded it once for an earlier publish, then did the next one from memory" — that skewed a cascade and cost real debugging time. A second publish is a second load.
+> - Do it **before the first version bump**, not after you've already tagged.
+> - It is the **authoritative** procedure; the prose below is reference only and the skill supersedes it. Publishing from memory has burned npm versions (unbumped/duplicate) and shipped `workspace:*` cross-pins.
+> - This is **enforced by a hook** (`.claude/hooks/cello-publish-guard.sh`, registered in `.claude/settings.json`): publish-trigger Bash commands are **hard-blocked** until the skill is loaded for the current publish. If you hit the block, load `/cello-publish` and re-run — do not try to work around it.
 
 **NEVER run `npm publish`.** Use `pnpm publish` via CI only. `npm publish` ships raw `workspace:*` specifiers → broken package → version burned forever.
 
