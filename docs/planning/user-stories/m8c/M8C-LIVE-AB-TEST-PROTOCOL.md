@@ -212,6 +212,40 @@ the rejection is invisible to both parties without reading the daemon log direct
 - Use a fresh identity pair for Phase 2 instead of reusing Ms_Chelly/Support, sidestepping the stale
   bound-count entirely.
 
+### ✅ PHASE 2 BLOCK — DIAGNOSED & UNBLOCKED (2026-07-08, from source)
+
+**The counter question is answered: the cap is NOT monotonic.** It is a live DB query —
+`COUNT(*) WHERE agent = Support AND counterparty = Ms_Chelly AND status IN ('active','interrupted')`,
+cap **3** per unknown sender (`session-node-manager.ts:913`, `ABUSE_MAX_SESSIONS_PER_UNKNOWN_SENDER`
+at `:109`). Terminal statuses (`sealed`, `abandoned`) release their slot — Phase 1's force-abandon
+of `5749859a…` really did free one.
+
+**Why it still rejected:** Support's DB held **5** counting sessions from Ms_Chelly — `dd7493…`
+(interrupted, real) **+ the 4 abuse-test sessions** (`e3384957…`, `a2359c8b…`, `42bb8a07…`,
+`96dc658c…`), all flipped to `interrupted` by the shared daemon-restart event (finding 3 above).
+5 ≥ 3 → reject. Counting `interrupted` is **deliberate** (D18 reviewer-HIGH fix: otherwise an
+attacker evades the bound by disconnecting) — not the bug.
+
+**The actual defect — a gap between two shipped fixes (filed as CC-10):** the CC-5 reaper only
+scans `status = 'active'` (`daemon.ts:1758`), so an interrupted 0-received ghost is never reaped;
+and `classifySession` maps interrupted + msgCount 0 → `failed`, so such sessions appear in **no
+list**. Net effect: invisible, unreapable sessions that permanently consume the sender's abuse
+budget. A stranger whose first 3 handshakes die (daemon restart, network) is silently locked out
+of that operator forever — a "can't connect" failure, launch-relevant.
+
+**Unblocked (2026-07-08):** all 4 ghosts force-abandoned by full ID over daemon IPC
+(`cello_close_session { force: true }` works on any owned non-sealed session even when invisible —
+`daemon.ts:3265`). All returned `{ok:true, status:"abandoned", reason:"force_abandoned"}`;
+`dd7493…` untouched (still interrupted, msgCount 6). Support's per-sender count for Ms_Chelly
+is now **1 of 3** → Phase 2 re-runs as scripted against Support.
+
+**Fix decision (Andre, 2026-07-08): fix it — CC-10.** Extend the reaper's scan to
+`('active','interrupted')`, keeping every existing gate (0-received, liveness ≠ alive,
+age > TTL). Safe vs the D18 evasion attack: those sessions always have received > 0 on the
+victim's side, so they never qualify — a 0-received interrupted session represents zero
+delivered abuse. Implement + commit now; **publish cascade held until the A/B run completes**
+(one batched cascade; a mid-run daemon restart is exactly the event that mints these ghosts).
+
 ---
 
 ## Phase 3 — Core session + doorbell + read-before-write (regression + CC-3)
