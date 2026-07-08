@@ -543,6 +543,34 @@ onboarding riders (HELP top-level + NEXTSTEP already passed in R1 Phase 4). Pure
 
 **✅ R12 PASS:** onboarding errors are actionable, no fake secret-klaxon, routine churn is quiet.
 
+### ✅ R12 RESULTS — run 2026-07-08 — PASS, all 3 sub-checks
+
+Pure local CLI + log, no B needed.
+
+1. **ERRORS** — all 3 bad paths run directly:
+   - `cello register someagent CELLO_PREAUTH_TOKEN` → *"That doesn't look like a pre-auth token — real
+     ones start with 'CELLO-' followed by 33 characters. (Did you paste the words 'CELLO_PREAUTH_TOKEN'
+     instead of the token itself?)..."* — ✅ speaks clearly now (this was the R4 silent-output repro).
+   - `cello register no-such-agent CELLO-realtoken0000000000000000000` → `{"ok":false,
+     "reason":"agent_not_found","guidance":"Agent 'no-such-agent' does not exist. Create it first with
+     cello_create_agent('no-such-agent') (or 'cello create-agent no-such-agent'), then retry
+     cello_register."}` — ✅ specific and actionable.
+   - `cello register someagent` (no token) → *"You're missing the pre-auth token. Get a single-use token
+     from the CELLO Operations Agent on Telegram, then run: cello register someagent <token> or set it
+     in the environment: CELLO_PREAUTH_TOKEN=<token> cello register someagent. The token is single-use
+     and expires in 24 hours."* — ✅ exceeds the spec bar (worked example + env-var alternative + expiry).
+2. **WARN** — used the already-captured Round-1 Phase 4 registration transcript (`Ms_Chelly_Hermes`,
+   `cello register Ms_Chelly_Hermes CELLO-CgcJ88ctZFA6FEqDtw8wMnq462NyA4irS`) rather than repeating a
+   real Telegram registration — no durable-secret klaxon appeared in that output at all, just the
+   `{"ok":true,...}` result and the multi-line next-step guidance (CC-6). ✅ PASS.
+3. **LOGNOISE** — `grep -a directory.signaling.reader.error ~/.cello/daemon.log` → every entry is
+   `"level":"debug"` (not `warn`/`error`) and explicitly carries `"expected":true`, e.g.
+   `{"level":"debug","event":"directory.signaling.reader.error","error":"signaling_closed",
+   "expected":true,...}`. ✅ a healthy daemon does not read as failing.
+
+**✅ R12 PASS — all 3 sub-checks confirmed live.** Onboarding errors are specific and actionable across
+all 3 bad paths; no fake secret-klaxon; routine reconnect churn is quiet and marked expected.
+
 ---
 
 ## Round-2 coverage map
