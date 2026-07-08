@@ -270,6 +270,11 @@ correctly queued behind the busy turn) → the Hermes agent read via its cello M
 via `cello_send` → reply doorbell + content received back on Ms_Chelly's side. Session
 `40c729f5ffeb91bb3916fa9786670457`.
 
+**Silence-token path also live-proven:** a follow-up "no reply needed" ack woke Hermes
+(`cello_message` wake), the agent read it and answered `[SILENT]` (gateway log: "response=8 chars"
++ "Suppressing intentional silence marker") — no spurious `cello_send` came back. Both §3.2
+reply-side correctness requirements (read-before-send, silence tokens) confirmed in the wild.
+
 Not yet done: publishing (`@cello-protocol/cli` bump + cascade so `cello install hermes` reaches
 users — needs the /cello-publish procedure), and the §5-Step-5 CLI/MCP parity follow-on story.
 
