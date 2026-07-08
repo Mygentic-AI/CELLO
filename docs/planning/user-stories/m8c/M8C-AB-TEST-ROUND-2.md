@@ -491,11 +491,40 @@ every M8C feature; push loss is always recoverable. This formalizes the whole Ro
 1. With **channels off** (or simply never reading a doorbell), have **A** open a session and send **3**
    messages to **B** while B does nothing.
 2. **B** reconciles entirely by **polling**: `cello_check_notifications {}` → ✅ shows the pending
-   session + unread count (the missed doorbells); `cello_receive { session_id, since_seq: 0,
-   timeout_ms: 5000 }` → ✅ returns all 3 in order, no dupes/gaps.
+   session + unread count (the missed doorbells); `cello_receive { session_id, since_seq: -1,
+   timeout_ms: 5000 }` → ✅ returns all 3 in order, no dupes/gaps. **Use `-1`, not `0`** — sequences are
+   0-indexed and `since_seq` means "sequence > since_seq"; `0` excludes message 0 (see R11 results below).
 3. ✅ B completed the full receive→reply flow with **zero** channel pushes — nothing hard-required the doorbell.
 
 **✅ R11 PASS:** a poll-only operator reached a push feature end-to-end; push is an optimization, not a requirement.
+
+### ✅ R11 RESULTS — run 2026-07-08 — PASS (after a test-script sentinel correction)
+
+Session `6bd0ef2625c954e9b3fed9cb2c25a1b4` (Ms_Chelly → CELLO_Support). A sent 3 messages back-to-back
+with no `cello_receive` in between; B deliberately ignored all doorbell pushes as they arrived.
+
+1. **B:** `cello_check_notifications {}` → `{"agent":"CELLO_Support",...,"unread":[{"session_id":
+   "6bd0ef2625c9...","unread_count":3,"last_seq":2}],"total_unread":3}` — ✅ matches the 3 sends exactly.
+   (Side note, non-blocking: `pending_session_requests` also listed 5 older sessions already
+   closed/force-abandoned earlier this run — possible stale-list display issue, not investigated further.)
+2. **B, first attempt:** `cello_receive { session_id, since_seq: 0, timeout_ms: 5000 }` → returned only
+   `count: 2` (sequences 1 and 2) — **sequence 0 ("message 1 of 3") missing.** Cross-checked against
+   `cello_get_transcript`, which showed all 3 messages present (0/1/2) — confirming this was a fetch gap,
+   not a data-loss issue.
+3. **Falsified before concluding a defect:** the tool's own schema documents `since_seq` as *"return all
+   messages with sequence > since_seq"* — `since_seq:0` excluding seq 0 is the tool behaving exactly per
+   its documented, and previously live-proven (DOD-SINCESEQ-1: `since_seq:2` → returned seq 3/4/5),
+   contract. The bug was in the **test script's chosen value**, not the tool: for 0-indexed sequences,
+   the correct "give me everything from the start" sentinel is `since_seq: -1`, not `0`.
+4. **B, corrected:** `cello_receive { session_id, since_seq: -1, timeout_ms: 5000 }` →
+   `{"ok":true,"since_seq":-1,"count":3,"messages":[{"sequence":0,...},{"sequence":1,...},
+   {"sequence":2,...}]}` — ✅ all 3, in order, no dupes/gaps.
+
+**✅ R11 PASS — confirmed on B**, with the corrected `since_seq: -1` sentinel (fixed in this doc's
+step 2 above for future runs). **Residual product note (not filed as a story):** the `since_seq`
+parameter description doesn't state that `-1` is the sentinel for full history — `0` is the natural,
+intuitive-but-wrong first guess, which is exactly how this test script got it wrong. Worth a tool
+description fix so this doesn't recur for a real operator.
 
 ## R12 — Onboarding legibility CLI checks (ERRORS / WARN / LOGNOISE)  ·  🟢 CHANNELS-FREE
 
