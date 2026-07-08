@@ -50,6 +50,31 @@ in the numbered order (the cello messages are the sync channel). Each phase ends
 **A & B:** confirm `cello_contact_list`, `cello_contact_add`, `cello_contact_remove`, and a `force`
 param on `cello_close_session` are all present in the tool list (the new connect 0.0.61 shim).
 
+### ✅ PHASE 0 RESULTS — run 2026-07-08
+
+**A (Ms_Chelly):** `cello_status` → `{"daemon":"running","directory_signaling":"connected","agents":[
+{"name":"CELLO_Feedback","state":"online","selected":false,"standing_receiver_ready":true},
+{"name":"CELLO_Support","state":"online","selected":false,"standing_receiver_ready":true},
+{"name":"Ms_Chelly","state":"online","selected":true,"standing_receiver_ready":true}],
+"interrupted_sessions":[...3 pre-existing entries, incl. the `5749859a…` ghost targeted in Phase 1...],
+"active_sessions":[]}` — ✅ online + `standing_receiver_ready: true`, ✅ no `connections` field.
+Versions confirmed: CLI `0.0.32` (`~/.npm-global/lib/node_modules/@cello-protocol/cli/package.json`),
+connect `0.0.61` (`npx @cello-protocol/connect@beta --version`) — matches the doc's target.
+
+**B (CELLO_Support):** `cello_status` → ✅ online + `standing_receiver_ready: true`, ✅ no
+`connections` field. `cello_contact_list {}` → `{"ok":true,"agent":"CELLO_Support","contacts":
+[{"pubkey":"178d42...44c","added_at":1783446042779}]}` — ✅ tool exists and returns (**CC-9**);
+Ms_Chelly is currently a known contact from prior tests (as expected — removed in Phase 2 step 1).
+`cello_contact_add`/`cello_contact_remove` confirmed present in the tool list; `cello_close_session`
+confirmed to have a `force` param.
+
+**Both sides mid-session-reconnect note:** partway through this run the cello MCP server on A's side
+dropped (`ipc_connection_lost`) and an in-session `/mcp reconnect cello` initially failed, then
+succeeded on retry — full tool set (`mcp__cello__*`) came back after the second reconnect attempt,
+no Claude Code restart required.
+
+**✅ PHASE 0 PASS — confirmed on both A and B**, daemon `0.0.35` / cli `0.0.32` / connect `0.0.61`.
+
 ---
 
 ## Phase 1 — CC-5 / F21: force-abandon a stuck half-open ghost
@@ -77,8 +102,24 @@ half-open once it ages past 5 min. It's covered by unit tests and fires on any r
 live proof here.** *(To watch the reaper live: with the daemon started under `CELLO_HALF_OPEN_TTL_MS=5000`,
 create an active half-open to an offline peer, wait, then `cello_list_sessions` → it flips to `abandoned`.)*
 
-**✅ PHASE 1 PASS:** normal close couldn't clear the ghost; `force: true` abandoned it; it left the open
-list; the real 6-message session was untouched.
+### ✅ PHASE 1 RESULTS — run 2026-07-08
+
+**B (CELLO_Support):**
+1. `cello_list_sessions {}` (no `filter` param on this MCP tool — schema differs from the doc's
+   `filter: "all"`, returns `open` by default) → `totalMatched: 2`, `5749859a8380d55f98fdd4436ca7ee1d`
+   present, `status: "interrupted"`, `messageCount: 1` ✅.
+2. Normal close: `cello_close_session { session_id: "5749859a…" }` →
+   `{"ok":false,"reason":"seal_interrupted_rejected_by_counterparty","guidance":"The counterparty
+   rejected the seal-interrupted request..."}` — trap confirmed, does not cleanly seal ✅.
+3. Force close: `cello_close_session { session_id: "5749859a…", force: true }` →
+   `{"ok":true,"status":"abandoned","reason":"force_abandoned"}` ✅.
+4. `cello_list_sessions {}` → `totalMatched: 1`; `5749859a…` **gone** from open ✅.
+5. `dd7493f265fd53dcf5067982fcd15659` (msgCount 6) left untouched, still `status: "interrupted"`,
+   still present in the open list ✅ — force-abandon touched only the ghost.
+
+**✅ PHASE 1 PASS — confirmed on B.** Normal close hit `seal_interrupted_rejected_by_counterparty`
+(the pre-CC-5 dead end); `force: true` abandoned it cleanly; it left the open list; the real
+6-message session was untouched.
 
 ---
 
@@ -114,6 +155,63 @@ runs as a known contact.)*
 **✅ PHASE 2 PASS:** a knock alone left the stranger unknown; only the operator's reply promoted her;
 `cello_contact_list/remove/add` all worked over MCP (**CC-9**).
 
+### ⛔ PHASE 2 RESULTS — run 2026-07-08 — BLOCKED at step 3/4
+
+Step 1 (B removes Ms_Chelly, confirms `contacts: []`) and step 2 (A knocks, session
+`11e152ba2ff46ec1f71d2dad9df02de8` returned `ok:true`) completed normally. Step 3 (B confirms
+Ms_Chelly still absent) also passed. **Step 4 failed** — B could not engage with the session at all:
+
+- `cello_check_notifications {}` → nothing pending, no unread.
+- `cello_receive { session_id: "11e152ba2ff46ec1f71d2dad9df02de8" }` → `{"ok":false,"reason":"session_not_found"}`.
+- `cello_list_sessions` (B) → session absent entirely; only the pre-existing `dd7493…` interrupted session shows.
+- `cello_status` (A) → session **does** exist, but only on Ms_Chelly's side: `active_sessions:
+  [{"sessionId":"11e152ba...","agentName":"Ms_Chelly","counterpartyPubkey":"2ee9bed9...","liveness":"alive"}]`.
+
+**Root cause, confirmed from `~/.cello/daemon.log`:** the session was rejected on Support's inbound
+side by the anti-abuse cap, silently:
+
+```
+session.inbound.assignment.unverified  sessionId=11e152ba...  agentName=CELLO_Support
+session.inbound.accept.failed          sessionId=11e152ba...  agentName=CELLO_Support  reason="abuse_bound_sessions_per_sender"
+(repeats once more, second correlationId — retry, same reason)
+session.negotiate.assignment.received  agentName=Ms_Chelly
+session.node.created                   sessionId=11e152ba...  agentName=Ms_Chelly
+session.transport.connected             sessionId=11e152ba...
+```
+
+**Findings, in order of what's provable:**
+
+1. **The cap is being enforced on this build** — 2 identical `session.inbound.accept.failed` /
+   `abuse_bound_sessions_per_sender` entries for `11e152ba…` at `12:57:32`. This reverses the earlier
+   pre-fix result where 4 sequential unknown-sender sessions all sailed through with `ok:true`.
+2. **Historical count**: 9 total inbound sessions ever accepted for CELLO_Support; cross-referencing
+   session IDs against earlier test steps, at least 6 originated from Ms_Chelly's pubkey: `dd7493…`
+   (still interrupted, msgCount 6), `5749859a…` (force-abandoned in Phase 1), and the 4 from the
+   earlier abuse-cap test (`e3384957…`, `a2359c8b…`, `42bb8a07…`, `96dc658c…`).
+3. All 4 of those abuse-cap-test sessions show `session.node.destroyed` / `reason: "interrupted"` at
+   `2026-07-08T12:17:59.6xx` — the same instant `dd7493…` was also interrupted (a shared
+   daemon-restart event), not a close/seal/abandon.
+4. None of the 4, nor `dd7493…`, show any subsequent close/seal/abandon event — yet none are visible
+   in `cello_list_sessions` or `cello_status` anymore either (only `dd7493…` shows as interrupted).
+
+**What can't be proven from logs alone:** whether `abuse_bound_sessions_per_sender` decrements on
+interruption/force-abandon, or is a monotonic per-sender counter that never releases. Finding 4 is
+suggestive (sessions vanished from view but may still count toward the cap) but not conclusive
+without reading the counter's source/DB state.
+
+**Initiator-side signal gap (separate from the cap question):** `cello_initiate_session` returned
+`ok:true` with zero indication of the receiver's rejection — both the earlier 4-session ABUSE-1 test
+and this one look identical from A's side (all `ok:true`) regardless of whether the receiver actually
+accepted. The receiver also gets no notification and no session-list entry for a rejected inbound —
+the rejection is invisible to both parties without reading the daemon log directly.
+
+**This blocks Phase 2 as scripted.** Two ways to unblock (not yet decided):
+- Force-abandon `dd7493…` too (same as Phase 1) and re-test — but Phase 1 explicitly said to leave it
+  alone as "a real interrupted conversation." Doing this now would answer the counter question but
+  contaminates that earlier result.
+- Use a fresh identity pair for Phase 2 instead of reusing Ms_Chelly/Support, sidestepping the stale
+  bound-count entirely.
+
 ---
 
 ## Phase 3 — Core session + doorbell + read-before-write (regression + CC-3)
@@ -147,6 +245,34 @@ see it live, stop two agents (`cello_stop_agent` ×2) so exactly one is online, 
 **✅ PHASE 3 PASS:** doorbell both directions with no polling; ordered exchange with read-before-write;
 clean bilateral seal.
 
+### ✅ PHASE 3 RESULTS — run 2026-07-08 — ran against CELLO_Feedback, not Support
+
+Run against **CELLO_Feedback** (`da0c73f892648da9c6edae58e2a6b96194bfc27ec3883946fd6d44448253f8b7`)
+instead of Support — Support's per-sender bound-session count is still poisoned from the Phase 2
+block, so Feedback was used to sidestep it rather than resolve it. Session `9a557bafb4a60be0da26acec348460bd`.
+
+1. **A** (`Ms_Chelly`): `cello_initiate_session` → `ok:true`. First `cello_receive` returned the
+   away-auto-reply ("Agent is currently away... queued") — Feedback wasn't attended yet on B's side.
+2. **B:** switched to `CELLO_Feedback`, engaged the queued session. ✅ **doorbell fired unprompted on
+   both sides** — B saw the pending-session notification then a `cello_message` push on A's Turn 1; A
+   saw a `cello_message` push on B's replies throughout, zero polling either direction.
+3. **3 turns each way**, alternating `cello_send` → block on `cello_receive`. ✅ **read-before-write
+   held** — B hit one `session_not_current` on their first send, resolved exactly per the documented
+   workaround (`cello_get_transcript` then retry).
+4. **Mutual `[[WRAP]]`**, then `cello_close_session` on both sides. ✅ **sealed_root matches on both
+   sides**: `48a468d8af7acf4784778e8111ed0ee6c7e5059767a3f97a3415dbc5fb91d857`, both participants
+   `attestation_mode: "live"`.
+
+**Observation (not a failure, flagged by B):** the sealed receipt shows asymmetric bookkeeping —
+Ms_Chelly `content_frontier_seq: 8, last_authored_seq: 9`; Feedback `content_frontier_seq: 6,
+last_authored_seq: 8`; a `final_message` from Feedback at `seq: 7, answered: false`. Likely seal-
+ceremony/close-handshake messages generated automatically when each side called `cello_close_session`
+(not unread real content — the 3 real turns each way were already exchanged and acked before either
+side wrapped). Not verified against daemon-log ground truth; noted for the record since the sealed
+root matching on both sides is the actual integrity proof here, not the seq bookkeeping.
+
+**✅ PHASE 3 PASS — confirmed on both A and B**, run against CELLO_Feedback as a substitute target.
+
 ---
 
 ## Phase 4 — Cold onboarding (OA-1, OA-2, CC-2, CC-6, CC-7, CC-8) — *optional, needs Telegram*
@@ -172,6 +298,64 @@ Prereq: the ops-agent Telegram bot reachable + a way to start a fresh registrati
 
 **✅ PHASE 4 PASS:** the Telegram copy is accurate and runnable; a freshly-registered agent is immediately
 receivable.
+
+### ⚠️ PHASE 4 RESULTS — run 2026-07-08 — PASS with one confirmed bug found
+
+New agent `Ms_Chelly_Hermes` (`77d0c8060d2885c9c9fbc71d0b2092a97bb19c0c3b927a9bcb3d2d53c15c7b43`),
+registered via the ops-agent Telegram bot (`CelloConnectStaging`) as a second agent on Andre's
+existing account (phone `+971 58 508 9156`).
+
+1. ✅ **CC-7**: `cello --help` opened with what CELLO is + the onboarding path
+   (`login → create-agent → register → status`), not a bare command list.
+2. **Telegram register** — ✅ **OA-1** confirmed: token message gave a runnable
+   `cello register [YOUR_NAME] CELLO-CgcJ88ctZFA6FEqDtw8wMnq462NyA4irS` (token inlined) +
+   `cello create-agent [YOUR_NAME]`, never mentions an env var. ✅ OA-2 phone-ask privacy note present
+   verbatim ("only irreversible hashes... No one... will ever call you"). ✅ OTP 15-min lifetime stated.
+   ❌ **OA-2 O3 not observed**: no "rate-limit... up to an hour" copy appeared anywhere in the
+   transcript after invalidation — the bot just says "provide your email address again."
+3. ✅ **CC-6**: `register` output's next-step guidance was multi-line, 3 separate bullets.
+4. ✅ **CC-2 / CC-8**: immediately after `register` (no logout/login), `cello status` showed
+   `Ms_Chelly_Hermes` `state: "online"`, `standing_receiver_ready: true`.
+5. ✅ **Receive-cold proof**: from A (`Ms_Chelly`), `cello_initiate_session { target_pubkey:
+   "77d0c8060d2885c9c9fbc71d0b2092a97bb19c0c3b927a9bcb3d2d53c15c7b43" }` → `{"ok":true,"sessionId":
+   "b563678ea1cfe1a4162c6034f4ffabb9",...}`. Switched this connection's current agent to
+   `Ms_Chelly_Hermes` (same daemon, per-connection selection) and confirmed via `cello_status`: session
+   `b563678e…` shows `active`/`alive` on **both** sides (`Ms_Chelly_Hermes` ↔ `Ms_Chelly`), and the
+   doorbell (`cello_message` push) landed on A's channel unprompted. Hermes received cold, no restart.
+
+**🐛 Bug found — mistyped email during registration has no clean recovery path:**
+
+Transcript (verbatim, Telegram):
+1. Bot: "Please enter the same email address you registered with the first time."
+2. Andre (typo): `apemmelaar@gmal.com` → bot: "A 6-digit verification code has been sent to
+   apemmelaar@gmal.com" — **sent an OTP to a mistyped, non-owned address with no validation that it
+   matches the account's on-file email**, despite the bot's own copy requiring "the same email."
+3. Andre then typed the *correct* email (`apemmelaar@gmail.com`) into the OTP-code field →
+   "Incorrect code. You have 2 attempts remaining." (expected — not a 6-digit code, but there is no
+   affordance here to say "actually let me retype the email").
+4. Andre sent `/start` (attempting to restart) → bot: "Incorrect code. You have 1 attempt remaining."
+   — **`/start` was consumed as a wrong-code guess**, burning an attempt, rather than being treated as
+   a restart or rejected without penalty.
+5. Andre re-typed the correct email again → "Too many incorrect attempts. Your code has been
+   invalidated. Please provide your email address again to get a new code." — only *now* does the bot
+   return to email-entry.
+6. This repeated once more (typo `apemmelaar@gamil.com` → OTP sent to wrong address again → 3 more
+   burned attempts) before the correct email finally got a deliverable OTP and registration completed.
+
+**Root cause, two distinct defects:**
+- No match-check between the typed email and the account's on-file email before dispatching an OTP —
+  any email-shaped string gets a code sent to it.
+- No escape hatch from OTP-entry back to email-entry except exhausting all 3 attempts — and `/start`
+  is swallowed as a wrong-code guess instead of being handled as a restart. (Contrast: `/start` sent
+  during *email-entry* state was correctly ignored/re-prompted — the inconsistency is state-dependent.)
+
+Andre: *"I managed to figure out how to solve the problem by just deliberately failing. But the whole
+three times deliberately failed doesn't even make sense."* — i.e. the only way to correct a typo is to
+discover, by trial, that burning 3 OTP attempts is the reset mechanism.
+
+**Not filed as a story yet — triage question open:** onboarding is on the launch-critical path (agent
+connect), but this is a recoverable-with-effort papercut, not a hard block (Andre did complete
+registration). Needs an explicit call on severity before writing it up as a story.
 
 ---
 
