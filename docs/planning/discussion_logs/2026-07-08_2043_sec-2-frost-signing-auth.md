@@ -120,8 +120,30 @@ it's done now.
   branches of `#handleFrostStream`; new reasons `AUTH_REQUIRED` / `AUTH_INVALID`.
 - Publish cascade (daemon+cli at least; client if the client-package twin changes) + directory deploy.
 
+## Reviewer follow-ups (applied 2026-07-08)
+
+The `cello-unit-reviewer` returned **SPEC FAITHFUL / NO SILENT FALLBACKS / TESTS HAVE TEETH — the
+forgery is closed.** Three findings, all fixed:
+- **MEDIUM (DoS):** `verifyFrostAuth` no longer coerces an untrusted `authSig` with `new Uint8Array(x)`
+  — a CBOR integer would allocate that many bytes on the internet-facing pre-gate path. Now
+  `if (!(authSig instanceof Uint8Array)) return "AUTH_INVALID"`.
+- **LOW (domain separation):** the hashed tail now carries a 1-byte frame-type prefix — `0x00` for
+  commit, `0x01 || framedMsg` for sign — so the two request classes are cryptographically disjoint
+  regardless of framedMsg contents (a captured commit authSig can never be a valid sign authSig).
+  Applied identically on both sides; the live smoke is the client↔directory cross-validator.
+- **LOW (housekeeping) — the retired twin `cello-client/core/client/src/network-directory-node.ts`
+  still contains the pre-SEC-2 unauthenticated requests.** It is NOT a live path (the daemon stack is
+  live per DAEMON-004; `@cello-protocol/connect` spawns the daemon and never imports the client twin).
+  Left as-is to keep this security cascade daemon+cli-only (a cosmetic edit there would force a
+  client+connect version bump). **Follow-up: port the SEC-2 auth to the client twin, or delete it,
+  before that stack is ever reactivated** — otherwise it would emit requests an enforcing directory
+  refuses `AUTH_REQUIRED`.
+
 ## Checklist
-- [ ] Design note committed (this doc)
+- [x] Design note committed (this doc)
+- [x] Client half implemented + gated + reviewed (cello-client, K_local signs every commit/sign)
+- [x] Directory half implemented + gated + reviewed (local commit — NOT pushed)
+- [x] Reviewer findings fixed (MEDIUM DoS + LOW domain-separation)
 - [ ] Client: TDD red → sign+attach authSig → green; gates; reviewer
 - [ ] Directory: TDD red (missing/wrong-key/tampered) → verify → green; gates; reviewer
 - [ ] Client publish cascade + promote `latest` + reinstall all agents
