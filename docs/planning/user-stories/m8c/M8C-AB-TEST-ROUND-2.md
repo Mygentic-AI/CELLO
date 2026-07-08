@@ -403,6 +403,35 @@ M9-gated — [[M8C-TEST-COVERAGE-LEDGER]]; only transparent-away vs unreachable 
 
 **✅ R9 PASS:** away yields a real auto-response; unreachable yields silence; the two never blur.
 
+### ✅ R9 RESULTS — run 2026-07-08 — PASS
+
+Session `ad6dce43b2db332e5e71849906c72da8` (Ms_Chelly → CELLO_Feedback, an existing known contact).
+B confirmed CELLO_Feedback `selected: false` on their connection too before starting (attendance is
+daemon-wide, not per-connection, so both sides needed checking).
+
+1. **Away:** `cello_initiate_session` → `ok:true`. First `cello_send` was refused
+   `session_not_current` (an unread away-reply to the request itself was already queued — CURSOR's
+   read-before-write gate caught it). `cello_receive` → `"Agent is currently away. Your session
+   request has been received and queued."` (verbatim request-kind text). Retried `cello_send` → `ok:true`,
+   then `cello_receive` → `"Agent is currently away. Your message has been received and will be read
+   when the operator returns."` (verbatim message-kind text). Both are the **known-contact** templates,
+   not the flat stranger "Dispatched." — confirming the known/unknown branch too. Verified the queue
+   claim directly: temporarily attended `CELLO_Feedback` on this connection and called
+   `cello_check_notifications {}` → `{"pending_session_requests":[{"session_id":"ad6dce43b2db...",
+   "from":"178d42..."}],"unread":[{"session_id":"ad6dce43b2db...","unread_count":1,"last_seq":1}],
+   "total_unread":1}` — surfaced exactly as the doc predicted, non-destructively (didn't consume it).
+2. **Unreachable:** `cello_stop_agent { name: "CELLO_Feedback" }`, then `cello_initiate_session` →
+   `{"ok":false,"reason":"counterparty_unavailable",...}` — **no session created, no away text at
+   all**. (Naming note: the doc's working label was `target_offline`; the actual reason string is
+   `counterparty_unavailable` — same behavior, different label than expected.) Restored
+   `CELLO_Feedback` afterward.
+3. No third state observed anywhere — away always produces the real queued auto-reply text; offline
+   always produces a clean rejection with nothing fabricated.
+
+**✅ R9 PASS — confirmed live.** Away and unreachable are cleanly distinguishable; both the known-contact
+away templates and the request/message distinction hold; the queued message correctly surfaces in the
+unattended agent's own inbox.
+
 ## R10 — INV-CONTENTFREE: the doorbell carries no message content  ·  🟡 log-inspectable (🔴 for the live push)
 
 **DoD:** `DOD-INV-CONTENTFREE` — every push is a content-free doorbell: `type` + counterparty pubkey +
