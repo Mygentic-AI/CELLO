@@ -240,6 +240,27 @@ absent from B's session list).
 **Proves:** the anti-spam cap. **Note:** this is where the **initiator-side signal gap** is most visible —
 A sees `ok: true` regardless of the receiver's refusal. Capture it as evidence for that follow-up.
 
+### ✅ R4 RESULTS — run 2026-07-08 — PASS
+
+1. **B:** `cello_contact_remove` → `{"ok":true,"removed":false}` (already absent); `cello_contact_list {}`
+   → `[]`. Cleared all 3 leftover sessions from Ms_Chelly first (required — they counted toward the cap):
+   `14912ff8…` (R5's session, still active) sealed normally (`sealed_root:
+   bf306278c40e56adaf6791fb23d9630760adca7d9f365fab82e9f3ff70fbb1a4`); `dd7493…` force-abandoned;
+   `e700842…` was already auto-reaped earlier. Confirmed clean: `cello_list_sessions {}` → `totalMatched: 0`.
+2. **A:** 3 sequential `cello_initiate_session` calls, all `ok:true`: `0b1882f50d31e3d0cebd49c071d4cff4`,
+   `8e21bbc006bc78418c271c150d400337`, `e7771b56fde5211768bd210044e8086d`. `cello_status` confirmed all 3
+   `active`/`alive` on **both** sides (A and B).
+3. **A:** 4th knock → `{"ok":true,"sessionId":"fb6bbcfc7d3ea9548cc6a399b6e4e81c",...}` — success reported
+   regardless, as expected (initiator-signal gap).
+4. **B:** `cello_list_sessions {}` → `totalMatched: 3`, `fb6bbcfc…` **absent** — only the prior 3 remain.
+   `grep -a "fb6bbcfc7d3ea9548cc6a399b6e4e81c" ~/.cello/daemon.log` → confirmed twice:
+   `{"event":"session.inbound.accept.failed","sessionId":"fb6bbcfc...","agentName":"CELLO_Support",
+   "reason":"abuse_bound_sessions_per_sender"}`.
+
+**✅ R4 PASS — confirmed on both A and B.** Exactly 3 concurrent unknown-sender sessions admitted; the
+4th refused server-side despite A's `ok:true` — the initiator-signal gap directly evidenced here (A had
+no way to know the 4th was rejected without B checking the daemon log).
+
 ---
 
 ## R5 — Doorbell (unprompted push)  ·  🔴 CHANNELS-REQUIRED — run when channels is back
