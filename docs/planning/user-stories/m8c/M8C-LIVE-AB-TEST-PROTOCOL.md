@@ -246,6 +246,31 @@ victim's side, so they never qualify — a 0-received interrupted session repres
 delivered abuse. Implement + commit now; **publish cascade held until the A/B run completes**
 (one batched cascade; a mid-run daemon restart is exactly the event that mints these ghosts).
 
+### ✅ PHASE 2 RE-RUN RESULTS — run 2026-07-08 — UNBLOCKED, PASS (CC-10 shipped)
+
+CC-10 shipped as daemon `0.0.36` / cli `0.0.33` (tag `v0.0.82`, cello-client commit `79030e3`),
+promoted to `latest`, live daemon restarted `14:38:35`. Re-ran Phase 2 as scripted on the new binary,
+session `e700842ac52414043d696753cb1c195a`:
+
+1. **A** (`Ms_Chelly`): re-selected agent (daemon restart cleared this connection's selection), then
+   `cello_initiate_session` → `{"ok":true,"sessionId":"e700842ac52414043d696753cb1c195a",...}` — knock
+   **accepted** this time (vs. the silent `abuse_bound_sessions_per_sender` rejection pre-CC-10).
+2. **B** (`CELLO_Support`): `cello_contact_list {}` → `contacts: []` — ✅ Ms_Chelly absent after the knock.
+3. **B:** engaged — `cello_check_notifications {}` found the pending session; `cello_receive` timed out
+   (A was blocking on receive, nothing to read yet); `cello_get_transcript` showed only the auto-
+   "Dispatched." ack (seq 0); `cello_send { content: "Hi Ms_Chelly — support here, how can I help?" }`
+   → `{"ok":true,"sequence_number":1,"delivered":true}`. **A** received both the auto-ack (seq 0) and
+   the real reply (seq 1) via separate doorbell pushes.
+4. **B:** `cello_contact_list {}` → `contacts: [{"pubkey":"178d42...","added_at":1783521835888}]` —
+   ✅ Ms_Chelly **now present** — promoted by the reply.
+
+**✅ PHASE 2 PASS (re-run) — confirmed on both A and B.** Knock alone left the stranger unknown; only
+the operator's reply promoted her to known (**CC-1** promote-on-reply, confirmed working end-to-end on
+the CC-10 build, `1771` tests green, reviewer verdict SPEC FAITHFUL / NO SILENT FALLBACKS / TESTS HAVE
+TEETH). **D26 accepted trade** (logged separately): for a stranger who never sends a byte, the cap is
+now a 3-per-5-min rate limit instead of a lifetime lock — deliberate, since 0-received means zero
+delivered abuse.
+
 ---
 
 ## Phase 3 — Core session + doorbell + read-before-write (regression + CC-3)
