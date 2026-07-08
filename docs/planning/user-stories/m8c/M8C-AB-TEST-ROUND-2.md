@@ -233,6 +233,109 @@ on-file-email match before OTP dispatch, (b) no escape from OTP-entry except bur
 
 ---
 
+---
+
+# Round-2 additions — no-infra DoD coverage (R7–R12)
+
+These close the DoD lines that need **no infrastructure staging** — just the running daemon, MCP/CLI
+calls, and stopping/starting **local** agents. They join R1–R6 above. Everything requiring a relay, a
+real Telegram bot, or a second physical daemon is in the sibling doc
+[[M8C-AB-TEST-ROUND-3-INFRA-STAGED]]; everything not yet testable (unbuilt / gated) is tracked in
+[[M8C-TEST-COVERAGE-LEDGER]], which also carries the **complete DoD → bucket ledger** proving no area
+is left uncategorized.
+
+## R7 — LOGINSTART-1: `cello login` auto-starts all agents  ·  🟢 CHANNELS-FREE
+
+**DoD:** `DOD-LOGINSTART-1` — login brings up every registered agent, always completes, enumerates any
+failures by reason.
+1. `cello logout` → `Daemon stopped.`
+2. `cello login` → ✅ output **enumerates every registered agent** started (e.g. "Started 4 agent(s):
+   …"), and login **completes** even if one fails (a failed agent is listed with its reason, not a hang).
+3. `cello_status` → ✅ all registered agents `state: "online"` with no manual `cello_start_agent`.
+
+**✅ R7 PASS:** one `login` returns every agent online; failures (if any) are named, not silent.
+
+## R8 — TTL-1: inbound session-request expiry  ·  🟢 CHANNELS-FREE  ·  ⚠️ needs a 1-line enabler
+
+**DoD:** `DOD-TTL-1` — a session **request** (not yet accepted) expires after its TTL (24h default),
+leaves the queue, and shows as **expired** in INBOX.
+**Prereq:** `INBOUND_SESSION_TTL_MS` is a hardcoded const (`daemon.ts:294`) with **no env override**
+today — unlike `CELLO_HALF_OPEN_TTL_MS`. To test in-window, add a `CELLO_INBOUND_SESSION_TTL_MS`
+override mirroring line 1760 (trivial, ships in the next cascade), then start the daemon with it set to
+e.g. `8000`. *(Without the enabler this is a 24h wait — still no infra, just slow.)*
+1. Start the daemon with `CELLO_INBOUND_SESSION_TTL_MS=8000 cello login`.
+2. **A** (`Ms_Chelly`, a **stranger** to B — remove the contact first): `cello_initiate_session
+   { target_pubkey: "<Support>" }` — a request B does **not** accept.
+3. **B** (`CELLO_Support`): `cello_check_notifications {}` → ✅ the pending request is present.
+4. Wait > 8 s.
+5. **B:** `cello_check_notifications {}` → ✅ the request is **gone from pending** and appears under
+   `expired_session_requests` (not silently vanished). `~/.cello/daemon.log` shows the lazy reap.
+
+**✅ R8 PASS:** an unaccepted request expires past its TTL, leaves the queue, and is visible as expired.
+
+## R9 — INV-HONEST-STATES: away vs unreachable (no faked third state)  ·  🟢 CHANNELS-FREE
+
+**DoD:** `DOD-INV-HONEST-STATES` — a counterparty sees exactly two non-answer states: **away** (a bona
+fide daemon auto-response) or **unreachable** (silence). Nothing fakes a third. *(Opaque privacy mode is
+M9-gated — [[M8C-TEST-COVERAGE-LEDGER]]; only transparent-away vs unreachable is testable now.)*
+1. **Away:** make `CELLO_Feedback` **online but unattended** — ensure no connection has it selected
+   (don't `cello_use_agent` it anywhere). **A** (a **known contact** of Feedback) `cello_initiate_session`
+   + `cello_send` to it → then `cello_receive`. ✅ A gets the **away text** auto-reply and the message is
+   **queued** (surfaces later as unread on Feedback's inbox).
+2. **Unreachable:** `cello_stop_agent { name: "CELLO_Feedback" }`. **A** `cello_initiate_session` to it
+   → ✅ **silence / `target_offline`** — and crucially **no away text** (away ≠ unreachable; the two are
+   distinguishable).
+3. ✅ There is no third, fabricated state (no fake "delivered", no fake presence).
+
+**✅ R9 PASS:** away yields a real auto-response; unreachable yields silence; the two never blur.
+
+## R10 — INV-CONTENTFREE: the doorbell carries no message content  ·  🟡 log-inspectable (🔴 for the live push)
+
+**DoD:** `DOD-INV-CONTENTFREE` — every push is a content-free doorbell: `type` + counterparty pubkey +
+`session_id` + routing metadata only; message text NEVER rides a push (SI-001). The security assertion
+behind R5 — inspect the actual frame, don't just confirm it arrived.
+1. A session open between A and B. **A:** `cello_send { session_id, content: "CANARY_9f3c_secret_body" }`.
+2. Inspect the doorbell frame:
+   - **Channels-free path:** `grep -a "cello_message\|session_state_changed" ~/.cello/daemon.log` (and the
+     shim's forwarded frame) → ✅ the pushed payload carries `type` + `session_id` + pubkey + label only.
+   - **Live-push path (needs channels):** the `<channel source="cello">` event that lands in B's session.
+3. ✅ **`CANARY_9f3c_secret_body` appears NOWHERE** in the pushed frame — only in the content you fetch
+   deliberately via `cello_receive` / `cello_get_transcript`.
+
+**✅ R10 PASS:** the doorbell announces *that* a message exists (routing only); the body is never in the push.
+
+## R11 — INV-PUSHPULL: every feature reachable poll-only  ·  🟢 CHANNELS-FREE (this is the point)
+
+**DoD:** `DOD-INV-PUSHPULL` — every push capability has a pull equivalent; a poll-only client reaches
+every M8C feature; push loss is always recoverable. This formalizes the whole Round-2 premise.
+1. With **channels off** (or simply never reading a doorbell), have **A** open a session and send **3**
+   messages to **B** while B does nothing.
+2. **B** reconciles entirely by **polling**: `cello_check_notifications {}` → ✅ shows the pending
+   session + unread count (the missed doorbells); `cello_receive { session_id, since_seq: 0,
+   timeout_ms: 5000 }` → ✅ returns all 3 in order, no dupes/gaps.
+3. ✅ B completed the full receive→reply flow with **zero** channel pushes — nothing hard-required the doorbell.
+
+**✅ R11 PASS:** a poll-only operator reached a push feature end-to-end; push is an optimization, not a requirement.
+
+## R12 — Onboarding legibility CLI checks (ERRORS / WARN / LOGNOISE)  ·  🟢 CHANNELS-FREE
+
+**DoD:** `DOD-ONBOARD-ERRORS-1`, `DOD-ONBOARD-WARN-1`, `DOD-ONBOARD-LOGNOISE-1` — the remaining
+onboarding riders (HELP top-level + NEXTSTEP already passed in R1 Phase 4). Pure local CLI + log.
+1. **ERRORS** — run each bad path, expect a **specific, actionable** message (never silence or a Usage dump):
+   - `cello register someagent CELLO_PREAUTH_TOKEN` (bogus literal) → ✅ "that isn't a pre-auth token —
+     they start with `CELLO-`" (this was the **R4 silent-output repro** — confirm it now speaks).
+   - `cello register no-such-agent CELLO-realtoken…` → ✅ "no agent named X; create it first".
+   - `cello register someagent` (missing token) → ✅ "you're missing the pre-auth token" (not the Usage line).
+2. **WARN** — inspect a real `register` output → ✅ **no** durable-secret klaxon (the scary warning was
+   removed; at most one calm line, or none).
+3. **LOGNOISE** — `grep -a directory.signaling.reader.error ~/.cello/daemon.log` → ✅ the routine
+   ~40–70 min reconnect churn is logged **quietly / marked expected**, so a healthy daemon doesn't read
+   as failing.
+
+**✅ R12 PASS:** onboarding errors are actionable, no fake secret-klaxon, routine churn is quiet.
+
+---
+
 ## Round-2 coverage map
 
 | Test | Proves | Channels |
@@ -243,11 +346,20 @@ on-file-email match before OTP dispatch, (b) no escape from OTP-entry except bur
 | **R4** ABUSE-1 cap | 3-session per-unknown-sender cap; 4th refused | 🟢 free |
 | **R5** doorbell | the single daemon→shim→Claude channel (unprompted push) | 🔴 required |
 | **R6** onboarding bug | reproduces the email-recovery papercut for triage | 🟢 free (Telegram) |
+| **R7** LOGINSTART-1 | `cello login` auto-starts all agents, enumerates failures | 🟢 free |
+| **R8** TTL-1 | inbound session-request expiry → INBOX (needs a 1-line enabler) | 🟢 free |
+| **R9** INV-HONEST-STATES | away (auto-reply) vs unreachable (silence), no faked 3rd state | 🟢 free |
+| **R10** INV-CONTENTFREE | doorbell carries routing only; message body never rides the push | 🟡 log / 🔴 live push |
+| **R11** INV-PUSHPULL | every push feature reachable poll-only; push loss recoverable | 🟢 free |
+| **R12** onboarding legibility | ERRORS actionable, no secret-klaxon, log churn quiet | 🟢 free |
 
 ---
 
 ## Related
 - [[M8C-LIVE-AB-TEST-PROTOCOL]] — Round 1 (all 5 phases PASS on loopback); this doc continues it
+- [[M8C-AB-TEST-ROUND-3-INFRA-STAGED]] — the infra-staged sibling (relay / Telegram bot / 2nd daemon)
+- [[M8C-TEST-COVERAGE-LEDGER]] — complete DoD → bucket ledger + the not-yet-testable (blocked) scenarios
+- [[M8C-DEFINITION-OF-DONE]] — the DoD lines these tests close
 - [[M8C-FIX-PLAN]] — RESUME STATE (fix run closed) + the two post-launch follow-ups R4/R6 feed
 - [[M8C-DECISIONS]] — D25 (CC-5 reap/force), D26 (CC-10 reaper scope + doorbell-rate residual)
 - [[M8C-BUILD-JOURNAL]] — Entry 60 (CC-10), Entry 61 (fix run closed)
