@@ -280,11 +280,19 @@ description: >
   (confirmed live: `moniker.resolved … agentName:"Ms_Chelly" source:"offered"`). Same cause makes the
   two delete sites cross-agent. Key by `(agentName, sessionIdHex)` at all four sites (`:4597` write,
   `:1070` read, `:1099` + `:4327` deletes). Two-machine setups are unaffected — which is why the tier
-  tested green. Full flow + ACs: [[M8C-MONIKER-SPEC]] §10. — ❌
+  tested green. Full flow + ACs: [[M8C-MONIKER-SPEC]] §10. — ✅ **BUILT + REVIEWED**
+  (cello-client `0729ca5`; AC1/AC2/AC3 all covered, red-first, in `moniker-2-inbound-offer.test.ts`.
+  Reviewer confirmed no sibling map shares the defect class — `telegramRungUnread` was already
+  agent-scoped, `inboundSessionQueues`/`expiredSessionRequests` are keyed by agent at the top level.
+  **Not yet live-proven**: green vitest ≠ done; needs the T6 two-local-agents run.)
 - **DOD-HERMES-3** — The Hermes wake sentence surfaces the resolved name. The adapter's `_wake_prompt`
   (cello-client `core/cli/src/hermes/assets.ts`) predates monikers and never reads `who`/`whoKnown`, so a
   Hermes agent sees raw hex forever and every name an operator sets is invisible to it. The pubkey must
-  stay in the sentence beside the name — Hermes has no metadata layer. [[M8C-MONIKER-SPEC]] §12. — ❌
+  stay in the sentence beside the name — Hermes has no metadata layer. [[M8C-MONIKER-SPEC]] §12. —
+  ✅ **BUILT + REVIEWED** (cello-client `519dc68`, review fixes `7612970`; `_render_who` mirrors the
+  Claude Code shim's `renderWho`. Tests execute the real Python against a stubbed `gateway`.
+  **Not yet shipped**: `core/cli` is unpublished — the installed plugin still carries the old prompt,
+  so this is invisible on the live Hermes until a `cli` bump + `cello install hermes` re-run.)
 
 > **Future direction "C" (agreed, NOT scheduled):** the offered name should move into the receiver's
 > contacts **on accept**, and the box should retire — see [[M8C-MONIKER-SPEC]] §13. It delivers the

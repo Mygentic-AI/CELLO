@@ -294,7 +294,9 @@ demo setup, and nothing else. That is exactly why the whole tier tested green.
   existing harness in `core/daemon/src/__tests__/moniker-2-inbound-offer.test.ts` (add a second agent) plus
   the `__test_emit_session_event` hook (gated on `CELLO_ENV=test`). Never a from-scratch fixture.
 - **AC3** A state change or request-expiry for agent A must not drop agent B's box.
-- ❌ NOT BUILT
+- ✅ BUILT + REVIEWED — cello-client `0729ca5` (+ test hardening `7612970`). Red-first; all three
+  ACs covered in `moniker-2-inbound-offer.test.ts`. Review confirmed no sibling map shares the
+  defect class. **Not yet live-proven** — needs the two-local-agents run (T6).
 
 ---
 
@@ -330,7 +332,10 @@ Unrelated to §10 — different bug, different repo path. Note the irony: **Herm
 - **AC2** The **pubkey stays in the sentence beside it** (§11 — Hermes has no metadata layer, so the prose
   *is* the frame).
 - **AC3** An unverified name (`whoKnown: false`) is marked as a claim, as in the Claude Code copy.
-- ❌ NOT BUILT
+- ✅ BUILT + REVIEWED — cello-client `519dc68` (+ `7612970`). `_render_who` mirrors the Claude Code
+  shim's `renderWho`; tests execute the real Python against a stubbed `gateway` package.
+  **Not yet shipped** — `core/cli` is unpublished, so the installed plugin still carries the old
+  prompt; needs a `cli` bump + `cello install hermes` re-run to reach the live Hermes.
 
 ---
 
