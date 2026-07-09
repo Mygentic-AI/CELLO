@@ -3268,7 +3268,19 @@ and `cello_contact_list` (AC1); AC2 asserts the load-bearing invariant: a named 
 nameless one get identical contact membership and identical ABUSE-1 acceptance bounds, and neither
 is auto-promoted (CC-1). Reviewer in flight. Gates: 1883 green, lint/typecheck/build clean.
 
-**REMAINING TO CLOSE THE MONIKER TIER:** (1) MONIKER-5 review + fixes. (2) The publish cascade —
+**MONIKER-5 REVIEWED + CLOSED ✅ (2026-07-09).** Review fix `65fbf6a`: the `toEqual(boundNamed,
+boundNameless)` assertion was **vacuous** — the bound function takes no moniker and both strangers
+sat under the caps, so it compared `{ok:true}` to `{ok:true}` and could never detect a name leaking
+into ABUSE-1. Replaced with the discriminating assertion (`countActiveSessionsFromUnknownSenders`
+=== 2), which drops to 1 the moment an offered name makes a sender contact-like. The `isContact`
+pair was already toothy and stays. Reviewer cleared both structural risks I asked about: `resolveWho`
+runs only on the *sliced* rows (bounded at MAX_LIST_LIMIT, and its try/catch means the per-row DB
+read cannot throw out of a handler where the old code couldn't); daemon-wide `list_sessions` resolves
+each row against its OWN agent's contacts — no cross-agent read. DOD-MONIKER-5 flipped.
+
+**ALL SIX UNITS BUILT AND REVIEWED. Gates: 1883 tests green, lint/typecheck/build clean.**
+
+**REMAINING TO CLOSE THE MONIKER TIER:** (1) ~~MONIKER-5 review + fixes~~ ✅. (2) The publish cascade —
 protocol-types 0.0.19 → transport 0.0.17 → client 0.0.47 → daemon 0.0.38 → cli 0.0.35 → connect
 0.0.62, tag `v0.0.84` (monotonic CI trigger, NOT the connect version — they have drifted); carries
 the parallel session's RECONNECT-001 (`b91b6c1`) too. Load `/cello-publish` fresh; verify against

@@ -234,7 +234,13 @@ a dropped notification. The system fails **legible and loud**: the label degrade
   response) plus both teeth-gaps pinned; 1860 workspace tests green.)
 - **DOD-MONIKER-4** — `whoLabel` resolution + doorbell copy, proven LIVE in a channels session
   (legible name, ID out of the body, unverified names marked). ❌
-- **DOD-MONIKER-5** — Screening outcomes byte-identical with/without monikers. ❌
+- **DOD-MONIKER-5** — Screening outcomes byte-identical with/without monikers. ✅ (2026-07-09,
+  cello-client `d7c741c` + review fix `65fbf6a`; reviewer SPEC FAITHFUL / no silent fallbacks; the
+  invariant holds BY CONSTRUCTION — `isContact` and `checkUnknownSenderAcceptanceBound` take only
+  (agentName, pubkey), no moniker can reach them — and the test now asserts the discriminating
+  dimension: a named stranger is still COUNTED as unknown. Reviewer also cleared the two structural
+  risks: `resolveWho` runs only on the sliced rows (bounded, cannot throw out of the handler), and
+  daemon-wide `list_sessions` reads each row's OWN agent's contacts — no cross-agent boundary.)
 
 ## Related Documents
 
