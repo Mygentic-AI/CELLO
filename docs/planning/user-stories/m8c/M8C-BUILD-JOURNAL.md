@@ -3291,6 +3291,39 @@ label end-to-end (legible name through the deployed directory), an invalid name 
 fingerprint, and the ID out of the body. Human-gated steps: `latest` promotion (needs Andre's go) and
 `/mcp` reconnect.
 
+### 2026-07-09 — Entry 70: v0.0.84 publish cascade — CUT, blocked on a GitHub Actions outage
+
+**Cascade cut.** cello-client `6a02750`, tag **`v0.0.84`** (next free counter — the tag is a monotonic
+CI trigger, NOT the connect version; they have drifted). Bump set computed from the real dependency
+graph, not assumed: `protocol-types` 0.0.19 (changed — MONIKER-0) → `transport` 0.0.17, `client`
+0.0.47 (re-pin) → `daemon` 0.0.38 (changed — MONIKER-1..5), `cli` 0.0.35 (changed) → `connect` 0.0.62
+(changed — RECONNECT-001 + doorbell copy). **`crypto` stays 0.0.18** — unchanged and depends on
+nothing that changed. Carries the parallel session's RECONNECT-001 (`b91b6c1`). Final gate on the
+tagged tree: 1883 tests, lint/typecheck/build clean.
+
+**⚠️ BLOCKED — GitHub outage, NOT our pipeline. Do not "fix" it.** CI run `29017700447`: *Build and
+Test* **SUCCEEDED** including the Publish-completeness guard; the *Publish (tag release)* job sits
+**queued with no runner assigned**. Ruled out, by inspection: `needs: build` satisfied; no
+`environment:` protection gate; no concurrency group; `pending_deployments` empty; identical
+`ubuntu-latest` labels to the job that DID get a runner. Root cause is upstream — GitHub incident
+**"Delays starting Actions runs"** (status `investigating`, impact **major**, opened 04:34Z): ~30% of
+hosted-runner runs delayed >5 min, a subset exhausting retries and failing to start.
+
+**Standing instructions while blocked** (watchdog cron `f79a50c9`, 4-min): if the publish job fails
+to start, `gh run rerun 29017700447 --failed` — safe, because already-published versions are skipped
+(`|| true`) and the tag is already pushed. **Never** cancel-and-retag, and **never** `npm publish`
+locally — that ships raw `workspace:*` specifiers and burns the version on npm forever.
+
+**The real success signal is `smoke-tag`** (clean-installs `cli@beta` + `connect@beta` and loads their
+module graphs), not the top-level green. On green, the step-5 BINARY verification runs before anything
+is believed: all seven `@beta` versions; `cli@0.0.35` deps must show `daemon@0.0.38` (never
+`workspace:*`); `npm pack` the daemon + connect tarballs and grep `dist/` for `offered_moniker` /
+`whoLabel` / the reconnect marker. CI's checkmark is not evidence the change shipped.
+
+**Human-gated, genuinely blocking (PROCEDURE §2c):** (1) `latest` dist-tag promotion — all seven
+packages, needs Andre's explicit go. (2) `/mcp` reconnect at Andre's keyboard, then the **live
+channels session** that flips DOD-MONIKER-4 and discharges the MONIKER-2 reviewer's carried condition.
+
 ---
 
 ## Related Documents
