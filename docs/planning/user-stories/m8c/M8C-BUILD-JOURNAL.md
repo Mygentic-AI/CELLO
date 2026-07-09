@@ -2953,6 +2953,51 @@ DoD, ledger (C2 + table row), and the journal banner corrected accordingly. SEC-
 
 ---
 
+### 2026-07-09 — Entry 65: MONIKER-0 — give the charset a single home (unit start, clause checklist)
+
+**Target (one sentence):** One exported `MONIKER_RE` + `validateMoniker` in `core/protocol-types`,
+every existing copy of the agent-name rule repointed at it, behaviour byte-identical, with the named
+reject battery + strip-oracle regression pinned once on that module.
+
+**Provenance:** spec at [[M8C-MONIKER-SPEC]] §MONIKER-0 (commits `aca5f0f8` + `a28d8289`), finding
+originated by CELLO_Support in live session `30b5b208c68c5779fcb692be1252f762` (sealed
+`2a162674b52183e0e00cc10afa61f585e42519fc0fa3de281bd54d8eacfa8300`): the spec's original "reuse the
+validator create-agent already enforces" named a validator that does not exist — the rule lives as
+four unsynchronised copies (daemon.ts:1941, daemon.ts:2048 inline literals; cli-args.ts:53 prose;
+cli-args.test.ts:70 hand-typed twin). Since the charset is the entire injection defense for the
+moniker work, MONIKER-1..5 must import one object, not add copies five and six.
+
+**Clause checklist (DOD-MONIKER-0 + AC1–AC4):**
+- [ ] AC1a — `MONIKER_RE` + `validateMoniker(raw): string | null` exported from `core/protocol-types` (new `moniker.ts`, exported via `index.ts`)
+- [ ] AC1b — regex byte-identical to the two existing literals (`/^[a-zA-Z0-9_-]{1,64}$/`); no widening/narrowing
+- [ ] AC1c — `cli` gains a direct `@cello-protocol/protocol-types` dep (daemon already has one)
+- [ ] AC1d — existing agent-name tests pass **unmodified** (behaviour-preservation proof)
+- [ ] AC2a — daemon.ts:1941 (`cello_create_agent`) repointed at the shared validator
+- [ ] AC2b — daemon.ts:2048 (`cello_remove_agent`) repointed at the shared validator
+- [ ] AC2c — cli-args.ts:53 help prose derives the regex text from the constant (`MONIKER_RE.source`), not a hand-typed string
+- [ ] AC2d — cli-args.test.ts asserts the help text against the constant itself; independent copies: zero
+- [ ] AC3a — named reject battery on the module, each an individual assertion: newline, carriage return, tab, other control chars, `"`, `'`, `(`, `)`, space, non-ASCII, 65 chars, empty
+- [ ] AC3b — strip-oracle regression: an invalid name is rejected (`null`), never repaired into a valid one (`C*E*L*L*O*_*S*u*p*p*o*r*t` → `null`, not `CELLO_Support`)
+- [ ] AC4 — ONE constant shared by agent names and monikers; no second regex introduced anywhere
+
+**Falsification pass (procedure step 3):**
+- Call sites have access? Yes — daemon already imports from `@cello-protocol/protocol-types`
+  (workspace dep confirmed in `core/daemon/package.json`); cli adds the workspace dep (in-workspace
+  `workspace:*` is correct here — the pinned-semver rule is for trustless-cello references only).
+- Responsibility lives here? Yes — protocol-types is a leaf; the moniker crosses the wire on the
+  offer frame (MONIKER-2), making the charset a wire contract, which is what protocol-types holds.
+- Redundancy? None created — the two daemon literals are deleted, the help prose becomes derived.
+- What else breaks? `helpForCommand` output must stay byte-identical (interpolating `MONIKER_RE.source`
+  yields the same characters as the current hand-typed prose — verified by eye, pinned by the
+  unmodified existing test). Error `reason: "invalid_agent_name"` and guidance strings unchanged.
+
+**Plan:** red tests first (`core/protocol-types/src/__tests__/moniker.test.ts` — battery + strip-oracle,
+red because the module doesn't exist), then implement, repoint the three sites, gates
+(`pnpm run test` → `lint` → `typecheck` → `build`), `cello-unit-reviewer` on the diff, flip
+DOD-MONIKER-0 in the spec, close the entry.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
