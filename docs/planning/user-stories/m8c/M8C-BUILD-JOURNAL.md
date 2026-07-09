@@ -3589,6 +3589,63 @@ module. Plus AC3: a fail-closed plaintext→encrypted migration for existing ins
 
 ---
 
+### 2026-07-09 — Entry 76: 🏁 T6 + T7 PASS — DOD-MONIKER-6 and DOD-HERMES-3 are LIVE-PROVEN
+
+Both close. Run against the shipped binaries, not a dev build: daemon **0.0.39** (pid 44970, started
+`18:40:49Z`, Node 24.15.0), `cli` **0.0.36**, `connect` **0.0.62**, all from `latest`.
+
+**T6 — two agents, ONE daemon.** `Ms_Chelly` (`178d420b…`) → `Ms_Chelly_Hermes` (`77d0c806…`), the
+configuration the whole moniker tier never tested. Her `cello_message` doorbell:
+
+```
+who="agent 77d0c806…"  whoKnown="false"  from="77d0c8060d2885c9…"
+📩 CELLO — agent 77d0c806… sent a message. Run cello_receive to read it.
+```
+
+The counterparty's fingerprint — **not her own name**. Daemon log gives proof in both directions:
+
+```
+18:48:04Z  moniker.resolved  agentName=Ms_Chelly_Hermes  cp=178d420b…  source=offered      ← reads its OWN box
+18:48:34Z  moniker.resolved  agentName=Ms_Chelly         cp=77d0c806…  source=fingerprint  ← degrades correctly
+```
+
+**Method note worth keeping.** Absence of the bug's signature is not proof of the fix. `resolveWho` logs
+`moniker.resolved` on *every* call regardless of source, so a fixed initiator must emit
+`source=fingerprint` — a *positive* line. Seeing no `Ms_Chelly` line at all would have meant `resolveWho`
+never ran, proving nothing. It also mattered to timestamp-filter: the log still holds
+`agentName=Ms_Chelly source=offered` at `15:29Z`/`15:45Z` — real instances of the bug, recorded by the OLD
+binary hours before this daemon existed. Reading the log without filtering on daemon start would have
+"failed" a passing test.
+
+Second correction mid-run: the initiator's doorbell is **not** the session-created frame — it is the
+`cello_message` doorbell raised when the counterparty **replies** (spec §10 step 4). T6 is not a session
+open; it needs a round trip.
+
+**T7 — the Hermes wake.** After `cello install hermes --agent Ms_Chelly_Hermes` + `hermes gateway restart`,
+Hermes pasted the sentence it was handed, verbatim:
+
+```
+CELLO wake: a new message arrived on session 2a8647ca… from "Ms_Chelly" (unverified)
+(counterparty pubkey 178d420b86beb79d2cd819647368d3e24739dcfa526a95f32c0e95ba3bc3e44c).
+```
+
+Name leads (AC1); pubkey beside it (AC2 / §11 — Hermes has no metadata layer, the prose IS the frame);
+unverified name marked as a claim (AC3). Previously this was hexadecimal only. **The plugin is a COPY at
+`~/.hermes/plugins/cello/__init__.py`, not a live import** — verified against the file on disk (3×
+`_render_who`, 4× `fullmatch`, 0 stale `.match(`), not against the installer's claim. Every Hermes host
+needs the re-scaffold.
+
+Session sealed bilaterally, both participants `attestation_mode: live`; sealed root
+`d317339e53ab60d1e51382e730e2562a42e1ca2c173835ee904bf67edd7e4448`.
+
+**Also observed, filed not chased:** `cello_check_notifications` reported 2 unread for `Ms_Chelly` on
+sessions that then returned `session_not_found`. The unread counter survives a daemon restart; the session
+does not. Cosmetic, forgivable, not launch-blocking.
+
+Protocol: [[M8C-MONIKER-LIVE-TEST]] T6/T7 (`50e9c681`).
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

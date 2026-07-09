@@ -286,7 +286,13 @@ description: >
   agent-scoped, `inboundSessionQueues`/`expiredSessionRequests` are keyed by agent at the top level.
   **SHIPPED**: `daemon@0.0.39`, promoted to `latest` 2026-07-09; verified in the binary —
   `dist/daemon.js` has all four `offerKey(agentName, …)` sites and zero bare session-id accesses.
-  **Not yet live-proven**: green vitest ≠ done; needs the T6 two-local-agents run.)
+  🏁 **LIVE-PROVEN 2026-07-09 (T6)** — `Ms_Chelly` → `Ms_Chelly_Hermes` on ONE daemon (pid 44970,
+  daemon 0.0.39, Node 24.15.0). Her doorbell read `who="agent 77d0c806…" whoKnown=false` — the
+  counterparty's fingerprint, NOT her own name. Daemon log, positive proof both directions:
+  `moniker.resolved agentName=Ms_Chelly_Hermes source=offered` (receiver reads its own box) and
+  `moniker.resolved agentName=Ms_Chelly source=fingerprint` (initiator degrades). Zero
+  `agentName=Ms_Chelly source=offered` since the fixed daemon started — that string is the bug's
+  signature. Sealed root `d317339e53ab60d1e51382e730e2562a42e1ca2c173835ee904bf67edd7e4448`.)
 - **DOD-HERMES-3** — The Hermes wake sentence surfaces the resolved name. The adapter's `_wake_prompt`
   (cello-client `core/cli/src/hermes/assets.ts`) predates monikers and never reads `who`/`whoKnown`, so a
   Hermes agent sees raw hex forever and every name an operator sets is invisible to it. The pubkey must
@@ -295,8 +301,13 @@ description: >
   Claude Code shim's `renderWho`. Tests execute the real Python against a stubbed `gateway`.
   **SHIPPED**: `cli@0.0.36`, promoted to `latest` 2026-07-09; verified in the binary —
   `dist/hermes/assets.js` has `_render_who` and both regex sites on `.fullmatch`.
-  **Still needs `cello install hermes --agent <name>`** on each Hermes host: the plugin is a COPY
-  written into `~/.hermes`, not a live import, so upgrading the npm package alone changes nothing there.)
+  🏁 **LIVE-PROVEN 2026-07-09 (T7)** — after `cello install hermes` re-scaffolded the plugin copy,
+  Hermes pasted its wake sentence verbatim:
+  `CELLO wake: a new message arrived on session 2a8647ca… from "Ms_Chelly" (unverified) (counterparty
+  pubkey 178d420b86beb79d2cd819647368d3e24739dcfa526a95f32c0e95ba3bc3e44c).`
+  Name LEADS (AC1), pubkey rides beside it (AC2 / §11), unverified name marked as a claim (AC3).
+  **Per-host step, not a one-time fix:** the plugin is a COPY in `~/.hermes`, never a live import, so
+  every Hermes host needs `cello install hermes --agent <name>` + `hermes gateway restart`.)
 
 > **Future direction "C" (agreed, NOT scheduled):** the offered name should move into the receiver's
 > contacts **on accept**, and the box should retire — see [[M8C-MONIKER-SPEC]] §13. It delivers the
