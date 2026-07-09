@@ -2168,14 +2168,14 @@ export class CelloDirectoryNode {
             continue;
           }
           // M7-WIRE-001 AC-002: Reject session_request missing initiator session Peer ID
-          const parsedReq = parsed as { connection_id?: string; relay_rtt?: Record<string, number>; initiator_session_peer_id?: string; initiator_session_addrs?: string[]; transport_mode?: "direct" | "relay"; wants_session_offer?: boolean };
+          const parsedReq = parsed as { connection_id?: string; relay_rtt?: Record<string, number>; initiator_session_peer_id?: string; initiator_session_addrs?: string[]; transport_mode?: "direct" | "relay"; wants_session_offer?: boolean; moniker?: string };
           if (!parsedReq.initiator_session_peer_id || !parsedReq.initiator_session_addrs || parsedReq.initiator_session_addrs.length === 0) {
             this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "session_request_missing_peer_id" }));
             continue;
           }
           // Run concurrently — ceremony_result frames must be processed by this same loop
           // while #processSessionRequest is suspended awaiting the ceremony round-trip.
-          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), parsedReq.connection_id, parsedReq.relay_rtt, parsedReq.initiator_session_peer_id, parsedReq.initiator_session_addrs, parsedReq.transport_mode, parsedReq.wants_session_offer === true);
+          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), parsedReq.connection_id, parsedReq.relay_rtt, parsedReq.initiator_session_peer_id, parsedReq.initiator_session_addrs, parsedReq.transport_mode, parsedReq.wants_session_offer === true, parsedReq.moniker);
         } else if (parsed.type === "discovery_lookup") {
           // Cross-node item 1: answer "where is agent X?" from fully-replicated state. Post-auth on
           // the agent's home inbound stream. Advisory — the target node's own #streams check stays
@@ -3254,6 +3254,8 @@ export class CelloDirectoryNode {
     initiatorSessionAddrs?: string[],
     requestedTransportMode?: "direct" | "relay",
     requestWantsOffer = false,
+    // MONIKER-2 AC1b: bounded at decode; pass-through into the assignment, never stored, never in a TBS.
+    initiatorMoniker?: string,
   ): Promise<void> {
     protocolLog("SESS", `Session request: ${truncHex(initiatorHex)} → ${truncHex(targetHex)}`);
     this.#logger?.info("frost.debug.session_request.enter", {
@@ -3525,6 +3527,8 @@ export class CelloDirectoryNode {
         counterparty_session_peer_id: counterpartySessionPeerId,
         counterparty_session_addrs: counterpartySessionAddrs,
         transport_mode: transportMode,
+        // MONIKER-2 AC1b: unsigned pass-through hint; omitted from the wire when absent.
+        ...(initiatorMoniker !== undefined ? { moniker: initiatorMoniker } : {}),
       };
 
       // (e) Register with relay BEFORE delivering to clients (SI-003)

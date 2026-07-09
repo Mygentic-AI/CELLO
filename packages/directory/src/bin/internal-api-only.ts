@@ -13,7 +13,6 @@ import { createInternalApiServer } from "../internal-api-server.js";
 function requireEnv(key: string): string {
   const v = process.env[key];
   if (!v) {
-    // eslint-disable-next-line no-console -- standalone bin entrypoint.
     console.error(`[internal-api-only] missing required env ${key}`);
     process.exit(1);
   }
@@ -38,7 +37,6 @@ const logger = {
 
 const server = createInternalApiServer({ pool, internalApiKey, logger, owningNodeId: process.env["NODE_ID"] ?? "local" });
 server.listen(port, () => {
-  // eslint-disable-next-line no-console -- standalone bin entrypoint.
   console.log(`[internal-api-only] listening on :${port}`);
 });
 

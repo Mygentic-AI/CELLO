@@ -150,6 +150,12 @@ export interface SessionRequest {
    * Absent/false keeps pre-WIRE-002 callers on the original no-offer path.
    */
   wants_session_offer?: boolean;
+  /**
+   * MONIKER-2 AC1: the initiator's outbound display name, an UNVERIFIED HINT the
+   * directory passes through into the assignment (never stored, never in the TBS).
+   * Bounded at decode (string, 1–64 chars); the RECEIVER validates the charset.
+   */
+  moniker?: string;
 }
 
 // ─── M7-WIRE-001: Session offer accept (target → directory) ─────────────────
@@ -179,6 +185,13 @@ export type SessionAssignment = SessionAssignmentBase & {
   counterparty_session_peer_id: string;
   counterparty_session_addrs: string[];
   transport_mode: "direct" | "relay";
+  /**
+   * MONIKER-2 AC1: the initiator's outbound display name, passed through from the
+   * session_request. UNSIGNED (outside the TBS — no integrity claim, spec §2) and
+   * optional; omitted when the initiator sent none. The receiver validates it at
+   * its wire boundary before anything displays or stores it.
+   */
+  moniker?: string;
 };
 export type { SessionAssignmentBase };
 /** @deprecated Use RelayEndpointInfo instead */

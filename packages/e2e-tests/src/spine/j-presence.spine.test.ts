@@ -18,7 +18,6 @@ import {
   startSpineCluster,
   startDaemon,
   provisionAgent,
-  connectMcp,
   cello,
   psqlSpineN,
   copyAgentProfileBetweenNodes,

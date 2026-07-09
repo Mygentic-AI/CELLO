@@ -169,6 +169,11 @@ export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Arr
   if (relayDirSig) {
     encodedAssignment["relay_directory_signature"] = relayDirSig;
   }
+  // MONIKER-2 AC1b: the initiator's outbound name, UNSIGNED pass-through (outside every TBS —
+  // no integrity claim, spec §2). Omitted when absent — never an empty string on the wire.
+  if (a.moniker) {
+    encodedAssignment["moniker"] = a.moniker;
+  }
   return ENC.encode({ type: frame.type, assignment: encodedAssignment });
 }
 
@@ -443,12 +448,19 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     // carried through this typed allowlist decoder or the directory's offer branch
     // (which reads parsedReq.wants_session_offer) never fires.
     const wants_session_offer = o["wants_session_offer"] === true ? true : undefined;
+    // MONIKER-2 AC1b: bounded pass-through (string, 1–64 chars). The directory does NOT judge the
+    // charset — the receiver is the validation authority; junk is merely size-bounded here.
+    const moniker =
+      typeof o["moniker"] === "string" && o["moniker"].length >= 1 && o["moniker"].length <= 64
+        ? o["moniker"]
+        : undefined;
     const result: SessionRequest = { type: "session_request", target_pubkey };
     if (connection_id !== undefined) result.connection_id = connection_id;
     if (initiator_session_peer_id !== undefined) result.initiator_session_peer_id = initiator_session_peer_id;
     if (initiator_session_addrs !== undefined) result.initiator_session_addrs = initiator_session_addrs;
     if (transport_mode !== undefined) result.transport_mode = transport_mode;
     if (wants_session_offer !== undefined) result.wants_session_offer = wants_session_offer;
+    if (moniker !== undefined) result.moniker = moniker;
     return result;
   }
 
@@ -948,6 +960,13 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     const transport_mode_raw = raw["transport_mode"];
     const transport_mode: "direct" | "relay" | undefined = transport_mode_raw === "direct" ? "direct" : transport_mode_raw === "relay" ? "relay" : undefined;
 
+    // MONIKER-2 AC1b: bounded pass-through on the decode side too (string, 1–64 chars);
+    // undefined when absent — the receiver validates the charset at its own boundary.
+    const moniker =
+      typeof raw["moniker"] === "string" && raw["moniker"].length >= 1 && raw["moniker"].length <= 64
+        ? raw["moniker"]
+        : undefined;
+
     const commonFields = {
       session_id,
       participant_a: pa,
@@ -962,6 +981,7 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       counterparty_session_peer_id,
       counterparty_session_addrs,
       transport_mode,
+      moniker,
     };
 
     // Cast needed until @cello-protocol/protocol-types@0.0.5 makes M7 fields optional (AC-020).

@@ -3127,6 +3127,32 @@ explicitly declines integrity claims about the directory hop).
 - Deploy sequencing (§2c): directory change commits to main only when green; the push triggers the
   directory pipeline — batch it, arm the Cron-1 watchdog, keep working the client side in parallel.
 
+**Directory half DONE (2026-07-09).** Red-first (7 codec tests: bounded request decode, assignment
+encode/decode round-trip, absent-field omission, signed-fields-byte-identical proof), then:
+`SessionRequest.moniker` + `SessionAssignment.moniker` (local directory-types), bounded pass-through
+decode (string, 1–64 — the directory does NOT judge the charset; the receiver is the authority),
+threading through `#processSessionRequest`, unsigned carry on the assignment (OUTSIDE every TBS —
+adding it to the signed portion would break existing FROST verification, and the spec makes no
+integrity claim). Directory suite green: 712 tests. Lint + typecheck clean.
+
+**⚠️ PARKED FINDING — e2e-tests network suites red on this machine, NOT caused by this unit.**
+The repo-root gate's e2e half fails: 7 network files (session003-e2e, adapter-003, node-004-e2e…)
+= 22 tests, `initiateSession failed: directory_unreachable`. Evidence chain (all four probes fail
+IDENTICALLY): (1) with vs without this unit's diff — same; (2) pre-SEC-2 (`1d730260~1`) — same;
+(3) node 22 vs node 24 (repo wants ≥24; shell default was 22 post-crash) — same; (4) weeks-old
+commit `807817c0` — same. Only libp2p-network suites fail; structural e2e files pass (49 tests).
+Signature: both clients auth + announce on signaling, both streams close ~10ms later, the
+subsequent persistent-stream open fails. The suites run ANCIENT published pins
+(`@cello-protocol/client` ^0.0.20 vs 0.0.82 current) against today's directory source. Prime
+suspects: stale pins meeting a newer signaling flow, or machine-local libp2p state. This predates
+the moniker work by weeks and does not gate it (the touched package's suite is green); it needs its
+own unit — proposed **E2E-PINS-1**: refresh the e2e published-client pins (or vendor the spine
+client) and get the network e2e green again, then make the pin-freshness a checked invariant.
+Full logs: scratchpad `e2e-full-main.log`, `e2e-807817c0.log`.
+
+Also fixed when found (pre-existing lint): unused `connectMcp` import (j-presence.spine.test.ts,
+error-level) + two unused eslint-disable directives (internal-api-only.ts). Lint now fully clean.
+
 ---
 
 ## Related Documents
