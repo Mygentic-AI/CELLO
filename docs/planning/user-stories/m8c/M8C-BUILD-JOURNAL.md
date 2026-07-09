@@ -3211,6 +3211,48 @@ cello_contact_list (checked: single caller) so the added field is additive.
 
 ---
 
+### 2026-07-09 — Entry 69: MONIKER-4 — whoLabel + doorbell copy (unit start, DESIGN NOTE first)
+
+**Target:** a pure, total `whoLabel` renders every counterparty as local pet name → offered name →
+fingerprint; the dispatcher stamps `who`/`whoKnown` on the two counterparty-bearing frames; the shim
+doorbell leads with the label, moves session IDs out of the body, and marks unverified names.
+
+**Design note (§6 — this is the in-context egress surface):**
+- **Pure core** `core/daemon/src/who-label.ts`: `fingerprint(pubkeyHex)` → `agent 178d420b…` (8 hex +
+  ellipsis; garbage/empty input still yields a non-empty label — total, never throws). `whoLabel({
+  localMoniker, offeredMoniker, pubkeyHex })` → `{ who, whoKnown, source }`; re-validates both name
+  inputs with the shared rule (defense in depth — total even if misused), precedence local ?? offered
+  ?? fingerprint; `whoKnown` true ONLY for source local (AC2's "came from the local address book").
+- **Producer chain:** localMoniker ← new targeted `getContactMoniker(agentName, pubkey)` on
+  session-node-manager (MONIKER-3's column); offeredMoniker ← MONIKER-2's session-scoped map keyed by
+  sessionId; resolution happens daemon-side at the dispatch call sites (wrapper + content-arrived
+  callback), emits `moniker.resolved {agentName, pubkey, source}` debug. Dispatcher methods gain
+  optional who/whoKnown params — additive on the frame, `counterpartyPubkey`/`from` stay the anchors.
+- **Shim rendering (forward-only frames, rendering is display):** label = whoKnown ? who :
+  (fingerprint ? who : `"who" (unverified)`). The name-vs-fingerprint discriminator is UNFORGEABLE:
+  MONIKER_RE excludes spaces; a fingerprint always contains one (`agent 178d…`). Quotes/parens
+  excluded by the charset → the (unverified) marker itself cannot be forged (AC4). Copy per spec
+  table (created/active/sealed/closed/cello_message); non-table states get the generic
+  `session with {label} is now "state"`. Session IDs leave the body — they remain as `<channel>` meta
+  attributes (AC3). Old-daemon frames (no `who`) fall back to a shim-side fingerprint of
+  counterpartyPubkey/from — degrades legibly, never blank (spec §8).
+- **AC5 / INV-CONTENTFREE:** `who` is a validated ≤64-char name or a fingerprint — routing metadata,
+  never message content; the shim's synthesized-body + content-key-skip stance is unchanged.
+- **Enforcers:** unit tests (who-label battery incl. 64-char never-truncated names + totality;
+  channel-params copy assertions incl. marker rendering + ID-out-of-body; dispatcher integration over
+  the moniker-2 harness with a real notification listener). **The DoD line flips ONLY after the LIVE
+  channels session** (published connect + /mcp reconnect — the two human-gated steps land at cascade
+  time), which also discharges the MONIKER-2 reviewer's carried condition (end-to-end label assert,
+  invalid name renders as fingerprint live).
+
+**Checklist:** [ ] AC1 pure total whoLabel+fingerprint (battery) · [ ] AC2 who/whoKnown on exactly
+session_state_changed + cello_message, whoKnown true only for local source · [ ] AC3 copy table,
+who leads, IDs out of body (meta keeps them), names never truncated · [ ] AC4 unverified marker,
+unforgeable · [ ] AC5 content-free preserved · [ ] OBS moniker.resolved · [ ] live proof PENDING
+cascade (flip held).
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
