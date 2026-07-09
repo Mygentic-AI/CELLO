@@ -3251,6 +3251,34 @@ who leads, IDs out of body (meta keeps them), names never truncated · [ ] AC4 u
 unforgeable · [ ] AC5 content-free preserved · [ ] OBS moniker.resolved · [ ] live proof PENDING
 cascade (flip held).
 
+**MONIKER-4 BUILT + REVIEWED (2026-07-09) — DoD flip HELD for the live gate.** cello-client
+`a09c17b` + review fixes `e10b8d7`. Pure `who-label.ts` (local ?? offered ?? fingerprint; whoKnown
+only for the local tier), daemon-side `resolveWho` at the two dispatch points, additive who/whoKnown
+on `session_state_changed` + `cello_message`, shim copy per the spec table. Reviewer: SPEC deviation
+F1 (`{yourAgent}` was truncated at 12 chars by `short()` — agent names are legal to 64; AC3's
+never-truncate applies to your own name too) FIXED; **HOLLOW TEST T1** — the ID-out-of-body
+assertions checked for 16 consecutive hex chars while the *old* rendering emitted only 12 via
+`short()`, so the one assertion whose entire job was pinning "session ID leaves the body" could not
+catch that regression; tightened to 8 and re-proven. F2 (silent null-DB branch) now logs
+`moniker.local.db_unavailable`. No silent fallbacks; resolve-before-drop ordering and the
+unforgeable space-discriminator both confirmed by the reviewer.
+
+**MONIKER-5 BUILT (2026-07-09).** cello-client `d7c741c` — `who`/`whoKnown` on `cello_list_sessions`
+and `cello_contact_list` (AC1); AC2 asserts the load-bearing invariant: a named stranger and a
+nameless one get identical contact membership and identical ABUSE-1 acceptance bounds, and neither
+is auto-promoted (CC-1). Reviewer in flight. Gates: 1883 green, lint/typecheck/build clean.
+
+**REMAINING TO CLOSE THE MONIKER TIER:** (1) MONIKER-5 review + fixes. (2) The publish cascade —
+protocol-types 0.0.19 → transport 0.0.17 → client 0.0.47 → daemon 0.0.38 → cli 0.0.35 → connect
+0.0.62, tag `v0.0.84` (monotonic CI trigger, NOT the connect version — they have drifted); carries
+the parallel session's RECONNECT-001 (`b91b6c1`) too. Load `/cello-publish` fresh; verify against
+the BINARY (`npm view … dependencies` = real versions never `workspace:*`; `npm pack` + grep dist for
+both a RECONNECT marker and `offered_moniker`). (3) **The LIVE channels session** — the gate for
+DOD-MONIKER-4, which also discharges the MONIKER-2 reviewer's carried condition: assert the received
+label end-to-end (legible name through the deployed directory), an invalid name rendering as a
+fingerprint, and the ID out of the body. Human-gated steps: `latest` promotion (needs Andre's go) and
+`/mcp` reconnect.
+
 ---
 
 ## Related Documents
