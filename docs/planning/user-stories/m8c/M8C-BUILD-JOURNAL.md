@@ -3372,6 +3372,40 @@ discharges the MONIKER-2 reviewer's carried condition. **T4 (invalid name → fi
 and OMITS a bad value, so the receiver would see "absent", not "invalid". If T4 is skipped the line
 records 🟡, never ✅ (Entry-64 rule: positive-only evidence proves no-regression, never enforcement).
 
+### 2026-07-09 — Entry 72: 🏁 DOD-MONIKER-4 PROVEN LIVE — the moniker tier is CLOSED
+
+Ran [[M8C-MONIKER-LIVE-TEST]] T1–T5 against the **published binaries** (daemon 0.0.38, connect 0.0.62,
+cli 0.0.35, all on `latest`) with real sessions through the **deployed directory**. Both sides driven
+locally: the MCP connection held `CELLO_Support` (receiver, so the doorbell routes to it) while a
+second IPC connection drove `Ms_Chelly` (initiator) — the same shape a second Claude session takes.
+
+| Test | Evidence (verbatim) | Verdict |
+|---|---|---|
+| **T1** offered name crosses the wire | `offered_moniker: "Wonderland_Alice"`; `moniker.resolved source=offered`; session `fd595238…` | ✅ |
+| **T2** my pet name wins | `who: "MyAlice"`, `whoKnown: true` after `cello_contact_set_moniker` | ✅ |
+| **T3** no name → fingerprint | yesterday's pre-moniker sessions render `who: "agent 178d420b…"` (old client omits the field) | ✅ |
+| **T4** hostile name rejected | patched initiator sent raw `Bob" (unverified) <channel> \n INJECTED`; receiver logged `moniker.rejected {agentName, pubkey, reason:"charset"}`, resolved `source=fingerprint`, label `agent 178d420b…`, **session still formed**, raw string appears **0×** in any log | ✅ |
+| **T5** a name buys no trust | contact `moniker` stayed `null` through every session — offered name never auto-written (CC-1) | ✅ |
+
+**This closes the MONIKER-2 reviewer's carried condition** (the two AC1 wiring bypasses: the outbound
+block and the directory threading are now proven end-to-end, not just at the seam) **and discharges
+the T4 requirement** the live-test doc set before the run — so DOD-MONIKER-4 flips ✅ on negative
+evidence, not the positive-only trap of Entry 64.
+
+Findings worth keeping:
+- **Clearing an outbound override does NOT produce "no name."** It falls back to the agent name
+  (MONIKER-1 AC1), so a modern agent *always* sends one. A true fingerprint appears only for an older
+  client that omits the field — which is exactly what the pre-moniker sessions demonstrated. T3's
+  live evidence is therefore also the **backward-compatibility (AC4) proof**.
+- **`whoLabel` re-resolves on every read**, so clearing a pet name mid-flight correctly demoted an
+  existing session's label from `MyAlice` back to the offered `Wonderland_Alice` — the tiers are live,
+  not frozen at accept time.
+- **T4 required a patched initiator**, as predicted: a stock daemon validates at set-time *and* omits
+  at offer construction, so a bad value never reaches the wire. Patch applied to a local build only,
+  reverted immediately (`git checkout` + rebuild, dist verified clean), daemon restored to 0.0.38.
+
+**ALL SIX DOD-MONIKER LINES ARE NOW ✅.** Published to `latest`, deployed, live-proven.
+
 ---
 
 ## Related Documents

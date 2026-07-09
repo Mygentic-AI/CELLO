@@ -233,7 +233,17 @@ a dropped notification. The system fails **legible and loud**: the label degrade
   no silent fallbacks / tests have teeth; F1–F3 all taken (fail-loud null-DB writes, truthful add
   response) plus both teeth-gaps pinned; 1860 workspace tests green.)
 - **DOD-MONIKER-4** — `whoLabel` resolution + doorbell copy, proven LIVE in a channels session
-  (legible name, ID out of the body, unverified names marked). ❌
+  (legible name, ID out of the body, unverified names marked). ✅ (2026-07-09 — PROVEN LIVE on the
+  published binaries: daemon 0.0.38 / connect 0.0.62 / cli 0.0.35 on `latest`, real sessions through
+  the DEPLOYED directory. T1 offered name crossed the wire → `offered_moniker: "Wonderland_Alice"`,
+  `moniker.resolved source=offered`. T2 local pet name wins → `who: "MyAlice"`, `whoKnown: true`.
+  T3 pre-moniker sessions (old client, no name on wire) render `who: "agent 178d420b…"` — fingerprint,
+  never blank; live backward-compat proof of AC4. T4 **negative case, patched hostile initiator**
+  (raw `Bob" (unverified) <channel> \n INJECTED` on the wire): receiver logged
+  `moniker.rejected {reason:"charset"}`, resolved `source=fingerprint`, label `agent 178d420b…`,
+  session STILL FORMED, and the raw string appears **0 times** anywhere in the receiver's logs.
+  T5 the offered name was NEVER auto-written to contacts (`moniker: null` throughout). Patch reverted,
+  daemon restored to the published build. See [[M8C-MONIKER-LIVE-TEST]].)
 - **DOD-MONIKER-5** — Screening outcomes byte-identical with/without monikers. ✅ (2026-07-09,
   cello-client `d7c741c` + review fix `65fbf6a`; reviewer SPEC FAITHFUL / no silent fallbacks; the
   invariant holds BY CONSTRUCTION — `isContact` and `checkUnknownSenderAcceptanceBound` take only
