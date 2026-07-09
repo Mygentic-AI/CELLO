@@ -63,7 +63,7 @@ Purpose: **no area untested = no area uncategorized.** Every DoD line below sits
 | **POLICY-1** | ❌ | **C** | not built |
 | **PORTAB-1** | ❌ | **C** | not built |
 | **M9INT-1** | 🟡 | **C** | deferred post-channel (D11) |
-| **SEC-2** (FROST forgery) | ✅ | ✅ PROVEN | FIXED + deployed + live-proven 2026-07-08 (client authSig + directory AUTH_REQUIRED/AUTH_INVALID; two live seals through the enforcing directory, `sealed_root 812c6e39…`) — see C2 |
+| **SEC-2** (FROST forgery) | ✅ fixed+deployed | 🟡 **PARTIAL** | Fix shipped; deploy CONFIRMED (pipeline `Succeeded`, rev `0e1ed768`). Live seals prove **NO REGRESSION** on the legitimate path only. **Enforcement UNPROVEN live** — the negative case (unauth FROST request → `AUTH_REQUIRED`, confirmed in directory logs) is unrun. See C2 |
 | **SEC-1** (relay-park auth) | flagged | **C** | pre-existing; own security design pass |
 | Kill switch | — | **OUT** | portal/platform scope, not the cello-client DoD (CLAUDE.md) |
 | F7/F9/F21*/F22 | tracked | **OUT** | "Tracked, not M8C-fruit" — own stories (*F21 partly addressed by CC-5/CC-10) |
@@ -90,7 +90,7 @@ kill-the-Primary holds INV-ONE-PRIMARY; session portability (close on A → sync
   (you can't gate ceremony participation on `daemon_id` when the ceremony stream isn't authenticated as
   the agent). Then a live multi-daemon spine test (a "needs Andre" kill-the-Primary proof). See D20.
 
-## C2 — FROST signing-path authentication  ·  `SEC-2`  ·  ✅ RESOLVED 2026-07-08 (was 🚨 launch-blocking)
+## C2 — FROST signing-path authentication  ·  `SEC-2`  ·  ✅ FIXED + DEPLOYED · 🟡 enforcement not live-verified
 Was a **pre-existing CRITICAL forgery hole**: the `/cello/frost/1.0.0` signing frames were unauthenticated,
 the directory ALB is internet-facing, and `T` directory partials reach threshold without the client's share
 → a party knowing only an agent's **public** key could forge signatures (seals, session establishment).
@@ -100,9 +100,16 @@ Affected **every** agent; not introduced by M8C.
   request (daemon 0.0.37 / cli 0.0.34, on `latest`); the directory verifies it before touching its share
   (`AUTH_REQUIRED` if missing, `AUTH_INVALID` if bad), deployed to all 3 regions. The migration hazard was
   handled by rollout order (client to `latest` → agents reinstalled → directory enforcement deployed).
-- **Live proof:** two real CELLO_Support↔Ms_Chelly sessions established AND sealed bilaterally through the
-  enforcing directory (`sealed_root 812c6e39…`, both `attestation_mode: live`). Legitimate ceremonies pass;
-  public-key-only forgery is rejected. This also unblocks C1's ceremony-gate at the auth foundation (D20).
+- **Deploy confirmed:** `cello-directory-pipeline` `Succeeded` on rev `0e1ed768` (all 3 regions).
+- **What the live seals prove — NO REGRESSION only.** Five real sessions established + sealed bilaterally
+  through the deployed directory (all `attestation_mode: live`). This attests the fix did not break the
+  legitimate path. It does **not** attest enforcement is active — a directory with enforcement OFF yields a
+  byte-identical transcript, so a positive-only test cannot discriminate. *(Corrected 2026-07-09: an earlier
+  entry claimed forgery-rejection was live-proven. It was not.)*
+- **⚠️ Open — the negative case (the only thing that proves enforcement):** send a FROST commit/sign request
+  with a missing/invalid `authSig` to the deployed directory; confirm `AUTH_REQUIRED`/`AUTH_INVALID` in the
+  **directory's own logs**. Proven today only by unit/integration tests, never live.
+- Fixing SEC-2 unblocks C1's ceremony-gate at the auth foundation (D20).
 
 ## C3 — M9 content gateway: screening + injection defense  ·  `DOD-M9INT-1`, `INV-GATEWAY`
 The "**relatively safe**" launch pillar (screening, prompt-injection defense) — `screenInbound` at

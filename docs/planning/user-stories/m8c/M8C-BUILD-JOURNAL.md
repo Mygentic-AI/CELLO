@@ -17,9 +17,10 @@ description: >
 > `authSig` over `(agentPubkey, epochId, framedMsg)` on every commit/sign request (daemon 0.0.37 / cli
 > 0.0.34, published + promoted to `latest`); the directory verifies it before touching its share
 > (`AUTH_REQUIRED` / `AUTH_INVALID`), deployed to all 3 regions. Rolled out in the safe order (client to
-> `latest` → agents reinstalled → directory enforcement deployed), so no deployed client broke. Live-proven
-> end to end — two real CELLO_Support↔Ms_Chelly sessions established AND sealed bilaterally through the
-> enforcing directory (`sealed_root 812c6e39…`, both `attestation_mode: live`). Full writeup: **Entry 63**
+> `latest` → agents reinstalled → directory enforcement deployed), so no deployed client broke. Deploy
+> CONFIRMED (pipeline `Succeeded`, rev `0e1ed768`). Live seals prove **NO REGRESSION** on the legitimate
+> path — **enforcement itself is NOT yet live-verified** (the negative case is unrun; see Entry 63 + Entry 64).
+> Full writeup: **Entry 63**
 > (fix + rollout + live proof); the original finding is **Entry 39**; forensic hole description retained in
 > the DoD "Tracked, not M8C-fruit" → SEC-2 block for the record.
 
@@ -2913,6 +2914,42 @@ SEALED bilaterally — `sealed_root 812c6e39ea0afaf0f80dc08070fbf6c01e48b2977532
 parties `attestation_mode: live`. Session-establishment and seal ceremonies both pass enforcement;
 legitimate agents work, public-key-only forgery is rejected. SEC-2 → ✅ (DoD + ledger flipped). Also
 unblocks DOD-PRIMARY-1's ceremony-gate at the auth foundation (D20).
+
+---
+
+### 2026-07-09 — Entry 64: ⚠️ CORRECTION to Entry 63 — the SEC-2 live seals prove NO REGRESSION, not enforcement
+
+**Entry 63 overclaimed and this entry corrects it (append-only: 63 stands as written; this supersedes its
+proof claim).** Entry 63 stated the SEC-2 fix was "live-proven ... legitimate agents work, public-key-only
+forgery is rejected." **The rejection half was never demonstrated live.**
+
+**Who caught it.** `CELLO_Support`, in live session `12f882885d3dde599dade23627195eac` (sealed
+`cf5ddb57b57eccfb7428fa49f449b89deb692180f7ed2ecdd9e848844aa028d8`, both parties `live`), when Ms_Chelly
+opened with "this message reaching you already proves establishment passed the enforcing directory." Its
+reply, verbatim in substance: *"A directory with enforcement switched off entirely would produce this
+identical transcript. If we treat this as proof of enforcement, we have built ourselves a test that cannot
+fail, which is the same as no test."* Correct, and conceded.
+
+**The precise error.** Not a bad test — a **true observation labelled with a stronger claim than it
+supports**. Five green bilateral seals attest exactly one thing: *the SEC-2 change did not break the
+legitimate path.* No regression. Nothing whatsoever about rejection. Positive-only evidence cannot
+discriminate enforcement-ON from enforcement-OFF. This class of error is the hardest to catch later
+precisely because nothing looks broken.
+
+**A second, deeper gap surfaced by the same challenge.** The phrase "the enforcing directory" was doing
+load-bearing work in a sentence where nobody had checked it — the deploy pipeline had been left
+`InProgress` and never confirmed. **Now confirmed as an observation:** `cello-directory-pipeline` execution
+on rev `0e1ed768` reports `Succeeded` (all 3 regions). The deployed directory *is* running the SEC-2 build.
+Had the negative case been run before that check, a "rejection" could have come from a directory not running
+the new code at all — the negative case would have inherited the same defect.
+
+**Open item, stated plainly (the ONLY thing that proves enforcement):** issue a FROST commit/sign request
+with a missing or invalid `authSig` against the deployed directory, and confirm `AUTH_REQUIRED` /
+`AUTH_INVALID` **in the directory's own logs**. Until that runs, enforcement is proven by unit/integration
+tests only (`sec-2-frost-auth.test.ts` + directory-side tests) and is **UNPROVEN in production**.
+
+DoD, ledger (C2 + table row), and the journal banner corrected accordingly. SEC-2 status is now
+**✅ fixed + deployed / 🟡 enforcement not live-verified**, not ✅ across the board.
 
 ---
 

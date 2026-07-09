@@ -501,8 +501,9 @@ own story) deliberately, never smuggled in as a rider. Source:
   signature to the park protocol. Flagging prominently — this is real production crypto-protocol
   attack surface, not a nice-to-have.
 
-- **SEC-2 (2026-07-07, found while scoping DOD-PRIMARY-1's ceremony-gate) — ✅ FIXED, DEPLOYED &
-  LIVE-PROVEN (2026-07-08). Was a 🚨 pre-existing CRITICAL forgery hole in the FROST signing path.**
+- **SEC-2 (2026-07-07, found while scoping DOD-PRIMARY-1's ceremony-gate) — ✅ FIXED & DEPLOYED
+  (2026-07-08). ⚠️ ENFORCEMENT NOT YET LIVE-VERIFIED — the negative case is unrun (see below).
+  Was a 🚨 pre-existing CRITICAL forgery hole in the FROST signing path.**
   > **✅ RESOLVED 2026-07-08.** Both halves shipped and live: the **client** now signs every FROST
   > commit/sign request with a K_local Ed25519 `authSig` bound to `(agentPubkey, epochId, framedMsg)`
   > (cello-client `d744778`/`9971769`, daemon 0.0.37 / cli 0.0.34, published + promoted to `latest`);
@@ -510,11 +511,27 @@ own story) deliberately, never smuggled in as a rider. Source:
   > invalid → `AUTH_INVALID` (trustless-cello `1d730260`/`d9202913`, deployed to all 3 regions via
   > `cello-directory-pipeline`, revision `0e1ed768`). Reviewer verdict: forgery closed, SPEC FAITHFUL /
   > TESTS HAVE TEETH (2 findings fixed: DoS coercion on non-bytes authSig + commit/sign domain
-  > separation `0x00` vs `0x01||msg`). **Live-proven end to end 2026-07-08** against the enforcing
-  > directory: two real CELLO_Support↔Ms_Chelly sessions established AND sealed bilaterally
-  > (`sealed_root 812c6e39…`, both parties `attestation_mode: live`) — session-establishment and seal
-  > ceremonies both pass enforcement; legitimate agents work, public-key-only forgery is rejected. The
-  > forensic description of the original hole is retained below for the record. See BUILD-JOURNAL Entry 63.
+  > separation `0x00` vs `0x01||msg`).
+  >
+  > **Deploy CONFIRMED (observation, not assumption):** `cello-directory-pipeline` execution on revision
+  > `0e1ed768` reports `Succeeded`, all 3 regions. The deployed directory is running the SEC-2 build.
+  >
+  > **What the live sessions actually prove — NO REGRESSION, not enforcement.** Five real
+  > CELLO_Support↔Ms_Chelly / Ms_Chelly_Hermes sessions established AND sealed bilaterally through the
+  > deployed directory (`sealed_root 812c6e39…`, `cf5ddb57…`, others; all `attestation_mode: live`).
+  > That attests the SEC-2 change **did not break the legitimate path**. It does **NOT** attest that
+  > enforcement is active: a directory with enforcement switched off produces a byte-identical
+  > transcript, so a positive-only test cannot discriminate on/off. (An earlier revision of this line
+  > claimed "public-key-only forgery is rejected" as live-proven. It was not. Corrected 2026-07-09 after
+  > CELLO_Support challenged the claim in session `12f88288…` — a true observation had been labelled
+  > with a stronger claim than it supports.)
+  >
+  > **⚠️ OPEN — the negative case.** Rejection of an unauthenticated FROST request is proven only by
+  > unit/integration tests (`sec-2-frost-auth.test.ts` + directory-side tests), never live. To prove
+  > enforcement: issue a FROST commit/sign request with a missing/invalid `authSig` against the deployed
+  > directory and confirm `AUTH_REQUIRED`/`AUTH_INVALID` **in the directory's own logs**. Until that runs,
+  > enforcement is UNPROVEN in production. The forensic description of the original hole is retained below
+  > for the record. See BUILD-JOURNAL Entry 63.
   **NOT introduced by M8C or the Tier-5 work — pre-exists in the M2/M6B/federation FROST signing
   path and affects EVERY agent.** Confirmed by three independent code-reads (a ceremony-gate
   feasibility pass, a FROST-threshold-model check, and an adversarial confirm-or-refute that
