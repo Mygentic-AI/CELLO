@@ -167,6 +167,49 @@ crisp handoff for the live checks.
    original ABUSE-1 test and the Phase-2 block looked identical (`ok:true`) from A's side regardless of
    acceptance. Consider surfacing a rejection reason to the initiator. Details in Phase 2 RESULTS.
 
+**🔭 ADDED 2026-07-09 (surfaced during the SEC-2 rollout + Hermes live use):**
+
+3. **`node:sqlite` ExperimentalWarning on every `cello login` / `logout`** 🟢 *(cosmetic, trust-damaging)* —
+   the CLI prints `ExperimentalWarning: SQLite is an experimental feature and might change at any time` on
+   the core operator path. **Data is NOT at risk** — verified: `~/.cello/sessions.db` has no
+   `SQLite format 3` magic header (whole-file SQLCipher AES-256), key is `sessions.db.key` (32 bytes, 0600).
+   **Root cause:** `core/daemon/src/identity-migration.ts` does a **top-level static import** of
+   `node:sqlite` (used only for reading a *legacy plaintext* DB during a one-time migration that never runs
+   on a migrated install). `session-node-manager` and `db-identity-store` already import it lazily.
+   **Fix:** make that import dynamic (`await import("node:sqlite")` inside the migration function) — remove
+   the cause, don't silence the warning. Ships with the next daemon cascade. Andre (2026-07-09): "users will
+   keep getting that message and it looks like we're using some unstable thing."
+   *(Also: `core/daemon/dist/transcript-cipher.d.ts` is a stale build artifact claiming "plain node:sqlite
+   (no whole-DB encryption)" — its source no longer exists and it does NOT ship in the published tarball. A
+   rebuild clears it. No user impact.)*
+
+4. **`cello login` couples the daemon's lifetime to its spawning process** 🔴 *(real bug — silent total loss)* —
+   daemon pid 77859, spawned by `cello login` from inside a Claude Code Bash tool, died by raw **`SIGTERM`**
+   at `2026-07-09T06:54:12.039Z` the moment that Claude Code session ended. It is the **only** daemon in the
+   whole log history not to die by a clean `logout_requested`. The daemon *is* spawned detached (PPID 1,
+   PGID == PID), so the ordinary terminal-SIGHUP path doesn't explain it. **Proven:** not a crash (graceful
+   info-level shutdown, zero uncaught exceptions), not launchd (no job/plist), not the Hermes adapter (a
+   Unix-socket client cannot signal a process; zero IPC errors). **Unproven:** who sent the signal — macOS
+   does not record signal senders. **Falsification test (~10 min):** `cello login` inside an agent session,
+   kill the session, observe whether the daemon survives. An operator who runs `cello login` from any wrapper
+   that later exits silently loses their daemon and every agent — violates the "heavy local node" contract.
+
+5. **MCP never auto-reconnects after a daemon restart** 🟠 — one daemon restart silently orphaned *both*
+   connected agents' MCP servers simultaneously (Claude Code: tools vanish; Hermes: `ClosedResourceError`).
+   Neither self-heals, and neither error names the remedy (`/mcp reconnect cello`). Both required manual
+   operator intervention. Fix direction: reconnect-on-socket-loss in the shim, or at minimum an error string
+   that states the fix.
+
+6. **Hermes agent receives no notification in its chat surface** 🔴 *(fact; cause NOT established)* —
+   the Hermes agent reports it has never received an autonomous wake in the surface its operator uses; it
+   only found sessions when explicitly prompted to look. **What is proven:** the adapter *does* inject wakes
+   — the gateway log shows `inbound message: platform=cello ... chat=default` and the agent replying with no
+   human in the loop. **What is NOT proven:** why the operator never sees it. Do NOT accept the agent's own
+   explanation ("the desktop app is a different surface") — that is conjecture from an LLM reasoning about
+   its own harness, not evidence. Needs a real investigation from the gateway logs + adapter code + the
+   actual Hermes surface in use. If confirmed, "install the bridge, then never see a notification" is an
+   unforgivable-column launch problem, not a papercut.
+
 Prior notes for CC-5 (now done, superseded):
 **(was) CC-5** (🟢 — F21 full, design-significant, LAST fix:
 (a) don't-strand — receiver session conditional on initiator confirmation OR reap `messageCount:0`
