@@ -45,7 +45,7 @@ relationship×availability response matrix (stays M9/CONFIG-1).
 
 ## 3. Validation — one regex, on both sides, reject never strip
 
-The name reuses the **existing agent-name rule**, already enforced by `cello create-agent`:
+The name uses the same rule `cello create-agent` enforces on agent names:
 
 ```
 MONIKER_RE = /^[a-zA-Z0-9_-]{1,64}$/
@@ -55,6 +55,18 @@ Letters, digits, `_`, `-`. Max 64. By construction this excludes newlines, contr
 quotes, parentheses, spaces, markup, and all non-ASCII — so a name cannot break the `<channel>` tag,
 forge a trust marker, or carry a homoglyph. The charset *is* the injection defense; no separate
 sanitizer subsystem exists.
+
+> ⚠️ **There is nothing to "reuse" yet — see MONIKER-0.** The rule exists today only as *inline
+> literals*: `daemon.ts:1941`, `daemon.ts:2048`, a prose copy in `cli-args.ts:53`, and a test copy in
+> `cli-args.test.ts:70`. No exported constant. Writing MONIKER against that would add copies five and
+> six, one of them at the wire boundary. Since the charset is the whole injection defense, a defense
+> living in six unsynchronised copies is one that drifts silently. MONIKER-0 fixes that first.
+> *(Found by CELLO_Support during kickoff review, session `30b5b208…`; the spec previously claimed a
+> shared validator existed. It does not.)*
+
+**The constant is not the defense — the reject battery is.** An exported `MONIKER_RE` with a weak
+battery drifts exactly as silently as six literals. Pin the security-relevant rejects individually and
+by name (§7), so a future widening trips a named test instead of sliding through green.
 
 **Validate on both sides.** The initiator's daemon validates at set-time and at offer construction.
 That is not sufficient — a malicious operator can modify their own daemon — so the **receiver
@@ -73,6 +85,21 @@ to fingerprint **and** log `moniker.rejected`. It is a red flag, not grounds to 
 ## 4. Requirements
 
 Each story is E2E-first, TDD (red before green). IDs are `MONIKER-N`; DoD lines in §8.
+
+### MONIKER-0 — Give the charset a single home (pure refactor, no behaviour change)
+**Do this first. Everything below imports it.**
+- **AC1** Extract one exported `MONIKER_RE` + `validateMoniker(raw): string | null` into a shared module.
+  The regex is **byte-identical** to the two existing literals — MONIKER-0 must not widen or narrow
+  agent-name validation. Existing agent-name tests pass **unmodified**; that is the proof of
+  behaviour-preservation.
+- **AC2** Repoint `daemon.ts:1941`, `daemon.ts:2048`, and the CLI help text (`cli-args.ts:53`) at it.
+  Zero inline copies remain.
+- **AC3** The accept/reject battery (§7) is pinned **once**, on this module, and is the single subject of
+  the strip-oracle regression test.
+- **AC4** **One constant, shared by agent names and monikers — not two.** MONIKER-1 AC1 makes the agent
+  name the *default* outbound moniker, so the two cannot legitimately diverge: an agent name failing the
+  moniker rule would be unsendable. Sharing the object forces anyone relaxing agent names to confront
+  that they are widening the wire charset, rather than discovering it later.
 
 ### MONIKER-1 — Outbound name
 - **AC1** An agent's outbound name defaults to its **agent name** (`create-agent`). No separate
@@ -156,9 +183,14 @@ Each story is E2E-first, TDD (red before green). IDs are `MONIKER-N`; DoD lines 
 
 ## 7. Test plan
 
-- **Unit:** `whoLabel` precedence (all three tiers, local-wins, collision); `MONIKER_RE` accept/reject
-  battery (newlines, quotes, parens, spaces, non-ASCII, 65 chars, empty); **strip-oracle regression** —
-  assert an invalid name is rejected, never repaired into a valid one; guarded migration on a populated DB.
+- **Unit:** `whoLabel` precedence (all three tiers, local-wins, collision); guarded migration on a
+  populated DB.
+- **The reject battery (MONIKER-0 AC3) — the actual injection defense.** Pinned once, on the shared
+  module, each an **individually named assertion** so a future widening trips a test rather than sliding
+  through green: newline, carriage return, tab, other control chars, `"`, `'`, `(`, `)`, space, any
+  non-ASCII codepoint, 65 characters, empty string. Plus the **strip-oracle regression**: assert an
+  invalid name is *rejected*, never repaired into a valid one (`C*E*L*L*O*_*S*u*p*p*o*r*t` must not
+  become `CELLO_Support`).
 - **Fixture / spine:** extend `packages/e2e-tests/src/session-fixture.ts` (never a from-scratch fixture):
   initiator with a name offers → receiver's `session_state_changed` carries the right `who`/`whoKnown`;
   receiver with a local moniker → local wins; no name anywhere → fingerprint; invalid name on the wire →
@@ -173,6 +205,8 @@ a dropped notification. The system fails **legible and loud**: the label degrade
 
 ## 9. Proposed DoD lines
 
+- **DOD-MONIKER-0** — One exported `MONIKER_RE` + `validateMoniker`; zero inline copies; agent-name tests
+  pass unmodified; the named reject battery + strip-oracle regression pinned once. ❌
 - **DOD-MONIKER-1** — Outbound name (agent name + validated optional override) carried on the offer. ❌
 - **DOD-MONIKER-2** — Receiver validates at the wire boundary; invalid → fingerprint + `moniker.rejected`;
   never auto-added to contacts. ❌
