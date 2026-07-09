@@ -3019,6 +3019,46 @@ DOD-MONIKER-0 in the spec, close the entry.
 
 ---
 
+### 2026-07-09 — Entry 66: MONIKER-1 — outbound name (unit start, clause checklist)
+
+**Target (one sentence):** An agent's outbound name defaults to its agent name, with an optional
+per-agent override persisted as a nullable column on the agents table, settable via
+`cello_set_moniker` (daemon) / `cello moniker set` (CLI), validated at set-time, and never sent to
+the directory.
+
+**Clause checklist (DOD-MONIKER-1 + AC1–AC4):**
+- [ ] AC1 — outbound name defaults to the agent name; no separate "self-moniker" concept
+  (`getOutboundName(agentName)` = override ?? agent_name)
+- [ ] AC2a — nullable `moniker TEXT` column on the **agents** table (NOT the config store — D14):
+  added to `CREATE_AGENTS_SQL` + PRAGMA-guarded additive ALTER in `ensureIdentitySchema`
+- [ ] AC2b — migration guard is an INDEPENDENT `if`, not chained `else if` — an old table missing
+  both `frost_directory_node_ids` and `moniker` must receive BOTH ALTERs (the existing chain would
+  apply only the first)
+- [ ] AC2c — migration idempotent on a populated DB; existing rows → NULL; second run no-throw
+- [ ] AC2d — `cello_set_moniker` daemon handler (set + clear via explicit null); shim forwards only
+  (D7 — no logic in cello-mcp.ts); `cello moniker set <name> [--agent]` in the CLI
+- [ ] AC3a — set-time validation via the shared `validateMoniker` (MONIKER-0); invalid → clean
+  `invalid_moniker` error, value never stored; store-level backstop throws on invalid write
+- [ ] AC3b — offer construction re-validates and omits rather than sending a bad value — DEFERRED to
+  MONIKER-2 (offer construction does not exist yet; journaled here so it is not lost)
+- [ ] AC4 — the name is local: registration path untouched; no directory payload gains the field
+- [ ] OBS — `agent.moniker.set` (info) `{agentName}` on success (domain.noun.verb; no raw-value
+  logging beyond the validated name, which is by construction display-safe)
+
+**Falsification pass:**
+- Call sites have access? `daemon.ts` already imports `validateMoniker` (MONIKER-0); handler pattern
+  matches `cello_contact_add` (per-connection agent resolution). Store methods live beside
+  `createAgent`/`retireAgent` in `DbIdentityStore` — same class, same DB handle.
+- Responsibility? Persistence in the store, validation at the handler (operator-facing error) with a
+  store-level throw as backstop — matches "an invalid value can never be stored" at the lowest layer.
+- Redundancy? The default (agent name) is NOT stored — it is resolved at read time
+  (override ?? agent_name), so renames and the no-override case can't drift.
+- What breaks? Nothing consumes the column yet (MONIKER-2 consumes). The independent-`if` migration
+  fix touches `ensureIdentitySchema` — covered by the existing persist-quorum-migration test plus a
+  new both-columns-missing case.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
