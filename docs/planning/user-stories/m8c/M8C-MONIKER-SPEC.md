@@ -216,9 +216,18 @@ a dropped notification. The system fails **legible and loud**: the label degrade
   1815 tests green. Journaled deviation, Entry 65: `.source` where AC2's letter said `.toString()` —
   toString's slashes would have changed the user-visible help prose, breaking AC1's byte-identical
   constraint. Source-level line; ships with the tier's batched publish cascade per PROCEDURE §2a.)
-- **DOD-MONIKER-1** — Outbound name (agent name + validated optional override) carried on the offer. ❌
+- **DOD-MONIKER-1** — Outbound name (agent name + validated optional override) carried on the offer. ✅
+  (2026-07-09. Outbound-name half: cello-client `bd44f26` + `11a2574`, reviewed Entry 66. Offer carry:
+  `44540e3` (client) + trustless-cello `77cba799` (directory pass-through, DEPLOYED all 3 regions,
+  pipeline Succeeded incl. SmokeTest). Held from Entry 66 until the carry existed; now every clause of
+  this line's text is built and reviewed.)
 - **DOD-MONIKER-2** — Receiver validates at the wire boundary; invalid → fingerprint + `moniker.rejected`;
-  never auto-added to contacts. ❌
+  never auto-added to contacts. ✅ (2026-07-09, cello-client `44540e3` + review fixes `7e6133b`;
+  unit-reviewer on the cross-repo diff: F1 blocking (offered-name map cleanup was production-unreachable)
+  FIXED with red-first lifecycle tests; F2/F4 taken; verdict conditions satisfied. "Fingerprint" here =
+  the boundary yields `offeredMoniker: null`, which whoLabel renders — the RENDERED fingerprint plus the
+  end-to-end wire proof (name riding a real request through the deployed directory) is DOD-MONIKER-4's
+  required live channels gate, per the reviewer's stated condition.)
 - **DOD-MONIKER-3** — `contacts.moniker` + set/rename surface; guarded idempotent migration. ❌
 - **DOD-MONIKER-4** — `whoLabel` resolution + doorbell copy, proven LIVE in a channels session
   (legible name, ID out of the body, unverified names marked). ❌

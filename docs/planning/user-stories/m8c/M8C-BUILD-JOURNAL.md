@@ -3153,6 +3153,33 @@ Full logs: scratchpad `e2e-full-main.log`, `e2e-807817c0.log`.
 Also fixed when found (pre-existing lint): unused `connectMcp` import (j-presence.spine.test.ts,
 error-level) + two unused eslint-disable directives (internal-api-only.ts). Lint now fully clean.
 
+**CLOSED ✅ (2026-07-09) — DOD-MONIKER-1 and DOD-MONIKER-2 flipped.** Evidence:
+- Client half: cello-client `44540e3` (outbound single-seam + wire-boundary validation +
+  `offered_moniker` on await_session + session-scoped map; 11 red-first tests) and review fixes
+  `7e6133b`. Directory half `77cba799` **DEPLOYED** — pipeline all stages Succeeded incl. SmokeTest,
+  ECS COMPLETED 1/1 in us-east-1 (:249), eu-central-1 (:100), ap-northeast-1 (:90); watchdog cron
+  retired.
+- Review (`cello-unit-reviewer`, cross-repo diff): **F1 [blocking]** — the offeredMonikers cleanup
+  fired only on terminal states that never flow through the wrapper (production emits
+  created/interrupted/counterparty_closing): dead code, unbounded remote-fed map. FIXED: drop on any
+  state ≠ created + drop at offer expiry in the reap, observable via `moniker.offer.dropped`, pinned
+  by red-first lifecycle tests (including second-transition-no-second-drop, which proves removal
+  rather than logging). **F2** — `moniker.rejected` now carries the boundary's real reason
+  (`not_string|length|charset`). **F4** — stored-but-invalid outbound name logs
+  `moniker.outbound.invalid_name_omitted`. **F3 (design note, carried to MONIKER-4's journal):**
+  length/non-string junk is silently bounded away directory-side, so `moniker.rejected` only fires
+  for charset-invalid values the directory passes — acceptable (receiver authority holds), noted.
+- Reviewer's standing condition, carried forward: **MONIKER-4's live channels session MUST assert
+  the received label end-to-end** (name through the deployed directory to a real doorbell; invalid
+  name renders as fingerprint) — that closes the two seam-level AC1 wiring bypasses it identified.
+- Gates: cello-client full workspace 1855 green (includes the parallel session's RECONNECT-001
+  suite, landed as `b91b6c1` — adapter WIP no longer uncommitted), lint/typecheck/build clean.
+- Parallel-session coordination: RECONNECT-001 rides the SAME upcoming publish cascade as the
+  moniker units (Andre's relay: bump map protocol-types 0.0.19 / transport 0.0.17 / client 0.0.47 /
+  daemon 0.0.38 / cli 0.0.35 / connect 0.0.62, tag v0.0.84 as monotonic trigger; verify against the
+  BINARY incl. a RECONNECT grep and an offered_moniker grep). Cascade cut AFTER MONIKER-3/4/5 land,
+  via /cello-publish loaded fresh. **Next red: DOD-MONIKER-3** (contacts pet-name column).
+
 ---
 
 ## Related Documents
