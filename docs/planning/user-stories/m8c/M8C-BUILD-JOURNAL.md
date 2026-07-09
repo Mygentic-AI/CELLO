@@ -3057,6 +3057,28 @@ the directory.
   fix touches `ensureIdentitySchema` — covered by the existing persist-quorum-migration test plus a
   new both-columns-missing case.
 
+**UNIT COMPLETE (2026-07-09) — DoD line deliberately NOT flipped.** All MONIKER-1 story ACs are
+delivered and reviewed, but the DoD line text reads "carried on the offer" — that clause is
+MONIKER-2 AC1's seam (offer construction does not exist yet). The line flips ✅ when MONIKER-2 lands
+the carry; an auditor anchoring to line text would rightly reject an earlier flip. Evidence:
+- Implementation cello-client `bd44f26`; review fixes `11a2574`. Gates green: 1834 tests,
+  lint/typecheck/build clean. Red-first throughout (10 unit tests red → green; 4 review-fix tests
+  red → green).
+- Review (`cello-unit-reviewer` on `bd44f26`): AC1/AC3-set-half/AC4 implemented; **Finding 1
+  (HIGH/blocking, CLI):** the inline `--agent` filter dropped positional index 0 when the flag was
+  absent (`i === agentIdx + 1` with agentIdx `-1`) — `cello moniker set Bob` printed usage instead
+  of dispatching. **Finding 2 (HIGH, pre-existing):** identical bug in `cello contact` (the copy
+  source) — `cello contact list` without `--agent` was broken on main. Both fixed via one extracted,
+  test-pinned `splitAgentFlag` helper (fix-when-found rule). **Finding 3 (MEDIUM):** omitted
+  `moniker` key treated as an explicit clear — a malformed request silently deleted a stored
+  override and reported success; now rejected as `missing_params`, with a test proving the stored
+  override survives. **Hollow-coverage gap:** the bin dispatch layer was untested (exactly where
+  Finding 1 lived) — the parse is now a tested unit.
+- OBS: `agent.moniker.set` (info) `{agentName, cleared}` on success only.
+- AC3's offer-construction re-validation remains deferred to MONIKER-2 (journaled above).
+  **Next: MONIKER-2** — offer carries the name; receiver validates at the wire boundary; then
+  DOD-MONIKER-1 and DOD-MONIKER-2 flip together.
+
 ---
 
 ## Related Documents
