@@ -211,7 +211,11 @@ a dropped notification. The system fails **legible and loud**: the label degrade
 ## 9. Proposed DoD lines
 
 - **DOD-MONIKER-0** — One exported `MONIKER_RE` + `validateMoniker`; zero inline copies; agent-name tests
-  pass unmodified; the named reject battery + strip-oracle regression pinned once. ❌
+  pass unmodified; the named reject battery + strip-oracle regression pinned once. ✅ (2026-07-09,
+  cello-client `aba17df` + review fixes `b771a86`; unit-reviewer verdict FAITHFUL, no blocking findings;
+  1815 tests green. Journaled deviation, Entry 65: `.source` where AC2's letter said `.toString()` —
+  toString's slashes would have changed the user-visible help prose, breaking AC1's byte-identical
+  constraint. Source-level line; ships with the tier's batched publish cascade per PROCEDURE §2a.)
 - **DOD-MONIKER-1** — Outbound name (agent name + validated optional override) carried on the offer. ❌
 - **DOD-MONIKER-2** — Receiver validates at the wire boundary; invalid → fingerprint + `moniker.rejected`;
   never auto-added to contacts. ❌

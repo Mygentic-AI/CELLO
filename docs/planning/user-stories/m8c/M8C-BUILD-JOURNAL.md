@@ -2996,6 +2996,27 @@ red because the module doesn't exist), then implement, repoint the three sites, 
 (`pnpm run test` → `lint` → `typecheck` → `build`), `cello-unit-reviewer` on the diff, flip
 DOD-MONIKER-0 in the spec, close the entry.
 
+**CLOSED ✅ (2026-07-09).** All clauses checked. Evidence:
+- Red first: moniker.test.ts failed on missing module; then 27 tests green (accept battery, named
+  reject battery — newline/CR/tab/NUL/ESC/DEL/quotes/parens/space/homoglyphs/markup/65-chars/empty,
+  each an individual `it()` — strip-oracle regression, non-string inputs).
+- Implementation: cello-client `aba17df` — `moniker.ts` in protocol-types, both daemon sites and the
+  CLI help repointed, cli gains the workspace dep. Sweep shows ZERO copies of the charset outside the
+  module. Gates: 1814 tests green, lint/typecheck/build clean; agent-name tests untouched
+  (persist-002-create-agent.test.ts unmodified — behaviour-preservation proof).
+- **Journaled deviation (AC2 letter):** the test derives from `MONIKER_RE.source`, not `.toString()`.
+  toString carries surrounding slashes, which are not part of the pattern text; asserting it would have
+  forced slashes into the user-visible help prose, violating AC1's byte-identical constraint. `.source`
+  satisfies both clauses; intent (zero independent copies, prose derived from the constant) fully met.
+- Review: `cello-unit-reviewer` on `aba17df` — verdict **FAITHFUL / no silent fallbacks / tests have
+  teeth**, zero blocking findings; per-clause verdicts all implemented (AC2c/d "deviated — acceptable",
+  judged correctly resolved). Both non-blocking suggestions taken in `b771a86`: (1) 128-codepoint ASCII
+  equivalence sweep proving `validateMoniker` and `MONIKER_RE` are one rule (kills the second-internal-
+  regex drift bypass); (2) daemon `invalid_agent_name` guidance strings now interpolate
+  `MONIKER_RE.source`. Re-ran all four gates after fixes: 1815 tests green.
+- DOD-MONIKER-0 flipped ✅ in [[M8C-MONIKER-SPEC]] §9. Source-level line — no live enforcer required;
+  publish rides the tier's batched cascade (PROCEDURE §2a). **Next red: DOD-MONIKER-1.**
+
 ---
 
 ## Related Documents
