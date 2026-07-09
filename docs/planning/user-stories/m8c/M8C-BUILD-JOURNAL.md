@@ -3324,6 +3324,54 @@ is believed: all seven `@beta` versions; `cli@0.0.35` deps must show `daemon@0.0
 packages, needs Andre's explicit go. (2) `/mcp` reconnect at Andre's keyboard, then the **live
 channels session** that flips DOD-MONIKER-4 and discharges the MONIKER-2 reviewer's carried condition.
 
+### 2026-07-09 — Entry 71: ✅ v0.0.85 PUBLISHED to beta — verified against the BINARY
+
+**Published.** Run `29019356454`, tag **`v0.0.85`**, all jobs green **including `smoke-tag`** (the
+clean-install + module-graph load — the only real success signal; a green top-level is not evidence).
+
+`v0.0.84` was **cancelled**: its publish job sat queued ~1h with no runner, then GitHub cancelled it
+outright (the incident's "exhausting retries" path). **Nothing had published under it** — all six
+packages still read their old versions, verified before acting, so there was no partial cascade to
+reconcile. Recovery was to cut a **new tag on the identical tree** (`6a02750`): a tag is only a
+monotonic CI trigger, versions live in `package.json`, so `v0.0.85` shipped the same set. Never
+re-push an existing tag; never `npm publish` locally (ships raw `workspace:*`, burns the version
+forever). `/cello-publish` was re-invoked for the second tag — the guard hook blocked it until then,
+correctly: loaded-once ≠ covered.
+
+**Diagnostic note for the record.** Mid-incident I claimed the retry "reproduced the asymmetry"
+(Build gets a runner, Publish doesn't) and began hunting a cause on our side. That was wrong — I was
+comparing a 3-minute queue to an hour-long one. Ruled out properly before and after: `needs: build`
+satisfied, no `environment:` gate, no concurrency group, empty `pending_deployments`, identical
+`ubuntu-latest` label to the job that DID get a runner, and the repo is **public** (Actions minutes
+free/unlimited, killing the exhausted-minutes theory that would have produced exactly that pattern).
+Cause was upstream throughout: GitHub "Delays starting Actions runs", Actions component
+`major_outage`, impact critical.
+
+**Step-5 BINARY verification (not CI status) — all PASS:**
+- `@beta` versions: crypto 0.0.18 (unchanged), protocol-types **0.0.19**, transport **0.0.17**,
+  client **0.0.47**, daemon **0.0.38**, cli **0.0.35**, connect **0.0.62**.
+- Cross-pins are REAL versions, never `workspace:*` — `cli@0.0.35 → daemon@0.0.38 +
+  protocol-types@0.0.19`; `connect@0.0.62 → client@0.0.47 + crypto@0.0.18 + transport@0.0.17`.
+- `npm pack` + grep `dist/`: **daemon@0.0.38** carries `offered_moniker`, `whoLabel`,
+  `moniker.rejected`, `getContactMoniker`, `validateMoniker`. **protocol-types@0.0.19** carries
+  `MONIKER_RE` + `validateMoniker`. **connect@0.0.62** carries the doorbell copy (verbatim:
+  `📞 CELLO — ${renderWho(data)} wants to connect. Run cello_await_session to accept.`), the
+  `(unverified)` marker, `cello_set_moniker` + `cello_contact_set_moniker`, **and RECONNECT-001**
+  (`reconnected to the CELLO daemon`) — proof the parallel session's work shipped rather than being
+  silently dropped.
+
+**BLOCKED ON THE TWO HUMAN-ONLY STEPS (PROCEDURE §2c), stated plainly:**
+1. **`latest` promotion** — seven `npm dist-tag add` commands. Needs Andre's explicit go. WE PROMOTE,
+   WE DO NOT PIN.
+2. **`/mcp` reconnect** at Andre's keyboard, after `npm i -g @cello-protocol/cli@latest
+   @cello-protocol/connect@latest` and `cello logout && cello login`.
+
+Then the live run: [[M8C-MONIKER-LIVE-TEST]] T1–T5 → flips DOD-MONIKER-4 (the last ❌ of the tier) and
+discharges the MONIKER-2 reviewer's carried condition. **T4 (invalid name → fingerprint +
+`moniker.rejected`) needs a deliberately patched initiator daemon** — a stock client validates twice
+and OMITS a bad value, so the receiver would see "absent", not "invalid". If T4 is skipped the line
+records 🟡, never ✅ (Entry-64 rule: positive-only evidence proves no-regression, never enforcement).
+
 ---
 
 ## Related Documents
