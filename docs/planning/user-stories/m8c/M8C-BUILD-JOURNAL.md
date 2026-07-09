@@ -3409,6 +3409,48 @@ Findings worth keeping:
 
 ---
 
+### 2026-07-09 — Entry 73: 🔴 Two moniker defects found by USING it; RECONNECT-001 + Hermes wake fixed; design "C" recorded
+
+**Found by live use, not by tests.** Both are in [[M8C-MONIKER-SPEC]] §10/§12 with full flows + ACs.
+
+1. **DOD-MONIKER-6 — the offered-name box is not agent-scoped.** `offeredMonikers` (`daemon.ts:4260`) is
+   ONE daemon-wide map keyed by `sessionIdHex` alone. On a shared daemon the initiator reads the box the
+   daemon filled in *on the receiver's behalf* and is shown **her own name** as the sender. Confirmed, not
+   inferred: `{"event":"moniker.resolved","agentName":"Ms_Chelly","pubkey":"77d0c806…","source":"offered"}`.
+   Latent twin: both delete sites are cross-agent, so one agent's state change drops another's box.
+   Two-machine setups are unaffected (an initiator's daemon never *receives* an offer, so its box is empty
+   → fingerprint) — **which is precisely why the whole tier tested green**. Fix "A": key by
+   `(agentName, sessionIdHex)` at `:4597`, `:1070`, `:1099`, `:4327`. NOT YET BUILT.
+
+2. **DOD-HERMES-3 — Hermes never sees the name.** The adapter's `_wake_prompt` predates monikers and never
+   reads `who`/`whoKnown`. Hermes agents see raw hex forever. The irony: Hermes could never have surfaced
+   defect 1, because it does not display the field that was wrong. NOT YET BUILT.
+
+**Shipped today (cello-client):**
+- `b91b6c1` **RECONNECT-001** — IpcProxy survives a daemon restart (replays `ipc.connect` + `cello_use_agent`
+  before releasing queued callers; NEVER replays in-flight calls — `cello_send` is not idempotent; a failed
+  INITIAL connect starts no background loop; only the handshake may time out, so blocking `cello_receive` is
+  uncapped). 8 tests. Published in **connect 0.0.62**.
+- `86a4dad` + `91929c3` **Hermes wake prompt** — the woken agent answered `[SILENT]` to six wakes and called
+  zero tools, because my own prompt ended "If no action is needed, reply with exactly [SILENT]". Message
+  wakes now forbid silence and name the tools; the platform hint forbids the `cello` CLI and any daemon
+  restart, with reasons. **Clean-room test PASSED**: `Mcp Cello Cello Use Agent → Receive → Get Transcript`,
+  no shell, no `[SILENT]`, no restart. ⚠️ These two are **NOT PUBLISHED** — published `cli 0.0.35` still
+  carries the old prompt; the local plugin was installed from the local dist. They need a `cli` bump.
+
+**Design "C" recorded, NOT scheduled** ([[M8C-MONIKER-SPEC]] §13): the offered name should move into the
+receiver's contacts **on accept**; the box retires. Delivers the feature's real purpose (you learn who you
+are talking to, persistently) and makes defect 1 structurally impossible. Conditions: provenance must
+survive the save; auto-accept paths decide deliberately. Injection + collisions examined and dismissed —
+the charset is the defense, and the pubkey anchor rides every frame (**§11 invariant: never remove it**).
+
+**Also learned (operational):** Hermes spawns a NEW `cello-mcp` process per session — the repeated
+`starting MCP server 'cello'` lines are Hermes' session lifecycle, not an agent restarting CELLO. And the
+shim's `notification.channel.forwarded` path is dead: Hermes' MCP client ignores custom notifications; only
+the platform adapter's injection wakes it.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

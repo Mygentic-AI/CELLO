@@ -272,6 +272,30 @@ description: >
 >   remote daemon rather than a co-located stub.
 > - **DOD-LIVE-1's** cross-machine leg — the launch smoke's "real peer on another machine" half.
 
+## Tier 1½ addendum — moniker defects found live (2026-07-09, after the tier closed)
+
+- **DOD-MONIKER-6** — The offered-name box is scoped to the agent it was written for. Today
+  `offeredMonikers` (`daemon.ts:4260`) is ONE daemon-wide map keyed by `sessionIdHex` alone, so on a
+  shared daemon the **initiator reads the receiver's box and is shown her own name** as the sender
+  (confirmed live: `moniker.resolved … agentName:"Ms_Chelly" source:"offered"`). Same cause makes the
+  two delete sites cross-agent. Key by `(agentName, sessionIdHex)` at all four sites (`:4597` write,
+  `:1070` read, `:1099` + `:4327` deletes). Two-machine setups are unaffected — which is why the tier
+  tested green. Full flow + ACs: [[M8C-MONIKER-SPEC]] §10. — ❌
+- **DOD-HERMES-3** — The Hermes wake sentence surfaces the resolved name. The adapter's `_wake_prompt`
+  (cello-client `core/cli/src/hermes/assets.ts`) predates monikers and never reads `who`/`whoKnown`, so a
+  Hermes agent sees raw hex forever and every name an operator sets is invisible to it. The pubkey must
+  stay in the sentence beside the name — Hermes has no metadata layer. [[M8C-MONIKER-SPEC]] §12. — ❌
+
+> **Future direction "C" (agreed, NOT scheduled):** the offered name should move into the receiver's
+> contacts **on accept**, and the box should retire — see [[M8C-MONIKER-SPEC]] §13. It delivers the
+> feature's actual purpose (you learn who you're talking to, persistently) and makes DOD-MONIKER-6's bug
+> structurally impossible. Two conditions: provenance must survive the save (a stranger's self-chosen name
+> must not silently become a trusted one), and auto-accept paths must decide deliberately whether they
+> save. Injection and name-collision were examined and dismissed — do not re-litigate. Also
+> [[M8C-MONIKER-SPEC]] §11: **the pubkey must always ride on the notification**; every simplification in
+> the moniker design depends on it.
+
+
 ## Tier 2 — Full reactivity + command surface
 
 - **DOD-MSGWAKE-1** — Channel stage 2: content-arrival callback on `session-node-manager` +

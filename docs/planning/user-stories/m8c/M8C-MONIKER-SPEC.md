@@ -252,6 +252,130 @@ a dropped notification. The system fails **legible and loud**: the label degrade
   risks: `resolveWho` runs only on the sliced rows (bounded, cannot throw out of the handler), and
   daemon-wide `list_sessions` reads each row's OWN agent's contacts — no cross-agent boundary.)
 
+---
+
+## 10. 🔴 KNOWN DEFECT — the offer box is not agent-scoped (`DOD-MONIKER-6`, "fix A")
+
+**Found live 2026-07-09, AFTER the tier closed.** Confirmed, not hypothesised — the daemon logged
+`{"event":"moniker.resolved","agentName":"Ms_Chelly","pubkey":"77d0c806…","source":"offered"}`:
+Ms_Chelly resolving her *counterparty* and getting a name out of the **offered** box.
+
+**The flow (one daemon, two local agents):**
+
+1. Ms_Chelly opens a session to Ms_Chelly_Hermes. Session number `9faede28`. Her offer carries `"Ms_Chelly"`.
+2. The daemon **receives that offer on Hermes's behalf** and writes the box: `9faede28 → "Ms_Chelly"`
+   (`daemon.ts:4597`). Correct — from Hermes's side, the caller *is* Ms_Chelly.
+3. Hermes's doorbell reads correctly: *"Ms_Chelly wants to connect."*
+4. Hermes replies.
+5. The daemon must now build **Ms_Chelly's** doorbell and answer *who sent this?* It looks for a box
+   labelled `9faede28` — **the session number is the only label there is** (`resolveWho`, `daemon.ts:1070`).
+6. It finds the box *Hermes's side* filled in, containing `"Ms_Chelly"`.
+7. **Ms_Chelly is told she messaged herself.**
+
+**Root cause:** `const offeredMonikers = new Map<string, string>()` (`daemon.ts:4260`) is one daemon-wide
+map keyed by `sessionIdHex` alone. Both agents share that key, and the box records **the caller's** name
+with no record of *who it was written for*. At the write site the receiving `agentName` is already in
+scope (used two lines above, for logging) and simply isn't put in the key.
+
+**Second, latent symptom (same cause):** the deletes are unscoped too. `daemon.ts:1099` drops the box when
+**either** agent's session moves past `created`; `daemon.ts:4327` drops it when **one** agent's request
+expires. An agent can silently lose the caller's name because a *different* agent's session moved on.
+
+**Why two machines are unaffected:** only the *receiving* daemon ever writes a box. An initiator's daemon
+never receives an offer for its own outbound session, so its box is empty and it correctly degrades to a
+fingerprint. **The bug requires initiator and receiver to share one daemon** — i.e. every local dev and
+demo setup, and nothing else. That is exactly why the whole tier tested green.
+
+### `DOD-MONIKER-6` — the offered-name box is scoped to the agent it was written for
+- **AC1** `offeredMonikers` is keyed by `(agentName, sessionIdHex)`, never `sessionIdHex` alone. Four
+  sites, each already holding `agentName`: write `:4597`, read `:1070`, deletes `:1099` and `:4327`.
+- **AC2** **Regression, red-first:** on ONE daemon, agent A initiates to agent B; B replies; A's
+  `cello_message` doorbell shows **B's** name or a fingerprint — **never A's own**. Drive it through the
+  existing harness in `core/daemon/src/__tests__/moniker-2-inbound-offer.test.ts` (add a second agent) plus
+  the `__test_emit_session_event` hook (gated on `CELLO_ENV=test`). Never a from-scratch fixture.
+- **AC3** A state change or request-expiry for agent A must not drop agent B's box.
+- ❌ NOT BUILT
+
+---
+
+## 11. INVARIANT — the key must always ride on the notification
+
+**The name is decoration; the public key is identity.** Every simplification in this spec — no signature
+verification, no tamper-proofing, collisions tolerated, an unverified name shown for a stranger — is safe
+**only because `from` / `counterpartyPubkey` is on every doorbell frame**, so an LLM can always
+disambiguate two identical names and never has to trust the label.
+
+If a future cleanup drops the pubkey from the frame because "the hex is noise," the name silently becomes
+load-bearing and every retracted objection returns at full strength: collisions become unresolvable,
+impersonation becomes free. **Do not remove the anchor from the frame.** IDs may leave the prose
+(MONIKER-4 AC3); they may never leave the metadata.
+
+*(Holds in Claude Code, where the shim puts `from`/`session_id` on the `<channel>` tag as attributes. In
+Hermes it holds only by accident — see §12.)*
+
+---
+
+## 12. 🔴 Hermes never sees the name (`DOD-HERMES-3`)
+
+The daemon puts `who`/`whoKnown` on the notification, but the Hermes platform adapter's wake sentence
+(cello-client `core/cli/src/hermes/assets.ts`, `_wake_prompt`) predates monikers: it builds its text from
+`type`, `session_id` and the raw `from` pubkey, and **never reads `who`**. A Hermes agent sees hexadecimal
+forever, and every name an operator sets is invisible to it.
+
+Unrelated to §10 — different bug, different repo path. Note the irony: **Hermes could never have surfaced
+§10**, because it does not display the field that was wrong.
+
+### `DOD-HERMES-3` — the Hermes wake surfaces the resolved name
+- **AC1** `_wake_prompt` reads `who` / `whoKnown` and leads with the name.
+- **AC2** The **pubkey stays in the sentence beside it** (§11 — Hermes has no metadata layer, so the prose
+  *is* the frame).
+- **AC3** An unverified name (`whoKnown: false`) is marked as a claim, as in the Claude Code copy.
+- ❌ NOT BUILT
+
+---
+
+## 13. FUTURE DIRECTION — "C": the name is learned on accept (agreed, NOT scheduled)
+
+**Andre's model, 2026-07-09. We are not building this now.** It is the intended end state; recorded so it
+is not rediscovered from scratch.
+
+Today the offered name is a *temporary label*: re-read from the box on every message, then thrown away when
+the session ends. You never learn who anyone is — tomorrow Alice calls again and she is a stranger again.
+
+**The intended flow:**
+
+1. Alice's offer carries `"Alice"`.
+2. Bob's doorbell rings: *"Alice wants to connect."*
+3. **Bob accepts → `"Alice"` moves out of the box and into Bob's contacts as his name for her key.**
+4. From then on — this session and every future one — Bob's doorbell says `Alice`, because **Bob** named her.
+5. **The box retires.** It exists only between the knock and the accept.
+
+**Why it is the right end state:** it delivers what the feature was actually for (you learn who you are
+talking to, persistently), and it **retires the only structure that can go wrong** — §10 becomes
+structurally impossible, because nothing reads a box after the accept.
+
+**Two conditions it must satisfy** — the only real objections found, both cheap:
+
+- **Provenance must survive the save.** Today an unsaved name renders `"Bob" (unverified)`. If accepting
+  silently flips `whoKnown` to true, a stranger who called himself `CELLO_Support` has permanently installed
+  *his own chosen label* into your address book, stripped of any warning. Store the name **with its
+  provenance** ("they told me this" vs "I chose this") and keep the marker until the operator edits or
+  confirms it. `whoKnown` then means *"did **I** name them"* — which is what it should have meant all along.
+- **Accept is not always a human act.** Auto-accept paths (whitelisted / VIP senders, per the
+  [[2026-07-08_inbound-state-matrix]] tier model) would write names with nobody in the loop. Decide
+  deliberately whether those save.
+
+**What is NOT an objection** — both examined and dismissed on 2026-07-09, do not re-litigate:
+- *Prompt injection through the name.* The charset `^[a-zA-Z0-9_-]{1,64}$` forbids newlines, quotes, parens,
+  markup and all non-ASCII. The worst payload is a name-shaped token. The charset **is** the defense.
+- *Name collisions.* Tolerable, because §11's anchor rides along: two identical names are always
+  distinguishable by pubkey, and the LLM sees it.
+
+**Spec conflict to resolve when scheduled:** MONIKER-2 AC3 currently forbids auto-writing the offered name
+to contacts. But **accepting a session already adds the sender as a contact** (CONTACT-1) — writing their
+name at that same instant completes a deliberate act already taken, rather than adding a new one. That
+clause is what this design changes.
+
 ## Related Documents
 
 - [[2026-07-08_inbound-state-matrix|Inbound State Matrix]] — the parent design; Decision #3 and the
