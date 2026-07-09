@@ -88,12 +88,17 @@ Each story is E2E-first, TDD (red before green). IDs are `MONIKER-N`; DoD lines 
 
 ### MONIKER-0 — Give the charset a single home (pure refactor, no behaviour change)
 **Do this first. Everything below imports it.**
-- **AC1** Extract one exported `MONIKER_RE` + `validateMoniker(raw): string | null` into a shared module.
+- **AC1** Extract one exported `MONIKER_RE` + `validateMoniker(raw): string | null` into
+  **`core/protocol-types`**. That is the lowest shared layer and a leaf package, so neither `daemon` nor
+  `cli` can create an import cycle — and now that the moniker crosses the wire on the offer frame, the
+  charset **is a wire contract**, not a CLI convenience. `daemon` already depends on it; `cli` adds the dep.
   The regex is **byte-identical** to the two existing literals — MONIKER-0 must not widen or narrow
   agent-name validation. Existing agent-name tests pass **unmodified**; that is the proof of
   behaviour-preservation.
 - **AC2** Repoint `daemon.ts:1941`, `daemon.ts:2048`, and the CLI help text (`cli-args.ts:53`) at it.
-  Zero inline copies remain.
+  The help-text test (`cli-args.test.ts:70`) asserts against the constant's own `MONIKER_RE.toString()`
+  rather than a hand-typed twin, so the prose copy is *derived from* the constant, not parallel to it.
+  **Independent copies: zero.**
 - **AC3** The accept/reject battery (§7) is pinned **once**, on this module, and is the single subject of
   the strip-oracle regression test.
 - **AC4** **One constant, shared by agent names and monikers — not two.** MONIKER-1 AC1 makes the agent
