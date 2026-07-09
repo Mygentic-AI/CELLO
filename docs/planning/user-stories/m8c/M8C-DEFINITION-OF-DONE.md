@@ -307,6 +307,63 @@ description: >
 > [[M8C-MONIKER-SPEC]] §11: **the pubkey must always ride on the notification**; every simplification in
 > the moniker design depends on it.
 
+## 🔴 DOD-CRYPTO-AT-REST-1 — the gateway writes security records + config to disk UNENCRYPTED
+
+**Found 2026-07-09, while chasing an unrelated npm warning.** Not an M9 concern despite living in
+`core/gateway` — M9 is the screening layer in front. This is local storage encryption, which is a
+client-side data-custody problem and belongs with the daemon's SQLCipher work.
+
+**This is a spec violation, not an omission.** `M9-CFG-001`'s own behavior clause says:
+
+> *"the gateway shall write it as a new append-only versioned row in its own **SQLCipher database
+> (a separate file and key from the daemon's)**"*
+
+The shipped code is `new DatabaseSync(dbPath)` — plaintext `node:sqlite`, no cipher key:
+- `cello-client core/gateway/src/config/config-store.ts:134`
+- `cello-client core/gateway/src/records/record-store.ts:74`
+
+`M9-REC-001` stores into "CFG-001's DB or a sibling", so it inherits the same requirement. Both files
+carry a header comment justifying plaintext with *"the daemon opens node:sqlite without a cipher key
+today, so this store matches that"*. That was written 2026-06-23; the daemon moved to SQLCipher on
+2026-06-25 (PERSIST-002) and nobody revisited the comment or the code. **The justification is stale, and
+it was never true of the spec.** It passed review.
+
+**What is exposed:** the hash-chained security-pass records (every screening decision: clean / redacted /
+blocked / warned, with rule + category + offset) and the gateway's governance config, including which
+guards are loosened. No private keys — those are in the daemon's SQLCipher DB. So this is a
+confidentiality + tamper-surface problem, not a key-compromise one.
+
+### `DOD-CRYPTO-AT-REST-1` — the gateway's stores are SQLCipher, same as the daemon's
+- **AC1** `core/gateway` opens its DB via `openEncryptedDatabase` / `openEncryptedDatabaseAtPath`, with
+  its **own file and its own key**, separate from the daemon's (per `M9-CFG-001`; no `ATTACH`).
+- **AC2** `sqlcipher-db.ts` is lifted out of `core/daemon` into a package both can import. **`core/gateway`
+  cannot import `core/daemon` — `daemon` depends on `gateway`, not the reverse.** Two options: a new
+  `@cello-protocol/db` package (needs the three registrations — root `tsconfig` references, the CI publish
+  list, the verify/smoke loops), or move it into `core/gateway` and have `daemon` import it from there
+  (zero new packages, since `daemon` already depends on `gateway`). **Do not put it in `core/crypto`** —
+  `crypto` is a dependency of `connect`, and the MCP shim must not pull a native module.
+- **AC3** A **plaintext → encrypted migration** for existing installs, mirroring `migrateToEncryptedIfNeeded`.
+  Client-side migrations that fail silently are unrecoverable; it must be fail-closed and tested against a
+  real pre-migration DB file.
+- **AC4** `node:sqlite` disappears from production entirely, including `daemon/identity-migration.ts` —
+  **verified 2026-07-09 that SQLCipher opens a plaintext SQLite file directly**, so the legacy-read path
+  needs no builtin. Then delete the allowlist block in `cello-client/eslint.config.mjs`.
+- **AC5** Once AC4 lands, `engines.node` can honestly drop from `>=24` (nothing else needs it), removing
+  the `EBADENGINE` wall for Node 22 LTS users. CI must then **test** on the declared floor, not just
+  declare it.
+- ❌ NOT BUILT
+
+> **Not launch-blocking, and do not let it become a rabbit hole.** It is invisible on our declared runtime
+> (Node 24 loads `node:sqlite` silently). A guard is already in place — `cello-client/eslint.config.mjs`
+> blocks `node:sqlite` across `core/*/src` (allowed in `__tests__`), with these three files quarantined in
+> one visible allowlist. Nothing new can regress; the block disappears when the debt is paid.
+>
+> **Warning triage note, so this is never re-diagnosed from scratch:** the `EBADENGINE` and
+> `ExperimentalWarning: SQLite` warnings Andre saw on 2026-07-09 were **not** caused by this defect. Hermes
+> installed its own Node 22 at `~/.hermes/node` and symlinked `~/.local/bin/node` ahead of homebrew's Node
+> 24. Node 24 loads `node:sqlite` silently and satisfies `>=24`; Node 22 does neither. `EBADENGINE
+> required >=24` cannot print on Node 24 — seeing it proves the runtime changed, not the package.
+
 
 ## Tier 2 — Full reactivity + command surface
 

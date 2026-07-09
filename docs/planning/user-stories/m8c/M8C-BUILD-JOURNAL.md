@@ -3539,6 +3539,56 @@ reached were already at their promoted versions, so every re-tag was a no-op.)
 
 ---
 
+### 2026-07-09 — Entry 75: 🔴 The gateway writes security records + config to disk UNENCRYPTED
+
+Found sideways, chasing an npm warning that turned out to be unrelated. Recorded as
+**`DOD-CRYPTO-AT-REST-1`** in [[M8C-DEFINITION-OF-DONE]] (not M9 — M9 is the screening layer in front;
+this is local data custody, the daemon's SQLCipher domain). A status correction was added to
+[[M9-DEFINITION-OF-DONE]] so nobody closes CFG-001/REC-001 believing the store is encrypted.
+
+**It is a spec violation, not an omission.** `M9-CFG-001`'s behavior clause reads: *"the gateway shall
+write it as a new append-only versioned row in its own **SQLCipher database (a separate file and key from
+the daemon's)**"*. The shipped code is `new DatabaseSync(dbPath)` — plaintext `node:sqlite`, no key, in
+`core/gateway/src/config/config-store.ts:134` and `core/gateway/src/records/record-store.ts:74`. REC-001
+inherits it. Both files carry a header comment justifying plaintext with *"the daemon opens node:sqlite
+without a cipher key today, so this store matches that"* — written 2026-06-23, falsified 2026-06-25 when
+PERSIST-002 moved the daemon to SQLCipher. Nobody revisited it. **It passed review.**
+
+Exposed: the hash-chained security-pass records (every screening decision, with rule/category/offset) and
+the governance config, including which guards are loosened. **No private keys** — those are in the daemon's
+SQLCipher DB. Confidentiality + tamper surface, not key compromise.
+
+**The chase, recorded so it is never repeated.** Andre reported `npm warn EBADENGINE` and
+`ExperimentalWarning: SQLite` and was certain they were 2–3 days old. I first argued the install path had
+changed — wrong; he was right and I was pattern-matching. The actual cause, proven: installing **Hermes on
+2026-07-08 20:53** created `~/.local/bin/node -> ~/.hermes/node/bin/node` (Node **22.23.1**), ahead of
+homebrew's Node **24.15.0** on PATH. Node 24 loads `node:sqlite` silently and satisfies `engines: >=24`;
+Node 22 does neither. **The tell was in his own paste: `EBADENGINE ... required >=24, current v22.23.1`
+cannot print on Node 24 — seeing it at all proves the runtime changed, not the package.** Fix:
+`rm ~/.local/bin/node`. Neither warning is a CELLO defect, and neither is launch-blocking.
+
+But the hunt walked straight into the real bug. Three production files import `node:sqlite`: the two
+gateway stores above, plus `daemon/identity-migration.ts` (which reads a legacy plaintext DB to migrate it
+— the one defensible use). **Verified empirically that SQLCipher opens a plaintext SQLite file directly**,
+so even that case needs no builtin, and `node:sqlite` can leave production entirely.
+
+**Guard shipped now** (cello-client `9017836`): ESLint `no-restricted-imports` blocks `node:sqlite` across
+`core/*/src`, off in `__tests__` (tests never ship). Verified the rule actually fires on a new production
+import and stays quiet in a test file — a guard that doesn't fire is decoration. The three known violations
+are quarantined in ONE visible allowlist in `eslint.config.mjs` rather than scattered `eslint-disable`
+comments, so the debt is greppable and the block disappears when it is paid. **Never add to that allowlist.**
+
+**Packaging constraint for whoever does the conversion:** `core/gateway` cannot import `core/daemon` —
+`daemon` depends on `gateway`, not the reverse. So `sqlcipher-db.ts` must be lifted out: either a new
+`@cello-protocol/db` package (needs the three registrations — root tsconfig references, CI publish list,
+verify/smoke loops) or moved into `core/gateway` with `daemon` importing it from there (zero new packages).
+**Not `core/crypto`** — `crypto` is a dependency of `connect`, and the MCP shim must never pull a native
+module. Plus AC3: a fail-closed plaintext→encrypted migration for existing installs.
+
+**Not launch-blocking.** Invisible on the declared runtime. Scheduled, guarded, and written down.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

@@ -86,6 +86,19 @@ block/redact/warn handling run locally. Config and records are local. Ends at **
 | **M9-REC-001** | Local security-pass records: the gateway records what it did to each message (clean / redacted / blocked / warned), and computes a fingerprint of each record. (The cheap half of #5; sending to the directory is Phase 2.) | Every message produces a record with a fingerprint; clean passes are recorded too. | REDACT-004 (part) |
 | **M9-GATE-1** | **End-to-end gate, one machine.** Send a message → screened → secret redacted / injection blocked / warning handled → LLM gets the right answer. A message comes in → screened. | The whole loop is green against the real daemon + gateway on one machine. No directory attestation. | new |
 
+> 🔴 **STATUS CORRECTION (2026-07-09) — CFG-001 and REC-001 did NOT ship the storage they specify.**
+> The row above says "the gateway's own local **SQLCipher** DB", and CFG-001's behavior clause says "its own
+> SQLCipher database (a separate file and key from the daemon's)". The shipped code is
+> `new DatabaseSync(dbPath)` — plaintext `node:sqlite`, no cipher key (`core/gateway/src/config/config-store.ts`,
+> `core/gateway/src/records/record-store.ts`). REC-001 inherits it by storing into "CFG-001's DB or a sibling".
+> Both files justify plaintext with a comment claiming the daemon does the same; that stopped being true on
+> 2026-06-25. **Do not treat these two as done on the storage clause.**
+>
+> The remediation is tracked OUTSIDE M9 — as `DOD-CRYPTO-AT-REST-1` in
+> [[M8C-DEFINITION-OF-DONE]] — because it is local data-custody (the daemon's SQLCipher domain), not the
+> screening layer M9 owns. This note exists only so nobody closes CFG-001/REC-001 believing the store is
+> encrypted. It is not.
+
 **Retired (cut in the prune — do not build):**
 - **REDACT-002** (Layer 5, LLM-call governor) — out; that governs the agent's own LLM use, upstream of `cello_send`.
 - **REDACT-003** (Layer 6, deny-all filesystem/URL) — out; upstream tool/sandbox concern.
