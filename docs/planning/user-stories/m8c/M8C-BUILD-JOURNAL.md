@@ -3081,6 +3081,54 @@ the carry; an auditor anchoring to line text would rightly reject an earlier fli
 
 ---
 
+### 2026-07-09 — Entry 67: MONIKER-2 — offer carries the name (unit start; CROSS-REPO discovery)
+
+**Target (one sentence):** The initiator's `session_request` carries its validated outbound name,
+the directory passes it through into the `session_assignment`, and the receiver validates it once
+at the wire boundary (`extractInboundSessionAssignment`) yielding `offeredMoniker: string | null` —
+never auto-written to contacts, fully backward compatible.
+
+**SCOPE DISCOVERY — this unit is CROSS-REPO.** The spec's ref seam names only the client
+(`extractInboundSessionAssignment`), but the offer path is initiator → `session_request` →
+**directory constructs `session_assignment`** → responder. The directory decodes the request into
+typed fields and builds the assignment explicitly — an unrecognised field is DROPPED by the codec.
+So the moniker needs: client outbound (request), **directory pass-through (decode request field →
+carry into assignment encode)**, client inbound (boundary validation). Per repo rules: never assume
+one repo; a directory change means a batched deploy (~25–30 min, all 3 regions) before any live
+proof. MONIKER-1 AC4 ("never sent to the directory") is not violated — that clause bars directory
+REGISTRATION/storage; the offer transits the directory as an unverified pass-through hint (spec §2
+explicitly declines integrity claims about the directory hop).
+
+**Clause checklist (DOD-MONIKER-2 + AC1–AC4):**
+- [ ] AC1a — client outbound: `session_request` gains optional `moniker`, populated from
+  `getOutboundName(agentName)` (MONIKER-1), re-validated at construction (MONIKER-1 AC3's deferred
+  half); absent name → field OMITTED (never an empty string)
+- [ ] AC1b — directory: request decode accepts optional `moniker` (type/length-bounded), threads it
+  through `#processSessionRequest`, assignment encode carries it to the responder
+- [ ] AC2a — receiver: `extractInboundSessionAssignment` validates once with the shared
+  `validateMoniker`; result `offeredMoniker: string | null` on the parsed assignment; invalid →
+  `null` + `moniker.rejected` `{agentName, pubkey, reason}` (never the raw value); absent → `null`,
+  no log
+- [ ] AC2b — `offeredMoniker` is carried on the inbound session state so MONIKER-4's dispatcher can
+  resolve `who` (stored with the session, not re-parsed later)
+- [ ] AC3 — the offered name is NEVER auto-written to the contacts address book (test asserts the
+  contacts store is untouched after an offer with a moniker arrives)
+- [ ] AC4 — backward compatible: old initiator omits the field (receiver fingerprints, silent); old
+  directory drops the field (same degradation); old receiver ignores it; no version bump
+- [ ] OBS — `moniker.rejected` (info) per spec §6
+
+**Falsification pass:**
+- The initiator validates at request construction; the directory bounds but does not judge; the
+  receiver is the authority (spec: hostile operators can modify their own daemon — receiver-side
+  validation is the only one that counts for display safety).
+- Reject-never-strip holds at the boundary: invalid → `null`, the label degrades to fingerprint.
+- Failure integrity: a missing/invalid moniker NEVER drops the assignment — sessions must still
+  form (refusing would hand strangers a DoS lever, spec §3).
+- Deploy sequencing (§2c): directory change commits to main only when green; the push triggers the
+  directory pipeline — batch it, arm the Cron-1 watchdog, keep working the client side in parallel.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
