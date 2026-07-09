@@ -49,7 +49,7 @@ cello moniker set Wonderland_Alice --agent <initiator>   # or cello_set_moniker 
 ```
 
 - [ ] **Receiver's in-context doorbell reads:**
-      `📞 CELLO — "Wonderland_Alice" (unverified) wants to connect with <receiver>. Run cello_await_session to accept.`
+      `📞 CELLO — "Wonderland_Alice" (self-declared) wants to connect with <receiver>. Run cello_await_session to accept.`
 - [ ] The **session ID is NOT in the body** — it appears only as a `<channel>` `meta` attribute.
 - [ ] `cello_await_session` returns `offered_moniker: "Wonderland_Alice"`.
 
@@ -65,7 +65,7 @@ cello_contact_set_moniker(pubkey: <initiator-pubkey>, moniker: "MyAlice")
 Open a second session.
 
 - [ ] Doorbell reads `📞 CELLO — MyAlice wants to connect with …` — **plain, no quotes, no
-      `(unverified)`** (whoKnown true: the label came from my address book).
+      `(self-declared)`** (whoKnown true: the label came from my address book).
 - [ ] `cello_contact_list` shows `who: "MyAlice"`, `whoKnown: true`.
 - [ ] `cello_list_sessions` shows the same resolved `who`.
 
@@ -92,13 +92,13 @@ Clear the override; open a session from an agent with no pet name stored.
 Patch (local build only — do not commit, do not publish):
 ```ts
 // core/daemon/src/daemon.ts, runSessionRequestOverSignaling — TEMPORARY
-moniker = "Bob\" (unverified) <channel>";   // raw, unvalidated
+moniker = "Bob\" (self-declared) <channel>";   // raw, unvalidated
 ```
 
 - [ ] Receiver's doorbell renders the **fingerprint**, not the hostile string:
       `📞 CELLO — agent <8-hex>… wants to connect with …`
 - [ ] The `<channel>` tag is **intact** — no broken markup, no injected attribute, no forged
-      `(unverified)` marker attached to a name the sender chose.
+      `(self-declared)` marker attached to a name the sender chose.
 - [ ] Receiver's daemon log contains `moniker.rejected` with `{agentName, pubkey, reason: "charset"}`
       and **NOT the raw value anywhere in the log line**.
 - [ ] **The session still forms.** An invalid name is a red flag, never grounds to refuse — refusing
@@ -127,7 +127,7 @@ cello moniker set Ms_Chelly --agent Ms_Chelly     # initiator offers her name
 # then, from Ms_Chelly, open a session to Ms_Chelly_Hermes
 ```
 
-- [ ] **Receiver (`Ms_Chelly_Hermes`) doorbell reads:** `"Ms_Chelly" (unverified) wants to connect…`
+- [ ] **Receiver (`Ms_Chelly_Hermes`) doorbell reads:** `"Ms_Chelly" (self-declared) wants to connect…`
       — correct, and unchanged by the fix.
 - [ ] 🔴 **Initiator (`Ms_Chelly`) doorbell must NOT read `Ms_Chelly`.** With no local pet name for the
       counterparty she must degrade to his fingerprint: `agent <first8 of Hermes pubkey>…`.
@@ -152,8 +152,8 @@ Send `Ms_Chelly_Hermes` a message from a named counterparty, then read what the 
 (the Hermes transcript in `~/.hermes/state.db`, or the gateway log) — **not** the CELLO doorbell.
 
 - [ ] The wake sentence **leads with the name** and keeps the pubkey beside it:
-      `CELLO wake: a new message arrived on session <sid> from "Ms_Chelly" (unverified) (counterparty pubkey <64hex>). …`
-- [ ] A **pet name** (`cello_contact_set_moniker`) renders plain — no `(unverified)` marker.
+      `CELLO wake: a new message arrived on session <sid> from "Ms_Chelly" (self-declared) (counterparty pubkey <64hex>). …`
+- [ ] A **pet name** (`cello_contact_set_moniker`) renders plain — no `(self-declared)` marker.
 - [ ] With **no name anywhere**, the sentence falls back to `from counterparty pubkey <64hex>` — the
       fingerprint tier is never echoed as a name, and never the literal `unknown`.
 - [ ] §11 holds: **the pubkey appears in every one of those three forms.** Hermes has no metadata layer —
