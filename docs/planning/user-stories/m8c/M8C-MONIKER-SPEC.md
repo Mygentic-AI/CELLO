@@ -3,7 +3,7 @@ name: M8C Moniker Identity Resolution — Spec
 type: spec
 date: 2026-07-09
 milestone: M8C
-status: open
+status: done
 topics: [monikers, contacts, notifications, doorbell, identity, injection-defense, offer-frame, m8c]
 description: >
   Human-readable "who" in CELLO. Your agent's name rides the session offer; the receiver shows it

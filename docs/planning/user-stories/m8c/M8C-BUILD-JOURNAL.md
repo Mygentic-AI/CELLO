@@ -30,10 +30,11 @@ description: >
 |---|---|---|
 | I — Invariants | INV-CONTENTFREE, INV-GATEWAY (activates w/ M9, deferred), INV-PUSHPULL, INV-HONEST-STATES, INV-ONE-PRIMARY | ❌ all |
 | 0 — Prerequisites | SPIKE-1 | ✅ |
-| 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | **✅** 🟡 🟡 🟠 — **WAKE-1 LIVE PROVEN** (doorbell, Entries 45/46); LIVE-1 doorbell-half proven, owes latest-promotion + cold-onboarding |
+| 1 — LAUNCH GATE | WAKE-1, AUTOSTART-1 (+F5/F18), INBOX-1 (+F4), LIVE-1 | **✅** 🟡 🟡 🟠 — **WAKE-1 LIVE PROVEN** (doorbell, Entries 45/46); LIVE-1 doorbell-half proven; **latest-promotion DONE 2026-07-09** (v0.0.85 → `latest`, all seven); still owes **cold-onboarding** |
 | 1 — Onboarding riders | ONBOARD-HELP/ERRORS/NEXTSTEP/WARN/LOGNOISE-1 | 🟡 all (built+reviewed; ✅ at the cold-onboarding run, LIVE-1) |
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | **✅** 🟡 🟡CORE 🅿️CFG(D14) 🟡 — **MSGWAKE-1 LIVE PROVEN** (per-message doorbell, both directions, Entries 45/46) |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡CORE 🟡 🟡CORE 🟡 (**TIER 3 DONE, reviewed+fixed**) |
+| 3½ — Legible identity | MONIKER-0/1/2/3/4/5 | **✅ ALL SIX — TIER CLOSED** (Entries 65–72; published `v0.0.85` → `latest`; DOD-MONIKER-4 **LIVE PROVEN incl. the hostile-name negative case**, Entry 72) |
 | 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | 🟡CORE 🟡CORE (**TIER 4 DONE**, reviewer pending) |
 | 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ✅ 🟠 ❌ ❌ — DESIGN done (Entry 35); **PRIMARY-1 directory arbitration BUILT+real-FROST-tested+reviewed (Entries 36-38, all findings fixed, 16 tests green)**. **REMAINDER (after-launch):** **SEC-2 FIXED 2026-07-08** (frost-stream K_local auth shipped+deployed+live-proven — Entry 63), so the ceremony-gate's auth prerequisite (D20) is now MET; its remaining pieces (daemon_id mint/persist, primary_holder seed, the gate itself) + pairing/DB-sync/Telegram-gating/kill-the-Primary need a live multi-device spine |
 | Post-channel — deferred | M9INT-1 (do AFTER channel tiers — D11; NOT a prerequisite) | 🟡 MERGED (`d47227c`, reviewed, 1 HIGH fixed) |

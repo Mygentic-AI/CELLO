@@ -80,7 +80,8 @@ No new code needed. Detail lives in M8C-DEFINITION-OF-DONE; this is the quick li
   facing CLI is the stale one. Fold into the onboarding sprint (F5/CLI).
 
 ## Moniker tier (M8C-MONIKER-0..5) — built + reviewed 2026-07-09, awaiting the live run
-- [ ] **Legible doorbell** — the full protocol lives in [[M8C-MONIKER-LIVE-TEST]] (T1–T5). Flips
+- [x] **Legible doorbell — DONE 2026-07-09, T1–T5 ALL PASS incl. the T4 hostile-name negative case
+  (Entry 72).** The full protocol lives in [[M8C-MONIKER-LIVE-TEST]] (T1–T5). Flipped
   DOD-MONIKER-4 and discharges the MONIKER-2 reviewer's carried condition. Gated on: `v0.0.84`
   published + verified against the BINARY, promoted to `latest` (Andre's go), `/mcp` reconnect.
   **Note T4** — proving the receiver's invalid-name reject path needs a *deliberately patched

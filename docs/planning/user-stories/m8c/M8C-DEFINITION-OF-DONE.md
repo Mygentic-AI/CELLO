@@ -353,6 +353,55 @@ description: >
   channel machinery anywhere in this unit — the daemon talks to the Telegram Bot API directly;
   "stage 3" is historical numbering (see SPEC §2, channels mental model). — 🟡 (2026-07-06, Entry 25/26 — built `99d6a53`, design note first (§6); TelegramBotClient interface + HttpTelegramBotClient (M4+ adapter pattern) + injectable test override; new dedicated telegram_settings table; generation-counter-guarded single poller (cold-capable); session-request/state-change always ring, message-waiting coalesced (ring-once-until-read, cleared on cello_receive/since_seq); inbound allowlist-ack vs silent-drop; content-free fixed-label text. Reviewer (a60d68ed) found 2 HIGH silent fallbacks (getUpdates ok:false→[] collapse; unbounded telegramRungUnread) + 2 hollow tests (G1/G7 unexercised), all fixed `446fb74`. Needs a REAL Telegram bot token for the live proof — the ONLY Tier-3 unit that can't be smoke-tested even locally beyond the FakeTelegramBotClient tests. Flips ✅ live.)
 
+## Tier 3½ — Legible identity (monikers) — **CLOSED 2026-07-09**
+
+> Doorbells named the *receiver* and a truncated session ID; nobody could act on them. This tier makes
+> the **counterparty** legible. One name on the wire, one nullable column, one regex, one display
+> function. The name is an **unverified hint** — caller-ID semantics, never an identity claim; the
+> pubkey remains the only identity. Spec: [[M8C-MONIKER-SPEC]]. Live protocol: [[M8C-MONIKER-LIVE-TEST]].
+> Shipped in daemon 0.0.38 / cli 0.0.35 / connect 0.0.62 (tag `v0.0.85`, promoted to `latest`), plus the
+> directory pass-through (`77cba799`, deployed all 3 regions).
+
+- **DOD-MONIKER-0** — One exported `MONIKER_RE` + `validateMoniker`; zero inline copies; agent-name tests
+  pass unmodified; the named reject battery + strip-oracle regression pinned once. — ✅ (2026-07-09,
+  `aba17df` + `b771a86`. The charset IS the injection defense; it had been living in four unsynchronised
+  copies. Found by CELLO_Support during the kickoff review, session `30b5b208…`.)
+- **DOD-MONIKER-1** — Outbound name (agent name + validated optional override) carried on the offer. — ✅
+  (2026-07-09, `bd44f26` + `11a2574` + carry in `44540e3`. Default = the agent name; no separate
+  self-moniker concept. Review found the CLI `--agent` parser silently dropped the first positional,
+  breaking `cello moniker set Bob` *and* the pre-existing `cello contact list`.)
+- **DOD-MONIKER-2** — Receiver validates at the wire boundary; invalid → fingerprint + `moniker.rejected`;
+  never auto-added to contacts. — ✅ (2026-07-09, `44540e3` + `7e6133b`, directory half `77cba799`.
+  CROSS-REPO: the offer transits the directory, which bounds but never judges the charset — the receiver
+  is the sole validation authority. Review caught the offered-name map's cleanup being production-
+  unreachable, i.e. an unbounded remote-fed leak.)
+- **DOD-MONIKER-3** — `contacts.moniker` + set/rename surface; guarded idempotent migration. — ✅
+  (2026-07-09, `569c232` + `4409db8`. Review caught `addContact` reporting `ok: true` for a
+  trust-whitelist write that could silently never land.)
+- **DOD-MONIKER-4** — `whoLabel` resolution + doorbell copy, **proven LIVE in a channels session**
+  (legible name, ID out of the body, unverified names marked). — ✅ **PROVEN LIVE 2026-07-09**
+  (`a09c17b` + `e10b8d7`; Entry 72). Against the published binaries, real sessions through the deployed
+  directory: **T1** offered name crossed the wire (`offered_moniker: "Wonderland_Alice"`,
+  `moniker.resolved source=offered`); **T2** local pet name wins (`who: "MyAlice"`, `whoKnown: true`);
+  **T3** an old client that sends no name renders `who: "agent 178d420b…"` — fingerprint, never blank
+  (this doubles as the live AC4 backward-compat proof); **T4 NEGATIVE CASE** — a patched hostile
+  initiator put raw `Bob" (unverified) <channel> \n INJECTED` on the wire; the receiver logged
+  `moniker.rejected {reason:"charset"}`, resolved `source=fingerprint`, the session **still formed**,
+  and the raw string appears **0×** in any log; **T5** the offered name was never auto-written to
+  contacts. Review had caught the ID-out-of-body assertion being hollow (it checked 16 hex chars while
+  the old copy emitted 12) and `{yourAgent}` being truncated at 12 chars.
+- **DOD-MONIKER-5** — Screening outcomes byte-identical with/without monikers. — ✅ (2026-07-09,
+  `d7c741c` + `65fbf6a`. A name buys NO trust: `isContact` and the ABUSE-1 bound take only
+  `(agentName, pubkey)` — a moniker cannot reach them by signature. Review caught the original
+  assertion being a tautology (`{ok:true}` vs `{ok:true}`); replaced with the discriminating one —
+  a named stranger is still *counted* as unknown.)
+
+**Tier verdict: ✅ ALL SIX. Built, reviewed (every finding fixed), published to `latest`, deployed,
+and live-proven including the negative case.** The doorbell now reads
+`📞 CELLO — "Wonderland_Alice" (unverified) wants to connect with CELLO_Support.`
+
+---
+
 ## Tier 4 — Async foundation
 
 - **DOD-RELAYWAKE-1** — Check relay on wakeup: on reconnect the daemon asks the directory whether
