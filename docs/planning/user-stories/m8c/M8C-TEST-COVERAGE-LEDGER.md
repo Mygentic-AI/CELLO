@@ -63,7 +63,7 @@ Purpose: **no area untested = no area uncategorized.** Every DoD line below sits
 | **POLICY-1** | ❌ | **C** | not built |
 | **PORTAB-1** | ❌ | **C** | not built |
 | **M9INT-1** | 🟡 | **C** | deferred post-channel (D11) |
-| **SEC-2** (FROST forgery) | 🚨 | **C** | pre-existing CRITICAL; needs coordinated cross-repo fix (not a "test") |
+| **SEC-2** (FROST forgery) | ✅ | ✅ PROVEN | FIXED + deployed + live-proven 2026-07-08 (client authSig + directory AUTH_REQUIRED/AUTH_INVALID; two live seals through the enforcing directory, `sealed_root 812c6e39…`) — see C2 |
 | **SEC-1** (relay-park auth) | flagged | **C** | pre-existing; own security design pass |
 | Kill switch | — | **OUT** | portal/platform scope, not the cello-client DoD (CLAUDE.md) |
 | F7/F9/F21*/F22 | tracked | **OUT** | "Tracked, not M8C-fruit" — own stories (*F21 partly addressed by CC-5/CC-10) |
@@ -90,17 +90,19 @@ kill-the-Primary holds INV-ONE-PRIMARY; session portability (close on A → sync
   (you can't gate ceremony participation on `daemon_id` when the ceremony stream isn't authenticated as
   the agent). Then a live multi-daemon spine test (a "needs Andre" kill-the-Primary proof). See D20.
 
-## C2 — FROST signing-path authentication  ·  `SEC-2`  ·  🚨 possibly launch-blocking
-Not a feature test — a **pre-existing CRITICAL forgery hole**: the `/cello/frost/1.0.0` signing frames are
-unauthenticated, the directory ALB is internet-facing, and `T` directory partials reach threshold without
-the client's share → a party knowing only an agent's **public** key can forge signatures (seals, session
-establishment). Affects **every** agent; not introduced by M8C.
-- **Unblock / fix:** require the frost signing stream to be K_local-authenticated with the existing
-  `CELLO-DIR-AUTH-v1` challenge (+ optionally bind `framedMsg` to a directory-brokered session). This is
-  a **coordinated cross-repo phased rollout** (client-then-directory) — enforcing auth before deployed
-  clients send it breaks every existing agent. A genuine migration decision (PROCEDURE §3a → PARK).
-- **Launch call owed (Andre):** severity + whether it blocks launch. It is also the prerequisite for C1's
-  ceremony-gate.
+## C2 — FROST signing-path authentication  ·  `SEC-2`  ·  ✅ RESOLVED 2026-07-08 (was 🚨 launch-blocking)
+Was a **pre-existing CRITICAL forgery hole**: the `/cello/frost/1.0.0` signing frames were unauthenticated,
+the directory ALB is internet-facing, and `T` directory partials reach threshold without the client's share
+→ a party knowing only an agent's **public** key could forge signatures (seals, session establishment).
+Affected **every** agent; not introduced by M8C.
+- **✅ FIXED, DEPLOYED & LIVE-PROVEN (2026-07-08):** the frost signing stream is now K_local-authenticated —
+  the client attaches an Ed25519 `authSig` over `(agentPubkey, epochId, framedMsg)` on every commit/sign
+  request (daemon 0.0.37 / cli 0.0.34, on `latest`); the directory verifies it before touching its share
+  (`AUTH_REQUIRED` if missing, `AUTH_INVALID` if bad), deployed to all 3 regions. The migration hazard was
+  handled by rollout order (client to `latest` → agents reinstalled → directory enforcement deployed).
+- **Live proof:** two real CELLO_Support↔Ms_Chelly sessions established AND sealed bilaterally through the
+  enforcing directory (`sealed_root 812c6e39…`, both `attestation_mode: live`). Legitimate ceremonies pass;
+  public-key-only forgery is rejected. This also unblocks C1's ceremony-gate at the auth foundation (D20).
 
 ## C3 — M9 content gateway: screening + injection defense  ·  `DOD-M9INT-1`, `INV-GATEWAY`
 The "**relatively safe**" launch pillar (screening, prompt-injection defense) — `screenInbound` at

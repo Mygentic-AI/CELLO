@@ -12,17 +12,16 @@ description: >
 
 # M8C — Build Journal
 
-> 🚨 **READ FIRST (2026-07-07): SEC-2 — pre-existing CRITICAL forgery hole in the FROST signing
-> path.** Found while scoping DOD-PRIMARY-1's ceremony-gate; confirmed by three independent
-> code-reads. The `/cello/frost/1.0.0` signing frames are unauthenticated and the directory blindly
-> signs arbitrary client-supplied bytes; T directory shares alone meet threshold, so anyone knowing
-> an agent's **public** key can forge its group signatures (sessions, seals). **Pre-existing, not
-> M8C's doing. Severity resolved UP: the frost protocol is internet-reachable (ALB is
-> internet-facing, libp2p multiplexes all protocols, no gate) — no network mitigation stands
-> between an attacker and the oracle. Likely launch-blocking — your call.** NOT fixed headless (it's
-> a cross-repo hot-path auth change that breaks every deployed client unless rolled out in lockstep).
-> Full writeup: DoD "Tracked, not M8C-fruit" → SEC-2, and BUILD-JOURNAL Entry 39. Proposed fix:
-> K_local-authenticate the frost signing stream (same challenge the signaling stream already uses).
+> ✅ **RESOLVED (2026-07-08): SEC-2 — the FROST-signing forgery hole is FIXED, DEPLOYED & LIVE-PROVEN.**
+> The `/cello/frost/1.0.0` signing stream is now K_local-authenticated: the client attaches an Ed25519
+> `authSig` over `(agentPubkey, epochId, framedMsg)` on every commit/sign request (daemon 0.0.37 / cli
+> 0.0.34, published + promoted to `latest`); the directory verifies it before touching its share
+> (`AUTH_REQUIRED` / `AUTH_INVALID`), deployed to all 3 regions. Rolled out in the safe order (client to
+> `latest` → agents reinstalled → directory enforcement deployed), so no deployed client broke. Live-proven
+> end to end — two real CELLO_Support↔Ms_Chelly sessions established AND sealed bilaterally through the
+> enforcing directory (`sealed_root 812c6e39…`, both `attestation_mode: live`). Full writeup: **Entry 63**
+> (fix + rollout + live proof); the original finding is **Entry 39**; forensic hole description retained in
+> the DoD "Tracked, not M8C-fruit" → SEC-2 block for the record.
 
 ## Status board (update in place)
 
@@ -35,7 +34,7 @@ description: >
 | 2 — Reactivity + surface | MSGWAKE-1, SINCESEQ-1, LOGINSTART-1, CONFIG-1 (+F6/F12), CURSOR-1 | **✅** 🟡 🟡CORE 🅿️CFG(D14) 🟡 — **MSGWAKE-1 LIVE PROVEN** (per-message doorbell, both directions, Entries 45/46) |
 | 3 — Reachability | AWAY-1, CONTACT-1, ABUSE-1, TTL-1, TGDOOR-1 | 🟡CORE 🟡CORE 🟡 🟡CORE 🟡 (**TIER 3 DONE, reviewed+fixed**) |
 | 4 — Async foundation | RELAYWAKE-1, LEAVEMSG-1 | 🟡CORE 🟡CORE (**TIER 4 DONE**, reviewer pending) |
-| 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ✅ 🟠 ❌ ❌ — DESIGN done (Entry 35); **PRIMARY-1 directory arbitration BUILT+real-FROST-tested+reviewed (Entries 36-38, all findings fixed, 16 tests green)**. **REMAINDER ANDRE-GATED:** ceremony-gate 🅿️ PARKED on **SEC-2** (D20 — frost-signing-stream is unauthenticated, a pre-existing critical forgery hole, see 🚨 banner above); pairing/DB-sync/Telegram-gating/kill-the-Primary need a live multi-device spine |
+| 5 — Multi-daemon | PRIMARY-DESIGN-1, PRIMARY-1, POLICY-1, PORTAB-1 | ✅ 🟠 ❌ ❌ — DESIGN done (Entry 35); **PRIMARY-1 directory arbitration BUILT+real-FROST-tested+reviewed (Entries 36-38, all findings fixed, 16 tests green)**. **REMAINDER (after-launch):** **SEC-2 FIXED 2026-07-08** (frost-stream K_local auth shipped+deployed+live-proven — Entry 63), so the ceremony-gate's auth prerequisite (D20) is now MET; its remaining pieces (daemon_id mint/persist, primary_holder seed, the gate itself) + pairing/DB-sync/Telegram-gating/kill-the-Primary need a live multi-device spine |
 | Post-channel — deferred | M9INT-1 (do AFTER channel tiers — D11; NOT a prerequisite) | 🟡 MERGED (`d47227c`, reviewed, 1 HIGH fixed) |
 
 **⛔ M9 IS NOT A PREREQUISITE (D11, 2026-07-06).** Do NOT merge `m9-build` before the channel work.
@@ -2865,6 +2864,55 @@ daemon log). Both need a severity call before story-writing.
 
 **M8C fix run is closed.** 11 directive fixes + CC-10, all committed/reviewed/shipped/promoted/live-verified.
 Deferred by directive (unchanged): SEC-2/DIR-1, full D21 model.
+
+---
+
+### 2026-07-08 — Entry 62: HERMES-001 — CELLO drives a second, non-Claude-Code runtime (Hermes Agent), live-proven
+
+**Why.** The launch intent's #1 value is "two agents connect across devices, incl. one you don't control";
+that needs CELLO working on a runtime OTHER than Claude Code. Hermes Agent is that runtime. Zero PRs to
+hermes-agent — everything rides its public extension surfaces.
+
+**Shipped (cello-client `30506b6` + review fixes `b4a1c12`, in cli 0.0.34).** `cello install hermes
+--agent <name>` scaffolds a CELLO **platform adapter** (a pure-stdlib Python asyncio client speaking the
+daemon's Unix-socket IPC directly — `ipc.connect` → `cello_use_agent` → content-free wake injection on
+`session_state_changed`/`cello_message`, single-flight reconnect), registers **cello-mcp** as a Hermes MCP
+server (the 18 `cello_*` commands), drops the `cello-bridge-setup` skill, and binds `CELLO_AGENT_NAME`.
+Raft-precedent shape but simpler (no subprocess/HTTP hop/bridge-token — there's no process boundary to
+cross). Two live-run discoveries fixed: `hermes mcp add` cancels on stdin EOF while exiting 0 (installer
+now answers `Y` and VERIFIES against `hermes mcp list`); + two adapter reconnect-lifecycle fixes. 13 tests,
+gates green on the CLI package.
+
+**Live-proven (same daemon):** install → gateway restart → adapter bound → Ms_Chelly (Claude Code) initiated
++ sent → wake injected into the Hermes gateway → the Hermes agent read via `cello_receive` and replied via
+`cello_send` on the first attempt; a "no reply needed" ack proved the `[SILENT]` suppression path. This is
+DOD-HERMES-1 (second-runtime leg). DOD-HERMES-2 (off-device via the AWS Hermes box) is the remaining
+cross-machine proof — gated only on installing the bridge there (post-publish). Design + record:
+[[2026-07-09_1915_hermes-agent-integration-plan]] §6.
+
+### 2026-07-08 — Entry 63: 🔒 SEC-2 FIXED — FROST-signing forgery hole closed, rolled out to `latest`, directory deployed, live-proven
+
+**The fix (both halves).** Client: every FROST commit/sign request now carries a K_local Ed25519 `authSig`
+bound to `(agentPubkey, epochId, framedMsg)`, threaded through all ceremony paths (cello-client `d744778`,
+review follow-up `9971769` — domain-separate commit vs sign, `0x00` vs `0x01||msg`). Directory: verifies
+that `authSig` before touching its share — missing → `AUTH_REQUIRED`, invalid → `AUTH_INVALID`
+(trustless-cello `1d730260`, review follow-up `d9202913` — reject non-bytes authSig, MEDIUM DoS). Reviewer:
+forgery closed, SPEC FAITHFUL / TESTS HAVE TEETH.
+
+**Rollout (the migration hazard, handled by ORDER).** SEC-2 was cross-repo and hot-path: enforcing on the
+directory before clients send authSig would reject EVERY agent. So: (1) publish client cascade — daemon
+0.0.36→**0.0.37**, cli 0.0.33→**0.0.34** (cli cross-pins real daemon 0.0.37; connect unchanged 0.0.61),
+tag `v0.0.83`, CI green incl. smoke-tag, binary-verified in the tarball; (2) promote all 7 to `latest`
+(only daemon+cli moved); (3) fix a stale-packument install trap (`npm i -g @latest` served old 0.0.33/0.0.36
+until `npm cache clean --force`), then `cello logout`/`login` onto daemon 0.0.37 (4 agents online); (4) THEN
+push+deploy the directory enforcement via `cello-directory-pipeline` (revision `0e1ed768`, all 3 regions).
+EC2 demo agent is a known laggard, accepted.
+
+**Live proof (against the enforcing directory).** Two real CELLO_Support↔Ms_Chelly sessions ESTABLISHED and
+SEALED bilaterally — `sealed_root 812c6e39ea0afaf0f80dc08070fbf6c01e48b2977532a2d053533df2f464dca9`, both
+parties `attestation_mode: live`. Session-establishment and seal ceremonies both pass enforcement;
+legitimate agents work, public-key-only forgery is rejected. SEC-2 → ✅ (DoD + ledger flipped). Also
+unblocks DOD-PRIMARY-1's ceremony-gate at the auth foundation (D20).
 
 ---
 

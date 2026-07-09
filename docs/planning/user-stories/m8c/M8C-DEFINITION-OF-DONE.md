@@ -501,8 +501,20 @@ own story) deliberately, never smuggled in as a rider. Source:
   signature to the park protocol. Flagging prominently — this is real production crypto-protocol
   attack surface, not a nice-to-have.
 
-- **SEC-2 (2026-07-07, found while scoping DOD-PRIMARY-1's ceremony-gate) — 🚨 pre-existing CRITICAL
-  forgery hole in the FROST signing path. Possibly launch-blocking — Andre's call on severity + fix.**
+- **SEC-2 (2026-07-07, found while scoping DOD-PRIMARY-1's ceremony-gate) — ✅ FIXED, DEPLOYED &
+  LIVE-PROVEN (2026-07-08). Was a 🚨 pre-existing CRITICAL forgery hole in the FROST signing path.**
+  > **✅ RESOLVED 2026-07-08.** Both halves shipped and live: the **client** now signs every FROST
+  > commit/sign request with a K_local Ed25519 `authSig` bound to `(agentPubkey, epochId, framedMsg)`
+  > (cello-client `d744778`/`9971769`, daemon 0.0.37 / cli 0.0.34, published + promoted to `latest`);
+  > the **directory** verifies that `authSig` before touching its share — missing → `AUTH_REQUIRED`,
+  > invalid → `AUTH_INVALID` (trustless-cello `1d730260`/`d9202913`, deployed to all 3 regions via
+  > `cello-directory-pipeline`, revision `0e1ed768`). Reviewer verdict: forgery closed, SPEC FAITHFUL /
+  > TESTS HAVE TEETH (2 findings fixed: DoS coercion on non-bytes authSig + commit/sign domain
+  > separation `0x00` vs `0x01||msg`). **Live-proven end to end 2026-07-08** against the enforcing
+  > directory: two real CELLO_Support↔Ms_Chelly sessions established AND sealed bilaterally
+  > (`sealed_root 812c6e39…`, both parties `attestation_mode: live`) — session-establishment and seal
+  > ceremonies both pass enforcement; legitimate agents work, public-key-only forgery is rejected. The
+  > forensic description of the original hole is retained below for the record. See BUILD-JOURNAL Entry 63.
   **NOT introduced by M8C or the Tier-5 work — pre-exists in the M2/M6B/federation FROST signing
   path and affects EVERY agent.** Confirmed by three independent code-reads (a ceremony-gate
   feasibility pass, a FROST-threshold-model check, and an adversarial confirm-or-refute that
@@ -535,21 +547,27 @@ own story) deliberately, never smuggled in as a rider. Source:
     and no in-code gate (SEC-2 confirmed). So the exploit is open to anyone who can reach the
     directory = the internet. No network-level mitigation stands between an attacker and the blind
     signing oracle.
-  - **Proposed fix direction (NOT implemented — PARKED):** require the frost signing stream to be
-    K_local-authenticated with the same `CELLO-DIR-AUTH-v1` challenge the signaling stream uses (a
-    public-key-only attacker cannot answer it; the legitimate daemon can). Optionally also bind
-    `framedMsg` to a directory-brokered session. **Not fixed headless** because it is the most
-    sensitive hot path (every agent/session/seal) and a CROSS-REPO change: enforcing auth on the
-    directory before deployed clients send it breaks EVERY existing agent — it needs a coordinated
-    client-then-directory phased rollout, a genuine migration decision (PROCEDURE §3a → PARK).
-  - This fix is ALSO the prerequisite for DOD-PRIMARY-1's ceremony-gate (D20). Related: SEC-1 (the
-    relay-park bare-content auth gap) is a different, narrower pre-existing gap; SEC-2 is the
-    signing path itself.
+  - **Fix SHIPPED + DEPLOYED + LIVE-PROVEN (2026-07-08 — was "Proposed, PARKED"):** the frost signing
+    stream is now K_local-authenticated — the client attaches an Ed25519 `authSig` over
+    `(agentPubkey, epochId, framedMsg)` on every commit/sign request, and the directory verifies it
+    against the agent's public key before touching its share (a public-key-only attacker cannot
+    produce it; the legitimate daemon can). The predicted migration hazard was handled by the correct
+    rollout order: client published + promoted to `latest` FIRST, agents reinstalled onto daemon
+    0.0.37, THEN the directory enforcement deployed — so no deployed client was broken. (The EC2 demo
+    agent is a known laggard, accepted.)
+  - This fix was ALSO the prerequisite for DOD-PRIMARY-1's ceremony-gate — see D20, now unblocked at
+    the auth-foundation level. Related: SEC-1 (the relay-park bare-content auth gap) is a different,
+    narrower pre-existing gap, still open; SEC-2 (the signing path itself) is CLOSED.
 
 ## Parked decisions
 *(Genuine undecidable forks get parked here + journal + DECISIONS — never silently dropped.)*
 
-- **D20 parks (2026-07-07):** DOD-PRIMARY-1's **ceremony-gate** (directory refuses to co-sign for a
+- **D20 parks (2026-07-07) — SEC-2 prerequisite now MET (2026-07-08):** the frost-stream K_local auth
+  that D20 was waiting on has LANDED (SEC-2 fixed/deployed above), so the ceremony-gate is no longer
+  blocked at the authentication foundation. Its remaining pieces (mint/persist/send a `daemon_id`,
+  seed `primary_holder` at registration, then the gate itself) can now proceed — they are Tier-5,
+  after-launch work, not launch-blocking. Original park text follows for the record.
+  DOD-PRIMARY-1's **ceremony-gate** (directory refuses to co-sign for a
   non-current `daemon_id`, enforcing DOD-INV-ONE-PRIMARY) — gated on **SEC-2**'s fix. You cannot
   meaningfully gate ceremony participation on `daemon_id` when the ceremony stream is not
   authenticated as the agent at all; frost-stream K_local auth (SEC-2's fix) is the prerequisite,
