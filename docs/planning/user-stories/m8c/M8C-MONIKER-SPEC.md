@@ -228,7 +228,10 @@ a dropped notification. The system fails **legible and loud**: the label degrade
   the boundary yields `offeredMoniker: null`, which whoLabel renders — the RENDERED fingerprint plus the
   end-to-end wire proof (name riding a real request through the deployed directory) is DOD-MONIKER-4's
   required live channels gate, per the reviewer's stated condition.)
-- **DOD-MONIKER-3** — `contacts.moniker` + set/rename surface; guarded idempotent migration. ❌
+- **DOD-MONIKER-3** — `contacts.moniker` + set/rename surface; guarded idempotent migration. ✅
+  (2026-07-09, cello-client `569c232` + review fixes `4409db8`; unit-reviewer verdict FAITHFUL /
+  no silent fallbacks / tests have teeth; F1–F3 all taken (fail-loud null-DB writes, truthful add
+  response) plus both teeth-gaps pinned; 1860 workspace tests green.)
 - **DOD-MONIKER-4** — `whoLabel` resolution + doorbell copy, proven LIVE in a channels session
   (legible name, ID out of the body, unverified names marked). ❌
 - **DOD-MONIKER-5** — Screening outcomes byte-identical with/without monikers. ❌
