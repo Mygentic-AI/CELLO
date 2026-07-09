@@ -3182,6 +3182,35 @@ error-level) + two unused eslint-disable directives (internal-api-only.ts). Lint
 
 ---
 
+### 2026-07-09 — Entry 68: MONIKER-3 — local address book pet name (unit start)
+
+**Target:** `contacts.moniker TEXT NULL` via a PRAGMA-guarded idempotent ALTER; `addContact` gains an
+optional validated moniker (re-add updates it when non-null given, `added_at` keeps never-refresh);
+`cello_contact_add` accepts optional `moniker`, new `cello_contact_set_moniker` renames/clears;
+`cello_contact_list` returns `{pubkey, added_at, moniker}`.
+
+**Clause checklist (AC1–AC3 + hygiene):**
+- [ ] AC1 guarded ALTER on `contacts` (session-node-manager schema init) — SQLite has no ADD COLUMN
+  IF NOT EXISTS; migration idempotent; existing rows NULL, no data loss (restart test)
+- [ ] AC2 `addContact(agentName, pubkey, moniker?)` — INSERT OR IGNORE preserves `added_at`
+  never-refresh; a new NON-NULL moniker on re-add updates; absent moniker on re-add leaves the
+  stored one; store-level validate-throw backstop (MONIKER-0 rule)
+- [ ] AC3 `cello_contact_add` optional `moniker` (invalid → `invalid_moniker`, nothing stored);
+  `cello_contact_set_moniker(pubkey, moniker|null [, agent])` — rename + clear; missing `moniker`
+  key → `missing_params` (Entry-66-F3 lesson: absence is not a clear); unknown contact →
+  `contact_not_found` fail-loud; list returns the moniker; shim forwards only (D7)
+- [ ] Hygiene: the two AUTO-add call sites (reply-promotion, outbound-initiate) pass NO moniker —
+  MONIKER-2 AC3's never-auto-written boundary holds by construction
+- [ ] OBS `contact.moniker.set` (info) `{agentName, pubkey}` — spec §6, never the value? (spec logs
+  only identifiers; the moniker is display-safe by construction but stay consistent: no value)
+
+**Falsify:** store methods live beside addContact (same #db); handlers mirror cello_contact_add /
+cello_set_moniker patterns incl. resolveContactAgent; no redundancy (validation handler-side for the
+friendly error + store throw backstop); nothing else consumes listContacts' row shape except
+cello_contact_list (checked: single caller) so the added field is additive.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
