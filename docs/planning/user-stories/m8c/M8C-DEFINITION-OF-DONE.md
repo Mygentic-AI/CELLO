@@ -290,9 +290,16 @@ description: >
   daemon 0.0.39, Node 24.15.0). Her doorbell read `who="agent 77d0c806…" whoKnown=false` — the
   counterparty's fingerprint, NOT her own name. Daemon log, positive proof both directions:
   `moniker.resolved agentName=Ms_Chelly_Hermes source=offered` (receiver reads its own box) and
-  `moniker.resolved agentName=Ms_Chelly source=fingerprint` (initiator degrades). Zero
-  `agentName=Ms_Chelly source=offered` since the fixed daemon started — that string is the bug's
-  signature. Sealed root `d317339e53ab60d1e51382e730e2562a42e1ca2c173835ee904bf67edd7e4448`.)
+  `moniker.resolved agentName=Ms_Chelly source=fingerprint` (initiator degrades).
+  **Proven SYMMETRICALLY:** Hermes then called back (session `3c6d6c06…`), reversing the roles — and
+  `agentName=Ms_Chelly_Hermes source=fingerprint` (initiator degrades), `agentName=Ms_Chelly
+  source=offered` (receiver reads her own box). Both initiators degrade; both receivers read their own
+  box; same two agents, same daemon, opposite roles.
+  ⚠️ **The bug's signature is role-dependent, NOT a grep string.** `source=offered` is CORRECT for a
+  receiver and WRONG only for an initiator. `moniker.resolved` carries no sessionId, so it cannot be
+  classified without knowing who opened that session. A naive grep for `agentName=Ms_Chelly
+  source=offered` flags three correct lines as bugs.
+  Sealed root `d317339e53ab60d1e51382e730e2562a42e1ca2c173835ee904bf67edd7e4448`.)
 - **DOD-HERMES-3** — The Hermes wake sentence surfaces the resolved name. The adapter's `_wake_prompt`
   (cello-client `core/cli/src/hermes/assets.ts`) predates monikers and never reads `who`/`whoKnown`, so a
   Hermes agent sees raw hex forever and every name an operator sets is invisible to it. The pubkey must

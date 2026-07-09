@@ -3609,13 +3609,35 @@ The counterparty's fingerprint — **not her own name**. Daemon log gives proof 
 18:48:34Z  moniker.resolved  agentName=Ms_Chelly         cp=77d0c806…  source=fingerprint  ← degrades correctly
 ```
 
-**Method note worth keeping.** Absence of the bug's signature is not proof of the fix. `resolveWho` logs
-`moniker.resolved` on *every* call regardless of source, so a fixed initiator must emit
-`source=fingerprint` — a *positive* line. Seeing no `Ms_Chelly` line at all would have meant `resolveWho`
-never ran, proving nothing. It also mattered to timestamp-filter: the log still holds
-`agentName=Ms_Chelly source=offered` at `15:29Z`/`15:45Z` — real instances of the bug, recorded by the OLD
-binary hours before this daemon existed. Reading the log without filtering on daemon start would have
-"failed" a passing test.
+**Then Hermes called back, and gave us the stronger half for free.** Session `3c6d6c06…`, roles reversed:
+
+```
+18:54:33Z  moniker.resolved  agentName=Ms_Chelly_Hermes  cp=178d420b…  source=fingerprint  ← initiator degrades
+18:54:52Z  moniker.resolved  agentName=Ms_Chelly         cp=77d0c806…  source=offered      ← receiver reads her OWN box
+```
+
+Ms_Chelly's doorbell on that session read `"Ms_Chelly_Hermes" (unverified)`, and `cello_await_session`
+returned `offered_moniker: "Ms_Chelly_Hermes"` — the wire chain is intact end to end, not just the display
+layer. **Same two agents, same daemon, opposite roles, opposite-and-correct resolutions.** Under the old
+code both sessions shared one box keyed by session id, so the initiator's lookup collided with the
+receiver's entry.
+
+**Method notes — three of them, each one nearly produced a wrong verdict.**
+
+1. **Absence of the bug's signature is not proof of the fix.** `resolveWho` logs `moniker.resolved` on
+   *every* call regardless of source, so a fixed initiator must emit a *positive* `source=fingerprint`
+   line. Seeing no `Ms_Chelly` line at all — which is what the first read showed — would have meant
+   `resolveWho` never ran, proving nothing.
+2. **The log still holds real pre-fix bug instances.** `agentName=Ms_Chelly source=offered` at `15:29Z`
+   and `15:45Z`, recorded by the OLD binary hours before this daemon started at `18:40:49Z`. Reading the
+   log without filtering on daemon start "fails" a passing test.
+3. 🔴 **The bug's signature is role-dependent, and I got this wrong mid-run and had to retract it.**
+   `source=offered` is CORRECT for a receiver and wrong only for an INITIATOR. `moniker.resolved` carries
+   `agentName`, `pubkey`, `source` — **no sessionId** — so a line cannot be classified without knowing who
+   opened that session. My grep for `agentName=Ms_Chelly source=offered` flagged three *correct* lines as
+   bugs the moment Hermes initiated. The earlier version of this entry asserted that string WAS the
+   signature; that claim was false and is corrected here. If a future reader wants a one-line check, there
+   isn't one — add `sessionId` to the `moniker.resolved` event first.
 
 Second correction mid-run: the initiator's doorbell is **not** the session-created frame — it is the
 `cello_message` doorbell raised when the counterparty **replies** (spec §10 step 4). T6 is not a session
