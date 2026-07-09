@@ -79,6 +79,15 @@ No new code needed. Detail lives in M8C-DEFINITION-OF-DONE; this is the quick li
   **CLI** `cello status` still shows `"registered"` with no `selected` — CLI/MCP status diverge; the human-
   facing CLI is the stale one. Fold into the onboarding sprint (F5/CLI).
 
+## Moniker tier (M8C-MONIKER-0..5) — built + reviewed 2026-07-09, awaiting the live run
+- [ ] **Legible doorbell** — the full protocol lives in [[M8C-MONIKER-LIVE-TEST]] (T1–T5). Flips
+  DOD-MONIKER-4 and discharges the MONIKER-2 reviewer's carried condition. Gated on: `v0.0.84`
+  published + verified against the BINARY, promoted to `latest` (Andre's go), `/mcp` reconnect.
+  **Note T4** — proving the receiver's invalid-name reject path needs a *deliberately patched
+  initiator daemon*; a stock client validates twice and omits the bad value, so the receiver would
+  see "absent", not "invalid". If T4 is skipped the line records 🟡, never ✅ (Entry-64 rule:
+  positive-only evidence proves no-regression, never enforcement).
+
 ## Confirm-live pass — everything else that's built
 - [x] **3a. Catch up after away** — `cello_receive({ since_seq })` returns everything missed in one batch.
   **PROVEN LIVE 2026-07-07:** 3 messages piled up (seq 3/4/5); one `cello_receive({since_seq:2})` returned
