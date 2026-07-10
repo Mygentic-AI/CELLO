@@ -4131,6 +4131,57 @@ awaiting the deploy.** The remaining work is not engineering: a directory deploy
 
 ---
 
+### 2026-07-10 — Entry 86: 🏁 THE PHANTOM-SESSION CHAIN IS LIVE-PROVEN, END TO END
+
+D1 + D2 + D3 + D4, running together against the promoted binaries (`daemon@0.0.44`, `cli@0.0.42`,
+`client@0.0.48`, `connect@0.0.64`) and the deployed directory (all three regions, rev `1ccd08a5`).
+
+**The race was FORCED, not waited for.** `cello_stop_agent` tears down an agent's standing receiver and
+**leaves its directory signaling stream connected** — which is exactly the D2 precondition. So the
+first-connect race, which we had written off as unreproducible on demand, is one tool call away.
+
+**Negative case.** `Ms_Chelly` → `CELLO_Feedback` (receiver down, signaling up):
+
+```
+{ ok: false, reason: "counterparty_did_not_accept",
+  guidance: "The directory refused the session request (counterparty_did_not_accept)." }
+```
+
+Not `directory_unreachable` — the lie that would have blamed a healthy directory for a counterparty that
+declined. Daemon log:
+
+```
+13:12:54  session.offer.abort        agent=CELLO_Feedback  reason=standing_receiver_unavailable
+13:12:54  session.offer.reject.sent  agent=CELLO_Feedback  reason=standing_receiver_unavailable
+```
+
+**What is ABSENT is the proof:**
+- No `session.initiate.counterparty_unavailable` — the M8B F13 guard never fired, because **the directory
+  never signed an endpoint-less assignment.** (D2)
+- No `session.inbound.accepted` — **no phantom session.** D3's guard never even got a chance. (D3)
+- No away-reply → no orphan transcript row → no permanently-unread message. (D4)
+- `reject.sent` in the **same second** as `abort` — no 2 s stall. The directory resolved its waiter on
+  D1's frame instead of timing out. (D1)
+
+**Positive control.** Restarted the agent, initiated the same session: `ok: true`, sealed bilaterally,
+root `76cfe937…`. A fix that refused *everything* would have passed the negative test; it does not.
+
+Also confirmed in passing: the away-reply on the healthy session read back with **`from` = the real
+pubkey**, where the orphaned rows correctly returned `from: null`. The two D4b paths behave differently
+and both correctly.
+
+**Before today, that same sequence produced:** silent abort → directory waits 2 s → FROST-signs an
+assignment with an empty counterparty endpoint → initiator refuses (`counterparty_unavailable`) → receiver
+accepts anyway → phantom session → away-reply into a void → a message the operator could never read, and a
+badge that could never clear. And the error blamed the wrong subsystem.
+
+**Now it produces one honest error, immediately, and nothing else happens at all.**
+
+`DOD-OFFER-REJECT-1`, `DOD-DIR-FAILCLOSED-1`, `DOD-INBOUND-GUARD-1`, `DOD-UNREAD-1` — all ✅ live-proven.
+[[M8C-PHANTOM-SESSION-FIX-PLAN]] is closed.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
