@@ -439,6 +439,31 @@ and they correlate one-to-one.
 > IS online. D3 is small, local, needs no deploy, and removes the phantom session; do it regardless of
 > when D2 is scheduled.
 
+## 🔴 DOD-AGENT-ID-JOINKEY-1 — the six session tables join on a MUTABLE key (2026-07-10)
+
+**Found while asking whether an agent can be renamed.** `agent_name` was the original PK; `REMOVE-001`
+added the stable `agent_id` **to make names reusable** and migrated only the parent `agents` table — the
+six children (`sessions`, `seal_interrupted_artifacts`, `session_tree_leaves`, `transcript`,
+`message_watermarks`, `contacts`) still join on the now-mutable, reuse-freed name. The same commit's
+comment declares the name "a mutable ATTRIBUTE" while six FKs point at it. Full story, ACs, and hazards:
+[[2026-07-10_agent-id-joinkey]].
+
+**Confirmed hazard:** retire an agent (rows KEPT, name FREED), create a new one with that name (fresh
+pubkey) → the new identity's `WHERE agent_name=…` queries return the DEAD identity's transcript, contacts,
+and interrupted sessions; resuming one would seal with a different keypair. Also blocks agent rename.
+No remote actor — `agent_name` never crosses the wire (AC1 proves it).
+
+**Safe, unlike June-26:** purely client-side and purely ADDITIVE — `ADD COLUMN agent_id` + backfill from
+the local `agents` table + re-point joins. **No DELETE/TRUNCATE/purge**, no value the directory replicates
+changes (it keys on `k_local_pubkey`, has no `agent_name` — consistent with the PII-free directory
+policy). The retire-reuse orphans need no purge: on an `agent_id` join a new same-named agent simply never
+matches them.
+
+- **DOD-AGENT-ID-JOINKEY-1** — carry `agent_id` into the six tables as the join key; `agent_name` becomes
+  display-only. AC1 wire-proof gates it. Client-side, no deploy. **Blocks the address-book tables** — they
+  must be born on `agent_id`. Not launch-blocking (trigger is retire+recreate-same-name on one machine),
+  but contagious and cheapest before more tables land on it. — ❌
+
 ## 🔴 Daemon singleton — multiple daemons, one database (2026-07-10)
 
 **Observed live, not theorised:** three `cello-daemon` processes at once; `lsof` showed **two holding
