@@ -30,6 +30,13 @@ description: >
 - **Canonical CBOR** is the hashed form; JSON is a display/LLM projection only (§5).
 - **Supersede, never mutate** for renewal/override (§3).
 - **No single score, ever** — inherited hard rule from the taxonomy. Tier is not a signal.
+- **Agent-scoped, not daemon-level** — a signal shared with one agent is invisible to co-resident
+  agents; cross-agent trust propagates only by explicit endorsement + PSI (§10).
+- **The recipient does not persist the subject's signals** — it holds the *relationship*; the subject
+  holds its own reputation and re-presents the current set each time (§9). The recipient-side
+  `trust_signals` table is an **optional cache**, never source of truth.
+- **Tier never auto-downgrades** — signals inform tier decisions; a revoked signal that earned a tier
+  surfaces a *review prompt*, it does not silently change the tier (§9).
 
 **Open (flagged, not decided):**
 1. Does the **recipient re-scan**, or fully trust the creation-time scan? (§8) — leaning: trust it;
@@ -260,7 +267,85 @@ is the weakest of the three layers.
 
 ---
 
-## 9. Invariants
+## 9. Flows — four scenarios collapse to one
+
+Trust-sharing has an obvious set of cases: first contact; a known contact sharing more; an *updated*
+signal (supersession); a *new* signal on an existing agent. **From the recipient's side they are one
+operation** — "evaluate the initiator's current full set against my policy" — because of one decision:
+**the recipient does not remember what a subject showed it last time.** The distinctions are real, but
+they live on the *subject's* side (what they've accumulated) or in the recipient's *existing
+relationship* (does it already have a tier for this pubkey), never in the sharing mechanics.
+
+**Why this is right, not just simple:** *your trust signals are yours to carry, not others' to hoard.*
+If every recipient stored copies of your set, your reputation would scatter across everyone's databases —
+stale copies everywhere, and a disclosure leak (whoever you showed can dump what you revealed). Instead:
+
+- **Subject (Alice)** holds her own signals — her wallet, the stateful holder.
+- **Recipient (Bob)** holds the **relationship** — the contact row (tier, moniker, met-how, last-seen),
+  optionally a cached *verdict* ("as of last session Alice cleared my known-tier bar") with a freshness
+  stamp — **never the signal data, and never relied upon.** The default flow works with zero cache.
+
+This is the moniker principle inverted: your name for a contact is yours; their reputation is theirs.
+
+| case | what the recipient does |
+| :-- | :-- |
+| **First contact + signals** | Unknown subject presents its set; recipient evaluates against its *unknown-sender* policy. Accept → unknown→known, contact row created. Reject, or a second round ("also provide X?"). |
+| **First contact, shares nothing** | No-signals policy applies → typically reject for an unknown. Sharing is *selective disclosure*: share all, some, or none; the recipient's policy may demand specific signals — that is the second round. |
+| **Known contact, new/added signals** | Current full set is richer; the recipient already has a tier. New signals matter only for *elevation* (known→whitelisted) — otherwise informational. |
+| **Updated signal (supersession)** | The current version is presented; with no persistence there is no "it updated" event and none is needed. The old hash is superseded at the directory; a stale copy fails freshness. |
+
+**Two edge cases this handles cleanly, one it does not:**
+
+- **Omitted / dropped signal — handled, no history needed.** If the recipient's policy requires signal X
+  and the subject doesn't present it, they fail — whether they never had it or dropped it is irrelevant.
+  **Policy-on-current-set is robust to omission without remembering anything.**
+- **Selective disclosure — a feature.** A subject doesn't dump its full identity on every stranger; a
+  demanding recipient triggers the two-round negotiation. Both sides have agency.
+- **Tier staleness — the one it does not handle.** If a signal that earned `whitelisted` is later
+  revoked, the tier is now based on something that no longer holds — but **tier is the operator's
+  sacrosanct decision and must not auto-downgrade** (same rule as the moniker). Resolution: signals
+  *inform* tier decisions but never change them; a revocation of a signal a contact was elevated on
+  **surfaces a review prompt** ("the signal you whitelisted Alice on was revoked — review?"). Same shape
+  as the rename notice — the system tells you, you decide. Auto-downgrade would let a third party
+  (whoever revokes) silently mutate your address book.
+
+---
+
+## 10. Scoping — agent-unique, never daemon-level
+
+**Q: same daemon, multiple agents (Ms_Chelly, Alice). Bob shares signals with Ms_Chelly. Can Alice see or
+benefit from them?** **A: no — agent-scoped.** Bob shared with Ms_Chelly's *identity*; the disclosure and
+everything Ms_Chelly derives from it belong to Ms_Chelly's agent, not the daemon and not Alice. Three
+reasons, all pointing the same way:
+
+1. **Consent.** Bob's share was *selective disclosure to Ms_Chelly* — he may show his LinkedIn to a
+   professional contact and withhold it from a personal one. Alice seeing it violates Bob's per-recipient
+   choice. He disclosed to an agent, not a machine.
+2. **Sovereign-identity no-bleed — literally the `agent_id` bug one layer up.** Ms_Chelly and Alice are
+   distinct pubkey identities that merely co-reside. Alice benefiting is *one identity reading another's
+   social graph through shared daemon storage* — the same anti-pattern as the retire-reuse history bleed
+   we rebuilt seven tables to kill ([[2026-07-10_agent-id-joinkey]]).
+3. **Deliberate separation.** Co-resident agents are different personas *on purpose*; merging their trust
+   knowledge defeats the reason they are two agents.
+
+**The legitimate "let Alice benefit" want is delivered explicitly, through the trust system itself, not
+through storage bleed.** Ms_Chelly *endorses* Bob (a Class 2 agent-issued signal); when Bob later connects
+to Alice, PSI reveals that Bob's endorsers overlap with Alice's contacts — namely Ms_Chelly. **The
+network-graph class IS the cross-agent trust channel.** Trust propagates by explicit vouching, never by
+shared storage — and the architecture already has that consent-respecting channel, which is exactly why
+the leaky one is unnecessary.
+
+- **The schema enforces this for free:** the recipient-side `trust_signals` cache FKs to a *per-agent*
+  contact row keyed on `agent_id`, so a query scoped by Alice's `agent_id` structurally cannot see
+  Ms_Chelly's contacts or their signals. The join-key fix is the enforcement mechanism, not just a
+  correctness fix.
+- **Security bonus:** agent-scoping *contains the blast radius* — a compromised Ms_Chelly exposes
+  Ms_Chelly's trust graph, not Alice's. Daemon-level would make one compromised agent a window into every
+  co-resident agent's relationships, the fattest target on the machine.
+
+---
+
+## 11. Invariants
 
 - **INV-DIR-DUMB** — the directory performs only the two hash checks (§2). Any content evaluation,
   signature logic, or schema knowledge added to the directory is a violation.
@@ -273,10 +358,15 @@ is the weakest of the three layers.
 - **INV-RECEIPT-FRESH** — a recipient's stored signal is a point-in-time receipt; freshness (revocation,
   supersession) is re-checked on use, never trusted from cache indefinitely.
 - **INV-NO-SCORE** — signals are independent and named; never collapsed into a score/level/rank.
+- **INV-AGENT-SCOPED** — a signal shared with one agent is invisible to co-resident agents; the only
+  cross-agent trust channel is explicit endorsement + PSI (§10). Enforced by the per-agent (`agent_id`)
+  `trust_signals` FK.
+- **INV-RECIPIENT-STATELESS** — the recipient holds the *relationship*, not the subject's signals; any
+  stored signal is an optional, freshness-re-checked cache, never source of truth (§9).
 
 ---
 
-## 10. Cross-milestone dependencies
+## 12. Cross-milestone dependencies
 
 - **Address book + `agent_id` join key.** The `trust_signals` table FKs to the recipient's contact row;
   it must be born on `agent_id` and on the address-book schema. **M10 storage cannot be designed until
