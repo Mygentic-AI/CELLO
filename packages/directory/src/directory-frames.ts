@@ -28,6 +28,7 @@ import type {
   PeerInfoAnnounce,
   ManifestPollResponse,
   SessionOfferAccept,
+  SessionOfferReject,
   RevokeAgentRequest,
   AgentRevocationAck,
   AgentRevocationError,
@@ -376,7 +377,7 @@ export type SealInterruptedAckFrame = { type: "seal_interrupted_ack"; sessionId:
 /** initiatorPubkey is included so the directory can route the rejection back to the initiator by direct lookup in #streams. */
 export type SealInterruptedRejectionFrame = { type: "seal_interrupted_rejection"; sessionId: string; initiatorPubkey: string; reason: string };
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck | DiscoveryLookup | PrimaryTransferRequest;
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SessionOfferReject | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck | DiscoveryLookup | PrimaryTransferRequest;
 
 /**
  * CELLO-M8-TRUST-001: encode a trust-signal pickup for delivery to the agent's daemon (OUTBOUND).
@@ -650,6 +651,21 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     const counterparty_session_addrs = toStringArray(o["counterparty_session_addrs"]);
     if (!counterparty_session_peer_id || !counterparty_session_addrs) return null;
     return { type: "session_offer_accept", session_id, counterparty_session_peer_id, counterparty_session_addrs };
+  }
+
+  // DOD-DIR-FAILCLOSED-1 (D2): session_offer_reject (target → directory) — the daemon-D1 answer
+  // when the target cannot serve the offer. MUST live in this DECODER allowlist, not just the
+  // dispatch chain: an unlisted type decodes to null and the directory replies not_authenticated,
+  // so a dispatch-only branch would never fire (D1-review F2). session_id may be absent (the
+  // daemon's no_session_id abort has nothing to echo) — decoded as null, logged, never dispatched
+  // to a waiter.
+  if (o["type"] === "session_offer_reject") {
+    const session_id_raw = toUint8Array(o["session_id"]);
+    const session_id = session_id_raw && session_id_raw.length === 16 ? session_id_raw : null;
+    const reason = typeof o["reason"] === "string" && o["reason"].length >= 1 && o["reason"].length <= 128
+      ? o["reason"]
+      : "unspecified";
+    return { type: "session_offer_reject", session_id, reason };
   }
 
   // M7-SESSION-001 AC-009: seal_interrupted signaling frames (pass-through routing)
@@ -1110,7 +1126,16 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       reason !== "no_connection" &&
       reason !== "session_request_missing_peer_id" &&
       reason !== "ceremony_timeout" &&
-      reason !== "ceremony_exhausted"
+      reason !== "ceremony_exhausted" &&
+      // DOD-DIR-FAILCLOSED-1 (D2): the fail-closed reason must also survive the OUTBOUND typed
+      // allowlist, or the initiator's client decodes the error frame to null and sees a dropped
+      // frame instead of the cause. (Same trap as D1-review F2 on the inbound decoder — an
+      // allowlist that lives apart from the reason union silently swallows every new reason.)
+      reason !== "counterparty_did_not_accept" &&
+      // Present in the reason union since M7/M8 but never listed here — a `session_request_error`
+      // carrying either would decode to null on the client. Same defect, found by the same fix.
+      reason !== "agent_revoked" &&
+      reason !== "agent_suspended"
     ) return null;
     return { type: "session_request_error", reason };
   }

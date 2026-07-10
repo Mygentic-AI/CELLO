@@ -364,6 +364,176 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     }
   });
 
+  // ─── DOD-DIR-FAILCLOSED-1 (D2, M8C-PHANTOM-SESSION-FIX-PLAN §4) ──────────────────────────────
+  //
+  // The directory used to "proceed with empty defaults" when the target never accepted the
+  // session_offer: it FROST-signed an assignment whose counterparty endpoint was EMPTY and pushed
+  // it to BOTH parties. That artifact is validly signed and structurally unusable — the initiator
+  // has no address to dial. It is the root of the phantom session. A timeout (or an explicit
+  // reject) must produce a FAILURE, never a signed artifact.
+  describe("DOD-DIR-FAILCLOSED-1: the directory never signs an endpoint-less assignment", () => {
+    // `session_offer` is a directory→target frame the DAEMON decodes (session-ceremony.ts), not
+    // decodeOutboundSignalingFrame — which is this repo's client-side allowlist and does not list
+    // it. So the target side of these tests decodes raw CBOR, exactly as the daemon's inbound
+    // handler does.
+    type RawFrame = { type?: string; session_id?: Uint8Array };
+    const readRaw = async (reader: StreamReader): Promise<RawFrame> =>
+      CBOR_ENC.decode(await reader.readDecoded()) as RawFrame;
+
+    /** Drain frames for `ms`, collecting whatever arrives. Used to prove NOTHING was sent. */
+    async function collectFor(reader: StreamReader, ms: number): Promise<string[]> {
+      const seen: string[] = [];
+      const done = new Promise<void>((resolve) => setTimeout(resolve, ms));
+      void (async () => {
+        for (;;) {
+          try {
+            const f = await readRaw(reader);
+            if (f?.type) seen.push(f.type);
+          } catch { return; }
+        }
+      })();
+      await done;
+      return seen;
+    }
+
+    it("AC1/AC2/AC3: offer-accept TIMEOUT → session_request_error(counterparty_did_not_accept) to the initiator, NOTHING to the target, no assignment signed", async () => {
+      const keyA = generateKeypair();
+      const keyB = generateKeypair();
+      const { stream: streamA, reader: readerA } = await connectAndAuth(keyA);
+      const { reader: readerB, pubkeyHex: hexB } = await connectAndAuth(keyB);
+
+      // B is connected but never answers the session_offer (its standing receiver is not up —
+      // the first-connect race). A opts into the offer round-trip, as the real daemon does.
+      const targetFrames = collectFor(readerB, 2_600);
+      sendFrame(streamA, CBOR_ENC.encode({
+        type: "session_request",
+        target_pubkey: Buffer.from(hexB, "hex"),
+        initiator_session_peer_id: "12D3KooWInitiatorSession",
+        initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
+        wants_session_offer: true,
+      }));
+
+      // AC1: the initiator learns the truth — the counterparty did not accept.
+      const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());
+      expect(frameA?.type).toBe("session_request_error");
+      if (frameA?.type !== "session_request_error") return;
+      expect(frameA.reason).toBe("counterparty_did_not_accept");
+
+      // AC1/AC2: the target got the session_offer and NOTHING else — no assignment. Before the
+      // fix it received a FROST-signed, endpoint-less session_assignment and built a session on it.
+      const seen = await targetFrames;
+      expect(seen).not.toContain("session_assignment");
+    }, 20_000);
+
+    it("AC1/AC3: an explicit session_offer_reject fails the request IMMEDIATELY — no 2s stall, no assignment", async () => {
+      const keyA = generateKeypair();
+      const keyB = generateKeypair();
+      const { stream: streamA, reader: readerA } = await connectAndAuth(keyA);
+      const { stream: streamB, reader: readerB, pubkeyHex: hexB } = await connectAndAuth(keyB);
+
+      // B answers the offer with the Generic Reject (daemon DOD-OFFER-REJECT-1).
+      const bDone = (async () => {
+        const offer = await readRaw(readerB);
+        if (offer.type !== "session_offer") return null;
+        sendFrame(streamB, CBOR_ENC.encode({
+          type: "session_offer_reject",
+          session_id: offer.session_id,
+          reason: "standing_receiver_unavailable",
+        }));
+        return offer.session_id ?? null;
+      })();
+
+      const started = Date.now();
+      sendFrame(streamA, CBOR_ENC.encode({
+        type: "session_request",
+        target_pubkey: Buffer.from(hexB, "hex"),
+        initiator_session_peer_id: "12D3KooWInitiatorSession",
+        initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
+        wants_session_offer: true,
+      }));
+
+      const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());
+      const elapsed = Date.now() - started;
+      expect(await bDone).not.toBeNull(); // B really did receive the offer and reject it
+      expect(frameA?.type).toBe("session_request_error");
+      if (frameA?.type !== "session_request_error") return;
+      expect(frameA.reason).toBe("counterparty_did_not_accept");
+      // The reject RESOLVES the waiter — it does not fall through to the 2s timeout.
+      expect(elapsed).toBeLessThan(1_500);
+    }, 20_000);
+
+    it("regression: a target that DOES accept still gets a full 10-field assignment (the fix refuses only the broken case)", async () => {
+      const keyA = generateKeypair();
+      const keyB = generateKeypair();
+      const { stream: streamA, reader: readerA } = await connectAndAuth(keyA);
+      const { stream: streamB, reader: readerB, pubkeyHex: hexB } = await connectAndAuth(keyB);
+
+      const bAccepts = (async () => {
+        const offer = await readRaw(readerB);
+        if (offer.type !== "session_offer") return;
+        sendFrame(streamB, CBOR_ENC.encode({
+          type: "session_offer_accept",
+          session_id: offer.session_id,
+          counterparty_session_peer_id: "12D3KooWCounterpartyOk",
+          counterparty_session_addrs: ["/ip4/127.0.0.1/tcp/9011"],
+        }));
+      })();
+
+      sendFrame(streamA, CBOR_ENC.encode({
+        type: "session_request",
+        target_pubkey: Buffer.from(hexB, "hex"),
+        initiator_session_peer_id: "12D3KooWInitiatorSession",
+        initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
+        transport_mode: "relay",
+        wants_session_offer: true,
+      }));
+      await bAccepts;
+
+      const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());
+      expect(frameA?.type).toBe("session_assignment");
+      if (frameA?.type !== "session_assignment") return;
+      expect(frameA.assignment.counterparty_session_peer_id).toBe("12D3KooWCounterpartyOk");
+      expect(frameA.assignment.transport_mode).toBe("relay");
+    }, 20_000);
+
+    it("a session_offer_reject from a NON-target is ignored (a third party cannot cancel someone else's session)", async () => {
+      const keyA = generateKeypair();
+      const keyB = generateKeypair();
+      const keyC = generateKeypair();
+      const { stream: streamA, reader: readerA } = await connectAndAuth(keyA);
+      const { reader: readerB, pubkeyHex: hexB } = await connectAndAuth(keyB);
+      const { stream: streamC } = await connectAndAuth(keyC); // the interloper
+
+      const cInterferes = (async () => {
+        const offer = await readRaw(readerB);
+        if (offer.type !== "session_offer") return;
+        // C rejects B's offer. The directory must drop it — C is not the target.
+        sendFrame(streamC, CBOR_ENC.encode({
+          type: "session_offer_reject",
+          session_id: offer.session_id,
+          reason: "standing_receiver_unavailable",
+        }));
+      })();
+
+      const started = Date.now();
+      sendFrame(streamA, CBOR_ENC.encode({
+        type: "session_request",
+        target_pubkey: Buffer.from(hexB, "hex"),
+        initiator_session_peer_id: "12D3KooWInitiatorSession",
+        initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
+        wants_session_offer: true,
+      }));
+      await cInterferes;
+
+      const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());
+      const elapsed = Date.now() - started;
+      // Still fails closed (B never accepted) — but via the TIMEOUT, proving C's reject was dropped
+      // rather than honored. If the interloper could resolve the waiter, this would return fast.
+      expect(frameA?.type).toBe("session_request_error");
+      expect(elapsed).toBeGreaterThan(1_500);
+    }, 20_000);
+  });
+
   // ─── AC-005: session_assignment delivered to both clients ────────────────────
 
   it("AC-005: session_request delivers signed assignment to both initiator and target", async () => {

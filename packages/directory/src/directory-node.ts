@@ -202,6 +202,26 @@ export const SIGNALING_PROTOCOL_ID = "/cello/signaling/1.0.0";
 const AUTH_DOMAIN = "CELLO-DIR-AUTH-v1";
 const NONCE_TTL_MS = 30_000;
 
+/**
+ * DOD-DIR-FAILCLOSED-1 (D2): how long the directory waits for the target's `session_offer_accept`
+ * after sending it a `session_offer` (M7-WIRE-002 opt-in path).
+ *
+ * ⚠️ **Do NOT raise this to "fix" a first-connect race.** A longer window narrows the race without
+ * closing it. The bug was never the duration — it was that a timeout produced a validly FROST-signed
+ * assignment with an EMPTY counterparty endpoint instead of a failure. The fail-closed guard in
+ * `#processSessionRequest` is the fix; this constant just bounds the wait. A `session_offer_reject`
+ * (daemon DOD-OFFER-REJECT-1) ends the wait immediately, so a target that knows it cannot serve the
+ * offer costs no wait at all.
+ */
+const SESSION_OFFER_ACCEPT_TIMEOUT_MS = 2_000;
+
+/**
+ * The much shorter window on the legacy (no `wants_session_offer`) path, where no `session_offer` is
+ * sent: it only catches an accept that arrived CONCURRENTLY with the request. Nothing is expected to
+ * arrive, so this must stay short.
+ */
+const SESSION_OFFER_CONCURRENT_ACCEPT_WINDOW_MS = 100;
+
 // SEC-2: the frost signing stream (/cello/frost/1.0.0) is unauthenticated apart from the honor-check
 // pause gate — so a party knowing only an agent's PUBLIC k_local key could drive T directories to sign
 // arbitrary bytes (the FROST group is (T, N+1) with T = majority(N) ≤ N, so T directory partials reach
@@ -647,10 +667,16 @@ export class CelloDirectoryNode {
 
   // M7-WIRE-001: session_id_hex → counterparty session info from SessionOfferAccept
   readonly #pendingSessionOfferAccepts = new Map<string, { counterpartySessionPeerId: string; counterpartySessionAddrs: string[] }>();
-  // M7-WIRE-001: session_id_hex → resolve function for waiting on Bob's SessionOfferAccept
-  readonly #sessionOfferAcceptWaiters = new Map<string, () => void>();
+  // M7-WIRE-001: session_id_hex → resolve function for waiting on Bob's SessionOfferAccept.
+  // DOD-DIR-FAILCLOSED-1 (D2): resolves TRUE on session_offer_accept, FALSE on
+  // session_offer_reject — a reject ends the wait immediately instead of stalling to timeout.
+  readonly #sessionOfferAcceptWaiters = new Map<string, (accepted: boolean) => void>();
   // M7-WIRE-001: session_id_hex → target pubkey hex (validates session_offer_accept sender)
   readonly #sessionOfferAcceptTargets = new Map<string, string>();
+  // DOD-DIR-FAILCLOSED-1 (D2): session_ids whose target answered session_offer_reject. Lets the
+  // waiter's `false` be attributed to an explicit refusal rather than a timeout, so the
+  // counterparty_no_accept log names the real cause. Consumed (deleted) by the reader.
+  readonly #rejectedSessionOffers = new Set<string>();
 
   // session_id_hex → provisional session (relay registered, frames may not yet be delivered)
   // Entry remains until the stream's finally block processes it.
@@ -2198,9 +2224,42 @@ export class CelloDirectoryNode {
             // Resolve any pending waiter for this session_id
             const waiter = this.#sessionOfferAcceptWaiters.get(acceptSessionIdHex);
             if (waiter) {
-              waiter();
+              waiter(true);
               this.#sessionOfferAcceptWaiters.delete(acceptSessionIdHex);
             }
+          }
+        } else if (parsed.type === "session_offer_reject") {
+          // DOD-DIR-FAILCLOSED-1 (D2) / daemon DOD-OFFER-REJECT-1 (D1): the target answers instead
+          // of vanishing. End the offer wait NOW — the request then fails closed (the guard in
+          // #processSessionRequest), rather than stalling 2 s and fabricating an endpoint-less
+          // assignment. Sender validation mirrors session_offer_accept: only the session's
+          // registered TARGET may reject it, so a third party cannot cancel someone else's session.
+          const rejectFrame = parsed as { session_id?: Uint8Array | null; reason?: string };
+          if (!rejectFrame.session_id) {
+            // The daemon's `no_session_id` abort has nothing to echo — uncorrelatable, diagnostics only.
+            this.#logger?.warn("session.offer.reject.received", {
+              clientPubkey: authedPubkeyHex!,
+              reason: rejectFrame.reason ?? "unspecified",
+              correlated: false,
+            });
+            continue;
+          }
+          const rejectSessionIdHex = Buffer.from(rejectFrame.session_id).toString("hex");
+          const expectedRejectTarget = this.#sessionOfferAcceptTargets.get(rejectSessionIdHex);
+          if (!expectedRejectTarget || expectedRejectTarget !== authedPubkeyHex) {
+            continue; // drop — session unknown or sender is not the target
+          }
+          this.#logger?.warn("session.offer.reject.received", {
+            sessionId: rejectSessionIdHex,
+            targetPubkey: authedPubkeyHex!,
+            reason: rejectFrame.reason ?? "unspecified",
+            correlated: true,
+          });
+          this.#rejectedSessionOffers.add(rejectSessionIdHex);
+          const rejectWaiter = this.#sessionOfferAcceptWaiters.get(rejectSessionIdHex);
+          if (rejectWaiter) {
+            rejectWaiter(false); // ends the wait immediately — no 2 s stall
+            this.#sessionOfferAcceptWaiters.delete(rejectSessionIdHex);
           }
         } else if (parsed.type === "seal_frost_signature") {
           void this.#processSealFrostSignature(authedPubkeyHex!, parsed);
@@ -3258,6 +3317,9 @@ export class CelloDirectoryNode {
     initiatorMoniker?: string,
   ): Promise<void> {
     protocolLog("SESS", `Session request: ${truncHex(initiatorHex)} → ${truncHex(targetHex)}`);
+    // D2 observability: one correlationId per session-request flow, threaded into the
+    // fail-closed event so an operator can join it against the initiator's failure.
+    const correlationId = randomUUID();
     this.#logger?.info("frost.debug.session_request.enter", {
       initiatorShort: initiatorHex.slice(0, 16), targetShort: targetHex.slice(0, 16),
       connectionId, requireConnectionGate: this.#requireConnectionGate,
@@ -3352,19 +3414,22 @@ export class CelloDirectoryNode {
 
     // M7-WIRE-001 AC-003: Resolve counterparty session Peer ID.
     // If an offer-accept has already arrived (race-won), use it.
-    // Otherwise, check if one arrives within a brief window. If not, proceed with
-    // empty defaults — the counterparty may be a pre-M7 client or the session_offer
-    // notification hasn't triggered yet. Full offer-accept handshake requires a
-    // session_offer frame to be sent to the target first (wired in WIRE-002).
+    // Otherwise, wait for one. DOD-DIR-FAILCLOSED-1 (D2): if none arrives — timeout, or an
+    // explicit session_offer_reject — the request FAILS. The directory never builds, signs, or
+    // distributes an assignment it knows is incomplete (see the fail-closed guard below).
     const sessionIdHexForWait = Buffer.from(session_id).toString("hex");
     // Register expected target so the dispatch loop can validate session_offer_accept sender
     this.#sessionOfferAcceptTargets.set(sessionIdHexForWait, targetHex);
     let counterpartySessionPeerId = "";
     let counterpartySessionAddrs: string[] = [];
+    // D2: how the offer round-trip ended, for the fail-closed guard's diagnosis.
+    let offerOutcome: "accepted" | "timeout" | "rejected" | "no_offer_sent" = "no_offer_sent";
+    let offerWaitedMs = 0;
     const existingAccept = this.#pendingSessionOfferAccepts.get(sessionIdHexForWait);
     if (existingAccept) {
       counterpartySessionPeerId = existingAccept.counterpartySessionPeerId;
       counterpartySessionAddrs = existingAccept.counterpartySessionAddrs;
+      offerOutcome = "accepted";
       this.#pendingSessionOfferAccepts.delete(sessionIdHexForWait);
     } else if (requestWantsOffer && this.#streams.get(targetHex)) {
       // M7-WIRE-002: when the initiator EXPLICITLY opts in (session_request.wants_session_offer
@@ -3383,29 +3448,39 @@ export class CelloDirectoryNode {
           initiator_session_addrs: initiatorSessionAddrs ?? [],
         }),
       );
+      const waitStarted = this.#clock.now();
+      // D2: the waiter now resolves TRUE on session_offer_accept and FALSE on
+      // session_offer_reject — the target's explicit "cannot serve this" (daemon
+      // DOD-OFFER-REJECT-1) ends the wait at once instead of stalling to the timeout.
       const accepted = await Promise.race([
         new Promise<boolean>((resolve) => {
-          this.#sessionOfferAcceptWaiters.set(sessionIdHexForWait, () => resolve(true));
+          this.#sessionOfferAcceptWaiters.set(sessionIdHexForWait, resolve);
         }),
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000)),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), SESSION_OFFER_ACCEPT_TIMEOUT_MS)),
       ]);
+      offerWaitedMs = this.#clock.now() - waitStarted;
       this.#sessionOfferAcceptWaiters.delete(sessionIdHexForWait);
       if (accepted) {
         const acceptData = this.#pendingSessionOfferAccepts.get(sessionIdHexForWait)!;
         counterpartySessionPeerId = acceptData.counterpartySessionPeerId;
         counterpartySessionAddrs = acceptData.counterpartySessionAddrs;
+        offerOutcome = "accepted";
+      } else {
+        // A reject clears its own pending entry; distinguish the two so the log names the cause.
+        offerOutcome = this.#rejectedSessionOffers.delete(sessionIdHexForWait) ? "rejected" : "timeout";
       }
       this.#pendingSessionOfferAccepts.delete(sessionIdHexForWait);
     } else {
       // Brief wait (100ms) for a session_offer_accept that arrived concurrently (original path).
       const accepted = await Promise.race([
         new Promise<boolean>((resolve) => {
-          this.#sessionOfferAcceptWaiters.set(sessionIdHexForWait, () => resolve(true));
+          this.#sessionOfferAcceptWaiters.set(sessionIdHexForWait, resolve);
         }),
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), SESSION_OFFER_CONCURRENT_ACCEPT_WINDOW_MS)),
       ]);
       this.#sessionOfferAcceptWaiters.delete(sessionIdHexForWait);
       if (accepted) {
+        offerOutcome = "accepted";
         const acceptData = this.#pendingSessionOfferAccepts.get(sessionIdHexForWait)!;
         counterpartySessionPeerId = acceptData.counterpartySessionPeerId;
         counterpartySessionAddrs = acceptData.counterpartySessionAddrs;
@@ -3413,11 +3488,46 @@ export class CelloDirectoryNode {
       this.#pendingSessionOfferAccepts.delete(sessionIdHexForWait);
     }
     this.#sessionOfferAcceptTargets.delete(sessionIdHexForWait);
+    this.#rejectedSessionOffers.delete(sessionIdHexForWait);
 
-    // NOTE (DOD-SPINE-6 / WIRE-002): when no session_offer_accept handshake supplies the
-    // counterparty's SESSION endpoint, it is left empty. The target's announced peer_info
-    // (`targetInfo`) is its per-agent DIRECTORY node, NOT its standing-receiver session node,
-    // so it is NOT a valid content endpoint (using it yields "could not negotiate
+    // ─── DOD-DIR-FAILCLOSED-1 (D2): never sign an assignment we know is incomplete ──────────
+    //
+    // When the offer round-trip was ATTEMPTED (wants_session_offer + target connected) and did
+    // not produce an endpoint — the target rejected, or never answered — the directory used to
+    // "proceed with empty defaults" and FROST-sign an assignment whose counterparty endpoint was
+    // EMPTY, distributing it to BOTH parties. That artifact is validly signed and structurally
+    // unusable: the initiator has no address to dial. It is the root of the phantom session (the
+    // initiator's F13 guard refused it and created nothing; the receiver accepted it, built a
+    // session, and auto-replied into a void). A timeout must produce a FAILURE, not a signed
+    // artifact.
+    //
+    // Fail closed: tell the initiator, send NOTHING to the target, and never enter the FROST
+    // ceremony — so no signature over a 5-field (endpoint-less) TBS is ever produced on this path.
+    //
+    // NOTE: raising SESSION_OFFER_ACCEPT_TIMEOUT_MS would narrow the race without closing it —
+    // the bug is that a timeout minted a signed artifact at all. Do not "fix" this by waiting longer.
+    //
+    // The `no_offer_sent` path (pre-WIRE-002 callers, or a target with no live stream) still
+    // yields a 5-field assignment: that is the documented legacy shape (DOD-SPINE-6 note below),
+    // not a race. Those callers never expected a counterparty endpoint.
+    if (offerOutcome === "timeout" || offerOutcome === "rejected") {
+      this.#logger?.warn("session.request.counterparty_no_accept", {
+        sessionId: sessionIdHexForWait,
+        initiatorPubkey: initiatorHex,
+        targetPubkey: targetHex,
+        waitedMs: offerWaitedMs,
+        outcome: offerOutcome,
+        correlationId,
+      });
+      protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: counterparty_did_not_accept (${offerOutcome})`);
+      this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "counterparty_did_not_accept" }));
+      return;
+    }
+
+    // NOTE (DOD-SPINE-6 / WIRE-002): on the `no_offer_sent` path no session_offer_accept
+    // handshake supplies the counterparty's SESSION endpoint, so it is left empty. The target's
+    // announced peer_info (`targetInfo`) is its per-agent DIRECTORY node, NOT its standing-receiver
+    // session node, so it is NOT a valid content endpoint (using it yields "could not negotiate
     // /cello/content"). Communicating B's session endpoint to A requires the WIRE-002
     // session_offer→session_offer_accept round-trip — tracked as the SPINE-6 build.
 

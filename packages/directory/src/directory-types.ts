@@ -172,6 +172,20 @@ export interface SessionOfferAccept {
   counterparty_session_addrs: string[];  // target's ephemeral session listen multiaddrs
 }
 
+/**
+ * DOD-DIR-FAILCLOSED-1 (D2) / daemon DOD-OFFER-REJECT-1 (D1): the target's definitive
+ * "cannot accept" answer to a session_offer — the Generic Reject of the inbound-state matrix.
+ * Resolves the directory's offer-accept waiter immediately (no 2 s stall) so the initiator
+ * gets a fast session_request failure instead of a fabricated endpoint-less assignment.
+ * session_id is null when the daemon had no session_id to echo (its no_session_id abort) —
+ * such a reject is uncorrelatable and only logged.
+ */
+export interface SessionOfferReject {
+  type: "session_offer_reject";
+  session_id: Uint8Array | null;  // 16 bytes when present; null = uncorrelatable diagnostics
+  reason: string;                 // e.g. "standing_receiver_unavailable"
+}
+
 // SessionAssignment and participant/relay types live in @cello-protocol/protocol-types (MSG-004 boundary fix).
 // Re-exported here for backwards compatibility.
 import type { SessionAssignment as SessionAssignmentBase, ParticipantInfo, RelayEndpointInfo } from "@cello-protocol/protocol-types";
@@ -329,7 +343,12 @@ export type SessionRequestErrorReason =
   | "connection_id_required"       // SESSION-006: session_request missing connection_id field
   | "session_request_missing_peer_id"  // M7-WIRE-001 AC-002: session_request missing initiator_session_peer_id or addrs
   | "agent_revoked"  // CELLO-M7-REMOVE-001 DOD-REMOVE-3: the target agent has been revoked
-  | "agent_suspended";  // CELLO-M8-LEVER-001 DOD-INV-6: the target/initiator is PAUSED (reversible)
+  | "agent_suspended"  // CELLO-M8-LEVER-001 DOD-INV-6: the target/initiator is PAUSED (reversible)
+  // DOD-DIR-FAILCLOSED-1 (D2): the target never accepted the session_offer — it answered
+  // session_offer_reject, or the wait timed out. Distinguishable from target_offline: the target
+  // IS connected to the directory, it just cannot serve this session right now (e.g. its standing
+  // receiver has not come up). The directory signs NOTHING on this path.
+  | "counterparty_did_not_accept";
 
 export interface SessionRequestError {
   type: "session_request_error";
