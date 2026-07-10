@@ -26,13 +26,25 @@ natural fit: the referral rides an endorsement's plaintext (the **scope** — "I
 referral") proves the referral was received and acted on, and the notarized, authenticated session gives a
 tamper-evident trail of who-introduced-whom. Attribution without a platform arbitrating it.
 
-## The general shape
+## The general shape — attestations on a cryptographic notary
 
-Under the referral example, the architecture is a **trustless attribution + receipt layer** — it can prove
-*who did what for whom, and whether they are still good for it*, without a trusted intermediary. **Any
-commercial mechanism that today needs a platform to track attribution, eligibility, or revocation can run
-on these primitives instead.** Referral is one instance; the notarized-receipt + scoped-endorsement +
-revocation stack is the general engine. The five below are distinct instances of that engine.
+The frame that emerged from this session (its own doc:
+[[2026-07-10_2110_cello-is-a-cryptographic-notary]]): **what CELLO is, is a cryptographic notary** — AI
+intelligence composed with cryptographic primitives (hashes, Merkle trees, non-repudiation, revocation,
+PSI). And we already had the vocabulary — **endorsements are a special case of *attestations*** (an issuer's
+signed claim about a subject/event):
+
+- **Endorsement** = a vouch-shaped attestation (Class 2) — [[2026-04-10_1000_connection-endorsements-and-attestations]].
+- **Purchase / commerce** = a both-party-signed transaction attestation, Merkle-hashed — **already designed**
+  in [[2026-04-18_1620_commerce-attestation-and-fraud-detection]]. This IS the "proof-of-transaction review"
+  case below; it is not new.
+- **Session-close** (CLEAN / FLAGGED / PENDING) and **device attestation** — further attestation types the
+  same notary already carries.
+
+**Any commercial mechanism that today needs a platform to track attribution, eligibility, or revocation is
+just another attestation type on this notary** — no new cryptography, only new `type` strings and the client
+code that reads them. Referral is one instance; the five below are others — a small first sample of the
+permissionless long tail the notary frame opens.
 
 ## A few other cases in the same family
 
@@ -62,19 +74,27 @@ revocation stack is the general engine. The five below are distinct instances of
 
 ## Why these are notable, not just a list
 
-Each maps to a primitive already in the design:
+Each is an **attestation type** on the notary, mapping to a primitive already in the design — several with
+prior-art logs, so this is consolidation, not invention:
 - **Attribution** → notarized introductions + the referral callback loop (cases 1, 5).
-- **Non-repudiable mutual receipts** → both-party authenticated sessions (case 2).
+- **Non-repudiable mutual receipts** → both-party signed attestations (case 2) — **already designed** as
+  purchase attestations in [[2026-04-18_1620_commerce-attestation-and-fraud-detection]].
 - **Revocation as enforcement** → the §14.2 write path (case 3).
-- **Skin-in-the-game** → §7 submitter-accountability generalized (case 4).
+- **Skin-in-the-game** → §7 submitter-accountability, plus the connection-staking prior art
+  [[2026-04-08_1900_connection-staking-and-institutional-defense]] (case 4).
 
-None of these require new cryptography beyond what M10 already specifies — they are *product* surface on top
-of the same engine. That is the reason to capture them: they suggest the trust layer's commercial reach is
-much wider than "endorsements," and several (especially proof-of-transaction reviews) may be worth their own
-milestone conversation later.
+None require new cryptography beyond what M10 already specifies — they are *product* surface (new `type`
+strings) on the same notary. The reframe is the payload: CELLO's reach is not "endorsements," it is
+**general-purpose intelligent, trustless notarization** ([[2026-07-10_2110_cello-is-a-cryptographic-notary]]),
+of which trust signals, endorsements, and commerce attestations are all applications.
 
 ## Related Documents
 
-- [[M10-TRUST-SIGNAL-STORAGE-AND-CREATION]] — the HOW; §11 (endorsements + the parked callback loop),
-  §14.2 (revocation write path), §7 (submitter-accountability) are the primitives these ride on.
+- [[2026-07-10_2110_cello-is-a-cryptographic-notary]] — the parent frame: the notary this all rides on.
+- [[M10-TRUST-SIGNAL-STORAGE-AND-CREATION]] — the HOW; §1 (directory = notary), §11 (endorsements + the
+  parked callback loop), §14.2 (revocation write path), §7 (submitter-accountability).
 - [[M10-TRUST-SIGNAL-TAXONOMY]] — the WHAT; Class 2 endorsements, the source of truth for the signal set.
+- [[2026-04-10_1000_connection-endorsements-and-attestations]] — endorsements as attestations (origin of the
+  framing).
+- [[2026-04-18_1620_commerce-attestation-and-fraud-detection]] — signed purchase attestations = the
+  proof-of-transaction case, already designed.
