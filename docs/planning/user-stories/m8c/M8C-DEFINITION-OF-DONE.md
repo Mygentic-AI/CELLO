@@ -325,6 +325,47 @@ description: >
 > [[M8C-MONIKER-SPEC]] §11: **the pubkey must always ride on the notification**; every simplification in
 > the moniker design depends on it.
 
+## 🔴 Phantom session — the first-connect race (D1–D4)
+
+**Found 2026-07-10 by chasing "2 unread messages I can never read."** Full evidence, anchors, ACs,
+red-first tests and ordering: [[M8C-PHANTOM-SESSION-FIX-PLAN]]. Do not re-derive — it is written to be
+executed cold.
+
+Initiating to an agent whose **standing receiver has not come up yet** produces an asymmetric session:
+the initiator refuses (correctly) and gets `counterparty_unavailable`; the receiver builds a session
+anyway and auto-replies into a void; the reply lands in the initiator's `transcript` with no `sessions`
+row and becomes permanently unread AND unreadable. Proven: the daemon log holds exactly **2**
+`session.offer.abort reason=standing_receiver_unavailable` events and exactly **2** stuck sessions,
+and they correlate one-to-one.
+
+- **DOD-INBOUND-GUARD-1** (D3, do first) — the receiver refuses an assignment whose
+  `counterparty_session_peer_id` is absent: no session node, no DB row, no accept, no away response;
+  logs `session.inbound.assignment.incomplete` at warn. The directory already OMITS that field (and
+  `transport_mode`) when nobody accepted, so the receiver has everything it needs — it just never reads
+  it (`extractInboundSessionAssignment`, 0 occurrences). Mirrors the initiator's M8B F13 guard.
+  ⚠️ Three existing test files inject frames without that field and expect acceptance — they encode the
+  bug. cello-client, daemon-only, no deploy. — ❌
+- **DOD-OFFER-REJECT-1** (D1) — the responder sends a `session_offer_reject` instead of returning
+  silently on `standing_receiver_unavailable`, so the directory fails fast instead of stalling 2 s and
+  fabricating. This is the `Generic Reject` of [[2026-07-08_inbound-state-matrix]], arriving as a
+  protocol necessity. Daemon half is inert until the directory understands the frame. — ❌
+- **DOD-DIR-FAILCLOSED-1** (D2, the correct root fix) — the directory must **never FROST-sign or
+  distribute an assignment with an empty counterparty endpoint**. On offer-accept timeout it returns a
+  `session_request` failure to the initiator and sends **nothing** to the target. Today it "proceeds
+  with empty defaults" (`directory-node.ts:3355-3400`) — a silent fallback that mints a validly-signed,
+  structurally invalid artifact. **Do not merely raise the 2 s timeout**; that narrows the race without
+  closing it. trustless-cello; 3-region deploy ~25-30 min; batch it. — ❌
+- **DOD-UNREAD-1** (D4, needs Andre's decision) — a received `transcript` row with no `sessions` row is
+  counted unread (`getUnreadSummary` never joins `sessions`) but `cello_receive` returns
+  `session_not_found`, so it can never be cleared. **🚫 Do NOT fix by joining `sessions`** — that hides a
+  message that was really delivered. Either make reading a transcript operation, or materialise the
+  session on recovery. — ❌
+
+> **Triage:** the trigger is connecting to an agent that just started — a first-connect race, and the
+> launch pitch is "two agents connect." The initiator is told the counterparty may be offline when it
+> IS online. D3 is small, local, needs no deploy, and removes the phantom session; do it regardless of
+> when D2 is scheduled.
+
 ## 🔴 DOD-CRYPTO-AT-REST-1 — the gateway writes security records + config to disk UNENCRYPTED
 
 **Found 2026-07-09, while chasing an unrelated npm warning.** Not an M9 concern despite living in
