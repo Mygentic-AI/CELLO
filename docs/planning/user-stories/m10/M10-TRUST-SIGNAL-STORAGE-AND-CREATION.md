@@ -37,19 +37,33 @@ description: >
   `trust_signals` table is an **optional cache**, never source of truth.
 - **Tier never auto-downgrades** — signals inform tier decisions; a revoked signal that earned a tier
   surfaces a *review prompt*, it does not silently change the tier (§9).
-- **PSI is client-side, two-party, directory-relayed** (§11) — a round-2 negotiation item (not a round),
-  one-sided output, the asker learns *which* contacts vouched, set-size is an accepted leak, terms are
-  protocol constants never per-session negotiated.
+- **PSI is a general contact-overlap primitive** (§11), client-side / two-party / directory-relayed —
+  a round-2 negotiation item (not a round), one-sided output, set-size an accepted leak, terms are
+  protocol constants never per-session negotiated. Its **original purpose is mutual-contact discovery**
+  ("how many / which of our contacts overlap"); endorser-overlap is one *application*, never the only one.
+- **Endorsements (Class 2) are plain-presentable, first-class, plaintext-rich objects** (§11) — shared
+  directly in round-1 trust signaling, carrying human context ("we're both on Team X"; "I'm a customer of
+  this dentist") and commerce/referral use. **They are NOT PSI-only; PSI never replaces the rich blob.**
+  Three ways to use one: (a) intentionally share it in round-1 signaling, (b) feed it to mutual-contact
+  count, (c) endorser-overlap discovery. PSI *discovers which* to reveal; the endorsement *delivers what*.
+- **Creation submission is signed** (§6, §14.1) — the issuer (portal agent / endorsement-intake role)
+  submits the canonical-CBOR plaintext + its hash over a **signed, authenticated** channel; it lands at
+  **one** node and **federates by the existing replication path**. The *directory-presentation* checks stay
+  dumb/unsigned (§2) — signing is at creation, not presentation. Two different moments.
+- **Revocation = re-auth through the same chokepoint** (§14.2) — issuer / portal / directory only; the
+  subject controls *presentation* (selective disclosure), never a signal's *existence*.
 
 **Open (flagged, not decided):**
 1. Does the **recipient re-scan**, or fully trust the creation-time scan? (§8) — leaning: trust it;
-   optional pass/block re-scan as cheap defence-in-depth.
+   optional pass/block re-scan as cheap defence-in-depth (more attractive under §14.1's honest weakening).
 2. Which classes **persist vs mint-on-request**? Class 3 (track record) is directory-computed and may
    never be stored client-side (§6).
 3. The exact **"suspect" consequence** policy for a rejected endorsement submission (§7).
+4. The **endorsement callback/referral loop** ("quote code 12345, my agent confirms you read it") — a
+   named Class-2 capability, **parked** (design later, not launch).
 
-**Plus the full gap register in §14** — reviewed 2026-07-10; items 14.1–14.3 must be resolved before
-any M10 story YAML is written.
+**§14.1–14.3 are now resolved** (2026-07-10, below). The remaining §14.4–14.10 are decided during story
+writing — none may be silently defaulted.
 
 ---
 
@@ -194,6 +208,11 @@ The scan-vs-hash collision (a scanner that alters flagged content breaks the has
 *after* hashing. **Scan at creation, before the hash exists**, and the collision vanishes: the scanner is
 free to reject or pass, and only clean content is ever hashed. There is no hash to break because there is
 no hash yet.
+
+**The submission is signed.** However the plaintext is composed, the issuer hands the directory the
+canonical-CBOR blob + its hash over a *signed, authenticated* channel; the directory inserts it at one node
+and lets the **existing replication path federate it** to the rest (§14.1). Signing is the creation-time
+authentication that the hash then carries forward — the dumb presentation checks (§2) need no signature.
 
 The three issuer flows:
 - **Portal-issued** (Class 1 OAuth/identity, Class 4 economic) — the portal (via its portal agent)
@@ -351,69 +370,94 @@ the leaky one is unnecessary.
 
 ---
 
-## 11. PSI — the network-graph exchange (Class 2)
+## 11. PSI and endorsements — a general overlap primitive and a rich, plain object
 
-The endorsement-overlap signal: compute `{subject's endorsers} ∩ {evaluator's contacts}` — *"how many
-people I already trust vouch for you, and which"* — without either party revealing their full social
-graph. See [[M10-TRUST-SIGNAL-TAXONOMY]] Class 2. This section fixes the semantics and policy; the concrete
-cryptographic construction is still to be chosen (see the end).
+Two distinct mechanisms, often confused because we first wired them together. Keep them separate.
 
-### Where it runs — client-side, two-party, never the directory
+### PSI is a general contact-overlap primitive
 
-- **Both clients, peer-to-peer.** PSI is a two-party computation *by definition* — there is no version
-  where one side does it alone; half the input is the other party's set, in locked form.
-- **The directory NEVER computes it.** To compute an intersection you need both sets; a directory that
-  touched both social graphs — even ephemerally, even discarding after — *is* the surveillance layer the
-  project rejects, and running a set computation violates `INV-DIR-DUMB`. Ephemerality does not rescue it:
-  *seeing* the graphs is the violation.
-- **The directory brokers + dumb-relays**, over the **existing handshake path** (no new transport). It sees
-  locked blobs (ciphertext) and metadata — that a PSI happened, and set sizes (it can count blobs) — but
-  **never the graphs, and stores nothing.** PSI is even more hands-off than a static signal: no hash to
-  check, pure pipe.
-- **Pre-session.** Runs during the brokered introduction; its result gates whether the full session forms.
+PSI answers *"how many / which of our contacts overlap"* — a privacy-preserving set intersection over two
+social graphs, revealing only the intersection, never either full set. Its **original and primary purpose is
+mutual-contact discovery** between two agents; the *endorser-overlap* case (`{subject's endorsers} ∩
+{evaluator's contacts}`) is **one application of the same primitive**, not its reason to exist. See
+[[M10-TRUST-SIGNAL-TAXONOMY]] Class 2. This section fixes semantics + policy; the concrete construction is
+unchosen (end of section).
 
-### The handshake — PSI is a round-2 ITEM, not a round
+- **Both clients, peer-to-peer.** PSI is two-party by definition — half the input is the other party's set,
+  in locked form. There is no version where one side computes it alone.
+- **The directory NEVER computes it.** To intersect two sets you need both; a directory that touched both
+  graphs — even ephemerally — *is* the surveillance layer the project rejects, and running a set
+  computation violates `INV-DIR-DUMB`. *Seeing* the graphs is the violation; discarding after does not
+  rescue it.
+- **The directory brokers + dumb-relays** over the **existing handshake path** (no new transport). It sees
+  locked blobs and set sizes (it can count), **never the graphs, and stores nothing.**
+- **Pre-session, round-2 item.** Runs during the brokered introduction; consent is a round-2 list item
+  (the receiver proposes PSI, the initiator agrees or declines in the same response). PSI's own multi-
+  message crypto runs *underneath* round 2 as transport and does **not** consume a negotiation round.
+  Front-loaded / one-shot: with no round 3, the receiver cannot see the PSI result and *then* re-demand —
+  itself an anti-probing defence.
 
-The two-round budget (§9) counts **negotiation turns, not messages.**
-- Round 1: initiator offers signals. Round 2: the receiver sends a **bundle** of demands
-  (e.g. *"profile URL + signal X + run the endorser PSI"*); the initiator satisfies the bundle.
-- PSI's own multi-message crypto exchange runs **underneath** round 2, as transport — it does **not**
-  consume a negotiation round. Consent is a round-2 list item: the receiver proposes PSI, the initiator
-  agrees or declines in the same response.
-- **Front-loaded / one-shot.** With no round 3, the receiver declares every demand up front and cannot see
-  the PSI result and *then* re-demand. This is itself an anti-probing defence.
+**Fixed terms — protocol constants, never per-session negotiable** (negotiating them would need a round to
+converge, spilling past two):
+- **One-sided output.** Only the asker (evaluator) learns the result; the counterparty learns nothing about
+  the asker's set.
+- **Granularity = WHICH.** The asker learns *which* of *their own* contacts are in the overlap — their own
+  contacts, no leak beyond the fact of the overlap. The counterparty's **non-matching** members are never
+  revealed.
+- **Set-size = accepted leak.** The asker (and the relay) learn the counterparty's total set size. Not
+  padded — the count is itself a weak signal, and blobs are countable.
 
-### Fixed terms — protocol constants, NEVER per-session negotiable
+**Policy — deterministic floor + LLM discretion.** The agree/decline decision is security-sensitive
+(probing, DoS). A **deterministic code floor is non-negotiable**: rate-limit PSI per counterparty, tier
+gates, set-size caps. LLM/config discretion layers on top and may only make the decision **more**
+restrictive — decline where code allows, never bypass the floor (same shape as `INV-TIER-BOUND`).
 
-(Negotiating terms per exchange would need a round to converge, spilling past two — so they are global.)
-- **One-sided output.** Only the evaluator (the asker, holding contacts) learns the result. The subject
-  (holding endorsers) learns nothing about the evaluator's contacts.
-- **Granularity = WHICH.** The evaluator learns *which* of their own contacts vouched — their own contacts,
-  no leak to them beyond the fact of the vouch. The subject's **non-matching** endorsers are never revealed.
-- **Set-size = accepted leak.** The evaluator learns the subject's total endorser count (blobs are
-  countable). **Not padded** — the count is itself a trust signal (more endorsers ≈ more vouched-for), so
-  the disclosure is justified. The same count is visible to the directory-relay; accepted.
-
-### Policy — who agrees to run PSI (deterministic floor + LLM discretion)
-
-The agree/decline decision is **security-sensitive** — probing, DoS, and the counterparty's endorsement
-free-text is an injection surface. So:
-- **Deterministic code floor, non-negotiable:** rate-limit PSI per counterparty (anti-probing), tier gates,
-  set-size caps. An LLM is manipulable; it must not be able to loosen these.
-- **LLM / config discretion layers on top and may only make the decision MORE restrictive** — decline where
-  code allows, never bypass the floor. Same shape as `INV-TIER-BOUND`.
-
-### Probing defence (the killer attack)
-
-Repeated or colluding PSI runs reconstruct the subject's endorser set one intersection at a time. Defences,
-all deterministic: **rate-limit per counterparty**, the **two-round front-loading** (one shot, no adaptive
+**Probing defence (the killer attack).** Repeated or colluding runs reconstruct a set one intersection at a
+time. All deterministic: rate-limit per counterparty, the two-round front-loading (one shot, no adaptive
 re-demand), and **cache the result** so a repeat ask returns the same answer, not a fresh leak.
 
-### Still open
+**Still open:** the concrete construction (DH-based, OT-based, …) is unchosen. The technique is real and
+deployed (private contact discovery, breach checking); this section fixes what PSI must *deliver*, and a
+specific protocol with its performance/leakage/malicious-party tradeoffs is selected before build.
 
-The concrete **PSI construction** (DH-based, OT-based, …) is unchosen. The technique is real and deployed
-(private contact discovery, breach checking), and this section fixes what it must *deliver*; a specific
-protocol with its performance/leakage/malicious-party tradeoffs must be selected before build.
+### Endorsements are plain, rich, scoped, first-class — PSI never replaces them
+
+An endorsement (Class 2) is a **plain-presentable object carrying human-readable context**, authored by one
+operator's agent about a subject. Its **value is the content and the endorser's recognizable identity**, not
+a count:
+
+- **Plaintext is mandatory, because plaintext is the only thing that carries SCOPE.** An endorsement without
+  text has no scoping — it collapses to a bare "vouched (yes/no)," which is nearly useless. The power of an
+  AI agent endorsing is that it endorses within a **bounded claim**: not *"great guy, trust for anything,"*
+  but *"reliable on X,"* *"paid on time as a client,"* *"co-worked with them on Project Y."* The **recipient's
+  agent reasons over that scope** to decide how far the contact graduates — `known`, `whitelisted`, or `vip`.
+  Strip the text and you strip the scope, and with it the entire tier-graduation mechanism. This is why
+  endorsements can **never** be reduced to a PSI overlap count.
+- **Feeds tier, never sets it.** Scope *informs* the graduation decision; per §9 the operator/agent decides
+  the tier — signals inform, they do not auto-set (and never auto-downgrade). The endorsement's scope is the
+  richest input to that decision.
+- **Shared directly in round-1 trust signaling.** The subject presents the endorsement blob plainly; the
+  evaluator reads `issuer_pubkey` and recognizes the endorser (or not). Revealing the endorser is *the
+  point*, not a leak — an endorsement from someone you know is exactly what carries weight.
+- **The plaintext is the value.** "We're both on Team X." "We met at the offsite; our operators asked us to
+  connect — there are five of us, round robin." "I'm a customer of this dentist; they did great work."
+  Reducing this to *"an overlap exists"* discards a multifaceted object.
+- **Commerce / referral.** Endorsements were conceived for commerce, not only PSI: *"I generally endorse
+  this service — reach out to my agent, say you read my endorsement, quote code `12345`, and it will know
+  you actually saw it."* This callback/referral loop is a **parked Class-2 capability** (design later).
+
+**Three ways to use an endorsement:**
+1. **Intentionally share it** in round-1 trust signaling — plain, rich, scoped, direct.
+2. **Mutual-contact count** — feed contacts to the general PSI overlap.
+3. **Endorser-overlap discovery** — PSI over {subject's endorsers} ∩ {evaluator's contacts}.
+
+**How PSI and endorsements compose (resolves the old §14.3 tension).** PSI is **discovery**; the endorsement
+is **delivery**. When a subject has many endorsers and does not want to dump them all, PSI privately finds
+the overlap ("someone you know vouches"); on a non-zero hit, the subject reveals the **matched** endorsements
+**plainly, with their full plaintext** — so the evaluator gets the *scope*, not just the fact of a match. PSI
+narrows *which* to present without a full dump — it never substitutes for the rich blob. The earlier worry
+("plain presentation makes PSI decorative") was a category error: PSI protects the **contact/endorser lists**
+from enumeration, not the endorsement *content*, which is meant to be shown.
 
 ---
 
@@ -421,9 +465,10 @@ protocol with its performance/leakage/malicious-party tradeoffs must be selected
 
 - **INV-DIR-DUMB** — the directory performs only the two hash checks (§2). Any content evaluation,
   signature logic, or schema knowledge added to the directory is a violation.
-- **INV-HASH-WRITE-CHOKEPOINT** — a hash enters the directory's store **only** through a scanned creation
-  chokepoint (portal agent / endorsement-intake role) or the directory's own computation. If any agent
-  can self-insert a hash, "notarized ⇒ scanned" collapses and an attacker notarizes un-scanned injection.
+- **INV-HASH-WRITE-CHOKEPOINT** — a hash enters the directory's store **only** through a **signed
+  submission from an authorized issuer** at a scanned creation chokepoint (portal agent / endorsement-
+  intake role) or the directory's own computation, then federates by replication (§14.1). If any agent
+  could self-insert a hash, "notarized ⇒ scanned" collapses and an attacker notarizes un-scanned injection.
 - **INV-SUPERSEDE-NOT-MUTATE** — a signal is never edited in place; a changed fact is a new
   content-addressed signal that supersedes the old (§3).
 - **INV-CANONICAL** — everything hashed is canonical CBOR; every party re-serializes identically (§5).
@@ -441,6 +486,12 @@ protocol with its performance/leakage/malicious-party tradeoffs must be selected
 - **INV-PSI-FIXED-TERMS** — PSI's disclosure terms (one-sided, which-granularity, set-size-accepted) are
   protocol constants, never negotiated per session — negotiating them would break the two-round budget
   (§11).
+- **INV-PSI-GENERAL** — PSI is a general contact-overlap primitive (mutual-contact + endorser-overlap
+  applications), not an endorsement-privacy mechanism; it protects the contact/endorser *lists*, never the
+  endorsement *content* (§11).
+- **INV-ENDORSE-PLAIN-SCOPED** — Class 2 endorsements are plain-presentable, plaintext-rich, and **scoped**
+  (plaintext is the only carrier of scope). PSI may *discover which* to reveal but never *replaces* the
+  blob; reducing an endorsement to an overlap count is a violation (§11).
 
 ---
 
@@ -451,34 +502,47 @@ protocol with its performance/leakage/malicious-party tradeoffs must be selected
   [[2026-07-10_agent-id-joinkey]] lands and [[2026-07-10_contact-address-book-design]]'s tables exist.**
 - **M9 gateway.** If recipient re-scan is adopted, the gateway needs a **no-redact, pass/block** verdict
   mode for hash-anchored content (M9-FEED-001 today is redact/allow/block/warn). Flag in both milestones.
-- **PSI** (Class 2 endorsement intersection) is now designed here — see §11 (semantics + policy). The
-  concrete cryptographic construction remains to be chosen.
+- **PSI** is a general contact-overlap primitive (mutual-contact + endorser-overlap applications) — see
+  §11. The concrete cryptographic construction remains to be chosen.
 
-## 14. Known gaps — logged 2026-07-10, decisions still owed
+## 14. Known gaps — logged 2026-07-10
 
-A design-review pass against the full signal lifecycle found these undecided. **14.1–14.3 are
-blocking: resolve before any M10 story YAML is written.** The rest can be resolved during story
-writing, but each needs an explicit decision — none may be silently defaulted.
+A design-review pass against the full signal lifecycle found these. **14.1–14.3 were blocking; resolved
+2026-07-10 (below).** The rest are resolved during story writing — each needs an explicit decision, none
+may be silently defaulted.
 
-### Blocking
+### Resolved 2026-07-10
 
-- **14.1 — Federation: this doc pretends "the directory" is one thing.** §2, §7, and
-  `INV-HASH-WRITE-CHOKEPOINT` all speak of a singular directory, but CELLO is a T-of-N
-  sovereign-node system. Undecided: where a hash is notarized (one node or quorum), and how
-  hash + mutable status replicate across nodes. Critically, the chokepoint invariant **collapses
-  under the federation threat model** — a single compromised node can skip its scanner and insert
-  un-scanned hashes, killing "notarized ⇒ scanned-clean." Either notarization needs T-of-N
-  attestation, or the invariant must be honestly weakened to "scanned by the accepting node."
-- **14.2 — The revocation write path.** Mutable status is the entire reason the directory exists
-  (§4), yet how status *changes* is undesigned. Who may revoke which signal — issuer, subject,
-  both? Authenticated how? (There are no signatures in this design: creation-time authentication
-  carries the hash in, but revocation is a **later** write by someone claiming to be the issuer.)
-  And how does a revocation propagate across nodes (couples to 14.1)?
-- **14.3 — Class 2 presentation vs PSI: a live tension, not just a gap.** §2 says signals travel
-  as `{hash, blob}` pairs; an endorsement blob contains `issuer_pubkey`, so presenting it directly
-  reveals the endorser. §11's PSI exists precisely so non-matching endorsers are never revealed.
-  Decide: do endorsements travel **only** through PSI, or may they also be presented as plain
-  blobs? If both paths exist, PSI's privacy guarantee is decorative.
+- **14.1 — Federation. RESOLVED: signed submission + existing replication; no new machinery.** Creation is
+  a **signed, authenticated submission** — the issuer (portal agent, or the per-node endorsement-intake
+  role) hands the directory the canonical-CBOR plaintext + its hash over a signed channel; it lands at
+  **one** node and **federates to the rest by the same replication path CELLO already uses for profiles /
+  registration**. No quorum-notarization ceremony — the model already exists. On the chokepoint-collapse
+  concern: portal- and directory-issued signals are **signature-protected** (a compromised node has no
+  portal key, cannot forge them). Only **agent-issued endorsements** rely on a per-node scan, and there the
+  invariant is honestly *"scanned-clean by the accepting node, at scanner version V"* (carried in the
+  record) — acceptable because the endorsement is delivered as untrusted, quoted "Bob says:" text (§8), so
+  charset + framing are the primary injection defence and the scan is defence-in-depth. Residual, accepted
+  for launch: a compromised node can spam-notarize endorsements (inflating a subject's count); the record
+  carries node + scanner-version, so T-of-N scan attestation is a later *strengthening*, not a migration.
+- **14.2 — Revocation write path. RESOLVED: re-auth through the chokepoint; issuer / portal / directory.**
+  A revocation is a later write authenticated the same way creation was: the revoker reconnects over an
+  **authenticated CELLO session**; the intake role checks `connecting_pubkey == issuer_pubkey` on the
+  record, sets `status = revoked`, and replicates the status change (rides 14.1). **Issuer** revokes its own
+  signals, **portal** revokes portal-issued, **directory** self-recomputes directory-issued. The **subject
+  does not revoke** — selective disclosure already lets a subject suppress any signal at presentation
+  (positive-only, §14.10), so the subject controls *presentation*, the issuer controls *existence*. Expiry
+  is automatic (`expires_at` in the hash), not a write. Residual, accepted: a compromised node can forge a
+  *revocation* to censor a signal — same class as refusing to serve it; T-of-N is the eventual fix.
+- **14.3 — Class 2 presentation vs PSI. RESOLVED: different mechanisms; endorsements stay plain + scoped.**
+  The premise ("if endorsements present plainly, PSI is decorative") was a category error. PSI is a
+  **general contact-overlap primitive** (§11) whose original purpose is mutual-contact discovery; it
+  protects the **contact/endorser lists**, not the endorsement content. Endorsements are **plain-
+  presentable, plaintext-rich, first-class** objects — and plaintext is **mandatory** because it is the only
+  carrier of **scope** (a bounded claim the recipient's agent reasons over to graduate a contact to
+  `known` / `whitelisted` / `vip`); strip the text and you strip the scope. Shared directly in round-1,
+  built for commerce. PSI **discovers which** endorsements to reveal; it never **replaces** the rich blob.
+  Full model in §11.
 
 ### Must be decided during story writing
 
@@ -486,9 +550,10 @@ writing, but each needs an explicit decision — none may be silently defaulted.
   but the policy is undesigned: the `SignalRequirementPolicy` shape, the round-2 demand-bundle
   format, and who evaluates — deterministic code, LLM, or the floor+discretion split §11 uses for
   PSI. Without this, the four flows in §9 cannot actually run.
-- **14.5 — Chokepoint enforcement mechanics.** What *technically* stops an agent from calling the
-  directory's write API directly? The invariant names the rule; the auth model (capability,
-  allowlisted issuer keys, portal-only route?) is unchosen.
+- **14.5 — Chokepoint enforcement mechanics. Narrowed by 14.1:** the write API requires a *signed
+  submission from an authorized issuer* (portal key, or the endorsement-intake role's capability). What
+  remains is defining the authorized-issuer key set and the capability format — not *whether* enforcement
+  exists.
 - **14.6 — Subject key rotation / succession.** `subject` is hash-bound to a pubkey; rotate or
   succeed the key and every signal is about the old identity. Re-issue everything, or a succession
   link the recipient follows? Reconcile with the succession doc's rule that Class 1/2 do not
