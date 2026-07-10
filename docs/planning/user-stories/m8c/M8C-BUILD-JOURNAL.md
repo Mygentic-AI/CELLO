@@ -3812,6 +3812,55 @@ decoder allowlist + reject-resolves-waiter), batched with any pending directory 
 
 ---
 
+### 2026-07-10 — Entry 80: D1 merged + verified; a lie in the seal ceremony, found by verifying it
+
+`DOD-OFFER-REJECT-1` (daemon half) merged by **CELLO_Support** (`8becaa7` + review fixes `94d08f0`).
+The responder now answers `session_offer_reject {type, session_id, reason}` on both abort paths instead
+of vanishing. On main, **unpublished — inert until D2 teaches the directory the frame.** Rides the next
+cascade. Gate green: 1904 passed.
+
+**The frame-shape question resolved cleanly.** [[2026-07-08_inbound-state-matrix]] defines `Generic
+Reject` conceptually with no wire format, so `{type, session_id, reason}` is its first materialization.
+Nothing was bent to fit.
+
+**His review findings, all three verified by reading the code, not the summary:**
+
+1. **F1/F3 — `sendRaw` never throws.** `core/transport/src/signaling-manager.ts:325` has **zero `throw`
+   statements**; it catches internally and resolves `{ok:false, reason}`. So every `try/catch` wrapped
+   around it is dead code. His first cut logged `reject.sent` on a resolved-but-failed send — and the
+   **pre-existing ACCEPT path had the identical lie**, logging `session.offer.accepted` on `{ok:false}`.
+   That is the exact failure that makes the directory stall 2 s and fabricate the endpoint-less
+   assignment. **The log has been pointing debuggers away from the one line that mattered since it was
+   written.** Both paths now branch on `res.ok`. His SI test was hollow the same way (the fake failed by
+   throwing); it now drives the resolve-`{ok:false}` contract, red-first.
+2. **F2 — the reject cannot reach the directory.** `session_offer_reject` appears **0 times** anywhere in
+   `packages/directory/src`. `decodeInboundSignalingFrame` (`directory-frames.ts:409`) is a literal
+   if-chain allowlist over `o["type"]`; unmatched types fall to `null`. **D2 must add the frame to the
+   DECODER, not just the dispatch chain.** Recorded on the D2 DoD line.
+
+**What verifying his fix turned up — `DOD-SENDRAW-1`.** Three more sites of the identical class:
+`session-ceremony.ts:502` (`seal_frost_signature`, **inside the seal ceremony** — a signature that never
+left the machine is logged as sent), `session-ceremony.ts:676` (`session.ceremony.reply.failed` can never
+fire), `daemon.ts:4844` (`trust_signal_ack`, result discarded). Queued after D4.
+
+**The lesson is about the fake, not the call sites.** A test double that fails by *throwing* cannot catch
+a contract that fails by *resolving*. The double was more forgiving than production, so the tests passed
+on code that could not work. Fix the class — a lint rule on a bare `await sendRaw(` whose result is
+unused, or a `sendRawOrThrow` — rather than three call sites and a wait for the fourth.
+
+**Also today.** `scripts/promote-latest.sh` reported "Nothing to promote" while daemon 0.0.41 / cli 0.0.38
+sat unpromoted: it reads versions from the **working tree**, and Andre's checkout was stale, so it compared
+npm against itself and agreed. Hardened (`5db5e3e`) to fetch and refuse when HEAD is behind upstream or a
+`package.json` is dirty. **The first cut of that guard had the bug it exists to prevent** — it compared
+against `origin/$BRANCH` and swallowed the failure with `|| echo 0`, so a branch with no remote counterpart
+reported "0 behind". It resolves the real upstream via `@{u}` now, and refuses when there is none.
+
+**Unprompted proof that two M8C features work.** Reaching CELLO_Support mid-coding returned
+`session_not_current` (the `DOD-CURSOR-1` read-before-write gate) and then `AWAY-1`'s auto-ack, because
+his agent was unattended. Neither was being tested. Both behaved.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

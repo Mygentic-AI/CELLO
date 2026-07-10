@@ -380,6 +380,19 @@ and they correlate one-to-one.
   **INVARIANT:** `getUnreadSummary` and `cello_receive` must agree on what a session is; any fix that
   leaves those two authorities disagreeing recreates this bug in a new shape. — ❌
 
+- **DOD-SENDRAW-1** (found 2026-07-10 while verifying D1; **do AFTER D4**) — `SignalingManager.sendRaw`
+  (`core/transport/src/signaling-manager.ts:325`) has **zero `throw` statements**: it catches internally
+  and resolves `{ok:false, reason}`. Every `try { await sendRaw(...); log("…sent") } catch { log("…failed") }`
+  therefore **lies in both directions** — the success line always fires, the failure line never can.
+  Three sites remain: `session-ceremony.ts:502` (`seal_frost_signature` — logs `.sent` unconditionally,
+  **inside the seal/non-repudiation ceremony**), `session-ceremony.ts:676` (`ceremony_result` —
+  `session.ceremony.reply.failed` can never be emitted), `daemon.ts:4844` (`trust_signal_ack` — result
+  discarded entirely). Already correct: `daemon.ts:1258/1332/2092`; confirm `seal-upgrade.ts:129` branches.
+  **Fix the class, not the sites:** a lint rule banning a bare `await sendRaw(` whose result is unused, or
+  a `sendRawOrThrow` for callers that want the exception. Red-first, and **drive the fake from the
+  resolve-`{ok:false}` contract, never a throw** — a fake that threw is exactly what let this hide.
+  Not launch-blocking (an observability lie, no data loss), but it has already misled a debugger once. — ❌
+
 > **Triage:** the trigger is connecting to an agent that just started — a first-connect race, and the
 > launch pitch is "two agents connect." The initiator is told the counterparty may be offline when it
 > IS online. D3 is small, local, needs no deploy, and removes the phantom session; do it regardless of
