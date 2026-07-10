@@ -70,6 +70,16 @@ If a piece of work is not in service of that, it is probably forgivable at launc
 
 ---
 
+## Database — join on the STABLE key, never the mutable one
+
+**`agent_id` is the identity. `agent_name` is a display label — mutable, and reusable after retirement.** The six M7 session tables (`sessions`, `transcript`, seal leaves, watermarks, `contacts`, …) join on `agent_name` because it *was* the PK before `REMOVE-001` added `agent_id` and only half-migrated. That is a known defect (`DOD-AGENT-ID-JOINKEY-1`), not a pattern to copy.
+
+- **Every new table keys/joins on `agent_id`.** Never put `agent_name` in a `PRIMARY KEY`, `JOIN`, or `WHERE`-match. It is `SELECT`-for-display only.
+- **Do not propagate the smell "to match" the existing tables.** Matching a bad convention grows it roots. If a nearby table joins on a mutable attribute, that is a bug to flag, not a precedent to follow.
+- The rule generalises: **join on the stable primary key, never on a mutable attribute** — even one that is currently unique.
+
+---
+
 ## Quick Commands
 
 **Gate sequence (run in order before every commit):**
