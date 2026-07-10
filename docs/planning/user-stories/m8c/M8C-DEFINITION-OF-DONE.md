@@ -439,6 +439,40 @@ and they correlate one-to-one.
 > IS online. D3 is small, local, needs no deploy, and removes the phantom session; do it regardless of
 > when D2 is scheduled.
 
+## 🔴 Daemon singleton — multiple daemons, one database (2026-07-10)
+
+**Observed live, not theorised:** three `cello-daemon` processes at once; `lsof` showed **two holding
+`sessions.db` open together**. Killing the orphan left the healthy daemon with **no lock file and no
+socket** — unreachable and invisible. Full evidence, ACs and red-first tests:
+[[2026-07-10_daemon-singleton-defects]].
+
+The cascade is self-propagating: an exiting daemon unlinks `daemon.lock` and `daemon.sock` **without
+checking it still owns them** → `cello logout` truthfully reports "No daemon running" → `cello login`
+spawns a second daemon beside the live one → killing either disarms the survivor. **The obvious recovery
+action makes it worse.** `DOD-LOGOUT-WAIT-1` cannot help: there is nothing left to wait for.
+
+`sessions.db` IS SQLCipher-encrypted (verified: header `c52522ee…`, not `SQLite format 3`), and SQLCipher's
+WAL locking is multi-process safe — so the **file** does not corrupt. Everything above it assumes a single
+writer: hash-chain leaf indices allocated read-compute-write (a duplicated index is a broken transcript
+**that the seal then attests to**), two daemons running the same agents with two directory signaling
+streams for one pubkey, two processes holding the same FROST share, double-accept. No damage observed.
+
+- **DOD-DAEMON-CLEANUP-1** (do first) — an exiting daemon unlinks `daemon.lock` only if the lock's pid is
+  its OWN, and removes `daemon.sock` only if it created it. Otherwise it leaves them and logs
+  `daemon.lock.not_ours`. Two conditions, near-zero risk. **This is the propagation mechanism.** Test with
+  a REAL spawned binary — an in-process daemon shares the test's pid and cannot reproduce it (the same
+  trap that made `DOD-LOGOUT-WAIT-1`'s first AC2 hollow). — ❌
+- **DOD-SINGLE-DAEMON-1** — the daemon takes an **exclusive OS lock** (`flock`/`O_EXLOCK`) at startup and
+  holds it for its lifetime; the OS releases it on death, so a `kill -9` leaves nothing stale. A second
+  instance exits non-zero naming the holder's pid, and never opens the DB, registers agents, or connects
+  to the directory. `connectOrStart` must treat "lock held by a live process" as *connect*, never *spawn*.
+  The advisory JSON lock may keep its metadata but **must never decide whether a daemon may start**. — ❌
+
+> **Triage:** neither blocks "two agents connect." Both are close to unforgivable on "do I trust this with
+> my identity", because the failure is **silent**, the trigger is the restart sequence our own docs
+> prescribe plus any crash, and the recovery action propagates it. `DOD-INV-ONE-PRIMARY` forbids exactly
+> this across machines; we have been violating it on one.
+
 ## 🔴 DOD-CRYPTO-AT-REST-1 — the gateway writes security records + config to disk UNENCRYPTED
 
 **Found 2026-07-09, while chasing an unrelated npm warning.** Not an M9 concern despite living in
