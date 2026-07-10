@@ -26,11 +26,14 @@ description: >
 | **D3** `DOD-INBOUND-GUARD-1` | The receiver accepts an assignment it can see is broken | cello-client | ✅ daemon-only | no |
 | **D1** `DOD-OFFER-REJECT-1` | The responder aborts **silently** on `standing_receiver_unavailable` | cello-client | ✅ daemon-only | no |
 | **D2** `DOD-DIR-FAILCLOSED-1` | The directory signs + distributes an **incomplete** assignment | trustless-cello | ⚠️ | yes, 3 regions, ~25–30 min |
-| **D4** `DOD-UNREAD-1` | A received transcript row with no session row = permanently unread + unreadable | cello-client | ⚠️ decision needed | no |
+| **D4** `DOD-UNREAD-1` | A received transcript row with no session row = permanently unread + unreadable | cello-client | ✅ **decided 2026-07-10: producer-first** | no |
 
 **Do them in the order D3 → D1 → D4 → D2.** D3 alone stops the phantom session and the orphaned
 reply at the receiving daemon, with no directory deploy. D2 is the *correct* root fix but is the
 expensive one and is not required to stop the bleeding.
+
+**The invariant underneath all four (§4b) — hold it in review:** `getUnreadSummary` and `cello_receive`
+must agree on what a session is.
 
 **🚫 DO NOT "fix" this by adding a `JOIN sessions` to `getUnreadSummary`.** That makes the badge
 disappear by hiding a message that was really delivered. It is a cosmetic fix over a real defect —
