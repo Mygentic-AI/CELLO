@@ -352,13 +352,21 @@ and they correlate one-to-one.
 - **DOD-OFFER-REJECT-1** (D1) — the responder sends a `session_offer_reject` instead of returning
   silently on `standing_receiver_unavailable`, so the directory fails fast instead of stalling 2 s and
   fabricating. This is the `Generic Reject` of [[2026-07-08_inbound-state-matrix]], arriving as a
-  protocol necessity. Daemon half is inert until the directory understands the frame. — ❌
+  protocol necessity. Daemon half is inert until the directory understands the frame. — 🟡 daemon half
+  built + reviewed + merged to cello-client main (`8becaa7` + `94d08f0`, 2026-07-10; review found F1
+  blocking — the production seam's `sendRaw` resolves `{ok:false}` instead of throwing, so a failed
+  reject logged `reject.sent`; fixed on BOTH the reject and the pre-existing accept path). ✅ when the
+  directory half (D2) understands the frame.
 - **DOD-DIR-FAILCLOSED-1** (D2, the correct root fix) — the directory must **never FROST-sign or
   distribute an assignment with an empty counterparty endpoint**. On offer-accept timeout it returns a
   `session_request` failure to the initiator and sends **nothing** to the target. Today it "proceeds
   with empty defaults" (`directory-node.ts:3355-3400`) — a silent fallback that mints a validly-signed,
   structurally invalid artifact. **Do not merely raise the 2 s timeout**; that narrows the race without
-  closing it. trustless-cello; 3-region deploy ~25-30 min; batch it. — ❌
+  closing it. trustless-cello; 3-region deploy ~25-30 min; batch it. ⚠️ **D1-review F2 (2026-07-10):**
+  `session_offer_reject` never reaches the directory's dispatch chain — `decodeInboundSignalingFrame`
+  (`directory-frames.ts:409`) is a typed allowlist returning null on unknown types (today the directory
+  replies `not_authenticated`, which the daemon harmlessly drops). D2 must add the frame to the
+  **decoder allowlist**, not just the dispatch chain — a dispatch branch alone would never fire. — ❌
 - **DOD-UNREAD-1** (D4, **DECIDED 2026-07-10 — producer-first**) — a received `transcript` row with no
   `sessions` row is counted unread (`getUnreadSummary` never joins `sessions`) but `cello_receive` returns
   `session_not_found`, so it can never be cleared. **Materialising the session (option b) is REJECTED**:

@@ -3767,6 +3767,51 @@ until D2 teaches the directory to understand it.
 
 ---
 
+### 2026-07-10 — Entry 79: ✅ DOD-OFFER-REJECT-1 (D1, daemon half) built, reviewed, merged — and the review caught a lie in the fix itself
+
+**What shipped.** `wireSessionOfferHandler`'s two abort paths (`standing_receiver_unavailable`,
+`no_session_id`) now send `session_offer_reject {type, session_id, reason}` instead of returning
+silently — session_id echoed when present, omitted on `no_session_id` (never an empty value on the
+wire). `session.offer.abort` still logs with the unchanged reason (AC3); a sent reject logs
+`session.offer.reject.sent`; a failed send logs `session.offer.reject.failed` with the upstream
+detail. Red-first via a new injectable-SignalingSeam block in `session-ceremony-verify.test.ts`.
+Frame-shape call (per Entry 78's instruction): the inbound-state-matrix defines the Generic Reject
+conceptually — a definitive rejection receipt instead of opaque silence — with no concrete frame, so
+`{type, session_id, reason}` is its first materialization, not a bending. cello-client main =
+**`94d08f0`** (`8becaa7` unit + `94d08f0` review fixes), pushed; rebased over the D3 publish cascade
+(`f31bafa`, daemon 0.0.41 / cli 0.0.38) before merging.
+
+**The review earned its keep — F1, blocking: a silent fallback inside the anti-silent-fallback fix.**
+My first implementation logged `reject.sent` whenever `sendRaw` *resolved* and caught only *throws* —
+but the production seam (transport `SignalingManager.sendRaw`) **never throws**; it resolves
+`{ok:false, reason:"signaling_reconnecting"|"signaling_lost"}` on every failure. Under exactly the
+degraded condition D1 exists to fix, the daemon would have logged success while nothing left the
+machine, and `reject.failed` was unreachable in production. The SI test was hollow the same way: its
+fake failed by throwing — a contract the production seam does not have. Fixed test-first (fake now
+resolves `{ok:false}`; red confirmed), then both paths branch on `res.ok`, catch kept as
+belt-and-braces.
+
+**F3 (pre-existing, same disease, fixed per fix-errors-when-found):** the WIRE-002 **accept** path
+logged `session.offer.accepted` on `{ok:false}` too — actively pointing the operator away from the
+exact failure that makes the directory stall 2 s and fabricate. Same fix, new test.
+
+**F2 (recorded for D2, not fixed here):** `session_offer_reject` never reaches the directory's
+dispatch chain. `decodeInboundSignalingFrame` (`directory-frames.ts:409`) is a typed **allowlist**
+returning null on unknown types; the directory then replies `not_authenticated`, which the daemon's
+inbound handlers silently drop (harmless — one spurious round-trip per rejected offer until D2). My
+falsification note in the D1 unit commit claimed the dispatch chain ignores unknown types — wrong
+mechanism, right conclusion, corrected in `94d08f0`'s message. **D2 must add the frame to the decoder
+allowlist, not just the dispatch chain** — noted on the D2 DoD line.
+
+**Gates.** Full suite 1904 passed, lint, typecheck, build — green after the review fixes.
+
+**Next red:** DOD-UNREAD-1 (D4) per the decided producer-first split — D4a producer guard
+(`session.content.orphaned`, never record unattributable content), D4b transcript-only `since_seq`
+reader (`from: null`, `session_not_live` for plain receive). Then D2 (directory fail-closed +
+decoder allowlist + reject-resolves-waiter), batched with any pending directory work.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
