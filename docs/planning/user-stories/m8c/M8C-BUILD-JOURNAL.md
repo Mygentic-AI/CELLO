@@ -3668,6 +3668,56 @@ Protocol: [[M8C-MONIKER-LIVE-TEST]] T6/T7 (`50e9c681`).
 
 ---
 
+### 2026-07-10 — Entry 77: ✅ DOD-INBOUND-GUARD-1 (D3) built, reviewed, merged — the phantom-session receive guard
+
+**Context.** First unit of the phantom-session fix ([[M8C-PHANTOM-SESSION-FIX-PLAN]], D3 → D1 → D4 → D2),
+executed by CELLO_Support's session from the plan doc, coordinated with Ms_Chelly over CELLO sessions
+(kickoff sealed `7534f398…`; D4-decision session sealed `4dccf5f2…`). Work done in a worktree branch
+`m8c-phantom-session-fix`, merged fast-forward to cello-client `main` = **`8bf8486`** and pushed.
+
+**Clause checklist (the yardstick the reviewer received):**
+1. `extractInboundSessionAssignment` surfaces `counterpartySessionPeerId: string | null` (absent/non-string → null) — daemon.ts ~4436/4477.
+2. Guard in `handleInboundSessionAssignment` after `localAgent` resolution, **before** `inboundInFlight`,
+   the duplicate check, and the accept chain — refusal happens before ANY session state.
+   `session.inbound.assignment.incomplete` at warn `{agentName, sessionId, correlationId}`.
+3. Red-first tests in `seam-2-inbound-session.test.ts` (extended `assignmentFrame()` builder, no new
+   fixture): absent-field AND empty-string variants; assert no session row, no `session.inbound.accepted`,
+   no `session.away.response.sent`, the warn fields, and `cello_await_session` → timeout. Red confirmed for
+   the right reason pre-fix: the broken frame produced an active row with `message_count: 1` — the away
+   reply already sent into the void.
+4. The tests that encoded the bug: the plan named **three** files injecting field-less frames and expecting
+   acceptance; the full suite surfaced **eleven** (moniker-2-inbound-offer, seam-2-inbound-session,
+   moniker-4-who-dispatch, moniker-5-label-only, m8c-contact-1, m8c-away-1, m8c-tgdoor-1, m8c-abuse-1 ×4
+   frames, standing-receiver-inbound, f16-counterparty-gone, m9-core-001-seam, seam-4-daemon-orchestration
+   — the last three carried the field on their *initiator-side* assignment but not the receiver-side
+   injected frame, which is exactly the frame the guard judges). All now send
+   `counterparty_session_peer_id`; called out in the commit message per the plan.
+5. Untouched, per the DO-NOT list: initiator's F13 guard, `getUnreadSummary`, the directory's 2 s timeout.
+
+**Gates.** Full workspace `pnpm run test` (179 files, 1896 passed), `lint`, `typecheck`, `build` — all
+green. One transient failure in an intermediate 3-file rerun (640 s run, 21/22) did not reproduce in the
+verbose rerun (22/22, ~30 s) nor in the full gate; the full gate is the arbiter.
+
+**Review (cello-unit-reviewer, one pass, four lenses).** Verdict: **SPEC FAITHFUL / NO SILENT FALLBACKS /
+TESTS HAVE TEETH**. Per-clause: all implemented. Confirmed no bypass path into `acceptInboundAssignment`
+(single caller), duplicate-check-after-guard has no correctness consequence (a refused assignment creates
+nothing to dedupe; a retransmit re-warns — loud, idempotent), and nothing else on the receive side consumes
+the field, so the placeholder test value masks nothing. Two notes: (1) LOW "pre-existing `__test_*`
+handlers ungated" — **checked and factually wrong**: all three sit inside the `CELLO_ENV=test` guard
+(daemon.ts:4046–4107); no change. (2) The `""` variant skipped the AC3 await check — fixed (`8bf8486`),
+both variants now pin AC3.
+
+**Commits.** cello-client `e8c4891` (guard + tests) + `8bf8486` (review fix). DoD line flipped to 🟡; ✅ owed
+to the live invariant check (`count(session.offer.abort) > 0 AND count(session.inbound.accepted for those
+ids) == 0`, filtered on daemon start — the Entry 76 trap) once a published daemon carries the fix.
+Publishing is Ms_Chelly's side per the kickoff agreement.
+
+**Next red:** DOD-OFFER-REJECT-1 (D1) — the responder answers with `session_offer_reject` instead of
+vanishing; daemon half first (inert until the directory understands the frame; the directory half rides
+with D2). Then D4 per the decided producer-first split (fb5ab9a3), then D2.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

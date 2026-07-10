@@ -344,7 +344,11 @@ and they correlate one-to-one.
   `transport_mode`) when nobody accepted, so the receiver has everything it needs — it just never reads
   it (`extractInboundSessionAssignment`, 0 occurrences). Mirrors the initiator's M8B F13 guard.
   ⚠️ Three existing test files inject frames without that field and expect acceptance — they encode the
-  bug. cello-client, daemon-only, no deploy. — ❌
+  bug (eleven, it turned out — Entry 77). cello-client, daemon-only, no deploy. — 🟡 built + reviewed +
+  merged to cello-client main (`e8c4891` + `8bf8486`, 2026-07-10; unit-reviewer verdict SPEC FAITHFUL,
+  one test-gap finding fixed). ✅ at the live invariant check (`count(session.offer.abort) > 0 AND
+  count(session.inbound.accepted for those ids) == 0`, log filtered on daemon start — Entry 76 trap)
+  once a published daemon carries it.
 - **DOD-OFFER-REJECT-1** (D1) — the responder sends a `session_offer_reject` instead of returning
   silently on `standing_receiver_unavailable`, so the directory fails fast instead of stalling 2 s and
   fabricating. This is the `Generic Reject` of [[2026-07-08_inbound-state-matrix]], arriving as a
