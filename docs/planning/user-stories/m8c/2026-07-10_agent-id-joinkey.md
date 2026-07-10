@@ -38,6 +38,26 @@ The name is a mutable attribute and a foreign key at the same time. That is the 
 `sessions`, `seal_interrupted_artifacts`, `session_tree_leaves`, `transcript`, `message_watermarks`,
 `contacts` — every one has `agent_name TEXT NOT NULL` in its `PRIMARY KEY`, and none carries `agent_id`.
 
+**SEVENTH TABLE (found by AC5, 2026-07-10): `retry_queue`** (`core/daemon/src/retry-queue.ts`). It carries
+`agent_name` (nullable — legacy direct-retry rows are not agent-scoped) and scopes live `DELETE`s by it.
+Chronology confirms it is not later contagion but a child `REMOVE-001` skipped: `retry_queue.agent_name`
+landed 2026-06-22 (`b31c5bd`, DOD-LOOP-1), `REMOVE-001` on 2026-06-26 (`0064d95`). **`REMOVE-001`
+half-migrated SEVEN tables.** `retry_queue` carries a latent HIGH bug the other six do not — see the
+callout below.
+
+> 🔴 **HIGH — silent cross-agent data loss in `retry_queue` (fixed as part of this unit).** DOD-LOOP-1 added
+> `agent_name` *"so two of the operator's agents can hold awaiting content for the SAME session_id on one
+> daemon without colliding,"* but never added the agent to the table's uniqueness constraint, still
+> `UNIQUE(session_id, nonce_hex)` (line 120) — and for awaiting rows `nonce_hex` IS the content hash. Two
+> local agents, same session, identical content → the second `INSERT` collides, is **swallowed** by a
+> `try/catch` that logs `message.retry.persist.failed` and falls through to an in-memory fallback commented
+> *"still re-parkable this run."* The second agent's content is never persisted and is **gone on the next
+> daemon restart**, while the first agent's identical row survives. The comment asserts a guarantee the
+> constraint denies — the same *report-the-intent-not-the-outcome* disease as SENDRAW-1 and LOGOUT-WAIT-1.
+> **Reachable now:** Ms_Chelly ↔ CELLO_Support is a two-local-agent session, the exact DOD-LOOP-1 case.
+> Re-keying `retry_queue` on `agent_id` makes the correct constraint `UNIQUE(agent_id, session_id,
+> nonce_hex)` fall out for free; the swallowing catch is made loud in the same unit.
+
 ## The confirmed hazards (self-inflicted, single-machine — no remote actor)
 
 `agent_name` **never crosses the wire as identity** — a counterparty is pubkey-identified, always. So the
@@ -112,8 +132,13 @@ wipe.
   `INSERT INTO new SELECT …` copying every row with `agent_id` backfilled from the local `agents` table
   (`agent_name → agent_id`), drop the old, rename. **All six rebuilds in ONE `BEGIN…COMMIT`** — SQLite DDL
   is transactional, so a crash rolls the entire migration back atomically. The migration verifies its own
-  completeness (every row has a non-null `agent_id`; row counts match pre/post) **before commit**, and
-  fails loud rather than half-commit. Idempotent (skip if already rebuilt).
+  completeness **before commit** (row counts match pre/post), and fails loud rather than half-commit.
+  Idempotent (skip if already rebuilt).
+  **Completeness rule differs for `retry_queue` (nullable `agent_name`):** the six `NOT NULL` tables assert
+  *every* row has a non-null `agent_id`. `retry_queue`'s legacy direct-retry rows store `NULL`
+  `agent_name` (not agent-scoped — true, must survive), so its rule is: a non-null `agent_name` MUST
+  resolve to an `agent_id` or ABORT; `NULL` stays `NULL`. Completeness = zero rows where `agent_name IS
+  NOT NULL AND agent_id IS NULL`.
   **Explicitly rejected:** the "add `agent_id`, re-point queries, leave the PK" shortcut. It leaves
   `PRIMARY KEY (agent_name, …)` in the schema — the misleading artifact that propagated this defect — and
   defers the risky rebuild to when there are operators whose DBs cannot be wiped. Do it fully now, while
@@ -126,9 +151,17 @@ wipe.
 - **AC4 — retire-reuse is closed, proven.** Red-first: create agent A, generate sessions/transcript/
   contacts, retire A, create a NEW A (same name, new pubkey), assert the new A sees **none** of the old
   A's rows. Must fail on today's `agent_name` join and pass on the `agent_id` join.
-- **AC5 — no other unmigrated children.** `REMOVE-001` half-migrated; incomplete migrations rarely miss
-  exactly one table. Enumerate every table with an `agent_name` column and confirm all six (and no more)
-  are covered. If a seventh exists, it is in scope.
+- **AC5 — no other unmigrated children. ✅ DONE: found `retry_queue` (seven, not six).** Enumerated from
+  the LIVE schema (not this doc's list) including `.sql` migrations. The seventh, `retry_queue`, is in
+  scope with its own sub-requirements: re-key to `agent_id`, adopt `UNIQUE(agent_id, session_id,
+  nonce_hex)`, **make the swallowing persist-failure catch LOUD**, and fix the `#positionCounters` keying
+  inconsistency (`session_id` in `loadFromDb` vs `#ak(agentName, sessionId)` in `enqueueAwaitingContent`).
+  It gets its OWN red-first test, distinct from AC4: two local agents (distinct `agent_id` + pubkey), same
+  `session_id`, identical content → assert BOTH persist AND survive a restart; must FAIL today. Confirmed
+  correct-as-is: `agents`, `trust_signals` (already `agent_id`), `telegram_settings` (singleton),
+  `session_seal_leaves` + `relay_ack_receipts` (keyed on stable `agent_pubkey`), `session_seen_nonces`,
+  `manifest_state`; and `client/db/migrations/V2` where `agent_name` is a plain column under `PRIMARY KEY
+  (pubkey)`.
 - **AC6 — restore collision resolved.** Settle AC's §3 unknown: `cello_restore` must not create two active
   agents under one name, and with `agent_id` joins a name collision on restore cannot bleed history.
 - **SI/observability.** The migration logs `daemon.migration.agent_id_backfill` with per-table row counts;
