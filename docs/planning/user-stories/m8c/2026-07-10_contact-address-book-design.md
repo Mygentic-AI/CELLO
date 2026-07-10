@@ -115,7 +115,11 @@ never meant to mean whitelisting.**
 
 ---
 
-## 2. DECIDED — the daemon owns it; the portal is a lens
+## 2. DECIDED — the daemon owns it; the portal is a lens ⏳ **(portal work DEFERRED)**
+
+> **⏳ DEFERRED — we are not writing portal code.** Everything below is a *requirement record* for when
+> the portal is integrated. **Build and prove all of it locally in the daemon first.** The portal comes
+> later. Nothing in this section is scheduled.
 
 **The daemon's SQLCipher DB is the source of truth.** The portal is a lightweight web interface with
 direct access only to what is in the **directory**. It never holds PII, contacts, or anything like them.
@@ -247,6 +251,38 @@ personally named**, and therefore cannot be spammed by strangers.
 
 ---
 
+## 3b. REQUIRED — per-tier and per-contact answering messages
+
+The parent matrix demands three response bodies this document previously had nowhere to store:
+
+| matrix response | scope | where it lives |
+| :-- | :-- | :-- |
+| **Generic Answering Machine** | system default | code |
+| **Custom Answering Machine** | per agent | agent settings (`DOD-CONFIG-1`) |
+| **Targeted Custom Answering Machine** | **per contact** — *"Hey John, I'm on a plane"* | `contacts` |
+
+And the matrix varies the *response type* by tier — an unattended agent answers a `whitelisted` sender
+with a Custom Answering Machine and an `unknown` one with a Generic Reject. So the away text needs **two
+levels of override**, resolved most-specific-first:
+
+```
+per-contact message   >   per-tier message   >   agent default   >   system default
+```
+
+- **Per contact:** a nullable `away_message` column on `contacts`. Falls out of the row that already
+  exists. **Answers "can I give one person a unique answering message?" — yes.**
+- **Per tier:** not a `contacts` column — it is agent policy keyed by tier, so it belongs in the config
+  store (`DOD-CONFIG-1`, ❌). The column can land before the policy that reads it.
+
+**AC:** resolution is deterministic and total — every sender, at every tier, resolves to exactly one
+message, and the system default is unreachable only because something more specific matched.
+
+⚠️ An away message is **operator-authored text sent to an unknown sender**. It is an outbound disclosure:
+*"I am away until Thursday"* tells a stranger when your agent is unattended. Treat per-contact messages as
+the sensitive ones — they name a person to whoever holds that key.
+
+---
+
 ## 4. DECIDED — the columns land NOW; the signal table does not
 
 **`contacts` gains three nullable columns now**, before there are operators to migrate:
@@ -257,7 +293,7 @@ personally named**, and therefore cannot be spammed by strangers.
 | `last_offered_moniker` | the last claim this peer showed us — §3 |
 | `provenance` | how the row arose: I initiated / I accepted / imported / introduced by ⟨pubkey⟩ |
 
-**Why now:** this is client-side SQLite on operators' disks. `CLAUDE.md` calls client-side migrations
+**Why now:** this is the operator's local **SQLCipher** database (never `node:sqlite` — see the lint rule). `CLAUDE.md` calls client-side migrations
 *"unrecoverable without manual intervention"* when they fail. You have **one** user. Every user added makes
 reshaping this table more expensive and more dangerous. Nullable columns cost nothing today and make the
 trust milestone **additive** rather than a migration of everybody's address book. None of the three is
@@ -274,54 +310,77 @@ knows who these people are.
 
 ---
 
-## 5. Trust signals — their own table, keyed on the pubkey
+## 5. Trust signals — Andre's model (2026-07-10). Not designing the table yet.
 
-**Andre, 2026-07-10:** trust signals do **not** live in `contacts`. They go in their own table. An agent may
-share many at once — ten, fifteen. Each is a row with its own key and a foreign key to the contact that owns
-it. **`contacts` gets no trust-signal columns.** That is what keeps `contacts` small and stable, and what
-makes §4 safe.
+Signals do **not** live in `contacts`. Own table, many per subject, FK to the contact that owns them.
+`contacts` gets no trust-signal columns — which is what keeps it small and stable, and what makes §4 safe.
 
-**One refinement, and it decides whether a stranger's signals can be stored at all.** If the FK references a
-`contacts` **row**, you must already have a contact before you can hold a signal about someone. But signals
-arrive **from strangers** — that is exactly when they are most useful, because they are what you would use
-to *decide* whether to accept.
+### How an endorsement actually works
 
-**Key on the pubkey.** It is already the identity anchor (§11): the thing every frame carries and the thing
-that survives a name change. `contacts` is *your annotation* of a pubkey; `trust_signals` are *claims about*
-that pubkey. Both are children of the key, not of each other. A stranger's signals then land with nothing
-else required, and if you later name and tier them, the signals are already there, joined on the same column.
+1. I ask someone to endorse me. They write a short message about me — **anything they want to say.**
+2. That message **plus its author's pubkey** is hashed by the **directory**. The directory stores **only
+   the hash**. It never stores the endorsement text. **No PII in the directory** — the same rule as
+   email/phone hash-only stubs.
+3. **I** — the endorsed party — store the endorsement itself, alongside its hash.
+4. When I initiate a session I may attach trust signals. **The directory includes them only if what I
+   present matches the hashes it holds.** Third-party verification, every time, for *all* signal types —
+   not just endorsements.
 
-It also resolves the self-versus-other question with no second table: **a signal about your own agent is one
-whose subject is your own pubkey.** No special case.
+So the directory is the notary and never the archive. The holder keeps the content; the directory keeps
+the proof that the content is what was endorsed, by whom.
 
-### OPEN — does a signal record who ISSUED it?
+### Two rounds, then a decision
 
-A signal an agent shares **about itself** and an endorsement a third party **signs about them** are the same
-row only if there is an `issuer` column. Without one they are indistinguishable — and the moniker taught us
-that this distinction is the whole ballgame:
+- **Round 1:** the initiator sends trust signals with the session request.
+- **Round 2:** the receiver may say *"fine, but can you also provide X?"* The initiator responds.
+- **Then accept or decline. There is no third round of questioning.**
 
-| who asserted it | rendering |
-| :-- | :-- |
-| I did | plain — my own judgement |
-| they did (`issuer == subject`) | `(self-declared)` — a claim |
-| a third party did | `(vouched by X)` — worth exactly what X is worth |
+### This resolves the foreign key — and I was wrong about it
 
-If it is signed, **store the exact wire bytes**: a signature cannot be re-verified over a re-serialized
-payload. Canonical encoding in, canonical encoding stored. Getting that wrong is unrecoverable later.
+I argued signals must key on the **pubkey**, so a stranger's signals could land before a `contacts` row
+exists. Unnecessary. Signals are **evaluated in flight and never stored** during the two rounds. **At the
+moment of acceptance** the sender moves `unknown → known`, and *that* is when the row is inserted — so the
+row exists before anything is persisted, and the FK to `contacts` is correct.
 
-And if the trust-signal design includes something purely **behavioural and locally derived** — "this peer has
-never broken a seal" — that has no issuer and no signature. It is an **observation**, not an attestation, and
-observations and attestations are different kinds of thing. **That may be the real split**, and it is not
-self-versus-other at all.
+Which also settles §1's row question: **absence of a row means `unknown`.** Rows exist for `blocked` and
+for `known` and above. Nothing is written for a stranger you never accepted.
 
-⚠️ **Blocked on reading the existing trust-signal documentation before any schema is proposed.** Everything
-above about signals was derived from the wire semantics, not from those docs.
+### The three issuer types — all ultimately hashed in the directory
+
+| type | issued by | example | nature |
+| :-- | :-- | :-- | :-- |
+| **Portal-issued** | the portal backend | I log into LinkedIn through the portal and prove I own the account | a *verified credential* |
+| **Directory-issued** | the directory | successful connections over time, without incident | *behavioural history*, pseudonymous |
+| **Agent/operator-issued** | another user | an endorsement, or an introduction | a *human statement* |
+
+The second is the one people underrate. **Two years and no incident is worth far more than two years and
+no usage.** Longevity without activity proves nothing; longevity *with* activity and no incident is the
+signal.
+
+### Open questions — deliberately not answered here
+
+- 🔐 **Does the directory see endorsement plaintext at share time?** To check "what I present matches the
+  stored hash," the directory must hash what I present — so it holds the text **transiently**, even though
+  it persists only the hash. An alternative keeps it blind: the initiator sends the signal **directly to
+  the receiver**, and the receiver asks the directory *"is hash H a valid signal about pubkey X issued by
+  Y?"* The directory answers yes/no and **never sees the content at all.** Same guarantee, strictly less
+  exposure. Worth deciding before implementation.
+- **Revocation.** An endorser may withdraw. The directory holds the hash; withdrawal must be expressible,
+  and a receiver must be able to learn that a signal it once accepted is no longer vouched for.
+- **Storage of the signed bytes.** If a signal carries a signature, store the **exact wire bytes** — a
+  signature cannot be re-verified over a re-serialized payload. Canonical encoding in, canonical encoding
+  stored. Getting this wrong is unrecoverable later.
+- **Display.** The moniker's rendering ladder generalises: *I asserted it* → plain; *they asserted it*
+  (`issuer == subject`) → `(self-declared)`; *a third party asserted it* → `(vouched by X)`, worth exactly
+  what X is worth.
+
+⚠️ **The table is NOT being designed now** (Andre). Recorded so the model is not re-derived.
 
 ---
 
 ## 6. What is NOT decided
 
-- **The `trust_signals` / `attestations` shape** — pending the doc read (§5).
+- **The `trust_signals` table shape** — deliberately not designed yet (§5). The model is recorded; the schema is not.
 - **`tier` needs somewhere to persist per-agent policy**, which is `DOD-CONFIG-1` (❌). The column can land
   without it; the *policy* that reads it cannot.
 - **The first-sighting prompt** — every unknown sender, or only after a first accepted session (§3).
