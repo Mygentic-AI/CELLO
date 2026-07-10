@@ -3911,6 +3911,49 @@ unit per the queue: **DOD-SENDRAW-1**, then D2.
 
 ---
 
+### 2026-07-10 — Entry 82: ✅ DOD-SENDRAW-1 built, reviewed, merged — the class is a lint error now
+
+**What shipped.** cello-client main = **`2e701c3`** (`5156189` unit + `2e701c3` review fixes), rebased
+over the D4 publish cascade (`11dbf23`, daemon 0.0.42 / cli 0.0.39). The three sites Ms_Chelly found
+while verifying D1 all branch on `res.ok` now:
+- **`seal_frost_signature`** — extracted to an exported `sendSealFrostSignature()` so the send
+  contract is testable without a live FROST ceremony. A signature that never left the machine was
+  logged `.sent` INSIDE the non-repudiation seal ceremony; the failure event was unreachable.
+- **`ceremony_result` reply** — `session.ceremony.reply.failed` now reachable, tested via the no-tbs
+  abort path (which reaches `reply(null)` without touching FROST machinery).
+- **`trust_signal_ack`** — result was discarded entirely; a failed ack now warns
+  `daemon.trust_signal.ack_send_failed`.
+Confirmed already-correct: `daemon.ts` 1258/1332/2092 and `seal-upgrade.ts:129→138`.
+
+**The class is now a lint error.** `no-restricted-syntax` in `eslint.config.mjs` bans a discarded
+`sendRaw` in all three shapes — awaited-and-discarded, `void`-wrapped, bare-floating (the last two
+per review F1: `void` was a trivially reachable escape, and `no-floating-promises` isn't enabled) —
+and the name regex also covers `sendSignalingFrame`, the registration-context wrapper with the
+identical never-throws contract (both current callers verified branching before widening).
+**Red-first at both layers:** the rule flagged exactly the three known sites pre-fix and nothing
+else (independently re-verified by the reviewer against the `40d0a33` sources); behavior tests drive
+the resolve-`{ok:false}` contract — never a throw, which is precisely what let this class hide.
+
+**Review (cello-unit-reviewer): SPEC FAITHFUL.** F1 (lint escapes) and F2 fixed in `2e701c3`; F2 was
+this DoD line's own disease one layer down — the new failure logs carried `reason` (the generic
+label) but dropped `guidance` (the SPECIFIC cause, e.g. the exception text). `SignalingSendResult`
+now declares `guidance` and all five branching failure logs thread it; asserted in the seal test.
+F3 noted for follow-up, not owed: `dispatchManifestPoll`'s best-effort poll logs nothing per failed
+attempt (designed interval retry; a dead stream flips status and the loud reconnect path takes over).
+**Declared honestly:** the `trust_signal_ack` branch has no in-process test — reaching it needs the
+full trust-signal path; the reviewer notes an inverted branch would survive the suite. The lint rule
+pins that the result is consumed, not what the branch does. Accepted as proportionate for an
+observability fix; a follow-up test can ride any future trust-signal work.
+
+**Gates.** 1913 passed, lint (rule active), typecheck, build.
+
+**Remaining from the phantom-session plan: D2 only** (`DOD-DIR-FAILCLOSED-1`, trustless-cello) — the
+directory never signs an endpoint-less assignment; add `session_offer_reject` to the DECODER
+allowlist (`decodeInboundSignalingFrame`, per D1-review F2), resolve the offer waiter on it; 3-region
+deploy, batch with pending directory work.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

@@ -397,7 +397,15 @@ and they correlate one-to-one.
   **Fix the class, not the sites:** a lint rule banning a bare `await sendRaw(` whose result is unused, or
   a `sendRawOrThrow` for callers that want the exception. Red-first, and **drive the fake from the
   resolve-`{ok:false}` contract, never a throw** — a fake that threw is exactly what let this hide.
-  Not launch-blocking (an observability lie, no data loss), but it has already misled a debugger once. — ❌
+  Not launch-blocking (an observability lie, no data loss), but it has already misled a debugger once. —
+  🟡 built + reviewed + merged to cello-client main (`5156189` + `2e701c3` review fixes, 2026-07-10;
+  unit-reviewer: SPEC FAITHFUL. All three sites branch on `res.ok`; the LINT rule flagged exactly the
+  three known sites pre-fix and now also bans the void-wrapped/bare-floating shapes and covers
+  `sendSignalingFrame`; `guidance` (the specific cause) threads into every failure log — review F2).
+  Declared gap: the `trust_signal_ack` branch has no in-process test (needs the full trust-signal
+  path); the lint rule + the two tested sites pin the shape. ✅ when it rides a published daemon.
+  Follow-up noted, not owed here: `dispatchManifestPoll`'s best-effort poll logs nothing per failed
+  attempt (designed retry; the reconnect path is the loud signal). — Entry 82
 
 > **Triage:** the trigger is connecting to an agent that just started — a first-connect race, and the
 > launch pitch is "two agents connect." The initiator is told the counterparty may be offline when it
