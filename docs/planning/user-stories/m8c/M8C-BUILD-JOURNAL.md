@@ -4015,6 +4015,70 @@ the 3-region deploy is Andre's call. Partial work is parked in a `trustless-cell
 
 ---
 
+### 2026-07-10 — Entry 84: 🏁 DOD-UNREAD-1 and DOD-LOGOUT-WAIT-1 both LIVE-PROVEN
+
+Run against the **published, promoted binaries** on Andre's machine — `daemon@0.0.43`, `cli@0.0.41`,
+`connect@0.0.63`, all on `latest` — not a dev build.
+
+**DOD-UNREAD-1 — the two messages that could not be read.** `5749859a…` arrived 2026-07-07, `3d3311c8…`
+arrived 2026-07-08. Both had been counted as unread and been unreadable ever since. Before:
+
+```
+total_unread: 2
+```
+
+Then, on the fixed daemon:
+
+```
+cello_receive { since_seq: -1 }  5749859a…  → { sequence: 0, content: "Dispatched.",                    from: null }
+cello_receive { since_seq: -1 }  3d3311c8…  → { sequence: 0, content: "Agent is currently away. ...",   from: null }
+total_unread: 0
+```
+
+**Cleared BY DELIVERY, not by hiding** — the acceptance condition. `from: null`, never the string
+`"unknown"`. And the plain (no `since_seq`) receive now answers honestly:
+
+```
+{ ok: false, reason: "session_not_live",
+  guidance: "This session exists only as a durable transcript ... Read it with cello_receive { since_seq }" }
+```
+
+`session_not_found` was a lie; `session_not_live` is not. ✅
+
+**DOD-LOGOUT-WAIT-1 — proved itself on the first live use, unprompted.**
+
+```
+cello logout   →  "Shutting down the daemon…"   "Daemon stopped."
+cello login    →  "Daemon started."             (NOT "Daemon already running.")
+```
+
+That is exactly the sequence that failed this morning. ✅
+
+**The bug's real cost, discovered while fixing it.** The old `logout` (0.0.38) printed "Daemon stopped."
+for pid 97959 while pid **76581 kept running** — spawned by an earlier broken restart, holding no lock, so
+no `cello` command could ever find it. **Two daemons, one SQLite database**, which is precisely the
+orphan-process corruption hazard `CLAUDE.md` warns about. Both commands printed exactly what an operator
+would want to see. It needed a manual `kill 76581`.
+
+**A publishing defect this exposed, and it is mine.** `/cello-publish` claims the CDN dist-tag lag "never
+blocks the operator install anyway, because `cli` pins `daemon` at an exact version." **That is false.** The
+lag does not affect the transitive daemon — it affects resolving `cli@latest` itself. Andre ran
+`npm i -g @cello-protocol/cli@latest` inside the lag window and installed **`cli@0.0.38`**, which correctly
+pinned `daemon@0.0.41`. Both a version behind; none of the day's fixes present. The skill's reasoning
+protects the wrong dependency edge. Worse: the verify loop printed `… CDN lag …` three separate times today
+and I read it as cosmetic each time. It was telling us the install would be stale.
+
+Remedy: install exact versions (`npm i -g @cello-protocol/cli@0.0.41`), which is lag-proof. To be fixed:
+`scripts/promote-latest.sh` should poll until `latest` actually resolves to the promoted version before
+reporting success, and the skill's false claim must be corrected.
+
+**Thread of the day.** `sendRaw` logged "sent" having only *called* a function that fails by resolving.
+`logout` printed "Daemon stopped." having only *written* a shutdown request. Its own timeout branch would
+have printed success having only *given up*. The directory FROST-signs an assignment having only *timed out*
+(D2, unbuilt). Four layers, one habit: **reporting the intent rather than the outcome.**
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
