@@ -396,6 +396,44 @@ to contacts. But **accepting a session already adds the sender as a contact** (C
 name at that same instant completes a deliberate act already taken, rather than adding a new one. That
 clause is what this design changes.
 
+### Live evidence for C — observed 2026-07-10, after MONIKER-6 and HERMES-3 shipped
+
+`Ms_Chelly` and `CELLO_Support` had by then exchanged **nine sealed sessions** in one morning. Neither
+could name the other. Andre noticed both symptoms and read them as two bugs; they are one gap, and C
+closes both.
+
+**Symptom 1 — the initiator sees a fingerprint.** Ms_Chelly's doorbell for an incoming message from
+CELLO_Support read `📩 CELLO — agent 2ee9bed9… sent a message`, on sessions **she** had opened.
+
+Not a defect. The offered name rides on the **offer**, so only the *receiver* of a session request ever
+gets one. The same two agents, same daemon, opposite roles, opposite (and correct) results:
+
+| who opened the session | what Ms_Chelly's doorbell says |
+| :-- | :-- |
+| CELLO_Support initiated | `"CELLO_Support" (self-declared)` — she holds his offered name |
+| Ms_Chelly initiated | `agent 2ee9bed9…` — nobody offered her anything |
+
+That asymmetry *is* `DOD-MONIKER-6` behaving. Before fix A, the initiator read the box written for the
+receiver and was shown **her own name** as the sender.
+
+**Symptom 2 — the marker never goes away.** CELLO_Support's doorbell kept rendering
+`"Ms_Chelly" (self-declared)` after every one of those nine sessions, because `whoKnown` is true **only**
+when the operator has set a local pet name, and `MONIKER-2` AC3 forbids auto-writing the offered name to
+contacts. The promotion is a manual act: `cello_contact_set_moniker`.
+
+**Both symptoms have one cause: nothing ever learns anything.** The offered name is read from a box during
+the session and thrown away. So the receiver sees a name and never keeps it, and the initiator has no name
+at all. `CELLO_Support` was in Ms_Chelly's address book from 2026-07-05 with `moniker: null` — the contact
+existed, the name existed on the wire, and the two were never joined.
+
+**Under C, one change removes both.** The receiver learns `Ms_Chelly` on the first accept, so his doorbell
+reads `Ms_Chelly` plain from then on — it is now *his* pet name, not her claim. And because CELLO_Support
+had offered his own name repeatedly, Ms_Chelly would have learned `CELLO_Support` on her first accept and
+would see it plain **when she initiates too**, where no offer exists to fall back on.
+
+The interim workaround, and the manual version of exactly what C automates: run
+`cello_contact_set_moniker` once per contact.
+
 ## Related Documents
 
 - [[2026-07-08_inbound-state-matrix|Inbound State Matrix]] — the parent design; Decision #3 and the
