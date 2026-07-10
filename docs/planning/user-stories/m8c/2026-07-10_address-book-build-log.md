@@ -62,6 +62,19 @@ one of init's two migrations; its legacy replay now runs BOTH in order (faithful
 - **DEC-AB-2:** the Step1→Step3 tier=UNKNOWN window is a source-tree artifact only (publish lands after
   the whole unit, Ms_Chelly's) — no production daemon sees it, so no window backfill needed unless that
   publish assumption changes.
+- **DEC-AB-3 (from DOD-TIER-4 review F1, 2026-07-10 — engagement-promotes, NOT accept-promotes):**
+  DOD-TIER-4 AC3 and design §1a say "on accept → KNOWN." The implementation instead stamps KNOWN on
+  ENGAGEMENT (a committed reply into an accepted inbound session, daemon.ts:5658, provenance 'accepted';
+  or an outbound initiate, or an explicit add) — a mere transport-accept adds nothing. **Decision:
+  keep engagement-promotes** (the tighter, security-conservative reading), for three reasons: (1) it
+  preserves CC-1 (BUILD-JOURNAL Entry 50, 2026-07-07, live-verified in the A/B run: a stranger who
+  merely knocks is not promoted); (2) the standing overnight rule is "take the tighter/fail-safe option
+  and flag" — accept-promotes would auto-grant KNOWN reachability (richer away text, larger caps) to
+  anyone who opens a session, a looser posture; (3) design §1a's premise sentence ("accepting a session
+  today adds the sender") was already FALSE when written (CC-1 removed add-on-accept three days
+  earlier), so §1a cannot be read as authoritative on the accept-vs-engage seam. **Flag for Andre:** if
+  he intended literal add-on-accept-at-KNOWN (with the "operator is then offered the upgrade" prompt),
+  that is a small follow-up unit — say so and it will be built. Until then the tighter reading ships.
 
 ## Step 2 — DOD-TIER-2 / DOD-TIER-3: tiered bounds + blocked — ✅ DONE (green + reviewed)
 
