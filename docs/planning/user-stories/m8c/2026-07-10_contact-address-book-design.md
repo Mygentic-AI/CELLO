@@ -91,14 +91,27 @@ orthogonal, applies to everyone always, and never appears in the matrix.
 ⚠️ **`checkUnknownSenderAcceptanceBound` currently reads "Known contacts are exempt entirely (bounded only
 by disk)."** That is the exact shape INV-TIER-BOUND forbids. Fix when the tier lands.
 
-### 1a. OPEN — what tier does an accepted stranger get?
+### 1a. DECIDED — an accepted stranger becomes `known`, and is offered the upgrade
 
-Accepting a session today adds the sender to `contacts`, which auto-accepts them forever after. Under the
-tier, is an accepted stranger `known` or `whitelisted`?
+**Andre, 2026-07-10: Option 3.**
 
-`known` is the matrix's intent and tightens behaviour: one accepted session is no longer a standing
-invitation. `whitelisted` preserves today's behaviour and buys nothing. **It is a behaviour change for
-existing installs. Andre's call.**
+Accepting a session today adds the sender to `contacts`, which auto-accepts them forever after. That
+conflates **"I answered your call"** with **"I gave you my keys"** — and the conflation is invisible: nobody
+sees the moment a one-off conversation became a standing invitation. The cost of a mistaken accept is
+unbounded future access, granted silently.
+
+- **On accept → tier `known`.** They reach you when you are attended; they get the answering machine when
+  you are away; they get a `Generic Reject` when you are offline. Exactly the parent matrix's
+  `Known (Neutral)` row.
+- **The operator is then offered the upgrade**, explicitly:
+  `Accepted. Add Alice to your whitelist so she can reach you when you're away?  cello_contact_set_tier …`
+- **Existing rows migrate to `whitelisted`**, preserving today's behaviour. Silently revoking access that
+  people already rely on is a worse failure than grandfathering a permissive default for a handful of
+  contacts. The grandfathering is honest: they can be listed and demoted at leisure.
+
+The parent matrix already assumes this split — it reserves the relay mailbox for `Whitelisted` and `VIP`,
+and gives `Known (Neutral)` a `Generic Reject` when the receiver is offline. **Accepting a session was
+never meant to mean whitelisting.**
 
 ---
 
@@ -308,7 +321,6 @@ above about signals was derived from the wire semantics, not from those docs.
 
 ## 6. What is NOT decided
 
-- **1a** — the tier an accepted stranger receives (`known` vs `whitelisted`). Behaviour change; Andre's call.
 - **The `trust_signals` / `attestations` shape** — pending the doc read (§5).
 - **`tier` needs somewhere to persist per-agent policy**, which is `DOD-CONFIG-1` (❌). The column can land
   without it; the *policy* that reads it cannot.
