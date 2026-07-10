@@ -108,12 +108,34 @@ same gate as F1 HIGH — already fixed by the time the review landed.)
 
 **Gate:** daemon 767, workspace 1975 pass; lint, typecheck, build clean.
 
-## Step 3 — DOD-TIER-4 / CONTACT-VIEW-1 / RENAME-1: address book + Option C — ⏳ NEXT (red)
+## Step 3 — DOD-TIER-4 / CONTACT-VIEW-1 / RENAME-1: address book + Option C — 🟡 CODE DONE
 
-Design-significant (Option C rename). Design note staged (scratchpad step3-design-note.md). Hook points:
-isContact→isAutoAccept(≥WHITELISTED)/isKnown(≥KNOWN); accept/initiate→KNOWN (DEC-AB-1: explicit add→KNOWN
-too); cello_contact_set_tier + list JOIN (sealed count, last-spoke); rename detection at the offer-seen
-point (daemon.ts:4653) → last_offered_moniker + INBOX notice (NOT a real-time push), idempotent.
+Split into three review-units. Commits: TIER-4 `cfc0783` + fixes `c2bef79`; CONTACT-VIEW-1 `b539bd0`;
+RENAME-1 `2886c65`.
+
+- **DOD-TIER-4 — ✅ done + reviewed.** isContact split into isKnown(≥KNOWN, the away-wording site) /
+  isAutoAccept(≥WHITELISTED, the LEAVEMSG seam). addContact gained an explicit `tier` (default UNKNOWN
+  floor); the 3 creation paths pass KNOWN (initiate/engage/explicit-add). Review: F1 → DEC-AB-3
+  (engagement-promotes, journaled); F2 → end-to-end KNOWN assertions for all 3 paths; F3 → addContact
+  throws on out-of-range tier. Gate: daemon 777.
+- **DOD-CONTACT-VIEW-1 — ✅ done (3b review in flight).** cello_contact_set_tier (validates 0..4, emits
+  contact.tier.changed) + MCP tool + CLI `cello contact tier`. listContacts extended with a read-side
+  LEFT JOIN: tier, provenance, sealed-session count, last-spoke — per-agent scoped, no-sessions=never.
+  Corrected the stale "exempt from screening" MCP descriptions.
+- **DOD-RENAME-1 — ✅ done (3b review in flight).** Option C: contact_rename_notices table +
+  recordOfferedMoniker (at the offer-SEEN point, AFTER the acceptance bound — so a BLOCKED/over-cap
+  sender can't manipulate the rename baseline; verified secure) / getRenameNotices / clearRenameNotice.
+  Notices surface via cello_check_notifications (INBOX, not a push), rendered as an untrusted quoted
+  claim; cleared on set_moniker (adopt) or remove. Local pet name never overwritten (AC2). 7 manager
+  tests + an end-to-end integration.
+
+Gate at RENAME-1 commit: daemon 785, workspace 1993 pass; lint, typecheck, build clean. 3b (CONTACT-VIEW-1
++ RENAME-1) awaiting the Fable-5 review; TIER-4 already reviewed.
+
+## Step 4 — DOD-SETTINGS-1 / TIER-BOUNDS-SETTINGS / AWAY-TIER-1: settings + away messages — ⏳ NEXT
+
+Daemon-side per-agent settings store (SQLCipher, agent_id-keyed, NOT M9-CFG-001); make the bounds grid
+settings-overridable (reject Infinity/negative); per-tier + per-contact away messages, most-specific-first.
 
 ## Related
 - [[2026-07-10_address-book-implementation-spec]] — the spec (authority).
