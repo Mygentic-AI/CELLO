@@ -92,12 +92,21 @@ wipe.
 
 ## Acceptance criteria
 
-- **AC1 — WIRE PROOF (do this first, it gates everything).** Prove `agent_name` never crosses the wire.
-  Grep every frame encoder/decoder (`core/transport/src/signaling-manager.ts`, `core/transport/src/node.ts`,
-  `core/protocol-types/src/*.ts`, the directory's `directory-frames.ts`) and every CBOR-encoded payload:
-  `agent_name` / `agentName` must appear in **zero** wire structures — only the pubkey and `session_id`
-  identify parties on the wire. A test asserts it (snapshot of encoded frames contains no agent-name
-  field). *If this fails, the whole "client-only" premise is wrong and STOP — re-scope.*
+- **AC1 — WIRE PROOF, NETWORK-scoped (do this first, it gates everything).** Prove `agent_name` never
+  crosses a **network** frame — the p2p signaling protocol and the directory protocol. Grep every network
+  frame encoder/decoder (`core/transport/src/signaling-manager.ts`, `core/transport/src/node.ts`,
+  `core/protocol-types/src/*.ts`, the directory's `directory-frames.ts` / `directory-types.ts`) and every
+  CBOR-encoded network payload: `agent_name` / `agentName` must appear in **zero** of them — only the
+  pubkey and `session_id` identify parties over the network. A test asserts it, named for the network
+  scope. *If this fails, the "client-only, no directory desync" premise is wrong — STOP and re-scope.*
+  **Explicitly OUT of scope: the local `daemon↔gateway↔MCP-shim` IPC** (`core/gateway/src/protocol.ts`,
+  `types.ts`, `server.ts`, `client.ts`; adapter-claude-code `lock-file.ts`, `channel-params.ts`), where
+  `agent_name` is pervasive and **correct** — it is one-machine, one-operator addressing/display that no
+  peer or directory ever sees (`cello_use_agent { name }`). It is safe there for a structural reason worth
+  the test's rationale: local IPC resolves **only active** agents, and the partial unique index makes
+  active names unique — so the retire-reuse ambiguity that poisons the six session tables (which keep
+  *retired* rows) cannot arise on the IPC path. The defect is specifically that the tables join on a name
+  *across the retired boundary*; IPC never crosses it.
 - **AC2 — full transactional table rebuild (NOT a shortcut).** `agent_name` is in all six composite PKs,
   and SQLite cannot alter a PK, so each table is rebuilt: create the new table keyed on `agent_id`,
   `INSERT INTO new SELECT …` copying every row with `agent_id` backfilled from the local `agents` table
