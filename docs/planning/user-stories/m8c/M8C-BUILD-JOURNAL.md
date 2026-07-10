@@ -3954,6 +3954,67 @@ deploy, batch with pending directory work.
 
 ---
 
+### 2026-07-10 — Entry 83: ✅ DOD-LOGOUT-WAIT-1 — `logout` stopped lying about a daemon that was still dying
+
+**Found live by Andre**, mid-milestone, running the one command our own docs tell every operator to
+run. Inserted before D2 at Ms_Chelly's call. cello-client main = **`57e6151`** (`167bb49` unit +
+`57e6151` review fixes).
+
+**The bug, as a producer/consumer chain.** `cello logout && cello login` printed `Daemon already
+running.` and left the operator logged **out**. `logout` returned the instant the shutdown request was
+*written*; `connectOrStart` then read a still-alive pid and a still-connectable socket and correctly
+concluded a daemon was up, so it spawned nothing; the daemon finished dying a moment later. **The
+consumer was right and was being lied to.** The fix belongs in the producer, and nowhere else.
+
+**This is [[M8C-DEFINITION-OF-DONE]]'s `DOD-SENDRAW-1` again, one layer out.** There, a send that never
+left the machine logged `.sent`. Here, a daemon that is still running prints `Daemon stopped.` Same
+defect class — *report success on the strength of having asked, rather than of the state being true* —
+in a completely different subsystem, found the same day. Worth naming as a pattern, not a coincidence.
+
+**⚠️ The "workaround" is not a fix.** Running the two commands on separate lines only works because
+human typing outlasts the shutdown; `cello logout; cello login` in a script races identically. Andre's
+own transcript proves it: his follow-up `cello logout` printed `No daemon running.` — the daemon had
+already died from the *first* command. Time fixed it, not the newline. Anyone tempted to close this by
+documenting a delay should reread that.
+
+**What shipped.** `logout` prints `Shutting down the daemon…` immediately (Andre's addition — the
+operator must see the command activate before the pause), then polls (50 ms, 5 s bound) until the
+daemon is genuinely gone, and only then prints `Daemon stopped.` On timeout it **fails loud**: exit 1,
+naming the pid and socket path with recovery guidance, never the success line. A stale lock (dead pid)
+is reported and removed. The wait predicate is `pid dead OR (lock gone AND socket refuses)` — a
+declared deviation from the spec's literal `AND`, because it mirrors exactly what `connectOrStart`
+consults, so a completed logout **guarantees the next login starts fresh in every topology** (the
+in-process test daemon shares the CLI's pid and can never die; the literal AND was both untestable and
+wrong there). The reviewer verified that reasoning against `connectOrStart`'s actual branches and
+against the daemon's `stop()` ordering (lock removed *after* the IPC server closes).
+
+**AC2 is Andre's transcript verbatim, and the first version of it was a hollow test.** An in-process
+daemon dies too fast to reproduce the race — that test passed *before* the fix. Rewritten to spawn the
+real built daemon binary (a separate process, as production), it went red with exactly the production
+symptom. **A test that cannot reproduce the bug is not a red test.**
+
+**Review (cello-unit-reviewer): SPEC FAITHFUL / no silent fallbacks / one blocking hollow-test gap.**
+F1 (blocking, fixed): the fail-loud timeout branch had **zero coverage** — an implementation whose
+timeout printed `Daemon stopped.` exit 0, the exact lie this unit exists to kill, passed the whole
+suite. The wait bounds are now injectable and a fake daemon that acknowledges-but-never-dies pins the
+branch. Also fixed: F2 the spawned daemon leaked from AC2 on assertion failure; F3 the stale-lock
+message claimed a removal it hadn't verified (this unit's own lie, in miniature); F4 the socket probe
+is now raced against a 500 ms timer (`connectToDaemon` has no connect timeout, so a hung probe could
+stall the poll past its deadline); F5 a lock re-acquired by a *different* pid now counts as gone. Plus
+an anti-sleep pin: a flat `sleep(5s)` hollow would have passed every test; AC1 now asserts logout
+returns well inside the bound.
+
+**Sweep (asked for by the spec):** `login` already polls the socket until the spawned daemon accepts,
+so `Daemon started.` is true when printed. Every other command reports the daemon's synchronous reply.
+`logout` was the only lifecycle command returning before the state it claimed.
+
+**Gates.** 1918 passed, lint, typecheck, build.
+
+**Next:** D2 (`DOD-DIR-FAILCLOSED-1`) — the last unit of the phantom-session plan. Code + tests only;
+the 3-region deploy is Andre's call. Partial work is parked in a `trustless-cello` worktree.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

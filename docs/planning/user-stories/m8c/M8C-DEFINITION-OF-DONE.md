@@ -407,6 +407,22 @@ and they correlate one-to-one.
   Follow-up noted, not owed here: `dispatchManifestPoll`'s best-effort poll logs nothing per failed
   attempt (designed retry; the reconnect path is the loud signal). — Entry 82
 
+- **DOD-LOGOUT-WAIT-1** (found live by Andre 2026-07-10; done BEFORE D2) — **`cello logout && cello
+  login` leaves the operator logged OUT while printing "Daemon already running."** `logout`
+  (`core/cli/src/commands.ts`) returned the instant the shutdown request was *written*; `connectOrStart`
+  (the consumer — correct) then saw a still-alive pid + connectable socket and reported
+  `alreadyRunning`, spawning nothing; the daemon finished dying a moment later. **"Daemon stopped." for
+  a daemon that is still running is `DOD-SENDRAW-1`'s lie at the CLI surface.** ⚠️ The separate-lines
+  "workaround" is not a fix — it only works because human typing outlasts the shutdown; `logout; login`
+  in a script races identically. Fix belongs in the PRODUCER (`logout`), never the consumer. —
+  🟡 built + reviewed + merged to cello-client main (`167bb49` + `57e6151` review fixes, 2026-07-10;
+  unit-reviewer: SPEC FAITHFUL, both declared deviations verified sound against `connectOrStart`'s
+  actual branches). logout now prints "Shutting down the daemon…" immediately, polls (50 ms, 5 s bound)
+  until the daemon is genuinely gone, prints "Daemon stopped." only then, and on timeout **fails loud**
+  (exit 1, names pid + socket + guidance, never the success line); a stale lock is reported and removed.
+  Review F1 was blocking: the fail-loud branch had zero coverage — a timeout printing the success line
+  passed the suite. ✅ when it rides a published cli. — Entry 83
+
 > **Triage:** the trigger is connecting to an agent that just started — a first-connect race, and the
 > launch pitch is "two agents connect." The initiator is told the counterparty may be offline when it
 > IS online. D3 is small, local, needs no deploy, and removes the phantom session; do it regardless of
