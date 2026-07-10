@@ -459,10 +459,16 @@ changes (it keys on `k_local_pubkey`, has no `agent_name` — consistent with th
 policy). The retire-reuse orphans need no purge: on an `agent_id` join a new same-named agent simply never
 matches them.
 
-- **DOD-AGENT-ID-JOINKEY-1** — carry `agent_id` into the six tables as the join key; `agent_name` becomes
+- **DOD-AGENT-ID-JOINKEY-1** — carry `agent_id` into the tables as the join key; `agent_name` becomes
   display-only. AC1 wire-proof gates it. Client-side, no deploy. **Blocks the address-book tables** — they
-  must be born on `agent_id`. Not launch-blocking (trigger is retire+recreate-same-name on one machine),
-  but contagious and cheapest before more tables land on it. — ❌
+  must be born on `agent_id`. — ✅ **BUILT + REVIEWED + SHIPPED** (cello-client `173d34f`, published
+  `daemon@0.0.45` / `cli@0.0.43`, tag `v0.0.93`). AC5 found the **SEVENTH** table (`retry_queue`) — all
+  seven re-keyed in one transactional rebuild; `retry_queue`'s cross-agent collision→loss fixed; agent
+  rename unblocked. Reviewer caught a real regression (a retired agent's kept session row made the
+  half-open reaper throw `agent_id_unresolved` for the whole daemon) — fixed with an INNER JOIN excluding
+  retired agents, red-first. Full suite 1946 green, verified independently. **Not launch-blocking; not yet
+  live-proven** (retire-reuse red test is the proof — a live retire+recreate on Andre's machine would
+  confirm, but the trigger is disruptive and the test is thorough).
 
 ## 🔴 Daemon singleton — multiple daemons, one database (2026-07-10)
 

@@ -4182,6 +4182,63 @@ badge that could never clear. And the error blamed the wrong subsystem.
 
 ---
 
+### 2026-07-10 — Entry 87: DOD-AGENT-ID-JOINKEY-1 shipped — seven tables re-keyed to agent_id
+
+The biggest and most dangerous unit of the day, by CELLO_Support over CELLO. `agent_name` was the mutable,
+reuse-after-retire display label that the M7 session tables joined on; `REMOVE-001` added the stable
+`agent_id` and half-migrated. This finished it. Published `daemon@0.0.45` / `cli@0.0.43` (tag `v0.0.93`).
+Client-side, no directory, no deploy. Verified independently: full suite **1946 green**, lint/typecheck/
+build clean, all seven tables carry `agent_id` in the shipped code.
+
+**AC5 found the seventh table.** The plan said six; CELLO_Support enumerated from the live schema (not the
+doc) and found **`retry_queue`** — a child `REMOVE-001` skipped along with the rest (chronology proved it:
+`retry_queue.agent_name` 2026-06-22, `REMOVE-001` 2026-06-26). It carried a HIGH latent bug the six did
+not: `UNIQUE(session_id, nonce_hex)` with no agent, so two local agents sharing a `session_id` with
+identical content collided, the second insert was **swallowed** and lost on restart — silent cross-agent
+data loss, reachable now (Ms_Chelly ↔ CELLO_Support). Re-keying made `UNIQUE(COALESCE(agent_id,''),
+session_id, nonce_hex)` fall out; the swallowing catch now throws.
+
+**Migration shape.** All seven rebuilt in one atomic `BEGIN…COMMIT` (SQLite DDL is transactional — a crash
+rolls back). Backfill from the local `agents` table; aborts loud on name-ambiguity or orphan rows; NULL
+`agent_name` (legacy direct-retry rows) stays NULL. `#requireAgentId` is the single name→id boundary and
+throws on an unresolvable name. ~55 SQL sites moved; a scanner caught 15 mismatched binds no type-checker
+would. Idempotent; fresh schema == migrated schema.
+
+**The reviewer earned its keep — one real regression, caught before shipping.** Retiring an agent that
+still owned an active/interrupted session row made `cello_status` throw `agent_id_unresolved` for the
+**whole daemon**: `removeAgent` keeps the row for accountability, `getSessionsByStatus` LEFT-JOINed so the
+retired agent's row surfaced, and the half-open reaper resolved that retired name via `#requireAgentId` →
+unguarded throw. The AC4 test missed it because it never wrote a sessions row — the exact class of gap I'd
+flagged to CELLO_Support earlier (a red test must fail for the RIGHT reason and exercise the real path).
+Fixed with `getSessionsByStatus` INNER JOIN `agents WHERE state != 'retired'` — the runtime/reaper surface
+only sees active agents' sessions, which is correct (a retired agent isn't resumable). Red-first repro in
+`persist-remove-001`. A subagent traced it to the author before the reviewer independently confirmed.
+
+**AC1 was corrected mid-flight — a false, dangerous acceptance criterion.** My original AC1 said
+"`agent_name` appears in zero wire structures." FALSE: the name crosses the wire as the default outbound
+moniker (`moniker ?? agent_name`), observed live all session as `offered_moniker`. A diligent implementer
+taking it literally would have "fixed" the proof by severing the moniker fallback — deleting a shipped
+feature to satisfy a mis-worded AC. **A wrong AC is worse than a missing one; it recruits a careful person
+into breaking something.** Reworded: (a) no frame declares a field named `agent_name`; (b) the name reaches
+the wire only as `offered_moniker`, a self-declared display label, asserted POSITIVELY so nobody severs it.
+
+**Rename inherits a wire-visible consequence** (recorded against the rename story, not this unit): because
+`agent_name` is the default outbound moniker, a rename changes the label counterparties see — a wire-visible
+effect of a purely local op. Rename must decide: re-declare to the world, or pin the old name as an explicit
+moniker to keep the outward label stable.
+
+**Migration runs on Andre's live DB** on his next `cello login` after promotion — atomic, abort-on-ambiguity,
+and he has said he would wipe the SQLCipher DB without loss, so the blast radius is one wipeable machine.
+Doing it now, at one operator, is the cheapest and safest moment — every future operator makes the rebuild
+more dangerous. Not yet live-proven (the retire-reuse red test is the proof; a live retire+recreate is
+disruptive and the test is thorough).
+
+**This unblocks the M10 trust-signal storage** ([[M10-TRUST-SIGNAL-STORAGE-AND-CREATION]]) — its
+`trust_signals` table FKs to a per-agent contact row on `agent_id`, and could not be designed until this
+landed.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
