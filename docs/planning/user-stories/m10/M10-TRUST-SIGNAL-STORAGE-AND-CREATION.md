@@ -62,8 +62,9 @@ description: >
 4. The **endorsement callback/referral loop** ("quote code 12345, my agent confirms you read it") — a
    named Class-2 capability, **parked** (design later, not launch).
 
-**§14.1–14.3 are now resolved** (2026-07-10, below). The remaining §14.4–14.10 are decided during story
-writing — none may be silently defaulted.
+**§14.1–14.10 are now resolved** (2026-07-10, below) — the design is settled; only per-type / per-story
+specifics (the `SignalRequirementPolicy` field set, v1 payload schemas, TTL values, rate limits) remain
+for story writing.
 
 ---
 
@@ -544,37 +545,46 @@ may be silently defaulted.
   built for commerce. PSI **discovers which** endorsements to reveal; it never **replaces** the rich blob.
   Full model in §11.
 
-### Must be decided during story writing
+### Resolved 2026-07-10 (design settled; per-type / per-story specifics noted)
 
-- **14.4 — The recipient's policy layer.** §9 leans on "evaluate against my policy" throughout,
-  but the policy is undesigned: the `SignalRequirementPolicy` shape, the round-2 demand-bundle
-  format, and who evaluates — deterministic code, LLM, or the floor+discretion split §11 uses for
-  PSI. Without this, the four flows in §9 cannot actually run.
+- **14.4 — Recipient policy layer. RESOLVED: floor + discretion.** A **deterministic, non-bypassable code
+  floor** (an unknown must clear screening and a minimum-signal bar; hard caps) + **LLM/config discretion
+  that may only make acceptance MORE restrictive** — same shape as PSI policy (§11) and `INV-TIER-BOUND`.
+  The round-2 demand-bundle is a **declarative list** (`need: profile_url, ≥1 endorsement scoped to X,
+  PSI≥1`); the deterministic floor gates, then the LLM reasons over endorsement *scope* for graduation.
+  Per-story: the concrete `SignalRequirementPolicy` field set.
 - **14.5 — Chokepoint enforcement mechanics. Narrowed by 14.1:** the write API requires a *signed
   submission from an authorized issuer* (portal key, or the endorsement-intake role's capability). What
   remains is defining the authorized-issuer key set and the capability format — not *whether* enforcement
   exists.
-- **14.6 — Subject key rotation / succession.** `subject` is hash-bound to a pubkey; rotate or
-  succeed the key and every signal is about the old identity. Re-issue everything, or a succession
-  link the recipient follows? Reconcile with the succession doc's rule that Class 1/2 do not
-  transfer.
-- **14.7 — Freshness semantics under node failure.** `INV-RECEIPT-FRESH` says "re-checked on use"
-  with no cadence defined (per session? TTL?), and no behaviour defined when the directory is
-  unreachable: fail-open contradicts the invariant, fail-closed contradicts availability-as-
-  first-class. Needs an explicit call.
-- **14.8 — Type registry governance + first payload schemas.** The registry carries retirement
-  and class derivation (§3, §4) but has no home — code, directory, or protocol constant? Who
-  admits a new type? And no v1 payload is defined for even the launch types (`linkedin`,
-  `endorsement`, `connection_bond`).
-- **14.9 — Wallet loss / backup.** The holder's plaintext blobs exist nowhere else — the directory
-  has only hashes. Lose the SQLCipher DB, lose your reputation. Is `trust_signals` in the existing
-  backup/restore path, and is that acceptable as the *only* recovery story?
-- **14.10 — Smaller but real.** Per-type validity windows and who re-verifies at expiry (re-run
-  OAuth?); whether Class 3 source data actually exists directory-side to compute from (seal
-  records — probably yes, verify); backfilling the four already-live M8 signals (WebAuthn / TOTP /
-  phone / email) into envelopes; concrete rate limits for the endorsement-intake role; and stating
-  out loud that a subject can silently discard unflattering endorsements (believed yes by design —
-  selective disclosure — which means all presented signals are effectively positive-only).
+- **14.6 — Key rotation / succession. RESOLVED: defer to the succession-doc rule.** Class 1/2 do **not**
+  transfer across a key succession — under a new key you re-establish identity signals and re-collect
+  endorsements; old signals stay valid-about-the-old-key and don't carry over. **No succession-link
+  following at launch** (a forged succession = a stolen reputation — not worth the attack surface for a
+  rare flow). Revisit Class 3 (track record) transfer with the succession doc if it comes up.
+- **14.7 — Freshness under node failure. RESOLVED: fail-soft, tier-gated + TTL.** A verification is fresh
+  within a **TTL** (re-check on use only past it — that is the cadence). Past TTL **and** the directory
+  unreachable (all/quorum nodes down — rare, since any node can answer): **do not silently accept, do not
+  hard-reject** — disclose the staleness to the deciding agent and let **tier policy** decide. An
+  established `whitelisted`/`vip` contact proceeds on a stale-but-previously-valid signal; an `unknown`
+  presenting only unverifiable signals is refused. Honors both `INV-RECEIPT-FRESH` (stale is never treated
+  as fresh — it is disclosed) and availability-as-first-class (established contacts survive an outage).
+  Per-story: the TTL value per class.
+- **14.8 — Type registry. RESOLVED: code-level versioned protocol constant.** The registry (retirement +
+  class derivation) is a **shipped, versioned shared component** — never directory-enforced, never a DB
+  table (keeps the directory dumb, no per-operator migration; same shape as §7's byte-identical scanner).
+  Maintainers admit new types at launch; governance decentralization is Day-2. Per-story: the **v1 payload
+  schemas** for the launch types (`linkedin`, `endorsement`, `connection_bond`).
+- **14.9 — Wallet loss / backup. RESOLVED: existing backup path; bounded risk.** `trust_signals` rides the
+  existing `cello_backup` / `restore` path (another SQLCipher table). Risk is bounded by class: Class 1/4
+  are portal-**re-mintable**, Class 3 is directory-**recomputable**, so only **Class 2 endorsements** need
+  backup-or-re-request. Acceptable as the launch recovery story.
+- **14.10 — Smaller items.** **RESOLVED now: positive-only** — selective disclosure lets a subject silently
+  discard unflattering endorsements, so **all presented signals are effectively positive-only** (a stated
+  design fact). **Deferred to story writing:** per-type validity windows + who re-verifies at expiry
+  (re-run OAuth?); verifying Class 3 source data exists directory-side (seal records — probably yes);
+  backfilling the four live M8 signals (WebAuthn / TOTP / phone / email) into envelopes; concrete
+  endorsement-intake rate limits.
 
 ---
 
