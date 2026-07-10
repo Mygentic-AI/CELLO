@@ -63,10 +63,44 @@ one of init's two migrations; its legacy replay now runs BOTH in order (faithful
   the whole unit, Ms_Chelly's) — no production daemon sees it, so no window backfill needed unless that
   publish assumption changes.
 
-## Step 2 — DOD-TIER-2 / TIER-3: tiered bounds + blocked — ⏳ NEXT (red)
+## Step 2 — DOD-TIER-2 / DOD-TIER-3: tiered bounds + blocked — ✅ DONE (green + reviewed)
 
-Design note staged (scratchpad). Grid keyed by getTier; VIP finite; BLOCKED falls out as the same
-byte-identical refusal path as an over-cap UNKNOWN (no oracle). INV-TIER-BOUND / INV-TIER-SCREEN.
+**Commits:** `8040bd4` (build), `e4bb1b9` (self-found re-check fix), `0471fc0` (review fixes).
+
+**Delivered.** The binary "known contacts exempt entirely, else 3/25MB" became a tier-graduated grid:
+- `DEFAULT_TIER_BOUNDS` (contacts-tier-migration) — per-tier {maxSessionsPerSender, maxBytesPerSession}:
+  BLOCKED 0/0, UNKNOWN 3/25MB, KNOWN 5/100MB, WHITELISTED 20/500MB, VIP 50/2GB. Single source (AC4);
+  all FINITE (VIP ≠ Infinity, INV-TIER-BOUND). `tierBoundsFor` total. Legacy ABUSE_MAX_* consts now
+  DERIVE from grid[UNKNOWN] so they cannot drift.
+- `checkUnknownSenderAcceptanceBound` keys the per-sender cap on getTier. **DOD-TIER-3 falls out for
+  free:** BLOCKED cap 0 → refused via the SAME reason/path an over-cap UNKNOWN takes (no oracle). Global
+  anti-swarm cap applies only when tier === UNKNOWN.
+- Both per-session byte-cap gates use the sender's tier cap, applied to EVERY sender (contact no longer
+  exempt). `countActiveSessionsFromUnknownSenders` keys the stranger pool on `tier >= KNOWN` (≤ VIP), not
+  row-existence — a merely-recorded UNKNOWN contact no longer escapes the anti-swarm cap.
+
+**Self-found before review (`e4bb1b9`):** the SECOND byte-cap gate (post-screenInbound re-check) was
+missed by the first conversion (its log carries `recheck:true`, so the replace_all pattern skipped it) —
+it still exempted contacts. Fixed to mirror the primary gate. (The reviewer independently flagged this
+same gate as F1 HIGH — already fixed by the time the review landed.)
+
+**Review (Fable 5, on 8040bd4).** F1 (HIGH) = the re-check gate, already fixed. F2 (LOW) = two stale
+"contacts exempt" comments in the accept path → rewritten. Three test-teeth gaps closed (`0471fc0`):
+- BLOCKED real-wiring test: an injected inbound knock from a BLOCKED sender produces the refusal event
+  and NO node.created / accepted / away.response.sent / doorbell.sent / sessions row (TIER-3 AC2, and the
+  direct test for a "move away above the bound check" bypass).
+- Global-pool distinguishing tests: an UNKNOWN-tier CONTACT counts toward the pool (a KNOWN+ one doesn't),
+  and is refused with the global reason when the pool is full — red under the old row-existence query.
+- KNOWN byte cap proven behaviorally finite (100 MB prior + tip → refused) — kills a `tier>=KNOWN?Infinity`.
+
+**Gate:** daemon 767, workspace 1975 pass; lint, typecheck, build clean.
+
+## Step 3 — DOD-TIER-4 / CONTACT-VIEW-1 / RENAME-1: address book + Option C — ⏳ NEXT (red)
+
+Design-significant (Option C rename). Design note staged (scratchpad step3-design-note.md). Hook points:
+isContact→isAutoAccept(≥WHITELISTED)/isKnown(≥KNOWN); accept/initiate→KNOWN (DEC-AB-1: explicit add→KNOWN
+too); cello_contact_set_tier + list JOIN (sealed count, last-spoke); rename detection at the offer-seen
+point (daemon.ts:4653) → last_offered_moniker + INBOX notice (NOT a real-time push), idempotent.
 
 ## Related
 - [[2026-07-10_address-book-implementation-spec]] — the spec (authority).
