@@ -551,6 +551,19 @@ verified.** Remaining cross-node DoD flips are gated on other work, not on the c
 ### dev — us-east-1
 *Last deployed: 2026-06-27 (CONN-001 /manifest ALB ManifestPathRule APPLIED in all 3 regions via deploy.sh; relays redeployed in-order + re-registered)
 
+> **2026-07-10 — directory IMAGE deploy (pipeline, no CFN change).** `DOD-DIR-FAILCLOSED-1` (D2):
+> the directory never signs or distributes an assignment with an empty counterparty endpoint; on
+> offer-accept timeout OR `session_offer_reject` it returns `counterparty_did_not_accept` to the
+> initiator and sends nothing to the target. `cello-directory-pipeline` execution
+> `3a8dea65-8385-4f31-b200-a92b9441a0dc`, source rev `1ccd08a5`, **Succeeded**. Rollout `COMPLETED`,
+> `1/1` in all three regions; task definitions us-east-1 `:251`, eu-central-1 `:101`,
+> ap-northeast-1 `:92`; tasks started 12:57 / 13:02 / 13:07 CEST (after the push — the new image is
+> genuinely live). No CloudFormation stack changed, so the stack table below is unaffected.
+>
+> ⚠️ **Process note:** the directory pipeline is **path-triggered on push to `main`**. Merging
+> `packages/directory/**` IS deploying it. "Merge freely, deploy deliberately" is not currently
+> enforceable for that path.
+
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
 | cello-ecr-dev | UPDATE_COMPLETE | 2026-06-05 | OperationsAgentRepo imported via CFN resource import |
