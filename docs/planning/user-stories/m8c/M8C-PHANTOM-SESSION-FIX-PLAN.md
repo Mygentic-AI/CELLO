@@ -241,6 +241,14 @@ actually been delivered to a reader** — never by hiding them. The two real ids
 `5749859a8380d55f98fdd4436ca7ee1d` and `3d3311c867e96ff88803dce3deaf27b7`; they live on Andre's machine.
 **Prove it in a test — do not poke the live daemon.**
 
+> **⚠️ D4a's DROP is safe BECAUSE of the relay TTL — do not "optimize" the re-pull away (2026-07-10,
+> D4 verification).** A refused (orphaned) parked entry is never confirm-deleted, so it is re-pulled
+> and loudly refused on every reconnect. That retry is **bounded**: `relay-node.ts:1374` TTL-sweeps
+> parked entries (`CONTENT_STORE_TTL_MS`) whether or not the recipient reconnects — an orphan re-pulls
+> until TTL, then is reclaimed. Anyone tempted to stop the repeated warn by **confirm-deleting on
+> refusal** would turn a bounded retry into **silent data loss** (the parked copy is the only
+> redelivery source). Dedupe the log if the spam ever matters — never the retention.
+
 ---
 
 ## 4b. THE INVARIANT (hold this in review)
