@@ -2,7 +2,7 @@
 name: m10-trust-signal-storage-and-creation
 type: design
 date: 2026-07-10
-topics: [m10, trust-signals, storage, hashing, canonical-cbor, endorsement-mother, dumb-directory, scan-before-hash, supersession, extensibility, provenance]
+topics: [m10, trust-signals, storage, hashing, canonical-cbor, endorsement-mother, dumb-directory, scan-before-hash, supersession, extensibility, provenance, psi]
 status: active
 description: >
   HOW trust signals are stored, created, hashed, scanned, and verified across the three parties
@@ -37,6 +37,9 @@ description: >
   `trust_signals` table is an **optional cache**, never source of truth.
 - **Tier never auto-downgrades** — signals inform tier decisions; a revoked signal that earned a tier
   surfaces a *review prompt*, it does not silently change the tier (§9).
+- **PSI is client-side, two-party, directory-relayed** (§11) — a round-2 negotiation item (not a round),
+  one-sided output, the asker learns *which* contacts vouched, set-size is an accepted leak, terms are
+  protocol constants never per-session negotiated.
 
 **Open (flagged, not decided):**
 1. Does the **recipient re-scan**, or fully trust the creation-time scan? (§8) — leaning: trust it;
@@ -345,7 +348,73 @@ the leaky one is unnecessary.
 
 ---
 
-## 11. Invariants
+## 11. PSI — the network-graph exchange (Class 2)
+
+The endorsement-overlap signal: compute `{subject's endorsers} ∩ {evaluator's contacts}` — *"how many
+people I already trust vouch for you, and which"* — without either party revealing their full social
+graph. See [[M10-TRUST-SIGNAL-TAXONOMY]] Class 2. This section fixes the semantics and policy; the concrete
+cryptographic construction is still to be chosen (see the end).
+
+### Where it runs — client-side, two-party, never the directory
+
+- **Both clients, peer-to-peer.** PSI is a two-party computation *by definition* — there is no version
+  where one side does it alone; half the input is the other party's set, in locked form.
+- **The directory NEVER computes it.** To compute an intersection you need both sets; a directory that
+  touched both social graphs — even ephemerally, even discarding after — *is* the surveillance layer the
+  project rejects, and running a set computation violates `INV-DIR-DUMB`. Ephemerality does not rescue it:
+  *seeing* the graphs is the violation.
+- **The directory brokers + dumb-relays**, over the **existing handshake path** (no new transport). It sees
+  locked blobs (ciphertext) and metadata — that a PSI happened, and set sizes (it can count blobs) — but
+  **never the graphs, and stores nothing.** PSI is even more hands-off than a static signal: no hash to
+  check, pure pipe.
+- **Pre-session.** Runs during the brokered introduction; its result gates whether the full session forms.
+
+### The handshake — PSI is a round-2 ITEM, not a round
+
+The two-round budget (§9) counts **negotiation turns, not messages.**
+- Round 1: initiator offers signals. Round 2: the receiver sends a **bundle** of demands
+  (e.g. *"profile URL + signal X + run the endorser PSI"*); the initiator satisfies the bundle.
+- PSI's own multi-message crypto exchange runs **underneath** round 2, as transport — it does **not**
+  consume a negotiation round. Consent is a round-2 list item: the receiver proposes PSI, the initiator
+  agrees or declines in the same response.
+- **Front-loaded / one-shot.** With no round 3, the receiver declares every demand up front and cannot see
+  the PSI result and *then* re-demand. This is itself an anti-probing defence.
+
+### Fixed terms — protocol constants, NEVER per-session negotiable
+
+(Negotiating terms per exchange would need a round to converge, spilling past two — so they are global.)
+- **One-sided output.** Only the evaluator (the asker, holding contacts) learns the result. The subject
+  (holding endorsers) learns nothing about the evaluator's contacts.
+- **Granularity = WHICH.** The evaluator learns *which* of their own contacts vouched — their own contacts,
+  no leak to them beyond the fact of the vouch. The subject's **non-matching** endorsers are never revealed.
+- **Set-size = accepted leak.** The evaluator learns the subject's total endorser count (blobs are
+  countable). **Not padded** — the count is itself a trust signal (more endorsers ≈ more vouched-for), so
+  the disclosure is justified. The same count is visible to the directory-relay; accepted.
+
+### Policy — who agrees to run PSI (deterministic floor + LLM discretion)
+
+The agree/decline decision is **security-sensitive** — probing, DoS, and the counterparty's endorsement
+free-text is an injection surface. So:
+- **Deterministic code floor, non-negotiable:** rate-limit PSI per counterparty (anti-probing), tier gates,
+  set-size caps. An LLM is manipulable; it must not be able to loosen these.
+- **LLM / config discretion layers on top and may only make the decision MORE restrictive** — decline where
+  code allows, never bypass the floor. Same shape as `INV-TIER-BOUND`.
+
+### Probing defence (the killer attack)
+
+Repeated or colluding PSI runs reconstruct the subject's endorser set one intersection at a time. Defences,
+all deterministic: **rate-limit per counterparty**, the **two-round front-loading** (one shot, no adaptive
+re-demand), and **cache the result** so a repeat ask returns the same answer, not a fresh leak.
+
+### Still open
+
+The concrete **PSI construction** (DH-based, OT-based, …) is unchosen. The technique is real and deployed
+(private contact discovery, breach checking), and this section fixes what it must *deliver*; a specific
+protocol with its performance/leakage/malicious-party tradeoffs must be selected before build.
+
+---
+
+## 12. Invariants
 
 - **INV-DIR-DUMB** — the directory performs only the two hash checks (§2). Any content evaluation,
   signature logic, or schema knowledge added to the directory is a violation.
@@ -363,18 +432,24 @@ the leaky one is unnecessary.
   `trust_signals` FK.
 - **INV-RECIPIENT-STATELESS** — the recipient holds the *relationship*, not the subject's signals; any
   stored signal is an optional, freshness-re-checked cache, never source of truth (§9).
+- **INV-PSI-CLIENT-SIDE** — PSI computes on the two clients; the directory brokers/relays only, never
+  computes, never sees the graphs (§11). A directory that participates in the set computation is a
+  violation.
+- **INV-PSI-FIXED-TERMS** — PSI's disclosure terms (one-sided, which-granularity, set-size-accepted) are
+  protocol constants, never negotiated per session — negotiating them would break the two-round budget
+  (§11).
 
 ---
 
-## 12. Cross-milestone dependencies
+## 13. Cross-milestone dependencies
 
 - **Address book + `agent_id` join key.** The `trust_signals` table FKs to the recipient's contact row;
   it must be born on `agent_id` and on the address-book schema. **M10 storage cannot be designed until
   [[2026-07-10_agent-id-joinkey]] lands and [[2026-07-10_contact-address-book-design]]'s tables exist.**
 - **M9 gateway.** If recipient re-scan is adopted, the gateway needs a **no-redact, pass/block** verdict
   mode for hash-anchored content (M9-FEED-001 today is redact/allow/block/warn). Flag in both milestones.
-- **PSI** (Class 2 endorsement intersection) is its own mechanism, referenced by the taxonomy; out of
-  scope here beyond noting the endorsement's storage shape must support it.
+- **PSI** (Class 2 endorsement intersection) is now designed here — see §11 (semantics + policy). The
+  concrete cryptographic construction remains to be chosen.
 
 ## Related Documents
 
