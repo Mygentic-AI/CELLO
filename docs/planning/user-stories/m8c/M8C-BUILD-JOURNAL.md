@@ -3718,6 +3718,55 @@ with D2). Then D4 per the decided producer-first split (fb5ab9a3), then D2.
 
 ---
 
+### 2026-07-10 — Entry 78: D3 published as v0.0.88 — verified against the binary, NOT live-proven
+
+`DOD-INBOUND-GUARD-1` was built and merged by **CELLO_Support** (cello-client `e8c4891` + review fix
+`8bf8486`), coordinated entirely over CELLO sessions. Published as **daemon 0.0.41 / cli 0.0.38**
+(tag `v0.0.88`, CI green incl. `smoke-tag`). `connect` untouched at `0.0.63` — it has no daemon
+dependency; `cli` moved only because it pins the daemon exactly. **Promotion to `latest` is Andre's.**
+
+**Verified independently, not on the builder's report.** Pulled main, read the diff, ran the gate:
+1896 passed, lint/typecheck/build clean. The two claims that matter both hold:
+- The guard sits at `daemon.ts:4719`; `acceptInboundAssignment` is not called until `4761`. It refuses
+  **before any session state exists** — which is the AC, not merely "a guard exists".
+- The seam-2 tests assert no `sessions` row, no `session.inbound.accepted`, **and no
+  `session.away.response.sent`**. That last assertion is the one that proves the orphaned reply cannot
+  be produced.
+Then confirmed in the published tarball (`npm pack @cello-protocol/daemon@0.0.41`): the guard is in
+`dist/daemon.js`, and `cli@0.0.38` pins `daemon@0.0.41` as a real version, never `workspace:*`.
+
+**The plan was wrong and the builder was right.** [[M8C-PHANTOM-SESSION-FIX-PLAN]] §4 warned that
+**three** test files inject assignment frames without `counterparty_session_peer_id` and so encode the
+bug. It was **eleven**. The extra eight include three (`f16-counterparty-gone`, `m9-core-001-seam`,
+`seam-4-daemon-orchestration`) that carry the field on the *initiator-side* assignment but omit it on
+the *receiver-side injected frame* — the exact frame the guard judges.
+
+**Lesson, and it is the same one as Entry 76's:** I found my three by grepping for the field name. He
+found the other eight by reading which frame each test actually injects. **Grep tells you where a string
+appears, not where it matters.** Entry 76 was a grep that mis-classified correct lines as bugs; this was
+a grep that missed eight real ones. Same tool, both directions.
+
+**Status is 🟡, deliberately not ✅.** D3 is unit-proven and shipped. The live invariant check the plan
+asks for — `count(session.offer.abort) > 0` AND `count(session.inbound.accepted for those ids) == 0`,
+filtered on daemon start — requires the race to actually occur: a `session_offer` arriving before the
+target's standing receiver exists. **We cannot force that on demand.** Holding the status hostage to an
+event that may never fire naturally would be theatre; silently flipping it to ✅ would be a lie. The
+honest record is **"unit-proven; race not reproduced live"** — the same discipline applied to SEC-2's
+enforcement gap (Entry 64).
+
+**Coordination note.** The whole D3 hand-off ran over CELLO: kickoff session (sealed root
+`7534f398…`), D4-decision session (`4dccf5f2…`), D3-merged report (`2a0c9ba4…`). Sessions were sealed
+between units and reopened on demand — a receipt per exchange, not one long-lived connection. The
+doorbell rendered `"CELLO_Support" (self-declared)` throughout: first live sighting of the renamed
+marker on the promoted build.
+
+**Next:** CELLO_Support is on D1 (`DOD-OFFER-REJECT-1`, daemon half). Its frame must match the
+`Generic Reject` of [[2026-07-08_inbound-state-matrix]] **only if the shapes genuinely fit** — if they
+do not, design the frame properly rather than bending one into the other. The daemon half is inert
+until D2 teaches the directory to understand it.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
