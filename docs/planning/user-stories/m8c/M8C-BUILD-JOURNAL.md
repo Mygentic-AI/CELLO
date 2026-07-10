@@ -3861,6 +3861,56 @@ his agent was unattended. Neither was being tested. Both behaved.
 
 ---
 
+### 2026-07-10 — Entry 81: ✅ DOD-UNREAD-1 (D4) built, reviewed, merged — the two authorities agree again
+
+**What shipped.** cello-client main = **`40d0a33`** (`2e9eb5d` unit + `40d0a33` review fixes), pushed
+after rebasing over `5db5e3e`. Producer-first per the decided split:
+
+- **D4a (producer):** `ingestReceivedContent` refuses content for a session with no `sessions` row —
+  `session.content.orphaned` warn `{agentName, sessionId, correlationId}`, reason `session_orphaned`,
+  and NOTHING recorded (no transcript row, no leaf, no buffer, **no unread minted**). Chose **drop**
+  over quarantine: the content stays un-acked, so the sender's TTF/park backstop keeps the durable
+  copy and redelivers once a session actually exists. The `senderPubkey = "unknown"` paper-in is
+  deleted outright — sender resolves from the now-guaranteed record; a hand-crafted empty counterparty
+  refuses with `sender_unresolved` instead of inventing an attribution.
+- **D4b (reader, for the residue):** `cello_receive { since_seq }` works for a TRANSCRIPT-ONLY session
+  (received rows, no `sessions` row): reads the durable transcript, reports `from: null` (never
+  `"unknown"`), advances the watermark, clears the Telegram ring. Plain receive on such a session
+  returns **`session_not_live`** with guidance naming the catch-up read — never `session_not_found`,
+  which was a lie. Neither-row-nor-transcript stays `session_not_found`.
+
+**The acceptance shape is a test, not a live poke** (the two real stuck ids live on Andre's machine):
+badge shows `unread_count: 2` BEFORE the read → `since_seq: -1` delivers both messages with
+`from: null` → badge clears **by delivery**, not by hiding. `getUnreadSummary` untouched — no
+`JOIN sessions`.
+
+**Review (cello-unit-reviewer): SPEC FAITHFUL / NO SILENT FALLBACKS / TESTS HAVE TEETH**, including an
+exhaustive INVARIANT check: *"no state found where the summary counts what since_seq can't read"*
+(sent-only transcripts: not counted, still readable as an empty batch — no disagreement). Findings,
+all closed in `40d0a33`:
+- **F1 (MEDIUM, pre-existing, escalated by D4a):** `#insertSessionRow` swallows a DB write failure and
+  both creators ignored its boolean — a session node could go fully live with NO row, which post-D4a
+  refuses every message while looking healthy. Now `createSessionNode`/`acceptSession` fail ONCE at
+  creation (`session_persist_failed`), stop the node, and rebuild the consumed standing receiver.
+  Red-first via `DROP TABLE sessions`.
+- **F2 (LOW):** that helper's failure event renamed `session.interrupt.db.write.failed` →
+  `session.row.write.failed` (+agentName, +status) — the old name steered diagnosis to the interrupt
+  path. The four genuine interrupt-path sites keep their name.
+- **F3 (LOW):** dead `session_not_owned` branch removed from `handleReceive` — `getSessionRecord` is
+  (agent, session)-keyed; the record can never belong to another agent.
+- **F4 (noted, no change):** permanently-orphaned relay-parked residue is re-pulled and loudly refused
+  on every agent-online; confirm-deleting would destroy the only redelivery source. If the warn-spam
+  ever matters, dedupe the LOG, never the retention.
+
+**Gates.** Full suite 1910 passed (nothing else in the codebase ingested without a row), lint,
+typecheck, build.
+
+**Phantom-session status: D3 shipped (0.0.88), D1 + D4 on main unpublished, D2 remains** (directory
+fail-closed + decoder allowlist + reject-resolves-waiter; batch with pending directory work). Next
+unit per the queue: **DOD-SENDRAW-1**, then D2.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

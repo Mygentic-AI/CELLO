@@ -378,7 +378,13 @@ and they correlate one-to-one.
   row (it already does; only an early return blocks it), reports `from: null`, advances the watermark.
   **🚫 Do NOT join `sessions` in `getUnreadSummary`** — that hides a really-delivered message.
   **INVARIANT:** `getUnreadSummary` and `cello_receive` must agree on what a session is; any fix that
-  leaves those two authorities disagreeing recreates this bug in a new shape. — ❌
+  leaves those two authorities disagreeing recreates this bug in a new shape. — 🟡 built + reviewed +
+  merged to cello-client main (`2e9eb5d` + `40d0a33` review fixes, 2026-07-10; unit-reviewer: SPEC
+  FAITHFUL incl. the INVARIANT — "no state found where the summary counts what since_seq can't read";
+  D4a = drop, loudly; review F1 fixed: a failed session-row write now fails creation ONCE with
+  `session_persist_failed` instead of leaving a live-but-rowless session that refuses everything).
+  ✅ when the two live stuck messages on Andre's machine (`5749859a…`, `3d3311c8…`) are actually read
+  and `total_unread` hits 0 by delivery, on a published daemon. — Entry 81
 
 - **DOD-SENDRAW-1** (found 2026-07-10 while verifying D1; **do AFTER D4**) — `SignalingManager.sendRaw`
   (`core/transport/src/signaling-manager.ts:325`) has **zero `throw` statements**: it catches internally
