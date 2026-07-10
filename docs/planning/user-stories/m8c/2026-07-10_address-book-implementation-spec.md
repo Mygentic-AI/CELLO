@@ -57,12 +57,19 @@ simple.
 **DOD-TIER-1 — the contact record gains a tier and metadata.**
 - **AC1** Idempotent PRAGMA-guarded `ALTER TABLE contacts ADD COLUMN` for: `tier INTEGER`,
   `provenance TEXT`, `last_offered_moniker TEXT`, `away_message TEXT`. All nullable. Fresh schema == migrated
-  schema (assert).
+  schema (assert). **`tier` MUST NOT carry a column `DEFAULT`** — a `DEFAULT 1` would set existing rows to
+  `UNKNOWN` on the ALTER, and AC4's grandfather backfill (`WHERE tier IS NULL`) would then match nothing,
+  silently downgrading every existing auto-accepting contact. Add with no default; backfill explicitly (AC4);
+  let `getTier` normalize any residual NULL (AC3).
 - **AC2** `tier` is an INTEGER with named constants, ordered so `>=` works:
   `BLOCKED=0, UNKNOWN=1, KNOWN=2, WHITELISTED=3, VIP=4`. A `TIER` enum/const map is the single source; no
   bare integers in call sites.
-- **AC3** A `getTier(agentId, pubkey): number` helper returns the row's tier, or **`UNKNOWN`** when no
-  contact row exists. Absence of a row = `UNKNOWN`; a `BLOCKED` contact is an explicit `tier=0` row.
+- **AC3** A `getTier(agentId, pubkey): number` helper is **total** — it never returns null/undefined. It
+  returns the row's tier, or **`UNKNOWN`** when the row is **absent OR `tier IS NULL`**. (A row can be
+  NULL-tier: created post-migration before tier-on-create is wired. In JS `null >= 0` is `true` and
+  `grid[null]` is `undefined` → crash, so NULL must be normalized here, to the *tighter* `UNKNOWN`, never to
+  the grandfather `WHITELISTED`.) Absence of a row = `UNKNOWN` (never seen); an explicit `tier=NULL` row =
+  `UNKNOWN` (seen, unclassified); a `BLOCKED` contact is an explicit `tier=0` row.
 - **AC4** Migration backfill: **existing contact rows → `WHITELISTED`** (they were auto-accepting; preserve
   behavior — grandfather, per decision 1a). `UPDATE contacts SET tier = 3 WHERE tier IS NULL`.
 - **AC5** `provenance` is written on contact creation: `'initiated'` (I opened the session),
