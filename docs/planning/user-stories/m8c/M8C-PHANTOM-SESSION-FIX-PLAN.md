@@ -276,6 +276,39 @@ pnpm run test && pnpm run lint && pnpm run typecheck && pnpm run build
 ```
 then the `cello-unit-reviewer` agent, then commit with the DOD id.
 
+## ✅ CLOSED 2026-07-10 — all four live-proven (journal Entry 86)
+
+**THE STANDING REPRO — use this, do not wait for the race.** `cello_stop_agent` tears down an agent's
+standing receiver and **leaves its directory signaling stream connected**. That is exactly D2's
+precondition, on demand, in one tool call:
+
+```
+cello_stop_agent { name: "CELLO_Feedback" }        # receiver down, signaling up
+cello_initiate_session { target_pubkey: <feedback> }
+  → { ok: false, reason: "counterparty_did_not_accept" }     # NOT directory_unreachable
+cello_start_agent { name: "CELLO_Feedback" }       # positive control
+cello_initiate_session { target_pubkey: <feedback> }
+  → { ok: true, ... }   # a fix that refused EVERYTHING would pass the negative test
+```
+
+Daemon log, same second — no 2 s stall, because the directory resolves its waiter on D1's frame:
+```
+session.offer.abort        agent=CELLO_Feedback  reason=standing_receiver_unavailable
+session.offer.reject.sent  agent=CELLO_Feedback  reason=standing_receiver_unavailable
+```
+
+**The absence is the evidence.** No `session.initiate.counterparty_unavailable` (F13 never had to fire —
+there was no endpoint-less assignment to refuse), no `session.inbound.accepted` (no phantom session), no
+away-reply, no orphan row, no permanent unread.
+
+> **D3 contains the damage; D2 prevents it.** The guards downstream did not save us — **the directory
+> stopped minting the thing.** Both belong here; only one is the root fix. (CELLO_Support, 2026-07-10)
+
+> **Both of us wrote this race off as unforceable, twice.** It was one tool call away. "We could not
+> reproduce it" is what let the bug live for three days.
+
+---
+
 **Live acceptance test — reproduce the race deliberately.** The trigger is a `session_offer` arriving
 before the target's standing receiver exists.
 
