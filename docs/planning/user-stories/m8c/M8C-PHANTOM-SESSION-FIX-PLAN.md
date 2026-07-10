@@ -190,21 +190,65 @@ that change *is* part of this unit and must be called out in the commit message.
 - **Deploy:** `infra/` — directory deploys take ~25–30 min across us-east-1 / eu-central-1 /
   ap-northeast-1. **Batch this with any other pending directory change.** Update `infra/STATE.md`.
 
-### D4 — `DOD-UNREAD-1` (needs Andre's decision)
-*A received transcript row with no session row is unreadable and permanently unread.*
+### D4 — `DOD-UNREAD-1` — **DECIDED 2026-07-10 (Andre): option (a), producer-first**
+*A received transcript row with no session row is unattributable, unreadable, and permanently unread.*
 
-Even with D1–D3 shipped, existing installs still carry these rows. Two options — **do not pick
-silently**:
+**Option (b) — materialise the session on recovery — is REJECTED.** Evidence
+(`session-node-manager.ts:2739-2747`):
 
-- **(a) Reader-side (recommended).** Treat reading as a *transcript* operation, not a live-session
-  one: `cello_receive` (or at minimum the watermark advance) works for a session that exists in
-  `transcript` but not in `sessions`. Delivers the message, clears the badge, loses nothing.
-- **(b) Reconcile-on-recovery.** When `content.recovered` writes a received row for a session with no
-  local `sessions` row, materialise the row. Riskier: it invents a session the initiator never agreed to.
+```js
+let senderPubkey = entry?.counterpartyPubkey
+  ?? this.getSessionRecord(agentName, sessionId)?.counterparty_pubkey;
+if (!senderPubkey) {
+  this.#logger.warn("session.content.sender_unresolved", { sessionId, agentName, correlationId });
+  senderPubkey = "unknown";                       // ← papers it in, right below a comment saying it won't
+}
+```
 
-**AC (either option):** after the fix, `cello_check_notifications` for `Ms_Chelly` returns
-`total_unread: 0` **only after the two messages have actually been delivered to a reader** — never by
-hiding them.
+and `transcript` has **no counterparty column** — `(agent_name, session_id, sequence, direction, blob,
+created_at)`. The daemon recorded a received message **it could not attribute to anyone**, and the
+attribution is gone for good. `session.content.sender_unresolved` fired on BOTH stuck sessions.
+
+So (b) would invent a session the initiator explicitly refused via the F13 guard, **with no
+counterparty** — the same disease as the directory's "proceed with empty defaults", one layer down.
+
+#### D4a — producer (primary)
+- **AC1** Refuse to write a `transcript` row for a session with **no `sessions` row for that agent**.
+- **AC2** Log `session.content.orphaned` at **warn** with `{ agentName, sessionId, correlationId }`.
+- **AC3** Either drop, or quarantine visibly (as `expiredSessionRequests` surfaces missed requests via
+  `cello_check_notifications`). Implementer's call — but a quarantine MUST be visible, never silent.
+- **AC4** `senderPubkey = "unknown"` is never written to a transcript row. **Never record content you
+  cannot attribute.**
+- **SI** After D3 this path should be unreachable. That makes it a fail-loud assertion exactly where one
+  belongs.
+
+#### D4b — reader (for installs that already carry these rows)
+- **AC1** `cello_receive` **with `since_seq`** works without a `sessions` row: it already reads the
+  durable transcript, advances `advanceLastDeliveredSeq`, and clears the Telegram ring — it never touches
+  a session node. It needs `record` for exactly one field (`counterparty_pubkey`), and only the early
+  `if (!record) return session_not_found` blocks it.
+- **AC2** `from` is reported as `null`, **never the string `"unknown"`**.
+- **AC3** The plain (no `since_seq`) live-receive path is unchanged: a transcript-only session has no
+  live node to wait on. It returns a distinct reason (e.g. `session_not_live`) with guidance pointing at
+  the catch-up read — **never `session_not_found`, which is a lie.**
+
+#### Acceptance (D4)
+`cello_check_notifications` for `Ms_Chelly` returns `total_unread: 0` **only after the two messages have
+actually been delivered to a reader** — never by hiding them. The two real ids are
+`5749859a8380d55f98fdd4436ca7ee1d` and `3d3311c867e96ff88803dce3deaf27b7`; they live on Andre's machine.
+**Prove it in a test — do not poke the live daemon.**
+
+---
+
+## 4b. THE INVARIANT (hold this in review)
+
+> **`getUnreadSummary` and `cello_receive` must agree on what a session is.**
+> One counts `transcript` rows; the other requires a `sessions` row. **Any fix that leaves those two
+> authorities disagreeing recreates this bug in a new shape.**
+
+This is the defect underneath all four. It is also exactly why `JOIN sessions` is forbidden: it makes the
+two authorities agree by **deleting the evidence**, rather than by fixing the producer that created the
+disagreement.
 
 ---
 

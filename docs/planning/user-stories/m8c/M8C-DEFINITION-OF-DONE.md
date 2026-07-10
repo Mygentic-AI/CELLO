@@ -355,11 +355,18 @@ and they correlate one-to-one.
   with empty defaults" (`directory-node.ts:3355-3400`) — a silent fallback that mints a validly-signed,
   structurally invalid artifact. **Do not merely raise the 2 s timeout**; that narrows the race without
   closing it. trustless-cello; 3-region deploy ~25-30 min; batch it. — ❌
-- **DOD-UNREAD-1** (D4, needs Andre's decision) — a received `transcript` row with no `sessions` row is
-  counted unread (`getUnreadSummary` never joins `sessions`) but `cello_receive` returns
-  `session_not_found`, so it can never be cleared. **🚫 Do NOT fix by joining `sessions`** — that hides a
-  message that was really delivered. Either make reading a transcript operation, or materialise the
-  session on recovery. — ❌
+- **DOD-UNREAD-1** (D4, **DECIDED 2026-07-10 — producer-first**) — a received `transcript` row with no
+  `sessions` row is counted unread (`getUnreadSummary` never joins `sessions`) but `cello_receive` returns
+  `session_not_found`, so it can never be cleared. **Materialising the session (option b) is REJECTED**:
+  the daemon wrote that row with `senderPubkey = "unknown"` (`session-node-manager.ts:2745`) and
+  `transcript` has no counterparty column, so (b) would invent a session the initiator refused, *with no
+  counterparty*. **D4a (primary):** never write a transcript row for a session with no `sessions` row —
+  log `session.content.orphaned` at warn and drop, or quarantine visibly. Never record content you cannot
+  attribute. **D4b:** `cello_receive` with `since_seq` reads the durable transcript without a `sessions`
+  row (it already does; only an early return blocks it), reports `from: null`, advances the watermark.
+  **🚫 Do NOT join `sessions` in `getUnreadSummary`** — that hides a really-delivered message.
+  **INVARIANT:** `getUnreadSummary` and `cello_receive` must agree on what a session is; any fix that
+  leaves those two authorities disagreeing recreates this bug in a new shape. — ❌
 
 > **Triage:** the trigger is connecting to an agent that just started — a first-connect race, and the
 > launch pitch is "two agents connect." The initiator is told the counterparty may be offline when it
