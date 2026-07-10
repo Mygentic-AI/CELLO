@@ -70,8 +70,12 @@ only actor who can trip this is the operator or a local DB/restore operation.
    would try to seal/co-sign with a *different keypair* — FROST-share mismatch and a divergent seal chain,
    not merely stale data. Directly violates the sovereign-identity model: two distinct pubkeys must share
    nothing.
-2. **Rename is structurally blocked.** The `agents` table would rename in one `UPDATE`; the six children
-   orphan all history. Rename and this defect are the *same work*.
+2. **Rename is structurally blocked.** The `agents` table would rename in one `UPDATE`; the children orphan
+   all history. Rename and this defect are the *same work*. **A note the rename story must inherit (not this
+   unit's problem):** because `agent_name` is the default outbound moniker (AC1b), a rename **changes the
+   label counterparties see on the next session offer** — a wire-visible effect of a purely local op. Rename
+   must decide deliberately: re-declare the agent to the world, or pin the old name as an explicit moniker
+   to keep the outward label stable? Counterparties who set their own pet name are unaffected (pubkey-pinned).
 3. **Restore collision (UNVERIFIED — flag it).** `cello_restore` inserts agent rows. Restoring a backup
    containing `Ms_Chelly` onto a daemon that already has a *different* active `Ms_Chelly` either fails
    (data loss) or slips two active agents under one name — the collision the partial index exists to
@@ -112,21 +116,31 @@ wipe.
 
 ## Acceptance criteria
 
-- **AC1 — WIRE PROOF, NETWORK-scoped (do this first, it gates everything).** Prove `agent_name` never
-  crosses a **network** frame — the p2p signaling protocol and the directory protocol. Grep every network
-  frame encoder/decoder (`core/transport/src/signaling-manager.ts`, `core/transport/src/node.ts`,
-  `core/protocol-types/src/*.ts`, the directory's `directory-frames.ts` / `directory-types.ts`) and every
-  CBOR-encoded network payload: `agent_name` / `agentName` must appear in **zero** of them — only the
-  pubkey and `session_id` identify parties over the network. A test asserts it, named for the network
-  scope. *If this fails, the "client-only, no directory desync" premise is wrong — STOP and re-scope.*
-  **Explicitly OUT of scope: the local `daemon↔gateway↔MCP-shim` IPC** (`core/gateway/src/protocol.ts`,
-  `types.ts`, `server.ts`, `client.ts`; adapter-claude-code `lock-file.ts`, `channel-params.ts`), where
-  `agent_name` is pervasive and **correct** — it is one-machine, one-operator addressing/display that no
-  peer or directory ever sees (`cello_use_agent { name }`). It is safe there for a structural reason worth
-  the test's rationale: local IPC resolves **only active** agents, and the partial unique index makes
-  active names unique — so the retire-reuse ambiguity that poisons the six session tables (which keep
-  *retired* rows) cannot arise on the IPC path. The defect is specifically that the tables join on a name
-  *across the retired boundary*; IPC never crosses it.
+- **AC1 — PROVE NO WIRE FRAME IDENTIFIES A PARTY BY NAME (do this first, it gates everything).**
+  ⚠️ **The premise is true; the naive wording is FALSE and dangerous — an agent's NAME *does* cross the
+  wire.** When an agent has no MONIKER-1 override, its `agent_name` IS the default outbound moniker
+  (`db-identity-store.ts:369`, `getOutboundName() → moniker ?? agent_name`), and the moniker rides the
+  session-offer frame (MONIKER-2). Observed live all session: `offered_moniker: "Ms_Chelly"`,
+  `"CELLO_Support" (self-declared)`. **Do not "prove agent_name never crosses the wire" — it does.** A test
+  written to that false claim would grep, find `offered_moniker`, conclude failure, and "fix" it by cutting
+  the `?? agent_name` fallback — **deleting the shipped MONIKER-1/2 feature to satisfy a mis-worded AC.** A
+  wrong AC is worse than a missing one: it recruits a diligent implementer into breaking something.
+  - **(a)** No frame encoder/decoder in `core/transport/src`, `core/protocol-types/src`, or the directory's
+    `directory-frames.ts` / `directory-types.ts` declares a field **named** `agent_name` / `agentName`.
+    Parties are identified by **pubkey and `session_id` only**. (Grep confirmed empty 2026-07-10.)
+  - **(b)** The single path by which an agent's *name* reaches the wire is `offered_moniker` — the MONIKER-1
+    default. It is a **self-declared display label**: `MONIKER_RE`-bounded, rendered `(self-declared)` to
+    the receiver, **pinned-to-pubkey** by the receiver's contact store, never a lookup key, never a join
+    key, and **never persisted by the directory** (which forwards it and has no `agent_name` column —
+    PII-free policy). It is display, not identity, and is **out of scope of this migration**: the local
+    join key changes; the wire label does not. **Assert (b) POSITIVELY** so no future reader severs the
+    moniker to make a test pass.
+  - *The premise this defends — changing the local DB join key cannot desync the directory or confuse a
+    counterparty — HOLDS: this migration alters not one byte on the wire.*
+  - **Out of scope, and correct:** the local `daemon↔gateway↔MCP-shim` IPC uses `agent_name` pervasively
+    for one-machine addressing/display (`cello_use_agent { name }`). Safe because IPC resolves **only
+    active** agents and active names are unique (partial index) — the retire-reuse ambiguity that poisons
+    the seven tables (which keep *retired* rows) cannot arise where the boundary is never crossed.
 - **AC2 — full transactional table rebuild (NOT a shortcut).** `agent_name` is in all six composite PKs,
   and SQLite cannot alter a PK, so each table is rebuilt: create the new table keyed on `agent_id`,
   `INSERT INTO new SELECT …` copying every row with `agent_id` backfilled from the local `agents` table
