@@ -48,6 +48,9 @@ description: >
    never be stored client-side (§6).
 3. The exact **"suspect" consequence** policy for a rejected endorsement submission (§7).
 
+**Plus the full gap register in §14** — reviewed 2026-07-10; items 14.1–14.3 must be resolved before
+any M10 story YAML is written.
+
 ---
 
 ## 1. Three storage locations
@@ -450,6 +453,65 @@ protocol with its performance/leakage/malicious-party tradeoffs must be selected
   mode for hash-anchored content (M9-FEED-001 today is redact/allow/block/warn). Flag in both milestones.
 - **PSI** (Class 2 endorsement intersection) is now designed here — see §11 (semantics + policy). The
   concrete cryptographic construction remains to be chosen.
+
+## 14. Known gaps — logged 2026-07-10, decisions still owed
+
+A design-review pass against the full signal lifecycle found these undecided. **14.1–14.3 are
+blocking: resolve before any M10 story YAML is written.** The rest can be resolved during story
+writing, but each needs an explicit decision — none may be silently defaulted.
+
+### Blocking
+
+- **14.1 — Federation: this doc pretends "the directory" is one thing.** §2, §7, and
+  `INV-HASH-WRITE-CHOKEPOINT` all speak of a singular directory, but CELLO is a T-of-N
+  sovereign-node system. Undecided: where a hash is notarized (one node or quorum), and how
+  hash + mutable status replicate across nodes. Critically, the chokepoint invariant **collapses
+  under the federation threat model** — a single compromised node can skip its scanner and insert
+  un-scanned hashes, killing "notarized ⇒ scanned-clean." Either notarization needs T-of-N
+  attestation, or the invariant must be honestly weakened to "scanned by the accepting node."
+- **14.2 — The revocation write path.** Mutable status is the entire reason the directory exists
+  (§4), yet how status *changes* is undesigned. Who may revoke which signal — issuer, subject,
+  both? Authenticated how? (There are no signatures in this design: creation-time authentication
+  carries the hash in, but revocation is a **later** write by someone claiming to be the issuer.)
+  And how does a revocation propagate across nodes (couples to 14.1)?
+- **14.3 — Class 2 presentation vs PSI: a live tension, not just a gap.** §2 says signals travel
+  as `{hash, blob}` pairs; an endorsement blob contains `issuer_pubkey`, so presenting it directly
+  reveals the endorser. §11's PSI exists precisely so non-matching endorsers are never revealed.
+  Decide: do endorsements travel **only** through PSI, or may they also be presented as plain
+  blobs? If both paths exist, PSI's privacy guarantee is decorative.
+
+### Must be decided during story writing
+
+- **14.4 — The recipient's policy layer.** §9 leans on "evaluate against my policy" throughout,
+  but the policy is undesigned: the `SignalRequirementPolicy` shape, the round-2 demand-bundle
+  format, and who evaluates — deterministic code, LLM, or the floor+discretion split §11 uses for
+  PSI. Without this, the four flows in §9 cannot actually run.
+- **14.5 — Chokepoint enforcement mechanics.** What *technically* stops an agent from calling the
+  directory's write API directly? The invariant names the rule; the auth model (capability,
+  allowlisted issuer keys, portal-only route?) is unchosen.
+- **14.6 — Subject key rotation / succession.** `subject` is hash-bound to a pubkey; rotate or
+  succeed the key and every signal is about the old identity. Re-issue everything, or a succession
+  link the recipient follows? Reconcile with the succession doc's rule that Class 1/2 do not
+  transfer.
+- **14.7 — Freshness semantics under node failure.** `INV-RECEIPT-FRESH` says "re-checked on use"
+  with no cadence defined (per session? TTL?), and no behaviour defined when the directory is
+  unreachable: fail-open contradicts the invariant, fail-closed contradicts availability-as-
+  first-class. Needs an explicit call.
+- **14.8 — Type registry governance + first payload schemas.** The registry carries retirement
+  and class derivation (§3, §4) but has no home — code, directory, or protocol constant? Who
+  admits a new type? And no v1 payload is defined for even the launch types (`linkedin`,
+  `endorsement`, `connection_bond`).
+- **14.9 — Wallet loss / backup.** The holder's plaintext blobs exist nowhere else — the directory
+  has only hashes. Lose the SQLCipher DB, lose your reputation. Is `trust_signals` in the existing
+  backup/restore path, and is that acceptable as the *only* recovery story?
+- **14.10 — Smaller but real.** Per-type validity windows and who re-verifies at expiry (re-run
+  OAuth?); whether Class 3 source data actually exists directory-side to compute from (seal
+  records — probably yes, verify); backfilling the four already-live M8 signals (WebAuthn / TOTP /
+  phone / email) into envelopes; concrete rate limits for the endorsement-intake role; and stating
+  out loud that a subject can silently discard unflattering endorsements (believed yes by design —
+  selective disclosure — which means all presented signals are effectively positive-only).
+
+---
 
 ## Related Documents
 
