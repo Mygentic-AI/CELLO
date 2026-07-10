@@ -446,6 +446,9 @@ a count:
 - **Commerce / referral.** Endorsements were conceived for commerce, not only PSI: *"I generally endorse
   this service — reach out to my agent, say you read my endorsement, quote code `12345`, and it will know
   you actually saw it."* This callback/referral loop is a **parked Class-2 capability** (design later).
+  Referral is the seed of a wider family of commercial mechanisms this stack enables (multi-hop affiliate
+  chains, proof-of-transaction reviews, revocable paid credentials, vouching-with-liability, bounties) —
+  parked ideation in [[2026-07-10_referral-and-commercial-use-cases]].
 
 **Three ways to use an endorsement:**
 1. **Intentionally share it** in round-1 trust signaling — plain, rich, scoped, direct.
@@ -594,4 +597,6 @@ may be silently defaulted.
 - [[2026-07-10_contact-address-book-design]] — the `trust_signals` table's home; issuer types, the
   directory-is-notary shape.
 - [[2026-07-10_agent-id-joinkey]] — the join-key fix this storage is born on top of.
+- [[2026-07-10_referral-and-commercial-use-cases]] — parked ideation: referral and the wider family of
+  commercial mechanisms this trust stack enables (attribution/receipt layer). No decisions.
 - `.claude/CLAUDE.md` — "join on the stable key" and the no-`node:sqlite` rules that govern the schema.
