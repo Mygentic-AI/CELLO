@@ -4079,6 +4079,58 @@ have printed success having only *given up*. The directory FROST-signs an assign
 
 ---
 
+### 2026-07-10 — Entry 85: ✅ DOD-DIR-FAILCLOSED-1 (D2) — the root fix. The phantom-session plan is CODE-COMPLETE.
+
+**Both halves merged:** trustless-cello **`1ccd08a5`**, cello-client **`aa34b81`**. Last unit of
+[[M8C-PHANTOM-SESSION-FIX-PLAN]]. **The 3-region deploy is NOT done — Andre's call, Ms_Chelly runs it.**
+
+**What the directory does now.** When the offer round-trip was attempted and produced no endpoint — the
+target rejected, or never answered — the directory returns `session_request_error{counterparty_did_not_accept}`
+to the initiator, sends **nothing** to the target, and **returns before the TBS build and before the only
+`participateInCeremony`**. No FROST signature over a 5-field (endpoint-less) TBS can be minted on that path.
+That was the whole disease: a timeout produced a *validly signed, structurally unusable artifact* instead of
+a failure. `session_offer_reject` (D1's frame) now lives in the **decoder allowlist** with target-only sender
+validation and resolves the waiter immediately — no 2 s stall. The 2 s literal is a named constant whose
+comment says raising it is NOT the fix. The legacy `no_offer_sent` path is untouched.
+
+**Red-first, and the red IS the bug.** Against the pre-fix directory the timeout test logs
+`Sending session_assignment to TARGET` and the initiator receives the endpoint-less assignment — the phantom
+session being born, captured in a test instead of in a daemon log two days later.
+
+**The reviewer earned its keep again — cross-repo this time. HIGH, blocking.** Directory side: clean,
+fail-loud, four tests with teeth, security claim confirmed by tracing every route to the signer,
+`#rejectedSessionOffers` provably leak-free. But I patched `decodeOutboundSignalingFrame` in
+trustless-cello — **which has no production caller.** The live consumer is the **daemon's**
+`sessionRequestErrorReason`; the client's `mapSessionRequestErrorFrame` is the second. **Three separate
+reason allowlists**, each collapsing an unlisted reason to `directory_unreachable`. The operator would have
+been told *the directory was unreachable* while the directory was healthy and the counterparty had simply
+declined — **the error naming the wrong subsystem**, the exact failure the debugging discipline exists to
+prevent. My own checklist item had *found* this trap and fixed it in the wrong file. Fixed in `aa34b81`,
+red-first against the live mapper.
+
+**The same trace surfaced a pre-existing bug.** `agent_revoked` and `agent_suspended` have been in the
+directory's reason union since M7/M8 and were **never** mapped by the client — a revoked agent has been
+reading as "directory unreachable" this entire time. Fixed alongside.
+
+**Cross-repo contract pinned from both sides:** the directory's tests assert the literal wire reason;
+cello-client's assert the mappers preserve it. The directory pins a *published* `@cello-protocol/client`, so
+it cannot import the fixed mapper until the cascade ships.
+
+**Entry 84's "thread of the day" closes here.** Its fourth layer was "D2, unbuilt." D2 is now built, and it
+was the same habit: *reporting the intent rather than the outcome*. Five instances, one day, four subsystems,
+different authors each time. Two of them were **inside the units written to fix the other three** — the
+logout timeout branch, and my own outbound-decoder patch. That is the useful part: this defect class hides
+best in the code that is hunting it.
+
+**Gates.** trustless-cello: typecheck, lint, full directory suite (709 passed, 0 failed). cello-client: 1925
+passed, lint, typecheck, build.
+
+**Plan status — all six units code-complete.** D3 ✅ shipped (0.0.88) + live-proven; D1 🟡 on main; D4 🟡
+shipped + live-proven; SENDRAW-1 🟡; LOGOUT-WAIT-1 🟡 shipped (cli 0.0.41) + live-proven; **D2 🟡 merged,
+awaiting the deploy.** The remaining work is not engineering: a directory deploy and a promotion.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

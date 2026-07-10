@@ -366,7 +366,18 @@ and they correlate one-to-one.
   `session_offer_reject` never reaches the directory's dispatch chain — `decodeInboundSignalingFrame`
   (`directory-frames.ts:409`) is a typed allowlist returning null on unknown types (today the directory
   replies `not_authenticated`, which the daemon harmlessly drops). D2 must add the frame to the
-  **decoder allowlist**, not just the dispatch chain — a dispatch branch alone would never fire. — ❌
+  **decoder allowlist**, not just the dispatch chain — a dispatch branch alone would never fire. —
+  🟡 built + reviewed + merged, BOTH halves (trustless-cello `1ccd08a5`; cello-client `aa34b81`),
+  2026-07-10. Guard returns before the TBS build and the only `participateInCeremony`, so **no FROST
+  signature over a 5-field TBS can be produced on the offer-attempted path** (reviewer-verified).
+  `session_offer_reject` is in the decoder allowlist with target-only sender validation; the waiter
+  resolves on it (no 2 s stall); the 2 s literal is a named constant carrying "raising this is NOT
+  the fix". Unit-reviewer found one HIGH cross-repo gap, fixed: **three** separate reason allowlists
+  collapsed `counterparty_did_not_accept` to `directory_unreachable` — blaming a healthy directory
+  for a counterparty that declined. The live one is the daemon's `sessionRequestErrorReason`; the
+  client's `mapSessionRequestErrorFrame` was also swallowing `agent_revoked`/`agent_suspended` since
+  M7/M8. ✅ **awaiting the 3-region deploy — Andre's call, Ms_Chelly runs it. Do not run deploy.sh.**
+  — Entry 85
 - **DOD-UNREAD-1** (D4, **DECIDED 2026-07-10 — producer-first**) — a received `transcript` row with no
   `sessions` row is counted unread (`getUnreadSummary` never joins `sessions`) but `cello_receive` returns
   `session_not_found`, so it can never be cleared. **Materialising the session (option b) is REJECTED**:
