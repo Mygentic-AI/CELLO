@@ -69,13 +69,26 @@ only actor who can trip this is the operator or a local DB/restore operation.
   the MMR tamper-evidence (`conversation_proof_leaves`, keyed by `session_id` + `leaf_hash`) — **not
   `agent_name`**, untouched by this change.
 
-The June-26 incident was a **purge** (delete local, directory keeps it → desync; or `TRUNCATE` → broken
-replication). **This is purely additive** — `ADD COLUMN` + backfill from data already local + re-point the
-joins. No `DELETE`, no `TRUNCATE`, no row leaves the machine, no value the directory replicates changes
-(pubkey, `session_id`, leaf hashes all untouched; `agent_name` stays as a display column). **Nothing to
-sync, because nothing the directory can see moves.** And the retire-reuse orphans need no purge either —
-once joined on `agent_id`, a new same-named agent (different `agent_id`) simply never matches them; the
-dead rows sit inert. **The hazard closes without a single delete** — the opposite of what burned us.
+The June-26 incident was a **purge** (delete local content, directory keeps it → desync; or `TRUNCATE` →
+broken replication). **This destroys no data and syncs nothing.** `agent_name` sits in all six composite
+PRIMARY KEYs, and **SQLite cannot alter a PK** — so this is a per-table *rebuild* (create the new table
+keyed on `agent_id`, copy every row across with the backfilled id, drop the old, rename), not a bare
+`ADD COLUMN`. That rebuild is **data-preserving**: every row is copied before the old table is dropped, it
+runs inside one atomic `BEGIN…COMMIT` (SQLite DDL is transactional — a crash rolls the whole thing back),
+and **no row content is destroyed, nothing leaves the machine, and no value the directory replicates
+changes** (pubkey, `session_id`, leaf hashes untouched; the directory keys on `k_local_pubkey` and has no
+`agent_name`). **Nothing to sync, because nothing the directory can see moves.** The retire-reuse orphans
+need no purge either — once joined on `agent_id`, a new same-named agent (different `agent_id`) never
+matches them; the dead rows sit inert. **The hazard closes without destroying a row.**
+
+**Do the FULL fix now — reject the "leave the PK" shortcut.** A cheaper version (add `agent_id`, re-point
+only the queries, leave `PRIMARY KEY (agent_name, …)` in place) is **not** zero-impact: the schema would
+still read `PRIMARY KEY (agent_name, …)` six times, which is the exact misleading artifact that propagated
+this defect — the next table gets copied "to match." And the migration risk that would justify the
+shortcut is **near-zero right now**: one operator, on a machine whose SQLCipher DB is wipeable without loss.
+Every future operator makes the table rebuild *more* dangerous, so deferring it schedules the riskiest
+step for the worst time. Rebuild the PKs now, while the only database it can break is one we would happily
+wipe.
 
 ## Acceptance criteria
 
@@ -85,14 +98,22 @@ dead rows sit inert. **The hazard closes without a single delete** — the oppos
   `agent_name` / `agentName` must appear in **zero** wire structures — only the pubkey and `session_id`
   identify parties on the wire. A test asserts it (snapshot of encoded frames contains no agent-name
   field). *If this fails, the whole "client-only" premise is wrong and STOP — re-scope.*
-- **AC2 — additive migration.** Idempotent PRAGMA-guarded `ALTER TABLE … ADD COLUMN agent_id` on all six
-  tables, backfilled from the local `agents` table (`agent_name → agent_id`, current mapping). **No
-  `DELETE`, no `TRUNCATE`, no `DROP`.** One transaction; the migration verifies its own completeness
-  (every row has a non-null `agent_id`) before the daemon serves. A half-applied SQLCipher migration is
-  unrecoverable — fail loud and roll back, never half-commit.
-- **AC3 — re-point the joins.** Every `WHERE agent_name = …` / `PRIMARY KEY (agent_name, …)` / `JOIN` on
-  the six tables uses `agent_id`. `agent_name` remains only in `SELECT`-for-display. Enforce with the
-  CLAUDE.md rule ("join on `agent_id`, never the mutable `agent_name`").
+- **AC2 — full transactional table rebuild (NOT a shortcut).** `agent_name` is in all six composite PKs,
+  and SQLite cannot alter a PK, so each table is rebuilt: create the new table keyed on `agent_id`,
+  `INSERT INTO new SELECT …` copying every row with `agent_id` backfilled from the local `agents` table
+  (`agent_name → agent_id`), drop the old, rename. **All six rebuilds in ONE `BEGIN…COMMIT`** — SQLite DDL
+  is transactional, so a crash rolls the entire migration back atomically. The migration verifies its own
+  completeness (every row has a non-null `agent_id`; row counts match pre/post) **before commit**, and
+  fails loud rather than half-commit. Idempotent (skip if already rebuilt).
+  **Explicitly rejected:** the "add `agent_id`, re-point queries, leave the PK" shortcut. It leaves
+  `PRIMARY KEY (agent_name, …)` in the schema — the misleading artifact that propagated this defect — and
+  defers the risky rebuild to when there are operators whose DBs cannot be wiped. Do it fully now, while
+  the only database it can break is one we would happily wipe (one operator, wipeable).
+- **AC3 — `agent_name` is demoted to a plain non-key column.** After the rebuild it appears in **no**
+  `PRIMARY KEY`, no `JOIN`, no `WHERE`-match, no index used for scoping — only in `SELECT`-for-display.
+  Every `WHERE agent_name = …` across `session-node-manager.ts` and `daemon.ts` (a large surface — grep
+  exhaustively; missing one is a silent scoping bug no type-checker catches) now scopes by `agent_id`.
+  Enforce with the CLAUDE.md rule ("join on `agent_id`, never the mutable `agent_name`").
 - **AC4 — retire-reuse is closed, proven.** Red-first: create agent A, generate sessions/transcript/
   contacts, retire A, create a NEW A (same name, new pubkey), assert the new A sees **none** of the old
   A's rows. Must fail on today's `agent_name` join and pass on the `agent_id` join.
