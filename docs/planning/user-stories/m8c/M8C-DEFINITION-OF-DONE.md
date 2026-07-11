@@ -174,9 +174,14 @@ description: >
   quoting is only needed for spaces/metacharacters, explains the create-agent (local) → register
   (directory, needs token) two-step, and documents the `CELLO_PREAUTH_TOKEN` env-var form with a
   real one-liner (it works today via `cello.ts:82` but is invisible in help). (F24, R1, R2, R5) — 🟡 (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL.
-  **2026-07-07 partially exercised live:** per-command help (`cello create-agent --help`) is REAL + good
-  (name rule + next step); but top-level `cello --help` is STILL a bare command list — HELP-1 requires
-  BOTH to give real help, so it's half-met. Remaining gap = P2-5 in [[M8C-ONBOARDING-IMPROVEMENTS]]. Stays 🟡.)
+  **Per-command help ✅ — LIVE-CONFIRMED by Andre 2026-07-11** (`cello create-agent --help` gives real help:
+  name rule from the shared regex + next step). **Top-level `cello --help` — half-done:** CC-7 (`f486e32`,
+  cli 0.0.44) added the orientation HEADER (what CELLO is + the `login → create-agent → register → status`
+  path) ✅, BUT the command list is STILL a single pipe-delimited blob with no per-command descriptions —
+  which is NOT "REAL help" ("what the command does" applies at the top level too). The real remaining work is
+  a described `Commands:` table (git/`claude --help` style, one line + summary per command). **Now FOLDED
+  into DOD-CLI-PARITY-1** (the table renders from that story's command registry). Stays 🟡 until the table
+  ships. (An earlier note this session wrongly called this DONE from the header alone — corrected by Andre.))
 - **DOD-ONBOARD-ERRORS-1** — register-path errors are specific and actionable, never a generic
   Usage dump or silence: missing token → "you're missing the pre-auth token" (not the Usage line);
   malformed token → "that isn't a pre-auth token — they start with `CELLO-`"; unknown agent →
@@ -204,6 +209,21 @@ description: >
   (`directory.signaling.reader.error` at `warn`, ~every 40–70 min, always recovers —
   `signaling-connect.ts:323`) is logged quietly and marked expected, so a healthy daemon doesn't
   look like it's failing; a genuine sustained outage still stands out. (F11) — ✅ (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL. **2026-07-08, Round-2 R12 — PROVEN LIVE:** every `directory.signaling.reader.error` entry in the live daemon log is `"level":"debug"` (not `warn`) and carries `"expected":true` explicitly. See [[M8C-AB-TEST-ROUND-2]] R12.)
+
+- **DOD-CLI-PARITY-1** (Andre, 2026-07-11 — "critical to removing friction") — Every daemon capability
+  reachable via the MCP tool surface is ALSO reachable via the `cello` CLI, so **any bash-capable agent
+  operates a CELLO node with no MCP dependency**. Bash is the universal agent adapter — most agents can shell
+  out even when they can't/won't use MCP tools — so this broadens runtime reach past Claude Code + Hermes to
+  essentially every runtime, and directly serves the #1 launch value ("two agents connect and communicate").
+  Thin pass-throughs over the **existing** daemon IPC (CLI-only; no daemon/shim change); a JSON-out +
+  exit-code + verbatim-structured-error contract makes scripts/agents the first-class consumer. **Group A**
+  (agent lifecycle: agents/start-agent/stop-agent/use-agent; data custody: backup/restore; inbox; transcript;
+  inclusion-proof; contact set-tier/away/moniker) + **Group B** (initiate/send/receive/close/await-session/
+  receive-session, mirroring the MCP cursor/timeout semantics exactly). **Folds DOD-ONBOARD-HELP-1** — the
+  described `cello --help` Commands: table renders from the same command registry (single source of truth for
+  dispatch + help + summaries). Proof = a **bash-only** two-agent connect→send→receive→seal smoke (also gives
+  us the scripted live-smoke we lack). Full brief, written to execute cold: [[2026-07-11_cli-mcp-parity-plan]].
+  — ❌ NOT BUILT (assigned to CELLO_Support 2026-07-11).
 
 - **DOD-LIVE-1 (Tier 1 close / launch gate)** — The live doorbell journey: real daemon, real
   published shim, live `claude --channels` session; a real peer (second daemon) opens a session;
