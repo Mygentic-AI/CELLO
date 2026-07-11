@@ -128,7 +128,11 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   `contacts(agent_id, pubkey)`). SQLCipher, keyed on `agent_id`. **The M8 defect dies with the drop:**
   the scaffold wrote `agent_id = null` (investigation §9, `daemon.ts:4920`) — both new tables declare
   `agent_id NOT NULL` and every write path attributes it, or INV-AGENT-SCOPED is violated at birth.
-  Migration idempotent; fresh schema == migrated schema. — ❌
+  **Account-subject rows (M10-D5):** wallet key is `(agent_id, signal_hash)` — N agents hold N
+  attributions of the SAME content-addressed envelope; duplicate insert is a no-op
+  (`INSERT OR IGNORE` semantics, the same property §14.11's sync relies on). Bytes-once
+  normalization (envelope stored once + per-agent attribution rows) is a free implementation
+  choice, invisible to the protocol. Migration idempotent; fresh schema == migrated schema. — ❌
 - **DOD-STORE-DIR-1** — directory `signal_records` table (`signal_hash` PK, subject_kind,
   subject, issuer_pubkey, issuer_kind, type-as-opaque-string, status, superseded_by, revoked_at,
   accepting_node, scanner_version) + replication of records AND status changes over the existing
