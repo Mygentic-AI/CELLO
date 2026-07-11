@@ -294,6 +294,20 @@ description: >
   logic in `server.ts` is NOT on the published MCP path), so data custody works NOWHERE today.** — ❌ NOT BUILT
   (known-open).
 
+- **DOD-LEGACY-MCP-1** (found by review, 2026-07-11, during DOD-ONBOARD-HELP-1) — a **second MCP vocabulary is
+  sitting on the public export surface.** `core/adapter-claude-code/src/server.ts` and
+  `core/client/src/mcp-server.ts` are the legacy M1 **in-process** MCP servers. They still register and name the
+  PRE-RENAME tools (`cello_list_sessions`, `cello_get_sealed_receipt`, plus guidance like "Use
+  `cello_list_sessions` to find valid session IDs"). Nothing drives them at runtime — the published shim
+  (`bin/cello-mcp.ts`) proxies to the daemon — but **both are exported from their package roots**
+  (`createMcpServer`, `createMcpSessionServer`) and ship in `dist/`, so they are not dead in the
+  *published-surface* sense. That is precisely the "one capability, two names" that §2b abolishes. **Not a launch
+  blocker** (no runtime path reaches them). Fix: **delete the two exports** (only tests construct them), or rename
+  their tools to the vocabulary and bring them under the parity audit. Deliberately NOT done inside the help pass —
+  removing public exports is a riskier change than a help revision and deserves its own unit. A note in
+  `dod-onboard-help-1-tool-parity.test.ts` had claimed these were "not published"; that was FALSE and is corrected.
+  — ❌ NOT BUILT (known-open).
+
 - **DOD-CURSOR-DURABLE-1** (found LIVE by CELLO_Support 2026-07-11, during CLI-PARITY Phase 3) —
   **read-before-write makes a stateless CLI unable to hold a two-way conversation.** The `cello_send` gate
   consumes the ephemeral per-connection cursor (`connectionCursors`, `daemon.ts:919`, keyed by connectionId,
