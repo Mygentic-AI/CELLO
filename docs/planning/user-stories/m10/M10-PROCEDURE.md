@@ -6,10 +6,12 @@ milestone: M10
 status: open
 topics: [m10, trust-signals, procedure, runbook, zero-bump, portal, three-repo]
 description: >
-  The operating runbook for M10 (trust signals — pipes for all, signals for few), adapted from
-  M8C-PROCEDURE. Read FIRST, then M10-DEFINITION-OF-DONE. Three-repo milestone with the center
-  of gravity in cello-portal. No separate SPEC or DECISIONS docs: the two M10 design docs are
-  the spec-of-record, and decisions live in the DoD's Decisions section.
+  The operating runbook for M10 (trust signals — pipes for all, signals for few). SELF-CONTAINED
+  — no other milestone's procedure needs to be read. Read FIRST, then M10-DEFINITION-OF-DONE.
+  Three-repo milestone with the center of gravity in cello-portal. No separate SPEC or DECISIONS
+  docs: the two M10 design docs are the spec-of-record, and decisions live in the DoD's
+  Decisions section. Includes the design-note template (§6); the worked example is
+  BUILD-JOURNAL Entry 1.
 ---
 
 # M10 Procedure — How to Work the Milestone
@@ -152,22 +154,58 @@ reversing.** Log it in the DoD Decisions section, proceed (redo > block, always)
 undecidable fork → PARK (DoD Parked + journal) and pull the next unit, saying so. Arm both
 crons at kickoff; re-arm after every restart/compaction.
 
-## 3b. Watchdog crons — same two as M8C (see M8C-PROCEDURE §3b for full text)
-- **Cron 1 — deploy watchdog** (armed only while a directory deploy / pipeline run is in
-  flight; `*/4 * * * *`): check per-STAGE pipeline state + ECS `rolloutState` + crash-loop
-  signatures, not top-level status. Terminal → `CronDelete` itself.
-- **Cron 2 — 30-min heartbeat** (whole milestone; off-minute, e.g. `12,42 * * * *`): docs in
-  context? stalled on a decided/authorized thing? >15 min uncommitted? reviewer skipped? One
-  status line each firing. Session-only — re-arm after every compaction/restart; recreate at
-  tier checkpoints (7-day auto-expiry).
+## 3b. Watchdog crons — arm both (self-contained; no other doc needed)
+Cron jobs in this environment are **session-only**: gone on restart or compaction, and they fire
+ONLY while the session is idle (not mid-query) — which is exactly what makes the heartbeat able
+to un-stick a stalled session: a fired cron prompt is enqueued like any new instruction, so it
+resumes a session that stopped. **Re-arm BOTH crons immediately after every compaction and every
+session restart** — this is the single point of failure for the whole mechanism; forget it and
+the session goes silent with nothing to wake it. Recurring jobs auto-expire after 7 days — at
+every tier-boundary checkpoint (§3), `CronList` and recreate anything missing.
+
+**Cron 1 — Deploy/pipeline watchdog (armed ONLY while a deploy is in flight).** Arm the moment
+you run `infra/deploy.sh` or push something that triggers a CodePipeline run (directory deploys:
+~25–30 min, all 3 regions in parallel). Cadence `*/4 * * * *` (an active wait, not idle sleep).
+The fired prompt must check REAL health, not top-level status alone:
+- **CodePipeline:** `aws codepipeline get-pipeline-state` — per-STAGE status. A stage can read
+  `InProgress` while its ECS deployment is crash-looping underneath (task starts, fails health
+  check, stops, restarts, forever) — "in progress" is not evidence of health.
+- **ECS:** `aws ecs describe-services` → `deployments[].rolloutState`, plus task stop reasons /
+  restart counts (`describe-tasks` / CloudWatch) for the crash-loop signature (same task
+  definition revision repeatedly stopping and restarting).
+- Genuine failure or crash-loop → STOP waiting, surface it now, diagnose per CLAUDE.md Debugging
+  Discipline (producer/consumer, not the error string). Healthy and progressing → log one line,
+  keep polling. Terminal (success or confirmed failure) → the prompt calls `CronDelete` on
+  itself. (Separate from the tight 30s foreground poll for a single already-triggered ECS
+  rollout, per repo CLAUDE.md M5 rule 9 — that stays; this cron covers the outer 25–30 min wait.)
+
+**Cron 2 — 30-min heartbeat / anti-stall nudge (armed for the WHOLE milestone).** Cadence every
+~30 min at an off-minute, e.g. `12,42 * * * *` (never `0,30`). Recurring. The fired prompt is
+the self-audit:
+1. Are M10-PROCEDURE / M10-DEFINITION-OF-DONE actually in context right now? If compaction
+   dropped them, re-read both before doing anything else.
+2. Stalled on a decision? Pick the best-practice choice (§3a rubric), log it in the DoD
+   Decisions section, proceed.
+3. Waiting for confirmation on something already authorized (code changes, AWS/publish actions
+   per the REALITY CHECK)? Unwanted — continue now. EXCEPTION: genuinely waiting on a named
+   human-only step (§2c) — state it plainly; that is a real stop, not a frivolous one; a cron
+   firing is not a signal to fake progress past it.
+4. >15 min since the last commit? Commit now.
+5. Did the last unit go green without a `cello-unit-reviewer` dispatch? Dispatch it now.
+6. State one line of current status (DoD line, red/green) so a human skimming later can see the
+   session was alive and unstuck at this timestamp.
 
 ## 4. First actions (order matters)
-1. **DOD-CBOR-1** — the canonical-envelope library + cross-party hash agreement is the
+1. **DOD-PORTAL-ARCH-1** — investigate the current portal as it actually is, then determine and
+   record the M10 portal architecture (where per-type verification modules live, the background-
+   job runner, key custody, the submission client, the registry publisher). It gates all portal
+   code and shapes DOD-CBOR-1's where-does-the-component-live decision.
+2. **DOD-CBOR-1** — the canonical-envelope component + cross-party hash agreement is the
    load-bearing foundation (spec §5: retrofitting a canonical form breaks every existing hash).
-   Nothing else starts until byte-agreement is proven.
-2. **Design notes owed before their tiers** (§6): registry document format + portal key custody
+   Its design note is already written as the worked example — journal Entry 1.
+3. **Design notes owed before their tiers** (§6): registry document format + portal key custody
    (before Tier 1); browser-extraction infrastructure (before Tier 4).
-3. Then the loop, tier order strict.
+4. Then the loop, tier order strict.
 
 ## 5. Hard rules (non-negotiable)
 - **One thread. One coder (the main loop). NO parallel implementation agents.** Read-only
@@ -192,8 +230,11 @@ crons at kickoff; re-arm after every restart/compaction.
 - **Vitest: one worker, foreground, timeout, filtered.** Never background a test process.
 - **Deferrals get a home** — DoD Parked + journal. No silent deferral.
 
-## 6. Design-significant units (short design note in the journal FIRST — approach,
-producer/consumer chain, the seam, invariants it must satisfy — then the loop)
+## 6. Design-significant units — design note in the journal FIRST, then the loop
+
+These units are NOT mechanical; each gets a **design note in the journal before any code**:
+- **PORTAL-ARCH-1** — the portal investigation + architecture determination (its OUTPUT is the
+  architecture section the whole milestone builds against — see the DoD line).
 - **REGISTRY-1** — the registry document format, its signing key, its serve/cache/TTL path
   (spec §15.2.5; the manifest-over-HTTP precedent).
 - **DIR-WRITE-1** — the authorized-issuer key set + submission signature format (spec §14.5:
@@ -203,6 +244,43 @@ producer/consumer chain, the seam, invariants it must satisfy — then the loop)
   infrastructure, not a code unit — it gets a full design log, and infra/STATE.md discipline.
 - **FLOOR-1** — the `SignalRequirementPolicy` v1 field set (spec §14.4 defers it to here).
 - **TRACK-1** — the Class-3 read path (what directory data the portal job may read, and how).
+
+### The design-note template (use this structure; the worked example is journal Entry 1 — CBOR-1)
+
+```markdown
+### YYYY-MM-DD — Entry N: DESIGN NOTE — DOD-<UNIT> (written before any code)
+
+**Target behavior (one sentence).** What an observer sees when this unit works.
+
+**Spec anchors.** The exact spec-of-record sections this unit implements (cite §), plus any
+RFC for crypto (Ed25519 → RFC 8032, CBOR → RFC 8949, SHA-256 → FIPS 180-4). A clause the spec
+does NOT pin gets called out as a decision this note is making.
+
+**Producer/consumer chain.** For each thing this unit creates or checks: who produces it,
+who consumes it, what breaks at each hop if it's wrong. This is the map reviewers verify
+against.
+
+**The seam.** Exactly where this unit's code meets existing code (files/interfaces), and which
+repo(s). What the interface must expose; what it must NOT know about (e.g. payload contents,
+signal types).
+
+**Invariants at stake.** Which DoD Tier-I invariants this unit can violate, and the specific
+design property that prevents each.
+
+**Approach + rejected alternative.** The chosen shape in 3–6 sentences, then at least ONE
+alternative considered and WHY it lost. (A design note with no rejected alternative hasn't
+looked hard enough.)
+
+**Falsification pass.** Before writing code: does the call site have the method on the
+INTERFACE? Does the fix location match where responsibility lives? What redundancy would this
+create? What else breaks? State what you checked.
+
+**Decisions this note makes.** Numbered; anything material graduates to the DoD Decisions
+section. Anything undecidable → PARK.
+
+**Test plan sketch.** The red-first assertions (fixture harness + focused), and which enforcer
+proves the unit (harness / live journey / CBOR cross-party / canary).
+```
 
 ## 7. What a checkpoint/handoff entry contains
 Which DoD lines are green WITH the enforcer-run output (not a claim); the exact next red + its
@@ -218,5 +296,5 @@ package versions if a cascade shipped; anything parked; anything that changes th
 - [[M10-TYPE-PLAYBOOK]] — the per-type runbook (the repeating unit after v1)
 - [[M10-TRUST-SIGNAL-STORAGE-AND-CREATION]] — spec-of-record: HOW signals are stored/created/verified
 - [[M10-TRUST-SIGNAL-TAXONOMY]] — spec-of-record: WHAT the signals are
-- [[M8C-PROCEDURE]] — the parent runbook this adapts (two-enforcer model, publish cascade, crons)
+- [[M8C-PROCEDURE]] — provenance only (this document is self-contained; nothing requires reading it)
 - [[2026-05-16_0800_trust-signal-verification-architecture|Trust Signal Verification Architecture]] — the OAuth/extraction design Tier 4 implements

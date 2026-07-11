@@ -78,16 +78,35 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
 - **DOD-INV-STATELESS-RECIPIENT** — the default recipient flow works with zero cached signal
   data; any cache is freshness-re-checked, never source of truth. — ❌
 
-## Tier 0 — Foundations (canonical form + generic stores)
+## Tier 0 — Foundations (portal architecture + canonical form + generic stores)
 
+- **DOD-PORTAL-ARCH-1** — **investigate the portal as it actually is, then determine the M10
+  portal architecture. First unit of the milestone; gates ALL portal code.** Two halves:
+  - **Investigation (evidence, not recall):** read the current cello-portal — auth/session
+    model, DB schema + migration state, `src/server/directory/` client (what it can already say
+    to the directory, and how it authenticates), `src/server/trust/handoff.ts` and the M8
+    trust-signals scaffold (where the WebAuthn/TOTP/phone/email verification state lives today),
+    background-job capability (Next.js 16 runtime constraints — is there anywhere for a
+    long-running Class-3 job to live, or does it need a separate worker?), key material handling
+    today, and the e2e-with-real-directory harness. Findings journaled with file-level evidence.
+  - **Architecture (the determination):** where per-type verification modules live and their
+    interface; how the portal signs (submission key + registry key custody — where a private key
+    can safely live in this deployment shape); the submission client; the registry publisher;
+    the Class-3 background job's home (in-portal vs separate worker process); how envelopes are
+    delivered to the holder daemon; what the trust-signals UI scaffold needs to become real.
+    Recorded as an **architecture section appended to this DoD's spec-of-record set** (a design
+    doc under `user-stories/m10/`, wikilinked here), reviewed by `cello-unit-reviewer` like any
+    unit, and its decisions logged in the Decisions section below. Downstream DoD lines that the
+    architecture reshapes are edited THEN, not discovered mid-build. — ❌
 - **DOD-CBOR-1** — a shared canonical-envelope component (serialize, hash, verify) usable from
   portal, directory, and client. Clauses: deterministic map ordering + defined number encoding
   per spec §5; the hash preimage is exactly spec §4's mandatory-disclosure set (subject,
   issuer_kind, issuer_pubkey, type, schema_version, payload, issued_at, expires_at,
   supersedes_hash — status/class/verified_at OUT); the **cross-party hash test** (all three
   consumers agree byte-for-byte on fixed vectors + property-based random envelopes) runs in CI.
-  Where the component lives (published package vs per-repo vendored spec-with-vectors) is a
-  Decisions entry when made. **First unit of the milestone.** — ❌
+  Where the component lives (published package vs per-repo vendored spec-with-vectors) is
+  decided by DOD-PORTAL-ARCH-1's architecture. Design note: journal Entry 1 (the worked
+  example). — ❌
 - **DOD-STORE-CLIENT-1** — holder-side `trust_signals` table per spec §3 (envelope columns,
   opaque payload BLOB, status mutable outside the hash) + recipient-side optional cache FK'd to
   the per-agent contact row. SQLCipher, keyed on `agent_id`. Migration idempotent; fresh schema

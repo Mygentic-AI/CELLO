@@ -15,8 +15,9 @@ description: >
 # M10 — Build Journal
 
 ## RESUME STATE (keep current — update at every checkpoint/compaction)
-- **Milestone status:** seeded, not started. **Next red: DOD-CBOR-1** (the canonical-envelope
-  component + cross-party hash test — first unit, everything sits on it).
+- **Milestone status:** seeded, not started. **Next red: DOD-PORTAL-ARCH-1** (investigate the
+  portal as-is, determine the M10 portal architecture — gates all portal code). Then DOD-CBOR-1,
+  whose design note is already written (Entry 1, the worked example).
 - **Design notes owed before code** (PROCEDURE §6): registry format + portal key custody
   (before Tier 1); browser-extraction infra (before Tier 4 only).
 - **Scope fence:** phone + email → track record (1–2) → GitHub → canary. Nothing else in v1
@@ -60,7 +61,78 @@ dependency. No deploy pipeline — local/dev for this milestone.
 (M8C Entry 87, daemon 0.0.45+); address-book schema live (v0.0.94); the M10 design docs carry
 the resolved §14 gap list and the §15 zero-bump amendment.
 
-**Next:** DOD-CBOR-1.
+**Next:** DOD-PORTAL-ARCH-1, then DOD-CBOR-1 (design note below).
+
+---
+
+### 2026-07-11 — Entry 1: DESIGN NOTE — DOD-CBOR-1 (written before any code; the worked example for PROCEDURE §6's template)
+
+**Target behavior (one sentence).** Any two parties — portal, directory node, holder daemon,
+recipient daemon — given the same trust-signal envelope, independently produce byte-identical
+canonical CBOR and therefore the identical SHA-256 hash, forever.
+
+**Spec anchors.** Spec-of-record §4 (the hash preimage IS the mandatory-disclosure set: subject,
+issuer_kind, issuer_pubkey, type, schema_version, payload, issued_at, expires_at,
+supersedes_hash; status/class/verified_at excluded), §5 (canonical CBOR is the hashed form; JSON
+is a never-hashed display projection). CBOR deterministic encoding → **RFC 8949 §4.2 (Core
+Deterministic Encoding)**. SHA-256 → **FIPS 180-4**. NOT pinned by the spec, so this note
+decides: the exact CBOR profile details, a domain-separation prefix, payload embedding, and
+where the component lives (deferred — DOD-PORTAL-ARCH-1 input).
+
+**Producer/consumer chain.** The portal PRODUCES the envelope bytes + hash at mint (§6). Four
+CONSUMERS re-derive: the directory at submission (re-hash before store — INV-CHOKEPOINT), the
+directory again at presentation (dumb check 1), the holder on receipt (verify before insert),
+the recipient at verification (re-hash the presented blob). A divergence at ANY hop is a false
+`hash_mismatch` — a valid signal becomes unpresentable, which is a correctness bug and, because
+it can differ per node/client version, a censorship-shaped one. That is why the cross-party test
+is a CI invariant (DOD-INV-CANONICAL), not a unit test.
+
+**The seam.** All three repos consume the component; NONE may parse `payload` (opaque bytes —
+the component canonicalizes the ENVELOPE, never the payload's interior; INV-ZERO-BUMP depends
+on this). Candidate homes: `@cello-protocol/crypto` (already a dependency of all three repos,
+including cello-portal) vs a vendored spec-with-test-vectors per repo. Leaning: the published
+package (one implementation, three consumers — divergence is the enemy), but the portal's
+Next.js 16 runtime constraints are DOD-PORTAL-ARCH-1's to confirm, so packaging is explicitly
+deferred to that unit's output.
+
+**Invariants at stake.** INV-CANONICAL (the unit's whole point). INV-ZERO-BUMP (the component
+must be type-blind: `type` is an opaque string in the map, `payload` an opaque byte string — if
+the encoder ever branches on type, zero-bump dies at the foundation). INV-CHOKEPOINT (the
+directory's re-hash at submission is only as strong as encoding agreement).
+
+**Approach + rejected alternative.** Encode the envelope as a CBOR map under RFC 8949 Core
+Deterministic Encoding: definite lengths only, minimal-length integer encoding, bytewise-sorted
+keys, **no floating point anywhere** (timestamps are integer epoch-seconds), `payload` embedded
+as a byte string verbatim (never decoded/re-encoded), absent optional fields OMITTED (never
+null — presence ambiguity is a canonicalization bug). Hash = SHA-256 over
+`"CELLO-TSIG-v1" || envelope-bytes` — the domain-separation prefix prevents a trust-signal hash
+from colliding with any other CELLO CBOR structure signed/hashed elsewhere (same pattern as the
+existing framed-message prefixes). REJECTED: canonical JSON (RFC 8785 JCS) — the protocol is
+already CBOR end-to-end, and JSON's number/Unicode normalization pitfalls are the exact failure
+class spec §5 calls out; JSON stays the display projection. ALSO REJECTED: ad-hoc field
+concatenation (order fragile, no tooling, reinvents what CDE specifies).
+
+**Falsification pass.** (1) Does `@cello-protocol/crypto` (or transport) already ship a CBOR
+encoder, and is it CDE-capable or configurable to be? — verify in code at unit start; do NOT
+assume; a second CBOR library in one repo is a red flag to surface. (2) Double-encoding trap:
+if the payload were parsed and re-encoded, a payload produced by a different encoder version
+would change bytes — treating payload as opaque bytes kills this class. (3) The portal runs on
+Node inside Next 16 — confirm the chosen encoder has no native-module install cost (repo rule:
+install size matters). (4) Nothing else consumes the envelope hash today, so no call-site
+regression surface exists yet — greenfield is the falsification result, journaled as such.
+
+**Decisions this note makes.** (1) RFC 8949 CDE profile, no floats, epoch-second integers,
+omit-absent-fields. (2) Domain-separation prefix `CELLO-TSIG-v1`. (3) Payload embedded as
+opaque bytes, never re-encoded. (4) Packaging deferred to DOD-PORTAL-ARCH-1 (leaning: the
+published crypto package). — (1)–(3) graduate to the DoD Decisions section when the unit goes
+green; (4) is that unit's to close.
+
+**Test plan sketch.** Red-first: committed fixed test vectors (envelope → exact hex bytes →
+exact hash) that all three repos' suites consume; property-based round-trip (random envelopes:
+encode → decode → encode is byte-identical); tamper tests (single-bit flip anywhere in the
+preimage changes the hash; a mutated `status` does NOT — it's outside the preimage); an
+unknown extra envelope field is REJECTED loud (the preimage is a closed set — spec §4).
+Enforcer: the CBOR cross-party CI test (DOD-INV-CANONICAL) green from this unit on.
 
 ---
 
