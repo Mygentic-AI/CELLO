@@ -122,6 +122,16 @@ RENAME-1 `2886c65`.
   contact.tier.changed) + MCP tool + CLI `cello contact tier`. listContacts extended with a read-side
   LEFT JOIN: tier, provenance, sealed-session count, last-spoke — per-agent scoped, no-sessions=never.
   Corrected the stale "exempt from screening" MCP descriptions.
+- **DEC-AB-4 (from DOD-RENAME-1 3b review F1 — rename baseline updates on ACCEPTANCE, not raw
+  offer-seen):** AC1 says "set last_offered_moniker unconditionally when the offer is SEEN." The
+  implementation updates the baseline (and any notice) right AFTER the acceptance-bound check passes —
+  so a BLOCKED or over-cap peer, whose offer is refused before any session state, does NOT update the
+  operator's rename baseline or push notices into their inbox. **Decision: keep the acceptance-gated
+  placement** (tighter: a peer you blocked or who is flooding you must not be able to drive your
+  address book or spam your inbox). Moved the call from the post-`acceptSession` point to immediately
+  after `bound.ok` so an ALLOWED peer is still tracked even if session formation transiently fails
+  (closing the reviewer's transient-failure gap). Tested both ways: an accepted differing offer →
+  notice; a BLOCKED named contact's differing offer → no notice.
 - **DOD-RENAME-1 — ✅ done (3b review in flight).** Option C: contact_rename_notices table +
   recordOfferedMoniker (at the offer-SEEN point, AFTER the acceptance bound — so a BLOCKED/over-cap
   sender can't manipulate the rename baseline; verified secure) / getRenameNotices / clearRenameNotice.
