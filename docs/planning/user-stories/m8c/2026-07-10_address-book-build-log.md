@@ -142,10 +142,24 @@ RENAME-1 `2886c65`.
 Gate at RENAME-1 commit: daemon 785, workspace 1993 pass; lint, typecheck, build clean. 3b (CONTACT-VIEW-1
 + RENAME-1) awaiting the Fable-5 review; TIER-4 already reviewed.
 
-## Step 4 — DOD-SETTINGS-1 / TIER-BOUNDS-SETTINGS / AWAY-TIER-1: settings + away messages — ⏳ NEXT
+## Step 4 — DOD-SETTINGS-1 / TIER-BOUNDS-SETTINGS / AWAY-TIER-1: settings + away messages — 🟡 IN PROGRESS
 
-Daemon-side per-agent settings store (SQLCipher, agent_id-keyed, NOT M9-CFG-001); make the bounds grid
-settings-overridable (reject Infinity/negative); per-tier + per-contact away messages, most-specific-first.
+- **DOD-SETTINGS-1 — ✅ done (review pending).** Commit `d385fca`. New agent_settings(agent_id, key,
+  value, updated_at) table + getSetting/setSetting(upsert, fail-closed)/getAllSettings. New
+  agent-settings-keys.ts: the key namespace — `bounds.<tier>.{max_sessions,max_bytes}` and
+  `away.default` / `away.tier.<tier>` for the settable tiers (unknown/known/whitelisted/vip; BLOCKED
+  fixed 0/0, never overridable). cello_settings_get/set handlers; unknown key REFUSED (invalid_key);
+  unset key → null so the consumer applies the default. Gate: daemon 794. Fable-5 review to run.
+- **DOD-TIER-BOUNDS-SETTINGS — ⏳ NEXT.** Make Step-2's `tierBoundsFor` read from settings first,
+  falling back to the hardcoded grid. Behavior identical with no settings; a `bounds.<tier>.max_sessions`
+  of 8 makes the 8th succeed / 9th refused. Reject Infinity/negative at SET time (INV-TIER-BOUND: a
+  setting cannot REMOVE a bound). Where: checkUnknownSenderAcceptanceBound + the two byte-cap gates read
+  a per-agent override via a new `resolveTierBound(agent, tier, field)` helper.
+- **DOD-AWAY-TIER-1 — ⏳ AFTER.** Per-tier + per-contact away messages. Resolution most-specific-first:
+  contacts.away_message (per contact) → away.tier.<tier> (settings) → away.default (settings) → system
+  default (code). cello_contact_set_away { agent, pubkey, message }. The resolved away text is SCREENED
+  on the outbound path like any content (does not bypass the gateway). Touches sendAwayResponse
+  (daemon.ts:968) which currently uses AWAY_TEXT[kind]/STRANGER_TEXT.
 
 ## Related
 - [[2026-07-10_address-book-implementation-spec]] — the spec (authority).
