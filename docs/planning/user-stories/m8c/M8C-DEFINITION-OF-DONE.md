@@ -173,7 +173,7 @@ description: >
   the actual `^[a-zA-Z0-9_-]{1,64}$`, today invisible); `register` shows a worked example, says
   quoting is only needed for spaces/metacharacters, explains the create-agent (local) → register
   (directory, needs token) two-step, and documents the `CELLO_PREAUTH_TOKEN` env-var form with a
-  real one-liner (it works today via `cello.ts:82` but is invisible in help). (F24, R1, R2, R5) — ✅ (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL.
+  real one-liner (it works today via `cello.ts:82` but is invisible in help). (F24, R1, R2, R5) — 🟡 (2026-07-06, Entry 12 — built `448c362`/`af6d9b7`, reviewed SPEC-FAITHFUL.
   **Per-command help ✅ — LIVE-CONFIRMED by Andre 2026-07-11** (`cello create-agent --help` gives real help:
   name rule from the shared regex + next step). **Top-level `cello --help` — half-done:** CC-7 (`f486e32`,
   cli 0.0.44) added the orientation HEADER (what CELLO is + the `login → create-agent → register → status`
@@ -186,6 +186,14 @@ description: >
   plus a footer telling a bash agent the commands print JSON + exit non-zero. Both halves (per-command +
   top-level table) now give REAL help. (An earlier note this session wrongly called this DONE from the header
   alone — corrected by Andre, then genuinely closed once the table shipped in cli 0.0.45.))
+  **⟲ REOPENED 2026-07-11 (Andre) — the table STRUCTURE shipped but the CONTENT fails "REAL help."** Several
+  descriptions are opaque or misleading: `install` reads as "install CELLO itself" and hardcodes Hermes (a
+  *parameter*); `refresh` ("threshold shares / new epoch"), `receipts` ("relay ordering receipts") and
+  `telegram` ("daemon-owned doorbell") are opaque even to the architect; `send` says "honors read-before-write"
+  (jargon); `sessions`/`contact` wording is ambiguous. The command ORDER is neither alphabetical nor grouped
+  (`register` before `create-agent`). Real help = accurate + intuitive descriptions + a sane order (grouped or
+  alphabetical). Also `contact`→plural + the list/single-contact mixing. Revision folded into the CLI-PARITY
+  help pass; design decisions being gathered (ordering, `install` rename, `contacts` structure). Stays 🟡.
 - **DOD-ONBOARD-ERRORS-1** — register-path errors are specific and actionable, never a generic
   Usage dump or silence: missing token → "you're missing the pre-auth token" (not the Usage line);
   malformed token → "that isn't a pre-auth token — they start with `CELLO-`"; unknown agent →
