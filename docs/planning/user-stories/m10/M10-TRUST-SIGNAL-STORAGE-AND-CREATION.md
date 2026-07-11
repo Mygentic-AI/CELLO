@@ -33,9 +33,14 @@ description: >
 - **No single score, ever** — inherited hard rule from the taxonomy. Tier is not a signal.
 - **Agent-scoped, not daemon-level** — a signal shared with one agent is invisible to co-resident
   agents; cross-agent trust propagates only by explicit endorsement + PSI (§10).
-- **The recipient does not persist the subject's signals** — it holds the *relationship*; the subject
-  holds its own reputation and re-presents the current set each time (§9). The recipient-side
-  `trust_signals` table is an **optional cache**, never source of truth.
+- **The recipient stores what was presented, but evaluates only what is presented now** *(amended
+  2026-07-11, Andre — M10-D4; the earlier "verdict-only / does-not-persist" phrasing was wrong)*.
+  Received signals ARE stored — plaintext envelope rows inside the encrypted SQLCipher DB (the same
+  posture as the transcript), FK'd to the recipient's contact row for the subject, stamped
+  `verified_at` — as re-checkable **evidence**. Statelessness is about *reliance*, not storage: the
+  subject re-presents its current set each time, policy evaluation runs on that presented set alone,
+  and the stored copy is never source of truth for freshness (re-checked on use) and never
+  substitutes for presentation.
 - **Tier never auto-downgrades** — signals inform tier decisions; a revoked signal that earned a tier
   surfaces a *review prompt*, it does not silently change the tier (§9).
 - **PSI is a general contact-overlap primitive** (§11), client-side / two-party / directory-relayed —
@@ -98,9 +103,9 @@ writing.
 | **Recipient** (local SQLCipher, in *their* contact row for you) | the plaintext you presented + hash + **`verified_at`** | **evidence**, re-checkable |
 
 The recipient cell is why this milestone sits on the address-book work: a received signal is a
-`trust_signals` row FK'd to the recipient's contact record for the subject — which is exactly why that
-table must key on `agent_id` ([[2026-07-10_agent-id-joinkey]]) and be born on the address-book schema
-([[2026-07-10_contact-address-book-design]]).
+`contact_trust_signals` row (§3.1) FK'd to the recipient's contact record for the subject — which is
+exactly why that table must key on `agent_id` ([[2026-07-10_agent-id-joinkey]]) and be born on the
+address-book schema ([[2026-07-10_contact-address-book-design]]).
 
 ---
 
@@ -170,6 +175,43 @@ trust_signals(
 > per type. Someone will want to "optimize" by hoisting a payload field into a real column. **Forbidden.**
 > It re-hardcodes the type into the schema and destroys every extensibility property above — the exact
 > `agent_name`-as-join-key mistake ([[2026-07-10_agent-id-joinkey]]). The type stays in the payload.
+
+### 3.1 The two client tables (decided 2026-07-11, Andre — M10-D4)
+
+The one envelope shape above lives in **TWO daemon tables with different lifecycles — never one table
+with a role flag**. Both are plaintext-inside-SQLCipher (the same posture as the transcript), both key
+on `agent_id`, and neither ever interprets `payload`.
+
+**`trust_signals` — the wallet (holder side).** Envelopes about the daemon's OWN agents
+(`subject` = the local agent's identity), delivered from the creation chokepoint. Durable: this is
+what the agent presents, it rides `cello_backup`/`restore` (§14.9), and losing it means re-minting.
+Exactly the §3 envelope columns; `status` mutable outside the hash. **The M8 scaffold table of the
+same name (signal_kind/payload shape, `agent_id` written NULL) is DROPPED and its signals re-minted
+via the §14.10 backfill — never migrated.** We are in alpha with no users; incorrect data is not
+maintained.
+
+**`contact_trust_signals` — the received store (recipient side).** Envelopes a counterparty presented
+during an introduction, stored as re-checkable **evidence**:
+
+```
+contact_trust_signals(
+  signal_hash      TEXT,     -- content address, re-verified before insert
+  agent_id         TEXT,     -- the LOCAL receiving agent (scoping key)
+  contact_pubkey   TEXT,     -- the presenting counterparty
+  -- ...all §3 envelope columns (subject, issuer_kind, issuer_pubkey, type,
+  --    schema_version, payload BLOB, issued_at, expires_at, supersedes_hash, status)...
+  verified_at      INTEGER,  -- when this recipient last verified hash ∈ directory + status (metadata, local, never hashed — §4)
+  received_at      INTEGER,
+  PRIMARY KEY (agent_id, contact_pubkey, signal_hash),
+  FOREIGN KEY (agent_id, contact_pubkey) REFERENCES contacts(agent_id, pubkey)
+)
+```
+
+The composite FK to the per-agent contact row is what makes `INV-AGENT-SCOPED` structural (§10): a
+query scoped by one agent's `agent_id` cannot see a co-resident agent's received signals. Rows here
+are **evidence, never an evaluation input** — policy always runs on the currently-presented set (§9),
+and freshness is always re-checked on use (§8, §14.7). Exact DDL (indexes, NOT NULLs) is
+DOD-STORE-CLIENT-1's to finalize; the columns and keys above are spec.
 
 ---
 
@@ -333,18 +375,27 @@ is the weakest of the three layers.
 Trust-sharing has an obvious set of cases: first contact; a known contact sharing more; an *updated*
 signal (supersession); a *new* signal on an existing agent. **From the recipient's side they are one
 operation** — "evaluate the initiator's current full set against my policy" — because of one decision:
-**the recipient does not remember what a subject showed it last time.** The distinctions are real, but
-they live on the *subject's* side (what they've accumulated) or in the recipient's *existing
+**the recipient never evaluates from memory** *(amended 2026-07-11, M10-D4: it DOES store what it was
+shown — see below — but stored copies are evidence, never an evaluation input)*. The distinctions are
+real, but they live on the *subject's* side (what they've accumulated) or in the recipient's *existing
 relationship* (does it already have a tier for this pubkey), never in the sharing mechanics.
 
-**Why this is right, not just simple:** *your trust signals are yours to carry, not others' to hoard.*
-If every recipient stored copies of your set, your reputation would scatter across everyone's databases —
-stale copies everywhere, and a disclosure leak (whoever you showed can dump what you revealed). Instead:
+**Why this is right, not just simple:** *your trust signals are yours to carry — stale copies of them
+have no authority.* Recipients DO keep what they were shown (that is a normal consequence of
+disclosure — the transcript already works this way, and the stored copy is the recipient's evidence
+in a dispute). What would scatter your reputation is recipients *evaluating from* those copies:
+stale sets treated as current, revoked signals living on in other people's databases. So authority
+and storage are split:
 
-- **Subject (Alice)** holds her own signals — her wallet, the stateful holder.
-- **Recipient (Bob)** holds the **relationship** — the contact row (tier, moniker, met-how, last-seen),
-  optionally a cached *verdict* ("as of last session Alice cleared my known-tier bar") with a freshness
-  stamp — **never the signal data, and never relied upon.** The default flow works with zero cache.
+- **Subject (Alice)** holds her own signals — her wallet, the stateful holder, the only party whose
+  set is authoritative.
+- **Recipient (Bob)** holds the **relationship** — the contact row (tier, moniker, met-how,
+  last-seen) — **plus a stored copy of every signal Alice presented to him**
+  (`contact_trust_signals`, §3.1: plaintext in his encrypted SQLCipher DB, FK'd to his contact row
+  for Alice, stamped `verified_at`). That copy is **evidence, re-checkable — never the input to a
+  later evaluation, never trusted for freshness.** Evaluation always runs on what Alice presents
+  *now*. *(Amended 2026-07-11, M10-D4 — an earlier revision said Bob keeps "only a verdict, never
+  the signal data"; that was wrong.)*
 
 This is the moniker principle inverted: your name for a contact is yours; their reputation is theirs.
 
@@ -353,7 +404,7 @@ This is the moniker principle inverted: your name for a contact is yours; their 
 | **First contact + signals** | Unknown subject presents its set; recipient evaluates against its *unknown-sender* policy. Accept → unknown→known, contact row created. Reject, or a second round ("also provide X?"). |
 | **First contact, shares nothing** | No-signals policy applies → typically reject for an unknown. Sharing is *selective disclosure*: share all, some, or none; the recipient's policy may demand specific signals — that is the second round. |
 | **Known contact, new/added signals** | Current full set is richer; the recipient already has a tier. New signals matter only for *elevation* (known→whitelisted) — otherwise informational. |
-| **Updated signal (supersession)** | The current version is presented; with no persistence there is no "it updated" event and none is needed. The old hash is superseded at the directory; a stale copy fails freshness. |
+| **Updated signal (supersession)** | The current version is presented; because evaluation runs on the presented set, there is no "it updated" event and none is needed. The old hash is superseded at the directory; a stale stored copy is evidence of what WAS presented, and fails freshness if replayed. |
 
 **Two edge cases this handles cleanly, one it does not:**
 
@@ -396,10 +447,10 @@ network-graph class IS the cross-agent trust channel.** Trust propagates by expl
 shared storage — and the architecture already has that consent-respecting channel, which is exactly why
 the leaky one is unnecessary.
 
-- **The schema enforces this for free:** the recipient-side `trust_signals` cache FKs to a *per-agent*
-  contact row keyed on `agent_id`, so a query scoped by Alice's `agent_id` structurally cannot see
-  Ms_Chelly's contacts or their signals. The join-key fix is the enforcement mechanism, not just a
-  correctness fix.
+- **The schema enforces this for free:** the recipient-side `contact_trust_signals` store (§3.1) FKs
+  to a *per-agent* contact row keyed on `agent_id`, so a query scoped by Alice's `agent_id`
+  structurally cannot see Ms_Chelly's contacts or their signals. The join-key fix is the enforcement
+  mechanism, not just a correctness fix.
 - **Security bonus:** agent-scoping *contains the blast radius* — a compromised Ms_Chelly exposes
   Ms_Chelly's trust graph, not Alice's. Daemon-level would make one compromised agent a window into every
   co-resident agent's relationships, the fattest target on the machine.
@@ -517,8 +568,10 @@ from enumeration, not the endorsement *content*, which is meant to be shown.
 - **INV-AGENT-SCOPED** — a signal shared with one agent is invisible to co-resident agents; the only
   cross-agent trust channel is explicit endorsement + PSI (§10). Enforced by the per-agent (`agent_id`)
   `trust_signals` FK.
-- **INV-RECIPIENT-STATELESS** — the recipient holds the *relationship*, not the subject's signals; any
-  stored signal is an optional, freshness-re-checked cache, never source of truth (§9).
+- **INV-RECIPIENT-STATELESS** — statelessness is about RELIANCE, not storage *(amended 2026-07-11,
+  M10-D4)*: policy evaluation consumes only the currently-presented set. Stored received signals
+  (`contact_trust_signals` evidence rows, §3.1/§9) are never an input to acceptance, never trusted
+  for freshness (re-checked on use), and the flow works even when none exist.
 - **INV-PSI-CLIENT-SIDE** — PSI computes on the two clients; the directory brokers/relays only, never
   computes, never sees the graphs (§11). A directory that participates in the set computation is a
   violation.
@@ -547,8 +600,8 @@ from enumeration, not the endorsement *content*, which is meant to be shown.
 
 ## 13. Cross-milestone dependencies
 
-- **Address book + `agent_id` join key.** The `trust_signals` table FKs to the recipient's contact row;
-  it must be born on `agent_id` and on the address-book schema. **M10 storage cannot be designed until
+- **Address book + `agent_id` join key.** The `contact_trust_signals` table (§3.1) FKs to the
+  recipient's contact row; it must be born on `agent_id` and on the address-book schema. **M10 storage cannot be designed until
   [[2026-07-10_agent-id-joinkey]] lands and [[2026-07-10_contact-address-book-design]]'s tables exist.**
 - **M9 gateway.** If recipient re-scan is adopted, the gateway needs a **no-redact, pass/block** verdict
   mode for hash-anchored content (M9-FEED-001 today is redact/allow/block/warn). Flag in both milestones.

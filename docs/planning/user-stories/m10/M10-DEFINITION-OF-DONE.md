@@ -75,8 +75,10 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   quoted-untrusted). — ❌
 - **DOD-INV-NO-SCORE** — signals stay independent and named; nothing collapses them into a
   score/level/rank anywhere (storage, policy, UI, LLM prompt). — ❌
-- **DOD-INV-STATELESS-RECIPIENT** — the default recipient flow works with zero cached signal
-  data; any cache is freshness-re-checked, never source of truth. — ❌
+- **DOD-INV-STATELESS-RECIPIENT** — statelessness = reliance, not storage (M10-D4): policy
+  evaluation consumes ONLY the currently-presented set; stored received signals
+  (`contact_trust_signals`, spec §3.1) are evidence — never an evaluation input, never trusted for
+  freshness (re-checked on use) — and the flow works with zero stored signal data. — ❌
 
 ## Tier 0 — Foundations (portal architecture + canonical form + generic stores)
 
@@ -107,9 +109,12 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   Where the component lives (published package vs per-repo vendored spec-with-vectors) is
   decided by DOD-PORTAL-ARCH-1's architecture. Design note: journal Entry 1 (the worked
   example). — ❌
-- **DOD-STORE-CLIENT-1** — holder-side `trust_signals` table per spec §3 (envelope columns,
-  opaque payload BLOB, status mutable outside the hash) + recipient-side optional cache FK'd to
-  the per-agent contact row. SQLCipher, keyed on `agent_id`. Migration idempotent; fresh schema
+- **DOD-STORE-CLIENT-1** — TWO daemon tables per spec §3.1 (M10-D4), never one with a role flag:
+  **(1) wallet `trust_signals`** per spec §3 (envelope columns, opaque payload BLOB, status mutable
+  outside the hash; subject = the local agent) — the existing M8 scaffold table is **dropped and its
+  signals re-minted via the §14.10 backfill, never migrated** (alpha, no users); **(2) received
+  store `contact_trust_signals`** (envelope columns + `verified_at` + `received_at`, composite FK to
+  `contacts(agent_id, pubkey)`). SQLCipher, keyed on `agent_id`. Migration idempotent; fresh schema
   == migrated schema. — ❌
 - **DOD-STORE-DIR-1** — directory `signal_records` table (`signal_hash` PK, subject,
   issuer_pubkey, issuer_kind, type-as-opaque-string, status, superseded_by, revoked_at,
@@ -153,7 +158,8 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   per-tier choice surface, default sensible); the directory runs its two dumb checks in the
   moment and forwards or strips with a named event; nothing persists directory-side. — ❌
 - **DOD-VERIFY-1** — the recipient re-hashes each presented blob, checks directory membership +
-  status (fresh, not revoked/superseded), records `verified_at`. Freshness policy per spec
+  status (fresh, not revoked/superseded), stores the verified signal in `contact_trust_signals`
+  with `verified_at` (M10-D4). Freshness policy per spec
   §14.7: TTL re-check on use; past-TTL + directory unreachable = disclosed staleness, tier
   policy decides (established contacts proceed, unknowns are refused) — never silent-accept,
   never hard-reject. — ❌
@@ -237,6 +243,16 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
 - **M10-D3 (2026-07-11) — GitHub before LinkedIn.** One external validator in v1; GitHub first
   per the 2026-05-16 log's provider order (mature OAuth, richer public data). Reverse: LinkedIn
   is the first post-v1 playbook run.
+- **M10-D4 (2026-07-11, Andre) — Recipient-side storage: store what was presented; evaluate only
+  what is presented.** Received signals ARE stored — plaintext envelope rows inside the encrypted
+  SQLCipher DB, FK'd to the per-agent contact row, stamped `verified_at`/`received_at` — as
+  re-checkable evidence; every earlier "verdict-only / does-not-persist" phrasing was wrong and is
+  amended (spec §0/§9/§12). Statelessness means RELIANCE: policy evaluates the currently-presented
+  set only; stored copies never feed acceptance and are never trusted for freshness. TWO tables,
+  never one with a role flag: wallet `trust_signals` (durable, rides backup §14.9) and received
+  store `contact_trust_signals` (spec §3.1). The M8 scaffold rows are dropped and re-minted via the
+  §14.10 backfill — alpha, no users, incorrect data is not maintained. Reverse: verdict-only would
+  delete the evidence purpose (§1) — not foreseen.
 
 ## Parked
 *(Genuine undecidable forks: journal + here. Never silently dropped.)*
