@@ -114,9 +114,12 @@ state exists.
 - **AC1** `isAutoAccept(agentId, pubkey)` = `getTier() >= WHITELISTED`. This is the *policy* gate (auto-accept
   an inbound session).
 - **AC2** `isKnown(agentId, pubkey)` = `getTier() >= KNOWN`. This is the *display/relationship* check.
-- **AC3** Accepting a stranger's session → the new contact is `KNOWN` (not whitelisted — decision 1a).
-  Initiating to a stranger → also `KNOWN`, `provenance='initiated'`. (Neither auto-accepts future inbound;
-  that requires an explicit promote.)
+- **AC3** Promotion to `KNOWN` is by **engagement, not mere accept** (DEC-AB-3 — tighter than the original
+  "on accept → KNOWN"): a *committed reply* into an accepted inbound session (`provenance='accepted'`), an
+  outbound *initiate* (`provenance='initiated'`), or an explicit add promotes a contact to `KNOWN`. A bare
+  transport-accept of an inbound knock adds nothing — a stranger who merely knocks is not promoted
+  (preserves CC-1, live-verified). (None auto-accept future inbound; that requires an explicit promote to
+  `WHITELISTED`.)
 - **AC4** Every former `isContact()` call site is now one of `isAutoAccept` / `isKnown` / the bounds grid —
   **and none gate a screening call** (INV-TIER-SCREEN; verify).
 
@@ -131,9 +134,11 @@ state exists.
   zero/never, not an error.
 
 **DOD-RENAME-1 — Option C: the stored name is sacrosanct; renames are noticed, never auto-applied.**
-- **AC1** On every inbound offer carrying a moniker, set `last_offered_moniker` to that value —
-  **unconditionally, when the offer is SEEN** (not when a notice is read). This is what makes rename
-  detection idempotent (design §3).
+- **AC1** On an inbound offer carrying a moniker, set `last_offered_moniker` to that value **once the
+  session acceptance-bound check has passed** (DEC-AB-4 — tighter than the original "unconditionally, when
+  the offer is SEEN"): a `BLOCKED` or over-cap peer, refused before any session state, must NOT drive the
+  operator's rename baseline or push a notice into their inbox. For an accepted peer it still updates on
+  offer-seen (not when a notice is read) — which is what keeps rename detection idempotent (design §3).
 - **AC2** A stored local moniker (`contacts.moniker`) is **never overwritten** by an offered name. `whoLabel`
   precedence is unchanged: local pet name wins.
 - **AC3** When an inbound offered moniker **differs from `last_offered_moniker`** for a contact the operator
@@ -190,6 +195,24 @@ Named events, with `{ agentName/agentId, pubkey, correlationId }` where applicab
 - `session.inbound.refused.tier` (a `BLOCKED` or over-cap sender refused) — reuse/extend the existing
   abuse-bound refusal event; do not invent a blocked-specific one that leaks the tier to the sender.
 - `contact.away.resolved` (which level matched) — at away-response time, debug level.
+
+## Post-build reconciliations (2026-07-11)
+
+After the whole-unit Fable-5 `cello-done-auditor` pass (verdict: 6 EARNED, 3 EARNED-PENDING-LIVE-SMOKE,
+0 NOT-EARNED; both invariants hold):
+
+- **AC text amended to the journaled decisions** (this file): TIER-4 **AC3** → engagement-promotes
+  (DEC-AB-3); RENAME-1 **AC1** → acceptance-gated baseline (DEC-AB-4). The code was always the tighter
+  version; the ACs now match so future readers don't diff code against stale text. Full rationale:
+  `2026-07-10_address-book-build-log.md` (DEC-AB-1..4).
+- **Operator-surface unit added before the publish cascade** (Andre's call, 2026-07-11): `cello_settings_get`
+  / `cello_settings_set` as MCP tool + CLI, mirroring `cello_contact_set_tier`. Without it,
+  `DOD-TIER-BOUNDS-SETTINGS` and the per-tier / agent-default away messages (`away.tier.<tier>`,
+  `away.default`) would ship as dead features — reachable only over daemon IPC. The SET path validates at the
+  handler boundary (valid key; bound values finite + strictly positive — reject `Infinity`/negative/0).
+- **Follow-up (non-blocking, logged):** a slow-gateway **race test** for the second (re-check) byte-cap gate
+  (`session-node-manager.ts` ~L3393). Both gates are code-identical today, so a re-check-only regression
+  would stay green without it.
 
 ## Not in scope (deferred to later units — do NOT build)
 
