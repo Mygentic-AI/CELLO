@@ -165,8 +165,13 @@ three steps completed from the command guidance alone, no source-reading. Rough 
       • if it stays disconnected, run  cello logout  then  cello login.
     ```
 
-- ⬜ **P2-2. FUNCTIONAL BUG — a freshly-registered agent is `standing_receiver_ready: false` and can't
-  receive until a daemon restart.** *(cello-client daemon)*
+- ✅ **P2-2. FUNCTIONAL BUG — a freshly-registered agent is `standing_receiver_ready: false` and can't
+  receive until a daemon restart.** *(cello-client daemon)* **FIXED same day, 2026-07-07 — cello-client
+  `e73c421` (commit message: `fix(m8c CC-2): register arms the standing receiver — fresh agent can receive
+  without a restart`), reviewed (cello-unit-reviewer: SPEC FAITHFUL / NO SILENT FALLBACKS / TESTS HAVE
+  TEETH, one LOW fixed). Shipped since `v0.0.94`; VERIFIED 2026-07-11 present in the currently-promoted
+  `latest` tarball (`daemon@0.0.49`, `registration.standing_receiver.arm_initiated` found in
+  `dist/daemon.js`). This checklist simply never got updated to reflect it — no code work remains.
   - **Observed:** right after `cello register CELLO_Feedback`, `cello status` showed CELLO_Feedback
     `standing_receiver_ready: false` while the two boot-time agents (CELLO_Support, Ms_Chelly) showed
     `true`. A `cello logout` → `cello login` (full daemon restart) armed it → `true`. **Recurring**

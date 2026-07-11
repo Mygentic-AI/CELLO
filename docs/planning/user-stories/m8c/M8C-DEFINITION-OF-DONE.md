@@ -381,11 +381,12 @@ description: >
   (2026-07-07 — `npm dist-tag add @cello-protocol/connect@0.0.60 latest`; default unpinned install
   now = the proven combo connect 0.0.60 + cli 0.0.30 → daemon 0.0.32). **Cold-onboarding half —
   2026-07-07 WALKED LIVE:** create-agent→register→status succeeded from the command guidance alone
-  (agent `CELLO_Feedback`), so the CLI mechanics are PROVEN. But the gate is NOT clean yet — the walk
-  surfaced blockers: the Telegram handoff still names the wrong env var (`CELLO_REGISTRATION_TOKEN`,
-  which the CLI does not read) so a literal follower is stuck, plus the register-doesn't-arm-the-
-  standing-receiver bug (P2-2). Gate flips ✅ when the onboarding mini-sprint ships. See
-  [[M8C-ONBOARDING-IMPROVEMENTS]].)
+  (agent `CELLO_Feedback`), so the CLI mechanics are PROVEN. **P2-2 (register-doesn't-arm-the-standing-
+  receiver) was FIXED the same day** (`e73c421`), shipped since `v0.0.94`, and verified present in the
+  currently-promoted `latest` daemon tarball 2026-07-11 — no longer a blocker. Remaining gap: the
+  Telegram registration-bot handoff still names the wrong env var (`CELLO_REGISTRATION_TOKEN`, which the
+  CLI does not read), an ops-agent copy fix, still unbuilt (Phase 1 of [[M8C-ONBOARDING-IMPROVEMENTS]]).
+  Gate flips ✅ once that ships (or is judged non-blocking if Telegram isn't the primary onboarding path).)
   - **Onboarding legibility bar (see the ONBOARD-* riders above — ordered before this line because the launch smoke includes them):** the Tier 1 launch smoke
     includes a COLD onboarding run — a fresh operator does `create-agent → register → status`
     with no prior CELLO knowledge and can complete it from the tool output alone (help, errors,
