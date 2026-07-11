@@ -199,16 +199,21 @@ trust_signals(
 ### 3.1 The two client tables (decided 2026-07-11, Andre — M10-D4)
 
 The one envelope shape above lives in **TWO daemon tables with different lifecycles — never one table
-with a role flag**. Both are plaintext-inside-SQLCipher (the same posture as the transcript), both key
-on `agent_id`, and neither ever interprets `payload`.
+with a role flag**. Both are plaintext-inside-SQLCipher (the same posture as the transcript), and
+neither ever interprets `payload`. *(Amended 2026-07-11, Andre — M10-D14: only the RECEIVED store
+keys on `agent_id`; the wallet does not.)*
 
-**`trust_signals` — the wallet (holder side).** Envelopes about the daemon's OWN agents
-(`subject` = the local agent's identity), delivered from the creation chokepoint. Durable: this is
-what the agent presents, it rides `cello_backup`/`restore` (§14.9), and losing it means re-minting.
-Exactly the §3 envelope columns; `status` mutable outside the hash. **The M8 scaffold table of the
-same name (signal_kind/payload shape, `agent_id` written NULL) is DROPPED and its signals re-minted
-via the §14.10 backfill — never migrated.** We are in alpha with no users; incorrect data is not
-maintained.
+**`trust_signals` — the wallet (holder side).** Envelopes about the daemon's own agents OR their
+account, delivered from the creation chokepoint. Durable: this is what the agent presents, it rides
+`cello_backup`/`restore` (§14.9), and losing it means re-minting. Exactly the §3 envelope columns;
+`status` mutable outside the hash. **Wallet rows carry NO agent association (M10-D14): PK =
+`signal_hash`, one row per signal per daemon.** The envelope's own hashed `subject_kind`/`subject`
+decide who can present it, at presentation time — an account-subject row serves every local agent
+under the account (no per-agent copies, no assignment sweep at agent-add, no re-assignment at
+renewal; agent-add stays the no-op M10-D5 requires), an agent-subject row serves its subject.
+**The M8 scaffold table of the same name (signal_kind/payload shape, `agent_id` written NULL) is
+DROPPED and its signals re-minted via the §14.10 backfill — never migrated.** We are in alpha with
+no users; incorrect data is not maintained.
 
 **`contact_trust_signals` — the received store (recipient side).** Envelopes a counterparty presented
 during an introduction, stored as re-checkable **evidence**:

@@ -125,14 +125,17 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   outside the hash; subject = the local agent) — the existing M8 scaffold table is **dropped and its
   signals re-minted via the §14.10 backfill, never migrated** (alpha, no users); **(2) received
   store `contact_trust_signals`** (envelope columns + `verified_at` + `received_at`, composite FK to
-  `contacts(agent_id, pubkey)`). SQLCipher, keyed on `agent_id`. **The M8 defect dies with the drop:**
-  the scaffold wrote `agent_id = null` (investigation §9, `daemon.ts:4920`) — both new tables declare
-  `agent_id NOT NULL` and every write path attributes it, or INV-AGENT-SCOPED is violated at birth.
-  **Account-subject rows (M10-D5):** wallet key is `(agent_id, signal_hash)` — N agents hold N
-  attributions of the SAME content-addressed envelope; duplicate insert is a no-op
-  (`INSERT OR IGNORE` semantics, the same property §14.11's sync relies on). Bytes-once
-  normalization (envelope stored once + per-agent attribution rows) is a free implementation
-  choice, invisible to the protocol. Migration idempotent; fresh schema == migrated schema. — ❌
+  `contacts(agent_id, pubkey)`). SQLCipher. **Wallet rows carry NO agent association (M10-D14,
+  Andre — supersedes an earlier per-agent-attribution draft): PK = `signal_hash`, one row per
+  signal per daemon.** The envelope's own hashed `subject_kind`/`subject` fields answer "who can
+  present this" at presentation time — account-subject rows serve every local agent under the
+  account, agent-subject rows serve their subject. Agent-add on an existing daemon is therefore
+  ZERO signal work (no assignment sweep, per M10-D5's agent-add-is-a-no-op); renewal is one new
+  row per daemon; duplicate delivery is a no-op (`INSERT OR IGNORE` — the §14.11 sync property).
+  **`agent_id NOT NULL` applies to the RECEIVED store** (`contact_trust_signals` — consent
+  scoping is genuinely per-agent; INV-AGENT-SCOPED), where the M8 `agent_id = null` defect
+  (investigation §9, `daemon.ts:4920`) must die with the drop. Migration idempotent; fresh schema
+  == migrated schema. — ❌
 - **DOD-STORE-DIR-1** — directory `signal_records` table (`signal_hash` PK, subject_kind,
   subject, issuer_pubkey, issuer_kind, type-as-opaque-string, status, superseded_by, revoked_at,
   accepting_node, scanner_version) + replication of records AND status changes over the existing
@@ -310,13 +313,20 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
     exhaustion fails LOUD (`unreachable: true` posture); manifest-driven discovery post-v1.
   - **M10-D12** — the portal keeps no authoritative signal state; the directory's `signal_records`
     is the record; only TTL'd transient verification-flow state is permitted portal-side.
-  - **M10-D13** — late-added agents get account-subject envelopes by **re-mint with supersession**
-    (amends M10-D5: agent-add = no-op on verification, supersede on delivery); same-daemon sibling
-    copy allowed; directory/portal never hold envelope plaintext. Residual disclosed: out-of-band
-    agent-add waits for the next portal touch. **A BRIDGE, not a policy (Andre):** wallet sync
-    (spec §14.11 — content-addressed rows, `INSERT OR IGNORE`) is the real solution and is parked;
-    when it ships, the re-mint pass stops being needed, with no migration (synced row == delivered
-    row).
+  - **M10-D13** — an agent added on a NEW DAEMON gets account-subject envelopes by **re-mint with
+    supersession** (amends M10-D5: agent-add = no-op on verification, supersede on delivery);
+    directory/portal never hold envelope plaintext. Residual disclosed: out-of-band agent-add
+    waits for the next portal touch. **A BRIDGE, not a policy (Andre):** wallet sync (spec §14.11
+    — content-addressed rows, `INSERT OR IGNORE`) is the real solution and is parked; when it
+    ships, the re-mint pass stops being needed, with no migration (synced row == delivered row).
+    **Same-daemon agent-add needs NOTHING** — under M10-D14 the account-subject row is already
+    daemon-level; there is no copy, no assignment, no delivery.
+  - **M10-D14 (Andre) — wallet rows carry no agent association.** PK = `signal_hash`, one row per
+    signal per daemon; the envelope's own hashed `subject_kind`/`subject` decides who can present
+    it, at presentation time. Supersedes the earlier per-agent `(agent_id, signal_hash)`
+    attribution draft, which reintroduced the per-agent bookkeeping M10-D5 stipulated against
+    (agent-add sweeps, expiry re-assignment). `agent_id NOT NULL` remains the rule for the
+    RECEIVED store only.
 - **M10-D4 (2026-07-11, Andre) — Recipient-side storage: store what was presented; evaluate only
   what is presented.** Received signals ARE stored — plaintext envelope rows inside the encrypted
   SQLCipher DB, FK'd to the per-agent contact row, stamped `verified_at`/`received_at` — as

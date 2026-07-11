@@ -132,10 +132,11 @@ mint-or-deliver pass finds an agent without a current account-subject envelope A
 constructible, the portal **re-mints** (fresh `issued_at` → new hash → `supersedes_hash` chain) and
 fans the sealed delivery to ALL the account's agents; the old envelope goes `superseded` normally.
 This amends M10-D5's "agent-add is a no-op" to: **no-op on verification** (the fact is not
-re-verified; still one envelope per fact, never per-agent envelopes), **supersede on delivery**.
-Same-daemon optimization allowed: sibling agents under the same account on one daemon may copy the
-content-addressed wallet row locally (the operator's own data — INV-AGENT-SCOPED governs *received*
-signals, not your own wallet), avoiding the re-mint in the common case. **Disclosed residual:**
+re-verified; still one envelope per fact, never per-agent envelopes), **supersede on delivery** —
+and it applies ONLY to an agent on a **new daemon**. Same-daemon agent-add needs nothing at all:
+under M10-D14 the account-subject wallet row is daemon-level (no agent association; INV-AGENT-SCOPED
+governs *received* signals, not your own wallet), so a sibling agent presents the row that is
+already there. **Disclosed residual:**
 agent-add through the portal (the normal path — pre-auth minting is a portal touch) triggers the
 pass immediately; an agent added out-of-band stays signal-less until the next portal touch —
 fail-soft, visible in the UI (§6), accepted.
@@ -255,16 +256,21 @@ daemon opens, re-hashes against the anchor, stores, ACKs, fail-closed) is kept w
 1. **The blob becomes the canonical-CBOR envelope bytes** (was: canonical JSON) — the daemon's
    re-hash uses the shared component (M10-D7) and compares against `signal_records.signal_hash`
    (was: `identity_tree_entries`' mutate-in-place row, which retires with the seam — inv §5.3).
-2. **The daemon writes to the M10 wallet table with `agent_id NOT NULL`** (DOD-STORE-CLIENT-1;
-   kills the `agentId: null` defect, inv §9).
-3. **Account-subject envelopes still fan out per-agent at DELIVERY** (sealed to each agent's
-   `k_local` — sealing is per-recipient by nature and M10-D5 explicitly kept this, inv §10.7):
-   ONE envelope, N sealed copies at mint time, each agent's wallet holding the same
-   content-addressed row. A **later-added agent** is served per **M10-D13**: re-mint with
-   supersession (fresh envelope, `supersedes_hash`, delivery fanned to ALL the account's agents),
-   or the same-daemon local copy where applicable — never a portal- or directory-held plaintext
-   (neither exists; review F1). Journey coverage owed: add an agent AFTER minting and verify its
-   wallet receives the account-subject envelopes (now a DOD-T1-JOURNEY-1 clause).
+2. **The daemon writes to the M10 wallet table keyed on `signal_hash` alone** (M10-D14): the
+   envelope's own hashed `subject_kind`/`subject` decides which local agents may present it — no
+   per-agent attribution rows, one row per signal per daemon. The M8 `agentId: null` defect
+   (inv §9) dies with the scaffold table; `agent_id NOT NULL` is the RECEIVED store's rule
+   (DOD-STORE-CLIENT-1).
+3. **Account-subject envelopes still fan out per-agent at DELIVERY ONLY** (sealed to each agent's
+   `k_local` — agents are the protocol's only addressable mailboxes; sealing is per-recipient by
+   nature, inv §10.7): ONE envelope, N sealed transport copies at mint time, and **each daemon
+   stores it ONCE** (`INSERT OR IGNORE` on `signal_hash`, M10-D14 — the per-agent part ends at the
+   mailbox; every local agent under the account presents the same row). A **later-added agent on
+   a NEW daemon** is served per **M10-D13**: re-mint with supersession (fresh envelope,
+   `supersedes_hash`, delivery fanned out again) — never a portal- or directory-held plaintext
+   (neither exists; review F1). **Same-daemon agent-add needs nothing** — the row is already
+   there. Journey coverage owed: add an agent AFTER minting and verify it can present the
+   account-subject envelopes (DOD-T1-JOURNEY-1 clause).
 4. **Enqueue moves inside the submit flow:** the portal seals per recipient agent and enqueues via
    the same signed surface (an `op: submit` field carrying sealed copies, or a follow-up
    `op: deliver` — DOD-DIR-WRITE-1's design note picks one; the pickup/ACK mechanics themselves are
