@@ -697,9 +697,52 @@ dependency (widens reach past Claude Code + Hermes). Plan:
   seal, driven entirely by `cello` + `jq` with **zero MCP** — initiate → send → receive → close →
   bilateral seal, with **both sides' `sealed_root` matching**
   (`598b746125eecc85a8ba84ed315d78e73e1de1551e9297f3abbff86cccfe7a2a`).
-- ⏳ **Publish (Phase 4) HELD** pending `DOD-CURSOR-DURABLE-1` below — see the recommendation there.
+- ✅ **Publish (Phase 4):** shipped as a **daemon+cli cascade** (daemon `0.0.47`, cli `0.0.45`, tag
+  `v0.0.95`) once `DOD-CURSOR-DURABLE-1` landed — deliberately NOT published before, because a `send`
+  that cannot reply is half a capability. `connect` is unaffected (it depends on client/crypto/transport,
+  not daemon; operators pull the new daemon transitively through `cli`). **`latest` promotion is
+  Andre's to run** — the command set is prepared, never executed here.
 
 **Two things were STOPPED AND FLAGGED rather than faked** (the brief's §2 guardrail doing its job):
+
+### ✅ `DOD-CURSOR-DURABLE-1` — DONE (cello-client `120240e`; Andre approved the trade, 2026-07-11)
+
+**Landed.** The gate now passes if EITHER authority says caught-up:
+`(connectionCursor >= currentSeq) || (unreadReceivedCount === 0)` — the second being the **persisted
+per-(agent, session) watermark** (`message_watermarks`) that already existed and that `cello_receive`
+already advanced. The gate had simply been consulting the wrong authority. `cello_get_transcript` now
+advances that watermark too (**AC3** — reading the history *is* reading), with the same contiguous-run
+hole safety as the cursor, so a gap can never mark unseen content as read.
+
+**PROVEN LIVE, bash only, zero MCP:** `cello-client/scripts/bash-only-smoke.sh` — a **four-turn
+BIDIRECTIONAL** conversation between two registered agents, every step its own process (fresh
+connection, cursor −1 each time), then close + bilateral seal with **matching `sealed_root` on both
+sides** (`b7ca9f17962b775ed9cf1eb34bec9506a42766d0f927548e91efd79d2d5b1dc8`). The blind send is **still
+refused** (`unread_received: 1`) — the fix is not a bypass. This is the reusable scripted live-smoke the
+plan asked for.
+
+**Two traps a naive fix would have hit** — both found by tracing producers, both avoided:
+1. **The counters measure different things.** `currentSeq` counts *every* message including your own
+   sends; the watermark counts *received* only. A direct swap would have blocked **your own second send
+   in a row** — breaking the MCP path too, not just the CLI.
+2. **The documented remedy would have stopped working.** `cello_get_transcript` did not advance the
+   persisted watermark, so the gate's own guidance ("read the transcript, then retry") was a dead end
+   for any stateless client.
+
+**🔻 THE TRADE — approved on purpose; recorded so nobody later rediscovers it as a bug.** The durable
+clause is **per-agent**, so a message this agent **SENT from another local connection** no longer blocks
+a second window. Unread **counterparty** content still blocks *every* connection — that guarantee is
+preserved, and is now durable. Clauses **C4/C5/C6/C7** of `m8c-cursor-1.test.ts` asserted the old
+per-connection rule (C7 was itself a reviewer HIGH finding) and were **rewritten to lock the new
+boundary**, including an explicit assertion that the counterparty half did not weaken. Rationale: the
+principal is the **agent, not the socket** — two windows are one operator's own processes, same keys,
+same identity, same counterparty, and the daemon cannot referee which window a human is looking at.
+Against that, the old rule left *every* stateless client (and every reconnecting MCP client) unable to
+hold a conversation at all. Design + the stricter alternative that was NOT taken:
+[[2026-07-11_cursor-durable-read-before-write-design]].
+
+<details>
+<summary>Original defect report (kept for the trail)</summary>
 
 ### 🔴 `DOD-CURSOR-DURABLE-1` — read-before-write makes a stateless client unable to hold a conversation
 
@@ -733,8 +776,10 @@ than the gap.
 - **AC3** A bash-only two-agent **bidirectional** conversation (A→B→A, multiple turns) completes and
   seals. This also fixes the same latent bug for a *reconnecting* MCP client, whose cursor is likewise
   reset to -1.
-- ❌ NOT BUILT — daemon change, out of DOD-CLI-PARITY-1's CLI-only scope. **Recommendation: land this
-  BEFORE publishing the CLI**, so the first beta is one that can actually hold a conversation.
+- ✅ ALL THREE ACs MET — see the DONE block above. (The recommendation "land this before publishing"
+  was taken: publish waited for the fix, then shipped daemon+cli together.)
+
+</details>
 
 ### 🔴 `DOD-CUSTODY-DAEMON-1` — backup / restore / inclusion-proof work NOWHERE (worse than "MCP-only")
 
