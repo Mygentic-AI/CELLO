@@ -196,3 +196,20 @@ Marked accordingly so you know how much of each doc is actually on-topic.
 - `discussion_logs/2026-04-08_1900_connection-staking-and-institutional-defense.md` — primarily institutional DDoS/Sybil defense economics; staking-as-signal is a side effect of that mechanism, not its purpose
 - `user-stories/m8c/2026-07-10_contact-address-book-design.md` — primarily the contacts/address-book schema; only §5 (tier) is relevant here, and only to establish tier is *not* a trust signal
 - `server-infrastructure.md` — primarily infra/DB requirements across the whole protocol; the one relevant fact is the conductance internal-only constraint used in §5 above
+
+---
+
+## Related Documents
+
+- [[M10-TRUST-SIGNAL-STORAGE-AND-CREATION|M10 Trust Signal Storage & Creation]] — the HOW companion to
+  this WHAT: envelope, dumb directory, scan-before-hash, supersession, zero-bump extensibility.
+- [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] —
+  the canonical four-class definition this taxonomy expands.
+- [[2026-05-16_0800_trust-signal-verification-architecture|Trust Signal Verification Architecture]] —
+  the OAuth/social verification architecture behind the Class 1 social-account signals.
+- [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]] — why
+  Class 2 contains only endorsements; TrustRank is formally excluded.
+- [[2026-07-10_2102_referral-and-commercial-use-cases|Referral and Commercial Use Cases]] — parked
+  Class-2 ideation: the referral/commerce family endorsements enable.
+- [[2026-07-10_contact-address-book-design|Contact Address Book Design]] — defines contact tier, cited
+  in §5 to establish that tier is *not* a trust signal.

@@ -710,4 +710,13 @@ one type's convenience is pressure to spend the rare-change budget on something 
 - [[2026-07-10_agent-id-joinkey]] — the join-key fix this storage is born on top of.
 - [[2026-07-10_referral-and-commercial-use-cases]] — parked ideation: referral and the wider family of
   commercial mechanisms this trust stack enables (attribution/receipt layer). No decisions.
+- [[2026-05-16_0800_trust-signal-verification-architecture|Trust Signal Verification Architecture]] — the
+  portal-side per-type verification work (OAuth, browser-harness audit); under §15's zero-bump rule this
+  is the *only* place per-type code exists.
+- [[2026-06-26_1030_per-agent-directory-connections-and-manifest-over-http|Manifest over HTTP]] — the
+  distribution precedent for §15's type registry: signed data served by the directory as opaque bytes,
+  polled and cached by clients.
+- [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — the 2026-04
+  ancestor of this design: hash-everything, extensible schema, "CELLO is in the verification business,
+  not the storage business."
 - `.claude/CLAUDE.md` — "join on the stable key" and the no-`node:sqlite` rules that govern the schema.

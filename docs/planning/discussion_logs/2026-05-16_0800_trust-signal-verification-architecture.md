@@ -158,3 +158,13 @@ For fraud to succeed, an attacker needs: their malicious agent to be randomly se
 | Bootstrap implementation | Single pre-authenticated account per provider |
 | Long-term implementation | Community oracle with economic incentives (post-M9/M10) |
 | Interface design | `TrustAuditorAgent` is swap point between bootstrap and community model |
+
+---
+
+## Related Documents
+
+- [[M10-TRUST-SIGNAL-TAXONOMY|M10 Trust Signal Taxonomy]] — the canonical list of signal types this
+  verification architecture serves (Class 1 social accounts in particular).
+- [[M10-TRUST-SIGNAL-STORAGE-AND-CREATION|M10 Trust Signal Storage & Creation]] — where the verified
+  result lives: the portal composes the envelope, hashes it, and submits it to the directory; under its
+  zero-bump rule (§15) this portal-side verification is the only per-type code in the system.
