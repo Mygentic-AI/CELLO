@@ -4239,6 +4239,82 @@ landed.
 
 ---
 
+## 2026-07-11 — `DOD-CLI-PARITY-1` + `DOD-CURSOR-DURABLE-1` — bash becomes a first-class CELLO runtime
+
+**Both DONE. Published: daemon `0.0.47`, cli `0.0.45`, tag `v0.0.95` (beta). `connect` unaffected.**
+Commits: cello-client `b2aaad8` (parity), `120240e` (cursor fix + review fixes), `08d59ad` (cascade).
+
+**What shipped.** Every daemon capability that was MCP-only is now a `cello` command, so *any*
+bash-capable agent operates a CELLO node with no MCP dependency — a direct widening of the #1 launch
+value past Claude Code + Hermes. The command **registry** (`core/cli/src/registry.ts`) is now the single
+source of truth for dispatch, the `cello --help` table, per-command help, and the flag set — they cannot
+drift, and **`DOD-ONBOARD-HELP-1` is closed** (the described `Commands:` table). 13 new commands, each
+recording the daemon handler it calls in `ipcMethod`, which is the **literal that is dispatched** — so
+the DoD §9 parity claim is enforced by a test rather than asserted in prose.
+
+**Proof (the only thing that counts):** `cello-client/scripts/bash-only-smoke.sh` — a **four-turn
+bidirectional** conversation between two registered agents, every step its own process, real relay, real
+FROST seal, **matching `sealed_root` on both sides** (`b7ca9f17…`), **zero MCP**. The harness also
+asserts a blind send is still *refused*, so the security guarantee can't silently rot.
+
+### Bugs found and fixed (Symptom / Root cause / Fix / Rule)
+
+**1. A bash agent could speak once, then never reply.** (`DOD-CURSOR-DURABLE-1`)
+- *Symptom:* B reads A's message via `cello receive`, then B's `cello send` is refused —
+  `session_not_current, last_read_seq: -1`. Following the error's own advice (read the transcript) did
+  not help.
+- *Root cause:* the read-before-write gate consumed `getConnectionCursor` — an **in-memory map keyed by
+  connectionId**, deleted on disconnect, default `-1`. The CLI is a fresh process (fresh connection) per
+  command, so it could *never* satisfy it. The same latent bug hit any **reconnecting MCP client**.
+- *Fix:* the gate now ORs in the **persisted per-(agent, session) watermark** (`message_watermarks`) that
+  already existed and that `cello_receive` already advanced — it was consulting the wrong authority.
+  `cello_get_transcript` now advances it too (reading the history *is* reading), with the same
+  contiguous-run hole safety.
+- *Rule:* **an error message names where a failure surfaced, not what produced it.** The fix only became
+  obvious after tracing the *producer* of `last_read_seq`. And: a guarantee that only holds for one
+  client shape is not a guarantee — it is a coupling to that shape.
+
+**2. `cello inbox` silently un-did `cello stop-agent`.** (unit review, HIGH)
+- *Symptom:* stop an agent, run any read-only command, and it is back **online and reachable**. Exit 0,
+  no signal.
+- *Root cause:* every agent-scoped CLI command replays `cello_use_agent` on its new connection, and that
+  handler **auto-starts** an offline agent (AUTOSTART-1).
+- *Fix:* the replay refuses an offline selection (`selected_agent_offline`, fail loud), and `stop-agent`
+  clears the persisted selection — mirroring what the daemon does to connection state.
+- *Rule:* **a read must never re-arm a kill switch.** When you mirror daemon state client-side, mirror
+  its *invalidation* too, not just its happy path.
+
+**3. `--agent ""` ran the command as a different agent.** (unit review, HIGH)
+- *Symptom:* `cello send $SID msg --agent "$VAR"` with `VAR` unset → the command runs as whatever agent
+  happens to be online. Exit 0. Wrong identity, silently.
+- *Root cause:* `""` is not nullish, so `opts.agent ?? persisted` yielded `""`, which then failed a
+  truthiness check — suppressing the persisted selection *and* skipping the replay, leaving the daemon's
+  sole-online fallback to pick.
+- *Fix:* an empty `--agent` is a structured error.
+- *Rule:* in a surface built *for* shell scripting, **the unset-variable case is a first-class input**,
+  not an edge case.
+
+### 🔻 The trade we took on purpose (do not rediscover this as a regression)
+
+The durable clause is **per-agent**, so a message the agent **SENT from another local connection** no
+longer blocks a second window. **Unread counterparty content still blocks every connection** — that half
+is preserved and is now *durable*. This invalidated clauses **C4/C5/C6/C7** of `m8c-cursor-1.test.ts`
+(C7 was itself a reviewer HIGH finding); they were **rewritten to lock the new boundary**, not deleted.
+No design preserves them while fixing the CLI — both are "a fresh connection with cursor −1", and
+telling them apart *requires* the per-connection strictness that breaks every stateless client. Andre
+approved the trade. Rationale + the stricter alternative not taken:
+[[2026-07-11_cursor-durable-read-before-write-design]].
+
+### What this unblocks / what is still owed
+
+- **Unblocks:** any bash-capable runtime as a CELLO operator; a scripted live-smoke we did not have.
+- **Owed — `DOD-CUSTODY-DAEMON-1`:** backup / restore / inclusion-proof are `not_implemented` daemon
+  stubs, and the **published** shim forwards to those stubs — so **data custody works through no surface
+  at all today**. No CLI command was shipped for them rather than ship fakes.
+- **Owed:** `latest` promotion (operator-run, Andre).
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
@@ -4246,3 +4322,5 @@ landed.
 - [[M8C-PROCEDURE]] — the runbook
 - [[M8C-DECISIONS]] — forks + choices
 - [[M8C-MILESTONE-NOTES]] — inventory + verification evidence
+- [[2026-07-11_cli-mcp-parity-plan]] — the CLI↔MCP parity work order
+- [[2026-07-11_cursor-durable-read-before-write-design]] — the cursor fix design + the approved trade
