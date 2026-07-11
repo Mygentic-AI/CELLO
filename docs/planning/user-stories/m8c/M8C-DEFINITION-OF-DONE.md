@@ -204,6 +204,15 @@ description: >
   names anywhere, hiding a stale name inside the very sentence that hands it to a user. Both are now anchored
   with a negative lookahead / restricted to wire position, and both carry NEGATIVE CONTROLS proving they fire.
   (test 2145 ✓ lint ✓ typecheck ✓ build ✓). Work order: [[2026-07-11_cli-help-revision-workorder]].
+  **✅ CLOSED — LIVE-CONFIRMED by Andre 2026-07-11 on the promoted `latest` (cli 0.0.47).** Full `cello --help`
+  pasted and read clean: `bridge` replaces the old "install" framing (Hermes now reads as an example, not a
+  hardcode); `refresh` names the actual operation ("Rotate an agent's signing-key shares to a fresh epoch");
+  the receipts split disambiguates itself (`sealed-receipt` = the notarized proof, `relay-receipts` explicitly
+  says "Not the session receipt — see 'sealed-receipt'"); `send`'s description drops the "read-before-write"
+  jargon for plain English; `create-agent` (Step 1 of 2) now precedes `register-agent` (Step 2 of 2), fixing
+  the order bug; sections are grouped (Setup/Agents/Messaging/Sessions & receipts/Contacts/Other) per the
+  "grouped or alphabetical" bar. Every specific complaint from the 2026-07-11 reopen is individually
+  addressed. **DOD-ONBOARD-HELP-1 is DONE — no further action.**
   Delivered: **grouped help** (Setup · Agents · Messaging · Sessions & receipts · Contacts · Other) as registry
   METADATA so the table still cannot drift from dispatch; **clean renames, no aliases** (`install`→`bridge`,
   `register`→`register-agent`, `close`→`close-session`, `initiate`→`initiate-session`, `receipts`→
@@ -223,8 +232,8 @@ description: >
   legacy, unpublished `core/client/mcp-server.ts`). Four live guidance strings pointed at it. Handing an operator
   a dead command is worse than saying nothing. Now `cello_status` (what those strings actually wanted: "is the
   counterparty reachable?"), and a **source-audit test fails the build** on any daemon guidance naming a tool
-  outside the vocabulary — so the class cannot return. Stays 🟡 until Andre live-confirms the revised
-  `cello --help`.
+  outside the vocabulary — so the class cannot return. **Live-confirmed by Andre — see the ✅ CLOSED note
+  above.**
   **✅ RULED + DONE (Andre, 2026-07-11): `receive-session` is DELETED.** It is a literal ALIAS of `receive` — the daemon
   registers the SAME handler object for both (`handlers.set("cello_receive_session", handleReceive)`). It does
   not accept or join anything (inbound sessions are auto-accepted by the standing receiver), and its help
