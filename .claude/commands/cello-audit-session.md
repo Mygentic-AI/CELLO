@@ -5,11 +5,11 @@ description: Full paper-trail audit of a sealed CELLO session. Verifies local tr
 
 # CELLO Session Audit — Full Paper Trail Verification
 
-Given a session ID (from `cello_close_session` or `cello_list_sessions`), this skill verifies every layer of the CELLO trust infrastructure recorded the session correctly.
+Given a session ID (from `cello_close_session` or `cello_sessions`), this skill verifies every layer of the CELLO trust infrastructure recorded the session correctly.
 
 **Input:** A session ID (32-char hex, e.g. `a001ca741aab521cbeb2b254edeb9583`).
 
-If no session ID is provided as argument, check `cello_list_sessions` for the most recently sealed session.
+If no session ID is provided as argument, check `cello_sessions` for the most recently sealed session.
 
 ---
 
@@ -22,7 +22,7 @@ Both participants should have independent, matching transcripts stored in their 
 Switch to the initiating agent (`cello_use_agent` if needed), then:
 
 ```
-cello_get_transcript({ session_id: SESSION_ID })
+cello_transcript({ session_id: SESSION_ID })
 ```
 
 Record:
@@ -36,7 +36,7 @@ Record:
 Switch to the target agent (`cello_use_agent`), then:
 
 ```
-cello_get_transcript({ session_id: SESSION_ID })
+cello_transcript({ session_id: SESSION_ID })
 ```
 
 ### Step 1c — Verify consistency
@@ -69,7 +69,7 @@ Both agents should have the same sealed receipt with a matching `sealed_root`.
 
 For each agent:
 ```
-cello_get_sealed_receipt({ session_id: SESSION_ID })
+cello_sealed_receipt({ session_id: SESSION_ID })
 ```
 
 ### Step 2b — Verify consistency
@@ -325,10 +325,10 @@ Provability statement:
 
 ## Troubleshooting
 
-**`cello_get_transcript` returns empty messages:**
+**`cello_transcript` returns empty messages:**
 Session may not have been sealed yet. Only sealed sessions have durable transcripts.
 
-**`cello_get_sealed_receipt` returns `not_found`:**
+**`cello_sealed_receipt` returns `not_found`:**
 The session was interrupted, not sealed. Check `cello_status` for `interrupted_sessions`.
 
 **`cello_get_inclusion_proof` returns `not_implemented`:**
