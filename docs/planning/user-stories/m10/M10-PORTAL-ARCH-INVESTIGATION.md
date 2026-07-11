@@ -453,7 +453,8 @@ Per PROCEDURE §4, downstream lines the architecture reshapes are edited **now**
 
 ## 11. The forks the architecture half must decide
 
-Stated as forks, with the evidence each turns on. **No recommendation here — that is the next document.**
+Stated as forks, with the evidence each turns on. Recommendations (explicitly NOT decisions) are in
+§12; they graduate to the DoD Decisions section only via the architecture determination + review.
 
 1. **Issuer key custody.** (a) Ed25519 **in KMS**, portal calls `kms:Sign`, holds nothing — strongest
    containment, one API call per mint (cost/latency on the Class-3 batch), per-region key material, IAM
@@ -483,6 +484,88 @@ Stated as forks, with the evidence each turns on. **No recommendation here — t
    replication fans it out)?
 7. **Subject binding** — per-agent fan-out (M8's de facto answer) vs. an Account-subject envelope.
    See §10.7.
+
+---
+
+## 12. RECOMMENDATIONS on the forks — not decisions
+
+> **Status: RECOMMENDATIONS ONLY (2026-07-11, Andre: "all seem sensible").** Nothing here is settled.
+> Each becomes a decision only when the architecture determination (half 2) adopts it, survives
+> `cello-unit-reviewer`, and is logged in the DoD Decisions section. Numbering matches §11.
+
+**R1 — Issuer key custody: Ed25519 in KMS (`ECC_NIST_EDWARDS25519`); the portal calls `kms:Sign` and
+holds no private key.** Mint volume is tiny (portal touches + a nightly job), so per-sign latency and
+cost are irrelevant — which removes the only real argument for the KMS-as-wrapper option. A compromised
+portal container can *request* signatures (every one visible in CloudTrail) but can never exfiltrate
+the key: an incident is time-bounded and auditable, and recovery is an IAM policy change, not a key
+rotation. For a cryptographic notary this is the custody a competent engineer would pick at negligible
+cost. Local dev: a file-based signer behind the same interface (the adapter-pattern rule); the
+directory pins the pubkey obtained via `GetPublicKey` as data in its authorized-issuer set.
+*Rejected:* (b) KMS-as-wrapper — puts the raw key in container memory for a speed win nothing needs;
+(c) env-var/Secrets-Manager plaintext — the weakest, and the master-key precedent it copies is itself
+slated for upgrade.
+
+**R2 — Canonical-CBOR component: ONE implementation, published in `@cello-protocol/crypto`.** Crypto
+already holds the precedent (the canonical TBS builders and `hash()` live there) and is already the
+portal's sole `@cello-protocol` dependency — no new coupling, just a version bump. The
+cascade-coupling worry is small because the envelope is frozen by design (spec §15.3): the component
+ships once in Tier 0 and rarely changes. *Rejected:* vendored-spec-with-vectors — three hand-kept
+byte-identical implementations is the §7 scanner-version drift problem in another costume; vectors
+catch the divergences you thought of, not the Unicode/bignum edge case you didn't.
+
+**R3 — Class-3 job home: in-process scheduler started from `instrumentation.register()`, job code in
+its own module behind a clean entrypoint.** The classic objection to in-process cron — duplicate runs
+under scale-out — does not apply at `DesiredCount: 1` (add a Postgres advisory lock the day it does).
+The job is minutes of light work against an always-on process. Because it is a module with an
+entrypoint, promoting it to a separate worker later is a routing change, not a redesign — the same
+shape as the Endorsement Mother launch compromise. A job crash must never kill the server process;
+fail loud in logs. *Rejected:* second container / EventBridge-scheduled ECS task — doubles the deploy
+surface for a nightly job; Lambda — re-packages crypto + the submission client outside the Next build.
+
+**R4 — Registry signing: a dedicated portal registry key (own KMS key, single signer), NOT the officer
+threshold; clients pin its pubkey as a build-time constant beside `BUNDLED_CONSORTIUM_ROOT_KEYS`.**
+The registry changes every few days early on — that cadence is the entire zero-bump point, and an
+offline officer ceremony per type addition kills it. The officer threshold protects the network's
+trust ROOT; the registry is fail-soft metadata (absent/unverifiable ⇒ valid-but-unclassified, never
+rejected — INV-TYPE-CARRY), so a compromised registry key can cause classification mischief but cannot
+forge a signal. Separate key from the submission key: different blast radius, independent revocation.
+Pinning the pubkey in the client is legal — it ships with Tier 0–2's one-time generic client work,
+before the canary's zero-bump measurement starts. Manifest-carried rotation is the later
+strengthening. *Rejected:* officer threshold — right instrument, wrong cadence.
+
+**R5 — Submission transport: a NEW dedicated directory write route, born type-blind; `agent-write`
+keeps its lever role and its `trust_signal_*` arms retire after migration.** The existing seam's
+contract is the wrong shape in every dimension that matters — exact-key per-kind schemas, the
+`SIGNAL_KINDS` enum, mutate-in-place semantics, body-asserted `accountId` — and retrofitting
+signed-envelope semantics into that union drags the enum's gravitational pull into exactly the code
+the zero-bump reviewer lens polices. A fresh route implements INV-CHOKEPOINT natively: signature over
+domain-separated submission bytes, authorized-issuer set as DATA, re-hash before store, idempotent on
+duplicate hash. Revocation re-auth (DOD-REVOKE-1) rides the same surface. *Rejected:* extending
+`agent-write` — legacy arms + validator style would be carried forever.
+
+**R6 — Portal→directory availability: a static ordered list of 2–3 directory base URLs with
+try-next-on-unreachable, for all `DirectoryClient` methods; full manifest-driven discovery is
+post-v1.** The launch-triage split: a single-node *write* path is forgivable (replication fans out
+after accept; an outage delays minting) — but sign-in resolving through the same single node means a
+us1 outage locks every operator out of the portal, and that is the unforgivable half. A static list is
+an afternoon and covers the actual failure mode at three known nodes. Interlock: the write is
+idempotent-on-duplicate-hash by design (R5), so retrying a submission against the second node is safe.
+*Rejected:* teaching the portal the full manifest client + pinned-root verification — real new surface
+that buys little at this node count.
+
+**R7 — Subject binding: ratify per-agent fan-out (M8's de facto answer): `subject` = agent identity;
+Account-level facts (phone, email) mint one envelope per agent, re-minted at agent creation.** The
+decisive argument is unlinkability, not plumbing: an Account-subject envelope has ONE hash, so two
+pseudonymous personas presenting it are *provably the same operator* — the privacy break the whole
+co-resident-agent model exists to prevent (spec §10). Per-agent envelopes get distinct hashes for free
+(different subject ⇒ different preimage), keep the transplant defense intact, and keep verification
+inside the dumb-check model (no agent→account resolution at presentation). Cost: N envelopes per human
+fact, automatable at portal-touch/agent-add. Obliges a `CONTEXT.md` amendment — its "aggregate
+Account-level trust view" paragraph describes something M10 deliberately does not build. *Rejected:*
+Account-subject envelope — linkability across personas, plus a lookup the dumb directory doesn't have.
+
+**Weighting.** R1, R4, R7 are load-bearing (custody, trust chain, privacy). R2, R3, R5, R6 are
+reversible engineering picks chosen to be cheapest to *promote later*, not cheapest today.
 
 ---
 
