@@ -150,16 +150,31 @@ Gate at RENAME-1 commit: daemon 785, workspace 1993 pass; lint, typecheck, build
   `away.default` / `away.tier.<tier>` for the settable tiers (unknown/known/whitelisted/vip; BLOCKED
   fixed 0/0, never overridable). cello_settings_get/set handlers; unknown key REFUSED (invalid_key);
   unset key → null so the consumer applies the default. Gate: daemon 794. Fable-5 review to run.
-- **DOD-TIER-BOUNDS-SETTINGS — ⏳ NEXT.** Make Step-2's `tierBoundsFor` read from settings first,
-  falling back to the hardcoded grid. Behavior identical with no settings; a `bounds.<tier>.max_sessions`
-  of 8 makes the 8th succeed / 9th refused. Reject Infinity/negative at SET time (INV-TIER-BOUND: a
-  setting cannot REMOVE a bound). Where: checkUnknownSenderAcceptanceBound + the two byte-cap gates read
-  a per-agent override via a new `resolveTierBound(agent, tier, field)` helper.
-- **DOD-AWAY-TIER-1 — ⏳ AFTER.** Per-tier + per-contact away messages. Resolution most-specific-first:
-  contacts.away_message (per contact) → away.tier.<tier> (settings) → away.default (settings) → system
-  default (code). cello_contact_set_away { agent, pubkey, message }. The resolved away text is SCREENED
-  on the outbound path like any content (does not bypass the gateway). Touches sendAwayResponse
-  (daemon.ts:968) which currently uses AWAY_TEXT[kind]/STRANGER_TEXT.
+  Review (Fable 5): F1 (typo'd GET key → invalid_key, not null), F2 (setSetting store-level backstop),
+  F3 (non-string key → missing_params), T1 (agent_id-keying proven via raw-SQL), T2 (fail-closed write).
+  All fixed (`2e5c602`). Gate: daemon 802.
+- **DOD-TIER-BOUNDS-SETTINGS — ✅ done + reviewed.** Commit `805b8f0` + fixes `cc063e0`.
+  `resolveTierBound(agent, tier, field)` reads a per-agent `bounds.<tier>.<field>` override, else the
+  grid (checkUnknownSenderAcceptanceBound + both byte-cap gates). No settings = byte-identical to Step 2.
+  validateSettingValue rejects Infinity/negative/0/decimal (INV-TIER-BOUND — a setting cannot REMOVE a
+  bound). Review: F1 (log settings.bound.corrupt on the fallback), F3 (settableTierName keys off TIER
+  constants), T1 (max_bytes override proven through the real byte-cap gate). Gate: daemon 809.
+- **DOD-AWAY-TIER-1 — ✅ done (review in flight).** Commit `cad3544`. resolveAwayMessage resolves
+  most-specific-first: per-contact away_message → away.tier.<tier> → away.default → null (caller applies
+  the system default AWAY_TEXT[kind]/STRANGER_TEXT — total). setContactAwayMessage + cello_contact_set_away
+  handler + MCP tool + CLI `cello contact away`. **SI:** sendAwayResponse now SCREENS the resolved away
+  text via securityGateway.screenOutbound (block/warn → not sent; redact → altered bytes) — it does not
+  bypass the gateway; mirrors the tested cello_send verdict handling. Observability `contact.away.resolved`
+  (which level matched) added post-commit (staged for the review-fix batch). Gate: daemon 808, workspace
+  2016. Fable-5 review running.
+
+## 🎉 Address book CODE-COMPLETE — all 9 DoD lines built
+
+TIER-1, TIER-2, TIER-3, TIER-4, CONTACT-VIEW-1, RENAME-1, SETTINGS-1, TIER-BOUNDS-SETTINGS, AWAY-TIER-1.
+Seven reviewed + fixed; AWAY-TIER-1 review in flight (+ the observability fix staged). Full workspace 2016
+green throughout. Publish is Ms_Chelly's (daemon + cli bump); this unit is client-side only, no deploy.
+Remaining before the unit fully closes: AWAY-TIER-1 review + fixes, then a tier-boundary cello-done-auditor
+pass over every ✅ flip, then Ms_Chelly's publish cascade + the DoD marker flips in M8C-DEFINITION-OF-DONE.
 
 ## Related
 - [[2026-07-10_address-book-implementation-spec]] — the spec (authority).
