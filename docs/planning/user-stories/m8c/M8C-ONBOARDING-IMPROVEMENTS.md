@@ -260,6 +260,16 @@ three steps completed from the command guidance alone, no source-reading. Rough 
     — the handlers already exist; just add the shim tool definitions + forwarding.
   - **Deploy:** cello-client connect shim (publish; same path as P2-2/…/P2-5).
 
+- ⬜ **P2-7. A CLI error points at the MCP tool name.** *(cello-client — daemon guidance string)* Observed
+  live 2026-07-11 on cli 0.0.45: `cello contact list` with several agents online + none selected returns
+  `{"ok":false,"reason":"no_current_agent","guidance":"… or call cello_use_agent to select one first."}`.
+  The `no_current_agent` result is CORRECT (4 agents online, can't guess — the F18 sole-online fallback only
+  fires with exactly one). But a CLI user is told to "call `cello_use_agent`" (the MCP tool name); the CLI
+  verb is `cello use-agent`. Exactly the CLI/MCP surface inconsistency the parity work exists to remove.
+  **Fix:** the shared guidance string should render the caller-appropriate verb (or the CLI should rewrite
+  `cello_x` → `cello x` on output). Trivial; batch it into the next daemon/cli touch — not worth its own
+  cascade. Non-blocking papercut.
+
 ## Implementation notes (for the one-shot sprint)
 
 - **Files:** `packages/operations-agent/src/registration/engine.ts` (item 1),
