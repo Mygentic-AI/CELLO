@@ -73,28 +73,40 @@ A capability must carry the **same name on both surfaces** — humans and agents
 - `contacts`/`contact <pubkey> <op>` ↔ `cello_contact_*` — align (list under `contacts`; per-contact ops map
   to `cello_contact_set_tier/away/moniker/add/remove`).
 
-**PENDING ANDRE'S SCOPE CALL — full reconciliation of the OTHER pre-existing divergences** (the CLI shortened
-these; the MCP kept the verbose form):
-`agents`↔`cello_list_agents` · `inbox`↔`cello_check_notifications` · `sessions`↔`cello_list_sessions` ·
-`transcript`↔`cello_get_transcript` · `sealed-receipt`↔`cello_get_sealed_receipt` ·
-`receipts`↔`cello_get_relay_receipts` · `settings`↔`cello_settings_get/set` · `moniker`↔`cello_set_moniker`.
-(Already matching: `send`/`receive`/`status`/`start-agent`/`stop-agent`/`use-agent`.)
-- **FULL:** pick ONE canonical name per capability, apply to BOTH surfaces as a CLEAN rename (no aliases).
-  Cleanest (true one-vocabulary parity), but a **breaking MCP change** (touches the connect shim tool defs +
-  any skill/doc references) → publish becomes **connect + cli** (+ daemon if IPC method names move). Fine
-  pre-launch (single user).
-- **MINIMAL:** only the current renames propagate (they mostly already match); the divergences above are logged
-  for a later pass.
+**DECIDED — FULL reconciliation (Andre 2026-07-11).** The rule: **an MCP tool's name is `cello_` + the CLI
+command name** (snake_cased; multi-verb commands keep their sub-verb, e.g. `cello_settings_get`,
+`cello_contact_set_tier`). The CLI keeps its terse names; the MCP tools drop the `list_`/`get_`/`check_` cruft
+to match. The concrete MCP renames (apply the rule across the FULL tool inventory — enumerate every `cello_*`
+tool in the connect shim and rename any that doesn't already equal `cello_<cli-command>`; flag any awkward
+case rather than guessing):
+- `cello_list_agents` → `cello_agents`
+- `cello_check_notifications` → `cello_inbox`
+- `cello_list_sessions` → `cello_sessions`
+- `cello_get_transcript` → `cello_transcript`
+- `cello_get_sealed_receipt` → `cello_sealed_receipt`
+- `cello_get_relay_receipts` → matches whatever `receipts` ends up named after the §4 semantics check (e.g.
+  `cello_relay_receipts` if the CLI command becomes `relay-receipts`).
+- `cello_set_moniker` → `cello_moniker`  (the agent's OWN name; distinct from `cello_contact_set_moniker`)
+- contact tools align to the §3 split: `cello_contacts` (list the book) + `cello_contact_add/remove/set_tier/
+  set_away/set_moniker` (per-contact).
+- Already matching, leave alone: `cello_send`/`cello_receive`/`cello_status`/`cello_start_agent`/
+  `cello_stop_agent`/`cello_use_agent`/`cello_close_session`/`cello_initiate_session`/`cello_await_session`/
+  `cello_receive_session`/`cello_settings_get`/`cello_settings_set`.
+- `cello_get_inclusion_proof`/`cello_backup`/`cello_restore` — leave for DOD-CUSTODY-DAEMON-1 (no CLI command
+  yet; they're stubs).
 
-## 3. Split `contact` → `contacts` + `contact` (decided: split; Andre may veto to a plain rename)
+This is a **breaking MCP change** — it renames the tools THIS session and any skill/doc references use. Clean
+rename, no aliases (single user, pre-launch). Publish becomes **connect + cli** (the daemon IPC method names
+need NOT move — the shim maps tool `cello_agents` → the existing `list_agents` IPC method). Update the
+tool→command→handler audit map and any skill (`cello-walkie-talkie`) / doc that names a renamed tool.
+
+## 3. Split `contact` → `contacts` + `contact` (DECIDED — split, Andre 2026-07-11)
 
 - **`contacts`** — the address book as a whole: `cello contacts` (list, filters like `--tier`/`--agent` as
-  they exist today). Plural, high-level.
+  they exist today). Plural, high-level. MCP: `cello_contacts`.
 - **`contact <pubkey> <op>`** — operations on ONE contact: `add` / `remove` / `set-tier` / `set-away` /
-  `set-moniker`. Singular, per-contact.
+  `set-moniker`. Singular, per-contact. MCP: `cello_contact_add/remove/set_tier/set_away/set_moniker`.
 - Clean rename of the old flat `cello contact list/add/...` shape — no alias (single user, pre-launch).
-- **If Andre vetoes the split:** fall back to renaming `contact`→`contacts`, keep the sub-verbs, no structural
-  change. (He flagged the *mixing* as the thing he dislikes; the split is the fix, the rename is the minimum.)
 
 ## 4. Wording — accurate + intuitive, no internal jargon
 
@@ -128,16 +140,16 @@ say so — do not silently drop:
 
 ## 6. Guardrails / process
 
-- Help + renames + split are **cli-only** (registry, help renderer, dispatch) — unless the FULL §2b MCP
-  reconciliation is chosen, which adds the connect shim (+ maybe daemon). The two §5 strings
-  are the only daemon-side pieces — decide batch-vs-defer explicitly.
-- Renames update the **tool→command→handler audit map** and every test that names the old command; the audit
-  test must still pass (it's the parity guarantee).
+- Scope is **cli + connect** (FULL §2b renames the MCP tools in the connect shim). The two §5 strings are the
+  only daemon-side pieces — decide batch-vs-defer explicitly (if batched, add a daemon bump).
+- Renames update the **tool→command→handler audit map** and every test that names the old command/tool; the
+  audit test must still pass (it's the parity guarantee — and now it also guarantees the *names* match).
 - Reuse `session-fixture.ts`; from-scratch fixture is a blocking finding.
 - SPARC/TDD red-first; gate sequence; `cello-unit-reviewer` (Fable 5); fix every finding.
-- Publish: cli bump `0.0.45 → 0.0.46` (cli-only unless §5 pulls in a daemon bump → daemon `0.0.47 → 0.0.48`).
-  Load `/cello-publish`. Verify against the tarball (grep `dist/` for the new groups + `bridge`/`register-agent`
-  + the reworded strings). Andre promotes to `latest` (prepare `--dry-run`, hand over — do NOT run it).
+- Publish cascade: **cli `0.0.45 → 0.0.46` + connect `0.0.65 → 0.0.66`** (+ daemon `0.0.47 → 0.0.48` only if
+  the §5 strings are batched). Load `/cello-publish`. Verify against the tarball (grep `dist/` for the new
+  groups, `bridge`/`register-agent`/`close-session`/`initiate-session`, the renamed MCP tools, and the reworded
+  strings). Andre promotes to `latest` (prepare `--dry-run`, hand over — do NOT run it).
 
 ## 7. Definition of done
 
@@ -145,6 +157,8 @@ say so — do not silently drop:
   `bridge`/`register-agent`/`close-session`/`initiate-session`/`contacts`(+`contact`) in place, old names gone.
 - `receipts` and `sealed-receipt` are unmistakably different in the help; `send`/`telegram`/`refresh`/
   `sessions`/`use-agent` read plainly.
+- **CLI↔MCP name parity holds:** every capability has one name on both surfaces (`cello <x>` ↔ `cello_<x>`);
+  the audit test enforces it.
 - Published to beta + verified against the binary; **HELP-1 closes on Andre's live confirmation** of the
   revised `cello --help`.
 
