@@ -223,7 +223,21 @@ description: >
   described `cello --help` Commands: table renders from the same command registry (single source of truth for
   dispatch + help + summaries). Proof = a **bash-only** two-agent connect→send→receive→seal smoke (also gives
   us the scripted live-smoke we lack). Full brief, written to execute cold: [[2026-07-11_cli-mcp-parity-plan]].
-  — ❌ NOT BUILT (assigned to CELLO_Support 2026-07-11).
+  — ❌ NOT BUILT (assigned to CELLO_Support 2026-07-11; building the **9 Group A + 6 Group B** clean handlers.
+  **3 rows descoped at handoff** — `backup`/`restore`/`inclusion-proof` are shim-only stubs, moved to
+  **DOD-CUSTODY-DAEMON-1** below; the §9 parity DoD reads as the table minus those 3, marked known-open).
+
+- **DOD-CUSTODY-DAEMON-1** (found by CELLO_Support 2026-07-11, during CLI-PARITY handoff) — `cello_backup`,
+  `cello_restore`, `cello_get_inclusion_proof` have **no real daemon IPC handler**: the daemon registers them
+  only as `not_implemented` stubs (`core/daemon/src/daemon.ts:3650-3656`) and the real logic lives **inside
+  the MCP shim** (`core/adapter-claude-code/src/server.ts` — `clientBackup.backup()`/`restore()`, inclusion
+  proof via `checkpointStatusProvider`), as in-process objects that never cross the IPC socket. Two
+  consequences: (a) DOD-CLI-PARITY-1 cannot thin-wrap them without shipping fake `not_implemented` commands or
+  a forbidden second client path; (b) more importantly, **backup/restore/inclusion-proof only work through
+  Claude Code today** — a Hermes or bash operator has NO data-custody path at all, which violates the
+  heavy-node principle (the daemon is the source of truth) and is a real trust gap. Fix: move the logic out of
+  the shim into **real daemon IPC handlers**; both the CLI pass-through and the shim then become trivial.
+  Trust-relevant (data custody), so weigh it above ordinary parity. — ❌ NOT BUILT (known-open).
 
 - **DOD-LIVE-1 (Tier 1 close / launch gate)** — The live doorbell journey: real daemon, real
   published shim, live `claude --channels` session; a real peer (second daemon) opens a session;

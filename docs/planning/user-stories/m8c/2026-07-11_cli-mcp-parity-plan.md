@@ -97,6 +97,18 @@ its one-line summary.
 | `cello_contact_set_away` | `cello contact set-away <name> <message>` | |
 | `cello_contact_set_moniker` | `cello contact set-moniker <name> <moniker>` | (per-CONTACT pet name — distinct from `moniker`) |
 
+> **⛔ DESCOPED during handoff (CELLO_Support, 2026-07-11) — `cello_backup`, `cello_restore`,
+> `cello_get_inclusion_proof` are NOT thin pass-throughs.** They have **no real daemon IPC handler** — the
+> daemon registers them only as `not_implemented` stubs (`core/daemon/src/daemon.ts:3650-3656`); the real
+> logic lives **inside the MCP shim process** (`core/adapter-claude-code/src/server.ts:566` backup, `:593`
+> restore, `:494` inclusion proof), as in-process objects that never cross the IPC socket. A thin CLI
+> pass-through would therefore ship data-custody commands that always return `not_implemented`, and making
+> them real from the CLI means instantiating `ClientBackup` in the CLI process — the §6-forbidden parallel
+> path. **This is the §2 guardrail firing correctly.** These 3 move to a separate daemon-side story
+> **DOD-CUSTODY-DAEMON-1** (move the logic out of the shim into real daemon IPC handlers — which ALSO gives
+> Hermes/bash operators a backup path they lack entirely today). Marked known-open, never silently dropped.
+> The remaining **9 Group A** rows are clean thin pass-throughs.
+
 ### Group B — live conversation (mirror the MCP params exactly; scriptable, not interactive)
 
 | MCP tool | New CLI command | Notes |
