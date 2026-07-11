@@ -226,6 +226,16 @@ description: >
   — ❌ NOT BUILT (assigned to CELLO_Support 2026-07-11; building the **9 Group A + 6 Group B** clean handlers.
   **3 rows descoped at handoff** — `backup`/`restore`/`inclusion-proof` are shim-only stubs, moved to
   **DOD-CUSTODY-DAEMON-1** below; the §9 parity DoD reads as the table minus those 3, marked known-open).
+  **UPDATE 2026-07-11 — Phases 0-3 CODE-COMPLETE** (cello-client `b2aaad8`; gate green, 127 CLI tests; unit
+  review in flight): registry as single source of truth (dispatch + help table + per-command help + an
+  auditable tool→command→IPC-handler map enforced by a test); **13 new commands** (agents, start/stop/use-agent,
+  inbox, transcript, **sealed-receipt** — a corrected parity gap: the notarized bilateral seal had no CLI
+  surface; my "receipts covers it" was wrong, `receipts` calls a different handler — initiate, send, receive,
+  receive-session, close, await-session, + contact set-tier/away/moniker); **DOD-ONBOARD-HELP-1's described
+  command table renders from the registry** (HELP-1 closable on publish). **Crown jewel PROVEN LIVE:**
+  bash-only two-agent connect→send→receive→close→bilateral-seal, matching `sealed_root 598b7461…`, zero MCP.
+  **Phase 4 publish HELD** on DOD-CURSOR-DURABLE-1 (below) — a bash `send` cannot reply until the
+  read-before-write gate is fixed; publish daemon+cli once, after.
 
 - **DOD-CUSTODY-DAEMON-1** (found by CELLO_Support 2026-07-11, during CLI-PARITY handoff) — `cello_backup`,
   `cello_restore`, `cello_get_inclusion_proof` have **no real daemon IPC handler**: the daemon registers them
@@ -237,7 +247,29 @@ description: >
   Claude Code today** — a Hermes or bash operator has NO data-custody path at all, which violates the
   heavy-node principle (the daemon is the source of truth) and is a real trust gap. Fix: move the logic out of
   the shim into **real daemon IPC handlers**; both the CLI pass-through and the shim then become trivial.
-  Trust-relevant (data custody), so weigh it above ordinary parity. — ❌ NOT BUILT (known-open).
+  Trust-relevant (data custody), so weigh it above ordinary parity. **DATUM (CELLO_Support, 2026-07-11): worse
+  than "absent from CLI" — the PUBLISHED shim entrypoint `core/adapter-claude-code/src/bin/cello-mcp.ts:345-372`
+  forwards `cello_backup`/`cello_restore` straight to the daemon's `not_implemented` stub (the `clientBackup`
+  logic in `server.ts` is NOT on the published MCP path), so data custody works NOWHERE today.** — ❌ NOT BUILT
+  (known-open).
+
+- **DOD-CURSOR-DURABLE-1** (found LIVE by CELLO_Support 2026-07-11, during CLI-PARITY Phase 3) —
+  **read-before-write makes a stateless CLI unable to hold a two-way conversation.** The `cello_send` gate
+  consumes the ephemeral per-connection cursor (`connectionCursors`, `daemon.ts:919`, keyed by connectionId,
+  deleted on disconnect — `daemon.ts:6252`: "cursor is connection-scoped, dies with it"; default -1). The MCP
+  shim holds ONE long-lived socket so read-then-send works; the CLI opens a NEW connection per invocation, so
+  `last_read_seq` is ALWAYS -1 at send time. Consequence (reproduced live, smoke step 4): a bash agent speaks
+  ONCE (a virgin session is also current_seq -1), then every subsequent `cello send` is permanently refused
+  `session_not_current` even though it DID receive — connect-and-communicate, the #1 launch value, is
+  HALF-delivered from bash. **Fix (state already exists):** the persisted per-(agent,session)
+  `message_watermarks` (`daemon.ts:914`, advanced by `cello_receive` at `daemon.ts:5827`) is the correct
+  authority — the send gate should consult it rather than (or in addition to) the ephemeral connection cursor.
+  Preserves the real intent (the agent genuinely read) AND works for any stateless client; also fixes the
+  latent reconnecting-MCP-client case. **Trade to make explicit:** per-connection → per-agent relaxes
+  CURSOR-1's two-attended-window "each connection must independently read" guarantee (never live-proven; a
+  Tier-2 nicety) in favor of the launch-critical stateless-client case. Daemon change; **blocks the CLI-PARITY
+  publish** (do NOT ship a `send` that can't reply — fix first, publish daemon+cli once). — 🟡 AWAITING
+  ANDRE'S GO on the semantics; CELLO_Support prepping the design.
 
 - **DOD-LIVE-1 (Tier 1 close / launch gate)** — The live doorbell journey: real daemon, real
   published shim, live `claude --channels` session; a real peer (second daemon) opens a session;
