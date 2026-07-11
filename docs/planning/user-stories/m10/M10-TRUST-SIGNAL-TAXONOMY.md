@@ -1,6 +1,7 @@
 ---
 name: m10-trust-signal-taxonomy
 type: reference
+role: spec-of-record for M10 (WHAT) — no separate M10-SPEC exists; pairs with M10-TRUST-SIGNAL-STORAGE-AND-CREATION (HOW)
 date: 2026-07-10
 topics: [m10, trust-signals, taxonomy, identity-proofs, network-graph, track-record, economic-stake, anti-sybil, webauthn, device-attestation]
 status: decided
@@ -203,6 +204,8 @@ Marked accordingly so you know how much of each doc is actually on-topic.
 
 - [[M10-TRUST-SIGNAL-STORAGE-AND-CREATION|M10 Trust Signal Storage & Creation]] — the HOW companion to
   this WHAT: envelope, dumb directory, scan-before-hash, supersession, zero-bump extensibility.
+- [[M10-PROCEDURE]] / [[M10-DEFINITION-OF-DONE]] / [[M10-BUILD-JOURNAL]] / [[M10-TYPE-PLAYBOOK]] —
+  the milestone apparatus that implements the two spec-of-record docs.
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] —
   the canonical four-class definition this taxonomy expands.
 - [[2026-05-16_0800_trust-signal-verification-architecture|Trust Signal Verification Architecture]] —

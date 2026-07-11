@@ -1,6 +1,7 @@
 ---
 name: m10-trust-signal-storage-and-creation
 type: design
+role: spec-of-record for M10 (HOW) — no separate M10-SPEC exists; pairs with M10-TRUST-SIGNAL-TAXONOMY (WHAT)
 date: 2026-07-10
 topics: [m10, trust-signals, storage, hashing, canonical-cbor, endorsement-mother, dumb-directory, scan-before-hash, supersession, extensibility, provenance, psi, zero-bump, type-registry, self-describing-payload]
 status: active
@@ -704,6 +705,8 @@ one type's convenience is pressure to spend the rare-change budget on something 
 
 ## Related Documents
 
+- [[M10-PROCEDURE]] / [[M10-DEFINITION-OF-DONE]] / [[M10-BUILD-JOURNAL]] / [[M10-TYPE-PLAYBOOK]] —
+  the milestone apparatus that implements this design (this doc is the spec-of-record, HOW half).
 - [[M10-TRUST-SIGNAL-TAXONOMY]] — parent; *what* the signals are (source of truth).
 - [[2026-07-10_contact-address-book-design]] — the `trust_signals` table's home; issuer types, the
   directory-is-notary shape.
