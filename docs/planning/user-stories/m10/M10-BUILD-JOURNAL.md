@@ -32,7 +32,11 @@ description: >
 - **Repos:** cello-portal (center of gravity; **LIVE on ECS Fargate, us-east-1** — deploys join the
   batching discipline), trustless-cello (batch deploys: one for Tier 0/1, one for Tier 3),
   cello-client (publish cascade; all tables on `agent_id`).
-- **DoD edits owed** before Tier 0 code — see investigation §10 (7 lines affected).
+- **DoD edits from investigation §10: ALL APPLIED (2026-07-11)** — §10.1 PROCEDURE/RESUME fixed
+  earlier; §10.2 (custody clause → Fargate+KMS reality), §10.3 (MINT-INTERNAL source-of-fact),
+  §10.4 (agent_id NOT NULL), §10.5 (DIR-WRITE replaces agent-write, never extends), §10.6
+  (DIRDATA consistency clause) applied to the DoD; §10.7 resolved as M10-D5.
+  DOD-PORTAL-ARCH-1 flipped to 🟠 (half 1 done).
 - **If autonomous:** arm both crons (PROCEDURE §3b) before the first unit.
 
 ---

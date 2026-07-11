@@ -94,14 +94,20 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
     long-running Class-3 job to live, or does it need a separate worker?), key material handling
     today, and the e2e-with-real-directory harness. Findings journaled with file-level evidence.
   - **Architecture (the determination):** where per-type verification modules live and their
-    interface; how the portal signs (submission key + registry key custody — where a private key
-    can safely live in this deployment shape); the submission client; the registry publisher;
-    the Class-3 background job's home (in-portal vs separate worker process); how envelopes are
-    delivered to the holder daemon; what the trust-signals UI scaffold needs to become real.
-    Recorded as an **architecture section appended to this DoD's spec-of-record set** (a design
-    doc under `user-stories/m10/`, wikilinked here), reviewed by `cello-unit-reviewer` like any
-    unit, and its decisions logged in the Decisions section below. Downstream DoD lines that the
-    architecture reshapes are edited THEN, not discovered mid-build. — ❌
+    interface; how the portal signs (submission key + registry key custody — answered for the
+    REAL deployment shape: **ECS Fargate + IAM task role + Secrets Manager + KMS, which supports
+    Ed25519 natively** — with "the portal holds no private key at all" (`kms:Sign`) a live
+    option, per investigation §6); the submission client; the registry publisher; the Class-3
+    background job's home (investigation §4.2: `after()` is disqualified — in-process scheduler
+    vs second container vs scheduled task vs Lambda); how envelopes are delivered to the holder
+    daemon (the M8 pipe of investigation §5 is the running prior art — correct it, don't
+    reinvent it); what the trust-signals UI scaffold needs to become real. Written AGAINST
+    [[M10-PORTAL-ARCH-INVESTIGATION]] (its §11 forks + §12 recommendations), recorded as a
+    design doc under `user-stories/m10/` wikilinked here, reviewed by `cello-unit-reviewer` like
+    any unit, and its decisions logged in the Decisions section below. Downstream DoD lines that
+    the architecture reshapes are edited THEN, not discovered mid-build. —
+    🟠 (half 1 DONE 2026-07-11: [[M10-PORTAL-ARCH-INVESTIGATION]], → Journal Entry 2; its §10
+    evidence-driven DoD edits applied. Half 2 — the determination — is the next unit.)
 - **DOD-CBOR-1** — a shared canonical-envelope component (serialize, hash, verify) usable from
   portal, directory, and client. Clauses: deterministic map ordering + defined number encoding
   per spec §5; the hash preimage is exactly spec §4's mandatory-disclosure set (subject_kind,
@@ -117,8 +123,10 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   outside the hash; subject = the local agent) — the existing M8 scaffold table is **dropped and its
   signals re-minted via the §14.10 backfill, never migrated** (alpha, no users); **(2) received
   store `contact_trust_signals`** (envelope columns + `verified_at` + `received_at`, composite FK to
-  `contacts(agent_id, pubkey)`). SQLCipher, keyed on `agent_id`. Migration idempotent; fresh schema
-  == migrated schema. — ❌
+  `contacts(agent_id, pubkey)`). SQLCipher, keyed on `agent_id`. **The M8 defect dies with the drop:**
+  the scaffold wrote `agent_id = null` (investigation §9, `daemon.ts:4920`) — both new tables declare
+  `agent_id NOT NULL` and every write path attributes it, or INV-AGENT-SCOPED is violated at birth.
+  Migration idempotent; fresh schema == migrated schema. — ❌
 - **DOD-STORE-DIR-1** — directory `signal_records` table (`signal_hash` PK, subject_kind,
   subject, issuer_pubkey, issuer_kind, type-as-opaque-string, status, superseded_by, revoked_at,
   accepting_node, scanner_version) + replication of records AND status changes over the existing
@@ -131,7 +139,12 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   signature against the authorized-issuer set (portal keys — but the set is DATA, not a
   hardcoded "portal only": `issuer_kind: agent` intake must be addable post-v1 without an API
   change); reject unauthorized loud (`signal.submission.rejected` + reason); insert at one node,
-  federate by replication; idempotent on duplicate hash. Design note first (PROCEDURE §6:
+  federate by replication; idempotent on duplicate hash. **This REPLACES the M8 `agent-write`
+  seam, never extends it** (investigation §5.3): the `SIGNAL_KINDS` per-type enum
+  (`agent-write-validation.ts:20`) and the `trust_signal_hash`/`trust_signal_ciphertext` arms
+  retire after migration, and the shared-static-bearer-key model (one secret, also held by the
+  ops-agent, over plaintext HTTP — investigation §3) is superseded by signed submissions on this
+  surface — INV-CHOKEPOINT is a NEW property, not a hardening. Design note first (PROCEDURE §6:
   submission signature + key custody). — ❌
 - **DOD-REVOKE-1** — revocation = re-auth through the same chokepoint (spec §14.2): issuer
   revokes own signals (`connecting_pubkey == issuer_pubkey`), portal revokes portal-issued;
@@ -148,8 +161,13 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   self-describing payload (plain-language claim + structured fields; email carries domain, not
   address — no PII beyond what the signal IS), hashed via DOD-CBOR-1, submitted via
   DOD-DIR-WRITE-1, delivered to the holder (generic delivery: verify hash ∈ directory → insert
-  envelope row; the client half is type-agnostic). Registry entries for both types. Existing
-  accounts get them on next portal touch; new registrations mint at verify time. — ❌
+  envelope row; the client half is type-agnostic). **Source-of-fact clause (investigation §2):
+  the portal holds NO phone data — the verified fact lives in the directory's
+  `user_accounts.phone_stub_hash`; email exists portal-side only as envelope ciphertext. The
+  unit must define how the portal obtains/attests each fact it mints (a directory read, not a
+  re-verification), and the architecture half decides that read's shape.** Registry entries for
+  both types. Existing accounts get them on next portal touch; new registrations mint at verify
+  time. — ❌
 - **DOD-T1-JOURNEY-1** — **live journey, first half:** for a real agent, portal mints phone +
   email → directory notarizes (visible in `signal_records`, replicated to all 3 nodes) → holder
   daemon holds both envelopes and re-verifies their hashes locally. Real portal process, real
@@ -191,9 +209,16 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
 ## Tier 3 — The directory-computed path (Class 3 track record)
 
 - **DOD-DIRDATA-READ-1** — the read path the portal's Class-3 job uses (spec §6 amendment: the
-  portal computes, the directory only serves data it already holds). Design note first: exactly
-  which aggregates (session/seal counts, clean-close attestations) are exposed, authenticated
-  how; no content, no PII, aggregate-only. — ❌
+  portal computes, the directory only serves data it already holds). **Materially bigger than
+  "expose an aggregate" (investigation §7):** `pseudonym_stats` exists but is pseudonym-keyed
+  (M10 subjects are agent identities), has zero exposure surface (no route, no accessor), and
+  **its inputs are unreplicated** (`pseudonym_stats`, `conversation_participation`,
+  `conversation_attestations` absent from `PUBLICATION_TABLES`) — so the three sovereign nodes
+  may disagree on the numbers. **Consistency clause:** a track-record signal must be reproducible
+  from any node — make the aggregate agent-keyed AND cross-node consistent (replicate the inputs
+  or compute from already-replicated data; a Decisions entry) BEFORE exposure. Design note first:
+  exactly which aggregates (session/seal counts, clean-close attestations) are exposed,
+  authenticated how; no content, no PII, aggregate-only. — ❌
 - **DOD-TRACK-1** — a portal background job computes one or two track-record signals
   (**session count** and **clean-close rate** — per taxonomy Class 3) and mints them through
   the SAME write path as Tier 1 (nothing directory-issued; INV-CHOKEPOINT unchanged). Default
