@@ -33,7 +33,8 @@ not alphabetical — Andre fixed Setup + Agents explicitly; refine the others on
 
 - **Setup:** `login` · `logout` · `status` · `create-agent` · `register-agent` · `remove-agent`
 - **Agents:** `agents` · `start-agent` · `use-agent` · `stop-agent` · `refresh`
-- **Messaging:** `initiate` · `await-session` · `receive-session` · `send` · `receive` · `inbox` · `close`
+- **Messaging:** `initiate` · `await-session` · `receive-session` · `close-session` · `send` · `receive` · `inbox`
+  (session-lifecycle verbs first and clustered, then the bare message verbs, then `inbox` last — Andre 2026-07-11)
 - **Sessions & receipts:** `sessions` · `transcript` · `receipts` · `sealed-receipt`
 - **Contacts:** `contacts` · `contact`
 - **Other:** `settings` · `telegram` · `bridge`
@@ -52,6 +53,10 @@ of truth (dispatch + help + per-command help all derive from it, as today). Keep
   onboarding first-run string in `cli-args.ts` USAGE ("First-time setup: … cello register …"), the per-command
   help, the Telegram handoff text, and any doc/portal/ops-agent copy that says `cello register`. A rename that
   leaves the onboarding string pointing at the old verb is a half-rename.
+- **`close` → `close-session`** (Andre: it closes a *session*; this also clusters the session-lifecycle verbs
+  `await-session`/`receive-session`/`close-session`, leaving `send`/`receive` as the bare message verbs). Keep
+  `close` as a hidden alias. **Open — Andre's call: `initiate` → `initiate-session`** would complete the
+  `*-session` parallel; left as `initiate` unless he confirms the rename (send/receive stay bare either way).
 - Hidden aliases must be **functional + tested** but **not shown** in `cello --help`.
 
 ## 3. Split `contact` → `contacts` + `contact` (decided: split; Andre may veto to a plain rename)
