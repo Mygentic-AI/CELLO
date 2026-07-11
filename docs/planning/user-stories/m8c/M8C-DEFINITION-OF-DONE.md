@@ -359,9 +359,12 @@ and they correlate one-to-one.
   built + reviewed + merged to cello-client main (`8becaa7` + `94d08f0`, 2026-07-10; review found F1
   blocking — the production seam's `sendRaw` resolves `{ok:false}` instead of throwing, so a failed
   reject logged `reject.sent`; fixed on BOTH the reject and the pre-existing accept path). ✅ when the
-  directory half (D2) understands the frame. 📦 **Daemon half NOW SHIPPED — 0.0.46 / v0.0.94 (2026-07-11):
-  commit `8becaa7` verified an ancestor; `session_offer_reject` present in `dist/`. Flip still gated on the
-  3-region directory deploy (D2, Andre's deploy.sh call) — the frame is inert until the directory decodes it.**
+  directory half (D2) understands the frame. 📦 **BOTH HALVES NOW LIVE — 0.0.94 (2026-07-11): daemon half
+  in 0.0.46 (`8becaa7` ancestor of the tag; `session_offer_reject` present in `dist/`); the directory-side
+  decoder rides `1ccd08a5`, whose `cello-directory-pipeline` execution **Succeeded 2026-07-10 12:37 and is
+  running in all 3 regions** (ECS `cello-directory-dev` image tag `1ccd08a`, us-east-1 / eu-central-1 /
+  ap-northeast-1 all `running=1`, verified against live ECS 2026-07-11 — NOT a pending deploy). Flip pending
+  a single live proof that the directory understands the reject frame.**
 - **DOD-DIR-FAILCLOSED-1** (D2, the correct root fix) — the directory must **never FROST-sign or
   distribute an assignment with an empty counterparty endpoint**. On offer-accept timeout it returns a
   `session_request` failure to the initiator and sends **nothing** to the target. Today it "proceeds
@@ -381,10 +384,15 @@ and they correlate one-to-one.
   collapsed `counterparty_did_not_accept` to `directory_unreachable` — blaming a healthy directory
   for a counterparty that declined. The live one is the daemon's `sessionRequestErrorReason`; the
   client's `mapSessionRequestErrorFrame` was also swallowing `agent_revoked`/`agent_suspended` since
-  M7/M8. ✅ **awaiting the 3-region deploy — Andre's call, Ms_Chelly runs it. Do not run deploy.sh.**
-  📦 **Daemon-side half (decoder allowlist, reject-waiter, `counterparty_did_not_accept` reason fix) NOW
-  SHIPPED in 0.0.46 / v0.0.94 (2026-07-11); the root fix is directory-side (`1ccd08a5`, trustless-cello)
-  and remains UNDEPLOYED — this line does not move until the 3-region deploy runs.**
+  M7/M8. ✅ **DEPLOYED — NOT awaiting anything (corrected 2026-07-11).** The directory root fix `1ccd08a5`
+  ships as APPLICATION CODE via `cello-directory-pipeline` (image swap on push), not deploy.sh — its
+  pipeline execution **Succeeded 2026-07-10 12:37** and all 3 regions run image tag `1ccd08a` (ECS
+  `cello-directory-dev`, us-east-1 / eu-central-1 / ap-northeast-1, each `running=1`, verified against live
+  ECS 2026-07-11). It is the LATEST directory commit — nothing directory-side is unshipped. The daemon-side
+  half (decoder allowlist, reject-waiter, `counterparty_did_not_accept` reason fix) is in 0.0.46 / v0.0.94.
+  **Both sides are live; this line moves to fully-✅ on a single live phantom-session-gone proof — NO deploy
+  remains.** (A prior note here wrongly said "awaiting the 3-region deploy / undeployed" — it conflated the
+  app-code pipeline with deploy.sh and was falsified by the live ECS check.)
   — Entry 85
 - **DOD-UNREAD-1** (D4, **DECIDED 2026-07-10 — producer-first**) — a received `transcript` row with no
   `sessions` row is counted unread (`getUnreadSummary` never joins `sessions`) but `cello_receive` returns
