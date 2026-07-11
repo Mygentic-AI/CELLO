@@ -268,8 +268,14 @@ description: >
   latent reconnecting-MCP-client case. **Trade to make explicit:** per-connection → per-agent relaxes
   CURSOR-1's two-attended-window "each connection must independently read" guarantee (never live-proven; a
   Tier-2 nicety) in favor of the launch-critical stateless-client case. Daemon change; **blocks the CLI-PARITY
-  publish** (do NOT ship a `send` that can't reply — fix first, publish daemon+cli once). — 🟡 AWAITING
-  ANDRE'S GO on the semantics; CELLO_Support prepping the design.
+  publish** (do NOT ship a `send` that can't reply — fix first, publish daemon+cli once). — 🟡 **OPTION 1
+  APPROVED (Andre, 2026-07-11)** — the OR gate `caughtUp = (connectionCursor >= currentSeq) OR
+  (unreadReceivedCount == 0)`, reusing INBOX-1's unread-received computation (Trap 1: own sends must not
+  enter the compare) + `cello_get_transcript` advances the persisted watermark (Trap 2: keep the documented
+  remedy true), with a test asserting **zero behavior change on the long-lived-connection path** (the safety
+  property that makes it safe on a security gate). Building now; proof = a **bidirectional** bash smoke (both
+  sides reply, matching sealed_root); then publish daemon+cli once (connect unaffected). Design (traps +
+  the per-connection→per-agent relaxation, stated not absorbed): [[2026-07-11_cursor-durable-read-before-write-design]].
 
 - **DOD-LIVE-1 (Tier 1 close / launch gate)** — The live doorbell journey: real daemon, real
   published shim, live `claude --channels` session; a real peer (second daemon) opens a session;
