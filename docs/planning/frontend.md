@@ -248,7 +248,7 @@ Contents:
 - **Notification events**: tombstone notifications (connected identity tombstoned), trust event notifications (connected agent's trust status changed), recovery event notifications (recovered identity re-entering network), session-close attestation dispute notifications, trust signal pickup pending (agent has an encrypted trust signal blob awaiting retrieval from the portal pickup queue), succession claim filed (urgent — links to contest UI), human input requested (agent waiting for owner input during an active conversation), Merkle tree pruning scheduled (30-day warning before leaf-level proofs are pruned). These come from the formal notification type registry; the event stream must support filtering by type.
 - Security events (`security_block` type): covers both Layer 1 sanitization fires (injection pattern detected) and hash–message mismatch events (tamper detection — received message does not match the hash the directory has on record). Both surface as `security_block` events with a subtype field distinguishing them. Hash-without-message events (permanent delivery gap — directory has a hash but message never arrived) are a distinct sub-event within the same type.
 
-The activity log is the same data surfaced by `cello_list_sessions` and `cello_poll_notifications` via the MCP tool surface, presented for a human reader.
+The activity log is the same data surfaced by `cello_sessions` and `cello_poll_notifications` via the MCP tool surface, presented for a human reader.
 
 **[GAP F-9]**: The retention period for the activity log is not specified. Is the full audit trail available in perpetuity, or is there a rolling window? The answer has implications for storage in the signup portal backend.
 

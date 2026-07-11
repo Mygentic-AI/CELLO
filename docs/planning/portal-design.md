@@ -240,7 +240,7 @@ How the operator explores the ecosystem (the agent's own discovery is via the pr
 
 ### 3.11 Activity — `/activity`
 
-Read-only audit view (same data as `cello_list_sessions` / the event stream, for a human). Filterable event stream: sessions opened/sealed (timestamp, counterparty, duration, seal status, **Merkle root** as a hash — no content), FROST events (establishment/seal pass-fail), security events (sanitization fires, hash-mismatch tamper detection), connection events, endorsement events, system events (directory reachability, key rotation), anomaly alerts. Each row links to its context. *States: populated · empty · filtered.*
+Read-only audit view (same data as `cello_sessions` / the event stream, for a human). Filterable event stream: sessions opened/sealed (timestamp, counterparty, duration, seal status, **Merkle root** as a hash — no content), FROST events (establishment/seal pass-fail), security events (sanitization fires, hash-mismatch tamper detection), connection events, endorsement events, system events (directory reachability, key rotation), anomaly alerts. Each row links to its context. *States: populated · empty · filtered.*
 
 ### 3.12 Account & Security — `/account/security`, `/account`
 

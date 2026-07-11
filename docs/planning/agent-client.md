@@ -29,7 +29,7 @@ The client is not a proxy between the agent and the protocol. The agent calls MC
 
 The client supports any number of concurrent sessions running simultaneously. Each session is fully independent: its own relay node assignment, its own Merkle tree, its own sequence numbering, its own `session_id`. A new connection request arriving while other sessions are active is processed normally — the persistent libp2p connection to the directory remains open during active sessions for exactly this purpose (connection requests, notifications, relay assignments). Accepting a new connection runs a FROST ceremony on directory nodes independently of any active relay sessions; there is no contention.
 
-The agent interacts with sessions by `session_id`. All `cello_send`, `cello_receive`, and `cello_close_session` calls are scoped to a specific session. `cello_list_sessions` returns all active sessions. The agent can address sessions in any order; the client routes each call to the correct relay and P2P connection independently.
+The agent interacts with sessions by `session_id`. All `cello_send`, `cello_receive`, and `cello_close_session` calls are scoped to a specific session. `cello_sessions` returns all active sessions. The agent can address sessions in any order; the client routes each call to the correct relay and P2P connection independently.
 
 ### What the client handles automatically (agent never sees this)
 
@@ -1227,7 +1227,7 @@ The client's behavior is identical across deployment models. The calling pattern
 
 | Group | Tools | Count |
 |---|---|---|
-| Session / Conversation | `cello_send`, `cello_receive`, `cello_initiate_session`, `cello_close_session`, `cello_abort_session`, `cello_resume_session`, `cello_list_sessions`, `cello_acknowledge_receipt` | 8 |
+| Session / Conversation | `cello_send`, `cello_receive`, `cello_initiate_session`, `cello_close_session`, `cello_abort_session`, `cello_resume_session`, `cello_sessions`, `cello_acknowledge_receipt` | 8 |
 | Security | `cello_scan`, `cello_report`, `cello_redact`, `cello_block_agent` | 4 |
 | Trust / Identity | `cello_verify`, `cello_get_trust_profile`, `cello_check_own_signals` | 3 |
 | Discovery & Listings | `cello_search`, `cello_create_listing`, `cello_update_listing`, `cello_renew_listing`, `cello_retire_listing` | 5 |
