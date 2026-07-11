@@ -201,6 +201,29 @@ reviewed by `cello-unit-reviewer`, decisions logged in the DoD.
 
 ---
 
+### 2026-07-11 — Entry 3: M10-D4 + M10-D5 — recipient storage settled; subject_kind added to the envelope (amends Entry 1's preimage)
+
+**M10-D4 (Andre):** recipients DO store presented signals (plaintext-in-SQLCipher evidence rows,
+`verified_at` metadata) — all "verdict-only / does-not-persist" spec phrasing was wrong and is
+amended; statelessness = reliance (evaluate only the presented set). TWO client tables (spec §3.1):
+wallet `trust_signals` + received store `contact_trust_signals`. M8 scaffold rows: drop + re-mint.
+
+**M10-D5 (Andre):** subjects have two levels — **`subject_kind: account | agent`, both hashed**
+(spec §3.2, §4). Operator-level facts (phone/email/social) are account-subject, ONE envelope per
+fact, agent-add a no-op; track record is agent-subject and may also mint an account aggregate;
+endorsements may target either (default: specific agent unless requested and agreed — post-v1
+intake policy, seam ships now). Dumb check 2 resolves account subjects through the presenting
+agent's account (spec §2). Cross-persona linkability of account signals: accepted, selective
+disclosure is the lever. Multi-daemon portability constraint logged as spec §14.11; sync mechanism
++ same-agent-two-daemons control handoff PARKED (DoD). Supersedes investigation §12 R7.
+
+**⚠️ Amendment to Entry 1 (append-only, so noted here, never edited there):** the CBOR-1 design
+note's preimage list now includes **`subject_kind`** before `subject`. The DoD's DOD-CBOR-1 line
+carries the authoritative field list. All decided BEFORE any hashing exists — DOD-CBOR-1 has not
+started, so no hash breaks (spec §5's retrofit warning honored).
+
+---
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client

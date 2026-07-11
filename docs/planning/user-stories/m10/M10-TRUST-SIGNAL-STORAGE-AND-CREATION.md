@@ -78,6 +78,20 @@ description: >
   expiry, revocation, age. Payload-level judgment is LLM discretion (restrict-only). A floor predicate
   that reaches into a payload is the §3 guardrail smell in policy clothing.
 
+**Decided (subject-scope session, 2026-07-11 — M10-D5):**
+- **Subjects have two levels: `subject_kind: account | agent`, both fields hashed** (§3.2, §4).
+  Operator-level facts (phone, email, social OAuth) are account-subject — one envelope per fact,
+  every agent under the account presents it, agent-add is a no-op, **no per-agent duplication**.
+  Agent-level facts (track record) are agent-subject; some Class-3 signals exist at both scopes by
+  aggregation. Endorsements may target either (default: specific agent, unless requested and agreed —
+  intake policy, post-v1; the seam ships now). Account-wide signals are cross-persona linkable —
+  accepted, selective disclosure is the lever (§3.2). The dumb presentation check resolves an
+  account subject through the presenting agent's account (§2).
+- **Wallet rows are daemon-portable by construction** (§14.11): content-addressed, immutable,
+  sync = `INSERT OR IGNORE`; `status` is directory-authoritative. Nothing daemon-identity-specific
+  ever goes in a wallet row. The multi-daemon sync mechanism and same-agent-two-daemons control
+  handoff are conceived, NOT designed here — parked in the DoD.
+
 **Open (flagged, not decided):**
 1. Does the **recipient re-scan**, or fully trust the creation-time scan? (§8) — leaning: trust it;
    optional pass/block re-scan as cheap defence-in-depth (more attractive under §14.1's honest weakening).
@@ -116,6 +130,11 @@ directory does exactly two mechanical checks:
 
 1. `hash(blob the agent forwarded) == hash the agent claims`?
 2. `that hash ∈ what the directory stored for this subject`, and not revoked?
+
+For an **account-subject** envelope (§3.2, M10-D5), check 2 resolves the subject through the
+presenting agent: `hash ∈ what the directory stored for the ACCOUNT this agent belongs to` — one
+mechanical join on the `agent → account` mapping the directory already holds. Still no content
+evaluation, no signature logic, no schema knowledge.
 
 Both pass → the introduction carries the signal. **No signature verification, no content evaluation, no
 schema knowledge.** The directory matches bytes. All intelligence lives at *creation* (§6); the directory
@@ -199,8 +218,8 @@ contact_trust_signals(
   signal_hash      TEXT,     -- content address, re-verified before insert
   agent_id         TEXT,     -- the LOCAL receiving agent (scoping key)
   contact_pubkey   TEXT,     -- the presenting counterparty
-  -- ...all §3 envelope columns (subject, issuer_kind, issuer_pubkey, type,
-  --    schema_version, payload BLOB, issued_at, expires_at, supersedes_hash, status)...
+  -- ...all §3 envelope columns (subject_kind, subject, issuer_kind, issuer_pubkey,
+  --    type, schema_version, payload BLOB, issued_at, expires_at, supersedes_hash, status)...
   verified_at      INTEGER,  -- when this recipient last verified hash ∈ directory + status (metadata, local, never hashed — §4)
   received_at      INTEGER,
   PRIMARY KEY (agent_id, contact_pubkey, signal_hash),
@@ -214,6 +233,42 @@ are **evidence, never an evaluation input** — policy always runs on the curren
 and freshness is always re-checked on use (§8, §14.7). Exact DDL (indexes, NOT NULLs) is
 DOD-STORE-CLIENT-1's to finalize; the columns and keys above are spec.
 
+### 3.2 Subject scope — account-wide vs agent-specific (decided 2026-07-11, Andre — M10-D5)
+
+A dimension the spec previously left implicit: **who a signal is ABOUT has two levels**, and the
+envelope must carry it — a wallet-side "scope" column alone cannot, because the *hash* is what is
+presented and verified, and an endorser signs once.
+
+`subject_kind: account | agent` + `subject`, **both inside the hash** (§4), mirroring
+`issuer_kind`/`issuer_pubkey` on the issuer side:
+
+- **`account`** — a fact about the OPERATOR (the human). The majority of portal-verified signals:
+  phone, email, LinkedIn, GitHub, and most Class-1 identity proofs. `subject` is a **dedicated public
+  account identifier** (which value exactly — never the internal `account_id` UUID — is a
+  DIR-WRITE-1/MINT design-note decision). Every agent under the account can present it; **adding an
+  agent is a no-op** — nothing is re-minted, the claim was never about an agent. One envelope per
+  fact; **no per-agent duplication** (rejected: duplication makes agent-add a re-mint chore and
+  forces endorsers to re-sign per agent).
+- **`agent`** — a fact about ONE agent. Directory-computed track record is the canonical case;
+  `subject` is the agent identity, and the transplant defence (§4) applies as originally designed.
+- **Both, by aggregation** — some Class-3 signals legitimately exist at both scopes from the same
+  data: *this agent's* clean-close count (subject_kind=agent) and *the whole account's* aggregate
+  (subject_kind=account). Two envelopes, same machinery; the directory read path (Class-3) must
+  serve both aggregations.
+- **Endorsements target either.** An endorser may endorse the account or a specific agent,
+  **defaulting to the specific agent unless requested and agreed** — that default is intake policy
+  (post-v1, with endorsements), but the seam (`subject_kind`) exists from birth, per the same
+  no-seam-rot rule as `issuer_kind: agent`.
+
+**Design fact — account-wide signals are cross-persona linkable, accepted with eyes open.** An
+account-subject envelope carries a stable account-scoped identifier, and its single hash is the same
+whichever agent presents it: two personas presenting it are linkable. This is NOT worth per-agent
+hash splitting, because for identity proofs the *payload content links the personas anyway* (two
+agents both presenting "a 6-year LinkedIn, verified via OAuth" are linked by the claim itself).
+The real lever is the one the design already has — **selective disclosure**: a persona that must
+stay unlinkable does not present account-wide signals. Stated here so nobody later "fixes"
+linkability with duplication.
+
 ---
 
 ## 4. What goes in the hash — the mandatory-disclosure set
@@ -224,8 +279,10 @@ disclosure set. The generative rule: **hash what the issuer commits to at birth 
 leave out everything that changes after.**
 
 **IN the hash (the immutable claim — all compelled on share):**
-- **subject** — the single most important field. Without it, a signal about Alice can be presented as
-  being about Bob (transplant). Binding subject into the hash is the transplant defence.
+- **subject_kind + subject** — the single most important fields. Without the subject, a signal about
+  Alice can be presented as being about Bob (transplant); without the kind, an account-wide claim
+  could be re-presented as agent-specific or vice versa (scope forgery). Binding the pair into the
+  hash is the transplant defence at both levels (§3.2, M10-D5).
 - **issuer_pubkey** + **issuer_kind** — binds the signal to its author; forging "the portal issued this"
   becomes impossible.
 - **type**, **schema_version** — you cannot present a `linkedin` blob as an `endorsement`, or reinterpret
@@ -306,7 +363,10 @@ BotFather-shaped, but corrected for a federated system. The concrete instantiati
 chokepoint for agent-issued endorsements.
 
 **Flow.** Bob writes an endorsement *for Alice* and connects to the endorsement-intake role: *"here is my
-endorsement for pubkey X."* The role runs it through the deterministic scanner. On pass → hash it,
+endorsement for pubkey X."* *(Amended 2026-07-11, M10-D5: the target may be a specific agent OR the
+account — `subject_kind`, §3.2 — defaulting to the specific agent unless requested and agreed; the
+default is intake policy, decided with endorsements post-v1.)* The role runs it through the
+deterministic scanner. On pass → hash it,
 notarize the hash in the directory keyed to **Alice's** pubkey, and deliver the plaintext blob to
 **Alice** (the subject holds and later presents it — Bob's role ends at submission). On fail → reject,
 and (graduated, see below) flag the submitter.
@@ -694,6 +754,18 @@ may be silently defaulted.
   (re-run OAuth?); verifying Class 3 source data exists directory-side (seal records — probably yes);
   backfilling the four live M8 signals (WebAuthn / TOTP / phone / email) into envelopes; concrete
   endorsement-intake rate limits.
+- **14.11 — Multi-daemon accounts and signal portability (logged 2026-07-11, M10-D5).** One account
+  may run several daemons (a laptop and an AWS instance), with agents copyable/movable between them
+  via a planned sign-prove-you-own-both sync mechanism — conceived, not coded, NOT M10 scope. What IS
+  M10 scope is the constraint it imposes on this schema: **trust signals must be copyable between
+  daemons**, so nothing daemon-identity-specific ever goes in a wallet row. The envelope design
+  already satisfies this by construction: rows are immutable and content-addressed
+  (sync = `INSERT OR IGNORE` on `signal_hash`, trivially convergent), and the one mutable field
+  (`status`) is directory-authoritative, so a re-fetch resolves any divergence. Account-subject
+  signals (§3.2) are daemon-agnostic outright. The adjacent problem — the same agent (same keys) live
+  on two daemons, and which one the directory calls / how control is handed over (request-and-receive
+  permission between daemons) — is a known open design, **parked in the DoD**, and must not be
+  accidentally foreclosed by M10 storage decisions.
 
 ---
 
@@ -707,9 +779,9 @@ three-region deploy), the cadence is impossible. So: introducing a new trust sig
 ### 15.1 The principle
 
 **The protocol's unit is the envelope, never the signal type.** Freeze the envelope —
-`(subject, issuer_kind, issuer_pubkey, type, schema_version, payload, issued_at, expires_at,
-supersedes_hash)` hashed as canonical CBOR (§4, §5) — and put *everything* type-specific in exactly two
-places: the **payload bytes** and **portal code**. The client and directory only ever handle envelopes.
+`(subject_kind, subject, issuer_kind, issuer_pubkey, type, schema_version, payload, issued_at,
+expires_at, supersedes_hash)` hashed as canonical CBOR (§4, §5) — and put *everything* type-specific
+in exactly two places: the **payload bytes** and **portal code**. The client and directory only ever handle envelopes.
 The end-to-end verification of a LinkedIn / GitHub / X claim is real, unique, per-type work — and all of
 it lives in the portal, behind the envelope.
 

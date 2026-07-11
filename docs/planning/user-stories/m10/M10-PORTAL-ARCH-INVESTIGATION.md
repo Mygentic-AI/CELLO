@@ -443,11 +443,14 @@ Per PROCEDURE §4, downstream lines the architecture reshapes are edited **now**
 6. **DOD-DIRDATA-READ-1 / DOD-TRACK-1** — materially bigger than written: the aggregate is
    pseudonym-keyed, unexposed, and **its inputs are not replicated**, so nodes may disagree. Needs a
    consistency clause.
-7. **A new invariant is owed: INV-SUBJECT-BINDING.** `CONTEXT.md` says trust signals attach to the
-   **Account** (one human, N agents *inherit*, "counterparties receive an aggregate Account-level trust
-   view"); the M10 envelope binds `subject` to an **agent**. Phone and email are Account-level facts by
-   construction. M8's handoff already resolved this in practice by **fanning out one sealed envelope per
-   agent** (`handoff.ts:77-81`) — the architecture must ratify that (or overturn it) explicitly.
+7. ~~**A new invariant is owed: INV-SUBJECT-BINDING.**~~ **RESOLVED — M10-D5 (2026-07-11, Andre;
+   spec §3.2).** The envelope gained `subject_kind: account | agent` (both hashed): phone/email/social
+   are account-subject (one envelope, every agent presents it), track record is agent-subject (both
+   scopes possible by aggregation), endorsements may target either. M8's per-agent fan-out
+   (`handoff.ts:77-81`) is overturned for account-level facts — note the M8 pipe fans out the sealed
+   *delivery* per agent's k_local, which remains fine for delivery even under an account-subject
+   envelope. `CONTEXT.md`'s account-level attachment model is substantially ratified rather than
+   contradicted.
 
 ---
 
@@ -553,8 +556,16 @@ idempotent-on-duplicate-hash by design (R5), so retrying a submission against th
 *Rejected:* teaching the portal the full manifest client + pinned-root verification — real new surface
 that buys little at this node count.
 
-**R7 — Subject binding: ratify per-agent fan-out (M8's de facto answer): `subject` = agent identity;
-Account-level facts (phone, email) mint one envelope per agent, re-minted at agent creation.** The
+**R7 — ~~Subject binding: per-agent fan-out~~ SUPERSEDED by M10-D5 (2026-07-11, Andre — see the DoD
+Decisions section and spec §3.2).** The ruling: `subject_kind: account | agent`, both hashed —
+operator-level facts are account-subject (ONE envelope, no per-agent duplication, agent-add a no-op);
+endorsements may target either. R7's unlinkability argument was weaker than stated: for identity
+proofs the *payload content* links personas regardless of hash, so per-agent hash splitting was fake
+protection — selective disclosure is the real lever. Account-level endorsements also make per-agent
+fan-out impossible (an endorser signs once). Original text kept below for the record:
+
+*Original R7 —* Subject binding: ratify per-agent fan-out (M8's de facto answer): `subject` = agent identity;
+Account-level facts (phone, email) mint one envelope per agent, re-minted at agent creation. The
 decisive argument is unlinkability, not plumbing: an Account-subject envelope has ONE hash, so two
 pseudonymous personas presenting it are *provably the same operator* — the privacy break the whole
 co-resident-agent model exists to prevent (spec §10). Per-agent envelopes get distinct hashes for free
@@ -564,8 +575,9 @@ fact, automatable at portal-touch/agent-add. Obliges a `CONTEXT.md` amendment �
 Account-level trust view" paragraph describes something M10 deliberately does not build. *Rejected:*
 Account-subject envelope — linkability across personas, plus a lookup the dumb directory doesn't have.
 
-**Weighting.** R1, R4, R7 are load-bearing (custody, trust chain, privacy). R2, R3, R5, R6 are
-reversible engineering picks chosen to be cheapest to *promote later*, not cheapest today.
+**Weighting.** R1 and R4 are load-bearing (custody, trust chain); R7 was load-bearing and is now
+DECIDED as M10-D5 (subject_kind — see above). R2, R3, R5, R6 are reversible engineering picks chosen
+to be cheapest to *promote later*, not cheapest today.
 
 ---
 

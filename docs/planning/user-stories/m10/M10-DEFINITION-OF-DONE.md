@@ -56,7 +56,9 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
 ## Tier I — Invariants (must hold in every journey, every tier; spec §12 + §15)
 
 - **DOD-INV-DIR-DUMB** — the directory performs only the two hash checks at presentation; no
-  content evaluation, no signature logic at presentation, no schema knowledge. — ❌
+  content evaluation, no signature logic at presentation, no schema knowledge. For an
+  account-subject envelope (M10-D5, spec §3.2) check 2 resolves through the presenting agent's
+  account — one mechanical join, still content-blind. — ❌
 - **DOD-INV-CHOKEPOINT** — a hash enters the directory's store ONLY via a signed submission from
   an authorized issuer key; anything else is rejected loud. Notarized ⇒ scanned-clean-at-birth
   holds. — ❌
@@ -102,9 +104,10 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
     architecture reshapes are edited THEN, not discovered mid-build. — ❌
 - **DOD-CBOR-1** — a shared canonical-envelope component (serialize, hash, verify) usable from
   portal, directory, and client. Clauses: deterministic map ordering + defined number encoding
-  per spec §5; the hash preimage is exactly spec §4's mandatory-disclosure set (subject,
-  issuer_kind, issuer_pubkey, type, schema_version, payload, issued_at, expires_at,
-  supersedes_hash — status/class/verified_at OUT); the **cross-party hash test** (all three
+  per spec §5; the hash preimage is exactly spec §4's mandatory-disclosure set (subject_kind,
+  subject, issuer_kind, issuer_pubkey, type, schema_version, payload, issued_at, expires_at,
+  supersedes_hash — status/class/verified_at OUT; subject_kind added by M10-D5, amending
+  Journal Entry 1's list); the **cross-party hash test** (all three
   consumers agree byte-for-byte on fixed vectors + property-based random envelopes) runs in CI.
   Where the component lives (published package vs per-repo vendored spec-with-vectors) is
   decided by DOD-PORTAL-ARCH-1's architecture. Design note: journal Entry 1 (the worked
@@ -116,8 +119,8 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   store `contact_trust_signals`** (envelope columns + `verified_at` + `received_at`, composite FK to
   `contacts(agent_id, pubkey)`). SQLCipher, keyed on `agent_id`. Migration idempotent; fresh schema
   == migrated schema. — ❌
-- **DOD-STORE-DIR-1** — directory `signal_records` table (`signal_hash` PK, subject,
-  issuer_pubkey, issuer_kind, type-as-opaque-string, status, superseded_by, revoked_at,
+- **DOD-STORE-DIR-1** — directory `signal_records` table (`signal_hash` PK, subject_kind,
+  subject, issuer_pubkey, issuer_kind, type-as-opaque-string, status, superseded_by, revoked_at,
   accepting_node, scanner_version) + replication of records AND status changes over the existing
   replication path (spec §14.1). Flyway migration + `OpsAgentExpectedMigrationVersion` bump. — ❌
 
@@ -140,12 +143,13 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   valid-but-unclassified (INV-TYPE-CARRY); registry update requires NO release anywhere.
   Design note first (format + signing key). — ❌
 - **DOD-MINT-INTERNAL-1** — the portal mints **phone** and **email** as real envelopes (the
-  §14.10 backfill): self-describing payload (plain-language claim + structured fields; email
-  carries domain, not address — no PII beyond what the signal IS), hashed via DOD-CBOR-1,
-  submitted via DOD-DIR-WRITE-1, delivered to the holder (generic delivery: verify
-  hash ∈ directory → insert envelope row; the client half is type-agnostic). Registry entries
-  for both types. Existing registered agents get them on next portal touch; new registrations
-  mint at verify time. — ❌
+  §14.10 backfill), **as ACCOUNT-subject signals (`subject_kind: account`, M10-D5)** — one
+  envelope per fact, presentable by every agent under the account, agent-add a no-op:
+  self-describing payload (plain-language claim + structured fields; email carries domain, not
+  address — no PII beyond what the signal IS), hashed via DOD-CBOR-1, submitted via
+  DOD-DIR-WRITE-1, delivered to the holder (generic delivery: verify hash ∈ directory → insert
+  envelope row; the client half is type-agnostic). Registry entries for both types. Existing
+  accounts get them on next portal touch; new registrations mint at verify time. — ❌
 - **DOD-T1-JOURNEY-1** — **live journey, first half:** for a real agent, portal mints phone +
   email → directory notarizes (visible in `signal_records`, replicated to all 3 nodes) → holder
   daemon holds both envelopes and re-verifies their hashes locally. Real portal process, real
@@ -192,9 +196,11 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   how; no content, no PII, aggregate-only. — ❌
 - **DOD-TRACK-1** — a portal background job computes one or two track-record signals
   (**session count** and **clean-close rate** — per taxonomy Class 3) and mints them through
-  the SAME write path as Tier 1 (nothing directory-issued; INV-CHOKEPOINT unchanged).
-  Self-describing payloads; registry entries. Decide-at-build (Decisions entry): persist
-  client-side like other signals vs mint-on-request (spec §0.2 open item). — ❌
+  the SAME write path as Tier 1 (nothing directory-issued; INV-CHOKEPOINT unchanged). Default
+  scope `subject_kind: agent`; the same data MAY additionally mint an account-wide aggregate
+  (`subject_kind: account`, M10-D5 / spec §3.2) — if minted, the read path serves both
+  aggregations. Self-describing payloads; registry entries. Decide-at-build (Decisions entry):
+  persist client-side like other signals vs mint-on-request (spec §0.2 open item). — ❌
 - **DOD-SUPERSEDE-1** — recomputation supersedes, never mutates: the new envelope carries
   `supersedes_hash`, the old goes `status: superseded` at the directory, a stale presented copy
   fails freshness (DOD-VERIFY-1 catches it live). Track record's natural drift makes it the
@@ -253,17 +259,37 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   store `contact_trust_signals` (spec §3.1). The M8 scaffold rows are dropped and re-minted via the
   §14.10 backfill — alpha, no users, incorrect data is not maintained. Reverse: verdict-only would
   delete the evidence purpose (§1) — not foreseen.
+- **M10-D5 (2026-07-11, Andre) — Subjects have two levels: `subject_kind: account | agent`, both
+  hashed (spec §3.2, §4).** Operator-level facts (phone, email, social OAuth) are account-subject:
+  ONE envelope per fact, presentable by every agent under the account, agent-add a no-op — no
+  per-agent duplication (rejected: re-mint chore at agent-add; endorsers can't re-sign per agent).
+  Agent-level facts (track record) are agent-subject; Class-3 may mint BOTH scopes by aggregation.
+  Endorsements may target either, defaulting to the specific agent unless requested and agreed
+  (intake policy, post-v1; the seam ships now). The dumb check resolves account subjects through the
+  presenting agent's account (one join — INV-DIR-DUMB amended). Accepted with eyes open:
+  account-wide signals are cross-persona linkable; payload content links personas anyway, and
+  selective disclosure is the lever. Supersedes investigation R7 (per-agent fan-out). Constraint
+  from multi-daemon accounts (spec §14.11): wallet rows are content-addressed and
+  daemon-portable; nothing daemon-specific in the schema. Reverse: splitting to per-agent
+  envelopes later is a minting-policy change, not a schema change — subject_kind stays.
 
 ## Parked
 *(Genuine undecidable forks: journal + here. Never silently dropped.)*
 
-- *(none yet)*
+- **Multi-daemon sync + same-agent-two-daemons control handoff (2026-07-11, spec §14.11).** The
+  sign-prove-you-own-both daemon-to-daemon sync mechanism, and the which-daemon-does-the-directory-
+  call / request-and-receive-permission control handoff for one agent live on two machines:
+  conceived, not designed, NOT M10 scope. M10's only obligation is negative — wallet rows stay
+  content-addressed and daemon-portable, nothing daemon-identity-specific in the schema — so these
+  designs are not foreclosed. Do not code any of it this milestone.
 
 ## Post-v1 — explicitly deferred, tracked so nothing falls between milestones
 - **Endorsement intake (Endorsement Mother)** — the `issuer_kind: agent` creation path: intake
   role, deterministic scanner (versioned, byte-identical), submitter-accountability flags,
   delivery to subject. Portal-routed at launch per spec §7 amendment; per-node is the
   decentralization target. The write API ships seam-ready for it (DOD-DIR-WRITE-1 clause).
+  Target may be a specific agent OR the account (`subject_kind`, M10-D5), defaulting to the
+  specific agent unless requested and agreed — the default is intake policy, decided here.
 - **PSI** — construction unchosen (spec §11); both applications (mutual-contact,
   endorser-overlap) post-v1.
 - **Connection bonds / staking / fees (Class 4)** — needs the commerce layer.
