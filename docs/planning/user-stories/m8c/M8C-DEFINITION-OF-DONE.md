@@ -194,6 +194,35 @@ description: >
   (`register` before `create-agent`). Real help = accurate + intuitive descriptions + a sane order (grouped or
   alphabetical). Also `contact`→plural + the list/single-contact mixing. Revision folded into the CLI-PARITY
   help pass; design decisions being gathered (ordering, `install` rename, `contacts` structure). Stays 🟡.
+  **UPDATE 2026-07-11 — BUILT + GATES GREEN, awaiting live confirmation** (cello-client `cf4a36a`; test 2135 ✓
+  lint ✓ typecheck ✓ build ✓; unit review in flight). Work order: [[2026-07-11_cli-help-revision-workorder]].
+  Delivered: **grouped help** (Setup · Agents · Messaging · Sessions & receipts · Contacts · Other) as registry
+  METADATA so the table still cannot drift from dispatch; **clean renames, no aliases** (`install`→`bridge`,
+  `register`→`register-agent`, `close`→`close-session`, `initiate`→`initiate-session`, `receipts`→
+  **`relay-receipts`**) with the old names DELETED and a test asserting they are gone; **`contact` split** into
+  `contacts` (the book) + `contact <pubkey> <op>` (one contact); **wording verified against the handlers**, not
+  guessed (`refresh` = a resharing ceremony, new epoch, public identity unchanged, needs the directory
+  reachable; `relay-receipts` = an advanced/debug per-message delivery artifact, explicitly NOT the seal).
+  **§2b FULL CLI↔MCP name parity** — one vocabulary (`core/daemon/src/vocabulary.ts`): an MCP tool's name is
+  `cello_` + the CLI command name. 7 shim tools renamed; the daemon RENDERS its ~50 guidance strings for the
+  surface that asked (it records `clientType` at `ipc.connect`), at ONE choke point wrapping the handler map —
+  so a CLI caller is told `cello use-agent` and an MCP caller `cello_use_agent`. **This closes P2-7 as a CLASS**,
+  not as the single string it was reported as. The IPC WIRE names deliberately do NOT move (connect has no
+  daemon dependency, so a new daemon must keep serving an OLD shim). Cascade became **daemon + cli + connect**
+  (the work order predicted cli+connect; the daemon was forced in — see the phantom below).
+  **🔍 Phantom found + killed:** the daemon told operators to "check **`cello_list_connections`**" — a tool with
+  **zero handlers and zero registrations**, which has never existed on the shipped surface (it lives only in the
+  legacy, unpublished `core/client/mcp-server.ts`). Four live guidance strings pointed at it. Handing an operator
+  a dead command is worse than saying nothing. Now `cello_status` (what those strings actually wanted: "is the
+  counterparty reachable?"), and a **source-audit test fails the build** on any daemon guidance naming a tool
+  outside the vocabulary — so the class cannot return. Stays 🟡 until Andre live-confirms the revised
+  `cello --help`.
+  **⚠️ OPEN — needs Andre's ruling: DELETE `receive-session`?** It is a literal ALIAS of `receive` — the daemon
+  registers the SAME handler object for both (`handlers.set("cello_receive_session", handleReceive)`). It does
+  not accept or join anything (inbound sessions are auto-accepted by the standing receiver), and its help
+  claimed an "Accept / join an inbound session request" step that CELLO does not have. Under the no-aliases
+  doctrine it should be deleted (CLI command + `cello_receive_session` MCP tool). Held pending the ruling; until
+  then it is described truthfully as a deprecated alias rather than left lying. Deletion is a one-liner.
 - **DOD-ONBOARD-ERRORS-1** — register-path errors are specific and actionable, never a generic
   Usage dump or silence: missing token → "you're missing the pre-auth token" (not the Usage line);
   malformed token → "that isn't a pre-auth token — they start with `CELLO-`"; unknown agent →
