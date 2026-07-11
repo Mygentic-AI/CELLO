@@ -97,9 +97,14 @@ client and directory get one-time GENERIC infrastructure only.
   (next: 0006). Existing surfaces to build on: `src/app/(app)/trust-signals/page.tsx` (the M8
   scaffold UI), `src/server/directory/` (the directory HTTP client), `src/server/trust/`.
   Already depends on `@cello-protocol/crypto`. E2E vs a real directory:
-  `pnpm test:e2e:real-dir`. **No deploy pipeline exists — the portal runs locally/dev for this
-  milestone.** Signing keys for submissions/registry are new surfaces: where the portal key
-  lives is a design-note decision (§6), never an env-var default.
+  `pnpm test:e2e:real-dir`. **The portal IS deployed — LIVE on ECS Fargate, single-region us-east-1,
+  at https://portal.cello.mygentic.ai** (`infra/deploy-portal.sh`, image built in AWS by CodeBuild;
+  `infra/STATE.md` §"M8 operator portal"). Corrected 2026-07-11 — the earlier "no deploy pipeline,
+  local/dev only" claim was false; see [[M10-PORTAL-ARCH-INVESTIGATION]] §4.1. Portal deploys join
+  the batching discipline. Signing keys for submissions/registry are new surfaces: where the portal
+  key lives is a design-note decision (§6), never an env-var default — and the deployment shape it
+  must be answered for is **Fargate + IAM task role + Secrets Manager + KMS** (KMS supports Ed25519
+  natively: `ECC_NIST_EDWARDS25519`), not a laptop.
 - **trustless-cello** (directory) — the generic write API, revocation re-auth, registry serving,
   signal-record replication, the Class-3 read path. **Batch into as few deploys as possible —
   target ONE deploy for the Tier 0/1 surface, ONE for Tier 3** (each is ~25-30 min × 3 regions).

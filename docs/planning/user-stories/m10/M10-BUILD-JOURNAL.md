@@ -15,16 +15,24 @@ description: >
 # M10 — Build Journal
 
 ## RESUME STATE (keep current — update at every checkpoint/compaction)
-- **Milestone status:** seeded, not started. **Next red: DOD-PORTAL-ARCH-1** (investigate the
-  portal as-is, determine the M10 portal architecture — gates all portal code). Then DOD-CBOR-1,
-  whose design note is already written (Entry 1, the worked example).
+- **Milestone status:** started. **DOD-PORTAL-ARCH-1 half 1 (investigation) is DONE** →
+  [[M10-PORTAL-ARCH-INVESTIGATION]] (Entry 2). **Next: half 2 — the architecture determination**
+  (a separate design doc under `user-stories/m10/`, written AGAINST the investigation, then
+  reviewed). Then DOD-CBOR-1, whose design note is already written (Entry 1, the worked example).
+- **Read the investigation before any M10 design or code.** It overturns several premises: the
+  portal is LIVE on AWS; the M8 trust pipe (portal→directory→daemon, sealed + anchored + ACKed)
+  already exists and violates three M10 invariants; INV-CHOKEPOINT is net-new (today: one shared
+  static bearer key, shared with the ops-agent, over plaintext HTTP); the portal holds no signing
+  key; AWS KMS supports Ed25519 natively; Class-3 track record is already computed but is
+  pseudonym-keyed, unexposed, and its inputs are unreplicated.
 - **Design notes owed before code** (PROCEDURE §6): registry format + portal key custody
   (before Tier 1); browser-extraction infra (before Tier 4 only).
 - **Scope fence:** phone + email → track record (1–2) → GitHub → canary. Nothing else in v1
   (DoD M10-D1).
-- **Repos:** cello-portal (center of gravity; no deploy pipeline — runs local/dev),
-  trustless-cello (batch deploys: one for Tier 0/1, one for Tier 3), cello-client (publish
-  cascade; all tables on `agent_id`).
+- **Repos:** cello-portal (center of gravity; **LIVE on ECS Fargate, us-east-1** — deploys join the
+  batching discipline), trustless-cello (batch deploys: one for Tier 0/1, one for Tier 3),
+  cello-client (publish cascade; all tables on `agent_id`).
+- **DoD edits owed** before Tier 0 code — see investigation §10 (7 lines affected).
 - **If autonomous:** arm both crons (PROCEDURE §3b) before the first unit.
 
 ---
@@ -136,8 +144,67 @@ Enforcer: the CBOR cross-party CI test (DOD-INV-CANONICAL) green from this unit 
 
 ---
 
+### 2026-07-11 — Entry 2: DOD-PORTAL-ARCH-1, half 1 — the INVESTIGATION (evidence, not recall)
+
+**What happened.** Six parallel read-only investigations across the three repos (portal auth/session +
+key material; portal DB/migrations; portal→directory seam + M8 trust handoff + the trust-signals
+scaffold; portal runtime/jobs/deploy/e2e; the directory node; the client daemon), each required to cite
+`path:line`. Findings written up as [[M10-PORTAL-ARCH-INVESTIGATION]]. **HEADs:** cello-portal `776752d`;
+trustless-cello + cello-client on `main`.
+
+**The eight findings that change the milestone** (full detail + citations in the investigation):
+
+1. **The portal is LIVE on AWS** — ECS Fargate, us-east-1, `portal.cello.mygentic.ai`, image
+   `cello-portal:776752d`, RDS, deployed by `infra/deploy-portal.sh` (`infra/STATE.md:380`). The
+   PROCEDURE's "no deploy pipeline — local/dev only" was **false**; corrected in place today.
+2. **The M8 trust pipe already exists end to end** — portal seals per-agent with `sealToRecipient`,
+   double-writes hash + ciphertext, directory anchors in `identity_tree_entries` + queues in
+   `pickup_queue`, pushes a `trust_signal_pickup` frame down the agent's authenticated signaling stream
+   with the authoritative hash attached, the daemon opens the seal, **re-hashes, compares, stores, and
+   only then ACKs** (no ACK ⇒ retry). The 2026-04 pickup-queue design is **shipped code**. M10 does not
+   invent holder delivery.
+3. **…and that scaffold violates three M10 invariants**: `SIGNAL_KINDS = new Set(["webauthn"])` in the
+   *directory's* validator (INV-ZERO-BUMP), `identity_tree_entries` upserting `DO UPDATE`
+   (INV-SUPERSEDE-NOT-MUTATE), and hashing **canonical JSON** not CBOR (INV-CANONICAL). Replace, do not
+   extend.
+4. **INV-CHOKEPOINT is net-new.** Today: a single static bearer header, non-constant-time compared,
+   over **plaintext HTTP on a public ALB**, and it is **the same secret the ops-agent holds** — so any
+   key-holder can write a trust-signal hash for any account, or mint a pre-auth capability. No
+   authorized-issuer/portal-pubkey concept exists anywhere.
+5. **The portal holds no signing key.** `kms.ts` is not AWS KMS — it is a local AES-GCM envelope cipher
+   keyed by a `PORTAL_KMS_MASTER_KEY` env var (all-zeros default in `local`). The M8 pipe is
+   **seal-only and unsigned** (`sealToRecipient` needs no sender key).
+6. **AWS KMS supports Ed25519 natively** — `ECC_NIST_EDWARDS25519` / `ED25519_SHA_512` (MessageType
+   `RAW` = pure EdDSA), private key never leaves KMS, `GetPublicKey` for offline verify. So "the portal
+   holds no private key at all" is a live custody option. (KMS also offers ML-DSA-44/65/87.)
+7. **Class-3 track record is already computed** — `pseudonym_stats` (V7) holds conversation count,
+   unique counterparties, clean/flagged counts — but it is **pseudonym-keyed**, has **zero exposure**
+   (no route, no frame, no accessor), and **neither it nor its inputs are replicated**, so the three
+   nodes may disagree. DOD-DIRDATA-READ-1 is bigger than written.
+8. **The portal has no background-job machinery**, and Next 16's `after()` is **request-bounded** (per
+   the installed docs) so it cannot host the Class-3 job. The only hatch into long-lived Node is
+   `instrumentation.register()`. The job's home is a real new-process decision, shaped by ECS.
+
+**Also surfaced (bugs/defects found, not caused by this work):** the daemon stores trust signals with
+`agent_id = null` (`daemon.ts:4920`) and **nothing reads the table** — so INV-AGENT-SCOPED would be
+violated at birth; `pickup-repository.ts:80-81` claims `pickup_queue` is node-local while
+`setup-replication.sh:169` **does** replicate it (one is wrong); and the directory's code comment
+claiming the ALB rejects `/internal/*` is contradicted by the CFN, which forwards it.
+
+**Not done here, by design.** No architecture, no recommendations. The investigation §11 states the
+seven forks (key custody · where the CBOR component lives · the Class-3 job's home · registry signing
+keys · submission transport · portal→directory failover · Account-vs-Agent subject binding) and §10
+lists the seven DoD lines this evidence obliges us to edit **before** Tier 0 code.
+
+**Next:** DOD-PORTAL-ARCH-1 half 2 — the architecture determination, written against the investigation,
+reviewed by `cello-unit-reviewer`, decisions logged in the DoD.
+
+---
+
 ## Related Documents
 
+- [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
+  actually are today (evidence, `path:line`). Read before any M10 design or code.
 - [[M10-PROCEDURE]] — the runbook
 - [[M10-DEFINITION-OF-DONE]] — the yardstick + sole status authority
 - [[M10-TYPE-PLAYBOOK]] — the per-type runbook
