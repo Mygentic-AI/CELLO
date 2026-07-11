@@ -637,6 +637,95 @@ confidentiality + tamper-surface problem, not a key-compromise one.
 > required >=24` cannot print on Node 24 — seeing it proves the runtime changed, not the package.
 
 
+## ✅ DOD-CLI-PARITY-1 — every daemon capability reachable from bash (2026-07-11)
+
+**DONE — cello-client `b2aaad8`.** Bash is the universal agent adapter: every capability that was
+MCP-only is now a `cello` command, so any bash-capable agent operates a CELLO node with no MCP
+dependency (widens reach past Claude Code + Hermes). Plan:
+[[2026-07-11_cli-mcp-parity-plan]].
+
+- ✅ **Registry** (`core/cli/src/registry.ts`) is the single source of truth — dispatch, the
+  `cello --help` `Commands:` table, per-command help, and the flag set all derive from it and
+  **cannot drift**. The dispatch switch in `bin/cello.ts` is gone. Per-command help moved verbatim.
+- ✅ **DOD-ONBOARD-HELP-1 CLOSED** — the described `Commands:` table renders from each entry's
+  `summary`; a new command cannot be added without one, and it auto-appears in the table.
+- ✅ **13 new commands**, each a thin pass-through to the **same daemon IPC handler its `cello_*` MCP
+  tool calls**: `agents`, `start-agent`, `stop-agent`, `use-agent`, `inbox`, `transcript`,
+  `sealed-receipt`, `initiate`, `send`, `receive`, `receive-session`, `close`, `await-session`, plus
+  `contact set-tier` / `set-away` / `set-moniker`. The handler each one calls is recorded in the
+  registry's `ipcMethod` field, so the parity claim is **auditable from the table** (a test enforces
+  the tool → command → handler map) rather than asserted in prose.
+- ✅ **Bash-only live smoke PASSED** (the proof of done): two agents, real relay transport, real FROST
+  seal, driven entirely by `cello` + `jq` with **zero MCP** — initiate → send → receive → close →
+  bilateral seal, with **both sides' `sealed_root` matching**
+  (`598b746125eecc85a8ba84ed315d78e73e1de1551e9297f3abbff86cccfe7a2a`).
+- ⏳ **Publish (Phase 4) HELD** pending `DOD-CURSOR-DURABLE-1` below — see the recommendation there.
+
+**Two things were STOPPED AND FLAGGED rather than faked** (the brief's §2 guardrail doing its job):
+
+### 🔴 `DOD-CURSOR-DURABLE-1` — read-before-write makes a stateless client unable to hold a conversation
+
+**Found live, 2026-07-11, by the bash-only smoke.** B receives A's message successfully, then B's
+`cello send` is rejected: `{"ok":false,"reason":"session_not_current","current_seq":0,"last_read_seq":-1}`.
+**B did read.** The daemon cannot tell.
+
+Producer/consumer: the send gate *consumes* `getConnectionCursor(connectionId, sessionId)`
+(`daemon.ts:5527`). Its *producer* is `connectionCursors`, an in-memory `Map` keyed by **connectionId**
+(`daemon.ts:919`), deleted on disconnect — `daemon.ts:6252` says it outright: *"cursor is
+connection-scoped, dies with it"*. Unknown connection → **-1**. The MCP shim holds ONE long-lived
+socket, so read-then-send works there. **The CLI opens a new connection per invocation, so
+`last_read_seq` is ALWAYS -1 at send time.**
+
+**Consequence:** a bash agent can open a session and speak **once** (that works only because a virgin
+session's `current_seq` is also -1). The moment the counterparty speaks, every subsequent CLI send is
+permanently blocked. *Connect-and-communicate — the #1 launch value — is half-delivered from bash.*
+
+**Not worked around on purpose.** The CLI could read the transcript on the same connection before
+sending, but that is exactly the auto-fix the brief forbids, and it would hollow out the guarantee
+(the gate exists so a sender has genuinely seen what it is replying to). Faking the cursor is worse
+than the gap.
+
+- **AC1** The read-before-write gate consults the **persisted per-(agent, session) read watermark**
+  rather than (or in addition to) the ephemeral per-connection cursor. **The state already exists:**
+  `message_watermarks` is a persisted, per-AGENT read watermark — `daemon.ts:914` explicitly calls it
+  *"Distinct from"* the connection cursor — and `cello_receive` already advances it (`daemon.ts:5827`).
+  The gate simply consults the wrong one.
+- **AC2** The security intent is preserved exactly: a send is accepted only if that agent has genuinely
+  read up to the current sequence. Never a bypass, never an auto-read.
+- **AC3** A bash-only two-agent **bidirectional** conversation (A→B→A, multiple turns) completes and
+  seals. This also fixes the same latent bug for a *reconnecting* MCP client, whose cursor is likewise
+  reset to -1.
+- ❌ NOT BUILT — daemon change, out of DOD-CLI-PARITY-1's CLI-only scope. **Recommendation: land this
+  BEFORE publishing the CLI**, so the first beta is one that can actually hold a conversation.
+
+### 🔴 `DOD-CUSTODY-DAEMON-1` — backup / restore / inclusion-proof work NOWHERE (worse than "MCP-only")
+
+No CLI command was shipped for `backup`, `restore`, or `inclusion-proof`: their daemon handlers are
+`not_implemented` **stubs** (`daemon.ts:3650-3656` — a literal loop returning
+`{ok:false, reason:"not_implemented"}`), so a thin pass-through would have shipped a *fake data-custody
+command*. Descoped by agreement, recorded here rather than silently dropped.
+
+**Escalation found while checking:** these are not merely absent from the CLI — they are **broken on the
+MCP surface today**. The *published* shim (`core/adapter-claude-code/src/bin/cello-mcp.ts:345-372`)
+forwards `cello_backup` / `cello_restore` straight to that `not_implemented` stub. The real
+`clientBackup` logic lives in `server.ts`, which is **not** the published MCP entrypoint. **Data custody
+currently works through no surface at all.**
+
+- **AC1** The real backup / restore / inclusion-proof logic moves **out of the shim and into the daemon**
+  as genuine IPC handlers (the daemon is the heavy node and the source of truth).
+- **AC2** Both the CLI pass-through and the MCP shim then become trivial, and **both** surfaces gain the
+  capability — a Hermes or bash operator has a data-custody path for the first time.
+- ❌ NOT BUILT — separate daemon-side story.
+
+### Contract note (edits the plan's §3 wording)
+
+The daemon has **two** response conventions, not one: some handlers are `ok`-bearing; others are
+**payload-only with no `ok` at all** (`cello_list_agents` → bare `{agents:[…]}`; `cello_await_session` →
+bare `{type:"timeout"}` — verified in `daemon.ts`, not assumed). §3's "exit 0 when the response is
+`ok:true`" would therefore make `cello agents` **exit 1 on success**. The CLI keys its exit code on
+**`ok === false`** — the daemon's one and only failure convention (a genuine transport failure throws).
+
+
 ## Tier 2 — Full reactivity + command surface
 
 - **DOD-MSGWAKE-1** — Channel stage 2: content-arrival callback on `session-node-manager` +
