@@ -145,7 +145,8 @@ content-addressed envelope** and treats the signal content as an opaque typed bl
 ```
 trust_signals(
   signal_hash      PK,      -- content address = hash(canonical envelope); renewal = new hash = new row
-  subject          <agent_id / pubkey>,
+  subject_kind     TEXT,    -- account | agent      (M10-D5: WHO the claim is about, as DATA — see §3.2)
+  subject          TEXT,    -- the public account identifier, or the agent identity (matches subject_kind)
   issuer_kind      TEXT,    -- portal | directory | agent          (the three types, as DATA)
   issuer_pubkey    TEXT,
   type             TEXT,    -- 'linkedin' | 'endorsement' | 'connection_bond' | …   (DATA, not schema)

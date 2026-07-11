@@ -323,7 +323,15 @@ description: >
   (`bin/cello-mcp.ts`) proxies to the daemon — but **both are exported from their package roots**
   (`createMcpServer`, `createMcpSessionServer`) and ship in `dist/`, so they are not dead in the
   *published-surface* sense. That is precisely the "one capability, two names" that §2b abolishes. **Not a launch
-  blocker** (no runtime path reaches them). Fix: **delete the two exports** (only tests construct them), or rename
+  blocker** (no runtime path reaches them). **CONFIRMED AGAINST THE v0.0.97 TARBALL (2026-07-11):** connect's
+  `dist/server.js` really does ship, and really does still register `cello_receive_session`, `cello_list_sessions`
+  and `cello_get_sealed_receipt`. The live entrypoint (`dist/bin/cello-mcp.js`) never imports it, so it is
+  unreachable — but it IS exported from the package root, so **the tarball carries a second vocabulary**.
+  (CELLO_Support claimed "zero occurrences in the connect dist" after grepping only the entrypoint; Ms_Chelly
+  checked the tarball and caught the imprecision. The accurate claim is "zero in the **live entrypoint**".)
+  The quarantine is now **bounded by a test**: `server.ts` is the ONLY file in the package permitted to name a
+  renamed-away tool, so it cannot silently grow while another audit reports green.
+  Fix: **delete the two exports** (only tests construct them), or rename
   their tools to the vocabulary and bring them under the parity audit. Deliberately NOT done inside the help pass —
   removing public exports is a riskier change than a help revision and deserves its own unit. A note in
   `dod-onboard-help-1-tool-parity.test.ts` had claimed these were "not published"; that was FALSE and is corrected.
