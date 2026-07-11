@@ -168,13 +168,28 @@ Gate at RENAME-1 commit: daemon 785, workspace 1993 pass; lint, typecheck, build
   (which level matched) added post-commit (staged for the review-fix batch). Gate: daemon 808, workspace
   2016. Fable-5 review running.
 
-## 🎉 Address book CODE-COMPLETE — all 9 DoD lines built
+## 🎉 Address book DONE — all 9 DoD lines built + reviewed + fixed
 
-TIER-1, TIER-2, TIER-3, TIER-4, CONTACT-VIEW-1, RENAME-1, SETTINGS-1, TIER-BOUNDS-SETTINGS, AWAY-TIER-1.
-Seven reviewed + fixed; AWAY-TIER-1 review in flight (+ the observability fix staged). Full workspace 2016
-green throughout. Publish is Ms_Chelly's (daemon + cli bump); this unit is client-side only, no deploy.
-Remaining before the unit fully closes: AWAY-TIER-1 review + fixes, then a tier-boundary cello-done-auditor
-pass over every ✅ flip, then Ms_Chelly's publish cascade + the DoD marker flips in M8C-DEFINITION-OF-DONE.
+TIER-1, TIER-2, TIER-3, TIER-4, CONTACT-VIEW-1, RENAME-1, SETTINGS-1, TIER-BOUNDS-SETTINGS, AWAY-TIER-1 —
+**all nine** through a Fable-5 cello-unit-reviewer pass with every finding fixed and re-gated. Full
+workspace **2021 pass** (daemon 813); lint, typecheck, build clean throughout.
+
+**AWAY-TIER-1 review (Fable 5, `cad3544`) fixes — `81c02b5` (observability) + `d5557f9`:** F1 (the
+`contact.away.resolved` event — already committed in 81c02b5 before the review landed), F2 (empty/
+whitespace away text CLEARS, never stores a blank reply — fixed the MCP-vs-CLI inconsistency), F3 (away
+text length-bounded at 2048), T1 (the away RESPONSE using the resolution is now tested end-to-end — a
+per-contact text lands in the transcript), T2 (the SI — an injected gateway proves a BLOCK sends nothing
+and a REDACT sends the ALTERED bytes, never the draft).
+
+**Decisions journaled:** DEC-AB-1 (explicit add→KNOWN), DEC-AB-2 (no Step1→3 window backfill), DEC-AB-3
+(engagement-promotes, not accept-promotes), DEC-AB-4 (rename baseline updates on acceptance, not raw
+offer-seen).
+
+**Head commit (cello-client):** `d5557f9`. Client-side only — no directory change, no deploy.
+
+**Remaining (NOT mine):** Ms_Chelly's publish cascade (daemon + cli version bump, per /cello-publish) and
+the DoD-marker flips in M8C-DEFINITION-OF-DONE / the spec. A tier-boundary cello-done-auditor pass over
+the ✅ flips is the checkpoint before those. Do NOT publish/deploy from this session.
 
 ## Related
 - [[2026-07-10_address-book-implementation-spec]] — the spec (authority).
