@@ -1157,6 +1157,21 @@ own story) deliberately, never smuggled in as a rider. Source:
   (fixed port 4001 caps the demo at one concurrent onboarding). Concurrency redesign.
 - **R4 repro** — the bad-token silent-output bug feeding DOD-ONBOARD-ERRORS-1 needs a live
   reproduction before its fix; tracked on that line, noted here.
+- **DOD-SESSION-REAP-1** (2026-07-11, observed live) — restart-interrupted sessions accumulate as
+  un-sealable cruft and never self-clean. When the daemon restarts, both agents lose in-memory session
+  state (session node + standing receiver are built at startup, not persisted mid-flight), so a later close
+  gets `seal_interrupted_rejected_by_counterparty` — the counterparty, also restarted, has no consistent
+  record. A normal close can't finalize; only force-abandon clears it. Heavily amplified by the single-daemon
+  dev setup (all agents co-located, constant publish/promote restarts → 8 piled up 2026-07-11, hand-cleared).
+  Rarer in a real two-machine deployment (one side's restart leaves the other's state intact). **Fix = an
+  auto-reaper, but EVIDENCE-GATED, never age-gated** (Andre, the load-bearing constraint): reap ONLY on a
+  *definitive, permanent* rejection from a *reachable* counterparty (the reject signal above) — the same
+  probe-then-force sequence done by hand. NEVER reap on age, on unreachability (unknown ≠ unsealable — the
+  session may still seal when the counterparty returns), or on a pending bilateral seal (a healthy
+  waiting-to-co-sign state). A retired/removed counterparty is reapable (identity can never co-sign — verify).
+  Guard against a *transient* reject during the counterparty's own restart window (require "no record of this
+  session," ideally stable across attempts). Cosmetic, not launch-blocking; belongs with the restart-churn
+  family. Cross-ref DOD-SINGLE-DAEMON-1, F21 (stuck-seal terminal state). — ❌ NOT BUILT (backlog).
 - **SEC-1 (2026-07-07, flagged by cello-unit-reviewer during DOD-LEAVEMSG-1) — relay-parked
   content authentication gap.** Bare-content parked envelopes (those without the DOD-MSG-4 ordering
   Structure1/2 — the fallback shape `decodeParkEnvelope` accepts) skip Ed25519 signature
