@@ -2,7 +2,7 @@
 name: m10-trust-signal-storage-and-creation
 type: design
 date: 2026-07-10
-topics: [m10, trust-signals, storage, hashing, canonical-cbor, endorsement-mother, dumb-directory, scan-before-hash, supersession, extensibility, provenance, psi]
+topics: [m10, trust-signals, storage, hashing, canonical-cbor, endorsement-mother, dumb-directory, scan-before-hash, supersession, extensibility, provenance, psi, zero-bump, type-registry, self-describing-payload]
 status: active
 description: >
   HOW trust signals are stored, created, hashed, scanned, and verified across the three parties
@@ -53,6 +53,25 @@ description: >
 - **Revocation = re-auth through the same chokepoint** (§14.2) — issuer / portal / directory only; the
   subject controls *presentation* (selective disclosure), never a signal's *existence*.
 
+**Decided (zero-bump session, 2026-07-11):**
+- **Zero-bump extensibility** (§15) — introducing a **new signal type requires portal work only**: portal
+  verification code + a type string + a payload. **No cello-client release, no directory release, no
+  migration anywhere.** The protocol's unit is the *envelope*, never the type.
+- **The type registry is served signed data, not shipped code** — amends §14.8. A portal-signed registry
+  document (type → class, lifecycle status, default TTL, label) served by the directory as opaque bytes;
+  clients cache it and treat absent types as **valid-but-unclassified** (fail-soft, §14.7 shape).
+- **Self-describing payloads** — every payload carries a portal-composed plain-language claim; the
+  recipient's pipeline is type-agnostic (verify → project → frame by `issuer_kind` → hand to LLM), so a
+  stale client correctly consumes a type invented yesterday.
+- **Single portal write path at launch** — Class 3 track record is computed by a **portal background
+  process** reading directory-served data (not directory self-issued), and endorsement intake is
+  **portal-routed** (amends §7's per-node constraint *for launch*; per-node intake remains the
+  decentralization target — a routing change later, not a migration). The directory's authorized-issuer
+  key set is just portal keys.
+- **The deterministic policy floor gates on envelope fields only** — type string, `issuer_kind`, counts,
+  expiry, revocation, age. Payload-level judgment is LLM discretion (restrict-only). A floor predicate
+  that reaches into a payload is the §3 guardrail smell in policy clothing.
+
 **Open (flagged, not decided):**
 1. Does the **recipient re-scan**, or fully trust the creation-time scan? (§8) — leaning: trust it;
    optional pass/block re-scan as cheap defence-in-depth (more attractive under §14.1's honest weakening).
@@ -62,9 +81,10 @@ description: >
 4. The **endorsement callback/referral loop** ("quote code 12345, my agent confirms you read it") — a
    named Class-2 capability, **parked** (design later, not launch).
 
-**§14.1–14.10 are now resolved** (2026-07-10, below) — the design is settled; only per-type / per-story
-specifics (the `SignalRequirementPolicy` field set, v1 payload schemas, TTL values, rate limits) remain
-for story writing.
+**§14.1–14.10 are now resolved** (2026-07-10, below; **§14.8 amended 2026-07-11** — registry is served
+signed data, not shipped code, per §15) — the design is settled; only per-type / per-story specifics
+(the `SignalRequirementPolicy` field set, v1 payload schemas, TTL values, rate limits) remain for story
+writing.
 
 ---
 
@@ -226,6 +246,14 @@ The three issuer flows:
   scan, and possibly **no client-side persistence** (mint-on-request — open decision §0.2). Confirm the
   intended split.
 
+> **Amended 2026-07-11 (§15): all three flows route through the portal backend at launch.** Class 3 is
+> computed by a **portal background process** reading the directory-side usage/seal data (the directory
+> gains a read path, keeps its single write path), and endorsement intake runs as a portal-backed agent.
+> The directory never composes signals at all — it is dumber than designed above, and its authorized-issuer
+> key set collapses to portal keys. The per-node intake role (§7) and directory self-issuance remain the
+> decentralization targets; both are routing changes later, not migrations, because the record format is
+> identical either way.
+
 ---
 
 ## 7. Endorsement Mother — the endorsement-intake role
@@ -253,6 +281,12 @@ Bytes in, pass/reject out.
    of failure — it contradicts the sovereign-node invariant. Make endorsement-intake a **standard role
    every directory node runs**; an endorser routes to any node; all behave identically. Keep the name for
    the *capability*, not one identity.
+   > **Amended 2026-07-11 — launch runs intake portal-routed (a singleton), deliberately.** The zero-bump
+   > write path (§15) routes endorsements through a portal-backed intake agent at launch. That *is* the
+   > singleton this constraint forbids — accepted with eyes open: the portal is already a hard dependency
+   > for Class 1/4, and because the notarized record format is identical either way, moving intake to the
+   > per-node role later is a **routing change, not a migration** (the §14.1 strengthening-not-migration
+   > shape). The per-node role stays the target; this constraint governs the destination, not the launch.
 2. **Versioned, byte-identical deterministic scanner across nodes.** Otherwise the same endorsement passes
    at node A and fails at node B — a correctness bug *and* a censorship-by-node-shopping surface. The
    scanner is a versioned shared component; a node's scanner version travels with its decision. Same
@@ -496,6 +530,17 @@ from enumeration, not the endorsement *content*, which is meant to be shown.
 - **INV-ENDORSE-PLAIN-SCOPED** — Class 2 endorsements are plain-presentable, plaintext-rich, and **scoped**
   (plaintext is the only carrier of scope). PSI may *discover which* to reveal but never *replaces* the
   blob; reducing an endorsement to an overlap count is a violation (§11).
+- **INV-ZERO-BUMP** — a new signal *type* ships with **portal changes only** (§15). Any per-type code in
+  the client or directory — a type enum, a `CHECK` on `type`, a `switch(type)`, a per-type column, a
+  per-type validation or rendering path, a shipped registry entry — is a violation. `type` is an opaque
+  string everywhere outside the portal.
+- **INV-TYPE-CARRY** — client and directory treat an **unrecognized type string as first-class**: store
+  it, present it, verify it, hand it to the LLM. A type absent from the served registry is
+  **valid-but-unclassified**, never rejected (§15). Rejecting unknown types silently reintroduces the
+  version-lockstep this design exists to kill.
+- **INV-FLOOR-ENVELOPE-ONLY** — the deterministic policy floor gates only on **envelope fields**; payload
+  interpretation belongs to LLM/config discretion (restrict-only, §14.4). A floor predicate reaching into
+  a payload is a violation (§15).
 
 ---
 
@@ -573,11 +618,17 @@ may be silently defaulted.
   presenting only unverifiable signals is refused. Honors both `INV-RECEIPT-FRESH` (stale is never treated
   as fresh — it is disclosed) and availability-as-first-class (established contacts survive an outage).
   Per-story: the TTL value per class.
-- **14.8 — Type registry. RESOLVED: code-level versioned protocol constant.** The registry (retirement +
-  class derivation) is a **shipped, versioned shared component** — never directory-enforced, never a DB
-  table (keeps the directory dumb, no per-operator migration; same shape as §7's byte-identical scanner).
-  Maintainers admit new types at launch; governance decentralization is Day-2. Per-story: the **v1 payload
-  schemas** for the launch types (`linkedin`, `endorsement`, `connection_bond`).
+- **14.8 — Type registry. ~~RESOLVED: code-level versioned protocol constant.~~ AMENDED 2026-07-11:
+  served signed data, not shipped code (§15).** The original resolution — a shipped, versioned code
+  component — is **exactly one client release per new type**, which defeats the zero-bump requirement.
+  The amendment honors both original motivations without the bump: the registry (type → class, lifecycle
+  `active | deprecated | retired`, default TTL, display label) is a **portal-signed document the directory
+  serves as opaque bytes** — the directory stays dumb (it never interprets it, same as serving profiles),
+  and clients cache it with a TTL, **treating absent types as valid-but-unclassified** (`INV-TYPE-CARRY`,
+  fail-soft per §14.7). A new type, a retirement, a TTL change are all **data updates** — no migration,
+  no release, anywhere. Still never a directory-enforced DB table. Maintainers (the portal key) admit new
+  types at launch; governance decentralization is Day-2. Per-story: the **v1 payload schemas** for the
+  launch types (`linkedin`, `endorsement`, `connection_bond`).
 - **14.9 — Wallet loss / backup. RESOLVED: existing backup path; bounded risk.** `trust_signals` rides the
   existing `cello_backup` / `restore` path (another SQLCipher table). Risk is bounded by class: Class 1/4
   are portal-**re-mintable**, Class 3 is directory-**recomputable**, so only **Class 2 endorsements** need
@@ -588,6 +639,66 @@ may be silently defaulted.
   (re-run OAuth?); verifying Class 3 source data exists directory-side (seal records — probably yes);
   backfilling the four live M8 signals (WebAuthn / TOTP / phone / email) into envelopes; concrete
   endorsement-intake rate limits.
+
+---
+
+## 15. Zero-bump extensibility — new signal types without client or directory releases
+
+*Added 2026-07-11. The driving requirement: in the early days we may add trust signals every few days.
+If each one forces a cello-client release (every operator must upgrade) or a directory release (~30-minute
+three-region deploy), the cadence is impossible. So: introducing a new trust signal type must require*
+**portal work only** *— portal verification code + a type string + a payload. Nothing else changes.*
+
+### 15.1 The principle
+
+**The protocol's unit is the envelope, never the signal type.** Freeze the envelope —
+`(subject, issuer_kind, issuer_pubkey, type, schema_version, payload, issued_at, expires_at,
+supersedes_hash)` hashed as canonical CBOR (§4, §5) — and put *everything* type-specific in exactly two
+places: the **payload bytes** and **portal code**. The client and directory only ever handle envelopes.
+The end-to-end verification of a LinkedIn / GitHub / X claim is real, unique, per-type work — and all of
+it lives in the portal, behind the envelope.
+
+### 15.2 The five surfaces where a new type could force a bump — and how each is neutralized
+
+1. **Storage — already generic (§3); guard it.** The client `trust_signals` table and the directory's
+   record table are final as designed. The guard is behavioral, not schema: no type enums, no `CHECK`
+   constraints on `type`, no per-type columns (§3's guardrail), no `switch(type)` in client or directory
+   code. `type` is an opaque string both sides store and compare, never interpret (`INV-ZERO-BUMP`).
+2. **Creation — one generic write API.** The directory exposes exactly one write: *signed submission of
+   `(envelope-CBOR, hash)` from an authorized issuer key* (§14.1), plus revocation re-auth (§14.2). It
+   validates the signature, re-hashes, stores, replicates — never looks inside `payload`. With the
+   single-portal write path (§6 amendment) the authorized-issuer key set is just portal keys, and the
+   directory gains only a *read* path for the usage/seal data the portal's Class-3 background job computes
+   from.
+3. **Verification — already type-agnostic (§2, §8).** Hash-recompute + directory membership + status.
+   Nothing type-specific exists to change.
+4. **Interpretation — the consumer is an LLM, not code.** This is what makes zero-bump *useful* rather
+   than merely storable. **Self-describing payload convention:** every payload carries, alongside its
+   structured fields, a portal-composed plain-language claim (e.g. `claim: "This agent's operator has held
+   a LinkedIn account for 6 years with 500+ connections, verified via OAuth on <date>"`). The recipient
+   pipeline is one generic path for every type ever invented: verify → project CBOR→JSON (§5) → frame by
+   `issuer_kind` ("the portal attests: …" / "agent Bob says: …", §8) → hand to the LLM. A recipient on a
+   six-month-old client correctly consumes a type invented yesterday, because the payload explains itself.
+   **The framing is the safety valve:** self-description is a persuasion surface, and `issuer_kind` is
+   *hashed* (§4) — unforgeable — so an agent-issued signal can never describe itself with portal-grade
+   authority.
+5. **Classification & lifecycle — the registry becomes served data.** The one decided item the requirement
+   broke: §14.8's shipped-code registry (amended above). Portal-signed registry document, served by the
+   directory as opaque bytes, cached by clients, absent types valid-but-unclassified (`INV-TYPE-CARRY`).
+
+Policy already fits: §14.4's demand bundle is a declarative list referencing type strings — operator
+config data. The floor gates on envelope fields only (`INV-FLOOR-ENVELOPE-ONLY`); the moment someone
+wants a floor predicate that reaches into a payload, that is the §3 guardrail smell in policy clothing.
+Holder-side delivery is generic too: however a new signal reaches its subject (portal session, intake
+delivery), the client performs one type-agnostic operation — verify hash ∈ directory, insert envelope row.
+
+### 15.3 What still legitimately bumps
+
+A new **type** never bumps. A change to the **envelope schema itself**, the hash algorithm or CBOR
+canonicalization (§5), a new floor-predicate *kind*, or a new presentation *mechanism* (e.g. PSI, §11)
+still does — those are protocol changes, and they should be rare precisely because the envelope absorbs
+everything else. Naming this boundary is the point: pressure to "just add a field to the envelope" for
+one type's convenience is pressure to spend the rare-change budget on something the payload can carry.
 
 ---
 
