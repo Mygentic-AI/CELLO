@@ -10,8 +10,9 @@ description: >
   §-reference, not re-derived). Resolves the seven forks (§11) — adopting the §12 recommendations
   R1–R6 with the reasoning re-examined, R7 already superseded by M10-D5 — and determines the six
   things the DoD line requires: per-type module shape, signing/custody, the submission client, the
-  registry publisher, the Class-3 job home, and holder delivery. Decisions graduate to the DoD
-  Decisions section as M10-D6…D12.
+  registry publisher, the Class-3 job home, and holder delivery. Reviewed by cello-unit-reviewer
+  2026-07-11 (8 findings, all fixed in place — F1 became M10-D13). Decisions graduate to the DoD
+  Decisions section as M10-D6…D13.
 ---
 
 # M10 — Portal Architecture Determination
@@ -107,10 +108,34 @@ everything from it through the signed read route (§3.3): "has this account's `p
 minted?" is a query, not a local row. Mint-on-portal-touch is therefore idempotent by construction
 (query → absent → mint; query → active → no-op), retry-safe, and survives portal DB loss with zero
 signal-state consequences. The portal's Postgres keeps only what it already owns (auth, sessions,
-TOTP/WebAuthn material). If a per-type verification flow needs transient state (OAuth `state`
-tokens, Tier 4), that is auth-flow state, not signal state — it gets its own table then.
+TOTP/WebAuthn material). Carve-out (deliberately narrow): a per-type verification flow may keep
+**transient verification-flow state — TTL'd, never envelope data, never anything a signal's
+existence is derived from** (OAuth `state` tokens; Tier 4's async extraction results awaiting mint,
+which DOD-EXTRACT-DESIGN-1 scopes). Anything persisted past the flow, or consulted to answer "is
+this signal minted?", is a violation of this decision.
 *Rejected:* portal-side bookkeeping table — a second source of truth that can only ever disagree
 with the directory (the M8C status-board drift lesson, applied to data).
+
+### M10-D13 — Late-added agents get account-subject envelopes by RE-MINT WITH SUPERSESSION (resolves review F1)
+An account-subject envelope's plaintext exists only in holder wallets — the portal keeps no signal
+state (M10-D12), the directory persists hash + metadata only (no payload — the no-PII posture), and
+pickup ciphertexts are deleted on ACK. So "seal the existing envelope to a new agent" has **no
+plaintext source** and the original §4.3 mechanism was unimplementable. Resolution: when the
+mint-or-deliver pass finds an agent without a current account-subject envelope AND no sealed copy is
+constructible, the portal **re-mints** (fresh `issued_at` → new hash → `supersedes_hash` chain) and
+fans the sealed delivery to ALL the account's agents; the old envelope goes `superseded` normally.
+This amends M10-D5's "agent-add is a no-op" to: **no-op on verification** (the fact is not
+re-verified; still one envelope per fact, never per-agent envelopes), **supersede on delivery**.
+Same-daemon optimization allowed: sibling agents under the same account on one daemon may copy the
+content-addressed wallet row locally (the operator's own data — INV-AGENT-SCOPED governs *received*
+signals, not your own wallet), avoiding the re-mint in the common case. **Disclosed residual:**
+agent-add through the portal (the normal path — pre-auth minting is a portal touch) triggers the
+pass immediately; an agent added out-of-band stays signal-less until the next portal touch —
+fail-soft, visible in the UI (§6), accepted.
+*Rejected:* (a) directory escrows envelope plaintext as opaque delivery blobs — breaks the
+directory's hash-only/no-PII storage stance for a delivery convenience; (c) byte-deterministic
+`compose()` so re-composition reproduces the hash — fragile (any claim-wording change breaks it)
+and unverifiable at a distance.
 
 ## 2. Keys and custody (M10-D6, M10-D9 in operation)
 
@@ -145,17 +170,28 @@ signature. Replay is harmless by construction (submit/revoke/registry-publish ar
 1. **`op: submit`** (DOD-DIR-WRITE-1) — payload carries the envelope bytes. Directory: re-hash
    (canonical component, M10-D7) → reject mismatch loud → `INSERT` into `signal_records`
    (idempotent on duplicate `signal_hash`) → if `supersedes_hash` present, mark the old row
-   `superseded` → replicate. Events: `signal.submission.accepted/rejected` (+ reason, issuer,
-   type-as-string, correlationId).
+   `superseded` → replicate. **Two normative rules that make replay harmless (review F3 — these
+   are DIR-WRITE-1 clauses, not suggestions):** a duplicate-hash submit is a **strict no-op that
+   never touches the existing row — `status` included** (an upsert here would let a replayed
+   submit resurrect a revoked signal); and supersede-marking is the **transition
+   `active → superseded` ONLY** (a replayed submit whose `supersedes_hash` points at a
+   since-revoked row must NOT launder `revoked` into `superseded`). Negative AC owed: replay a
+   submit after revoking its signal — status stays `revoked`. Events:
+   `signal.submission.accepted/rejected` (+ reason, issuer, type-as-string, correlationId).
 2. **`authorized_issuers` table** (with DOD-STORE-DIR-1's migration) — `(pubkey PK, role
    submitter|registry, status, added_at)`, replicated, seeded by migration. The set is DATA
    (spec §15.2.2); `issuer_kind: agent` intake lands post-v1 as new rows + a role, no API change.
-3. **`op: query`** (read; also DOD-DIRDATA-READ-1's carrier) — (a) `signal_records` by
-   `(subject_kind, subject[, type])` for portal idempotence (M10-D12) and the UI (§6); (b) the
-   Class-3 aggregates (agent-keyed session/seal counts, clean-close attestations; aggregate-only,
-   no content, no PII). Same signed-request auth. The aggregate mechanics (agent-keying, replicated
-   inputs — the consistency clause on DOD-DIRDATA-READ-1) are that unit's design note; this
-   determination fixes only the transport + auth shape.
+3. **`op: query`** (read; also DOD-DIRDATA-READ-1's carrier) — three arms, same signed-request
+   auth: (a) `signal_records` by `(subject_kind, subject[, type])` for portal idempotence
+   (M10-D12) and the UI (§6); (b) the Class-3 aggregates (agent-keyed session/seal counts,
+   clean-close attestations; aggregate-only, no content, no PII); (c) **verified-account-facts**
+   (review F2 — the read DOD-MINT-INTERNAL-1's `verify()` uses): for an account, the
+   already-verified fact state the directory holds — phone-verified presence + `phone_stub_hash`,
+   email-verified presence + stub hash — **presence booleans and stubs only, never recoverable
+   PII**. This retires the temptation to reach those facts through the condemned bearer-key
+   routes. The aggregate mechanics for (b) (agent-keying, replicated inputs — the consistency
+   clause on DOD-DIRDATA-READ-1) are that unit's design note; this determination fixes only the
+   transport + auth shape.
 4. **`op: registry-publish`** (DOD-REGISTRY-1) — payload is the signed registry document as opaque
    bytes (inner signature by the registry key; the directory does NOT verify it — clients do). The
    directory stores it and serves it at **public `GET /registry`** exactly like `GET /manifest`
@@ -163,16 +199,46 @@ signature. Replay is harmless by construction (submit/revoke/registry-publish ar
    signature (role `registry`) is what stops a random party overwriting the served registry.
    Directory refuses `version <` stored (anti-rollback server-side as hygiene; the client enforces
    its own).
-5. **Revocation (`op: revoke`,** DOD-REVOKE-1**)** — payload `{signal_hash}`; the directory checks
-   the requester's role/pubkey against the record's `issuer_pubkey` (issuer revokes own; the portal
-   key IS the issuer for all v1 types), sets `status = revoked` + `revoked_at`, replicates.
+5. **Revocation (`op: revoke`,** DOD-REVOKE-1**)** — payload `{signal_hash}`; authorization is
+   **role-based for portal-issued records** (review F4): any ACTIVE `submitter`-role key may revoke
+   a record whose `issuer_kind` is portal — the portal is one logical issuer and keys are rotating
+   instruments, so `requester_pubkey == record.issuer_pubkey` would strand every old-key record
+   unrevocable after a §2 rotation (or force keeping retired keys active, defeating retirement).
+   Exact-pubkey match remains the model for `issuer_kind: agent` (post-v1 intake), where the key IS
+   the identity. Directory sets `status = revoked` + `revoked_at`, replicates. Feed into
+   DOD-REVOKE-1's design note.
 
 **Registry document** (DOD-REGISTRY-1's design note refines): JSON, manifest-style — canonical body
 (all fields except `signatures`, recursively sorted keys, UTF-8), Ed25519 by the registry key,
 monotonic `version`, optional `not_before`/`expires`; entries `type → {class, status:
 active|deprecated|retired, default_ttl_days, label}`. Client behavior copies the manifest poller
 (inv §6.4): verify against the pinned pubkey, anti-rollback, every failure leaves the cache
-untouched, absent type ⇒ valid-but-unclassified.
+untouched, absent type ⇒ valid-but-unclassified. **INV-CANONICAL scoping (review F7):** that
+invariant governs the ENVELOPE hash — the four-party byte-agreement problem. The registry is not an
+envelope and is never content-addressed; it deliberately follows the manifest's canonical-JSON
+signing convention so the client reuses the one shipped, proven verifier instead of growing a second
+signed-JSON-vs-CBOR path. State this in DOD-REGISTRY-1 so its reviewer doesn't trip on it.
+
+**Legacy `/internal/*` surface (review F6 — explicit, not silent):** the bearer-key routes that are
+NOT signal-related (`account-by-email-stub`, `agents-by-account`, `agent-write`'s remaining
+`revocation_flag` lever, `pre-authorize`) are **accepted at launch as-is in auth model** — replacing
+their auth is real cross-repo work with no M10 payoff — but they **move behind the HTTPS listener
+DOD-DIR-WRITE-1 adds anyway** (near-free; plaintext-HTTP transport for login-critical calls is the
+part that was indefensible). Bearer-key retirement for those routes is post-v1, tracked in the DoD's
+Post-v1 section.
+
+**Observability + operator-visible failure (review F5 — obligations, per surface):**
+- `signal.mint.sign.failed` — KMS denial/throttle; the mint path's first real dependency. Surfaces
+  to the operator per §6, never a silent skip.
+- `signal.submission.accepted/rejected` — directory-side (above).
+- `signal.registry.publish.rejected` — wrapper-auth or anti-rollback refusal.
+- `signal.delivery.enqueue.failed` — sealed-copy enqueue failure; the mint is still notarized, so
+  this is a retry-on-next-touch condition, logged loud, not an error swallowed into success.
+- `signal.directory.failover` (per node tried) and `signal.directory.unreachable` (list
+  EXHAUSTED — all 2–3 nodes down): failover is resilience, exhaustion **fails LOUD**, carrying
+  forward today's honest `503`/`unreachable: true` posture (inv §2/§3). A permanent outage must
+  never be masked as transient by the retry loop.
+All events carry correlationId threading per the milestone's observability ACs.
 
 ## 4. Delivery to the holder — correct the M8 pipe, keep its bones
 
@@ -186,9 +252,12 @@ daemon opens, re-hashes against the anchor, stores, ACKs, fail-closed) is kept w
    kills the `agentId: null` defect, inv §9).
 3. **Account-subject envelopes still fan out per-agent at DELIVERY** (sealed to each agent's
    `k_local` — sealing is per-recipient by nature and M10-D5 explicitly kept this, inv §10.7):
-   ONE envelope, N sealed copies, each agent's wallet holding the same content-addressed row.
-   A later-added agent gets its copy on the next portal touch via the idempotent mint-or-deliver
-   pass (M10-D12: query says envelope exists → seal to the new agent, enqueue; no re-mint).
+   ONE envelope, N sealed copies at mint time, each agent's wallet holding the same
+   content-addressed row. A **later-added agent** is served per **M10-D13**: re-mint with
+   supersession (fresh envelope, `supersedes_hash`, delivery fanned to ALL the account's agents),
+   or the same-daemon local copy where applicable — never a portal- or directory-held plaintext
+   (neither exists; review F1). Journey coverage owed: add an agent AFTER minting and verify its
+   wallet receives the account-subject envelopes (now a DOD-T1-JOURNEY-1 clause).
 4. **Enqueue moves inside the submit flow:** the portal seals per recipient agent and enqueues via
    the same signed surface (an `op: submit` field carrying sealed copies, or a follow-up
    `op: deliver` — DOD-DIR-WRITE-1's design note picks one; the pickup/ACK mechanics themselves are
@@ -235,7 +304,11 @@ cells render from the **directory query route** (§3.3a) — the account's actua
 (active/superseded/revoked/expired, by type) — plus per-type mint/re-verify actions that call
 `mint.ts`. The portal's own-DB reads remain only for what the portal owns (passkey/TOTP enrollment
 state). Cells for out-of-v1 types stay "coming soon" — honest, not fabricated (no-mocks rule).
-Modest by design; UI polish is forgivable at launch, wrong data is not.
+**A failed mint action shows the operator the real reason** (review F5's traced gap): KMS denial,
+all-directories-unreachable, or the directory's rejection reason — carried to the UI in the
+`unreachable: true` honesty posture the portal already has (inv §2), never a silent no-op or a
+generic "something went wrong" that buries the cause. Modest by design; UI polish is forgivable at
+launch, wrong data is not.
 
 ## 7. Sequencing note — the backfill IS the migration
 

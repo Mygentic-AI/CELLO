@@ -15,10 +15,10 @@ description: >
 # M10 — Build Journal
 
 ## RESUME STATE (keep current — update at every checkpoint/compaction)
-- **Milestone status:** started. **DOD-PORTAL-ARCH-1 half 1 (investigation) is DONE** →
-  [[M10-PORTAL-ARCH-INVESTIGATION]] (Entry 2). **Next: half 2 — the architecture determination**
-  (a separate design doc under `user-stories/m10/`, written AGAINST the investigation, then
-  reviewed). Then DOD-CBOR-1, whose design note is already written (Entry 1, the worked example).
+- **Milestone status:** **DOD-PORTAL-ARCH-1 ✅ COMPLETE** (both halves; Entry 3). Investigation →
+  [[M10-PORTAL-ARCH-INVESTIGATION]]; determination → [[M10-PORTAL-ARCH-DETERMINATION]] (reviewed,
+  8 findings fixed, decisions M10-D6…D13 in the DoD). **Next red: DOD-CBOR-1** — its design note
+  is Entry 1; its packaging decision is now MADE (M10-D7: `@cello-protocol/crypto`).
 - **Read the investigation before any M10 design or code.** It overturns several premises: the
   portal is LIVE on AWS; the M8 trust pipe (portal→directory→daemon, sealed + anchored + ACKed)
   already exists and violates three M10 invariants; INV-CHOKEPOINT is net-new (today: one shared
@@ -228,10 +228,60 @@ started, so no hash breaks (spec §5's retrofit warning honored).
 
 ---
 
+### 2026-07-11 — Entry 3: DOD-PORTAL-ARCH-1 half 2 DONE — the architecture determination, reviewed, findings fixed → line ✅
+
+**What shipped.** [[M10-PORTAL-ARCH-DETERMINATION]] (`72b973ef` draft, fixes follow-up commit) —
+resolves all seven investigation forks: **M10-D6** KMS-held Ed25519, portal holds no key; **M10-D7**
+one CBOR implementation in `@cello-protocol/crypto`; **M10-D8** in-process Class-3 scheduler;
+**M10-D9** dedicated registry key, build-time pinned pubkey; **M10-D10** new type-blind signed
+`/internal/signal/*` surface over TLS, `agent-write` signal arms retire; **M10-D11** static
+directory failover list, exhaustion fails loud; **M10-D12** no authoritative signal state in the
+portal; **M10-D13** late-added agents via re-mint-with-supersession. Plus the `SignalTypeModule`
+per-type interface, the corrected M8 delivery pipe, two-KMS-key custody with ops-agent excluded in
+IAM, and backfill-is-the-migration sequencing.
+
+**Review (cello-unit-reviewer, fable).** Verdict: strong determination, blocking set narrow. 8
+findings, ALL fixed in the doc + DoD:
+- **F1 HIGH** — late-added-agent delivery had NO plaintext source (portal keeps no signal state,
+  directory stores hash-only, pickup ciphertexts deleted on ACK) — the drafted "seal the existing
+  envelope to the new agent" was unimplementable. → **M10-D13**: re-mint with supersession
+  (amends M10-D5: agent-add = no-op on verification, supersede on delivery); journey coverage
+  added to DOD-T1-JOURNEY-1(a).
+- **F2 HIGH** — the verified-account-facts read (how `verify()` reaches `phone_stub_hash`) was
+  silently undelivered → query arm (c) added to §3.3, presence booleans + stubs only.
+- **F3 HIGH** — the replay-harmlessness claim was violated by the doc's own unconditional
+  supersede-marking (replayed submit could launder `revoked` → `superseded`) → two normative
+  rules pinned (duplicate = strict no-op never touching status; supersede = `active → superseded`
+  only) + negative AC on DOD-DIR-WRITE-1.
+- **F4 MED** — exact-pubkey revocation auth broke under key rotation → role-based for
+  portal-issued (DOD-REVOKE-1 updated).
+- **F5 MED** — failure events + operator-visible mint failure named per surface (incl. failover
+  EXHAUSTION fails loud).
+- **F6 MED** — legacy bearer-key `/internal/*` routes: accepted-at-launch stated explicitly,
+  moved behind DIR-WRITE-1's TLS listener; retirement → Post-v1 section.
+- **F7 LOW** — INV-CANONICAL scoped to envelopes; registry deliberately uses the manifest's
+  canonical-JSON convention (one shipped verifier).
+- **F8 LOW** — M10-D12 carve-out tightened: transient verification-flow state, TTL'd, never
+  envelope data.
+- **Test-teeth gaps** → DOD-T1-JOURNEY-1 gained (a) late-agent, (b) failover, (c) custody
+  (no key material in the task definition; `authorized_issuers` pubkey == KMS `GetPublicKey`).
+
+**⚠️ For Andre's veto — M10-D13.** F1 forced a genuine trade against a stated rule. Chosen:
+re-mint-with-supersession (M10-D5's "agent-add is a no-op" amended to no-op-on-verification).
+Rejected: directory escrow of envelope plaintext (breaks hash-only/no-PII storage — treated as
+non-negotiable) and deterministic re-composition (fragile). Residual disclosed: an agent added
+out-of-band waits for the next portal touch.
+
+**Next:** DOD-CBOR-1 (design note = Entry 1; packaging now decided by M10-D7).
+
+---
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
   actually are today (evidence, `path:line`). Read before any M10 design or code.
+- [[M10-PORTAL-ARCH-DETERMINATION]] — DOD-PORTAL-ARCH-1 half 2: the decided architecture
+  (M10-D6…D13), reviewed 2026-07-11.
 - [[M10-PROCEDURE]] — the runbook
 - [[M10-DEFINITION-OF-DONE]] — the yardstick + sole status authority
 - [[M10-TYPE-PLAYBOOK]] — the per-type runbook

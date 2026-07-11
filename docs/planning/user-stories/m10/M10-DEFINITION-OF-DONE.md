@@ -106,8 +106,10 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
     design doc under `user-stories/m10/` wikilinked here, reviewed by `cello-unit-reviewer` like
     any unit, and its decisions logged in the Decisions section below. Downstream DoD lines that
     the architecture reshapes are edited THEN, not discovered mid-build. —
-    🟠 (half 1 DONE 2026-07-11: [[M10-PORTAL-ARCH-INVESTIGATION]], → Journal Entry 2; its §10
-    evidence-driven DoD edits applied. Half 2 — the determination — is the next unit.)
+    ✅ (2026-07-11 — half 1: [[M10-PORTAL-ARCH-INVESTIGATION]] → Entry 2; half 2:
+    [[M10-PORTAL-ARCH-DETERMINATION]], reviewed by cello-unit-reviewer on fable — 8 findings,
+    ALL fixed (F1→M10-D13), decisions M10-D6…D13 logged below, downstream lines
+    (DIR-WRITE/REVOKE/T1-JOURNEY) edited → Entry 3.)
 - **DOD-CBOR-1** — a shared canonical-envelope component (serialize, hash, verify) usable from
   portal, directory, and client. Clauses: deterministic map ordering + defined number encoding
   per spec §5; the hash preimage is exactly spec §4's mandatory-disclosure set (subject_kind,
@@ -144,12 +146,19 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   (`agent-write-validation.ts:20`) and the `trust_signal_hash`/`trust_signal_ciphertext` arms
   retire after migration, and the shared-static-bearer-key model (one secret, also held by the
   ops-agent, over plaintext HTTP — investigation §3) is superseded by signed submissions on this
-  surface — INV-CHOKEPOINT is a NEW property, not a hardening. Design note first (PROCEDURE §6:
-  submission signature + key custody). — ❌
-- **DOD-REVOKE-1** — revocation = re-auth through the same chokepoint (spec §14.2): issuer
-  revokes own signals (`connecting_pubkey == issuer_pubkey`), portal revokes portal-issued;
-  status change replicates; the subject cannot revoke (selective disclosure is their lever);
-  expiry is automatic via `expires_at`, not a write. — ❌
+  surface — INV-CHOKEPOINT is a NEW property, not a hardening. **Replay-integrity clauses
+  (determination §3.1, review F3):** duplicate-hash submit is a strict no-op that never touches the
+  existing row (`status` included); supersede-marking is the transition `active → superseded` ONLY.
+  **Negative AC:** replay a captured submit after revoking its signal — status stays `revoked`.
+  The new surface is served over TLS (the HTTPS listener this unit adds also fronts the legacy
+  `/internal/*` routes — determination §3). Design note first (PROCEDURE §6: submission signature +
+  key custody; determination §3 fixes the shape). — ❌
+- **DOD-REVOKE-1** — revocation = re-auth through the same chokepoint (spec §14.2): **role-based
+  for portal-issued** (any active `submitter`-role key — exact-pubkey matching would strand old-key
+  records unrevocable after a key rotation; determination §3.5, review F4), exact
+  `issuer_pubkey` match for `issuer_kind: agent` (post-v1); status change replicates; the subject
+  cannot revoke (selective disclosure is their lever); expiry is automatic via `expires_at`, not a
+  write. — ❌
 - **DOD-REGISTRY-1** — the type registry as served signed data (spec §15.2.5, amended §14.8):
   a portal-signed document (type → class, lifecycle, default TTL, display label) the directory
   serves as opaque bytes; client fetches + caches with TTL; absent type =
@@ -171,7 +180,13 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
 - **DOD-T1-JOURNEY-1** — **live journey, first half:** for a real agent, portal mints phone +
   email → directory notarizes (visible in `signal_records`, replicated to all 3 nodes) → holder
   daemon holds both envelopes and re-verifies their hashes locally. Real portal process, real
-  dev directory, real daemon. — ❌
+  dev directory, real daemon. **Three cases from the architecture review:** (a) **late-added
+  agent** — add a second agent AFTER minting; its wallet receives the account-subject envelopes
+  via M10-D13 re-mint-with-supersession; (b) **failover** — with the primary directory node
+  unreachable, portal login AND a mint both succeed via the next node in the list (M10-D11's own
+  justification deserves the test); (c) **custody** — assert the ECS task definition carries no
+  signing key material and `authorized_issuers`' pubkey equals KMS `GetPublicKey` output (the
+  file-signer-in-prod bypass is otherwise invisible to every enforcer). — ❌
 
 ## Tier 2 — Presentation + consumption (the generic client pipeline) — closes with the canary
 
@@ -274,6 +289,27 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
 - **M10-D3 (2026-07-11) — GitHub before LinkedIn.** One external validator in v1; GitHub first
   per the 2026-05-16 log's provider order (mature OAuth, richer public data). Reverse: LinkedIn
   is the first post-v1 playbook run.
+- **M10-D6…D13 (2026-07-11) — the architecture determination's decisions**, full rationale +
+  rejected alternatives in [[M10-PORTAL-ARCH-DETERMINATION]] §1 (reviewed by cello-unit-reviewer,
+  8 findings fixed):
+  - **M10-D6** — issuer signing: Ed25519 in AWS KMS (`kms:Sign`); the portal holds no private key.
+    File-based signer behind the same interface for local dev; directory learns the pubkey as data.
+  - **M10-D7** — ONE canonical-CBOR implementation, in `@cello-protocol/crypto` (already the
+    portal's dependency); no vendored copies.
+  - **M10-D8** — Class-3 job: in-process scheduler from `instrumentation.register()`, own module,
+    crash never kills the server; promotion to a worker is a routing change.
+  - **M10-D9** — registry signed by a dedicated KMS key (not officers, not the submission key);
+    clients pin its pubkey at build time; manifest-carried rotation later.
+  - **M10-D10** — new type-blind signed `/internal/signal/*` surface (TLS); `agent-write`'s signal
+    arms + `SIGNAL_KINDS` enum retire after the backfill; INV-CHOKEPOINT implemented natively.
+  - **M10-D11** — portal→directory: static ordered failover list for ALL DirectoryClient methods;
+    exhaustion fails LOUD (`unreachable: true` posture); manifest-driven discovery post-v1.
+  - **M10-D12** — the portal keeps no authoritative signal state; the directory's `signal_records`
+    is the record; only TTL'd transient verification-flow state is permitted portal-side.
+  - **M10-D13** — late-added agents get account-subject envelopes by **re-mint with supersession**
+    (amends M10-D5: agent-add = no-op on verification, supersede on delivery); same-daemon sibling
+    copy allowed; directory/portal never hold envelope plaintext. Residual disclosed: out-of-band
+    agent-add waits for the next portal touch.
 - **M10-D4 (2026-07-11, Andre) — Recipient-side storage: store what was presented; evaluate only
   what is presented.** Received signals ARE stored — plaintext envelope rows inside the encrypted
   SQLCipher DB, FK'd to the per-agent contact row, stamped `verified_at`/`received_at` — as
@@ -325,6 +361,12 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   review-prompt surface; design with the rename-notice pattern.
 - **Registry governance decentralization; T-of-N scan attestation** (spec §14.1) —
   strengthenings, not migrations.
+- **Bearer-key retirement on the legacy `/internal/*` routes** (`account-by-email-stub`,
+  `agents-by-account`, `agent-write`'s `revocation_flag`, `pre-authorize`) — accepted at launch in
+  auth model, moved behind TLS by DOD-DIR-WRITE-1 (determination §3, review F6); replacing the
+  shared bearer key with signed requests is post-v1.
+- **Manifest-carried registry-key rotation** (M10-D9's later strengthening; build-time pin at
+  launch).
 
 ---
 
