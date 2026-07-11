@@ -108,7 +108,7 @@ same gate as F1 HIGH — already fixed by the time the review landed.)
 
 **Gate:** daemon 767, workspace 1975 pass; lint, typecheck, build clean.
 
-## Step 3 — DOD-TIER-4 / CONTACT-VIEW-1 / RENAME-1: address book + Option C — 🟡 CODE DONE
+## Step 3 — DOD-TIER-4 / CONTACT-VIEW-1 / RENAME-1: address book + Option C — ✅ DONE + LIVE-CERTIFIED
 
 Split into three review-units. Commits: TIER-4 `cfc0783` + fixes `c2bef79`; CONTACT-VIEW-1 `b539bd0`;
 RENAME-1 `2886c65`.
@@ -142,7 +142,7 @@ RENAME-1 `2886c65`.
 Gate at RENAME-1 commit: daemon 785, workspace 1993 pass; lint, typecheck, build clean. 3b (CONTACT-VIEW-1
 + RENAME-1) awaiting the Fable-5 review; TIER-4 already reviewed.
 
-## Step 4 — DOD-SETTINGS-1 / TIER-BOUNDS-SETTINGS / AWAY-TIER-1: settings + away messages — 🟡 IN PROGRESS
+## Step 4 — DOD-SETTINGS-1 / TIER-BOUNDS-SETTINGS / AWAY-TIER-1: settings + away messages — ✅ DONE + LIVE-CERTIFIED
 
 - **DOD-SETTINGS-1 — ✅ done (review pending).** Commit `d385fca`. New agent_settings(agent_id, key,
   value, updated_at) table + getSetting/setSetting(upsert, fail-closed)/getAllSettings. New
@@ -203,9 +203,46 @@ adding the surface before publish (don't ship dead features). Commits `2b8c448` 
 **Head commit (cello-client):** `1af5bb1` — origin/main confirmed == HEAD. Client-side only — no directory
 change, no deploy. Reported to Ms_Chelly over CELLO; she owns the delta verify + the one publish cascade.
 
-**Remaining (NOT mine):** Ms_Chelly's publish cascade (daemon + cli version bump, per /cello-publish) and
-the DoD-marker flips in M8C-DEFINITION-OF-DONE / the spec. A tier-boundary cello-done-auditor pass over
-the ✅ flips is the checkpoint before those. Do NOT publish/deploy from this session.
+**Remaining — ALL DONE (Ms_Chelly, 2026-07-11):** delta-verified, published v0.0.94, promoted to `latest`,
+live-smoke certified. See the close section below.
+
+## ✅ PUBLISHED + LIVE-SMOKE CERTIFIED — 2026-07-11 (Ms_Chelly)
+
+**Published & promoted.** Delta-verified `1af5bb1` independently (read the migration / bounds / screening /
+settings-validation diffs; own 4-part gate 2025 pass), cut the cascade **v0.0.94 → daemon 0.0.46 / cli
+0.0.44 / connect 0.0.65**, verified against the npm binary (dist contains `migrateContactsAddTierMetadata`,
+`validateSettingValue`, `cello_settings_set`; cross-pins real, no `workspace:*`; smoke-tag green). Andre
+promoted all three to `latest` and installed.
+
+**Migration incident on first live login — RESOLVED, no data loss.** The `agent_id` backfill (0.0.45, a
+PREREQUISITE that runs before the tier ADD COLUMN) aborted `agent_id_backfill_ambiguous`: the name
+`Ms_Chelly` resolved to two `agent_id`s (a June-25 agent retired June-26, and the July-6 active one that
+reused the freed name — hazard #1, retire-reuse). Root cause **proven from the DB** (not the error's
+say-so): the retired identity owns **zero** rows — all 67 sessions / 154 transcript / 3 contacts postdate
+the active agent, so nothing is truly ambiguous. Fixed by hand: **renamed the defunct retired row**
+`Ms_Chelly → Ms_Chelly_retired_b3e96900` (one `UPDATE`, DB backed up first) → the map became unambiguous →
+`cello login` migrated clean: `daemon.migration.agent_id_backfill` (11 agents, 133 sessions) then
+`contacts.tier.grandfathered count:6 tier:3`. Full incident + the launch-hardening finding:
+[[2026-07-11_retire-reuse-migration-incident]].
+
+**Live A/B smoke — all 9 lines + the surface, certified LIVE (not vitest-green):**
+- Solo (Ms_Chelly): grandfather → all contacts WHITELISTED (tier 3); contact-view JOIN (sealed count +
+  last-spoke); settings round-trip; INV-TIER-BOUND rejections (`0`/`2.5`/`Infinity` → `invalid_value`;
+  `blocked` not a settable tier); `invalid_key`; away-text set. ✅
+- Wire (with CELLO_Support as counterparty): **RENAME-1** ✅ (notice fired on the `_v2` rename, named by
+  the operator's pet name, new name as an unverified quoted claim; the revert REPLACED it — bidirectional,
+  one-per-contact; local moniker never overwritten). **AWAY-TIER-1** ✅ (`away.default` resolved at
+  `agent_default` level, sent, screened outbound, received verbatim). **TIER-3** ✅ (blocked knock refused
+  `reason:"abuse_bound_sessions_per_sender"` server-side — byte-identical to an over-cap unknown, no away
+  reply; from the blocked initiator's side, `dispatched_to_relay` + silence, **byte-for-byte
+  indistinguishable from "offline"** — no oracle, confirmed both ends).
+
+**Two known-behavior findings (logged, coherent, not defects):**
+1. **BLOCKED mutes existing sessions, not just new-session acceptance.** A blocked contact's byte cap is 0,
+   so its content is rejected at ingest on an already-open session too ("blocked = fully cut off").
+2. **`delivered:true` yet ingest-rejected asymmetry.** A blocked sender's `cello_send` reports
+   `delivered:true` (bytes reached the wire) even though the daemon drops the content at ingest — which
+   *preserves* the no-oracle property on existing sessions. Worth a one-line note in known behavior.
 
 ## Related
 - [[2026-07-10_address-book-implementation-spec]] — the spec (authority).

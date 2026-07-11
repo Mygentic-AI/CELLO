@@ -466,9 +466,22 @@ matches them.
   seven re-keyed in one transactional rebuild; `retry_queue`'s cross-agent collision→loss fixed; agent
   rename unblocked. Reviewer caught a real regression (a retired agent's kept session row made the
   half-open reaper throw `agent_id_unresolved` for the whole daemon) — fixed with an INNER JOIN excluding
-  retired agents, red-first. Full suite 1946 green, verified independently. **Not launch-blocking; not yet
-  live-proven** (retire-reuse red test is the proof — a live retire+recreate on Andre's machine would
-  confirm, but the trigger is disruptive and the test is thorough).
+  retired agents, red-first. Full suite 1946 green, verified independently. **LIVE-PROVEN 2026-07-11** on
+  Andre's real DB: a genuine retire-reuse (`Ms_Chelly` retired 06-26, name reused 07-06) tripped the
+  ambiguity guard on the first `cello login` onto 0.0.45+ (correct fail-closed abort, DB untouched); after a
+  one-row hand-fix (below) the backfill re-keyed **11 agents / 133 sessions** clean and the tier migration
+  grandfathered 6 contacts. The abort's only documented recovery is "resolve by hand or wipe" — hardening in
+  `DOD-MIGRATION-AMBIGUITY-RESOLVE-1`.
+
+- **DOD-MIGRATION-AMBIGUITY-RESOLVE-1** (found live 2026-07-11) — the `agent_id` backfill's abort on a
+  reused name has **no automated recovery**: it tells the operator to "resolve by hand or start from a fresh
+  database." Fine on a developer's machine with DB access; **unforgivable for a real operator** who ever
+  retired-and-reused an agent name — their daemon won't start on upgrade and "wipe your DB" loses their
+  identity + history. Needs an automated path before broad launch: **timestamp auto-attribution** (a retired
+  agent cannot write, so rows postdating the reusing agent's creation provably belong to it — the strategy
+  `agent-id-migration.ts` explicitly parks) and/or a `cello repair --disambiguate <name>` subcommand doing
+  the safe rename/attribution. Not a fresh-user blocker; blocking for any reuse operator. Incident + the
+  hand-fix that unblocked Andre: [[2026-07-11_retire-reuse-migration-incident]]. — ⏳ **BACKLOG.**
 
 ## 🔴 Daemon singleton — multiple daemons, one database (2026-07-10)
 
