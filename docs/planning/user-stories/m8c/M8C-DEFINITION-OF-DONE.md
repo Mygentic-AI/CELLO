@@ -225,12 +225,25 @@ description: >
   counterparty reachable?"), and a **source-audit test fails the build** on any daemon guidance naming a tool
   outside the vocabulary — so the class cannot return. Stays 🟡 until Andre live-confirms the revised
   `cello --help`.
-  **⚠️ OPEN — needs Andre's ruling: DELETE `receive-session`?** It is a literal ALIAS of `receive` — the daemon
+  **✅ RULED + DONE (Andre, 2026-07-11): `receive-session` is DELETED.** It is a literal ALIAS of `receive` — the daemon
   registers the SAME handler object for both (`handlers.set("cello_receive_session", handleReceive)`). It does
   not accept or join anything (inbound sessions are auto-accepted by the standing receiver), and its help
-  claimed an "Accept / join an inbound session request" step that CELLO does not have. Under the no-aliases
-  doctrine it should be deleted (CLI command + `cello_receive_session` MCP tool). Held pending the ruling; until
-  then it is described truthfully as a deprecated alias rather than left lying. Deletion is a one-liner.
+  claimed an "Accept / join an inbound session request" step that CELLO does not have. Deleted everywhere on the
+  shipped surface — CLI command, MCP tool, vocabulary row, and (per "no dead handler left behind") the daemon
+  handler registration itself. An old shim calling it now gets a loud, terminal `Unknown IPC method` naming
+  version skew; it does not hang or retry. The test that asserted the alias was LIVE was **inverted**, not
+  deleted — it now asserts the handler is gone, because a deletion no test can see is a deletion that grows
+  back. Shipped in **v0.0.97** (daemon 0.0.49 / cli 0.0.47 / connect 0.0.67) — **Andre promotes v0.0.97, NOT
+  v0.0.96**: [[2026-07-11_latest-promotion-v0.0.97]].
+  **🔍 And a third phantom, caught by review at the last moment: `SKILL.md` — which SHIPS INSIDE the connect
+  tarball and is the doc that hands an agent its tool list — had drifted into fiction.** It named eleven tools
+  that do not exist (a whole M1-era connect-to-peers flow: `cello_request_connection`, `cello_accept_connection`,
+  `cello_get_policy`, `cello_setup_guidance`, `cello_list_connections`…), told agents to register via MCP when
+  registration has been a CLI step for milestones, and never mentioned 15 tools that DO exist. Every audit
+  written for this story scanned `.ts` files, so not one of them ever opened it — and it went out in
+  connect@0.0.66. Rewritten against the 26 tools the shim really registers; the shim audit now reads
+  package.json's `files:` and checks every published `.md` as an **allowlist** (a denylist only catches the
+  deaths you remember). **Standing lesson: follow what SHIPS, not what compiles.**
 - **DOD-ONBOARD-ERRORS-1** — register-path errors are specific and actionable, never a generic
   Usage dump or silence: missing token → "you're missing the pre-auth token" (not the Usage line);
   malformed token → "that isn't a pre-auth token — they start with `CELLO-`"; unknown agent →

@@ -11,8 +11,20 @@ description: >
 
 # `latest` promotion — v0.0.96 (daemon 0.0.48, cli 0.0.46, connect 0.0.66)
 
-> **NOT RUN.** Per `/cello-publish` step 6, promotion to `latest` is **operator-run** and needs Andre's
-> explicit go. This file is the prepared command set, nothing more.
+> ## ⛔ SUPERSEDED — DO NOT PROMOTE v0.0.96. Promote **v0.0.97**.
+>
+> Andre ruled (2026-07-11) that `receive-session` is DELETED, and asked for the delete to ride the
+> NEXT cut so it lands in the promoted build rather than forcing a promote-then-re-promote. He also
+> promotes **v0.0.97, not v0.0.96**.
+>
+> **v0.0.96 additionally ships a defect:** `SKILL.md` — which is inside the connect tarball and is the
+> doc that hands an agent its tool list — still named `cello_list_sessions`, `cello_get_sealed_receipt`
+> and `cello_receive_session` (all renamed or deleted), plus eleven M1-era tools that have not existed
+> for milestones. Promoting it would hand every agent a tool list that is largely fiction. Fixed in
+> v0.0.97.
+>
+> **→ Use [[2026-07-11_latest-promotion-v0.0.97]].** This file is kept only as the record of what
+> v0.0.96 contained.
 
 ## What changed
 
