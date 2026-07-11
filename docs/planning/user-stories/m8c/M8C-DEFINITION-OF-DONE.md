@@ -194,8 +194,16 @@ description: >
   (`register` before `create-agent`). Real help = accurate + intuitive descriptions + a sane order (grouped or
   alphabetical). Also `contact`→plural + the list/single-contact mixing. Revision folded into the CLI-PARITY
   help pass; design decisions being gathered (ordering, `install` rename, `contacts` structure). Stays 🟡.
-  **UPDATE 2026-07-11 — BUILT + GATES GREEN, awaiting live confirmation** (cello-client `cf4a36a`; test 2135 ✓
-  lint ✓ typecheck ✓ build ✓; unit review in flight). Work order: [[2026-07-11_cli-help-revision-workorder]].
+  **UPDATE 2026-07-11 — BUILT, REVIEWED (×2), PUBLISHED TO BETA, awaiting Andre's live confirmation.**
+  cello-client `0626701`; cascade **daemon 0.0.48 · cli 0.0.46 · connect 0.0.66**, tag `v0.0.96`, all CI green
+  incl. the published-artifact smoke test; verified against the TARBALLS (not the commit). Promotion runbook:
+  [[2026-07-11_latest-promotion-v0.0.96]] — **Andre runs the promotion.** Two review passes; every finding fixed.
+  The second pass found the AUDITS THEMSELVES were defeatable — the dead-verb check anchored on a trailing space,
+  so a verb followed by a quote or full stop walked through (PROVEN: the Hermes plugin scaffolded onto the
+  operator's disk said `'cello register'` while the audit was green), and the CLI sweep stripped quoted tool
+  names anywhere, hiding a stale name inside the very sentence that hands it to a user. Both are now anchored
+  with a negative lookahead / restricted to wire position, and both carry NEGATIVE CONTROLS proving they fire.
+  (test 2145 ✓ lint ✓ typecheck ✓ build ✓). Work order: [[2026-07-11_cli-help-revision-workorder]].
   Delivered: **grouped help** (Setup · Agents · Messaging · Sessions & receipts · Contacts · Other) as registry
   METADATA so the table still cannot drift from dispatch; **clean renames, no aliases** (`install`→`bridge`,
   `register`→`register-agent`, `close`→`close-session`, `initiate`→`initiate-session`, `receipts`→
