@@ -348,7 +348,10 @@ and they correlate one-to-one.
   merged to cello-client main (`e8c4891` + `8bf8486`, 2026-07-10; unit-reviewer verdict SPEC FAITHFUL,
   one test-gap finding fixed). ✅ at the live invariant check (`count(session.offer.abort) > 0 AND
   count(session.inbound.accepted for those ids) == 0`, log filtered on daemon start — Entry 76 trap)
-  once a published daemon carries it.
+  once a published daemon carries it. 📦 **NOW CARRIED — daemon 0.0.46 / v0.0.94 (2026-07-11): commit
+  `e8c4891` verified an ancestor of the tag; `session.inbound.assignment.incomplete` +
+  `extractInboundSessionAssignment` verified present in `dist/`. Flip pending only the live invariant grep
+  on the running 0.0.46 daemon log.**
 - **DOD-OFFER-REJECT-1** (D1) — the responder sends a `session_offer_reject` instead of returning
   silently on `standing_receiver_unavailable`, so the directory fails fast instead of stalling 2 s and
   fabricating. This is the `Generic Reject` of [[2026-07-08_inbound-state-matrix]], arriving as a
@@ -356,7 +359,9 @@ and they correlate one-to-one.
   built + reviewed + merged to cello-client main (`8becaa7` + `94d08f0`, 2026-07-10; review found F1
   blocking — the production seam's `sendRaw` resolves `{ok:false}` instead of throwing, so a failed
   reject logged `reject.sent`; fixed on BOTH the reject and the pre-existing accept path). ✅ when the
-  directory half (D2) understands the frame.
+  directory half (D2) understands the frame. 📦 **Daemon half NOW SHIPPED — 0.0.46 / v0.0.94 (2026-07-11):
+  commit `8becaa7` verified an ancestor; `session_offer_reject` present in `dist/`. Flip still gated on the
+  3-region directory deploy (D2, Andre's deploy.sh call) — the frame is inert until the directory decodes it.**
 - **DOD-DIR-FAILCLOSED-1** (D2, the correct root fix) — the directory must **never FROST-sign or
   distribute an assignment with an empty counterparty endpoint**. On offer-accept timeout it returns a
   `session_request` failure to the initiator and sends **nothing** to the target. Today it "proceeds
@@ -377,6 +382,9 @@ and they correlate one-to-one.
   for a counterparty that declined. The live one is the daemon's `sessionRequestErrorReason`; the
   client's `mapSessionRequestErrorFrame` was also swallowing `agent_revoked`/`agent_suspended` since
   M7/M8. ✅ **awaiting the 3-region deploy — Andre's call, Ms_Chelly runs it. Do not run deploy.sh.**
+  📦 **Daemon-side half (decoder allowlist, reject-waiter, `counterparty_did_not_accept` reason fix) NOW
+  SHIPPED in 0.0.46 / v0.0.94 (2026-07-11); the root fix is directory-side (`1ccd08a5`, trustless-cello)
+  and remains UNDEPLOYED — this line does not move until the 3-region deploy runs.**
   — Entry 85
 - **DOD-UNREAD-1** (D4, **DECIDED 2026-07-10 — producer-first**) — a received `transcript` row with no
   `sessions` row is counted unread (`getUnreadSummary` never joins `sessions`) but `cello_receive` returns
@@ -395,7 +403,13 @@ and they correlate one-to-one.
   D4a = drop, loudly; review F1 fixed: a failed session-row write now fails creation ONCE with
   `session_persist_failed` instead of leaving a live-but-rowless session that refuses everything).
   ✅ when the two live stuck messages on Andre's machine (`5749859a…`, `3d3311c8…`) are actually read
-  and `total_unread` hits 0 by delivery, on a published daemon. — Entry 81
+  and `total_unread` hits 0 by delivery, on a published daemon. 📦 **NOW SHIPPED — 0.0.46 / v0.0.94
+  (2026-07-11): commit `2e9eb5d` verified an ancestor; `session.content.orphaned` + `session_persist_failed`
+  present in `dist/`. LIVE EVIDENCE 2026-07-11: `cello_check_notifications` on the running 0.0.46 daemon
+  shows BOTH originally-stuck ids (`5749859a…`, `3d3311c8…`) GONE from the unread set — under the old bug
+  they were permanent, so this is direct evidence D4 cleared them; remaining unread is the healthy readable
+  kind (real session rows). Full ✅ = one targeted `cello_receive` confirming a counted-unread is now
+  readable (the getUnreadSummary↔receive invariant).** — Entry 81
 
 - **DOD-SENDRAW-1** (found 2026-07-10 while verifying D1; **do AFTER D4**) — `SignalingManager.sendRaw`
   (`core/transport/src/signaling-manager.ts:325`) has **zero `throw` statements**: it catches internally
@@ -409,12 +423,15 @@ and they correlate one-to-one.
   a `sendRawOrThrow` for callers that want the exception. Red-first, and **drive the fake from the
   resolve-`{ok:false}` contract, never a throw** — a fake that threw is exactly what let this hide.
   Not launch-blocking (an observability lie, no data loss), but it has already misled a debugger once. —
-  🟡 built + reviewed + merged to cello-client main (`5156189` + `2e701c3` review fixes, 2026-07-10;
+  ✅ SHIPPED (was 🟡) — built + reviewed + merged to cello-client main (`5156189` + `2e701c3` review fixes, 2026-07-10;
   unit-reviewer: SPEC FAITHFUL. All three sites branch on `res.ok`; the LINT rule flagged exactly the
   three known sites pre-fix and now also bans the void-wrapped/bare-floating shapes and covers
   `sendSignalingFrame`; `guidance` (the specific cause) threads into every failure log — review F2).
   Declared gap: the `trust_signal_ack` branch has no in-process test (needs the full trust-signal
-  path); the lint rule + the two tested sites pin the shape. ✅ when it rides a published daemon.
+  path); the lint rule + the two tested sites pin the shape. ✅ **PUBLISHED 2026-07-11 in daemon 0.0.46
+  (tag v0.0.94): commit `5156189` verified an ancestor of the tag AND `session.ceremony.reply.failed` (the
+  log that could never fire pre-fix) verified present in the published `dist/`. This observability-fix
+  line's enforcer is shipping + unit tests — both met; rides the running daemon.**
   Follow-up noted, not owed here: `dispatchManifestPoll`'s best-effort poll logs nothing per failed
   attempt (designed retry; the reconnect path is the loud signal). — Entry 82
 
@@ -426,13 +443,16 @@ and they correlate one-to-one.
   a daemon that is still running is `DOD-SENDRAW-1`'s lie at the CLI surface.** ⚠️ The separate-lines
   "workaround" is not a fix — it only works because human typing outlasts the shutdown; `logout; login`
   in a script races identically. Fix belongs in the PRODUCER (`logout`), never the consumer. —
-  🟡 built + reviewed + merged to cello-client main (`167bb49` + `57e6151` review fixes, 2026-07-10;
+  ✅ SHIPPED (was 🟡) — built + reviewed + merged to cello-client main (`167bb49` + `57e6151` review fixes, 2026-07-10;
   unit-reviewer: SPEC FAITHFUL, both declared deviations verified sound against `connectOrStart`'s
   actual branches). logout now prints "Shutting down the daemon…" immediately, polls (50 ms, 5 s bound)
   until the daemon is genuinely gone, prints "Daemon stopped." only then, and on timeout **fails loud**
   (exit 1, names pid + socket + guidance, never the success line); a stale lock is reported and removed.
   Review F1 was blocking: the fail-loud branch had zero coverage — a timeout printing the success line
-  passed the suite. ✅ when it rides a published cli. — Entry 83
+  passed the suite. ✅ **PUBLISHED 2026-07-11 in cli 0.0.44 (tag v0.0.94): commit `167bb49` verified an
+  ancestor of the tag AND `"Shutting down the daemon"` verified present in the published `dist/`;
+  additionally exercised live this session (`cello logout && cello login` during the migration recovery,
+  which completed cleanly). — Entry 83
 
 > **Triage:** the trigger is connecting to an agent that just started — a first-connect race, and the
 > launch pitch is "two agents connect." The initiator is told the counterparty may be offline when it
