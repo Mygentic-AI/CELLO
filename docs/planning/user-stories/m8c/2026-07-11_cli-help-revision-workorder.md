@@ -43,21 +43,48 @@ not alphabetical — Andre fixed Setup + Agents explicitly; refine the others on
 not "integrations". Implement group + explicit order as registry metadata so the table stays a single source
 of truth (dispatch + help + per-command help all derive from it, as today). Keep the bash-adapter footer.
 
-## 2. Renames (keep the OLD name as a hidden, deprecated alias — pre-launch safety)
+## 2. Renames (CLEAN — no aliases; single user, pre-launch, so update all references and delete the old name)
 
 - **`install` → `bridge`.** Description: **"Bridge CELLO into a third-party agent runtime (Hermes, OpenClaw,
   …)."** The runtime is a PARAMETER — never hardcode Hermes in the description; name the supported ones in
-  parentheses with the trailing `…` (more coming). Keep `install` as a hidden alias.
+  parentheses with the trailing `…` (more coming).
 - **`register` → `register-agent`** (parallel with `create-agent`/`remove-agent`; "register" alone doesn't say
-  *what* you register — Andre). Keep `register` as a hidden alias. **Grep and update every reference**: the
+  *what* you register — Andre). **Grep and update every reference**: the
   onboarding first-run string in `cli-args.ts` USAGE ("First-time setup: … cello register …"), the per-command
   help, the Telegram handoff text, and any doc/portal/ops-agent copy that says `cello register`. A rename that
   leaves the onboarding string pointing at the old verb is a half-rename.
 - **`close` → `close-session`** (Andre: it closes a *session*; this also clusters the session-lifecycle verbs
   `await-session`/`receive-session`/`close-session`, leaving `send`/`receive` as the bare message verbs). Keep
-  `close` as a hidden alias. **Open — Andre's call: `initiate` → `initiate-session`** would complete the
-  `*-session` parallel; left as `initiate` unless he confirms the rename (send/receive stay bare either way).
-- Hidden aliases must be **functional + tested** but **not shown** in `cello --help`.
+  **`initiate` → `initiate-session`** too — it matches the MCP tool `cello_initiate_session` and completes the
+  `*-session` parallel (send/receive stay bare).
+- **No aliases, no back-compat.** There is exactly ONE user (Andre) and no install base (pre-launch), so every
+  rename is a CLEAN rename: update all references and DELETE the old name. No deprecated aliases or alias tests.
+
+## 2b. CLI ↔ MCP name parity — ONE vocabulary (Andre 2026-07-11)
+
+A capability must carry the **same name on both surfaces** — humans and agents learn it once. Two implications:
+
+**Our renames vs the MCP tools (most CONVERGE — the CLI had shortened names the MCP kept verbose):**
+- `close-session` ↔ `cello_close_session` — the CLI rename *closes* a pre-existing gap (CLI had `close`).
+- `initiate-session` ↔ `cello_initiate_session` — **this SETTLES the initiate question: YES rename**, because
+  the MCP tool is already `_session`. Renaming aligns them.
+- `await-session` ↔ `cello_await_session`, `receive-session` ↔ `cello_receive_session` — already match.
+- `bridge`, `register-agent` — CLI-only (no MCP tool); nothing to match.
+- `contacts`/`contact <pubkey> <op>` ↔ `cello_contact_*` — align (list under `contacts`; per-contact ops map
+  to `cello_contact_set_tier/away/moniker/add/remove`).
+
+**PENDING ANDRE'S SCOPE CALL — full reconciliation of the OTHER pre-existing divergences** (the CLI shortened
+these; the MCP kept the verbose form):
+`agents`↔`cello_list_agents` · `inbox`↔`cello_check_notifications` · `sessions`↔`cello_list_sessions` ·
+`transcript`↔`cello_get_transcript` · `sealed-receipt`↔`cello_get_sealed_receipt` ·
+`receipts`↔`cello_get_relay_receipts` · `settings`↔`cello_settings_get/set` · `moniker`↔`cello_set_moniker`.
+(Already matching: `send`/`receive`/`status`/`start-agent`/`stop-agent`/`use-agent`.)
+- **FULL:** pick ONE canonical name per capability, apply to BOTH surfaces as a CLEAN rename (no aliases).
+  Cleanest (true one-vocabulary parity), but a **breaking MCP change** (touches the connect shim tool defs +
+  any skill/doc references) → publish becomes **connect + cli** (+ daemon if IPC method names move). Fine
+  pre-launch (single user).
+- **MINIMAL:** only the current renames propagate (they mostly already match); the divergences above are logged
+  for a later pass.
 
 ## 3. Split `contact` → `contacts` + `contact` (decided: split; Andre may veto to a plain rename)
 
@@ -65,7 +92,7 @@ of truth (dispatch + help + per-command help all derive from it, as today). Keep
   they exist today). Plural, high-level.
 - **`contact <pubkey> <op>`** — operations on ONE contact: `add` / `remove` / `set-tier` / `set-away` /
   `set-moniker`. Singular, per-contact.
-- Keep the old flat `cello contact list/add/...` shape as hidden aliases so nothing breaks.
+- Clean rename of the old flat `cello contact list/add/...` shape — no alias (single user, pre-launch).
 - **If Andre vetoes the split:** fall back to renaming `contact`→`contacts`, keep the sub-verbs, no structural
   change. (He flagged the *mixing* as the thing he dislikes; the split is the fix, the rename is the minimum.)
 
@@ -101,7 +128,8 @@ say so — do not silently drop:
 
 ## 6. Guardrails / process
 
-- Help + renames + split + aliases are **cli-only** (registry, help renderer, dispatch). The two §5 strings
+- Help + renames + split are **cli-only** (registry, help renderer, dispatch) — unless the FULL §2b MCP
+  reconciliation is chosen, which adds the connect shim (+ maybe daemon). The two §5 strings
   are the only daemon-side pieces — decide batch-vs-defer explicitly.
 - Renames update the **tool→command→handler audit map** and every test that names the old command; the audit
   test must still pass (it's the parity guarantee).
@@ -114,7 +142,7 @@ say so — do not silently drop:
 ## 7. Definition of done
 
 - `cello --help` renders **grouped**, logically-ordered sections with **accurate, jargon-free** descriptions;
-  `bridge`/`register-agent`/`contacts`(+`contact`) in place with old names as hidden working aliases.
+  `bridge`/`register-agent`/`close-session`/`initiate-session`/`contacts`(+`contact`) in place, old names gone.
 - `receipts` and `sealed-receipt` are unmistakably different in the help; `send`/`telegram`/`refresh`/
   `sessions`/`use-agent` read plainly.
 - Published to beta + verified against the binary; **HELP-1 closes on Andre's live confirmation** of the
