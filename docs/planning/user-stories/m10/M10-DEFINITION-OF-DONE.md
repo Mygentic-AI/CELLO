@@ -309,7 +309,10 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   - **M10-D13** — late-added agents get account-subject envelopes by **re-mint with supersession**
     (amends M10-D5: agent-add = no-op on verification, supersede on delivery); same-daemon sibling
     copy allowed; directory/portal never hold envelope plaintext. Residual disclosed: out-of-band
-    agent-add waits for the next portal touch.
+    agent-add waits for the next portal touch. **A BRIDGE, not a policy (Andre):** wallet sync
+    (spec §14.11 — content-addressed rows, `INSERT OR IGNORE`) is the real solution and is parked;
+    when it ships, the re-mint pass stops being needed, with no migration (synced row == delivered
+    row).
 - **M10-D4 (2026-07-11, Andre) — Recipient-side storage: store what was presented; evaluate only
   what is presented.** Received signals ARE stored — plaintext envelope rows inside the encrypted
   SQLCipher DB, FK'd to the per-agent contact row, stamped `verified_at`/`received_at` — as

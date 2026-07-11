@@ -116,7 +116,14 @@ this signal minted?", is a violation of this decision.
 *Rejected:* portal-side bookkeeping table — a second source of truth that can only ever disagree
 with the directory (the M8C status-board drift lesson, applied to data).
 
-### M10-D13 — Late-added agents get account-subject envelopes by RE-MINT WITH SUPERSESSION (resolves review F1)
+### M10-D13 — Late-added agents get account-subject envelopes by RE-MINT WITH SUPERSESSION (resolves review F1) — a BRIDGE until wallet sync, not a permanent policy
+**Relationship to spec §14.11 (Andre, 2026-07-11):** wallet sync is the real solution — §14.11
+already conceives it (rows are content-addressed, immutable, sync = `INSERT OR IGNORE`, status
+directory-authoritative), but its mechanism is parked and the backup/restore substitute is
+`not_implemented` daemon stubs today. Re-mint is the v1 bridge: zero new machinery (reuses the
+Tier-1 mint pipeline), covers the normal add-an-agent-via-portal moment. The two compose with no
+migration: a synced row and a delivered row are the same content-addressed row, so when sync ships
+the re-mint pass simply stops being needed.
 An account-subject envelope's plaintext exists only in holder wallets — the portal keeps no signal
 state (M10-D12), the directory persists hash + metadata only (no payload — the no-PII posture), and
 pickup ciphertexts are deleted on ACK. So "seal the existing envelope to a new agent" has **no
