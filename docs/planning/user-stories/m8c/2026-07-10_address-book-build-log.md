@@ -185,7 +185,23 @@ and a REDACT sends the ALTERED bytes, never the draft).
 (engagement-promotes, not accept-promotes), DEC-AB-4 (rename baseline updates on acceptance, not raw
 offer-seen).
 
-**Head commit (cello-client):** `d5557f9`. Client-side only — no directory change, no deploy.
+## DOD-SETTINGS-SURFACE-1 — operator surface for the settings store (added post-audit) — ✅ done + reviewed
+
+The done-auditor flagged that `cello_settings_get/set` existed only as daemon IPC — the tier bound
+overrides and the per-tier/agent-default away messages shipped operator-UNREACHABLE. Andre chose GO on
+adding the surface before publish (don't ship dead features). Commits `2b8c448` (surface) + `1af5bb1`
+(review F1).
+- MCP tools `cello_settings_get`/`cello_settings_set` + CLI `cello settings get|set` — forward-only
+  (D7); validation stays daemon-side (invalid_key / invalid_value; unset→null). Red-first CLI test vs a
+  real daemon.
+- Fable-5 review: FAITHFUL / NO SILENT FALLBACKS / TESTS HAVE TEETH. F1 (LOW, fixed): POSIX `--`
+  end-of-flags terminator so a dash-leading value (negative bound, away text "- back Monday") reaches the
+  daemon. T1 (pre-existing pattern): the argv switch is untested — no binary-spawn infra exists CLI-wide;
+  logged as a follow-up (with the byte-cap 2nd-gate race test), not blocking.
+- Gate: workspace 2025 pass; lint, typecheck, build clean.
+
+**Head commit (cello-client):** `1af5bb1` — origin/main confirmed == HEAD. Client-side only — no directory
+change, no deploy. Reported to Ms_Chelly over CELLO; she owns the delta verify + the one publish cascade.
 
 **Remaining (NOT mine):** Ms_Chelly's publish cascade (daemon + cli version bump, per /cello-publish) and
 the DoD-marker flips in M8C-DEFINITION-OF-DONE / the spec. A tier-boundary cello-done-auditor pass over
