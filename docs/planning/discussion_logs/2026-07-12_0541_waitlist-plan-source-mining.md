@@ -297,6 +297,16 @@ than resolved:
   presumably private/sealed by default (directory never sees content), so the SEO-indexing half of the loop
   doesn't transfer without a deliberate "publish this transcript publicly" opt-in feature — a real product
   decision, not a copy-paste of Notion's mechanic.
+- **Loop vs. funnel framing** (Andre-supplied, strategic reasoning not a data claim — no citation to verify,
+  two of the source list's citations were unrelated Google Vertex AI/Gemini API doc pages, a reminder that
+  citation lists from AI answers still need spot-checking even when the prose reads fine): the new user isn't
+  the funnel's endpoint, they become the next creator/distributor, which is what makes the mechanism
+  compounding rather than one-shot. Practical design test for any CELLO shareable artifact: **"Would someone
+  be proud to share this with a colleague or audience?"** — if yes, it's a viable artifact-loop candidate. The
+  failure condition, stated sharply: **"If the artifact is gated too hard, too private, or too customized to
+  one user, the loop breaks."** This sharpens the privacy-tension flag above — CELLO's default-private
+  transcript needs to clear this bar deliberately (a redacted/anonymized share view, a "here's the shape of
+  what happened" summary artifact, etc.), not assume the raw sealed record is automatically shareable.
 - **The actual template-freebie funnel mechanic** (Andre-supplied, generic pattern — no specific tool named,
   since the sources describing it are pitching paid SaaS which isn't in scope per the no-paid-tooling
   constraint above): create a genuinely useful, narrow-problem template as a free "lead magnet" → **gate it
