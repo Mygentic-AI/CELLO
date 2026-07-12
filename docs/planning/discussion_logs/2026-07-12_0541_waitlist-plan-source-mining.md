@@ -194,29 +194,48 @@ best-fit source in the whole mining pass:
 
 **Correction (2026-07-12):** an earlier draft of this section said existing users could "see who was on the
 waitlist" and choose whom to vouch for — that's wrong and got caught by Andre asking a follow-up question
-("how did that vetting actually work — was it anonymous?"). Verified against a primary source (a Superhuman
-case-study compilation citing the Acquired.fm podcast episode,
-`brandonkboswell.com/sources/Superhuman--History-and-Strategy--Deep-Podcast-Case-Studies`): there was no
-waitlist visibility or anonymous review at all. The actual mechanic, quoted from the source: *"The act of
-referring (or asking for a referral) was itself a strong indicator of interest, and Superhuman further
-qualified these leads by an automated survey process before approving them for 1:1 onboarding."*
+("how did that vetting actually work — was it anonymous?"). First verified against a secondary source (a
+Superhuman case-study compilation citing the Acquired.fm podcast episode), then against the actual primary
+source itself — Andre supplied the full transcript of that episode directly
+(`docs/planning/discussion_logs/superhuman transscript.txt`, Acquired LP Show S4E10, Rahul Vohra interviewed
+by Ben Gilbert and David Rosenthal). There was no waitlist visibility or anonymous review at all. Quoting
+Vohra directly on the mechanic (line 626 of the transcript, itself quoting the show's own written summary):
+*"The act of referring (or asking for a referral) was itself a strong indicator of interest and Superhuman
+further qualified these leads by an automated survey process before approving them for 1:1 onboarding."*
 
-So the real shape is three layers, none of which involve one user inspecting another's data: (1) a user
-refers someone they **already personally know** — the referral is a relationship-based signal, not a
-judgment made by browsing a queue; (2) Superhuman's own automated survey independently screens the referred
-lead; (3) a **mandatory live 30-minute onboarding call**, deliberately non-scaling, doubling as both a
-qualification filter and a research session (ROI estimated ~60x in one source's framing: $30 cost/call vs
-$1,800 LTV). Waitlist size is reported inconsistently across sources (275,000 per
-valueaddvc.com/startupsuperschool.com vs 180,000 per askusers.org — flagging the discrepancy, not picking
-one).
+The primary transcript adds detail beyond what the secondary source had:
 
-This maps to CELLO's endorsement primitive *better* than the incorrect version did: it's a real relationship
-making a real claim ("I know this person, they're a fit"), independently screened by the platform — not
-anonymous crowd-review. CELLO can implement this literally as a signed endorsement from an already-connected
-agent operator, no visibility into anyone else's waitlist entry required. It's also the closest real-world
-precedent for gating access behind genuine technical/operational readiness rather than arbitrary scarcity —
-exactly why CELLO's own queue exists (FROST ceremonies, directory/relay onboarding needing to be proven before
-a flood).
+- **Waitlist size, founder-confirmed**: Gilbert states "you have a wait list of 180,000 people," Vohra
+  replies "that's more or less correct" (line 402–404). **180,000 is the founder-confirmed figure at the time
+  of this interview** — resolving the earlier-flagged 180K vs 275K discrepancy in favor of 180K; the 275K
+  figure's provenance remains unverified and is likely from a later point in Superhuman's growth or an
+  uncorroborated secondary source.
+- **70% of new users each week were "virally referred within product from the previous week"** (line 404) —
+  a precise, founder-stated referral rate, not just "referrals happened."
+- **A public solicitation channel existed alongside personal referral** — this nuances the "only from people
+  you already know" framing. Vohra's own advice for getting access (line 568): *"the best way is to get a
+  referral from an existing user. I would recommend going to search.twitter.com and typing 'superhuman'...
+  You can see which ones the most helpful users are just by who's jumping in on which threads giving out
+  invites."* So there were actually two referral paths: (1) a personal relationship asking someone they know,
+  and (2) publicly searching Twitter and asking a stranger who was visibly handing out invites. Both are
+  still referral-gated (never anonymous waitlist browsing), but the second path means "relationship-based"
+  should be read as "at least a direct ask," not necessarily a pre-existing personal relationship.
+- **Growth was a deliberately chosen weekly cohort size, not a fixed rule**: *"Every single week we just pick
+  a number of users that we will onboard the following week and that's how we grow"* (line 398), explicitly
+  tied to a "pick a weekly growth rate and just do it" operating philosophy. This is a stronger source for the
+  wave/cohort-tied-to-capacity tactic already noted elsewhere in this doc.
+- **Not confirmed by this transcript**: the exact "30-minute" onboarding call duration and the "$30 cost vs
+  $1,800 LTV, ~60x ROI" framing — both remain attributed to the secondary source only. The transcript confirms
+  1:1 onboarding was real and deliberately kept even past the point of scale, but doesn't state a call length
+  or unit economics. Flagging this rather than implying the primary source backs every number.
+
+This maps to CELLO's endorsement primitive *better* than the incorrect version did: it's a real ask from one
+person to another (whether pre-existing relationship or a direct request to a visible existing user),
+independently screened by the platform — never anonymous crowd-review of a waitlist. CELLO can implement this
+literally as a signed endorsement from an already-connected agent operator, no visibility into anyone else's
+waitlist entry required. It's also the closest real-world precedent for gating access behind genuine
+technical/operational readiness rather than arbitrary scarcity — exactly why CELLO's own queue exists (FROST
+ceremonies, directory/relay onboarding needing to be proven before a flood).
 
 ### Position display / scarcity / social proof
 
@@ -278,6 +297,17 @@ than resolved:
   presumably private/sealed by default (directory never sees content), so the SEO-indexing half of the loop
   doesn't transfer without a deliberate "publish this transcript publicly" opt-in feature — a real product
   decision, not a copy-paste of Notion's mechanic.
+- **The actual template-freebie funnel mechanic** (Andre-supplied, generic pattern — no specific tool named,
+  since the sources describing it are pitching paid SaaS which isn't in scope per the no-paid-tooling
+  constraint above): create a genuinely useful, narrow-problem template as a free "lead magnet" → **gate it
+  behind an email-capture step instead of a direct download link** → distribute it (own site, social,
+  submission to whatever the analogous "official marketplace" surface is) → nurture the captured list with an
+  automated sequence, optionally upselling a paid/deeper version later. **Stage 1/3 hybrid**: the gate-before-
+  delivery structure is a Stage 1 activation-funnel tactic (capture intent before granting value) even though
+  the artifact-sharing/discovery half is Stage 3. CELLO mapping: an exported agent-to-agent transcript (or a
+  "starter pairing config" — e.g. a ready-to-run Hermes↔Claude Code connection recipe) could use the same
+  gate: show enough of the transcript/recipe to demonstrate value, but require signup to get the runnable
+  artifact itself, rather than giving the full thing away with no capture step.
 - **Slack's invite loop — UNVERIFIABLE, flagging plainly rather than picking a side.** [flowjam.com, shno.co —
   both independent, but "cross-confirmed" was the wrong word; they're echoing the same unsourced figures, not
   independently corroborating them] Claims: workspace creation triggers an automatic bot email pulling
@@ -352,7 +382,7 @@ detail; this table is the summary.
 
 | Case | Mechanic | Result | Verification | CELLO relevance |
 |---|---|---|---|---|
-| Superhuman | Referral from a personal relationship (not waitlist visibility) → platform survey screen → mandatory 30-min onboarding call | 180K–275K waitlist (sources disagree), $825M valuation | **Verified** — primary source found (Acquired.fm podcast case-study compilation) | **Highest** — closest precedent for readiness-gating + relationship-based endorsement |
+| Superhuman | Direct ask (relationship or public Twitter solicitation, never waitlist browsing) → platform survey screen → 1:1 onboarding, deliberate weekly cohort sizing | 180K waitlist (**founder-confirmed** in the primary transcript, resolving the earlier 180K/275K discrepancy), 70% of new users/week virally referred within product, $825M valuation | **Verified against the primary transcript itself** (Andre supplied the full Acquired.fm episode transcript directly) | **Highest** — closest precedent for readiness-gating + relationship-based endorsement |
 | Harry's | Tiered milestone referral rewards | 100K signups in a week, 77% from referral | **Verified** — traces to Tim Ferriss's original 2014 write-up | Medium — tiered-reward shape is generic, portable |
 | Dropbox | Double-sided "give/get" referral | 3900% growth in 15 months, 100K→4M users | **Verified** — attributed to Drew Houston/Sean Ellis, consistently cited a decade+ | Medium — the double-sided *principle* fits CELLO's real mutual-benefit mechanic |
 | Robinhood | Pure queue-jump referral, no other incentive | ~1M waitlist signups over ~1 year before launch (**corrected** — not 24 hours) | **Corrected** — primary source (Vlad Tenev, Business Insider 2017) contradicted the original claim | High — canonical referral example, but the "instant virality" framing was wrong |

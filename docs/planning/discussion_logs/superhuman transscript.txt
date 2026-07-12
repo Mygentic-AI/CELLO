@@ -1,0 +1,680 @@
+
+transcript
+ • 
+Season 4
+ | episode 
+10
+Superhuman
+Ben: Welcome, Acquired LPs, to a very special episode of the LP Show. David and I are sitting here in Superhuman World HQ on California Street in San Francisco, and we have a dozen awesome guests. Rahul Vohra, CEO of Superhuman, welcome to the show.
+
+Rahul: Absolutely. Thank you both for having me.
+
+Ben: You bet. To give a little brief  bio, Rahul is the founder and CEO of Superhuman, the wildly popular, blazingly fast email app that is changing the way a lot of us think about our relationship with our inbox. Before Superhuman, Rahul was the CEO and co-founder of Rapportive, selling that to LinkedIn in 2012. If you’re noticing a pattern there, I think I definitely am. Rahul is also an active angel investor and advisor to several startups and we are lucky to have him with us today. I already said welcome to the show so I don’t need to say that again, but welcome to the show.
+
+Rahul: Thank you.
+
+Ben: Are we right that this is your second office?
+
+Rahul: This, technically, is our fourth office.
+
+Ben: Fourth office and you’re about 30 people now here, it looks like?
+
+Rahul: We are, yes.
+
+Ben: It’s nice and decked-out in Superhuman colors.
+
+Rahul: Yeah. We do like our pinks and our purples and our blues, although we’re sort of trying to keep the ‘we just moved in’ vibe. We don’t want to go too crazy here. What we found is, we grow so fast that, by the time we’ve made the place nice, it’s like, “Okay, time to move on to the next office.”
+
+David: That’s awesome. The problem with early-stage startup offices.
+
+Rahul: Good problem to have.
+
+David: Yeah, good problem to have. Let’s talk for a minute. Before we go to Superhuman, which we’re going to spend most of the episode on, can you tell us quickly on Rapportive? How did you start it? It was a very quick turnaround.
+
+Rahul: Rapportive was basically started to satisfy my own need. It was a classic case of scratching my own itch. I was at the University of Cambridge at the time and I, in fact, have just dropped out of the PhD program. I started a PhD there in Machine Learning and Computer Vision. This was way before either those things were cool or even  feasible. In any case, I dropped out because I realized that what I wanted to be was an entrepreneur, but I didn’t have an idea at the time what I wanted to pursue.
+
+So, I networked my way into the part of the university that helps staff and students create companies called Cambridge University Entrepreneurs. Essentially what I would do is I would actually come to folks like yourself, VCs, angels, big tech companies, and I would say, “Hey, can I please have some money?” They would be like, “Why?” and I’d say, “Well, I want to give that money to staff and students at the University of Cambridge who are making companies. It’s going to be awesome. Trust me.” These folks would sort of rub their hands together and go, “Cool, how much equity do we get?” I would say, “None whatsoever. This is a charity that we’re running here. We’re trying to help people learn how to build businesses and by their work we’re going to make some amazing businesses as well.”
+
+As we’ve covered multiple times on the show, Cambridge is actually a really great entrepreneurial hub. ARM came out of Cambridge as did many other companies. Everything’s crazy. ARM, Cambridge Silicon Radio, let’s see who else. There was that company that Qualcomm acquired. I forgot the name.
+
+Ben: And wedding companies, too. My partner, Rylie at Wave was a graduate student in Cambridge, as well as our friend, Nells at Eventbrite, and plenty of Silicon Valley has come from Cambridge in the UK. These VCs should have given you money.
+
+Rahul: They did, they did actually give me money in the end but the point of the story is I was thrust into this not-for-profit fundraising at a very young age, with no training in this field whatsoever. Having grown up learning how to program and being a very competent programmer at the time, I was just wondering to myself on what tools would help me do this fundraising better.
+
+I imagined if in my email I could see what people look like, where they were based, links to their recent tweets, links to their social profiles, then I would be able to authentically connect with that person and establish rapport so much better. Hence the idea behind Rapportive. I couldn’t find that product in the market so in about six weeks, I just sat down and build that first version.
+
+Ben: That was totally magical. I remember the first time I installed, the plugin was first for Gmail and then Chrome? What was the implementation of that?
+
+Rahul: It was in fact always a Chrome extension. Although, before it was a Chrome extension, technically it was a Firefox extension. This was in 2010 when people, it’s kind of hard to remember now, but people were still skeptical that Chrome was a great thing. The taste makers at the time, we were all sitting in Firefox. So, it started as a Firefox add-on and later on it was a Chrome extension.
+
+Ben: I do definitely remember that eye-opening experience that you can type someone’s email, then a second or two goes by, and then boom there’s all this enrichment about them. Now, it’s taken for granted because this idea has permeated into other products throughout the years, but there’s really something magical to it.
+
+David: How did the connection with LinkedIn happened? We’ve also talked a bunch upon the show about the importance of email to LinkedIn until LinkedIn’s growth on onboarding, so imagine you popped up on their radar screen pretty quickly. What was the relationship like?
+
+Rahul: We had a great relationship.Ultimately it ended up in a technical consummation that acquired us. Initially, like many acquisitions, it started with a  business development relationship. The way that that transpired was we were consumers of an API at the time provided by then, if you guys remember, a company called RapLeaf.
+
+David: Oh yeah, totally.
+
+Rahul: RapLeaf was one of those first companies to whom—
+
+David: RapLeaf was first acquired then, I think?
+
+Rahul: No. RapLeaf ended up, transmogrifying to some degree, they became LiveRamp, then they were acquired by Acxiom and have recently spawned out a large public company. I think they’re now worth $3 billion or more, so they’re doing really well. But back in the day, it was a relatively small startup called RapLeaf.
+
+Despite their small size, they were the only company—remember this was back in 2010—to whom you could supply an email address. They would give you the full social context about that email.
+
+Ben: Today that’s FullContact, Clearbit, those are the sort of providers that would be their comps today.
+
+Rahul: Correct and there are others as well. Now it’s sort of an almost a commodity marketplace for that data. But back then, it was the sort of edgy, crazy, new thing that you are able to do. To me being an opportunistic entrepreneur. I was like, “Cool. Let’s take this API, let’s package it up,” which actually wasn’t a crazy amount of work, “and let’s jar it into Gmail via their browser extension.”
+
+That’s where the data came from. Now, you can imagine that LinkedIn were none too pleased about an upstart selling their data.
+
+David: Totally and LinkedIn famously has always made it really hard to get mass quantities of data out of their VIB because they have a network effect.
+
+Rahul: Indeed and we definitely didn’t want or need mass quantities. Everything, by the way, that we were doing was for the benefit of LinkedIn’s hardest core members, which is ultimately why it was such a good relationship with them.
+
+They approached us at one point and were like, “Hey, listen. We really would prefer it if you were not buying our data off third parties.” I was like, “Cool, I would really prefer it if I have access to the API.”
+
+We both stated our preferences for a while until, I think a few months later, we realized that maybe an actual business development relationship would be the best thing, which was truly remarkable because I think at that point, in fact, it never grew beyond us. They were only ever about 20 companies that had access to this secret LinkedIn API.
+
+David: Wow. That’s awesome. That was probably right around the time of their IPO, right?
+
+Rahul: This would have been halfway through 2011. I don’t recall exactly when their IPO. It would have been around that time.
+
+David: It was either end of 2011 or the beginning of 2012, I believe.
+
+Rahul: Yeah, the chap I was dealing with is Adam Nash, who went on to be the CEO of Weltron, is now Dropbox, and he was super nice about it. So, I went in and he was like, “Can you demo what you would do with the LinkedIn API?” I showed him the work flows. He was looking for things like, “Is the copy helpful? Are we trying to deceive users?” Clearly no. “Are we stealing data?” Absolutely not. “Is it for the value of the LinkedIn member?” Yes, it is. He was like, “Okay, great. You should be a partner.”
+
+Ben: I personally wanted to dive into that, to give context on how we got to where we are today. What I’d love to start to stir the conversation to is the founding of Superhuman. David and I have previously talked a couple times on the LP show about things that companies do pre- and post-product market fit and definitions of it, but the whole hue at Superhuman have actually built metrics around it and found systematic and scientific ways to find product market fit. I’m teasing our analysis section here later because I want folks to know that we’re going to dive into the founding of Superhuman right now.
+
+Where we got eventually is to a company that waited over two years to launch and really built something amazing in a very both art- and data-driven way. Then we’re going to dive in and tell that whole story, but talk to me about the initial idea for Superhuman, where it came from, and how you convinced yourself that there’s a business to started selling a new email platform.
+
+Rahul: It isn’t necessarily obvious from the outside. I do agree with that. At LinkedIn, I ran all of our email integrations. It  was my responsibility, rather, to get LinkedIn data, LinkedIn profiles into other email clients. So I became very familiar with how professionals do their email. The TLDR is badly.
+
+So, I took a year off after I left. During that time I was looking for what I wanted to start next. Due in part to the IPO and to the acquisition, I was very fortunate to be in a position where I didn’t really have to work. So I focused on impact. What was the biggest thing that I could possibly do? My mind kept going back to a 2012 McKenzie study where they showed that the average professional—there are one billion professionals in the world—spends three hours a day reading and writing email.
+
+Ben: It’s not hard at all to believe.
+
+David: 100% right. It’s crazy.
+
+Rahul: I mean, it’s just mind-blowing. During my year off, every single day, I was doing the very simple math. One billion professionals times three hours a day is three billion hours a day that go into email and I couldn’t find, I couldn’t think of anything bigger than that to do.
+
+David: A market that big and nobody had built a business on it.
+
+Rahul: Correct. People were scared because Microsoft and Google between them had systematically almost prevented startups in getting this area. It was during that time when I looked very closely at how people were feeling about Gmail. Bizarrely, I saw this product get worse every single year. I think because I was building on the Gmail, well it’s not really a platform because I was building a Gmail browser extension. I could have a front-row seat to what was happening here.
+
+I saw the product becoming more cluttered using more memory, consuming more CPU, slowing down your machine, still not working properly offline. Then on top of that, people were installing plugins, like ours Rapportive, but also Boomerang, you’ll remember, Mixmax, Clearbit, you name it.
+
+Ben: They have it all sorts of…
+
+David: ...streak and what have you here.
+
+Rahul: Right. It’s kind of guilt-inducing for me because Rapportive was the first to get to billions of users and I’m like, “I am sorry, guys. I did not intend it to be this way.” It actually makes me sad.
+
+David: One of the rules I think we’ve talked about at various points on the show before, all rules and startups inventors were meant to be broken, but you can’t build a big company on the back of somebody else’s platform. There are very, very few examples and as long as Gmail and Microsoft are the platforms and you’re just building plugins—Rapportive being the most successful among them—you’re just going to be a plugin.
+
+Rahul: I think that’s true, although I would like to see, for example, Grammarly be the exception to that rule. I think at this point, they’re probably the highest-valued, most successful plugin business. Fingers-crossed, they actually break the barrier and break out since their own thing. But you’re right. That there’s a lot of existential crisis around there.
+
+Ben: Can I ask when you were thinking about what to start and you were fully impact-driven on that, was your mind able to go to places that weren’t email? Is it that you knew it so well that you felt that you were uniquely positioned and owed it to the world to fix that problem? Or was it more like, “I tried to think of other stuff and email is where my head was”?
+
+Rahul: I did absolutely go to other ideas. I spent time in the summer of 2014 researching any number of things I could do. I got quite deep into what you would now call Concierge Health. An on-demand doctor who might turn up and sought you out with whatever ailment you might be feeling. Again, I saw the potential for a very large amount of impact there.
+
+But it’s interesting that you mentioned this idea of owing it to the world. I very much felt like I did and still do. I do believe that there is the perfect startup for every founder. The one where, if you do it, you have an outsized chance of success. The story arc is just perfect. It’s kind of a startup where if you do, everybody will cheer you on because they want you to succeed, because it feels like it should be destiny that this thing works.  That startup exists for most founders. For me, I believe that it was Superhuman. It was the natural, logical, progressive evolution from Rapportive. It is the thing that we always wanted to build anyway. Almost actually the solution to all the problems that we created whilst we were messing around with Rapportive.
+
+David: You just said it. It resonates so much because at this stage that we invested in, where even the PSL works out, I have some version of that conversation every week. I’m just curious. Were there people who helped you through that phase or was it a journey you had to go by yourself to realize the destiny is Superhuman?
+
+Rahul: There were definitely lots of people who helped me through that phase. We just mentioned Adam Nash earlier. I remember, when I left LinkedIn, he was CEO of Weltron at that time. I went to him and I said, “Hey, I have this idea for a new email experience. It’s called Superhuman. Here’s what it’s going to do. It’s amazing. I want to go and start it.” He was like, “Whoa, slow down. Are you going to take any time off?” I said, “Yeah, I’m planning to take some time off.” He said, “Well, how much time do you think you need?” I said, “About three months.” He was like, “Wrong. However much time you think you need is actually more like three times that. You probably need nine months off.”
+
+In retrospect, he was completely right. I ended up taking about nine months off before I felt comfortable settling into what was essentially the same business idea that I’ve been working on for about four years.
+
+During that time I did explore a lot of some other ideas. I had a few mentors that I would constantly bounce concepts off. But I just felt myself always coming back to this one idea because—it’s hard to explain—I just couldn’t stay away from it. I think that’s a good sign when you can’t stay away from an idea, it’s a strong indication that you should probably go and do it no matter how bad the idea is.
+
+David: It resonates so much certainly for me in starting Wave and it seemed for you in [...], for Kimberly Glow, like everything acquired totally.
+
+Ben: Okay, so Superhuman.
+
+Rahul: Superhuman is the fastest email experience of all time. Our users get to their inbox about twice as fast compared to in Gmail. They respond more quickly to the emails that matter and many of them see inbox zero for the first time in years. You can imagine that’s pretty life-changing.
+
+David: Tell me more.
+
+Ben: You’ve never said that before, I’m sure.
+
+Rahul: I wake up saying that everyday.
+
+Ben: Not to overly fanboy here but I can absolutely vouch for all of that and especially in a day like today where I’m down in San Francisco and traveling, literally feel like I have superpowers plowing through my email at the end of the day. You guys have built something amazing.
+
+Rahul: Thank you.
+
+David: Either during the nine months or at the end of it when you first start working on it and then into your process will get to before you launched, there are couple of value props in there but one of them is like fast rate. Did you land on that? How quick did you get to that or whatever like in your mind is the most specific value prop you needed to nail?
+
+Rahul: Speed was a value prop from very early on. I think as I introspect this, it came out of some of the frustrations developing Rapportive on Gmail. Obviously, Gmail at the time was my primary email interface. I was the founder and CEO of that startup and I was doing a lot of email-based work, so I was intimately familiar with how slow Gmail was and how slow it was getting. I had therefore this hunch, this inkling that speed was going to be a very big deal. But like with any hunch or inkling, one does have to validate it.
+
+In the first year of Superhuman, as we were primarily building, we threw up a landing page. It was a terrible landing page, just a basic Squarespace thing that took us all of two hours to put together. All you could do on this page was throwing your email address. When  you threw in your email address, you got an automatic email from me. In that email, there were two questions. Number one was what do you use for email today and number two was what were your pet peeves about it.
+
+I had two hypotheses going in. Hypothesis number one was that for Gmail, people were upset about how slow it had gotten, how it wasn’t working properly offline and how they had to use Gmail plugins to make it do the things that they wanted to do. Then for third-party email clients, people were upset about how buggy they were, how unstable they were, and how they don’t sync properly. All of which are still true today.
+
+David: So much head-bobbing on this side of the table.
+
+Ben: You’re talking to an Apple Mail convert.
+
+Rahul: Oh boy. Yeah, I feel for you. We have to validate that. In that first year of Superhuman. I think that we had maybe in the region of 5000 signups on that landing page, 5000 emails that went out, a thousand conversations actually happened, therefore, a thousand interviews I did with early users, probably way more than most founders would actually do.
+
+Resoundingly those two hypotheses were confirmed. People disliked Gmail for the speed, the lack of offline, the clutter, and the plugins, and people disliked third-party email apps because of the stability, the sync, and the bugginess.
+
+Ben: How did you drive traffic? How did you get top-of-funnel to get all of those responses on your landing page?
+
+Rahul: In the early days of the startup, this is what we did. The best way to do it is to pick one or two events per year where you can insert yourself into the cultural zeitgeist. For us, one such event was when Mailbox was being shut down.
+
+Ben: RIP.
+
+Rahul: Yeah, sadness, right? But it was the perfect narrative to say, “Hey, I’m over here. Come look at our company.” The trick when doing these is to think of interesting evergreen content. You guys are the perfect people to talk to about this. You know more than anyone else just how hard acquisitions are. I currently have one of the most widely-read articles on how to survive an acquisition and it was written in response to the mailbox shutdown.
+
+Ben: I think it's your only Medium post, right?
+
+Rahul: It's probably my only Medium post, correct because, sort of second part to your question, I usually actually end up syndicating posts. You get far more reach that way.
+
+That post ended up on Medium, also was syndicated to qz.com. Yes, it was about how you survive an acquisition. We were able to insert into the zeitgeist because relevant to our company, some news event was happening. I think if we as founders think hard enough, there's probably one or two things a year where that's true. You only need one of two things here. Now, it's a pretty intense period, I think, to write that article. It probably took me about three days and not doing anything else. Then another day of shopping at around. So, four days all in. But those four days bought, I don't know, north of 5000 sign-ups. Those are the sign-ups that you need to validate your initial idea.
+
+David: Yeah. When you saw the news, how quickly did your mind go to opportunity like, “I'm now going to take four days to do this”?
+
+Rahul: Practically immediately. Immediately I said to the team, “This is something that we need to capitalize on and take advantage of. We have to make ourselves relevant.” We didn't actually do anything—this is just often how startups go—until there was about a week to go.  The last week was an extreme scramble. I was like, “Remember that idea that we had a few months ago? We need to do it right now.”
+
+David: Amazing.
+
+Ben: Yup. Startups. Before we get into our discussion, I want to talk about a kind of provocative question. Have we reached the end of the era of the MVP or ship-a-crappy version? But before we get there, for the listeners who don't know, Superhuman cost $30 a month for an email client. Talk about a narrative violation. I think the last browser that tried to charge for you to use was OmniWeb in the early 2000s. I think it would be absolute heresy today to say, “It's not even a mail service, it's backed by Gmail. It's an application through which to interface with Gmail. But boy is it great,” and, “Oh my gosh, I pay $30 for it.” How did you come to a revenue model of, “We're just going to ask people to pay”? How did you pick a price point? And how did you validate it?
+
+Rahul: I think overall with pricing strategy, you have to analyze what you're going up against. We were going up against free or nearly free. Gmail and Microsoft are practically free if you are a consumer and if you're in the enterprise, it’s being paid for you anyway, so you don't see or feel the cost. The only way to win, and I think it's Reid Hoffman who popularized the following statement, is to be contrarian and on right. I don't necessarily know how to be right but I do know how to be contrarian. There's nothing more contrarian in against a free product than to charge as much as seems reasonable or maybe even more than seems reasonable, but then to back it up with the goods that actually make it worthwhile.
+
+Before we tried to address pricing, we actually first addressed our positioning. We ran through a series of questions. I'm a car guy so a lot of my analogies have to do with cars. For example we asked ourselves, are we the Ford of email? No, not really. Are we the Mercedes of email? Not quite but maybe we're getting there. Are we the Tesla of email? Okay, this is beginning to feel about right.
+
+There's a classic positioning game that you can do. It's a little bit of a Mad Libs exercise where you say, “For a target customer who has a need or an opportunity, my product is in this category and this key benefit, unlike some other competitor product, will create this primary differentiation...”
+
+David: From crossing the chasm.
+
+Rahul: Is it?
+
+David: Yeah. I believe Geoffrey Moore in Crossing the Chasm came up with that frame and it's been used many times for that.
+
+Rahul: Got you. I'm clearly not as widely read as you are.
+
+Ben: David’s a frameworks guy.
+
+David: Well, when you go to business school, you learn a lot of useless trivia.
+
+Rahul: So, I actually found this piece of wisdom as I find much of my wisdom off the First Round Review Journal, which is incredible, and it was written by Arielle Jackson, who listeners may not know but she was the Product Marketing Manager of Google who launched Gmail. I have to meet her and fortunately, we were a first round investment so that was very easy.
+
+I got to spend a lot of time with her working on our positioning and I have it right here. We came up with, “For founders, CEOs, and managers of high-growth technology companies who feel like their work is mostly email, Superhuman is the fastest email experience ever made. It's what Gmail could be if were made today instead of 12 years ago. Unlike Gmail, Superhuman is meticulously crafted so that everything happens in a hundred milliseconds or less.” We've since expanded beyond that very, very...
+
+Ben: That’s very narrow.
+
+David: That's so great.
+
+Rahul: That's what you have to do. You have to start with something that narrow.
+
+Ben: Is there a risk in starting with something that narrow that you're not going to be able to expand outside of it? Or do you feel like if you can nail it that core group, then you're always going to be able to find more room around the edges?
+
+Rahul: Very much the latter. I think we should come back to that point because I have a thing that I should probably share with the listeners, just to tie the positioning back into the pricing because this is a very methodical exercise that we ran through.
+
+Step one is understand the lay of the competitive environment. In our case we were going up against two incumbents whose products are free or practically free. Step two is come up with the positioning like I just described. When you read our positioning, it's clear that Superhuman is a premium tool for a premium market. Step three is develop your pricing. There are many ways to develop pricing but one of the easiest ways—this will appeal to the business school guy in you—is the Van Westendorp Pricing Sensitivity Meter. I see head nods going on over here.
+
+Ben: It sounds like a fancy name.
+
+David: Yeah.
+
+Rahul: It's just some dude's name, I think. He's probably very smart, very clever, did a lot of pricing. Anyway, he said, "Ask your target users four questions. Number one, at what price would you consider Superhuman to be so expensive that you would not consider buying it? Number two, at what price would you consider Superhuman to be priced so low that you would feel the quality couldn't be very good? Number three, at what price would you consider Superhuman to be starting to get expensive? It isn't out of the question but you would have to give some thought to buying it. And number four, at what price would you consider Superhuman to be a bargain, a great buy for the money?"
+
+Most startups actually orient around the fourth question, the bargain for the money because there's some kind of network effect, or a greenfield effect, or they're trying to take advantage of a first-mover effect, or so on.
+
+Ben: So there's a land-grab. They want to go get all the users, so we may as well price as low as we can to get them all.
+
+Rahul: Exactly, which is why most founders I know have the experience of a  board meeting where your board members are like, "Hey, maybe you should half the price. Maybe we should just make this free and give this away for good."
+
+David: Oh good. You’re going to give me the heebie-jeebies here.
+
+Rahul: Wait, have you done this to founders?
+
+David: I've done this, yeah. They did the cardinal sin here. Guilty as charged.
+
+Rahul: My point is it's actually entirely the correct thing to do if you're building in a new market or there is a land-grab or first-mover advantage that you're trying to chase.
+
+David: However, it's definitely not the case with email.
+
+Rahul: Not the case with email where there's a big incumbent and the competitive products are great. Startups like Superhuman should orient around the third question: when does it feel expensive but you'd still buy it anyway? That makes sense if you’re building a premium product. For us, the median answer to that third question was $30 per month. That's how we picked the price. We very methodically went through competitive landscape positioning and then pricing using this very simple pricing methodology.
+
+David: Were you using people who are engaged to the survey that you were driving traffic to?
+
+Rahul: This was actually well before we started doing the service. This is when were onboarding our first 100 customers. I did all of these manually in the onboarding. These onboardings used to be much longer, they were 1–1½ hours. I'd give them a demo of the product, and then I'd look them in the eye and I'd be like, "Hey, this is the thing that you have to pay for."
+
+David: They didn't know going into the demo.
+
+Rahul: They kind of knew but I was reminding them.
+
+Ben: You can't see Rahul right now but it's almost like there's a terse dad look that he's giving you. It's like, “Now son, I have some news for you.”
+
+Rahul: I would actually very sternly look them in the eye and say, "Hey, this is the thing you have to pay for. Can I ask you a few questions about how you feel on pricing?" And they'd be like, "Yes." Then I'd just go into it. I'd write down the numbers and after we've done a hundred of these, the answers were pretty clear.
+
+Ben: That's awesome.
+
+David: That's amazing. You haven't changed the pricing since?
+
+Rahul: Well, actually the initial pricing was $29 per user per month. We didn't think too hard about that. It seems to be the right price, roughly the right order of magnitude. Then I had a few conversations with some pricing experts who pointed out that if we're truly owning the premium experience now category, then ending your price with a nine probably isn't the best thing to do. So, we pretty quickly rounded up to $30 per month.
+
+David: Interesting.
+
+Ben: That's fascinating. I never thought about that before, especially because Apple does $12.99 for your iPhone. I know Walmart undercuts it like $12.95. That's super interesting psychology.
+
+David: Wow. Super cool. You said you wanted to circle back on positioning.
+
+Ben: Yes. Let's dive in now to this analysis section. For listeners I want to set the stage on sort of a timeline for this whole thing because I do think it's kind of crazy how long it waited before seeing the light of the day. When did you break ground on designing Superhuman? When was the first line of code? When did you start rolling out to these first hundred users?
+
+Rahul: I first started sketching out the concept and the business model for Superhuman in February of 2014. That's five years ago now. Or more, rather. Then it wasn't until nearly a year later in January of 2015 when I started designing the product. That's when I first put pen to paper. I wrote the landing page before I did anything else. All of the copy that you see on superhuman.com is actually copy that was written in January 2015. I created hundreds of detailed wireframes.
+
+The first line of code was not written until May the 4th in 2015.
+
+Ben: Just to get nerdy-like, how were you doing the wireframes? Is this in Sketch or you're literally sketching it out? What's your preferred methodology here?
+
+Rahul: It depends on how clearly I can see it in my head. It will often start with an extremely sketchy sketch on paper. Then once I can begin to see it, my tool of choice is still Balsamiq, I'm kind of old school about this. I can use it extremely fast, way faster than I am in Sketch. That's where I did it in.
+
+Ben: It's your Superhuman of prototyping technology.
+
+Rahul: Pretty much.
+
+Ben: Okay so you started sketching for a year, then did a year of design after that?
+
+Rahul: In the week after I left LinkedIn, in my gusto to get something done, I actually went out and pitched a bunched of VCs that same week. This was the February of 2014.
+
+David: This was before Adam Nash's advice to…
+
+Rahul: Yeah, he was like, "Yo, chill out bro," which was great advice. So, I had term sheets at that point. I could have raised money, but he suggested as did many others who knew me, they were like, "Listen, you're really burned out. Maybe you don't see it yet." I did go through this rollercoaster of emotions in the following months as I was processing the burnout from the last four years.
+
+Let's say that there was a few weeks in early 2014 then most of 2014 was time off. Then I really got going again around Q4 of 2014. My advice to any listener who's going through the same thing or who shortly will be is don't try and just jump straight into it. You can’t go from being a professional party animal like I was into, “Okay, I'm not going to do 12-hour days again.” It just doesn't work. I went from not working to four hours a day, to five hours a day, to six hours a day. I slowly built that muscle memory back up. The first few things were things like, “Let's buy superhuman.com. Let's investigate trademarks. Let's raise some seed capital.”
+
+David: Were you pulling together a team at this point, too?
+
+Rahul: I was trying to, but that is a longer term thing. There are things you can do even when you don't have a team. What I did in Q4 was I bought superhuman.com and I raised about $750,000 of seed capital. Then in January, I did the wireframes. Then in February, I engaged with a design agency to make those wireframes into really beautiful high-fidelity markups.
+
+Ben: I think that’s a little bit of a contrarian thing to bring in a design agency. It’s sort of that early in a startup rather than hiring a designer or doing it inhouse.
+
+Rahul: It is and it’s turned out to be super expensive compared to hiring a designer. I think I spent $45,000 on turning these wireframes into high-fidelity markups. Speaking of frameworks, I do have a framework on this which explains why I think it was the rational thing to do in my case, if you want to hear.
+
+Ben: Absolutely, yeah.
+
+Rahul: Okay, cool. I think the fundamental job of a founder is to create momentum. In my mind I like to imagine this gigantic flywheel and it’s made up of the most dense material in the universe. The job is to get this thing moving. Most founders, the first time are probably technical. The way that you get this flywheel moving is you make a thing, you launch a thing, and hopefully, people like your thing and it starts moving by sheer force of use and numbers. This was certainly how Rapportive worked. It took me about six weeks to build the first version. Tens of thousands of users in 24 hours and it just kept on growing up dramatically thereafter, which is cool. So the flywheel just started moving  by itself. At that point it’s like, “Okay, can I now hold on to this thing?”
+
+When you are a second-time founder and you’re coming back as it again, you get to do things in weird, strange orders but still moving the flywheel. For example, the money, that initial $750,000 that was raised in 2014 for Superhuman, was raised on the basis of primarily one slide where I took a screenshot of Gmail and I just redlined out everything I didn’t like. I said I’m going to make this pretty and fast. You’ll believe me because of what I did previously.
+
+David: Because you built Rapportive.
+
+Rahul: Right. There is no execution risked here. I know how to build the thing, I know how to hire the team, I know how to market the thing, this is what I’m going to do. That $750,000 starts this flywheel moving. Now I’m like, “Cool, a single founder, I’ve called this money in the bank, I’m not paying myself, obviously, I don’t need to do that. What else can I do to get this flywheel moving? Well, that domain name looks pretty juicy. Let’s see if I can make that happen.” The guy who sold it to me wasn’t the most pleasant of individuals.
+
+Ben: They never are.
+
+David: No, never fun.
+
+Rahul: He took up perverse sense of enjoyment out of sending me abusive, insulting emails. But fortunately I didn’t have to deal with this myself. I hired an expert broker to go after the man. We ended up getting a very good deal, but that’s another example of how you can get this flywheel moving.
+
+You might think as many people said at the time, “Well, so you just raised $750,000 and you’re going to spend 20% of it or something on buying a domain name? That’s crazy.” I know how would you feel about that as a seed investor.
+
+David: Yeah, I would feel like we need to have a conversation. How about a .co?
+
+Rahul: I think I did buy the .co and then I let it lapse, so someone else probably has it now. In any case, I thought about it long and hard. I realized that in the grand scheme of things, this is going to turn out to be no money whatsoever. Most importantly, this is a sign to the world that this flywheel is moving.
+
+Ben: We’re serious about this.
+
+Rahul: I’m super serious about this. The people I’m really signaling to at this point are potential co-founders, number one, and potential investors, number two.
+
+David: Once it comes back to the market, if you were trying to create a new market, it would be wholly irrelevant, right? But you’re trying to compete with established entrenched competitors, back to your positioning, you are the Tesla, not the EV1.
+
+Ben: Which, of course, Rahul is staring at us like we’re crazy. Of course you wouldn’t know because it wasn’t the Tesla.
+
+David: Right. Before the Roadster, before Elon Musk joined Tesla, there is the EV1.
+
+Rahul: Yeah, that was a pretty terrible name.
+
+Ben: Actually it was the TZ row. That’s because it was like the mathematicians look at time in TZ row.
+
+Rahul: That’s kind of cool. Although it just reminds me of a terminator.
+
+Ben: Yeah, right.
+
+Rahul: That sort of murderous connotation that you probably don’t want a self-driving car. In any case the flywheel, the domain was another piece. Then the landing page, like a really well-crafted landing page, where every single sentence had been iterated hundreds of times over. I’m not even exaggerating, by the way. I spent 4-6 weeks writing the copy for the landing page. Then another six weeks doing the wireframes. Then $50,000 to the design agency to create these beautiful designs.
+
+These are all examples of how a single founder, who once upon a time is technical—I wouldn’t claim to be particularly technical nowadays—is an example of how a single human being can start the flywheel spinning and that helps both with recruiting co-founders as well as with raising investment.
+
+Ben: I’m going to catch us up on the timeline. It’s summer 2017, we started in February 2015, so we’re 2½ years in. It’s a 14-person team, still haven’t shipped. This is freaking heresy for startups that are supposed to be embarrassed of your first version. There’s this famous sort of Reid Hoffman mindset, if you’re not embarrassed by the first version of your product, you’ve launched too late.
+
+Could Superhuman have done this and put maybe your worst foot forward to get some signal and then iterated, iterated, iterated? Or did it have to be done in this way where you and a team went away for 2½ years and created the magic internally?
+
+Rahul: I think it had to be done this way. I noticed with almost every single other email app, every single other productivity app, they went through the following motion: they would raise some seed money, they would make a thing, it wouldn’t be a very good thing, not because the teams weren’t talented or well intentioned, most people here are…
+
+David: But you’re competing with Microsoft and Google.
+
+Rahul: That and the domain is so inherently complex. It is a very, very difficult thing to build an email client that people actually want to use. It does take more than two years. I challenge anybody to do that faster. I don’t think it’s possible.
+
+The same is true, by the way, of a web browser, or the database, or the compiler. Any sufficiently hard productivity tool will take many, many years to build. Back to the Reid Hoffman quote, I’m still embarrassed today by many aspects of Superhuman. I probably always will be. I think Reid is actually still correct. The nuance here though, and I think this is the question that you might be asking, is how applicable is the advice to Superhuman? I think his advice applies most to startups that are creating new markets, and especially to startups that have network effects.
+
+For startups that are creating new markets, the alternative is usually a terrible experience. You guys will talk about this on Friday but remember, trying to hail a cab in San Francisco before Uber existed.
+
+David: Well you could use the Cabulous or Taxi Magic, but yes.
+
+Rahul: I remember standing in the rain, which of course made everything worse, on the Embarcadero for 30–40 minutes waiting for a taxi to arrive. They keep on wheezing by you. It was the worst thing.
+
+David: But exactly to your point there was a moment in time, after iOS was opened to third-party developers, where the time had come and there were probably seven legit companies that all got started and then it was like, “You need to ship yesterday. You need to move as soon, as fast as possible, lock up all this flying [...].”
+
+Rahul: Exactly because at that moment some time, anything you release, even if as Reid says it’s embarrassing to you, is going to be worth it for a critical mass of users, and that gives you a small advantage. When you have a network effect, as all of these companies did, that small advantage is going to start compounding on itself. Great for that kind of company. But for a startup like Superhuman...
+
+Ben: ...in an existing market.
+
+Rahul: Exactly, where the alternative product is Gmail, and without an explicit network effect built into it right now, the bar is very different.
+
+David: I want to double-click a little bit on that network effect piece. Obviously, Rapportive had a network effect or at least you were building on other people’s network effects, maybe a more accurate way to put it. Were you intentional about at least this first act of Superhuman not being a network effect business?
+
+Rahul: I do actually think that Rapportive had a network effect. We may be using the term in a different way. By network effect I mean where the value of the product becomes more valuable to more people using it.
+
+David: That’s what I did. I called myself [...] You didn’t, really. You were building on the fact that LinkedIn had that, and then you were using their data.
+
+Rahul: Yes. I think it’s always great if you can build a network effect. We believe that with Superhuman, there are underlying network effects that will become apparent overtime. In the meantime, we don’t need one. The reason why we don’t need one is that we can solve the marketing and the retention challenges in a different way, which we've been able to by making the products very desirable, very viral, and very sticky once you actually start using it.
+
+Ben: Yup. So you mentioned competing in an existing market where the bar is already very high versus a land grab opportunity as a framework for. Can you sort of take your time, be intentional and methodical, and frankly spend a good amount of money developing your first version of your product? Are there other vectors on which to decide whether you need to launch yesterday or you can take your time other than that market timing?
+
+Rahul: Yes. So I have another framework for you.
+
+Ben: Excellent. David be very excited.
+
+David: Yeah.
+
+Rahul: I can see you grinning as we speak. I'm not going to claim credit for this one because it's not mine but it is, “Oh boy, it's right.” So this one came to me from Shishir Mehrotra. He is founder and CEO of Coda, another great productivity tool. We were talking about our respective attitudes to launch. As you've been alluding to Superhuman has, at this point, so famously held back from a public launch, so too has Coda and he was able to put into words what I had been feeling for a very long time. He said, “A startup should only launch for one of three reasons: number one, either you need more users or customers to sell to. Number two, you need more capital to spend. Or number three, you need more candidates to hire.”
+
+If you’re benchmarking well across all three, if you are attracting all the users you need to, if you have all the capital you could spend, and if you have no trouble hiring, then why would you launch? It's a relatively expensive, distracting, one-time event that's going to bring an influx of people into your product. They'll find a myriad of bugs because, of course, first rule of startups, we don't have perfect products, and you won't be able to fix them on a responsible timeframe. So you'll just end up with thousands, if not tens of thousands, of disappointed people,” and I was like, “Yes, that's exactly the problem.”
+
+Ben: What he said.
+
+Rahul: True. This is the problem that happens in productivity. So, we just decided that we wouldn't. Who knows, maybe we never will launch.
+
+Ben: You pre-launch today, right?
+
+Rahul: At this point it's like we have a lot of users, we have a lot of revenue, we’re growing very quickly, are we pre-launch. Who knows? I think we're just doing it in a very different fashion. The way that we actually model the company is from my favorite Paul Graham essay, Startup = Growth. This is such a good essay, probably his best.
+
+For listeners who don't know, he basically says, the most important thing a startup needs to do is to grow. Especially if you're a technology startup, you probably like to optimize things and you like to optimize things on a short-term basis. So, let's optimize short term growth rate. Pick a weekly growth rates that you like. It might be 2%, it might be 3%, it might be 4% per week, and just do it. Do it every single week and you will shocked at how fast you grow every month and every year. We've been running Superhuman that way for the last two years. Every single week we just pick a number of users that we will onboard the following week and that's how we grow.
+
+David: You have the finest control knobs on that of any company I've ever heard of.
+
+Ben: Well, I mean you have a wait list of 180,000 people who are dying to use the product and can't. You just choose every week how many of those people you’re going to let in. Is that about capture it?
+
+Rahul: That's more or less correct. Although I would say that the wait list is a relatively small funnel into the product. The fastest way in. One of the reasons why Superhuman is so exciting is that each week 70% of our new users are virally referred within products from the previous week.
+
+Ben: Fascinating. Do you put a governor on how many referrals can start the next week or if you're referred, is it we will grant you an access no matter what?
+
+Rahul: There’s still a qualification process. We’re pretty clear on who Superhuman is good for and who it's not going to be good for.
+
+David: I got qualified out six months ago because I'm a primary iPad user.
+
+Rahul:  Well there you go. This was before we had iPad shortcuts.
+
+David: I'm very excited to be now qualified back in.
+
+Rahul: It's going to be good.
+
+Ben: I'm going to blatantly steal from your essay on First Round Review, which, if you're listening to this and you're finding this interesting, you are just going to be beside yourself reading this awesome piece that Rahul wrote on the First Round Review. You basically at Superhuman developed a way to measure product market fit and a four-step process to get there. Can you sort of talk about what that process is?
+
+Rahul: Sure. The context for this or the motivation was we had to spend a number of years to get the products to the point where people would actually pay for it That's not something that most teams want to go through. Most teams want to build a thing, launch a thing, make money, go, go, go. But it was very obvious to me as a member of our target market, that we didn't have product market fit. I didn't need to do the big splashy launch in order to convince myself to my own level of satisfaction that our product wasn't good enough. It was just obvious. It was obvious because I couldn't personally switch away from Gmail to Superhuman. And if I couldn't, then why would anybody else?
+
+David: Do you feel like you are uniquely equipped to be able to hold yourself to that bar because you were a second time founder?
+
+Rahul: Yes, but only because founders were a core target market for who we were going after. Because I had experienced the pain that we were trying to solve when I was running my last company. I very clearly could see we haven't solved that pain. Not yet. I could feel ourselves getting closer every single day, but I had to find a way to explain this to the team. These are hyper-ambitious, super intelligent engineers and designers and people of all disciplines who poured their hearts and souls into the product. They needed a way to understand not only that we weren't ready, but how not ready we were or how close we were and the precise steps that we could do in order to get there.
+
+So I went out and about, I read everything I could find, I started searching for definitions of product market fit. There's quite a few out there. For example, Paul Graham would say, “It's when you made something people want.” I think that's a pretty good definition but I wanted something more actionable. I think Sam Altman had a slightly different take, which is it's when users love your product so much that they spontaneously tell other people to start using it without you even asking them to do that. And that's a different take on it.
+
+PG’s take is around desire, Sam's take is around a distribution or sort of net promotion, but perhaps the best definition I found all the most interesting at least was Marc Andreessen's and he had the most vivid definition. He would say—I have it right here because it's quite lengthy and detailed—“Number one, you can always feel it when product market fit is not happening. Customers aren't quite getting value, users are not growing quite that fast, word of mouth is not spreading, press who use it are a kind of blah, and the sales cycle takes too damn long. But you can always feel it when product market fit is happening. Customers are buying as fast as you can add servers, you're hiring cells and support as fast as you can, reporters are constantly calling you about your hot new thing, money is piling up in your checking account, investors are staking out your house, and you start winning Company of the Year awards from Harvard Business School.”
+
+Ben: My favorite is the part about staking out the house.
+
+David: I know.
+
+Rahul: It does actually happen, can confirm. I can tell just by your reaction, whilst this is a vivid, an accurate definition, there is a challenge to using this in running the business, which is that it is a post hoc definition. By the time investors are staking out your house or blowing up your phone, you probably already have…
+
+David: Your last concern is achieving product market fit at that point.
+
+Ben: You're no longer interested in quantifying it.
+
+David: Yeah, right.
+
+Rahul: I remember staring at this definition through tears in the summer of 2017 thinking we don't have this and we are so, so far away from having this. But how do I explain that?
+
+David: Did you have a board at this point?
+
+Rahul: Did we have a board at this point?
+
+Ben: David, why is that relevant?
+
+David: But you know, when you're a hammer, everything looks like a nail, but you obviously had investors. Was there a group of people to whom you felt beholden to explain this current state of the business to?
+
+Rahul: That's a good question. As I cast my mind back, the answer is yes, of course, we did have a board. We never did any board meetings, which is why I had to think about it. Our board, formerly at the time, was Bill Trenchard from First Round who's been incredible to us, and informally I would speak basically every two or three days, with Ed Sim from Boldstart. They were New York-based funds that does really great enterprise investments.
+
+Ben: They led your seed round, right?
+
+Rahul: Yes, they actually wrote the first check in. That first $750,000 was from them.
+
+Ben: Got it.
+
+Rahul: They wanted to write a million dollar check. I was like, “No, I'll take $250,000 at this cap.” And then I went away and made some progress. I came back like, “I'll have another $250,000 now,” but it's got a more expensive price. Then the next $250,000 was at an even more expensive price.”
+
+Ben: #secondtimefounder
+
+Rahul: Yeah. Just play the game, play it nicely, and everyone will enjoy themselves. Yes, we did have a board, but it wasn't really a thing that I was turning to them for help on.
+
+David: So the tears to you guys were like yourself, not just less so yourself and like, “Oh shoot, now I got to go explain to everybody where we are.”
+
+Rahul: Oh sure, yeah. Explaining it to the board was the very least of my concerns. Ed, I made money for in the past at Rapportive, Bill is a long-term investor. He, just fundamentally believes in what we're doing. All of our other investors fundamentally believe in what we're doing. If I went to them and I said, “Hey, this is the direction I think we should go,” they would always be like, “Good, we believe in you. This is why we invested in you.”
+
+It was the team who are working on this day in, day out. I wanted to give them a path and an engine that could work. I found a piece of work by Sean Ellis, who's famous for coining the term growth hacking. He came up with that. He ran early growth that Dropbox, LogMeIn, Eventbrite.
+
+During his days of doing growth consultancy to startups, he found a benchmarked predictive way to measure product market fit. You simply ask your users, “How would you feel if you could no longer use the product?” and you let them answer either, “I would be very disappointed,” “I would be somewhat disappointed,” or “I would be not disappointed.” You measure the percentage that say very disappointed.
+
+What he found is that the companies that struggled to grow almost always had less than 40% very disappointed. The companies that grew the most easily almost always had more than 40% very disappointed. In other words, if more than 40% of your users would be very disappointed without your product, guess what? You have initial product market fit.
+
+Ben: Threat them to take it away and see what they say.
+
+Rahul: Exactly. It's a stroke of genius. I'm not going to claim to invent it. He did. It's more predictive of success than Net Promoter Score. It's benchmarked across hundreds of venture-backed companies. It's a really phenomenal metric. The most exciting thing about this metric and the thing that we did at Superhuman is that you can use it to build your very own product market fit engine. You can use it to come up with a systematic methodology to numerically optimize product market fit, which sounds crazy, but it's true. You can actually build this thing.
+
+Ben: It's fascinating. So that is the measuring stick by which you can determine if the changes that you're making in the product are bringing you closer to product market fit. What then is the other side of that equation to actually govern how you should change the product to hopefully get you closer when you measure that? How do you figure out what the inputs need to be in your product changes?
+
+Rahul: We have a whole, very lengthy article about yourself. I'll give you the quick summary, but I would very much recommend reading the article cause there's a ton of subtlety around how to do this correctly.
+
+It begins fundamentally with surveying your users, for every user who comes into your product and who then experiences the core benefits of your product, that usually means they've done the thing, whatever it might be, two or three times. They've probably been there for about two weeks. You send them a survey. In that survey you ask a number of questions. You ask four questions. Number one, how would you feel if you could no longer use, I'll take Superhuman as an example, how would you feel if you can no longer use Superhuman with the answers that I outlined? Number two, what type of people do you think would most benefit from Superhuman? Number three, what is the main benefit that you get from Superhuman? Number four, how can we improve Superhuman for you?
+
+David: Free text or drop downs?
+
+Rahul: The first one is a tristate like I described and the other three, yes, free street, free text, and type forms is what we use. It's probably the easiest way to get this done.
+
+Ben: Nice keyboard shortcuts.
+
+Rahul: That's actually why we chose it.
+
+Ben: It's like that's our primary at Pioneer Square Labs. That's all we use for validation now.
+
+Rahul: I wish everything had keyboard shortcuts. It would just make everybody's lives so much better and faster.
+
+Ben: How do you then use those four questions to guide you toward what features should we build or change?
+
+Rahul: We then have a full step engine to systematically generates your roadmap and increased product market fit. The four steps that you go through are: number one, segment, number two, analyze, number three, build, and number four, repeat. It just occurs to me that this creates a nice acronym which is SABR—Segment, Analyze, Build and Repeat. So you've got to SABR your users. That's the sounds quite [...].
+
+David: It's interesting because you're an artisan. You spent 3–4 weeks writing copy on a landing page. You're an artisan and yet what you're describing here is an algorithm to start a product market fit startup. It sort of begs the question, if you have the right team who are capable of doing all of these functions, writing that survey, analyzing the results, doing SABR, will every startup idea end up at an end state of product market fit if you apply the correct algorithm to it?
+
+Rahul: I think that this greatly increases your chances but the sad and realistic answer to your question I think is obviously no. Why? Well, let me give you three big reasons. Number one, many startups will run out of money before they finish this process. Number two, many co-founding teams will have disagreements and fall apart. And number three, many teams will just get tired and go, “You know what? I can't do this anymore.” Those are the three fundamental reasons that people will fail even given the SABR product market fit engine.
+
+Ben: Yeah and it could be, too. If you start with a kernel of an idea that is sufficiently bad for a sufficiently incorrect market, it could just take too long to ever iterate your way toward whatever the ultimate correct end state is.
+
+Rahul: Yes. I do have some rules of thumb around starts. The first step of this engine is to segment. If you like, we can get into the details of how you might do that. But if after that first segmentation step, your very disappointed score, your product's market fit score is in the region of 5%–15%, my considered advice to you would be to suggest not doing that product.
+
+Ben: Totally. Yeah. We all have only so many years on this earth.
+
+Rahul: Take the capital you've raised, take the team that you have, go brainstorm and try something else. I'm sure your board will be supportive if you have the data to show that it's not really working. But if you're in the 15%–25% mark, which is where we were after that original segmentation, then I do believe you can actually iterate your way to success. The challenge then becomes raise enough money and keep morale high enough for long enough so that you actually have the time to make it work.
+
+Ben: Hence the job of the CEO. The momentum creator.
+
+David: I'm curious if you'd say this has to be the case, but in your case it certainly is the case. You have this engine and it is a mixing metaphors.The engine is the transmission of the startup, but the true engine of the startup is like your passion, like this is your destiny, right? You do that nine month process. There was no other company that you would start. I would imagine that it’s, in many ways, given you the perseverance, the drive to look at your 15%–25% score on that rubric and say, “Okay, we're going to make that better,” versus, “Ooh.”
+
+Rahul: I think so. I suspect I may just be on the far end of persistence compared to most people. We had a very interesting debate as an executive team over the last year about redefining our company values. This idea of persistence kept coming up over and over again. I was like, “You know what? Maybe we should have persistence as a value now.” Ultimately it didn't end up becoming a company value, but I do believe that even if it's not a company value, every single founder needs to exhibit unnatural levels of persistence.
+
+Again, to quote Paul Graham, he talks about grimly determined founders and how during the days when he was operating YC, he would see these people come out of college and they're the super nice and bubbly, and then a year or two later, they're just these grimly persistent people who will stop at nothing. They've got the battle scars from running through brick walls over and over and over again. I do genuinely believe that if you're a cofounder, if you're a founder, especially if you're a CEO, this is your job. You have to run through the brick walls over and over and over and over again. When it's time that other people might be thinking of giving up or backing out, you have to be the person say, “Nope, we're going to keep on going.”
+
+David: Also resonates.
+
+Ben: We're going to loop back to a previous question that we sort of talked about to end this segment here. I'm going to read it from my Google Doc here, which was written much more eloquently than I phrased it earlier. When you're building for a narrow segment of users who love you at the start, how do you think about building for them without overfitting the product to them such that you can't serve the broader market later?
+
+Rahul: I'm going to read the answer from my equivalently formatted Google Doc. It’s not even my answer, but this is just something I believe so strongly because it seems so self-evidently true to me. Again, it's going to be a Paul Graham quote.
+
+Ben: Is it about local maxima?
+
+Rahul: It is, yes. I'm going to quote two different office essays. Number one is going to be from Startup Ideas where he talks about how you find startup ideas and some good startup ideas incidentally and tangentially to this answer. One of them is just build Gmail but fast. That was public on the web for about 10 years before we started Superhuman. So the idea was out there.
+
+David: That was one of PG’s Startup Ideas?
+
+Rahul: I'm pretty sure it's in the essay Startup Ideas. I'm going to try and quote this from memory. He's like, “Just build Gmail but fast. It's become so slow. There are sufficiently many people like me, that he had some insane price, that would spend $1000 a month on Gmail because it's literally all we do.”
+
+David: Yeah, I mean, he should have started Superhuman.
+
+Ben: He wasn't grimly determined.
+
+David: He was not going to be determined.
+
+Rahul: Okay, so Startup Ideas. He says, “When a startup launches, they have to be at least some users who really need what they're making. Not just people who could see themselves using it one day, but who want it urgently. Usually, this initial group of users is small for the simple reason that if there were something that large numbers of people urgently needed and that could be built with the amount of efforts that a startup usually puts into version one, it would probably already exist, which means you have to compromise on one dimension. You can either build something that a large number of people want a small amount or something that a small number of people want a large amount. Choose the latter. Not all ideas of that type are good startup ideas, but nearly all good startup ideas are of that type.” In other words, what he's saying is don't worry too much about building for a narrow segment of users and therefore overfitting.
+
+It's precisely what he's advising that you do. And then you might say, “Well, doesn't that give you the problem of being boxed into a particular niche or a particular segment of the market?” And then to quote from a different essay, one that we've already referenced, Startup = Growth, he says, “In theory, this sort of hill climbing could get a startup into trouble. They could end up on a local maximum. But in practice that never happens. The maxima in the space of startup ideas are not spiky and isolated. Most fairly good ideas are adjacent to even better ones.” To this, I'll give two very classic examples. One of course is Airbnb, where the idea of couch surfing is extremely adjacent to the idea of houses being hotels. The other very timely is Uber, where the idea of a luxury car that comes to your house with a chauffeur is adjacent to peer-to-peer driving.
+
+David: It's crazy. I mean, literally every single one of the “A+ companies” that we're going to cover on this season of the IPOs, Airbnb, Pinterest, Lyft, Uber, Slack, Stripe, fits this definition.
+
+Ben: Even Stripe. The original market was startups that need to get their merchant accounts faster and implement them quickly. It turns out everybody needs better merchant accounts.
+
+David: To put words in your mouth for email, who the business people and executives who spent three hours a day on email, they really desperately care about faster email, but everybody cares about really faster email, right?
+
+Rahul: Absolutely. The good thing for us, it turns out that even that particular market will lead to a multibillion dollar company. So there is this potential to create an enduring a franchise, a company that could last for over a hundred years, but that’s certainly our goal here.
+
+Ben: All right, well we very much look forward to covering these Superhuman IPO on the main show next.
+
+David: What’s the next act going to be?
+
+Ben: I don’t know, who else is in your cohort that's going to be all IPOing around the same time?
+
+Rahul: I'd love to see all the great products of the companies right now. Notion at table.
+
+Ben: It’s amazing, we’re in a total renaissance.
+
+Rahul: We are, we really are.
+
+Ben: Well before we break, Rahul, where can our LPs find you on the Internet? And two, what is the best way for them to get access to Superhuman?
+
+Rahul: Okay, so I am on Twitter @rahulvohra, that's my name. And of course email at rahul@superhuman.com. To get access by far, the best way is to get a referral from an existing user. I would just recommend going to search.twitter.com and typing in ‘superhuman’ and there is a high volume of tweets. There’s a lot of very helpful Superhuman uses out there. You can see which one's the most helpful users are just by who’s jumping in on which threads giving out invites. If you don't feel inclined to do that level of work, then you can sign up on the website. But that will be a fair bit slower.
+
+Ben: All right.
+
+David: What are you hiring for? I'm sure there are lots of listeners who would love to come work there.
+
+Rahul: Well, you mentioned just before we started, your primary audience is actually product managers right now and it turns out that I'm hiring for our very first product manager. This is a super exciting role. You get to work with me for better, for worse all day, everyday on building the fastest email experience of all time. I'm really thrilled to be hiring for this role. I've carried product in the company for a number of years and it's a really fantastic opportunity for the right person.
+
+David: Terrible boss, but like great.
+
+Rahul: I don’t know, I think I rate okay. But yes, really great products. In addition to that, engineers of all types. A lead back-end engineer, front-end engineer. If you're a phenomenal developer, we'd really love to speak with you.
+
+Ben: Awesome. Well, we rarely do LP shows, I think, with early stage companies that are still “early stage,” but I think we very intentionally and selectively reached out and I think we think incredibly highly of Superhuman. So LPs, if you do feel so inclined that that may be interesting for you, please don't hesitate to reach out.
+
+Rahul: Thank you.
+
+Ben: Awesome. All right, folks, we will see you next time.
+
+‍
+
+Search Episodes
+
+
+Superhuman
+Superhuman
+Episode 
+10
+ • 
+June 27, 2019
+transcript
+Many thanks to our sponsors
+Rahul Vohra's Quest for the Fastest Email
+overview
+We wrap up Season 4 with a very special (and accidental!) episode, a conversation with the CEO of Superhuman, the red hot email productivity app which just announced their $33m Series B led by Andreessen Horowitz. While originally intended as an LP episode, we felt Superhuman would provide the perfect bookend to our “modern enterprise productivity trilogy” following our Zoom and Slack episodes. We hope you enjoy the conversation with Rahul as much as we did, and we’ll see you later this summer for Season 5!
+
+More on the episode
+Playbooks
+Thanks to listener Jeremy Diamond for contributing these Playbook notes! He’s one half of Automatter, a newsletter about processes and the people who automate them.
+
+1. Start with a clear, specific articulation of the problem.
+"Email sucks now" may have been accurate, but it wouldn't have helped anyone land on a solution. When you deeply understand the problem, you are more likely to create the right solution.
+
+Rahul's original pitch was literally a screenshot of Gmail's interface where he pointed out all of the little things that added up to make the product experience worse.
+From that strong foundation, Rahul then spent time applying his singular viewpoint to designing an email experience that he would want to use — the classic founding story of solving your own problem.
+2. Apply segmentation, targeting, and positioning to your product roadmap.
+Rahul has written in-depth about how they quantified product-market fit to gain a granular understanding of their customers, their wants, and their needs. You can apply the same high-level marketing principles -- through surveys or interviews -- to identify who your product is for, how you're going to reach that audience, and what message will resonate with them.
+
+It is common to segment demographically, but there is significant variation within most large demographics. Superhuman identified which personas would convert to truly loyal users, then further analyzed who those users thought the product was for, what value they got out of it, and finally used this data to build more precise customer profiles to target.
+The team also prioritized feature requests from their next-most-loyal segment to figure out how to move them from on-the-fence to committed, rabid customers.
+3. You can wedge into a competitive space without forcing your customers to incur switching costs.
+Rahul's previous startup Rapportive was a Gmail plugin — it was additive but the users remained primarily inside the Google ecosystem.
+Know how the underlying platforms will respond to your product. For email, the underlying protocols are open, even though Gmail has dominant market share. The market was already well-defined and served by lowest-common-denominator products, but there was an opportunity to tap into an influential niche with super high willingness to pay. And because of the open underlying nature of email, this did not prompt a direct competitive response from the platform provider.
+Superhuman (as of this writing) still assumes the customer uses Gmail and doesn't take on all of the backend responsibilities that Google can handle. From the customer's perspective, it simply replaces the frontend, so the only switching cost incurred is the time to learn the new tools.
+Part of that cost is addressed for every user through 1:1 onboarding, a practice that Superhuman has held to long past the point when other startups would have transitioned primarily to self-serve onboarding. And as users get more comfortable with the product, they discover more hidden and helpful features because the Superhuman team applied principles of game design to help their users feel... well, superhuman at email.
+4. The digital waitlist is back, and it can be an incredible distribution hack.
+In a world of abundance and growth-at-all-costs, Superhuman used scarcity to choose their growth rate, pre-qualify their sales leads, and drum up even more organic interest.
+
+When this interview was recorded, the waitlist was at 180,000 people. However, Superhuman granted faster access to direct referrals from existing users and allocated the majority of new user onboarding to these referrals.
+The act of referring (or asking for a referral) was itself a strong indicator of interest and Superhuman further qualified these leads by an automated survey process before approving them for 1:1 onboarding. As a result, the supposedly unscalable 1:1 onboarding was in fact very efficient, converted at extremely high rates, and brought on the best possible customers.
+Superhuman's earliest adopters tended to be high-status people — founders, investors, and executives — which gave the product cachet that accrued to Superhuman's brand value. In addition to valuing the product on its own merits, having a Superhuman account (and "Sent from Superhuman" email signature) suggested that you were important enough and busy enough to spend $30 per month to improve your professional communication. This cachet drove even more requests for referrals, which spilled out into social media and became a meta conversation of its own.
+Links
+New York Times article announcing the fundraise: https://www.nytimes.com/2019/06/27/technology/superhuman-email.html 
+Rahul’s Medium post on acquisitions: https://medium.com/swlh/rip-mailbox-or-founders-how-to-stop-worrying-and-love-being-acquired-261da4f6d566
+Rahul on finding product-market fit on First Round Review: https://firstround.com/review/how-superhuman-built-an-engine-to-find-product-market-fit/
+Note: Acquired hosts and guests may hold assets discussed in this episode. This podcast is not investment advice, and is intended for informational and entertainment purposes only. You should do your own research and make your own independent decisions when considering any financial transactions.
+Emails from Ben & David
+Our key takeaways, research photos, hints at the next episode, and your vote on future topics.
+Email address
+Superhuman
+Superhuman
+S4
+ • 
+Jun 27, 2019
+you may also enjoy
+Google: The AI Company
+How Google Rebuilt for the AI Era
+Alphabet Inc.
+How Google Built Seven More Billion-User Products
+Google: The Origin of Search
+BackRub to Google: How Two Stanford Students Changed Everything
+The Steve Ballmer Interview
+Microsoft's Former CEO on Leadership
+Epic Systems (MyChart)
+The Private Healthcare Software Giant You've Never Heard Of
+Microsoft Volume II
+Ballmer, Nadella, and the Cloud Transformation
+finished an episode?
+The conversation
+keeps going.
+Join us on Slack for updates and opportunities from Acquired & community.
+Emails from Ben & David
+Our key takeaways, research photos, hints at the next episode, and your vote on future topics.
+Email address
+Episodes
+Acquired
+ACQ2 Show
+More Acquired
+About
+Library
+Email Archive
+Sponsor
+Speaking
+Merch
+COMMUNITY
+Slack
+X.com
+YouTube
+LinkedIn
+contact
+press
+© 2026 ACQ, LLC
+every company has a story.
+Ben and David Armchair Expert
