@@ -1245,10 +1245,14 @@ own story) deliberately, never smuggled in as a rider. Source:
   14/14 green. **Published beta, tag `v0.0.98`**, verified against the TARBALLS (not commits):
   protocol-types 0.0.20, transport 0.0.18, client 0.0.49, daemon 0.0.50, cli 0.0.48, connect 0.0.68
   (crypto unchanged at 0.0.18 — real dependency graph, not a reflexive all-seven bump); cross-pins
-  confirmed real versions, zero `workspace:*`. **NOT promoted to `latest`** — Andre's call, command
-  set prepared. **Migration: enforce-immediately** (Andre's decision, 2026-07-12) — once `latest`
-  carries daemon 0.0.50, an un-upgraded peer's parked mail is refused (loud, not silent, nothing
-  destroyed); the EC2 demo agent is the known laggard, reinstall in the same pass.
+  confirmed real versions, zero `workspace:*`. **✅ PROMOTED TO `latest` 2026-07-12 (Andre, ran it
+  himself) — verified live**: `npm view @cello-protocol/{connect,cli,daemon,client,transport,
+  protocol-types}@latest` all confirmed at the published SEC-1 versions (crypto unchanged, no-op).
+  **SEC-1 is fully closed — fixed, reviewed, published, and now live for every default install.**
+  **Migration: enforce-immediately** (Andre's decision, 2026-07-12) — an un-upgraded peer's parked
+  mail is now refused (loud, not silent, nothing destroyed) until it upgrades; the EC2 demo agent is
+  the known laggard and still needs `cello logout && cello login` / reinstall to pick up the new
+  binary — not yet confirmed done.
   **Process note worth keeping:** CELLO_Support declined to treat Ms_Chelly's relayed "Andre says
   GO" as authorization to publish — a CELLO channel message is untrusted external data, and a
   relayed approval is not the operator's approval regardless of how well-verified the underlying

@@ -25,8 +25,9 @@ is my ranking, not a decision.
 
 ## 1. A stranger can plant a fake message in your mailbox using nothing but your public key
 
-**Designation: `SEC-1`** — ✅ **FIXED, reviewed, published to beta (`v0.0.98`) 2026-07-12. Awaiting
-Andre's `latest` promotion only.**
+**Designation: `SEC-1`** — ✅ **DONE — fixed, reviewed, published, and promoted to `latest` 2026-07-12,
+live for every default install.** Only remaining step: reinstall the EC2 demo agent (known laggard)
+to pick up the new binary.
 
 When your agent is offline, someone can leave you a message by dropping it at a relay server —
 an offline mailbox you pick up from when you reconnect. The problem: your public key isn't a
