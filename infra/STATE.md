@@ -302,6 +302,31 @@ benign warnings at startup (`content.recover.auto.relay_failed reason:standing_r
 before the standing receiver armed, not investigated further (no live-session re-verification done this pass;
 prior full end-to-end re-verify below is from the previous update and pre-dates this bump).
 
+**🔴 DEMO AGENT IS UNDISCOVERABLE — root-caused 2026-07-12, NOT a new bug, a stale consequence of the
+2026-07-05 reset.** Live `cello_initiate_session` from Ms_Chelly to the demo agent's pubkey
+(`7ab98987…6ec1f910`) fails `unknown_agent`. Traced to the DB, not assumed:
+- `agent_presence` has a correct, correctly-replicated row (`owning_node_id: eu-central-1, online: true`,
+  identical on us-east-1 via logical replication — verified `pg_stat_subscription` workers are live and
+  current, ruling out a replication lag/bug).
+- `agent_profiles` has **zero rows** for this pubkey on **either** node (both show 4 total profiles — only
+  Andre's 4 personal agents, all `created_at` 2026-07-06/07). Discovery lookup
+  (`directory-node.ts:3266 #processDiscoveryLookup`) requires BOTH a profile row AND a presence row
+  (`resolveDiscoveryState(profile !== undefined, presence)`); presence-only is exactly `unknown_agent`.
+- **Root cause: the 2026-07-05 cross-node-counter-collision reset wiped `agent_profiles` fleet-wide**
+  (`docs/planning/user-stories/m8b/2026-07-05_1500_cross-node-counter-collision-reset-fix-plan.md`,
+  documented consequence: "every existing agent (demo, Agent-1, …) must re-register — startup only writes
+  presence, not a profile, no auto-reconcile by design"). Andre's 4 personal agents were re-registered
+  afterward (hence their `created_at` dates); **the demo agent was never re-registered** — it has kept
+  running and updating its own presence for a week, invisibly failing the one thing that matters
+  (discoverability), because nothing about its own startup surfaces the gap (no error, no health-check
+  failure — it looks completely healthy from the inside).
+- **Fix, not yet executed:** `cd /opt/cello-demo && npx @cello-protocol/cli register default <TOKEN>` per
+  `demo/CLAUDE.md`. Local keys are untouched (re-enrolls the SAME identity via the M8B quorum DKG flow,
+  does not create a new pubkey) — this is `register`, not `create-agent`. **Blocked on a fresh pre-auth
+  token from `@CelloConnectStagingBot` on Telegram — single-use, requires the human phone/email flow,
+  no automatable bypass exists** (checked: no demo-specific token issuance in
+  `packages/operations-agent/src/`). Needs Andre.
+
 **DEMO AGENT — updated to latest + verified 2026-07-03.** Local install at
 `/opt/cello-demo` bumped `@cello-protocol/daemon` 0.0.23→**0.0.26** and `cli` 0.0.21→**0.0.24** (connect
 already 0.0.53); `chown -R cello-demo:cello-demo /opt/cello-demo` after the root npm install; restarted
