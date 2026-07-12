@@ -1266,9 +1266,22 @@ own story) deliberately, never smuggled in as a rider. Source:
   restart/interrupt path — needs its own root-cause pass per the debugging discipline, not a shrug.
   Tracked below as its own backlog line.
 
-- **SEC-2 (2026-07-07, found while scoping DOD-PRIMARY-1's ceremony-gate) — ✅ FIXED & DEPLOYED
-  (2026-07-08). ⚠️ ENFORCEMENT NOT YET LIVE-VERIFIED — the negative case is unrun (see below).
-  Was a 🚨 pre-existing CRITICAL forgery hole in the FROST signing path.**
+- **SEC-2 (2026-07-07, found while scoping DOD-PRIMARY-1's ceremony-gate) — ✅ FULLY CLOSED
+  2026-07-12: FIXED, DEPLOYED, AND ENFORCEMENT LIVE-VERIFIED (both the positive AND the negative
+  case). Was a 🚨 pre-existing CRITICAL forgery hole in the FROST signing path.**
+  > **✅ NEGATIVE CASE PROVEN LIVE 2026-07-12 (Ms_Chelly, at Andre's direct request).** A throwaway
+  > script (real `NetworkDirectoryNode`, real libp2p dial, deleted immediately after running — no
+  > code changed, nothing committed) sent two deliberately unauthorized `frost_commit_request`
+  > frames straight at the deployed us-east-1 directory, using Ms_Chelly's real, PUBLIC pubkey as
+  > the impersonation target (the exact SEC-2 threat model: a party who knows only a public key).
+  > **Test 1 — no `authSig` at all:** refused client-side (`AUTH_REQUIRED`) — confirmed independently
+  > in the directory's own CloudWatch log the same second: `frost.auth.refused frame:"commit"
+  > reason:"AUTH_REQUIRED"`. **Test 2 — a syntactically valid signature from an attacker's own
+  > keypair (not the victim's):** refused (`AUTH_INVALID`) — confirmed server-side:
+  > `frost.auth.refused reason:"AUTH_INVALID"`. Both the wire response AND the server's own log
+  > agree, on the live, running, promoted directory — not a test harness. **Enforcement is no longer
+  > merely believed to work; it has been watched refusing a real forged request.** SEC-2 needs
+  > nothing further.
   > **✅ RESOLVED 2026-07-08.** Both halves shipped and live: the **client** now signs every FROST
   > commit/sign request with a K_local Ed25519 `authSig` bound to `(agentPubkey, epochId, framedMsg)`
   > (cello-client `d744778`/`9971769`, daemon 0.0.37 / cli 0.0.34, published + promoted to `latest`);

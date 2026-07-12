@@ -77,18 +77,14 @@ Source: [[M8C-DEFINITION-OF-DONE]] → `DOD-CUSTODY-DAEMON-1`.
 
 ---
 
-## 4. We've built the defense against forged signing requests, but never watched it actually reject one live
+## 4. ~~We've built the defense against forged signing requests, but never watched it actually reject one live~~
 
-**Designation: `SEC-2` (the unverified negative case)**
+**Designation: `SEC-2`** — ✅ **DONE 2026-07-12.** Sent two real forged signing requests at the live
+directory (no signature; a signature from the wrong key) impersonating a real agent by public key
+alone. Both were refused, confirmed both in the response AND independently in the directory's own
+server-side log. Enforcement is proven, not just believed.
 
-Every request to sign something is supposed to carry proof it's really you, and the live network
-is supposed to refuse anything that doesn't. The "accept a real request" side has been proven
-live. The "reject a fake one" side has only been proven in our own test suite — never fired at
-the actual running system and watched fail correctly. We believe it works. Nobody has confirmed
-it. If it turns out not to, a forged request could get signed. Costs nothing to check — it needs
-someone to run one test against the live system, not new code.
-
-Source: [[M8C-DEFINITION-OF-DONE]] → `SEC-2`, "the negative case."
+Source: [[M8C-DEFINITION-OF-DONE]] → `SEC-2`.
 
 ---
 
