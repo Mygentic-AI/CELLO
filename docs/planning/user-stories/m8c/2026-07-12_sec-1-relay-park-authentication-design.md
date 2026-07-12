@@ -227,6 +227,57 @@ one repo, no deploy, no migration. It does not open a rabbit hole — and the fa
 what keeps it from becoming one (option (a) would have looked cheaper and shipped a silent
 message-loss bug).
 
+## 9. BUILT — what the review changed (2026-07-12)
+
+Implemented in cello-client `d1dd623`, review fixes `2d0cf91`. Gate: 2161 tests green, lint,
+typecheck, build. **Not published** — held for approval.
+
+`cello-unit-reviewer` verdict: **the gate itself is sound.** It could not find a path that ingests
+parked bytes without authentication (`ingestReceivedContent` has exactly two production callers:
+`recoverParkedEntry` and the direct libp2p stream behind the session gater), every failure branch
+fails closed, and the consumer-side tests are genuine discriminators. It also **independently
+verified the §4 falsification** — `startupParkFn` really does have the key provider, session id,
+recipient pubkey and content hash it needs at re-park time, and `signing_key_unavailable` cannot
+fire for a case that previously succeeded.
+
+Four defects **around** the gate, all fixed — the pattern in three of them is the same one SEC-1 is
+about: *the check was right; the reporting around it went quiet.*
+
+- **M1 (MEDIUM-HIGH) — the signer check compared HEX STRINGS.** `sessions.counterparty_pubkey` is
+  persisted verbatim from the IPC `target_pubkey` with **no case normalization**, and
+  `Buffer.from(hex)` is case-insensitive — so an uppercase pubkey makes a perfectly functional
+  session (dialing, sealing, direct content all work) whose **every parked recovery** would then be
+  refused as `signer_not_counterparty`. Permanent store-and-forward mail loss, indistinguishable in
+  the log from a real forgery. Now a length-guarded `timingSafeEqual` on **bytes**. The same defect
+  pre-existed at the ordering-record signer check; this work *promoted it to load-bearing*, so it
+  was fixed there too.
+- **M2 — refusals were invisible behind `ok:true`.** `recoverParkedFromRelay` returned
+  `{ok:true, pulled:3, recovered:0}` — success, with three messages evaporated and the only
+  explanation in the daemon log. Now returns `refused` + `refusals[]`. This matters *more* because
+  of §7's enforce-immediately decision: **this is the lagging-peer experience as much as the
+  injection experience.**
+- **M3 — the new failure branch returned into a swallow.** `drainAwaitingToPark` discarded
+  `result.error` entirely, so every park failure (including SEC-1's new `signing_key_unavailable`)
+  failed in silence — the only trace was `parkedCount: 0`, a number with no reason. Now warns.
+- **M4 — a forged mailbox was an unbounded amplifier.** A refused entry is deliberately never
+  confirm-deleted (a forgery must not evict itself), so without a memo the same forgeries are
+  re-unsealed and re-Ed25519-verified on *every* reconnect, forever. Bounded FIFO refusal memo.
+- **AC7** — `correlationId` was a parameter no production call site passed; the crash-backstop park
+  emitted no `content.park.signed`. Both fixed.
+
+**The hollow-test finding is the one worth remembering.** Every test built its own envelope, so a
+**producer** that signed the wrong to-be-signed arguments — its own pubkey where the recipient's
+belongs — would have shipped envelopes no recipient could ever accept, with all 10 tests green and
+mail simply never arriving. `sealParkEnvelope` is now the **sole producer** (both park sites call
+it) and is round-tripped through the real seal into the real gate. Mutation-verified: signing the
+sender's key instead of the recipient's now fails three tests.
+
+**Residual, flagged not fixed (out of SEC-1's scope):** the *direct* content path still takes sender
+attribution from the session row and relies on the transport gater's peer-id binding rather than a
+per-message signature. SEC-1 closes the **park** half. That asymmetry is deliberate — the direct
+path is authenticated by the Noise session channel, which the park path has no equivalent of — but
+it is worth stating so nobody later reads the park signature as the system's only sender proof.
+
 ## Related
 
 - [[M8C-DEFINITION-OF-DONE]] — SEC-1 (Tracked, not M8C-fruit); SEC-2 (the FROST-stream auth fix,
