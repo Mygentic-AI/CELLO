@@ -40,11 +40,8 @@ import { NetworkRelayAdapter } from "@cello-protocol/directory/network-relay-ada
 import type { CelloDirectoryNode } from "@cello-protocol/directory";
 import { createRelayNode } from "@cello-protocol/relay";
 import type { CelloRelayNode, DirectoryAdapter } from "@cello-protocol/relay";
-import { createClient, createMcpSessionServer } from "@cello-protocol/client";
+import { createClient } from "@cello-protocol/client";
 import type { SignalRequirementPolicy } from "@cello-protocol/client";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { Notification } from "@modelcontextprotocol/sdk/types.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -57,10 +54,6 @@ export interface AgentFixture {
   client: ReturnType<typeof createClient>;
   /** Set after register() is called (opts.register: true) */
   primaryPubkey?: string;
-  /** Set when opts.withMcp: true */
-  mcp?: Client;
-  /** Set when opts.withMcp: true — captured MCP notifications from this agent */
-  notifications?: Notification[];
 }
 
 export interface SessionFixtureResult {
@@ -94,8 +87,6 @@ export interface SessionFixtureOpts {
   register?: boolean;
   /** Also bootstrap FROST for agent B. Default: false */
   bootstrapB?: boolean;
-  /** Wire up MCP servers + clients for both agents. Default: false */
-  withMcp?: boolean;
   /** Connection policy for agent A. Default: open / deterministic */
   policyA?: SignalRequirementPolicy;
   /** Connection policy for agent B. Default: open / deterministic */
@@ -334,43 +325,18 @@ export async function createSessionFixture(
     };
   }
 
-  // ── Optional MCP wiring ────────────────────────────────────────────────────
-  let mcpA: Client | undefined;
-  let mcpB: Client | undefined;
-  let notificationsA: Notification[] | undefined;
-  let notificationsB: Notification[] | undefined;
-  const mcpCleanup: Array<() => Promise<void>> = [];
-
-  if (opts.withMcp) {
-    notificationsA = [];
-    notificationsB = [];
-
-    const serverA = createMcpSessionServer(nodeA, clientA, kpA);
-    const serverB = createMcpSessionServer(nodeB, clientB, kpB);
-
-    const [stA, ctA] = InMemoryTransport.createLinkedPair();
-    const [stB, ctB] = InMemoryTransport.createLinkedPair();
-    await serverA.connect(stA);
-    await serverB.connect(stB);
-
-    mcpA = new Client({ name: "agent-a", version: "0.0.1" });
-    mcpB = new Client({ name: "agent-b", version: "0.0.1" });
-
-    (mcpA as unknown as { fallbackNotificationHandler: (n: Notification) => void })
-      .fallbackNotificationHandler = (n) => { notificationsA!.push(n); };
-    (mcpB as unknown as { fallbackNotificationHandler: (n: Notification) => void })
-      .fallbackNotificationHandler = (n) => { notificationsB!.push(n); };
-
-    await mcpA.connect(ctA);
-    await mcpB.connect(ctB);
-
-    mcpCleanup.push(async () => {
-      try { await mcpA!.close(); } catch {}
-      try { await mcpB!.close(); } catch {}
-      try { await serverA.close(); } catch {}
-      try { await serverB.close(); } catch {}
-    });
-  }
+  // ── (removed) Optional MCP wiring — DOD-LEGACY-MCP-1, 2026-07-12 ──────────
+  // This block used to build a `createMcpSessionServer` per agent and expose `mcp`/`notifications`
+  // on each AgentFixture. That server was the legacy M1 in-process MCP server; it is DELETED. It was
+  // never the shipped path — Claude Code talks to `bin/cello-mcp.ts`, a stdio→IPC proxy in front of
+  // the daemon — so every e2e test that drove a tool through it was reaching the LIVE CelloClient
+  // through a dead translator. Those tests now call the client directly (12 of the 15 were real
+  // protocol coverage and were re-pointed, not deleted).
+  //
+  // Removing it is behaviourally identical to `withMcp: false` for every other consumer: the block
+  // was a pure leaf. Its one outside effect was registering `client.onSessionAssignment(...)` — a
+  // single-slot OBSERVER that fires after the session record is fully installed, never a gate. The
+  // slot is now free for tests that want it.
 
   // ── Optional registration ──────────────────────────────────────────────────
   let primaryPubkeyA: string | undefined;
@@ -391,9 +357,8 @@ export async function createSessionFixture(
     }
   }
 
-  // ── Cleanup (MCP first, then nodes, then infrastructure) ──────────────────
+  // ── Cleanup (nodes, then infrastructure) ─────────────────────────────────
   const stopAll = async () => {
-    for (const fn of mcpCleanup) await fn();
     try { await nodeA.stop(); } catch {}
     try { await nodeB.stop(); } catch {}
     if (nodeC) { try { await nodeC.stop(); } catch {} }
@@ -415,13 +380,11 @@ export async function createSessionFixture(
       kp: kpA, pubkey: pubkeyA, pubkeyHex: pubkeyAHex,
       node: nodeA,
       client: clientA, primaryPubkey: primaryPubkeyA,
-      mcp: mcpA, notifications: notificationsA,
     },
     agentB: {
       kp: kpB, pubkey: pubkeyB, pubkeyHex: pubkeyBHex,
       node: nodeB,
       client: clientB,
-      mcp: mcpB, notifications: notificationsB,
     },
     agentC: agentCFixture,
     signerA,
