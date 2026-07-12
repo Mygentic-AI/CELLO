@@ -182,20 +182,31 @@ best-fit source in the whole mining pass:
 
 ### The closest real precedent to CELLO's endorsement primitive
 
-**Superhuman's referral-as-vouching model** is, across all four clusters, the single most structurally
-relevant case study found: existing users could *see who was on the waitlist* and choose to refer people they
-personally vouched for as a good fit — access was denied outright to people whose survey answers didn't
-match. [vendor case study, waitlister.me] Waitlist size is reported inconsistently across sources (275,000 per
-valueaddvc.com/startupsuperschool.com vs 180,000 per askusers.org — flagging the discrepancy rather than
-picking one), but every source agrees on the mechanic: a **mandatory live 30-minute onboarding call before
-access**, deliberately non-scaling, used simultaneously as a qualification filter and a research session
-(ROI estimated ~60x: $30 cost/call vs $1,800 LTV in one source's framing).
+**Correction (2026-07-12):** an earlier draft of this section said existing users could "see who was on the
+waitlist" and choose whom to vouch for — that's wrong and got caught by Andre asking a follow-up question
+("how did that vetting actually work — was it anonymous?"). Verified against a primary source (a Superhuman
+case-study compilation citing the Acquired.fm podcast episode,
+`brandonkboswell.com/sources/Superhuman--History-and-Strategy--Deep-Podcast-Case-Studies`): there was no
+waitlist visibility or anonymous review at all. The actual mechanic, quoted from the source: *"The act of
+referring (or asking for a referral) was itself a strong indicator of interest, and Superhuman further
+qualified these leads by an automated survey process before approving them for 1:1 onboarding."*
 
-This isn't a points gimmick — it's "people vouching for people they know are a fit," which CELLO can implement
-*literally* as a real signed endorsement rather than simulate with a points system. It's also the closest
-real-world precedent for gating access behind genuine technical/operational readiness rather than arbitrary
-scarcity — which is exactly why CELLO's own queue exists (FROST ceremonies, directory/relay onboarding needing
-to be proven before a flood).
+So the real shape is three layers, none of which involve one user inspecting another's data: (1) a user
+refers someone they **already personally know** — the referral is a relationship-based signal, not a
+judgment made by browsing a queue; (2) Superhuman's own automated survey independently screens the referred
+lead; (3) a **mandatory live 30-minute onboarding call**, deliberately non-scaling, doubling as both a
+qualification filter and a research session (ROI estimated ~60x in one source's framing: $30 cost/call vs
+$1,800 LTV). Waitlist size is reported inconsistently across sources (275,000 per
+valueaddvc.com/startupsuperschool.com vs 180,000 per askusers.org — flagging the discrepancy, not picking
+one).
+
+This maps to CELLO's endorsement primitive *better* than the incorrect version did: it's a real relationship
+making a real claim ("I know this person, they're a fit"), independently screened by the platform — not
+anonymous crowd-review. CELLO can implement this literally as a signed endorsement from an already-connected
+agent operator, no visibility into anyone else's waitlist entry required. It's also the closest real-world
+precedent for gating access behind genuine technical/operational readiness rather than arbitrary scarcity —
+exactly why CELLO's own queue exists (FROST ceremonies, directory/relay onboarding needing to be proven before
+a flood).
 
 ### Position display / scarcity / social proof
 
@@ -307,7 +318,7 @@ than resolved:
 
 | Case | Mechanic | Result | CELLO relevance |
 |---|---|---|---|
-| Superhuman | Mandatory 30-min onboarding call, vouch-based referral, denial for bad fit | 180K–275K waitlist (sources disagree), $825M valuation | **Highest** — closest precedent for readiness-gating + real vouching |
+| Superhuman | Referral from a personal relationship (not waitlist visibility) → platform survey screen → mandatory 30-min onboarding call | 180K–275K waitlist (sources disagree), $825M valuation | **Highest** — closest precedent for readiness-gating + relationship-based endorsement |
 | Robinhood | Pure queue-jump referral, no other incentive | 1M signups in 24 hours | High — canonical referral example, cited by 3 independent sources |
 | Notion | 2-year slow-roll beta, public template gallery loop | 1M users pre-broad-launch; templates = 40% of new accounts at zero CAC | High — closest precedent for transcript-sharing artifact, with a stated privacy gap |
 | Slack | Auto-invite on workspace creation, retention-ceiling nudge | 30% of workspaces born inside existing ones; K-factor ~8.5 peak | Medium — structural insight (retention threat as trigger) is CELLO-adaptable but edges toward manufactured urgency |
