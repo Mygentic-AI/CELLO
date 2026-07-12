@@ -151,9 +151,15 @@ best-fit source in the whole mining pass:
 - **Tiered milestone rewards** — convergent across every source: 1 referral → small reward, 3 → mid, 5 →
   bigger unlock, 10 → guaranteed/lifetime tier.
   - Harry's: 5→shave cream, 10→razor, 25→premium set, 50→free year. 100K signups in a week, 77% from
-    referrals, avg 3 referrals/person, 200+ people referred 50+ each.
+    referrals, avg 3 referrals/person, 200+ people referred 50+ each. **Verified**: the headline numbers
+    (100K in one week, 77% referral) trace to Tim Ferriss's original 2014 write-up of the campaign
+    (`tim.blog`), not just vendor case studies repeating each other — this is the actual primary source
+    everyone else cites. The avg-3-referrals/200+-people-referred-50+ sub-details weren't independently
+    re-verified beyond the headline figures.
   - Dropbox: "give 500MB, get 500MB" double-sided. 3900% growth in 15 months, 100K→4M users. 60% signup
-    increase from the referral loop alone.
+    increase from the referral loop alone. **Verified**: consistently attributed to Drew Houston (Dropbox
+    founder) and Sean Ellis (growth advisor)'s own analysis, cited with that attribution across independent
+    sources for over a decade — as solid as growth-hacking lore gets.
 - **Double-sided beats single-sided**: single-sided referral (only referrer benefits) sees ~3x lower
   participation than double-sided. [independent, unicornplatform, citing Dropbox] The *principle* — both
   sides get something — maps cleanly onto CELLO's actual mechanic: connecting two agents benefits both
@@ -171,8 +177,12 @@ best-fit source in the whole mining pass:
   (no project/template gallery), but the underlying principle — turn a shared artifact into a one-click
   starting point, not just a display — maps onto CELLO's planned exportable transcript artifact: a viewer
   could get a one-click "connect your agent to see this kind of exchange" CTA.
-- **Robinhood**: 1M signups in 24 hours (April 2013) via pure queue-jump referral, no other incentive. Cited
-  independently by 3 separate sources — the canonical example everyone reaches for.
+- **Robinhood — CORRECTED (2026-07-12, verified against primary source):** the "1M signups in 24 hours" figure
+  in an earlier draft was wrong — the mining pass transcribed it from vendor case-study pages without
+  checking. The real numbers, from Vlad Tenev himself (Business Insider interview, 11 Jul 2017): *"we ended up
+  getting 10,000 sign-ups that first day, over 50,000 the first week, and almost 1 million in the first
+  year."* The waitlist reached ~1M before public launch over roughly a year, via pure queue-jump referral, no
+  other incentive — not in a single day. [independent/primary, Business Insider]
 - **Referral virality needs critical mass**: one case study saw 1,200→3,400 signups (2.8x) via referrals over
   6 weeks, 32% of signups referred someone — but virality "needs critical mass (500+ signups) before
   competition takes off." [vendor, remery.ai]
@@ -230,9 +240,16 @@ than resolved:
   N get day-one access... scarcity drives referral activity."* [independent/vendor]
 - **Clubhouse**: 2 invites per user even at 10M waitlist size — invites resold for up to $400 on eBay. Cited
   as the extreme case of artificial scarcity working, celebrity/influencer-seeded. Least CELLO-relevant of the
-  named case studies — depends on influencer culture, not developer trust.
+  named case studies — depends on influencer culture, not developer trust. **Verified with a correction**:
+  eBay resale is real and confirmed by contemporaneous 2021 press (Tech Times, Newsweek, Business Insider,
+  TechNode), but $400 was a notable peak sale, not typical — most press puts the going rate at $20–50, spiking
+  past $1000 during celebrity moments (e.g. when Elon Musk joined). The "10M waitlist" and "6M active users by
+  early 2021" are two different numbers (waitlist size vs. actual usage) — don't conflate them.
 - **Monzo's "Golden Ticket"**: after ~2 weeks of engaged app use, users got exactly 1 invite to give away — by
-  2019, 80% of Monzo's acquisition was word-of-mouth.
+  2019, 80% of Monzo's acquisition was word-of-mouth. **Partially verified**: the Golden Ticket mechanic and
+  the 80% word-of-mouth figure are independently corroborated (an Australian Banking Association report cites
+  "according to the company"), but the specific "~2 weeks of engaged use" trigger timing has no findable
+  primary source — likely an unverified embellishment from whichever vendor blog first added that detail.
 - **UI/conversion-psychology tactics** [independent, scoreapp.com, citing external research]: rounded CTA
   buttons get 17–55% more clicks than sharp-edged ones; personalized/visually distinct CTAs increase
   click-through up to 202% (HubSpot); quantity-option buttons increase purchase likelihood 14% and total sales
@@ -245,22 +262,33 @@ than resolved:
 
 ### Artifact/template sharing loop
 
-- **Notion's loop, full mechanics** — the strongest real precedent for [[2026-06-24_1630_gtm-strategy]]'s
+- **Notion's loop, mechanics** — the strongest real precedent for [[2026-06-24_1630_gtm-strategy]]'s
   "exportable agent-to-agent conversation transcripts as shareable artifact" idea: user creates a
   workspace → shares a page/template publicly → indexed by Google → new user discovers it → signs up to
-  remix → creates own workspace → shares publicly → repeats. **60% of newcomers who duplicate a template
-  invite teammates to fill the doc; templates source 40% of all new Notion accounts at zero CAC.**
-  [independent, greta.agency] The underlying condition that makes this work: the artifact is inherently
-  *reusable* by the recipient, not just viewable.
+  remix → creates own workspace → shares publicly → repeats. [independent, greta.agency] The underlying
+  condition that makes this work: the artifact is inherently *reusable* by the recipient, not just viewable.
+  **Correction (verified 2026-07-12): the specific numbers — "60% of newcomers who duplicate a template
+  invite teammates" and "templates source 40% of all new Notion accounts at zero CAC" — have no findable
+  primary source.** No Notion blog post, founder statement, or press citation turned up either figure; the
+  40% appears to be a mixed-up citation of an unrelated Lenny Rachitsky stat about *other* PLG companies'
+  organic-search channel mix (Airtable/Miro/Snyk/Webflow/Zapier), not Notion templates specifically. Treat the
+  qualitative mechanic (public template → discovery → remix → new workspace) as directionally real — it's
+  widely described — but do not cite either percentage as fact.
 - **The gap, stated plainly**: Notion's artifact is publicly indexable by design. CELLO's transcripts are
   presumably private/sealed by default (directory never sees content), so the SEO-indexing half of the loop
   doesn't transfer without a deliberate "publish this transcript publicly" opt-in feature — a real product
   decision, not a copy-paste of Notion's mechanic.
-- **Slack's invite loop** [independent, cross-confirmed flowjam.com + shno.co]: workspace creation triggers an
-  automatic bot email pulling teammates in for free; a 10k-message retention ceiling nudges migration before
-  history disappears; **30% of all new workspaces are born inside existing ones**; invite loop completes in
-  ~1 day; K-factor peaked ~8.5 during hyper-growth. The *retention-threat-as-invite-trigger* structural
-  insight could map to CELLO's sealed-transcript continuity if framed carefully — noted as edging toward
+- **Slack's invite loop — UNVERIFIABLE, flagging plainly rather than picking a side.** [flowjam.com, shno.co —
+  both independent, but "cross-confirmed" was the wrong word; they're echoing the same unsourced figures, not
+  independently corroborating them] Claims: workspace creation triggers an automatic bot email pulling
+  teammates in for free; a 10k-message retention ceiling nudges migration before history disappears; "30% of
+  all new workspaces are born inside existing ones"; invite loop completes in ~1 day; K-factor peaked ~8.5
+  during hyper-growth. Searched for a primary source (Slack blog, founder interview, contemporaneous press,
+  First Round Review-style teardown) for every sub-claim and found none — only marketing-glossary blogs
+  repeating the same numbers with no citation trail. Treat as widely-repeated growth-marketing lore, not
+  confirmed fact. The mechanic itself (workspace creation prompts inviting teammates) is real and observable;
+  the specific numbers attached to it are not verifiable. The *retention-threat-as-invite-trigger* structural
+  insight could still map to CELLO's sealed-transcript continuity if framed carefully — noted as edging toward
   manufactured urgency, not excluded on that basis, just flagged.
 - **Dark social whisper tactic**: private, unbranded share links that still track referrals — *"developers
   hate overt marketing but will share utility links in Slack groups."* [independent, flowjam.com] Strong fit
@@ -273,8 +301,9 @@ than resolved:
 ### Metrics/instrumentation for the invite loop
 
 - **K-factor** = invites sent per user × conversion rate of those invites. >1 is true virality and extremely
-  rare; realistic B2B SaaS targets sit well under 1. Historical extremes: Slack ~8.5, Facebook ~7 early on.
-  **Loop velocity (cycle time from trigger to new user) matters more than K-factor once K is already above 1**
+  rare; realistic B2B SaaS targets sit well under 1. Historical extremes cited (Slack ~8.5, Facebook ~7 early
+  on) are unverified — see the Slack correction above; treat these as commonly-repeated figures, not confirmed
+  ones. **Loop velocity (cycle time from trigger to new user) matters more than K-factor once K is already above 1**
   — reducing cycle time compounds harder than increasing viral coefficient. [independent, cross-confirmed
   shno.co + flowjam.com]
 - **Don't track "invites sent" — track Retained Invitee Activation Rate (RIAR)**: % of invitees reaching
@@ -316,16 +345,21 @@ than resolved:
 
 ## Case studies referenced across sources (cross-cutting reference table)
 
-| Case | Mechanic | Result | CELLO relevance |
-|---|---|---|---|
-| Superhuman | Referral from a personal relationship (not waitlist visibility) → platform survey screen → mandatory 30-min onboarding call | 180K–275K waitlist (sources disagree), $825M valuation | **Highest** — closest precedent for readiness-gating + relationship-based endorsement |
-| Robinhood | Pure queue-jump referral, no other incentive | 1M signups in 24 hours | High — canonical referral example, cited by 3 independent sources |
-| Notion | 2-year slow-roll beta, public template gallery loop | 1M users pre-broad-launch; templates = 40% of new accounts at zero CAC | High — closest precedent for transcript-sharing artifact, with a stated privacy gap |
-| Slack | Auto-invite on workspace creation, retention-ceiling nudge | 30% of workspaces born inside existing ones; K-factor ~8.5 peak | Medium — structural insight (retention threat as trigger) is CELLO-adaptable but edges toward manufactured urgency |
-| Dropbox | Double-sided "give/get" referral | 3900% growth in 15 months | Medium — the double-sided *principle* fits CELLO's real mutual-benefit mechanic |
-| Harry's | Tiered milestone referral rewards | 100K signups in a week, 77% from referral | Medium — tiered-reward shape is generic, portable |
-| Monzo | Single "Golden Ticket" invite after engagement threshold | 80% of acquisition via word-of-mouth by 2019 | Medium — engagement-gated single invite maps to CELLO's readiness framing |
-| Clubhouse | Scarce invites, influencer-seeded | 10M users, invites resold for $400 | Low — depends on influencer/celebrity culture, not developer trust |
+**Verification status added 2026-07-12** after Andre caught the Superhuman claim being transcribed from a
+vendor page without checking — the whole table was then re-checked against primary/independent sources, not
+just the vendor case-study pages the mining pass originally pulled from. See narrative sections above for
+detail; this table is the summary.
+
+| Case | Mechanic | Result | Verification | CELLO relevance |
+|---|---|---|---|---|
+| Superhuman | Referral from a personal relationship (not waitlist visibility) → platform survey screen → mandatory 30-min onboarding call | 180K–275K waitlist (sources disagree), $825M valuation | **Verified** — primary source found (Acquired.fm podcast case-study compilation) | **Highest** — closest precedent for readiness-gating + relationship-based endorsement |
+| Harry's | Tiered milestone referral rewards | 100K signups in a week, 77% from referral | **Verified** — traces to Tim Ferriss's original 2014 write-up | Medium — tiered-reward shape is generic, portable |
+| Dropbox | Double-sided "give/get" referral | 3900% growth in 15 months, 100K→4M users | **Verified** — attributed to Drew Houston/Sean Ellis, consistently cited a decade+ | Medium — the double-sided *principle* fits CELLO's real mutual-benefit mechanic |
+| Robinhood | Pure queue-jump referral, no other incentive | ~1M waitlist signups over ~1 year before launch (**corrected** — not 24 hours) | **Corrected** — primary source (Vlad Tenev, Business Insider 2017) contradicted the original claim | High — canonical referral example, but the "instant virality" framing was wrong |
+| Clubhouse | Scarce invites, influencer-seeded | 10M waitlist (distinct from 6M active users); invites resold up to $400 (peak, not typical — $20–50 was the norm) | **Verified with correction** — real, but $400 was a peak sale | Low — depends on influencer/celebrity culture, not developer trust |
+| Monzo | Single "Golden Ticket" invite after engagement threshold | 80% of acquisition via word-of-mouth by 2019 | **Partially verified** — 80% figure and mechanic confirmed independently; the "~2 weeks" trigger timing is unsourced | Medium — engagement-gated single invite maps to CELLO's readiness framing |
+| Notion | 2-year slow-roll beta, public template gallery loop | 1M users pre-broad-launch; specific "60%"/"40%" template-conversion figures | **Unverifiable** — no primary source for either percentage; likely a misattributed stat | High (mechanic) — closest precedent for transcript-sharing artifact, but don't cite the numbers |
+| Slack | Auto-invite on workspace creation, retention-ceiling nudge | 30% of workspaces born inside existing ones; K-factor ~8.5 peak | **Unverifiable** — no primary source for any of the attached numbers; mechanic itself is plausible | Medium — structural insight (retention threat as trigger) is CELLO-adaptable but edges toward manufactured urgency |
 
 ---
 
