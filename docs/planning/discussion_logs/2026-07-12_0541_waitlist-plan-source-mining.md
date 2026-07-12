@@ -29,7 +29,11 @@ is **Stage 3**, and only makes sense once Stage 1 has already hooked someone. Mo
 not because it's unethical, but because Stage 1 has no second person to invite yet.
 
 Provenance tags: **[vendor]** = a waitlist/growth/survey tool selling itself (grounded in real customer data,
-but self-serving); **[independent]** = blog/agency/consultant/VC with nothing to sell.
+but self-serving); **[independent]** = blog/agency/consultant/VC with nothing to sell. **The vendor tag is a
+credibility marker only, never a recommendation to buy that product.** CELLO has no budget for paid SaaS
+right now (no credit card on file) — the waitlist/survey/email system is being built in-house and
+self-hosted on AWS or GCP. Every vendor-tagged tactic below describes a *mechanic* (a points system, a
+position-display feature, a survey flow) to reimplement ourselves, not a product to procure.
 
 ---
 
