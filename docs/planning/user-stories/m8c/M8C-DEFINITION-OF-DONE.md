@@ -344,7 +344,22 @@ description: >
   their tools to the vocabulary and bring them under the parity audit. Deliberately NOT done inside the help pass —
   removing public exports is a riskier change than a help revision and deserves its own unit. A note in
   `dod-onboard-help-1-tool-parity.test.ts` had claimed these were "not published"; that was FALSE and is corrected.
-  — ❌ NOT BUILT (known-open).
+  **EVALUATED IN DEPTH 2026-07-12 (CELLO_Support, kicked off from a broader dead-code audit of
+  `@cello-protocol/client` — see `cello-client/docs/dead-code-report.md`) — DEFERRED, not built,
+  Andre's call.** Full plan: [[2026-07-12_dod-legacy-mcp-1-deletion-plan]]. Reachability confirmed
+  real (the live shim never imports either legacy server); scope corrected from "delete 3 files" —
+  those files are the test harness for ~130 test cases across 11 suites, and at least one file
+  (`m6b-002-client-error-propagation.test.ts`) MIXES tests of dead code with tests of **live**
+  `client.ts`/`types.ts` code in the same file, so a wholesale deletion risks silently destroying
+  real coverage. A bounded, case-by-case surgical plan exists (§5 of the linked doc: triage every
+  case KEEP/DELETE by subject-under-test, red-first, delete, tighten the parity test's invariant from
+  "only server.ts may" to "nobody may," gate, review, publish cascade, verify against tarballs) —
+  ready to execute whenever this is picked up. **Andre (2026-07-12), on hearing the diagnosis:**
+  having tests that are either exercising dead code, or — worse — mixing dead-code and live-code
+  assertions in the same file, is "vastly wrong" independent of the runtime-dead-code question
+  itself; test-suite integrity is its own reason to prioritize this, not just tarball hygiene.
+  Deferred for now (launch runway), but flagged for elevated priority post-launch rather than
+  filed as routine cleanup. — ❌ NOT BUILT (known-open, deferred with reasoning recorded).
 
 - **DOD-CURSOR-DURABLE-1** (found LIVE by CELLO_Support 2026-07-11, during CLI-PARITY Phase 3) —
   **read-before-write makes a stateless CLI unable to hold a two-way conversation.** The `cello_send` gate
