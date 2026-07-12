@@ -25,7 +25,8 @@ is my ranking, not a decision.
 
 ## 1. A stranger can plant a fake message in your mailbox using nothing but your public key
 
-**Designation: `SEC-1`**
+**Designation: `SEC-1`** — ✅ **FIXED, reviewed, published to beta (`v0.0.98`) 2026-07-12. Awaiting
+Andre's `latest` promotion only.**
 
 When your agent is offline, someone can leave you a message by dropping it at a relay server —
 an offline mailbox you pick up from when you reconnect. The problem: your public key isn't a
@@ -35,6 +36,13 @@ there skip the sender-signature check entirely. Put together: anyone who knows y
 can plant a message that comes back looking like it's from a real contact. This is live and
 unpatched today, not hypothetical. Found by a reviewer during unrelated work, correctly flagged,
 never designed against.
+
+**Turned out worse than this description:** the design pass found the relay server itself — not
+just a random stranger — is the party best placed to pull this off, since the protocol hands it
+everything it needs automatically. Fix: every message you leave for pickup now gets signed with
+your own key before it's sealed, so the relay can't fake it, and a pickup only succeeds if that
+signature checks out. Independently verified by Ms_Chelly against the actual code and test suite
+before publishing, not taken on report. Full trail: [[M8C-DEFINITION-OF-DONE]] → `SEC-1`.
 
 Source: [[M8C-DEFINITION-OF-DONE]] → `SEC-1`.
 

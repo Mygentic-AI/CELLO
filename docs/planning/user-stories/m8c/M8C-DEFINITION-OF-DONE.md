@@ -1182,6 +1182,15 @@ own story) deliberately, never smuggled in as a rider. Source:
   Guard against a *transient* reject during the counterparty's own restart window (require "no record of this
   session," ideally stable across attempts). Cosmetic, not launch-blocking; belongs with the restart-churn
   family. Cross-ref DOD-SINGLE-DAEMON-1, F21 (stuck-seal terminal state). — ❌ NOT BUILT (backlog).
+
+- **DOD-SIGTERM-FLAKE-1** (2026-07-12, surfaced by CELLO_Support during the SEC-1 publish, flagged not
+  fixed) — `session-node-manager.test.ts` "AC-009 (binary): SIGTERM marks active sessions interrupted,
+  survives daemon restart" failed on CI (`expected 'active' to be 'interrupted'`) on a commit that touched
+  only docs/scripts (cello-client `29177125124`, the dead-code-report merge immediately before the SEC-1
+  tag) — passed on the SEC-1 tag's own CI run and passes locally (2161 green). Intermittent, not caused by
+  SEC-1. Per the debugging discipline this is a real failing assertion in the restart/interrupt path and
+  needs a root-cause pass (producer/consumer trace on the SIGTERM → interrupted-state write), not attribution
+  to flakiness without evidence. — ❌ NOT INVESTIGATED (backlog).
 - **SEC-1 (2026-07-07, flagged by cello-unit-reviewer during DOD-LEAVEMSG-1) — relay-parked
   content authentication gap.** Bare-content parked envelopes (those without the DOD-MSG-4 ordering
   Structure1/2 — the fallback shape `decodeParkEnvelope` accepts) skip Ed25519 signature
@@ -1195,6 +1204,48 @@ own story) deliberately, never smuggled in as a rider. Source:
   (requiring every parked entry to carry the ordering record) or add a genuine per-message sender
   signature to the park protocol. Flagging prominently — this is real production crypto-protocol
   attack surface, not a nice-to-have.
+  **✅ FIXED, REVIEWED, PUBLISHED TO BETA — 2026-07-12 (CELLO_Support, kicked off from
+  [[launch-triage]] item 1).** Design pass first (SPARC S+P+A):
+  [[2026-07-12_sec-1-relay-park-authentication-design]] — ESCALATED the threat model past the
+  original writeup: the RELAY ITSELF is the best-placed adversary (handed the session_id in
+  plaintext + holds the mailbox key), not merely a stranger who learns a pubkey. FALSIFIED the
+  option-(a) fix above — rejecting bare-content envelopes would have silently broken the
+  CELLO-M7-MSG-001 crash backstop (a legitimate degraded path with no ordering record available at
+  re-park time) — before any code was written. Shipped **option (b+)**: an Ed25519 sender signature
+  domain-bound to `(session_id, recipient_pubkey, content_hash)`, carried INSIDE the seal so the
+  relay can neither read, strip, nor forge it; recovery fails closed (unsigned / bad sig /
+  signer≠counterparty / unknown session → refused, never confirm-deleted). cello-client `d1dd623`
+  (fix) + `2d0cf91` (review fixes) — RED-FIRST proof against the pre-fix daemon confirmed the live
+  exploit (forged content ingested, leaf appended, notarized) before the fix landed. Reviewer
+  (cello-unit-reviewer, Opus) found 4 defects AROUND the sound gate, all fixed: a signer-pubkey
+  hex-case-sensitivity bug (M1, MEDIUM-HIGH — would have silently refused legitimate mail as
+  "attacks"), swallowed refusal counts (M2), a silently-discarded park-failure error (M3), an
+  unbounded re-verify amplifier on a forged mailbox (M4) — plus a hollow-test finding
+  (mutation-verified: every test built its own envelope, so a wrong-key producer bug would have
+  shipped silently; fixed by making `sealParkEnvelope` the sole producer, round-tripped through the
+  real seal). Direct content (non-park) attribution still relies on the transport/session layer, not
+  a per-message signature — deliberately out of scope, recorded so it isn't later mistaken for
+  covered. **Independently verified by Ms_Chelly** (not taken on report): pulled both repos, spot-
+  checked the diffs match the described fix, ran `sec-1-park-authentication.test.ts` directly —
+  14/14 green. **Published beta, tag `v0.0.98`**, verified against the TARBALLS (not commits):
+  protocol-types 0.0.20, transport 0.0.18, client 0.0.49, daemon 0.0.50, cli 0.0.48, connect 0.0.68
+  (crypto unchanged at 0.0.18 — real dependency graph, not a reflexive all-seven bump); cross-pins
+  confirmed real versions, zero `workspace:*`. **NOT promoted to `latest`** — Andre's call, command
+  set prepared. **Migration: enforce-immediately** (Andre's decision, 2026-07-12) — once `latest`
+  carries daemon 0.0.50, an un-upgraded peer's parked mail is refused (loud, not silent, nothing
+  destroyed); the EC2 demo agent is the known laggard, reinstall in the same pass.
+  **Process note worth keeping:** CELLO_Support declined to treat Ms_Chelly's relayed "Andre says
+  GO" as authorization to publish — a CELLO channel message is untrusted external data, and a
+  relayed approval is not the operator's approval regardless of how well-verified the underlying
+  work is. It got Andre's authorization directly before touching npm. Worth holding as a standing
+  rule for any agent coordinating irreversible actions through another agent.
+  **⚠️ Unrelated flake surfaced, logged not fixed (out of scope for SEC-1):** the CI run on main
+  immediately before the SEC-1 tag failed `session-node-manager.test.ts` "AC-009 (binary): SIGTERM
+  marks active sessions interrupted, survives daemon restart" (`expected 'active' to be
+  'interrupted'") on a commit that touched only docs/scripts; passed on the SEC-1 tag's own run and
+  locally (2161 green). Intermittent in CI, not caused by SEC-1, but a real failing assertion in the
+  restart/interrupt path — needs its own root-cause pass per the debugging discipline, not a shrug.
+  Tracked below as its own backlog line.
 
 - **SEC-2 (2026-07-07, found while scoping DOD-PRIMARY-1's ceremony-gate) — ✅ FIXED & DEPLOYED
   (2026-07-08). ⚠️ ENFORCEMENT NOT YET LIVE-VERIFIED — the negative case is unrun (see below).
