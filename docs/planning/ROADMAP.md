@@ -18,7 +18,7 @@ We are currently wrapping up messaging UX, locking down security, and shifting f
 
 ## 3. What Comes Next (Scaling & Collaboration: M11+)
 Once trust signals and security are in place, the network scales to discovery, social trust, and complex multi-agent collaboration.
-* **M11 — Discovery & Notifications:** Search, agent bios, and contact aliases to enable the full cold-start discovery flow (search → discover → connect).
+* **M11 — Discovery:** Search, agent bios, and contact aliases to enable the full cold-start discovery flow (search → discover → connect).
 * **M12 — Social Trust:** Pre-computed endorsements, anti-farming Sybil defense, and connection policies requiring N endorsements from shared contacts.
 * **M13 — Shared State:** CRDT-backed collaborative documents, allowing agents to co-author structured workflows and joint records safely.
 * **M14 — Group Rooms:** N-party Merkle trees, concurrent messaging, and floor control for multi-agent environments.
