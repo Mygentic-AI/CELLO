@@ -359,7 +359,60 @@ description: >
   assertions in the same file, is "vastly wrong" independent of the runtime-dead-code question
   itself; test-suite integrity is its own reason to prioritize this, not just tarball hygiene.
   Deferred for now (launch runway), but flagged for elevated priority post-launch rather than
-  filed as routine cleanup. — ❌ NOT BUILT (known-open, deferred with reasoning recorded).
+  filed as routine cleanup.
+  **REVERSED AND BUILT 2026-07-12 (Andre's call, executed by CELLO_Feedback).** The defer was
+  reversed on two grounds: (1) the "risk" half of the trade was priced BEFORE the design pass, which
+  had already done the hard part; (2) "zero customer-visible value" was wrong — cello-client is open
+  source, and a technical evaluator points their own agent at the repo before trusting a
+  cryptographic-trust product. Dead-code-backed tests are a credibility signal there.
+  **Code complete on branches `dod-legacy-mcp-1` (cello-client, 4fafbe7) and `dod-legacy-mcp-1-e2e`
+  (trustless-cello, 68144ec0). NOT YET PUBLISHED — awaiting Andre's go on the cascade.**
+  - **Deleted:** `adapter/server.ts`, `adapter/notifications.ts` (BOTH functions — `pushChannelNotification`
+    was runtime-dead too; the live shim inlines its own `buildChannelParams` call and never imports the
+    module), `client/mcp-server.ts`, and the package-root exports from both `index.ts`.
+  - **Triage:** 130 cases across **12** suites (the plan said 11 — `persist-022`'s `AC-007-dist-freshness`
+    was missed, and it asserted `dist/mcp-server.js` EXISTS and names the legacy tools: a test whose job
+    was guarding that the dead vocabulary kept shipping). **95 DELETE / 25 KEEP / 10 tightened.** A
+    file-level delete would have destroyed: `FileKeyProvider` 0o600 key-persistence, live `client.ts`
+    send/receive, the three `DOD-DIR-FAILCLOSED-1` cases, and the SOLE consumer of
+    `rfc6962-external-verify.json` — CELLO's only external RFC 6962 conformance check.
+  - **Parity audit tightened** from an allowlist ("only server.ts may name a renamed-away tool") to an
+    absolute ("nobody may"), and its scan is now recursive (it had only ever read top-level `src/*.ts`).
+  - **Verified against the REAL tarball** (`npm pack` → extract → grep): connect's `dist/` ships no
+    `server.js`/`notifications.js` and registers no renamed-away tool. This is the defect, closed at the
+    artifact level.
+  - **Cross-repo (caught by review, NOT in the plan):** `packages/e2e-tests/src/session-fixture.ts`
+    imported `createMcpSessionServer`; 15 e2e cases used it via `withMcp`. They passed only because the
+    `^0.0.20` pin resolves to the old client — the publish cascade would have broken the e2e suite and the
+    live smoke test that gates milestone close. Triaged the same way: **12 re-pointed at the live
+    CelloClient** (they were real protocol coverage — real libp2p/directory/DKG/FROST/relay — merely read
+    through a dead translator), **3 deleted as genuine duplicates.** `withMcp` is gone from the fixture.
+  - **Gate:** cello-client 197 files / 2051 tests green, lint + typecheck + build clean. trustless-cello
+    typecheck clean; default e2e gate unchanged from main (49 pass / 22 fail on BOTH — those 22 are
+    PRE-EXISTING failures on main, not introduced here).
+  — ✅ BUILT (publish cascade pending Andre's approval).
+
+  **Follow-ups this surfaced (NOT done, deliberately — each is its own unit):**
+  - **`buildChannelParams` has no field allowlist.** It SPREADS every identifier-safe scalar of the
+    daemon's doorbell frame into agent-visible `<channel>` attributes. INV-CONTENTFREE holds today only
+    because of what the daemon happens to send, plus two structural skips (the `content` key, and
+    non-scalars). A daemon that ever adds a scalar `preview`/`genesis_prev_root` to a doorbell ships it
+    straight into the agent's prompt-injection blast radius. Mitigated for now by a TRIPWIRE test
+    (`adapter-002.test.ts` SI-001) that pins the exact meta key set and goes red on any new field — but
+    the allowlist question is real and unresolved.
+  - **`cello_get_inclusion_proof` is now provably a no-op surface.** The shim still registers it; the
+    daemon answers `not_implemented`. Its only real implementation (Merkle proof generation with the
+    `local_tree_inconsistent` / `leaf_index_out_of_range` guards) lived in the deleted `mcp-server.ts`.
+    This diff removes the last implementation, not merely a dead copy. Decide: implement, or unregister.
+  - **`CheckpointStatusProvider` is now orphaned** in `trustless-cello/packages/interfaces` — zero
+    references in cello-client after the deletion. PERSIST-017's checkpoint surface has no implementation
+    and no tests.
+  - **`packages/e2e-tests` has 22 failing tests on `main`** (pre-existing, unrelated). The three MCP e2e
+    suites are also `describe.skipIf(!process.env.CELLO_E2E_LIVE)` — so that coverage does not run in CI
+    at all. `connreq-002` runs the same live fixture unguarded, so the stated "FROST timing is unreliable
+    in CI" rationale for the guard looks stale.
+  - **`dx-001-startup.test.ts` contains a hollow test** — `expect('server.connect(...)').toContain("server.connect")`
+    asserts a string literal against itself and can never fail.
 
 - **DOD-CURSOR-DURABLE-1** (found LIVE by CELLO_Support 2026-07-11, during CLI-PARITY Phase 3) —
   **read-before-write makes a stateless CLI unable to hold a two-way conversation.** The `cello_send` gate
