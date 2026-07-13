@@ -83,28 +83,37 @@ Measured on `1365e05`:
 
 ---
 
-## 3. ⚠️ THE GUARD ASYMMETRIES — this is the review payload, not trivia
+## 3. ❌ THE GUARD ASYMMETRIES — RETRACTED. They do not exist.
 
-**Read the table above again as a review finding, because that is what it is.**
+**This section originally claimed the review payload of the whole refactor. It was wrong, and the
+error was mine.** Re-measured against `1365e05` on 2026-07-13:
 
-- **26** handlers read the connection state — but only **18** guard `no_current_agent`.
-- **11** handlers fetch a session record — but only **3** check `session_not_owned`.
+| the claim | the truth |
+|---|---|
+| "26 read connection state, only **18** guard `no_current_agent`" | **All 13 `resolveCurrentAgent` call sites guard**, immediately. The 8 "missing" ones return the shared constant `NO_CURRENT_AGENT_RESPONSE` — invisible to a grep for the literal string. |
+| the 10 contacts/settings handlers "don't resolve an agent" | They resolve through `resolveContactAgent` (`daemon.ts:6135`), which **guards internally**. The prologue is already factored — twice. |
+| "11 fetch a session record, only **3** check `session_not_owned`" | `getSessionRecord(agentName, sessionId)` is **keyed on the agent**. Ownership is enforced **structurally, by the query key** — you cannot read another agent's session. The 3 explicit returns exist to give a *better error message*, not to perform a missing check. |
 
-Each gap is **either deliberate or a bug**, and today nothing distinguishes the two. This is not
-hypothetical: exactly one of these asymmetries was the live agent-misroute fixed in `f00b534`
-(`stop-agent` cleared the selection, and the next unselected call silently wrote to a *different*
-agent — observed: selected alice, write landed on bob, exit 0).
+**Zero unguarded handlers. Zero unowned session reads.** The numbers in §2 are raw token counts; they
+were never evidence of an asymmetry, and reading them as one was the defect.
 
-**The decorator does not "clean this up" — it FORCES EVERY ASYMMETRY INTO THE OPEN.** When a handler
-must declare `withAgent` or `withSession`, a handler that currently skips a guard 20 others apply
-becomes impossible to miss.
+### The rule this cost us
+> **A count of a string is not a count of a behaviour.** A shared constant, a helper, or an enforcing
+> key makes a guard invisible to grep while leaving it perfectly present. This is the same
+> false-negative that nearly deleted the live `ed25519_FROST` re-export during Phase 0 — the second
+> time in two days. **Read the call sites. `M8C-PROCEDURE` §5c ("verification, not assertion") exists
+> for exactly this, and this document violated it.**
 
-> **Standing instruction:** every asymmetry surfaced is a **FINDING TO LOG** in the journal —
-> deliberate (say why) or a defect (fix it). **Never silently normalise one away** by wrapping it in
-> the decorator and moving on. That would convert a real bug into a "refactor" with no trace.
->
-> Andre, 2026-07-13: *"these refactorings are actually good as a kind of code review."* He is right,
-> and it is the main reason to do this work at all.
+**Consequence: Unit 1 (the handler decorator) is CANCELLED — not deferred.** Its entire justification
+was "force the asymmetries into the open." With the guards uniform and already helper-factored, what
+remains is a decorator that saves ~40 lines and surfaces no bugs. Cosmetic. The triage rule says no.
+
+*What survives is §1, which was never a grep result:* `startDaemon` really is **6,255 lines in one
+function**, really is **66% covered**, and really is unsplittable because 46 handlers close over 73
+shared locals. **The seams (D, A1+C, B) deliver that, and their value never depended on §3.**
+
+*(Andre, 2026-07-13: "these refactorings are actually good as a kind of code review." Still true —
+the first thing this one reviewed was the plan for it.)*
 
 ---
 
@@ -116,13 +125,10 @@ diffs that MOVE code, and lenses 1–4 have nothing to bite on here**) → fix e
 **Behavior preservation IS the spec.** A refactor has no DoD clause, but it has an implicit one:
 *nothing changes.* Anything whose behavior moves is a finding unless journaled.
 
-### Unit 1 — the handler decorator (`withAgent` / `withSession`) — DO THIS FIRST
-The highest-leverage change in the file and the one that makes every later seam visible. It collapses
-~20 copy-pasted prologues **and** forces each handler to name what it needs — the closure-capture
-conversion in miniature. Expected output: a list of guard asymmetries (§3), each one journaled.
-**Risk: LOW-MED.** Behavior must not change; the asymmetries are findings, not fixes-in-passing.
+### ~~Unit 1 — the handler decorator~~ — **CANCELLED 2026-07-13. See §3.** Its justification was the
+guard asymmetries; there are none. Start at Seam D.
 
-### Unit 2 — Seam D: bootstrap / manifest / consortium (~254 lines)
+### Unit 2 — Seam D: bootstrap / manifest / consortium (~254 lines) — **DO THIS FIRST**
 Straight-line startup that **already returns one object** (`{consortiumEndpoints, manifestVerified,
 directoryEndpointResolver, stopHttpManifestPoll}`). Captures almost nothing. **Risk: LOW.** Proves
 the module-extraction pattern on the easiest possible target.
