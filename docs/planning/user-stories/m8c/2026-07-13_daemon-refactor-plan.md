@@ -128,7 +128,24 @@ diffs that MOVE code, and lenses 1–4 have nothing to bite on here**) → fix e
 ### ~~Unit 1 — the handler decorator~~ — **CANCELLED 2026-07-13. See §3.** Its justification was the
 guard asymmetries; there are none. Start at Seam D.
 
-### Unit 2 — Seam D: bootstrap / manifest / consortium (~254 lines) — **DO THIS FIRST**
+### ✅ Unit 2 — Seam D: bootstrap / manifest / consortium — **DONE 2026-07-13** (`719b2be`)
+`daemon.ts:395-553` → `core/daemon/src/consortium-bootstrap.ts`. **`daemon.ts` −150/+25.**
+
+Extracted as **two** functions, not one, and the split is load-bearing: `startDaemon` must be able
+to **refuse to start between them** (ADV-002). The refusal closes the DB and releases the singleton
+lock — both the daemon's, neither the module's — and it must happen **before** the manifest poll
+starts, or a refused startup **leaks a live timer**. Fusing them would drag the lock into the module
+or leak the timer.
+
+**The payoff is coverage, not line count.** Every failure branch in that block — a clock outside the
+validity window, an anti-rollback hit, a load that throws, a roster that only partly resolves — could
+previously be reached ONLY by standing up a whole daemon. That is *why* `daemon.ts` sits at 66%. They
+are now 17 ordinary unit tests. Two had no direct coverage at all before: a **partial roster still
+verifies** (one node down must not strand the rest — the redundancy invariant), and an **empty roster
+logs at ERROR**, never buried at info. Reviewer (Lens 5) confirmed behavior preservation
+statement-by-statement and proved the dropped `consortiumEndpoints` local dead by reference scan.
+
+### Unit 3 — Seam A1 + C: the address book (~690 lines) — **NEXT**
 Straight-line startup that **already returns one object** (`{consortiumEndpoints, manifestVerified,
 directoryEndpointResolver, stopHttpManifestPoll}`). Captures almost nothing. **Risk: LOW.** Proves
 the module-extraction pattern on the easiest possible target.
@@ -224,6 +241,21 @@ M6→M7. Implement, or unregister?).
 4. **The revert test.** *Would this test still pass if the fix were reverted?* If yes, it is not
    coverage — whatever its name says.
 5. **`main` is moving.** Another agent is active in `trustless-cello`. Pull first.
+6. **🚨 TWO AGENTS, ONE WORKING TREE — this bit me on Seam D. WORK IN A WORKTREE.**
+   CELLO_Support was working in the **same** `cello-client` checkout. `HEAD` moved under me mid-edit
+   (`1365e05` → `7d5ec7a`), and my first Seam D edit was built on the **stale** `daemon.ts` — it
+   **silently reverted** their `DOD-AGENT-PARAM-1` guidance strings. **The net line-stat
+   (`30+/152-`) hid it perfectly**: the diff looked exactly like the block I meant to move. Two
+   failing tests were the only signal, and my first instinct was to attribute them to *their*
+   in-flight work. **I checked instead of attributing, and the check is what found it** — they
+   *passed* without my change. Fix was to discard my copy, `git checkout HEAD -- daemon.ts`, and
+   re-apply the block on the correct parent.
+   - **A net line-stat is not a diff review.** A revert and an extraction can net out to the same
+     numbers. Read the `+`/`-` lines, or diff the specific strings you did not intend to touch.
+   - **"That test isn't mine" is a hypothesis, not a finding.** Prove it: stash your change and run
+     the test. If it passes without you, it *is* yours.
+   - This is [[feedback_failing_test_must_be_fixed_not_attributed]] and [[M8C-PROCEDURE]] §5c earning
+     their keep on the same day, on the same change.
 
 ## 8. The gate (run in order, every unit)
 
