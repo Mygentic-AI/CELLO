@@ -101,6 +101,12 @@ and Bob's name for the same session are different rows, different values, no con
   reason code, not silently stripped. A 201-char name is REJECTED, not truncated. Leading/trailing
   whitespace is trimmed before the length check; a name that is only whitespace is treated as a clear
   (see AC-A5) — decide this explicitly in the test, don't leave it to chance.
+
+  > **⚠️ ORDERING, clarified 2026-07-13 (CELLO_Support read through my loose wording to the intent):**
+  > **check control characters BEFORE trimming.** "Trimmed before the length check" was sloppy of me and
+  > could be read as trim-first. Trim-first would silently eat a leading `\n` and store a label the
+  > operator never typed — a mutation oracle on their own data, in the one field whose entire purpose is
+  > to be *what they said*. **Reject, do not massage.**
 - **AC-A4** — `null` is legal everywhere a name is accepted and means "no name" (on close: don't set
   one; on rename: clear it).
 
@@ -118,10 +124,32 @@ and Bob's name for the same session are different rows, different values, no con
   unilateral seal, and `force: true` abandonment. (Force-abandon is the case where a name is most
   useful — that is the session you most want to identify later.)
 
+  > **⚠️ AC-A7 SHARPENED 2026-07-13 by CELLO_Support, and its version is better than mine.** Do NOT
+  > write the name at each of the three exits. **Write it ONCE on the way in, immediately after
+  > validation.** Threading it through bilateral/unilateral/force is exactly how force-abandon ends up
+  > silently unnamed — and force-abandon is the session you most want to identify later, which is what
+  > this AC says in its own parenthesis. My AC undermined its own intent. Writing early is safe only
+  > because **AC-A9 makes a rename legal in ANY status**: the worst case of a failed seal is a *named
+  > open session*, a state the operator could produce by hand anyway.
+
 **Rename**
 
-- **AC-A8** — New IPC handler + MCP tool `cello_session_set_name(session_id, session_name)`:
+- **AC-A8** — New IPC handler + MCP tool `cello_name_session(session_id, session_name)`:
   set-or-clear-by-null, mirroring the shape of the already-shipped `cello_contact_set_moniker`.
+
+  > **⚠️ AC-A8 AMENDED 2026-07-13 — as originally written, AC-A8 and AC-A15 were mutually
+  > unsatisfiable, and I did not notice.** I asked for MCP tool `cello_session_set_name` AND CLI
+  > command `cello name-session`. `DOD-ONBOARD-HELP-1` §2b mechanically enforces that **an MCP tool's
+  > name is `cello_` + the CLI command name, snake_cased** (`core/daemon/src/vocabulary.ts:8`) — it has
+  > a test, and that test went red the instant CELLO_Support registered the pair. It is not a style
+  > rule: the daemon names these tools back at the operator in ~50 guidance strings and renders them
+  > per surface, so one capability with two names is exactly what the vocabulary exists to abolish.
+  >
+  > **Resolution: the CLI verb wins → the tool is `cello_name_session`.** `cello name-session ab12…
+  > the deploy postmortem` reads the way an operator thinks, and AC-A15 *deliberately* designed that
+  > multi-word positional. The alternative (CLI `session-set-name`, matching the tool by analogy with
+  > `contact-set-moniker`) buys naming symmetry at the cost of a worse command line — trading the thing
+  > actually wanted for a thing only wanted by analogy.
 - **AC-A9** — It works on a session in ANY status — `active`, `interrupted`, `seal_interrupted_pending`,
   `sealed`, force-abandoned. Naming a long-sealed session for archival clarity is the point. The ONLY
   scoping is ownership: the `(agent_id, session_id)` row must belong to the calling agent, or
@@ -148,7 +176,7 @@ and Bob's name for the same session are different rows, different values, no con
 - **AC-A14** — `cello close-session <id> [--session-name "<text>"]` — new flag, `consumesValue: true`.
 - **AC-A15** — New command `cello name-session <session-id> <name…>` (with `--clear` to null it),
   registered in `core/cli/src/registry.ts` with a `summary`, a `help`, and its `ipcMethod` pointing at
-  `cello_session_set_name` — so the tool → command → handler parity test that already exists picks it
+  `cello_name_session` — so the tool → command → handler parity test that already exists picks it
   up automatically. Multi-word names must work without quoting hell: take the remaining positionals
   (the `--` terminator is already handled by `splitAgentFlag`).
 
@@ -234,7 +262,7 @@ Resolution order: explicit param > this connection's current agent > the sole on
 - **AC-B4** — The CLI already has `--agent <name>` on these commands and already routes it through
   `splitAgentFlag` + the `use-agent` replay. Confirm that path still works end to end after the
   rename; do not change the CLI's flag spelling (`--agent` is already right).
-- **AC-B5** — `cello_session_set_name` (Part A) takes the same optional `agent` param, for consistency
+- **AC-B5** — `cello_name_session` (Part A) takes the same optional `agent` param, for consistency
   with every other tool. Same resolution order.
 
 ---

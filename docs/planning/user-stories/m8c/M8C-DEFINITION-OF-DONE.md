@@ -1312,7 +1312,7 @@ which. Add a **local-only, cosmetic** `session_name` on the `sessions` row.
   nullable), when the agent has just finished the conversation and does know.
 - 🔴 **Unnamed is a SIGNAL, not a gap** — a closed session with no name probably did not close
   cleanly. NO auto-generated default names; NULL is allowed to mean something.
-- 🔴 **Rename any time, any status** — new `cello_session_set_name(session_id, session_name)`, set-or-
+- 🔴 **Rename any time, any status** — new `cello_name_session(session_id, session_name)`, set-or-
   clear-by-null, ownership-scoped. Naming a long-sealed session is the point. Provably does not touch
   the seal (`sealed_root_hex` byte-identical before/after).
 - 🔴 **Surfaced with the id, never instead of it** — `cello_list_sessions`, `list_sessions` (CLI),
