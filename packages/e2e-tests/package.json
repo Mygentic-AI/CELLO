@@ -23,14 +23,13 @@
     "test:spine": "vitest run --config vitest.spine.config.ts"
   },
   "dependencies": {
-    "@cello-protocol/connect": "^0.0.30",
-    "@cello-protocol/client": "^0.0.20",
-    "@cello-protocol/crypto": "^0.0.18",
+    "@cello-protocol/connect": "^0.0.70",
+    "@cello-protocol/crypto": "^0.0.19",
     "@cello-protocol/directory": "workspace:*",
     "@cello-protocol/interfaces": "workspace:*",
-    "@cello-protocol/protocol-types": "^0.0.18",
+    "@cello-protocol/protocol-types": "^0.0.21",
     "@cello-protocol/relay": "workspace:*",
-    "@cello-protocol/transport": "^0.0.4",
+    "@cello-protocol/transport": "^0.0.19",
     "@claude-flow/testing": "3.0.0-alpha.6",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@noble/curves": "2.2.0",

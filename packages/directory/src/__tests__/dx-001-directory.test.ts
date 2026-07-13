@@ -40,7 +40,7 @@ import {
 } from "../directory-node.js";
 import type { RelayAdapter } from "../directory-node.js";
 import type { RelaySessionAssignment } from "../directory-types.js";
-import { NetworkDirectoryNode, runNetworkDkg } from "@cello-protocol/client";
+import { NetworkDirectoryNode, runNetworkDkg } from "@cello-protocol/daemon";
 import { createHealthServer } from "../health-server.js";
 import { DevTokenValidator } from "@cello-protocol/interfaces/stubs";
 
