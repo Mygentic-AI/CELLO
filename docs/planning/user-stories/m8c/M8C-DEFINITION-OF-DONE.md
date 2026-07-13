@@ -1354,6 +1354,26 @@ nowhere, so a multi-agent operator can only switch with the sticky `cello_use_ag
 
 ## Tracked, not M8C-fruit (bigger friction — own items, NOT folded in as riders)
 
+- **`DOD-TYPECHECK-TESTS-1` — NO TEST FILE IN THIS REPO IS TYPECHECKED.** Found 2026-07-13 during
+  the daemon Seam C review. Every `core/*/tsconfig.json` has `"exclude": [..., "src/__tests__"]`
+  (correctly — `tsc --build` emits, and a test must never land in `dist/`), and `pnpm typecheck` is
+  just `tsc --build`. Vitest's esbuild **strips** types without checking them. So a type error in a
+  test **ships silently**, and neither gate ever sees it.
+  - **Why it matters beyond tidiness:** it makes a whole class of test claim *unfalsifiable*. A test
+    that constructs a module's deps object is supposed to go RED when that module grows a new
+    required dependency — that is how a test pins a seam. Untypechecked, the new field simply
+    arrives `undefined` and the test passes, still asserting the module is decoupled **while it is
+    being re-coupled**. The `contact-handlers` seam test hit exactly this.
+  - **Measured cost: 209 errors across 45 test files.** Most are test doubles that have silently
+    **drifted from the interfaces they impersonate** (e.g. `FakeNode` is missing `CelloNode`'s
+    `hasDirectConnectionTo` and `keyProvider`) — a stub that no longer resembles the real thing is a
+    test passing for the wrong reason, and this is *why* they drifted.
+  - **The recipe** (validated, then reverted — a config with no consumer must not ship): a root
+    `tsconfig.test.json` extending `tsconfig.base.json` with `composite:false`, `declaration:false`,
+    `noEmit:true`, `rootDir:"."`, `include: ["core/*/src/**/*.ts"]`; run it after `tsc --build` (it
+    resolves against the emitted `.d.ts`), and add it to the `typecheck` script.
+  - Not a launch blocker, and **not a rider on a refactor** — it is 45 files of real cleanup.
+
 These surfaced in the same friction sweep but are NOT cheap ride-alongs — each is real work with
 its own design surface. Recorded so they don't fall through the cracks; pull into a tier (or their
 own story) deliberately, never smuggled in as a rider. Source:

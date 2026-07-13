@@ -145,7 +145,32 @@ verifies** (one node down must not strand the rest — the redundancy invariant)
 logs at ERROR**, never buried at info. Reviewer (Lens 5) confirmed behavior preservation
 statement-by-statement and proved the dropped `consortiumEndpoints` local dead by reference scan.
 
-### Unit 3 — Seam A1 + C: the address book (~690 lines) — **NEXT**
+### ✅ Unit 3 — Seam C: the address book handlers — **DONE 2026-07-13**
+`daemon.ts:5984-6261` (ten handlers) → `core/daemon/src/contact-handlers.ts`. **`daemon.ts` −266.**
+
+**The extraction found a defect, which is the whole argument for doing this work.** Forced to name
+its dependencies, the address book needs: the session store, this connection's agent selection, a
+logger, and a telegram-poller callback. Nothing about sessions, seals, transport or ceremonies —
+*except* `cello_set_moniker`, which was the **ONE** handler bypassing the store interface to grab the
+**raw SQLite handle** (`sessionNodeManager.getDb()`) and build a `DbIdentityStore`. Every other
+handler goes through a store method. Inside the closure that asymmetry was invisible. It is now an
+injected `setAgentMoniker` capability — same construction, same behavior, and the stub store has no
+`getDb` at all, so reinstating the reach goes red.
+
+**Reviewer F1 was against my own test file, and it was right.** I claimed "re-couple this and it
+stops compiling or throws." *Neither was true.* It only threw for 4 of the 10 handlers (only 4 were
+invoked — now all ten are, table-driven), and it **never stops compiling, because no test file in
+this repo is typechecked at all** → `DOD-TYPECHECK-TESTS-1` (209 errors / 45 files; its own item).
+
+> **The rule:** an **overclaimed test is worse than no test** — it converts an unfalsifiable claim
+> into a green check mark. State exactly what a test does *not* catch.
+
+**Seam A1 (the SNM store methods, ~430 lines) is NOT done and is NOT one slab** — the plan said
+"contiguous, zero coupling"; it is neither. Those lines **interleave** address-book methods with
+M8C-ABUSE-1 session accounting (`#getHeldBytesTotal` reaches `#heldContent`, session runtime). Doing
+it means a `ContactStore` that SNM delegates to, not a block move. Re-scope before starting.
+
+### Unit 4 — Seam B: the seal cluster (~1,250 lines) — **NEXT**
 Straight-line startup that **already returns one object** (`{consortiumEndpoints, manifestVerified,
 directoryEndpointResolver, stopHttpManifestPoll}`). Captures almost nothing. **Risk: LOW.** Proves
 the module-extraction pattern on the easiest possible target.
