@@ -4315,6 +4315,116 @@ approved the trade. Rationale + the stricter alternative not taken:
 
 ---
 
+## 2026-07-13 — `DOD-AGENT-PARAM-1` + `DOD-SESSION-NAME-1` — one word for the agent selector; a name for a session
+
+**Both DONE.** Branch `m8c-session-names` in cello-client (off `7d5ec7a`, which is itself on main via
+Seam D's merge `719b2be`). Commits: Part B `7d5ec7a` + `699eb21`, Part A `adb8116` + `a20d107` +
+`4eab4f7`. Gate on the final tree: **1771 tests, lint, typecheck, build — green.** One
+`cello-unit-reviewer` per unit; every finding fixed. **NOT PUBLISHED** — daemon+cli+connect cascade,
+needs `/cello-publish` + Andre's go.
+
+**What shipped.** The per-call agent selector is `agent` on all nineteen handlers that take one (it
+was `name` on ten of them), and it is now EXPOSED on the eight session tools — so a multi-agent
+operator can say "do THIS one call as Alice" instead of only being able to flip the sticky,
+connection-scoped `cello_use_agent`. And a session can carry a human-readable name — set optionally at
+close, renameable in any status, surfaced next to the id on every list surface.
+
+### Bugs found and fixed (Symptom / Root cause / Fix / Rule)
+
+**1. The story's own clean-break claim was FALSE, and following it would have misrouted FROST shares.**
+- *Symptom:* none, yet — this was caught in the falsification step, before a line of code.
+- *Root cause:* AC-B3 asserted "the only callers of the old spelling are our own tests," reasoning that
+  the CLI carries its agent via the `use-agent` replay rather than as an IPC param. True of the 18
+  commands that go through `withDaemon` — and false of `cello refresh <name>` and
+  `cello relay-receipts <name>`, which take the agent as a **required positional** and send `{ name }`
+  themselves. They are exactly the two of the ten that are NOT MCP tools, which is how they escaped the
+  audit.
+- *Fix:* rename the daemon AND fix both producers in the same commit. Not an alias — they are ours, in
+  the same repo, in the same publish cascade.
+- *Rule:* **a rename is a producer/consumer contract, and the audit must sweep BOTH sides.** Renaming
+  the consumer alone would not have failed loudly: the daemon would have read no selector, fallen
+  through to the sole-online-agent fallback, and rotated FROST shares for whichever agent happened to
+  be up — `cello refresh alice` acting on bob, exit 0. A silent misroute on key material, which is the
+  exact defect class the story exists to kill.
+
+**2. A test that could not catch the bug it was written for.** (unit review, BLOCKING)
+- *Symptom:* the shim test asserting "the tool forwards the agent" was green, and would have stayed
+  green while the feature was broken.
+- *Root cause:* it matched `/\bagent\b/` against the `proxy.call` payload — which matches the VALUE,
+  not the KEY. `{ agentName: agent }` passes it.
+- *Fix:* assert the key in shorthand position, then MUTATION-TEST it: substitute the bad key, watch it
+  go red, restore, green.
+- *Rule:* **a test that pins a key must look at the key.** And: the way to know a test has teeth is to
+  break the code and watch it fail — not to read it and agree with it.
+
+**3. AC-A7 was two-thirds uncovered, with a one-line bypass.** (unit review, BLOCKING)
+- *Symptom:* 1766 tests green; the session name was covered on exactly one of the three terminal close
+  paths.
+- *Root cause:* every close in the unit's test file passed `force: true`. Move the name write inside
+  the `if (force)` block and the whole gate stays green while the name silently stops persisting on a
+  **healthy** close — the majority case.
+- *Fix:* two behavioural tests on the existing `seal-unilateral-retry` harness (real seal ceremony,
+  fake relay, recording signaling — no new fixture), covering the bilateral and unilateral paths.
+  Mutation-tested: with the write hidden inside the force branch, both go red.
+- *Rule:* **when an AC names three paths, the tests cover three paths.** A clause tested on its easiest
+  path is a clause that will break on its hardest one.
+
+**4. The "it never reaches the wire" guard was half-theatre.** (unit review, BLOCKING)
+- *Symptom:* a structural test grepped `protocol-types` and `transport` for the string `session_name`
+  and passed.
+- *Root cause:* the daemon is where frames are CONSTRUCTED. A leak added in `daemon.ts` — or one
+  riding under a different key — is invisible to that grep. The guard could not see the place the leak
+  would actually be written.
+- *Fix:* name the session with a NONCE, drive a real seal, and assert the string appears in no
+  signaling frame and in no byte the relay received. The grep stays as a belt.
+- *Rule:* **a negative claim about the wire is proven ON the wire.** A grep over the encoders proves
+  the encoders don't say it; it does not prove nobody hands it to them.
+
+**5. A valid name was silently dropped on the already-sealed close.** (unit review, MEDIUM)
+- *Symptom:* the seal completes, the agent's call is interrupted, it retries the close with the name it
+  just decided on — and is told "already sealed, no further action is needed" while the name goes
+  nowhere.
+- *Root cause:* the name write sat BELOW the status gate.
+- *Fix:* it sits above them now, which is where it always belonged — a name is not close-scoped
+  (AC-A9 permits renaming a sealed session). The refusal also carries the name and says it was applied.
+- *Rule:* **guidance that says "no further action is needed" must be true.** A response that quietly
+  discards part of the request is worse than one that refuses it.
+
+**6. `cello name-session <id>` with no words silently CLEARED the name.** (unit review, MEDIUM)
+- *Root cause:* the positional join produced `""`, which the daemon trims to null — i.e. a clear.
+- *Fix:* an empty name is a usage error. Clearing is what `--clear` is for, and it has to be asked for.
+- *Rule:* in a surface built for shells, **the half-typed command and the unset `"$VAR"` are
+  first-class inputs** — the same rule DOD-CLI-PARITY-1 learned from `--agent ""`.
+
+**7. A plain close of an ABANDONED session fired a seal at a counterparty that was never there.**
+(unit review, pre-existing — fixed under found-is-fixed)
+- *Root cause:* the already-abandoned early-return lives INSIDE the `if (force)` block, so a close
+  without `--force` fell through to the seal branches.
+- *Fix:* guarded, scoped to the non-force path so `force` stays idempotent.
+
+### The two deviations from the story, and why
+
+**The rename tool is `cello_name_session`.** AC-A8 (tool `cello_session_set_name`) and AC-A15 (CLI
+`cello name-session`) were **mutually unsatisfiable**: `DOD-ONBOARD-HELP-1` §2b mechanically enforces
+*"an MCP tool's name is `cello_` + the CLI command name, snake_cased,"* and its test went red the
+moment the pair was registered. The CLI verb won. Ms_Chelly confirmed and is amending AC-A8.
+**A vocabulary rule with a test beats a literal string in a story** — bending the rule for one tool
+makes the rule advisory, which costs more than the string.
+
+**AC-A7's write happens once, on the way in.** Threading the name through the three terminal exits is
+how one silently ends up without it, and force-abandon — the likeliest to be missed — is precisely the
+session you most want to identify later.
+
+### What this unblocks / what is still owed
+
+- **Unblocks:** telling one conversation from another (`cello sessions` was 64 hex chars and a pubkey);
+  per-call agent targeting from any surface.
+- **Owed:** the publish cascade (daemon + cli + connect), which needs `/cello-publish` loaded for THAT
+  publish and Andre's go. Nothing in this story is live for an operator until then.
+- **Owed:** the branch merges to cello-client main (rebase onto `719b2be`).
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

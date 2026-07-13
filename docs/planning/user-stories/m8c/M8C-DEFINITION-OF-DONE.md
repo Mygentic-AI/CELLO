@@ -1294,54 +1294,78 @@ and live-proven including the negative case.** The doorbell now reads
   ("Agent is currently away...", "Dispatched."), never user-authored content, so there is nothing
   for PII/secrets/injection screening to check. `cello-unit-reviewer` dispatch pending post-commit.)
 
-## 🔴 DOD-SESSION-NAME-1 + DOD-AGENT-PARAM-1 — name a session; one word for the agent selector (2026-07-13)
+## ✅ DOD-SESSION-NAME-1 + DOD-AGENT-PARAM-1 — name a session; one word for the agent selector (2026-07-13)
 
 Added to M8C after the fact, from a design session with Andre. Full spec, ACs, and the decisions
 NOT to re-litigate: [[2026-07-13_session-names-and-agent-param-story]]. Assigned to CELLO_Support.
 
-### 🔴 `DOD-SESSION-NAME-1` — a human-readable name for a session
+**✅ BOTH DONE 2026-07-13** (CELLO_Support). Branch `m8c-session-names` in cello-client, off
+`7d5ec7a`: Part B `7d5ec7a` + `699eb21` (review), Part A `adb8116` + `a20d107` (docs) + `4eab4f7`
+(review). Gate on the final tree: **1771 tests, lint, typecheck, build — green.** One
+`cello-unit-reviewer` pass per unit; every finding fixed. **NOT PUBLISHED** — this is a
+daemon+cli+connect cascade and needs `/cello-publish` loaded for that publish, plus Andre's go.
+
+**Two DEVIATIONS from the story text, both deliberate, journaled here so neither reads as drift:**
+
+1. **The rename tool is `cello_name_session`, not `cello_session_set_name`.** AC-A8 (tool name) and
+   AC-A15 (CLI `cello name-session`) were **mutually unsatisfiable**: `DOD-ONBOARD-HELP-1` §2b
+   mechanically enforces *"an MCP tool's name is `cello_` + the CLI command name, snake_cased"*
+   (`vocabulary.ts`), and its test went red the moment the pair was registered. The CLI verb won —
+   `cello name-session ab12… the deploy postmortem` reads how an operator thinks, and AC-A15
+   deliberately designed that multi-word positional, so trading it for naming symmetry with
+   `contact-set-moniker` would trade the thing actually wanted for a thing wanted only by analogy.
+   Ms_Chelly (the story's author) confirmed and is amending AC-A8. Applied everywhere — the old
+   string appears nowhere in the repo.
+
+2. **AC-A7's name write is ONCE on the way in, not at each of the three terminal exits.** Threading
+   it through bilateral/unilateral/force is how one silently ends up without it — and force-abandon,
+   the one most likely to be missed, is precisely the session you most want to identify later. Safe
+   because AC-A9 makes renaming legal in ANY status: a failed seal leaves a named open session, a
+   state the operator could produce by hand. Ms_Chelly agreed this is better than her AC.
+
+### ✅ `DOD-SESSION-NAME-1` — a human-readable name for a session
 
 Scanning `cello sessions` gives you 64 hex chars and a pubkey. You cannot tell which conversation was
 which. Add a **local-only, cosmetic** `session_name` on the `sessions` row.
 
-- 🔴 Nullable `session_name TEXT` column on `sessions` (idempotent `ALTER TABLE`, client-side SQLite).
-- 🔴 **Never leaves the machine** — not to the relay, not to the directory, not to the counterparty,
+- ✅ Nullable `session_name TEXT` column on `sessions` (idempotent `ALTER TABLE`, client-side SQLite).
+- ✅ **Never leaves the machine** — not to the relay, not to the directory, not to the counterparty,
   not into the transcript or the seal. If it becomes observable to another party, it is wrong.
-- 🔴 **Not settable at creation** (`initiate`/`await` do NOT take it) — at open time nobody yet knows
+- ✅ **Not settable at creation** (`initiate`/`await` do NOT take it) — at open time nobody yet knows
   what the session is about. Set optionally at **close** (`cello_close_session { session_name }`,
   nullable), when the agent has just finished the conversation and does know.
-- 🔴 **Unnamed is a SIGNAL, not a gap** — a closed session with no name probably did not close
+- ✅ **Unnamed is a SIGNAL, not a gap** — a closed session with no name probably did not close
   cleanly. NO auto-generated default names; NULL is allowed to mean something.
-- 🔴 **Rename any time, any status** — new `cello_name_session(session_id, session_name)`, set-or-
+- ✅ **Rename any time, any status** — new `cello_name_session(session_id, session_name)`, set-or-
   clear-by-null, ownership-scoped. Naming a long-sealed session is the point. Provably does not touch
   the seal (`sealed_root_hex` byte-identical before/after).
-- 🔴 **Surfaced with the id, never instead of it** — `cello_list_sessions`, `list_sessions` (CLI),
+- ✅ **Surfaced with the id, never instead of it** — `cello_list_sessions`, `list_sessions` (CLI),
   `cello_status`, `cello_get_transcript`, `cello_get_sealed_receipt`.
-- 🔴 **CLI parity** (DOD-CLI-PARITY-1 is a standing invariant): `cello close-session --session-name`,
+- ✅ **CLI parity** (DOD-CLI-PARITY-1 is a standing invariant): `cello close-session --session-name`,
   new `cello name-session <id> <name…> [--clear]`, registered in `registry.ts` with its `ipcMethod`.
-- 🔴 Validation is daemon-owned (D7): 1–200 chars, free text (NOT handle-shaped — do not copy
+- ✅ Validation is daemon-owned (D7): 1–200 chars, free text (NOT handle-shaped — do not copy
   `cello_moniker`'s charset rule), control chars rejected not stripped, over-length rejected not
   truncated. **Validate BEFORE starting the seal** — a bad name must never break a close.
-- 🔴 Log `session.name.set` / `.cleared` / `.rejected` with the name's **LENGTH, never its text** (it
+- ✅ Log `session.name.set` / `.cleared` / `.rejected` with the name's **LENGTH, never its text** (it
   is the subject of a private conversation; daemon logs are not confidential).
 
 **The two-local-agents question is already answered by the schema — no tiebreak to build.** `sessions`
 is `PRIMARY KEY (agent_id, session_id)`, so each participating agent already holds its OWN row (that
 is what `DOD-LOOP-1` is for). Both ends can name it independently; they cannot collide.
 
-### 🔴 `DOD-AGENT-PARAM-1` — the agent selector is called two different things
+### ✅ `DOD-AGENT-PARAM-1` — the agent selector is called two different things
 
 Ten daemon handlers read an optional agent-selector as `params.name`; nine later tools call the same
 concept `agent` and EXPOSE it. Two words, one concept — and on the 8 session tools it is exposed
 nowhere, so a multi-agent operator can only switch with the sticky `cello_use_agent` and cannot say
 "do THIS one call as Alice" the way they already can for contacts and settings.
 
-- 🔴 Rename to **`agent`** in all ten `resolveCurrentAgent` call sites. `agent` wins: it is the
+- ✅ Rename to **`agent`** in all ten `resolveCurrentAgent` call sites. `agent` wins: it is the
   spelling already on a shipped tool surface, and `name` is hopelessly overloaded now that agents,
   contacts, monikers **and sessions** all have names.
-- 🔴 **Expose `agent`** on the 8 that are MCP tools: `initiate_session`, `close_session`,
+- ✅ **Expose `agent`** on the 8 that are MCP tools: `initiate_session`, `close_session`,
   `await_session`, `send`, `receive`, `sessions`, `sealed_receipt`, `transcript`.
-- 🔴 **Clean break, no compatibility alias** — but **update the two real producers.** My original
+- ✅ **Clean break, no compatibility alias** — but **update the two real producers.** My original
   "no external producer" claim was WRONG and CELLO_Support caught it: `cello refresh`
   (`commands.ts:426`) and `cello relay-receipts` (`:463`) send `{ name }` to two of the ten handlers,
   as a required POSITIONAL (which is why the `use-agent` replay doesn't cover them). Leave them behind
@@ -1349,7 +1373,7 @@ nowhere, so a multi-agent operator can only switch with the sticky `cello_use_ag
   sole-online, and **`cello refresh alice` rotates FROST shares for whoever happens to be online.** A
   silent misroute on key material: the very defect class this story exists to kill. Fix both call
   sites to send `{ agent: name }` in the SAME commit, with red tests pinning the misroute.
-- 🔴 **Do Part B before Part A** — Part A edits the same handler and must be born with the right
+- ✅ **Do Part B before Part A** — Part A edits the same handler and must be born with the right
   spelling.
 
 ## Tracked, not M8C-fruit (bigger friction — own items, NOT folded in as riders)
