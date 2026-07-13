@@ -86,8 +86,7 @@ credential, a human hand, or reaches a real counterparty is OUT OF SCOPE — do 
 |---|---|
 | **Part F (the live test)** | Needs two daemons, a real relay, and killing a process by hand. A green tick from a faked version is worse than no tick. |
 | **The `latest` promotion** | Operator-run, always. Andre's explicit go. Never automate it. |
-| **A5 (PII whitelist seed)** | **BLOCKED** — not implementable as written; needs Andre to pick 1/2/3. |
-| **B1, if still undecided** | The startup policy IS the shape of A1/A3. Recommendation is on the table; if there is no answer by run time, implement **refuse-to-start** behind the A3 flag and SAY SO in the report. |
+| ~~A5, B1~~ | ✅ **BOTH DECIDED 2026-07-13 — now IN SCOPE.** A5 = option 1 (operator sets it explicitly, prompted at first login). B1 = refuse-to-start. **There are no open decisions left; nothing in this run waits on Andre.** |
 | **Publishing the cascade** | A `daemon + cli + connect + gateway` cascade is needed at the end. **Prepare it, tag NOTHING.** Load `/cello-publish` in the morning. |
 
 ### ✅ IN SCOPE, in dependency order — each ends with the full gate + a commit
@@ -106,9 +105,11 @@ credential, a human hand, or reaches a real counterparty is OUT OF SCOPE — do 
 10. **A1 + A2 + E1 — IN ONE COMMIT.** Spawn the sidecar, pass the client, kill the child on shutdown,
     **and flip the docs in the same change.** `SKILL.md`/`README` currently say content is screened —
     **false today, true the moment A1 lands.** They must never be out of step, in either direction.
-11. **B2 (the benchmark)** — measure, publish the table here, propose a deadline. **Do not set it
+11. **A5** (the `cello pii-whitelist` surface + the first-login prompt). Independent of the gateway
+    fixes; do it after the wiring so you can prove it end-to-end.
+12. **B2 (the benchmark)** — measure, publish the table here, propose a deadline. **Do not set it
     unilaterally**; leave the number as a recommendation.
-12. **D1′** — verify the `flagId` round trip across the real daemon↔sidecar boundary.
+13. **D1′** — verify the `flagId` round trip across the real daemon↔sidecar boundary.
 
 ### The rules for the run
 - **The full gate after EVERY item**: `pnpm test` → `lint` → `typecheck` → `build`. Never batch.
@@ -139,27 +140,31 @@ credential, a human hand, or reaches a real counterparty is OUT OF SCOPE — do 
       real conversation you will want it to already exist.
 - [ ] **A4. Paths under `~/.cello/`.** `CELLO_GATEWAY_SOCKET` (required), `CELLO_GATEWAY_CONFIG_DB`,
       `CELLO_GATEWAY_REQUEST_LOG`. Give them real defaults; do not make the operator set env vars.
-- [ ] **A5. Seed the PII whitelist — ⛔ NOT IMPLEMENTABLE AS WRITTEN. NEEDS ANDRE'S DECISION.**
-      `M9-OUT-002`'s premise is *"a whitelisted own-email passes silently."* Unseeded, **the operator's
-      own email is flagged on their very first message** — the worst possible first impression.
+- [ ] **A5. The PII whitelist — DECIDED: OPTION 1, the operator sets it explicitly (Andre, 2026-07-13).**
 
-      **But "seed it from the registered identity" CANNOT BE DONE: the daemon has no email.** Verified
-      2026-07-13 — no email column, nothing in the identity store. That is BY DESIGN, not an oversight:
-      **no PII in the directory** (email is hash-only there); the **portal** holds the recoverable copy.
-      There is nothing for the daemon to seed *from*. An agent that takes this item literally will go
-      looking in the directory for an email that does not exist.
+      **What it actually is:** a plain `string[]` (`core/gateway/src/detect/pii.ts:34`) — a list of the
+      operator's OWN PII values (email, phone) that the outbound detector lets through **silently**.
+      Nothing cryptographic; "seed" here just means pre-populate. Today it is a comma-separated env
+      var (`CELLO_GATEWAY_PII_WHITELIST`). Anything NOT on it produces a **warn** — message not sent
+      until the agent answers `redact` / `allow_once` / `allow_always`.
 
-      **Pick one (Andre):**
-      1. **Operator sets it explicitly** — `cello config pii-whitelist add <email>`, prompted on first
-         `cello login`. Simple, no new dependency, no PII anywhere new. *Recommended.*
-      2. **Portal fetch** — the portal has the KMS-recoverable email; the daemon pulls it after portal
-         login. Truest to A5's intent, but adds a portal round-trip to daemon startup and puts the
-         operator's email on the daemon's disk.
-      3. **Ship unseeded and accept the first-message flag** — the operator hits ONE warn, answers
-         `allow_always`, done. Cheapest; leans on the (working) governance re-send. Slightly ugly first
-         impression, zero new machinery.
+      Unseeded, writing *"reach me at andre@mygentic.ai"* **warns and does not send** — your own email
+      treated as a leak. That is the bad first impression.
 
-      **Until this is decided, A5 is BLOCKED and must not be attempted.**
+      **The original A5 ("seed from the registered identity") IS IMPOSSIBLE and must not be attempted:
+      the daemon has no email, BY DESIGN** (no PII in the directory — hash-only; the portal holds the
+      recoverable copy). Do not go looking for it.
+
+      **Build instead:**
+      - A `cello` CLI surface to manage the list — e.g. `cello pii-whitelist add|remove|list <value>`,
+        persisted where the gateway reads it (config store, not an env var the operator must export).
+      - **Prompt on first `cello login`** ("what email/phone are yours? we will never flag them"),
+        skippable, and never nagged twice.
+      - The gateway reads the persisted list; the env var stays supported as an override.
+
+      **Done when:** a fresh operator sets their own email once, and a message containing it sends
+      silently with no warn. **Note `allow_always` already writes to this list** — so option 1 is a
+      convenience layer over machinery that already works, not a prerequisite for it.
 
 ## Part B — decide the failure policy BEFORE flipping (not after)
 
@@ -177,7 +182,8 @@ credential, a human hand, or reaches a real counterparty is OUT OF SCOPE — do 
       code exists either way — verified.) The review is explicit that **production should not be
       *able* to run passthrough** — the A3 flag should be the ONLY route to it.
 
-      **Recommendation: REFUSE TO START**, with an error naming the cause and the escape hatch.
+      **✅ DECIDED (Andre, 2026-07-13): REFUSE TO START.** With an error naming the cause and the
+      escape hatch.
       Starting unscreened is a *silent security downgrade on a bad day*: the operator gets no signal,
       while `SKILL.md` tells them their messages are screened (E1). That is the absent⇒fine pattern in
       its purest form. A loud refusal costs a minute; a quiet passthrough costs the operator the thing
