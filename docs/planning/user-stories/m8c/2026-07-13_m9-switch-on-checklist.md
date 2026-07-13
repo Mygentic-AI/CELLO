@@ -13,6 +13,57 @@ description: >
 
 # `DOD-M9-SWITCH-ON-1` — from merged-but-off to live-tested
 
+> ## ✅ THE OVERNIGHT RUN IS COMPLETE — items 1–13 done, 2026-07-13/14
+>
+> **Branch `m9-switch-on` in `cello-client` (worktree `../cello-client-m9`). 11 commits. Nothing published, nothing tagged.**
+> Gate green after every item: **1,889 tests** (baseline 1,817 → **+72**), lint, typecheck, build.
+>
+> **SCREENING IS ON.** `cello-daemon.ts` spawns the gateway sidecar and passes a real client. Verified
+> against the running binary, not just the suite: `security.gateway.started`, `mode=sidecar`, and the
+> stores created under `~/.cello/` with zero operator configuration.
+>
+> **The three biggest finds were not on this list — and two of them this document had backwards:**
+>
+> 1. **A live remote DoS in `pii.ts`.** The checklist said `exfil.ts` was "the single hole in the RE2
+>    discipline" and that `pii.ts` already went through `linear-regex`. Both halves were false.
+>    `exfil.ts`'s patterns measure linear; the *actual* exploitable ReDoS was in the file the checklist
+>    vouched for. `EMAIL_RE` keeps `.` inside the domain class → quadratic: **821 ms at 20 KB, 13 s at
+>    80 KB, ~35 MINUTES at the 1 MB cap.** One long word from any counterparty hangs the gateway.
+> 2. **RE2's `\s` is ASCII-only.** The naive RE2 port silently NARROWED five detectors (it omits `\v`,
+>    NBSP, U+2000–200A, U+2028/9, U+FEFF). `ignore<NBSP>all<NBSP>previous<NBSP>instructions` — the exact
+>    phrase the outbound hijack block exists to catch — came back `allow`. **The whole suite was green.**
+>    Caught in review, fixed with a class verified exhaustively over every codepoint on both engines.
+> 3. **The secrets cap was a leak.** Past 1,000 matches the scanner stopped and emitted the remainder
+>    VERBATIM, under a `redact` verdict that made it look handled. Also found `pkcs12-file`: an EMPTY
+>    regex with NO keywords, so it ran on every message, matched once per character, could never detect
+>    anything — and cost ~1 GB of string copying per message in the old offset loop.
+>
+> **Also fixed, all confirmed real:** C1 (the invisible-strip was *assembling* the payload one step too
+> late to be checked), C2 (inbound `redact`-without-content delivered the attacker's ORIGINAL text —
+> the two seams disagreed and this one pointed the wrong way), C3, C6 (`verifyChain()` was written,
+> tested, and never called), C7 (the language filter was ON by default, silently dropping non-Latin
+> mail), A1–A5, B1, B2, E1.
+>
+> **Two bugs I introduced and the tests caught:** spawning the gateway *before* the singleton lock (a
+> daemon that lost the race unlinked the winner's socket and orphaned itself — both DOD-SINGLE-DAEMON-1
+> and A2 in one line); and a startup window where the gateway child existed but no signal handler did.
+>
+> **D1′ was a FALSE ALARM** — already proven. I journaled it and did not pad it. (I did close a real gap
+> it exposed: the `allow_once` path, the one decision that actually *releases* data, had never crossed
+> the real process boundary.)
+>
+> **B2 answered backwards too:** 2 s was never too *short*. Worst case is bounded at **~380 ms** at the
+> 1 MB cap. Table + recommendation in Part B. **The number is still yours to set.**
+>
+> **⛔ NOT DONE, deliberately: Part F (the live test).** Needs two daemons, a real relay, and killing a
+> process by hand. Also not done: tagging, publishing, the `latest` promotion. **A publish cascade is
+> prepared but nothing is tagged.**
+>
+> **One thing to know before you read the diff:** `M9-SECURITY-REVIEW-FABLE5`'s verdict — *"the design
+> is genuinely good… nothing found that lets an attacker forge a verdict over the wire"* — still holds.
+> Every defect above is in the **detectors and the defaults**, not the architecture. The load-bearing
+> security design was right; what was wrong was what it was configured to do, and one regex.
+
 > ## ⚠️ VERIFY EACH CLAIM AGAINST THE CODE BEFORE ACTING ON IT.
 >
 > **This document, and the M9 DoD, have each been confidently WRONG about the code — in opposite
@@ -209,6 +260,43 @@ credential, a human hand, or reaches a real counterparty is OUT OF SCOPE — do 
       at, say, 1 KB / 10 KB / 100 KB / 1 MB (the content cap). Publish the table in this document. The
       deadline is then a number with headroom over the measured p95 at the cap — not a round figure
       someone liked.
+
+      ### ✅ MEASURED, 2026-07-13 — and the premise was wrong
+
+      Measured through the **real sidecar** (spawn → unix socket → framing → screen → reply), because
+      that full round trip is what the client's deadline actually bounds. An in-process measurement of
+      the detectors alone would flatter the number and miss the thing that times out. Records DB on
+      (production writes a row per message). Realistic prose, 25 iterations after 5 warmup.
+      Bench: `core/daemon/src/__tests__/b2-screen-latency-bench.ts`.
+
+      | direction | size | p50 | p95 | max |
+      |---|---|---|---|---|
+      | inbound | 1 KB | 0.5 ms | 0.6 ms | 0.7 ms |
+      | inbound | 10 KB | 1.8 ms | 1.9 ms | 1.9 ms |
+      | inbound | 100 KB | 16.0 ms | 17.2 ms | 17.3 ms |
+      | inbound | **1 MB (the cap)** | 162.9 ms | **164.7 ms** | 167.6 ms |
+      | outbound | 1 KB | 0.6 ms | 0.7 ms | 0.7 ms |
+      | outbound | 10 KB | 3.7 ms | 4.3 ms | 4.4 ms |
+      | outbound | 100 KB | 34.7 ms | 35.8 ms | 36.1 ms |
+      | outbound | **1 MB (the cap)** | 374.9 ms | **377.2 ms** | 377.4 ms |
+
+      **The worry was backwards: 2s was never too SHORT.** Latency is linear in message size
+      (~0.16 ms/KB inbound, ~0.38 ms/KB outbound — the detectors are regex sweeps, so this is the
+      expected shape, now measured rather than assumed). And because the daemon caps content at
+      **1 MB**, the worst case is BOUNDED: no message can cost more than ~380 ms. A single fixed
+      deadline is therefore fine — the size-dependence that would have broken it is capped out of
+      relevance.
+
+      **RECOMMENDATION (not a decision — the number is yours):** leave it at the client's default
+      **5000 ms**. That is **13× headroom** over the measured worst case, survives a 2× loaded machine
+      with 6× to spare, and sits far under any MCP host timeout (~60 s). It is already what production
+      runs: `resolveSecurityGateway` passes no deadline, so `LocalSidecarGatewayClient`'s default
+      applies, and `CELLO_GATEWAY_DEADLINE_MS` overrides it. **Nothing was set unilaterally.**
+      (`m9-gate-1`'s test value of 2000 ms is also fine — 5× headroom — and needs no change.)
+
+      **⚠️ THE ONE THING THAT INVALIDATES THIS TABLE:** IN-002 / DeBERTa is OFF (no model, D2). It is a
+      neural inference, not a regex sweep — orders of magnitude slower, and NOT linear in the same way.
+      **If Layer-2 is ever switched on, this benchmark must be re-run before the deadline is trusted.**
 
 ## Part C — the Fable-5 review's findings (`M9-SECURITY-REVIEW-FABLE5.md`)
 
