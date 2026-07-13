@@ -170,7 +170,40 @@ this repo is typechecked at all** → `DOD-TYPECHECK-TESTS-1` (209 errors / 45 f
 M8C-ABUSE-1 session accounting (`#getHeldBytesTotal` reaches `#heldContent`, session runtime). Doing
 it means a `ContactStore` that SNM delegates to, not a block move. Re-scope before starting.
 
-### Unit 4 — Seam B: the seal cluster (~1,250 lines) — **NEXT**
+### ✅ Unit 4 — Seam B: the seal cluster — **DONE 2026-07-13**
+`daemon.ts:2525-3053` (529 lines) → `core/daemon/src/seal-coordinator.ts`; the two pure wire-frame
+helpers it shared with the session-event handlers → `frame-values.ts`. **`daemon.ts` 6,168 → 5,606.**
+
+> ### 🔥 THE FINDING: the file's ORDER was load-bearing, and nothing said so.
+> `registerSessionSealedListener` and its two siblings were **declared at ~2547** but **called at
+> 657, 742 and 1376 — 1,900 lines EARLIER.** That works only because a `function` declaration is
+> **hoisted**. Replace them with a `const` — which is what *any* extraction produces — and all three
+> call sites land in the **temporal dead zone**. **253 tests went red**: `Cannot access
+> 'registerSessionSealedListener' before initialization`.
+>
+> The original mentions the trick in passing ("Function declaration so getAgentSignaling can wire it
+> per-agent") but **never says the order of the file is a correctness constraint.** In a 6,255-line
+> function you cannot *see* that a definition sits 1,900 lines after its first call. This is exactly
+> the class of hazard the refactor exists to expose: **an invisible dependency that only fails when
+> someone tries to move the code** — i.e. the next person, with no warning.
+>
+> Fixed by constructing the coordinator where its deps are ready and **before its first use**, with
+> the constraint written down at the construction point.
+
+**What the cluster actually needs:** the session store, a logger, the per-agent FROST persistence,
+the per-agent key provider, and content recovery. **Not the signaling hub** — a `SignalingManager` is
+passed per registration, so it never reaches for the daemon's nervous system (§5 DO-NOT-CUT holds).
+
+**An asymmetry PRESERVED, not normalised away** (per §3's standing instruction): the **visiting**
+signaling connection (`daemon.ts:1376`) registers the sealed + unilateral-confirmed listeners but
+**not** the upgrade listener, while sites 657/742 register all three. Plausibly deliberate — the
+upgrade notification is directory-pushed to the agent's *home* authenticated stream, and a visiting
+stream is transient. Logged and sent to the reviewer for a verdict rather than quietly made uniform.
+
+`cello_close_session` stays in `daemon.ts` and still drives the waiters directly (~30 sites, **zero
+churn**). Behavior preservation beats tightening encapsulation in the same move.
+
+### Then reassess — remaining seams
 Straight-line startup that **already returns one object** (`{consortiumEndpoints, manifestVerified,
 directoryEndpointResolver, stopHttpManifestPoll}`). Captures almost nothing. **Risk: LOW.** Proves
 the module-extraction pattern on the easiest possible target.
@@ -266,7 +299,14 @@ M6→M7. Implement, or unregister?).
 4. **The revert test.** *Would this test still pass if the fix were reverted?* If yes, it is not
    coverage — whatever its name says.
 5. **`main` is moving.** Another agent is active in `trustless-cello`. Pull first.
-6. **🚨 TWO AGENTS, ONE WORKING TREE — this bit me on Seam D. WORK IN A WORKTREE.**
+6. **🔥 HOISTING: a `function` declaration can be CALLED before it is DEFINED — a `const` cannot.**
+   Every extraction turns a hoisted `function foo()` into a `const { foo } = createThing()`. If any
+   caller runs **earlier in the file** than the new binding, it lands in the **temporal dead zone**
+   and throws. Seam B hit this at scale: three listeners called at lines 657/742/1376, defined at
+   2547 → **253 red tests**. **Before extracting a `function` declaration, find its EARLIEST call
+   site and construct the module before it.** The bigger point: in a 6,000-line function, *file
+   order is a silent correctness constraint*, and it only fails for the person who moves the code.
+7. **🚨 TWO AGENTS, ONE WORKING TREE — this bit me on Seam D. WORK IN A WORKTREE.**
    CELLO_Support was working in the **same** `cello-client` checkout. `HEAD` moved under me mid-edit
    (`1365e05` → `7d5ec7a`), and my first Seam D edit was built on the **stale** `daemon.ts` — it
    **silently reverted** their `DOD-AGENT-PARAM-1` guidance strings. **The net line-stat
