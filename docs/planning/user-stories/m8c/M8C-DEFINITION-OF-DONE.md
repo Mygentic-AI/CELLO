@@ -1341,10 +1341,14 @@ nowhere, so a multi-agent operator can only switch with the sticky `cello_use_ag
   contacts, monikers **and sessions** all have names.
 - 🔴 **Expose `agent`** on the 8 that are MCP tools: `initiate_session`, `close_session`,
   `await_session`, `send`, `receive`, `sessions`, `sealed_receipt`, `transcript`.
-- 🔴 **Clean break, no compatibility alias.** Two accepted spellings is the disease, not the cure. The
-  old spelling has no external producer — the shim never forwarded it and the CLI carries agent
-  selection via its `use-agent` replay, not as an IPC param. Verify that in BOTH repos before relying
-  on it; if a real producer turns up, stop and report rather than aliasing.
+- 🔴 **Clean break, no compatibility alias** — but **update the two real producers.** My original
+  "no external producer" claim was WRONG and CELLO_Support caught it: `cello refresh`
+  (`commands.ts:426`) and `cello relay-receipts` (`:463`) send `{ name }` to two of the ten handlers,
+  as a required POSITIONAL (which is why the `use-agent` replay doesn't cover them). Leave them behind
+  and they fail **silently** — the param goes unread, `resolveCurrentAgent` falls through to
+  sole-online, and **`cello refresh alice` rotates FROST shares for whoever happens to be online.** A
+  silent misroute on key material: the very defect class this story exists to kill. Fix both call
+  sites to send `{ agent: name }` in the SAME commit, with red tests pinning the misroute.
 - 🔴 **Do Part B before Part A** — Part A edits the same handler and must be born with the right
   spelling.
 

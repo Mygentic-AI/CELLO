@@ -205,12 +205,32 @@ Resolution order: explicit param > this connection's current agent > the sole on
 - **AC-B3** — **Zero remaining readers of `params?.name` as an agent selector.** Grep is part of the
   AC: after this change, `params?.name` must not appear in daemon.ts as an agent selector. This is a
   rename, not an alias — do NOT accept both words "for compatibility". Two accepted spellings is the
-  disease, not the cure. **Justification for the clean break:** the field is not exposed on ANY MCP
-  tool today (the shim never forwards it), and the CLI does not send it either — the CLI carries the
-  agent selection via its `use-agent` replay on each fresh connection (`parity-commands.ts`), not as
-  an IPC param. So the only callers of the old spelling are our own tests. There is no operator to
-  break. Verify that claim yourself before you rely on it (grep both repos), and if you find a real
-  producer sending `name`, STOP and report rather than adding a compatibility alias.
+  disease, not the cure.
+
+  > **⚠️ AC-B3 AMENDED 2026-07-13 — my original clean-break justification was WRONG, and CELLO_Support
+  > caught it in its falsification step.** I claimed the only callers of the old spelling were our own
+  > tests (shim never forwards it; CLI carries agent selection via the `use-agent` replay). **The shim
+  > half is true. The CLI half is false.** Two commands send `{ name }` straight to two of the ten
+  > handlers being renamed — `core/cli/src/commands.ts:426` (`cello refresh` → `cello_refresh_shares`)
+  > and `:463` (`cello relay-receipts` → `cello_get_relay_receipts`). In both, the agent is a REQUIRED
+  > POSITIONAL, not a `--agent` flag, which is exactly why the `use-agent` replay does not cover them —
+  > and they are precisely the two handlers in the ten that are NOT MCP tools, which is how they escaped
+  > my audit. **This is not cosmetic:** rename the daemon and leave them, and they fail SILENTLY — the
+  > param goes unread, `resolveCurrentAgent` sees no explicit selector, and falls through to
+  > current-agent / sole-online. `cello refresh alice` would rotate FROST shares for whoever happens to
+  > be online. A silent misroute on key material — the same defect class this story exists to kill.
+  >
+  > **The fix (agreed, do this):** update the two producers, do NOT alias. Rename the daemon to `agent`
+  > and change both CLI call sites to send `{ agent: name }` **in the same commit**, each with a red
+  > test pinning the misroute (second agent online; `cello refresh alice` must act on alice — fails
+  > against today's code if the producer is left behind). The "STOP and report" instruction aims at a
+  > producer we cannot update — an operator's shipped client. These are ours: same repo, same
+  > daemon+cli cascade. Producer sweep is complete (cello-client, trustless-cello incl. e2e-tests,
+  > hermes-agent, openclaw): those two are the only ones.
+  >
+  > **The lesson, since it is the second time today:** I wrote the original claim from a plausible
+  > mental model instead of grepping. Do not inherit a claim — not even mine, not even one stated as an
+  > AC. Verify against the tree.
 - **AC-B4** — The CLI already has `--agent <name>` on these commands and already routes it through
   `splitAgentFlag` + the `use-agent` replay. Confirm that path still works end to end after the
   rename; do not change the CLI's flag spelling (`--agent` is already right).
@@ -253,9 +273,13 @@ then `cello-unit-reviewer` (NO model override — it runs on Opus), fix every fi
 - [[M8C-PROCEDURE]] — the procedure this executes under. Read it first.
 - [[M8C-DEFINITION-OF-DONE]] — where `DOD-SESSION-NAME-1` and `DOD-AGENT-PARAM-1` are tracked.
 - [[2026-07-13_dead-code-and-defect-reduction-workplan]] — §1.3 is the SAME class of bug as Part B
-  (two agent-resolution rules for one operator gesture). This story fixes the naming half of that
-  inconsistency; it does not fix §1.3's `contactCommand` defect. They are complementary, not
-  duplicates.
+  (two agent-resolution rules for one operator gesture).
+  **⚠️ Correction (2026-07-13):** this story originally said §1.3's `contactCommand` defect was still
+  open. **It is not.** `f00b534` (merged to cello-client main in `1365e05`) deleted `contactCommand`
+  outright and routed `settings set` / `moniker set` through the same `ipcCommand` path as everything
+  else. Part B therefore lands on a CLI that already has ONE agent-resolution rule. I wrote the
+  original line from the workplan's text without re-checking the tree — the exact mistake that
+  workplan's own §0 warns against. **The merged tree is the authority, not this doc.**
 - [[M8C-MONIKER-SPEC]] — `cello_moniker` (the AGENT's outbound display name) and
   `cello_contact_set_moniker` (YOUR pet name for a CONTACT). A session name is a THIRD, distinct
   thing. Do not call it a moniker, do not merge it into either.

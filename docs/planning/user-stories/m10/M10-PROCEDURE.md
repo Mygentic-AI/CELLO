@@ -287,10 +287,14 @@ the self-audit:
   its subject is alive. Delete by file and live coverage vanishes with no gate noticing. 12,538 lines
   of green tests were one bad decision from deletion. If the subject is live, RE-POINT the test.
 
-- **`rm -rf core/*/dist core/*/*.tsbuildinfo` BEFORE ANY BUILD THAT FOLLOWS A DELETION.** `tsc --build`
-  never removes orphaned outputs, and `tsc --build --clean` does not either (the source is gone, so
-  it is not tracked). A warm tree keeps compiling and PACKING files whose source you deleted. Assert
-  absence on the **BUILT ARTIFACT**, never on source. This has bitten three times.
+- **`dist/` ORPHANS — and the ORDER matters.** `tsc --build` never removes orphaned outputs, and
+  `tsc --build --clean` does not either (the source is gone, so it is not tracked). A warm tree keeps
+  compiling and PACKING files whose source you deleted. Assert absence on the **BUILT ARTIFACT**,
+  never on source. **The order is: `rm -rf core/*/dist core/*/*.tsbuildinfo` → BUILD → TEST.** NOT
+  clear-then-test: several tests spawn the REAL BUILT DAEMON BINARY out of `dist/`, so clearing it
+  before the test run fails ~1,000 tests for a reason that has nothing to do with your change (this
+  was gotten wrong while merging the very unit that introduced the rule). This trap has bitten four
+  times now.
 
 - **ENCODER / WIRE-FORMAT CHANGES: is any signature or hash over these bytes?** Mechanical, not a
   judgment call. Classify what the change alters and whether any of it is signed, hashed, or kept
