@@ -365,8 +365,17 @@ description: >
   had already done the hard part; (2) "zero customer-visible value" was wrong — cello-client is open
   source, and a technical evaluator points their own agent at the repo before trusting a
   cryptographic-trust product. Dead-code-backed tests are a credibility signal there.
-  **Code complete on branches `dod-legacy-mcp-1` (cello-client, 4fafbe7) and `dod-legacy-mcp-1-e2e`
-  (trustless-cello, 68144ec0). NOT YET PUBLISHED — awaiting Andre's go on the cascade.**
+  **Merged to main 2026-07-13 (cello-client `15d5922`, trustless-cello `a11220ea`) and PUBLISHED —
+  combined cascade with `DOD-DAEMON-CLEANUP-1`/`DOD-SINGLE-DAEMON-1` above (one publish, not two),
+  tag `v0.0.99`, connect `0.0.69` / client `0.0.50`. Verified against the real tarball by Ms_Chelly:
+  `server.js`/`notifications.js`/`mcp-server.js` all confirmed absent from the published dist —
+  caught and fixed a real trap first (`tsc --build`'s `.tsbuildinfo` cache trusts its own record over
+  actual file presence, so a plain `rm -rf dist` without also clearing `*.tsbuildinfo` would have let
+  the dead files silently reappear on rebuild — exactly the bug this line exists to remove). One
+  merge-time catch worth keeping: CELLO_Feedback's own merged-gate run caught `dist/server.js`
+  resurrecting on a warm local tree via the same `.tsbuildinfo` mechanism, before it ever reached a
+  publish — the cascade was corrected to do a genuinely clean build first. Not promoted to `latest` —
+  Andre's call.**
   - **Deleted:** `adapter/server.ts`, `adapter/notifications.ts` (BOTH functions — `pushChannelNotification`
     was runtime-dead too; the live shim inlines its own `buildChannelParams` call and never imports the
     module), `client/mcp-server.ts`, and the package-root exports from both `index.ts`.
@@ -390,7 +399,7 @@ description: >
   - **Gate:** cello-client 197 files / 2051 tests green, lint + typecheck + build clean. trustless-cello
     typecheck clean; default e2e gate unchanged from main (49 pass / 22 fail on BOTH — those 22 are
     PRE-EXISTING failures on main, not introduced here).
-  — ✅ BUILT (publish cascade pending Andre's approval).
+  — ✅ FULLY CLOSED — merged, published, verified against the tarball.
 
   **Follow-ups this surfaced (NOT done, deliberately — each is its own unit):**
   - **`buildChannelParams` has no field allowlist.** It SPREADS every identifier-safe scalar of the
@@ -767,12 +776,44 @@ streams for one pubkey, two processes holding the same FROST share, double-accep
   its OWN, and removes `daemon.sock` only if it created it. Otherwise it leaves them and logs
   `daemon.lock.not_ours`. Two conditions, near-zero risk. **This is the propagation mechanism.** Test with
   a REAL spawned binary — an in-process daemon shares the test's pid and cannot reproduce it (the same
-  trap that made `DOD-LOGOUT-WAIT-1`'s first AC2 hollow). — ❌
+  trap that made `DOD-LOGOUT-WAIT-1`'s first AC2 hollow). — ✅ **BUILT, REVIEWED, PUBLISHED — 2026-07-13**
+  (CELLO_Support, launch-triage item 2). Two review rounds surfaced 3 real bugs before shipping: (1) `cello
+  logout` itself trusted the same "absent lock file = no daemon" logic that IS the bug, so it would report
+  "No daemon running" while a live orphan was still online and extending the hash chain — fixed to ask the
+  daemon's own socket first, then the kernel, never reasoning from pids either direction; (2) the new
+  singleton probe could itself SEIZE the lock it was only meant to check, so a concurrent `cello login`
+  could kill a healthy starting daemon — fixed with a bounded acquire timeout; (3) the original tests had
+  no teeth — a reviewer's deliberately-wrong no-kernel-lock implementation passed all of them, because
+  every test started the second daemon only after the first had settled, never testing true concurrency —
+  fixed with a real simultaneous-start test. Also went deeper than this spec: Node's own `server.close()`
+  unlinks a unix-socket path unconditionally regardless of who currently owns it, so the original
+  guarded-unlink alone was insufficient — ownership is now decided BEFORE calling close(), and a foreign
+  socket is never closed at all (fd reclaimed by process exit instead).
 - **DOD-SINGLE-DAEMON-1** — the daemon takes an **exclusive OS lock** (`flock`/`O_EXLOCK`) at startup and
   holds it for its lifetime; the OS releases it on death, so a `kill -9` leaves nothing stale. A second
   instance exits non-zero naming the holder's pid, and never opens the DB, registers agents, or connects
   to the directory. `connectOrStart` must treat "lock held by a live process" as *connect*, never *spawn*.
-  The advisory JSON lock may keep its metadata but **must never decide whether a daemon may start**. — ❌
+  The advisory JSON lock may keep its metadata but **must never decide whether a daemon may start**. — ✅
+  **BUILT, REVIEWED, PUBLISHED — 2026-07-13.** No `flock` in Node core; `O_EXLOCK` is Darwin-only (would
+  give Linux, including the demo agent, no lock at all); a native locking addon compiles from source on
+  every install (ruled out by CLAUDE.md). Used a real POSIX `fcntl` write lock via `@signalapp/sqlcipher`
+  (already a prebuilt dependency) on a new zero-row `~/.cello/daemon.singleton` DB, acquired BEFORE
+  `sessions.db` opens. Verified by live spike: second process → immediate `SQLITE_BUSY`; `kill -9` the
+  holder → OS releases the lock cleanly, a third process starts fine. **User-visible behavior change,
+  intentional and correct per this line's own SI**: a daemon holding the lock but not answering (stuck
+  mid-startup, socket destroyed) now makes `cello login` retry ~10s then FAIL LOUD naming the holder's
+  pid, where before it silently spawned a second daemon. **Known limit, documented not hidden**: the fcntl
+  lock needs `~/.cello` on a local filesystem — on NFSv3 without `lockd` the singleton degrades silently;
+  logged at startup. Published beta: cello-client tag `v0.0.99`, daemon `0.0.51` / cli `0.0.49` (re-pinned)
+  / client `0.0.50` / connect `0.0.69` (combined cascade with `DOD-LEGACY-MCP-1` below — one publish, not
+  two). Verified against the actual tarballs by Ms_Chelly, not the commit: `singleton-lock.js` present in
+  the published `daemon` package; cross-pins on `cli`/`connect` are real versions, zero `workspace:*`. Full
+  gate green from a genuinely clean rebuild (both `dist/` AND every `*.tsbuildinfo` cleared first — `tsc
+  --build`'s incremental cache trusts its own record over actual file presence, so deleting `dist/` alone
+  does not force a real re-emit). One pre-existing, unrelated flaky test
+  (`http-manifest-poll.test.ts`, local-HTTP-server contention under the full 200+-file parallel run) —
+  verified green 12/12 in isolation before treating it as noise, not assumed. **Not promoted to `latest`**
+  — Andre's call, command set prepared.
 
 > **Triage:** neither blocks "two agents connect." Both are close to unforgivable on "do I trust this with
 > my identity", because the failure is **silent**, the trigger is the restart sequence our own docs

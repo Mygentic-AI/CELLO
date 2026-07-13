@@ -51,13 +51,20 @@ Source: [[M8C-DEFINITION-OF-DONE]] → `SEC-1`.
 
 ## 2. Two copies of the background process can run at once, and the obvious fix makes it worse
 
-**Designation: `DOD-DAEMON-CLEANUP-1` / `DOD-SINGLE-DAEMON-1`**
+**Designation: `DOD-DAEMON-CLEANUP-1` / `DOD-SINGLE-DAEMON-1`** — ✅ **DONE 2026-07-13**, published
+(`v0.0.99`), awaiting `latest` promotion only.
 
 The daemon is the background process holding your keys and talking to the network — normally
 exactly one runs. A startup-timing bug can leave two running at once, both pointed at the same
 database. If that happens and you try to fix it by killing the process that looks extra, you can
 kill the *real* one instead — leaving nothing running, with no error message explaining why.
 Not an attack; a silent, self-inflicted failure mode triggered by an ordinary restart or crash.
+
+**Fixed with a real OS-level lock** (a genuine POSIX file lock, not a deletable file this time) —
+a second daemon now fails immediately and says so by name instead of silently duplicating. Review
+caught the sharpest bug before it shipped: the "shut down my agent" command itself was trusting the
+exact broken logic this fix removes, so it could report "nothing running" while your agent was
+still live on the network.
 
 Source: [[M8C-DEFINITION-OF-DONE]] → "🔴 Daemon singleton — multiple daemons, one database."
 
