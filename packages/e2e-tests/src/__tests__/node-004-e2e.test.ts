@@ -9,6 +9,12 @@
  *         any in-process wiring between directory and relay.
  *
  * M3: connection must be established before session initiation (SESSION-006 gate).
+ *
+ * DOD-LEGACY-MCP-1 (2026-07-12): the legacy in-process MCP server was only the DRIVER
+ * for this test — every assertion is on protocol state (NetworkRelayAdapter.recordAssignment
+ * → relay session, message round-trip through the relay, NetworkRelayAdapter.confirmSeal →
+ * `sealed` on both clients). The driver is now the live CelloClient API; the assertions are
+ * preserved (and the message assertion is strengthened to check the decoded plaintext).
  */
 
 import {
@@ -22,20 +28,17 @@ import {
   waitFor,
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
+import { mlDsaKeygen } from "@cello-protocol/crypto";
 import { clearTestShares } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { SessionAssignmentEvent } from "@cello-protocol/client";
 import { createSessionFixture } from "../session-fixture.js";
+import { buildMinimalPackageCbor } from "../package-cbor-helper.js";
 
 setupV3Tests();
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function parseResult(result: Awaited<ReturnType<Client["callTool"]>>): unknown {
-  const text = (result.content as Array<{ type: string; text: string }>)
-    .find((c) => c.type === "text")?.text;
-  if (!text) throw new Error("No text content in tool result");
-  return JSON.parse(text);
-}
+const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 
 // ─── AC-007 ───────────────────────────────────────────────────────────────────
 
@@ -50,20 +53,24 @@ describe("CELLO-NODE-004: AC-007 — full session flow over /cello/directory-rel
   it("session establishes, agents communicate, session seals — directory and relay communicate only via network protocol", async () => {
     const fix = await createSessionFixture({
       networkRelay: true,
-      withMcp: true,
       register: true,
       policyB: { mode: "open", review_mode: "deterministic", requirements: [] },
     });
     scope.addCleanup(fix.stopAll);
 
     // ── Step 1: Establish a connection A→B (M3 gate requirement) ──────────────
-    const connResult = parseResult(
-      await fix.agentA.mcp!.callTool({
-        name: "cello_request_connection",
-        arguments: { target_pubkey: fix.agentB.pubkeyHex },
-      }),
-    ) as Record<string, unknown>;
-    expect(connResult.result).toBe("accepted");
+    const mlDsaA = await mlDsaKeygen();
+    const packageCborA = await buildMinimalPackageCbor(
+      fix.agentA.kp,
+      mlDsaA,
+      fix.agentA.primaryPubkey,
+    );
+
+    const connResult = await fix.agentA.client.cello_request_connection({
+      target_pubkey: fix.agentB.pubkeyHex,
+      package_cbor: packageCborA,
+    });
+    expect(connResult.result).toBe("established");
 
     // Wait for B to register the connection locally before A initiates the session
     await waitFor(
@@ -71,56 +78,78 @@ describe("CELLO-NODE-004: AC-007 — full session flow over /cello/directory-rel
       { timeout: 5_000, interval: 50 },
     );
 
-    // ── Step 2: B awaits a session in the background ───────────────────────────
-    const bSessionPromise = fix.agentB.mcp!.callTool({
-      name: "cello_await_session",
-      arguments: { timeout_ms: 20_000 },
-    });
+    // ── Step 2: B observes inbound session_assignment ─────────────────────────
+    // Registered BEFORE A initiates, so the event cannot be missed.
+    let bAssignment: SessionAssignmentEvent | null = null;
+    fix.agentB.client.onSessionAssignment((event) => { bAssignment = event; });
 
     // ── Step 3: A initiates session with B ────────────────────────────────────
     // This triggers: directory calls NetworkRelayAdapter.recordAssignment → relay stores session
-    const initiateResult = await fix.agentA.mcp!.callTool({
-      name: "cello_initiate_session",
-      arguments: { target_pubkey: fix.agentB.pubkeyHex },
+    const initiated = await fix.agentA.client.initiateSession(fix.agentB.pubkeyHex, {
+      timeoutMs: 20_000,
     });
-    const initiated = parseResult(initiateResult) as { ok: boolean; session_id?: string };
+    if (!initiated.ok) throw new Error(`initiateSession failed: ${initiated.reason}`);
     expect(initiated.ok).toBe(true);
-    const sessionId = initiated.session_id;
+
+    const sessionId = toHex(initiated.sessionId);
     expect(sessionId).toMatch(/^[0-9a-f]{32}$/);
 
-    // B receives the session_assignment
-    const bResult = parseResult(await bSessionPromise) as { type: string; session_id?: string };
-    expect(bResult.type).toBe("new_session");
-    expect(bResult.session_id).toBe(sessionId);
+    // B receives the session_assignment (pushed by the directory)
+    await waitFor(() => bAssignment !== null, { timeout: 20_000, interval: 50 });
+    expect((bAssignment as unknown as SessionAssignmentEvent).sessionIdHex).toBe(sessionId);
+
+    // B's session record is active before A sends
+    await waitFor(
+      () => fix.agentB.client.listSessions()
+        .find((s) => toHex(s.session_id) === sessionId)?.status === "active",
+      { timeout: 10_000, interval: 100 },
+    );
 
     // A sends a message to B via the relay
-    const sendResult = await fix.agentA.mcp!.callTool({
-      name: "cello_send",
-      arguments: { session_id: sessionId, content: "hello via network relay protocol" },
-    });
-    const sent = parseResult(sendResult) as { delivered: boolean };
-    expect(sent.delivered).toBe(true);
+    const content = "hello via network relay protocol";
+    const sent = await fix.agentA.client.sendMessage(
+      sessionId,
+      new TextEncoder().encode(content),
+    );
+    expect(sent.ok).toBe(true);
 
-    // B receives the message
-    const receiveResult = await fix.agentB.mcp!.callTool({
-      name: "cello_receive_session",
-      arguments: { session_id: sessionId, timeout_ms: 5000 },
-    });
-    const received = parseResult(receiveResult) as { type: string };
+    // B receives the message — and it is the exact plaintext A sent
+    const received = await fix.agentB.client.receiveSessionMessageAsync(sessionId, 5_000);
+    expect(received).not.toBeNull();
+    if (received === null) throw new Error("expected a message, got null");
     expect(received.type).toBe("message");
+    if (received.type !== "message") throw new Error("expected type:message");
+    expect(new TextDecoder().decode(received.content)).toBe(content);
 
-    // Both A and B close concurrently — bilateral SEAL ctrl leaves submitted
+    // Both A and B seal concurrently — bilateral SEAL ctrl leaves submitted
     // This triggers: relay detects bilateral SEAL → calls directory.processSeal
     //   → directory verifies → NetworkRelayAdapter.confirmSeal → relay destroys session
     //   → both clients receive session_sealed notification
-    const [closeA, closeB] = await Promise.all([
-      fix.agentA.mcp!.callTool({ name: "cello_close_session", arguments: { session_id: sessionId } }),
-      fix.agentB.mcp!.callTool({ name: "cello_close_session", arguments: { session_id: sessionId } }),
+    const [sealA, sealB] = await Promise.all([
+      fix.agentA.client.initiateSessionSeal(sessionId),
+      fix.agentB.client.initiateSessionSeal(sessionId),
     ]);
+    expect(sealA.ok).toBe(true);
+    expect(sealB.ok).toBe(true);
 
-    const closedA = parseResult(closeA) as { status: string };
-    const closedB = parseResult(closeB) as { status: string };
-    expect(closedA.status).toBe("sealed");
-    expect(closedB.status).toBe("sealed");
-  }, 60_000);
+    // AC-007 assertion: NetworkRelayAdapter.confirmSeal round-tripped — both clients
+    // observe the session as `sealed`.
+    await waitFor(
+      () => fix.agentA.client.listSessions()
+        .find((s) => toHex(s.session_id) === sessionId)?.status === "sealed",
+      { timeout: 30_000, interval: 100 },
+    );
+    await waitFor(
+      () => fix.agentB.client.listSessions()
+        .find((s) => toHex(s.session_id) === sessionId)?.status === "sealed",
+      { timeout: 30_000, interval: 100 },
+    );
+
+    expect(
+      fix.agentA.client.listSessions().find((s) => toHex(s.session_id) === sessionId)?.status,
+    ).toBe("sealed");
+    expect(
+      fix.agentB.client.listSessions().find((s) => toHex(s.session_id) === sessionId)?.status,
+    ).toBe("sealed");
+  }, 90_000);
 });

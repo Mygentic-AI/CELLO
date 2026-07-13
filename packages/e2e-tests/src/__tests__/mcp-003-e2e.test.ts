@@ -1,25 +1,39 @@
 /**
- * CELLO-MCP-003 — M3 MCP Tool Surface end-to-end tests
+ * CELLO-MCP-003 — M3 connection-policy tool surface, end-to-end.
  *
- * Tests run via InMemoryTransport against real in-process libp2p nodes,
- * a real directory node, and a real relay node — same fixture as connreq-002.
+ * DOD-LEGACY-MCP-1 (2026-07-12): these tests used to drive the legacy in-process MCP server
+ * (`createMcpSessionServer`) over InMemoryTransport. That server is DELETED — it was never the
+ * shipped path (Claude Code talks to `bin/cello-mcp.ts`, a stdio→IPC proxy in front of the daemon),
+ * so every case here was reaching the LIVE CelloClient through a dead translator. The protocol and
+ * security coverage was real, so the cases are re-pointed at the client API directly. Everything
+ * downstream of the call — real libp2p nodes, a real directory node, a real relay, a real DKG
+ * ceremony, the real connection-policy engine — is unchanged.
+ *
+ * Tool → client-method map (the MCP names in the AC text are the historical tool names):
+ *   cello_register                      → client.register(phoneStub, preAuthToken)
+ *   cello_status                        → client.getRegistrationState()
+ *   cello_request_connection            → client.cello_request_connection({ target_pubkey, package_cbor })
+ *   cello_await_connection_request      → client.awaitConnectionRequest(timeoutMs)
+ *   cello_request_more_disclosure       → client.requestMoreDisclosure(id, items)
+ *   cello_respond_to_disclosure_request → client.cello_respond_to_disclosure_request({ ... })
+ *   cello_accept_connection             → client.acceptConnection(id)
+ *   cello_initiate_session              → client.initiateSession(targetPubkeyHex)
  *
  * Covered ACs (e2e scope — complements mcp-003-unit.test.ts unit tests):
- *   AC-001: cello_register on unregistered instance → success; cello_status shows registered: true
- *   AC-003: cello_request_connection with open deterministic policy → { result: 'accepted', connection_id }
- *   AC-004: inference mode; B calls cello_request_more_disclosure on Round 1 → A gets disclosure_requested
- *   AC-005: cello_respond_to_disclosure_request + B accepts → { result: 'accepted', connection_id }
- *   AC-006: cello_await_connection_request returns pending_review with full ConnectionReport
- *   AC-013: cello_initiate_session after connection established → session proceeds normally
+ *   AC-001: register on an unregistered instance → RegistrationState; status reflects registration
+ *   AC-004: inference mode; B requests more disclosure on Round 1 → A gets disclosure_requested
+ *   AC-005: A responds to the disclosure request + B accepts → established with connection_id
+ *   AC-006: awaitConnectionRequest returns pending_review with the full ConnectionReport
  *
- * SI-001: cello_register response must not contain ML-DSA secret key material
- * SI-002: cello_initiate_session without connection returns no_connection immediately
- * SI-003: ConnectionReport from cello_await_connection_request contains no raw crypto blobs
+ * SI-001: the registration result carries no ML-DSA secret key material
+ * SI-002: initiateSession without a connection returns no_connection without a directory call
+ * SI-003: ConnectionReport carries no raw crypto blobs
+ *
+ * Deleted here as duplicates (see the comments at each site): AC-003, AC-013.
  *
  * Transport-path observables (per cello-story rule):
- *   - connection_id is independently verified on both client A and client B
- *   - directory store shows the connection record
- *   - session proceeds normally after connection gate
+ *   - connection_id is independently verified on the directory store
+ *   - the ConnectionReport B reviews is produced by the live evaluateConnectionPackage
  *
  * Crypto refs:
  *   Ed25519 auth: RFC 8032
@@ -35,12 +49,13 @@ import {
   expect,
   beforeEach,
   afterEach,
-  waitFor,
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
+import { mlDsaKeygen } from "@cello-protocol/crypto";
 import { clearTestShares } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { RegistrationState } from "@cello-protocol/protocol-types";
 import { createSessionFixture } from "../session-fixture.js";
+import { buildMinimalPackageCbor } from "../package-cbor-helper.js";
 import { describe } from "vitest";
 
 // These tests require FROST ceremony timing that is unreliable under CI resource
@@ -49,27 +64,12 @@ const liveOnly = describe.skipIf(!process.env.CELLO_E2E_LIVE);
 
 setupV3Tests();
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function parseResult(result: Awaited<ReturnType<Client["callTool"]>>): unknown {
-  const text = (result.content as Array<{ type: string; text: string }>)
-    .find((c) => c.type === "text")?.text;
-  if (!text) throw new Error("No text content in tool result");
-  return JSON.parse(text);
-}
-
-/** Request a connection from A to B via MCP. */
-async function requestConnectionViaMcp(
-  mcpA: Client,
-  targetPubkeyHex: string,
-): Promise<Record<string, unknown>> {
-  return parseResult(
-    await mcpA.callTool({
-      name: "cello_request_connection",
-      arguments: { target_pubkey: targetPubkeyHex },
-    }),
-  ) as Record<string, unknown>;
-}
+// Open + inference: every inbound request lands in pending_agent_review with a full report.
+const INFERENCE_POLICY = {
+  mode: "open" as const,
+  review_mode: "inference" as const,
+  requirements: [],
+};
 
 // ─── Test scope ───────────────────────────────────────────────────────────────
 
@@ -80,140 +80,88 @@ afterEach(() => {
   return scope.run(async () => {});
 });
 
-// ─── AC-001: cello_register on unregistered instance ─────────────────────────
+// ─── AC-001: register on an unregistered instance ─────────────────────────────
 
 liveOnly("AC-001: cello_register on unregistered instance returns success; cello_status shows registered: true", () => {
   it("AC-001: cello_register returns registered:true, agent_id, primary_pubkey, ml_dsa_pubkey; status reflects registration", async () => {
-    // Use withMcp but NOT register (so we can test via MCP tool)
-    const fix = await createSessionFixture({ withMcp: true });
+    // No `register: true` — this test IS the registration (live REG-001 DKG via the directory).
+    const fix = await createSessionFixture();
     scope.addCleanup(fix.stopAll);
 
-    // Register agent A via MCP cello_register tool
-    const regResult = parseResult(
-      await fix.agentA.mcp!.callTool({
-        name: "cello_register",
-        arguments: { phone_stub: `+${Date.now()}`, pre_auth_token: "DEV-test-token" },
-      }),
-    ) as Record<string, unknown>;
+    const regResult = await fix.agentA.client.register(`+${Date.now()}`, "DEV-test-token");
 
-    // Must succeed with expected fields
-    expect(regResult.registered).toBe(true);
+    // Must succeed with the expected fields
+    if ("error" in regResult) throw new Error(`register failed: ${regResult.error}`);
     expect(typeof regResult.agent_id).toBe("string");
     expect(typeof regResult.primary_pubkey).toBe("string");
     expect(typeof regResult.ml_dsa_pubkey).toBe("string");
+    // The legacy tool's `registered: true` is `status: "active"` on RegistrationState.
+    expect(regResult.status).toBe("active");
     // SI-001: ml_dsa_pubkey is the PUBLIC key (hex) — not the secret
     // The public key is non-empty; if it were the secret it would be identifiable by length
-    expect((regResult.ml_dsa_pubkey as string).length).toBeGreaterThan(0);
+    expect(regResult.ml_dsa_pubkey.length).toBeGreaterThan(0);
 
-    // cello_status must now show registered: true and matching agent_id
-    const statusResult = parseResult(
-      await fix.agentA.mcp!.callTool({ name: "cello_status", arguments: {} }),
-    ) as Record<string, unknown>;
-
-    expect(statusResult.registered).toBe(true);
-    expect(statusResult.agent_id).toBe(regResult.agent_id);
+    // Status must now show the agent as registered, with a matching agent_id
+    const status = fix.agentA.client.getRegistrationState();
+    expect(status).not.toBeNull();
+    expect(status!.status).toBe("active");
+    expect(status!.agent_id).toBe(regResult.agent_id);
   }, 30_000);
 });
 
-// ─── AC-003: open deterministic policy — cello_request_connection → accepted ──
-
-liveOnly("AC-003: cello_request_connection with open deterministic policy → accepted", () => {
-  it("AC-003: A calls cello_request_connection targeting B (open policy); returns { result: 'accepted', connection_id }; A's list_connections includes B", async () => {
-    // register: true registers both agents (pre-condition for CONNREQ-002)
-    const fix = await createSessionFixture({
-      withMcp: true,
-      register: true,
-      // default policy is open + inference, so override B to open + deterministic
-      policyB: { mode: "open", review_mode: "deterministic", requirements: [] },
-    });
-    scope.addCleanup(fix.stopAll);
-
-    const result = await requestConnectionViaMcp(fix.agentA.mcp!, fix.agentB.pubkeyHex);
-
-    // AC-003: result must be accepted with a connection_id
-    expect(result.result).toBe("accepted");
-    if (result.result !== "accepted") throw new Error(`Expected accepted, got ${JSON.stringify(result)}`);
-
-    const connectionId = result.connection_id as string;
-    expect(typeof connectionId).toBe("string");
-    expect(connectionId.length).toBeGreaterThan(0);
-
-    // Transport-path: A's cello_list_connections must include the connection to B
-    const listResult = parseResult(
-      await fix.agentA.mcp!.callTool({ name: "cello_list_connections", arguments: {} }),
-    ) as { connections: Array<{ connection_id: string; counterparty_pubkey: string; status: string }> };
-
-    const connEntry = listResult.connections.find(c => c.connection_id === connectionId);
-    expect(connEntry).toBeDefined();
-    expect(connEntry!.counterparty_pubkey).toBe(fix.agentB.pubkeyHex);
-    expect(connEntry!.status).toBe("active");
-
-    // Transport-path: directory store has connection record
-    const dirConn = await fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
-    expect(dirConn).not.toBeNull();
-    expect(dirConn!.connection_id).toBe(connectionId);
-  }, 45_000);
-});
+// ─── AC-003: DELETED — duplicate ──────────────────────────────────────────────
+//
+// "A calls cello_request_connection targeting B (open policy); returns accepted + connection_id;
+//  A's list_connections includes B" is fully covered by
+//   connreq-002-session-006-e2e.test.ts → "AC-001: A and B get connection_established; both
+//   listConnections() show same connection_id; directory store has record"
+// — same open + deterministic policy, same assertions on the connection_id, both clients'
+// listConnections(), and the directory store record. (`accepted` was the MCP translator's name
+// for the client's `established`.)
 
 // ─── AC-004: inference mode; B requests more disclosure; A gets disclosure_requested ─
 
 liveOnly("AC-004: inference mode — B calls cello_request_more_disclosure; A gets { result: 'disclosure_requested' }", () => {
   it("AC-004: A calls cello_request_connection; B (inference mode) requests more disclosure; A's tool returns disclosure_requested", async () => {
-    const inferencePolicy = {
-      mode: "open" as const,
-      review_mode: "inference" as const,
-      requirements: [],
-    };
-
     const fix = await createSessionFixture({
-      withMcp: true,
       register: true,
-      policyB: inferencePolicy,
+      policyB: INFERENCE_POLICY,
       round2TimeoutMs: 15_000,
     });
     scope.addCleanup(fix.stopAll);
 
-    // B awaits connection request via MCP (blocking call races A's request)
-    // We start B's await first, then A sends the request
-    const bAwaitPromise = fix.agentB.mcp!.callTool({
-      name: "cello_await_connection_request",
-      arguments: { timeout_ms: 20_000 },
-    });
+    const mlDsaA = await mlDsaKeygen();
+    const packageCborA = await buildMinimalPackageCbor(fix.agentA.kp, mlDsaA, fix.agentA.primaryPubkey);
+
+    // B awaits the connection request (blocking call races A's request).
+    // We start B's await first, then A sends the request.
+    const bAwaitPromise = fix.agentB.client.awaitConnectionRequest(20_000);
 
     // Give B's await a moment to register before A sends
     await new Promise(r => setTimeout(r, 50));
 
-    // A sends connection_request via MCP (will block until result)
-    const aRequestPromise = fix.agentA.mcp!.callTool({
-      name: "cello_request_connection",
-      arguments: { target_pubkey: fix.agentB.pubkeyHex },
+    // A sends connection_request (will block until B's verdict comes back)
+    const aRequestPromise = fix.agentA.client.cello_request_connection({
+      target_pubkey: fix.agentB.pubkeyHex,
+      package_cbor: packageCborA,
     });
 
     // B receives the connection request in pending_review
-    const bAwaitResult = parseResult(await bAwaitPromise) as {
-      type: string;
-      connection_request_id: string;
-      from_pubkey: string;
-      report: Record<string, unknown>;
-    };
+    const bAwaitResult = await bAwaitPromise;
     expect(bAwaitResult.type).toBe("pending_review");
+    if (bAwaitResult.type !== "pending_review") throw new Error("Expected pending_review");
     expect(bAwaitResult.from_pubkey).toBe(fix.agentA.pubkeyHex);
     expect(typeof bAwaitResult.connection_request_id).toBe("string");
 
-    // B calls cello_request_more_disclosure (Round 2 flow)
-    const moreDisclosureResult = parseResult(
-      await fix.agentB.mcp!.callTool({
-        name: "cello_request_more_disclosure",
-        arguments: {
-          connection_request_id: bAwaitResult.connection_request_id,
-          requested_items: [{ type: "endorsement", min_count: 1 }],
-        },
-      }),
-    ) as Record<string, unknown>;
-    expect(moreDisclosureResult.request_sent).toBe(true);
+    // B asks for more disclosure (Round 2 flow)
+    const moreDisclosureResult = await fix.agentB.client.requestMoreDisclosure(
+      bAwaitResult.connection_request_id,
+      [{ type: "endorsement", min_count: 1 }],
+    );
+    expect(moreDisclosureResult).toEqual({ request_sent: true });
 
     // A's cello_request_connection must now return disclosure_requested
-    const aResult = parseResult(await aRequestPromise) as Record<string, unknown>;
+    const aResult = await aRequestPromise;
     expect(aResult.result).toBe("disclosure_requested");
     if (aResult.result !== "disclosure_requested") {
       throw new Error(`Expected disclosure_requested, got ${JSON.stringify(aResult)}`);
@@ -223,95 +171,76 @@ liveOnly("AC-004: inference mode — B calls cello_request_more_disclosure; A ge
   }, 45_000);
 });
 
-// ─── AC-005: respond_to_disclosure_request + B accepts → accepted ─────────────
+// ─── AC-005: respond_to_disclosure_request + B accepts → established ──────────
 
 liveOnly("AC-005: cello_respond_to_disclosure_request + B accepts → { result: 'accepted', connection_id }", () => {
   it("AC-005: after disclosure_requested, A calls respond; B accepts; returns accepted with connection_id", async () => {
-    const inferencePolicy = {
-      mode: "open" as const,
-      review_mode: "inference" as const,
-      requirements: [],
-    };
-
     const fix = await createSessionFixture({
-      withMcp: true,
       register: true,
-      policyB: inferencePolicy,
+      policyB: INFERENCE_POLICY,
       round2TimeoutMs: 15_000,
     });
     scope.addCleanup(fix.stopAll);
 
+    const mlDsaA = await mlDsaKeygen();
+    const packageCborA = await buildMinimalPackageCbor(fix.agentA.kp, mlDsaA, fix.agentA.primaryPubkey);
+
     // ── Round 1: B awaits, A sends, B requests more disclosure ──────────────────
 
-    const bAwaitRound1Promise = fix.agentB.mcp!.callTool({
-      name: "cello_await_connection_request",
-      arguments: { timeout_ms: 20_000 },
-    });
+    const bAwaitRound1Promise = fix.agentB.client.awaitConnectionRequest(20_000);
     await new Promise(r => setTimeout(r, 50));
 
-    const aRound1Promise = fix.agentA.mcp!.callTool({
-      name: "cello_request_connection",
-      arguments: { target_pubkey: fix.agentB.pubkeyHex },
+    const aRound1Promise = fix.agentA.client.cello_request_connection({
+      target_pubkey: fix.agentB.pubkeyHex,
+      package_cbor: packageCborA,
     });
 
-    const bRound1Result = parseResult(await bAwaitRound1Promise) as {
-      type: string;
-      connection_request_id: string;
-    };
+    const bRound1Result = await bAwaitRound1Promise;
     expect(bRound1Result.type).toBe("pending_review");
+    if (bRound1Result.type !== "pending_review") throw new Error("Expected pending_review");
     const connectionRequestId = bRound1Result.connection_request_id;
 
     // B requests more disclosure
-    await fix.agentB.mcp!.callTool({
-      name: "cello_request_more_disclosure",
-      arguments: {
-        connection_request_id: connectionRequestId,
-        requested_items: [{ type: "endorsement", min_count: 1 }],
-      },
-    });
+    await fix.agentB.client.requestMoreDisclosure(
+      connectionRequestId,
+      [{ type: "endorsement", min_count: 1 }],
+    );
 
     // A receives disclosure_requested
-    const aRound1Result = parseResult(await aRound1Promise) as Record<string, unknown>;
+    const aRound1Result = await aRound1Promise;
     expect(aRound1Result.result).toBe("disclosure_requested");
+    if (aRound1Result.result !== "disclosure_requested") throw new Error("Expected disclosure_requested");
 
     // ── Round 2: B awaits Round 2, A responds, B accepts ────────────────────────
 
-    const bAwaitRound2Promise = fix.agentB.mcp!.callTool({
-      name: "cello_await_connection_request",
-      arguments: { timeout_ms: 20_000 },
-    });
+    const bAwaitRound2Promise = fix.agentB.client.awaitConnectionRequest(20_000);
     await new Promise(r => setTimeout(r, 50));
 
-    // A calls respond_to_disclosure_request (concurrently with B's await)
-    const aRespondPromise = fix.agentA.mcp!.callTool({
-      name: "cello_respond_to_disclosure_request",
-      arguments: {
-        connection_request_id: aRound1Result.connection_request_id as string,
-      },
+    // A responds to the disclosure request (concurrently with B's await)
+    const mlDsaV2 = await mlDsaKeygen();
+    const packageV2 = await buildMinimalPackageCbor(fix.agentA.kp, mlDsaV2, fix.agentA.primaryPubkey);
+    const aRespondPromise = fix.agentA.client.cello_respond_to_disclosure_request({
+      connection_request_id: aRound1Result.connection_request_id,
+      package_cbor: packageV2,
     });
 
-    // B receives the Round 2 request
-    const bRound2Result = parseResult(await bAwaitRound2Promise) as {
-      type: string;
-      connection_request_id: string;
-      report: Record<string, unknown>;
-    };
+    // B receives the Round 2 request — the live two-round re-evaluation
+    const bRound2Result = await bAwaitRound2Promise;
     expect(bRound2Result.type).toBe("pending_review");
+    if (bRound2Result.type !== "pending_review") throw new Error("Expected pending_review on Round 2");
+    expect(bRound2Result.report.is_round_2).toBe(true);
 
     // B accepts the Round 2 request
-    const bAcceptResult = parseResult(
-      await fix.agentB.mcp!.callTool({
-        name: "cello_accept_connection",
-        arguments: { connection_request_id: bRound2Result.connection_request_id },
-      }),
-    ) as Record<string, unknown>;
+    const bAcceptResult = await fix.agentB.client.acceptConnection(bRound2Result.connection_request_id);
+    if ("error" in bAcceptResult) throw new Error(`acceptConnection failed: ${bAcceptResult.error.reason}`);
     expect(bAcceptResult.accepted).toBe(true);
-    const connectionId = bAcceptResult.connection_id as string;
+    const connectionId = bAcceptResult.connection_id;
     expect(typeof connectionId).toBe("string");
 
-    // A's respond_to_disclosure_request returns accepted
-    const aRespondResult = parseResult(await aRespondPromise) as Record<string, unknown>;
-    expect(aRespondResult.result).toBe("accepted");
+    // A's respond_to_disclosure_request returns established with the same connection_id
+    const aRespondResult = await aRespondPromise;
+    expect(aRespondResult.result).toBe("established");
+    if (aRespondResult.result !== "established") throw new Error("Expected established");
     expect(aRespondResult.connection_id).toBe(connectionId);
 
     // Transport-path: directory store has the connection record
@@ -321,61 +250,34 @@ liveOnly("AC-005: cello_respond_to_disclosure_request + B accepts → { result: 
   }, 60_000);
 });
 
-// ─── AC-006: cello_await_connection_request returns pending_review + ConnectionReport ─
+// ─── AC-006: awaitConnectionRequest returns pending_review + ConnectionReport ──
 
 liveOnly("AC-006: cello_await_connection_request returns pending_review with full ConnectionReport", () => {
   it("AC-006: B (inference mode) gets pending_review with ConnectionReport containing policy_summary and package_summary", async () => {
-    const inferencePolicy = {
-      mode: "open" as const,
-      review_mode: "inference" as const,
-      requirements: [],
-    };
-
     const fix = await createSessionFixture({
-      withMcp: true,
       register: true,
-      policyB: inferencePolicy,
+      policyB: INFERENCE_POLICY,
     });
     scope.addCleanup(fix.stopAll);
 
+    const mlDsaA = await mlDsaKeygen();
+    const packageCborA = await buildMinimalPackageCbor(fix.agentA.kp, mlDsaA, fix.agentA.primaryPubkey);
+
     // B awaits connection request
-    const bAwaitPromise = fix.agentB.mcp!.callTool({
-      name: "cello_await_connection_request",
-      arguments: { timeout_ms: 20_000 },
-    });
+    const bAwaitPromise = fix.agentB.client.awaitConnectionRequest(20_000);
     await new Promise(r => setTimeout(r, 50));
 
     // A sends connection request (fire and don't await — we're testing B's receive side)
-    void fix.agentA.mcp!.callTool({
-      name: "cello_request_connection",
-      arguments: { target_pubkey: fix.agentB.pubkeyHex },
+    void fix.agentA.client.cello_request_connection({
+      target_pubkey: fix.agentB.pubkeyHex,
+      package_cbor: packageCborA,
     });
 
-    const result = parseResult(await bAwaitPromise) as {
-      type: string;
-      connection_request_id: string;
-      from_pubkey: string;
-      report: {
-        policy_summary: {
-          mode: string;
-          review_mode: string;
-          requirements_met: unknown[];
-          requirements_unmet: unknown[];
-        };
-        package_summary: {
-          pseudonym_label: string;
-          endorsement_count: number;
-          attestation_types: unknown[];
-          pseudonym_age_days: number;
-          registration_age_days: number;
-          is_provisional: boolean;
-        };
-        is_round_2: boolean;
-      };
-    };
+    const result = await bAwaitPromise;
 
     // AC-006: type, from_pubkey, connection_request_id
     expect(result.type).toBe("pending_review");
+    if (result.type !== "pending_review") throw new Error("Expected pending_review");
     expect(result.from_pubkey).toBe(fix.agentA.pubkeyHex);
     expect(typeof result.connection_request_id).toBe("string");
     expect(result.connection_request_id.length).toBeGreaterThan(0);
@@ -408,91 +310,35 @@ liveOnly("AC-006: cello_await_connection_request returns pending_review with ful
   }, 45_000);
 });
 
-// ─── AC-013: cello_initiate_session after connection established ───────────────
+// ─── AC-013: DELETED — duplicate ──────────────────────────────────────────────
+//
+// "A and B connected; A calls cello_initiate_session; FROST ceremony runs; session_id returned"
+// is covered by
+//   connreq-002-session-006-e2e.test.ts → "AC-008: A and B are strangers → connection request →
+//   connection_established → initiateSession → send/receive messages"
+// — which runs the same live FROST ceremony behind initiateSession and additionally asserts the
+// session is active on BOTH sides and that messages flow over it.
 
-liveOnly("AC-013: cello_initiate_session after connection established → session proceeds", () => {
-  it("AC-013: A and B connected; A calls cello_initiate_session; FROST ceremony runs; session_id returned", async () => {
-    const fix = await createSessionFixture({
-      withMcp: true,
-      register: true,
-      policyB: { mode: "open", review_mode: "deterministic", requirements: [] },
-      // register: true automatically configures the directory threshold signer via DKG
-    });
-    scope.addCleanup(fix.stopAll);
-
-    // ── Step 1: Establish connection ──────────────────────────────────────────
-    const connResult = await requestConnectionViaMcp(fix.agentA.mcp!, fix.agentB.pubkeyHex);
-    expect(connResult.result).toBe("accepted");
-    if (connResult.result !== "accepted") throw new Error(`Connection failed: ${JSON.stringify(connResult)}`);
-
-    // Wait for B to also register the connection locally
-    await waitFor(
-      () => fix.agentB.client.listConnections().length > 0,
-      { timeout: 5_000, interval: 50 },
-    );
-
-    // ── Step 2: Initiate session ───────────────────────────────────────────────
-    // B awaits session assignment concurrently
-    const bSessionPromise = fix.agentB.mcp!.callTool({
-      name: "cello_await_session",
-      arguments: { timeout_ms: 20_000 },
-    });
-
-    const sessionResult = parseResult(
-      await fix.agentA.mcp!.callTool({
-        name: "cello_initiate_session",
-        arguments: { target_pubkey: fix.agentB.pubkeyHex },
-      }),
-    ) as Record<string, unknown>;
-
-    // AC-013: session proceeds normally after connection gate
-    expect(sessionResult.ok).toBe(true);
-    expect(typeof sessionResult.session_id).toBe("string");
-    expect((sessionResult.session_id as string)).toMatch(/^[0-9a-f]+$/);
-
-    // B also receives the session assignment
-    const bResult = parseResult(await bSessionPromise) as Record<string, unknown>;
-    expect(bResult.type).toBe("new_session");
-    expect(bResult.session_id).toBe(sessionResult.session_id);
-
-    // Transport-path: session is active on both sides
-    const sessionIdHex = sessionResult.session_id as string;
-    await waitFor(
-      () => fix.agentB.client.listSessions().some(
-        s => Buffer.from(s.session_id).toString("hex") === sessionIdHex,
-      ),
-      { timeout: 5_000, interval: 50 },
-    );
-
-    const aSession = fix.agentA.client.listSessions().find(
-      s => Buffer.from(s.session_id).toString("hex") === sessionIdHex,
-    );
-    expect(aSession?.status).toBe("active");
-  }, 45_000);
-});
-
-// ─── SI-001: cello_register response contains no ML-DSA secret key material ──
+// ─── SI-001: registration result contains no ML-DSA secret key material ───────
 
 liveOnly("SI-001: cello_register response contains no ML-DSA secret key material", () => {
   it("SI-001: registered response contains only public fields; ml_dsa_pubkey is public key (non-empty hex), no secret exposed", async () => {
-    const fix = await createSessionFixture({ withMcp: true });
+    const fix = await createSessionFixture();
     scope.addCleanup(fix.stopAll);
 
-    const result = parseResult(
-      await fix.agentA.mcp!.callTool({
-        name: "cello_register",
-        arguments: { phone_stub: `+${Date.now()}`, pre_auth_token: "DEV-test-token" },
-      }),
-    ) as Record<string, unknown>;
+    const result = await fix.agentA.client.register(`+${Date.now()}`, "DEV-test-token");
+    if ("error" in result) throw new Error(`register failed: ${result.error}`);
+    expect(result.status).toBe("active");
 
-    expect(result.registered).toBe(true);
-
-    // The response must have only these keys — no secret key field
+    // The RegistrationState must have only these keys — no secret key field.
+    // Fails loudly if a future field is added, forcing a security look at it.
     const keys = Object.keys(result).sort();
-    expect(keys).toEqual(["agent_id", "ml_dsa_pubkey", "primary_pubkey", "registered"].sort());
+    expect(keys).toEqual(
+      (["agent_id", "ml_dsa_pubkey", "primary_pubkey", "registered_at", "status"] satisfies Array<keyof RegistrationState>).sort(),
+    );
 
     // ml_dsa_pubkey is a hex string (public key) — not raw binary that might be the secret
-    const mlDsaPubkey = result.ml_dsa_pubkey as string;
+    const mlDsaPubkey = result.ml_dsa_pubkey;
     expect(typeof mlDsaPubkey).toBe("string");
     // Public ML-DSA-44 key = 1312 bytes = 2624 hex chars
     // Secret ML-DSA-44 key = 2528 bytes = 5056 hex chars
@@ -502,69 +348,58 @@ liveOnly("SI-001: cello_register response contains no ML-DSA secret key material
   }, 30_000);
 });
 
-// ─── SI-002 (e2e): cello_initiate_session without connection → no_connection ──
+// ─── SI-002 (e2e): initiateSession without a connection → no_connection ───────
 
 liveOnly("SI-002 (e2e): cello_initiate_session to unconnected peer → no_connection immediately", () => {
-  it("SI-002: A (registered, no connection to B) calls cello_initiate_session → { error: { reason: 'no_connection' } } without directory call", async () => {
+  it("SI-002: A (registered, no connection to B) calls cello_initiate_session → { ok: false, reason: 'no_connection' } without directory call", async () => {
     const fix = await createSessionFixture({
-      withMcp: true,
       register: true,
+      // The client-side gate (SignalingManager.initiateSession) only engages when a connection
+      // policy is configured — hasConnectionPolicy() && !connectionId → no_connection, returned
+      // BEFORE the signaling stream is touched. Without policyA the gate never fires and this
+      // test would pass on a directory round-trip instead of the local guard it is written for.
+      policyA: { mode: "open", review_mode: "deterministic", requirements: [] },
     });
     scope.addCleanup(fix.stopAll);
 
     // A has no connection with B — initiate_session must fail immediately
-    const result = parseResult(
-      await fix.agentA.mcp!.callTool({
-        name: "cello_initiate_session",
-        arguments: { target_pubkey: fix.agentB.pubkeyHex },
-      }),
-    ) as Record<string, unknown>;
+    const result = await fix.agentA.client.initiateSession(fix.agentB.pubkeyHex);
 
     expect(result.ok).toBe(false);
     // The error must be no_connection specifically (not timeout, not directory error)
-    // Could be returned as { ok: false, reason } or { error: { reason } }
-    const reason = result.reason ?? (result.error as Record<string, unknown> | undefined)?.reason;
-    expect(reason).toBe("no_connection");
+    if (result.ok) throw new Error("Expected initiateSession to fail");
+    expect(result.reason).toBe("no_connection");
 
     // Transport-path: no session was created
     expect(fix.agentA.client.listSessions().length).toBe(0);
   }, 15_000);
 });
 
-// ─── SI-003 (e2e): ConnectionReport from await_connection_request contains no crypto blobs ─
+// ─── SI-003 (e2e): ConnectionReport contains no raw cryptographic material ────
 
 liveOnly("SI-003 (e2e): ConnectionReport contains no raw cryptographic material", () => {
   it("SI-003: ConnectionReport strings are human-readable summaries, not raw signatures or full pubkeys", async () => {
-    const inferencePolicy = {
-      mode: "open" as const,
-      review_mode: "inference" as const,
-      requirements: [],
-    };
-
     const fix = await createSessionFixture({
-      withMcp: true,
       register: true,
-      policyB: inferencePolicy,
+      policyB: INFERENCE_POLICY,
     });
     scope.addCleanup(fix.stopAll);
 
-    const bAwaitPromise = fix.agentB.mcp!.callTool({
-      name: "cello_await_connection_request",
-      arguments: { timeout_ms: 20_000 },
-    });
+    const mlDsaA = await mlDsaKeygen();
+    const packageCborA = await buildMinimalPackageCbor(fix.agentA.kp, mlDsaA, fix.agentA.primaryPubkey);
+
+    const bAwaitPromise = fix.agentB.client.awaitConnectionRequest(20_000);
     await new Promise(r => setTimeout(r, 50));
 
-    void fix.agentA.mcp!.callTool({
-      name: "cello_request_connection",
-      arguments: { target_pubkey: fix.agentB.pubkeyHex },
+    void fix.agentA.client.cello_request_connection({
+      target_pubkey: fix.agentB.pubkeyHex,
+      package_cbor: packageCborA,
     });
 
-    const result = parseResult(await bAwaitPromise) as {
-      type: string;
-      report: Record<string, unknown>;
-    };
+    const result = await bAwaitPromise;
 
     expect(result.type).toBe("pending_review");
+    if (result.type !== "pending_review") throw new Error("Expected pending_review");
     const reportJson = JSON.stringify(result.report);
 
     // SI-003: No raw ML-DSA signature (4840+ hex chars) in the report
@@ -576,11 +411,7 @@ liveOnly("SI-003 (e2e): ConnectionReport contains no raw cryptographic material"
 
     // SI-003: No ML-DSA public key (2624 hex chars)
     // Already covered by the above pattern, but explicitly check structure
-    const report = result.report as {
-      policy_summary: Record<string, unknown>;
-      package_summary: Record<string, unknown>;
-    };
-    const pkgSummary = report.package_summary;
+    const pkgSummary = result.report.package_summary;
     // package_summary must not contain raw key fields
     const pkgKeys = Object.keys(pkgSummary);
     expect(pkgKeys).not.toContain("ml_dsa_pubkey");
