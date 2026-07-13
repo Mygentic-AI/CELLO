@@ -169,6 +169,34 @@ inert copy consumes/clears the nonce as single-use (:469-474, cites "SI-003"); t
 **Before deleting, establish whether single-use nonce enforcement is needed on the client side or is
 the directory's job.** Do not assume. (~90 lines.)
 
+### 1.9 (NEW, found 2026-07-13 during the comment pass) The relay witness cross-check DEGRADES OPEN — needs a human decision
+
+Found while doing comment archaeology; **surfaced, not fixed** — rewriting a security comment on a
+guess is worse than leaving it wrong.
+
+`session-node-manager.ts:3156` carries a SCOPE note saying content tamper-evidence is incomplete
+because "that relay hash-submit path is MSG-001's scope and **does not exist yet**." **That reason is
+STALE — the path exists.** The sender submits a `K_local`-signed content-hash leaf to the relay
+(`session-relay-client.ts:756`, `LEAF_KIND_MSG`), and the receiver gets an independent
+`(content_hash → canonical sequence)` binding back on the `leaf_deliver` stream (`SNM:254-259`,
+`#witnessedSeq`).
+
+**But the note's CONCLUSION still holds, for a different and worse reason.** The witness is consulted
+for **ordering**, and a hash with **no witness is not refused** — it falls back to arrival order
+(`SNM:78`: *"relay just doesn't witness the leaf yet"*). So a sender who simply **never submits** to
+the relay gets content ingested with no independent hash to check it against. The cross-check
+**degrades open**, and `ingestReceivedContent`'s hash compare is then only comparing the frame
+against itself — which is exactly the thing the scope note says it cannot prove.
+
+**The decision (Andre's, not a sweep):** is an unwitnessed content leaf supposed to be *refused*
+(fail-closed, at the cost of breaking any session where the relay is unreachable — which the park
+backstop exists to tolerate), or is arrival-order fallback the intended, accepted trade? The code
+cannot tell you; both readings are coherent. **Do not "fix" this by tightening the comment.**
+
+Note the shape: this is the same failure mode as §1.5 (a fail-OPEN default inside a contract
+documented as fail-closed) and §1.8 (a security check that an attacker can skip by omitting the field
+that triggers it). Three instances is a pattern, not three bugs.
+
 ---
 
 ## 2. DEAD CODE — ~2,200 lines, provable
