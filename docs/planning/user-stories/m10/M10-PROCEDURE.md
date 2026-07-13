@@ -132,6 +132,19 @@ the repo(s). Standing M10-specific instructions to include:
 - **Framing integrity** — any path that hands signal content to an LLM must carry `issuer_kind`
   framing; agent-issued content is always quoted-untrusted.
 
+- **Removal & refactor integrity (Lens 5) — DISPATCH IT EXPLICITLY on any diff that DELETES or
+  MOVES code.** Lenses 1-4 all assume a diff that ADDS something (a DoD clause to check, a new
+  `catch` to inspect, a new test to bypass). A diff that removes 24,000 lines, or moves 6,000
+  between files, gives them nothing to bite on and sails through. Tell the reviewer the diff is a
+  removal/refactor so it applies: deadness PROVEN (both repos + `exports` map + red build, never a
+  grep); every DELETED test triaged by SUBJECT (a live subject behind a dead driver must be
+  re-pointed, not deleted); absence asserted on the BUILT artifact; and — for a refactor —
+  behavior preservation as the spec (anything that moved is a finding unless journaled).
+- **Error substitution (Lens 3a2).** Not just swallowed errors — RENAMED ones. An exit-point label
+  (`relay_unavailable`, `directory_unreachable`, `threshold_not_met`) standing in for the real cause
+  sends the operator to the wrong subsystem for days. The upstream reason must survive in the payload.
+- **The revert test (Lens 4).** For every new test: would it still pass if the fix were reverted?
+
 ## 2c. Publish + deploy sequencing
 **Load `/cello-publish` for THIS publish — every publish, never from memory.** Batch publishes
 per tier, not per unit; a line needing a published artifact is not ✅ until the published
@@ -213,6 +226,99 @@ the self-audit:
 4. Then the loop, tier order strict.
 
 ## 5. Hard rules (non-negotiable)
+
+### 5a. The recurring defect classes (M8C reduction work, 2026-07-13 — earned, not theoretical)
+
+- **ABSENT IS NOT FINE.** When a guard's input is missing, unreadable, or an unrecognized shape,
+  the answer is **REFUSE**. A default that lets the caller proceed is a security defect even when
+  it is currently unreachable — unreachable is a property of today's SQL, not of the code. Five
+  instances of ONE bug were found in a single pass: a `SELECT` with no row returning 0 (unblocking
+  a send), a missing verifier skipping directory auth entirely, a missing relay witness falling
+  back to arrival order, an unrecognized response shape returning `[]` through a `length > 1`
+  guard, and a missing selection guessing an agent (the write landed on the wrong one). An attacker
+  never has to DEFEAT these — they omit the thing that triggers the check.
+  **Exception, and it is real:** if refusing would break the redundancy invariant (a node being
+  unreachable must not make CELLO unusable — refusing to read mail because the relay is down makes
+  the relay a precondition for the inbox), you may proceed — but the degraded path is **ANNOUNCED**
+  (distinct log event / flag on the response) and the trade is journaled. **Never silent.**
+  Corollary: **a signal that fires on the normal case is not a signal** — a warning that fires on a
+  designed benign state buries the one occurrence that matters.
+
+- **ERRORS NAME THEIR CAUSE, NOT THEIR EXIT POINT.** Do not SWALLOW an error (that is obvious) and
+  do not **SUBSTITUTE** one (that is the expensive one). `relay_unavailable`,
+  `directory_unreachable`, `transport_unavailable`, `threshold_not_met`, `ceremony_exhausted` are
+  **labels on the exit point**, not causes. Real case: the surfaced error was
+  `directory_unreachable`; the actual cause was `session_request_missing_peer_id` — a version-pinned
+  client that never sent a required field. The name pointed at the network; the bug was in the
+  payload. Days lost. Whenever a mapper collapses many upstream conditions into one terminal string,
+  the upstream reason **must survive in the payload** (`cause` / `detail` / `upstream_reason`). Test:
+  *would this message send a competent operator to the RIGHT subsystem?*
+
+- **NO CONSUMER, NO SHIP.** A new return field, response flag, log event, or config knob needs a
+  NAMED CONSUMER in the same unit. A field nobody reads is dead weight born dead, and it lies — a
+  reader assumes something acts on it.
+
+- **NO ARCHAEOLOGY COMMENTS.** A comment states a constraint the CURRENT code cannot show. It never
+  narrates what the code used to do, who caught what in review, or which story renamed a thing — git
+  holds that. But **rewrite, do not delete**: the constraint under a "previously…" comment is usually
+  load-bearing, and deleting it invites the bug back. Present tense, imperative.
+
+### 5b. Deletion & refactor discipline (a refactor IS a code review)
+
+> **A refactor is a code review.** The finds come from having to read code closely enough to move it.
+> Every anomaly surfaced during a refactor is a FINDING to log — never noise to normalise away.
+> Corollary: for a refactor, **behavior preservation IS the spec**. There is no DoD clause, but there
+> is an implicit one: *nothing changes.* Anything that moved is a finding unless journaled.
+
+- **DEADNESS IS PROVEN BY DELETION, NOT BY GREP.** A grep is a hypothesis; a red build is proof.
+  Before deleting or moving ANY file or export, all three:
+  1. **Grep BOTH repos.** Separate workspaces — "unused" in one is routinely consumed by the other.
+  2. **Read the `exports` map.** `package.json`'s `exports`/`main` **IS a consumer**. A file with no
+     in-repo importer can still be a published entry point. (`crypto/frost/stubs.ts` had no
+     in-package caller, was moved to `__tests__/`, and broke the directory — which imported
+     `@cello-protocol/crypto/frost/stubs.js` by subpath, in five files.)
+  3. **Remove it and run BOTH repos' gates.** An empty grep is suspect, not conclusive: a re-export
+     with no in-package caller looks exactly like dead code (`ed25519_FROST` had zero callers in
+     `core/crypto` and drove the entire client-side DKG from the daemon).
+  **Never inherit a deadness claim** from a report, an analyst, a prior session, or a comment. The
+  regression above came from trusting the sentence "only used by frost.test.ts."
+
+- **TRIAGE TESTS BY SUBJECT-UNDER-TEST, NEVER BY FILE.** A test may use dead code as a *driver* while
+  its subject is alive. Delete by file and live coverage vanishes with no gate noticing. 12,538 lines
+  of green tests were one bad decision from deletion. If the subject is live, RE-POINT the test.
+
+- **`rm -rf core/*/dist core/*/*.tsbuildinfo` BEFORE ANY BUILD THAT FOLLOWS A DELETION.** `tsc --build`
+  never removes orphaned outputs, and `tsc --build --clean` does not either (the source is gone, so
+  it is not tracked). A warm tree keeps compiling and PACKING files whose source you deleted. Assert
+  absence on the **BUILT ARTIFACT**, never on source. This has bitten three times.
+
+- **ENCODER / WIRE-FORMAT CHANGES: is any signature or hash over these bytes?** Mechanical, not a
+  judgment call. Classify what the change alters and whether any of it is signed, hashed, or kept
+  byte-identical by another implementation. (Changing the CBOR encoder altered OBJECT encoding but
+  not ARRAY encoding — and every signed TBS encodes an array, so no signature was affected. Three
+  commands answered what was being hedged for an hour.)
+
+### 5c. Verification, not assertion
+
+- **DO NOT ESCALATE WHAT YOU CAN VERIFY.** Before putting a question to Andre, check the authoritative
+  source: the type definition, the RFC, the other repo's code, the actual bytes. Escalation spends his
+  scarcest resource. *"The code cannot tell you"* is a claim that must ITSELF be checked. (A "one of
+  these two is wrong — a human must decide" was escalated; the libp2p type definition answered it in
+  one line: `close()` is a half-close, both patterns were correct.)
+
+- **RED FOR THE RIGHT REASON — APPLY THE REVERT TEST.** *"Would this test still pass if the fix were
+  reverted?"* If yes, it is not coverage, whatever its name says. Two ways it fails: the test lands on
+  a NEIGHBOURING branch (exercising the already-correct guard beside the one you changed), or it passes
+  for the WRONG REASON (an error fires before the code under test runs — a test with its arguments in
+  the wrong ORDER still "passed" because a pre-check refused before either was read). If the changed
+  line is genuinely unreachable, say so **in the test name and the commit**, not in a comment.
+
+- **MEASURE BEFORE QUOTING A NUMBER.** A figure in a journal or DoD is measured, or it is labelled an
+  estimate and the miss is recorded when it lands. (An archaeology estimate of "1,500–3,000 lines"
+  came in at 354 — extrapolated from keyword counts. Coverage had never been measured at all: it is
+  75%, and `daemon.ts` is 66% with 1,434 uncovered lines.) `--coverage` runs in the gate.
+
+### 5d. Process
 - **One thread. One coder (the main loop). NO parallel implementation agents.** Read-only
   subagents only (unit-reviewer / done-auditor / explorer).
 - **Work directly on `main` in all three repos.** Commit often; batch directory pushes;
