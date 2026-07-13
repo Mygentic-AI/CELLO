@@ -356,10 +356,27 @@ This is already in the repo's own CLAUDE.md — *"never to say where it came fro
 the reviewer, not the next reader, and it's noise the moment the PR merges"* — and it has been widely
 violated.
 
-**Scale:** production is **13,096 comment lines (31% of 41,633)**. A keyword scan finds **261 archaeology
-marker lines** and **888 story-ID mentions** — but those are the *tips of blocks*. One hit at
-`daemon.ts:5646` is a **23-line** block quoting a vault doc it names by filename. Realistic archaeology
-volume: **1,500-3,000 lines.**
+**✅ DONE 2026-07-13** (cello-client `7929962`, branch `reduction`): 42 files, **−354 net lines**, zero
+behavior change, gate green (170 files / 1,754 tests — baseline unchanged).
+
+> **The 1,500–3,000 estimate below was WRONG. Recorded so nobody chases it.** It extrapolated block
+> size from keyword-marker counts. In reality most of the 888 "story-ID mentions" are *inline
+> prefixes* (`M8C-ABUSE-1 (reviewer HIGH fix, D18):`) that strip without removing a line. The real
+> archaeology was concentrated in a few large SPARC pseudocode blocks — the 51-line
+> `session-node-manager` header, 43 in `retry-queue`, 58 in transport's `node.ts`, the 43-line H-1
+> block — and those are now gone. **Comment volume is not the metric; comment TRUTH is.** Most of the
+> remaining 31% is legitimate constraint documentation. Do not go hunting for another 2,000 lines.
+
+**Two findings a pure line-count sweep would have missed** (the real payoff of the pass):
+1. The 43-line H-1 scope block in `daemon.ts` justified a live limitation by pointing at `core/client`
+   — the package deleted last week. **21 comments still cited it.**
+2. `crypto/index.ts`'s `ed25519_FROST` re-export **looked dead** (no in-package caller; its comment
+   named the deleted client as its only consumer). It is **LIVE** — `network-directory-node.ts:16`
+   imports it *from that re-export* and runs the whole client-side DKG on it. Deleting it would have
+   repeated the frost/stubs regression, in the same package, from the same bad grep.
+
+**Original (superseded) estimate:** production was **13,096 comment lines (31% of 41,633)**; a keyword
+scan found **261 archaeology marker lines** and **888 story-ID mentions**.
 
 ### The test
 
@@ -415,10 +432,13 @@ Measure before quoting a line count — **raw line counts overstate code by ~40%
 The ordering is deliberate: **delete before you extract** (less surface to thread through a constructor),
 and **decorate before you split** (the decorator is what makes the seams visible).
 
-**Phase 0 — free wins, no risk**
-1. **§1.6** — reword the two shipped docs. Ships a false claim today. Two lines.
-2. **§6** — comment archaeology. Zero behavior change, ~1,500-3,000 lines, and it makes everything below
-   easier to read. Do it FIRST, not last: you are about to read these files closely anyway.
+**Phase 0 — ✅ COMPLETE 2026-07-13** (branch `reduction`, worktree `cello-client-reduction`)
+1. **§1.6 ✅** — `45d5b39`. NOT two lines: **six** operator-facing surfaces claimed screening was
+   active. The two docs were known; the **four MCP tool descriptions were not**, and they are worse —
+   a tool description is read by the operator's *agent* every session, and they said "always screened"
+   / "Every tier is still screened" while the daemon runs `PassthroughGatewayClient`. Tier caps and
+   the unknown-sender gate ARE enforced, so those claims stayed; only content-screening ones went.
+2. **§6 ✅** — `7929962`. −354 net, not 1,500–3,000 (see §6 for why the estimate was wrong).
 
 **Phase 1 — defects (this is why we are here)**
 3. **§1.2 + §1.3 + §4's CLI row** — route the 9 hand-rolled commands through `withDaemon`. Fixes the socket
