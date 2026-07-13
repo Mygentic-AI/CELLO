@@ -394,6 +394,82 @@ describeIntegration("RegistrationEngine integration", () => {
     expect(expiredMsg).toBeDefined();
   });
 
+  // ─── AC-006 dead-end recovery ───────────────────────────────────────────────
+  // The AC-006 test above proves the expired code is REJECTED. It never proved the operator can
+  // RECOVER — which is why the dead-end survived it. These two drive expiry/invalidation all the
+  // way through to a completed registration. Both fail without the AWAITING_EMAIL transition.
+
+  it("AC-006: expired OTP → transitions to AWAITING_EMAIL; user re-enters email and completes (no dead-end)", async () => {
+    await channelState.injectMessage(userId, "hello");
+    await channelState.injectMessage(userId, `CONTACT:${userId}:+447911111111`);
+    await channelState.injectMessage(userId, "user@example.com");
+
+    await pool.query(
+      `UPDATE registrations SET otp_expires_at = $1 WHERE channel_user_id = $2`,
+      [new Date(Date.now() - 1000), userId],
+    );
+
+    const firstOtp = otpState.captured[0].otp;
+    await channelState.injectMessage(userId, firstOtp);
+
+    // The record MUST leave AWAITING_EMAIL_OTP. Before the fix it stayed, so every subsequent
+    // message — including the email the notice asks for — replayed the expiry notice forever.
+    const repo = new RegistrationRepository(pool);
+    const afterExpiry = await repo.findActiveByChannelUser("cli", userId);
+    expect(afterExpiry?.state).toBe("AWAITING_EMAIL");
+
+    // The notice tells them how to recover, not just that they failed.
+    const guidance = channelState.sent.find((m) =>
+      m.message.toLowerCase().includes("expired") && m.message.toLowerCase().includes("email"),
+    );
+    expect(guidance).toBeDefined();
+
+    // Recovery: re-entering the email issues a FRESH code that completes registration.
+    await channelState.injectMessage(userId, "user@example.com");
+    const secondOtp = otpState.captured[1]?.otp;
+    expect(secondOtp).toBeDefined();
+    expect(secondOtp).not.toBe(firstOtp);
+
+    await channelState.injectMessage(userId, secondOtp!);
+    const finalRow = await pool.query(
+      `SELECT state FROM registrations WHERE id = $1`,
+      [afterExpiry!.id],
+    );
+    expect(finalRow.rows[0].state).toBe("PRE_AUTH_TOKEN_ISSUED");
+  });
+
+  it("AC-006b: cleared OTP hash → transitions to AWAITING_EMAIL; recovery works (no dead-end)", async () => {
+    await channelState.injectMessage(userId, "hello");
+    await channelState.injectMessage(userId, `CONTACT:${userId}:+447911111111`);
+    await channelState.injectMessage(userId, "user@example.com");
+    const firstOtp = otpState.captured[0].otp;
+
+    // The cleared-OTP sentinel: otp_hash NULL while the state is still AWAITING_EMAIL_OTP. The
+    // !otpHash branch runs before the expiry check; before the fix it returned unchanged.
+    await pool.query(
+      `UPDATE registrations SET otp_hash = NULL WHERE channel_user_id = $1`,
+      [userId],
+    );
+
+    await channelState.injectMessage(userId, "anything");
+
+    const repo = new RegistrationRepository(pool);
+    const after = await repo.findActiveByChannelUser("cli", userId);
+    expect(after?.state).toBe("AWAITING_EMAIL");
+
+    await channelState.injectMessage(userId, "user@example.com");
+    const secondOtp = otpState.captured[1]?.otp;
+    expect(secondOtp).toBeDefined();
+    expect(secondOtp).not.toBe(firstOtp);
+
+    await channelState.injectMessage(userId, secondOtp!);
+    const finalRow = await pool.query(
+      `SELECT state FROM registrations WHERE id = $1`,
+      [after!.id],
+    );
+    expect(finalRow.rows[0].state).toBe("PRE_AUTH_TOKEN_ISSUED");
+  });
+
   // ─── AC-008 ─────────────────────────────────────────────────────────────────
 
   it("AC-008: 7-day expired record transitions to EXPIRED; new message starts fresh", async () => {

@@ -416,24 +416,46 @@ export class RegistrationStateMachine {
 
     const candidate = message.trim();
 
-    // 1. If OTP hash is null/empty (cleared sentinel) — prompt to re-enter email
+    // Each of the three branches below tells the operator to re-enter their email — so each MUST
+    // transition to AWAITING_EMAIL, the only state whose handler accepts an email and issues a
+    // fresh code. Returning the record unchanged strands them: the state stays AWAITING_EMAIL_OTP,
+    // the re-entered email is re-dispatched HERE as an OTP candidate, and the same notice replays
+    // forever. There is no other edge out. (Andre hit this live on 2026-06-25.)
+
+    // 1. OTP hash is null/empty (cleared sentinel).
     if (!record.otpHash) {
+      logger.info("registration.otp.invalidated", { registrationId: record.id, reason: "otp_hash_cleared", correlationId });
+      const awaitingEmail = await repository.transition(record.id, "AWAITING_EMAIL", {
+        clearOtp: true,
+        otpAttemptCount: 0,
+      });
       await channel.send(from, "Your verification code was invalidated. Please re-enter your email address to get a new code.");
-      return record;
+      return awaitingEmail;
     }
 
     // 2. Check OTP expiry (AC-006)
     if (record.otpExpiresAt < new Date()) {
       logger.info("registration.otp.expired", { registrationId: record.id, correlationId });
+      const awaitingEmail = await repository.transition(record.id, "AWAITING_EMAIL", {
+        clearOtp: true,
+        otpAttemptCount: 0,
+      });
       await channel.send(from, "Your verification code has expired. Please re-enter your email address to get a new code.");
-      return record;
+      return awaitingEmail;
     }
 
-    // Fetch salt from DB (not in RegistrationRecord — design decision)
+    // Fetch salt from DB (not in RegistrationRecord — design decision).
+    // A missing salt while otp_hash is present is abnormal (the two are always written and cleared
+    // together in normal flow), but it is reachable via admin/DB surgery — and it strands the same way.
     const salt = await repository.getOtpSalt(record.id);
     if (!salt) {
+      logger.info("registration.otp.invalidated", { registrationId: record.id, reason: "salt_missing", correlationId });
+      const awaitingEmail = await repository.transition(record.id, "AWAITING_EMAIL", {
+        clearOtp: true,
+        otpAttemptCount: 0,
+      });
       await channel.send(from, "Verification failed. Please re-enter your email address to get a new code.");
-      return record;
+      return awaitingEmail;
     }
 
     // Verify OTP
