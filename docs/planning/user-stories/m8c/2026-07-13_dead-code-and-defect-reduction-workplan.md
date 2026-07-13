@@ -13,9 +13,32 @@ description: >
 
 # Dead-Code & Defect Reduction — execution plan
 
-> **Pinned to `cello-client` main `eb33f73` and `trustless-cello` main `0554aeb2` (2026-07-13).**
+> **Pinned to `cello-client` main `0cd0211` and `trustless-cello` main `b7c5bab7` (2026-07-13).**
 > Every line number below is valid **only** against those commits. If the file has moved on,
 > re-verify before acting. A line number is a pointer, not a proof.
+>
+> **Published cascade (beta, by Ms_Chelly):** crypto `0.0.20` · daemon `0.0.53` · cli `0.0.51` ·
+> connect `0.0.71`. `@cello-protocol/client` is retired and must not publish.
+
+## ⚠️ READ THIS BEFORE DELETING ANYTHING — a purge regression, 2026-07-13
+
+The DEAD-CODE PURGE moved `core/crypto/src/frost/stubs.ts` into `__tests__/` on the strength of the
+dead-code report's claim *"Only used by frost.test.ts."* **That claim was false.**
+`core/crypto/package.json` declares `./frost/stubs.js` as a **real public subpath export**, and
+`trustless-cello/packages/directory` imports `@cello-protocol/crypto/frost/stubs.js` **directly, in five
+test files**. Moving it broke the other repo. Fixed in `0cd0211`.
+
+**Three lessons, and every one of them applies to every item in this document:**
+
+1. **A package's `exports` map is a consumer.** Grepping `src/` for importers is not sufficient. A file
+   with no in-repo importer can still be a published entry point. **Check `package.json` `exports`/`main`
+   before deleting or moving any file.**
+2. **Grep BOTH repos.** cello-client and trustless-cello are separate workspaces. An "unused" symbol in
+   one is routinely consumed by the other. Every claim in this document was checked across both — but
+   check again before you act, because that is exactly the check that was skipped here.
+3. **Do not inherit a claim.** The "only used by frost.test.ts" line came from an earlier report and was
+   trusted rather than re-verified. **This document is a lead sheet, not a warrant.** Re-verify each item
+   against the code before deleting it.
 
 ---
 
