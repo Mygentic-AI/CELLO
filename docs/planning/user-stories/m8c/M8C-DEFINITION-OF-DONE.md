@@ -1489,6 +1489,29 @@ own story) deliberately, never smuggled in as a rider. Source:
   (`^3.0.0`), and libp2p ships breaking changes in patch releases. Any lockfile regeneration can
   re-break this. A follow-up worth doing: pin the libp2p surface deliberately rather than pinning one
   package reactively.
+- **DOD-M9-SWITCH-ON-1** (2026-07-13) — ❌ **NOT STARTED. Sequenced AFTER the pending publish
+  cascade** (Andre: ship and live-test today's large changes first — a screening regression on top of
+  an unproven daemon is two problems wearing one coat). Full ordered checklist:
+  [[2026-07-13_m9-switch-on-checklist]].
+  The M9 gateway is **merged, published (`@cello-protocol/gateway@0.0.2`), and already a dependency of
+  the daemon** — this is a wiring job, not a build job. The gap is one line:
+  `core/daemon/src/bin/cello-daemon.ts:74` calls `startDaemon()` without `securityGateway`, so the
+  `PassthroughGatewayClient` default wins. **A conscious decision, already known — not news.**
+  What makes it more than a one-line change is the **Fable-5 security review**
+  ([[M9-SECURITY-REVIEW-FABLE5]]): it read every gateway source file and both seams, found the
+  architecture sound (*"nothing that lets an attacker forge a verdict over the wire… those hold"*),
+  and then found **7 real detector/default defects that a switch-on carries straight into
+  production** — an outbound injection-artifact block evadable by a zero-width char (the block runs
+  BEFORE the invisible-strip; inbound has the right order, outbound inverts it); an inbound
+  `redact`-without-content that fails **OPEN** while outbound fails closed on the identical case;
+  path-based image exfil uncaught; outbound exfil patterns matching adversary content on native
+  RegExp outside the RE2 discipline; secret redaction leaking past a 1000-match cap; no `verifyChain`
+  at gateway boot (the other half of `DOD-CRYPTO-AT-REST-1` — fixing one leaves the hole open); and
+  **IN-003's language allowlist is LIVE and terminally blocks all confident non-Latin inbound while
+  the M9 DoD claims it is "not wired"** — a false-positive risk that needs Andre's product call
+  before any live test. Also blocking a real trial: **`M9-FEED-001` inc 4 (the governance re-send) is
+  unbuilt**, so a `warn` is a dead end — the agent is told "not sent" with no way to `allow_once`.
+
 - **DOD-DEVENV-ROLES-1** — ✅ **FIXED 2026-07-13 (`ab428736`).** The local dev role passwords could
   **never** be set. `docker/postgres/initdb/01-dev-role-passwords.sql` ran as a Postgres **initdb
   hook** — which fires at first boot, **before Flyway** — but the roles it targets (`cello_service`,
