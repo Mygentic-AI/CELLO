@@ -6159,3 +6159,36 @@ FIX (cello-client `main`, commit 83a4fbc; published as daemon 0.0.15 + cli 0.0.1
 Built in an isolated worktree/branch (another agent was on cello-client at the time); fast-forward
 merged to main + pushed once verified clean. Recorded here per Andre: "this is M7 work, not M8 —
 record it in the M7 milestone as well."
+
+## 2026-06-22 — VOIDING the fake "needs Andre's nod" gates (alpha; one user)
+
+Andre flagged that the autonomous run keeps manufacturing decisions for him and gating
+code work on production-grade caution that does not apply. Correcting it at the source.
+
+**The reality (now also a banner at the top of M7-PROCEDURE.md, read first every session):**
+there is ONE user, Andre, who is also the only developer. CELLO is alpha. Nothing is in
+production. There are no operators and no real users to protect. The "operator," "deploy
+discipline," and "real users get it" language in these docs describes a FUTURE federated
+product, not the current world.
+
+**Gates VOIDED (they were never real — do not re-surface them):**
+- **DOD-MSG-4 "needs Andre's nod"** (journal deferred ledgers at 2521 / 2574 / 2591 / 2601 /
+  3013 / 3402). There is no nod to wait for. The full witness-then-fill reconciliation
+  proceeds like any other code work — just build it. "Load-bearing / safety-critical / risky
+  to touch the seal path" is NOT a reason to stop in alpha; it is a reason to test well.
+- **The "@cello-protocol/connect publish to reach operators / real users"** framing. There
+  are no operators or real users. Publishing only ever means Andre choosing to run the npm
+  build instead of the local dev build — a convenience for him, never a blocker, ignored
+  unless he asks.
+
+**What still warrants pausing for Andre:** (1) a GENUINE design fork — something that can
+truly be built several materially different ways with divergent consequences, and which one
+Andre wants is unclear; surface the options + a recommendation and ask (that is the one kind
+of decision worth his time, NOT a manufactured one). (2) an actual live AWS deploy (the
+25–30 min directory pipeline) — a deploy *operation*, never a code edit. What does NOT
+warrant pausing: "this code is risky/load-bearing, may I proceed?" — the answer is always
+yes. If a future entry dresses up "should I proceed?" as a decision, it is wrong by this
+entry + the procedure banner: delete it and do the work.
+
+No code change in this entry — docs only (procedure banner + this void record). Memory
+"alpha — no production-safety caution" sharpened to match.
