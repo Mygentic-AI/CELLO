@@ -1457,19 +1457,73 @@ own story) deliberately, never smuggled in as a rider. Source:
   needs a root-cause pass (producer/consumer trace on the SIGTERM → interrupted-state write), not attribution
   to flakiness without evidence. — ❌ NOT INVESTIGATED (backlog).
 
-- **DOD-LIBP2P-DUP-1** (2026-07-13, surfaced by Ms_Chelly while verifying the crypto 0.0.20 fix cascade,
-  flagged not fixed) — bumping `daemon`/`transport` in cello-client (workspace-loose `@libp2p/interface:
-  ^3.0.0`) triggered a fresh dependency resolution in trustless-cello that now pulls TWO different
-  versions of `@libp2p/interface` (3.2.2 and 3.2.5) and, one level deeper, two different MAJOR versions of
-  the transitive `uint8arraylist` package (2.4.9 and 3.0.2) — the real cause of the resulting type errors
-  (`Uint8ArrayList` vs `Uint8ArrayList<ArrayBufferLike>`) in `packages/directory`'s typecheck
-  (`directory-node.ts`, `network-relay-adapter.ts`). Confirmed NOT pre-existing: `git diff` on
-  `pnpm-lock.yaml` shows zero occurrences of `3.2.5` before this bump — it's registry drift surfaced by a
-  fresh install of the bumped subtree, not a code regression. Does NOT affect anything published (verified
-  clean against the actual tarballs). A `pnpm.overrides` pin on both packages was attempted; it only
-  partially deduped (reduced but did not eliminate the duplicate) — reverted rather than commit a
-  half-working fix. Needs its own investigation (likely a stricter pin or a deeper transitive override) —
-  ❌ NOT FIXED (backlog, non-blocking).
+- **DOD-LIBP2P-DUP-1** — ✅ **FIXED 2026-07-13 (`b88ea8b8`). The original diagnosis below was WRONG;
+  corrected here rather than deleted, because the wrong diagnosis is the lesson.**
+
+  **What it actually was:** an upstream **breaking change shipped in a PATCH release**.
+  `@libp2p/interface` **3.2.5 removed `Symbol.iterator` from `Stream`**, so every site that pipes a
+  stream (`lp.decode(stream)` and friends) stopped type-checking:
+  `Argument of type 'Stream' is not assignable to parameter of type 'Iterable<Uint8Array |
+  Uint8ArrayList>' — property '[Symbol.iterator]' is missing in type 'Stream'.`
+  **94 errors, 45 of them in `directory-node.ts` (production code, not tests).** Nothing pinned the
+  package — every dependency asks for `^3.0.0` — so regenerating the lockfile during the crypto 0.0.20
+  re-pin (`d11976a8`) silently walked **3.2.2 → 3.2.5**. Our code never changed; a caret range
+  re-resolved onto a bad patch. Verified: **zero** occurrences of `3.2.5` in the lockfile at
+  `d11976a8~1`, two at `d11976a8`.
+  **Fix:** `pnpm.overrides` → `"@libp2p/interface": "3.2.2"`. Typecheck **94 → 0**; lint green; clean
+  build (dist wiped + tsbuildinfo purged) emits directory and relay; the directory suite is unchanged
+  at 1021 passing, **including every libp2p-exercising test** (federation, cross-node discovery, real
+  FROST streams) — so it is not a type-level paper-over hiding a runtime break. Runtime was never
+  broken; the **compiler** was.
+
+  **The original entry claimed a DUPLICATE-VERSION problem — two copies of `@libp2p/interface` (3.2.2
+  and 3.2.5) and two majors of transitive `uint8arraylist`. There was never a duplicate: the tree
+  holds exactly ONE copy.** That misdiagnosis came from reading the *symptom* (a `Uint8ArrayList` type
+  mismatch, which looks exactly like a dual-copy nominal collision) and inferring the *cause*, then
+  attempting an overrides-based dedupe that "only partially worked" — because it was deduping
+  something that was never duplicated. **Lesson: a type-identity error is not proof of two copies.
+  Count the copies (`grep the lockfile`) before naming the cause.** The half-working fix was the tell,
+  and it was recorded as a puzzle rather than treated as evidence the diagnosis was wrong.
+
+  **Standing risk this exposes:** every libp2p dependency across both repos is a loose caret
+  (`^3.0.0`), and libp2p ships breaking changes in patch releases. Any lockfile regeneration can
+  re-break this. A follow-up worth doing: pin the libp2p surface deliberately rather than pinning one
+  package reactively.
+- **DOD-DEVENV-ROLES-1** — ✅ **FIXED 2026-07-13 (`ab428736`).** The local dev role passwords could
+  **never** be set. `docker/postgres/initdb/01-dev-role-passwords.sql` ran as a Postgres **initdb
+  hook** — which fires at first boot, **before Flyway** — but the roles it targets (`cello_service`,
+  `cello_analytics`, `cello_ops_agent`) are **created BY Flyway** (V2/V7/V26). So its `ALTER ROLE`
+  statements hit roles that did not exist yet, and **every fresh volume left them password-less**:
+  **129 directory test failures, all `password authentication failed for user "cello_service"`.** The
+  script's own header even says the roles come from Flyway — it was simply wired to the wrong
+  lifecycle point. **It only ever appeared to work on long-lived volumes where someone had set the
+  passwords by hand — so the breakage was invisible until you reset the volume, which is exactly what
+  a new contributor does first.** Fix: a `role-passwords` compose service applying the same SQL with
+  `ON_ERROR_STOP=1`, gated on `flyway: service_completed_successfully`; the initdb `COPY` is removed
+  from the Dockerfile with a comment recording why it cannot live there. Verified from a **virgin
+  volume** (`down -v && up -d`, zero manual steps): `cello_service` authenticates and the directory
+  suite goes **129 failures → 3**.
+
+- **DOD-ACCOUNTS-CHAIN-1** (2026-07-13, found by Ms_Chelly while clearing the above) — ❌ **OPEN, and
+  the one worth a real look.** `verifyChain("user_accounts")` fails **whenever the ops-agent suite has
+  run against the same database**; on a clean DB with only the directory suite it passes. The test's
+  own comment asserts the invariant: *"no row can exist that was inserted outside the chain
+  mechanism."* If the **ops-agent registration flow writes `user_accounts` rows without going through
+  `insertWithChain`**, that invariant is false in production, not just in tests — and a hash chain
+  with rows outside it is a **tamper-evidence gap in the exact table that binds a human to an agent**.
+  Two possibilities, and they need to be told apart rather than assumed: (a) ops-agent genuinely
+  inserts outside the chain — a real integrity defect; or (b) the test's whole-table global scope is
+  too strong for a shared dev DB — a test defect. **Do not close this by scoping the test down until
+  (a) is ruled out.** Reproduce: fresh volume → run ops-agent suite → run directory suite → the two
+  `ACCOUNT-001` `verifyChain` cases (AC-005, AC-007) fail.
+
+- **Directory suite: 3 remaining failures** (2026-07-13, non-blocking, characterised not fixed) — 2 ×
+  "exits 1 with `migration.out.of.date` when no migrations have been applied" point at a database
+  `cello_nonexistent_test_db` that `docker-compose.yml` **never creates**, so they get a connection
+  error instead of the expected exit path (test-environment gap, not a code defect); 1 × `CELLO-M6B-009
+  AC-001` pool-max under 50 concurrent queries — **not diagnosed**. Recorded so a future red run is not
+  waved through as "the known ones" without someone having actually looked.
+
 - **SEC-1 (2026-07-07, flagged by cello-unit-reviewer during DOD-LEAVEMSG-1) — relay-parked
   content authentication gap.** Bare-content parked envelopes (those without the DOD-MSG-4 ordering
   Structure1/2 — the fallback shape `decodeParkEnvelope` accepts) skip Ed25519 signature
