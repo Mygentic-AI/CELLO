@@ -35,3 +35,22 @@ services:
       postgres:
         condition: service_healthy
 
+  # Dev role passwords — MUST run AFTER Flyway, never as an initdb hook.
+  # The service roles (cello_service, cello_analytics, cello_ops_agent) are CREATED by the
+  # migrations (V2/V7/V26) with no password. An initdb hook fires at first boot, before Flyway,
+  # so its ALTER ROLE statements would target roles that do not exist yet — leaving them
+  # password-less on every fresh volume and failing every service-role connection with
+  # `password authentication failed for user "cello_service"`.
+  role-passwords:
+    image: postgres:18
+    environment:
+      PGPASSWORD: dev
+    entrypoint:
+      ["psql", "-h", "postgres", "-U", "postgres", "-d", "cello_dev", "-v", "ON_ERROR_STOP=1",
+       "-f", "/sql/01-dev-role-passwords.sql"]
+    volumes:
+      - ./docker/postgres/initdb:/sql:ro
+    depends_on:
+      flyway:
+        condition: service_completed_successfully
+
