@@ -84,14 +84,31 @@ you flip the switch, and are far cheaper to fix before that than after.
 
 ## Part B — decide the failure policy BEFORE flipping (not after)
 
+> **Still OPEN and blocking the overnight work — Andre's call:**
+> - **B1** (below): if the sidecar fails to spawn, does the daemon refuse to start, or start unscreened?
+> - **D1** (Part D): `warn` is a dead end — build the governance re-send, or accept warn == blocked for
+>   the trial and script around it?
+>
+> **DECIDED 2026-07-13:** C7 (allowlist is opt-in; empty ⇒ inactive, and loudly so) and B2 (benchmark
+> the deadline, including against message size — do not guess).
+
 - [ ] **B1. Startup-failure policy.** If the sidecar fails to spawn, does the daemon refuse to start,
       or start unscreened? Fail-closed is the designed behavior for an *unreachable* gateway at
       runtime; the *startup* case is a separate decision and is currently unmade. The review is
       explicit that **production should not be *able* to run passthrough** — i.e. the flag in A3
       should be the ONLY route to it.
-- [ ] **B2. The deadline.** `m9-gate-1` runs with `deadlineMs: 2000`. That number is the whole
-      never-hang guarantee (INV-6: *a timeout is a verdict, not a hang*). Pick the real one
-      deliberately; it must sit below the MCP host timeout.
+- [ ] **B2. The deadline — DECIDED: BENCHMARK IT, DO NOT GUESS (Andre, 2026-07-13).** `m9-gate-1`
+      runs with `deadlineMs: 2000`. That number is the whole never-hang guarantee (INV-6: *a timeout
+      is a verdict, not a hang*), and **2s may well be too short** — it was a test value, never a
+      measured one. Before imposing any number:
+      - **Measure the real screen latency** for both compositions (inbound: sanitizer + injection
+        patterns + language + scanner; outbound: rate-limit + secrets + PII + exfil), on real content.
+      - **Measure it as a FUNCTION OF MESSAGE SIZE.** The detectors are regex sweeps over the content,
+        so expect roughly linear in length — but "expect" is not a measurement. If latency grows with
+        size, a single fixed deadline is wrong: a large legitimate message would time out into a
+        fail-closed BLOCK, which reads to the operator as a security refusal rather than a timeout.
+      - THEN pick the deadline, with headroom, and confirm it sits below the MCP host timeout.
+      A deadline set by guess is a self-inflicted denial of service on your own users.
 
 ## Part C — the Fable-5 review's findings (`M9-SECURITY-REVIEW-FABLE5.md`)
 
@@ -120,13 +137,29 @@ work that belongs to this switch-on**, because flipping the switch is what makes
       trusted until Phase-2 attestation exists. **This and `DOD-CRYPTO-AT-REST-1` are two halves of
       one hole — fixing only one leaves it open** (plaintext on disk is what makes the tamper
       trivial; no boot-time verify is what makes it undetected).
-- [ ] **C7. LOW / NEEDS ANDRE'S DECISION — the IN-003 language allowlist is LIVE and blocking.**
-      It terminally drops **all confident non-Latin inbound**, while the M9 DoD says it is "NOT yet
-      wired live." The DoD is wrong; the code blocks. This is a **product decision, not a bypass**
-      (the heuristic is trivially evaded, so the risk is false-positives — silently dropping a
-      legitimate counterparty's message — not false-negatives). **Decide before switch-on:** ship it
-      blocking, downgrade it to observe/flag, or turn it off. A live test with this on will
-      terminally drop any non-Latin message.
+- [ ] **C7. DECIDED (Andre, 2026-07-13) — the language allowlist is OPT-IN: EMPTY ⇒ INACTIVE.**
+      The IN-003 allowlist is currently LIVE and blocking — it terminally drops **all confident
+      non-Latin inbound**, while the M9 DoD claims it is "NOT yet wired live." The DoD is wrong; the
+      code blocks.
+
+      **The rule:** an **empty allowlist means the filter is OFF and everything is allowed.** It
+      becomes active only when an operator explicitly sets one. Correct for this heuristic: it is
+      trivially evaded, so its realistic failure is a **false positive** — silently dropping a
+      legitimate counterparty's message — not a false negative. Nobody should have a language filter
+      they never asked for.
+
+      **⚠️ BUT: an inactive security layer must NEVER be SILENTLY inactive.** "Absent config ⇒ allow
+      everything" is structurally the same shape as the absent⇒fine defect class this milestone spent
+      a week killing. The difference is that here it is *intended* — which obliges us to make it
+      LOUD, not to hide it:
+      - the gateway **logs at boot** that the language filter is INACTIVE (and, when set, what the
+        allowlist is);
+      - `cello status` (or the gateway's own status surface) can show it;
+      - the default must be visible in the docs, not discovered.
+
+      Implement it as: empty/unset allowlist → the language detector is not composed into the inbound
+      screen at all. Not "composed but always passes" — **not composed**, so it cannot misfire and
+      cannot cost latency.
 
 ## Part D — the gap that will bite in the first live test
 
