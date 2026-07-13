@@ -13,6 +13,21 @@ description: >
 
 # `DOD-M9-SWITCH-ON-1` — from merged-but-off to live-tested
 
+> ## ⚠️ VERIFY EACH CLAIM AGAINST THE CODE BEFORE ACTING ON IT.
+>
+> **This document, and the M9 DoD, have each been confidently WRONG about the code — in opposite
+> directions — and both were caught only by reading the source (2026-07-13):**
+>
+> - **This checklist said D1 (the governance re-send) was "NOT BUILT" and "security-critical".** It is
+>   **fully built**, end to end, and the hard parts are right. **It was the single largest item on this
+>   list.** Struck below.
+> - **The M9 DoD says the IN-003 language allowlist is "NOT yet wired live."** The code **blocks**, by
+>   default, with no configuration at all. The DoD is wrong. See C7.
+>
+> The wiring items (A1, A3) were verified TRUE. The lesson is not "the doc is bad" — it is that a plan
+> document drifts from the code in BOTH directions, and an overnight run that trusts it will build
+> something that exists and skip something that doesn't. **Read the source first. Every time.**
+
 **Sequencing (Andre, 2026-07-13): the pending publish cascade goes FIRST.** A lot of code changed
 today (the dead-code purge, the daemon decomposition, DOD-AGENT-PARAM-1, DOD-SESSION-NAME-1). Ship
 and live-test *that* before adding a whole security layer on top of it. Debugging a screening
@@ -92,11 +107,21 @@ you flip the switch, and are far cheaper to fix before that than after.
 > **DECIDED 2026-07-13:** C7 (allowlist is opt-in; empty ⇒ inactive, and loudly so) and B2 (benchmark
 > the deadline, including against message size — do not guess).
 
-- [ ] **B1. Startup-failure policy.** If the sidecar fails to spawn, does the daemon refuse to start,
-      or start unscreened? Fail-closed is the designed behavior for an *unreachable* gateway at
-      runtime; the *startup* case is a separate decision and is currently unmade. The review is
-      explicit that **production should not be *able* to run passthrough** — i.e. the flag in A3
-      should be the ONLY route to it.
+- [ ] **B1. Startup-failure policy — THE ONLY DECISION STILL OPEN.** If the sidecar fails to spawn,
+      does the daemon refuse to start, or start unscreened? Fail-closed is the designed behavior for
+      an *unreachable* gateway at runtime; the *startup* case is separate and currently unmade. (No
+      code exists either way — verified.) The review is explicit that **production should not be
+      *able* to run passthrough** — the A3 flag should be the ONLY route to it.
+
+      **Recommendation: REFUSE TO START**, with an error naming the cause and the escape hatch.
+      Starting unscreened is a *silent security downgrade on a bad day*: the operator gets no signal,
+      while `SKILL.md` tells them their messages are screened (E1). That is the absent⇒fine pattern in
+      its purest form. A loud refusal costs a minute; a quiet passthrough costs the operator the thing
+      they installed CELLO for — and you cannot un-leak a message. It is also the reversible choice:
+      you can always loosen it later.
+
+      **Condition: A3 (the kill switch) must exist BEFORE the switch is flipped.** Refuse-to-start
+      without an escape hatch is a trap.
 - [ ] **B2. The deadline — DECIDED: BENCHMARK IT, DO NOT GUESS (Andre, 2026-07-13).** `m9-gate-1`
       runs with `deadlineMs: 2000`. That number is the whole never-hang guarantee (INV-6: *a timeout
       is a verdict, not a hang*), and **2s may well be too short** — it was a test value, never a
@@ -109,6 +134,11 @@ you flip the switch, and are far cheaper to fix before that than after.
         fail-closed BLOCK, which reads to the operator as a security refusal rather than a timeout.
       - THEN pick the deadline, with headroom, and confirm it sits below the MCP host timeout.
       A deadline set by guess is a self-inflicted denial of service on your own users.
+
+      **Deliverable: a benchmark, not an opinion.** Screen latency (p50/p95/max) for both compositions
+      at, say, 1 KB / 10 KB / 100 KB / 1 MB (the content cap). Publish the table in this document. The
+      deadline is then a number with headroom over the measured p95 at the cap — not a round figure
+      someone liked.
 
 ## Part C — the Fable-5 review's findings (`M9-SECURITY-REVIEW-FABLE5.md`)
 
@@ -157,18 +187,42 @@ work that belongs to this switch-on**, because flipping the switch is what makes
       - `cello status` (or the gateway's own status surface) can show it;
       - the default must be visible in the docs, not discovered.
 
-      Implement it as: empty/unset allowlist → the language detector is not composed into the inbound
-      screen at all. Not "composed but always passes" — **not composed**, so it cannot misfire and
-      cannot cost latency.
+      **The code, precisely** (verified 2026-07-13 — it blocks by DEFAULT, with zero configuration):
+      - `core/gateway/src/screen/inbound.ts:93` composes it **unconditionally**:
+        `screenInboundLanguage(deliveredText, this.#language ?? {})`
+      - `core/gateway/src/detect/language.ts:67` then defaults to Latin-only: `opts.allow ?? ["latin"]`
+      - → a confident non-Latin inbound message is a **TERMINAL block** (`inbound_language_blocked`),
+        dropped and never delivered, for an operator who configured nothing.
+
+      Implement as: **unset/empty allowlist → the detector is NOT COMPOSED into the inbound screen at
+      all.** Not "composed but always passes" — *not composed*, so it cannot misfire and costs no
+      latency. Then log at boot that the filter is INACTIVE.
 
 ## Part D — the gap that will bite in the first live test
 
-- [ ] **D1. `M9-FEED-001` increment 4 — the stateless governance re-send is NOT BUILT**, and the M9
-      DoD calls it **security-critical**. Without it, a `warn` verdict is a **dead end**: the agent
-      is told "not sent" and has **no way to say `allow_once` / `allow_always`**. You will hit this
-      the first time you test the PII warn flow. **Decide before the live test:** build it (it wants
-      a focused effort + adversarial review, per its own DoD note), or accept for the trial that
-      warn == blocked and script around it. Do not discover this live.
+- [x] **~~D1. The stateless governance re-send is NOT BUILT.~~ ❌ FALSE — IT IS BUILT. Verified in
+      the source, 2026-07-13. Nothing to do here; `warn` is NOT a dead end.**
+
+      All four links traced:
+      - **MCP shim** — `core/adapter-claude-code/src/bin/cello-mcp.ts:275` exposes `governance_decisions`
+        with a full zod schema.
+      - **Daemon** — `core/daemon/src/session-content-handlers.ts:135` parses + shape-validates it,
+        threads `governanceDecisions` into `screenOutbound`, and returns `governance_warn` with `flags`.
+      - **Gateway transport** — `client.ts` → `protocol.ts` → `server.ts` all carry it.
+      - **Gateway screen** — `core/gateway/src/screen/outbound.ts:130` **APPLIES it** (`#resolvePII`).
+
+      And it is not a stub — the hard parts are right: `allow_once`/`allow_always` are honored **only**
+      when `autonomous_override` is on, else **rejected → re-warn**; if ANY flag is rejected the whole
+      send re-warns (**nothing goes out half-decided**); `allow_always` under autonomous mode degrades
+      to allow-once **plus a whitelist-add REQUEST**, because persisting is a human action; and a rate
+      slot is committed **once**, not twice across the warn → re-send round trip. `M9-FEED-001` is
+      ✅ EARNED in the M9 DoD, explicitly including this flow, with a warn round-trip proven by test.
+
+- [ ] **D1′. The ONE thing to actually verify (and it is cheap).** The wiring exists but has never run
+      through a real operator install. Confirm the **`flagId` round trip**: the ids the daemon hands
+      back in `flags` must be the SAME ids the gateway expects in `governance_decisions`. That is the
+      classic seam where a flow like this breaks, and an in-process test that drives both halves can
+      miss it. Test it across the real daemon↔sidecar boundary, not in one process.
 - [ ] **D2. IN-002 / DeBERTa stays OFF.** Deferred by decision (Andre, 2026-06-23) pending the 568 MB
       model + runtime infra. Absent model → Layer-2 off, graceful. Fine for a live test — just know
       that **semantic** injection detection is not in it; only Layer-1 deterministic patterns are.
