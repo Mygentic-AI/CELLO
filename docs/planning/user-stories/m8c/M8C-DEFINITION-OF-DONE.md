@@ -401,6 +401,39 @@ description: >
     PRE-EXISTING failures on main, not introduced here).
   — ✅ FULLY CLOSED — merged, published, verified against the tarball.
 
+  **Scope grew far past this line, same day, on Andre's explicit push — record kept here since it's the
+  same lineage.** After landing the above (~7,554 lines), Andre told CELLO_Feedback directly to stop being
+  cautious about the rest it had already identified as dead. Result: **~27,990 additional lines removed**
+  (cello-client `567b856`+`a3c81fd`+`eb33f73`) — reachability from the four production entrypoints went
+  **32 dead files → 1** (the sole survivor, `core/test-fixtures/src/index.ts`, is unreachable from a binary
+  BY DESIGN — live test infrastructure). Headline: **`@cello-protocol/client` is entirely gone** — all 25
+  files, ~13k lines, the whole M6-era in-process client that M6→M7 had already fully superseded; also
+  removed `adapter/lock-file.ts`, `adapter/index.ts`+`config.ts`, `cli/index.ts`,
+  `daemon/cello-node-transport-dialer.ts`. Deregistered everywhere it needs to be to actually stop
+  publishing: root tsconfig, the adapter's project reference, `vitest.workspace.ts`, the CI publish list,
+  the CI verify loop, the smoke-tag module-graph import. Published beta `v0.0.100`, then `v0.0.101` (see
+  `DOD-SINGLE-DAEMON-1` above for why) — verified against the real tarballs by Ms_Chelly: connect no longer
+  depends on `@cello-protocol/client` **at all** (not just deleted files — the dependency itself is gone).
+  **`@cello-protocol/client` npm versions 0.0.1–0.0.50 should be deprecated** (`npm deprecate`) now that the
+  cascade has landed — not yet done, next step.
+
+  **CELLO_Feedback's own retrospective on this, worth keeping verbatim in spirit (2026-07-13):** it had
+  every fact needed to do the full deletion from the start — the dead-code report already said the whole
+  package was dead, and a one-command reachability check confirmed it. What it did instead was write the
+  fact up as a future story with a list of blockers, and hand Andre a decision. The blockers were real
+  (published package, real consumers) but each was ~1 hour of tractable work, not a reason to stop — "I'd
+  labeled the code dead in a table cell and then argued about why dead didn't mean dead." Every brake it
+  pulled was imported from a live-production mental model that doesn't apply pre-launch, alpha, one user:
+  "published package, one-way door" (the only consumer was our own test suite), "breaking API change"
+  (breaking for whom — there is one operator), "could strand existing users" (there are none), "burns npm
+  versions forever" (free in alpha). None individually false; all irrelevant at this stage, stacked
+  together into something that looked like rigor and was mostly deferral. **The recalibration, stated as
+  the standing rule going forward: at alpha with one user, default is ACT; the exception is ASK. Ask when
+  the action reaches outside — a real counterparty, a real customer, a real bill, a public claim. Don't ask
+  about internal-only actions just because the diff is large.** What stayed correct throughout and should
+  keep being non-negotiable: never silently destroy coverage of code that's still live — every kept test
+  was traced to a live subject, gate stayed green at every step.
+
   **Follow-ups this surfaced (NOT done, deliberately — each is its own unit):**
   - **`buildChannelParams` has no field allowlist.** It SPREADS every identifier-safe scalar of the
     daemon's doorbell frame into agent-visible `<channel>` attributes. INV-CONTENTFREE holds today only
@@ -804,10 +837,13 @@ streams for one pubkey, two processes holding the same FROST share, double-accep
   mid-startup, socket destroyed) now makes `cello login` retry ~10s then FAIL LOUD naming the holder's
   pid, where before it silently spawned a second daemon. **Known limit, documented not hidden**: the fcntl
   lock needs `~/.cello` on a local filesystem — on NFSv3 without `lockd` the singleton degrades silently;
-  logged at startup. Published beta: cello-client tag `v0.0.99`, daemon `0.0.51` / cli `0.0.49` (re-pinned)
-  / client `0.0.50` / connect `0.0.69` (combined cascade with `DOD-LEGACY-MCP-1` below — one publish, not
-  two). Verified against the actual tarballs by Ms_Chelly, not the commit: `singleton-lock.js` present in
-  the published `daemon` package; cross-pins on `cli`/`connect` are real versions, zero `workspace:*`. Full
+  logged at startup. **Published beta, SUPERSEDED twice same day — final state: tag `v0.0.101`, daemon
+  `0.0.53` / cli `0.0.51` / connect `0.0.71` / crypto `0.0.20` / transport `0.0.20`.** (v0.0.99 was this
+  fix alone; v0.0.100 added the much larger `DOD-LEGACY-MCP-1` dead-code purge on top — see below; v0.0.101
+  fixed a regression the purge introduced in `crypto`. All three superseded versions remain valid on `beta`,
+  just outdated — only the highest matters.) Verified against the actual tarballs by Ms_Chelly, not the
+  commit, at every step: `singleton-lock.js` present in the published `daemon` package; cross-pins on
+  `cli`/`connect` are real versions, zero `workspace:*`. Full
   gate green from a genuinely clean rebuild (both `dist/` AND every `*.tsbuildinfo` cleared first — `tsc
   --build`'s incremental cache trusts its own record over actual file presence, so deleting `dist/` alone
   does not force a real re-emit). One pre-existing, unrelated flaky test
@@ -1300,6 +1336,20 @@ own story) deliberately, never smuggled in as a rider. Source:
   SEC-1. Per the debugging discipline this is a real failing assertion in the restart/interrupt path and
   needs a root-cause pass (producer/consumer trace on the SIGTERM → interrupted-state write), not attribution
   to flakiness without evidence. — ❌ NOT INVESTIGATED (backlog).
+
+- **DOD-LIBP2P-DUP-1** (2026-07-13, surfaced by Ms_Chelly while verifying the crypto 0.0.20 fix cascade,
+  flagged not fixed) — bumping `daemon`/`transport` in cello-client (workspace-loose `@libp2p/interface:
+  ^3.0.0`) triggered a fresh dependency resolution in trustless-cello that now pulls TWO different
+  versions of `@libp2p/interface` (3.2.2 and 3.2.5) and, one level deeper, two different MAJOR versions of
+  the transitive `uint8arraylist` package (2.4.9 and 3.0.2) — the real cause of the resulting type errors
+  (`Uint8ArrayList` vs `Uint8ArrayList<ArrayBufferLike>`) in `packages/directory`'s typecheck
+  (`directory-node.ts`, `network-relay-adapter.ts`). Confirmed NOT pre-existing: `git diff` on
+  `pnpm-lock.yaml` shows zero occurrences of `3.2.5` before this bump — it's registry drift surfaced by a
+  fresh install of the bumped subtree, not a code regression. Does NOT affect anything published (verified
+  clean against the actual tarballs). A `pnpm.overrides` pin on both packages was attempted; it only
+  partially deduped (reduced but did not eliminate the duplicate) — reverted rather than commit a
+  half-working fix. Needs its own investigation (likely a stricter pin or a deeper transitive override) —
+  ❌ NOT FIXED (backlog, non-blocking).
 - **SEC-1 (2026-07-07, flagged by cello-unit-reviewer during DOD-LEAVEMSG-1) — relay-parked
   content authentication gap.** Bare-content parked envelopes (those without the DOD-MSG-4 ordering
   Structure1/2 — the fallback shape `decodeParkEnvelope` accepts) skip Ed25519 signature
