@@ -12,7 +12,10 @@
     "dev": "pnpm --filter @cello-protocol/directory run start & pnpm --filter @cello-protocol/relay run start"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["@journeyapps/sqlcipher", "esbuild", "better-sqlite3", "argon2", "@oqs/liboqs-js", "agentdb", "hnswlib-node", "cbor-extract", "protobufjs", "sharp"]
+    "onlyBuiltDependencies": ["@journeyapps/sqlcipher", "esbuild", "better-sqlite3", "argon2", "@oqs/liboqs-js", "agentdb", "hnswlib-node", "cbor-extract", "protobufjs", "sharp"],
+    "overrides": {
+      "@libp2p/interface": "3.2.2"
+    }
   },
   "devDependencies": {
     "@claude-flow/memory": "^3.0.0-alpha.2",
