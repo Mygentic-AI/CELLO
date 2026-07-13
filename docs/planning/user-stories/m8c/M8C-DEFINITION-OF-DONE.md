@@ -1376,6 +1376,24 @@ nowhere, so a multi-agent operator can only switch with the sticky `cello_use_ag
 - ✅ **Do Part B before Part A** — Part A edits the same handler and must be born with the right
   spelling.
 
+- **`DOD-SEAL-VISITING-DRAIN-1` — DIRECTORY SIDE, still open.** The client half is **fixed and
+  shipped** (cello-client `0e48944`): every signaling stream now gets the whole seal listener bundle,
+  so a `seal_unilateral_notification` on a visiting stream is handled. But the **directory** is still
+  the loaded gun: it drains its **durable** notification queue on **any** stream that authenticates —
+  visiting included (`packages/directory/src/directory-node.ts` ~1894-2003) — and `acknowledge()`
+  **DELETEs the row** once sent. `pending_notifications` is cross-node replicated, so *every* node
+  holds *every* agent's queued notifications. A transient connection can therefore **consume a
+  durable notification**, and if the client ever fails to act on it, it is gone for good.
+  - **Fix:** skip the drain (or at minimum skip the `acknowledge`) when `visiting === true`. A
+    transient stream must never be able to permanently consume a durable row. Belt and braces —
+    the client no longer drops the frame, but the directory should not be one client bug away from
+    destroying a notarized receipt.
+  - Related, same class: `void acknowledge(...).catch(() => {})` (`directory-node.ts` 1946/1960/1971/
+    1976/1983/1989) is a **fire-and-forget delete of a durable row with the failure swallowed**. That
+    is what would make a loss permanent *and* silent rather than retried.
+  - **No test drives `seal_unilateral_notification` at the daemon level** — which is exactly why the
+    asymmetry sat there unnoticed. `seal-listener-wiring.test.ts` now covers the client side.
+
 ## Tracked, not M8C-fruit (bigger friction — own items, NOT folded in as riders)
 
 - **`DOD-TYPECHECK-TESTS-1` — NO TEST FILE IN THIS REPO IS TYPECHECKED.** Found 2026-07-13 during

@@ -194,14 +194,65 @@ helpers it shared with the session-event handlers → `frame-values.ts`. **`daem
 the per-agent key provider, and content recovery. **Not the signaling hub** — a `SignalingManager` is
 passed per registration, so it never reaches for the daemon's nervous system (§5 DO-NOT-CUT holds).
 
-**An asymmetry PRESERVED, not normalised away** (per §3's standing instruction): the **visiting**
-signaling connection (`daemon.ts:1376`) registers the sealed + unilateral-confirmed listeners but
-**not** the upgrade listener, while sites 657/742 register all three. Plausibly deliberate — the
-upgrade notification is directory-pushed to the agent's *home* authenticated stream, and a visiting
-stream is transient. Logged and sent to the reviewer for a verdict rather than quietly made uniform.
+> ### 🔴 …AND THE ASYMMETRY WAS A REAL BUG. Silent, permanent loss of a notarized seal receipt.
+> The **visiting** signaling stream registered two of the three seal listeners. **I judged it
+> deliberate and preserved it** (per §3: log, never normalise away). **The reviewer traced the
+> directory and proved me wrong.**
+>
+> The directory drains its **durable** notification queue on **ANY** stream that authenticates —
+> visiting included — and `acknowledge()` **DELETEs the row** once sent. `pending_notifications` is
+> cross-node replicated, so every node holds every agent's queue. So:
+> 1. B has an unratified unilateral seal waiting.
+> 2. B opens a routine **visiting** connection to some other agent's home node.
+> 3. That node authenticates B, drains the queue, pushes `seal_unilateral_notification` down the
+>    visiting stream — **where B has no handler.**
+> 4. The frame hits the floor. **The directory deletes the durable row.**
+> 5. B never runs the DOD-UP-1 KERNEL, never ratifies, never persists its receipt.
+>    **The seal stays unilateral forever.**
+>
+> **The fix is STRUCTURAL, not a one-liner.** Restoring the missing call would leave the trap armed
+> for the next stream anyone wires. The coordinator no longer exports the three listeners
+> individually — only a **bundle**. *A partial seal wiring is no longer expressible.* **Make the bad
+> state unrepresentable; do not leave a comment asking the next person to remember all three.**
+>
+> Directory half still open → `DOD-SEAL-VISITING-DRAIN-1`.
+>
+> **This is the whole argument for the refactor, in one finding.** It was not found by reading, by
+> grepping, or by a test. It was found because *moving the code forced someone to ask why two things
+> that should be identical were not.*
 
 `cello_close_session` stays in `daemon.ts` and still drives the waiters directly (~30 sites, **zero
 churn**). Behavior preservation beats tightening encapsulation in the same move.
+
+### ✅ Unit 5 — Seam E: the Telegram doorbell — **DONE 2026-07-13**
+→ `telegram-doorbell.ts`. **`daemon.ts` 5,606 → 5,502.** The module boundary now **enforces** two
+invariants that were previously only *promised in comments*: **DOD-INV-CONTENTFREE** (it cannot leak
+conversation content because it is never given any — its whole dependency list is a logger, the
+settings, and a bot client) and **D6** (nothing from Telegram can enter a CELLO content path, because
+there is no session-send seam in the module to abuse). *A security property asserted in a comment
+inside a 6,000-line closure is a claim; the same property expressed as a five-item dependency list is
+a fact.*
+
+---
+
+## Scoreboard (2026-07-13, all merged to `main` — cello-client `0e48944`)
+
+| | start | now |
+|---|---:|---:|
+| `daemon.ts` | **6,558** | **5,632** (−926, −14%) |
+| `daemon.ts` coverage | **66%** | **68.4%** |
+| tests | 1,726 | **1,813** |
+| new modules | — | 6 (`consortium-bootstrap`, `contact-handlers`, `seal-coordinator`, `frame-values`, `telegram-doorbell`, + tests) |
+
+**Three real defects found, none by reading or grepping — all three by moving the code:**
+1. 🔴 **A visiting stream silently lost seal receipts, forever** (above). Fixed.
+2. 🔥 **The file's ORDER was load-bearing** — hoisting let listeners be called 1,900 lines before
+   their definition; 253 tests went red. Fixed.
+3. ⚠️ **`cello_set_moniker` reached past the store for the raw SQLite handle** — the one address-book
+   handler that did. Fixed.
+
+Plus one against my own work: an **overclaimed test** (it "stops compiling" — no test file in this
+repo is typechecked at all → `DOD-TYPECHECK-TESTS-1`).
 
 ### Then reassess — remaining seams
 Straight-line startup that **already returns one object** (`{consortiumEndpoints, manifestVerified,
