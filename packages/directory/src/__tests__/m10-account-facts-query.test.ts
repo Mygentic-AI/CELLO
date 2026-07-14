@@ -109,6 +109,17 @@ describeIntegration("DOD-MINT-INTERNAL-1 dep — verified-account-facts query (a
       .rejects.toMatchObject({ reason: "issuer_wrong_role" });
   });
 
+  it("REFUSES a non-UUID account_id as malformed_request, not a generic 500", async () => {
+    // account_id is a UUID column; a non-UUID string would reach pg and throw `invalid input syntax`,
+    // surfacing as a 500 "query failed" — an exit-point label, not the cause. The shape guard turns it
+    // into a clean named refusal the mint can distinguish from a real directory failure.
+    const body = encodeCbor({ v: 1, op: "query", query: "account-facts", account_id: "not-a-uuid", issued_at: nowSec() });
+    await expect(queryAccountFacts({
+      pool, logger: silent, correlationId: "c", bodyCbor: body,
+      signerPubkeyHex: subPub, signatureHex: hex(await subKey.sign(buildSignalRequestTbs(body))),
+    })).rejects.toMatchObject({ reason: "malformed_request" });
+  });
+
   it("REFUSES a stale query", async () => {
     const body = encodeCbor({ v: 1, op: "query", query: "account-facts", account_id: acctBoth, issued_at: nowSec() - 3600 });
     await expect(queryAccountFacts({

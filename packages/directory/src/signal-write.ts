@@ -643,6 +643,13 @@ export async function queryAccountFacts(args: {
     if (r.v !== 1) throw new SubmitRejected("malformed_request", `unsupported request version ${String(r.v)}`);
     if (r.op !== "query" || r.query !== "account-facts") throw new SubmitRejected("malformed_request", `unsupported query ${String(r.op)}/${String(r.query)}`);
     if (typeof r.account_id !== "string" || r.account_id.length === 0) throw new SubmitRejected("malformed_request", "account_id is required");
+    // account_id is a UUID column. A non-UUID string would reach pg and throw `invalid input syntax
+    // for type uuid` — a native error that is NOT a SubmitRejected, so it would surface as a generic
+    // 500 "query failed" instead of a named 422. Validate the SHAPE here so a client-side format fault
+    // is a clean `malformed_request` the caller can distinguish from a real directory failure.
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(r.account_id)) {
+      throw new SubmitRejected("malformed_request", "account_id must be a UUID");
+    }
     if (typeof r.issued_at !== "number" || !Number.isInteger(r.issued_at)) throw new SubmitRejected("malformed_request", "issued_at must be an integer (epoch SECONDS)");
     if (Math.abs(nowSec - r.issued_at) > CLOCK_SKEW_SECONDS) {
       throw new SubmitRejected("stale_request", `issued_at ${r.issued_at} is more than ${CLOCK_SKEW_SECONDS}s from this node's clock (${nowSec})`);
@@ -653,11 +660,11 @@ export async function queryAccountFacts(args: {
       [r.account_id],
     );
     if (rows.length === 0) {
-      logger.info("signal.query.account_facts", { accountId: r.account_id, found: false, correlationId });
+      logger.info("signal.account_facts.read", { accountId: r.account_id, found: false, correlationId });
       return { found: false };
     }
     const { phone_stub_hash, email_stub_hash } = rows[0] as { phone_stub_hash: string | null; email_stub_hash: string | null };
-    logger.info("signal.query.account_facts", {
+    logger.info("signal.account_facts.read", {
       accountId: r.account_id, found: true,
       phoneVerified: phone_stub_hash !== null, emailVerified: email_stub_hash !== null, correlationId,
     });
