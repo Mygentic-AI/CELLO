@@ -9,6 +9,41 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🚀 M10 Tier 0/1 directory surface DEPLOYED — DB V45→V46, `/internal/signal/*` routes live (2026-07-15)
+
+**Pushed `2a65a615` → `cello-directory-pipeline` (all 3 regions).** The directory applies Flyway on
+boot, so **V46 auto-applied** — verified live in dev: `SELECT max(version) FROM flyway_schema_history`
+= **46**, and `signal_records` + `authorized_issuers` + `registry_documents` all present (queried via
+ECS exec on the us-east-1 directory task).
+
+**What shipped (directory app code + migration; NO CFN/template change, so no `deploy.sh` needed):**
+- **V46** — `signal_records` (the trust-signal notary ledger; composite PK `(signal_hash,
+  accepting_node)` for multi-master safety — M10-D20), `authorized_issuers` (the chokepoint key set,
+  seeded EMPTY), `registry_documents` (the served type registry), + the `signal_records_effective`
+  view (derived status: revoked > superseded > active).
+- **New routes on the internal-api** (signature-authed, INTERNAL-ONLY — the ALB rejects `/internal/*`):
+  `POST /internal/signal/submit` (INV-CHOKEPOINT), `/revoke`, `/query` (verified-account-facts),
+  `/registry-publish`, and **public `GET /registry`**.
+
+**Manual post-deploy steps taken:**
+- **ops-agent SSM `expected-migration-version` 45→46** (us-east-1; single param) — done, so the
+  ops-agent recovers from its false-alarm crash-loop (it asserts DB version == SSM version).
+- **Dev submission signer enrolled** in `authorized_issuers`: pubkey
+  `8d4abe074fef9229d3b441dfea4f98f805b1a2b3a06ae645810efece77fd5044` (role `submitter`, from portal
+  dev seed `de`×32), so the deployed portal can mint once it ships with `PORTAL_SUBMISSION_SEED=de…de`.
+
+**Post-deploy steps IN PROGRESS / owed (see the session — being done by hand, not the incomplete cron):**
+- **Relay cascade** (MANDATORY — relay has no directory-reconnect; directory redeploy broke
+  `recordAssignment` → `relay_unavailable` on session init until relays restart + re-register). NOTE:
+  the relay pipeline ALSO ran (a test-file change), so relays are restarting anyway; a clean cascade
+  after both pipelines stabilize ensures registration with the FINAL directory tasks.
+- **Manifest re-sign per region** after the relay restarts (new relay IP → stale S3 `healthCheckUrl`
+  otherwise; `infra/sign-manifest.sh`).
+- **Replication re-run** — add `signal_records` + `authorized_issuers` to `cello_pub` on each node
+  (STORE-DIR review F4); until then the new tables do not replicate across the 3 sovereign nodes.
+
+---
+
 ## 🔧 Ops-agent migration-version skew fixed — SSM 43→45 (2026-07-07, manual, pre-cold-onboarding check)
 
 **Found during a pre-cold-onboarding "is the ops-agent on latest code" audit; fixed same session.**
