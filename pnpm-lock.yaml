@@ -51,17 +51,17 @@ importers:
         specifier: 3.1051.0
         version: 3.1051.0
       '@cello-protocol/crypto':
-        specifier: ^0.0.20
-        version: 0.0.20
+        specifier: ^0.0.22
+        version: 0.0.22
       '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.21
-        version: 0.0.21
+        specifier: ^0.0.23
+        version: 0.0.23
       '@cello-protocol/transport':
-        specifier: ^0.0.20
-        version: 0.0.20
+        specifier: ^0.0.23
+        version: 0.0.23
       '@libp2p/interface':
         specifier: 3.2.2
         version: 3.2.2
@@ -79,8 +79,8 @@ importers:
         version: 8.18.0
     devDependencies:
       '@cello-protocol/daemon':
-        specifier: ^0.0.53
-        version: 0.0.53
+        specifier: ^0.0.60
+        version: 0.0.60
       '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
@@ -106,8 +106,8 @@ importers:
         specifier: ^0.0.71
         version: 0.0.71
       '@cello-protocol/crypto':
-        specifier: ^0.0.20
-        version: 0.0.20
+        specifier: ^0.0.22
+        version: 0.0.22
       '@cello-protocol/directory':
         specifier: workspace:*
         version: link:../directory
@@ -115,14 +115,14 @@ importers:
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.21
-        version: 0.0.21
+        specifier: ^0.0.23
+        version: 0.0.23
       '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
       '@cello-protocol/transport':
-        specifier: ^0.0.20
-        version: 0.0.20
+        specifier: ^0.0.23
+        version: 0.0.23
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
         version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
@@ -177,17 +177,17 @@ importers:
   packages/relay:
     dependencies:
       '@cello-protocol/crypto':
-        specifier: ^0.0.20
-        version: 0.0.20
+        specifier: ^0.0.22
+        version: 0.0.22
       '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
-        specifier: ^0.0.21
-        version: 0.0.21
+        specifier: ^0.0.23
+        version: 0.0.23
       '@cello-protocol/transport':
-        specifier: ^0.0.22
-        version: 0.0.22
+        specifier: ^0.0.23
+        version: 0.0.23
       '@chainsafe/libp2p-noise':
         specifier: ^17.0.0
         version: 17.0.0
@@ -478,17 +478,17 @@ packages:
     resolution: {integrity: sha512-kppH6RrPVZcZOvNwoGf3OnUu+q7re+6OvvFMeZIF+jjNDrVdgMjPnjAN+RNM2/rwSNh2vjPqZwTCZzjnCXBZ2g==}
     engines: {node: '>=24'}
 
-  '@cello-protocol/crypto@0.0.21':
-    resolution: {integrity: sha512-KR8WcDuzon4mIU92t6yVMyqDWYn2hu2Uw+V8pBWSU8PZslrzEeGzLAG3Z0xsVIWhceyMYfCrp6W4W2Igi8/UOw==}
+  '@cello-protocol/crypto@0.0.22':
+    resolution: {integrity: sha512-7kZbY7WYQlqE9/2u7tpaZIkgylCFTdQoznlpq/HiHhxzRM4GMx0h3f8k7mEUdU8CL2QPCxO4W0zCYB0QdaDueA==}
     engines: {node: '>=24'}
 
-  '@cello-protocol/daemon@0.0.53':
-    resolution: {integrity: sha512-9KNOeA7pSoVuOkZWa6Tv31pcpJ1b6m1ZgQ6IgUFqG5IdJBkqxA1BdbuUHu3pR6UsSulevjb9wRd3NYHq37wFKQ==}
+  '@cello-protocol/daemon@0.0.60':
+    resolution: {integrity: sha512-sPtkMj+TTsAaxjrc9aq9r9uR+ukeUzHIyEByvxmO3Zwq9iKY8UOKMRSiIcZvDdcIxKAkxcoHVHsYNTHg5TnUZg==}
     engines: {node: '>=24'}
     hasBin: true
 
-  '@cello-protocol/gateway@0.0.2':
-    resolution: {integrity: sha512-Rlq2Kq+wV8wS+plV19tP5CnGg/iie4DZbdaqFDl03JkgyANiOWjSbevTCaa3hum5zY11APwxSfQnn+FrZc5e9Q==}
+  '@cello-protocol/gateway@0.0.4':
+    resolution: {integrity: sha512-W2LSkXSSDqtpXlhtZixlVN9Jon6tACSLayEyzHUBbaBXwTHThu2oh7rZrgiL49h8QIZAYSBjDOXpMY0KRxArew==}
     engines: {node: '>=24'}
     hasBin: true
 
@@ -508,16 +508,16 @@ packages:
     resolution: {integrity: sha512-+iKN8qjbY7kfS03HJ37NZLYCKuaXnKxAVWSQyDCut266zFKOC6B8sbR+7jIx/bzAyqaTNQECHY6wJkndHjQCEA==}
     engines: {node: '>=24'}
 
-  '@cello-protocol/protocol-types@0.0.22':
-    resolution: {integrity: sha512-LLB1eftVkyQP83kwH0glL3gHUJXGxcCBfGREZUmLmwdLx9bJVBv+yFyv7g9iTVO6A058+u1gkZRIuyxQsbjuBQ==}
+  '@cello-protocol/protocol-types@0.0.23':
+    resolution: {integrity: sha512-Vrwzz7qJ1Pn31FPih1vITwuuGayU7kKiYyLvstQq+vpgOGjHqydQawWJJ9Ux0OL99cM9+ulQh2Zu5fbEv54Qmg==}
     engines: {node: '>=24'}
 
   '@cello-protocol/transport@0.0.20':
     resolution: {integrity: sha512-zWYi79RBi/Us1yG3Xy89OaNz0froOFZEloamCPPWGDVu1bq8VuGqqL07izXfMvTktO0ORoZjleu3dYF46242rQ==}
     engines: {node: '>=24'}
 
-  '@cello-protocol/transport@0.0.22':
-    resolution: {integrity: sha512-vXWUfJXTxNrPkL2WrBnrw+7sNDrUBB5CTnFX1qfbhj2/17FctdyUWrxGR5ynXa4xj9Cech9nnVZ370wL/kw2ng==}
+  '@cello-protocol/transport@0.0.23':
+    resolution: {integrity: sha512-K6gpZ+vtKaMO/Eyd8cjTF4TAh0cTS8q6wNZc8xkGCuXtG2sGUGdPYpEgG2wajdynF1rEpLZ1V6G+fobPqlcwtQ==}
     engines: {node: '>=24'}
 
   '@chainsafe/as-chacha20poly1305@0.1.0':
@@ -4153,18 +4153,18 @@ snapshots:
       '@noble/hashes': 2.2.0
       '@oqs/liboqs-js': 0.15.1
 
-  '@cello-protocol/crypto@0.0.21':
+  '@cello-protocol/crypto@0.0.22':
     dependencies:
       '@noble/curves': 2.2.0
       '@noble/hashes': 2.2.0
       '@oqs/liboqs-js': 0.15.1
 
-  '@cello-protocol/daemon@0.0.53':
+  '@cello-protocol/daemon@0.0.60':
     dependencies:
-      '@cello-protocol/crypto': 0.0.20
-      '@cello-protocol/gateway': 0.0.2
-      '@cello-protocol/protocol-types': 0.0.21
-      '@cello-protocol/transport': 0.0.20
+      '@cello-protocol/crypto': 0.0.22
+      '@cello-protocol/gateway': 0.0.4
+      '@cello-protocol/protocol-types': 0.0.23
+      '@cello-protocol/transport': 0.0.23
       '@libp2p/interface': 3.2.2
       '@signalapp/sqlcipher': 3.3.5
       cbor-x: 1.6.4
@@ -4173,7 +4173,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@cello-protocol/gateway@0.0.2':
+  '@cello-protocol/gateway@0.0.4':
     dependencies:
       re2-wasm: 1.0.2
     optionalDependencies:
@@ -4198,9 +4198,9 @@ snapshots:
       '@cello-protocol/crypto': 0.0.19
       cbor-x: 1.6.4
 
-  '@cello-protocol/protocol-types@0.0.22':
+  '@cello-protocol/protocol-types@0.0.23':
     dependencies:
-      '@cello-protocol/crypto': 0.0.21
+      '@cello-protocol/crypto': 0.0.22
       cbor-x: 1.6.4
 
   '@cello-protocol/transport@0.0.20':
@@ -4228,10 +4228,10 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@cello-protocol/transport@0.0.22':
+  '@cello-protocol/transport@0.0.23':
     dependencies:
-      '@cello-protocol/crypto': 0.0.21
-      '@cello-protocol/protocol-types': 0.0.22
+      '@cello-protocol/crypto': 0.0.22
+      '@cello-protocol/protocol-types': 0.0.23
       '@chainsafe/libp2p-noise': 17.0.0
       '@chainsafe/libp2p-yamux': 8.0.1
       '@libp2p/autonat': 3.0.20

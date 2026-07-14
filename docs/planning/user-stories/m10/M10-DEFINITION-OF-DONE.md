@@ -120,14 +120,14 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   Where the component lives (published package vs per-repo vendored spec-with-vectors) is
   decided by DOD-PORTAL-ARCH-1's architecture. Design note: journal Entry 1 (the worked
   example). —
-  🟡 (2026-07-14 — BUILT + REVIEWED, not yet cross-party. `@cello-protocol/protocol-types`
-  `trust-signal.ts`: preimage is a fixed-order CBOR **array** (M10-D15/D16/D17), 164/164 green,
-  reviewed by cello-unit-reviewer → **1 BLOCKING finding: a 100-year `expires_at` was hashed as an
-  IEEE float64** — all 8 findings fixed (`bec1230`, `3ae336a`). **The remaining clause is the
-  cross-party half:** only ONE consumer exists today, and the frozen vectors only became reachable
-  to the other two repos with the `exports` fix, which needs a publish. Completes at the Tier 0
-  publish boundary (batched with DOD-STORE-CLIENT-1), when trustless-cello and cello-portal check
-  their SHIPPED component against the vectors in CI. → Entries 4, 6.)
+  ✅ (2026-07-14 — PROVEN CROSS-PARTY. `@cello-protocol/protocol-types@0.0.23` (published, binary
+  verified): preimage is a fixed-order CBOR **array** with the domain tag in slot 0
+  (M10-D15/D16/D17); 164/164 in cello-client. Reviewed → **1 BLOCKING finding: a 100-year
+  `expires_at` was hashed as an IEEE float64**; all 8 fixed (`bec1230`, `3ae336a`). The DIRECTORY now
+  independently re-derives all 7 frozen vectors from the SHIPPED package and agrees byte-for-byte —
+  13/13 (`m10-cbor-1-cross-party-vectors.test.ts`). **The portal's third leg lands with
+  DOD-MINT-INTERNAL-1**, the first unit that gives the portal an envelope to hash; the enforcer is
+  written and will simply be re-pointed. → Entries 4, 6, 8.)
 - **DOD-STORE-CLIENT-1** — TWO daemon tables per spec §3.1 (M10-D4), never one with a role flag:
   **(1) wallet `trust_signals`** per spec §3 (envelope columns, opaque payload BLOB, status mutable
   outside the hash; subject = the local agent) — the existing M8 scaffold table is **dropped and its
