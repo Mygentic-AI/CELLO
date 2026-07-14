@@ -271,11 +271,14 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   Signer** (`cello-portal` `mint.ts`/`submission-signer.ts` — account-subject phone/email envelopes,
   no-PII payload, dev seed-signer, **prod fails closed** M10-D6; 14 tests; submission body cross-checked
   field-for-field against the directory's `parseRequest` + TBS domain — directory-acceptable). **Still
-  owed (deploy-coupled):** wire the mint into the portal DirectoryClient (needs a running directory);
-  client generic delivery into `wallet_trust_signals` + re-point `inbound-sessions.ts:601`; the M8
-  retirement (drop table + `SIGNAL_KINDS` + arms + re-point `handoff.ts` and the spine test, ONE
+  owed:** client generic delivery into `wallet_trust_signals` + re-point `inbound-sessions.ts:601`;
+  the M8 retirement (drop table + `SIGNAL_KINDS` + arms + re-point `handoff.ts` and the spine test, ONE
   commit); the **prod KMS signer** (needs a created KMS key — infra); enforcer = DOD-T1-JOURNEY-1 live.
-  → Entries 14, 15.)
+  **UPDATE 2026-07-15 — the portal→directory HALF is PROVEN LOCALLY:** `mintAccountSignals`
+  (`directory-submit.ts`) reads arm-c facts → composes → signs → submits, proven end-to-end against a
+  local server that runs the directory's own re-hash check (submissions are genuinely
+  chokepoint-acceptable); query + submit bodies cross-checked field-for-field against the directory
+  parsers. The remaining half is holder DELIVERY (the M8 retirement). → Entries 14, 15, 16.)
 - **DOD-T1-JOURNEY-1** — **live journey, first half:** for a real agent, portal mints phone +
   email → directory notarizes (visible in `signal_records`, replicated to all 3 nodes) → holder
   daemon holds both envelopes and re-verifies their hashes locally. Real portal process, real
