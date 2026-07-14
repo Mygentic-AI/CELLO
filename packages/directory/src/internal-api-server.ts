@@ -38,6 +38,7 @@ import type { KeyProvider } from "@cello-protocol/crypto";
 import { issuePreAuthToken, issuePreAuthCapability } from "./pre-auth-token-repository.js";
 import { listAccountAgentsWithPresence, PRESENCE_NODE_FRESHNESS_MS } from "./agent-presence-repository.js";
 import { validateWritePayload } from "./agent-write-validation.js";
+import { submitSignal, SubmitRejected } from "./signal-write.js";
 import {
   isAgentOwnedByAccount,
   applyRevocationFlag,
@@ -457,6 +458,49 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
       });
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, writeKind }));
+      return;
+    }
+
+    // ── M10 / DOD-DIR-WRITE-1: the signed-submission chokepoint ──────────────────────────────────
+    // NOTE: NO bearer-key check here. This surface is authenticated by REQUEST SIGNATURE against the
+    // authorized_issuers set (INV-CHOKEPOINT) — a fundamentally stronger model than the shared static
+    // bearer key the routes above use, which is why signals get their own door (M10-D10). The body is
+    // canonical CBOR (raw bytes), not JSON; the signer's pubkey hint and signature ride in headers.
+    if (req.method === "POST" && req.url === "/internal/signal/submit") {
+      let body: Buffer;
+      try {
+        body = await readBody(req);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "could not read request body" }));
+        return;
+      }
+      const signerPubkeyHex = String(req.headers["x-cello-signer-pubkey"] ?? "");
+      const signatureHex = String(req.headers["x-cello-signature"] ?? "");
+
+      try {
+        const result = await submitSignal({
+          pool, logger, acceptingNode: owningNodeId,
+          bodyCbor: new Uint8Array(body), signerPubkeyHex, signatureHex, correlationId,
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, signal_hash: result.signalHash, inserted: result.inserted }));
+      } catch (err) {
+        if (err instanceof SubmitRejected) {
+          // A refusal is a 4xx with its CAUSE named — never a bare 401/500. The reason is already
+          // logged by submitSignal via signal.submission.rejected; the wire echoes it so the caller
+          // (the portal) can act on it. `detail` is safe to surface: it names fields and hashes,
+          // never payload or key material (verified in review).
+          res.writeHead(422, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err.reason, detail: err.detail }));
+        } else {
+          logger.error("signal.submission.failed", {
+            reason: err instanceof Error ? err.message : String(err), correlationId,
+          });
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "submission failed" }));
+        }
+      }
       return;
     }
 

@@ -46,6 +46,10 @@ import { encodeCbor, decodeCbor, hashTrustSignalEnvelope, type TrustSignalEnvelo
 import type { Pool } from "pg";
 import type { Logger } from "@cello-protocol/interfaces";
 
+/** This module logs at info/warn only; narrowing to that keeps it compatible with the internal-api
+ *  server's own narrowed logger without forcing a `debug` it never calls. */
+type WriteLogger = Pick<Logger, "info" | "warn" | "error">;
+
 /** Domain separation for the REQUEST signature. Distinct from the envelope's own `CELLO-TSIG-v1`, so
  *  a signed submission can never be replayed as a signed envelope, or vice versa. */
 export const SIGNAL_REQUEST_DOMAIN = "CELLO-TSIG-REQ-v1";
@@ -192,7 +196,7 @@ export interface SubmitResult {
  */
 export async function submitSignal(args: {
   pool: Pool;
-  logger: Logger;
+  logger: WriteLogger;
   acceptingNode: string;
   bodyCbor: Uint8Array;
   signerPubkeyHex: string;

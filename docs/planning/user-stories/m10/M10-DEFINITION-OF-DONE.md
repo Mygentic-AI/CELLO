@@ -206,7 +206,15 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   - **`accepting_node` is written by the node itself**, never accepted from the request (it is half
     the PK under M10-D20; a submitter that could choose it could collide rows deliberately).
   - **Enrol the portal's KMS pubkey into `authorized_issuers`** from `kms:GetPublicKey` (the table
-    ships EMPTY by design). Until then every submission is refused — which is the correct failure. — ❌
+    ships EMPTY by design). Until then every submission is refused — which is the correct failure.
+  - **The `SIGNAL_KINDS` enum + the `agent-write` signal arms retire WITH THE BACKFILL, not here
+    (extends M10-D18).** `cello-portal/src/server/trust/handoff.ts` is the LIVE producer of
+    `trust_signal_hash`/`trust_signal_ciphertext` via the M8 `agent-write` seam. Retiring them in
+    DIR-WRITE-1 would break the live portal→directory→daemon pipe before MINT-INTERNAL-1 re-points its
+    producer — the same coverage-window trap M10-D18 avoids for the M8 table. DIR-WRITE-1 ADDS the
+    chokepoint; the old seam retires when the backfill re-points `handoff.ts` onto signed submissions.
+    Its retirement test asserts `SIGNAL_KINDS` and both signal arms are gone (mirrors the M8-table
+    drop test). — ❌
 - **DOD-REVOKE-1** — revocation = re-auth through the same chokepoint (spec §14.2): **role-based
   for portal-issued** (any active `submitter`-role key — exact-pubkey matching would strand old-key
   records unrevocable after a key rotation; determination §3.5, review F4), exact
