@@ -1119,7 +1119,9 @@ bare `{type:"timeout"}` — verified in `daemon.ts`, not assumed). §3's "exit 0
   exercises the acceptance criterion that matters MOST: **the relayed connection stayed up and
   carried the session live.** Session `3a6acba8e3d04b31ad6991ece5aeb6ae`. Proven on PUBLISHED
   packages (daemon 0.0.59 / cli 0.0.57 / transport 0.0.22, both ends) against the DEPLOYED relay
-  — not a working tree. — (2026-07-14 — client parts 1-3a built on
+  — not a working tree. **Open behind it: [[#DOD-RELAY-REDUNDANCY-1]] — an agent reserves with
+  exactly ONE relay, so its inbound reachability rests on a single relay (watchdog re-picks on
+  death). Tracked below, deliberately not folded in.** — (2026-07-14 — client parts 1-3a built on
   cello-client `nat-reachability-1` (`f650c71` transport: dcutr everywhere + runOnLimitedConnection
   + HOP gated to service nodes; `2b011d0` daemon: 0.0.0.0 default + reservations from persisted
   endpoints + gater set + NO_FATAL resilience; `d721542` review fixes (wildcard configuredHosts
@@ -1429,6 +1431,34 @@ nowhere, so a multi-agent operator can only switch with the sticky `cello_use_ag
     asymmetry sat there unnoticed. `seal-listener-wiring.test.ts` now covers the client side.
 
 ## Tracked, not M8C-fruit (bigger friction — own items, NOT folded in as riders)
+
+- **`DOD-RELAY-REDUNDANCY-1` — an agent reserves with exactly ONE relay. Its inbound reachability
+  therefore rests on a single relay.** Left open deliberately when `DOD-NAT-REACHABILITY-1` closed
+  (2026-07-14). Inbound works; it just has no redundancy behind it.
+  - **What ships today:** the standing receiver tries the candidate relays in order and KEEPS the
+    first that actually grants a reservation (`session-node-manager.ts` → `#startReceiverNode`).
+    One relay, one slot per agent. A watchdog watches the *connection* to that relay — not the
+    `/p2p-circuit` address, which libp2p keeps for up to two hours after the relay dies — and on
+    loss it re-probes and rebuilds against another relay (`W1`).
+  - **Why not several relays:** measured against the real relays, listening on N circuit addresses
+    is *worse than useless*. libp2p reserves with `DEFAULT_RESERVATION_CONCURRENCY = 1` and
+    `start()` awaits EVERY circuit listener, so N relays serialize into N × (connect + reserve)
+    before the node exists at all — and it yields **one** relay's addresses anyway. Asking for
+    three bought no redundancy and cost 3 of 4 live agents their reservation entirely.
+  - **The unexplained gap — do not assume it is understood.** Two relays blew a 15-second deadline
+    when each reserves in 3–4s alone; and three *configured* relays yield only one relay's
+    addresses even when start completes (libp2p's `HadEnoughRelaysError` cap applies only to
+    *discovered* relays, so that is NOT the explanation). Both were set aside once the relay's
+    15-slot exhaustion turned out to be the real root cause. **Anyone picking this up starts by
+    explaining those two facts** — the single-relay design is an empirical floor (one relay works
+    reliably in every experiment), not a understood one.
+  - **Why it is forgivable at launch:** the failure mode is bounded and covered. If the relay dies,
+    the watchdog re-picks within a tick; if none can be had, the receiver still comes up on the
+    direct path, loudly degraded, never deaf. A user is unreachable only in the window between a
+    relay's death and the rebuild.
+  - **Note for whoever takes it:** a reservation is scarce (the relay holds it for its full TTL even
+    after the client disconnects), so any redundancy design must count slots. An earlier probe
+    design burned TWO slots per agent to obtain one and was deleted for exactly that reason.
 
 - **`DOD-TYPECHECK-TESTS-1` — NO TEST FILE IN THIS REPO IS TYPECHECKED.** Found 2026-07-13 during
   the daemon Seam C review. Every `core/*/tsconfig.json` has `"exclude": [..., "src/__tests__"]`
