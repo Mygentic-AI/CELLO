@@ -1305,6 +1305,40 @@ works end to end locally.**
   no user benefit until the feature is live); registry client poller + consume path are ahead of their
   Tier-2 consumers (NO CONSUMER NO SHIP).
 
+### 2026-07-15 — Entry 17: Tier 0/1 directory DEPLOY triggered; client delivery built; dev-signer identity
+
+**DEPLOY IN FLIGHT.** Pushed 28 commits (main → `2a65a615`); the `cello-directory-pipeline` is
+building. This ships the whole Tier 0/1 directory surface to dev: **V46** (signal_records +
+authorized_issuers + registry_documents + the effective view — the directory applies Flyway on boot,
+so the migration auto-applies) and the `/internal/signal/{submit,revoke,query}` + `/internal/signal/
+registry-publish` + public `GET /registry` routes. Verified deploy-ready first: build green, V46 is
+pure additive DDL (safe on dev's V45 DB), existing agent-write route tests pass, lockfile pins 0.0.23.
+Corrected my own over-caution — this is an authorized, locally-proven, batched dev deploy; the
+"shared dev might break" hesitation was a production-mindset brake (alpha, no users, recoverable). The
+relay cascade (mandatory post-directory-redeploy per STATE.md) is understood — stop-task the relays so
+they re-register — and is in the deploy watchdog (cron `c561ce55`), along with the SSM bump to 46,
+the replication re-run for the new PUBLICATION_TABLES, and the STATE.md update.
+
+**Built during the window (laptop-testable, deploy-independent): `deliverWalletSignal`** — the holder's
+own chokepoint. A delivered envelope's hash is RE-DERIVED with the shared protocol-types and a mismatch
+is REFUSED before storing in `wallet_trust_signals`; idempotent. 32/32 daemon store tests. Its consumer
+is the M8 retirement's re-point of `inbound-sessions.ts:601`.
+
+**A real constraint surfaced:** the `/internal/signal/*` routes are INTERNAL-ONLY (the ALB rejects
+`/internal/*`), so the live mint→notarize proof is NOT laptop-reachable — it runs from the DEPLOYED
+PORTAL, inside the network. The directory deploy is the prerequisite; the full live journey needs the
+portal deployed with the mint + the dev signer enrolled + the M8 delivery routing.
+
+**DEV SIGNER IDENTITY (for the eventual portal live test — do not lose):** the portal's dev submission
+signer uses seed `de`×32; its Ed25519 pubkey is
+`8d4abe074fef9229d3b441dfea4f98f805b1a2b3a06ae645810efece77fd5044`. **Post-deploy enrollment** (once
+V46's `authorized_issuers` exists in dev):
+`INSERT INTO authorized_issuers (pubkey, role, status, label) VALUES
+('8d4abe074fef9229d3b441dfea4f98f805b1a2b3a06ae645810efece77fd5044','submitter','active','dev-portal-mint');`
+and the deployed portal sets `PORTAL_SUBMISSION_SEED=de…de` (dev requires it explicitly — no
+checked-in fallback). Harmless to enroll now (an unused authorized issuer); it makes the directory
+ready for the portal.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
