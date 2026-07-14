@@ -5085,10 +5085,28 @@ export class CelloDirectoryNode {
    */
   #relayEndpointsForAuthOk(): Array<{ peer_id: string; multiaddrs: string[] }> {
     if (this.#relayPoolManager) {
-      return this.#relayPoolManager.listAvailable().map((r) => ({
-        peer_id: r.peerId ?? r.relayId,
-        multiaddrs: r.multiaddrs ?? [r.endpoint],
-      }));
+      // NEVER fabricate addressing. A relay present in the S3 manifest but not yet
+      // SSM-seeded has NO peerId and NO multiaddrs (see relay-pool-manager's own
+      // note) — the old `?? relayId` / `?? [endpoint]` fallbacks turned that into a
+      // relayId and a `wss://` URL, neither of which is a multiaddr. The client puts
+      // these straight into libp2p's LISTEN set, where a non-multiaddr throws at node
+      // construction: the standing receiver then fails every retry and the agent ends
+      // up with NO receiver — deaf to ALL inbound, including the direct path that
+      // worked before. A relay we cannot address is a relay we do not advertise.
+      const usable: Array<{ peer_id: string; multiaddrs: string[] }> = [];
+      for (const r of this.#relayPoolManager.listAvailable()) {
+        if (!r.peerId || !r.multiaddrs || r.multiaddrs.length === 0) {
+          this.#logger?.warn("directory.relay_endpoints.unaddressable", {
+            relayId: r.relayId.slice(0, 16),
+            region: r.region,
+            hasPeerId: !!r.peerId,
+            multiaddrCount: r.multiaddrs?.length ?? 0,
+          });
+          continue;
+        }
+        usable.push({ peer_id: r.peerId, multiaddrs: [...r.multiaddrs] });
+      }
+      return usable;
     }
     if (this.#relayEndpoint) {
       return [{ peer_id: this.#relayEndpoint.peer_id, multiaddrs: [...this.#relayEndpoint.multiaddrs] }];

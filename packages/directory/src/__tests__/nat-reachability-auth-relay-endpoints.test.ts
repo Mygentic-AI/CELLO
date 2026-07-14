@@ -223,3 +223,59 @@ describe("DOD-NAT-REACHABILITY-1: signaling_auth_ok carries the relay pool", () 
     expect("relay_endpoints" in ack).toBe(false);
   });
 });
+
+// ─── Review round 3: NEVER fabricate addressing ───────────────────────────────
+
+describe("DOD-NAT-REACHABILITY-1: an unaddressable relay is DROPPED, never fabricated", () => {
+  let scope = createTestScope();
+  beforeEach(() => { scope = createTestScope(); });
+  afterEach(() => scope.run(async () => {}));
+
+  /** A relay from the S3 manifest that has NOT been SSM-seeded: no peerId, no multiaddrs. */
+  const RELAY_UNSEEDED: RelayManifestEntry = {
+    relayId: "dd".repeat(32),
+    endpoint: "wss://relay-unseeded.example.com",
+    region: "us-west-2",
+    status: "active",
+    healthCheckUrl: "http://10.3.0.1:4000/health",
+  };
+
+  it("a relay with no peerId/multiaddrs is omitted — the old `?? [endpoint]` fallback shipped a wss:// URL as a multiaddr", async () => {
+    // The client puts these straight into libp2p's LISTEN set. A wss:// URL is not a
+    // multiaddr: node construction THROWS, every standing-receiver retry fails, and the
+    // agent ends up with NO receiver — deaf to ALL inbound, including the direct path
+    // that worked before this feature. A relay we cannot address is one we do not send.
+    const pool = makeSignedPool([RELAY_A, RELAY_UNSEEDED]);
+    await pool.loadManifest();
+    const dirKey = generateKeypair();
+    const dirNode = await createDirectoryNode({ relay: makeRelayStub(),
+      keyProvider: dirKey,
+      relayPoolManager: pool,
+      relayEndpoint: { peer_id: "12D3KooWLegacyMustNotAppear", multiaddrs: ["/ip4/127.0.0.1/tcp/1"] },
+    });
+    scope.addCleanup(dirNode.stop);
+
+    const ack = await authAndGetAck(dirNode, scope);
+    const endpoints = ack["relay_endpoints"] as Array<{ peer_id: string; multiaddrs: string[] }>;
+    expect(endpoints).toEqual([{ peer_id: RELAY_A.peerId, multiaddrs: RELAY_A.multiaddrs }]);
+    // The unseeded relay contributed NOTHING — no relayId-as-peer-id, no endpoint-as-multiaddr.
+    const flat = JSON.stringify(endpoints);
+    expect(flat).not.toContain(RELAY_UNSEEDED.relayId);
+    expect(flat).not.toContain("wss://");
+  });
+
+  it("when EVERY available relay is unaddressable the field is omitted — not a list of garbage", async () => {
+    const pool = makeSignedPool([RELAY_UNSEEDED]);
+    await pool.loadManifest();
+    const dirKey = generateKeypair();
+    const dirNode = await createDirectoryNode({ relay: makeRelayStub(),
+      keyProvider: dirKey,
+      relayPoolManager: pool,
+      relayEndpoint: { peer_id: "12D3KooWLegacyMustNotAppear", multiaddrs: ["/ip4/127.0.0.1/tcp/1"] },
+    });
+    scope.addCleanup(dirNode.stop);
+
+    const ack = await authAndGetAck(dirNode, scope);
+    expect("relay_endpoints" in ack).toBe(false);
+  });
+});
