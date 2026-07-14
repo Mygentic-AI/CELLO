@@ -143,7 +143,17 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   **`agent_id NOT NULL` applies to the RECEIVED store** (`contact_trust_signals` — consent
   scoping is genuinely per-agent; INV-AGENT-SCOPED), where the M8 `agent_id = null` defect
   (investigation §9, `daemon.ts:4920`) must die with the drop. Migration idempotent; fresh schema
-  == migrated schema. — ❌
+  == migrated schema. —
+  🟡 (2026-07-14 — BUILT + REVIEWED. `core/daemon/trust-signal-store.ts`: both tables, wallet with
+  NO agent column (M10-D14), received store FK'd to `contacts` with FK enforcement now actually ON
+  (M10-D19). 29 unit + 973 full-daemon green. Reviewed by cello-unit-reviewer → **4 blocking
+  findings, all fixed**: turning FKs on ARMED a silent cascade-wipe of every received signal on any
+  `contacts` table rebuild (`withForeignKeysOff` + regression test); a peer could launder our
+  `revoked` verdict back to `active` by re-presenting (`status` is unhashed — the input type now
+  omits it and the upsert is monotonic); seconds/milliseconds confusion presented EXPIRED signals;
+  and `toBytes()` silently turned an unreadable payload into empty bytes. **The M8 scaffold drop is
+  deferred to DOD-MINT-INTERNAL-1 (M10-D18)** — that line now carries the drop as an explicit
+  clause. Cross-party/publish half pending at the Tier 0 boundary. → Entries 5, 7.)
 - **DOD-STORE-DIR-1** — directory `signal_records` table (`signal_hash` PK, subject_kind,
   subject, issuer_pubkey, issuer_kind, type-as-opaque-string, status, superseded_by, revoked_at,
   accepting_node, scanner_version) + replication of records AND status changes over the existing
@@ -185,7 +195,15 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   self-describing payload (plain-language claim + structured fields; email carries domain, not
   address — no PII beyond what the signal IS), hashed via DOD-CBOR-1, submitted via
   DOD-DIR-WRITE-1, delivered to the holder (generic delivery: verify hash ∈ directory → insert
-  envelope row; the client half is type-agnostic). **Source-of-fact clause (investigation §2):
+  envelope row; the client half is type-agnostic).
+  **THE M8 DROP LANDS HERE (M10-D18) — an explicit, tested clause, not a note.** This unit MUST, in
+  the same commit: drop the M8 `trust_signals` scaffold table; retire its only writer
+  (`inbound-sessions.ts:601`, the `agent_id = null` defect); re-point the delivery arm onto real CBOR
+  envelopes into `wallet_trust_signals`; and re-point `trustless-cello`'s
+  `packages/e2e-tests/src/spine/j-trust.spine.test.ts` (whose SUBJECT — the portal→directory→daemon
+  delivery pipe — stays alive and must keep its coverage). **Its own test asserts the scaffold table
+  is GONE.** STORE-CLIENT-1's test only guards against a *premature* drop and would stay green
+  forever if this were forgotten (review F7) — this clause is the forcing function. **Source-of-fact clause (investigation §2):
   the portal holds NO phone data — the verified fact lives in the directory's
   `user_accounts.phone_stub_hash`; email exists portal-side only as envelope ciphertext. The
   unit must define how the portal obtains/attests each fact it mints (a directory read, not a

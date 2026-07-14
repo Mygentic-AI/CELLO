@@ -602,6 +602,101 @@ burning a cascade per unit (PROCEDURE §2c).
 
 ---
 
+### 2026-07-14 — Entry 7: DOD-STORE-CLIENT-1 — the fix for one invariant ARMED a data-loss landmine
+
+**Shipped.** `core/daemon/src/trust-signal-store.ts` (wallet + received tables, store API),
+`PRAGMA foreign_keys = ON` (M10-D19), `withForeignKeysOff()` (the fix below). Commits `800e865`
+(build), `c778811` (a unit bug I caught myself), plus the review fixes.
+
+**THE BIG ONE — F1. Turning on the guard that makes INV-AGENT-SCOPED real also armed a silent
+cascade-wipe of every received trust signal.** The reviewer found it; I had not looked. Measured:
+
+```
+children before rebuild: 1
+PRAGMA foreign_keys = OFF   (inside BEGIN)  -> still reports 1   ← A SILENT NO-OP
+DROP TABLE contacts                         -> children: 0       ← ON DELETE CASCADE fired
+```
+
+Three facts, all newly true because of M10-D19:
+1. With FK enforcement ON, **`DROP TABLE parent` is an implicit `DELETE FROM parent`** — so it fires
+   `ON DELETE CASCADE` and silently empties `contact_trust_signals`. No error. Green suite.
+2. **`PRAGMA foreign_keys` is a NO-OP inside a transaction.** SQLite ignores it and says nothing. So
+   the intuitive mitigation — disable FKs around the rebuild — *looks* right and cascades anyway.
+3. `ALTER TABLE parent RENAME TO parent_old` **rewrites the child's FK clause** to point at the
+   renamed table.
+
+**And `contacts` is one of the seven tables `agent-id-migration.ts` rebuilds** with exactly this
+create-copy-drop-rename recipe, inside one `BEGIN…COMMIT`. The migration's own row-count guards would
+not have noticed: **they count `contacts`, not its children.** Every received signal on every agent,
+gone at next boot, with nothing logged. It is not triggered *today* only because
+`ensureTrustSignalSchema` happens to run AFTER the migration — **luck of ordering, not a guard.**
+
+**Fixed** with `withForeignKeysOff(db, logger, fn)` in `sqlcipher-db.ts`: it toggles the pragma
+OUTSIDE the transaction, **VERIFIES the toggle actually took effect** (the failure is silent by
+nature, so assuming it would be the same mistake one level up) and REFUSES to proceed if it did not,
+and on the way out re-enables FKs and runs `PRAGMA foreign_key_check` so a rebuild that leaves a
+dangling reference fails loudly instead of surfacing as a mystery insert failure days later.
+`migrateSessionTablesToAgentId` now runs inside it. The regression test drives the REAL recipe (seed a
+contact + a received signal → rebuild `contacts` → assert the signal **survives** and
+`foreign_key_check` is clean) — that test is the only thing that will stop this recurring.
+
+**The generalizable lesson.** *Turning on a dormant safety mechanism is a behavior change to every
+code path that mechanism touches* — including the ones written while it was off. "Zero existing FKs,
+so enabling enforcement is safe" was true **backwards** and false **forwards**: the danger was not in
+what the FK would reject, but in what the new CASCADE would delete. The 973-green suite said nothing,
+because no test rebuilds `contacts` while children exist.
+
+**F2 — a peer could rewrite our own evidence.** `putReceivedSignal` upserted
+`status = excluded.status`. But `status` is **outside the hash preimage** — which is what makes it
+mutable, and also means it is **not authenticated by the signal hash**. `ReceivedSignalInput` extended
+`WalletSignalInput`, so the peer's claimed `status` rode in the same struct as the envelope fields and
+the natural DOD-VERIFY-1 call site would have passed it straight through. Attack: Bob presents H; we
+check the directory, find it REVOKED, store that. Next session Bob re-presents H claiming `active` —
+and the one durable record saying we caught him is overwritten **by the party it indicts**. Evidence an
+adversary can rewrite is not evidence. Fixed structurally: `ReceivedSignalInput` now `Omit`s `status`
+and requires `verdict` (OUR directory-derived verdict), so there is no pass-through to forget to block;
+and the upsert is **monotonic** — a verdict may only ever worsen, never return to `active`.
+
+**F3 — I had already caught this one myself** before the review landed (`c778811`): `listPresentable`
+compared epoch SECONDS against a value derived from MILLISECONDS. The reviewer independently found it
+and rated it blocking, which is a useful calibration: my own adversarial pass and an independent one
+converged on the same defect.
+
+**F4 — the module's one ABSENT-IS-NOT-FINE violation, in a module built on that principle.**
+`toBytes()` returned `new Uint8Array(0)` for an unrecognized shape from the driver — so a payload that
+failed to materialise would flow onward as a *valid signal with empty content*, its hash would then
+fail to match, and the operator would be sent hunting a canonicalization bug that does not exist. Now
+throws `signal_payload_not_bytes`, naming the storage-layer fault and distinguishing it from a
+genuinely empty payload (which is a zero-length BLOB, a different thing).
+
+**F5 — `revoked → active` resurrection.** `setWalletStatus` was a blind UPDATE, so a stale or replayed
+directory read reporting `active` for a hash we already revoked would flip it back, and
+`listPresentable` would offer a revoked signal again. **Revocation is now terminal** (a `superseded`
+signal may still worsen to `revoked`, never the reverse, never back to `active`), and a refused
+downgrade logs `signal.wallet.status.change_refused` rather than passing silently. The directory is
+the authority on revocation, but *a late answer is not a new answer*.
+
+**F7 — my deferral pin pointed the wrong way,** and the commit message overclaimed. I wrote that a
+test "pins the scaffold's continued existence so the deferral cannot be forgotten silently." It does
+the opposite: it fails only if someone drops the M8 table EARLY. If MINT-INTERNAL-1 never lands, it
+stays green forever and the `agent_id = null` defect survives with it. Corrected in the test's own
+comment; the real forcing function is MINT-INTERNAL-1's DoD clause, which is a document, not a gate.
+
+**F8/F9 (LOW), both fixed.** The store constructor also created the schema, which made
+`new TrustSignalStore(anyHandle)` able to build `contact_trust_signals` with a **dangling FK** on a
+handle lacking `contacts` — failing later on the first insert with an error naming the wrong
+subsystem. `initialize()` now owns the schema alone. And `verified_at ?? 0` defaulted a `NOT NULL`
+column to "verified at the epoch," indistinguishable from a real absurd timestamp — the received store
+now has its own row type where `verified_at` is required.
+
+**A hollow test the reviewer caught that I would not have.** "fresh schema == migrated schema"
+compared `PRAGMA table_info` — names, types, NOT NULL. That says **nothing about the FOREIGN KEY, the
+PRIMARY KEY, or the indexes**. A migrated database that had lost the FK entirely would have passed the
+test guarding the very constraint this unit is built on. It now compares the actual DDL from
+`sqlite_master` and asserts the FK is present in both.
+
+---
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
