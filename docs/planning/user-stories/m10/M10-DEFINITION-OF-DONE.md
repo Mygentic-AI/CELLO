@@ -157,7 +157,14 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
 - **DOD-STORE-DIR-1** — directory `signal_records` table (`signal_hash` PK, subject_kind,
   subject, issuer_pubkey, issuer_kind, type-as-opaque-string, status, superseded_by, revoked_at,
   accepting_node, scanner_version) + replication of records AND status changes over the existing
-  replication path (spec §14.1). Flyway migration + `OpsAgentExpectedMigrationVersion` bump. — ❌
+  replication path (spec §14.1). Flyway migration + `OpsAgentExpectedMigrationVersion` bump. —
+  🟡 (2026-07-14 — WRITTEN, **NOT YET RUN**. `V46__signal_records.sql` (opaque `type` with NO
+  CHECK; append-and-amend — no DELETE grant; supersession links rather than overwrites; no payload
+  column), `signal_records` added to `PUBLICATION_TABLES`, `OpsAgentExpectedMigrationVersion`
+  45→46. **Its integration test exists and has NEVER EXECUTED — Docker Desktop will not start on
+  this machine (backend process alive, daemon never ready; it wants a GUI click).** No Postgres, no
+  Flyway, no proof. Not ✅ until the test runs green against a DB with all prior migrations applied.
+  → Entry 8.)
 
 ## Tier 1 — The write path + internal signals (phone, email)
 

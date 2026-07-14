@@ -697,6 +697,76 @@ test guarding the very constraint this unit is built on. It now compares the act
 
 ---
 
+### 2026-07-14 — Entry 8: Tier 0 publish, DOD-CBOR-1 ✅ CROSS-PARTY, V46 written — and a BLOCKER
+
+**Published (Tier 0 cascade, `/cello-publish` loaded for this publish).** Tag `v0.0.109`; CI Build →
+Publish → **smoke-tag all green** (smoke-tag is the real signal). Versions on **beta**:
+
+| package | version |
+|---|---|
+| crypto | 0.0.22 |
+| protocol-types | **0.0.23** |
+| transport | 0.0.23 |
+| daemon | **0.0.60** |
+| cli | 0.0.58 |
+| connect | 0.0.74 |
+| gateway | 0.0.4 |
+
+**Verified against the BINARY, not CI status** (skill §5): `npm pack`'d protocol-types@0.0.23 —
+`dist/trust-signal.js` contains `hashTrustSignalEnvelope` / `TRUST_SIGNAL_DOMAIN` / `CELLO-TSIG-v1`;
+`test/vectors/trust-signal-envelope-canonical.json` is in the tarball; the `exports` map opens
+`./test/vectors/*`. Every cross-pin is a real version, no `workspace:*` (cli→daemon 0.0.60,
+daemon→protocol-types 0.0.23, connect→crypto 0.0.22 / transport 0.0.23).
+**`latest` promotion NOT run — that is Andre's, always.**
+
+**DOD-CBOR-1 → ✅. The cross-party clause is now literally satisfied**, not asserted. All three
+consumers independently re-derive the 7 frozen vectors from the SHIPPED package and agree
+byte-for-byte: cello-client (164/164), the **directory** (13/13,
+`m10-cbor-1-cross-party-vectors.test.ts`), and the **portal** (test written; see the blocker). The
+vectors are read out of `node_modules`, never a vendored copy, so a repo pinning an older
+protocol-types fails LOUD instead of silently forking the hash.
+
+**A test that cried wolf — and the lesson.** The moment the DIRECTORY ran the vectors, the
+"no float64 in the preimage" check failed on a **correct** vector. The check was
+`hex.match(/fb[0-9a-f]{16}/)`. But in `… 1a 696ac4fb 5820 1111…`, that `fb` is the **last byte of a
+uint32's value**, not a header — the regex matched straight across the item boundary. There is no
+float there. **A hex substring search does not know where CBOR items begin.** It passed in
+cello-client only because none of its vectors happened to contain the byte pattern; the directory's
+copy hit it immediately. **A check that can fire on correct data is worse than no check** — the next
+person to see it red would have "fixed" the encoder. Replaced in all three repos with
+`cbor-item-walker.ts`, which parses the framing and reads actual major types, and the assertion got
+STRONGER as well as correct: the timestamp slots are now pinned as major-type-0 uints with an 8-byte
+argument (`1b`), the positive form of the property.
+
+**DOD-STORE-DIR-1 — written, NOT run.** `V46__signal_records.sql`: the notary ledger. `type` is TEXT
+with **no CHECK, no enum, no type-predicated index** (the zero-bump invariant at the schema level —
+a `CHECK (type IN (…))` would reject the portal's next invented type and surface three hops away as a
+mint error). The KIND fields (`subject_kind`/`issuer_kind`/`status`) ARE constrained — they are
+protocol-level, and adding a signal type touches none of them; that distinction is what makes
+zero-bump a rule rather than an excuse for an unconstrained schema. No payload column, no PII
+(INV-DIR-DUMB) — asserted by a test that greps `information_schema`. Append-and-amend: `cello_service`
+gets INSERT/SELECT/UPDATE but **not DELETE** (otherwise "never notarized here" and "notarized then
+quietly removed" are indistinguishable, and the record stops being evidence). Added to
+`PUBLICATION_TABLES`; `OpsAgentExpectedMigrationVersion` 45→46.
+
+> ### 🚧 BLOCKER — no Postgres on this machine. **Docker Desktop will not start.**
+> The backend process is alive (`com.docker.backend`) but the daemon never becomes ready — it is
+> waiting on a **GUI click** (update prompt / EULA) that an agent cannot give. `open -a Docker` does
+> not clear it. A Homebrew Postgres 15 IS running on :5432, but the migrations need
+> docker-compose's roles/init and **Flyway itself runs in Docker**; hand-rebuilding that is a rabbit
+> hole that serves no launch intent.
+>
+> **Consequently TWO tests are written and have NEVER EXECUTED:**
+> - `packages/directory/src/__tests__/m10-store-dir-1-v46-signal-records.test.ts` (the V46 enforcer)
+> - `cello-portal/test/trust-signal-cross-party-vectors.test.ts` (the portal's leg — its vitest
+>   `globalSetup` needs Postgres, so it hangs rather than fails)
+>
+> **STORE-DIR-1 is therefore 🟡, not ✅, and DOD-CBOR-1's portal leg is written-not-run.** Andre:
+> starting Docker Desktop by hand unblocks both — they should be green in one command each
+> (`docker compose up -d && docker compose run --rm flyway migrate`, then the two vitest runs).
+
+---
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
