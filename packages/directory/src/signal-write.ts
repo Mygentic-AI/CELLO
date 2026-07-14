@@ -27,16 +27,17 @@
  * one — that is what the zero-bump canary proves, and this handler is where it would first be
  * betrayed.
  *
- * ══ REPLAY IS HARMLESS BY CONSTRUCTION — AND THAT CLAIM IS EARNED, NOT ASSERTED ════════════════
- * There is deliberately no nonce store. That is only safe because of two rules, each with a negative
- * test:
+ * ══ REPLAY IS STATUS-HARMLESS BY CONSTRUCTION — AND THAT CLAIM IS EARNED, NOT ASSERTED ═════════
+ * There is deliberately no nonce store. A replay cannot change any signal's effective STATUS,
+ * because of two rules, each with a negative test:
  *   1. A duplicate submit is a STRICT NO-OP. It never touches the existing row — `status` included.
  *      An `ON CONFLICT DO UPDATE` here would let a replayed submit RESURRECT A REVOKED SIGNAL.
  *      (The client-side store shipped exactly this bug one tier down and had to have it removed.
  *      Once is a bug; twice is a pattern — so it is tested on both sides.)
  *   2. Supersession rides on the new record's own hashed `supersedes_hash`; the old row is never
  *      mutated to express it. So a replayed submit cannot launder a `revoked` row into `superseded`.
- * `issued_at` is bounds-checked as hygiene, not as a security control.
+ * What a replay CAN do is inflate PROVENANCE breadth by being replayed to another node — bounded only
+ * by the `issued_at` skew window. See CLOCK_SKEW_SECONDS. Status integrity holds either way.
  */
 
 import { createHash } from "node:crypto";
@@ -49,9 +50,21 @@ import type { Logger } from "@cello-protocol/interfaces";
  *  a signed submission can never be replayed as a signed envelope, or vice versa. */
 export const SIGNAL_REQUEST_DOMAIN = "CELLO-TSIG-REQ-v1";
 
-/** How far a submission's `issued_at` may sit from our clock. Hygiene against a stale captured
- *  request, NOT a security control — replay-safety comes from the two idempotence rules, not from
- *  this window (a 9-minute-old replay is just as harmless as a 9-day-old one). */
+/**
+ * How far a submission's `issued_at` may sit from our clock.
+ *
+ * STATUS integrity does not depend on this window — the two idempotence rules make a replay unable to
+ * change any signal's effective status (a duplicate is a strict no-op; `revoked` is monotonic across
+ * the hash group in `signal_records_effective`). A revoke-then-replay is harmless regardless of age.
+ *
+ * But PROVENANCE breadth DOES depend on it, and this is the bound. A captured, validly-signed submit
+ * replayed to a DIFFERENT node has no PK conflict (the PK is `(signal_hash, accepting_node)`), so it
+ * inserts a genuine new row `(H, otherNode, active)` — inflating `signal_records_effective.notarized_by`
+ * to assert an independent notarization that node never performed. The skew window is the only thing
+ * bounding that inflation, so it IS doing security work here, and any path that ever treats
+ * "notarized by N nodes" as assurance must authenticate provenance rather than count `accepting_node`
+ * rows. (No consumer of `notarized_by` is wired today; this is a standing caveat, not a live hole.)
+ */
 const CLOCK_SKEW_SECONDS = 600;
 
 export type IssuerRole = "submitter" | "registry";
@@ -66,7 +79,8 @@ export type SubmitRejection =
   | "issuer_wrong_role"          // it is active, but not a `submitter`
   | "signature_invalid"          // the signature does not verify against the claimed pubkey
   | "stale_request"              // issued_at is outside the skew window
-  | "envelope_undecodable"       // the envelope bytes are not a canonical trust-signal envelope
+  | "envelope_undecodable"       // the envelope bytes are not a canonical trust-signal envelope (bad FORM)
+  | "envelope_invalid"           // canonical form, but a field violates the envelope's own rules (bad MEANING)
   | "envelope_hash_mismatch";    // WE re-hashed the bytes and got a different hash — the chokepoint
 
 export class SubmitRejected extends Error {
@@ -226,6 +240,9 @@ export async function submitSignal(args: {
     //    envelope ONLY to re-hash it — never to interpret its payload, and never to branch on its
     //    type.
     const envelopeBytes = new Uint8Array(req.envelope);
+
+    // FORM: is this canonical trust-signal-envelope bytes at all? (bad CBOR, wrong arity, wrong
+    // domain tag, non-canonical encoding → `envelope_undecodable`.)
     let envelope: TrustSignalEnvelope;
     try {
       envelope = decodeTrustSignalEnvelope(envelopeBytes);
@@ -233,7 +250,18 @@ export async function submitSignal(args: {
       throw new SubmitRejected("envelope_undecodable", err instanceof Error ? err.message : String(err));
     }
 
-    const derived = Buffer.from(hashTrustSignalEnvelope(envelope)).toString("hex");
+    // MEANING: the re-hash RE-VALIDATES — hashTrustSignalEnvelope → toPreimage enforces the semantic
+    // rules (enum membership, NFC, lowercase-hex pubkey, integer bounds, 32-byte supersedes_hash) and
+    // throws a PLAIN Error on a violation. It MUST be caught and named here, or a canonical-but-
+    // invalid envelope (an out-of-enum subject_kind round-trips fine at the byte level) escapes as an
+    // unmapped exception: an HTTP 500 with no `signal.submission.rejected` log, on the security-core
+    // module, on hostile input. Form is checked above; meaning is checked here; both are loud + named.
+    let derived: string;
+    try {
+      derived = Buffer.from(hashTrustSignalEnvelope(envelope)).toString("hex");
+    } catch (err) {
+      throw new SubmitRejected("envelope_invalid", err instanceof Error ? err.message : String(err));
+    }
     if (derived !== req.signal_hash) {
       // The submitter's claim and the bytes disagree. This is the check that makes "notarized"
       // mean anything.

@@ -227,6 +227,33 @@ describeIntegration("DOD-DIR-WRITE-1 — the signed-submission chokepoint", () =
         .rejects.toMatchObject({ reason: "stale_request" });
     });
 
+    it("REFUSES a canonical-but-SEMANTICALLY-INVALID envelope with a NAMED rejection, not a raw throw", async () => {
+      // The gap the review found: an out-of-enum subject_kind round-trips fine at the byte level (it
+      // IS canonical CBOR), so it passes the form check — but the re-hash's own validation rejects it.
+      // That rejection must flow through the named/logged path, not escape as an unmapped Error (which
+      // would be an HTTP 500 with no `signal.submission.rejected` line, on the security-core module).
+      const env = envelope();
+      const arr = [
+        "CELLO-TSIG-v1", "user" /* not account|agent */, env.subject, env.issuer_kind,
+        env.issuer_pubkey, env.type, env.schema_version, env.payload, env.issued_at, null, null,
+      ];
+      const badEnvBytes = encodeCbor(arr);
+      const body = encodeCbor({
+        v: 1, op: "submit", envelope: badEnvBytes,
+        // The signal_hash never gets compared — the envelope is refused for its invalid subject_kind
+        // first — so any well-formed hex placeholder does.
+        signal_hash: "0".repeat(64),
+        scanner_version: "scan-v1", issued_at: nowSec(),
+      });
+      const err = await submitSignal({
+        pool, logger: silent, acceptingNode: NODE, correlationId: "c1", bodyCbor: body,
+        signerPubkeyHex: submitterPub,
+        signatureHex: hex(await submitterKey.sign(buildSignalRequestTbs(body))),
+      }).then(() => null, (e) => e);
+      expect(err, "a semantic violation must be a named SubmitRejected, never a raw Error").toBeInstanceOf(SubmitRejected);
+      expect((err as SubmitRejected).reason).toBe("envelope_invalid");
+    });
+
     it("REQUIRES scanner_version INSIDE the signed body — it is unforgeable only there", async () => {
       const env = envelope();
       const body = encodeCbor({
@@ -277,6 +304,36 @@ describeIntegration("DOD-DIR-WRITE-1 — the signed-submission chokepoint", () =
       const { rows: eff } = await pool.query(
         "SELECT effective_status FROM signal_records_effective WHERE signal_hash = $1", [signalHash]);
       expect(eff[0].effective_status).toBe("revoked");
+    });
+
+    it("a CROSS-NODE replay cannot change STATUS, but DOES add a provenance row (pins M10-D20)", async () => {
+      // The review's Finding B, made explicit. The same-node negative AC above only proves the
+      // same-node no-op; this proves the cross-node behavior the design actually leans on. A captured,
+      // validly-signed submit re-sent to a DIFFERENT node has no PK conflict (PK is
+      // (signal_hash, accepting_node)), so it inserts a real second row.
+      const env = envelope();
+      const captured = await signedSubmit({ env });
+
+      const atUsEast = await submitSignal({ ...captured, acceptingNode: "us-east-1" });
+      expect(atUsEast.inserted).toBe(true);
+      await pool.query("UPDATE signal_records SET status='revoked', revoked_at=now() WHERE signal_hash=$1 AND accepting_node='us-east-1'", [atUsEast.signalHash]);
+
+      // Replay the IDENTICAL captured bytes to a second node.
+      const atEuCentral = await submitSignal({ ...captured, acceptingNode: "eu-central-1" });
+      expect(atEuCentral.inserted, "no PK conflict at a different node — a genuine second row is inserted").toBe(true);
+
+      // Two provenance rows now exist. If the PK had regressed to a lone `signal_hash`, the second
+      // insert would have hit ON CONFLICT DO NOTHING and inserted:false — so this line pins M10-D20.
+      const { rows } = await pool.query("SELECT COUNT(*) AS n FROM signal_records WHERE signal_hash = $1", [atUsEast.signalHash]);
+      expect(Number(rows[0].n)).toBe(2);
+
+      // STATUS INTEGRITY HOLDS: revoked is monotonic across the hash group, so the replay to a fresh
+      // node did NOT resurrect the signal. This is the guarantee that survives cross-node replay.
+      const { rows: eff } = await pool.query(
+        "SELECT effective_status, notarized_by FROM signal_records_effective WHERE signal_hash = $1", [atUsEast.signalHash]);
+      expect(eff[0].effective_status, "a cross-node replay must not un-revoke a revoked signal").toBe("revoked");
+      // ...and provenance breadth IS inflated (the documented caveat — bounded only by the skew window).
+      expect(eff[0].notarized_by.sort()).toEqual(["eu-central-1", "us-east-1"]);
     });
 
     it("supersession rides the NEW record's own INSERT — the old row is never mutated", async () => {
