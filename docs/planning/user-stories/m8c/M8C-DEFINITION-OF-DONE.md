@@ -1432,6 +1432,44 @@ nowhere, so a multi-agent operator can only switch with the sticky `cello_use_ag
 
 ## Tracked, not M8C-fruit (bigger friction — own items, NOT folded in as riders)
 
+- **`DOD-TRANSPORT-PATH-1` — an agent cannot tell HOW it is connected: direct, hole-punched,
+  relayed, or mailbox. Today "CELLO is slow" and "CELLO is relaying every byte because your hole
+  punch failed" look IDENTICAL from the outside.** Raised 2026-07-14 off the back of
+  `DOD-NAT-REACHABILITY-1`. The daemon knows; the agent cannot ask.
+  - **The four states that must be distinguishable:**
+    | state | meaning |
+    |---|---|
+    | `direct` | never relayed — a direct connection from the start |
+    | `hole_punched` | started relayed, DCUtR upgraded it to direct |
+    | `relayed` | still on the circuit — the punch failed and the RELAY is carrying the session live |
+    | `mailbox` | no live connection at all; store-and-forward |
+  - **What already exists (in pieces, in the logs — none of it queryable):**
+    - *Am I NAT'd?* AutoNAT computes it. `CelloNode.getDialability()` → `{dialable, publicAddr}`;
+      `dialable: false` means nothing outside reaches you directly. Logged as
+      `transport.autonat.result`. **Not in `cello_status`.**
+    - *Did this connection come through a relay?* `session.transport.connected` logs the address,
+      and a relayed one contains `/p2p-circuit`. **Not stored on the session.**
+    - *Is there a direct connection right now?* `CelloNode.hasDirectConnectionTo(peerId)` — true only
+      for an open, non-circuit connection.
+    - *Did it go to the mailbox?* This one IS visible to the caller: `cello_send` returns
+      `delivered: true`, or `ok: false, reason: "dispatched_to_relay"`.
+  - **The actual gap:** `direct` and `hole_punched` CANNOT be told apart. `hasDirectConnectionTo`
+    reports only the CURRENT state — it cannot say whether the connection BEGAN relayed. And
+    nothing emits a DCUtR upgrade event, so the moment of the punch is invisible. We have never once
+    observed a successful hole punch in production, and as things stand we could not tell if we had.
+  - **Build:**
+    1. Record the path the session STARTED on (the address is already in hand at
+       `session.transport.connected`).
+    2. Detect the upgrade — watch `hasDirectConnectionTo` flip false→true while a circuit connection
+       exists — and emit a named event (`session.transport.upgraded`).
+    3. Store `transport_path` on the session; expose it in `cello_sessions` / `cello_status`,
+       alongside a `self_dialable` flag from AutoNAT so an agent knows it is behind NAT.
+  - **Why it matters beyond tidiness:** the relayed-fallback path is CELLO's answer for hostile
+    networks, and it is the path we can least afford to be blind on — a relayed session pays for
+    every byte through a third party, and under the relay's old default limits it would also have
+    been silently capped at 2 minutes. An operator asking "why is this slow" deserves an answer, and
+    `DOD-NAT-REACHABILITY-1` was only found because someone happened to read the daemon log by hand.
+
 - **`DOD-RELAY-REDUNDANCY-1` — an agent reserves with exactly ONE relay. Its inbound reachability
   therefore rests on a single relay.** Left open deliberately when `DOD-NAT-REACHABILITY-1` closed
   (2026-07-14). Inbound works; it just has no redundancy behind it.
