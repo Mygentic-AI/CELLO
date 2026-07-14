@@ -941,6 +941,89 @@ therefore *untested by construction*. Verify per node with `pg_publication_table
 
 ---
 
+### 2026-07-14 — Entry 12: DESIGN NOTE — DOD-REGISTRY-1 (written before any code)
+
+**Target behavior (one sentence).** A client, offline from the portal, learns a type's class /
+lifecycle / default-TTL / display-label by fetching ONE portal-signed document the directory serves as
+opaque bytes — and a type ABSENT from it is valid-but-unclassified, never rejected.
+
+**Spec anchors.** Spec §15.2.5 (the registry becomes served data, amends §14.8's shipped-code
+registry), §14.8. Determination §3.4 fixes the transport: `op: registry-publish` (signed, role
+`registry`) stores the doc; public `GET /registry` serves it as opaque bytes exactly like
+`GET /manifest`. Decisions: **M10-D9** (a DEDICATED registry KMS key — not officers, not the submission
+key; clients pin its pubkey at build time), **review F7** (INV-CANONICAL is scoped to the ENVELOPE; the
+registry is NOT content-addressed and deliberately follows the MANIFEST's canonical-JSON convention so
+the client reuses the one shipped, proven verifier rather than growing a second signed-JSON-vs-CBOR
+path).
+
+**The reuse that defines this unit.** `core/crypto/src/manifest.ts` already has `canonicalManifestBody`
+(recursive key-sort, no whitespace, all fields except `signatures`) + Ed25519 verification + monotonic
+`version` + `not_before`/`expires`. The registry document is the SAME shape with a different body, and
+the client poller is the SAME shape as `http-manifest-poll.ts` (verify against the pinned pubkey,
+anti-rollback, every failure leaves the cache UNTOUCHED). Building REGISTRY-1 is largely *parameterizing
+the manifest machinery for a second document*, not inventing a distribution path.
+
+**Producer/consumer chain.**
+- PRODUCER: the portal composes `{ version, not_before?, expires?, types: { <type> → {class, status:
+  active|deprecated|retired, default_ttl_days, label} } }`, canonicalizes it, signs with the dedicated
+  registry KMS key, and submits via `op: registry-publish`.
+- CONSUMER 1 — the directory at publish: `verifySignedRequest(..., "registry")` (the SAME chokepoint
+  helper, role `registry`), then stores the doc as OPAQUE BYTES. **The directory does NOT verify the
+  INNER registry signature** — clients do. It refuses `version <` stored (anti-rollback as hygiene).
+- CONSUMER 2 — the directory at `GET /registry`: serves the stored bytes verbatim, no interpretation
+  (INV-DIR-DUMB — same as `GET /manifest`).
+- CONSUMER 3 — the client: fetches, verifies the inner signature against the BUILD-TIME-PINNED registry
+  pubkey, checks anti-rollback + `expires`, caches with TTL. An absent type ⇒ valid-but-unclassified
+  (INV-TYPE-CARRY). Every verification failure leaves the last-good cache in place — a bad registry
+  never blanks classification.
+
+**The seam.** trustless-cello: a `registry_documents` store (or a single-row table — the doc is a
+singleton, latest-version-wins) + the `registry-publish` op in `signal-write.ts` (it already
+role-parameterizes auth) + the public `GET /registry` route. cello-client: a registry poller mirroring
+`http-manifest-poll.ts`, exposing "class/label/ttl for a type string, or unclassified." **The directory
+never parses the registry body; the client never treats an absent type as invalid.**
+
+**Invariants at stake.** INV-DIR-DUMB — the directory serves bytes, verifies only the OUTER
+role-`registry` submission signature, never the inner document. INV-TYPE-CARRY — absent type is
+first-class, not an error; this is the whole reason the registry is DATA not code. INV-ZERO-BUMP — a
+registry update requires NO release anywhere: the portal publishes a new version and clients pick it up
+on their next poll. **INV-CANONICAL is deliberately NOT extended here** (F7) — the registry is
+canonical-JSON, not CBOR; state that in the unit so its reviewer does not trip on it.
+
+**Approach + rejected alternative.** Reuse the manifest's canonical-JSON + Ed25519 + monotonic-version
+machinery for a second signed document. REJECTED: making the registry a content-addressed CBOR envelope
+like a trust signal — it is not a hashed, four-party-agreed object; it is a singleton the portal owns
+and rotates, and forcing it through the envelope's cross-party hash discipline would grow a second
+canonical path (F7's exact concern) for no benefit. REJECTED: the directory verifying the inner
+signature — that would make the directory interpret the document (INV-DIR-DUMB) and duplicate a check
+the client must do anyway against its own pinned key.
+
+**Falsification pass.** (1) Does the manifest verifier take a caller-supplied signing key, or is it
+hardcoded to officer keys? — VERIFY at unit start (`canonicalManifestBody` is generic, but the verify
+wrapper may assume officer thresholds; the registry is a SINGLE dedicated key, not a T-of-N officer
+set, so the signature-check shape differs and must be checked, not assumed). (2) Does `registry-publish`
+fit `verifySignedRequest` as-is? — it needs role `registry` (already a parameter) and NO envelope
+re-hash (it is not an envelope), so it is a DIFFERENT body path than submit — confirm the helper's auth
+half is cleanly separable from submit's envelope half (it is — the helper stops at signature; the
+envelope work is submit-only). (3) Anti-rollback: is `version` compared as a number or a string? — a
+string compare makes `10 < 9` — pin it as an integer. (4) What breaks if the registry is EMPTY / never
+published? — every type is unclassified, which is exactly INV-TYPE-CARRY's benign default; the client
+must not hard-fail on a missing registry.
+
+**Decisions this note makes.** (1) Registry doc = manifest-shaped canonical JSON, dedicated registry
+KMS key, build-time pinned client pubkey (graduates M10-D9's mechanics). (2) The directory stores +
+serves opaque bytes and verifies only the OUTER submission signature, never the inner doc. (3)
+`registry-publish` reuses `verifySignedRequest(role=registry)` with no envelope re-hash. (4) Registry is
+canonical-JSON, INV-CANONICAL (CBOR/envelope) explicitly does NOT apply.
+
+**Test plan sketch.** Directory: publish with a registry-role key stores the bytes; a submitter-role
+key is refused (wrong role); `version <` stored is refused (anti-rollback); `GET /registry` returns the
+exact stored bytes; an unsigned/forged publish is refused. Client: a valid doc verifies against the
+pinned pubkey and classifies a known type; an absent type returns unclassified (not an error); a
+rollback / bad-signature / expired doc leaves the last-good cache untouched; an EMPTY/never-published
+registry yields all-unclassified without error. Enforcer: the live journey later carries a registry
+entry for phone/email through to the LLM's framing.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
