@@ -1691,6 +1691,29 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     keyProvider,
     listenAddresses: opts.listenAddresses ?? ["/ip4/127.0.0.1/tcp/0"],
     transportPrivateKey: opts.transportPrivateKey,
+    // DOD-NAT-REACHABILITY-1 — THE ROOT CAUSE of "agents cannot get a reservation".
+    //
+    // The relay was running libp2p's DEFAULTS, which are sized for a public DHT where
+    // relaying is a courtesy, not the product:
+    //   * maxReservations: 15 — and a reservation is held for its FULL TTL even after
+    //     the client disconnects. Every CELLO agent needs one, and every daemon restart
+    //     mints a fresh peer id (new transport key) that consumes a NEW slot rather than
+    //     reusing the old one. Fifteen slots are gone almost immediately in real use —
+    //     after which the relay completes the handshake and silently grants NOTHING, so
+    //     agents come up looking healthy and reachable by nobody.
+    //   * applyDefaultLimit: true — relayed connections are capped at 2 minutes and
+    //     128 KiB. That is fatal for the case that matters most: where the hole punch
+    //     FAILS (symmetric NAT, strict corporate firewall) the relayed connection is not
+    //     a fallback, it IS the session, and it must last as long as the conversation.
+    //
+    // For a relay whose entire job is carrying CELLO sessions, both defaults are wrong.
+    relayServer: {
+      enabled: true,
+      reservations: {
+        maxReservations: 4096,
+        applyDefaultLimit: false,
+      },
+    },
   });
   await node.start();
 
