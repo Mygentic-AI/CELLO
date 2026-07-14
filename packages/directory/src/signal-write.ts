@@ -574,6 +574,106 @@ export async function publishRegistry(args: {
   }
 }
 
+/** The query request body (determination §3.3 arm (c) — verified-account-facts). */
+interface AccountFactsQueryRequest {
+  v: 1;
+  op: "query";
+  query: "account-facts";
+  account_id: string;
+  issued_at: number;
+}
+
+/**
+ * What the directory already knows about an account's verified facts — PRESENCE + STUB ONLY, never
+ * recoverable PII. The mint (DOD-MINT-INTERNAL-1) reads this to compose phone/email envelopes: the
+ * portal holds NO phone data (investigation §2), so the verified fact must come from here, and the
+ * mint is a READ of an already-verified fact, not a re-verification.
+ */
+export interface AccountFacts {
+  /** `phone_stub_hash` is NOT NULL for every account, so a known account always has a verified phone. */
+  phone: { verified: boolean; stub: string | null };
+  /** `email_stub_hash` is nullable — email may not be verified. */
+  email: { verified: boolean; stub: string | null };
+}
+
+export type AccountFactsResult =
+  | { found: true; facts: AccountFacts }
+  | { found: false };
+
+/**
+ * M10 / DOD-MINT-INTERNAL-1 dep — the verified-account-facts read (determination §3.3 arm (c)).
+ *
+ * Signed with a `submitter` key (the portal, which is about to MINT from these facts). Returns
+ * presence booleans + the stub HASHES the directory already stores — never the phone number, never
+ * the email address. The stubs are themselves SHA-256 stubs (no-PII-in-directory invariant), so even
+ * the returned value is non-recoverable.
+ *
+ * A missing account is `found: false`, NOT an error and NOT an empty-but-present fact set — the caller
+ * must distinguish "no such account" from "account with no verified email." ABSENT IS NOT FINE: a
+ * mint must never attest a fact for an account the directory does not know.
+ */
+export async function queryAccountFacts(args: {
+  pool: Pool;
+  logger: WriteLogger;
+  bodyCbor: Uint8Array;
+  signerPubkeyHex: string;
+  signatureHex: string;
+  correlationId: string;
+  nowSec?: number;
+}): Promise<AccountFactsResult> {
+  const { pool, logger, bodyCbor, signerPubkeyHex, signatureHex, correlationId } = args;
+  const nowSec = args.nowSec ?? Math.floor(Date.now() / 1000);
+
+  const reject = (e: SubmitRejected): never => {
+    logger.warn("signal.query.rejected", { reason: e.reason, detail: e.detail, issuer: signerPubkeyHex.slice(0, 16), correlationId });
+    throw e;
+  };
+
+  try {
+    await verifySignedRequest(pool, signerPubkeyHex, signatureHex, bodyCbor, "submitter");
+
+    let decoded: unknown;
+    try {
+      decoded = decodeCbor(bodyCbor);
+    } catch (err) {
+      throw new SubmitRejected("malformed_request", `body is not decodable CBOR: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const r = decoded as Partial<AccountFactsQueryRequest>;
+    if (r === null || typeof r !== "object") throw new SubmitRejected("malformed_request", "body is not a map");
+    if (r.v !== 1) throw new SubmitRejected("malformed_request", `unsupported request version ${String(r.v)}`);
+    if (r.op !== "query" || r.query !== "account-facts") throw new SubmitRejected("malformed_request", `unsupported query ${String(r.op)}/${String(r.query)}`);
+    if (typeof r.account_id !== "string" || r.account_id.length === 0) throw new SubmitRejected("malformed_request", "account_id is required");
+    if (typeof r.issued_at !== "number" || !Number.isInteger(r.issued_at)) throw new SubmitRejected("malformed_request", "issued_at must be an integer (epoch SECONDS)");
+    if (Math.abs(nowSec - r.issued_at) > CLOCK_SKEW_SECONDS) {
+      throw new SubmitRejected("stale_request", `issued_at ${r.issued_at} is more than ${CLOCK_SKEW_SECONDS}s from this node's clock (${nowSec})`);
+    }
+
+    const { rows } = await pool.query(
+      "SELECT phone_stub_hash, email_stub_hash FROM user_accounts WHERE account_id = $1",
+      [r.account_id],
+    );
+    if (rows.length === 0) {
+      logger.info("signal.query.account_facts", { accountId: r.account_id, found: false, correlationId });
+      return { found: false };
+    }
+    const { phone_stub_hash, email_stub_hash } = rows[0] as { phone_stub_hash: string | null; email_stub_hash: string | null };
+    logger.info("signal.query.account_facts", {
+      accountId: r.account_id, found: true,
+      phoneVerified: phone_stub_hash !== null, emailVerified: email_stub_hash !== null, correlationId,
+    });
+    return {
+      found: true,
+      facts: {
+        phone: { verified: phone_stub_hash !== null, stub: phone_stub_hash },
+        email: { verified: email_stub_hash !== null, stub: email_stub_hash },
+      },
+    };
+  } catch (err) {
+    if (err instanceof SubmitRejected) return reject(err);
+    throw err;
+  }
+}
+
 /** Read the currently-served registry document bytes (for GET /registry). Null if none published. */
 export async function getRegistryDocument(pool: Pool): Promise<{ version: number; document: Buffer } | null> {
   const { rows } = await pool.query("SELECT version, document FROM registry_documents WHERE id = 1");

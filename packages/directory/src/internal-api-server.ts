@@ -38,7 +38,7 @@ import type { KeyProvider } from "@cello-protocol/crypto";
 import { issuePreAuthToken, issuePreAuthCapability } from "./pre-auth-token-repository.js";
 import { listAccountAgentsWithPresence, PRESENCE_NODE_FRESHNESS_MS } from "./agent-presence-repository.js";
 import { validateWritePayload } from "./agent-write-validation.js";
-import { submitSignal, revokeSignal, publishRegistry, getRegistryDocument, SubmitRejected } from "./signal-write.js";
+import { submitSignal, revokeSignal, publishRegistry, getRegistryDocument, queryAccountFacts, SubmitRejected } from "./signal-write.js";
 import {
   isAgentOwnedByAccount,
   applyRevocationFlag,
@@ -590,6 +590,38 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
         logger.error("signal.registry.serve_failed", { reason: err instanceof Error ? err.message : String(err), correlationId });
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "registry unavailable" }));
+      }
+      return;
+    }
+
+    // ── M10 / DOD-MINT-INTERNAL-1 dep: verified-account-facts read (signed, role submitter) ──────
+    if (req.method === "POST" && req.url === "/internal/signal/query") {
+      let body: Buffer;
+      try {
+        body = await readBody(req);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "could not read request body" }));
+        return;
+      }
+      try {
+        const result = await queryAccountFacts({
+          pool, logger, bodyCbor: new Uint8Array(body),
+          signerPubkeyHex: String(req.headers["x-cello-signer-pubkey"] ?? ""),
+          signatureHex: String(req.headers["x-cello-signature"] ?? ""),
+          correlationId,
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        if (err instanceof SubmitRejected) {
+          res.writeHead(422, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err.reason, detail: err.detail }));
+        } else {
+          logger.error("signal.query.failed", { reason: err instanceof Error ? err.message : String(err), correlationId });
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "query failed" }));
+        }
       }
       return;
     }
