@@ -1251,6 +1251,60 @@ running directory); client generic delivery into `wallet_trust_signals` + re-poi
 `inbound-sessions.ts:601`; the M8 retirement (one commit); the prod KMS signer (needs a created KMS
 key); enforcer = DOD-T1-JOURNEY-1 live.
 
+### 2026-07-15 — Entry 16: mint ORCHESTRATION built + reviewed — the portal→directory half is PROVEN
+
+**Built (cello-portal, `14b861a` + review `966da95`).** `directory-submit.ts`: `postSignedSubmission`,
+`fetchAccountFacts`, and `mintAccountSignals` (the orchestration: read arm-c facts → compose → sign →
+submit through the chokepoint). A transport distinct from `HttpDirectoryClient` — the signal routes are
+signature-authed with CBOR bodies, not API-key JSON. **This closes the portal→directory HALF of the T1
+journey, proven end-to-end LOCALLY** against a server that runs the directory's own re-hash check, so
+the submissions are genuinely chokepoint-acceptable.
+
+**Review: no blocking findings, and the reviewer independently cross-checked the wire contract**
+byte-for-byte — the query request shape, the `CELLO-TSIG-REQ-v1` TBS domain, the header names, and the
+outage/unknown/unverified/rejection error trichotomy all match the directory's parsers. Three
+non-blocking fixes:
+- **MEDIUM — the auth path had ZERO test teeth.** The stub ignored the signature and re-hashed only the
+  envelope, so the entire request-signature construction (domain, headers, `signBody`) was unasserted —
+  a wrong-domain or missing-signature regression would have passed all tests, caught by NEITHER side's
+  unit tests (the directory uses its own TBS builder), only by the live journey. The stub now runs the
+  directory's actual Ed25519 signature check and a test proves a wrong-key submission is refused. **Same
+  pattern as every other review this session: a test that looked like it covered the path but never fed
+  the failing input.**
+- **LOW-1 — partial mint.** Phone-succeeds-then-email-throws discarded the phone success. Now per-type
+  failures are collected (`failed[]`) not thrown, so the caller retries only what failed; a whole-mint
+  retry is safe (duplicate submit is a directory no-op). Only a facts-read failure (directory down
+  before anything composes) throws.
+- **LOW-2 — an overstated zero-bump comment** ("adding a type is a compose fn + registry entry and
+  NOTHING else") — `mintAccountSignals` also carries a hardcoded type list. Corrected to name that loop
+  as the third portal-side edit site (still nothing in directory or client).
+
+**Known property (deferred, journaled):** a retry after partial failure re-composes with a fresh
+`issued_at` → a new hash → a SECOND phone signal, not a supersession — because the mint does not query
+existing signals. Bounded and forgivable for v1 (two "has verified phone" signals coexist; untidy, not
+incorrect); the proper fix is supersede-on-re-mint, which needs the signal-lookup read, a later unit.
+
+**WHERE THE MILESTONE STANDS — the isolated + locally-provable surface is COMPLETE.** Tonight built and
+reviewed across three repos: the canonical envelope (CBOR-1 ✅ cross-party, published), both client
+stores, the full directory write/read surface (submit / revoke / registry / account-facts), and the
+portal mint (compose → sign → orchestrate → the directory notarizes). ~135 tests, one npm cascade, 11
+review passes. **The core value — portal reads verified facts → composes → the directory notarizes —
+works end to end locally.**
+
+**THE REMAINING PHASE IS DEPLOY-COUPLED / ALL-OR-NOTHING, and is a clean handoff boundary:**
+- **The M8 retirement** (holder delivery into `wallet_trust_signals` + re-point `inbound-sessions.ts:601`
+  + wire `handoff.ts` onto `mintAccountSignals` + drop the M8 `trust_signals` table + retire
+  `SIGNAL_KINDS` — ONE commit, M10-D18). All-or-nothing across three repos; its live proof is the
+  delivery pipe. Wants a fresh, fully-testable run — starting without finishing leaves the pipe broken.
+- **The directory deploy** — the image is verified deploy-ready (build green, V46 additive, existing
+  routes pass), BUT it has a MANDATORY relay cascade (STATE.md) not yet understood, on shared dev the
+  demo agent uses. Andre says "deploy" → it runs (then SSM bump, replication re-run, cascade, enroll
+  the dev signer pubkey, STATE.md).
+- **The prod KMS signer** (needs a created KMS key — infra) and the **`latest` promotion** (Andre's).
+- **Held deliberately:** the Tier 0 cascade stays on beta (it ships the daemon FK-enforcement change;
+  no user benefit until the feature is live); registry client poller + consume path are ahead of their
+  Tier-2 consumers (NO CONSUMER NO SHIP).
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
