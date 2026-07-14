@@ -1070,6 +1070,46 @@ rollback / bad-signature / expired doc leaves the last-good cache untouched; an 
 registry yields all-unclassified without error. Enforcer: the live journey later carries a registry
 entry for phone/email through to the LLM's framing.
 
+### 2026-07-14 — Entry 13: DOD-REGISTRY-1 directory half — built + reviewed, no blocking findings
+
+**Built.** `publishRegistry` + `getRegistryDocument` in `signal-write.ts`, `registry_documents`
+singleton folded into V46, `POST /internal/signal/registry-publish` (signed, role `registry`) + public
+`GET /registry` (opaque bytes). The directory verifies only the OUTER role-`registry` submission
+signature and serves the document as bytes it never parses (INV-DIR-DUMB); the CLIENT verifies the
+inner signature against its pinned key and is the authoritative anti-rollback gate.
+
+**Reused, not reinvented.** Falsification at unit start confirmed `verifyManifest` is a T-of-N
+officer-threshold verifier — wrong shape for the registry's single dedicated key — so REGISTRY reuses
+`canonicalManifestBody` (the canonical-JSON convention) + a plain single-key verify, and the transport
+reuses the chokepoint's `verifySignedRequest(role=registry)`. Per STORE-DIR F7, INV-CANONICAL (the
+four-party envelope hash) deliberately does NOT apply — the registry is canonical-JSON, not
+content-addressed CBOR.
+
+**Review: clean, no blocking.** Role separation airtight (a submitter key cannot publish; DB CHECK on
+the role enum), public GET safe (no DoS surface, 404-when-absent leaks nothing), bytea round-trip
+clean, no per-type construct. Three non-blocking fixes:
+- **F1 — the code contradicted its own comments on the anti-rollback line.** `WHERE ... >=` stored an
+  equal version, but two comments said equal-version was a no-op. `>=` permits a same-version republish
+  with DIFFERENT bytes — the version stops uniquely identifying content, and a cached-v5 client
+  disagrees with a fresh-v5 client. Resolved to strictly-greater `>` (a content change MUST bump the
+  version; identical re-publish is an idempotent no-op), comments made to match. The test now
+  exercises the equal-version case — previously a `>=`↔`>` flip passed all tests silently.
+- **F2 — version precision.** BIGINT column, `Number.isInteger` validation, `Number()` readback — a
+  value past 2^53 could land/serve as N±1, corrupting the anti-rollback ordering. Bounded at
+  MAX_SAFE_INTEGER, consistent with the envelope's integer discipline. Not reachable with a realistic
+  counter, but one line.
+- **Test quality:** the "adding a type requires no release" test was decorative (proved only what the
+  round-trip test already did); rewritten to pin the observable half with an honest comment that no
+  round-trip test can prove the ABSENCE of a type branch. The "missing document" branch got a real test.
+
+Verified `ON CONFLICT DO UPDATE ... WHERE <false>` returns rowCount 0 without erroring against real
+Postgres, so the `stored` signal is sound. 11/11 green.
+
+**This closes the DIRECTORY-SIDE Tier 0/1 write/read surface** — CBOR-1, both stores, DIR-WRITE-1,
+REVOKE-1, REGISTRY-1 dir half, all built and reviewed. What remains is a different character: portal
+(MINT-INTERNAL-1), client (registry poller + envelope delivery), and the batched Tier 1 DEPLOY (V46 +
+routes + TLS listener + KMS keys + issuer enrollment) that the live journeys need.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client

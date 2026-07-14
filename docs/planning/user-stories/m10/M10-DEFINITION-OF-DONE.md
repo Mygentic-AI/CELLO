@@ -235,7 +235,16 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   a portal-signed document (type → class, lifecycle, default TTL, display label) the directory
   serves as opaque bytes; client fetches + caches with TTL; absent type =
   valid-but-unclassified (INV-TYPE-CARRY); registry update requires NO release anywhere.
-  Design note first (format + signing key). — ❌
+  Design note first (format + signing key). —
+  🟠 (2026-07-14 — DIRECTORY HALF built + reviewed, 11/11 on real Postgres. `publishRegistry`
+  (role `registry`, strictly-greater anti-rollback), `getRegistryDocument`, `registry_documents`
+  singleton in V46, `POST /internal/signal/registry-publish` + public `GET /registry` (opaque bytes,
+  INV-DIR-DUMB — the directory never parses the doc). Reviewed → no blocking; F1 (`>=` vs its own
+  comments) resolved to `>`, F2 (version precision bound), test gaps filled. Design note Entry 12.
+  **REMAINING (client half + deploy):** the cello-client registry POLLER (mirror
+  `http-manifest-poll.ts`: verify inner sig vs pinned pubkey, anti-rollback, failure-leaves-cache,
+  absent type = unclassified), shipped via the publish cascade; the registry key created + enrolled;
+  route behind the Tier 1 TLS listener. → Entry 13.)
 - **DOD-MINT-INTERNAL-1** — the portal mints **phone** and **email** as real envelopes (the
   §14.10 backfill), **as ACCOUNT-subject signals (`subject_kind: account`, M10-D5)** — one
   envelope per fact, presentable by every agent under the account, agent-add a no-op:
