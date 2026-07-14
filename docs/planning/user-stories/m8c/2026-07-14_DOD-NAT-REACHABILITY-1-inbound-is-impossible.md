@@ -314,6 +314,41 @@ change is three lines.
 
 ---
 
+## 6½. THE ROOT CAUSE OF "no reservation" — found live, 2026-07-14, AFTER the client fix
+
+> **The relay was running libp2p's stock `circuitRelayServer()` defaults, and they are
+> sized for a public DHT where relaying is a courtesy — not for CELLO, where a relay
+> reservation IS the product.**
+
+Two defaults, both fatal:
+
+| default | value | why it breaks CELLO |
+|---|---|---|
+| `maxReservations` | **15** | A reservation is held for its FULL TTL **even after the client disconnects**. Every agent needs one, and **every daemon restart mints a fresh peer id** (new transport key) that consumes a **NEW** slot instead of reusing the old one. Fifteen slots are gone almost immediately in ordinary use. |
+| `applyDefaultLimit` | **true** | Relayed connections capped at **2 minutes / 128 KiB**. Fatal for the case that matters most: where the hole punch FAILS, the relayed connection is not a fallback — it **IS** the session. |
+
+**And the failure is SILENT, which is why it took so long.** When the relay is out of
+slots it does **not** error. It completes the handshake and grants **nothing**. The
+client's `start()` succeeds, the node comes up, and it simply has no `/p2p-circuit`
+address: **healthy-looking, and reachable by nobody.** This is why agents intermittently
+got a reservation and then stopped getting one as the day's restarts burned the slots.
+
+Proof (`packages/relay/src/__tests__/nat-reachability-relay-limits.test.ts` L1): with
+`maxReservations: 2`, the third agent's `start()` **succeeds** and it gets no circuit
+address. Exactly the production shape.
+
+**Fix:** `relayServer: { enabled: true, reservations: { maxReservations: 4096,
+applyDefaultLimit: false } }` in `createRelayNode` (`packages/relay/src/relay-node.ts`),
+carried by `@cello-protocol/transport` ≥ 0.0.22's `relayServer` passthrough.
+
+**Corollary the client had to learn too:** a reservation is SCARCE. An early client
+design probed each relay on a throwaway node and then reserved AGAIN on the real
+receiver — **two slots consumed per agent to obtain one**, with the throwaway's slot
+pinned for hours. Deleted. The receiver now attempts the reservation on itself and
+KEEPS the node that succeeds (daemon ≥ 0.0.59).
+
+---
+
 ## 7. False trails already burned — DO NOT REPEAT THESE
 
 **7a. `primary_pubkey` from `register-agent` is NOT the agent's address.** It is the FROST group key
@@ -330,6 +365,17 @@ restart was very nearly performed to "fix" a problem that did not exist.
 race — the client submits the leaf hash before the relay has registered the session. It is swallowed,
 and it fires on *fast* (bash-driven) clients, not on every session. See
 [[2026-07-14_frost-ceremony-latency-trace]]. Not this sprint. Do not get pulled into it.
+
+**7e. The relays are NOT misconfigured, and their peer IDs are NOT swapped.** During the
+2026-07-14 hunt I "found" that `relay-eu1` and `relay-ap1` advertised each other's peer
+IDs, and nearly filed it as an infra bug. It was an artifact of my **own probe script**:
+the directory's log event prints `relayPeerIds` as a bare array, and I *assumed* it was in
+us1/eu1/ap1 order and hand-built the multiaddrs from that assumption. The true pairing —
+obtained by dialing each DNS name with **no** expected peer id, so whoever answers
+identifies itself — is `us1 = 12D3KooWDbUV…`, `eu1 = 12D3KooWHjs…`, `ap1 = 12D3KooWAcD…`.
+All three relays reserve correctly in isolation. **If you pair a peer id with an address
+yourself, you have invented data.** (This is §7a repeating itself: *check WHICH KEY you
+looked up first.*)
 
 **7d. Do not measure anything through the MCP tools.** Tool-level timestamps measure the LLM, not
 CELLO — a round trip reads as 41 s when the wire is 2 ms. **The daemon log is the only honest
