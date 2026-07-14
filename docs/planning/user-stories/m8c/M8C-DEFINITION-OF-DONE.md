@@ -1108,7 +1108,18 @@ bare `{type:"timeout"}` — verified in `daemon.ts`, not assumed). §3's "exit 0
   [[2026-07-14_DOD-NAT-REACHABILITY-1-inbound-is-impossible]]: demo (public) initiates to a NAT'd
   laptop → `session.transport.connected`, laptop reply `delivered: true` (NOT
   `dispatched_to_relay`), laptop advertises a `/p2p-circuit` addr — proven with daemon logs on
-  both sides, never MCP-tool timestamps. — 🟡 (2026-07-14 — client parts 1-3a built on
+  both sides, never MCP-tool timestamps. — ✅ **PROVEN LIVE 2026-07-14 ~17:55 UTC.** The demo
+  agent (public EIP, us-east-1) initiated a session INTO this NAT'd laptop and the daemon logged
+  `session.transport.connected` on
+  `/dns4/relay-us1…/p2p-circuit/p2p/12D3KooWD2e8…` — it dialed IN, through the relay circuit
+  address, with **no `counterparty_dial_failed`**. Bidirectional traffic followed on that live
+  connection: the demo's message arrived, and the laptop's reply returned
+  **`delivered: true`** — NOT `dispatched_to_relay`. All four agents on the laptop came up with
+  `circuitAddrs: 5` and zero relay rejections. DCUtR did not fire (no punch on this path), which
+  exercises the acceptance criterion that matters MOST: **the relayed connection stayed up and
+  carried the session live.** Session `3a6acba8e3d04b31ad6991ece5aeb6ae`. Proven on PUBLISHED
+  packages (daemon 0.0.59 / cli 0.0.57 / transport 0.0.22, both ends) against the DEPLOYED relay
+  — not a working tree. — (2026-07-14 — client parts 1-3a built on
   cello-client `nat-reachability-1` (`f650c71` transport: dcutr everywhere + runOnLimitedConnection
   + HOP gated to service nodes; `2b011d0` daemon: 0.0.0.0 default + reservations from persisted
   endpoints + gater set + NO_FATAL resilience; `d721542` review fixes (wildcard configuredHosts
