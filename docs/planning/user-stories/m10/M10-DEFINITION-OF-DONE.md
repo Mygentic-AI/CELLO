@@ -266,13 +266,16 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   re-verification), and the architecture half decides that read's shape.** Registry entries for
   both types. Existing accounts get them on next portal touch; new registrations mint at verify
   time. —
-  ❌ (design note = Entry 14. **Directory DEPENDENCY built + green:** the verified-account-facts read
-  (arm c — `queryAccountFacts`, `POST /internal/signal/query`, presence+stubs only, never PII, 5
-  tests + 78 across the directory suite) → Entry 14 / commit `01dbbd00`. **Still owed (the unit
-  proper):** the portal `Signer` (KMS prod / file dev, M10-D6) + the mint; client generic delivery
-  into `wallet_trust_signals` + re-point `inbound-sessions.ts:601`; the M8 retirement (drop table +
-  `SIGNAL_KINDS` + arms + re-point `handoff.ts` and the spine test, one commit); enforcer =
-  DOD-T1-JOURNEY-1 live.)
+  🟠 (design note = Entry 14. **Built + green so far:** (1) the directory verified-account-facts read
+  (arm c — `queryAccountFacts`, presence+stubs only, never PII, reviewed); (2) the portal **mint +
+  Signer** (`cello-portal` `mint.ts`/`submission-signer.ts` — account-subject phone/email envelopes,
+  no-PII payload, dev seed-signer, **prod fails closed** M10-D6; 14 tests; submission body cross-checked
+  field-for-field against the directory's `parseRequest` + TBS domain — directory-acceptable). **Still
+  owed (deploy-coupled):** wire the mint into the portal DirectoryClient (needs a running directory);
+  client generic delivery into `wallet_trust_signals` + re-point `inbound-sessions.ts:601`; the M8
+  retirement (drop table + `SIGNAL_KINDS` + arms + re-point `handoff.ts` and the spine test, ONE
+  commit); the **prod KMS signer** (needs a created KMS key — infra); enforcer = DOD-T1-JOURNEY-1 live.
+  → Entries 14, 15.)
 - **DOD-T1-JOURNEY-1** — **live journey, first half:** for a real agent, portal mints phone +
   email → directory notarizes (visible in `signal_records`, replicated to all 3 nodes) → holder
   daemon holds both envelopes and re-verifies their hashes locally. Real portal process, real
