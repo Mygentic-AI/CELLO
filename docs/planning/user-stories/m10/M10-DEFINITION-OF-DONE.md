@@ -220,7 +220,17 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   records unrevocable after a key rotation; determination §3.5, review F4), exact
   `issuer_pubkey` match for `issuer_kind: agent` (post-v1); status change replicates; the subject
   cannot revoke (selective disclosure is their lever); expiry is automatic via `expires_at`, not a
-  write. — ❌
+  write. —
+  🟡 (2026-07-14 — BUILT + RUN GREEN, review in flight. `revokeSignal` shares the chokepoint's
+  `verifySignedRequest` (role-based `submitter` auth — a DIFFERENT active key revokes A's record,
+  proving key-rotation survival; registry key refused, distinctly named). Out-of-order revoke writes
+  a **tombstone** (STORE-DIR F3, closed at source) — carried by an `is_tombstone` flag added to V46,
+  the effective view aggregating descriptive fields `FILTER (WHERE NOT is_tombstone)` so a placeholder
+  never surfaces over a real subject. `POST /internal/signal/revoke` wired. 8 REVOKE tests + 27 across
+  submit/revoke green on real Postgres. **Known property, journaled:** a compromised `submitter` key
+  can pre-emptively tombstone a not-yet-minted hash (revoked is monotonic) — within the
+  compromised-submitter model, not a new unprivileged vector; defense is revoking the key in
+  `authorized_issuers`. **Owed:** replication proof (three-node, batches with STORE-DIR-1). → Entry 11.)
 - **DOD-REGISTRY-1** — the type registry as served signed data (spec §15.2.5, amended §14.8):
   a portal-signed document (type → class, lifecycle, default TTL, display label) the directory
   serves as opaque bytes; client fetches + caches with TTL; absent type =
