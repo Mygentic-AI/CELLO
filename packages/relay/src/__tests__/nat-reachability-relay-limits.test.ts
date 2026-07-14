@@ -16,22 +16,8 @@
 import { setupV3Tests, createTestScope, describe, it, expect, beforeEach, afterEach } from "@claude-flow/testing";
 import { createNode } from "@cello-protocol/transport";
 import { generateKeypair } from "@cello-protocol/crypto";
-import type { CelloNode } from "@cello-protocol/transport";
 
 setupV3Tests();
-
-const LIBP2P_DEFAULT_MAX_RESERVATIONS = 15;
-
-/** The relay, configured exactly as createRelayNode configures it in production. */
-async function startCelloRelay(): Promise<CelloNode> {
-  const node = await createNode({
-    keyProvider: generateKeypair(),
-    listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
-    relayServer: { enabled: true, reservations: { maxReservations: 4096, applyDefaultLimit: false } },
-  });
-  await node.start();
-  return node;
-}
 
 describe("DOD-NAT-REACHABILITY-1: the relay's reservation limits", () => {
   let scope = createTestScope();

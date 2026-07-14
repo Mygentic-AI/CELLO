@@ -1,0 +1,327 @@
+/**
+ * M10 / DOD-DIR-WRITE-1 — the ONE write path into the directory's trust-signal store.
+ *
+ * ══ THIS MODULE *IS* INV-CHOKEPOINT ════════════════════════════════════════════════════════════
+ * A hash enters `signal_records` ONLY through here, only via a signed submission from a key in
+ * `authorized_issuers`. Everything else is refused, loudly. "Notarized ⇒ scanned-clean-at-birth"
+ * (spec §14.1) is true only because this is the sole door.
+ *
+ * The chokepoint is NET-NEW, not a hardening. Today's reality (investigation §4): ONE static bearer
+ * key, non-constant-time compared, over plaintext HTTP on a public ALB — and it is the SAME secret
+ * the ops-agent holds. Any key-holder can write a trust-signal hash for any account. This REPLACES
+ * that seam for signals (M10-D10); it does not extend it. Extending it would have made the
+ * chokepoint a lie told in a nicer voice.
+ *
+ * ══ THE RE-HASH IS THE WHOLE POINT ═════════════════════════════════════════════════════════════
+ * The submitter sends (envelope bytes, claimed hash). We RE-DERIVE the hash from the bytes with the
+ * shared canonical component (@cello-protocol/protocol-types — the same code the portal, the holder
+ * and the recipient run, proven byte-identical by the frozen cross-party vectors) and REJECT a
+ * mismatch. Without that, a submitter could hand us the hash of one thing and the bytes of another,
+ * and the directory would happily notarize a hash that corresponds to nothing it ever saw.
+ *
+ * A check the submitter performs on its own behalf is not a check.
+ *
+ * ══ TYPE IS OPAQUE HERE. NO BRANCHING ON IT. EVER. (DOD-INV-ZERO-BUMP) ═════════════════════════
+ * This file must never contain a type enum, a `switch (type)`, or a validation that knows what a
+ * type MEANS. A type the directory has never seen must submit, store and serve exactly like a known
+ * one — that is what the zero-bump canary proves, and this handler is where it would first be
+ * betrayed.
+ *
+ * ══ REPLAY IS HARMLESS BY CONSTRUCTION — AND THAT CLAIM IS EARNED, NOT ASSERTED ════════════════
+ * There is deliberately no nonce store. That is only safe because of two rules, each with a negative
+ * test:
+ *   1. A duplicate submit is a STRICT NO-OP. It never touches the existing row — `status` included.
+ *      An `ON CONFLICT DO UPDATE` here would let a replayed submit RESURRECT A REVOKED SIGNAL.
+ *      (The client-side store shipped exactly this bug one tier down and had to have it removed.
+ *      Once is a bug; twice is a pattern — so it is tested on both sides.)
+ *   2. Supersession rides on the new record's own hashed `supersedes_hash`; the old row is never
+ *      mutated to express it. So a replayed submit cannot launder a `revoked` row into `superseded`.
+ * `issued_at` is bounds-checked as hygiene, not as a security control.
+ */
+
+import { createHash } from "node:crypto";
+import { verify } from "@cello-protocol/crypto";
+import { encodeCbor, decodeCbor, hashTrustSignalEnvelope, type TrustSignalEnvelope } from "@cello-protocol/protocol-types";
+import type { Pool } from "pg";
+import type { Logger } from "@cello-protocol/interfaces";
+
+/** Domain separation for the REQUEST signature. Distinct from the envelope's own `CELLO-TSIG-v1`, so
+ *  a signed submission can never be replayed as a signed envelope, or vice versa. */
+export const SIGNAL_REQUEST_DOMAIN = "CELLO-TSIG-REQ-v1";
+
+/** How far a submission's `issued_at` may sit from our clock. Hygiene against a stale captured
+ *  request, NOT a security control — replay-safety comes from the two idempotence rules, not from
+ *  this window (a 9-minute-old replay is just as harmless as a 9-day-old one). */
+const CLOCK_SKEW_SECONDS = 600;
+
+export type IssuerRole = "submitter" | "registry";
+
+/** Every refusal names its CAUSE, not the exit point it surfaced at. An operator reading
+ *  `signal_submission_rejected: envelope_hash_mismatch` knows to look at the submitter's encoder;
+ *  one reading `bad_request` learns nothing and starts guessing. */
+export type SubmitRejection =
+  | "malformed_request"          // the body is not the canonical shape we require
+  | "unknown_issuer"             // the pubkey is not in authorized_issuers at all
+  | "issuer_revoked"             // it is there, and it has been revoked
+  | "issuer_wrong_role"          // it is active, but not a `submitter`
+  | "signature_invalid"          // the signature does not verify against the claimed pubkey
+  | "stale_request"              // issued_at is outside the skew window
+  | "envelope_undecodable"       // the envelope bytes are not a canonical trust-signal envelope
+  | "envelope_hash_mismatch";    // WE re-hashed the bytes and got a different hash — the chokepoint
+
+export class SubmitRejected extends Error {
+  readonly reason: SubmitRejection;
+  /** The upstream cause, preserved. A mapper that collapses many conditions into one terminal string
+   *  must let the real reason survive in the payload, or the operator is sent to the wrong subsystem
+   *  (repo rule: errors name their cause, not their exit point). */
+  readonly detail: string;
+  constructor(reason: SubmitRejection, detail: string) {
+    super(`${reason}: ${detail}`);
+    this.name = "SubmitRejected";
+    this.reason = reason;
+    this.detail = detail;
+  }
+}
+
+/** The signed request envelope (NOT the trust-signal envelope — a different thing, different domain
+ *  tag). Canonical CBOR, so the signer and the verifier agree on the bytes byte-for-byte. */
+export interface SignalSubmitRequest {
+  v: 1;
+  op: "submit";
+  /** The trust-signal envelope, as canonical CBOR bytes. OPAQUE to the transport — we decode it only
+   *  to re-hash it, never to interpret its payload. */
+  envelope: Uint8Array;
+  /** The submitter's claim about the envelope's hash. Checked, never trusted. */
+  signal_hash: string;
+  /** The scanner that cleared this content at birth. THE SUBMITTER'S ASSERTION — the directory cannot
+   *  see the payload and can never re-run the scan. It is inside the SIGNED body precisely because
+   *  outside it, it would be forgeable, and a forged scanner_version is a lie stored as evidence. */
+  scanner_version: string;
+  /** Epoch SECONDS (the protocol's unit everywhere — see the envelope). */
+  issued_at: number;
+}
+
+/** The to-be-signed bytes for a request: domain tag || sha256(canonical body). */
+export function buildSignalRequestTbs(bodyCbor: Uint8Array): Uint8Array {
+  const digest = createHash("sha256").update(bodyCbor).digest();
+  return Buffer.concat([Buffer.from(SIGNAL_REQUEST_DOMAIN, "utf8"), digest]);
+}
+
+const hexToBytes = (h: string): Uint8Array => new Uint8Array(Buffer.from(h, "hex"));
+
+/**
+ * Look the submitter up in `authorized_issuers` and say precisely why it is refused.
+ *
+ * ABSENT IS NOT FINE. A missing row, a revoked key, and a wrong-role key are THREE DIFFERENT
+ * refusals, and each says so. Collapsing them into one `unauthorized` would tell the operator
+ * nothing — and, worse, a `SELECT` that returned no row and was allowed to mean "fine" is exactly
+ * the defect class this project has found five times.
+ */
+async function authorizeIssuer(pool: Pool, pubkey: string, required: IssuerRole): Promise<void> {
+  const { rows } = await pool.query(
+    "SELECT role, status FROM authorized_issuers WHERE pubkey = $1",
+    [pubkey],
+  );
+  if (rows.length === 0) {
+    // Note: an EMPTY authorized_issuers table lands here for every submission — which is the correct
+    // failure for an unseeded directory. It notarizes nothing rather than falling open.
+    throw new SubmitRejected("unknown_issuer", `pubkey ${pubkey.slice(0, 16)}… is not an authorized issuer`);
+  }
+  const { role, status } = rows[0] as { role: string; status: string };
+  if (status !== "active") {
+    throw new SubmitRejected("issuer_revoked", `pubkey ${pubkey.slice(0, 16)}… has status '${status}'`);
+  }
+  if (role !== required) {
+    throw new SubmitRejected("issuer_wrong_role", `pubkey ${pubkey.slice(0, 16)}… has role '${role}', needs '${required}'`);
+  }
+}
+
+/** Decode + shape-check the signed request body. Nothing here interprets the trust signal itself. */
+function parseRequest(bodyCbor: Uint8Array): SignalSubmitRequest {
+  let decoded: unknown;
+  try {
+    decoded = decodeCbor(bodyCbor);
+  } catch (err) {
+    throw new SubmitRejected("malformed_request", `body is not decodable CBOR: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const r = decoded as Partial<SignalSubmitRequest>;
+  if (r === null || typeof r !== "object") throw new SubmitRejected("malformed_request", "body is not a map");
+  if (r.v !== 1) throw new SubmitRejected("malformed_request", `unsupported request version ${String(r.v)}`);
+  if (r.op !== "submit") throw new SubmitRejected("malformed_request", `unsupported op ${String(r.op)}`);
+  if (!(r.envelope instanceof Uint8Array) && !Buffer.isBuffer(r.envelope)) {
+    throw new SubmitRejected("malformed_request", "envelope must be raw CBOR bytes");
+  }
+  if (typeof r.signal_hash !== "string" || !/^[0-9a-f]{64}$/.test(r.signal_hash)) {
+    throw new SubmitRejected("malformed_request", "signal_hash must be 64 lowercase hex chars");
+  }
+  if (typeof r.scanner_version !== "string" || r.scanner_version.length === 0) {
+    throw new SubmitRejected("malformed_request", "scanner_version is required (it is the submitter's signed assertion that the content was scanned)");
+  }
+  if (!Number.isInteger(r.issued_at)) {
+    throw new SubmitRejected("malformed_request", "issued_at must be an integer (epoch SECONDS)");
+  }
+  return r as SignalSubmitRequest;
+}
+
+export interface SubmitResult {
+  signalHash: string;
+  /** True when this node had never seen the hash before. A duplicate is a NO-OP, not an error — the
+   *  portal retries, and a retry must be safe. */
+  inserted: boolean;
+}
+
+/**
+ * The chokepoint. Verify, re-hash, store.
+ *
+ * `acceptingNode` is supplied BY THIS NODE, never taken from the request: it is half the primary key
+ * (M10-D20), and a submitter that could choose it could deliberately collide rows.
+ */
+export async function submitSignal(args: {
+  pool: Pool;
+  logger: Logger;
+  acceptingNode: string;
+  bodyCbor: Uint8Array;
+  signerPubkeyHex: string;
+  signatureHex: string;
+  correlationId: string;
+  nowSec?: number;
+}): Promise<SubmitResult> {
+  const { pool, logger, acceptingNode, bodyCbor, signerPubkeyHex, signatureHex, correlationId } = args;
+  const nowSec = args.nowSec ?? Math.floor(Date.now() / 1000);
+
+  const reject = (e: SubmitRejected): never => {
+    logger.warn("signal.submission.rejected", {
+      reason: e.reason, detail: e.detail, issuer: signerPubkeyHex.slice(0, 16), correlationId,
+    });
+    throw e;
+  };
+
+  try {
+    if (!/^[0-9a-f]{64}$/.test(signerPubkeyHex)) {
+      throw new SubmitRejected("malformed_request", "signer pubkey must be 64 lowercase hex chars");
+    }
+
+    // 1. IS THIS KEY ALLOWED TO WRITE? (Before any crypto — a cheap check first, and it means an
+    //    unknown key never gets to exercise the verifier at all.)
+    await authorizeIssuer(pool, signerPubkeyHex, "submitter");
+
+    // 2. DID THIS KEY ACTUALLY SIGN THESE BYTES?
+    const tbs = buildSignalRequestTbs(bodyCbor);
+    let sigOk = false;
+    try {
+      sigOk = verify(hexToBytes(signerPubkeyHex), tbs, hexToBytes(signatureHex));
+    } catch (err) {
+      throw new SubmitRejected("signature_invalid", `signature could not be checked: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!sigOk) throw new SubmitRejected("signature_invalid", "signature does not verify against the submitter's registered pubkey");
+
+    // 3. Shape.
+    const req = parseRequest(bodyCbor);
+
+    if (Math.abs(nowSec - req.issued_at) > CLOCK_SKEW_SECONDS) {
+      throw new SubmitRejected("stale_request", `issued_at ${req.issued_at} is more than ${CLOCK_SKEW_SECONDS}s from this node's clock (${nowSec})`);
+    }
+
+    // 4. THE CHOKEPOINT: re-derive the hash from the BYTES and refuse a mismatch. We decode the
+    //    envelope ONLY to re-hash it — never to interpret its payload, and never to branch on its
+    //    type.
+    const envelopeBytes = new Uint8Array(req.envelope);
+    let envelope: TrustSignalEnvelope;
+    try {
+      envelope = decodeTrustSignalEnvelope(envelopeBytes);
+    } catch (err) {
+      throw new SubmitRejected("envelope_undecodable", err instanceof Error ? err.message : String(err));
+    }
+
+    const derived = Buffer.from(hashTrustSignalEnvelope(envelope)).toString("hex");
+    if (derived !== req.signal_hash) {
+      // The submitter's claim and the bytes disagree. This is the check that makes "notarized"
+      // mean anything.
+      throw new SubmitRejected(
+        "envelope_hash_mismatch",
+        `submitter claimed ${req.signal_hash} but the envelope bytes hash to ${derived}`,
+      );
+    }
+
+    // 5. Store. STRICT no-op on a duplicate — never an upsert (see the header: an upsert would let a
+    //    replayed submit resurrect a revoked signal).
+    const res = await pool.query(
+      `INSERT INTO signal_records
+         (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type,
+          supersedes_hash, status, scanner_version)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'active',$9)
+       ON CONFLICT (signal_hash, accepting_node) DO NOTHING`,
+      [
+        derived, acceptingNode, envelope.subject_kind, envelope.subject, envelope.issuer_kind,
+        envelope.issuer_pubkey, envelope.type,
+        envelope.supersedes_hash === null ? null : Buffer.from(envelope.supersedes_hash).toString("hex"),
+        req.scanner_version,
+      ],
+    );
+
+    const inserted = (res.rowCount ?? 0) > 0;
+    logger.info("signal.submission.accepted", {
+      signalHash: derived,
+      type: envelope.type,               // an opaque STRING in the log, never a gate
+      issuerKind: envelope.issuer_kind,
+      subjectKind: envelope.subject_kind,
+      acceptingNode,
+      inserted,                          // false = duplicate, a benign no-op
+      correlationId,
+    });
+    return { signalHash: derived, inserted };
+  } catch (err) {
+    if (err instanceof SubmitRejected) return reject(err);
+    throw err;
+  }
+}
+
+/**
+ * Decode canonical envelope bytes back into the envelope.
+ *
+ * The preimage is a fixed-order ARRAY (M10-D15) — element 0 is the domain tag. Refuse anything that
+ * is not exactly that shape: a submission we cannot canonicalize must never be stored "best effort",
+ * because a best-effort hash is a hash two parties can disagree about.
+ */
+function decodeTrustSignalEnvelope(bytes: Uint8Array): TrustSignalEnvelope {
+  const arr = decodeCbor(bytes);
+  if (!Array.isArray(arr) || arr.length !== 11) {
+    throw new Error(`envelope must be an 11-element CBOR array (the fixed preimage), got ${Array.isArray(arr) ? `${arr.length} elements` : typeof arr}`);
+  }
+  const [domain, subject_kind, subject, issuer_kind, issuer_pubkey, type, schema_version, payload, issued_at, expires_at, supersedes_hash] = arr as unknown[];
+  if (domain !== "CELLO-TSIG-v1") {
+    throw new Error(`envelope domain tag is '${String(domain)}', expected 'CELLO-TSIG-v1' — this is not a trust-signal envelope`);
+  }
+  const toBytes = (v: unknown): Uint8Array =>
+    v instanceof Uint8Array ? v : Buffer.isBuffer(v) ? new Uint8Array(v) : (() => { throw new Error("expected raw bytes"); })();
+
+  const env: TrustSignalEnvelope = {
+    subject_kind: subject_kind as "account" | "agent",
+    subject: subject as string,
+    issuer_kind: issuer_kind as "portal" | "agent",
+    issuer_pubkey: issuer_pubkey as string,
+    type: type as string,
+    schema_version: Number(schema_version),
+    payload: toBytes(payload),
+    issued_at: Number(issued_at),
+    expires_at: expires_at === null || expires_at === undefined ? null : Number(expires_at),
+    supersedes_hash: supersedes_hash === null || supersedes_hash === undefined ? null : toBytes(supersedes_hash),
+  };
+
+  // Re-encoding must reproduce the input EXACTLY. This is what makes the decode safe: if any field
+  // round-trips differently (a number that came back as a float, a byte string we mis-read), the
+  // bytes differ and we refuse — rather than hashing our RE-encoding of what we think they meant and
+  // notarizing a hash the submitter never computed.
+  const reencoded = encodeCbor([
+    "CELLO-TSIG-v1", env.subject_kind, env.subject, env.issuer_kind, env.issuer_pubkey, env.type,
+    env.schema_version > 0xffff_ffff ? BigInt(env.schema_version) : env.schema_version,
+    env.payload,
+    env.issued_at > 0xffff_ffff ? BigInt(env.issued_at) : env.issued_at,
+    env.expires_at === null ? null : (env.expires_at > 0xffff_ffff ? BigInt(env.expires_at) : env.expires_at),
+    env.supersedes_hash,
+  ]);
+  if (Buffer.compare(Buffer.from(reencoded), Buffer.from(bytes)) !== 0) {
+    throw new Error("envelope bytes are not canonical — re-encoding them does not reproduce the input");
+  }
+  return env;
+}
