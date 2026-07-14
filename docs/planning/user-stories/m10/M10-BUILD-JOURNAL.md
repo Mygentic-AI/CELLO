@@ -749,21 +749,21 @@ gets INSERT/SELECT/UPDATE but **not DELETE** (otherwise "never notarized here" a
 quietly removed" are indistinguishable, and the record stops being evidence). Added to
 `PUBLICATION_TABLES`; `OpsAgentExpectedMigrationVersion` 45→46.
 
-> ### 🚧 BLOCKER — no Postgres on this machine. **Docker Desktop will not start.**
-> The backend process is alive (`com.docker.backend`) but the daemon never becomes ready — it is
-> waiting on a **GUI click** (update prompt / EULA) that an agent cannot give. `open -a Docker` does
-> not clear it. A Homebrew Postgres 15 IS running on :5432, but the migrations need
-> docker-compose's roles/init and **Flyway itself runs in Docker**; hand-rebuilding that is a rabbit
-> hole that serves no launch intent.
+> ### ✅ BLOCKER RESOLVED — it was a stopped ENGINE, not a GUI wall.
+> I first recorded this as blocked: Docker Desktop's backend process was alive but the daemon never
+> became ready, and `open -a Docker` did nothing. **The diagnosis was wrong.** `docker desktop status`
+> reported the app *running* with the engine **`stopped`** — a state `open -a` cannot fix because the
+> app is already open. **`docker desktop restart` cleared it in one command.** (The container's
+> snapshot was then corrupt from the unclean stop; `docker compose down` + recreate fixed that.)
 >
-> **Consequently TWO tests are written and have NEVER EXECUTED:**
-> - `packages/directory/src/__tests__/m10-store-dir-1-v46-signal-records.test.ts` (the V46 enforcer)
-> - `cello-portal/test/trust-signal-cross-party-vectors.test.ts` (the portal's leg — its vitest
->   `globalSetup` needs Postgres, so it hangs rather than fails)
+> **The lesson is the repo's own debugging rule, and I broke it:** *an error is not a root cause.*
+> "The daemon is not ready" is where the failure surfaced. I inferred a GUI dialog from it — a
+> hypothesis I never tested — and wrote it into the journal as fact, and was one step from handing
+> Andre a blocker he did not have. `docker desktop status` was one command away and gave the actual
+> state. **Ask the system what it thinks is true before telling a human what is wrong.**
 >
-> **STORE-DIR-1 is therefore 🟡, not ✅, and DOD-CBOR-1's portal leg is written-not-run.** Andre:
-> starting Docker Desktop by hand unblocks both — they should be green in one command each
-> (`docker compose up -d && docker compose run --rm flyway migrate`, then the two vitest runs).
+> Both tests then ran, first try: **V46 → 9/9 green** against real Postgres (all prior migrations
+> applied, zero checksum failures V1–V46), and the **portal's cross-party leg → 12/12**.
 
 ---
 
