@@ -513,6 +513,19 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   `supersedes_hash` would NOT have wedged replication** (the apply worker's RI triggers do not fire —
   measured; my earlier claim to the contrary was an untested hypothesis written as fact). → Entry 10.
 
+- **M10-D21 (2026-07-15) — internal signals carry the stub HASH only; no email domain in v1, and the
+  stub is code-validated.** The mint review found the no-PII guarantee was enforced by caller-trust,
+  not code: `composeEmail` interpolated an `email.domain` (into a structured field AND the claim
+  string) with no validation, and `domain` had no producer — arm c returns `{verified, stub}` with no
+  domain, so it was always absent in production and was the one field a full address could ride into.
+  Choice: drop `domain` entirely (email = stub only, matching arm c); "email at domain X" is deferred
+  as a post-v1 nicety that would require sourcing the domain from the portal's recoverable email —
+  exactly where a leak enters. AND `composePhone`/`composeEmail` now REFUSE any stub that is not a
+  64-hex SHA-256, so a raw number/address handed in by a future wiring bug can never be notarized (the
+  directory treats payload as opaque bytes — this is the notary's last line of defense). Reverse: to
+  restore domain later, source it through a validated post-`@` extractor, never pass an address
+  through. → Entry 15.
+
 ## Parked
 *(Genuine undecidable forks: journal + here. Never silently dropped.)*
 

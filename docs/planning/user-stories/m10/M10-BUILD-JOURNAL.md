@@ -1204,6 +1204,53 @@ number/address; a submission is signed and accepted. Client: a delivered envelop
 are GONE; the spine test passes re-pointed. **Enforcer = DOD-T1-JOURNEY-1** (live, real processes):
 this unit is 🟡 until that journey runs.
 
+### 2026-07-15 — Entry 15: portal MINT + Signer built + reviewed — the PII guardrail had no teeth
+
+**Built (cello-portal `1d804cf`, fixed `8261123`).** `mint.ts` (composePhone/composeEmail →
+account-subject envelopes, buildSubmission binds the signer key then hashes then signs) +
+`submission-signer.ts` (Ed25519 Signer interface; local seed-signer; staging/prod fail closed —
+M10-D6). 15 tests. The submission body was cross-checked field-for-field against the directory's
+`parseRequest` and the TBS domain — it is directory-acceptable, and the cross-party vectors already
+prove the hash agrees byte-for-byte.
+
+**The review clustered on the PII guardrail — exactly the danger zone — and was right.**
+- **HIGH-1: the no-PII guarantee was enforced by CALLER TRUST, not code.** `composeEmail` interpolated
+  `email.domain` into a field AND the claim string with zero validation. `{ domain: "alice@evil.com" }`
+  → the full address CBOR-encoded, hashed, signed, and **notarized permanently** (the directory treats
+  payload as opaque bytes, so nothing downstream catches it). The notary co-signs the operator's email.
+- **HIGH-2: `domain` had no producer.** Arm c — the mint's own cited source — returns `{verified,
+  stub}`, no domain. So `domain` was always undefined in production (every email silently composed as
+  the weaker "has verified email" — a weaker guarantee indistinguishable from the stronger one), and
+  two same-named `AccountFacts` types silently disagreed across the boundary.
+- **The PII test was HOLLOW.** It fed CLEAN input and asserted clean output — it would have passed even
+  if the code embedded a full address. "clean in → clean out" is trivially true; the guardrail is
+  "dirty in → refused," which it never exercised.
+
+**Fixed (M10-D21):** dropped `domain` entirely (email = stub only, matching arm c), and made
+`composePhone`/`composeEmail` REFUSE any stub that is not a 64-hex SHA-256 — so a raw number/address
+can never reach the payload, enforced by code. The hollow test is replaced with one that feeds a raw
+phone number, a raw email, and malformed stubs and asserts refusal.
+
+**MEDIUM-3 (fixed):** the signer returned the checked-in dev seed for BOTH `local` and `dev` — but
+`dev` is a deployed, network-reachable env, so anyone with the source could forge submissions against
+it. Now only `local` uses the checked-in default; `dev` requires an explicit `PORTAL_SUBMISSION_SEED`
+and fails closed without one.
+
+**The recurring pattern, fourth time:** a guardrail that reads as protective but tests only the benign
+path. Same shape as the float64 "no floating point" block, the seconds/ms expiry test, and the registry
+equal-version case — each LOOKED like coverage and had no teeth against the actual threat. The
+generalizable check, now habitual: does the test feed the DANGEROUS input, or only the safe one?
+
+**Deferred (journaled so not lost):** LOW-5 — the fact-change → revoke path (so a stale phone/email
+signal does not live forever, since internal facts never expire on a timer) rides with the wider
+revoke wiring; LOW-6 — `issued_at` is fixed at compose time, fine in the synchronous
+compose→build→submit path, a caveat only if composition is ever cached.
+
+**MINT-INTERNAL-1 remaining (deploy-coupled):** wire the mint into the portal DirectoryClient (needs a
+running directory); client generic delivery into `wallet_trust_signals` + re-point
+`inbound-sessions.ts:601`; the M8 retirement (one commit); the prod KMS signer (needs a created KMS
+key); enforcer = DOD-T1-JOURNEY-1 live.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
