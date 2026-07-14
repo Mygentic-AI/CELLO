@@ -265,7 +265,14 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   unit must define how the portal obtains/attests each fact it mints (a directory read, not a
   re-verification), and the architecture half decides that read's shape.** Registry entries for
   both types. Existing accounts get them on next portal touch; new registrations mint at verify
-  time. — ❌
+  time. —
+  ❌ (design note = Entry 14. **Directory DEPENDENCY built + green:** the verified-account-facts read
+  (arm c — `queryAccountFacts`, `POST /internal/signal/query`, presence+stubs only, never PII, 5
+  tests + 78 across the directory suite) → Entry 14 / commit `01dbbd00`. **Still owed (the unit
+  proper):** the portal `Signer` (KMS prod / file dev, M10-D6) + the mint; client generic delivery
+  into `wallet_trust_signals` + re-point `inbound-sessions.ts:601`; the M8 retirement (drop table +
+  `SIGNAL_KINDS` + arms + re-point `handoff.ts` and the spine test, one commit); enforcer =
+  DOD-T1-JOURNEY-1 live.)
 - **DOD-T1-JOURNEY-1** — **live journey, first half:** for a real agent, portal mints phone +
   email → directory notarizes (visible in `signal_records`, replicated to all 3 nodes) → holder
   daemon holds both envelopes and re-verifies their hashes locally. Real portal process, real
