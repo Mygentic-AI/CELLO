@@ -452,6 +452,120 @@ export async function revokeSignal(args: {
   }
 }
 
+/** The registry-publish request body. The document itself is opaque bytes the directory never
+ *  interprets — it carries its own inner signature that CLIENTS verify against their pinned key. */
+interface RegistryPublishRequest {
+  v: 1;
+  op: "registry-publish";
+  /** The signed registry document, opaque to the directory. */
+  document: Uint8Array;
+  /** Monotonic anti-rollback counter. */
+  version: number;
+  issued_at: number;
+}
+
+export interface RegistryPublishResult {
+  version: number;
+  /** True if this publish updated the stored registry; false if it was refused as a rollback but the
+   *  request was otherwise valid (a lower/equal version is not an ERROR — the client is the real gate). */
+  stored: boolean;
+}
+
+/**
+ * M10 / DOD-REGISTRY-1 — publish the type registry through the SAME chokepoint, role `registry`.
+ *
+ * The directory is a DUMB NOTARY here too: it verifies the OUTER submission signature (role
+ * `registry` — so a random party, or even a `submitter` key, cannot overwrite the served registry),
+ * then stores the document as OPAQUE BYTES. It does NOT verify the document's INNER signature and does
+ * NOT parse it — clients verify the inner signature against their build-time-pinned registry pubkey
+ * (M10-D9), and clients enforce the real anti-rollback. INV-DIR-DUMB.
+ *
+ * Server-side anti-rollback (refuse a lower version) is HYGIENE, applied atomically in the UPDATE's
+ * WHERE so two concurrent publishes cannot race a rollback in.
+ */
+export async function publishRegistry(args: {
+  pool: Pool;
+  logger: WriteLogger;
+  bodyCbor: Uint8Array;
+  signerPubkeyHex: string;
+  signatureHex: string;
+  correlationId: string;
+  nowSec?: number;
+}): Promise<RegistryPublishResult> {
+  const { pool, logger, bodyCbor, signerPubkeyHex, signatureHex, correlationId } = args;
+  const nowSec = args.nowSec ?? Math.floor(Date.now() / 1000);
+
+  const reject = (e: SubmitRejected): never => {
+    logger.warn("signal.registry.rejected", {
+      reason: e.reason, detail: e.detail, issuer: signerPubkeyHex.slice(0, 16), correlationId,
+    });
+    throw e;
+  };
+
+  try {
+    // ROLE `registry`, not `submitter` — the registry key is dedicated (M10-D9), and a submission key
+    // must not be able to publish a registry.
+    await verifySignedRequest(pool, signerPubkeyHex, signatureHex, bodyCbor, "registry");
+
+    let decoded: unknown;
+    try {
+      decoded = decodeCbor(bodyCbor);
+    } catch (err) {
+      throw new SubmitRejected("malformed_request", `body is not decodable CBOR: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const r = decoded as Partial<RegistryPublishRequest>;
+    if (r === null || typeof r !== "object") throw new SubmitRejected("malformed_request", "body is not a map");
+    if (r.v !== 1) throw new SubmitRejected("malformed_request", `unsupported request version ${String(r.v)}`);
+    if (r.op !== "registry-publish") throw new SubmitRejected("malformed_request", `unsupported op ${String(r.op)}`);
+    if (!(r.document instanceof Uint8Array) && !Buffer.isBuffer(r.document)) {
+      throw new SubmitRejected("malformed_request", "document must be raw bytes");
+    }
+    if (typeof r.version !== "number" || !Number.isInteger(r.version) || r.version < 0) {
+      throw new SubmitRejected("malformed_request", "version must be a non-negative integer");
+    }
+    if (typeof r.issued_at !== "number" || !Number.isInteger(r.issued_at)) {
+      throw new SubmitRejected("malformed_request", "issued_at must be an integer (epoch SECONDS)");
+    }
+    if (Math.abs(nowSec - r.issued_at) > CLOCK_SKEW_SECONDS) {
+      throw new SubmitRejected("stale_request", `issued_at ${r.issued_at} is more than ${CLOCK_SKEW_SECONDS}s from this node's clock (${nowSec})`);
+    }
+
+    const version = r.version;
+    const documentBuf = Buffer.from(r.document);
+
+    // Upsert the singleton. The WHERE on DO UPDATE is the ATOMIC anti-rollback: a lower version leaves
+    // the stored document untouched. A first publish (no row) always stores.
+    const res = await pool.query(
+      `INSERT INTO registry_documents (id, version, document, published_at)
+         VALUES (1, $1, $2, now())
+       ON CONFLICT (id) DO UPDATE
+         SET version = EXCLUDED.version, document = EXCLUDED.document, published_at = now()
+         WHERE EXCLUDED.version >= registry_documents.version`,
+      [version, documentBuf],
+    );
+    const stored = (res.rowCount ?? 0) > 0;
+
+    if (stored) {
+      logger.info("signal.registry.published", { version, bytes: documentBuf.length, correlationId });
+    } else {
+      // Not an error — a rollback attempt (or an exact-version re-publish that the WHERE treated as a
+      // no-op). The client is the real anti-rollback gate; server-side is hygiene.
+      logger.info("signal.registry.rollback_ignored", { version, correlationId });
+    }
+    return { version, stored };
+  } catch (err) {
+    if (err instanceof SubmitRejected) return reject(err);
+    throw err;
+  }
+}
+
+/** Read the currently-served registry document bytes (for GET /registry). Null if none published. */
+export async function getRegistryDocument(pool: Pool): Promise<{ version: number; document: Buffer } | null> {
+  const { rows } = await pool.query("SELECT version, document FROM registry_documents WHERE id = 1");
+  if (rows.length === 0) return null;
+  return { version: Number(rows[0].version), document: rows[0].document as Buffer };
+}
+
 /**
  * Decode canonical envelope bytes back into the envelope.
  *

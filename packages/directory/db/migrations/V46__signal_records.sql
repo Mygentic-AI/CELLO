@@ -266,3 +266,46 @@ GRANT SELECT ON authorized_issuers TO cello_service;
 --
 -- An EMPTY set means every submission is REFUSED. That is the correct failure: ABSENT IS NOT FINE, and
 -- a directory with no authorized issuer must notarize nothing rather than fall open.
+
+-- ── registry_documents — the served type registry (DOD-REGISTRY-1, spec §15.2.5) ────────────────
+--
+-- A SINGLETON row (id=1). The type registry is a portal-signed document the directory serves as
+-- OPAQUE BYTES — it maps a type string to {class, lifecycle, default_ttl, label} so a client offline
+-- from the portal can classify a signal. The directory does NOT interpret it (INV-DIR-DUMB): it
+-- verifies only the OUTER role=`registry` submission signature (that a random party cannot overwrite
+-- the served registry), stores the bytes, and serves them at public GET /registry exactly as it
+-- serves GET /manifest. The client verifies the INNER document signature against its BUILD-TIME-PINNED
+-- registry pubkey (M10-D9), and an ABSENT type is valid-but-unclassified (INV-TYPE-CARRY).
+--
+-- NOT content-addressed, NOT an envelope — so INV-CANONICAL (the four-party CBOR hash) does NOT govern
+-- it (review F7). It follows the MANIFEST's canonical-JSON convention so the client reuses the one
+-- shipped, proven verifier path rather than growing a second signed-JSON discipline.
+--
+-- `version` is the anti-rollback counter. Server-side refusal of a lower version is HYGIENE; the
+-- client enforces its own rollback protection against its pinned key (determination §3.4).
+CREATE TABLE registry_documents (
+  id           INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton
+  version      BIGINT NOT NULL,                     -- monotonic; anti-rollback
+  document     BYTEA NOT NULL,                      -- the signed registry doc, OPAQUE to the directory
+  published_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE registry_documents ENABLE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'registry_documents'
+      AND policyname = 'registry_documents_service'
+  ) THEN
+    CREATE POLICY registry_documents_service ON registry_documents
+      TO cello_service USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+-- INSERT + UPDATE (publish overwrites the singleton) + SELECT (serve). No DELETE — a registry is
+-- replaced, never removed. An absent registry means every type is unclassified, which is the benign
+-- INV-TYPE-CARRY default, not an error.
+GRANT INSERT, SELECT, UPDATE ON registry_documents TO cello_service;
+
+-- Seeded EMPTY: no registry until the portal publishes one. Until then every type is
+-- valid-but-unclassified — correct, not a failure (INV-TYPE-CARRY).

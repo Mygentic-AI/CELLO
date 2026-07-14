@@ -38,7 +38,7 @@ import type { KeyProvider } from "@cello-protocol/crypto";
 import { issuePreAuthToken, issuePreAuthCapability } from "./pre-auth-token-repository.js";
 import { listAccountAgentsWithPresence, PRESENCE_NODE_FRESHNESS_MS } from "./agent-presence-repository.js";
 import { validateWritePayload } from "./agent-write-validation.js";
-import { submitSignal, revokeSignal, SubmitRejected } from "./signal-write.js";
+import { submitSignal, revokeSignal, publishRegistry, getRegistryDocument, SubmitRejected } from "./signal-write.js";
 import {
   isAgentOwnedByAccount,
   applyRevocationFlag,
@@ -535,6 +535,61 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "revocation failed" }));
         }
+      }
+      return;
+    }
+
+    // ── M10 / DOD-REGISTRY-1: publish the type registry (signed, role `registry`) ────────────────
+    if (req.method === "POST" && req.url === "/internal/signal/registry-publish") {
+      let body: Buffer;
+      try {
+        body = await readBody(req);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "could not read request body" }));
+        return;
+      }
+      try {
+        const result = await publishRegistry({
+          pool, logger, bodyCbor: new Uint8Array(body),
+          signerPubkeyHex: String(req.headers["x-cello-signer-pubkey"] ?? ""),
+          signatureHex: String(req.headers["x-cello-signature"] ?? ""),
+          correlationId,
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, version: result.version, stored: result.stored }));
+      } catch (err) {
+        if (err instanceof SubmitRejected) {
+          res.writeHead(422, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err.reason, detail: err.detail }));
+        } else {
+          logger.error("signal.registry.failed", { reason: err instanceof Error ? err.message : String(err), correlationId });
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "registry publish failed" }));
+        }
+      }
+      return;
+    }
+
+    // ── M10 / DOD-REGISTRY-1: serve the registry (PUBLIC, opaque bytes — like GET /manifest) ─────
+    // No auth: the registry is public signed data; a client verifies its INNER signature against the
+    // build-time-pinned registry pubkey. The directory serves bytes it never interprets (INV-DIR-DUMB).
+    if (req.method === "GET" && req.url === "/registry") {
+      try {
+        const doc = await getRegistryDocument(pool);
+        if (doc === null) {
+          // No registry published yet → every type is valid-but-unclassified (INV-TYPE-CARRY). 404 is
+          // the honest signal "there is no registry", NOT an error condition the client should choke on.
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "no_registry_published" }));
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/octet-stream", "x-cello-registry-version": String(doc.version) });
+        res.end(doc.document);
+      } catch (err) {
+        logger.error("signal.registry.serve_failed", { reason: err instanceof Error ? err.message : String(err), correlationId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "registry unavailable" }));
       }
       return;
     }
