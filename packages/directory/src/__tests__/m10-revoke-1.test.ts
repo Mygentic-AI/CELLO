@@ -156,6 +156,47 @@ describeIntegration("DOD-REVOKE-1 — revocation through the chokepoint", () => 
     await pool.query("DELETE FROM signal_records WHERE signal_hash=$1", [h]);
   });
 
+  it("F1: a revoke-then-submit at the SAME node preserves the real notarization (not dropped)", async () => {
+    // The review's F1: an UPDATE-or-tombstone design squatted PK (H, node) with the tombstone, so a
+    // real submit that arrived AFTER the revoke hit ON CONFLICT DO NOTHING and was silently dropped —
+    // the notarization lost at the chokepoint whose promise is "notarized ⇒ we hold the record".
+    // The always-tombstone-at-(H,'revoke:'+node) design must keep the two rows from colliding.
+    const env = envelope({ subject: `${tag}-f1-real` });
+    const h = hex(hashTrustSignalEnvelope(env));
+
+    // Revoke BEFORE the signal is minted (orphan), then mint the real signal at the SAME node.
+    await revokeSignal(await revokeArgs(h, keyA, pubA, NODE));
+    const minted = await mint(env, NODE);
+    expect(minted).toBe(h);
+
+    // The real notarization SURVIVED — its descriptive fields are present, not the placeholder.
+    const { rows } = await pool.query(
+      "SELECT subject, is_tombstone FROM signal_records WHERE signal_hash=$1 AND accepting_node=$2", [h, NODE]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].subject).toBe(`${tag}-f1-real`);
+    expect(rows[0].is_tombstone).toBe(false);
+    // ...and the signal still reads revoked (the tombstone lives at a distinct PK and wins the status).
+    expect(await effective(h)).toBe("revoked");
+    const { rows: eff } = await pool.query("SELECT subject FROM signal_records_effective WHERE signal_hash=$1", [h]);
+    expect(eff[0].subject, "the real subject, not the placeholder").toBe(`${tag}-f1-real`);
+    await pool.query("DELETE FROM signal_records WHERE signal_hash=$1", [h]);
+  });
+
+  it("F5: a SUPERSEDED signal can still be revoked (revoked > superseded)", async () => {
+    // The UPDATE ... WHERE status='active' design would have missed an effectively-superseded signal.
+    // The tombstone does not filter on the real row's status at all, so this just works — pinned here
+    // so a future change back to an UPDATE cannot silently reintroduce the gap.
+    const oldEnv = envelope({ subject: `${tag}-f5` });
+    const oldHash = await mint(oldEnv);
+    const newEnv = envelope({ subject: `${tag}-f5`, issued_at: nowSec() + 1, supersedes_hash: new Uint8Array(Buffer.from(oldHash, "hex")) });
+    await mint(newEnv);
+    expect(await effective(oldHash)).toBe("superseded");
+
+    await revokeSignal(await revokeArgs(oldHash, keyA, pubA));
+    expect(await effective(oldHash), "revoked is the stronger statement").toBe("revoked");
+    await pool.query("DELETE FROM signal_records WHERE signal_hash IN ($1,$2)", [oldHash, hex(hashTrustSignalEnvelope(newEnv))]);
+  });
+
   it("revoke is idempotent — revoking twice is harmless", async () => {
     const h = await mint(envelope());
     await revokeSignal(await revokeArgs(h, keyA, pubA));

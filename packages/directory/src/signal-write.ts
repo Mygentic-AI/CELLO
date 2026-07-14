@@ -408,35 +408,39 @@ export async function revokeSignal(args: {
 
     const signalHash = r.signal_hash;
 
-    // Mark every local copy revoked. Only `active → revoked` (a `superseded` row stays superseded; a
-    // revoked row is already terminal) — but note revoked is the STRONGER state in the effective
-    // view, so even a superseded row's signal reads as revoked once any copy is revoked.
-    const upd = await pool.query(
-      "UPDATE signal_records SET status='revoked', revoked_at=now() WHERE signal_hash=$1 AND status='active'",
-      [signalHash],
+    // REVOCATION IS ALWAYS A TOMBSTONE INSERT — never an UPDATE of the notarization row. This single
+    // decision closes three failure modes the review found (F1/F3/F4), and it is worth stating why:
+    //
+    //   - It NEVER collides with a real notarization. The tombstone's PK is
+    //     `(signal_hash, "revoke:" + node)`; a real record is `(signal_hash, node)`. So a submit that
+    //     arrives AFTER a revoke (a legitimate revoke-before-submit ordering, or an attacker
+    //     pre-revoking a hash at every node) still inserts its real row and keeps its provenance —
+    //     the signal reads `revoked`, but the notarization is NOT silently dropped. An UPDATE-or-
+    //     tombstone design squatted the real PK and lost the record (F1).
+    //   - It is RACE-FREE. One INSERT … ON CONFLICT DO NOTHING; `rowCount` is the truth. The earlier
+    //     SELECT-exists-then-INSERT could report success while a concurrent submit slipped in between
+    //     and left the signal active (F3, a TOCTOU false-success).
+    //   - It REPLICATES ROBUSTLY. An INSERT cannot be skipped the way a replicated UPDATE is when it
+    //     reaches a node before the row it targets (F4). The revocation does not depend on the
+    //     notarization row existing anywhere.
+    //
+    // The notarization row's own `status` column is left untouched (stays `active`); correctness lives
+    // in `signal_records_effective`, which reports `revoked` whenever ANY row for the hash — here, this
+    // tombstone — is revoked (BOOL_OR). Nothing reads a bare `status` column for a decision.
+    //
+    // `is_tombstone` keeps this row's placeholder descriptive fields out of the view's aggregation, and
+    // the `revoke:`-prefixed node keeps it out of `notarized_by`. Per-node idempotence falls out of the
+    // PK: a second revoke at the same node is ON CONFLICT DO NOTHING.
+    const revokeNode = `revoke:${acceptingNode}`;
+    const ins = await pool.query(
+      `INSERT INTO signal_records
+         (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type,
+          supersedes_hash, status, revoked_at, scanner_version, is_tombstone)
+       VALUES ($1,$2,'agent','(tombstone)','portal','(tombstone)','(tombstone)',NULL,'revoked',now(),'(tombstone)',true)
+       ON CONFLICT (signal_hash, accepting_node) DO NOTHING`,
+      [signalHash, revokeNode],
     );
-    let revokedRows = upd.rowCount ?? 0;
-
-    // No local row at all → write a tombstone rather than lose the revocation (see the header). We
-    // know nothing but the hash here (the envelope is not carried on a revoke), and we do not need to:
-    // the tombstone exists only so `signal_records_effective` reports `revoked` and replication
-    // carries it. The placeholder fields are marked so a tombstone is never mistaken for a real
-    // notarization.
-    if (revokedRows === 0) {
-      const exists = await pool.query(
-        "SELECT 1 FROM signal_records WHERE signal_hash=$1 AND accepting_node=$2", [signalHash, acceptingNode]);
-      if (exists.rowCount === 0) {
-        await pool.query(
-          `INSERT INTO signal_records
-             (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type,
-              supersedes_hash, status, revoked_at, scanner_version, is_tombstone)
-           VALUES ($1,$2,'agent','(tombstone)','portal','(tombstone)','(tombstone)',NULL,'revoked',now(),'(tombstone)',true)
-           ON CONFLICT (signal_hash, accepting_node) DO NOTHING`,
-          [signalHash, acceptingNode],
-        );
-        revokedRows = 1;
-      }
-    }
+    const revokedRows = ins.rowCount ?? 0; // 1 = newly revoked at this node; 0 = this node already had
 
     logger.info("signal.revocation.accepted", {
       signalHash, issuer: signerPubkeyHex.slice(0, 16), acceptingNode, revokedRows, correlationId,

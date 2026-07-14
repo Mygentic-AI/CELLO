@@ -69,12 +69,15 @@
 -- status change is gone on that node, permanently, and that node serves a dead signal as live
 -- forever. An UPDATE cannot deliver the DoD's "status changes replicate" clause on its own.
 --
--- Both status transitions are therefore ALSO expressible as an INSERT, which cannot be lost the way
--- an UPDATE can (a row either arrives or is absent; an absent row cannot be mistakenly served):
+-- Both status transitions are therefore expressed as an INSERT, which cannot be lost the way an
+-- UPDATE can (a row either arrives or is absent; an absent row cannot be mistakenly served):
 --   * SUPERSESSION rides on the NEW record's own INSERT, via `supersedes_hash` — a HASHED envelope
 --     field, so it is authenticated and it arrives with the row that asserts it.
---   * REVOCATION at a node that lacks the row inserts a TOMBSTONE row (status='revoked') rather than
---     updating zero rows. `revoked` is monotonic and any node's revocation counts, so this converges.
+--   * REVOCATION ALWAYS inserts a TOMBSTONE row (never an UPDATE of the notarization), at a distinct
+--     PK `(signal_hash, 'revoke:' || node)`. It therefore never collides with the real record, is a
+--     single race-free INSERT, and replicates robustly. `revoked` is monotonic in the effective view
+--     and any node's revocation counts, so this converges regardless of arrival order. See
+--     `signal-write.ts` revokeSignal for why UPDATE-of-the-real-row was abandoned (review F1/F3/F4).
 --
 -- READS DERIVE, and never trust one row's `status` alone. Use `signal_records_effective`.
 --
