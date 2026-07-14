@@ -45,6 +45,7 @@ describeIntegration("V46 signal_records migration (DOD-STORE-DIR-1)", () => {
     issuer_kind: "portal",
     issuer_pubkey: "aabb",
     type: "phone",
+    supersedes_hash: null,
     status: "active",
     accepting_node: "us-east-1",
     scanner_version: "scan-v1",
@@ -54,12 +55,19 @@ describeIntegration("V46 signal_records migration (DOD-STORE-DIR-1)", () => {
   const insert = (c: PoolClient, r: Record<string, unknown>): Promise<unknown> =>
     c.query(
       `INSERT INTO signal_records
-         (signal_hash, subject_kind, subject, issuer_kind, issuer_pubkey, type, status,
-          accepting_node, scanner_version)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [r.signal_hash, r.subject_kind, r.subject, r.issuer_kind, r.issuer_pubkey, r.type, r.status,
-       r.accepting_node, r.scanner_version],
+         (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type,
+          supersedes_hash, status, scanner_version)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [r.signal_hash, r.accepting_node, r.subject_kind, r.subject, r.issuer_kind, r.issuer_pubkey,
+       r.type, r.supersedes_hash ?? null, r.status, r.scanner_version],
     );
+
+  /** The AUTHORITATIVE status read — never a bare `status` column (see V46's header). */
+  const effective = async (c: PoolClient, h: string): Promise<string | undefined> => {
+    const { rows } = await c.query(
+      "SELECT effective_status FROM signal_records_effective WHERE signal_hash = $1", [h]);
+    return rows[0]?.effective_status;
+  };
 
   beforeAll(() => {
     pool = new Pool({
@@ -138,19 +146,25 @@ describeIntegration("V46 signal_records migration (DOD-STORE-DIR-1)", () => {
   });
 
   describe("DOD-INV-DIR-DUMB — the directory holds hashes, never content", () => {
-    it("has NO payload column and no PII-shaped column", async () => {
-      // A directory that held envelope content could read every operator's phone number and email
-      // domain. One that holds only hashes cannot, even if fully compromised. The convenient column
-      // must stay absent.
+    it("holds EXACTLY the known columns — an ALLOWLIST, so any new column must be justified", async () => {
+      // This was a denylist of nine names ("payload", "envelope", ...) and it was HOLLOW: a column
+      // called `envelope_bytes`, `body`, `plaintext` or `raw` passed every assertion. The invariant is
+      // "this table holds only hashes and metadata" — an ALLOWLIST property. Stating it as a denylist
+      // inverted it (the project's own rule: allowlist in prose, denylist in code — and this is the
+      // code side, where the wire names must be pinned exactly).
+      //
+      // Now the column set is asserted EXACTLY. Any new column — whatever it is named, however
+      // innocuous — goes red here and has to be justified against DOD-INV-DIR-DUMB. That is the point:
+      // the next person to add `payload_preview TEXT` for debugging must argue with this test first.
       const { rows } = await pool.query(
         "SELECT column_name FROM information_schema.columns WHERE table_name = 'signal_records'",
       );
-      const cols = rows.map((r: { column_name: string }) => r.column_name);
-      for (const forbidden of ["payload", "envelope", "content", "blob", "ciphertext",
-                               "phone", "email", "claim", "value"]) {
-        expect(cols, `signal_records must not carry '${forbidden}'`).not.toContain(forbidden);
-      }
-      expect(cols).toContain("signal_hash");
+      const cols = (rows as Array<{ column_name: string }>).map((r) => r.column_name).sort();
+      expect(cols).toEqual([
+        "accepting_node", "created_at", "issuer_kind", "issuer_pubkey", "revoked_at",
+        "scanner_version", "signal_hash", "status", "subject", "subject_kind",
+        "supersedes_hash", "type",
+      ].sort());
     });
   });
 
@@ -175,32 +189,130 @@ describeIntegration("V46 signal_records migration (DOD-STORE-DIR-1)", () => {
       });
     });
 
-    it("supersession LINKS records rather than overwriting one", async () => {
+    it("supersession is DERIVED from the superseding row's existence — no UPDATE required", async () => {
+      // The failure this design avoids: a replicated UPDATE that reaches a node BEFORE the row it
+      // targets is SILENTLY SKIPPED by the apply worker (no error, no retry), so that node would serve
+      // a superseded signal as live forever. Supersession therefore rides on the NEW record's own
+      // INSERT, via the hashed `supersedes_hash` field — and an INSERT cannot be lost the way an
+      // UPDATE can.
       await asCelloService(async (c) => {
         await insert(c, record({ signal_hash: H("old") }));
-        await insert(c, record({ signal_hash: H("new") }));
-        await c.query(
-          "UPDATE signal_records SET status = 'superseded', superseded_by = $2 WHERE signal_hash = $1",
-          [H("old"), H("new")],
-        );
-        const { rows } = await c.query(
-          "SELECT status, superseded_by FROM signal_records WHERE signal_hash = $1", [H("old")],
-        );
-        expect(rows[0].status).toBe("superseded");
-        expect(rows[0].superseded_by).toBe(H("new"));
-        // The superseded record still EXISTS — a counterparty holding a stale copy must be able to
-        // learn that it is stale, which requires the old hash to still resolve here.
-        const { rows: still } = await c.query("SELECT 1 FROM signal_records WHERE signal_hash = $1", [H("old")]);
-        expect(still).toHaveLength(1);
+        expect(await effective(c, H("old"))).toBe("active");
+
+        // Nothing but the new record's INSERT. No UPDATE of the old row at all.
+        await insert(c, record({ signal_hash: H("new"), supersedes_hash: H("old") }));
+
+        expect(await effective(c, H("old"))).toBe("superseded");
+        expect(await effective(c, H("new"))).toBe("active");
+        // The superseded record still EXISTS — a counterparty holding a stale copy has to be able to
+        // learn that it is stale, which requires the old hash to keep resolving.
+        const { rows } = await c.query("SELECT 1 FROM signal_records WHERE signal_hash = $1", [H("old")]);
+        expect(rows).toHaveLength(1);
       });
     });
 
-    it("re-submitting the same hash conflicts — idempotence is by content-address, not a dedup rule", async () => {
+    it("a REVOKED replacement supersedes nothing", async () => {
       await asCelloService(async (c) => {
-        await insert(c, record({ signal_hash: H("dup") }));
-        await expect(insert(c, record({ signal_hash: H("dup") })))
+        await insert(c, record({ signal_hash: H("o2") }));
+        await insert(c, record({ signal_hash: H("n2"), supersedes_hash: H("o2"), status: "revoked" }));
+        // If the replacement is itself revoked it cannot displace the original, or revoking a
+        // re-mint would silently kill the signal it replaced.
+        expect(await effective(c, H("o2"))).toBe("active");
+      });
+    });
+
+    it("REVOCATION BEATS SUPERSESSION — the stronger statement wins", async () => {
+      await asCelloService(async (c) => {
+        await insert(c, record({ signal_hash: H("o3") }));
+        await insert(c, record({ signal_hash: H("n3"), supersedes_hash: H("o3") }));
+        expect(await effective(c, H("o3"))).toBe("superseded");
+        await c.query("UPDATE signal_records SET status='revoked', revoked_at=now() WHERE signal_hash=$1", [H("o3")]);
+        // A revoked signal that is also superseded is REVOKED. Supersession must not soften it.
+        expect(await effective(c, H("o3"))).toBe("revoked");
+      });
+    });
+  });
+
+  describe("MULTI-MASTER SAFETY — the trap that would wedge federation (M10-D20)", () => {
+    it("TWO NODES may notarize the SAME hash without colliding", async () => {
+      // THE BUG THIS PREVENTS, and it is not exotic — it rides the DESIGNED path. The portal reaches
+      // the directory through an ordered failover list (M10-D11). Submit hash H to us-east-1; the row
+      // lands; the RESPONSE IS LOST; the portal dutifully fails over and re-submits to eu-central-1,
+      // which has not yet received H and inserts its own row. Both replicate.
+      //
+      // With `signal_hash` as a lone PRIMARY KEY, each node's INSERT is unapplicable at the other:
+      // the apply worker (which DOES enforce PK/UNIQUE — measured) errors, retries forever, and THE
+      // WHOLE SUBSCRIPTION STOPS. All 20 published tables. Seals, profiles, presence, registrations —
+      // federation down, because a request timed out.
+      //
+      // PK is therefore (signal_hash, accepting_node). Safe because the record is CONTENT-ADDRESSED:
+      // every hashed field is derived from the envelope, so two rows sharing a hash necessarily agree
+      // on all of them. They differ only in provenance.
+      await asCelloService(async (c) => {
+        await insert(c, record({ signal_hash: H("mm"), accepting_node: "us-east-1" }));
+        await insert(c, record({ signal_hash: H("mm"), accepting_node: "eu-central-1" }));
+
+        const { rows } = await c.query("SELECT COUNT(*) AS n FROM signal_records WHERE signal_hash = $1", [H("mm")]);
+        expect(Number(rows[0].n)).toBe(2);
+        // ...and the READ dedupes them back to one signal.
+        const { rows: eff } = await c.query(
+          "SELECT signal_hash, notarized_by, effective_status FROM signal_records_effective WHERE signal_hash = $1",
+          [H("mm")],
+        );
+        expect(eff).toHaveLength(1);
+        expect(eff[0].notarized_by.sort()).toEqual(["eu-central-1", "us-east-1"]);
+        expect(eff[0].effective_status).toBe("active");
+      });
+    });
+
+    it("the SAME node cannot notarize the same hash twice — idempotence is still enforced", async () => {
+      // The composite PK must not weaken same-node idempotence: a retry against the SAME node is a
+      // duplicate and must conflict, so the write path can treat it as a no-op.
+      await asCelloService(async (c) => {
+        await insert(c, record({ signal_hash: H("dup"), accepting_node: "us-east-1" }));
+        await expect(insert(c, record({ signal_hash: H("dup"), accepting_node: "us-east-1" })))
           .rejects.toThrow(/duplicate key|unique/i);
       });
+    });
+
+    it("a revocation TOMBSTONE from ANY node revokes the signal everywhere (convergent)", async () => {
+      // The other half of the same problem: a revoke that arrives at a node BEFORE the row it targets
+      // would UPDATE zero rows and be lost. So a node lacking the row inserts a revoked row instead —
+      // and `revoked` from ANY copy wins, so the answer converges regardless of arrival order.
+      await asCelloService(async (c) => {
+        await insert(c, record({ signal_hash: H("rv"), accepting_node: "us-east-1" }));
+        expect(await effective(c, H("rv"))).toBe("active");
+        await insert(c, record({ signal_hash: H("rv"), accepting_node: "ap-northeast-1", status: "revoked" }));
+        expect(await effective(c, H("rv"))).toBe("revoked");
+      });
+    });
+  });
+
+  describe("authorized_issuers — the chokepoint's key set (determination §3.2)", () => {
+    it("exists, and is EMPTY — an unseeded directory notarizes NOTHING rather than falling open", async () => {
+      // ABSENT IS NOT FINE. A placeholder key here would look configured while authorizing nobody;
+      // no key at all means every submission is refused, which is the correct failure.
+      const { rows } = await pool.query("SELECT COUNT(*) AS n FROM authorized_issuers");
+      expect(Number(rows[0].n)).toBe(0);
+    });
+
+    it("cello_service can READ the set but NOT add to it", async () => {
+      // The write path is checked AGAINST this set; it must never be able to add to the set it is
+      // checked against, or a compromised directory process could authorize itself.
+      await asCelloService(async (c) => {
+        await expect(c.query("SELECT * FROM authorized_issuers")).resolves.toBeTruthy();
+        await expect(
+          c.query("INSERT INTO authorized_issuers (pubkey, role) VALUES ('deadbeef','submitter')"),
+        ).rejects.toThrow(/permission denied/i);
+      });
+    });
+
+    it("constrains role and status — these are protocol enumerations, not an open axis", async () => {
+      await pool.query("INSERT INTO authorized_issuers (pubkey, role, label) VALUES ($1,'submitter','t')", [`k-${tag}`]);
+      await expect(
+        pool.query("INSERT INTO authorized_issuers (pubkey, role) VALUES ($1,'god-mode')", [`k2-${tag}`]),
+      ).rejects.toThrow(/violates check constraint/i);
+      await pool.query("DELETE FROM authorized_issuers WHERE pubkey LIKE $1", [`k%-${tag}`]);
     });
   });
 });

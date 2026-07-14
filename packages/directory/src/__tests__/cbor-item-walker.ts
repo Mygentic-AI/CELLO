@@ -45,6 +45,13 @@ function argBytes(ai: number): number {
 function readArg(b: Uint8Array, off: number, ai: number): { value: number; next: number } {
   const n = argBytes(ai);
   if (n === 0) return { value: ai, next: off + 1 };
+  // Bounds-check FIRST. Reading past the end yields `undefined`, which poisons the arithmetic into
+  // NaN — and NaN fails every `>=` guard downstream, so the walker would wander through garbage and
+  // eventually throw a message naming the wrong cause ("NaN trailing bytes"). Fail here, where the
+  // cause actually is.
+  if (off + 1 + n > b.length) {
+    throw new Error(`CBOR: truncated — a ${n}-byte argument at offset ${off} runs past the end of the buffer (${b.length} bytes)`);
+  }
   let v = 0;
   for (let i = 0; i < n; i++) v = v * 256 + b[off + 1 + i];
   return { value: v, next: off + 1 + n };
