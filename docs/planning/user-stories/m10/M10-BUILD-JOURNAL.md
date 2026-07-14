@@ -407,6 +407,201 @@ Closed-set: an unknown extra envelope field is rejected loud. Null-slot: `expire
 
 ---
 
+### 2026-07-14 — Entry 5: DESIGN NOTE — DOD-STORE-CLIENT-1 (written before any code)
+
+**Target behavior (one sentence).** A daemon has two SQLCipher tables — a wallet of signals it holds
+about itself, and a per-contact store of signals other agents presented to it — and neither of them
+knows what a signal *type* is.
+
+**Spec anchors.** Spec-of-record §3 (the envelope columns), §3.1 (the two tables), §14.10 (the
+backfill), §14.11 (content-addressed, daemon-portable wallet rows). Decisions: **M10-D4** (two
+tables, never one with a role flag), **M10-D5** (`subject_kind`), **M10-D14** (wallet rows carry NO
+agent association: PK = `signal_hash`, one row per signal per daemon).
+
+**This unit touches TWO repos** (PROCEDURE §2a, stated up front): `cello-client` (the tables + the
+store API) and `trustless-cello` (`packages/e2e-tests/src/spine/j-trust.spine.test.ts`, which reads
+`trust_signals` by raw SQL at lines 149 and 185).
+
+**Producer/consumer chain — the M8 scaffold, triaged by SUBJECT (§5b), not by file.** Evidence:
+- **`trust_signals` (M8)** — `db-identity-store.ts:178` —
+  `(signal_hash PK, agent_id NULLABLE, signal_kind, payload, received_at)`.
+- **Producer:** exactly ONE, `inbound-sessions.ts:601`, the `trust_signal_pickup` arm, and it passes
+  **`agentId: null`** — the INV-AGENT-SCOPED defect the investigation found (§9), present at birth.
+- **Consumer:** `getTrustSignal` has **ZERO production callers.** Nothing in the daemon reads this
+  table. The only reader anywhere is the spine test's raw SQL.
+- **The spine test's SUBJECT is ALIVE.** `j-trust.spine.test.ts` exercises the portal→directory→
+  daemon delivery pipe (seal → anchor → push → re-hash → compare → store → ACK). That pipe is prior
+  art M10 explicitly keeps — investigation §5: *"M10 does not invent holder delivery"* — so the test
+  is a live subject behind a doomed driver. **It gets RE-POINTED, never deleted.**
+
+**The sequencing fork this exposes.** The DoD says the M8 table is *"dropped and its signals
+re-minted via the §14.10 backfill, never migrated."* Taken literally as "drop it in THIS unit," the
+drop lands several units before its replacement: the M8 writer would write to columns that no longer
+exist, the spine test would go red, and there would be an open window — spanning DIR-WRITE-1,
+REVOKE-1, REGISTRY-1 — in which the delivery pipe has no coverage at all. A red gate held open
+across four units is how a coverage hole becomes permanent.
+
+**Decision — M10-D18: this unit is ADDITIVE; the DROP travels with the BACKFILL.** Create the two
+new tables and their store API now. Leave the M8 scaffold table and its single writer untouched.
+Drop the scaffold in **DOD-MINT-INTERNAL-1** — the unit that re-points the delivery arm onto real
+CBOR envelopes and re-points the spine test with it — so the drop and its replacement land in the
+same commit, no gate is ever red, and no coverage window opens. This is not a scope change: the DoD
+already binds the drop to the backfill (*"re-minted via the §14.10 backfill"*), and MINT-INTERNAL-1
+**is** the backfill. Rejected: drop-now-rebuild-later (opens the window above); and keeping both
+tables permanently (two sources of truth for one fact — exactly the M8 defect, preserved).
+
+**The schema.**
+```sql
+-- WALLET: signals ABOUT this daemon's agents. M10-D14 — no agent association at all.
+CREATE TABLE IF NOT EXISTS wallet_trust_signals (
+  signal_hash     TEXT PRIMARY KEY,     -- content-addressed: the row IS its hash (§14.11)
+  subject_kind    TEXT NOT NULL,        -- 'account' | 'agent'  (hashed — decides who may present)
+  subject         TEXT NOT NULL,        -- (hashed)
+  issuer_kind     TEXT NOT NULL,        -- (hashed) drives LLM framing
+  issuer_pubkey   TEXT NOT NULL,        -- (hashed)
+  type            TEXT NOT NULL,        -- OPAQUE STRING. No enum, no CHECK, no switch. INV-ZERO-BUMP.
+  schema_version  INTEGER NOT NULL,     -- (hashed)
+  payload         BLOB NOT NULL,        -- OPAQUE BYTES. Never parsed, never a column. (hashed)
+  issued_at       INTEGER NOT NULL,     -- (hashed) epoch SECONDS
+  expires_at      INTEGER,              -- (hashed) NULL = never expires
+  supersedes_hash TEXT,                 -- (hashed) NULL = first mint
+  status          TEXT NOT NULL,        -- MUTABLE, OUTSIDE the hash — that is why it is not hashed
+  received_at     INTEGER NOT NULL      -- local bookkeeping, outside the hash
+);
+
+-- RECEIVED: signals OTHER agents presented to one of MY agents. Consent scoping IS per-agent here.
+CREATE TABLE IF NOT EXISTS contact_trust_signals (
+  agent_id        TEXT NOT NULL,        -- NOT NULL. The M8 `agent_id = null` defect dies here.
+  contact_pubkey  TEXT NOT NULL,
+  signal_hash     TEXT NOT NULL,
+  ... same envelope columns ...
+  verified_at     INTEGER NOT NULL,     -- when WE re-verified it (M10-D4 — evidence, never an input)
+  received_at     INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, contact_pubkey, signal_hash),
+  FOREIGN KEY (agent_id, contact_pubkey) REFERENCES contacts(agent_id, pubkey) ON DELETE CASCADE
+);
+```
+`contacts` is `PRIMARY KEY (agent_id, pubkey)` (`session-node-manager.ts:640`), so the composite FK
+lands cleanly and INV-AGENT-SCOPED is enforced by the DATABASE, not by a query convention: a
+received signal cannot exist except hung off one agent's contact row.
+
+**Why the wallet table is renamed, not reused.** `wallet_trust_signals` vs the M8 `trust_signals`.
+Reusing the name would force the additive step above to collide with the live scaffold. The rename
+also makes the M8 drop a one-line, greppable event rather than an in-place column rewrite whose
+failure mode is a half-migrated table on an operator's disk (client-side migrations are
+unrecoverable without manual intervention — repo CLAUDE.md).
+
+**Invariants at stake.** INV-ZERO-BUMP — `type` is `TEXT`, with **no `CHECK`, no enum, no index
+predicated on a type value**; a reviewer must be able to grep this schema and find nothing per-type.
+INV-AGENT-SCOPED — the composite FK above. INV-STATELESS-RECIPIENT (M10-D4) — `contact_trust_signals`
+is EVIDENCE: it is written after verification and is never read as an input to policy evaluation, and
+this unit ships **no read path that policy could consume**, which is the structural way to keep that
+true rather than a rule someone must remember.
+
+**Falsification pass.** (1) Does the call site have the method on the INTERFACE? — the store API is
+new; `db-identity-store.ts` already owns the SQLCipher handle and the `CREATE TABLE` convention, so
+the tables go where the other tables are. Checked. (2) Responsibility — the wallet is identity-scoped
+(the daemon's own facts), so `db-identity-store` is right; the received store is contact-scoped and
+FKs to `contacts`, which lives in `session-node-manager.ts:640`. **These are two different files with
+two different DB handles — VERIFY they are the same SQLCipher database before writing the FK, or the
+foreign key references a table in another file's connection and fails at runtime, not at typecheck.**
+That is the one thing that can sink this unit and it is checked FIRST. (3) Redundancy — none; no
+envelope store exists. (4) What else breaks — `storeTrustSignal`/`getTrustSignal` keep working
+untouched under M10-D18, so nothing breaks; the spine test stays green.
+
+**Test plan sketch.** Red-first, in the daemon's DB tests: both tables exist with exactly the
+envelope columns; `type` accepts a string no code has ever seen (INV-TYPE-CARRY) and there is no
+`CHECK` to reject it; a `contact_trust_signals` insert with a `NULL` agent_id is REFUSED by the
+schema; an insert for a contact that does not exist is REFUSED by the FK (INV-AGENT-SCOPED, enforced
+by the DB); `status` is updatable while the hash is not; duplicate delivery is a no-op
+(`INSERT OR IGNORE` — the §14.11 sync property); migration is idempotent (run it twice) and
+**fresh schema == migrated schema** (build a DB from scratch and one from an M8-era DB, compare
+`PRAGMA table_info` — the DoD clause).
+
+---
+
+### 2026-07-14 — Entry 6: DOD-CBOR-1 BUILT + REVIEWED → 🟡. The reviewer found a float where a hash should be.
+
+**Shipped.** `@cello-protocol/protocol-types/src/trust-signal.ts` — `encodeTrustSignalEnvelope`,
+`hashTrustSignalEnvelope`, `verifyTrustSignalHash`, plus 7 frozen cross-party vectors. Commits
+`bec1230` (build) and `3ae336a` (review fixes). Gates: **164/164** protocol-types tests, lint,
+typecheck, build; presence asserted on the BUILT artifact (`dist/trust-signal.js`), not on source.
+
+**THE BUG — the one the unit existed to prevent, sitting inside the unit.** cbor-x encodes any JS
+`number` above `0xffffffff` as an IEEE **float64** (`fb`), never a uint64 (`1b`). Measured:
+
+```
+encode(1768000000)         -> 1a 69618a00           uint32   ✅
+encode(4920000000)         -> fb 41f25413e0000000   FLOAT64  ❌
+encode(BigInt(4920000000)) -> 1b 0000000125413e00   uint64   ✅  ← what RFC 8949 requires
+```
+
+`requireEpochSeconds` accepted up to 1e11, so the entire band `[2^32, 1e11)` was **accepted and
+float-encoded**. `schema_version` had no upper bound at all — `1e300` passed and encoded as a float.
+
+**This is not a 2106 problem.** An `expires_at` a century out is `1.768e9 + 3.15e9 = 4.92e9`, well
+past 2³², and reachable by the first long-dated signal the portal mints. A conforming CBOR library in
+Rust/Go/Python emits `1b…`; we emitted `fb…`. Different preimage → different SHA-256 → a permanent,
+unfixable `hash_mismatch` on a perfectly valid signal — and per spec §5, retrofitting the canonical
+form once signals exist breaks every hash already minted.
+
+**Three compounding failures, each worth remembering:**
+1. **The module forbade it in its own header** ("NO FLOATING POINT … a float would not survive
+   byte-agreement across languages") and did it anyway, twelve lines down.
+2. **Both sibling TBS builders already carry the guard** — `buildSealTbs` (`session.ts:160,271`) and
+   `buildAgentRevocationTbs` (`revocation.ts:39`) both do `v > 0xffffffff ? BigInt(v) : v`. Entry 4's
+   commit claimed the preimage was built *"exactly as every other signed TBS in CELLO already does
+   it."* It was not. It was **the only one without the guard** — the claim of matching the house
+   pattern was made without checking the one line of the house pattern that mattered.
+3. **The tests looked like coverage and were not.** The whole suite stayed inside the safe band: the
+   hand-derived vector used 1e9, the largest frozen vector 1.79e9, and the property test drew
+   `rnd(2_000_000_000)` — **strictly below `0xffffffff`**. So a `describe("no floating point, ever")`
+   block read as coverage of the float class while never once drawing a value that emits a float. A
+   float-emitting implementation passed all 33 tests. **A property test that cannot reach the failing
+   band is not testing the property** — the generalizable lesson, and the reason the revert test alone
+   would not have caught this either.
+
+**Fixed:** `asCborInteger()` coerces `> 0xffffffff` → BigInt for `issued_at` / `expires_at` /
+`schema_version`; values past `MAX_SAFE_INTEGER` are REFUSED rather than hashed as an approximation
+(past 2⁵³ a JS number cannot represent consecutive integers, so there is no honest hash to produce).
+The property test now draws ACROSS the 2³² boundary and asserts no preimage anywhere in the random
+space contains a float64 marker; a far-future vector (`expires_at = 4.92e9`) is frozen; and the
+encoder-premise test now PINS the trap itself, so a future cbor-x change surfaces as a red test
+rather than as a signal that quietly stopped verifying.
+
+**The other seven findings, all fixed.** F2 (MED): the vectors shipped in `files` but the `exports`
+map declared only `"."`, so `import "@cello-protocol/protocol-types/test/vectors/…"` throws
+`ERR_PACKAGE_PATH_NOT_EXPORTED` — the two repos the `files` line was added for could not read them;
+the shipped artifact did not do the job its commit claimed. F3 (MED): no Unicode normalization guard,
+a hazard **spec §5 names by name** — "é" is `c3a9` in NFC and `65cc81` in NFD; now REFUSED, never
+silently normalized (silent normalization would make two DIFFERENT inputs hash to the SAME signal — a
+collision we manufactured ourselves). F4 (MED): `issuer_pubkey` is hex and hex has a CASE — `"AABB"`
+and `"aabb"` are one key and two hashes; now lowercase-only. F5/F6 (LOW): the hash-length constant
+coupled two independent sizes; the deliberate return-false-vs-throw asymmetry is now documented so no
+call site papers over it with `catch { return false }`. F7: checked, NOT a hole (recorded so nobody
+re-checks it).
+
+**F8 — a PRE-EXISTING defect found and fixed (standing rule: fix it when you find it).**
+`buildPrimaryTransferTbs` had the same missing guard, and its `timestamp` is documented as
+**milliseconds** (`Date.now()` ≈ 1.77e12 — far past 2³²). Any caller passing ms would have had the
+TBS hashed as a float, and any non-cbor-x verifier would compute different bytes and **reject a
+genuine primary transfer**. Verified safe to fix: `primary_transfer_request` has **no producer in
+cello-client**, so no signature exists over these bytes, and every timestamp below 2³² encodes
+byte-identically to before (pinned by a test). Audited the rest while there: `session.ts` and
+`revocation.ts` guard; `content-delivery.ts` builds raw byte concatenations with no CBOR integers.
+**primary-transfer was the only remaining hole.**
+
+**The reviewer independently decoded all six frozen vectors byte-by-byte against RFC 8949** and
+confirmed the hand-derived reference is genuine, not generated-and-asserted-back. The anchor holds.
+
+**Why 🟡 and not ✅.** Clause 4 wants *all three* consumers agreeing byte-for-byte in CI. Only one
+consumer exists today, and the vectors only became reachable to the other two with the F2 `exports`
+fix — which needs a publish to take effect. **Not ✅ until the published artifact works** (the DoD's
+own rule). Completes at the Tier 0 publish boundary, batched with DOD-STORE-CLIENT-1 rather than
+burning a cascade per unit (PROCEDURE §2c).
+
+---
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client

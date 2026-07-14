@@ -119,7 +119,15 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   consumers agree byte-for-byte on fixed vectors + property-based random envelopes) runs in CI.
   Where the component lives (published package vs per-repo vendored spec-with-vectors) is
   decided by DOD-PORTAL-ARCH-1's architecture. Design note: journal Entry 1 (the worked
-  example). — ❌
+  example). —
+  🟡 (2026-07-14 — BUILT + REVIEWED, not yet cross-party. `@cello-protocol/protocol-types`
+  `trust-signal.ts`: preimage is a fixed-order CBOR **array** (M10-D15/D16/D17), 164/164 green,
+  reviewed by cello-unit-reviewer → **1 BLOCKING finding: a 100-year `expires_at` was hashed as an
+  IEEE float64** — all 8 findings fixed (`bec1230`, `3ae336a`). **The remaining clause is the
+  cross-party half:** only ONE consumer exists today, and the frozen vectors only became reachable
+  to the other two repos with the `exports` fix, which needs a publish. Completes at the Tier 0
+  publish boundary (batched with DOD-STORE-CLIENT-1), when trustless-cello and cello-portal check
+  their SHIPPED component against the vectors in CI. → Entries 4, 6.)
 - **DOD-STORE-CLIENT-1** — TWO daemon tables per spec §3.1 (M10-D4), never one with a role flag:
   **(1) wallet `trust_signals`** per spec §3 (envelope columns, opaque payload BLOB, status mutable
   outside the hash; subject = the local agent) — the existing M8 scaffold table is **dropped and its
@@ -381,6 +389,27 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   misaligned `supersedes_hash`. Fixed arity + explicit null is the unambiguous form. The two
   nullable fields are `expires_at` (some signals never expire) and `supersedes_hash` (a first mint
   supersedes nothing). Reverse: not foreseen — this is forced by M10-D15. → Journal Entry 4.
+
+- **M10-D18 (2026-07-14) — DOD-STORE-CLIENT-1 is ADDITIVE; the M8 table's DROP travels with the
+  BACKFILL.** Fork: the DoD says the M8 `trust_signals` scaffold is *"dropped and its signals
+  re-minted via the §14.10 backfill."* Read as "drop it in STORE-CLIENT-1," the drop lands several
+  units before its replacement: the M8 writer (`inbound-sessions.ts:601`, the only producer) would
+  write to columns that no longer exist, and `j-trust.spine.test.ts` would go red — leaving the
+  delivery pipe with NO coverage across DIR-WRITE-1, REVOKE-1 and REGISTRY-1. A red gate held open
+  across four units is how a coverage hole becomes permanent. Choice: STORE-CLIENT-1 creates the two
+  new tables and leaves the scaffold standing; **DOD-MINT-INTERNAL-1 drops it in the same commit that
+  re-points the delivery arm onto real CBOR envelopes and re-points the spine test.** Not a scope
+  change — the DoD already binds the drop to the backfill, and MINT-INTERNAL-1 *is* the backfill.
+  Rejected: drop-now-rebuild-later (opens the window above); keeping both tables permanently (two
+  sources of truth for one fact — the M8 defect, preserved). → Journal Entry 5.
+- **M10-D19 (2026-07-14) — `PRAGMA foreign_keys = ON` in the daemon's SQLCipher DB.** SQLite defaults
+  FK enforcement **OFF**, so a declared `FOREIGN KEY` is decorative — a guard that always passes.
+  INV-AGENT-SCOPED is supposed to be enforced by the DATABASE (a received signal cannot exist except
+  hung off one agent's contact row); without the pragma the schema would LIE about that. Verified
+  safe before flipping it: the daemon declares **zero** existing FKs anywhere, so enforcement cannot
+  retroactively violate a constraint or break an existing write. Rejected: enforcing the invariant
+  only in the store's query layer — a convention every future caller must remember, which is exactly
+  what "ABSENT IS NOT FINE" says not to rely on. → Journal Entry 5.
 
 ## Parked
 *(Genuine undecidable forks: journal + here. Never silently dropped.)*
