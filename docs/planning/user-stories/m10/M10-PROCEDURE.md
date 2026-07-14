@@ -198,20 +198,45 @@ The fired prompt must check REAL health, not top-level status alone:
   rollout, per repo CLAUDE.md M5 rule 9 — that stays; this cron covers the outer 25–30 min wait.)
 
 **Cron 2 — 30-min heartbeat / anti-stall nudge (armed for the WHOLE milestone).** Cadence every
-~30 min at an off-minute, e.g. `12,42 * * * *` (never `0,30`). Recurring. The fired prompt is
-the self-audit:
-1. Are M10-PROCEDURE / M10-DEFINITION-OF-DONE actually in context right now? If compaction
-   dropped them, re-read both before doing anything else.
-2. Stalled on a decision? Pick the best-practice choice (§3a rubric), log it in the DoD
-   Decisions section, proceed.
-3. Waiting for confirmation on something already authorized (code changes, AWS/publish actions
-   per the REALITY CHECK)? Unwanted — continue now. EXCEPTION: genuinely waiting on a named
-   human-only step (§2c) — state it plainly; that is a real stop, not a frivolous one; a cron
-   firing is not a signal to fake progress past it.
-4. >15 min since the last commit? Commit now.
-5. Did the last unit go green without a `cello-unit-reviewer` dispatch? Dispatch it now.
-6. State one line of current status (DoD line, red/green) so a human skimming later can see the
+~30 min at an off-minute, e.g. `12,42 * * * *` (never `0,30`). Recurring.
+
+> **The cron is a DEFIBRILLATOR, not a metronome (Andre, 2026-07-14 — a colossal-violation-level
+> rule).** Its ONLY job is to restart a session that somehow stalled. It is never a checkpoint,
+> never a reason to pause, and never something to wait for. Output of the shape *"waiting for the
+> next cron tick"* is itself the bug it exists to prevent, and it defeats the entire purpose of
+> running autonomously. If you are working, a fired cron changes nothing: keep working.
+> **And never call `AskUserQuestion` — it is a hard blocker that stops the session dead.**
+
+The fired prompt is the self-audit (this list IS the cron script — re-arm from it verbatim):
+1. Are M10-PROCEDURE / M10-DEFINITION-OF-DONE (+ the latest journal entry) actually in context
+   right now? If compaction dropped them, re-read before doing anything else — **and RE-ARM BOTH
+   CRONS if they are gone.**
+2. Stalled on a decision? Resolve per §3a: verifiable from a source → verify, never escalate what
+   you can check; has a best practice → take it, log an M10-D* entry, proceed (redo > block);
+   genuinely undecidable → PARK it and pull the next unit.
+3. Waiting for confirmation on something already authorized (code, AWS/dev deploys, pushes to
+   main, beta publishes per the REALITY CHECK)? Unwanted — continue now. **Only TWO human-only
+   steps exist** (§2c): the `latest` dist-tag promotion and the `/mcp` reconnect. Blocked on one of
+   those → say so plainly and work a DIFFERENT DoD line meanwhile. Never idle.
+4. **Publishing? Load `/cello-publish` for THIS publish — every publish, no exceptions.** Loading
+   it earlier in the session does NOT count; "I loaded it once, then did the next one from memory"
+   is the known failure mode and it has burned npm versions and shipped `workspace:*` cross-pins.
+   Hook-enforced. Publish to **beta**; pin the local install to the exact version and VERIFY the
+   pin (`claude mcp get cello`); verify the published BINARY (`npm view … dependencies`).
+   **Never run the `latest` promotion** — prepare + `--dry-run` + hand to Andre.
+5. **Deploying? Start the slow thing FIRST and keep coding while it is in flight** — a push to
+   `main` triggers CodePipeline, and a directory deploy is ~25–30 min across 3 regions. Never idle
+   on a deploy. Arm Cron 1 while one is in flight; batch directory pushes (§2a).
+6. >15 min since the last commit? Commit now — **detailed message** (the why, the forensics, the
+   decision; Andre relies heavily on commit messages, so never scrimp on them).
+7. Did the last unit go green without a `cello-unit-reviewer` dispatch? Dispatch it now.
+8. State one line of current status (DoD line, red/green) so a human skimming later can see the
    session was alive and unstuck at this timestamp.
+
+**SELF-TERMINATE (mandatory — the cron must clean itself up).** When M10 v1 closes
+(DOD-T4-JOURNEY-1 ✅), or the work is otherwise finished, abandoned, or handed back, the fired
+prompt calls `CronDelete` on its own job ID. A heartbeat left armed after the work is done wakes
+the session forever. This clause belongs IN the cron prompt, not only here.
 
 ## 4. First actions (order matters)
 1. **DOD-PORTAL-ARCH-1** — investigate the current portal as it actually is, then determine and
