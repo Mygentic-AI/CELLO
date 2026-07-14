@@ -941,6 +941,52 @@ therefore *untested by construction*. Verify per node with `pg_publication_table
 
 ---
 
+### 2026-07-14 — Entry 11: DOD-REVOKE-1 reviewed — a tombstone SQUATTED the real notarization's PK
+
+**Built:** `revokeSignal` sharing the chokepoint's `verifySignedRequest` (role-based `submitter`
+auth), `POST /internal/signal/revoke`, and the `is_tombstone` refinement to V46 (Entry 11's V46 amend
+is local-only — dev/staging/prod never saw it). 8 tests green first pass.
+
+**The review found a HIGH one I walked past, and two sharing its root.**
+
+**F1 (HIGH) — the tombstone squatted the real notarization's PK and dropped it.** The tombstone was
+INSERTed at `(signal_hash, thisNode)` — the exact PK a real record uses. So a real submit arriving
+AFTER a revoke at the same node hit submit's `ON CONFLICT (signal_hash, accepting_node) DO NOTHING`
+and was **silently dropped, logged as a "benign duplicate."** A notarization lost at the chokepoint
+whose whole promise is "notarized ⇒ we hold the record." Verified against Postgres: after a tombstone
+at `(H, us-east-1)`, the real submit for H left only the placeholder — `subject='alice-REAL'` gone.
+Reachable by a legitimate revoke-before-submit ordering, and by an attacker pre-revoking H at every
+node so the real signal is born dead with its provenance erased.
+
+**F3 (TOCTOU) + F4 (replicated-UPDATE skip)** shared the root: the design had TWO revocation
+mechanisms — UPDATE the real row, or insert a tombstone — that collided (F1), raced (F3), and didn't
+replicate robustly (F4, since a replicated UPDATE reaching a lagging node before its row is skipped).
+
+**The fix is one decision: revocation is ALWAYS a tombstone INSERT, never an UPDATE, at a distinct PK
+`(signal_hash, 'revoke:' || node)`.** It cannot collide with a real record, it is a single race-free
+INSERT, and an INSERT replicates robustly where an UPDATE is skipped. The real row's `status` stays
+`active`; correctness lives in `signal_records_effective` (`BOOL_OR(status='revoked')`), which nothing
+bypasses. F5 (the old `WHERE status='active'` missing a superseded signal) dissolved — the tombstone
+filters on nothing. Two coverage gaps filled: the F1 revoke-then-submit (real notarization survives),
+and revoke-of-superseded.
+
+**The pattern across tonight's reviews, again:** I reasoned about the tombstone's PK and did not notice
+it was the SAME namespace as a real record. The reviewer's F1 is the third time a reviewer caught
+something I had convinced myself was fine (float64, the FK-replication claim, now this). Each was a
+place I asserted a property without testing it against the actual store. The fix is cheap; the habit —
+verify the claim against Postgres, not against my model of Postgres — is the point.
+
+**F6 (LOW → Post-v1):** the blind tombstone hardcodes `issuer_kind='portal'` and authorizes on role
+`submitter` regardless of the target's real `issuer_kind`. Harmless today (filtered from reads,
+agent-issued is post-v1) but a `submitter` key must not be able to tombstone an agent-issued signal
+once those exist — logged in Post-v1.
+
+**Also settled (self-caught before the report):** F2 — `submitSignal` had kept its OWN inlined auth
+after I extracted `verifySignedRequest`; both write paths now run the one helper, so the "cannot drift"
+guarantee is real, not aspirational (`342b2c7e`).
+
+62/62 across all five M10 directory test files.
+
 ### 2026-07-14 — Entry 12: DESIGN NOTE — DOD-REGISTRY-1 (written before any code)
 
 **Target behavior (one sentence).** A client, offline from the portal, learns a type's class /

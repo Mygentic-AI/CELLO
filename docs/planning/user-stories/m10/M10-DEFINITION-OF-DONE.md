@@ -516,6 +516,10 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
 - **Connection bonds / staking / fees (Class 4)** — needs the commerce layer.
 - **LinkedIn, X, Facebook, Instagram** — playbook runs; LinkedIn first.
 - **SIM-age enrichment; device attestation (native app)** — per taxonomy.
+- **Agent-issued revocation must use exact-pubkey auth, and the revoke tombstone must respect the
+  target's real `issuer_kind`** (REVOKE-1 review F6). Today revoke authorizes on role `submitter` and
+  writes a `portal` tombstone regardless — fine while every signal is portal-issued, but a `submitter`
+  key must not be able to tombstone an agent-issued endorsement once those exist. Revisit with intake.
 - **Recipient re-scan of endorsements** (spec §0.1) — decide when endorsements land.
 - **Review-prompt on revocation of a tier-earning signal** (spec §9) — needs the address-book
   review-prompt surface; design with the rename-notice pattern.
