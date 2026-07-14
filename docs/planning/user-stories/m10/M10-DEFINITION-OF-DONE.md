@@ -158,13 +158,20 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   subject, issuer_pubkey, issuer_kind, type-as-opaque-string, status, superseded_by, revoked_at,
   accepting_node, scanner_version) + replication of records AND status changes over the existing
   replication path (spec §14.1). Flyway migration + `OpsAgentExpectedMigrationVersion` bump. —
-  🟡 (2026-07-14 — BUILT + RUN GREEN, review in flight. `V46__signal_records.sql`: opaque `type`
-  with NO CHECK/enum/type-predicated index (zero-bump at the schema level); no payload column and no
-  PII (INV-DIR-DUMB); append-and-amend — INSERT/SELECT/UPDATE but **no DELETE grant**; supersession
-  LINKS records rather than overwriting. `signal_records` added to `PUBLICATION_TABLES`;
-  `OpsAgentExpectedMigrationVersion` 45→46. **9/9 green against real Postgres** with all prior
-  migrations applied and zero checksum failures on V1–V46. Not ✅ until `cello-unit-reviewer` clears
-  it. → Entry 8.)
+  🟡 (2026-07-14 — BUILT + REVIEWED, **16/16 green** against real Postgres. `V46`: `signal_records`
+  (opaque `type` — no CHECK/enum/type-predicated index; exact-allowlist column test for INV-DIR-DUMB;
+  append-and-amend, no DELETE grant) **+ `authorized_issuers`** (seeded EMPTY — an unseeded directory
+  notarizes nothing rather than falling open). Reviewed → **2 blocking findings, both fixed**: the
+  lone `signal_hash` PK **would have wedged federation for all 20 tables on an ordinary timeout**
+  (M10-D20 — composite PK + derived status), and `authorized_issuers` was missing entirely.
+  **Still OWED before ✅ (deploy-time, not code):** the replication clause is *inert* until
+  `./infra/setup-replication.sh` is re-run per environment — editing `PUBLICATION_TABLES` changes
+  nothing in a live DB, and nothing detects the omission (review F4: no error, no alarm, and all 16
+  tests still pass, because they run against ONE local Postgres with no replication at all). Verify
+  with `SELECT 1 FROM pg_publication_tables WHERE pubname='cello_pub' AND tablename IN
+  ('signal_records','authorized_issuers')` **on each node**, and put the live SSM
+  `expected-migration-version` at 46 (infra/STATE.md records a prior template-vs-live drift).
+  → Entries 8, 10.)
 
 ## Tier 1 — The write path + internal signals (phone, email)
 
@@ -184,7 +191,22 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   **Negative AC:** replay a captured submit after revoking its signal — status stays `revoked`.
   The new surface is served over TLS (the HTTPS listener this unit adds also fronts the legacy
   `/internal/*` routes — determination §3). Design note first (PROCEDURE §6: submission signature +
-  key custody; determination §3 fixes the shape). — ❌
+  key custody; determination §3 fixes the shape).
+  **Clauses forced by the STORE-DIR-1 review (2026-07-14) — these are ACs, not notes:**
+  - **A 0-row status write is a LOUD FAILURE, never a silent success** (F3). A revoke/supersede
+    against a node that has not yet received the row matches zero rows and returns HTTP 200 today —
+    so the signal stays `active` on every node, forever. That is the "cheerfully vouching for a dead
+    signal" failure the whole line exists to prevent. Check `rowCount`, and where the row is absent
+    write the **tombstone** (M10-D20) rather than updating nothing. Error names its cause
+    (`signal_record_not_present_at_node`), never `revoke_failed`.
+  - **`scanner_version` travels INSIDE the signed request body** (F5). The directory cannot see the
+    payload and therefore cannot re-run the scan — it is the submitter's *assertion*. Outside the
+    signature it is forgeable, and a forged `scanner_version` is a lie stored as evidence, which
+    silently voids spec §14.1's "notarized ⇒ scanned-clean-at-birth".
+  - **`accepting_node` is written by the node itself**, never accepted from the request (it is half
+    the PK under M10-D20; a submitter that could choose it could collide rows deliberately).
+  - **Enrol the portal's KMS pubkey into `authorized_issuers`** from `kms:GetPublicKey` (the table
+    ships EMPTY by design). Until then every submission is refused — which is the correct failure. — ❌
 - **DOD-REVOKE-1** — revocation = re-auth through the same chokepoint (spec §14.2): **role-based
   for portal-issued** (any active `submitter`-role key — exact-pubkey matching would strand old-key
   records unrevocable after a key rotation; determination §3.5, review F4), exact
@@ -435,6 +457,24 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   retroactively violate a constraint or break an existing write. Rejected: enforcing the invariant
   only in the store's query layer — a convention every future caller must remember, which is exactly
   what "ABSENT IS NOT FINE" says not to rely on. → Journal Entry 5.
+
+- **M10-D20 (2026-07-14) — `signal_records` PK is `(signal_hash, accepting_node)`, and status is
+  DERIVED, not trusted.** Fork: the DoD says `signal_hash` PK, and that lone PK **wedges federation**.
+  Measured: a subscriber's apply worker DOES enforce PK/UNIQUE (`session_replication_role = replica`
+  → duplicate key still errors). Two nodes that independently insert the same hash each replicate an
+  INSERT the other cannot apply → the apply worker retries forever → **the whole subscription stops,
+  for all 20 published tables.** Reachable via the DESIGNED path: the portal fails over (M10-D11), so
+  a lost response after a successful write re-submits the same hash to a second node. *A timeout takes
+  down federation.* Choice: composite PK — two nodes may each notarize a signal and their rows cannot
+  collide. Safe because the record is content-addressed (every hashed field derives from the envelope,
+  so rows sharing a hash agree on all of them; they differ only in provenance). Reads dedupe via
+  `signal_records_effective`. **Corollary — a replicated UPDATE can be silently LOST** (arriving
+  before its row, the apply worker skips it: no error, no retry), so both status transitions are also
+  expressible as INSERTs: supersession rides the new record's own hashed `supersedes_hash`; a revoke
+  at a node lacking the row inserts a revoked TOMBSTONE. Precedence: revoked > superseded > active.
+  Reverse: none — a lone PK is not viable under mesh replication. **Also settled here: an FK on
+  `supersedes_hash` would NOT have wedged replication** (the apply worker's RI triggers do not fire —
+  measured; my earlier claim to the contrary was an untested hypothesis written as fact). → Entry 10.
 
 ## Parked
 *(Genuine undecidable forks: journal + here. Never silently dropped.)*

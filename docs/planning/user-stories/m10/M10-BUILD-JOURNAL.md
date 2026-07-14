@@ -863,6 +863,84 @@ AC); an UNKNOWN type submits and stores exactly like a known one (INV-TYPE-CARRY
 
 ---
 
+### 2026-07-14 — Entry 10: DOD-STORE-DIR-1 reviewed — the reviewer disproved ME, and found worse
+
+**The review overturned my own diagnosis, and that is the entry's point.** I had convinced myself a
+self-referencing FK on `superseded_by` would halt logical replication on out-of-order arrival, and I
+**wrote it into V46's comments as established fact**. It is false. Measured:
+
+```
+SET session_replication_role = replica;     -- what the apply worker actually runs as
+INSERT … (dangling FK target)  ->  INSERT 0 1        ACCEPTED
+RESET session_replication_role;
+INSERT … (dangling FK target)  ->  ERROR: violates foreign key constraint
+```
+
+The apply worker runs as `replica`, in which the internal RI triggers do not fire — **Postgres does
+not enforce FKs on the subscriber.** My landmine was a hypothesis I never tested, dressed in a comment
+block as a fact. That is precisely the failure this repo's debugging discipline names ("narrating a
+hypothesis as fact is the default failure mode") — and I committed it *while fixing a different
+instance of it*. Two hours after writing "an error is not a root cause" in the journal.
+
+**But PK/UNIQUE *IS* enforced on the subscriber — and that is a real, catastrophic bug (F1).**
+
+```
+SET session_replication_role = replica;
+INSERT … (duplicate hash)  ->  ERROR: duplicate key value violates unique constraint
+```
+
+`signal_records` was content-addressed with `signal_hash` as a **lone PRIMARY KEY**. Two nodes that
+independently insert the same hash each replicate an INSERT the other cannot apply → the apply worker
+errors, retries forever → **THE ENTIRE SUBSCRIPTION STOPS. All 20 published tables.** Seals, profiles,
+presence, registrations stop federating too.
+
+And it rides the **designed** path: the portal reaches the directory through an ordered failover list
+(M10-D11). Submit H to us-east-1 → the row lands → **the response is lost** → the portal dutifully
+fails over and re-submits to eu-central-1, which hasn't received H yet and inserts its own row. Both
+replicate. **Federation is down because a request timed out.**
+
+**M10-D20 — PK is `(signal_hash, accepting_node)`.** Two nodes may each notarize a signal; their rows
+cannot collide, so no INSERT is ever unapplicable. Safe *because* the record is content-addressed:
+every hashed field derives from the envelope, so rows sharing a hash necessarily agree on all of them
+— they differ only in provenance. Reads dedupe through `signal_records_effective`.
+
+**Corollary — a replicated UPDATE can be SILENTLY LOST (F3).** Reaching a node before the row it
+targets, the apply worker skips it: no error, no retry. That node serves a dead signal as live
+forever, which breaks the DoD's own "status changes replicate" clause. The publication fixes the
+*transport* of a status change; it cannot conjure the row to change. So both transitions are now
+also expressible as INSERTs — supersession rides the new record's own hashed `supersedes_hash`; a
+revoke at a node lacking the row writes a **tombstone**. `revoked` from any copy wins, so it
+converges. Precedence: revoked > superseded > active.
+
+**Other findings fixed:** `authorized_issuers` was **missing entirely** from V46 (F2 — determination
+§3.2 places it here); it now ships, SELECT-only for `cello_service` (the write path is checked
+*against* this set and must never be able to add to it) and **seeded EMPTY** (a placeholder key would
+look configured while authorizing nobody — an empty set refuses everything, which is the correct
+failure). The DIR-DUMB test was a **denylist** of nine column names and was hollow — `envelope_bytes`,
+`body`, `plaintext`, `raw` all passed it; it is now an exact **allowlist** of the column set (F6).
+`issuer_kind` admitted 2 of the 3 values spec §3 names (F8) — narrowing a protocol enumeration to
+what launch happens to use is the same class of mistake zero-bump exists to prevent. `updated_at` had
+no producer and would have lied about when a row last changed (F9) — deleted. The header claimed the
+table could answer "not expired" when it holds no `expires_at` and must not (F10).
+
+**Two findings became DIR-WRITE-1 clauses** (not notes — they would evaporate): the 0-row status write
+must fail loud with its cause named, and `scanner_version` must travel *inside* the signed body or it
+is forgeable (the directory cannot see the payload, so it can never re-run the scan — the value is the
+submitter's assertion, and a forged one is a lie stored as evidence).
+
+**16/16 green** (was 9). The new tests cover what had **no coverage at all**: two nodes notarizing the
+same hash without colliding, the read deduping them to one signal, the convergent revocation tombstone,
+derived supersession with no UPDATE, revoked-beats-superseded, and a revoked replacement superseding
+nothing.
+
+**Still owed before ✅ (deploy-time, F4):** the replication clause is **inert** until
+`./infra/setup-replication.sh` is re-run per environment. Editing `PUBLICATION_TABLES` changes nothing
+in a live database — and nothing detects the omission: no error, no alarm, and all 16 tests still pass,
+because they run against ONE local Postgres with no replication at all. The DoD's second clause is
+therefore *untested by construction*. Verify per node with `pg_publication_tables`.
+
+---
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
