@@ -73,6 +73,11 @@ export function encodeSignalingAuthOk(frame: SignalingAuthOk): Uint8Array {
   if (frame.nodeId !== undefined) obj["nodeId"] = frame.nodeId;
   if (frame.signature !== undefined) obj["signature"] = frame.signature;
   if (frame.timestamp !== undefined) obj["timestamp"] = frame.timestamp;
+  // DOD-NAT-REACHABILITY-1: omit when absent/empty — pre-NAT clients see the
+  // exact frame shape they always did.
+  if (frame.relay_endpoints !== undefined && frame.relay_endpoints.length > 0) {
+    obj["relay_endpoints"] = frame.relay_endpoints;
+  }
   return ENC.encode(obj);
 }
 
@@ -920,6 +925,20 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     if (nodeId !== undefined) result.nodeId = nodeId;
     if (signature !== undefined) result.signature = signature;
     if (timestamp !== undefined) result.timestamp = timestamp;
+    // DOD-NAT-REACHABILITY-1: optional relay pool — per-entry strict, malformed
+    // entries dropped (an auth ack must never fail to decode on a bad hint).
+    if (Array.isArray(o["relay_endpoints"])) {
+      const endpoints: Array<{ peer_id: string; multiaddrs: string[] }> = [];
+      for (const entry of o["relay_endpoints"] as unknown[]) {
+        if (typeof entry !== "object" || entry === null) continue;
+        const e = entry as Record<string, unknown>;
+        if (typeof e["peer_id"] !== "string" || e["peer_id"].length === 0) continue;
+        const ma = e["multiaddrs"];
+        if (!Array.isArray(ma) || ma.length === 0 || !ma.every((a): a is string => typeof a === "string" && a.length > 0)) continue;
+        endpoints.push({ peer_id: e["peer_id"], multiaddrs: ma });
+      }
+      if (endpoints.length > 0) result.relay_endpoints = endpoints;
+    }
     return result;
   }
 

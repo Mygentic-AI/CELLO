@@ -1840,6 +1840,12 @@ export class CelloDirectoryNode {
           //   + UTF-8(agentPubkeyHex) + '\n'
           //   + UTF-8(nonceHex) + '\n'
           //   + UTF-8(isoTimestamp)
+          // DOD-NAT-REACHABILITY-1: hand the agent the available relay pool with
+          // the auth ack, so its standing receiver can take circuit-relay
+          // reservations BEFORE any session exists — a NAT'd agent is otherwise
+          // unreachable for its very first inbound request. Rides every auth_ok
+          // variant (signed and bare); omitted when no relay is known.
+          const relayEndpointsForAuthOk = this.#relayEndpointsForAuthOk();
           if (this.#directoryKeyProvider) {
             const nodeId = this.#directoryKeyProvider.getNodeId();
             const isoTimestamp = new Date(this.#clock.now()).toISOString();
@@ -1864,6 +1870,7 @@ export class CelloDirectoryNode {
                 nodeId,
                 signature: sigHex,
                 timestamp: isoTimestamp,
+                relay_endpoints: relayEndpointsForAuthOk,
               }));
             } catch (err) {
               this.#logger?.warn("directory.auth.challenge.sign.failed", {
@@ -1872,10 +1879,10 @@ export class CelloDirectoryNode {
                 error: err instanceof Error ? err.message : String(err),
               });
               // Signing failed: fall back to bare auth_ok for availability
-              this.#sendFrame(stream, encodeSignalingAuthOk({ type: "signaling_auth_ok" }));
+              this.#sendFrame(stream, encodeSignalingAuthOk({ type: "signaling_auth_ok", relay_endpoints: relayEndpointsForAuthOk }));
             }
           } else {
-            this.#sendFrame(stream, encodeSignalingAuthOk({ type: "signaling_auth_ok" }));
+            this.#sendFrame(stream, encodeSignalingAuthOk({ type: "signaling_auth_ok", relay_endpoints: relayEndpointsForAuthOk }));
           }
 
           // Stash peer transport info for session assignments.
@@ -5067,6 +5074,27 @@ export class CelloDirectoryNode {
   }
 
   // ─── Transport helpers ───────────────────────────────────────────────────────
+
+  /**
+   * DOD-NAT-REACHABILITY-1: the relay endpoints an authenticating agent may take
+   * circuit-relay reservations with. Pool-managed directories hand out every
+   * AVAILABLE relay (multi-relay reservations = sovereign redundancy: one dead
+   * relay never costs an agent its inbound reachability); pool-less directories
+   * (tests, legacy config) fall back to the single hardcoded relay endpoint.
+   * Empty when no relay is known — the encoder then omits the field entirely.
+   */
+  #relayEndpointsForAuthOk(): Array<{ peer_id: string; multiaddrs: string[] }> {
+    if (this.#relayPoolManager) {
+      return this.#relayPoolManager.listAvailable().map((r) => ({
+        peer_id: r.peerId ?? r.relayId,
+        multiaddrs: r.multiaddrs ?? [r.endpoint],
+      }));
+    }
+    if (this.#relayEndpoint) {
+      return [{ peer_id: this.#relayEndpoint.peer_id, multiaddrs: [...this.#relayEndpoint.multiaddrs] }];
+    }
+    return [];
+  }
 
   #sendFrame(stream: Stream, bytes: Uint8Array): void {
     stream.send(lp.encode.single(bytes));

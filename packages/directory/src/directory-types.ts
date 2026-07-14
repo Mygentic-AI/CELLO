@@ -83,6 +83,15 @@ export interface SignalingAuthOk {
   signature?: string;
   /** ISO 8601 UTC timestamp at signing. Present alongside nodeId. */
   timestamp?: string;
+  /**
+   * DOD-NAT-REACHABILITY-1: the directory's available relay pool, so the agent's
+   * standing receiver can take circuit-relay reservations BEFORE any session
+   * exists (a NAT'd agent is otherwise unreachable for its first inbound
+   * request). Not covered by the step-5 signature — it rides the authenticated
+   * signaling channel, the same trust rail as session_assignment frames.
+   * Absent on pre-NAT-REACHABILITY directories and when no relay is known.
+   */
+  relay_endpoints?: Array<{ peer_id: string; multiaddrs: string[] }>;
 }
 
 /** M7-MANIFEST-002: Client requests a fresh manifest from the directory. */

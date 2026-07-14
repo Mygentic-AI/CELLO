@@ -535,13 +535,24 @@ export class RelayPoolManager {
    * AC-009: only relays present in the verified manifest are eligible.
    * AC-012: draining relays are excluded.
    */
-  pickRelay(rttMeasurements?: Record<string, number>): RelayManifestEntry | null {
-    // AC-009 / AC-012: only active (not draining) relays from the manifest
-    const available = this.#currentRelays.filter(r => {
-      if (r.status !== "active") return false; // AC-012: draining excluded
+  /**
+   * DOD-NAT-REACHABILITY-1: every relay an agent may take a circuit-relay
+   * reservation with — the same availability policy as pickRelay (active, not
+   * draining, health-state available), but ALL of them: an agent reserves with
+   * several relays so one relay's death never costs its inbound reachability
+   * (the sovereign-redundancy invariant).
+   */
+  listAvailable(): RelayManifestEntry[] {
+    return this.#currentRelays.filter(r => {
+      if (r.status !== "active") return false;
       const state = this.#failureState.get(r.relayId);
       return state?.available === true;
     });
+  }
+
+  pickRelay(rttMeasurements?: Record<string, number>): RelayManifestEntry | null {
+    // AC-009 / AC-012: only active (not draining) relays from the manifest
+    const available = this.listAvailable();
 
     if (available.length === 0) {
       // AC-006: log relay.pool.unavailable when all relays are unavailable
