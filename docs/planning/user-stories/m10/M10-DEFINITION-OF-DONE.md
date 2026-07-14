@@ -351,6 +351,37 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   daemon-portable; nothing daemon-specific in the schema. Reverse: splitting to per-agent
   envelopes later is a minting-policy change, not a schema change — subject_kind stays.
 
+- **M10-D15 (2026-07-14) — the envelope hash preimage is a fixed-order CBOR ARRAY, not a map.**
+  Fork: the shared encoder (`protocol-types/src/cbor.ts`) is NOT RFC 8949 §4.2 deterministic —
+  measured: map keys follow insertion order (`{b,a}` and `{a,b}` differ byte-for-byte) and map
+  headers are not minimal-length (`b9 0002` for a 2-entry map, not `a2`). Choice: encode the
+  preimage as an array, matching every existing TBS builder in the codebase
+  (`buildAgentRevocationTbs`, `buildPrimaryTransferTbs`, `buildSealTbs`, `buildParkContentTbs`).
+  Why: arrays have no key-ordering freedom, so determinism is structural, not a property we must
+  add to — and it costs ZERO encoder change and ZERO migration of blobs already on disk. Rejected:
+  making `encodeCbor` CDE-compliant (changes object encoding for every existing caller, on the wire
+  and in DB columns — a data migration bought for nothing) and a second CDE-only encoder (red under
+  the `no-multiple-cbor-encoders` guard, correctly). Nothing shipped is affected: every signed TBS
+  is already an array (PROCEDURE §5b); the exposure was purely prospective. Reverse: only if a
+  future preimage must be extensible-by-unknown-parties, which the closed-set rule (spec §4)
+  forbids. → Journal Entry 4.
+- **M10-D16 (2026-07-14) — the canonical-envelope component lives in
+  `@cello-protocol/protocol-types`; this AMENDS M10-D7's home, keeping its intent.** M10-D7 said
+  `@cello-protocol/crypto` because crypto is already the portal's only CELLO dependency. But the
+  dependency edge runs `protocol-types → crypto` (crypto has no cbor-x), so a CBOR component in
+  crypto means either a second encoder (red) or a dependency inversion. protocol-types already owns
+  the sole encoder, the TBS-builder convention, and the canonical vector directory. cello-portal
+  adds `@cello-protocol/protocol-types` as a dependency (published; trustless-cello already pins
+  `^0.0.3`). M10-D7's actual intent — ONE implementation, no vendored copies — is unchanged and
+  preserved. Reverse: none foreseen; inverting the packages later is mechanical. → Journal Entry 4.
+- **M10-D17 (2026-07-14) — optional preimage fields are an explicit CBOR `null` in a fixed slot,
+  never omitted.** REVERSES Journal Entry 1's "absent optional fields OMITTED (never null)" rule,
+  which was written for a MAP and is wrong for an ARRAY: omitting a field in an array shifts every
+  later field and changes the arity, so an absent `expires_at` becomes confusable with a
+  misaligned `supersedes_hash`. Fixed arity + explicit null is the unambiguous form. The two
+  nullable fields are `expires_at` (some signals never expire) and `supersedes_hash` (a first mint
+  supersedes nothing). Reverse: not foreseen — this is forced by M10-D15. → Journal Entry 4.
+
 ## Parked
 *(Genuine undecidable forks: journal + here. Never silently dropped.)*
 

@@ -17,8 +17,18 @@ description: >
 ## RESUME STATE (keep current — update at every checkpoint/compaction)
 - **Milestone status:** **DOD-PORTAL-ARCH-1 ✅ COMPLETE** (both halves; Entry 3). Investigation →
   [[M10-PORTAL-ARCH-INVESTIGATION]]; determination → [[M10-PORTAL-ARCH-DETERMINATION]] (reviewed,
-  8 findings fixed, decisions M10-D6…D13 in the DoD). **Next red: DOD-CBOR-1** — its design note
-  is Entry 1; its packaging decision is now MADE (M10-D7: `@cello-protocol/crypto`).
+  8 findings fixed, decisions M10-D6…D13 in the DoD). **IN FLIGHT: DOD-CBOR-1** — design note is
+  Entry 1 **as amended by Entry 4** (read Entry 4, not Entry 1 alone: three of Entry 1's premises
+  were wrong against the code). Preimage = fixed-order CBOR **array**, domain tag `CELLO-TSIG-v1`
+  in slot 0, nullable slots for `expires_at` / `supersedes_hash` (M10-D15/D17). Component lives in
+  **`@cello-protocol/protocol-types`**, NOT crypto — **M10-D16 amends M10-D7's home** (the sole
+  CBOR encoder already lives there and is guarded by `no-multiple-cbor-encoders.test.ts`; crypto
+  has no cbor-x and the dep edge runs protocol-types → crypto).
+- **Live testing is available (Andre, 2026-07-14):** hole-punching works, so the **AWS demo agent**
+  (`i-0ad3e7c22470f266e`, us-east-1 — see repo CLAUDE.md for the SSM command form) can be driven
+  over bash as a REAL counterparty for the live journeys. **Pushing to `main` triggers a CodePipeline
+  deploy** — so directory pushes must stay batched (PROCEDURE §2a: one deploy for Tier 0/1, one for
+  Tier 3), and Cron 1 (the deploy watchdog) gets armed the moment one is in flight.
 - **Read the investigation before any M10 design or code.** It overturns several premises: the
   portal is LIVE on AWS; the M8 trust pipe (portal→directory→daemon, sealed + anchored + ACKed)
   already exists and violates three M10 invariants; INV-CHOKEPOINT is net-new (today: one shared
@@ -273,6 +283,127 @@ non-negotiable) and deterministic re-composition (fragile). Residual disclosed: 
 out-of-band waits for the next portal touch.
 
 **Next:** DOD-CBOR-1 (design note = Entry 1; packaging now decided by M10-D7).
+
+---
+
+### 2026-07-14 — Entry 4: DOD-CBOR-1 design note AMENDED against the code (three premises in Entry 1 were wrong)
+
+**Why this entry exists.** Entry 1's design note was written from the spec, and its own falsification
+pass listed as item (1): *"Does `@cello-protocol/crypto` (or transport) already ship a CBOR encoder,
+and is it CDE-capable or configurable to be? — verify in code at unit start; do NOT assume."* That
+check has now been run. It changed the answer to three separate questions, so the note is amended
+here (append-only — Entry 1 is never edited) BEFORE any code is written.
+
+**Finding 1 — the encoder consolidation already shipped, and it is GUARDED.**
+`core/protocol-types/src/cbor.ts` is the single CBOR encoder (`encodeCbor` / `decodeCbor`, a lone
+`new Encoder({ tagUint8Array: false, useRecords: false })`). It arrived in `3a930cd` ("§1.1 ONE
+canonical CBOR encoding, and migrate the blobs already on disk") and `7386308`. It is enforced:
+`src/__tests__/no-multiple-cbor-encoders.test.ts` walks every production `.ts` under `core/*/src`
+and FAILS THE BUILD if any file constructs its own `Encoder` or imports cbor-x's bare `encode`.
+Consequence for this unit: DOD-CBOR-1 must USE this encoder. Adding a second one — anywhere,
+including in `crypto` — is not merely discouraged, it is red.
+
+**Finding 2 — that encoder is NOT deterministic, and the doc-comment overclaims.** Measured, not
+assumed (PROCEDURE §5c — measure before quoting):
+
+```
+encode({b:1, a:2})  ->  b9 0002 6162 01 6161 02
+encode({a:2, b:1})  ->  b9 0002 6161 02 6162 01     byte-identical: FALSE
+```
+
+Two defects against RFC 8949 §4.2 Core Deterministic Encoding. (a) **Map keys follow INSERTION
+ORDER**, not bytewise sort — so two implementations building the same logical object in a different
+field order produce different bytes, hence different hashes. (b) **The map header is not
+minimal-length**: a 2-entry map emits `b9 0002` (16-bit count) where CDE requires `a2`. The file's
+own doc-comment says *"Encode to canonical CBOR … Plain RFC 8949"* — true as to RFC 8949 core, but
+it reads as a canonicity claim it does not meet. That comment is corrected as part of this unit.
+
+**Nothing shipped is broken by Finding 2, and the reason is already written down.** PROCEDURE §5b:
+*"Changing the CBOR encoder altered OBJECT encoding but not ARRAY encoding — and every signed TBS
+encodes an array, so no signature was affected."* Confirmed in code: `buildAgentRevocationTbs`
+(`revocation.ts`), `buildPrimaryTransferTbs`, `buildSealTbs`, `buildParkContentTbs` are all
+`encodeCbor([...])` over a **fixed-order array whose element 0 is a domain-separation string**
+(`AGENT_REVOCATION_DOMAIN = "CELLO-REVOKE-v1"`, `PRIMARY_TRANSFER_DOMAIN`, …). Objects were never
+the signed surface. **The exposure is prospective, not historical:** the moment the trust-signal
+envelope is hashed as a CBOR *map*, insertion order becomes load-bearing across three independent
+implementations (portal/TS, directory, client) — which is precisely the cross-party divergence
+DOD-CBOR-1 exists to prevent, and it would fail silently and intermittently.
+
+**Finding 3 — M10-D7 named the wrong home.** M10-D7 put the one CBOR implementation in
+`@cello-protocol/crypto`, reasoning that crypto is already the portal's only CELLO dependency
+(`cello-portal/package.json:20` — `"@cello-protocol/crypto": "^0.0.11"`). But the dependency edge
+runs the other way: `protocol-types → crypto` (`protocol-types/package.json` depends on crypto +
+cbor-x; crypto depends on noble + liboqs only, and has no cbor-x). Putting a CBOR encoder in crypto
+therefore means either a SECOND encoder (red, per Finding 1) or inverting a package dependency.
+M10-D7's *intent* — ONE implementation, no vendored copies — is right and is preserved. Its *home*
+is corrected.
+
+**The three decisions this amendment makes** (graduating to the DoD Decisions section as
+M10-D15/D16/D17):
+
+1. **M10-D15 — the envelope preimage is a fixed-order CBOR ARRAY, not a map.** Determinism becomes
+   structural rather than a property of the encoder: arrays have no key-ordering freedom and the
+   existing encoder already emits them identically everywhere. This also means **zero encoder
+   change and zero migration** of the blobs on disk. Rejected: making `encodeCbor` CDE-compliant
+   (sorted keys + minimal-length headers) — it changes object encoding for every existing caller,
+   on the wire and in existing DB columns, to buy a determinism the array gives for free; that is a
+   data migration in exchange for nothing. Also rejected: a second CDE-only encoder beside the
+   shared one — Finding 1 makes that red, and correctly so.
+2. **M10-D16 — the component lives in `@cello-protocol/protocol-types`**, which already owns the
+   sole encoder, the TBS-builder convention, and the canonical test-vector directory
+   (`test/vectors/*-canonical.json`). cello-portal adds `@cello-protocol/protocol-types` as a
+   dependency (it is published; trustless-cello already pins it at `^0.0.3`). **This amends
+   M10-D7's home while keeping its intent intact.** Rejected: moving `cbor.ts` into crypto and
+   re-exporting from protocol-types — more churn, drags cbor-x into the crypto package, same result.
+3. **M10-D17 — optional preimage fields are an explicit CBOR `null` in a FIXED SLOT, never
+   omitted.** This REVERSES Entry 1's "absent optional fields OMITTED (never null)" rule, which was
+   correct for a map and is wrong for an array: in an array, omitting a field shifts every later
+   field's position and changes the arity, so `expires_at` absent would be indistinguishable from
+   `supersedes_hash` present-in-the-wrong-slot. Fixed arity + explicit null is the unambiguous form.
+   The two nullable fields are `expires_at` (signals that never expire) and `supersedes_hash` (a
+   first mint supersedes nothing).
+
+**Also carried over from Entry 1, unchanged and still correct:** no floating point anywhere
+(timestamps are integer epoch-seconds); `payload` embedded as an opaque byte string, never decoded
+or re-encoded (a payload parsed-and-re-encoded would change bytes under a different encoder version
+— treating it as opaque kills that class, and it is what INV-ZERO-BUMP depends on); the preimage is
+a CLOSED set (an unknown extra envelope field is rejected loud, not ignored); `status` / `class` /
+`verified_at` are OUT of the preimage (they are mutable after minting — that is the whole point of
+excluding them, and a tamper test pins it).
+
+**Domain separation — house convention wins over Entry 1.** Entry 1 proposed a byte-concatenated
+prefix: `SHA-256("CELLO-TSIG-v1" || envelope-bytes)`. The codebase instead binds the domain tag as
+**element 0 of the TBS array itself** (`revocation.ts`, `primary-transfer.ts`, `content-delivery.ts`
+all do this). Same property, one less concept, and it is what every reviewer here already reads
+fluently. `TRUST_SIGNAL_DOMAIN = "CELLO-TSIG-v1"` goes in slot 0. Hash = SHA-256 over the array
+bytes.
+
+**The preimage, authoritatively** (the DoD's DOD-CBOR-1 field list, in array order):
+
+```
+[ "CELLO-TSIG-v1", subject_kind, subject, issuer_kind, issuer_pubkey,
+  type, schema_version, payload, issued_at, expires_at|null, supersedes_hash|null ]
+```
+
+**Falsification pass (re-run for the amended design).** (1) Does the call site have the method on
+the interface? — `encodeCbor` is exported from `protocol-types/src/index.ts` and the new module sits
+inside that package, so it imports `./cbor.js` directly, exactly as the four existing TBS builders
+do. Checked. (2) Does responsibility live here? — yes: protocol-types is where every other canonical
+wire structure and TBS builder in CELLO lives; putting the envelope anywhere else splits the
+convention. (3) Redundancy? — none; no envelope canonicalization exists today (grep for
+`subject_kind` / `issuer_kind` / `supersedes_hash` across `core/` returns only the four M8 scaffold
+files in `daemon`, none of which hash an envelope). (4) What else breaks? — nothing consumes a
+trust-signal envelope hash today, so there is no call-site regression surface; greenfield, and that
+is the falsification RESULT, journaled as such per Entry 1's item (4). (5) Install cost? — cbor-x is
+already a dependency of protocol-types; the portal gains one published package, no native module.
+
+**Test plan (red-first).** Committed fixed vectors (envelope → exact hex bytes → exact hash) under
+`test/vectors/`, consumed by all three repos' suites — the cross-party enforcer for
+DOD-INV-CANONICAL. Property-based: random envelopes, encode→decode→encode is byte-identical, and
+field-order-of-construction does not change the hash (the direct regression test for Finding 2).
+Tamper: a single-bit flip anywhere in the preimage changes the hash; a mutated `status` does NOT.
+Closed-set: an unknown extra envelope field is rejected loud. Null-slot: `expires_at: null` and
+`supersedes_hash: null` encode to a fixed arity and are not confusable with each other.
 
 ---
 
