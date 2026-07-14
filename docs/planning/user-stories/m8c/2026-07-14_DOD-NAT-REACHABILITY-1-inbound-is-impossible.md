@@ -227,7 +227,20 @@ A surprising amount of this is done. The missing piece is small and specific.
 | `circuitRelayTransport()` (dial *via* a relay) | `core/transport/src/node.ts:383` | ✅ configured |
 | `dcutr()` | `node.ts:413` | ✅ configured (but omitted for standing receivers — see FACT 4) |
 | `autoNAT()` | `node.ts:412` | ✅ configured on all nodes |
-| **The relay node ACCEPTS reservations/HOP** | `packages/relay/src/index.ts:100` — `circuitRelayServer({ hopTimeout: 30_000 })` | ✅ **the far end is ready** |
+| **The relay node ACCEPTS reservations/HOP** | `packages/relay/src/index.ts:100` — `circuitRelayServer({ hopTimeout: 30_000 })` | ⚠️ **CORRECTED during implementation — see below** |
+
+> **§5 CORRECTION (2026-07-14, found while implementing).** The `startRelay` at `index.ts:100` is
+> NOT the production relay. The deployed relay is `CelloRelayNode` (`bin/relay.ts` →
+> `createRelayNode` → `relay-node.ts:1690`), whose libp2p node comes from `createNode` in
+> `@cello-protocol/transport` — so its HOP service is `circuitRelayServer()` with **all libp2p
+> defaults**: max **15 concurrent reservations**, reservation TTL 2 h, and relayed connections
+> **limited to 2 minutes / 128 KiB each way** (`@libp2p/circuit-relay-v2` constants). "The far end
+> is ready" was true only at toy scale; the relay needs `relayServer.reservations` config
+> (maxReservations raised, `applyDefaultLimit: false`) for the stays-up-relayed fallback to hold.
+> Verified in installed source: DCUtR still fires on unlimited relayed connections (its trigger is
+> a circuit remote address + inbound direction, NOT limited status), and the **inbound** peer is
+> the one that initiates the punch — which makes FACT 4's exclusion strictly fatal, not merely
+> wasteful. Client-side reservation renewal is automatic (libp2p refreshes ~5 min before expiry).
 | **The client already RECEIVES the relay's identity + addresses** | `core/daemon/src/session-node-manager.ts:82-83` — `relayPeerId: string; relayAddrs: string[]` (directory-signed relay assignment) | ✅ **it already knows which relay to reserve with** |
 | Announced addresses come from `getMultiaddrs()` | `core/transport/src/node.ts:173-175` | ✅ **a circuit address will be announced automatically once we listen on one** |
 | The two `/p2p-circuit` filters | `node.ts:49`, `node.ts:260` | ✅ **both are CORRECT — leave them.** `isPubliclyDialable` rightly says a circuit addr is not *direct*; `hasDirectConnectionTo` rightly excludes relayed conns when asking whether DCUtR already succeeded. Neither strips announcements. |
@@ -275,16 +288,26 @@ for an inbound session request to arrive at all. Chicken and egg.
 
 So a reservation must be obtained at **agent-online time**, which means answering:
 
-- **Which relay does an agent reserve with, before any session assigns one?** The consortium manifest
-  presumably names the relays — confirm and use that.
+- **Which relay does an agent reserve with, before any session assigns one?** ~~The consortium manifest
+  presumably names the relays — confirm and use that.~~ **RESOLVED 2026-07-14: the manifest names
+  directory nodes ONLY — no relays (and relay IPs change on every ECS relaunch, so a
+  threshold-signed manifest would go stale constantly). Instead the directory hands its
+  health-filtered relay pool (`RelayPoolManager.listAvailable()`) to every agent in
+  `signaling_auth_ok` — arrives at exactly agent-online time, refreshed on every reconnect,
+  backward compatible (optional field). Fallback: persisted relay endpoints from past sessions.**
 - **Does the reservation need to be directory-signed/authorised**, as the per-session relay assignment
-  is? (There is an Option-B signed-assignment scheme — `session-node-manager.ts:88`. Understand whether
-  reservations must ride the same rail, or whether an unauthenticated libp2p reservation is acceptable.)
-- **Reserve with ONE relay or several?** The sovereign-node redundancy invariant argues for more than
-  one — a single relay reservation makes that relay a single point of failure for the agent's entire
-  inbound reachability. That is exactly the dependency CELLO exists to avoid.
-- **Reservations expire.** libp2p circuit-relay-v2 reservations are time-bounded and must be renewed.
-  Who owns renewal, and what happens to inbound reachability if renewal fails?
+  is? **RESOLVED 2026-07-14: no signature needed. The endpoint list rides the authenticated,
+  directory-verified signaling channel (same trust rail as `session_assignment` frames), and the
+  relay's HOP reservation itself is transport-level. Gating reservations to registered agents is
+  post-launch hardening (noted, not built).**
+- **Reserve with ONE relay or several?** **RESOLVED: ALL available relays** — the sovereign-node
+  redundancy invariant; one dead relay must never cost an agent its inbound reachability. Cost is
+  one TCP connection per relay.
+- **Reservations expire.** **RESOLVED: libp2p's circuit transport owns renewal automatically
+  (refreshes ~5 min before the 2 h expiry, with retry). The daemon adds rebuild-if-deaf: when
+  directory endpoints arrive and the standing receiver holds zero circuit addrs, it is rebuilt;
+  plus loud observability (`session.standing_receiver.reservation.none`, warn) when every
+  reservation attempt failed.**
 
 **Do not hand-wave these.** The reservation lifecycle is the actual design work; the listen-address
 change is three lines.

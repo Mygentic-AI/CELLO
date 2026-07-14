@@ -1097,6 +1097,29 @@ bare `{type:"timeout"}` — verified in `daemon.ts`, not assumed). §3's "exit 0
 
 ## Tier 3 — Reachability + protection
 
+- **DOD-NAT-REACHABILITY-1** — Inbound sessions for NAT'd agents: the standing receiver binds
+  routable (not loopback), takes circuit-relay reservations with the directory-provided relay
+  pool (handed over at signaling-auth time — BEFORE any session exists, so a fresh agent is
+  reachable from first agent-online), announces its `/p2p-circuit` address through the existing
+  signed-assignment plumbing, DCUtR upgrades the relayed connection to direct where the NAT
+  allows, and where the punch fails the relayed connection STAYS UP and carries the session live.
+  The store-and-forward mailbox becomes what it was meant to be: the offline fallback, not the
+  mask for "online but NAT'd". Acceptance = the §8 reversed reproduction in
+  [[2026-07-14_DOD-NAT-REACHABILITY-1-inbound-is-impossible]]: demo (public) initiates to a NAT'd
+  laptop → `session.transport.connected`, laptop reply `delivered: true` (NOT
+  `dispatched_to_relay`), laptop advertises a `/p2p-circuit` addr — proven with daemon logs on
+  both sides, never MCP-tool timestamps. — 🟡 (2026-07-14 — client parts 1-3a built on
+  cello-client `nat-reachability-1` (`f650c71` transport: dcutr everywhere + runOnLimitedConnection
+  + HOP gated to service nodes; `2b011d0` daemon: 0.0.0.0 default + reservations from persisted
+  endpoints + gater set + NO_FATAL resilience; `d721542` review fixes (wildcard configuredHosts
+  dialability F1) + directory-endpoints client half with rebuild-if-deaf). Directory half
+  trustless-cello `183ea811` (relay_endpoints ride signaling_auth_ok from
+  RelayPoolManager.listAvailable; held UNPUSHED pending batch with the relay
+  circuitRelayServer-limits change). Per-unit reviews run after each section, all blocking
+  findings fixed. REMAINING: relay `relayServer` reservations config (maxReservations ↑, default
+  2-min/128-KiB limits off — needs the new `@cello-protocol/transport` published), publish
+  cascade, deploy, and the §8 live proof. Discovered during the FROST latency baseline — see the
+  finding doc for the false trails already burned (§7).)
 - **DOD-AWAY-1** — Away response: unattended Primary answers session requests + messages with the
   configured (or default transparent) away text and queues them; opaque privacy mode = full
   silence, indistinguishable from unreachable; per-type (request vs message) templates. — ✅CORE (PROVEN LIVE 2026-07-07 — an unattended agent
