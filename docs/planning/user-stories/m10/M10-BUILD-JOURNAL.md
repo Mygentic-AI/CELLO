@@ -1110,6 +1110,100 @@ REVOKE-1, REGISTRY-1 dir half, all built and reviewed. What remains is a differe
 (MINT-INTERNAL-1), client (registry poller + envelope delivery), and the batched Tier 1 DEPLOY (V46 +
 routes + TLS listener + KMS keys + issuer enrollment) that the live journeys need.
 
+### 2026-07-14 — Entry 14: DESIGN NOTE — DOD-MINT-INTERNAL-1 (written before any code; the tier's keystone)
+
+**Target behavior (one sentence).** For a real account, the portal composes phone and email as
+account-subject trust-signal envelopes, hashes them (CBOR-1), submits them through the chokepoint
+(DIR-WRITE-1), and they are delivered to the holder daemon — with the M8 scaffold retired in the same
+commit.
+
+**Spec anchors.** Spec §14.10 (the backfill), §3.2 / M10-D5 (account-subject), §14.11 (content-
+addressed, daemon-portable). Determination §3.3 arm (c) (verified-account-facts read), §5 (the M8
+delivery pipe is the running prior art — correct it, don't reinvent). Decisions: **M10-D5**
+(account-subject, agent-add a no-op), **M10-D13** (late-added agent = re-mint with supersession),
+**M10-D18** (the M8 drop + `SIGNAL_KINDS` retirement land HERE), **M10-D14** (wallet rows carry no
+agent association).
+
+**THIS UNIT SPANS THREE REPOS.** Stated up front (PROCEDURE §2a):
+- **cello-portal** — the mint itself: read the verified fact, compose the self-describing envelope,
+  hash, sign the submission, submit. Re-point `handoff.ts` (the M8 producer) onto real CBOR envelopes.
+- **trustless-cello** — the **verified-account-facts read** the mint depends on (determination §3.3
+  arm (c)): `op: query` returning phone-verified presence + `phone_stub_hash`, email-verified presence
+  + stub — **presence booleans and stubs only, never recoverable PII**. AND the M8 retirement: drop the
+  `trust_signals` scaffold table, retire `SIGNAL_KINDS` (`agent-write-validation.ts:20`) + the
+  `trust_signal_hash`/`trust_signal_ciphertext` arms, re-point `j-trust.spine.test.ts`.
+- **cello-client** — generic delivery: verify hash ∈ directory → insert into `wallet_trust_signals`
+  (the type-agnostic client half). Re-point the M8 delivery arm (`inbound-sessions.ts:601`, the
+  `agent_id = null` defect) onto the new store.
+
+**Source-of-fact — the load-bearing constraint (investigation §2).** The portal holds NO phone data;
+the verified fact lives in the directory's `user_accounts.phone_stub_hash`. Email exists portal-side
+only as envelope ciphertext. So the mint is a **directory READ of an already-verified fact, not a
+re-verification** — the portal asks the directory "is this account's phone verified, and what is its
+stub?" and composes an envelope asserting exactly that. The envelope's payload carries the STUB /
+DOMAIN, never the number or address (no PII beyond what the signal IS — email carries domain, not
+address). This is why arm (c) must exist first: without it the mint has nothing authoritative to
+attest.
+
+**Producer/consumer chain.**
+- The verified-account-facts READ (new): PRODUCER = directory (`user_accounts`), CONSUMER = portal
+  mint. What breaks if wrong: the portal attests a fact the directory cannot corroborate → the
+  signal is a lie the notary co-signs.
+- The MINT: PRODUCER = portal, CONSUMER = DIR-WRITE-1 (re-hash chokepoint) → `signal_records` →
+  replication → holder delivery.
+- DELIVERY: PRODUCER = the corrected M8 pipe (directory pickup-queue push, seal, ACK), CONSUMER =
+  client generic insert into `wallet_trust_signals`.
+
+**The seam + THE RETIREMENT (M10-D18, the coverage-window rule).** The M8 scaffold stays alive until
+THIS unit re-points its producer AND consumer in the SAME commit: `handoff.ts` stops double-writing
+`trust_signal_hash`/`trust_signal_ciphertext` via `agent-write` and starts submitting real envelopes
+via DIR-WRITE-1; `inbound-sessions.ts:601` stops writing the M8 `trust_signals` table with
+`agent_id = null` and starts inserting `wallet_trust_signals`. Only THEN: drop the M8 table, retire
+`SIGNAL_KINDS` + the signal arms, re-point `j-trust.spine.test.ts`. A test asserts the scaffold table
+and `SIGNAL_KINDS` are GONE (the forcing function STORE-CLIENT-1's test could not be — review F7).
+
+**Account-subject + late-added agent (M10-D5 / M10-D13).** Phone/email mint ONCE per account as
+`subject_kind: account`, presentable by every agent under the account — agent-add on an existing
+daemon is ZERO signal work (M10-D14: the wallet row is daemon-level, no per-agent copy). An agent
+added on a NEW daemon gets the account-subject envelopes by **re-mint with supersession** (M10-D13):
+the portal re-mints (new `issued_at`, `supersedes_hash` = the prior), because the directory holds
+hash-only and the portal keeps no envelope plaintext to re-seal. Journey coverage: the three
+DOD-T1-JOURNEY-1 cases (late-added agent, failover, custody).
+
+**Invariants at stake.** INV-CHOKEPOINT (mint goes through DIR-WRITE-1, no side door). INV-ZERO-BUMP
+(phone/email are just type strings; the mint's per-type knowledge — what a phone claim SAYS — lives
+ONLY in the portal, never in client or directory). No-PII (payload carries stub/domain, never
+number/address — the §3 guardrail in payload clothing). INV-AGENT-SCOPED (delivery inserts a wallet
+row, which is daemon-level and correct).
+
+**Approach + rejected alternative.** The portal signs submissions with its KMS key (M10-D6; a
+file-signer stub behind the same interface for local dev). REJECTED: minting from portal-held phone
+data — the portal HAS none, by design (no-PII); the fact must come from the directory read. REJECTED:
+building the full `op: query` surface here — only arm (c) (verified-account-facts) is MINT-INTERNAL's
+dependency; arms (a)/(b) (record lookup, Class-3 aggregates) belong to their own units. Build the
+minimal arm (c).
+
+**Falsification pass.** (1) Does arm (c) exist? — NO (determination fixed its shape, not its code);
+MINT-INTERNAL builds it. (2) Does the portal have a signing interface? — NO real KMS wiring yet; the
+mint needs a `Signer` abstraction (KMS in prod, file stub in dev) — build it, matching M10-D6. (3)
+Does the M8 delivery pipe actually still run? — YES (`handoff.ts` + `inbound-sessions.ts:601` are
+live), so re-pointing must preserve delivery, not just add a path. (4) What breaks on drop? — the
+spine test + the M8 producer/consumer; all three re-pointed in one commit or the gate is red across
+units.
+
+**Decisions this note makes (graduating to DoD Decisions as needed).** (1) MINT-INTERNAL builds the
+minimal verified-account-facts read (arm c), presence+stubs only. (2) A portal `Signer` abstraction
+(KMS prod / file dev) is introduced here, enrolled into `authorized_issuers`. (3) The M8 retirement is
+one commit re-pointing producer + consumer + spine test, then dropping table + enum + arms.
+
+**Test plan sketch.** Directory: arm (c) returns presence+stub for a verified account, refuses/omits
+for unverified, never returns recoverable PII. Portal: mint composes an envelope whose hash the
+directory re-hash accepts (CBOR-1 cross-party already proven); payload carries stub/domain not
+number/address; a submission is signed and accepted. Client: a delivered envelope is verified
+(hash ∈ directory) and inserted into `wallet_trust_signals`. Retirement: the M8 table + `SIGNAL_KINDS`
+are GONE; the spine test passes re-pointed. **Enforcer = DOD-T1-JOURNEY-1** (live, real processes):
+this unit is 🟡 until that journey runs.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
