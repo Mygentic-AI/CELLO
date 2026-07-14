@@ -767,6 +767,102 @@ quietly removed" are indistinguishable, and the record stops being evidence). Ad
 
 ---
 
+### 2026-07-14 — Entry 9: DESIGN NOTE — DOD-DIR-WRITE-1 (written before any code)
+
+**Target behavior (one sentence).** A hash enters the directory's store ONLY via a signed submission
+from a key in `authorized_issuers`; everything else is refused loudly — and that is INV-CHOKEPOINT.
+
+**Spec anchors.** Spec §14.1 (the one write path), §14.5 (the capability format is the open piece),
+§15.2.2 (the issuer set is DATA, not code). Determination §3 **fixes the shape** — this note does not
+re-derive it: canonical-CBOR request body `{v:1, op, payload…, issued_at}`, Ed25519 signature over
+`"CELLO-TSIG-REQ-v1" || sha256(body)`, pubkey hint, `authorized_issuers` lookup by role + status,
+`issued_at` bounds-checked ±10 min as hygiene. **No nonce store** — replay is harmless *by
+construction*, which is a claim the two normative rules below must actually earn.
+
+**THE GAP THIS NOTE CLOSES.** Determination §3.2 places `authorized_issuers` **"with DOD-STORE-DIR-1's
+migration"** — and V46 does not have it. That is my miss, not a spec ambiguity. It is caught before
+deploy, so it costs nothing: V46 has been applied to a local Docker Postgres and **nowhere else**, so
+the table is folded into V46 rather than bolted on as a V47 (a two-migration Tier 0 for one logical
+change would be archaeology for the next reader, and `infra/CLAUDE.md`'s "get the schema right the
+first time" rule exists precisely because a mid-milestone reactive migration forces renumbering
+cascades downstream). The local DB is `flyway clean`'d and re-migrated. **The rule "never modify an
+APPLIED migration" is about SHARED environments** — dev/staging/prod have never seen V46, and Flyway
+would checksum-fail if they had.
+
+**Producer/consumer chain.**
+- **PRODUCER:** the portal signs a submission with its KMS-held Ed25519 key (M10-D6 — the portal
+  holds no private key; `kms:Sign`).
+- **CONSUMER 1 — the directory at submit:** looks the pubkey up in `authorized_issuers` (role
+  `submitter`, status `active`) → verifies the signature → **RE-HASHES the envelope bytes with the
+  canonical component (M10-D7/D16) and rejects a mismatch loud.** That re-hash IS the chokepoint: a
+  submitter cannot hand us a hash of one thing and the bytes of another.
+- **CONSUMER 2 — replication:** the row federates to the other two sovereign nodes.
+- **What breaks at each hop:** an unverified signature ⇒ anyone writes any hash for anyone (today's
+  bearer-key reality — investigation §4, and the key is *shared with the ops-agent*). A skipped
+  re-hash ⇒ the directory notarizes a hash that does not correspond to its envelope, so "notarized
+  ⇒ scanned-clean-at-birth" collapses silently.
+
+**The seam.** `packages/directory/src/` — a new `/internal/signal/*` route group over the TLS
+listener this unit adds. The directory NEVER parses `payload` and never learns a type's meaning:
+`type` crosses this boundary as an opaque string and lands in a `TEXT` column with no `CHECK` (V46).
+
+**Invariants at stake.** **INV-CHOKEPOINT** (this unit *is* the invariant — it is NET-NEW, not a
+hardening: no authorized-issuer or portal-pubkey concept exists anywhere today). **INV-ZERO-BUMP** —
+the handler must not branch on `type` even once, or the canary dies at the write path.
+**INV-DIR-DUMB** — the directory verifies a signature and a hash; it evaluates no content.
+
+**Replay integrity — the two normative rules that EARN "no nonce store" (determination §3.1, review
+F3).** These are clauses, not suggestions, and each gets a NEGATIVE test:
+1. **A duplicate-hash submit is a strict no-op that never touches the existing row — `status`
+   included.** An `ON CONFLICT DO UPDATE` here would let a replayed submit resurrect a revoked
+   signal. (Exactly the F2 defect the client-side store shipped and had to have removed — the same
+   mistake, one tier up. Once is a bug; twice is a pattern, so it gets a test on both sides.)
+2. **Supersede-marking is the transition `active → superseded` ONLY.** A replayed submit whose
+   `supersedes_hash` points at a since-REVOKED row must NOT launder `revoked` into `superseded`.
+- **Negative AC (owed):** capture a submit, revoke its signal, replay the capture → status stays
+  `revoked`. If that test passes trivially, the replay-harmlessness claim is unearned and the nonce
+  store comes back.
+
+**The issuer set is DATA (spec §15.2.2), and the API must not assume "portal is the only issuer."**
+`authorized_issuers(pubkey PK, role, status, added_at)`, replicated, seeded by migration.
+`issuer_kind: agent` intake (endorsements, post-v1) must land as NEW ROWS + a role, with **no API
+change** — so the handler authorizes on `(role, status)`, never on a hardcoded "is this the portal".
+Building the endorsement intake now is out of scope; letting its absence rot the seam is not.
+
+**Approach + rejected alternative.** Signed requests against a replicated key set. **REJECTED: extend
+the existing `agent-write` seam** (investigation §5.3) — it carries a per-type `SIGNAL_KINDS` enum
+(`agent-write-validation.ts:20`, INV-ZERO-BUMP violation at birth) and is authenticated by ONE static
+bearer key, non-constant-time compared, **over plaintext HTTP on a public ALB, and shared with the
+ops-agent**. Extending it would make INV-CHOKEPOINT a lie told in a nicer voice. It is REPLACED
+(M10-D10), and its signal arms retire after the backfill. **REJECTED: a nonce/replay store** — real
+cost (a table, a GC, a cross-node consistency question) for a property the two rules above give free,
+*provided* they are tested. That proviso is the whole reason the negative AC is mandatory.
+
+**Falsification pass.** (1) Does the call site have the method on the INTERFACE? — the directory
+consumes `@cello-protocol/protocol-types@0.0.23`, whose `hashTrustSignalEnvelope` is exported from
+the package root and **already proven byte-identical to the portal's** (13/13 cross-party, Entry 8).
+Checked. (2) Responsibility — the re-hash belongs at the directory, not the portal: a check the
+submitter performs on its own behalf is not a check. (3) Redundancy — the portal also hashes, but
+that is the POINT; agreement between two independent derivations is the property. (4) What else
+breaks — the TLS listener fronts the legacy `/internal/*` routes too (determination §3, review F6);
+their bearer-key auth is accepted at launch but must not regress. (5) **Does `signal_records` have
+everything the write path needs?** `accepting_node` and `scanner_version` are `NOT NULL` with no
+default — the handler MUST supply both, or the first submit fails on a constraint. Flagged to the
+reviewer.
+
+**Decisions this note makes.** (1) `authorized_issuers` folds into **V46**, not a new V47 (never
+deployed; one logical change, one migration). (2) Authorization is on `(role, status)` — never on a
+hardcoded portal identity. (3) No nonce store, conditional on the two replay rules each carrying a
+negative test.
+
+**Test plan sketch.** Red-first: unsigned submit → refused; signature by an unknown key → refused;
+by a `registry`-role key → refused (wrong role); by a `revoked`-status key → refused; hash≠bytes →
+refused loud with the cause named, never "invalid request"; valid submit → row + `signal.submission.
+accepted`; duplicate → strict no-op; **revoke-then-replay → status stays `revoked`** (the negative
+AC); an UNKNOWN type submits and stores exactly like a known one (INV-TYPE-CARRY at the write path).
+
+---
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
