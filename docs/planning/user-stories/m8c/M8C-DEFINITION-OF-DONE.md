@@ -1489,6 +1489,31 @@ own story) deliberately, never smuggled in as a rider. Source:
   (`^3.0.0`), and libp2p ships breaking changes in patch releases. Any lockfile regeneration can
   re-break this. A follow-up worth doing: pin the libp2p surface deliberately rather than pinning one
   package reactively.
+- **DOD-FROST-PARALLEL-1** (2026-07-14) — ❌ **NOT STARTED. This is a GATE ON NODE EXPANSION, not a
+  perf nice-to-have.** Full two-sided trace (client daemon log + directory CloudWatch, every hop, no
+  aggregation): [[2026-07-14_frost-ceremony-latency-trace]].
+  Session establishment is **~4.1 s at ONE directory**, and Andre has accepted that ("four seconds is
+  not bad; ten seconds is getting long; under a few seconds is fine"). **The directory's actual
+  cryptography is 41 ms of the 4,100** — 1%. The rest is network round trips and **two brand-new
+  libp2p stream opens at ~350 ms each, in series**.
+  **The defect:** `frost-threshold-signer.ts:484` walks the directory roster **SERIALLY** — an
+  explicit `for … await` with the comment *"Gather per-stub (NOT Promise.all)"*. That comment's
+  reasoning is **correct and must be preserved** (a refusing/hung node must be excluded and the round
+  retried with survivors — `DOD-SUSPEND-1`, the availability invariant). **But it does not require
+  serialism:** `Promise.allSettled` gives the identical exclusion semantics while paying the cost of
+  the SLOWEST node instead of the SUM of all of them. Commitments are independent of each other, and
+  signature shares are independent once the commitment list is fixed — that is FROST's shape.
+  **Why it gates the federation:** today `commitmentList = 2` (the client + ONE directory), so the
+  serial walk costs nothing. At N=10 with `T = majority(10) = 6` the client walks **5 directory stubs
+  one at a time** — ≈3.4 s of commitments + ≈1.75 s of signatures = **~5 s ADDED**, using the 165 ms
+  measured to us-east-1 (the far regions are slower). Setup goes ~4 s → **9–12 s**. **It crosses
+  Andre's bar at roughly 3–4 directories, well before 10.** Fix it BEFORE the federation grows —
+  after means every agent is already registered under the old threshold.
+  Also surfaced by the trace, logged so they are not lost: **`session.relay.hash.submit.failed` fires
+  on EVERY session and is swallowed** (a silent failure on the tamper-evidence path, not diagnosed);
+  and the **directory floods production CloudWatch with `frost.debug.*` / raw `[DEBUG]` lines carrying
+  share and nonce internals**.
+
 - **DOD-M9-SWITCH-ON-1** (2026-07-13) — ❌ **NOT STARTED. Sequenced AFTER the pending publish
   cascade** (Andre: ship and live-test today's large changes first — a screening regression on top of
   an unproven daemon is two problems wearing one coat). Full ordered checklist:
