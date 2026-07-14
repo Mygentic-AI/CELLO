@@ -130,6 +130,15 @@ CREATE TABLE signal_records (
   -- (DOD-DIR-WRITE-1), or it is forgeable — and a forged scanner_version is a lie stored as evidence.
   scanner_version TEXT NOT NULL,
 
+  -- A REVOCATION TOMBSTONE (DOD-REVOKE-1). A revoke can reach a node BEFORE the row it targets, under
+  -- mesh replication (M10-D20); a plain UPDATE would match nothing, "succeed", and be silently lost.
+  -- So a revoke with no local row inserts a tombstone: a row carrying ONLY `status='revoked'` and the
+  -- hash, whose descriptive fields (subject/issuer/type/scanner_version) are PLACEHOLDERS the issuer
+  -- never attested. This flag marks it so the effective view counts it for STATUS but ignores its
+  -- placeholder fields for DESCRIPTION — otherwise, once the real row also replicates in, the view's
+  -- MIN() over the hash group would surface the placeholder subject instead of the real one.
+  is_tombstone    BOOLEAN NOT NULL DEFAULT false,
+
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
 
   PRIMARY KEY (signal_hash, accepting_node)
@@ -178,17 +187,21 @@ CREATE INDEX signal_records_supersedes_idx ON signal_records(supersedes_hash)
 --   * active   — otherwise.
 --
 -- Expiry is deliberately absent: it is the verifier's to evaluate (see the header).
+-- Descriptive fields aggregate over REAL rows only (`FILTER (WHERE NOT is_tombstone)`), so a
+-- tombstone's placeholders never surface — a hash known only through a tombstone reports NULL
+-- descriptive fields (correct: we know it is dead, not yet what it was). `notarized_by` likewise
+-- lists only real notarizations. `effective_status` counts tombstones (that is their whole purpose).
 CREATE VIEW signal_records_effective AS
 SELECT
   r.signal_hash,
-  MIN(r.subject_kind)    AS subject_kind,
-  MIN(r.subject)         AS subject,
-  MIN(r.issuer_kind)     AS issuer_kind,
-  MIN(r.issuer_pubkey)   AS issuer_pubkey,
-  MIN(r.type)            AS type,
-  MIN(r.supersedes_hash) AS supersedes_hash,
-  MIN(r.created_at)      AS first_notarized_at,
-  ARRAY_AGG(DISTINCT r.accepting_node ORDER BY r.accepting_node) AS notarized_by,
+  MIN(r.subject_kind)    FILTER (WHERE NOT r.is_tombstone) AS subject_kind,
+  MIN(r.subject)         FILTER (WHERE NOT r.is_tombstone) AS subject,
+  MIN(r.issuer_kind)     FILTER (WHERE NOT r.is_tombstone) AS issuer_kind,
+  MIN(r.issuer_pubkey)   FILTER (WHERE NOT r.is_tombstone) AS issuer_pubkey,
+  MIN(r.type)            FILTER (WHERE NOT r.is_tombstone) AS type,
+  MIN(r.supersedes_hash) FILTER (WHERE NOT r.is_tombstone) AS supersedes_hash,
+  MIN(r.created_at)      FILTER (WHERE NOT r.is_tombstone) AS first_notarized_at,
+  ARRAY_AGG(DISTINCT r.accepting_node) FILTER (WHERE NOT r.is_tombstone) AS notarized_by,
   MAX(r.revoked_at)      AS revoked_at,
   CASE
     WHEN BOOL_OR(r.status = 'revoked') THEN 'revoked'

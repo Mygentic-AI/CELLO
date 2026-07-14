@@ -38,7 +38,7 @@ import type { KeyProvider } from "@cello-protocol/crypto";
 import { issuePreAuthToken, issuePreAuthCapability } from "./pre-auth-token-repository.js";
 import { listAccountAgentsWithPresence, PRESENCE_NODE_FRESHNESS_MS } from "./agent-presence-repository.js";
 import { validateWritePayload } from "./agent-write-validation.js";
-import { submitSignal, SubmitRejected } from "./signal-write.js";
+import { submitSignal, revokeSignal, SubmitRejected } from "./signal-write.js";
 import {
   isAgentOwnedByAccount,
   applyRevocationFlag,
@@ -499,6 +499,41 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
           });
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "submission failed" }));
+        }
+      }
+      return;
+    }
+
+    // ── M10 / DOD-REVOKE-1: revocation through the SAME chokepoint ───────────────────────────────
+    if (req.method === "POST" && req.url === "/internal/signal/revoke") {
+      let body: Buffer;
+      try {
+        body = await readBody(req);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "could not read request body" }));
+        return;
+      }
+      try {
+        const result = await revokeSignal({
+          pool, logger, acceptingNode: owningNodeId,
+          bodyCbor: new Uint8Array(body),
+          signerPubkeyHex: String(req.headers["x-cello-signer-pubkey"] ?? ""),
+          signatureHex: String(req.headers["x-cello-signature"] ?? ""),
+          correlationId,
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, signal_hash: result.signalHash, revoked_rows: result.revokedRows }));
+      } catch (err) {
+        if (err instanceof SubmitRejected) {
+          res.writeHead(422, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err.reason, detail: err.detail }));
+        } else {
+          logger.error("signal.revocation.failed", {
+            reason: err instanceof Error ? err.message : String(err), correlationId,
+          });
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "revocation failed" }));
         }
       }
       return;

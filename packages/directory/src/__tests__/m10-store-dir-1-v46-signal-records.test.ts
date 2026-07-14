@@ -161,7 +161,7 @@ describeIntegration("V46 signal_records migration (DOD-STORE-DIR-1)", () => {
       );
       const cols = (rows as Array<{ column_name: string }>).map((r) => r.column_name).sort();
       expect(cols).toEqual([
-        "accepting_node", "created_at", "issuer_kind", "issuer_pubkey", "revoked_at",
+        "accepting_node", "created_at", "is_tombstone", "issuer_kind", "issuer_pubkey", "revoked_at",
         "scanner_version", "signal_hash", "status", "subject", "subject_kind",
         "supersedes_hash", "type",
       ].sort());

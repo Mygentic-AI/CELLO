@@ -309,6 +309,159 @@ export async function submitSignal(args: {
 }
 
 /**
+ * Shared front half of EVERY signed write (submit, revoke, and registry-publish later): the pubkey
+ * is well-formed, it is an active issuer with the REQUIRED role, and it actually signed these exact
+ * bytes. Any failure throws a named SubmitRejected.
+ *
+ * Factored out so revoke cannot drift from submit on the security-critical path — the auth on a
+ * revocation must be exactly as strong as the auth on a submission, and the only way to guarantee
+ * that is to run the same code.
+ */
+async function verifySignedRequest(
+  pool: Pool, signerPubkeyHex: string, signatureHex: string, bodyCbor: Uint8Array, requiredRole: IssuerRole,
+): Promise<void> {
+  if (!/^[0-9a-f]{64}$/.test(signerPubkeyHex)) {
+    throw new SubmitRejected("malformed_request", "signer pubkey must be 64 lowercase hex chars");
+  }
+  // Authorize BEFORE crypto — cheap check first; an unknown key never exercises the verifier.
+  await authorizeIssuer(pool, signerPubkeyHex, requiredRole);
+  let sigOk = false;
+  try {
+    sigOk = verify(hexToBytes(signerPubkeyHex), buildSignalRequestTbs(bodyCbor), hexToBytes(signatureHex));
+  } catch (err) {
+    throw new SubmitRejected("signature_invalid", `signature could not be checked: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!sigOk) throw new SubmitRejected("signature_invalid", "signature does not verify against the requester's registered pubkey");
+}
+
+/** The revoke request body. Just the hash — a revocation says "this signal is dead", nothing more. */
+interface SignalRevokeRequest {
+  v: 1;
+  op: "revoke";
+  signal_hash: string;
+  issued_at: number;
+}
+
+export interface RevokeResult {
+  signalHash: string;
+  /** How many local rows for this hash were moved to `revoked` (0 = we had no row for it yet, which
+   *  is NOT an error — see the tombstone note in revokeSignal). */
+  revokedRows: number;
+}
+
+/**
+ * M10 / DOD-REVOKE-1 — revocation is re-auth through the SAME chokepoint (spec §14.2).
+ *
+ * ROLE-BASED authorization, not exact-pubkey (M10-D6/determination §3.5, STORE-DIR review F4). ANY
+ * active `submitter`-role key may revoke a portal-issued record. Exact-pubkey matching
+ * (`requester == record.issuer_pubkey`) would strand every record signed by an OLD key the moment
+ * the portal rotates its KMS key — the record would become permanently unrevocable, or retirement
+ * would have to keep dead keys active, defeating its own purpose. The portal is ONE logical issuer;
+ * its keys are rotating instruments.
+ *
+ * THE SUBJECT CANNOT REVOKE. Nothing here consults the signal's subject — revocation authority is the
+ * issuer's, and the subject's lever is selective disclosure (they simply don't present it), not
+ * erasure of a fact the issuer attested. (Exact-pubkey for `issuer_kind: agent` is the post-v1
+ * endorsement model, where the key IS the identity; not this path.)
+ *
+ * EXPIRY IS NOT REVOCATION. A signal past its `expires_at` is dead without anyone writing anything —
+ * the verifier evaluates it against the clock (spec §14.2). Revocation is the EARLY, explicit death
+ * of a not-yet-expired signal.
+ *
+ * A REVOKE THAT FINDS NO LOCAL ROW WRITES A TOMBSTONE, it does not fail. Under mesh replication a
+ * revoke can reach a node before the row it targets (M10-D20) — a plain UPDATE would match zero rows,
+ * return "success", and be silently lost, leaving that node serving a dead signal as live forever. So
+ * absence of the row is met with an INSERT of a `revoked` tombstone, which replicates and cannot be
+ * lost the way an UPDATE can; `revoked` is monotonic in `signal_records_effective`, so any node's
+ * revocation wins and the system converges. This is the STORE-DIR review's F3, closed at the source.
+ */
+export async function revokeSignal(args: {
+  pool: Pool;
+  logger: WriteLogger;
+  acceptingNode: string;
+  bodyCbor: Uint8Array;
+  signerPubkeyHex: string;
+  signatureHex: string;
+  correlationId: string;
+  nowSec?: number;
+}): Promise<RevokeResult> {
+  const { pool, logger, acceptingNode, bodyCbor, signerPubkeyHex, signatureHex, correlationId } = args;
+  const nowSec = args.nowSec ?? Math.floor(Date.now() / 1000);
+
+  const reject = (e: SubmitRejected): never => {
+    logger.warn("signal.revocation.rejected", {
+      reason: e.reason, detail: e.detail, issuer: signerPubkeyHex.slice(0, 16), correlationId,
+    });
+    throw e;
+  };
+
+  try {
+    await verifySignedRequest(pool, signerPubkeyHex, signatureHex, bodyCbor, "submitter");
+
+    let decoded: unknown;
+    try {
+      decoded = decodeCbor(bodyCbor);
+    } catch (err) {
+      throw new SubmitRejected("malformed_request", `body is not decodable CBOR: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const r = decoded as Partial<SignalRevokeRequest>;
+    if (r === null || typeof r !== "object") throw new SubmitRejected("malformed_request", "body is not a map");
+    if (r.v !== 1) throw new SubmitRejected("malformed_request", `unsupported request version ${String(r.v)}`);
+    if (r.op !== "revoke") throw new SubmitRejected("malformed_request", `unsupported op ${String(r.op)} (expected 'revoke')`);
+    if (typeof r.signal_hash !== "string" || !/^[0-9a-f]{64}$/.test(r.signal_hash)) {
+      throw new SubmitRejected("malformed_request", "signal_hash must be 64 lowercase hex chars");
+    }
+    if (typeof r.issued_at !== "number" || !Number.isInteger(r.issued_at)) {
+      throw new SubmitRejected("malformed_request", "issued_at must be an integer (epoch SECONDS)");
+    }
+    const issuedAt = r.issued_at;
+    if (Math.abs(nowSec - issuedAt) > CLOCK_SKEW_SECONDS) {
+      throw new SubmitRejected("stale_request", `issued_at ${issuedAt} is more than ${CLOCK_SKEW_SECONDS}s from this node's clock (${nowSec})`);
+    }
+
+    const signalHash = r.signal_hash;
+
+    // Mark every local copy revoked. Only `active → revoked` (a `superseded` row stays superseded; a
+    // revoked row is already terminal) — but note revoked is the STRONGER state in the effective
+    // view, so even a superseded row's signal reads as revoked once any copy is revoked.
+    const upd = await pool.query(
+      "UPDATE signal_records SET status='revoked', revoked_at=now() WHERE signal_hash=$1 AND status='active'",
+      [signalHash],
+    );
+    let revokedRows = upd.rowCount ?? 0;
+
+    // No local row at all → write a tombstone rather than lose the revocation (see the header). We
+    // know nothing but the hash here (the envelope is not carried on a revoke), and we do not need to:
+    // the tombstone exists only so `signal_records_effective` reports `revoked` and replication
+    // carries it. The placeholder fields are marked so a tombstone is never mistaken for a real
+    // notarization.
+    if (revokedRows === 0) {
+      const exists = await pool.query(
+        "SELECT 1 FROM signal_records WHERE signal_hash=$1 AND accepting_node=$2", [signalHash, acceptingNode]);
+      if (exists.rowCount === 0) {
+        await pool.query(
+          `INSERT INTO signal_records
+             (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type,
+              supersedes_hash, status, revoked_at, scanner_version, is_tombstone)
+           VALUES ($1,$2,'agent','(tombstone)','portal','(tombstone)','(tombstone)',NULL,'revoked',now(),'(tombstone)',true)
+           ON CONFLICT (signal_hash, accepting_node) DO NOTHING`,
+          [signalHash, acceptingNode],
+        );
+        revokedRows = 1;
+      }
+    }
+
+    logger.info("signal.revocation.accepted", {
+      signalHash, issuer: signerPubkeyHex.slice(0, 16), acceptingNode, revokedRows, correlationId,
+    });
+    return { signalHash, revokedRows };
+  } catch (err) {
+    if (err instanceof SubmitRejected) return reject(err);
+    throw err;
+  }
+}
+
+/**
  * Decode canonical envelope bytes back into the envelope.
  *
  * The preimage is a fixed-order ARRAY (M10-D15) — element 0 is the domain tag. Refuse anything that
