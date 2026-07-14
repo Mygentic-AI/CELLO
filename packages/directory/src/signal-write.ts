@@ -466,8 +466,9 @@ interface RegistryPublishRequest {
 
 export interface RegistryPublishResult {
   version: number;
-  /** True if this publish updated the stored registry; false if it was refused as a rollback but the
-   *  request was otherwise valid (a lower/equal version is not an ERROR — the client is the real gate). */
+  /** True if this publish REPLACED the stored registry (strictly-greater version). False — NOT an
+   *  error — if it was a lower-or-equal version: a rollback attempt, or an idempotent same-version
+   *  re-publish. Server-side anti-rollback is hygiene; the client is the authoritative gate. */
   stored: boolean;
 }
 
@@ -523,6 +524,13 @@ export async function publishRegistry(args: {
     if (typeof r.version !== "number" || !Number.isInteger(r.version) || r.version < 0) {
       throw new SubmitRejected("malformed_request", "version must be a non-negative integer");
     }
+    if (r.version > Number.MAX_SAFE_INTEGER) {
+      // The column is BIGINT, but a JS number past 2^53 cannot represent consecutive integers, so
+      // the version we compare and store might not be the one the portal meant — and version is the
+      // anti-rollback ordering. Refuse rather than store an ambiguous counter. (Not reachable with
+      // any realistic portal scheme — a small monotone counter — but the guard is one line.)
+      throw new SubmitRejected("malformed_request", `version exceeds Number.MAX_SAFE_INTEGER (${r.version})`);
+    }
     if (typeof r.issued_at !== "number" || !Number.isInteger(r.issued_at)) {
       throw new SubmitRejected("malformed_request", "issued_at must be an integer (epoch SECONDS)");
     }
@@ -533,14 +541,21 @@ export async function publishRegistry(args: {
     const version = r.version;
     const documentBuf = Buffer.from(r.document);
 
-    // Upsert the singleton. The WHERE on DO UPDATE is the ATOMIC anti-rollback: a lower version leaves
-    // the stored document untouched. A first publish (no row) always stores.
+    // Upsert the singleton. The WHERE on DO UPDATE is the ATOMIC anti-rollback: only a STRICTLY
+    // GREATER version replaces the stored document. A first publish (no row) always stores.
+    //
+    // Strictly-greater (`>`, not `>=`) is deliberate: a content change MUST carry a version bump. If
+    // an equal version could overwrite with different bytes, the version number would stop uniquely
+    // identifying content — a client that cached v5 would silently disagree with a fresh client that
+    // fetched a different v5. Publishing is idempotent instead by IDENTITY: re-publishing the exact
+    // same (version, document) is a `stored:false` no-op, harmless to retry. (Server-side is hygiene;
+    // the client is the authoritative anti-rollback gate against its pinned key — determination §3.4.)
     const res = await pool.query(
       `INSERT INTO registry_documents (id, version, document, published_at)
          VALUES (1, $1, $2, now())
        ON CONFLICT (id) DO UPDATE
          SET version = EXCLUDED.version, document = EXCLUDED.document, published_at = now()
-         WHERE EXCLUDED.version >= registry_documents.version`,
+         WHERE EXCLUDED.version > registry_documents.version`,
       [version, documentBuf],
     );
     const stored = (res.rowCount ?? 0) > 0;
@@ -548,9 +563,9 @@ export async function publishRegistry(args: {
     if (stored) {
       logger.info("signal.registry.published", { version, bytes: documentBuf.length, correlationId });
     } else {
-      // Not an error — a rollback attempt (or an exact-version re-publish that the WHERE treated as a
-      // no-op). The client is the real anti-rollback gate; server-side is hygiene.
-      logger.info("signal.registry.rollback_ignored", { version, correlationId });
+      // Not an error — a lower-or-equal version was refused (a rollback, or a same-version re-publish).
+      // The client is the real anti-rollback gate; server-side is hygiene.
+      logger.info("signal.registry.not_stored", { version, correlationId });
     }
     return { version, stored };
   } catch (err) {

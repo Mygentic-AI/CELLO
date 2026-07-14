@@ -89,13 +89,21 @@ describeIntegration("DOD-REGISTRY-1 — the type registry (directory half)", () 
     await expect(publishRegistry(args)).rejects.toMatchObject({ reason: "signature_invalid" });
   });
 
-  it("ANTI-ROLLBACK: a lower version is ignored (not stored), a higher version replaces", async () => {
+  it("ANTI-ROLLBACK: only a STRICTLY GREATER version replaces; lower AND equal are refused", async () => {
     await publishRegistry(await publishArgs(doc("v2"), 2, regKey, regPub));
+
     // A rollback to v1 is refused server-side (hygiene) — not an error, just not stored.
     const rollback = await publishRegistry(await publishArgs(doc("v1-rollback"), 1, regKey, regPub));
     expect(rollback.stored).toBe(false);
     expect((await getRegistryDocument(pool))!.version).toBe(2);
     expect(new Uint8Array((await getRegistryDocument(pool))!.document)).toEqual(doc("v2"));
+
+    // An EQUAL version with DIFFERENT bytes must NOT overwrite — otherwise the version number would
+    // stop uniquely identifying content (a cached v2 client and a fresh v2 client would disagree).
+    // This is the case the strictly-greater `>` guards; a `>=` would silently store the new bytes.
+    const equal = await publishRegistry(await publishArgs(doc("v2-DIFFERENT-bytes"), 2, regKey, regPub));
+    expect(equal.stored, "an equal version must not overwrite with different bytes").toBe(false);
+    expect(new Uint8Array((await getRegistryDocument(pool))!.document)).toEqual(doc("v2")); // unchanged
 
     // A forward publish replaces.
     const forward = await publishRegistry(await publishArgs(doc("v3"), 3, regKey, regPub));
@@ -103,22 +111,39 @@ describeIntegration("DOD-REGISTRY-1 — the type registry (directory half)", () 
     expect((await getRegistryDocument(pool))!.version).toBe(3);
   });
 
-  it("ADDING A TYPE requires NO release — it is just a new document version (INV-ZERO-BUMP)", async () => {
-    // The whole point: a new signal type reaches clients as a data update, never a deploy. Model it:
-    // publish a registry with type 'phone', then one that ALSO has a type invented today. The
-    // directory stores both as opaque bytes without knowing or caring what changed.
-    const withPhone = new TextEncoder().encode(JSON.stringify({ types: { phone: { class: 1 } } }));
-    const withNewType = new TextEncoder().encode(JSON.stringify({ types: { phone: { class: 1 }, some_type_invented_today: { class: 2 } } }));
-    await publishRegistry(await publishArgs(withPhone, 1, regKey, regPub));
-    await publishRegistry(await publishArgs(withNewType, 2, regKey, regPub));
+  it("ADDING A TYPE is a data update, not a deploy — the directory stores an unseen type OPAQUELY", async () => {
+    // INV-ZERO-BUMP at the registry. This cannot prove the ABSENCE of a type branch (that is a code-
+    // structure property), but it pins the observable half: the directory accepts and serves a
+    // registry naming a type it has never seen, unchanged, with no per-type handling. If someone added
+    // a directory-side type validator, a registry naming `some_type_invented_today` would be the thing
+    // it choked on.
+    const withNewType = new TextEncoder().encode(JSON.stringify({ types: { some_type_invented_today: { class: 2 } } }));
+    const res = await publishRegistry(await publishArgs(withNewType, 1, regKey, regPub));
+    expect(res.stored).toBe(true);
     expect(new Uint8Array((await getRegistryDocument(pool))!.document)).toEqual(withNewType);
   });
 
-  it("REFUSES malformed publishes (bad version, missing document)", async () => {
+  it("REFUSES a negative version", async () => {
     const bad = encodeCbor({ v: 1, op: "registry-publish", document: doc("x"), version: -1, issued_at: nowSec() });
     await expect(publishRegistry({
       pool, logger: silent, correlationId: "c", bodyCbor: bad,
       signerPubkeyHex: regPub, signatureHex: hex(await regKey.sign(buildSignalRequestTbs(bad))),
+    })).rejects.toMatchObject({ reason: "malformed_request" });
+  });
+
+  it("REFUSES a version past MAX_SAFE_INTEGER — precision loss would corrupt the anti-rollback ordering", async () => {
+    const body = encodeCbor({ v: 1, op: "registry-publish", document: doc("x"), version: Number.MAX_SAFE_INTEGER + 2, issued_at: nowSec() });
+    await expect(publishRegistry({
+      pool, logger: silent, correlationId: "c", bodyCbor: body,
+      signerPubkeyHex: regPub, signatureHex: hex(await regKey.sign(buildSignalRequestTbs(body))),
+    })).rejects.toMatchObject({ reason: "malformed_request" });
+  });
+
+  it("REFUSES a MISSING document (the branch T6 previously named but never hit)", async () => {
+    const body = encodeCbor({ v: 1, op: "registry-publish", version: 1, issued_at: nowSec() }); // no document
+    await expect(publishRegistry({
+      pool, logger: silent, correlationId: "c", bodyCbor: body,
+      signerPubkeyHex: regPub, signatureHex: hex(await regKey.sign(buildSignalRequestTbs(body))),
     })).rejects.toMatchObject({ reason: "malformed_request" });
   });
 
