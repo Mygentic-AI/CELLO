@@ -215,23 +215,10 @@ export async function submitSignal(args: {
   };
 
   try {
-    if (!/^[0-9a-f]{64}$/.test(signerPubkeyHex)) {
-      throw new SubmitRejected("malformed_request", "signer pubkey must be 64 lowercase hex chars");
-    }
-
-    // 1. IS THIS KEY ALLOWED TO WRITE? (Before any crypto — a cheap check first, and it means an
-    //    unknown key never gets to exercise the verifier at all.)
-    await authorizeIssuer(pool, signerPubkeyHex, "submitter");
-
-    // 2. DID THIS KEY ACTUALLY SIGN THESE BYTES?
-    const tbs = buildSignalRequestTbs(bodyCbor);
-    let sigOk = false;
-    try {
-      sigOk = verify(hexToBytes(signerPubkeyHex), tbs, hexToBytes(signatureHex));
-    } catch (err) {
-      throw new SubmitRejected("signature_invalid", `signature could not be checked: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    if (!sigOk) throw new SubmitRejected("signature_invalid", "signature does not verify against the submitter's registered pubkey");
+    // 1+2. The pubkey is well-formed, it is an active `submitter`, and it signed these exact bytes.
+    //      The SAME helper revoke uses — one copy of the security-critical auth, so the two write
+    //      paths cannot drift apart.
+    await verifySignedRequest(pool, signerPubkeyHex, signatureHex, bodyCbor, "submitter");
 
     // 3. Shape.
     const req = parseRequest(bodyCbor);
