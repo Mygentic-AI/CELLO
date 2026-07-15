@@ -9,6 +9,34 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🚀 M10-D18 additive directory deploy — DB V46→V47, `/internal/signal/deliver` route live (2026-07-15)
+
+**Pushed `45949a5b` → `cello-directory-pipeline` (all 3 regions).** The ADDITIVE half of the M8-retirement
+cutover: V47 (`pickup_queue.signal_hash` + drain COALESCE + sweep guard) + the signed
+`POST /internal/signal/deliver` route. The destructive arm-retirement (`a9f7370e`) is HELD (coverage-window)
+until the new portal is live — do NOT push it yet.
+
+**Live-verified across all 3 regions:** DB=**V47** (us-east-1, eu-central-1, ap-northeast-1 — queried via
+ECS exec, `flyway_schema_history` max=47); all 6 ECS services (directory + relay ×3) **1/1 COMPLETED**;
+directory us-east-1 reached steady state with 0 failed tasks.
+
+**Post-deploy cascade — DONE + verified:**
+- **ops-agent SSM `expected-migration-version` 46→47** (us-east-1) — done.
+- **Relay cascade** — restarted the relay ECS task in all 3 regions; ECS relaunched; re-registered with the
+  new V47 directory. New relay IPs: us-east-1 `10.0.14.92`, eu-central-1 `10.1.29.119`, ap-northeast-1
+  `10.2.79.55`.
+- **Manifests AUTO-re-signed** — all 3 S3 manifests refreshed to the new relay IPs on the relay's
+  unavailable→available transition (`healthCheckUrl` matches the live task in every region); **no manual
+  `sign-manifest.sh` needed this cascade**.
+
+**Client cutover is on npm beta** (v0.0.110): protocol-types 0.0.24, transport 0.0.24, daemon 0.0.61, cli
+0.0.59, connect 0.0.75. `latest` promotion held (Andre's manual step).
+
+**Still owed (release tail, blocked on the portal deploy mechanism):** deploy the new portal (M10 handoff +
+mint), THEN the arm-retirement directory deploy (`a9f7370e`), THEN DOD-T1-JOURNEY-1 live.
+
+---
+
 ## 🚀 M10 Tier 0/1 directory surface DEPLOYED — DB V45→V46, `/internal/signal/*` routes live (2026-07-15)
 
 **Pushed `2a65a615` → `cello-directory-pipeline` (all 3 regions).** The directory applies Flyway on
