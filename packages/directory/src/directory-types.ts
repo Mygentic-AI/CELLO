@@ -215,6 +215,8 @@ export type SessionAssignment = SessionAssignmentBase & {
    * its wire boundary before anything displays or stores it.
    */
   moniker?: string;
+  /** DOD-PRESENT-1: trust signals that survived the directory's dumb check (membership + active). */
+  trust_signals?: Array<{ hash: string; blob: Uint8Array }>;
 };
 export type { SessionAssignmentBase };
 /** @deprecated Use RelayEndpointInfo instead */

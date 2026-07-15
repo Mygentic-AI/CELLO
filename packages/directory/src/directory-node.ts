@@ -197,6 +197,7 @@ import { protocolLog, truncId, truncHex } from "./protocol-log.js";
 import { resolveAccountId, redeemClaimCode } from "./pre-auth-token-repository.js";
 import type { MmrStore } from "./mmr-store.js";
 import type { RelayPoolManager } from "./relay-pool-manager.js";
+import { checkPresentedSignals } from "./signal-present.js";
 
 export const SIGNALING_PROTOCOL_ID = "/cello/signaling/1.0.0";
 const AUTH_DOMAIN = "CELLO-DIR-AUTH-v1";
@@ -2201,14 +2202,14 @@ export class CelloDirectoryNode {
             continue;
           }
           // M7-WIRE-001 AC-002: Reject session_request missing initiator session Peer ID
-          const parsedReq = parsed as { connection_id?: string; relay_rtt?: Record<string, number>; initiator_session_peer_id?: string; initiator_session_addrs?: string[]; transport_mode?: "direct" | "relay"; wants_session_offer?: boolean; moniker?: string };
+          const parsedReq = parsed as { connection_id?: string; relay_rtt?: Record<string, number>; initiator_session_peer_id?: string; initiator_session_addrs?: string[]; transport_mode?: "direct" | "relay"; wants_session_offer?: boolean; moniker?: string; trust_signals?: Array<{ hash: string; blob: Uint8Array }> };
           if (!parsedReq.initiator_session_peer_id || !parsedReq.initiator_session_addrs || parsedReq.initiator_session_addrs.length === 0) {
             this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "session_request_missing_peer_id" }));
             continue;
           }
           // Run concurrently — ceremony_result frames must be processed by this same loop
           // while #processSessionRequest is suspended awaiting the ceremony round-trip.
-          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), parsedReq.connection_id, parsedReq.relay_rtt, parsedReq.initiator_session_peer_id, parsedReq.initiator_session_addrs, parsedReq.transport_mode, parsedReq.wants_session_offer === true, parsedReq.moniker);
+          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), parsedReq.connection_id, parsedReq.relay_rtt, parsedReq.initiator_session_peer_id, parsedReq.initiator_session_addrs, parsedReq.transport_mode, parsedReq.wants_session_offer === true, parsedReq.moniker, parsedReq.trust_signals);
         } else if (parsed.type === "discovery_lookup") {
           // Cross-node item 1: answer "where is agent X?" from fully-replicated state. Post-auth on
           // the agent's home inbound stream. Advisory — the target node's own #streams check stays
@@ -3322,6 +3323,9 @@ export class CelloDirectoryNode {
     requestWantsOffer = false,
     // MONIKER-2 AC1b: bounded at decode; pass-through into the assignment, never stored, never in a TBS.
     initiatorMoniker?: string,
+    // DOD-PRESENT-1: trust signals the initiator wishes to present. The directory runs two dumb
+    // checks (membership + active status) and forwards survivors on the assignment. Nothing stored.
+    presentedSignals?: Array<{ hash: string; blob: Uint8Array }>,
   ): Promise<void> {
     protocolLog("SESS", `Session request: ${truncHex(initiatorHex)} → ${truncHex(targetHex)}`);
     // D2 observability: one correlationId per session-request flow, threaded into the
@@ -3608,6 +3612,25 @@ export class CelloDirectoryNode {
       // SESSION-004 Step 6: getPrimaryPubkey() — HIGH-4: method on IThresholdSigner interface
       const initiatorPrimaryPubkey = signer.getPrimaryPubkey();
 
+      // DOD-PRESENT-1: run the two dumb checks on any presented trust signals.
+      // Membership + active status only. Type-blind (INV-ZERO-BUMP). Read-only (INV-STATELESS).
+      let verifiedSignals: Array<{ hash: string; blob: Uint8Array }> | undefined;
+      if (presentedSignals && presentedSignals.length > 0 && this.#pgPool) {
+        const hashes = presentedSignals.map((s) => s.hash);
+        const activeHashes = await checkPresentedSignals(this.#pgPool, hashes);
+        const activeSet = new Set(activeHashes);
+        verifiedSignals = presentedSignals.filter((s) => activeSet.has(s.hash));
+        if (verifiedSignals.length < presentedSignals.length) {
+          this.#logger?.info("signal.presentation.stripped", {
+            sessionId: truncHex(Buffer.from(session_id).toString("hex")),
+            presented: presentedSignals.length,
+            survived: verifiedSignals.length,
+            correlationId,
+          });
+        }
+        if (verifiedSignals.length === 0) verifiedSignals = undefined;
+      }
+
       // CELLO-RELAY-001: Resolve relay endpoint.
       // When RelayPoolManager is configured, use pickRelay() for dynamic assignment.
       // Fall back to the hardcoded relayEndpoint for backward compatibility.
@@ -3646,6 +3669,8 @@ export class CelloDirectoryNode {
         transport_mode: transportMode,
         // MONIKER-2 AC1b: unsigned pass-through hint; omitted from the wire when absent.
         ...(initiatorMoniker !== undefined ? { moniker: initiatorMoniker } : {}),
+        // DOD-PRESENT-1: verified trust signals forwarded to the target (survivors of the dumb check).
+        ...(verifiedSignals !== undefined ? { trust_signals: verifiedSignals } : {}),
       };
 
       // (e) Register with relay BEFORE delivering to clients (SI-003)
