@@ -2138,6 +2138,107 @@ are pre-existing: 3 missing migration SQL files, 1 stale dist artifact).
 
 ---
 
+### 2026-07-15 — Entry 38: DOD-VERIFY-1 — IMPLEMENTED (cello-client `ed425fc`)
+
+Recipient verifies presented trust signals on inbound session acceptance:
+
+1. `decodeTrustSignalEnvelope(blob)` — rejects non-canonical input (never silent-accept)
+2. `verifyTrustSignalHash(decoded, claimedHash)` — rejects tampered blobs
+3. `putReceivedSignal()` with `verdict: 'active'`, `verifiedAt: epochSeconds(now)`
+
+Design decisions:
+- **Contact ensured at UNKNOWN tier** before storage (INSERT OR IGNORE). The FK on
+  `contact_trust_signals` requires a row. This does NOT violate CC-1 — UNKNOWN tier is not
+  trust promotion, and `isKnown()` returns false for UNKNOWN rows.
+- **Per-signal try/catch** so one malformed signal doesn't poison the rest.
+- **Outer try/catch** ensures verification failure never blocks session acceptance.
+- The directory's pass-through (DOD-PRESENT-1) is trusted for initial freshness — it checked
+  seconds ago. TTL re-check on use is a DOD-FLOOR-1/future concern.
+
+7 tests: valid round-trip, tampered hash, non-canonical blob, full end-to-end encode→hash→
+decode→verify, wrong claimed hash, unknown type (INV-ZERO-BUMP), re-presentation monotonicity.
+
+**Status:** DOD-VERIFY-1 IMPLEMENTED. Reviewer dispatched (Opus).
+
+---
+
+### 2026-07-15 — Entry 39: DOD-CONSUME-1 — IMPLEMENTED (cello-client `67c4d9f`)
+
+Verified signals projected to the LLM in `cello_await_session`:
+
+```json
+{ "trust_signals": [
+    { "type": "phone", "issuer": "platform-verified", "claim": {"has_verified_phone": true} },
+    { "type": "endorsement", "issuer": "peer-claimed", "claim": {"text": "..."} }
+  ]
+}
+```
+
+INV-FRAMING: `issuer_kind` drives the framing label:
+- `"portal"` → `"platform-verified"` (platform attested this fact independently)
+- `"agent"` → `"peer-claimed"` (counterparty says this; not independently verified)
+
+INV-TYPE-CARRY: unknown types flow through with identical generic framing — the self-describing
+payload decoded from CBOR provides the explanation.
+
+Only `verdict = 'active'` signals are projected. Revoked/superseded are excluded. A malformed
+payload decodes as `null` (never blocks the projection). Outer try/catch → no signals shown
+on failure (never blocks the session response).
+
+5 tests.
+
+**Status:** DOD-CONSUME-1 IMPLEMENTED.
+
+---
+
+### 2026-07-15 — Entry 40: DOD-FLOOR-1 — IMPLEMENTED (cello-client `e5c3399`)
+
+`SignalRequirementPolicy` — a pure function evaluating envelope-field predicates:
+
+```typescript
+interface SignalRequirementPolicy {
+  require_types?: string[];        // all must be present (the demand bundle)
+  require_issuer_kind?: "portal" | "agent";  // at least one must match
+  min_count?: number;              // minimum active signals required
+}
+```
+
+Revoked/superseded signals NEVER satisfy any predicate. Unknown type strings are requireable
+(INV-ZERO-BUMP). The function is deterministic (no network, no LLM, no clock).
+
+V1 defaults:
+- `DEFAULT_UNKNOWN_POLICY`: `{ min_count: 1, require_issuer_kind: "portal" }` — unknown
+  senders must present at least one portal-attested signal.
+- `NO_REQUIREMENT`: `{}` — KNOWN+ contacts pass unconditionally.
+
+14 tests. The caller (DOD-T2-JOURNEY-1's acceptance gate) decides which policy applies based
+on the contact's tier.
+
+**Status:** DOD-FLOOR-1 IMPLEMENTED.
+
+---
+
+### 2026-07-15 — Entry 41: Tier 2 status summary
+
+| Unit | Status |
+|------|--------|
+| DOD-PRESENT-1 | ✅ DONE (reviewed, fixes applied) |
+| DOD-VERIFY-1 | IMPLEMENTED (reviewer dispatched) |
+| DOD-CONSUME-1 | IMPLEMENTED |
+| DOD-FLOOR-1 | IMPLEMENTED |
+| DOD-T2-JOURNEY-1 | ❌ requires live daemons + deployed directory |
+| DOD-ZEROBUMP-CANARY-1 | ❌ requires full E2E (portal + directory + 2 daemons) |
+
+The first four units are all code + unit tests. The last two are integration/E2E proofs
+that need running infrastructure. They demonstrate that the code works end-to-end, but
+their preconditions (deployed directory with V46+, portal minting real signals, two running
+daemons) exceed what this session can prove with unit tests alone.
+
+**Next:** dispatch reviewers for CONSUME-1 and FLOOR-1, then assess what's needed for the
+journey tests.
+
+---
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
