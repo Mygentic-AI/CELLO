@@ -352,11 +352,11 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   scope `subject_kind: agent`; the same data MAY additionally mint an account-wide aggregate
   (`subject_kind: account`, M10-D5 / spec §3.2) — if minted, the read path serves both
   aggregations. Self-describing payloads; registry entries. Decide-at-build (Decisions entry):
-  persist client-side like other signals vs mint-on-request (spec §0.2 open item). — ❌
+  persist client-side like other signals vs mint-on-request (spec §0.2 open item). — ✅ composeTrackRecord + mintTrackRecordSignals (portal 633334f) → Journal Entry 44
 - **DOD-SUPERSEDE-1** — recomputation supersedes, never mutates: the new envelope carries
   `supersedes_hash`, the old goes `status: superseded` at the directory, a stale presented copy
   fails freshness (DOD-VERIFY-1 catches it live). Track record's natural drift makes it the
-  test vehicle; the mechanism is generic. — ❌
+  test vehicle; the mechanism is generic. — ✅ materialized supersede in submitSignal (13d8a05d) → Journal Entry 44
 - **DOD-T3-JOURNEY-1** — **live journey:** agent with real session history gets track-record
   envelopes; after more sessions the job re-mints; a counterparty sees the CURRENT version and
   a replayed stale one is refused. — ❌
