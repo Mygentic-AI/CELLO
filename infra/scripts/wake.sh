@@ -1,0 +1,451 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# wake.sh — spin CELLO infrastructure back UP from hibernation
+# ==============================================================================
+# Reads hibernation-state.json (written by hibernate.sh) and reconstructs the
+# environment in dependency order, blocking at each boundary until healthy.
+#
+# Restoration order (each step waits before the next):
+#   1. NAT Gateway        → wait available → rewrite 0.0.0.0/0 route
+#   2. ssmmessages endpoint → recreate → wait available
+#   3. RDS                → start → wait available
+#   4. ALBs (dir + relay) → recreate with saved config → wire listener rules
+#   5. Route53            → update A alias records to new ALB DNS names
+#   6. ECS services       → restore desiredCount → wait stable
+#   7. VERIFY             → DNS + HTTP health check + inventory diff vs before-snapshot
+#
+# Usage:
+#   ./wake.sh                                  # DRY-RUN all regions in state file
+#   ./wake.sh --region ap-northeast-1          # DRY-RUN single region
+#   ./wake.sh --region ap-northeast-1 --execute
+#   ./wake.sh --execute                        # live all regions
+#   ./wake.sh --execute --yes                  # skip confirmation
+# ==============================================================================
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hibernate-common.sh"
+
+# --- Options ------------------------------------------------------------------
+TARGET_REGIONS=()
+ASSUME_YES=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --execute)  DRY_RUN=0 ;;
+    --dry-run)  DRY_RUN=1 ;;
+    --region)   shift; TARGET_REGIONS+=("$1") ;;
+    --yes|-y)   ASSUME_YES=1 ;;
+    -h|--help)  grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) fatal "Unknown argument: $1" ;;
+  esac
+  shift
+done
+
+require_tools
+
+[[ -f "${STATE_FILE}" ]] || fatal "State file not found: ${STATE_FILE}. Run hibernate.sh first."
+S="$(cat "${STATE_FILE}")"
+echo "${S}" | jq -e . >/dev/null 2>&1 || fatal "State file is not valid JSON."
+
+# Filter to requested regions (or all regions in state file)
+ALL_STATE_REGIONS=$(echo "$S" | jq -r '.regions[].region')
+if [[ ${#TARGET_REGIONS[@]} -eq 0 ]]; then
+  mapfile -t TARGET_REGIONS < <(echo "$ALL_STATE_REGIONS")
+fi
+REGIONS_STR="${TARGET_REGIONS[*]}"
+
+banner "WAKE — CELLO infrastructure" "${REGIONS_STR}"
+log "Hibernated at: $(echo "$S" | jq -r '.hibernated_at')"
+confirm_execute
+
+SNAPSHOT_DIR="${INFRA_DIR}/hibernation-snapshots"
+mkdir -p "${SNAPSHOT_DIR}"
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+
+for REGION in "${TARGET_REGIONS[@]}"; do
+  log ""
+  log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  log "  REGION: ${REGION}"
+  log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+  R=$(echo "$S" | jq --arg r "${REGION}" '.regions[] | select(.region == $r)')
+  [[ -n "$R" ]] || fatal "Region ${REGION} not found in state file."
+
+  VPC_ID=$(echo "$R" | jq -r '.vpc_id')
+  NAT_SUBNET=$(echo "$R" | jq -r '.nat.subnet // .nat.SubnetId // empty')
+  NAT_EIP=$(echo "$R"    | jq -r '.nat.eip_alloc // empty')
+  PRIVATE_RT=$(echo "$R" | jq -r '.private_route_table')
+  NAT_TAGS=$(echo "$R"   | jq -c '.nat_tags // []')
+  DIR_SUB=$(echo "$R"    | jq -r '.route53.dir_subdomain')
+  RELAY_SUB=$(echo "$R"  | jq -r '.route53.relay_subdomain')
+
+  # ── STEP 1: NAT Gateway ──────────────────────────────────────────────────────
+  step "  [${REGION}] 1/7  NAT Gateway"
+
+  existing_nat=$(aws ec2 describe-nat-gateways --region "${REGION}" \
+    --filter "Name=vpc-id,Values=${VPC_ID}" "Name=state,Values=available,pending" \
+    --query 'NatGateways[0].NatGatewayId' --output text 2>/dev/null || echo "None")
+
+  NEW_NAT=""
+  if [[ "${existing_nat}" != "None" && -n "${existing_nat}" ]]; then
+    NEW_NAT="${existing_nat}"
+    ok "  NAT already present (${NEW_NAT}) — skipping creation"
+  else
+    nat_args=(ec2 create-nat-gateway
+      --subnet-id "${NAT_SUBNET}"
+      --allocation-id "${NAT_EIP}"
+      --region "${REGION}")
+    # Filter out aws: reserved tags — AWS rejects them on create-nat-gateway
+    CLEAN_NAT_TAGS=$(echo "${NAT_TAGS}" | jq -c '[.[] | select(.Key | startswith("aws:") | not)]')
+    if [[ "${CLEAN_NAT_TAGS}" != "[]" && "${CLEAN_NAT_TAGS}" != "null" ]]; then
+      nat_args+=(--tag-specifications \
+        "$(echo "${CLEAN_NAT_TAGS}" | jq -c '[{ResourceType:"natgateway",Tags:.}]')")
+    fi
+
+    if [[ "${DRY_RUN}" == "1" ]]; then
+      run aws "${nat_args[@]}" --query 'NatGateway.NatGatewayId' --output text
+      NEW_NAT="nat-DRYRUN"
+    else
+      NEW_NAT=$(aws "${nat_args[@]}" --query 'NatGateway.NatGatewayId' --output text)
+      ok "  Creating NAT ${NEW_NAT} — waiting for available (~2 min)..."
+      aws ec2 wait nat-gateway-available --nat-gateway-ids "${NEW_NAT}" --region "${REGION}"
+      ok "  NAT available: ${NEW_NAT}"
+    fi
+  fi
+
+  # Rewrite the private route table's default route
+  step "  [${REGION}]       Rewriting 0.0.0.0/0 in ${PRIVATE_RT} → ${NEW_NAT}"
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    warn "  [dry-run] create-route (or replace-route) 0.0.0.0/0 → ${NEW_NAT} in ${PRIVATE_RT}"
+  else
+    if ! aws ec2 create-route --route-table-id "${PRIVATE_RT}" \
+          --destination-cidr-block 0.0.0.0/0 --nat-gateway-id "${NEW_NAT}" \
+          --region "${REGION}" >/dev/null 2>&1; then
+      aws ec2 replace-route --route-table-id "${PRIVATE_RT}" \
+        --destination-cidr-block 0.0.0.0/0 --nat-gateway-id "${NEW_NAT}" \
+        --region "${REGION}"
+    fi
+    ok "  Private route restored."
+  fi
+
+  # ── STEP 2: ssmmessages VPC endpoint ─────────────────────────────────────────
+  step "  [${REGION}] 2/7  ssmmessages VPC endpoint"
+
+  EP_CONFIG=$(echo "$R" | jq -c '.ssmmessages_endpoint.config')
+  EP_SUBNETS=$(echo "$EP_CONFIG" | jq -r '(.subnets // .SubnetIds // []) | join(" ")')
+  EP_SGS=$(echo "$EP_CONFIG"     | jq -r '(.sgs // .Groups // []) | map(if type=="string" then . else .GroupId end) | join(" ")')
+  EP_PDNS=$(echo "$EP_CONFIG"    | jq -r '.pdns // .PrivateDnsEnabled // "true"')
+
+  # Idempotency check (JMESPath for state filter — aws ec2 describe-vpc-endpoints rejects Name=state)
+  existing_ep=$(aws ec2 describe-vpc-endpoints --region "${REGION}" \
+    --filters "Name=vpc-id,Values=${VPC_ID}" \
+              "Name=service-name,Values=com.amazonaws.${REGION}.ssmmessages" \
+    --query 'VpcEndpoints[?State==`available` || State==`pending`] | [0].VpcEndpointId' \
+    --output text 2>/dev/null || echo "None")
+
+  if [[ "${existing_ep}" != "None" && -n "${existing_ep}" ]]; then
+    ok "  ssmmessages endpoint already exists (${existing_ep}) — skipping"
+  else
+    ep_args=(ec2 create-vpc-endpoint
+      --vpc-id "${VPC_ID}"
+      --vpc-endpoint-type Interface
+      --service-name "com.amazonaws.${REGION}.ssmmessages"
+      --region "${REGION}"
+      --no-cli-pager
+      --query 'VpcEndpoint.VpcEndpointId' --output text)
+    [[ -n "${EP_SUBNETS}" ]] && ep_args+=(--subnet-ids ${EP_SUBNETS})
+    [[ -n "${EP_SGS}" ]]     && ep_args+=(--security-group-ids ${EP_SGS})
+    [[ "${EP_PDNS}" == "true" ]] && ep_args+=(--private-dns-enabled) || ep_args+=(--no-private-dns-enabled)
+    run aws "${ep_args[@]}"
+    ok "  ssmmessages endpoint recreated (becomes available in ~1-2 min)."
+  fi
+
+  # ── STEP 3: RDS ──────────────────────────────────────────────────────────────
+  step "  [${REGION}] 3/7  RDS"
+  RDS_ID=$(echo "$R" | jq -r '.rds_id')
+
+  if [[ "$RDS_ID" != "None" && -n "$RDS_ID" ]]; then
+    rds_status=$(aws rds describe-db-instances \
+      --db-instance-identifier "${RDS_ID}" --region "${REGION}" \
+      --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "unknown")
+
+    if [[ "${rds_status}" == "available" ]]; then
+      ok "  RDS ${RDS_ID} already available — skipping"
+    else
+      # If still stopping from hibernate, poll until it reaches 'stopped' first
+      if [[ "${rds_status}" == "stopping" ]]; then
+        log "  RDS ${RDS_ID} still stopping — polling until stopped (up to 15 min)..."
+        for i in $(seq 1 90); do
+          rds_status=$(aws rds describe-db-instances \
+            --db-instance-identifier "${RDS_ID}" --region "${REGION}" \
+            --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "unknown")
+          [[ "${rds_status}" == "stopped" ]] && break
+          [[ $((i % 6)) -eq 0 ]] && log "    still ${rds_status}... (${i}×10s)"
+          sleep 10
+        done
+        [[ "${rds_status}" == "stopped" ]] && ok "  RDS ${RDS_ID} stopped — now starting..." \
+          || warn "  RDS ${RDS_ID} still ${rds_status} after 15 min — attempting start anyway"
+      fi
+      run aws rds start-db-instance \
+        --db-instance-identifier "${RDS_ID}" --region "${REGION}" \
+        --no-cli-pager --query 'DBInstance.DBInstanceStatus' --output text
+      if [[ "${DRY_RUN}" != "1" ]]; then
+        log "  Waiting for RDS to become available (~3-5 min)..."
+        aws rds wait db-instance-available \
+          --db-instance-identifier "${RDS_ID}" --region "${REGION}"
+        ok "  RDS ${RDS_ID} available."
+      fi
+    fi
+  else
+    warn "  No RDS recorded for ${REGION} — skipping"
+  fi
+
+  # ── STEP 4: ALBs ─────────────────────────────────────────────────────────────
+  step "  [${REGION}] 4/7  ALBs"
+
+  # Helper: create an ALB and return its ARN
+  create_alb() {
+    local name="$1"
+    local config="$2"
+    local region="$3"
+    local idle="$4"
+
+    # Idempotency
+    existing=$(aws elbv2 describe-load-balancers --names "$name" --region "$region" \
+      --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "None")
+    if [[ "$existing" != "None" && -n "$existing" ]]; then
+      echo "$existing"
+      return 0
+    fi
+
+    local subnets sgs
+    subnets=$(echo "$config" | jq -r '.subnets | join(" ")')
+    sgs=$(echo "$config" | jq -r '.sgs | join(" ")')
+
+    local new_arn
+    new_arn=$(aws elbv2 create-load-balancer \
+      --name "$name" \
+      --subnets ${subnets} \
+      --security-groups ${sgs} \
+      --scheme internet-facing \
+      --type application \
+      --region "$region" \
+      --no-cli-pager \
+      --query 'LoadBalancers[0].LoadBalancerArn' --output text)
+
+    # Restore idle timeout
+    aws elbv2 modify-load-balancer-attributes \
+      --load-balancer-arn "$new_arn" \
+      --attributes "Key=idle_timeout.timeout_seconds,Value=${idle}" \
+      --region "$region" --no-cli-pager >/dev/null
+
+    echo "$new_arn"
+  }
+
+  NEW_DIR_ARN=""
+  NEW_RELAY_ARN=""
+  NEW_DIR_DNS=""
+  NEW_RELAY_DNS=""
+
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    warn "  [dry-run] would create ALB cello-dir-${ENVIRONMENT} in ${REGION}"
+    warn "  [dry-run] would create ALB cello-relay-${ENVIRONMENT} in ${REGION}"
+    NEW_DIR_DNS="cello-dir-${ENVIRONMENT}-DRYRUN.${REGION}.elb.amazonaws.com"
+    NEW_RELAY_DNS="cello-relay-${ENVIRONMENT}-DRYRUN.${REGION}.elb.amazonaws.com"
+  else
+    DIR_CONFIG=$(echo "$R"   | jq -c '.dir_alb_config')
+    RELAY_CONFIG=$(echo "$R" | jq -c '.relay_alb_config')
+    DIR_IDLE=$(echo "$R"     | jq -r '.dir_alb_config.idle_timeout_seconds // "300"')
+    RELAY_IDLE=$(echo "$R"   | jq -r '.relay_alb_config.idle_timeout_seconds // "300"')
+
+    log "  Creating dir ALB..."
+    NEW_DIR_ARN=$(create_alb "cello-dir-${ENVIRONMENT}" "$DIR_CONFIG" "${REGION}" "$DIR_IDLE")
+    ok "  Dir ALB: ${NEW_DIR_ARN}"
+
+    log "  Creating relay ALB..."
+    NEW_RELAY_ARN=$(create_alb "cello-relay-${ENVIRONMENT}" "$RELAY_CONFIG" "${REGION}" "$RELAY_IDLE")
+    ok "  Relay ALB: ${NEW_RELAY_ARN}"
+
+    # Wait for ALBs to become active
+    log "  Waiting for ALBs to become active..."
+    aws elbv2 wait load-balancer-available \
+      --load-balancer-arns "$NEW_DIR_ARN" "$NEW_RELAY_ARN" \
+      --region "${REGION}"
+    ok "  Both ALBs active."
+
+    # Get new DNS names
+    NEW_DIR_DNS=$(aws elbv2 describe-load-balancers \
+      --load-balancer-arns "$NEW_DIR_ARN" --region "${REGION}" \
+      --query 'LoadBalancers[0].DNSName' --output text)
+    NEW_RELAY_DNS=$(aws elbv2 describe-load-balancers \
+      --load-balancer-arns "$NEW_RELAY_ARN" --region "${REGION}" \
+      --query 'LoadBalancers[0].DNSName' --output text)
+    ok "  Dir DNS:   ${NEW_DIR_DNS}"
+    ok "  Relay DNS: ${NEW_RELAY_DNS}"
+
+    # ── Recreate listeners + rules ──────────────────────────────────────────
+    log "  Recreating directory listener + rules..."
+
+    TG_MAIN=$(echo "$R"      | jq -r '.target_groups.main')
+    TG_BOOTSTRAP=$(echo "$R" | jq -r '.target_groups.bootstrap')
+    TG_INTERNAL=$(echo "$R"  | jq -r '.target_groups.internal')
+    TG_RELAY=$(echo "$R"     | jq -r '.target_groups.relay')
+
+    # Directory listener (default → main/8080)
+    DIR_LISTENER_ARN=$(aws elbv2 create-listener \
+      --load-balancer-arn "$NEW_DIR_ARN" \
+      --protocol HTTP --port 80 \
+      --default-actions "Type=forward,TargetGroupArn=${TG_MAIN}" \
+      --region "${REGION}" --no-cli-pager \
+      --query 'Listeners[0].ListenerArn' --output text)
+    ok "  Dir listener: ${DIR_LISTENER_ARN}"
+
+    # Directory path rules
+    aws elbv2 create-rule --listener-arn "$DIR_LISTENER_ARN" --priority 3 \
+      --conditions 'Field=path-pattern,Values=["/agent-lookup"]' \
+      --actions "Type=forward,TargetGroupArn=${TG_BOOTSTRAP}" \
+      --region "${REGION}" --no-cli-pager >/dev/null
+    aws elbv2 create-rule --listener-arn "$DIR_LISTENER_ARN" --priority 4 \
+      --conditions 'Field=path-pattern,Values=["/bootstrap"]' \
+      --actions "Type=forward,TargetGroupArn=${TG_BOOTSTRAP}" \
+      --region "${REGION}" --no-cli-pager >/dev/null
+    aws elbv2 create-rule --listener-arn "$DIR_LISTENER_ARN" --priority 5 \
+      --conditions 'Field=path-pattern,Values=["/internal/*"]' \
+      --actions "Type=forward,TargetGroupArn=${TG_INTERNAL}" \
+      --region "${REGION}" --no-cli-pager >/dev/null
+    aws elbv2 create-rule --listener-arn "$DIR_LISTENER_ARN" --priority 6 \
+      --conditions 'Field=path-pattern,Values=["/manifest"]' \
+      --actions "Type=forward,TargetGroupArn=${TG_BOOTSTRAP}" \
+      --region "${REGION}" --no-cli-pager >/dev/null
+    ok "  Dir listener rules: /agent-lookup /bootstrap /internal/* /manifest wired."
+
+    # Relay listener (default → relay/4002)
+    RELAY_LISTENER_ARN=$(aws elbv2 create-listener \
+      --load-balancer-arn "$NEW_RELAY_ARN" \
+      --protocol HTTP --port 80 \
+      --default-actions "Type=forward,TargetGroupArn=${TG_RELAY}" \
+      --region "${REGION}" --no-cli-pager \
+      --query 'Listeners[0].ListenerArn' --output text)
+    ok "  Relay listener: ${RELAY_LISTENER_ARN}"
+  fi
+
+  # ── STEP 5: Route53 ──────────────────────────────────────────────────────────
+  step "  [${REGION}] 5/7  Route53 — update A alias records"
+
+  # Get ALB hosted zone ID (same for all ALBs in the region)
+  ALB_ZONE=""
+  if [[ "${DRY_RUN}" != "1" ]]; then
+    ALB_ZONE=$(aws elbv2 describe-load-balancers \
+      --load-balancer-arns "$NEW_DIR_ARN" --region "${REGION}" \
+      --query 'LoadBalancers[0].CanonicalHostedZoneId' --output text)
+  fi
+
+  update_r53_alias() {
+    local subdomain="$1"
+    local alb_dns="$2"
+    local alb_zone="$3"
+    local action="${4:-UPSERT}"
+
+    if [[ "${DRY_RUN}" == "1" ]]; then
+      warn "  [dry-run] would UPSERT ${subdomain}.${DOMAIN} → ${alb_dns}"
+      return 0
+    fi
+
+    aws route53 change-resource-record-sets \
+      --hosted-zone-id "${HOSTED_ZONE_ID}" \
+      --change-batch "$(jq -n \
+        --arg sub "${subdomain}.${DOMAIN}" \
+        --arg dns "${alb_dns}" \
+        --arg zone "${alb_zone}" \
+        --arg action "${action}" \
+        '{Changes:[{
+          Action:$action,
+          ResourceRecordSet:{
+            Name:$sub,
+            Type:"A",
+            AliasTarget:{
+              HostedZoneId:$zone,
+              DNSName:$dns,
+              EvaluateTargetHealth:true
+            }
+          }
+        }]}')" \
+      --no-cli-pager >/dev/null
+    ok "  Route53 ${subdomain}.${DOMAIN} → ${alb_dns}"
+  }
+
+  update_r53_alias "${DIR_SUB}"   "${NEW_DIR_DNS}"   "${ALB_ZONE}"
+  update_r53_alias "${RELAY_SUB}" "${NEW_RELAY_DNS}" "${ALB_ZONE}"
+
+  # ── STEP 6: ECS services ─────────────────────────────────────────────────────
+  step "  [${REGION}] 6/7  ECS services — restore desired counts"
+  svc_names=""
+  while read -r svc; do
+    name=$(echo "$svc"    | jq -r '.name')
+    desired=$(echo "$svc" | jq -r '.desired')
+    [[ "$desired" -lt 1 ]] && desired=1
+    svc_names="${svc_names} ${name}"
+    run aws ecs update-service --cluster "${CLUSTER_NAME}" --service "${name}" \
+      --desired-count "${desired}" --region "${REGION}" \
+      --no-cli-pager --query 'service.serviceName' --output text
+  done < <(echo "$R" | jq -c '.ecs_services[]')
+
+  if [[ "${DRY_RUN}" != "1" && -n "${svc_names// }" ]]; then
+    log "  Waiting for ECS services to reach steady state..."
+    log "  (relay re-registers with directory → directory auto-re-signs S3 manifest)"
+    aws ecs wait services-stable \
+      --cluster "${CLUSTER_NAME}" \
+      --services ${svc_names} \
+      --region "${REGION}" || warn "  services-stable wait timed out — check ECS console."
+    ok "  ECS services stable."
+  fi
+
+  # ── STEP 7: VERIFY ───────────────────────────────────────────────────────────
+  step "  [${REGION}] 7/7  Verification"
+
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    warn "  [dry-run] would verify DNS, HTTP health, and inventory diff"
+  else
+    # DNS check
+    dir_ip=$(dig @8.8.8.8 +short "${DIR_SUB}.${DOMAIN}" 2>/dev/null | head -1 || echo "")
+    relay_ip=$(dig @8.8.8.8 +short "${RELAY_SUB}.${DOMAIN}" 2>/dev/null | head -1 || echo "")
+    [[ -n "$dir_ip"   ]] && ok "  DNS ${DIR_SUB}: ${dir_ip}"   || warn "  DNS ${DIR_SUB}: NOT RESOLVING (may take 60s)"
+    [[ -n "$relay_ip" ]] && ok "  DNS ${RELAY_SUB}: ${relay_ip}" || warn "  DNS ${RELAY_SUB}: NOT RESOLVING (may take 60s)"
+
+    # HTTP health check on /manifest (public, no auth)
+    manifest_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+      "http://${DIR_SUB}.${DOMAIN}/manifest" 2>/dev/null || echo "000")
+    [[ "${manifest_code}" =~ ^(200|301|302)$ ]] \
+      && ok "  /manifest HTTP ${manifest_code}" \
+      || warn "  /manifest returned HTTP ${manifest_code} — directory may still be starting"
+
+    # After-snapshot + diff
+    log "  Taking after-snapshot and comparing with before..."
+    AFTER_FILE="${SNAPSHOT_DIR}/${REGION}-after-${TS}.json"
+    "${SCRIPT_DIR}/inventory.sh" "${REGION}" "${AFTER_FILE}"
+
+    # Find matching before-snapshot (most recent for this region)
+    BEFORE_FILE=$(ls -t "${SNAPSHOT_DIR}/${REGION}-before-"*.json 2>/dev/null | head -1 || echo "")
+    if [[ -n "$BEFORE_FILE" ]]; then
+      echo ""
+      "${SCRIPT_DIR}/inventory.sh" --diff "${BEFORE_FILE}" "${AFTER_FILE}" \
+        && ok "  Inventory diff: IDENTICAL (environment fully restored)" \
+        || warn "  Inventory diff: differences found — review above"
+    else
+      warn "  No before-snapshot found in ${SNAPSHOT_DIR}/ — skipping diff"
+    fi
+  fi
+
+done  # end per-region loop
+
+echo ""
+if [[ "${DRY_RUN}" == "1" ]]; then
+  banner "DRY-RUN COMPLETE — no changes made." "${REGIONS_STR}"
+  echo "Re-run with ${C_BOLD}--execute${C_RESET} to apply."
+else
+  banner "WAKE COMPLETE" "${REGIONS_STR}"
+  echo ""
+  echo "Post-wake checklist:"
+  echo "  1. Verify /manifest endpoints serve a current manifest"
+  echo "  2. Relay manifests auto-re-signed when relay re-registered (check CloudWatch logs)"
+  echo "  3. ECS Exec available again (ssmmessages endpoint restored)"
+fi
