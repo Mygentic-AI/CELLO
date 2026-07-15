@@ -1639,6 +1639,52 @@ wording — payload-only "drop"; not device-linkable).
    (drain COALESCE + sweep handle the transition); drop with a migration once M8 rows are confirmed drained.
    Plus the daemon F2 ACK-gating test.
 
+### 2026-07-15 — Entry 24: spine re-point RAN but is blocked at registration (infra, not the M10 logic)
+
+Re-pointed `j-trust.spine.test.ts` onto the M10 path (committed) and ran it live against the spine cluster
+(`test:spine` config; cello_spine auto-provisioned to V47 — the `pickup_queue.signal_hash` column is present,
+confirmed). **It failed at line 110 — `cello register` returned status 1** — which is the test's SETUP
+(unchanged from the M8 version), BEFORE any M10 seeding/assertion. The `cello` command's stderr is suppressed
+in the vitest output, so the cause is opaque without a surfaced-log re-run.
+
+**This is orthogonal to the M10 cutover.** Registration is a DKG ceremony over the directory quorum + a relay
+reservation — none of which my changes touch (arm retirement = the /internal/agent-write seam; daemon cutover
+= the trust-signal pickup handler + the dropped `trust_signals` table; decode = additive). cello_spine is at
+V47; the daemon builds + all 985 daemon unit tests pass (incl. startup + the DROP). Local spine-cluster DKG
+registration + relay reservation is a known-finicky path (see the recent relay-reservation root-cause commits),
+and CLAUDE.md explicitly warns against rabbit-holing it. Deliberately NOT chasing it at this session depth.
+
+**So: the M8 retirement is CODE-COMPLETE + comprehensively UNIT-verified + reviewed, but the cross-process
+spine GATE has not yet passed** (blocked at setup, not at the M10 behavior). Per "vitest green ≠ done," the
+publish is correctly HELD until the spine gate is green. Next focused session: re-run the spine test with the
+`cello register` stderr surfaced (or run the register step standalone against the cluster) to see whether it
+is pre-existing spine flakiness / a relay-reservation issue / a DEV pre-auth setup problem — then the gate
+passes and the publish + deploy proceed. The spine re-point CODE itself typechecks and faithfully mirrors the
+M10 semantics the unit tests already prove; only its ability to RUN end-to-end is blocked.
+
+### 2026-07-15 — Entry 25: the spine GATE IS GREEN — M8 retirement cross-process verified + a CLI regression fixed
+
+The j-trust spine passed a full 53s live cross-process run (`test:spine`) — the "live multi-process smoke
+test" the milestone-close gate requires. The M10 delivery path is proven end-to-end: a sealed CBOR envelope
+seeded on `pickup_queue` with its own `signal_hash` is DECODED by the daemon, re-verified via
+`deliverWalletSignal`, and stored in `wallet_trust_signals` (the M8 `trust_signals` table is GONE); the
+directory then holds only the hash; the hash-mismatch negative logs `delivery_rejected` and does NOT
+store/ack; the raw credential never appears. So the M8 retirement is now unit-verified (985 daemon + 722
+directory + 67 portal) AND cross-process verified AND reviewed.
+
+**Root-cause CLI fix found on the way (`fix(cli): allow the DEV- pre-auth sentinel`, cello-client):** the spine
+suite had ROTTED — `register-agent`'s client-side token gate checked `startsWith('CELLO-')` only, but the local
+`DevTokenValidator` accepts ONLY `DEV-` tokens, so NO token satisfied both and ALL local CLI registration was
+impossible. The fix allows both prefixes past the client typo-gate (the daemon stays the authority). This
+un-rots every spine test, not just j-trust. +1 cli regression test. (Also fixed the stale `register` command
+name in the j-trust spine — the alias was removed.)
+
+**Publish implication:** `cli` is now a CHANGED package too, so the M10 cascade is protocol-types(0.0.24,
+decode) + daemon(0.0.61, cutover) + cli(0.0.59, DEV- fix) + their dependents (transport, connect) re-pinned;
+crypto unchanged. NOTE the package layout changed since /cello-publish was written: `client` is DELETED
+(M6 dead-code purge), `connect` = `core/adapter-claude-code`. Proceeding to the publish now that the gate is
+green.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
