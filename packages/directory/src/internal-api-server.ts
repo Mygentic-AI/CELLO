@@ -42,8 +42,6 @@ import { submitSignal, deliverSignal, revokeSignal, publishRegistry, getRegistry
 import {
   isAgentOwnedByAccount,
   applyRevocationFlag,
-  upsertIdentityHash,
-  enqueuePickup,
 } from "./agent-write-repository.js";
 
 // READ-001 freshness window is now shared from agent-presence-repository (one source of truth for
@@ -431,12 +429,9 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
             }
             break;
           }
-          case "trust_signal_hash":
-            await upsertIdentityHash(pool, { agentId, signalKind: w.signalKind, signalHash: w.signalHash });
-            break;
-          case "trust_signal_ciphertext":
-            await enqueuePickup(pool, { agentId, signalKind: w.signalKind, ciphertext: w.ciphertext, owningNodeId });
-            break;
+          // M10-D18: the `trust_signal_hash` / `trust_signal_ciphertext` arms are RETIRED. Trust signals
+          // enter through the signed chokepoint (/internal/signal/submit) and deliver via
+          // /internal/signal/deliver — never this API-key seam. `revocation_flag` is the only kind now.
         }
       } catch (err: unknown) {
         const pgErr = err as { code?: string };

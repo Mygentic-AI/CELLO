@@ -114,18 +114,17 @@ describeLive("WRITEAPI-001 live — /internal/agent-write (real Postgres + HTTP)
     expect(row.rowCount).toBe(0);
   });
 
-  it("AC-002: a hash lands in the identity tree; sealed ciphertext lands in the pickup queue", async () => {
+  it("M10-D18: the retired trust_signal_hash + trust_signal_ciphertext arms are rejected — nothing lands in the seam tables", async () => {
+    // Trust signals now enter via the signed chokepoint (/internal/signal/submit) + deliver, NOT this seam.
     const hash = createHash("sha256").update("a-webauthn-credential-id").digest("hex");
     const h = await write({ accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_hash", payload: { signalKind: "webauthn", signalHash: hash } });
-    expect(h.status).toBe(200);
-    const treeRow = await pool.query(`SELECT signal_hash FROM identity_tree_entries WHERE agent_id=$1 AND signal_kind='webauthn'`, [AGENT_A]);
-    expect(treeRow.rows[0].signal_hash).toBe(hash);
-
+    expect(h.status, "trust_signal_hash is retired (unsupported_kind)").toBe(422);
     const sealed = Buffer.from(Uint8Array.from({ length: 80 }, (_, i) => (i * 53 + 7) % 256)).toString("base64");
     const c = await write({ accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext", payload: { ciphertext: sealed, signalKind: "webauthn" } });
-    expect(c.status).toBe(200);
-    const pq = await pool.query(`SELECT ciphertext FROM pickup_queue WHERE agent_id=$1`, [AGENT_A]);
-    expect(pq.rowCount).toBe(1);
+    expect(c.status, "trust_signal_ciphertext is retired (unsupported_kind)").toBe(422);
+    // Nothing landed: neither seam table gained a row for this agent.
+    expect((await pool.query(`SELECT 1 FROM identity_tree_entries WHERE agent_id=$1`, [AGENT_A])).rowCount).toBe(0);
+    expect((await pool.query(`SELECT 1 FROM pickup_queue WHERE agent_id=$1`, [AGENT_A])).rowCount).toBe(0);
   });
 
   it("SI-001: smuggled plaintext (email / OAuth token) is rejected AND never present in any seam table", async () => {

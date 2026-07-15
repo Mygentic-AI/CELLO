@@ -119,31 +119,21 @@ describe("WRITEAPI-001 — POST /internal/agent-write", () => {
     expect(writes).toHaveLength(0);
   });
 
-  // ─── AC-002: payload discipline — permitted shapes accepted ──────────────────
-  it("AC-002: a trust-signal HASH (64-hex) is accepted + persisted to the identity tree", async () => {
+  // ─── M10-D18: the trust-signal arms are RETIRED — revocation_flag is the only kind ───
+  it("M10-D18: the retired trust_signal_hash + trust_signal_ciphertext arms are rejected (422, nothing persisted)", async () => {
+    // Trust signals now enter ONLY through the signed chokepoint (POST /internal/signal/submit) and are
+    // delivered via POST /internal/signal/deliver — never this API-key seam. Both former arms are
+    // unsupported_kind now; the seam accepts revocation_flag alone.
     const { pool, writes } = makePool();
-    const res = await write(await start(pool), {
-      accountId: ACCOUNT_A,
-      agentId: AGENT_A,
-      writeKind: "trust_signal_hash",
-      payload: { signalKind: "webauthn", signalHash: VALID_HASH },
-    }, API_KEY);
-    expect(res.status).toBe(200);
-    expect(writes).toHaveLength(1);
-    expect(writes[0].text).toMatch(/identity_tree_entries/i);
-  });
-
-  it("AC-002: sealed CIPHERTEXT is accepted + enqueued to the pickup queue", async () => {
-    const { pool, writes } = makePool();
-    const res = await write(await start(pool), {
-      accountId: ACCOUNT_A,
-      agentId: AGENT_A,
-      writeKind: "trust_signal_ciphertext",
-      payload: { ciphertext: SEALED_B64, signalKind: "webauthn" },
-    }, API_KEY);
-    expect(res.status).toBe(200);
-    expect(writes).toHaveLength(1);
-    expect(writes[0].text).toMatch(/pickup_queue/i);
+    const base = await start(pool);
+    for (const arm of [
+      { writeKind: "trust_signal_hash", payload: { signalKind: "webauthn", signalHash: VALID_HASH } },
+      { writeKind: "trust_signal_ciphertext", payload: { ciphertext: SEALED_B64, signalKind: "webauthn" } },
+    ]) {
+      const res = await write(base, { accountId: ACCOUNT_A, agentId: AGENT_A, ...arm }, API_KEY);
+      expect(res.status, `${arm.writeKind} must be rejected as unsupported_kind`).toBe(422);
+    }
+    expect(writes, "a retired arm persists nothing").toHaveLength(0);
   });
 
   // ─── AC-002 / SI-001: disallowed shapes rejected, nothing persisted ──────────
@@ -154,51 +144,6 @@ describe("WRITEAPI-001 — POST /internal/agent-write", () => {
       agentId: AGENT_A,
       writeKind: "plaintext_blob",
       payload: { text: "anything" },
-    }, API_KEY);
-    expect(res.status).toBe(422);
-    expect(writes).toHaveLength(0);
-  });
-
-  it("AC-002 / SI-001: a raw email smuggled as a 'hash' is rejected (not hex)", async () => {
-    const { pool, writes } = makePool();
-    const res = await write(await start(pool), {
-      accountId: ACCOUNT_A,
-      agentId: AGENT_A,
-      writeKind: "trust_signal_hash",
-      payload: { signalKind: "webauthn", signalHash: "operator@example.com" },
-    }, API_KEY);
-    expect(res.status).toBe(422);
-    expect(writes).toHaveLength(0);
-  });
-
-  it("AC-002: sealed ciphertext in base64url (and MIME-wrapped) encoding is accepted", async () => {
-    const raw = Uint8Array.from({ length: 64 }, (_, i) => (i * 41 + 19) % 256);
-    const b64url = Buffer.from(raw).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-    const { pool, writes } = makePool();
-    const base = await start(pool);
-    const r1 = await write(base, {
-      accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext", payload: { ciphertext: b64url, signalKind: "webauthn" },
-    }, API_KEY);
-    expect(r1.status).toBe(200);
-    // wrapped standard base64 (embedded newlines) is tolerated too
-    const wrapped = Buffer.from(raw).toString("base64").replace(/(.{20})/g, "$1\n");
-    const r2 = await write(base, {
-      accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext", payload: { ciphertext: wrapped, signalKind: "webauthn" },
-    }, API_KEY);
-    expect(r2.status).toBe(200);
-    expect(writes).toHaveLength(2);
-    expect(writes.every((w) => /pickup_queue/i.test(w.text))).toBe(true);
-  });
-
-  it("AC-002 / SI-001: a plaintext token smuggled as 'ciphertext' is rejected (all-printable)", async () => {
-    const { pool, writes } = makePool();
-    // base64 of a printable OAuth-looking token — valid base64, but decodes to plaintext ASCII.
-    const tokenB64 = Buffer.from("ya29.A0ARrdaM-secret-oauth-token-value-here").toString("base64");
-    const res = await write(await start(pool), {
-      accountId: ACCOUNT_A,
-      agentId: AGENT_A,
-      writeKind: "trust_signal_ciphertext",
-      payload: { ciphertext: tokenB64, signalKind: "webauthn" },
     }, API_KEY);
     expect(res.status).toBe(422);
     expect(writes).toHaveLength(0);
@@ -215,22 +160,6 @@ describe("WRITEAPI-001 — POST /internal/agent-write", () => {
     expect(res.status).toBe(200);
     expect(writes).toHaveLength(1);
     expect(writes[0].text).toMatch(/agent_suspensions/i);
-  });
-
-  it("AC-002 / SI-001: PII smuggled as ciphertext with non-printable padding is rejected (long printable run)", async () => {
-    // test-attacker finding 2: base64(email + random non-printable bytes) defeats an all-printable
-    // check but the embedded email is a long printable run → must be rejected, nothing persisted.
-    const smuggle = Buffer.concat([
-      Buffer.from("victim-operator@example.com"), // 27-char printable run
-      Buffer.from(Uint8Array.from({ length: 24 }, (_, i) => (i * 91 + 3) % 32)), // non-printable padding
-    ]).toString("base64");
-    const { pool, writes } = makePool();
-    const res = await write(await start(pool), {
-      accountId: ACCOUNT_A, agentId: AGENT_A, writeKind: "trust_signal_ciphertext",
-      payload: { ciphertext: smuggle, signalKind: "webauthn" },
-    }, API_KEY);
-    expect(res.status).toBe(422);
-    expect(writes).toHaveLength(0);
   });
 
   it("AC-002: a revocation_flag with a non-enum mode is rejected", async () => {
