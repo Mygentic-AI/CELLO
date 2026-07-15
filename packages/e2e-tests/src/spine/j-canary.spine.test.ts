@@ -130,14 +130,15 @@ describe("J-CANARY — DOD-ZEROBUMP-CANARY-1: a type the system has never seen, 
     const dirB = mkdtempSync(join(tmpdir(), "cello-canary-B-"));
     dirs.push(dirA, dirB);
 
+    // Daemon must be running BEFORE create-agent (the CLI calls the daemon over IPC).
+    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "canaryA");
+    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "canaryB");
+    daemons.push(daemonA, daemonB);
+
     const createA = JSON.parse(cello(["create-agent", "canaryA"], { CELLO_DIR: dirA }).stdout) as { pubkey: string };
     const createB = JSON.parse(cello(["create-agent", "canaryB"], { CELLO_DIR: dirB }).stdout) as { pubkey: string };
     const pubA = createA.pubkey;
     const pubB = createB.pubkey;
-
-    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "canaryA");
-    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "canaryB");
-    daemons.push(daemonA, daemonB);
 
     await waitConnected(dirA, "A");
     await waitConnected(dirB, "B");

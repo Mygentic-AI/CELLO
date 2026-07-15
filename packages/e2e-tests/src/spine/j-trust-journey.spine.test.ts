@@ -111,17 +111,18 @@ describe("J-TRUST-JOURNEY — DOD-T2-JOURNEY-1: live signal presentation→consu
     const dirC = mkdtempSync(join(tmpdir(), "cello-jrny-C-"));
     dirs.push(dirA, dirB, dirC);
 
+    // Daemons must run BEFORE create-agent (the CLI calls the daemon over IPC).
+    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "jrnyA");
+    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "jrnyB");
+    const daemonC = await startDaemon(dirC, cluster.directoryUrl, "jrnyC");
+    daemons.push(daemonA, daemonB, daemonC);
+
     const createA = JSON.parse(cello(["create-agent", "alice"], { CELLO_DIR: dirA }).stdout) as { pubkey: string };
     const createB = JSON.parse(cello(["create-agent", "bob"], { CELLO_DIR: dirB }).stdout) as { pubkey: string };
     const createC = JSON.parse(cello(["create-agent", "carol"], { CELLO_DIR: dirC }).stdout) as { pubkey: string };
     const pubA = createA.pubkey;
     const pubB = createB.pubkey;
     const pubC = createC.pubkey;
-
-    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "jrnyA");
-    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "jrnyB");
-    const daemonC = await startDaemon(dirC, cluster.directoryUrl, "jrnyC");
-    daemons.push(daemonA, daemonB, daemonC);
 
     await waitConnected(dirA, "A");
     await waitConnected(dirB, "B");
