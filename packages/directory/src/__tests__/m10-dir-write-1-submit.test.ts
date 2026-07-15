@@ -12,7 +12,8 @@ import { Pool } from "pg";
 import { randomBytes } from "node:crypto";
 import { generateKeypair } from "@cello-protocol/crypto";
 import { encodeCbor, encodeTrustSignalEnvelope, hashTrustSignalEnvelope, type TrustSignalEnvelope } from "@cello-protocol/protocol-types";
-import { submitSignal, buildSignalRequestTbs, SubmitRejected } from "../signal-write.js";
+import { submitSignal, deliverSignal, buildSignalRequestTbs, SubmitRejected } from "../signal-write.js";
+import { drainPickupForAgent } from "../pickup-repository.js";
 import type { Logger } from "@cello-protocol/interfaces";
 
 /** The signing surface the portal actually has: in production this is AWS KMS (M10-D6 — the portal
@@ -388,6 +389,112 @@ describeIntegration("DOD-DIR-WRITE-1 — the signed-submission chokepoint", () =
       } finally {
         await pool.query("UPDATE authorized_issuers SET status='active' WHERE pubkey IN ($1,$2)", [submitterPub, registryPub]);
       }
+    });
+  });
+
+  // ── M10-D22: the delivery arm. Queues a NOTARIZED signal's sealed envelope for its holder's agents,
+  //    authenticated by the SAME signer/role as submit. Replaces the M8 trust_signal_ciphertext arm.
+  describe("deliver — the M10 delivery arm (M10-D22)", () => {
+    const DA = `${tag}-deliver-agent-a`;
+    const DB = `${tag}-deliver-agent-b`;
+    const CT_A = new Uint8Array([9, 8, 7, 6, 5]);
+    const CT_B = new Uint8Array([1, 1, 2, 3, 5, 8]);
+
+    async function signedDeliver(opts: {
+      signalHash: string;
+      signalKind?: string;
+      deliveries?: Array<{ agent_id: string; ciphertext: Uint8Array }>;
+      priv?: Signer;
+      pub?: string;
+      issuedAt?: number;
+      bodyOverride?: Uint8Array;
+    }) {
+      const body = opts.bodyOverride ?? encodeCbor({
+        v: 1,
+        op: "deliver",
+        signal_hash: opts.signalHash,
+        signal_kind: opts.signalKind ?? "phone",
+        deliveries: opts.deliveries ?? [{ agent_id: DA, ciphertext: CT_A }, { agent_id: DB, ciphertext: CT_B }],
+        issued_at: opts.issuedAt ?? nowSec(),
+      });
+      const priv = opts.priv ?? submitterKey;
+      const pub = opts.pub ?? submitterPub;
+      return {
+        pool, logger: silent, acceptingNode: NODE, correlationId: "d1",
+        bodyCbor: body,
+        signerPubkeyHex: pub,
+        signatureHex: hex(await priv.sign(buildSignalRequestTbs(body))),
+      };
+    }
+
+    beforeEach(async () => {
+      await pool.query("DELETE FROM pickup_queue WHERE agent_id = ANY($1)", [[DA, DB]]);
+    });
+    afterAll(async () => {
+      await pool.query("DELETE FROM pickup_queue WHERE agent_id = ANY($1)", [[DA, DB]]).catch(() => {});
+    });
+
+    /** Notarize a fresh signal and return its hash, so a deliver has something real to reference. */
+    async function notarize(): Promise<string> {
+      const env = envelope({ subject: `${tag}-deliver-subject` });
+      const res = await submitSignal(await signedSubmit({ env }));
+      return res.signalHash;
+    }
+
+    it("queues one sealed copy per agent, EACH carrying the signal_hash the drain surfaces", async () => {
+      const h = await notarize();
+      const res = await deliverSignal(await signedDeliver({ signalHash: h }));
+      expect(res.delivered).toBe(2);
+
+      const drainedA = await drainPickupForAgent(pool, DA);
+      const drainedB = await drainPickupForAgent(pool, DB);
+      expect(drainedA).toHaveLength(1);
+      expect(drainedB).toHaveLength(1);
+      // The row carries its OWN hash (no identity_tree anchor exists for these agents) — M10-D22.
+      expect(drainedA[0].signalHash).toBe(h);
+      expect(drainedB[0].signalHash).toBe(h);
+      expect(Buffer.compare(drainedA[0].ciphertext, Buffer.from(CT_A))).toBe(0);
+      expect(Buffer.compare(drainedB[0].ciphertext, Buffer.from(CT_B))).toBe(0);
+    });
+
+    it("REFUSES to deliver a hash this node never notarized (submit must precede deliver)", async () => {
+      const neverSeen = "a".repeat(64);
+      await expect(deliverSignal(await signedDeliver({ signalHash: neverSeen })))
+        .rejects.toMatchObject({ reason: "signal_not_notarized" });
+      expect(await drainPickupForAgent(pool, DA), "nothing queued on a refused deliver").toHaveLength(0);
+    });
+
+    it("uses the SAME auth as submit — a stranger cannot deliver, a registry key cannot either", async () => {
+      const h = await notarize();
+      await expect(deliverSignal(await signedDeliver({ signalHash: h, pub: strangerPub, priv: strangerKey })))
+        .rejects.toMatchObject({ reason: "unknown_issuer" });
+      await expect(deliverSignal(await signedDeliver({ signalHash: h, pub: registryPub, priv: registryKey })))
+        .rejects.toMatchObject({ reason: "issuer_wrong_role" });
+      expect(await drainPickupForAgent(pool, DA)).toHaveLength(0);
+    });
+
+    it("REJECTS a forged signature (authorized pubkey, someone else's signature)", async () => {
+      const h = await notarize();
+      const args = await signedDeliver({ signalHash: h, priv: strangerKey }); // signed by stranger…
+      args.signerPubkeyHex = submitterPub;                                    // …but claims to be the submitter
+      await expect(deliverSignal(args)).rejects.toMatchObject({ reason: "signature_invalid" });
+    });
+
+    it("REJECTS an empty deliveries list (invalid_delivery) — nothing to queue", async () => {
+      const h = await notarize();
+      await expect(deliverSignal(await signedDeliver({ signalHash: h, deliveries: [] })))
+        .rejects.toMatchObject({ reason: "invalid_delivery" });
+    });
+
+    it("a re-delivery for the same (agent, kind) SUPERSEDES the prior pending one — one row, newest ciphertext", async () => {
+      const h = await notarize();
+      await deliverSignal(await signedDeliver({ signalHash: h, deliveries: [{ agent_id: DA, ciphertext: CT_A }] }));
+      const h2 = await notarize();
+      await deliverSignal(await signedDeliver({ signalHash: h2, deliveries: [{ agent_id: DA, ciphertext: CT_B }] }));
+      const drained = await drainPickupForAgent(pool, DA);
+      expect(drained, "one pending per (agent, kind)").toHaveLength(1);
+      expect(drained[0].signalHash, "the superseding hash, not the prior one").toBe(h2);
+      expect(Buffer.compare(drained[0].ciphertext, Buffer.from(CT_B))).toBe(0);
     });
   });
 });

@@ -45,6 +45,7 @@ import { verify } from "@cello-protocol/crypto";
 import { encodeCbor, decodeCbor, hashTrustSignalEnvelope, type TrustSignalEnvelope } from "@cello-protocol/protocol-types";
 import type { Pool } from "pg";
 import type { Logger } from "@cello-protocol/interfaces";
+import { enqueuePickup } from "./agent-write-repository.js";
 
 /** This module logs at info/warn only; narrowing to that keeps it compatible with the internal-api
  *  server's own narrowed logger without forcing a `debug` it never calls. */
@@ -85,7 +86,9 @@ export type SubmitRejection =
   | "stale_request"              // issued_at is outside the skew window
   | "envelope_undecodable"       // the envelope bytes are not a canonical trust-signal envelope (bad FORM)
   | "envelope_invalid"           // canonical form, but a field violates the envelope's own rules (bad MEANING)
-  | "envelope_hash_mismatch";    // WE re-hashed the bytes and got a different hash — the chokepoint
+  | "envelope_hash_mismatch"     // WE re-hashed the bytes and got a different hash — the chokepoint
+  | "invalid_delivery"           // a deliver request's shape is wrong (empty/oversized list, bad agent_id/ciphertext)
+  | "signal_not_notarized";      // deliver names a signal_hash this node has never notarized (submit must precede deliver)
 
 export class SubmitRejected extends Error {
   readonly reason: SubmitRejection;
@@ -289,6 +292,171 @@ export async function submitSignal(args: {
       correlationId,
     });
     return { signalHash: derived, inserted };
+  } catch (err) {
+    if (err instanceof SubmitRejected) return reject(err);
+    throw err;
+  }
+}
+
+/** Bounds on a deliver request. An account fans out to its own agents — a handful, not thousands; the
+ *  ciphertext is one sealed envelope. These cap abuse of a signed-but-cheap endpoint without constraining
+ *  any real fan-out. */
+const MAX_DELIVERIES = 256;
+const MAX_CIPHERTEXT_BYTES = 65536;
+const MAX_AGENT_ID_LEN = 256;
+
+/** One sealed copy of a signal for one agent's daemon. The ciphertext is OPAQUE to the directory (sealed
+ *  to that agent's k_local) — the directory queues it, it never opens it. */
+export interface SignalDelivery {
+  agent_id: string;
+  ciphertext: Uint8Array;
+}
+
+/** The signed deliver request (NOT the trust-signal envelope). ONE notarized signal (`signal_hash`,
+ *  `signal_kind`) fanned out to N agents. Distinct op from `submit`: submit NOTARIZES the hash; deliver
+ *  QUEUES the sealed envelope for the holder's daemon. They are separate because the fan-out is asymmetric
+ *  (1 notarize : N deliver) and a received counterparty signal is notarized but never self-delivered. */
+export interface SignalDeliverRequest {
+  v: 1;
+  op: "deliver";
+  /** The hash of the notarized signal these ciphertexts carry. Must already be in `signal_records`. */
+  signal_hash: string;
+  /** The signal's type, used as the pickup's per-kind supersede key (one pending delivery per (agent,
+   *  kind); a re-mint replaces the prior pending one). The directory cannot read it from the SEALED
+   *  ciphertext, so the (authenticated) submitter states it. Opaque here — never branched on. */
+  signal_kind: string;
+  deliveries: SignalDelivery[];
+  issued_at: number;
+}
+
+/** Decode + shape-check a deliver body. Validates EVERY delivery up front so a malformed request queues
+ *  nothing (no partial fan-out from a bad shape). Nothing here opens a ciphertext or interprets the type. */
+function parseDeliverRequest(bodyCbor: Uint8Array): SignalDeliverRequest {
+  let decoded: unknown;
+  try {
+    decoded = decodeCbor(bodyCbor);
+  } catch (err) {
+    throw new SubmitRejected("malformed_request", `body is not decodable CBOR: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const r = decoded as Partial<SignalDeliverRequest>;
+  if (r === null || typeof r !== "object") throw new SubmitRejected("malformed_request", "body is not a map");
+  if (r.v !== 1) throw new SubmitRejected("malformed_request", `unsupported request version ${String(r.v)}`);
+  if (r.op !== "deliver") throw new SubmitRejected("malformed_request", `unsupported op ${String(r.op)}`);
+  if (typeof r.signal_hash !== "string" || !/^[0-9a-f]{64}$/.test(r.signal_hash)) {
+    throw new SubmitRejected("malformed_request", "signal_hash must be 64 lowercase hex chars");
+  }
+  if (typeof r.signal_kind !== "string" || r.signal_kind.length === 0 || r.signal_kind.length > 128) {
+    throw new SubmitRejected("malformed_request", "signal_kind must be a non-empty string (<=128 chars)");
+  }
+  if (!Number.isInteger(r.issued_at)) {
+    throw new SubmitRejected("malformed_request", "issued_at must be an integer (epoch SECONDS)");
+  }
+  if (!Array.isArray(r.deliveries) || r.deliveries.length === 0) {
+    throw new SubmitRejected("invalid_delivery", "deliveries must be a non-empty array");
+  }
+  if (r.deliveries.length > MAX_DELIVERIES) {
+    throw new SubmitRejected("invalid_delivery", `deliveries exceeds the max of ${MAX_DELIVERIES}`);
+  }
+  const deliveries: SignalDelivery[] = r.deliveries.map((d, i) => {
+    const dd = d as Partial<SignalDelivery>;
+    if (dd === null || typeof dd !== "object") throw new SubmitRejected("invalid_delivery", `delivery ${i} is not a map`);
+    if (typeof dd.agent_id !== "string" || dd.agent_id.length === 0 || dd.agent_id.length > MAX_AGENT_ID_LEN) {
+      throw new SubmitRejected("invalid_delivery", `delivery ${i}: agent_id must be a non-empty string (<=${MAX_AGENT_ID_LEN} chars)`);
+    }
+    const ct = dd.ciphertext;
+    if (!(ct instanceof Uint8Array) && !Buffer.isBuffer(ct)) {
+      throw new SubmitRejected("invalid_delivery", `delivery ${i}: ciphertext must be raw bytes`);
+    }
+    if (ct.length === 0 || ct.length > MAX_CIPHERTEXT_BYTES) {
+      throw new SubmitRejected("invalid_delivery", `delivery ${i}: ciphertext must be 1..${MAX_CIPHERTEXT_BYTES} bytes`);
+    }
+    return { agent_id: dd.agent_id, ciphertext: new Uint8Array(ct) };
+  });
+  // Number.isInteger is not a type guard, so r.issued_at is still `number | undefined` to TS — the check
+  // above proves it is a number.
+  return { v: 1, op: "deliver", signal_hash: r.signal_hash, signal_kind: r.signal_kind, deliveries, issued_at: r.issued_at as number };
+}
+
+export interface DeliverResult {
+  /** How many per-agent sealed copies were queued for pickup. */
+  delivered: number;
+}
+
+/**
+ * Queue a notarized signal's sealed envelope for each of its holder's agents (the M10 delivery arm,
+ * M10-D22). The mirror of the M8 `trust_signal_ciphertext` agent-write arm it REPLACES: same pickup
+ * transport, but authenticated by the SAME signer/role as `submit` (not a bearer key), the ciphertext
+ * carries a CBOR envelope (not a canonical-JSON record), and the pickup row carries the signal_hash
+ * itself (its anchor is `signal_records`, not `identity_tree_entries`).
+ *
+ * PRECONDITION — the hash must already be NOTARIZED here. Deliver never notarizes; it refuses to queue a
+ * ciphertext for a `signal_hash` this node has no `signal_records` row for (`signal_not_notarized`). So a
+ * delivery can only ever carry a signal the chokepoint accepted — you cannot smuggle content to a daemon
+ * under a hash the directory never saw. (submit-then-deliver is the portal's order.)
+ *
+ * The directory NEVER opens a ciphertext (sealed to the agent's k_local — SI-001); it queues opaque bytes.
+ * Idempotent per (agent, signal_kind): a re-delivered copy SUPERSEDES the prior pending one (enqueuePickup),
+ * so the portal's whole-request retry after a partial failure is safe.
+ */
+export async function deliverSignal(args: {
+  pool: Pool;
+  logger: WriteLogger;
+  acceptingNode: string;
+  bodyCbor: Uint8Array;
+  signerPubkeyHex: string;
+  signatureHex: string;
+  correlationId: string;
+  nowSec?: number;
+}): Promise<DeliverResult> {
+  const { pool, logger, acceptingNode, bodyCbor, signerPubkeyHex, signatureHex, correlationId } = args;
+  const nowSec = args.nowSec ?? Math.floor(Date.now() / 1000);
+
+  const reject = (e: SubmitRejected): never => {
+    logger.warn("signal.delivery.rejected", {
+      reason: e.reason, detail: e.detail, issuer: signerPubkeyHex.slice(0, 16), correlationId,
+    });
+    throw e;
+  };
+
+  try {
+    // Same auth as submit — the SAME helper, so deliver's auth cannot drift weaker than submit's.
+    await verifySignedRequest(pool, signerPubkeyHex, signatureHex, bodyCbor, "submitter");
+
+    const req = parseDeliverRequest(bodyCbor);
+
+    if (Math.abs(nowSec - req.issued_at) > CLOCK_SKEW_SECONDS) {
+      throw new SubmitRejected("stale_request", `issued_at ${req.issued_at} is more than ${CLOCK_SKEW_SECONDS}s from this node's clock (${nowSec})`);
+    }
+
+    // Deliver only what was notarized. A hash with no signal_records row (on ANY accepting_node) has not
+    // passed the chokepoint here — refuse to queue an envelope under it. signal_records is replicated, so
+    // a signal notarized at another node is visible here too.
+    const known = await pool.query(`SELECT 1 FROM signal_records WHERE signal_hash = $1 LIMIT 1`, [req.signal_hash]);
+    if ((known.rowCount ?? 0) === 0) {
+      throw new SubmitRejected("signal_not_notarized", `no signal_records row for ${req.signal_hash} — submit must precede deliver`);
+    }
+
+    // Queue one sealed copy per agent. Shape was fully validated up front (parseDeliverRequest), so this
+    // loop only performs idempotent upserts — a mid-loop failure leaves earlier rows queued, and the
+    // portal's whole-request retry re-supersedes them harmlessly.
+    for (const d of req.deliveries) {
+      await enqueuePickup(pool, {
+        agentId: d.agent_id,
+        signalKind: req.signal_kind,
+        ciphertext: Buffer.from(d.ciphertext),
+        owningNodeId: acceptingNode,
+        signalHash: req.signal_hash,
+      });
+    }
+
+    logger.info("signal.delivery.queued", {
+      signalHash: req.signal_hash,
+      signalKind: req.signal_kind,     // opaque STRING in the log, never a gate
+      agents: req.deliveries.length,
+      acceptingNode,
+      correlationId,
+    });
+    return { delivered: req.deliveries.length };
   } catch (err) {
     if (err instanceof SubmitRejected) return reject(err);
     throw err;

@@ -113,12 +113,17 @@ export async function upsertIdentityHash(
  *  zero. (signal_kind is always set by the write seam; the NULL-kind partial-index edge cannot arise.) */
 export async function enqueuePickup(
   pool: Queryable,
-  args: { agentId: string; signalKind: string; ciphertext: Buffer; owningNodeId: string },
+  args: { agentId: string; signalKind: string; ciphertext: Buffer; owningNodeId: string; signalHash?: string },
 ): Promise<void> {
+  // M10-D22: an M10 wallet-signal delivery carries its OWN signal_hash on the row (its anchor is
+  // signal_records, not identity_tree_entries, so the drain has nothing to JOIN). M8 callers omit it
+  // (NULL) and the drain resolves the hash via the identity-tree JOIN — both paths share this one upsert
+  // and its supersede semantics (one pending per (agent, kind); a re-mint replaces the prior pending row,
+  // INCLUDING its signal_hash, so a superseding delivery cannot leave the old hash behind).
   await pool.query(
-    `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, owning_node_id) VALUES ($1, $2, $3, $4)
+    `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, owning_node_id, signal_hash) VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (agent_id, signal_kind) WHERE acked_at IS NULL
-     DO UPDATE SET ciphertext = EXCLUDED.ciphertext, created_at = now()`,
-    [args.agentId, args.signalKind, args.ciphertext, args.owningNodeId],
+     DO UPDATE SET ciphertext = EXCLUDED.ciphertext, signal_hash = EXCLUDED.signal_hash, created_at = now()`,
+    [args.agentId, args.signalKind, args.ciphertext, args.owningNodeId, args.signalHash ?? null],
   );
 }

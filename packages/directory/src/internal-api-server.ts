@@ -38,7 +38,7 @@ import type { KeyProvider } from "@cello-protocol/crypto";
 import { issuePreAuthToken, issuePreAuthCapability } from "./pre-auth-token-repository.js";
 import { listAccountAgentsWithPresence, PRESENCE_NODE_FRESHNESS_MS } from "./agent-presence-repository.js";
 import { validateWritePayload } from "./agent-write-validation.js";
-import { submitSignal, revokeSignal, publishRegistry, getRegistryDocument, queryAccountFacts, SubmitRejected } from "./signal-write.js";
+import { submitSignal, deliverSignal, revokeSignal, publishRegistry, getRegistryDocument, queryAccountFacts, SubmitRejected } from "./signal-write.js";
 import {
   isAgentOwnedByAccount,
   applyRevocationFlag,
@@ -534,6 +534,43 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
           });
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "revocation failed" }));
+        }
+      }
+      return;
+    }
+
+    // ── M10 / DOD-MINT-INTERNAL-1 (M10-D22): queue a notarized signal's sealed envelope for its holder's
+    //    agents. Same signer/role auth as submit; the ciphertext is opaque (sealed to k_local). REPLACES
+    //    the M8 `trust_signal_ciphertext` agent-write arm. ──────────────────────────────────────────────
+    if (req.method === "POST" && req.url === "/internal/signal/deliver") {
+      let body: Buffer;
+      try {
+        body = await readBody(req);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "could not read request body" }));
+        return;
+      }
+      try {
+        const result = await deliverSignal({
+          pool, logger, acceptingNode: owningNodeId,
+          bodyCbor: new Uint8Array(body),
+          signerPubkeyHex: String(req.headers["x-cello-signer-pubkey"] ?? ""),
+          signatureHex: String(req.headers["x-cello-signature"] ?? ""),
+          correlationId,
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, delivered: result.delivered }));
+      } catch (err) {
+        if (err instanceof SubmitRejected) {
+          res.writeHead(422, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err.reason, detail: err.detail }));
+        } else {
+          logger.error("signal.delivery.failed", {
+            reason: err instanceof Error ? err.message : String(err), correlationId,
+          });
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "delivery failed" }));
         }
       }
       return;
