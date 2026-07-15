@@ -9,6 +9,32 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🌐 M10-D18 portal deploy — the M8 handoff retired, M10 mint/notarize/deliver LIVE (2026-07-15)
+
+**`infra/deploy-portal.sh dev` — portal now on `cello-portal:d2c1133` (was `776752d`, pre-M10).** Release-tail
+step 1 DONE: the deployed portal runs the M10 WebAuthn handoff (compose → notarize via signed
+`/internal/signal/submit` → sealed `/internal/signal/deliver`), not the retired M8 `trust_signal_*` arms.
+
+**Live-verified (task def is ground truth):**
+- Active task def **`cello-portal-dev:7`**, image **`d2c1133`**, service **1/1 COMPLETED**; `GET
+  https://portal.cello.mygentic.ai/sign-in` → **200**.
+- **New secret `cello/dev/portal/submission-seed`** (ARN suffix `-EX1Ryp`), wired as task secret
+  **`PORTAL_SUBMISSION_SEED`** (ValueFrom, not plaintext). Value = the enrolled `de`×32 dev key —
+  VERIFIED to derive pubkey `8d4abe07…` already in the directory's `authorized_issuers` (role submitter).
+  Without it `getSubmissionSigner("dev")` fails closed and the best-effort handoff would mint nothing.
+
+**IaC changes (committed, run via deploy-portal.sh — no directory pipeline involved):** `create-portal-secrets.sh`
+(+submission-seed create-once), `cello-portal-app.yaml` (+`SubmissionSeedSecretArn` param, exec-role grant,
+task secret), `deploy-portal.sh` (pass the ARN). cello-portal `d2c1133` fixes a Turbopack prod-build break
+(`.js` import extensions in the trust module — the portal is extensionless; `pnpm build` had been skipped in
+the M8-retirement gate).
+
+**Coverage window now OPEN:** with the portal cut over to M10 and the daemon on beta v0.0.110, the old M8
+`trust_signal_hash`/`trust_signal_ciphertext` arms have NO remaining producer. The held arm-retirement
+(`a9f7370e`) is now safe to deploy (release-tail step 2).
+
+---
+
 ## 🚀 M10-D18 additive directory deploy — DB V46→V47, `/internal/signal/deliver` route live (2026-07-15)
 
 **Pushed `45949a5b` → `cello-directory-pipeline` (all 3 regions).** The ADDITIVE half of the M8-retirement
