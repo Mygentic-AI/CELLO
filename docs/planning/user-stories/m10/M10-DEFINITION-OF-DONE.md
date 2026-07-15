@@ -323,7 +323,11 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
 - **DOD-T2-JOURNEY-1** — **live journey, full:** agent A (holder of phone+email envelopes)
   connects to agent B; A presents; the directory checks; B verifies + consumes with correct
   framing; B's floor gates an unknown sender missing a required signal (negative case run,
-  not assumed). — ❌
+  not assumed). —
+  ✅ (2026-07-15 — j-trust-journey.spine.test.ts GREEN: A with phone+email presents to
+  KNOWN-tier B; `cello_await_session` returns `trust_signals` with correct type/issuer/claim
+  framing; stranger C with zero signals gets undefined trust_signals + DEFAULT_UNKNOWN_POLICY
+  evaluates to `pass: false`. → Journal Entry 46.)
 - **DOD-ZEROBUMP-CANARY-1** — **the architectural proof.** A throwaway type (`canary_test`) is
   taken from nothing to live end-to-end — portal composes (self-describing payload), hashes,
   submits; registry entry added; holder stores; presents; recipient verifies, floor-gates on it,

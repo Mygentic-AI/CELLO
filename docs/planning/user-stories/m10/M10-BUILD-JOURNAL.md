@@ -2527,6 +2527,39 @@ canary. This note gates both.
 
 ---
 
+### Entry 46 — DOD-T2-JOURNEY-1 GREEN (live signal presentation→consumption→floor)
+
+**Date:** 2026-07-15
+
+**What was proven.** `j-trust-journey.spine.test.ts` exercises the full Tier 2 pipe against real
+binaries (directory + relay + daemon processes on localhost):
+
+1. **Wallet seeding (Tier 1 pipe).** Agent A gets phone+email envelopes via the pickup queue
+   (same pattern as j-trust). Daemon A decodes, verifies, stores in `wallet_trust_signals`.
+
+2. **Presentation (DOD-PRESENT-1).** A adds B as KNOWN tier via `cello_contact_add`. When A
+   initiates a session with B, A's daemon reads all active wallet signals and attaches them as
+   `{hash, blob}` pairs on the `session_request` frame (tier gate: `>= TIER.KNOWN`).
+
+3. **Directory hash checks (DOD-INV-DIR-DUMB).** The directory forwards the request after its
+   two dumb checks pass (re-derive hash of each blob, compare to the claimed hash; check
+   `signal_records` has a matching row). No content evaluation, no schema knowledge.
+
+4. **Verification + consumption (DOD-VERIFY-1 / DOD-CONSUME-1).** B's daemon decodes each blob,
+   re-hashes, verifies, stores in `contact_trust_signals`. B's `cello_await_session` response
+   carries `trust_signals: [{type: "phone", issuer: "platform-verified", claim: {country_code: "US"}},
+   {type: "email", issuer: "platform-verified", claim: {domain: "example.com"}}]` — the correct
+   INV-FRAMING projection.
+
+5. **Floor negative case (DOD-FLOOR-1).** Stranger C (no wallet signals, UNKNOWN tier) initiates
+   with B → B's `cello_await_session` returns undefined `trust_signals`. The standalone
+   `evaluateSignalPolicy(DEFAULT_UNKNOWN_POLICY, [])` returns `pass: false` — the floor rejects
+   a stranger with zero portal-attested signals.
+
+**Commit:** 022802ed
+
+---
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
