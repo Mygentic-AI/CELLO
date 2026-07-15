@@ -24,3 +24,7 @@ packages/*/*.tsbuildinfo
 .claude/projects/
 .claude-flow/
 packages/directory/test-sigterm-*.mjs
+
+# Hibernate/wake operational files (live state, not source)
+infra/hibernation-state.json
+infra/hibernation-snapshots/
