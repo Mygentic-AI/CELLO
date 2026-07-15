@@ -107,7 +107,10 @@ describe("J-TRUST — M10 sealed-envelope pickup end-to-end (M10-D18 / M10-D22)"
     const c = JSON.parse(cello(["create-agent", "tagent"], { CELLO_DIR: dir }).stdout) as { pubkey: string };
     const pubA = c.pubkey;
     await waitConnected(dir);
-    expect(cello(["register", "tagent", `DEV-trust-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dir }).status).toBe(0);
+    // NB: the CLI command is `register-agent` (the old `register` alias was removed) — the M8-era spine
+    // test used the stale name, which silently printed help + exited 1 (pre-existing test rot, unrelated
+    // to M10). This is the correct command.
+    expect(cello(["register-agent", "tagent", `DEV-trust-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dir }).status).toBe(0);
 
     const agentId = psqlSpine(`SELECT agent_id FROM agent_profiles WHERE k_local_pubkey = '${pubA}'`);
     expect(agentId, "A must have a directory agent_id after registration").toMatch(/\S/);
