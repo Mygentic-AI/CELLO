@@ -2107,6 +2107,37 @@ All three pieces coded, tested, typechecked:
 
 ---
 
+### 2026-07-15 — Entry 37: DOD-PRESENT-1 — REVIEWED, two fixes applied
+
+**Reviewer (Opus) findings — 1 blocking, resolved:**
+
+1. **FINDING-1 (blocking): directory-side PG failure blocks the session.** `checkPresentedSignals` was
+   called without a try/catch — a pool exhaustion / query failure would propagate unhandled, preventing
+   `session_assignment` from being sent. The initiator would get a generic 30s timeout pointing at
+   network health, not at the real cause (a PG query failure in the signal check).
+   **Fix (`7bbf2f7c`):** wrapped in try/catch; degrades to `verifiedSignals = undefined` with a
+   `signal.presentation.check_failed` warn log. Same pattern as moniker read failures.
+
+2. **Correctness fix (self-discovered, pre-reviewer): blob was inner payload, not full envelope.**
+   `outbound-sessions.ts` was sending `s.payload` (the inner opaque CBOR claim bytes) as the `blob`.
+   DOD-VERIFY-1 requires the recipient to re-derive the hash from the blob — which requires the FULL
+   canonical envelope (all 10 fields + domain tag), not just the inner payload.
+   **Fix (`6c9f30c`):** now calls `encodeTrustSignalEnvelope()` to reconstruct the full canonical CBOR
+   from `WalletSignalRow` fields. The recipient can decode it with `decodeTrustSignalEnvelope()` and
+   re-hash — which is exactly what DOD-VERIFY-1 will do.
+
+**Non-blocking notes from review:**
+- Test tier-gate gap: no test asserts UNKNOWN contacts get zero signals. The check is structural
+  (3-line conditional), but could be tested at the integration level. Not blocking.
+- `TrustSignalStore` instantiated per-request (cosmetic — below 80 confidence, not reported).
+
+**Gates:** typecheck ✓ (both repos), test ✓ (1945 cello-client, 927/1343 trustless-cello — 4 failures
+are pre-existing: 3 missing migration SQL files, 1 stale dist artifact).
+
+**Status:** DOD-PRESENT-1 ✅ DONE. Both repos committed. Next: DOD-VERIFY-1.
+
+---
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
