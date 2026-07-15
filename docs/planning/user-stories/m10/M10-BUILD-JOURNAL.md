@@ -1685,6 +1685,32 @@ crypto unchanged. NOTE the package layout changed since /cello-publish was writt
 (M6 dead-code purge), `connect` = `core/adapter-claude-code`. Proceeding to the publish now that the gate is
 green.
 
+### 2026-07-15 — Entry 26: M10-D18 cutover PUBLISHED to beta (v0.0.110) + verified against the binaries
+
+The cutover cascade is on npm beta: protocol-types 0.0.24 (decodeTrustSignalEnvelope), transport 0.0.24,
+daemon 0.0.61 (deliverWalletSignal cutover + DROP trust_signals + inbound decode re-point), cli 0.0.59
+(DEV- pre-auth fix), connect 0.0.75. crypto 0.0.22 + gateway 0.0.4 unchanged. Tag v0.0.110 → CI.
+
+**First CI Build FAILED on a flake** — `session-node-manager.test.ts` "AC-009 (binary): SIGTERM marks
+active sessions interrupted" ("expected 'active' to be 'interrupted'"), a process-spawning timing-sensitive
+test that passes locally 31/31 and is untouched by the cutover (the non-binary variant of the same AC
+passed in CI). Re-ran the failed jobs on the SAME tag (no version burn) → green. Not dismissed blindly:
+verified locally + confirmed the failing path is orthogonal to the trust-signal change.
+
+**Binary-verified (not memory):** npm-packed each tarball — daemon dist has `deliverWalletSignal` + `DROP
+TABLE IF EXISTS trust_signals` + inbound `decodeTrustSignalEnvelope`; protocol-types exports the decoder;
+cli has `startsWith("DEV-")`. Cross-pins are REAL versions (cli→daemon 0.0.61, connect→transport 0.0.24,
+daemon→pt 0.0.24), never workspace:*.
+
+**`latest` promotion is HELD — Andre's manual step (never auto-run).** Operators on `latest` do not get
+this until he promotes. Directory + portal package PINS to 0.0.24 are OPTIONAL hygiene (owed): the directory
+has its own local decoder + only ENCODES, the portal only ENCODES; only the daemon decodes, and daemon@0.0.61
+already pins pt 0.0.24, so operators get the decoder transitively. The directory-decoder de-dup (import the
+shared decodeTrustSignalEnvelope) is tracked in the owed-cleanup task.
+
+Meanwhile: the ADDITIVE directory deploy (V47 + /deliver, 45949a5b) is IN PROGRESS (pipeline InProgress,
+DB still 46); the deploy-watchdog cron runs the post-deploy cascade when all 3 regions reach V47.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
