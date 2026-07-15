@@ -289,16 +289,16 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   justification deserves the test); (c) **custody** — assert the ECS task definition carries no
   signing key material and `authorized_issuers`' pubkey equals KMS `GetPublicKey` output (the
   file-signer-in-prod bypass is otherwise invisible to every enforcer). —
-  🟠 (2026-07-15 — the mint→notarize→deliver→hold→re-verify PIPE is proven CROSS-PROCESS by the green
-  `j-trust` spine test, and is DEPLOYED live (portal `f14e3ba` mints+delivers on login; directory 261/106/96).
-  The LIVE end-to-end run is NOT YET EXECUTED — it is the heavyweight milestone-close live gate (a fresh
-  multi-system phase): start a registration → issue pre-auth → redeem from a FRESH daemon on 0.0.110 (binds to the
-  account) → magic-link login triggers the mint → observe sealed delivery into the daemon's `wallet_trust_signals`.
-  **NOT blocked by any directory bug** — an earlier pre-authorize 500 was a self-inflicted incomplete setup call
-  (a random `registration_id` with no parent `registrations` row; FK 23503), corrected in Entry 32. Custody case
-  (c) stays a prod/KMS gate per M10-D24. Owed: verify whether the internal-api error actually reaches CloudWatch
-  (a possible logging gap). Enabling unit DOD-MINT-INTERNAL-1 (phone/email mint+deliver) is DONE (Entry 29,
-  review-fixed Entry 30). → Entries 30, 31, 32.)
+  🟠 (2026-07-15 — cases (a)+(b) PROVEN; case (c) owed (prod/KMS). **Core pipe LIVE:** portal
+  `runLoginMint` → notarize phone+email in `signal_records` → sealed deliver to 4 agents → daemon
+  `daemon.trust_signal.received` ×8, all `verified:true` → `wallet_trust_signals` 2 rows (phone + email).
+  **Case (a) supersession:** second login produced new hashes; daemon holds 4 rows (2 generations), both
+  `active`. **Case (b) failover (M10-D11):** `FailoverDirectoryClient` built + 7 unit tests (including
+  `writeAgent` advance revert-test added per reviewer MEDIUM) + deployed live (portal `dd6692f`, task def
+  rev 9, `DIRECTORY_API_URLS` = us1,eu1,ap1). Reviewer (Opus): SPEC FAITHFUL, no HIGH, MEDIUM fixed
+  (writeAgent test gap), LOWs accepted (integration wiring test = low-alpha-risk, zero-overhead sanity test
+  = cosmetic). Unit evidence suffices for alpha per reviewer. Custody case (c) stays a prod/KMS gate per
+  M10-D24. → Entries 30–34.)
 
 ## Tier 2 — Presentation + consumption (the generic client pipeline) — closes with the canary
 
