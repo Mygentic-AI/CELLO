@@ -7,8 +7,14 @@
 #                                       all existing ciphertext unrecoverable).
 #   cello/{env}/portal/database-url     postgres://…?sslmode=no-verify (from the RDS managed master
 #                                       secret + endpoint).
+#   cello/{env}/portal/submission-seed  32-byte hex Ed25519 seed for the M10 trust-signal submission
+#                                       signer (M10-D6). CREATE-ONCE — its PUBLIC key is enrolled in
+#                                       the directory's authorized_issuers (role submitter); rotating
+#                                       it would orphan the enrollment and every mint would be
+#                                       rejected. dev value is the enrolled 'de'×32 key (pubkey
+#                                       8d4abe07…). staging/production sign via KMS, not this secret.
 #
-# Prints the two secret ARNs (for the app stack's *SecretArn parameters).
+# Prints the three secret ARNs (for the app stack's *SecretArn parameters).
 # Usage:  infra/create-portal-secrets.sh [dev|staging|production]
 set -euo pipefail
 
@@ -68,5 +74,24 @@ else
   echo "created database-url" >&2
 fi
 
+# ── submission-seed: create-once (dev = the enrolled 'de'×32 key) ─────────────
+# CREATE-ONCE with a FIXED value: the pubkey derived from this seed is already enrolled in the
+# directory's authorized_issuers. A random seed would derive an UN-enrolled pubkey and every mint
+# would be rejected (signal_not_authorized). Never regenerate. dev only — staging/production sign
+# via KMS and getSubmissionSigner FAILS CLOSED there rather than reading this secret.
+SEED_NAME="cello/${ENV}/portal/submission-seed"
+if aws secretsmanager describe-secret --secret-id "$SEED_NAME" --region "$REGION" >/dev/null 2>&1; then
+  echo "submission-seed already exists — leaving untouched (CREATE-ONCE; pubkey is enrolled)" >&2
+  SEED_ARN="$(aws secretsmanager describe-secret --secret-id "$SEED_NAME" --region "$REGION" --query ARN --output text)"
+else
+  # dev enrolled key. Any future non-dev env must instead wire KMS (never create this secret there).
+  SEED_VAL="$(printf 'de%.0s' $(seq 1 32))"
+  SEED_ARN="$(aws secretsmanager create-secret --name "$SEED_NAME" --region "$REGION" \
+    --description "Portal M10 trust-signal submission signer seed (32-byte hex, Ed25519). Pubkey enrolled in authorized_issuers. CREATE-ONCE." \
+    --secret-string "$SEED_VAL" --query ARN --output text)"
+  echo "created submission-seed (dev enrolled key)" >&2
+fi
+
 echo "KMS_MASTER_KEY_SECRET_ARN=${KMS_ARN}"
 echo "DATABASE_URL_SECRET_ARN=${DBURL_ARN}"
+echo "SUBMISSION_SEED_SECRET_ARN=${SEED_ARN}"

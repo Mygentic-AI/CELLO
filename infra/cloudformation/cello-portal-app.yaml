@@ -37,6 +37,13 @@ Parameters:
     Type: String
     Default: arn:aws:secretsmanager:us-east-1:257394457473:secret:cello/dev/ops-agent/directory-api-key-YTcKGN
     Description: Reuses the directory internal API key (same value the ops-agent uses).
+  SubmissionSeedSecretArn:
+    Type: String
+    Description: >
+      Secrets Manager ARN for cello/{env}/portal/submission-seed — the M10 trust-signal submission
+      signer's Ed25519 seed (its pubkey is enrolled in the directory's authorized_issuers). Required:
+      without it getSubmissionSigner FAILS CLOSED in dev (ABSENT IS NOT FINE) and the WebAuthn handoff
+      mints nothing. No Default — deploy.sh must pass it so a missing value fails at deploy, not silently.
   Cpu:
     Type: String
     Default: "512"
@@ -113,6 +120,7 @@ Resources:
                   - !Ref DatabaseUrlSecretArn
                   - !Ref KmsMasterKeySecretArn
                   - !Ref DirectoryApiKeySecretArn
+                  - !Ref SubmissionSeedSecretArn
 
   TaskRole:
     Type: AWS::IAM::Role
@@ -181,6 +189,8 @@ Resources:
               ValueFrom: !Ref KmsMasterKeySecretArn
             - Name: DIRECTORY_API_KEY
               ValueFrom: !Ref DirectoryApiKeySecretArn
+            - Name: PORTAL_SUBMISSION_SEED
+              ValueFrom: !Ref SubmissionSeedSecretArn
           LogConfiguration:
             LogDriver: awslogs
             Options:

@@ -66,7 +66,8 @@ SECRETS_OUT="$("$HERE/create-portal-secrets.sh" "$ENV")"
 echo "$SECRETS_OUT"
 KMS_ARN="$(echo "$SECRETS_OUT" | sed -n 's/^KMS_MASTER_KEY_SECRET_ARN=//p')"
 DBURL_ARN="$(echo "$SECRETS_OUT" | sed -n 's/^DATABASE_URL_SECRET_ARN=//p')"
-[ -n "$KMS_ARN" ] && [ -n "$DBURL_ARN" ] || { echo "secret ARNs missing"; exit 1; }
+SEED_ARN="$(echo "$SECRETS_OUT" | sed -n 's/^SUBMISSION_SEED_SECRET_ARN=//p')"
+[ -n "$KMS_ARN" ] && [ -n "$DBURL_ARN" ] && [ -n "$SEED_ARN" ] || { echo "secret ARNs missing"; exit 1; }
 
 # ── 5. app stack (ALB/HTTPS + Route53 + ECS + alarm) ──────────────────────────
 say "5/6 app stack (ALB + ECS + Route53 + alarm), image=${SHORT}"
@@ -78,6 +79,7 @@ aws cloudformation deploy \
     "ImageTag=${SHORT}" \
     "DatabaseUrlSecretArn=${DBURL_ARN}" \
     "KmsMasterKeySecretArn=${KMS_ARN}" \
+    "SubmissionSeedSecretArn=${SEED_ARN}" \
     "AlarmTopicArn=${ALARM_TOPIC_ARN}" \
   --capabilities CAPABILITY_NAMED_IAM --region "$REGION"
 
