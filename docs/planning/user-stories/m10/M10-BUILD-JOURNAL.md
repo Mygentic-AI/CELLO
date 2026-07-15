@@ -1943,6 +1943,67 @@ observe sealed delivery into the daemon's `wallet_trust_signals` + local hash re
 261/106/96), and cross-process-proven (`j-trust` green). The LIVE run is the remaining heavyweight phase — not
 blocked by a bug, just not yet executed. DOD-T1-JOURNEY-1 = 🟠.
 
+### 2026-07-15 — Entry 33: DESIGN NOTE — DOD-PRESENT-1 (written before code; Tier 2 begins)
+
+Parked the live journey (Entry 32 — heavyweight fresh phase, not blocked by a bug) and pulled the next unit per
+§3a. DOD-PRESENT-1 is design-significant (cross-repo, touches the session handshake), so it gets a note first.
+
+**Target behavior (one sentence).** When two agents are brokered into a session, the holder offers a
+selected subset of its presentable trust signals as `{hash, blob}` pairs; the directory runs two dumb checks
+(membership + status) in the moment and forwards or strips each, persisting nothing; the recipient receives only
+the survivors (verification + storage is DOD-VERIFY-1).
+
+**Spec anchors.** DoD DOD-PRESENT-1 (selective disclosure all/some/none, per-contact/per-tier choice, sensible
+default; directory two dumb checks in-moment; nothing persists directory-side). Invariants: INV-STATELESS-RECIPIENT
+(directory holds no presentation state), INV-ZERO-BUMP (payload/type opaque end-to-end), INV-AGENT-SCOPED (a
+received signal is per-recipient-agent). M10-D4 (evidence-not-input). Spec-of-record §14.6-§14.7.
+
+**Producer/consumer chain.**
+- PRODUCER (holder): `TrustSignalStore.listPresentable({agentId, accountId, nowSec})` — BUILT, returns eligible
+  (active, unexpired, subject-matched) wallet rows. The selective-disclosure filter (all/some/none per contact/tier)
+  is a NEW layer ON TOP — this unit adds it; `listPresentable` returns *eligible*, never *what to send*.
+- WIRE: the presentation rides the session-establishment exchange in `core/daemon/src/inbound-sessions.ts` (where
+  the counterparty pubkey is first known — `participantA/BPubkeyHex`). **OPEN (pin at implementation):** the exact
+  injection point — is there an existing profile/identity exchange message in the accept handshake to extend, or is
+  presentation a NEW post-accept exchange step? First impl task: read the accept flow end-to-end (inbound-sessions +
+  the session-node/offer protocol) and decide extend-vs-new. Must NOT break the M7 seal ceremony.
+- CHECK (directory): the two dumb checks are `signal_records` membership (the hash was notarized) + status
+  (`signal_records_effective`: active, not revoked/superseded). A NEW in-session directory path — type-blind
+  (INV-DIR-DUMB), reads only, writes/persists NOTHING. Mirrors arm-c's read-only shape. **OPEN:** does the directory
+  even sit in the session data path, or does the RECIPIENT call the directory to check (DOD-VERIFY-1)? The DoD says
+  "the directory runs its two dumb checks in the moment and forwards or strips" — implying the directory is on the
+  presentation relay path. Pin against the actual session transport (relay vs directory-brokered) before coding.
+- CONSUMER (recipient): DOD-VERIFY-1 re-hashes + re-checks directory + `putReceivedSignal` (BUILT). Out of scope here.
+
+**The seam.** `inbound-sessions.ts` (holder emits presentation on session establish; recipient receives). New
+selective-disclosure policy read (per-contact/tier from `contacts`). New directory in-session check OR recipient-side
+check (resolve the OPEN above). Interface must stay payload/type-opaque.
+
+**Invariants at stake.** INV-STATELESS-RECIPIENT (directory persists nothing — assert no write in the check path).
+INV-AGENT-SCOPED (presentation is by the holder's agent; receipt is per recipient-agent). INV-ZERO-BUMP (no
+per-type branching in daemon/directory). Selective disclosure must default to a SENSIBLE, PRIVACY-SAFE set (not
+"present everything" — that would leak every signal to every counterparty).
+
+**Approach + rejected alternative.** Extend the session-establishment exchange with an optional presentation block
+(list of `{hash, blob}`), holder-selected by a per-contact/tier policy. REJECTED: presenting during contact-add
+(before a session) — the DoD ties presentation to the brokered *introduction/session*, and a contact may exist long
+before a session; presenting at session establish is when the counterparty is live and the disclosure is contextual.
+
+**Falsification pass (before code).** `listPresentable` is on `TrustSignalStore` — the daemon holds it: ✓ (read).
+The session-establish path has the counterparty identity to scope disclosure: ✓ (`inbound-sessions.ts:401/472`).
+Redundancy: none — no existing presentation path. What breaks: the M7 seal ceremony shares the session establish
+flow; the presentation block must be ADDITIVE and optional (absent = today's behavior). The two OPENs above are the
+real risks — resolve both by reading the accept/transport path before writing a line.
+
+**Test plan sketch.** Red-first in the session fixture (extend `session-fixture.ts`, never from scratch): (1) holder
+with 2 presentable signals + a selective-disclosure policy → recipient receives exactly the disclosed subset; (2)
+directory dumb-check strips a revoked hash (present a revoked signal → recipient does not receive it); (3)
+INV-STATELESS assert: no directory row written by the check; (4) none-disclosure → nothing presented; (5) opaque:
+an unknown `type` presents identically. Enforcer: the T2 live journey (DOD-T2-JOURNEY-1), not this unit's tests.
+
+**NEXT (impl step 1):** read the `inbound-sessions.ts` accept flow + the session offer/transport protocol end-to-end
+to pin the two OPENs (injection point; directory-on-path vs recipient-checks). THEN red-first per the plan.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
