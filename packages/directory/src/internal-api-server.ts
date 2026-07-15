@@ -658,6 +658,97 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
       return;
     }
 
+    // ── M10 / DOD-DIRDATA-READ-1: track-record aggregate for a given agent pubkey ────────────────
+    // GET /internal/track-record/<agentPubkeyHex>
+    // Computes session_count and clean_close_rate from seal_notarizations + conversation_seals
+    // (both in PUBLICATION_TABLES → cross-node consistent). No PII, aggregate-only.
+    // Auth: same bearer key as all internal routes (SI-001).
+    const trackRecordPrefix = "/internal/track-record/";
+    if (req.method === "GET" && req.url?.startsWith(trackRecordPrefix)) {
+      const providedKey = req.headers["x-cello-internal-api-key"];
+      if (!providedKey || providedKey !== internalApiKey) {
+        logger.warn("track_record.auth.failed", { remoteAddr, correlationId });
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+
+      const agentPubkeyHex = req.url.slice(trackRecordPrefix.length);
+      if (!/^[0-9a-f]{64}$/i.test(agentPubkeyHex)) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid agent pubkey — expected 64 hex chars" }));
+        return;
+      }
+
+      // participant_a_pubkey and participant_b_pubkey are stored as BYTEA (raw 32 bytes).
+      // decode($1, 'hex') converts the hex string to the matching BYTEA for comparison.
+      // The join from seal_notarizations to conversation_seals uses:
+      //   encode(sn.session_id, 'hex') = replace(cs.conversation_id::text, '-', '')
+      // because session_id is stored as 16-byte BYTEA and conversation_id as UUID derived
+      // from those same bytes (see directory-node.ts #recordConversationSealBestEffort).
+      let result: {
+        session_count: string;
+        clean_close_count: string;
+        last_sealed_at: number | null;
+      };
+      try {
+        const qResult = await pool.query<{
+          session_count: string;
+          clean_close_count: string;
+          last_sealed_at: string | null;
+        }>(
+          `SELECT
+             COUNT(*)::text AS session_count,
+             COUNT(*) FILTER (
+               WHERE cs.close_type = 'MUTUAL_SEAL'
+             )::text AS clean_close_count,
+             MAX(sn.close_timestamp) AS last_sealed_at
+           FROM seal_notarizations sn
+           LEFT JOIN conversation_seals cs
+             ON encode(sn.session_id, 'hex') = replace(cs.conversation_id::text, '-', '')
+           WHERE sn.participant_a_pubkey = decode($1, 'hex')
+              OR sn.participant_b_pubkey = decode($1, 'hex')`,
+          [agentPubkeyHex.toLowerCase()],
+        );
+        const row = qResult.rows[0];
+        result = {
+          session_count: row?.session_count ?? "0",
+          clean_close_count: row?.clean_close_count ?? "0",
+          last_sealed_at: row?.last_sealed_at != null ? Number(row.last_sealed_at) : null,
+        };
+      } catch (err: unknown) {
+        const pgErr = err as { code?: string };
+        const isDbError = typeof pgErr.code === "string" && /^\d{5}$/.test(pgErr.code);
+        const reason = isDbError
+          ? `database_error:${pgErr.code}`
+          : err instanceof Error ? err.message : String(err);
+        logger.error("track_record.query.failed", { reason, correlationId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "track record query failed" }));
+        return;
+      }
+
+      const sessionCount = parseInt(result.session_count, 10);
+      const cleanCloseCount = parseInt(result.clean_close_count, 10);
+      const cleanCloseRate = sessionCount > 0 ? cleanCloseCount / sessionCount : null;
+
+      logger.info("track_record.query.ok", {
+        agentPubkeyPrefix: agentPubkeyHex.slice(0, 16),
+        sessionCount,
+        correlationId,
+      });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          session_count: sessionCount,
+          clean_close_count: cleanCloseCount,
+          clean_close_rate: cleanCloseRate,
+          last_sealed_at: result.last_sealed_at,
+        }),
+      );
+      return;
+    }
+
     // All other paths → 404
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "not found" }));
