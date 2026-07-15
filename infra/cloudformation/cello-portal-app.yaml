@@ -23,7 +23,14 @@ Parameters:
   DirectoryApiUrl:
     Type: String
     Default: http://directory-us1.cello.mygentic.ai
-    Description: The directory's public ALB (its /internal/* is header-authenticated).
+    Description: The directory's public ALB (its /internal/* is header-authenticated). Superseded by DirectoryApiUrls when set.
+  DirectoryApiUrls:
+    Type: String
+    Default: "http://directory-us1.cello.mygentic.ai,http://directory-eu1.cello.mygentic.ai,http://directory-ap1.cello.mygentic.ai"
+    Description: >
+      M10-D11 — ordered comma-separated failover list of directory ALB URLs (primary first).
+      When non-empty, supersedes DirectoryApiUrl. All portal DirectoryClient methods try each
+      node in order on DirectoryUnreachableError; exhaustion fails loud.
   EmailFrom:
     Type: String
     Default: "CELLO <no-reply@mygentic.ai>"
@@ -176,6 +183,8 @@ Resources:
               Value: !Ref EmailFrom
             - Name: DIRECTORY_API_URL
               Value: !Ref DirectoryApiUrl
+            - Name: DIRECTORY_API_URLS
+              Value: !Ref DirectoryApiUrls
             # WebAuthn relying-party config — must match the served host (no scheme/port for the ID;
             # full origin for the browser check). Required outside CELLO_ENV=local.
             - Name: WEBAUTHN_RP_ID
