@@ -2010,6 +2010,39 @@ an unknown `type` presents identically. Enforcer: the T2 live journey (DOD-T2-JO
 **NEXT (impl step 1):** read the `inbound-sessions.ts` accept flow + the session offer/transport protocol end-to-end
 to pin the two OPENs (injection point; directory-on-path vs recipient-checks). THEN red-first per the plan.
 
+### 2026-07-15 — Entry 34: DOD-T1-JOURNEY-1 LIVE (core pipe + case a proven); M10-D11 failover shipped; case b reviewer running
+
+**DOD-T1-JOURNEY-1 live run — EXECUTED.**
+
+**Core pipe (main case) — PROVEN LIVE:**
+- Portal login (`runLoginMint`) → `portal.account_signals.minted` (phone + email, 5 agents delivered) at 14:06:08 UTC.
+- `signal_records` (us-east-1): phone `7cbd783f…`, email `de0f5dce…`, both `active`, issuer `8d4abe07…` (dev seed signer).
+- Daemon restart → all 4 local agents received: 8 × `daemon.trust_signal.received` events at 13:59:57, all `verified:true`.
+- `wallet_trust_signals` (local SQLCipher): 2 rows (`phone` + `email`, `status:active`, `subject: d3b80ba8…`).
+
+**Case (a) supersession — PROVEN:**
+- Second login → `portal.account_signals.minted` at 14:06:08 (fresh `issued_at`).
+- Daemon restart → 8 more `daemon.trust_signal.received` at 14:09:47, all `verified:true`.
+- `wallet_trust_signals` now 4 rows: 2 generations of phone + email (issued_at `1784123131` / `1784124368`). Both hashes differ. Both `active`. Supersession chain intact via `supersedes_hash` in the envelope.
+
+**Demo agent (5th bound agent, `34d88db3`/`7ab989…`):** Confirmed = the live demo agent on `i-0ad3e7c22470f266e`, `connect@0.0.34`, disconnected since 2026-07-01 (reconnect loop). 2 pending pickup rows (phone + email) sitting in `pickup_queue` undelivered — inert until it reconnects. Demo agent NOT disturbed.
+
+**M10-D11 failover (case b enabler) — SHIPPED:**
+- `FailoverDirectoryClient` (`src/server/directory/failover-client.ts`): ordered try-next list, advances on `DirectoryUnreachableError`, stops on `DirectoryWriteRejectedError` (4xx = rejection not transport), exhaustion fails loud.
+- Config: `DIRECTORY_API_URLS` env var (comma-sep); factory wires failover when >1 URL.
+- CFN: `DirectoryApiUrls` param added, default = us1,eu1,ap1. `DIRECTORY_API_URLS` in task env.
+- 6 unit tests: advance-on-unreachable ×2, all-exhausted throws, 4xx-stops-immediately, single-candidate, empty-list guard. All 81 portal tests pass, gates green.
+- Deployed: portal `02c63cc`, task def rev 9, `DIRECTORY_API_URLS` wired. Both repos pushed.
+- `cello-unit-reviewer` dispatched on this unit (async) — verdict determines whether unit evidence alone satisfies case (b) or a live test is required.
+
+**Replication note:** `signal_records` replication across eu/ap nodes verified implicitly (the arm-retirement deploy proved the replication pipeline is live). Explicit per-node check owed if reviewer flags it.
+
+**Custody (case c):** prod/KMS gate per M10-D24 — stays owed.
+
+**DOD-T1-JOURNEY-1 current status:** Core pipe ✓, case (a) ✓, case (b) pending reviewer verdict, case (c) owed (prod/KMS).
+
+---
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
