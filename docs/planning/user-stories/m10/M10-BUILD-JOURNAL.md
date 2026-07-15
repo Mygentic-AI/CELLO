@@ -1558,6 +1558,41 @@ Coverage-window discipline: the directory arms + the portal producer retire TOGE
 writer re-point already shipped together (piece 3). The directory deploy of the arm-retirement lands only
 AFTER the portal is re-pointed and proven, never before (else the live M8 webauthn pipe breaks).
 
+### 2026-07-15 — Entry 22: M8-retirement — 5 of 6 pieces done; the LIVE webauthn handoff is re-pointed
+
+Piece 5 (the risky one) landed. The webauthn enrollment path — live on every registration — is off the M8
+agent-write arms and onto the M10 pipe. The M8 arms now have NO caller, clearing them to be retired (piece 6).
+
+**Portal cutover (cello-portal, 3 commits, held for the publish/deploy sequence):**
+- `c5a36b2` — `deliverSignalToAgents` (seal the envelope per agent → one signed `/deliver`); `buildSubmission`
+  now returns `envelopeBytes` (the bytes that were hashed + notarized — what gets sealed). +2 tests.
+- `f22591a` — `composeWebauthn` (M10-D23 no-PII payload: claim + `sha256(credentialId)` stub, never the raw
+  credential — M10 signals are presentable to counterparties). +1 test with teeth (raw string absent from bytes).
+- `756b20c` — `handTrustSignal` rewritten: compose → notarize once (chokepoint) → deliver sealed to each agent.
+  The register route passes just `{credentialId}`. Best-effort preserved (a directory hiccup never fails
+  enrollment; missing URL = loud warn, not silent drop). Test rewritten to a real HTTP stub: notarize-once +
+  deliver-to-each under the same hash, only the agent's own k_local opens its ciphertext and the recovered
+  ENVELOPE re-hashes to the notarized hash, raw credential never on the wire, and `writeAgent` THROWS if
+  called (proving the arms are gone). 67/70 full portal suite green.
+- Reviewer dispatched on all three (`cello-unit-reviewer`).
+- Cross-repo note: `trust-handoff.test.ts` decodes with a test-local reader because the shared
+  `decodeTrustSignalEnvelope` is not in PUBLISHED protocol-types yet — it ships with the cutover's publish
+  cascade. The portal PRODUCTION code only ENCODES (in 0.0.23), so the portal needs no new publish to run.
+
+**REMAINING — piece 6 + release:**
+- **Directory arm retirement (trustless-cello):** remove `SIGNAL_KINDS` + the `trust_signal_hash` /
+  `trust_signal_ciphertext` cases in `agent-write-validation.ts` (+ the `internal-api-server.ts` dispatch);
+  a test asserts both arms + the enum are gone. Then re-point `packages/e2e-tests/src/spine/j-trust.spine.test.ts`
+  onto the new pipe (it currently exercises the M8 arms — a cross-process e2e re-point, the bigger sub-task).
+- **`mintAccountSignals` delivery (owed, separate):** it NOTARIZES phone/email but does not yet DELIVER
+  (needs `listAgents` + `deliverSignalToAgents`), and has NO live trigger — wiring it to registration /
+  portal-touch is its own step, not blocking the arm retirement.
+- **RELEASE — coverage-window-safe 2-deploy sequence:** (A) directory deploy of V47 + the ADDITIVE deliver
+  route, KEEPING the arms (so nothing breaks); (B) publish protocol-types+daemon+connect cascade + deploy the
+  new portal (now the arms have no caller); (C) directory deploy that RETIRES the arms. Each directory deploy
+  needs the full post-deploy cascade (SSM 46→47 on the V47 one, relay restart + manifest re-sign, STATE.md).
+  Then DOD-T1-JOURNEY-1 live. NEVER retire the arms before the new portal is deployed + proven.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
