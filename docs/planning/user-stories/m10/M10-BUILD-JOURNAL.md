@@ -15,13 +15,19 @@ description: >
 # M10 — Build Journal
 
 ## RESUME STATE (keep current — update at every checkpoint/compaction)
-- **Milestone status (2026-07-15, Entry 28):** Tier 0 ✅. M8-retirement (M10's keystone delivery pipe)
-  code-complete, reviewed, on npm **beta v0.0.110**, additive directory half LIVE (V47, 3 regions).
-  **Portal LIVE on M10** (`cello-portal:d2c1133`, task def rev 7, `PORTAL_SUBMISSION_SEED` wired). **Arm-retirement
-  directory deploy IN FLIGHT** (`a9f7370e`, pushed `ee02dde3`; watchdog cron `c37bd580` drives the cascade).
-  **NEXT unit = DOD-T1-JOURNEY-1** (Tier-1 live enforcer) — plan + open custody question in Entry 28; runs after
-  the cascade. Then Tier 2 (present/verify/consume/floor + zero-bump canary). DOD-CBOR-1 ✅ (Entry 4; array
-  preimage, domain `CELLO-TSIG-v1`, home = `@cello-protocol/protocol-types` per M10-D16).
+- **Milestone status (2026-07-15, Entry 33 — CURRENT):** Tier 0 ✅. **The M8→M10 cutover (M10's keystone) is
+  DONE and LIVE end-to-end** — client on npm **beta v0.0.110** (protocol-types 0.0.24, transport 0.0.24, client
+  0.0.50, daemon 0.0.61, cli 0.0.59, connect 0.0.75, crypto 0.0.22; `latest` promotion PREPARED, Andre-run, NOT yet
+  done), portal LIVE (`cello-portal:f14e3ba`, task def rev 8, `PORTAL_SUBMISSION_SEED` wired, mints+delivers on
+  login), directory LIVE (arm-retirement deployed, td us1 261/eu1 106/ap1 96, all 3 regions, relays re-registered,
+  manifests re-signed, DB V47). The pipe is cross-process-proven by the green `j-trust` spine test.
+  **DOD-MINT-INTERNAL-1** (phone/email mint+deliver + login trigger) DONE + reviewed + review-fixed (Entries 29-30).
+  **NEXT (two fresh phases, either order):** (1) **DOD-T1-JOURNEY-1** — the heavyweight live milestone-close gate;
+  PARKED not blocked (Entry 32 has the full path: start-registration → pre-auth → fresh daemon on 0.0.110 → magic-link
+  login via Gmail → observe delivery; custody case (c) is a prod/KMS gate per M10-D24). (2) **Tier 2** —
+  DOD-PRESENT-1 has a §6 design note (Entry 33); impl step 1 = read `inbound-sessions.ts` accept flow to pin two
+  OPEN seams, then red-first. DOD-CBOR-1 ✅ (Entry 4). Decisions through M10-D25. Both crons armed (heartbeat
+  `fe62703b`); deploy watchdogs all self-deleted (no deploy in flight).
 - **Live testing is available (Andre, 2026-07-14):** hole-punching works, so the **AWS demo agent**
   (`i-0ad3e7c22470f266e`, us-east-1 — see repo CLAUDE.md for the SSM command form) can be driven
   over bash as a REAL counterparty for the live journeys. **Pushing to `main` triggers a CodePipeline
