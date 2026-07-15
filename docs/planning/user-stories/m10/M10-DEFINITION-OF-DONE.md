@@ -634,12 +634,13 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   obligation. Re-verification on renewal (∼1 year) requires a fresh OAuth round-trip (operator re-clicks);
   appropriate for the cadence. Reverse: store a refresh token if an async re-audit needs it later — add it
   post-v1, not now.
-- **M10-D28 (2026-07-15) — the `github` signal payload carries: claim, username, account_age_days,
-  public_repos, followers; `subject_kind: account`.** Same account-subject pattern as phone/email (M10-D5);
-  the GitHub username is public by definition. No PII beyond what the signal IS. The `username` field exists
-  so a recipient can independently verify the claim by visiting the profile — same trust-but-verify posture
-  as the phone/email stub hash. Reverse: add fields later by bumping `schema_version`; the envelope format
-  is extensible.
+- **M10-D28 (2026-07-15) — the `github` signal payload carries: claim, username, github_id,
+  account_age_days, public_repos, followers; `subject_kind: account`.** Same account-subject pattern as
+  phone/email (M10-D5); the GitHub username is public by definition. No PII beyond what the signal IS.
+  `github_id` (the numeric user ID) is included because usernames are mutable (GitHub allows renames) while
+  IDs are stable — a recipient can pin identity across renames. The `username` field exists so a recipient
+  can independently verify the claim by visiting the profile. Reverse: add fields later by bumping
+  `schema_version`; the envelope format is extensible.
 
 ## Parked
 *(Genuine undecidable forks: journal + here. Never silently dropped.)*
