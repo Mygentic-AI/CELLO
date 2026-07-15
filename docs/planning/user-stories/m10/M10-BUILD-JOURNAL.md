@@ -2352,6 +2352,181 @@ infrastructure is deployed.
 
 ---
 
+### Entry 45 — DESIGN NOTE — DOD-EXTRACT-DESIGN-1 (GitHub extraction architecture)
+
+**Date:** 2026-07-15
+
+**Target behavior (one sentence).** An operator proves they own a GitHub account via OAuth,
+the portal reads their public profile data from the GitHub REST API, and a `github` trust
+signal is minted through the existing signed chokepoint — no new infrastructure.
+
+**Spec anchors.** M10-D3 (GitHub first); M10-D1 (scope fence: one external validator);
+verification architecture log (2026-05-16: proof of ownership via OAuth, profile extraction as
+the second step, Passport.js); taxonomy Class 1 social accounts ("the directory reads account
+age/activity/history as the actual signal"); type playbook §1 ("implement the fact-verification —
+the only genuinely type-specific code in the system").
+
+**The finding: GitHub does NOT need browser extraction.** The DOD names "a separate,
+security-hardened instance running browser-harness for profile reads." That infrastructure was
+designed for providers whose profile data is NOT accessible via a structured API — specifically
+LinkedIn (requires authentication + rate-limits scraping) and X (restricted). GitHub is
+different: its REST API (`GET https://api.github.com/users/{username}`) returns all the fields
+we need for the v1 signal WITHOUT authentication:
+
+- `created_at` — account age (the primary Sybil-floor signal)
+- `public_repos` — activity indicator
+- `followers` / `following` — network size
+- `name`, `bio`, `company` — human indicators (not used in the signal, but available)
+
+This is a public, stable, rate-limited (60/hr unauthenticated, 5000/hr with a token) API that
+GitHub explicitly provides. The 2026-05-16 architecture log's "two-step" pattern (proof sync +
+extraction async) is correct but the extraction step for GitHub is a single REST call, not a
+browser session. The browser-extraction instance is premature infrastructure for v1.
+
+**Producer/consumer chain.**
+
+1. **OAuth proof (producer: GitHub, consumer: portal).** Operator clicks "Connect GitHub" in
+   portal → Passport.js GitHub strategy → GitHub OAuth authorize → callback with `code` →
+   portal exchanges for access token → reads `/user` from the token's scope → portal learns the
+   authenticated GitHub username + `id`. Token is used for the proof ceremony ONLY (proves
+   ownership), then discarded. NOT stored — the portal holds no long-lived GitHub token.
+2. **Profile read (producer: GitHub REST API, consumer: portal).** Immediately after OAuth:
+   `GET https://api.github.com/users/{username}` (unauthenticated or with the token that's about
+   to be discarded). Response is JSON with `created_at`, `public_repos`, `followers`. The portal
+   extracts the fields it needs and discards the rest.
+3. **Compose + mint (producer: portal, consumer: directory → daemon).** Portal composes the
+   `github` envelope with a self-describing payload (claim + structured fields), hashes via
+   DOD-CBOR-1, submits via DOD-DIR-WRITE-1, delivers via the sealed push path. Identical to
+   phone/email — the type playbook's "Mint + notarize" step (§3).
+
+**The seam.** Portal routes (Next.js API routes):
+- `GET /api/auth/github` — initiates OAuth (redirect to GitHub)
+- `GET /api/auth/github/callback` — handles the callback, reads profile, mints signal
+
+Existing portal auth infrastructure: the portal already has a magic-link auth system
+(`src/app/api/auth/`). The GitHub OAuth routes are NEW routes alongside the existing auth, NOT a
+replacement. They share: the session (operator must be logged in before connecting GitHub), the
+`DirectoryClient` (to read arm-c facts and submit), the `SubmissionSigner` (to sign the
+envelope). They do NOT share: the magic-link flow itself (GitHub OAuth is additive identity
+binding, not a login replacement).
+
+Interface the portal needs:
+```typescript
+interface GitHubProfileData {
+  username: string;
+  githubId: number;
+  createdAt: string;       // ISO 8601
+  publicRepos: number;
+  followers: number;
+}
+
+function composeGitHub(
+  accountId: string,
+  data: GitHubProfileData,
+  opts?: { supersedesHash?: string | null }
+): ComposedSignal | null;
+```
+
+**Invariants at stake.**
+- **INV-ZERO-BUMP** — the directory/client know NOTHING about this type. The `github` string is
+  opaque; no enum, no column, no switch. Enforced by the type playbook's zero-bump contract.
+- **INV-CHOKEPOINT** — same signed submission path as phone/email. No new write seam.
+- **INV-DIR-DUMB** — the directory stores the hash; it never sees "github" as a special case.
+- **INV-NO-SCORE** — the signal carries raw facts (account age 8 years, 42 repos, 200
+  followers), NOT a "GitHub trust score." The recipient's floor policy reasons over the
+  structured fields if it wants; no aggregation in the signal itself.
+
+**Approach + rejected alternative.**
+
+**Chosen: OAuth + REST API in the portal process.** The OAuth ceremony lives as a
+Next.js API route pair. The REST call (`fetch` to `api.github.com`) happens in the callback
+handler immediately after proving ownership. No new infrastructure, no new process, no browser.
+This is the type playbook's intended shape: portal-only, per-type verification code, everything
+else is generic.
+
+**Rejected: browser-extraction instance for GitHub.** The DOD names it; it IS the correct
+shape for LinkedIn/X (post-v1). But standing up a separate EC2 instance, security-hardened
+browser-harness runtime, credential isolation, job queue, and results transfer — for a single
+unauthenticated REST call — is objectively wrong for GitHub. The infrastructure cost (instance,
+browser, Puppeteer, security boundary) delivers no value that a 200ms REST call doesn't.
+Moreover, the extraction instance introduces a new attack surface for zero benefit: a
+compromised instance could fabricate results (the DOD's "output is data, never instructions"
+concern) — but so could a compromised REST response, and we handle that by treating the data
+as an assertion (the signal's `issuer_kind: portal` tells recipients exactly who asserted it).
+
+**Rejected: storing the GitHub OAuth token.** The token is a proof instrument, not a refresh
+mechanism. Storing it creates: a PII-adjacent secret (account-linkable), a revocation/rotation
+obligation, and a credential that can be stolen. The profile data is public; re-reading it
+later needs no token. If re-verification on renewal is wanted, the operator re-authenticates
+(another OAuth round-trip — 2 clicks), which is appropriate for a 1-year renewal cadence.
+
+**Decision: browser-extraction infrastructure is DEFERRED to post-v1.** The DOD line's
+requirements (separate instance, credential isolation, hardened runtime) are REAL requirements
+for LinkedIn/X where scraping authenticated sessions is the only path. They are not needed for
+GitHub (public API). The design is recorded so that when LinkedIn lands (M10-D3: "LinkedIn is
+the first post-v1 playbook run"), the infrastructure is already designed — just not built. This
+satisfies the DOD's "design before code" gate: the design IS this note; the code that
+benefits from it is post-v1.
+
+**The browser-extraction infrastructure design (for post-v1 LinkedIn/X):**
+- Separate EC2 instance (`t3.medium`, us-east-1), security group with egress-only to
+  `linkedin.com`, `x.com`; NO ingress from the internet; portal reaches it via a private
+  SQS queue (request) + results queue (response). Never direct HTTP.
+- Browser-harness runtime: headless Chrome + Puppeteer in a locked-down profile. Session
+  cookies persisted in Secrets Manager (per-provider). The instance has IAM read access to
+  its own provider cookies ONLY — never the portal's OAuth tokens.
+- Credential isolation: the portal's OAuth tokens (GitHub, future LinkedIn) NEVER reach the
+  extraction box. The extraction box receives a `{provider, handle}` job and returns
+  `{provider, handle, signals}` data. It cannot impersonate the operator.
+- Output is data, never instructions: the portal validates the result shape (known fields
+  only), bounds numeric values (followers < 10M, age < 30 years), and treats the output as
+  an unverified claim it then re-signs. A compromised extraction box cannot inject payload
+  content that bypasses the portal's scan.
+- infra/STATE.md entries (when built): instance ID, security group, SQS queue ARNs, IAM role.
+
+**Falsification pass.**
+- Does the portal have `fetch`? Yes — Next.js server routes have standard `fetch` (Node 24).
+- Does GitHub's public API actually return `created_at`? Verified:
+  `GET https://api.github.com/users/octocat` → `"created_at": "2011-01-25T18:44:36Z"`.
+  Rate limit: 60/hr unauthenticated (sufficient for registration-time reads;
+  5000/hr with the short-lived token).
+- Does Passport.js have a GitHub strategy? Yes: `passport-github2`, mature.
+- Is there a conflict with the existing auth flow? No — the portal's login is magic-link;
+  GitHub OAuth is an additive credential-binding flow, not a login replacement.
+- Does this violate the zero-bump contract? No — all changes are portal-only; no
+  cello-client or trustless-cello changes needed for the `github` type.
+
+**Decisions this note makes.**
+
+- **M10-D26 — GitHub uses REST API, not browser extraction; the extraction instance is
+  deferred to post-v1 (LinkedIn).** GitHub's public `GET /users/{username}` serves all
+  v1 signal fields. The separate extraction instance is designed (above) but NOT built
+  until a provider that requires it (LinkedIn) enters scope.
+- **M10-D27 — the GitHub OAuth token is discarded after use; never stored.** The portal
+  holds no long-lived GitHub credential. Re-verification on renewal requires a fresh OAuth
+  round-trip (operator clicks "re-connect GitHub" — appropriate for a ~1 year renewal).
+- **M10-D28 — the `github` signal payload carries: claim, username, account_age_days,
+  public_repos, followers; subject_kind = account (owned by the operator, not per-agent).**
+  Same account-subject pattern as phone/email (M10-D5). No PII beyond what the signal IS
+  (the GitHub username is public by definition — it's in the URL).
+
+**Test plan sketch.**
+- **OAuth flow (red-first):** mock the GitHub OAuth exchange (test-only); assert the callback
+  extracts username + reads profile; assert `composeGitHub` produces a valid envelope that
+  the directory's `parseRequest` accepts.
+- **Profile read (red-first):** assert `fetchGitHubProfile` returns the expected fields from
+  a canned API response; assert validation rejects non-JSON / missing `created_at`.
+- **End-to-end (the enforcer: DOD-EXT-SIGNAL-1's live journey):** a real GitHub account
+  (Andre's or a test account) connects via OAuth → portal composes + submits → directory
+  notarizes → daemon holds → present at introduction → recipient verifies + consumes.
+- **Zero-bump proof:** after the full pipeline: `git status --porcelain` clean in
+  cello-client AND trustless-cello. (Same as DOD-ZEROBUMP-CANARY-1, combined.)
+
+**Enforcer:** DOD-EXT-SIGNAL-1 (the full GitHub signal end-to-end) and the zero-bump
+canary. This note gates both.
+
+---
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client

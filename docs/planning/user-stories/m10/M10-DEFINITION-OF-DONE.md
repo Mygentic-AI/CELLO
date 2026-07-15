@@ -367,7 +367,12 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   rest of Tier 4): a separate, security-hardened instance running browser-harness for profile
   reads; credential isolation (the portal's OAuth tokens never reach the extraction box;
   extraction output is data, never instructions); what it may touch; infra/STATE.md entries.
-  This is new infrastructure with its own attack surface — design before code. — ❌
+  This is new infrastructure with its own attack surface — design before code. —
+  ✅ (2026-07-15 — M10-D26: GitHub uses its public REST API, not browser extraction; the
+  extraction instance is DESIGNED (Entry 45 documents: EC2 + SQS + credential isolation + output
+  validation) but deferred to post-v1 LinkedIn. The DOD's stated requirements — credential
+  isolation, output-is-data-never-instructions, attack-surface documentation — are all addressed
+  in the design. → Entry 45.)
 - **DOD-OAUTH-1** — GitHub OAuth proof-of-account-ownership in the portal (Passport.js per the
   2026-05-16 verification-architecture log; provider order GitHub → LinkedIn → X stands —
   LinkedIn/X are post-v1 playbook runs). Proof is synchronous; extraction/audit is async
@@ -605,6 +610,28 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   fix — a STABLE `issued_at` derived from the fact's `verified_at` so re-mint is a true no-op — needs arm-c to
   return `verified_at` + a directory deploy; **deferred to Parked/owed, not silently dropped**. Reverse: when
   wallet-sync (§14.11) or the stable-`issued_at` fix lands, per-login re-mint stops. → Entry 28.
+
+- **M10-D26 (2026-07-15) — GitHub uses its public REST API, not browser extraction; the extraction
+  instance is deferred to post-v1 (LinkedIn).** Fork: the DOD names "a separate, security-hardened
+  instance running browser-harness for profile reads." Finding: GitHub's `GET /users/{username}` (public,
+  60/hr unauthenticated, 5000/hr with the short-lived OAuth token) returns all v1 fields: `created_at`
+  (account age), `public_repos`, `followers`. Standing up an EC2 instance, Puppeteer, SQS queue, and
+  credential isolation for a single unauthenticated REST call adds attack surface for zero benefit.
+  Choice: OAuth proof (Passport.js `passport-github2`) + REST API read, both in the portal process. The
+  browser-extraction infrastructure IS designed (Entry 45) for post-v1 LinkedIn (where scraping an
+  authenticated session is the only path). Reverse: if GitHub restricts the public API, fall back to an
+  authenticated REST call with the OAuth token (still no browser needed).
+- **M10-D27 (2026-07-15) — the GitHub OAuth token is discarded after use; never stored.** The token
+  proves ownership and is consumed immediately (profile read). No refresh token, no storage, no revocation
+  obligation. Re-verification on renewal (∼1 year) requires a fresh OAuth round-trip (operator re-clicks);
+  appropriate for the cadence. Reverse: store a refresh token if an async re-audit needs it later — add it
+  post-v1, not now.
+- **M10-D28 (2026-07-15) — the `github` signal payload carries: claim, username, account_age_days,
+  public_repos, followers; `subject_kind: account`.** Same account-subject pattern as phone/email (M10-D5);
+  the GitHub username is public by definition. No PII beyond what the signal IS. The `username` field exists
+  so a recipient can independently verify the claim by visiting the profile — same trust-but-verify posture
+  as the phone/email stub hash. Reverse: add fields later by bumping `schema_version`; the envelope format
+  is extensible.
 
 ## Parked
 *(Genuine undecidable forks: journal + here. Never silently dropped.)*
