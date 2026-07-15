@@ -345,7 +345,7 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   from any node — make the aggregate agent-keyed AND cross-node consistent (replicate the inputs
   or compute from already-replicated data; a Decisions entry) BEFORE exposure. Design note first:
   exactly which aggregates (session/seal counts, clean-close attestations) are exposed,
-  authenticated how; no content, no PII, aggregate-only. — ❌
+  authenticated how; no content, no PII, aggregate-only. — ✅ design note + route implemented (efca4b2c) → Journal Entry 44
 - **DOD-TRACK-1** — a portal background job computes one or two track-record signals
   (**session count** and **clean-close rate** — per taxonomy Class 3) and mints them through
   the SAME write path as Tier 1 (nothing directory-issued; INV-CHOKEPOINT unchanged). Default

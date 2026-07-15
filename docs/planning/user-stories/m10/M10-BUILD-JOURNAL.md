@@ -2307,6 +2307,33 @@ seeding, or mark the journey as "deferred to post-publish integration testing"?
 
 ---
 
+### Entry 44 — DOD-DIRDATA-READ-1 implemented + portal UI fixes
+
+**Date:** 2026-07-15
+
+**DOD-DIRDATA-READ-1 — the directory track-record read path:**
+- Design note committed earlier (07076deb): compute from `seal_notarizations` + `conversation_seals`
+  (both replicated) → cross-node consistent.
+- Route implemented: `GET /internal/track-record/:agentPubkeyHex` in `internal-api-server.ts`
+  - Auth: same bearer key (SI-001)
+  - Input validation: 64 hex chars only
+  - Query: `WHERE participant_a_pubkey = decode($1,'hex') OR participant_b_pubkey = decode($1,'hex')`
+  - Left-joins to `conversation_seals` via encode/uuid-strip to get `close_type`
+  - Returns: `{ session_count, clean_close_count, clean_close_rate, last_sealed_at }`
+- Test: `dod-dirdata-read-1.test.ts` — 7 cases (auth, validation, zero-state, correct counts, rate, last_sealed, case-insensitive hex)
+- Commit: efca4b2c
+
+**Portal UI fixes (cello-portal 39801a3):**
+- Phone: `<Placeholder>` → `<LiveCell active={hasPhone}>` — every registered user has phone stub hash
+- Removed "Verified contacts" subgroup (recovery contacts is far-future)
+- Renamed "Network graph" → "Connections"
+- Track record: "Completed collaborations" → "Session count" + "Clean-close rate" placeholders
+
+**Next:** DOD-TRACK-1 — the portal background job that calls this route, composes track-record
+signal envelopes, and mints them through the chokepoint.
+
+---
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
