@@ -464,6 +464,23 @@ describeIntegration("DOD-DIR-WRITE-1 — the signed-submission chokepoint", () =
       expect(await drainPickupForAgent(pool, DA), "nothing queued on a refused deliver").toHaveLength(0);
     });
 
+    it("REFUSES a hash that only ever had a REVOKE TOMBSTONE — a tombstone is not a notarization (review F1)", async () => {
+      // A revoke tombstone is (hash, 'revoke:'+node) with is_tombstone=true — NOT a scanned-clean submission.
+      // Without the `is_tombstone = false` filter this would pass the notarized-gate and let an envelope be
+      // queued under a hash the chokepoint never accepted or scanned (§14.1).
+      const tombHash = "f".repeat(64);
+      await pool.query(
+        `INSERT INTO signal_records
+           (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type, status, scanner_version, is_tombstone)
+         VALUES ($1, 'revoke:us-east-1', 'agent', $2, 'portal', 'x', 'phone', 'revoked', '(tombstone)', true)
+         ON CONFLICT DO NOTHING`,
+        [tombHash, `${tag}-tombstone-subj`],
+      );
+      await expect(deliverSignal(await signedDeliver({ signalHash: tombHash })))
+        .rejects.toMatchObject({ reason: "signal_not_notarized" });
+      expect(await drainPickupForAgent(pool, DA), "nothing queued for a tombstone-only hash").toHaveLength(0);
+    });
+
     it("uses the SAME auth as submit — a stranger cannot deliver, a registry key cannot either", async () => {
       const h = await notarize();
       await expect(deliverSignal(await signedDeliver({ signalHash: h, pub: strangerPub, priv: strangerKey })))

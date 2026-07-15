@@ -389,10 +389,12 @@ export interface DeliverResult {
  * carries a CBOR envelope (not a canonical-JSON record), and the pickup row carries the signal_hash
  * itself (its anchor is `signal_records`, not `identity_tree_entries`).
  *
- * PRECONDITION — the hash must already be NOTARIZED here. Deliver never notarizes; it refuses to queue a
- * ciphertext for a `signal_hash` this node has no `signal_records` row for (`signal_not_notarized`). So a
- * delivery can only ever carry a signal the chokepoint accepted — you cannot smuggle content to a daemon
- * under a hash the directory never saw. (submit-then-deliver is the portal's order.)
+ * PRECONDITION — the hash must already be genuinely NOTARIZED here (a real submission, NOT a revoke
+ * tombstone). Deliver never notarizes; it refuses to queue a ciphertext unless a NON-TOMBSTONE
+ * `signal_records` row exists for the `signal_hash` (`signal_not_notarized`). So a delivery can only ever
+ * carry a signal the chokepoint accepted-and-scanned — you cannot smuggle content to a daemon under a hash
+ * the directory never notarized, nor under a hash that only ever had a revoke tombstone. (submit-then-
+ * deliver is the portal's order.)
  *
  * The directory NEVER opens a ciphertext (sealed to the agent's k_local — SI-001); it queues opaque bytes.
  * Idempotent per (agent, signal_kind): a re-delivered copy SUPERSEDES the prior pending one (enqueuePickup),
@@ -428,12 +430,21 @@ export async function deliverSignal(args: {
       throw new SubmitRejected("stale_request", `issued_at ${req.issued_at} is more than ${CLOCK_SKEW_SECONDS}s from this node's clock (${nowSec})`);
     }
 
-    // Deliver only what was notarized. A hash with no signal_records row (on ANY accepting_node) has not
-    // passed the chokepoint here — refuse to queue an envelope under it. signal_records is replicated, so
-    // a signal notarized at another node is visible here too.
-    const known = await pool.query(`SELECT 1 FROM signal_records WHERE signal_hash = $1 LIMIT 1`, [req.signal_hash]);
+    // Deliver only what was genuinely NOTARIZED — a real submission, never a revoke tombstone. `is_tombstone
+    // = false` is load-bearing: revokeSignal writes a `(hash, 'revoke:'+node)` row with is_tombstone=true,
+    // status='revoked', scanner_version='(tombstone)', and WITHOUT this filter a hash that only ever had a
+    // revoke tombstone (revoke-before-submit under mesh replication, or a submitter revoking a hash never
+    // submitted) would pass — queuing an envelope under a hash the chokepoint never accepted or scanned,
+    // breaking "notarized ⇒ scanned-clean-at-birth" (§14.1). A genuinely-notarized signal always has a
+    // non-tombstone active row, and signal_records is replicated so a signal notarized at another node is
+    // visible here too. (Effective REVOKED status is caught downstream by the daemon's verify against
+    // signal_records_effective; here we only guarantee "was actually notarized".)
+    const known = await pool.query(
+      `SELECT 1 FROM signal_records WHERE signal_hash = $1 AND is_tombstone = false LIMIT 1`,
+      [req.signal_hash],
+    );
     if ((known.rowCount ?? 0) === 0) {
-      throw new SubmitRejected("signal_not_notarized", `no signal_records row for ${req.signal_hash} — submit must precede deliver`);
+      throw new SubmitRejected("signal_not_notarized", `no non-tombstone signal_records row for ${req.signal_hash} — a genuine submit must precede deliver`);
     }
 
     // Queue one sealed copy per agent. Shape was fully validated up front (parseDeliverRequest), so this

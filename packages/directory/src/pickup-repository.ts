@@ -86,13 +86,14 @@ export async function ackPickupDelete(db: Queryable, id: string, agentId: string
  * signal_kind (validateWritePayload rejects any kind not in the closed SIGNAL_KINDS set; enqueuePickup types
  * it `string`), so a NULL-kind row cannot be produced today — only V34-era leftovers (none in practice) match.
  *
- * REPLICATION GATE (fallback-finder #3 — load-bearing for the H2 work): this sweep is safe ONLY because
- * pickup_queue is NODE-LOCAL today (NOT in cello_pub) while identity_tree_entries IS replicated and never
- * deleted in production — so every node re-checks anchor existence against the same converged anchor set at
- * delete time. When H2 adds pickup_queue to cello_pub, this per-node, per-cadence DELETE becomes UNSAFE: a
- * node whose identity_tree replica has not yet converged could see an anchor as absent, delete a deliverable
- * ciphertext, and replicate that delete federation-wide. H2 MUST gate the sweep before publishing
- * pickup_queue — owning-node ownership of the sweep, or a convergence check — never per-node on a replicated queue.
+ * REPLICATION SAFETY (load-bearing): pickup_queue IS replicated (in cello_pub since V39/post-V39, per
+ * infra/setup-replication.sh). This per-node DELETE is nonetheless safe because it is gated to
+ * `owning_node_id = $2` — a node only ever sweeps rows IT wrote — and the TTL (24h) vastly exceeds
+ * replication-convergence lag (seconds). So a node never deletes another node's row on the basis of a
+ * not-yet-converged anchor replica: it only touches its own rows, long after any anchor it wrote would have
+ * converged. The OWNING-NODE OWNERSHIP is the guarantee — NOT node-locality (the queue is not node-local).
+ * Do not weaken the `owning_node_id` predicate: without it, a lagging replica could see an anchor as absent
+ * and delete a deliverable ciphertext, replicating that delete federation-wide.
  */
 export async function sweepUndeliverablePickups(db: Queryable, owningNodeId: string, ttlHours = 24): Promise<number> {
   const res = await db.query(
