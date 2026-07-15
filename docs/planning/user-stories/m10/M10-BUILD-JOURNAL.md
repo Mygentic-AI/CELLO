@@ -16,14 +16,18 @@ description: >
 
 ## RESUME STATE (keep current — update at every checkpoint/compaction)
 - **Milestone status (2026-07-15, Entry 34 — CURRENT):** Tier 0 ✅. **DOD-T1-JOURNEY-1 cases (a)+(b) PROVEN live.**
-  Portal LIVE (`cello-portal:dd6692f`, task def rev 9, `DIRECTORY_API_URLS` us1/eu1/ap1 wired, M10-D11 failover live).
-  Core pipe: `portal.account_signals.minted` → `signal_records` (phone+email, us-east-1) → `daemon.trust_signal.received`
-  ×8 (`verified:true`) → `wallet_trust_signals` 4 rows (2 generations after supersession). Case (b): `FailoverDirectoryClient`
-  (7 tests, reviewer: SPEC FAITHFUL, no HIGH, MEDIUM fixed). Client on npm `latest` + `beta` v0.0.110. Directory td
-  us1 261/eu1 106/ap1 96, DB V47, SSM=47.
-  **DOD-T1-JOURNEY-1 status:** 🟠 — cases (a)+(b) done, case (c) custody = prod/KMS gate (owed).
+  HEADs: trustless-cello `a3af6db6`, cello-portal `dd6692f`. Portal LIVE (task def rev 9, `DIRECTORY_API_URLS`
+  us1/eu1/ap1 wired, M10-D11 failover live). Core pipe proven: `portal.account_signals.minted` → `signal_records`
+  (phone `7cbd783f…` + email `de0f5dce…`, us-east-1, both active) → `daemon.trust_signal.received` ×8 (all
+  `verified:true`) → `wallet_trust_signals` 4 rows (2 generations, issued_at 1784123131 / 1784124368). Case (a)
+  supersession: 2nd login → new hashes, daemon holds both generations. Case (b) M10-D11: `FailoverDirectoryClient`
+  (7 tests, Opus reviewer SPEC FAITHFUL, MEDIUM fixed, deployed). Case (c) custody = prod/KMS gate, owed.
+  Outstanding bug (non-blocking): TOTP verify locks out on wrong first attempt → task #14.
+  npm: `latest` + `beta` v0.0.110 (all 7 packages). Directory td us1 261/eu1 106/ap1 96, DB V47, SSM=47.
+  **DOD-T1-JOURNEY-1 status:** 🟠 cases (a)+(b) done; (c) owed.
   **NEXT:** **Tier 2** — DOD-PRESENT-1 design note (Entry 33); impl step 1 = read `inbound-sessions.ts` accept flow
-  to pin the two OPEN seams, then red-first. Heartbeat cron `fe62703b` armed; no deploys in flight.
+  to pin the two OPEN seams (injection point; directory-on-path vs recipient-side check), then red-first.
+  Heartbeat cron `fe62703b` armed; no deploys in flight.
 - **Live testing is available (Andre, 2026-07-14):** hole-punching works, so the **AWS demo agent**
   (`i-0ad3e7c22470f266e`, us-east-1 — see repo CLAUDE.md for the SSM command form) can be driven
   over bash as a REAL counterparty for the live journeys. **Pushing to `main` triggers a CodePipeline
