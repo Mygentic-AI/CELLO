@@ -2084,6 +2084,27 @@ the responder.
 
 **Repos touched:** cello-client (daemon: holder emit + recipient receive), trustless-cello (directory: dumb check in `#processSessionRequest`). Two-repo unit.
 
+### 2026-07-15 — Entry 36: DOD-PRESENT-1 — IMPLEMENTED (both repos)
+
+All three pieces coded, tested, typechecked:
+
+**1. Directory dumb check (trustless-cello `ec567e45`):**
+- `signal-present.ts`: `checkPresentedSignals(pool, hashes[])` → single `SELECT ... WHERE signal_hash = ANY($1) AND effective_status = 'active'` against `signal_records_effective`. Returns the surviving subset in input order.
+- Wired into `directory-node.ts#processSessionRequest` after the FROST ceremony, before building the assignment. Strips non-active hashes, attaches survivors to the `session_assignment` frame. Log event `signal.presentation.stripped` on any removal.
+- `SessionAssignment` type extended with optional `trust_signals?: Array<{hash, blob}>`.
+- 9 unit tests (real Postgres): active pass-through, revoked/superseded/unknown stripped, mixed input, order preserved, INV-STATELESS (no writes), INV-ZERO-BUMP (type-blind). All GREEN.
+
+**2. Holder emit (cello-client `d06281b`):**
+- `outbound-sessions.ts`: before `sendRaw`, checks `getTier(agentName, targetHex)`. If `>= TIER.KNOWN`, reads `TrustSignalStore.listAllActive()` and attaches `trust_signals: [{hash, blob}]` to the `session_request` frame. UNKNOWN/BLOCKED → nothing presented.
+- `trust-signal-store.ts`: added `listAllActive()` — all active non-expired wallet signals regardless of subject (correct for alpha: one agent per daemon). 4 unit tests.
+- A failure reading the wallet or tier never blocks the session (same degradation rule as moniker).
+
+**3. Recipient extract (cello-client `d06281b`):**
+- `inbound-sessions.ts`: `extractInboundSessionAssignment` now parses `trust_signals` from the assignment frame (Array<{hash: string, blob: Uint8Array}>). Surfaced as `parsed.trustSignals`.
+- `acceptInboundAssignment` logs `signal.presentation.received` with count + counterparty. Storage/verification is DOD-VERIFY-1's job.
+
+**Status:** DOD-PRESENT-1 IMPLEMENTED. Pending reviewer.
+
 ---
 
 ## Related Documents
