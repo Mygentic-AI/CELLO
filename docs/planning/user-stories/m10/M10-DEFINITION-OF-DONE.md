@@ -528,6 +528,28 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   directory treats payload as opaque bytes — this is the notary's last line of defense). Reverse: to
   restore domain later, source it through a validated post-`@` extractor, never pass an address
   through. → Entry 15.
+- **M10-D22 (2026-07-15) — wallet-signal delivery is PUSH-SEALED, not pull-from-notary. The privacy
+  invariant forbids the pull model outright.** The M8-retirement design (M10-D18) had an apparent fork:
+  now that `signal_records` is replicated across all 3 nodes (2026-07-15), could the daemon simply PULL
+  its account's notarized envelopes from any node and `deliverWalletSignal` each — deleting `pickup_queue`,
+  the per-agent sealing, and the whole push transport? **No — the V46 migration stores NO envelope
+  plaintext, NO payload, NO PII (a test asserts the payload column is absent); the directory is a dumb
+  hash-notary that holds only the SHA-256 + derived index fields.** It literally does not have the envelope
+  to serve, so the daemon cannot reconstruct it for re-hashing. The full envelope lives ONLY with the
+  holder. Therefore delivery MUST carry the envelope out-of-band from the party that has it (the portal)
+  to the daemon — the M8 sealed-pickup transport (`seal to each agent's k_local → pickup_queue → directory
+  push → daemon opens + verifies`) is REQUIRED by the invariant, not incidental. So the retirement KEEPS
+  the transport and re-points its endpoints: notarization moves from the `trust_signal_hash` agent-write
+  arm (`identity_tree_entries`) to the CHOKEPOINT (`signal_records`); the pickup row carries the
+  `signal_hash` directly (so the drain no longer JOINs `identity_tree_entries`); the daemon decodes the
+  CBOR envelope and calls `deliverWalletSignal` (which re-derives the DOD-CBOR-1 hash — NOT a raw sha256 —
+  and MAY additionally assert membership in `signal_records`). WebAuthn migrates onto the same
+  envelope+chokepoint+sealed-delivery path and STAYS sealed (its record is device-credential data, not
+  presentable-by-design like phone/email). Best-practice call per PROCEDURE §3a(b): a dedicated signed
+  `deliver` step (not folded into `submit`) because the fan-out is asymmetric — ONE account-subject
+  notarization : N per-agent sealed deliveries — and a received counterparty signal is notarized but never
+  self-delivered, so coupling them is wrong. Reverse: mechanical (delivery is a transport detail; the
+  hash/notary contract is unchanged). → Entry 19.
 
 ## Parked
 *(Genuine undecidable forks: journal + here. Never silently dropped.)*

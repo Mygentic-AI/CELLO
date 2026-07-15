@@ -1384,6 +1384,74 @@ portal handoff onto `mintAccountSignals`, re-point `inbound-sessions.ts` onto `d
 drop the M8 `trust_signals` table, retire the directory `SIGNAL_KINDS` arms — one atomic cross-repo
 commit whose test asserts the old table is GONE.
 
+### 2026-07-15 — Entry 19: DESIGN NOTE — DOD-MINT-INTERNAL-1's M8 RETIREMENT half (M10-D18), written against the code
+
+The keystone that wires the M10 delivery into the live daemon. Largest unit in the milestone (3 repos,
+2 directory tables, a redeploy, a publish cascade), so it gets a grounded design note before code — and
+this time grounded in the ACTUAL pipe, not recall (the Entry-4 lesson). Reading all sides collapsed a fork
+I thought I had (M10-D22) and surfaced the real shape.
+
+**The M8 pipe, end to end (read, not remembered):**
+- **Portal producer — `cello-portal/src/server/trust/handoff.ts::handTrustSignal`.** Canonical-JSON the
+  record → **raw** `hash()` → `signalHash`. Then FAN OUT over `directory.listAgents(accountId)`: for each
+  agent with an `agentId` + `kLocalPubkey`, `sealToRecipient(k_local, jsonBytes)` and write TWO agent-write
+  arms — `trust_signal_hash` (the anchor) and `trust_signal_ciphertext` (the sealed delivery). Account-level:
+  every agent the operator owns gets its own sealed copy. Best-effort; re-mintable (D1).
+- **Directory validation — `agent-write-validation.ts`.** `SIGNAL_KINDS = {"webauthn"}`; the two arms
+  `trust_signal_hash` / `trust_signal_ciphertext` are validated here. **Both retire** (+ the enum).
+- **Directory writes — `agent-write-repository.ts`.** `trust_signal_hash` → `identity_tree_entries
+  (agent_id, signal_kind, signal_hash)` (the anchor, replicated). `trust_signal_ciphertext` →
+  `pickup_queue (agent_id, signal_kind, ciphertext, owning_node_id)` (node-local, NOT in `cello_pub`;
+  partial-unique `idx_pickup_queue_one_pending_per_kind` = one pending per (agent, kind)).
+- **Directory drain — `pickup-repository.ts::drainPickupForAgent`.** LEFT JOINs `pickup_queue` ⋈
+  `identity_tree_entries` on `(agent_id, signal_kind)` to pair each ciphertext with its `signal_hash`,
+  pushes `{id, signal_kind, ciphertext, signal_hash}` to the daemon, DELETEs the row on ACK.
+- **Daemon consumer — `cello-client` `inbound-sessions.ts:548-624` (`handleTrustSignalPickup`).** Opens
+  the seal with `k_local` → recovers plaintext → **raw** `cryptoHash(recovered)` == `signal_hash`? →
+  `store.storeTrustSignal({signalHash, agentId: null, signalKind, payload})` (the M8 `trust_signals` table,
+  the `agent_id = null` defect) → ACKs so the directory deletes the pickup.
+
+**The finding that decided the delivery model (M10-D22): the pull-from-notary shortcut is IMPOSSIBLE.**
+I briefly thought replication (just fixed) let the daemon PULL its account's envelopes from any node and
+skip the whole sealed-pickup transport. But V46 is explicit and TESTED: `signal_records` stores **no
+envelope plaintext, no payload, no PII** — only the hash + derived index fields. The directory is a dumb
+hash-notary; it does not have the envelope to serve. The full envelope lives ONLY with the holder. So
+delivery MUST carry the envelope out-of-band, portal → daemon. **The M8 sealed-pickup transport is
+REQUIRED, not incidental.** Fork dissolved.
+
+**The M10 target — KEEP the transport, re-point its endpoints (nothing about the notary contract changes):**
+1. **Portal `handoff.ts`** → compose an M10 **CBOR envelope** (`webauthn` type, account-subject, DOD-CBOR-1),
+   `hashTrustSignalEnvelope` (NOT raw hash), notarize ONCE via the **chokepoint** (`/internal/signal/submit`,
+   signed → `signal_records`), then seal the **envelope** per agent and queue it for delivery via a dedicated
+   signed **deliver** step. 1 notarize : N deliveries (asymmetric — hence deliver is its own step, not folded
+   into submit; a received counterparty signal is notarized but never self-delivered).
+2. **Directory** — retire `SIGNAL_KINDS` + both agent-write arms; the pickup row now carries the
+   `signal_hash` itself (drain stops JOINing `identity_tree_entries`); a signed deliver path populates
+   `pickup_queue`. Migration: **drop nothing directory-side that STORE-CLIENT-1 needs** — the M8 table being
+   dropped is the DAEMON's `trust_signals` (client SQLite), not a directory table.
+3. **Daemon `inbound-sessions.ts`** — pickup handler decodes the CBOR envelope and calls
+   `deliverWalletSignal(envelope, claimedHash=signal_hash)` (re-derives the DOD-CBOR-1 hash, stores in
+   `wallet_trust_signals`); DELETE `storeTrustSignal` + **drop the `trust_signals` table** from the daemon
+   schema. The raw-`cryptoHash` check at line 594 goes (M10 hash is domain-tagged CBOR, not a raw sha256) —
+   `deliverWalletSignal` owns the verification.
+4. **`trustless-cello/packages/e2e-tests/src/spine/j-trust.spine.test.ts`** — re-point onto the new pipe;
+   its SUBJECT (portal→directory→daemon delivery) stays alive and keeps coverage.
+
+**Forcing-function test (the DoD's own clause):** MINT-INTERNAL-1's test asserts the daemon `trust_signals`
+table is GONE — STORE-CLIENT-1's guard only catches a *premature* drop and would stay green forever if this
+were forgotten (review F7).
+
+**Atomicity + coverage-window (M10-D18):** the drop of the daemon table and the re-point of its only writer
+(`inbound-sessions.ts:601`) land in ONE commit per repo, coordinated — the writer must not survive the table,
+nor the table the writer. The directory arm-retirement lands with the portal re-point (the arm's only caller),
+same coverage-window logic. Ordering to avoid a broken live pipe mid-migration: ship the directory deliver
+path FIRST (additive, deploy), THEN the portal+daemon cutover, THEN retire the old arms.
+
+**Cost of record:** a directory redeploy (~25-30 min, 3 regions) + a `protocol-types`/`daemon`/`connect`
+publish cascade (`/cello-publish`). This is the SECONDARY "signals for few" layer, not the launch-critical
+"pipes for all" core — but it is in M10 scope (it is what makes minted phone/email actually reach a holder),
+so it ships. Next: the directory deliver path, red-first.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
