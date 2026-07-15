@@ -291,11 +291,14 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   file-signer-in-prod bypass is otherwise invisible to every enforcer). —
   🟠 (2026-07-15 — the mint→notarize→deliver→hold→re-verify PIPE is proven CROSS-PROCESS by the green
   `j-trust` spine test, and is DEPLOYED live (portal `f14e3ba` mints+delivers on login; directory 261/106/96).
-  The LIVE end-to-end run is BLOCKED on two non-pipe dependencies: (1) **the M8B registration path** —
-  `POST /internal/pre-authorize` 500s on dev (`capability issuance failed`) with NO error logged in
-  `/ecs/cello-directory-dev`, so a test daemon can't register+bind to a test account (owed, tangential —
-  do NOT rabbit-hole per launch-triage); (2) **prod-KMS custody** case (c) per M10-D24. → Entry 31.
-  Enabling unit DOD-MINT-INTERNAL-1 phone/email mint+deliver is DONE (Entry 29, review-fixed Entry 30).)
+  The LIVE end-to-end run is NOT YET EXECUTED — it is the heavyweight milestone-close live gate (a fresh
+  multi-system phase): start a registration → issue pre-auth → redeem from a FRESH daemon on 0.0.110 (binds to the
+  account) → magic-link login triggers the mint → observe sealed delivery into the daemon's `wallet_trust_signals`.
+  **NOT blocked by any directory bug** — an earlier pre-authorize 500 was a self-inflicted incomplete setup call
+  (a random `registration_id` with no parent `registrations` row; FK 23503), corrected in Entry 32. Custody case
+  (c) stays a prod/KMS gate per M10-D24. Owed: verify whether the internal-api error actually reaches CloudWatch
+  (a possible logging gap). Enabling unit DOD-MINT-INTERNAL-1 (phone/email mint+deliver) is DONE (Entry 29,
+  review-fixed Entry 30). → Entries 30, 31, 32.)
 
 ## Tier 2 — Presentation + consumption (the generic client pipeline) — closes with the canary
 

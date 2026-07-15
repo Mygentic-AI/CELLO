@@ -1915,6 +1915,34 @@ the live journey; (3) prod-KMS for custody case (c). Alternative route (if prior
 `agent_profiles` directly in the directory DB with a generated k_local, bypassing registration — but that needs a
 daemon configured to that exact k_local and dev-directory transport connectivity, so it is its own live-setup phase.
 
+### 2026-07-15 — Entry 32: CORRECTION to Entry 31 — the pre-authorize 500 was MY incomplete call, NOT a directory bug
+
+Root-caused the Entry-31 blocker with three bounded directory-DB queries (cello-db-query). **Entry 31 was wrong
+to imply a directory/registration defect — correcting the record:**
+- Both `pre_authorization_tokens` + `capability_claim_codes` tables EXIST; `id` has `gen_random_uuid()` default.
+- My token row never landed (`myrow=0`) → the FIRST insert threw. Running the exact insert returned the precise
+  cause: **`23503` FK violation on `pre_authorization_tokens_registration_id_fkey`**. `registration_id` is
+  `NOT NULL REFERENCES registrations(id)` (V25/V24).
+- **So the 500 was because I passed a random `registrationId` with no parent `registrations` row.** The real
+  flow creates a `registrations` row FIRST (start-registration), then issues the pre-auth token FOR it, then the
+  operator redeems the claim code to register the daemon. **Registration is NOT broken; my direct setup call
+  skipped the parent step.** DOD-T1-JOURNEY-1 is NOT blocked on a directory defect.
+- **One real (minor) finding stands, softened:** the `23503` cause was not visible in the `/ecs/cello-directory-dev`
+  logs I queried (`{ $.level = "error" }`, 20-min window, nothing) even though the handler logs
+  `directory.auth.capability.issue.failed` at error level. Could be an internal-api logging-to-CloudWatch gap OR a
+  query miss on my side — VERIFY before treating as a defect; do not assert it is broken. Owed: confirm.
+
+**Revised journey path (achievable, heavyweight-live — the real registration ceremony):** start a registration
+(create the `registrations` row — via the portal/ops-agent start-registration path, to be located) → issue
+pre-auth for that registration_id → redeem the claim code from a FRESH daemon on beta 0.0.110 (registers + binds
+to the account, phone/email stubs become verified facts) → magic-link login (Gmail) triggers `runLoginMint` →
+observe sealed delivery into the daemon's `wallet_trust_signals` + local hash re-verify. Cases per M10-D24: prove
+(a)+(b); custody (c) stays a prod/KMS gate. This is the milestone-close live gate — a fresh, multi-system phase.
+
+**Bottom line unchanged from Entry 31 in substance:** the M10 pipe is DONE, DEPLOYED (portal `f14e3ba`, directory
+261/106/96), and cross-process-proven (`j-trust` green). The LIVE run is the remaining heavyweight phase — not
+blocked by a bug, just not yet executed. DOD-T1-JOURNEY-1 = 🟠.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
