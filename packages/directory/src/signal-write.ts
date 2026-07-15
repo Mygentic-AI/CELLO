@@ -282,6 +282,23 @@ export async function submitSignal(args: {
     );
 
     const inserted = (res.rowCount ?? 0) > 0;
+
+    // DOD-SUPERSEDE-1: when a new signal supersedes an old one, mark the old row `superseded`.
+    // Only fires on a genuinely new insert (not a duplicate no-op replay), only when
+    // supersedes_hash is non-null, and only on this accepting node's copy. A replayed submit
+    // (inserted=false) never flips status — so the supersede is idempotent and replay-safe.
+    if (inserted && envelope.supersedes_hash !== null) {
+      const oldHash = Buffer.from(envelope.supersedes_hash).toString("hex");
+      const upd = await pool.query(
+        `UPDATE signal_records SET status = 'superseded'
+         WHERE signal_hash = $1 AND accepting_node = $2 AND status = 'active'`,
+        [oldHash, acceptingNode],
+      );
+      if ((upd.rowCount ?? 0) > 0) {
+        logger.info("signal.superseded", { oldHash, newHash: derived, correlationId });
+      }
+    }
+
     logger.info("signal.submission.accepted", {
       signalHash: derived,
       type: envelope.type,               // an opaque STRING in the log, never a gate

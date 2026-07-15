@@ -337,9 +337,9 @@ describeIntegration("DOD-DIR-WRITE-1 — the signed-submission chokepoint", () =
       expect(eff[0].notarized_by.sort()).toEqual(["eu-central-1", "us-east-1"]);
     });
 
-    it("supersession rides the NEW record's own INSERT — the old row is never mutated", async () => {
-      // So a replayed submit cannot launder a `revoked` row into `superseded` either: nothing about
-      // the old row is written at submit time at all.
+    it("supersession marks the old row superseded AND the effective view agrees (DOD-SUPERSEDE-1)", async () => {
+      // DOD-SUPERSEDE-1: the new envelope carries `supersedes_hash`; the old goes `status: superseded`
+      // at the directory. Both the raw column AND the derivation view show superseded.
       const oldEnv = envelope();
       const { signalHash: oldHash } = await submitSignal(await signedSubmit({ env: oldEnv }));
 
@@ -353,9 +353,27 @@ describeIntegration("DOD-DIR-WRITE-1 — the signed-submission chokepoint", () =
         "SELECT effective_status FROM signal_records_effective WHERE signal_hash = $1", [oldHash]);
       expect(rows[0].effective_status).toBe("superseded");
 
-      // ...and the old row's own `status` column was never touched. The derivation did the work.
+      // DOD-SUPERSEDE-1: the old row's status column is materialized to 'superseded'.
       const { rows: raw } = await pool.query("SELECT status FROM signal_records WHERE signal_hash = $1", [oldHash]);
-      expect(raw[0].status).toBe("active");
+      expect(raw[0].status).toBe("superseded");
+    });
+
+    it("a replayed submit (duplicate) does NOT flip the superseded row — replay safety", async () => {
+      // A duplicate submit is a no-op (inserted=false). The supersede logic only fires on a fresh
+      // insert, so replaying the superseding envelope never double-flips anything.
+      const oldEnv = envelope();
+      const { signalHash: oldHash } = await submitSignal(await signedSubmit({ env: oldEnv }));
+
+      const newEnv = envelope({
+        issued_at: nowSec() + 1,
+        supersedes_hash: new Uint8Array(Buffer.from(oldHash, "hex")),
+      });
+      await submitSignal(await signedSubmit({ env: newEnv }));
+      // Replay the new submission — must be a no-op
+      await submitSignal(await signedSubmit({ env: newEnv }));
+
+      const { rows } = await pool.query("SELECT status FROM signal_records WHERE signal_hash = $1", [oldHash]);
+      expect(rows[0].status).toBe("superseded");
     });
   });
 
