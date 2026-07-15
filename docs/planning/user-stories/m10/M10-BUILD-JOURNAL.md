@@ -2237,6 +2237,36 @@ daemons) exceed what this session can prove with unit tests alone.
 **Next:** dispatch reviewers for CONSUME-1 and FLOOR-1, then assess what's needed for the
 journey tests.
 
+### 2026-07-15 — Entry 42: DOD-CONSUME-1 + DOD-FLOOR-1 REVIEWED; fixes applied
+
+**Reviewer dispatched on Opus** for both units together (tightly coupled). Returned with 2 findings:
+
+1. **(MEDIUM) Silent catch in `toResponse`** — the outer catch swallowed errors with no log event,
+   making a broken store indistinguishable from "no signals." Fix: added `logger.warn("signal.projection.failed", …)`.
+   The "not at all" behavior (omit signals) is preserved, but operators can now diagnose WHY.
+
+2. **(HIGH/blocking) Hollow tests — CONSUME-1 tested a LOCAL mirror, not production code.** All 5
+   tests passed even with the production change reverted. Fix: extracted `projectTrustSignals` as a
+   named export from `inbound-sessions.ts` and rewired tests to import the production function.
+   `toResponse` now calls this export too — single source of truth.
+
+FLOOR-1 tests passed the revert test (import fails if the file is removed) — no findings.
+
+**Commit:** `547281f` — fix(m10): reviewer findings — extract projectTrustSignals + log silent catch
+
+| Unit | Status |
+|------|--------|
+| DOD-PRESENT-1 | ✅ DONE |
+| DOD-VERIFY-1 | ✅ DONE (reviewed Entry 37; verifiedAt fix) |
+| DOD-CONSUME-1 | ✅ DONE (reviewed + 2 fixes above) |
+| DOD-FLOOR-1 | ✅ DONE (reviewed clean) |
+| DOD-T2-JOURNEY-1 | ❌ requires publish + deploy + 2 daemons |
+| DOD-ZEROBUMP-CANARY-1 | ❌ requires full E2E (portal + directory + 2 daemons) |
+
+**Gate:** test ✓ (1971 pass) | lint ✓ | typecheck ✓ | pushed.
+
+**Next:** publish cascade to beta, then deploy directory, then journey tests.
+
 ---
 
 ## Related Documents

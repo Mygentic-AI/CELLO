@@ -305,21 +305,21 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
 - **DOD-PRESENT-1** — the holder presents selected signals as `{hash, blob}` pairs during the
   brokered introduction (selective disclosure: all, some, none — an explicit per-contact/
   per-tier choice surface, default sensible); the directory runs its two dumb checks in the
-  moment and forwards or strips with a named event; nothing persists directory-side. — ❌
+  moment and forwards or strips with a named event; nothing persists directory-side. — ✅
 - **DOD-VERIFY-1** — the recipient re-hashes each presented blob, checks directory membership +
   status (fresh, not revoked/superseded), stores the verified signal in `contact_trust_signals`
   with `verified_at` (M10-D4). Freshness policy per spec
   §14.7: TTL re-check on use; past-TTL + directory unreachable = disclosed staleness, tier
   policy decides (established contacts proceed, unknowns are refused) — never silent-accept,
-  never hard-reject. — ❌
+  never hard-reject. — ✅
 - **DOD-CONSUME-1** — verified signals reach the recipient's LLM as the JSON projection framed
   by hashed `issuer_kind` (portal-attested vs quoted-untrusted "X says:"), pass/block only,
   byte-for-byte or not at all (INV-FRAMING). Unknown types flow through with generic framing
-  (INV-TYPE-CARRY) — the self-describing payload does the explaining. — ❌
+  (INV-TYPE-CARRY) — the self-describing payload does the explaining. — ✅
 - **DOD-FLOOR-1** — the `SignalRequirementPolicy` deterministic floor: v1 field set defined
   (design note; spec §14.4 defers it here), predicates on ENVELOPE FIELDS ONLY (type string,
   issuer_kind, count, expiry, revocation, age); LLM/config discretion layers on top and may
-  only RESTRICT. The round-2 demand-bundle is a declarative list referencing type strings. — ❌
+  only RESTRICT. The round-2 demand-bundle is a declarative list referencing type strings. — ✅
 - **DOD-T2-JOURNEY-1** — **live journey, full:** agent A (holder of phone+email envelopes)
   connects to agent B; A presents; the directory checks; B verifies + consumes with correct
   framing; B's floor gates an unknown sender missing a required signal (negative case run,
