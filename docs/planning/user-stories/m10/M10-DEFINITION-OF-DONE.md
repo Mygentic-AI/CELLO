@@ -559,8 +559,14 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   the webauthn payload carries `{claim: "this operator enrolled a WebAuthn hardware authenticator", credential_stub: sha256(credentialId)}`
   — mirrors the phone/email no-PII shape (M10-D21: stub hash, not the raw value) and the "no PII beyond what
   the signal IS" guardrail. The claim ("has a hardware authenticator") is the trust signal; the raw
-  credential id and the enrollment timestamp are not needed for it and are dropped. Reverse: to correlate a
+  credential id and the enrollment timestamp are dropped FROM THE PAYLOAD. Reverse: to correlate a
   specific credential later, a verifier compares stub hashes, never a raw id. → Entry 21.
+  **Precision (review LOW, 2026-07-15):** "the timestamp is dropped" is payload-only. The envelope's
+  REQUIRED `issued_at` is `nowSec()` at compose time, and because the webauthn signal is composed
+  synchronously in the enroll route, `issued_at` ≈ enrollment time to the second (it is presentable via
+  DOD-PRESENT-1). This is NOT a no-PII breach — a timestamp is not device-linkable, and every signal type
+  carries `issued_at`. If enrollment-time disclosure is ever unwanted, COARSEN the webauthn `issuedAt` to
+  day-granularity; never remove `issued_at` (a required envelope field). → Entry 22.
 
 ## Parked
 *(Genuine undecidable forks: journal + here. Never silently dropped.)*

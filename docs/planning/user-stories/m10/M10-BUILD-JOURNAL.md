@@ -1593,6 +1593,52 @@ agent-write arms and onto the M10 pipe. The M8 arms now have NO caller, clearing
   needs the full post-deploy cascade (SSM 46→47 on the V47 one, relay restart + manifest re-sign, STATE.md).
   Then DOD-T1-JOURNEY-1 live. NEVER retire the arms before the new portal is deployed + proven.
 
+### 2026-07-15 — Entry 23: M8-retirement — all 6 cutover CODE pieces done + both reviews addressed. Remaining: spine test + release.
+
+Piece 6 landed and both outstanding reviews are closed. The M8 retirement is CODE-COMPLETE across the three
+repos (all local/unpushed, held for the release sequence); what remains is one cross-process test re-point
+and the operational release.
+
+**Piece 6 — directory arm retirement (trustless-cello, `a9f7370e`):** `SUPPORTED_WRITE_KINDS =
+["revocation_flag"]`; the `trust_signal_hash`/`trust_signal_ciphertext` cases, `SIGNAL_KINDS`, and the
+sealed-blob validators are removed from `agent-write-validation.ts`; the dispatch + unused imports removed
+from `internal-api-server.ts`; the writeapi arm-acceptance tests (unit + live) FLIPPED to assert both arms
+are now `unsupported_kind` with nothing persisted. 722 directory unit tests green.
+
+**Daemon-cutover review (adc… earlier) — closed:** SPEC FAITHFUL, decoder SOUND, DROP SAFE. F1 fixed
+(`2c83aca` — the populated-table DROP test). F2 (handler ACK-gating test) OWED — needs a live-path
+extraction refactor; tracked.
+
+**Portal review (`62c2831`) — closed:** SPEC faithful, no silent fallbacks, removals proven. MEDIUM fixed
+(the handoff no-PII assertion was vacuous — checked the *encrypted* ciphertext; now asserts the DECRYPTED
+envelope). LOW fixed (removed the dead `trust_signal_*` `AgentWrite` variants + `toWirePayload` dispatch).
+LOW noted (domain constant triplicated — no drift). LOW corrected (M10-D23 `issued_at`≈enrollment-time
+wording — payload-only "drop"; not device-linkable).
+
+**FULL CUTOVER COMMIT LIST (local, unpushed):**
+- trustless-cello (directory + docs): `ae8a049a` V47, `dfae6552` deliver route, `cbec3b88` deliver review
+  fixes, `a9f7370e` arm retirement + Entries 20-23 / M10-D22,23.
+- cello-client: `75624a9` decode promotion, `eeb4353` daemon cutover, `2c83aca` populated-DROP test.
+- cello-portal: `c5a36b2` delivery client, `f22591a` composeWebauthn, `756b20c` handoff re-point, `62c2831`
+  review fixes.
+
+**REMAINING — the release (no more feature code):**
+1. **Daemon `j-trust.spine.test.ts` re-point** — the cross-process gate: it exercises the pickup→daemon
+   path, whose behavior changed (M8 raw-hash+storeTrustSignal → M10 decode+deliverWalletSignal into
+   `wallet_trust_signals`). It seeds pickups directly (not via the retired arms), so the re-point is about
+   the daemon's NEW receipt behavior + asserting the wallet row. This is the gate that proves the shared
+   encode/decode round-trips cross-repo before the cutover ships (portal review noted this seam).
+2. **Publish cascade** (`/cello-publish`): protocol-types (0.0.24 — adds `decodeTrustSignalEnvelope`) →
+   daemon → connect → cli; the daemon cutover + shared decoder ship to operators here. Then the portal
+   consumes the new protocol-types (its production code only ENCODES, so it runs on 0.0.23 today, but align it).
+3. **Directory deploys — coverage-window 2-step:** (A) V47 + the ADDITIVE deliver route, KEEPING nothing
+   that breaks; then deploy the new portal; (B) the arm-retirement deploy LAST. Each directory deploy needs
+   the full post-deploy cascade (SSM 46→47, relay restart + manifest re-sign, STATE.md).
+4. **DOD-T1-JOURNEY-1 live** — the end-to-end proof.
+5. **OWED dead-code cleanup (separate):** `upsertIdentityHash` + `identity_tree_entries` are now dead
+   (drain COALESCE + sweep handle the transition); drop with a migration once M8 rows are confirmed drained.
+   Plus the daemon F2 ACK-gating test.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
