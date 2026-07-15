@@ -1846,6 +1846,41 @@ change → just update the ECS service); (3) DOD-T1-JOURNEY-1 live setup (a test
 `apemmelaar@gmail.com`; seed `user_accounts.phone_stub_hash` in the directory for the dev phone fact; a real
 daemon on beta 0.0.110 as holder) → run the journey per M10-D24 scope (prove a+b; custody c is a prod/KMS gate).
 
+### 2026-07-15 — Entry 30: mint+deliver REVIEWED + fixed (f14e3ba); DOD-T1-JOURNEY-1 setup fully traced
+
+**Review (cello-unit-reviewer on 68211a2, no model override):** SPEC FAITHFUL, all 4 clauses implemented,
+tests have teeth, NO HIGH. Fixed:
+- **MED-1 (substantive):** the login trigger await'd the directory with NO deadline — a reachable-but-HUNG
+  directory (undici ~300s default) could STALL sign-in for minutes, leaking the "a hiccup never fails sign-in"
+  promise (a stalled login is worse than a missing signal). Extracted `runLoginMint` (`login-mint.ts`) that
+  races the mint against a **~2.5s deadline**; a blown deadline takes the same swallow+log path as a throw.
+  `test/login-mint.test.ts`: throw swallowed; a never-settling mint resolves via the deadline (revert the
+  deadline → it hangs to the vitest timeout → the test has teeth); happy path runs.
+- **LOW-1:** comment now distinguishes same-call retry (dup no-op) from next-login re-mint (supersede, M10-D25).
+- **LOW-2:** reviewer said no fix required (deliver-fail bucketed `failed` but the true reason rides in `f.reason`).
+Floor green, tests 18/18. Pushed cello-portal `f14e3ba`. Portal REDEPLOYING with it (`build-portal.sh dev`).
+
+**DOD-T1-JOURNEY-1 setup — account model traced end-to-end (the missing piece):**
+- An account is the directory's `user_accounts` row, **keyed by `phone_stub_hash`** (dedup: same phone → same
+  account_id; `resolveAccountId`, `pre-auth-token-repository.ts`). `email_stub_hash` also on the row.
+- An agent BINDS to an account via a **pre-authorization token** carrying the `phone_stub_hash` (+ optional
+  `email_stub_hash`): registration calls `resolveAccountId` → sets `agent_profiles.account_id`. THAT is the
+  account↔agent link `listAgents`/`/internal/agents-by-account` reads.
+- The portal resolves the account for login by `email_stub_hash` (`resolveAccountByEmailStub` → directory).
+- **arm-c "verified" = the stub is PRESENT** on `user_accounts` (no separate verified flag; presence of
+  `phone_stub_hash`/`email_stub_hash` is the fact). So seeding the stubs = the facts are verified.
+
+**Journey execution plan (real, autonomous):**
+1. Issue a pre-auth token for `phone_stub_hash = sha256(<test phone>)` + `email_stub_hash = sha256(apemmelaar@gmail.com)`.
+2. Register a FRESH daemon on **beta 0.0.110** (the demo agent runs old `connect@0.0.34` — lacks
+   `deliverWalletSignal`/`decodeTrustSignalEnvelope`; do NOT disturb it, it is Andre's live counterparty) using
+   that token → creates the account, binds the agent, makes phone+email verified facts.
+3. Portal magic-link login with `apemmelaar@gmail.com` (read the link via Gmail MCP) → session → `runLoginMint`
+   → mint phone+email → deliver sealed to the daemon.
+4. Observe: daemon `wallet_trust_signals` holds phone+email; daemon re-verifies each hash locally.
+5. Cases per **M10-D24**: (a) late-added agent (re-mint+supersession), (b) failover; **(c) custody is a PROD/KMS
+   gate — dev uses the seed, so (c) stays owed; journey is 🟠 until (c), never a false ✅.**
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
