@@ -38,6 +38,22 @@ auto-rollback; the deploy watchdog covers it manually for now. Enable via `cello
 
 ---
 
+## 🌐 Portal deploy — Tier 3+4 code, UI fixes, GitHub OAuth (2026-07-15)
+
+**Portal now on `cello-portal:ac0dd9e`** (was `02c63cc`). Image built via CodeBuild, app stack updated
+via `aws cloudformation deploy`. Service 1/1 COMPLETED; `GET https://portal.cello.mygentic.ai/sign-in` → 200.
+
+**What shipped:**
+- UI fixes: phone active (green), "Network graph" → "Connections", removed "Verified contacts", track-record fields
+- Track-record minting job (`mintTrackRecordSignals` + `composeTrackRecord`)
+- `fetchTrackRecord` discriminated-union fix (failures now visible, not silent)
+- GitHub OAuth flow (`/api/auth/github`, `/api/auth/github/callback`) + `composeGitHub`
+
+**GitHub OAuth not yet operational:** needs `GITHUB_CLIENT_ID` + `GITHUB_CLIENT_SECRET` env vars in the
+task definition (a registered GitHub OAuth App). Without them the flow fails closed in non-local envs.
+
+---
+
 ## 🌐 M10-D18 portal deploy — the M8 handoff retired, M10 mint/notarize/deliver LIVE (2026-07-15)
 
 **`infra/deploy-portal.sh dev` — portal now on `cello-portal:d2c1133` (was `776752d`, pre-M10).** Release-tail
