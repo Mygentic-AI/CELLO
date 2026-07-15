@@ -1711,6 +1711,68 @@ shared decodeTrustSignalEnvelope) is tracked in the owed-cleanup task.
 Meanwhile: the ADDITIVE directory deploy (V47 + /deliver, 45949a5b) is IN PROGRESS (pipeline InProgress,
 DB still 46); the deploy-watchdog cron runs the post-deploy cascade when all 3 regions reach V47.
 
+### 2026-07-15 — Entry 27: FOLLOW-THROUGH (compaction capstone) — M8 retirement SHIPPED to dev; release tail + portal deploy how-to
+
+Read this cold to resume. The M8 retirement (M10's keystone — the trust-signal delivery pipe) is
+CODE-COMPLETE, unit + cross-process verified, reviewed, PUBLISHED to npm beta, and its ADDITIVE directory
+half is DEPLOYED LIVE in dev across all 3 regions. What remains is the coverage-window tail + Tiers 2-4.
+
+**SHIPPED + LIVE (verified):**
+- **npm beta `v0.0.110`** (binary-verified): protocol-types **0.0.24** (decodeTrustSignalEnvelope), transport
+  **0.0.24**, daemon **0.0.61** (deliverWalletSignal cutover + DROP trust_signals + inbound decode), cli
+  **0.0.59** (DEV- pre-auth fix), connect **0.0.75**. crypto 0.0.22 + gateway 0.0.4 unchanged. `latest`
+  promotion HELD (Andre's manual step — NEVER auto-run).
+- **Directory dev at DB V47, all 3 regions** (us-east-1, eu-central-1, ap-northeast-1): `pickup_queue.signal_hash`
+  + the signed `POST /internal/signal/deliver` route. All 6 ECS services 1/1 COMPLETED. Post-deploy cascade
+  DONE: SSM `expected-migration-version`=47; relays restarted + re-registered (new IPs us1 `10.0.14.92` /
+  eu1 `10.1.29.119` / ap1 `10.2.79.55`); manifests auto-re-signed (fresh in all 3). See STATE.md top entry.
+
+**LOCAL UNPUSHED (trustless-cello main, ahead of origin `45949a5b`):** the arm-retirement commit **`a9f7370e`**
+(RETIRE the trust_signal_* arms + SIGNAL_KINDS) + the docs/spine/STATE.md commits on top of it (Entries 23-27,
+spine re-point `75679026` + fix `05895cba`, STATE.md `687ac06c`). **DO NOT push `a9f7370e` yet** — it is the
+DESTRUCTIVE half; it must deploy ONLY AFTER the new portal is live (coverage window). It is entangled above
+the docs in history, so the whole stack is held together.
+
+**cello-portal (branch `main`):** 5 M10 commits (`c5a36b2` deliverSignalToAgents, `f22591a` composeWebauthn,
+`756b20c` handoff re-point, `62c2831` review fixes, `fedbe69` domain de-dup) — committed on HEAD, some unpushed.
+The portal only ENCODES, so it builds on its current cello-client pins (no 0.0.24 needed).
+
+**HOW THE PORTAL DEPLOYS (the unblocking finding):** portal is live at **https://portal.cello.mygentic.ai**
+(us-east-1 only, IaC). ECS service **`cello-portal-dev`** on cluster `cello-dev`, ECR repo `cello-portal`,
+CodeBuild `cello-portal-build-dev`. Deploy = **`infra/build-portal.sh dev`** (git-archives cello-portal HEAD →
+S3 → CodeBuild → builds Dockerfile → pushes `cello-portal:<sha>` + `:latest` to ECR), THEN update the
+`cello-portal-dev` ECS service to the new ImageTag (force-new-deployment / update-service). Current live image
+is an OLD one (`776752d`, pre-M10). STATE.md §"M8 operator portal" has the full stack detail.
+
+**RELEASE TAIL — the exact next steps (in order):**
+1. **Deploy the new portal:** push cello-portal main; run `infra/build-portal.sh dev`; update `cello-portal-dev`
+   ECS to the new image; verify the M10 handoff is live (a webauthn enroll notarizes + delivers, not the M8 arms).
+2. **Arm-retirement directory deploy:** push the held trustless-cello stack (incl. `a9f7370e`) → directory
+   pipeline (~25-30 min); arm a FRESH deploy watchdog; run the post-deploy cascade (SSM already 47, so just
+   relay restart ×3 + manifest check + STATE.md). This is coverage-window-safe ONLY after step 1.
+3. **DOD-T1-JOURNEY-1 (task 9):** live journey — real portal mints phone+email → directory notarizes
+   (signal_records, replicated) → holder daemon holds + re-verifies. Plus late-added-agent, failover, custody
+   cases. Runs from the DEPLOYED portal (internal routes are not laptop-reachable).
+
+**THEN Tiers 2-4 (fresh phase, tasks 10-11):** DOD-PRESENT-1 / VERIFY-1 / CONSUME-1 / FLOOR-1 / T2-JOURNEY-1 /
+ZEROBUMP-CANARY-1 (present/verify/consume/floor + the canary), then Tier 3 (Class-3 track record) + Tier 4
+(GitHub). Grounding: `listPresentable` (holder) + `putReceivedSignal` (recipient contact_trust_signals) are
+BUILT; the session-ceremony flow is the PRESENT hook; the directory's two dumb checks mirror the arm-c pattern.
+
+**OWED CLEANUP (task 12, non-blocking):** daemon F2 handler-level ACK-gating test (needs a handleTrustSignalPickup
+extraction refactor); drop the now-dead upsertIdentityHash + identity_tree_entries via migration; wire
+mintAccountSignals delivery (phone/email — needs listAgents + deliverSignalToAgents; dormant, no live caller).
+Domain-constant de-dup DONE (`fedbe69`).
+
+**STANDING MACHINERY:** the M10 HEARTBEAT cron **`fe62703b`** (fires :12/:42) is ARMED — re-arm if compaction
+drops it. The deploy watchdog `2b78c957` was DELETED (its additive-deploy job is done). **Dev submission signer:**
+pubkey `8d4abe074fef9229d3b441dfea4f98f805b1a2b3a06ae645810efece77fd5044` enrolled in `authorized_issuers`
+(role submitter, from portal dev seed `de`×32); the deployed portal needs `PORTAL_SUBMISSION_SEED=de…de`.
+
+**TASK BOARD: 8 of 13 done** (Tier 0 + all 6 M8-retirement pieces + publish + additive deploy). Task 13
+(arm-retirement deploy) blocked on the portal; task 9 (live journey) needs the deployed portal; tasks 10-11
+(Tiers 2-4) are the fresh phase; task 12 (owed cleanup) partial.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
