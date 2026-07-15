@@ -15,15 +15,13 @@ description: >
 # M10 — Build Journal
 
 ## RESUME STATE (keep current — update at every checkpoint/compaction)
-- **Milestone status:** **DOD-PORTAL-ARCH-1 ✅ COMPLETE** (both halves; Entry 3). Investigation →
-  [[M10-PORTAL-ARCH-INVESTIGATION]]; determination → [[M10-PORTAL-ARCH-DETERMINATION]] (reviewed,
-  8 findings fixed, decisions M10-D6…D13 in the DoD). **IN FLIGHT: DOD-CBOR-1** — design note is
-  Entry 1 **as amended by Entry 4** (read Entry 4, not Entry 1 alone: three of Entry 1's premises
-  were wrong against the code). Preimage = fixed-order CBOR **array**, domain tag `CELLO-TSIG-v1`
-  in slot 0, nullable slots for `expires_at` / `supersedes_hash` (M10-D15/D17). Component lives in
-  **`@cello-protocol/protocol-types`**, NOT crypto — **M10-D16 amends M10-D7's home** (the sole
-  CBOR encoder already lives there and is guarded by `no-multiple-cbor-encoders.test.ts`; crypto
-  has no cbor-x and the dep edge runs protocol-types → crypto).
+- **Milestone status (2026-07-15, Entry 28):** Tier 0 ✅. M8-retirement (M10's keystone delivery pipe)
+  code-complete, reviewed, on npm **beta v0.0.110**, additive directory half LIVE (V47, 3 regions).
+  **Portal LIVE on M10** (`cello-portal:d2c1133`, task def rev 7, `PORTAL_SUBMISSION_SEED` wired). **Arm-retirement
+  directory deploy IN FLIGHT** (`a9f7370e`, pushed `ee02dde3`; watchdog cron `c37bd580` drives the cascade).
+  **NEXT unit = DOD-T1-JOURNEY-1** (Tier-1 live enforcer) — plan + open custody question in Entry 28; runs after
+  the cascade. Then Tier 2 (present/verify/consume/floor + zero-bump canary). DOD-CBOR-1 ✅ (Entry 4; array
+  preimage, domain `CELLO-TSIG-v1`, home = `@cello-protocol/protocol-types` per M10-D16).
 - **Live testing is available (Andre, 2026-07-14):** hole-punching works, so the **AWS demo agent**
   (`i-0ad3e7c22470f266e`, us-east-1 — see repo CLAUDE.md for the SSM command form) can be driven
   over bash as a REAL counterparty for the live journeys. **Pushing to `main` triggers a CodePipeline
@@ -1772,6 +1770,51 @@ pubkey `8d4abe074fef9229d3b441dfea4f98f805b1a2b3a06ae645810efece77fd5044` enroll
 **TASK BOARD: 8 of 13 done** (Tier 0 + all 6 M8-retirement pieces + publish + additive deploy). Task 13
 (arm-retirement deploy) blocked on the portal; task 9 (live journey) needs the deployed portal; tasks 10-11
 (Tiers 2-4) are the fresh phase; task 12 (owed cleanup) partial.
+
+### 2026-07-15 — Entry 28: RELEASE TAIL executed — portal LIVE on M10, arm-retirement deploying; DOD-T1-JOURNEY-1 plan
+
+Post-compaction resume. Executed release-tail steps 1–2; step 3 (the live journey) is teed up.
+
+**Step 1 — portal deploy DONE (see STATE.md top).** `infra/deploy-portal.sh dev` → `cello-portal:d2c1133`,
+task def rev 7, service 1/1, `/sign-in` 200. Two things had to be fixed to get here, both real:
+- **A Turbopack prod-build break** (`cello-portal` `d2c1133`): the M10 trust module used `.js` import
+  extensions (cello-client/Node-ESM convention) while the whole portal is extensionless. `pnpm build`
+  (Turbopack) does NOT rewrite `./mint.js`→`mint.ts`; the type-only `.js` imports were erased so only the
+  first VALUE import (`directory-submit.ts:16`) surfaced it. **`pnpm build` had been skipped in the
+  M8-retirement portal gate** — a §2-step-6 floor miss. Fixed 4 imports; build+typecheck+lint+handoff-test green.
+- **`PORTAL_SUBMISSION_SEED` was not wired** into the live task def (rev 6 had no signing key at all). Without
+  it `getSubmissionSigner("dev")` fails closed and the best-effort handoff would mint NOTHING — a green deploy
+  hiding a dead feature (§0a tier-2 / §5a ABSENT-IS-NOT-FINE). Wired as a create-once **secret** (not plaintext
+  env) via `create-portal-secrets.sh` + `cello-portal-app.yaml` + `deploy-portal.sh`. Value = the enrolled
+  `de`×32 dev key — **VERIFIED** (derived pubkey == `8d4abe07…` already in `authorized_issuers`), not assumed.
+
+**Step 2 — arm-retirement deploy IN FLIGHT.** Coverage window opened (portal cut over to M10 + daemon on beta
+0.0.110 → the M8 `trust_signal_*` arms have no producer). Pushed the held stack `45949a5b..ee02dde3` (base =
+`a9f7370e`, directory app-code only, NO migration). `cello-directory-pipeline` running (Build stage at push).
+Deploy watchdog cron `c37bd580` (*/4) armed to drive the post-deploy cascade: relay restart ×3 + manifest
+check, **no SSM bump** (DB stays V47). Watchdog self-deletes on completion + flips task 13.
+
+**Step 3 — DOD-T1-JOURNEY-1 plan (the Tier-1 enforcer; runs after the cascade).**
+- **Reachability DE-RISKED (verify-not-assume):** the mint was only ever proven against a LOCAL server. Probed
+  the LIVE dev directory from the portal's `DIRECTORY_API_URL` (`http://directory-us1.cello.mygentic.ai`):
+  `POST /internal/signal/query` → **HTTP 422** (route exists, parsed, rejected the junk body) — NOT 404/refused.
+  So the deployed portal genuinely reaches the signal routes. (Plain-HTTP `/health`/`/registry` returned 400 —
+  an ALB http→https artifact, orthogonal.)
+- **Cases to prove (DoD lines 282–291):** (a) mint phone+email → `signal_records` (replicated ×3) → holder
+  daemon holds both envelopes + re-verifies hashes locally; late-added agent gets them via re-mint+supersession;
+  (b) failover — primary node down, login+mint still succeed via next node; (c) custody.
+- **OPEN QUESTION to resolve at execution (not now): custody clause (c) vs the dev seed.** Case (c) asserts the
+  task def carries NO key material and `authorized_issuers` pubkey == KMS `GetPublicKey`. But dev deliberately
+  uses a SEED signer (submission-signer.ts: dev=seed, prod=KMS-fail-closed), and I just wired a seed secret into
+  the task def. Case (c) is intrinsically a PROD/KMS assertion. Likely resolution (decide at execution, log an
+  M10-D*): prove (a)+(b) live in dev with the seed; treat (c) as gated on the owed prod-KMS wiring (DOD-MINT-INTERNAL-1
+  "prod KMS signer needs a created KMS key — infra"), either wiring KMS or PARKing (c) with a named owed item —
+  NOT silently skipping it. Do not call DOD-T1-JOURNEY-1 ✅ while (c) is unproven.
+- **Account-setup approach (journey prerequisite):** a portal account with verified phone+email + a registered
+  agent. Email magic-link → `apemmelaar@gmail.com` (Gmail MCP readable). Phone has no real SMS path in dev →
+  seed `user_accounts.phone_stub_hash` directly in the directory (cello-db-query skill) so the fact is
+  "verified" for minting (the portal reads the fact, does not re-verify — investigation §2). Holder daemon =
+  the AWS demo agent (`i-0ad3e7c22470f266e`) or a local daemon on beta 0.0.110.
 
 ## Related Documents
 
