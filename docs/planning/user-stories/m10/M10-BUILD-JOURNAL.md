@@ -1816,6 +1816,36 @@ check, **no SSM bump** (DB stays V47). Watchdog self-deletes on completion + fli
   "verified" for minting (the portal reads the fact, does not re-verify — investigation §2). Holder daemon =
   the AWS demo agent (`i-0ad3e7c22470f266e`) or a local daemon on beta 0.0.110.
 
+### 2026-07-15 — Entry 29: DOD-MINT-INTERNAL-1 completed — phone/email mint+DELIVER + login trigger (M10-D25)
+
+The phone/email pipe was half-built: `mintAccountSignals` NOTARIZED but never DELIVERED, and had no live
+caller (webauthn's `handTrustSignal` was the only wired mint). DOD-T1-JOURNEY-1 needs phone+email delivered
+end-to-end, so this completes the producer. Portal-only (cello-portal `68211a2`); no directory/client change.
+
+**Built (red-first, all green):**
+- `mintAccountSignals(baseUrl, accountId, signer, agents=[])` now DELIVERS a sealed copy of each minted
+  envelope to every addressable agent — mirrors `handTrustSignal`: the SAME envelope bytes the submit hashed,
+  delivered ONLY after a successful notarize (the directory refuses an un-notarized hash). `MintResult.minted`
+  gains `deliveredTo`. Default `agents=[]` keeps the pure-notarize tests green (additive, no silent caller change).
+- `handAccountSignals(accountId, deps?)` — the best-effort resolver + trigger: resolve config+signer+directory,
+  `listAgents` → addressable, mint+deliver. Early-returns when no agent can hold it (a later agent re-mints,
+  M10-D13); returns empty for an unknown account (found:false).
+- Trigger = **magic-link verify (POST + GET)**, best-effort after the session is set (M10-D25 "portal touch").
+  A mint error is swallowed + logged (`portal.account_signals.mint_failed`), NEVER rethrown — sign-in always
+  completes (a directory hiccup must not fail login; the signal is re-mintable next touch).
+- **Red-first proof:** the delivery test failed `delivered.length` 0→4 before the wiring. Tests: 4 new
+  `handAccountSignals` cases (mint+deliver both; skip unverified; no-agent = mint nothing; unknown account) +
+  the mint-delivery case. Floor green: build + typecheck + lint + trust tests 15/15.
+
+**Decision M10-D25** (DoD Decisions): trigger = login; per-login re-mint churn (issued_at=nowSec → new hash
+supersedes prior) ACCEPTED for v1; stable-`issued_at` from `verified_at` (needs an arm-c field + directory
+deploy) DEFERRED+owed. Review: `cello-unit-reviewer` in flight (no model override, per 2026-07-11 rule).
+
+**NEXT:** (1) fix any review findings; (2) REDEPLOY the portal (`build-portal.sh dev` → new image; no template
+change → just update the ECS service); (3) DOD-T1-JOURNEY-1 live setup (a test account via magic-link →
+`apemmelaar@gmail.com`; seed `user_accounts.phone_stub_hash` in the directory for the dev phone fact; a real
+daemon on beta 0.0.110 as holder) → run the journey per M10-D24 scope (prove a+b; custody c is a prod/KMS gate).
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client

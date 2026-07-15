@@ -583,6 +583,19 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   KMS is prod-hardening. Reverse: if a prod/staging env stands up, case (c) becomes immediately testable and
   is the gate for flipping the journey ✅. → Entry 28.
 
+- **M10-D25 (2026-07-15) — phone/email mint+deliver trigger = magic-link login; per-login re-mint churn
+  accepted for v1 (stable-`issued_at` idempotency deferred, owed).** DOD-MINT-INTERNAL-1's `mintAccountSignals`
+  notarized but never DELIVERED, and had no live caller (webauthn's `handTrustSignal` was the only wired mint).
+  Choice: `mintAccountSignals` gains delivery (mirror `handTrustSignal` — `listAgents` once, seal+`deliver` each
+  minted phone/email envelope to every addressable agent), and its trigger is the **magic-link verify** (the
+  universal "portal touch" the DoD names; "existing accounts on next touch, new registrations at verify"). Best-effort
+  like webauthn — a directory hiccup must never fail login. Idempotency caveat: `issued_at = nowSec()` at compose,
+  so a re-mint on the NEXT login yields a new hash → supersedes the prior (active→superseded churn). Accepted for
+  v1: invisible papercut (extra superseded rows; the latest is always active; the journey mints once). The clean
+  fix — a STABLE `issued_at` derived from the fact's `verified_at` so re-mint is a true no-op — needs arm-c to
+  return `verified_at` + a directory deploy; **deferred to Parked/owed, not silently dropped**. Reverse: when
+  wallet-sync (§14.11) or the stable-`issued_at` fix lands, per-login re-mint stops. → Entry 28.
+
 ## Parked
 *(Genuine undecidable forks: journal + here. Never silently dropped.)*
 
