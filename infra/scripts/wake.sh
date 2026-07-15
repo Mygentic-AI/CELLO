@@ -159,6 +159,26 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     ok "  ssmmessages endpoint recreated (becomes available in ~1-2 min)."
   fi
 
+  # ── STEP 2b: Demo agent EC2 (us-east-1 only) ─────────────────────────────────
+  DEMO_EC2_ID=$(echo "$R" | jq -r '.demo_ec2_id // "None"')
+  if [[ "$DEMO_EC2_ID" != "None" && -n "$DEMO_EC2_ID" && "${REGION}" == "us-east-1" ]]; then
+    step "  [${REGION}] 2b/7  Demo agent EC2"
+    ec2_state=$(aws ec2 describe-instances --instance-ids "${DEMO_EC2_ID}" --region "${REGION}" \
+      --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
+    if [[ "${ec2_state}" == "running" ]]; then
+      ok "  Demo EC2 already running — skipping"
+    else
+      run aws ec2 start-instances --instance-ids "${DEMO_EC2_ID}" \
+        --region "${REGION}" --no-cli-pager \
+        --query 'StartingInstances[0].CurrentState.Name' --output text
+      if [[ "${DRY_RUN}" != "1" ]]; then
+        log "  Waiting for demo EC2 to reach running state..."
+        aws ec2 wait instance-running --instance-ids "${DEMO_EC2_ID}" --region "${REGION}"
+        ok "  Demo EC2 running."
+      fi
+    fi
+  fi
+
   # ── STEP 3: RDS ──────────────────────────────────────────────────────────────
   step "  [${REGION}] 3/7  RDS"
   RDS_ID=$(echo "$R" | jq -r '.rds_id')
@@ -197,6 +217,39 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     fi
   else
     warn "  No RDS recorded for ${REGION} — skipping"
+  fi
+
+  # ── STEP 3b: Portal RDS (us-east-1 only) ─────────────────────────────────────
+  PORTAL_RDS_ID=$(echo "$R" | jq -r '.portal_rds_id // "None"')
+  if [[ "$PORTAL_RDS_ID" != "None" && -n "$PORTAL_RDS_ID" && "${REGION}" == "us-east-1" ]]; then
+    step "  [${REGION}] 3b/7  Portal RDS"
+    portal_rds_status=$(aws rds describe-db-instances \
+      --db-instance-identifier "${PORTAL_RDS_ID}" --region "${REGION}" \
+      --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "unknown")
+    if [[ "${portal_rds_status}" == "available" ]]; then
+      ok "  Portal RDS ${PORTAL_RDS_ID} already available — skipping"
+    else
+      if [[ "${portal_rds_status}" == "stopping" ]]; then
+        log "  Portal RDS ${PORTAL_RDS_ID} still stopping — polling until stopped..."
+        for i in $(seq 1 90); do
+          portal_rds_status=$(aws rds describe-db-instances \
+            --db-instance-identifier "${PORTAL_RDS_ID}" --region "${REGION}" \
+            --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "unknown")
+          [[ "${portal_rds_status}" == "stopped" ]] && break
+          [[ $((i % 6)) -eq 0 ]] && log "    still ${portal_rds_status}... (${i}×10s)"
+          sleep 10
+        done
+      fi
+      run aws rds start-db-instance \
+        --db-instance-identifier "${PORTAL_RDS_ID}" --region "${REGION}" \
+        --no-cli-pager --query 'DBInstance.DBInstanceStatus' --output text
+      if [[ "${DRY_RUN}" != "1" ]]; then
+        log "  Waiting for portal RDS to become available..."
+        aws rds wait db-instance-available \
+          --db-instance-identifier "${PORTAL_RDS_ID}" --region "${REGION}"
+        ok "  Portal RDS ${PORTAL_RDS_ID} available."
+      fi
+    fi
   fi
 
   # ── STEP 4: ALBs ─────────────────────────────────────────────────────────────
@@ -246,11 +299,17 @@ for REGION in "${TARGET_REGIONS[@]}"; do
   NEW_DIR_DNS=""
   NEW_RELAY_DNS=""
 
+  NEW_PORTAL_ARN=""
+  NEW_PORTAL_DNS=""
+
   if [[ "${DRY_RUN}" == "1" ]]; then
     warn "  [dry-run] would create ALB cello-dir-${ENVIRONMENT} in ${REGION}"
     warn "  [dry-run] would create ALB cello-relay-${ENVIRONMENT} in ${REGION}"
+    [[ "${REGION}" == "us-east-1" ]] && \
+      warn "  [dry-run] would create ALB cello-portal-${ENVIRONMENT} in ${REGION}"
     NEW_DIR_DNS="cello-dir-${ENVIRONMENT}-DRYRUN.${REGION}.elb.amazonaws.com"
     NEW_RELAY_DNS="cello-relay-${ENVIRONMENT}-DRYRUN.${REGION}.elb.amazonaws.com"
+    NEW_PORTAL_DNS="cello-portal-${ENVIRONMENT}-DRYRUN.${REGION}.elb.amazonaws.com"
   else
     DIR_CONFIG=$(echo "$R"   | jq -c '.dir_alb_config')
     RELAY_CONFIG=$(echo "$R" | jq -c '.relay_alb_config')
@@ -326,6 +385,43 @@ for REGION in "${TARGET_REGIONS[@]}"; do
       --region "${REGION}" --no-cli-pager \
       --query 'Listeners[0].ListenerArn' --output text)
     ok "  Relay listener: ${RELAY_LISTENER_ARN}"
+
+    # ── Portal ALB (us-east-1 only) ───────────────────────────────────────────
+    if [[ "${REGION}" == "us-east-1" ]]; then
+      PORTAL_CONFIG=$(echo "$R"       | jq -c '.portal_alb_config')
+      PORTAL_IDLE=$(echo "$R"         | jq -r '.portal_alb_config.idle_timeout_seconds // "60"')
+      PORTAL_TG_ARN=$(echo "$R"       | jq -r '.portal_tg_arn')
+      PORTAL_ACM_CERT=$(echo "$R"     | jq -r '.portal_acm_cert_arn')
+
+      log "  Creating portal ALB..."
+      NEW_PORTAL_ARN=$(create_alb "cello-portal-${ENVIRONMENT}" "$PORTAL_CONFIG" "${REGION}" "$PORTAL_IDLE")
+      ok "  Portal ALB: ${NEW_PORTAL_ARN}"
+
+      aws elbv2 wait load-balancer-available \
+        --load-balancer-arns "$NEW_PORTAL_ARN" --region "${REGION}"
+
+      NEW_PORTAL_DNS=$(aws elbv2 describe-load-balancers \
+        --load-balancer-arns "$NEW_PORTAL_ARN" --region "${REGION}" \
+        --query 'LoadBalancers[0].DNSName' --output text)
+      ok "  Portal DNS: ${NEW_PORTAL_DNS}"
+
+      # HTTP/80 → redirect to HTTPS
+      aws elbv2 create-listener \
+        --load-balancer-arn "$NEW_PORTAL_ARN" \
+        --protocol HTTP --port 80 \
+        --default-actions 'Type=redirect,RedirectConfig={Protocol=HTTPS,Port=443,StatusCode=HTTP_301}' \
+        --region "${REGION}" --no-cli-pager >/dev/null
+      ok "  Portal HTTP→HTTPS redirect listener wired."
+
+      # HTTPS/443 → portal TG with ACM cert
+      aws elbv2 create-listener \
+        --load-balancer-arn "$NEW_PORTAL_ARN" \
+        --protocol HTTPS --port 443 \
+        --certificates "CertificateArn=${PORTAL_ACM_CERT}" \
+        --default-actions "Type=forward,TargetGroupArn=${PORTAL_TG_ARN}" \
+        --region "${REGION}" --no-cli-pager >/dev/null
+      ok "  Portal HTTPS listener wired (cert: ${PORTAL_ACM_CERT})."
+    fi
   fi
 
   # ── STEP 5: Route53 ──────────────────────────────────────────────────────────
@@ -375,6 +471,15 @@ for REGION in "${TARGET_REGIONS[@]}"; do
 
   update_r53_alias "${DIR_SUB}"   "${NEW_DIR_DNS}"   "${ALB_ZONE}"
   update_r53_alias "${RELAY_SUB}" "${NEW_RELAY_DNS}" "${ALB_ZONE}"
+  if [[ "${REGION}" == "us-east-1" && -n "${NEW_PORTAL_DNS}" && "${NEW_PORTAL_DNS}" != "" ]]; then
+    PORTAL_ALB_ZONE=""
+    if [[ "${DRY_RUN}" != "1" ]]; then
+      PORTAL_ALB_ZONE=$(aws elbv2 describe-load-balancers \
+        --load-balancer-arns "$NEW_PORTAL_ARN" --region "${REGION}" \
+        --query 'LoadBalancers[0].CanonicalHostedZoneId' --output text)
+    fi
+    update_r53_alias "portal" "${NEW_PORTAL_DNS}" "${PORTAL_ALB_ZONE}"
+  fi
 
   # ── STEP 6: ECS services ─────────────────────────────────────────────────────
   step "  [${REGION}] 6/7  ECS services — restore desired counts"

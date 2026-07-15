@@ -182,9 +182,60 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     --query "TargetGroups[?Port==\`4002\` && contains(TargetGroupName,'cello')].TargetGroupArn | [0]" \
     --output text 2>/dev/null || echo "None")
 
+  # --- Portal ALB (us-east-1 only) ---------------------------------------------
+  portal_alb_arn="None"
+  portal_alb_config='{}'
+  portal_tg_arn="None"
+  portal_acm_cert_arn="None"
+  demo_ec2_instance_id="None"
+  if [[ "${REGION}" == "us-east-1" ]]; then
+    portal_alb_arn=$(aws elbv2 describe-load-balancers \
+      --names "cello-portal-${ENVIRONMENT}" --region "${REGION}" \
+      --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "None")
+    [[ "$portal_alb_arn" != "None" ]] && ok "  Portal ALB: ${portal_alb_arn}" || warn "  Portal ALB not found"
+
+    if [[ "$portal_alb_arn" != "None" ]]; then
+      portal_alb_config=$(aws elbv2 describe-load-balancers \
+        --load-balancer-arns "$portal_alb_arn" --region "${REGION}" \
+        --query 'LoadBalancers[0].{subnets:AvailabilityZones[*].SubnetId,sgs:SecurityGroups,scheme:Scheme}' \
+        --output json 2>/dev/null || echo '{}')
+      idle=$(aws elbv2 describe-load-balancer-attributes \
+        --load-balancer-arn "$portal_alb_arn" --region "${REGION}" \
+        --query 'Attributes[?Key==`idle_timeout.timeout_seconds`].Value | [0]' \
+        --output text 2>/dev/null || echo "60")
+      portal_alb_config=$(echo "$portal_alb_config" | jq --arg i "$idle" '. + {idle_timeout_seconds: $i}')
+
+      # Capture HTTPS listener's ACM cert ARN (needed to recreate the HTTPS listener on wake)
+      portal_acm_cert_arn=$(aws elbv2 describe-listeners \
+        --load-balancer-arn "$portal_alb_arn" --region "${REGION}" \
+        --query 'Listeners[?Protocol==`HTTPS`].Certificates[0].CertificateArn | [0]' \
+        --output text 2>/dev/null || echo "None")
+      [[ "$portal_acm_cert_arn" != "None" ]] && ok "  Portal ACM cert: ${portal_acm_cert_arn}"
+
+      # Portal target group (port 3000)
+      portal_tg_arn=$(aws elbv2 describe-target-groups --region "${REGION}" \
+        --query "TargetGroups[?Port==\`3000\` && contains(TargetGroupName,'cello')].TargetGroupArn | [0]" \
+        --output text 2>/dev/null || echo "None")
+      [[ "$portal_tg_arn" != "None" ]] && ok "  Portal TG: ${portal_tg_arn}"
+    fi
+
+    # Demo agent EC2 instance
+    demo_ec2_instance_id=$(aws ec2 describe-instances \
+      --filters "Name=tag:Name,Values=cello-demo-agent" "Name=instance-state-name,Values=running,stopped" \
+      --region "${REGION}" \
+      --query 'Reservations[0].Instances[0].InstanceId' --output text 2>/dev/null || echo "None")
+    [[ "$demo_ec2_instance_id" != "None" && -n "$demo_ec2_instance_id" ]] \
+      && ok "  Demo EC2: ${demo_ec2_instance_id}" || warn "  Demo EC2 not found"
+  fi
+
   # --- ECS services ------------------------------------------------------------
   ecs_json='[]'
-  for svc in "cello-directory-${ENVIRONMENT}" "cello-relay-${ENVIRONMENT}"; do
+  ecs_svcs=("cello-directory-${ENVIRONMENT}" "cello-relay-${ENVIRONMENT}")
+  # us-east-1 only: portal and ops-agent are global singletons that run here
+  if [[ "${REGION}" == "us-east-1" ]]; then
+    ecs_svcs+=("cello-portal-${ENVIRONMENT}" "cello-operations-agent-${ENVIRONMENT}")
+  fi
+  for svc in "${ecs_svcs[@]}"; do
     desired=$(aws ecs describe-services --cluster "${CLUSTER_NAME}" \
       --services "$svc" --region "${REGION}" \
       --query 'services[0].desiredCount' --output text 2>/dev/null || echo "0")
@@ -199,6 +250,15 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     --db-instance-identifier "cello-${ENVIRONMENT}" --region "${REGION}" \
     --query 'DBInstances[0].DBInstanceIdentifier' --output text 2>/dev/null || echo "None")
   [[ "$rds_id" != "None" ]] && ok "  RDS: ${rds_id}" || warn "  RDS not found in ${REGION}"
+
+  # us-east-1 only: portal has its own RDS instance
+  portal_rds_id="None"
+  if [[ "${REGION}" == "us-east-1" ]]; then
+    portal_rds_id=$(aws rds describe-db-instances \
+      --db-instance-identifier "cello-portal-${ENVIRONMENT}" --region "${REGION}" \
+      --query 'DBInstances[0].DBInstanceIdentifier' --output text 2>/dev/null || echo "None")
+    [[ "$portal_rds_id" != "None" ]] && ok "  RDS portal: ${portal_rds_id}" || warn "  Portal RDS not found"
+  fi
 
   # --- VPC ssmmessages endpoint -----------------------------------------------
   vpc_id="$nat_vpc"
@@ -239,6 +299,7 @@ for REGION in "${TARGET_REGIONS[@]}"; do
   relay_rules=$(echo "${relay_rules}"         | jq -c .)
   [[ -z "$ep_config" || "$ep_config" == "null" ]] && ep_config='{}'
   ep_config=$(echo "$ep_config" | jq -c .)
+  portal_alb_config=$(echo "${portal_alb_config}" | jq -c .)
 
   # Assemble per-region state
   region_state=$(jq -n \
@@ -250,10 +311,16 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     --argjson nat_tags "${nat_tags}" \
     --argjson ecs "${ecs_json}" \
     --arg rds_id "${rds_id}" \
+    --arg portal_rds_id "${portal_rds_id}" \
     --arg alb_dir_arn "${alb_dir_arn}" \
     --arg alb_relay_arn "${alb_relay_arn}" \
+    --arg portal_alb_arn "${portal_alb_arn}" \
     --argjson dir_alb_config "${dir_alb_config}" \
     --argjson relay_alb_config "${relay_alb_config}" \
+    --argjson portal_alb_config "${portal_alb_config}" \
+    --arg portal_acm_cert_arn "${portal_acm_cert_arn}" \
+    --arg portal_tg_arn "${portal_tg_arn}" \
+    --arg demo_ec2_id "${demo_ec2_instance_id}" \
     --argjson dir_rules "${dir_rules}" \
     --argjson relay_rules "${relay_rules}" \
     --arg tg_main "${tg_main_arn}" \
@@ -273,10 +340,16 @@ for REGION in "${TARGET_REGIONS[@]}"; do
       nat_tags: $nat_tags,
       ecs_services: $ecs,
       rds_id: $rds_id,
+      portal_rds_id: $portal_rds_id,
       alb_dir_arn: $alb_dir_arn,
       alb_relay_arn: $alb_relay_arn,
+      portal_alb_arn: $portal_alb_arn,
       dir_alb_config: $dir_alb_config,
       relay_alb_config: $relay_alb_config,
+      portal_alb_config: $portal_alb_config,
+      portal_acm_cert_arn: $portal_acm_cert_arn,
+      portal_tg_arn: $portal_tg_arn,
+      demo_ec2_id: $demo_ec2_id,
       dir_listener_rules: $dir_rules,
       relay_listener_rules: $relay_rules,
       target_groups: {
@@ -336,11 +409,21 @@ for REGION in "${TARGET_REGIONS[@]}"; do
 
   # -- 3a. ECS → 0 -------------------------------------------------------------
   step "  [${REGION}] Scale ECS services to 0"
-  for svc in "cello-directory-${ENVIRONMENT}" "cello-relay-${ENVIRONMENT}"; do
+  while read -r svc_entry; do
+    svc=$(echo "$svc_entry" | jq -r '.name')
     run aws ecs update-service --cluster "${CLUSTER_NAME}" --service "${svc}" \
       --desired-count 0 --region "${REGION}" \
       --no-cli-pager --query 'service.serviceName' --output text
-  done
+  done < <(echo "$R" | jq -c '.ecs_services[]')
+
+  # -- 3a2. Demo agent EC2 → stop (us-east-1 only) -----------------------------
+  demo_ec2_id=$(echo "$R" | jq -r '.demo_ec2_id // "None"')
+  if [[ "$demo_ec2_id" != "None" && -n "$demo_ec2_id" && "${REGION}" == "us-east-1" ]]; then
+    step "  [${REGION}] Stopping demo agent EC2 ${demo_ec2_id}"
+    run aws ec2 stop-instances --instance-ids "${demo_ec2_id}" \
+      --region "${REGION}" --no-cli-pager \
+      --query 'StoppingInstances[0].CurrentState.Name' --output text
+  fi
 
   # -- 3b. RDS → stop ----------------------------------------------------------
   rds_id=$(echo "$R" | jq -r '.rds_id')
@@ -351,10 +434,19 @@ for REGION in "${TARGET_REGIONS[@]}"; do
       --query 'DBInstance.DBInstanceStatus' --output text
   fi
 
+  # -- 3b2. Portal RDS → stop (us-east-1 only) ---------------------------------
+  portal_rds_id=$(echo "$R" | jq -r '.portal_rds_id // "None"')
+  if [[ "$portal_rds_id" != "None" && -n "$portal_rds_id" && "${REGION}" == "us-east-1" ]]; then
+    step "  [${REGION}] Stopping portal RDS ${portal_rds_id}"
+    run aws rds stop-db-instance --db-instance-identifier "${portal_rds_id}" \
+      --region "${REGION}" --no-cli-pager \
+      --query 'DBInstance.DBInstanceStatus' --output text
+  fi
+
   # -- 3c. Delete ALBs ---------------------------------------------------------
   # Delete ALBs BEFORE NAT (ALB deletion is fast; NAT deletion takes time)
   step "  [${REGION}] Deleting ALBs (target groups are KEPT)"
-  for alb_key in alb_dir_arn alb_relay_arn; do
+  for alb_key in alb_dir_arn alb_relay_arn portal_alb_arn; do
     alb_arn=$(echo "$R" | jq -r ".${alb_key}")
     if [[ "$alb_arn" != "None" && -n "$alb_arn" ]]; then
       run aws elbv2 delete-load-balancer --load-balancer-arn "${alb_arn}" \
