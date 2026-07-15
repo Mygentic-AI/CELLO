@@ -376,12 +376,20 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
 - **DOD-OAUTH-1** — GitHub OAuth proof-of-account-ownership in the portal (Passport.js per the
   2026-05-16 verification-architecture log; provider order GitHub → LinkedIn → X stands —
   LinkedIn/X are post-v1 playbook runs). Proof is synchronous; extraction/audit is async
-  two-step per that log. — ❌
+  two-step per that log. —
+  ✅ (2026-07-15 — OAuth flow implemented: `GET /api/auth/github` → CSRF state + redirect,
+  `GET /api/auth/github/callback` → code exchange → profile read → `composeGitHub` → submit
+  via chokepoint → sealed deliver to all agents. 6 tests green. Token discarded immediately
+  (M10-D27). Portal `ac0dd9e`. → Entry 45.)
 - **DOD-EXT-SIGNAL-1** — the `github` signal end-to-end: OAuth-verified account → extraction
   reads account age/activity → portal composes the self-describing payload (claim in plain
   language + structured fields) → scan → hash → submit → registry entry → holder → live journey
   (present, verify, consume). The full [[M10-TYPE-PLAYBOOK]] is exercised and corrected against
-  reality as part of this line. — ❌
+  reality as part of this line. —
+  🟠 (2026-07-15 — CODE BUILT: OAuth + REST profile → `composeGitHub` → submit chokepoint →
+  sealed deliver. 6 tests. The generic machinery (holder store, present, verify, consume) is
+  already ✅ in Tier 2. **Owed:** registry entry for `github` (data operation, lands with the
+  next registry-publish); live journey proof (DOD-T4-JOURNEY-1). → Entry 45.)
 - **DOD-T4-JOURNEY-1** — **live journey + v1 CLOSE:** a real agent presents phone + email +
   track-record + github; the recipient's floor demands `≥1 identity proof`; framing correct for
   every class; the done-auditor checkpoint runs over all tiers. **v1 of M10 is DONE here.** — ❌
