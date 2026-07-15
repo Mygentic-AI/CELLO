@@ -32,15 +32,32 @@ ECS exec on the us-east-1 directory task).
   `8d4abe074fef9229d3b441dfea4f98f805b1a2b3a06ae645810efece77fd5044` (role `submitter`, from portal
   dev seed `de`×32), so the deployed portal can mint once it ships with `PORTAL_SUBMISSION_SEED=de…de`.
 
-**Post-deploy steps IN PROGRESS / owed (see the session — being done by hand, not the incomplete cron):**
-- **Relay cascade** (MANDATORY — relay has no directory-reconnect; directory redeploy broke
-  `recordAssignment` → `relay_unavailable` on session init until relays restart + re-register). NOTE:
-  the relay pipeline ALSO ran (a test-file change), so relays are restarting anyway; a clean cascade
-  after both pipelines stabilize ensures registration with the FINAL directory tasks.
-- **Manifest re-sign per region** after the relay restarts (new relay IP → stale S3 `healthCheckUrl`
-  otherwise; `infra/sign-manifest.sh`).
-- **Replication re-run** — add `signal_records` + `authorized_issuers` to `cello_pub` on each node
-  (STORE-DIR review F4); until then the new tables do not replicate across the 3 sovereign nodes.
+**Post-deploy steps — ALL DONE + VERIFIED (2026-07-15, by hand):**
+- **Relay cascade — ✅ done.** Relays restarted + re-registered with the FINAL directory tasks in all
+  3 regions; `recordAssignment` restored. (Relay has no directory-reconnect — a directory redeploy
+  breaks `recordAssignment` → `relay_unavailable` on session init until the relay restarts.)
+- **Manifest re-sign per region — ✅ done.** All 3 S3 manifests FRESH after the cascade with the new
+  relay IPs (us-east-1 `10.0.92.53`, eu-central-1 `10.1.89.171`, ap-northeast-1 `10.2.20.179`),
+  `healthCheckUrl`s matching the live tasks.
+- **Cross-region replication of `signal_records` + `authorized_issuers` — ✅ done + SMOKE-TESTED.**
+  Both tables added to `cello_pub` on every node (`PUBLICATION_TABLES` in `setup-replication.sh`), and
+  every subscriber's `pg_subscription_rel` now carries them in state `r` (ready). Proven live: a row
+  INSERTed on us-east-1 appears on eu-central-1 in ~8s, and a DELETE on the source replicates too;
+  test rows cleaned up (0 `repl-smoke%` rows on both nodes). This closes STORE-DIR review F4 — the new
+  tables genuinely replicate across the 3 sovereign nodes (redundancy invariant satisfied for signals).
+
+  ⚠️ **ROBUSTNESS GAP found + owed (not blocking):** `setup-replication.sh` Step 4b treats *empty*
+  ECS-exec output as REFRESH success (it only fails on a matched `ERROR:` line — no output ⇒ no match
+  ⇒ "Refreshed" logged). A flaky `aws ecs execute-command` session (which returns empty, not an error)
+  therefore SILENTLY SKIPS the actual `ALTER SUBSCRIPTION … REFRESH PUBLICATION` while the script still
+  exits 0. That is exactly what happened on the first run this session (script green, tables NOT in the
+  subscriptions); a clean re-run fixed it. HARDENING owed: after each REFRESH, assert the target table
+  set is present in `pg_subscription_rel` (positive confirmation), don't infer success from the absence
+  of an error string. Same class of bug as any "no error ⇒ success" check over a flaky transport.
+
+  ⚠️ **`registry_documents` deliberately NOT replicated yet.** It is a singleton served-registry doc,
+  not consumed by any node's read path yet (no Tier-2 consume path shipped). Add it to
+  `PUBLICATION_TABLES` when the registry poller/consume path lands (NO-CONSUMER-NO-SHIP). Tracked owed.
 
 ---
 

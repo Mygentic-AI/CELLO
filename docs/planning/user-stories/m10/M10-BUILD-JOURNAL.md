@@ -1339,6 +1339,51 @@ and the deployed portal sets `PORTAL_SUBMISSION_SEED=de…de` (dev requires it e
 checked-in fallback). Harmless to enroll now (an unused authorized issuer); it makes the directory
 ready for the portal.
 
+### 2026-07-15 — Entry 18: Tier 0/1 directory deploy COMPLETE + verified — and a silent-success bug in the replication script
+
+**The deploy is fully live in dev, every post-step done by hand and verified** (I took manual ownership
+and DELETED the deploy watchdog cron `c561ce55` — a watchdog you're actively driving is just a second
+cook). Ground truth, all confirmed via ECS exec on the running directory tasks:
+- **DB at V46**, all three M10 tables present (`signal_records`, `authorized_issuers`,
+  `registry_documents`) + the `signal_records_effective` view.
+- **`/internal/signal/*` routes live**; **ops-agent SSM `expected-migration-version` = 46**; **dev
+  signer enrolled** (`8d4abe07…fd5044`, role `submitter`).
+- **Relay cascade done** — all 3 relays restarted + re-registered with the final directory tasks,
+  `recordAssignment` restored; **all 3 S3 manifests re-signed FRESH** with the new relay IPs.
+
+**The load-bearing finding — cross-region replication was SILENTLY not happening, and the script said
+it was.** STORE-DIR review F4 demanded the new tables replicate across the 3 sovereign nodes (the
+redundancy invariant: a signal notarized at one node must be visible at the others). I added
+`signal_records,authorized_issuers` to `PUBLICATION_TABLES` and ran `setup-replication.sh` — **it
+exited 0**. But a smoke test (INSERT on us-east-1, read on eu-central-1) came back EMPTY, and
+`pg_subscription_rel` on eu-central-1 had **neither table**. The publication on the source had them;
+the subscriptions never picked them up.
+
+- **Producer/consumer trace.** The producer of a subscriber's table set is `ALTER SUBSCRIPTION …
+  REFRESH PUBLICATION` (Step 4b, run as `postgres` — the subscription owner; my ad-hoc `cello_service`
+  and the stale `rds-admin-credentials` secret both can't, which is a side-quest, not the cause). The
+  consumer is `pg_subscription_rel`. The producer never produced.
+- **Root cause: "no error string ⇒ success" over a flaky transport.** Step 4b captures the ECS-exec
+  output and only fails on a matched `ERROR:` line. `aws ecs execute-command` intermittently returns an
+  **empty** session (the "Cannot perform start session: EOF" flakiness) — no `ERROR:`, so the script
+  logs "Refreshed" and moves on **without the REFRESH ever executing**. Green script, inert replication.
+- **Fix + proof.** A clean re-run actually executed all 6 REFRESHes. Now `pg_subscription_rel` carries
+  both tables in state `r` (ready) for every subscription; a FRESH row INSERTed on us-east-1 lands on
+  eu-central-1 in ~8s, and a DELETE on the source replicates too. Test rows cleaned up (0 `repl-smoke%`
+  on both nodes). **F4 closed — signals genuinely replicate.**
+- **HARDENING owed (logged in STATE.md, not blocking):** Step 4b must POSITIVELY assert the target
+  tables are in `pg_subscription_rel` after each REFRESH, not infer success from the absence of an error
+  string. This is the same defect class the debugging discipline warns about — an error label is not a
+  root cause, and here the *absence* of a label was mistaken for success.
+- **`registry_documents` deliberately left un-replicated** — singleton served-doc, no consumer path
+  yet (NO-CONSUMER-NO-SHIP); add to `PUBLICATION_TABLES` when the Tier-2 registry poller lands.
+
+**Net:** the entire Tier 0/1 directory surface is live across all 3 regions, session-init restored, and
+cross-node replication proven. Next Tier-1 code unit: the **M8 retirement (M10-D18)** — re-point the
+portal handoff onto `mintAccountSignals`, re-point `inbound-sessions.ts` onto `deliverWalletSignal`,
+drop the M8 `trust_signals` table, retire the directory `SIGNAL_KINDS` arms — one atomic cross-repo
+commit whose test asserts the old table is GONE.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
