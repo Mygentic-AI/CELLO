@@ -1,0 +1,28 @@
+-- V47 — M10 (DOD-MINT-INTERNAL-1 / M10-D18, M10-D22): pickup_queue.signal_hash, so an M10 wallet-signal
+-- delivery carries its OWN authoritative hash on the pickup row instead of JOINing identity_tree_entries.
+--
+-- WHY THIS COLUMN (the M8→M10 delivery re-point).
+-- The M8 delivery pipe wrote the anchor hash to `identity_tree_entries (agent_id, signal_kind)` (via the
+-- `trust_signal_hash` agent-write arm) and the sealed ciphertext to `pickup_queue` (via the
+-- `trust_signal_ciphertext` arm); `drainPickupForAgent` LEFT JOINed the two on (agent_id, signal_kind) to
+-- pair each ciphertext with its hash. Under M10 (M10-D22) the anchor moves to `signal_records` (notarized
+-- through the CHOKEPOINT), and BOTH agent-write arms retire — so an M10 pickup row has NO
+-- `identity_tree_entries` anchor to JOIN. The row must therefore carry `signal_hash` itself.
+--
+-- WHY THE DIRECTORY STILL HOLDS THE HASH (not just the daemon deriving it). The daemon re-derives the
+-- DOD-CBOR-1 hash from the delivered envelope (deliverWalletSignal) — but the pickup's own `signal_hash` is
+-- the directory's assertion of WHAT it notarized, so the daemon can also confirm the delivered envelope
+-- matches the thing the chokepoint accepted (belt-and-suspenders; the frame carries an authoritative value,
+-- not one the daemon merely computed for itself).
+--
+-- BACKWARD-COMPATIBLE + ADDITIVE. Nullable, no default: existing M8 rows (none in practice — the queue is
+-- ephemeral) keep NULL and continue to resolve their hash via the identity_tree_entries JOIN, which the
+-- drain now COALESCEs (pq.signal_hash first, else it.signal_hash). An M10 deliver sets pq.signal_hash and
+-- has no anchor row, so the COALESCE returns the pickup's own value. Nothing about the M8 path changes.
+-- The column ships in `cello_pub` automatically (pickup_queue is already replicated post-V39) — no
+-- setup-replication change needed, because ALTER PUBLICATION carries all columns of a published table.
+--
+-- Idempotent: ADD COLUMN IF NOT EXISTS. A 64-char SHA-256 hex when set; unvalidated at the DB layer (the
+-- chokepoint validates before this row is ever written — the directory treats it as an opaque anchor).
+
+ALTER TABLE pickup_queue ADD COLUMN IF NOT EXISTS signal_hash TEXT;

@@ -26,10 +26,14 @@ export interface PickupItem {
 /** Drain an agent's unacked sealed signals, oldest first, each with its authoritative identity-tree hash. */
 export async function drainPickupForAgent(db: Queryable, agentId: string): Promise<PickupItem[]> {
   const res = await db.query<{ id: string; signal_kind: string | null; ciphertext: Buffer; signal_hash: string | null }>(
+    // M10-D22: an M10 wallet-signal delivery carries its OWN signal_hash on the pickup row (its anchor is
+    // signal_records, not identity_tree_entries, so there is nothing to JOIN). COALESCE prefers the row's
+    // own hash and falls back to the M8 identity-tree JOIN for legacy trust_signal_ciphertext rows — the M8
+    // path is unchanged (those rows have pq.signal_hash NULL, so the JOIN still supplies it).
     `SELECT pq.id::text AS id,
             pq.signal_kind,
             pq.ciphertext,
-            it.signal_hash
+            COALESCE(pq.signal_hash, it.signal_hash) AS signal_hash
        FROM pickup_queue pq
        LEFT JOIN identity_tree_entries it
          ON it.agent_id = pq.agent_id AND it.signal_kind = pq.signal_kind
@@ -69,12 +73,18 @@ export async function ackPickupDelete(db: Queryable, id: string, agentId: string
  * left to the supersede path (a re-enrollment replaces it) — it is not orphaned. Returns the row count.
  * No-op for an agent whose anchors all exist.
  *
+ * M10 ROWS ARE NOT ORPHANS (M10-D22): an M10 wallet-signal delivery carries its OWN `pq.signal_hash` and by
+ * design has NO identity_tree_entries anchor (its anchor is signal_records). The identity-tree `NOT EXISTS`
+ * alone would therefore sweep EVERY M10 delivery once past TTL — silently deleting valid, deliverable rows.
+ * The `pq.signal_hash IS NULL` guard excludes them: a row that carries its own hash is anchored-by-value and
+ * is never orphaned. Only rows with NEITHER their own hash NOR an identity-tree anchor are genuinely orphaned.
+ *
  * NULL signal_kind (fallback-finder #1): such a row is undeliverable BY CONSTRUCTION — drainPickupForAgent's
  * LEFT JOIN on `it.signal_kind = pq.signal_kind` yields UNKNOWN for NULL, so it never joins an anchor; the
  * `NOT EXISTS` here is likewise UNKNOWN→empty→true, so a NULL-kind row past TTL is correctly swept as the
- * orphan it is. This relies on the write seam ALWAYS setting signal_kind (validateWritePayload rejects any
- * kind not in the closed SIGNAL_KINDS set; enqueuePickup types it `string`), so a NULL-kind row cannot be
- * produced today — only V34-era leftovers (none in practice) would match.
+ * orphan it is (it also has no pq.signal_hash — an M8 leftover). This relies on the write seam ALWAYS setting
+ * signal_kind (validateWritePayload rejects any kind not in the closed SIGNAL_KINDS set; enqueuePickup types
+ * it `string`), so a NULL-kind row cannot be produced today — only V34-era leftovers (none in practice) match.
  *
  * REPLICATION GATE (fallback-finder #3 — load-bearing for the H2 work): this sweep is safe ONLY because
  * pickup_queue is NODE-LOCAL today (NOT in cello_pub) while identity_tree_entries IS replicated and never
@@ -90,6 +100,7 @@ export async function sweepUndeliverablePickups(db: Queryable, owningNodeId: str
       WHERE pq.acked_at IS NULL
         AND pq.owning_node_id = $2
         AND pq.created_at < now() - make_interval(hours => $1)
+        AND pq.signal_hash IS NULL
         AND NOT EXISTS (
           SELECT 1 FROM identity_tree_entries it
            WHERE it.agent_id = pq.agent_id AND it.signal_kind = pq.signal_kind

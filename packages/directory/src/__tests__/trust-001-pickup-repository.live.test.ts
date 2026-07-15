@@ -176,4 +176,44 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
 
     for (const d of remaining) await ackPickupDelete(pool, d.id, AGENT);
   });
+
+  // ── M10 (M10-D22): an M10 wallet-signal delivery carries its OWN signal_hash on the pickup row and has
+  // NO identity_tree_entries anchor (its anchor is signal_records). Two invariants the M8→M10 re-point
+  // depends on: the drain must surface the row's own hash (not NULL), and the sweep must NOT treat an
+  // anchor-less-but-self-anchored row as an orphan.
+  const M10_HASH = "e".repeat(64);
+
+  it("M10 drain: a row carrying its OWN signal_hash (no identity-tree anchor) drains that hash via COALESCE", async () => {
+    await pool.query(`DELETE FROM pickup_queue WHERE agent_id = $1`, [AGENT]);
+    const ct = Buffer.from(Uint8Array.from({ length: 40 }, (_, i) => (i * 13 + 2) % 256));
+    // No upsertIdentityHash for 'phone' here (beforeAll seeded one — clear it so this row is genuinely
+    // anchor-less, proving the hash comes from the ROW, not a stray JOIN).
+    await pool.query(`DELETE FROM identity_tree_entries WHERE agent_id = $1`, [AGENT]);
+    await pool.query(
+      `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, owning_node_id, signal_hash)
+       VALUES ($1, 'phone', $2, 'test-node', $3)`,
+      [AGENT, ct, M10_HASH],
+    );
+    const drained = await drainPickupForAgent(pool, AGENT);
+    expect(drained).toHaveLength(1);
+    expect(drained[0].signalHash, "the row's own signal_hash, not a NULL from the absent JOIN").toBe(M10_HASH);
+    expect(Buffer.compare(drained[0].ciphertext, ct)).toBe(0);
+    for (const d of drained) await ackPickupDelete(pool, d.id, AGENT);
+  });
+
+  it("M10 sweep: an OLD anchor-less row that carries its OWN signal_hash is NOT swept (it is deliverable)", async () => {
+    await pool.query(`DELETE FROM pickup_queue WHERE agent_id = $1`, [AGENT]);
+    await pool.query(`DELETE FROM identity_tree_entries WHERE agent_id = $1`, [AGENT]);
+    const ct = Buffer.from(Uint8Array.from({ length: 24 }, (_, i) => (i * 3 + 5) % 256));
+    // OLD (past TTL), anchor-less, but SELF-ANCHORED via pq.signal_hash → must survive the sweep.
+    await pool.query(
+      `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, owning_node_id, signal_hash, created_at)
+       VALUES ($1, 'phone', $2, 'test-node', $3, now() - interval '48 hours')`,
+      [AGENT, ct, M10_HASH],
+    );
+    const swept = await sweepUndeliverablePickups(pool, "test-node", 24);
+    expect(swept, "a self-anchored M10 row is NOT an orphan, even past TTL").toBe(0);
+    expect(await drainPickupForAgent(pool, AGENT), "the M10 delivery survives and still drains").toHaveLength(1);
+    for (const d of await drainPickupForAgent(pool, AGENT)) await ackPickupDelete(pool, d.id, AGENT);
+  });
 });
