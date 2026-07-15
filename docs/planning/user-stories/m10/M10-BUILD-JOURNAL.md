@@ -1452,6 +1452,60 @@ publish cascade (`/cello-publish`). This is the SECONDARY "signals for few" laye
 "pipes for all" core — but it is in M10 scope (it is what makes minted phone/email actually reach a holder),
 so it ships. Next: the directory deliver path, red-first.
 
+### 2026-07-15 — Entry 20: M8-retirement — the ADDITIVE directory delivery path is BUILT + green (2 commits, held for batched deploy)
+
+Implementing M10-D18 in the safe order from Entry 19: ship the directory deliver path FIRST (additive —
+the live M8 pipe is untouched), THEN the portal+daemon cutover, THEN retire the old arms. Two directory
+commits, both green, committed LOCALLY and HELD from push so ONE directory deploy ships the whole additive
+path (deploy-batching rule):
+
+- **`ae8a049a` — V47 `pickup_queue.signal_hash`.** An M10 delivery's anchor is `signal_records` (chokepoint),
+  not `identity_tree_entries`, so the pickup row must carry its own hash. `drainPickupForAgent` now
+  `COALESCE(pq.signal_hash, it.signal_hash)` (M8 rows unchanged — they still resolve via the identity-tree
+  JOIN). **Load-bearing fix:** `sweepUndeliverablePickups` gained a `pq.signal_hash IS NULL` guard — an M10
+  row is anchor-less BY DESIGN, so the old identity-tree `NOT EXISTS` alone would sweep every M10 delivery
+  past TTL. ssm-parameters `OpsAgentExpectedMigrationVersion` 46→47. +2 live pickup tests.
+- **`dfae6552` — `POST /internal/signal/deliver` (`deliverSignal`).** The M10 replacement for the M8
+  `trust_signal_ciphertext` agent-write arm. SAME auth as submit (`verifySignedRequest(role submitter)` —
+  cannot drift weaker). PRECONDITION `signal_not_notarized`: refuses to queue under a `signal_hash` not in
+  `signal_records` (any node — it's replicated), so you cannot smuggle content to a daemon under an unseen
+  hash. 1 notarize : N deliver (its own op — a received counterparty signal is notarized but never
+  self-delivered). `signal_kind` is submitter-stated (the directory can't read the SEALED ciphertext) and
+  opaque (INV-ZERO-BUMP). `parseDeliverRequest` validates the whole shape up front (≤256 deliveries, agent_id
+  ≤256 chars, ciphertext 1..64KB) so a bad request queues nothing; the insert loop is idempotent (supersede).
+  `enqueuePickup` gained optional `signalHash`. +6 live deliver tests. Gates: typecheck + eslint clean,
+  directory vitest 727 passed, live suites 25/25 (submit+deliver) and 6/6 (pickup).
+
+**Reviewer dispatched** (`cello-unit-reviewer`, opus) on `7bef53a7..HEAD` — the two directory commits. Deploy
+is HELD until it is clean (additive route, nothing consumes it yet, so no rush to burn a 25-min deploy on a
+route that might change).
+
+**REMAINING CUTOVER (the not-yet-done half of M10-D18), precise plan for a clean resume:**
+1. **Portal `cello-portal/src/server/trust/handoff.ts`** — re-point `handTrustSignal`: compose an M10 CBOR
+   envelope (`webauthn` type) instead of canonical JSON; `hashTrustSignalEnvelope`; notarize ONCE via the
+   chokepoint (`/internal/signal/submit`, signed — reuse `directory-submit.ts::postSignedSubmission`); then
+   seal the ENVELOPE per agent and call the new deliver route (fan out to `listAgents`). DEPENDS on the
+   deliver route request shape (why the portal waits on the reviewer). Retire the two `writeAgent`
+   `trust_signal_*` calls.
+2. **Daemon `cello-client/core/daemon/src/inbound-sessions.ts:~548-624`** (`handleTrustSignalPickup`) —
+   the recovered bytes are now a CBOR envelope: `decodeTrustSignalEnvelope(recovered)` →
+   `deliverWalletSignal(envelope, signal_hash)` (`trust-signal-store.ts:302`, already built — re-derives the
+   DOD-CBOR-1 hash, stores in `wallet_trust_signals`). REMOVE the raw-`cryptoHash` check at line 594
+   (deliverWalletSignal owns verification). `SignalDeliveryRejected` → no ACK (mirror the current hash_mismatch
+   path). Import `decodeTrustSignalEnvelope` (protocol-types export, used by the directory; not yet imported
+   in the daemon).
+3. **Drop the M8 table (ATOMIC with #2)** — remove the `trust_signals` CREATE TABLE (`db-identity-store.ts:179`)
+   and `storeTrustSignal` (:219). **The forcing-function test asserts the `trust_signals` table is GONE**
+   (MINT-INTERNAL-1's own clause; STORE-CLIENT-1's guard only catches a *premature* drop — review F7).
+4. **Directory arm retirement** — remove `SIGNAL_KINDS` + the `trust_signal_hash`/`trust_signal_ciphertext`
+   arms in `agent-write-validation.ts` (+ their `internal-api-server.ts` dispatch at ~434/437). Test asserts
+   both arms + the enum are gone. Lands WITH the portal re-point (the arms' only caller).
+5. **Spine test `packages/e2e-tests/src/spine/j-trust.spine.test.ts`** — re-point onto the new pipe; its
+   SUBJECT (portal→directory→daemon delivery) stays alive.
+6. **Deploy + publish** — ONE directory deploy (V47 + deliver route + arm retirement batched); a
+   `protocol-types`(if touched)/`daemon`/`connect` publish cascade via `/cello-publish` (the daemon
+   `deliverWalletSignal` cutover ships to operators). SSM 46→47 after the directory pipeline completes.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
