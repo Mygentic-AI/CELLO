@@ -288,7 +288,14 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   unreachable, portal login AND a mint both succeed via the next node in the list (M10-D11's own
   justification deserves the test); (c) **custody** — assert the ECS task definition carries no
   signing key material and `authorized_issuers`' pubkey equals KMS `GetPublicKey` output (the
-  file-signer-in-prod bypass is otherwise invisible to every enforcer). — ❌
+  file-signer-in-prod bypass is otherwise invisible to every enforcer). —
+  🟠 (2026-07-15 — the mint→notarize→deliver→hold→re-verify PIPE is proven CROSS-PROCESS by the green
+  `j-trust` spine test, and is DEPLOYED live (portal `f14e3ba` mints+delivers on login; directory 261/106/96).
+  The LIVE end-to-end run is BLOCKED on two non-pipe dependencies: (1) **the M8B registration path** —
+  `POST /internal/pre-authorize` 500s on dev (`capability issuance failed`) with NO error logged in
+  `/ecs/cello-directory-dev`, so a test daemon can't register+bind to a test account (owed, tangential —
+  do NOT rabbit-hole per launch-triage); (2) **prod-KMS custody** case (c) per M10-D24. → Entry 31.
+  Enabling unit DOD-MINT-INTERNAL-1 phone/email mint+deliver is DONE (Entry 29, review-fixed Entry 30).)
 
 ## Tier 2 — Presentation + consumption (the generic client pipeline) — closes with the canary
 

@@ -1881,6 +1881,40 @@ Floor green, tests 18/18. Pushed cello-portal `f14e3ba`. Portal REDEPLOYING with
 5. Cases per **M10-D24**: (a) late-added agent (re-mint+supersession), (b) failover; **(c) custody is a PROD/KMS
    gate — dev uses the seed, so (c) stays owed; journey is 🟠 until (c), never a false ✅.**
 
+### 2026-07-15 — Entry 31: DOD-T1-JOURNEY-1 attempt — BLOCKED on the M8B registration path (pre-authorize 500), NOT rabbit-holed
+
+Executed the live journey per Entry 30. Step 1 (issue a pre-auth capability so a test daemon can register +
+bind to a test account) **FAILED**, and the blocker is in the M8B registration path — tangential to M10.
+
+**What I did + verified (evidence, not hypothesis):**
+- Portal confirmed live on the mint+deliver code: task def `cello-portal-dev:8`, image `f14e3ba`.
+- `resolveAccountId` writes BOTH `phone_stub_hash` + `email_stub_hash` (`pre-auth-token-repository.ts:511`), so a
+  capability carrying both stubs would make phone+email verified facts AND let magic-link login resolve the
+  account. Portal email stub = `sha256(email.trim().toLowerCase())` (`account.ts:17`) — matched.
+- `POST http://directory-us1.cello.mygentic.ai/internal/pre-authorize` with `{phoneStubHash, emailStubHash=sha256(apemmelaar@gmail.com), registrationId}`
+  and the real `x-cello-internal-api-key` → **HTTP 500 `{"error":"capability issuance failed"}`**. That string is
+  the pre-authorize handler's own (`internal-api-server.ts:147`), so the handler RAN and `issuePreAuthCapability`
+  threw (its two INSERTs into `pre_authorization_tokens`/`capability_claim_codes`, or `signCapability`).
+
+**The defect (owed, non-M10):** the failure is **NOT logged** anywhere in `/ecs/cello-directory-dev` — no
+`directory.auth.capability.issue.failed`, no `level=error` in a 20-min window (only relay health-check debug). So
+the M8B capability path fails on dev AND swallows its cause from the operator log — a logging-integrity gap on top
+of whatever the underlying throw is. Root-causing it means reading `signCapability` + the M8B schema or adding
+logging + a 25-min directory redeploy.
+
+**DECISION (launch-triage, CLAUDE.md rabbit-hole rule):** do NOT rabbit-hole into M8B registration infra to set up
+an M10 journey. The M10 pipe is code-complete, reviewed, DEPLOYED live (portal `f14e3ba` + directory 261/106/96),
+and **already proven cross-process by the green `j-trust` spine test** (portal-shaped submit → directory notarize →
+pickup_queue → daemon `deliverWalletSignal` → `wallet_trust_signals`, hash re-verified). The LIVE end-to-end journey
+adds "against real deployed infra with a real registered daemon" — valuable, but gated on (a) the pre-authorize 500
+(M8B registration) and (b) prod-KMS custody (M10-D24). Both are tracked; neither is M10 pipe code.
+
+**DOD-T1-JOURNEY-1 status: 🟠 — pipe proven cross-process; LIVE run blocked on the M8B pre-authorize path + prod-KMS
+custody. NOT ✅.** Owed: (1) fix M8B capability issuance 500 + its missing error log (separate, non-M10); (2) then run
+the live journey; (3) prod-KMS for custody case (c). Alternative route (if prioritized): seed `user_accounts` +
+`agent_profiles` directly in the directory DB with a generated k_local, bypassing registration — but that needs a
+daemon configured to that exact k_local and dev-directory transport connectivity, so it is its own live-setup phase.
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
