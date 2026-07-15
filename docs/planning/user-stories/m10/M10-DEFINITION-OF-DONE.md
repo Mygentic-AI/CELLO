@@ -567,6 +567,21 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   DOD-PRESENT-1). This is NOT a no-PII breach — a timestamp is not device-linkable, and every signal type
   carries `issued_at`. If enrollment-time disclosure is ever unwanted, COARSEN the webauthn `issuedAt` to
   day-granularity; never remove `issued_at` (a required envelope field). → Entry 22.
+- **M10-D24 (2026-07-15) — DOD-T1-JOURNEY-1 dev scope: prove (a)+(b) with the dev SEED signer; custody
+  case (c) is a PROD/KMS gate, tracked owed, NOT skipped.** The journey's case (c) asserts the portal task
+  def carries NO signing key material and `authorized_issuers`' pubkey == KMS `GetPublicKey`. But dev
+  deliberately signs with a SEED (`submission-signer.ts`: `dev`→seed, `staging`/`production`→KMS-fail-closed,
+  M10-D6), and DOD-MINT-INTERNAL-1 wired `PORTAL_SUBMISSION_SEED` into the dev task def on purpose. Case (c)
+  is therefore intrinsically unprovable in dev — and there is no prod yet to bypass (alpha, one operator).
+  Choice: the dev live journey proves (a) mint phone+email → notarize (`signal_records`, replicated ×3) →
+  holder daemon holds + re-verifies, and (b) node-failover login+mint, both with the seed — the real
+  end-to-end PIPE. Case (c) custody rides with the owed prod-KMS wiring (create the `ECC_NIST_EDWARDS25519`
+  key + `kms:Sign`/`GetPublicKey` IAM + enroll the KMS pubkey, replacing the seed). **DOD-T1-JOURNEY-1 stays
+  🟠 PARTIAL until (c) is proven — the dev pipe passing does NOT earn a ✅**, so the file-signer-in-prod
+  bypass the clause guards against never slips through unproven. Why not wire KMS in dev now: it diverges dev
+  from its documented seed design and gold-plates dev infra ahead of need; dev-seed is the intended dev path,
+  KMS is prod-hardening. Reverse: if a prod/staging env stands up, case (c) becomes immediately testable and
+  is the gate for flipping the journey ✅. → Entry 28.
 
 ## Parked
 *(Genuine undecidable forks: journal + here. Never silently dropped.)*
