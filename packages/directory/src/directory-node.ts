@@ -3614,21 +3614,31 @@ export class CelloDirectoryNode {
 
       // DOD-PRESENT-1: run the two dumb checks on any presented trust signals.
       // Membership + active status only. Type-blind (INV-ZERO-BUMP). Read-only (INV-STATELESS).
+      // A PG failure here must NEVER block the session — degrade to no signals, same as moniker.
       let verifiedSignals: Array<{ hash: string; blob: Uint8Array }> | undefined;
       if (presentedSignals && presentedSignals.length > 0 && this.#pgPool) {
-        const hashes = presentedSignals.map((s) => s.hash);
-        const activeHashes = await checkPresentedSignals(this.#pgPool, hashes);
-        const activeSet = new Set(activeHashes);
-        verifiedSignals = presentedSignals.filter((s) => activeSet.has(s.hash));
-        if (verifiedSignals.length < presentedSignals.length) {
-          this.#logger?.info("signal.presentation.stripped", {
+        try {
+          const hashes = presentedSignals.map((s) => s.hash);
+          const activeHashes = await checkPresentedSignals(this.#pgPool, hashes);
+          const activeSet = new Set(activeHashes);
+          verifiedSignals = presentedSignals.filter((s) => activeSet.has(s.hash));
+          if (verifiedSignals.length < presentedSignals.length) {
+            this.#logger?.info("signal.presentation.stripped", {
+              sessionId: truncHex(Buffer.from(session_id).toString("hex")),
+              presented: presentedSignals.length,
+              survived: verifiedSignals.length,
+              correlationId,
+            });
+          }
+          if (verifiedSignals.length === 0) verifiedSignals = undefined;
+        } catch (err: unknown) {
+          this.#logger?.warn("signal.presentation.check_failed", {
             sessionId: truncHex(Buffer.from(session_id).toString("hex")),
-            presented: presentedSignals.length,
-            survived: verifiedSignals.length,
+            error: err instanceof Error ? err.message : String(err),
             correlationId,
           });
+          verifiedSignals = undefined;
         }
-        if (verifiedSignals.length === 0) verifiedSignals = undefined;
       }
 
       // CELLO-RELAY-001: Resolve relay endpoint.
