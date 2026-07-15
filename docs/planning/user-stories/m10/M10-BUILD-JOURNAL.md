@@ -2041,6 +2041,49 @@ to pin the two OPENs (injection point; directory-on-path vs recipient-checks). T
 
 **DOD-T1-JOURNEY-1 current status:** Core pipe ✓, case (a) ✓, case (b) pending reviewer verdict, case (c) owed (prod/KMS).
 
+### 2026-07-15 — Entry 35: DOD-PRESENT-1 — OPENs resolved; architecture pinned
+
+Both OPENs from Entry 33 are now resolved by reading the accept flow end-to-end.
+
+**OPEN 1 — Injection point: EXTEND the session_request → session_assignment path (no new step).**
+
+The session flow is: initiator sends `session_request` (via signaling) → directory FROST-signs → pushes
+`session_assignment` to both parties → responder's `acceptInboundAssignment` processes it. After that,
+content flows relay-only. There is NO existing post-accept identity/profile exchange between peers. The
+**moniker** field is the precedent: optional metadata piggybacked on `session_request`, passed through by
+the directory onto `session_assignment`. Presentation uses the same pattern — a new optional
+`trust_signals: Array<{hash: hex, blob: bytes}>` field on `session_request`, checked by the directory
+in-transit, survivors forwarded on the assignment.
+
+**OPEN 2 — Directory-on-path: YES — the directory checks during brokering.**
+
+The DoD says "the directory runs its two dumb checks in the moment and forwards or strips." The directory
+IS on the introduction path — it brokers every session via the signaling stream and has direct access to
+`signal_records_effective`. After brokering, data flows only through the relay; the directory never sees
+per-message content. So the dumb checks (hash membership + status = active) happen DURING `#processSessionRequest`,
+between receiving the `session_request` and emitting the `session_assignment`. Stripped signals never reach
+the responder.
+
+**Architecture summary (DOD-PRESENT-1):**
+1. Holder's daemon calls `listPresentable` → selective-disclosure filter → `{hash, blob}` list
+2. `session_request` carries `trust_signals: [{hash, blob}, ...]` (optional; absent = no presentation)
+3. Directory's `#processSessionRequest` runs dumb checks per signal: `SELECT 1 FROM signal_records_effective WHERE signal_hash = $1 AND status = 'active'`. Strips failures silently (named event). Writes/persists NOTHING.
+4. Survivors ride the `session_assignment` frame → responder extracts → DOD-VERIFY-1 takes over
+
+**Key decisions:**
+- Selective disclosure default: present ALL eligible signals to KNOWN+ contacts; present NOTHING to UNKNOWN tier (privacy-safe — a stranger sees zero). Configurable per-contact override later.
+- The `trust_signals` field is OPTIONAL on both frames. Absent = today's behavior (backward compatible with older clients that don't know about signals). The M7 seal ceremony is NOT affected.
+- The directory check is READ-ONLY against `signal_records_effective`. No INSERT, no UPDATE, no state change. INV-STATELESS-RECIPIENT holds trivially.
+
+**Test plan (red-first, per Entry 33 sketch):**
+1. Holder with 2 eligible signals + KNOWN contact → recipient receives both
+2. Directory strips a revoked hash → recipient does NOT receive it
+3. INV-STATELESS: assert no directory row written by the check
+4. UNKNOWN-tier contact → nothing presented (selective disclosure default)
+5. Unknown `type` string presents identically (INV-TYPE-CARRY / INV-ZERO-BUMP)
+
+**Repos touched:** cello-client (daemon: holder emit + recipient receive), trustless-cello (directory: dumb check in `#processSessionRequest`). Two-repo unit.
+
 ---
 
 ## Related Documents
