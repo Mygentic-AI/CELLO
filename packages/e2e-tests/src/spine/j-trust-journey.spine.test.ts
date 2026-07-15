@@ -25,9 +25,13 @@ import {
   cello,
   psqlSpine,
   CELLO_CLIENT_ROOT,
+  AUTH_DIRECTORY_NODE_KEY_HEX,
+  trustedDirectoryNode,
+  writeConsortiumManifest,
   type SpineCluster,
   type Proc,
   type McpConn,
+  type ManifestEnv,
 } from "./live-harness.js";
 
 async function loadSealer(): Promise<{
@@ -74,12 +78,14 @@ const hexToBytes = (h: string): Uint8Array => new Uint8Array(Buffer.from(h, "hex
 const hex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 
 let cluster: SpineCluster;
+let manifestEnv: ManifestEnv;
 const daemons: Proc[] = [];
 const dirs: string[] = [];
 const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
-  cluster = await startSpineCluster({});
+  cluster = await startSpineCluster({ directoryNodeKeyHex: AUTH_DIRECTORY_NODE_KEY_HEX });
+  manifestEnv = writeConsortiumManifest(cluster.tmpDir, "journey", [trustedDirectoryNode()]);
 }, 180_000);
 
 afterAll(async () => {
@@ -112,9 +118,10 @@ describe("J-TRUST-JOURNEY — DOD-T2-JOURNEY-1: live signal presentation→consu
     dirs.push(dirA, dirB, dirC);
 
     // Daemons must run BEFORE create-agent (the CLI calls the daemon over IPC).
-    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "jrnyA");
-    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "jrnyB");
-    const daemonC = await startDaemon(dirC, cluster.directoryUrl, "jrnyC");
+    // manifestEnv enables step-6 so daemons know their home nodeId (needed for same-node routing).
+    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "jrnyA", { manifestEnv });
+    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "jrnyB", { manifestEnv });
+    const daemonC = await startDaemon(dirC, cluster.directoryUrl, "jrnyC", { manifestEnv });
     daemons.push(daemonA, daemonB, daemonC);
 
     const createA = JSON.parse(cello(["create-agent", "alice"], { CELLO_DIR: dirA }).stdout) as { pubkey: string };
@@ -176,7 +183,7 @@ describe("J-TRUST-JOURNEY — DOD-T2-JOURNEY-1: live signal presentation→consu
 
     // Restart A's daemon so it picks up the seeded signals on reconnect
     await daemonA.stop();
-    const daemonA2 = await startDaemon(dirA, cluster.directoryUrl, "jrnyA2");
+    const daemonA2 = await startDaemon(dirA, cluster.directoryUrl, "jrnyA2", { manifestEnv });
     daemons.push(daemonA2);
 
     const connA = await connectMcp(dirA, "jrny-A");

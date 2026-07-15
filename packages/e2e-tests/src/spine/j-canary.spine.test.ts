@@ -34,9 +34,13 @@ import {
   psqlSpine,
   CELLO_CLIENT_ROOT,
   TRUSTLESS_ROOT,
+  AUTH_DIRECTORY_NODE_KEY_HEX,
+  trustedDirectoryNode,
+  writeConsortiumManifest,
   type SpineCluster,
   type Proc,
   type McpConn,
+  type ManifestEnv,
 } from "./live-harness.js";
 
 async function loadSealer(): Promise<{
@@ -90,12 +94,14 @@ function gitClean(repoPath: string): boolean {
 }
 
 let cluster: SpineCluster;
+let manifestEnv: ManifestEnv;
 const daemons: Proc[] = [];
 const dirs: string[] = [];
 const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
-  cluster = await startSpineCluster({});
+  cluster = await startSpineCluster({ directoryNodeKeyHex: AUTH_DIRECTORY_NODE_KEY_HEX });
+  manifestEnv = writeConsortiumManifest(cluster.tmpDir, "canary", [trustedDirectoryNode()]);
 }, 180_000);
 
 afterAll(async () => {
@@ -131,8 +137,9 @@ describe("J-CANARY — DOD-ZEROBUMP-CANARY-1: a type the system has never seen, 
     dirs.push(dirA, dirB);
 
     // Daemon must be running BEFORE create-agent (the CLI calls the daemon over IPC).
-    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "canaryA");
-    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "canaryB");
+    // manifestEnv enables step-6 so the daemon knows its home nodeId (needed for same-node routing).
+    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "canaryA", { manifestEnv });
+    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "canaryB", { manifestEnv });
     daemons.push(daemonA, daemonB);
 
     const createA = JSON.parse(cello(["create-agent", "canaryA"], { CELLO_DIR: dirA }).stdout) as { pubkey: string };
@@ -197,7 +204,7 @@ describe("J-CANARY — DOD-ZEROBUMP-CANARY-1: a type the system has never seen, 
 
     // Restart A's daemon to trigger pickup delivery on reconnect
     await daemonA.stop();
-    const daemonA2 = await startDaemon(dirA, cluster.directoryUrl, "canaryA2");
+    const daemonA2 = await startDaemon(dirA, cluster.directoryUrl, "canaryA2", { manifestEnv });
     daemons.push(daemonA2);
 
     const connA = await connectMcp(dirA, "canary-A");
