@@ -2329,8 +2329,26 @@ seeding, or mark the journey as "deferred to post-publish integration testing"?
 - Renamed "Network graph" → "Connections"
 - Track record: "Completed collaborations" → "Session count" + "Clean-close rate" placeholders
 
-**Next:** DOD-TRACK-1 — the portal background job that calls this route, composes track-record
-signal envelopes, and mints them through the chokepoint.
+**DOD-TRACK-1 — portal track-record minting job (portal 633334f):**
+- `composeTrackRecord` in `mint.ts`: AGENT-SUBJECT Class 3 envelope with session_count,
+  clean_close_rate, and supersedes_hash. `ComposedSignal` extended to support `"agent"` subject
+  kind and `supersedesHash` → `buildSubmission` converts hex → Uint8Array for the envelope.
+- `mintTrackRecordSignals` in `track-record.ts`: orchestrator that fetches each agent's data
+  from DIRDATA-READ-1, composes envelope, submits + delivers. Partial failure collected.
+- Test: 5 cases including full flow against a stub directory with Ed25519 signature verification.
+
+**DOD-SUPERSEDE-1 — materialized supersession (13d8a05d):**
+- When `submitSignal` inserts a new row with non-null `supersedes_hash`, it immediately updates
+  the pointed-to row: `status = 'superseded'` (WHERE status = 'active'). Only on genuine insert
+  (not duplicate replay), so idempotent.
+- Updated existing test from "old row never mutated" to "old row IS materialized superseded"
+  (the prior assertion predated DOD-SUPERSEDE-1). Added replay-safety test.
+
+**Remaining Tier 3:** DOD-T3-JOURNEY-1 — live journey (same situation as T2-JOURNEY-1: needs
+deployed infrastructure with real seal history). Cannot be proven from unit tests alone.
+
+**Next:** Tier 4 (DOD-EXTRACT-DESIGN-1: GitHub validator design) OR live journey tests once
+infrastructure is deployed.
 
 ---
 
