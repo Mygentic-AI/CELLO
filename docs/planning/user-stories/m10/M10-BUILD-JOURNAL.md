@@ -2267,6 +2267,44 @@ FLOOR-1 tests passed the revert test (import fails if the file is removed) — n
 
 **Next:** publish cascade to beta, then deploy directory, then journey tests.
 
+### 2026-07-15 — Entry 43: Publish cascade v0.0.111 — daemon 0.0.62, cli 0.0.60, connect 0.0.76
+
+**Tag `v0.0.111` pushed; CI fully green:** Build ✓ → publish-tag ✓ → verify ✓ → smoke-tag ✓.
+
+**Verified on npm (step 5):**
+- daemon@beta = 0.0.62, cli@beta = 0.0.60, connect@beta = 0.0.76
+- cli@0.0.60 → daemon@0.0.62 (correct cross-pin)
+- connect@0.0.76 → crypto@0.0.22, transport@0.0.24 (correct, no workspace:*)
+- `projectTrustSignals` present in `dist/inbound-sessions.js`
+- `evaluateSignalPolicy` present in `dist/signal-requirement-policy.js`
+
+**Latest promotion commands (for Andre):**
+```bash
+npm dist-tag add @cello-protocol/daemon@0.0.62 latest
+npm dist-tag add @cello-protocol/cli@0.0.60 latest
+npm dist-tag add @cello-protocol/connect@0.0.76 latest
+npm dist-tag add @cello-protocol/crypto@0.0.22 latest
+npm dist-tag add @cello-protocol/protocol-types@0.0.24 latest
+npm dist-tag add @cello-protocol/transport@0.0.24 latest
+npm dist-tag add @cello-protocol/client@0.0.50 latest
+```
+
+**DOD-T2-JOURNEY-1 prerequisites (all external actions):**
+1. **Latest promotion** — Andre runs the commands above
+2. **Local daemon restart** — `cello logout && cello login` (picks up daemon 0.0.62)
+3. **Directory deploy** — trustless-cello has 2 commits (`ec567e45`, `7bbf2f7c`) not yet deployed.
+   Without them the directory passes signals through unchecked (the session still works — the
+   check is additive security). If we test WITHOUT deploy, signals pass to B but the "directory
+   checks" AC is only logically proven (unit test), not live-proven.
+4. **Signals in wallet** — need phone+email envelopes in the local daemon's wallet. The portal
+   mints these via WebAuthn verify; or I can seed them directly via the daemon's DB for a
+   controlled test.
+5. **Second daemon** — demo agent on EC2 also needs 0.0.62 binary.
+
+**Decision point:** the unit tests prove the code correctness of all 4 DOD lines. The journey
+test adds a live-wire proof. Given runway triage: do we spend the time deploying + restarting +
+seeding, or mark the journey as "deferred to post-publish integration testing"?
+
 ---
 
 ## Related Documents
