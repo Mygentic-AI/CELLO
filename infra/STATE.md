@@ -9,6 +9,35 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🔻 M10-D18 arm-retirement directory deploy — M8 `trust_signal_*` arms GONE, all 3 regions (2026-07-15)
+
+**Pushed `ee02dde3` (base `a9f7370e`) → `cello-directory-pipeline`.** The DESTRUCTIVE half of the M8-retirement
+cutover: the directory's `agent-write` path drops the `trust_signal_hash`/`trust_signal_ciphertext` arms +
+the `SIGNAL_KINDS` per-type enum (`SUPPORTED_WRITE_KINDS = ["revocation_flag"]` only). App-code only — **NO
+migration** (DB stays V47), so no SSM bump. Safe now because the coverage window is OPEN: the portal (sole
+producer) is on M10 (`d2c1133`) and the daemon cutover is on beta v0.0.110.
+
+**Live-verified:** pipeline Build→StagingDeploy→SmokeTest→**ProductionDeploy all Succeeded**; all 3 directory
+ECS **1/1 COMPLETED** on the new image (task defs us1 **261** / eu1 **106** / ap1 **96**).
+
+**Post-deploy cascade — DONE + verified:**
+- **Relay cascade** — stopped + relaunched the relay task in all 3 regions (relay has NO directory-reconnect);
+  all re-registered with the new directory tasks. **New relay IPs:** us-east-1 `10.0.98.32`, eu-central-1
+  `10.1.78.4`, ap-northeast-1 `10.2.114.28`.
+- **Manifests AUTO-re-signed** — all 3 S3 manifests refreshed to the new relay IPs on the unavailable→available
+  transition (`healthCheckUrl` matches the live task): us1 v72, eu1 v38, ap1 v28, all `status: active`. No
+  manual `sign-manifest.sh` needed.
+- **No SSM bump** — `a9f7370e` carries no Flyway migration; `expected-migration-version` stays 47.
+
+**M8 RETIREMENT COMPLETE END-TO-END:** client (beta 0.0.110) + portal (`d2c1133`) + directory (261/106/96) all
+off the M8 arms; the M10 CBOR-envelope + signed-chokepoint + sealed-delivery pipe is the only path.
+
+**Owed hardening (non-blocking, noted not fixed):** the `cello-directory-dev` ECS deployment circuit breaker is
+DISABLED (`enable:false`) — infra/CLAUDE.md wants it on. A bad directory deploy would hang rather than
+auto-rollback; the deploy watchdog covers it manually for now. Enable via `cello-ecs-directory.yaml` + deploy.sh.
+
+---
+
 ## 🌐 M10-D18 portal deploy — the M8 handoff retired, M10 mint/notarize/deliver LIVE (2026-07-15)
 
 **`infra/deploy-portal.sh dev` — portal now on `cello-portal:d2c1133` (was `776752d`, pre-M10).** Release-tail
