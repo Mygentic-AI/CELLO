@@ -1506,6 +1506,58 @@ route that might change).
    `protocol-types`(if touched)/`daemon`/`connect` publish cascade via `/cello-publish` (the daemon
    `deliverWalletSignal` cutover ships to operators). SSM 46→47 after the directory pipeline completes.
 
+### 2026-07-15 — Entry 21: M8-retirement cutover — 4 of the 6 pieces BUILT + REVIEWED (directory, decode, daemon, portal client)
+
+Working the M8 retirement (M10-D18) in the safe order from Entry 19. Four pieces done, all gate-green and
+reviewed; two remain (the webauthn re-point + the wiring/deploys). Commits are LOCAL + unpushed across three
+repos — the directory ones held for a single batched deploy, the client/portal ones held for the publish
+cascade + their live re-point.
+
+**DONE + REVIEWED:**
+1. **Directory delivery path (trustless-cello, held for deploy):** `ae8a049a` V47 `pickup_queue.signal_hash`
+   + drain COALESCE + sweep `signal_hash IS NULL` guard; `dfae6552` the signed `POST /internal/signal/deliver`
+   (`deliverSignal`); `cbec3b88` review fixes (F1: `AND is_tombstone = false` so a revoke-tombstone-only hash
+   can't be delivered under; F2: corrected the false "pickup_queue is node-local" sweep comment). Reviewer:
+   SPEC FAITHFUL, tests have teeth, auth can't drift weaker than submit.
+2. **Shared decoder (cello-client, `75624a9`):** `decodeTrustSignalEnvelope` promoted into protocol-types
+   (INV-CANONICAL / M10-D7) — re-encode-and-compare-exactly refuses non-canonical; +6 tests. Reviewer: SOUND.
+3. **Daemon cutover (cello-client, `eeb4353` + `2c83aca`):** inbound pickup re-pointed onto decode →
+   `deliverWalletSignal`; M8 `trust_signals` DROPPED + `storeTrustSignal`/`getTrustSignal` retired; the
+   forcing-function guard flipped to "table GONE"; `2c83aca` adds the review-F1 test (the POPULATED-table
+   DROP — the unrecoverable client-migration case). Reviewer: SPEC FAITHFUL, DROP SAFE, NO SILENT FALLBACKS,
+   errors name their cause. **OWED — review F2 (regression-guard, NOT a bug; code traced correct):** a
+   handler-level test of `handleTrustSignalPickup`'s ACK-gating (undecodable → no ACK; hash-mismatch → no
+   ACK; valid → deliver then ACK). Guards against a future edit hoisting the ACK above the try/catch → silent
+   signal loss with all tests green. Deferred because the handler is a nested closure in inbound-sessions
+   (captures logger + sessionNodeManager); testing it needs an extraction refactor of the LIVE session path,
+   not worth the risk mid-cutover. Do it with the extraction when the path is next touched.
+4. **Portal delivery client (cello-portal, `c5a36b2`):** `buildSubmission` now returns `envelopeBytes`;
+   `deliverSignalToAgents(baseUrl, {signalHash, signalKind, envelopeBytes, agents}, signer)` seals the
+   envelope to each agent's k_local and POSTs one signed `/deliver`; skips unaddressable agents; +2 tests.
+
+**REMAINING (2 pieces + release):**
+5. **Portal webauthn re-point (`handoff.ts`) — LIVE, the риsky one.** `handTrustSignal` fires on every
+   WebAuthn registration (`webauthn/register/verify/route.ts`), record `{credentialId, enrolledAt}`. Re-point:
+   `composeWebauthn(accountId, {credentialId})` → per M10-D23 payload `{claim, credential_stub: sha256(credentialId)}`
+   (NO raw credential — presentable signals must not leak the device id) → `buildSubmission` (notarize via
+   chokepoint) → `deliverSignalToAgents`. Drop the two `writeAgent(trust_signal_*)` calls. handoff.ts switches
+   from the API-key `DirectoryClient` to the submission signer + deliver base URL. `composeWebauthn` goes in
+   `mint.ts` (the one place per-type knowledge lives). Also wire delivery into `mintAccountSignals` (phone/email)
+   — today it NOTARIZES but does not DELIVER, and it has NO live caller yet (dormant infra; wiring it to
+   registration/portal-touch is its own step).
+6. **Directory arm retirement (trustless-cello):** once handoff.ts no longer calls them, remove `SIGNAL_KINDS`
+   + the `trust_signal_hash`/`trust_signal_ciphertext` arms in `agent-write-validation.ts` (+ the
+   `internal-api-server.ts` dispatch ~434/437). A test asserts both arms + the enum are gone. Then re-point
+   `packages/e2e-tests/src/spine/j-trust.spine.test.ts` onto the new pipe.
+   **RELEASE:** ONE directory deploy #2 (V47 + deliver route + arm retirement) — REQUIRES the full post-deploy
+   cascade (SSM 46→47, relay restart + manifest re-sign, STATE.md) or the live session path breaks; a
+   protocol-types/daemon/connect publish cascade via `/cello-publish` (ships the daemon cutover to operators);
+   then DOD-T1-JOURNEY-1 live.
+
+Coverage-window discipline: the directory arms + the portal producer retire TOGETHER; the daemon DROP + its
+writer re-point already shipped together (piece 3). The directory deploy of the arm-retirement lands only
+AFTER the portal is re-pointed and proven, never before (else the live M8 webauthn pipe breaks).
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client

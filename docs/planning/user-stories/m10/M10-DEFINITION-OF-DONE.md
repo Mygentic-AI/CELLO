@@ -551,6 +551,17 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   self-delivered, so coupling them is wrong. Reverse: mechanical (delivery is a transport detail; the
   hash/notary contract is unchanged). → Entry 19.
 
+- **M10-D23 (2026-07-15) — the webauthn signal's M10 payload is a NO-PII claim + credential STUB HASH,
+  never the raw credential.** The M8 webauthn handoff (`handoff.ts`, live on every registration) sealed a
+  record `{credentialId, enrolledAt}` that only the holder's daemon could open. M10 wallet signals are
+  PRESENTABLE (the holder shows `{hash, blob}` to counterparties, DOD-PRESENT-1), so putting the raw
+  `credentialId` (a device-linkable identifier) in the payload would expose it to every recipient. Choice:
+  the webauthn payload carries `{claim: "this operator enrolled a WebAuthn hardware authenticator", credential_stub: sha256(credentialId)}`
+  — mirrors the phone/email no-PII shape (M10-D21: stub hash, not the raw value) and the "no PII beyond what
+  the signal IS" guardrail. The claim ("has a hardware authenticator") is the trust signal; the raw
+  credential id and the enrollment timestamp are not needed for it and are dropped. Reverse: to correlate a
+  specific credential later, a verifier compares stub hashes, never a raw id. → Entry 21.
+
 ## Parked
 *(Genuine undecidable forks: journal + here. Never silently dropped.)*
 
