@@ -182,6 +182,14 @@ describe("J-TRUST-JOURNEY — DOD-T2-JOURNEY-1: live signal presentation→consu
     const emailHash = hex(hashTrustSignalEnvelope(emailEnvelope));
     const emailSealedHex = hex(sealToRecipient(hexToBytes(pubA), emailEnvBytes));
 
+    // Insert into signal_records so the directory's dumb check (checkPresentedSignals) recognizes
+    // these hashes as active when A presents them during session initiation.
+    psqlSpine(
+      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type, status, scanner_version) VALUES ` +
+      `('${phoneHash}', 'local', 'account', '${accountId}', 'portal', '${"ab".repeat(32)}', 'phone', 'active', 'test-v0'), ` +
+      `('${emailHash}', 'local', 'account', '${accountId}', 'portal', '${"ab".repeat(32)}', 'email', 'active', 'test-v0')`,
+    );
+
     psqlSpine(
       `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, signal_hash) VALUES ` +
       `('${agentIdA}', 'phone', decode('${phoneSealedHex}', 'hex'), '${phoneHash}'), ` +
