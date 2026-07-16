@@ -67,7 +67,7 @@ async function loadFloorPolicy(): Promise<{
   const mod = (await import(pathToFileURL(join(CELLO_CLIENT_ROOT, "core/daemon/dist/signal-requirement-policy.js")).href)) as {
     evaluateSignalPolicy: (p: unknown, s: unknown) => { pass: boolean };
   };
-  return mod as { evaluateSignalPolicy: ReturnType<typeof loadFloorPolicy> extends Promise<infer T> ? T["evaluateSignalPolicy"] : never };
+  return mod as { evaluateSignalPolicy: (policy: { require_types?: string[]; require_issuer_kind?: string; min_count?: number }, signals: ReadonlyArray<{ type: string; issuerKind: string; verdict: string }>) => { pass: boolean } };
 }
 
 const hexToBytes = (h: string): Uint8Array => new Uint8Array(Buffer.from(h, "hex"));
