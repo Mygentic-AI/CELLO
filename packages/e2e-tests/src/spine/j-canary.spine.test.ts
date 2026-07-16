@@ -151,8 +151,10 @@ describe("J-CANARY — DOD-ZEROBUMP-CANARY-1: a type the system has never seen, 
     await waitConnected(dirB, "B");
 
     const devTag = (t: string) => `DEV-canary-${t}-${randomBytes(6).toString("hex")}`;
-    expect(cello(["register-agent", "canaryA", devTag("A")], { CELLO_DIR: dirA }).status).toBe(0);
-    expect(cello(["register-agent", "canaryB", devTag("B")], { CELLO_DIR: dirB }).status).toBe(0);
+    const regA = cello(["register-agent", "canaryA", devTag("A")], { CELLO_DIR: dirA });
+    expect(regA.status, `register-agent A failed: ${regA.stdout}`).toBe(0);
+    const regB = cello(["register-agent", "canaryB", devTag("B")], { CELLO_DIR: dirB });
+    expect(regB.status, `register-agent B failed: ${regB.stdout}`).toBe(0);
 
     const agentIdA = psqlSpine(`SELECT agent_id FROM agent_profiles WHERE k_local_pubkey = '${pubA}'`);
     expect(agentIdA).toMatch(/\S/);
