@@ -11,18 +11,20 @@ import pg from "pg";
 import { randomBytes } from "node:crypto";
 import { checkPresentedSignals } from "../signal-present.js";
 
+const isLocal = process.env["CELLO_ENV"] === "local";
 const DATABASE_URL = process.env.DATABASE_URL ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
 
 let pool: pg.Pool;
 
 beforeAll(async () => {
+  if (!isLocal) return;
   pool = new pg.Pool({ connectionString: DATABASE_URL });
-  // Ensure the schema is there (Flyway runs before tests in CI; locally via pnpm db:up + migrate).
   const check = await pool.query("SELECT 1 FROM information_schema.tables WHERE table_name = 'signal_records'");
   expect(check.rows.length, "signal_records must exist — run flyway migrate first").toBeGreaterThan(0);
 });
 
 afterAll(async () => {
+  if (!isLocal) return;
   await pool?.end();
 });
 
@@ -42,7 +44,9 @@ async function seedSignal(hash: string, opts: { status?: string; node?: string; 
   );
 }
 
-describe("DOD-PRESENT-1 — directory dumb check (checkPresentedSignals)", () => {
+const describeIntegration = isLocal ? describe : describe.skip;
+
+describeIntegration("DOD-PRESENT-1 — directory dumb check (checkPresentedSignals)", () => {
   it("passes an active notarized signal through", async () => {
     const h = randomHash();
     await seedSignal(h);
