@@ -80,6 +80,46 @@ for REGION in "${TARGET_REGIONS[@]}"; do
   DIR_SUB=$(echo "$R"    | jq -r '.route53.dir_subdomain')
   RELAY_SUB=$(echo "$R"  | jq -r '.route53.relay_subdomain')
 
+  # ── STEP 0: Kick off RDS immediately — it's the longest wait (~13 min) ───────
+  # Fire-and-don't-wait: start all RDS instances now, then do NAT/endpoint/ALB
+  # in parallel while RDS warms up. We'll wait for available just before ECS.
+  RDS_ID=$(echo "$R" | jq -r '.rds_id')
+  PORTAL_RDS_ID=$(echo "$R" | jq -r '.portal_rds_id // "None"')
+
+  _start_rds_nowait() {
+    local id="$1" region="$2"
+    local st
+    st=$(aws rds describe-db-instances --db-instance-identifier "$id" \
+      --region "$region" --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "unknown")
+    if [[ "$st" == "available" ]]; then
+      ok "  RDS ${id} already available"
+    elif [[ "$st" == "stopping" ]]; then
+      log "  RDS ${id} still stopping — polling until stopped before starting..."
+      for i in $(seq 1 90); do
+        st=$(aws rds describe-db-instances --db-instance-identifier "$id" \
+          --region "$region" --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "unknown")
+        [[ "$st" == "stopped" ]] && break
+        [[ $((i % 6)) -eq 0 ]] && log "    still ${st}... (${i}×10s)"
+        sleep 10
+      done
+      aws rds start-db-instance --db-instance-identifier "$id" --region "$region" \
+        --no-cli-pager --query 'DBInstance.DBInstanceStatus' --output text
+      ok "  RDS ${id} start-db-instance issued (waiting later)"
+    else
+      aws rds start-db-instance --db-instance-identifier "$id" --region "$region" \
+        --no-cli-pager --query 'DBInstance.DBInstanceStatus' --output text 2>/dev/null || true
+      ok "  RDS ${id} start-db-instance issued (waiting later)"
+    fi
+  }
+
+  if [[ "$RDS_ID" != "None" && -n "$RDS_ID" && "${DRY_RUN}" != "1" ]]; then
+    step "  [${REGION}] 0/7  RDS kick-off (fire-and-continue)"
+    _start_rds_nowait "$RDS_ID" "${REGION}"
+  fi
+  if [[ "$PORTAL_RDS_ID" != "None" && -n "$PORTAL_RDS_ID" && "${REGION}" == "us-east-1" && "${DRY_RUN}" != "1" ]]; then
+    _start_rds_nowait "$PORTAL_RDS_ID" "${REGION}"
+  fi
+
   # ── STEP 1: NAT Gateway ──────────────────────────────────────────────────────
   step "  [${REGION}] 1/7  NAT Gateway"
 
@@ -181,37 +221,20 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     fi
   fi
 
-  # ── STEP 3: RDS ──────────────────────────────────────────────────────────────
-  step "  [${REGION}] 3/7  RDS"
-  RDS_ID=$(echo "$R" | jq -r '.rds_id')
+  # ── STEP 3: Wait for RDS (already started in step 0) ────────────────────────
+  step "  [${REGION}] 3/7  RDS (wait for available — started earlier)"
 
   if [[ "$RDS_ID" != "None" && -n "$RDS_ID" ]]; then
-    rds_status=$(aws rds describe-db-instances \
-      --db-instance-identifier "${RDS_ID}" --region "${REGION}" \
-      --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "unknown")
-
-    if [[ "${rds_status}" == "available" ]]; then
-      ok "  RDS ${RDS_ID} already available — skipping"
+    if [[ "${DRY_RUN}" == "1" ]]; then
+      warn "  [dry-run] would wait for RDS ${RDS_ID} available"
     else
-      # If still stopping from hibernate, poll until it reaches 'stopped' first
-      if [[ "${rds_status}" == "stopping" ]]; then
-        log "  RDS ${RDS_ID} still stopping — polling until stopped (up to 15 min)..."
-        for i in $(seq 1 90); do
-          rds_status=$(aws rds describe-db-instances \
-            --db-instance-identifier "${RDS_ID}" --region "${REGION}" \
-            --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "unknown")
-          [[ "${rds_status}" == "stopped" ]] && break
-          [[ $((i % 6)) -eq 0 ]] && log "    still ${rds_status}... (${i}×10s)"
-          sleep 10
-        done
-        [[ "${rds_status}" == "stopped" ]] && ok "  RDS ${RDS_ID} stopped — now starting..." \
-          || warn "  RDS ${RDS_ID} still ${rds_status} after 15 min — attempting start anyway"
-      fi
-      run aws rds start-db-instance \
+      rds_status=$(aws rds describe-db-instances \
         --db-instance-identifier "${RDS_ID}" --region "${REGION}" \
-        --no-cli-pager --query 'DBInstance.DBInstanceStatus' --output text
-      if [[ "${DRY_RUN}" != "1" ]]; then
-        log "  Waiting for RDS to become available (~3-5 min)..."
+        --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "unknown")
+      if [[ "${rds_status}" == "available" ]]; then
+        ok "  RDS ${RDS_ID} already available"
+      else
+        log "  Waiting for RDS ${RDS_ID} to become available..."
         aws rds wait db-instance-available \
           --db-instance-identifier "${RDS_ID}" --region "${REGION}"
         ok "  RDS ${RDS_ID} available."
@@ -221,32 +244,16 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     warn "  No RDS recorded for ${REGION} — skipping"
   fi
 
-  # ── STEP 3b: Portal RDS (us-east-1 only) ─────────────────────────────────────
-  PORTAL_RDS_ID=$(echo "$R" | jq -r '.portal_rds_id // "None"')
   if [[ "$PORTAL_RDS_ID" != "None" && -n "$PORTAL_RDS_ID" && "${REGION}" == "us-east-1" ]]; then
-    step "  [${REGION}] 3b/7  Portal RDS"
-    portal_rds_status=$(aws rds describe-db-instances \
-      --db-instance-identifier "${PORTAL_RDS_ID}" --region "${REGION}" \
-      --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "unknown")
-    if [[ "${portal_rds_status}" == "available" ]]; then
-      ok "  Portal RDS ${PORTAL_RDS_ID} already available — skipping"
-    else
-      if [[ "${portal_rds_status}" == "stopping" ]]; then
-        log "  Portal RDS ${PORTAL_RDS_ID} still stopping — polling until stopped..."
-        for i in $(seq 1 90); do
-          portal_rds_status=$(aws rds describe-db-instances \
-            --db-instance-identifier "${PORTAL_RDS_ID}" --region "${REGION}" \
-            --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "unknown")
-          [[ "${portal_rds_status}" == "stopped" ]] && break
-          [[ $((i % 6)) -eq 0 ]] && log "    still ${portal_rds_status}... (${i}×10s)"
-          sleep 10
-        done
-      fi
-      run aws rds start-db-instance \
+    step "  [${REGION}] 3b/7  Portal RDS (wait)"
+    if [[ "${DRY_RUN}" != "1" ]]; then
+      portal_rds_status=$(aws rds describe-db-instances \
         --db-instance-identifier "${PORTAL_RDS_ID}" --region "${REGION}" \
-        --no-cli-pager --query 'DBInstance.DBInstanceStatus' --output text
-      if [[ "${DRY_RUN}" != "1" ]]; then
-        log "  Waiting for portal RDS to become available..."
+        --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "unknown")
+      if [[ "${portal_rds_status}" == "available" ]]; then
+        ok "  Portal RDS ${PORTAL_RDS_ID} already available"
+      else
+        log "  Waiting for portal RDS ${PORTAL_RDS_ID} to become available..."
         aws rds wait db-instance-available \
           --db-instance-identifier "${PORTAL_RDS_ID}" --region "${REGION}"
         ok "  Portal RDS ${PORTAL_RDS_ID} available."
