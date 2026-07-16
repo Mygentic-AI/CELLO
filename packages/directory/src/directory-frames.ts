@@ -464,6 +464,22 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
       typeof o["moniker"] === "string" && o["moniker"].length >= 1 && o["moniker"].length <= 64
         ? o["moniker"]
         : undefined;
+    // DOD-PRESENT-1: trust signals — array of {hash: string, blob: Uint8Array}.
+    let trust_signals: Array<{ hash: string; blob: Uint8Array }> | undefined;
+    const rawSignals = o["trust_signals"];
+    if (Array.isArray(rawSignals) && rawSignals.length > 0) {
+      const parsed: Array<{ hash: string; blob: Uint8Array }> = [];
+      for (const entry of rawSignals) {
+        if (entry && typeof entry === "object") {
+          const e = entry as Record<string, unknown>;
+          const hash = typeof e["hash"] === "string" ? e["hash"] : null;
+          const blobRaw = e["blob"];
+          const blob = blobRaw instanceof Uint8Array ? blobRaw : Buffer.isBuffer(blobRaw) ? new Uint8Array(blobRaw as Buffer) : null;
+          if (hash && blob) parsed.push({ hash, blob });
+        }
+      }
+      if (parsed.length > 0) trust_signals = parsed;
+    }
     const result: SessionRequest = { type: "session_request", target_pubkey };
     if (connection_id !== undefined) result.connection_id = connection_id;
     if (initiator_session_peer_id !== undefined) result.initiator_session_peer_id = initiator_session_peer_id;
@@ -471,6 +487,7 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     if (transport_mode !== undefined) result.transport_mode = transport_mode;
     if (wants_session_offer !== undefined) result.wants_session_offer = wants_session_offer;
     if (moniker !== undefined) result.moniker = moniker;
+    if (trust_signals !== undefined) result.trust_signals = trust_signals;
     return result;
   }
 

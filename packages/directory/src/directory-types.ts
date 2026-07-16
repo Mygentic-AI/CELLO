@@ -165,6 +165,8 @@ export interface SessionRequest {
    * Bounded at decode (string, 1–64 chars); the RECEIVER validates the charset.
    */
   moniker?: string;
+  /** DOD-PRESENT-1: trust signals the initiator wishes to present to the target. */
+  trust_signals?: Array<{ hash: string; blob: Uint8Array }>;
 }
 
 // ─── M7-WIRE-001: Session offer accept (target → directory) ─────────────────
