@@ -51,6 +51,11 @@ Parameters:
       signer's Ed25519 seed (its pubkey is enrolled in the directory's authorized_issuers). Required:
       without it getSubmissionSigner FAILS CLOSED in dev (ABSENT IS NOT FINE) and the WebAuthn handoff
       mints nothing. No Default — deploy.sh must pass it so a missing value fails at deploy, not silently.
+  GitHubOAuthSecretArn:
+    Type: String
+    Description: >
+      Secrets Manager ARN for cello/{env}/portal/github-oauth — JSON with client_id and
+      client_secret for the GitHub OAuth App (DOD-OAUTH-1 trust signal generation).
   Cpu:
     Type: String
     Default: "512"
@@ -128,6 +133,7 @@ Resources:
                   - !Ref KmsMasterKeySecretArn
                   - !Ref DirectoryApiKeySecretArn
                   - !Ref SubmissionSeedSecretArn
+                  - !Ref GitHubOAuthSecretArn
 
   TaskRole:
     Type: AWS::IAM::Role
@@ -200,6 +206,10 @@ Resources:
               ValueFrom: !Ref DirectoryApiKeySecretArn
             - Name: PORTAL_SUBMISSION_SEED
               ValueFrom: !Ref SubmissionSeedSecretArn
+            - Name: GITHUB_CLIENT_ID
+              ValueFrom: !Sub "${GitHubOAuthSecretArn}:client_id::"
+            - Name: GITHUB_CLIENT_SECRET
+              ValueFrom: !Sub "${GitHubOAuthSecretArn}:client_secret::"
           LogConfiguration:
             LogDriver: awslogs
             Options:
