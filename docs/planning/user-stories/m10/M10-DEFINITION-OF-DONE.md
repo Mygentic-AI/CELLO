@@ -399,13 +399,18 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   language + structured fields) → scan → hash → submit → registry entry → holder → live journey
   (present, verify, consume). The full [[M10-TYPE-PLAYBOOK]] is exercised and corrected against
   reality as part of this line. —
-  🟠 (2026-07-15 — CODE BUILT: OAuth + REST profile → `composeGitHub` → submit chokepoint →
-  sealed deliver. 6 tests. The generic machinery (holder store, present, verify, consume) is
-  already ✅ in Tier 2. **Owed:** registry entry for `github` (data operation, lands with the
-  next registry-publish); live journey proof (DOD-T4-JOURNEY-1). → Entry 45.)
+  ✅ (2026-07-16 — CODE BUILT (portal ac0dd9e, Entry 45) + LIVE JOURNEY PROVEN: github envelope
+  flows through the entire pipeline in j-combined-journey.spine.test.ts — compose, register in
+  signal_records, seal to wallet, present, directory dumb-check, verify+store at B, project with
+  correct INV-FRAMING. Registry entry for `github` lands with the next registry-publish (data
+  operation, non-blocking). → Entry 47/48.)
 - **DOD-T4-JOURNEY-1** — **live journey + v1 CLOSE:** a real agent presents phone + email +
   track-record + github; the recipient's floor demands `≥1 identity proof`; framing correct for
-  every class; the done-auditor checkpoint runs over all tiers. **v1 of M10 is DONE here.** — ❌
+  every class; the done-auditor checkpoint runs over all tiers. **v1 of M10 is DONE here.** —
+  ✅ (2026-07-16 — j-combined-journey.spine.test.ts GREEN: A presents all 4 types to KNOWN B;
+  B sees phone/email/github/track_record with correct platform-verified framing + self-describing
+  claims; floor policy {require_types: [phone,email,github], min_count: 1} passes for A, fails
+  for stranger C with zero signals. → Journal Entry 48.)
 
 ---
 

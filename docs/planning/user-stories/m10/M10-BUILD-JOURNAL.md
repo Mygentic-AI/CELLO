@@ -2609,6 +2609,45 @@ BOTH. Fix: `TrustSignalStore.setReceivedStatus()` + caller in the verify path af
 
 ---
 
+### Entry 48 — DOD-T4-JOURNEY-1 GREEN + DOD-EXT-SIGNAL-1 ✅ (v1 close)
+
+**Date:** 2026-07-16
+
+**What was proven.** `j-combined-journey.spine.test.ts` exercises the FULL v1 signal portfolio
+end-to-end against real binaries:
+
+1. **All four signal classes.** Agent A holds phone (Class 1 identity), email (Class 1 identity),
+   github (Class 1 social/external), and track_record (Class 3 directory-computed) — all seeded
+   via the pickup queue in a single batch. All four survive the directory's `checkPresentedSignals`
+   filter and reach B.
+
+2. **INV-FRAMING verified per class.** Every signal arrives at B with `issuer: "platform-verified"`
+   (correct for `issuer_kind: portal`) and a self-describing CBOR claim payload. Class-specific
+   fields verified: phone→country_code, email→domain, github→username/account_age_days/public_repos,
+   track_record→session_count/clean_close_rate.
+
+3. **Floor policy with identity-proof demand.** Policy `{require_types: [phone, email, github],
+   min_count: 1}` — passes for A (has all three identity proofs), fails for stranger C (zero
+   signals). This exercises the DOD's "recipient's floor demands ≥1 identity proof" clause.
+
+4. **Negative case (stranger C).** C initiates with B, presents nothing (no wallet, UNKNOWN tier),
+   B's `cello_await_session` returns undefined trust_signals, floor rejects.
+
+**DOD-EXT-SIGNAL-1 status update.** The `github` signal type now flows end-to-end without any
+code change beyond what Entry 45 built (portal OAuth + REST + compose). The spine test proves
+the generic machinery handles it (INV-ZERO-BUMP). The only remaining owed item is the registry
+entry (a data INSERT, lands with the next registry-publish — non-blocking for v1 close).
+
+**Commit:** `e3c19228` (trustless-cello) — test: j-combined-journey.spine.test.ts
+
+**ALL FOUR acceptance journey tests GREEN — M10 v1 signal pipeline DONE:**
+- `j-canary.spine.test.ts` (DOD-ZEROBUMP-CANARY-1) ✅
+- `j-trust-journey.spine.test.ts` (DOD-T2-JOURNEY-1) ✅
+- `j-track-record.spine.test.ts` (DOD-T3-JOURNEY-1) ✅
+- `j-combined-journey.spine.test.ts` (DOD-T4-JOURNEY-1) ✅
+
+---
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client
