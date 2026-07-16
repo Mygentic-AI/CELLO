@@ -227,9 +227,6 @@ describe("J-CANARY — DOD-ZEROBUMP-CANARY-1: a type the system has never seen, 
     // ── PRESENT: A adds B as KNOWN, initiates session → signals presented ──
     expect(((await connA.call("cello_contact_add", { pubkey: pubB })) as { ok?: boolean }).ok).toBe(true);
     expect(((await connA.call("cello_use_agent", { name: "canaryA" })) as { ok?: boolean }).ok).toBe(true);
-    // Diagnostic: verify tier + wallet state before initiation
-    const contacts = await connA.call("cello_contacts", {});
-    console.log("[CANARY-DIAG] contacts:", JSON.stringify(contacts));
 
     const connB = await connectMcp(dirB, "canary-B");
     mcpConns.push(connB);
@@ -246,21 +243,6 @@ describe("J-CANARY — DOD-ZEROBUMP-CANARY-1: a type the system has never seen, 
       trust_signals?: Array<{ type: string; issuer: string; claim: unknown }>;
     };
     expect(inbound.type).toBe("new_session");
-    // Diagnostic: dump A's presentation and B's receiving
-    const aPresent = daemonA2.output.split("\n").filter(l =>
-      l.includes("signal.presentation") || l.includes("trust_signal") || l.includes("signal.wallet")
-    );
-    console.log("[CANARY-DIAG] daemonA2 signal lines:\n", aPresent.join("\n"));
-    const bLines = daemonB.output.split("\n").filter(l =>
-      l.includes("trust_signal") || l.includes("signal.") || l.includes("session.inbound") || l.includes("assignment")
-    );
-    console.log("[CANARY-DIAG] daemonB signal/session lines:\n", bLines.join("\n"));
-    // Also dump the directory's relevant logs
-    const dirLines = cluster.directory.output.split("\n").filter(l =>
-      l.includes("signal") || l.includes("presentation") || l.includes("session_request")
-    );
-    console.log("[CANARY-DIAG] directory signal lines:\n", dirLines.join("\n"));
-    console.log("[CANARY-DIAG] inbound response:", JSON.stringify(inbound));
     expect(inbound.trust_signals, "B must see the canary signal").toBeDefined();
     expect(inbound.trust_signals!.length).toBe(1);
 
