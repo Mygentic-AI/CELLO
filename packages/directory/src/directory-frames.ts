@@ -180,6 +180,10 @@ export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Arr
   if (a.moniker) {
     encodedAssignment["moniker"] = a.moniker;
   }
+  // DOD-PRESENT-1: trust signals that survived the dumb check — forwarded to the target.
+  if (a.trust_signals && a.trust_signals.length > 0) {
+    encodedAssignment["trust_signals"] = a.trust_signals;
+  }
   return ENC.encode({ type: frame.type, assignment: encodedAssignment });
 }
 
