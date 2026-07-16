@@ -9,6 +9,31 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🌐 Portal deploy — github_anon + github_id split LIVE (2026-07-16)
+
+**Task definition `cello-portal-dev:19`** — registered manually (CFN drift). Image `e9d4381`.
+ECS service updated directly via `aws ecs update-service`. Deployment: PRIMARY 1/1 COMPLETED.
+
+**What changed (rev 14 → 19):**
+- `mint.ts`: `composeGitHub` replaced by `composeGitHubAnon` (type=`github_anon`, no username) +
+  `composeGitHubId` (type=`github_id`, username + profile_url)
+- OAuth callback mints and delivers BOTH signals in one flow
+- Trust signals UI shows two rows when GitHub connected
+
+**cello-client beta:** daemon `0.0.66`, cli `0.0.64`, connect `0.0.79` (tag v0.0.115, CI green).
+Changes: wallet supersession cascade fix, `wallet_list_signals` + `wallet_remove_signal` IPC handlers,
+`cello trust-signals list/remove` CLI command under new "Trust & endorsements" group.
+
+**latest promotion pending** — run when ready:
+```
+npm dist-tag add @cello-protocol/connect@0.0.79 latest
+npm dist-tag add @cello-protocol/cli@0.0.64 latest
+npm dist-tag add @cello-protocol/daemon@0.0.66 latest
+```
+(crypto/transport/client/protocol-types unchanged — already at latest, skip)
+
+---
+
 ## 🌐 Portal deploy — GitHub OAuth LIVE (2026-07-16)
 
 **Task definition `cello-portal-dev:14`** — registered manually (CFN drift blocks `deploy.sh` and
