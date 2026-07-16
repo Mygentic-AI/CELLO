@@ -59,6 +59,7 @@ import { MmrCheckpointService } from "../mmr-checkpoint-service.js";
 import { AnalyticsJob } from "../analytics-job.js";
 import { PendingConnectionRequestTtlSweep } from "../pending-connection-request-ttl-sweep.js";
 import { createHealthServer } from "../health-server.js";
+import { getRegistryDocument } from "../signal-write.js";
 import { logServiceStarted, logServiceStopped, logServiceCrashed, logSecretsUnavailable } from "../service-lifecycle.js";
 import { PgNotificationQueue } from "../adapters/pg-notification-queue.js";
 import { RelayPoolManager } from "../relay-pool-manager.js";
@@ -1105,6 +1106,17 @@ if (directoryHostname) {
   }
 }
 
+// DOD-REGISTRY-1: cache the registry document for the sync health server resolver.
+// Loaded at startup and refreshed by the internal API on each publish (the internal
+// API POSTs to /internal/signal/registry-publish which writes to DB; here we just
+// poll-on-demand with a 60s TTL so we don't add a coupling between the two servers).
+let registryCache: { document: Buffer; version: number } | null = null;
+let registryCacheAge = 0;
+const REGISTRY_CACHE_TTL_MS = 60_000;
+if (pgPool) {
+  getRegistryDocument(pgPool).then((doc) => { registryCache = doc; registryCacheAge = Date.now(); }).catch(() => {});
+}
+
 const healthServer = createHealthServer({
   nodeId,
   schemaVersion,
@@ -1121,6 +1133,13 @@ const healthServer = createHealthServer({
   // HTTP so the daemon polls it without an agent identity (the keystone is gone). The
   // store never throws from getCurrentManifest(); an unset store → null → 503.
   getCurrentManifest: () => directoryManifestStore?.getCurrentManifest() ?? null,
+  // DOD-REGISTRY-1: serve the type registry (same model as /manifest — public, signed).
+  getRegistryDocument: () => {
+    if (pgPool && Date.now() - registryCacheAge > REGISTRY_CACHE_TTL_MS) {
+      getRegistryDocument(pgPool).then((doc) => { registryCache = doc; registryCacheAge = Date.now(); }).catch(() => {});
+    }
+    return registryCache;
+  },
 });
 healthServer.listen(healthPort, () => {
   logger.info("adapter.initialised", { adapterName: "HealthServer", implementation: "http", env, port: healthPort });

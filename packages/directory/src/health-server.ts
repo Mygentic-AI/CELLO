@@ -47,6 +47,15 @@ export interface HealthServerOptions {
    * agent-specific ever goes in it.
    */
   getCurrentManifest?: () => ConsortiumManifest | null;
+  /**
+   * DOD-REGISTRY-1: resolver for GET /registry. Returns the stored registry document
+   * as raw bytes (opaque to the directory — clients verify the inner signature against
+   * their build-time-pinned registry pubkey). 404 when no registry is published yet
+   * (INV-TYPE-CARRY: absent = unclassified, not an error). Served unauthenticated on
+   * port 9090, routed via the BootstrapTargetGroup ALB ListenerRule — same model as
+   * /manifest (public, self-authenticating signed data).
+   */
+  getRegistryDocument?: () => { document: Buffer; version: number } | null;
 }
 
 /**
@@ -54,7 +63,7 @@ export interface HealthServerOptions {
  * the /health and /bootstrap endpoints. The caller is responsible for calling .listen().
  */
 export function createHealthServer(opts: HealthServerOptions): Server {
-  const { nodeId, schemaVersion, multiaddr, peerId, getKLocalPubkeyByAgentId, getCurrentManifest } = opts;
+  const { nodeId, schemaVersion, multiaddr, peerId, getKLocalPubkeyByAgentId, getCurrentManifest, getRegistryDocument } = opts;
 
   const healthResponseBody = JSON.stringify({
     status: "ok",
@@ -133,6 +142,22 @@ export function createHealthServer(opts: HealthServerOptions): Server {
       }
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(manifest));
+      return;
+    }
+
+    // DOD-REGISTRY-1: GET /registry — the type registry poll over unauthenticated HTTP.
+    // Same model as /manifest: public, self-authenticating signed data. Clients verify
+    // the Ed25519 inner signature against a build-time-pinned registry pubkey. 404 when
+    // no registry is published (INV-TYPE-CARRY: absent type = unclassified, not error).
+    if (req.method === "GET" && req.url === "/registry") {
+      const doc = getRegistryDocument ? getRegistryDocument() : null;
+      if (doc === null) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "no_registry_published" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/octet-stream", "x-cello-registry-version": String(doc.version) });
+      res.end(doc.document);
       return;
     }
 

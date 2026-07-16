@@ -374,6 +374,24 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref BootstrapTargetGroup
 
+  # DOD-REGISTRY-1: /registry path rule — routes to BootstrapTargetGroup (port 9090),
+  # same as /manifest. The daemon polls the signed type registry over unauthenticated
+  # HTTP; the document is self-authenticating (clients verify the inner Ed25519
+  # signature against their pinned registry pubkey).
+  RegistryPathRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    DependsOn: HttpListener
+    Properties:
+      ListenerArn: !Ref HttpListener
+      Priority: 7
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - "/registry"
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BootstrapTargetGroup
+
   # AC-009d (OPS-AGENT-005A): /internal/* path protection.
   # The directory /internal/pre-authorize endpoint is authenticated by x-cello-internal-api-key
   # header (verified in directory code). The ALB forwards all /internal/* requests to the
