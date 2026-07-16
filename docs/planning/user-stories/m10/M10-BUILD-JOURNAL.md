@@ -2568,6 +2568,47 @@ binaries (directory + relay + daemon processes on localhost):
 
 ---
 
+### Entry 47 — DOD-T3-JOURNEY-1 GREEN (track-record supersession live journey)
+
+**Date:** 2026-07-16
+
+**What was proven.** `j-track-record.spine.test.ts` exercises the full supersession lifecycle
+end-to-end against real binaries (directory + relay + daemon processes on localhost):
+
+1. **Track-record v1 presentation.** Agent A holds a `track_record` envelope (session_count: 5,
+   clean_close_rate: 1.0, subject_kind: "agent"). A presents to KNOWN-tier B. B receives, verifies,
+   and sees the correct INV-FRAMING projection (type: "track_record", issuer: "platform-verified").
+
+2. **Supersession materialization.** Track-record v2 is submitted (session_count: 12,
+   clean_close_rate: 0.92) with `supersedes_hash` pointing to v1. The `signal_records_effective`
+   view immediately shows v1 as `superseded`, v2 as `active`.
+
+3. **Directory-enforced filtering.** A's wallet holds BOTH v1 and v2 locally (both `status: active`
+   in SQLite — the daemon doesn't locally supersede wallet entries). A presents both hashes.
+   The directory's `checkPresentedSignals` filters: `WHERE effective_status = 'active'` strips v1.
+   Only v2's hash survives → only v2's blob is forwarded to B.
+
+4. **Recipient-side cascade.** B verifies v2, stores it, and — because v2 carries `supersedes_hash`
+   — calls `setReceivedStatus` to mark v1 as `superseded` in B's `contact_trust_signals`. B's
+   `cello_await_session` projects only active signals → v2 only.
+
+**Bug found and fixed during this test:** `projectTrustSignals` reads from B's accumulated
+`contact_trust_signals` (all signals ever received from A), filtering on `verdict === "active"`.
+Without the recipient-side cascade, both v1 and v2 remained active in B's store, and B projected
+BOTH. Fix: `TrustSignalStore.setReceivedStatus()` + caller in the verify path after
+`putReceivedSignal`, conditional on `envelope.supersedes_hash`. cello-client commit `508e314`.
+
+**Commits:**
+- `508e314` (cello-client) — daemon: `setReceivedStatus` + recipient-side supersession cascade
+- `2837edcf` (trustless-cello) — test: j-track-record.spine.test.ts
+
+**All three Tier 2+3 acceptance tests GREEN as of this entry:**
+- `j-canary.spine.test.ts` (DOD-ZEROBUMP-CANARY-1) ✅
+- `j-trust-journey.spine.test.ts` (DOD-T2-JOURNEY-1) ✅
+- `j-track-record.spine.test.ts` (DOD-T3-JOURNEY-1) ✅
+
+---
+
 ## Related Documents
 
 - [[M10-PORTAL-ARCH-INVESTIGATION]] — DOD-PORTAL-ARCH-1 half 1: what the portal/directory/client

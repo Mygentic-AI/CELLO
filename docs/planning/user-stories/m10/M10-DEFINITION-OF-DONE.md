@@ -367,7 +367,12 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   test vehicle; the mechanism is generic. — ✅ materialized supersede in submitSignal (13d8a05d) → Journal Entry 44
 - **DOD-T3-JOURNEY-1** — **live journey:** agent with real session history gets track-record
   envelopes; after more sessions the job re-mints; a counterparty sees the CURRENT version and
-  a replayed stale one is refused. — ❌
+  a replayed stale one is refused. —
+  ✅ (2026-07-16 — j-track-record.spine.test.ts GREEN: A presents track_record v1 to KNOWN-tier
+  B; v2 submitted with supersedes_hash materializes v1 as superseded; A presents again → directory
+  strips v1 (inactive in effective view), B sees only v2; recipient-side cascade marks v1
+  superseded in contact_trust_signals. Daemon fix: `setReceivedStatus` + caller in verify path.
+  → Journal Entry 47.)
 
 ## Tier 4 — The external-validator path (GitHub)
 
