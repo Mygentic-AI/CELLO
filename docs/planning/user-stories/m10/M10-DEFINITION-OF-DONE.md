@@ -58,29 +58,41 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
 - **DOD-INV-DIR-DUMB** — the directory performs only the two hash checks at presentation; no
   content evaluation, no signature logic at presentation, no schema knowledge. For an
   account-subject envelope (M10-D5, spec §3.2) check 2 resolves through the presenting agent's
-  account — one mechanical join, still content-blind. — ❌
+  account — one mechanical join, still content-blind. —
+  ✅ (proven by j-canary: `canary_test` type never seen by directory, yet passes; `checkPresentedSignals`
+  queries only `signal_hash + effective_status = 'active'` — `signal-present.ts:24`)
 - **DOD-INV-CHOKEPOINT** — a hash enters the directory's store ONLY via a signed submission from
   an authorized issuer key; anything else is rejected loud. Notarized ⇒ scanned-clean-at-birth
-  holds. — ❌
+  holds. — ✅ (DOD-DIR-WRITE-1 built + tested; `authorized_issuers` table + `signal-write.ts` verify)
 - **DOD-INV-ZERO-BUMP** — no per-type construct exists in cello-client or trustless-cello (no
   type enums used for gating, no `switch(type)`, no per-type columns/validation/rendering, no
-  `CHECK` on `type`). Enforced per-unit by the reviewer; proven by the canary. — ❌
+  `CHECK` on `type`). Enforced per-unit by the reviewer; proven by the canary. —
+  ✅ (j-canary GREEN: `canary_test` flows end-to-end, git clean — zero code touched)
 - **DOD-INV-TYPE-CARRY** — client and directory treat an unrecognized type string as
   first-class: store, present, verify, hand to the LLM; absent-from-registry =
-  valid-but-unclassified, never rejected. — ❌
+  valid-but-unclassified, never rejected. —
+  ✅ (j-canary: `canary_test` is not in any registry, yet B receives+verifies it)
 - **DOD-INV-CANONICAL** — everything hashed is canonical CBOR; the cross-party hash test is
-  green in CI continuously from Tier 0. JSON is a display projection, never hashed. — ❌
+  green in CI continuously from Tier 0. JSON is a display projection, never hashed. —
+  ✅ (all four journey tests: daemon re-derives hash from envelope bytes → matches claimed hash)
 - **DOD-INV-AGENT-SCOPED** — a received signal is invisible to co-resident agents; the
-  recipient-side cache FKs to a per-agent contact row on `agent_id`. — ❌
+  recipient-side cache FKs to a per-agent contact row on `agent_id`. —
+  ✅ (schema: `PRIMARY KEY (agent_id, contact_pubkey, signal_hash)` + FK; `listReceived` filters on agent_id)
 - **DOD-INV-FRAMING** — signal content reaches a consuming LLM only pass/block (never altered),
   byte-for-byte or not at all, framed by hashed `issuer_kind` (portal-attested vs "Bob says:"
-  quoted-untrusted). — ❌
+  quoted-untrusted). —
+  ✅ (all journey tests assert `issuer: "platform-verified"` for `issuer_kind: portal`; claim is CBOR-decoded
+  payload — byte-for-byte from the envelope)
 - **DOD-INV-NO-SCORE** — signals stay independent and named; nothing collapses them into a
-  score/level/rank anywhere (storage, policy, UI, LLM prompt). — ❌
+  score/level/rank anywhere (storage, policy, UI, LLM prompt). —
+  ✅ (j-combined: 4 signals arrive as independent array entries, each with own type/issuer/claim;
+  floor policy evaluates per-signal, never a collapsed score)
 - **DOD-INV-STATELESS-RECIPIENT** — statelessness = reliance, not storage (M10-D4): policy
   evaluation consumes ONLY the currently-presented set; stored received signals
   (`contact_trust_signals`, spec §3.1) are evidence — never an evaluation input, never trusted for
-  freshness (re-checked on use) — and the flow works with zero stored signal data. — ❌
+  freshness (re-checked on use) — and the flow works with zero stored signal data. —
+  ✅ (j-combined negative case: C with zero stored signals → floor evaluates empty set → fails;
+  `evaluateSignalPolicy` takes the current presentation array, never reads the store)
 
 ## Tier 0 — Foundations (portal architecture + canonical form + generic stores)
 
