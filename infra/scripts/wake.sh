@@ -61,7 +61,9 @@ SNAPSHOT_DIR="${INFRA_DIR}/hibernation-snapshots"
 mkdir -p "${SNAPSHOT_DIR}"
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 
+PIDS=()
 for REGION in "${TARGET_REGIONS[@]}"; do
+  (
   log ""
   log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   log "  REGION: ${REGION}"
@@ -540,12 +542,22 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     fi
   fi
 
+  ) &
+  PIDS+=($!)
 done  # end per-region loop
+
+# Wait for all parallel region jobs
+FAILED=0
+for pid in "${PIDS[@]}"; do
+  wait "$pid" || FAILED=$((FAILED + 1))
+done
 
 echo ""
 if [[ "${DRY_RUN}" == "1" ]]; then
   banner "DRY-RUN COMPLETE — no changes made." "${REGIONS_STR}"
   echo "Re-run with ${C_BOLD}--execute${C_RESET} to apply."
+elif [[ "$FAILED" -gt 0 ]]; then
+  banner "WAKE COMPLETE (${FAILED} region(s) had errors — check output above)" "${REGIONS_STR}"
 else
   banner "WAKE COMPLETE" "${REGIONS_STR}"
   echo ""

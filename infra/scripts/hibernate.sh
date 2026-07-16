@@ -62,12 +62,17 @@ SNAPSHOT_DIR="${INFRA_DIR}/hibernation-snapshots"
 mkdir -p "${SNAPSHOT_DIR}"
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 
+SNAP_PIDS=()
 for REGION in "${TARGET_REGIONS[@]}"; do
-  log "Snapshotting ${REGION} (before)..."
-  BEFORE_FILE="${SNAPSHOT_DIR}/${REGION}-before-${TS}.json"
-  "${SCRIPT_DIR}/inventory.sh" "${REGION}" "${BEFORE_FILE}"
-  ok "Before-snapshot: ${BEFORE_FILE}"
+  (
+    log "Snapshotting ${REGION} (before)..."
+    BEFORE_FILE="${SNAPSHOT_DIR}/${REGION}-before-${TS}.json"
+    "${SCRIPT_DIR}/inventory.sh" "${REGION}" "${BEFORE_FILE}"
+    ok "Before-snapshot: ${BEFORE_FILE}"
+  ) &
+  SNAP_PIDS+=($!)
 done
+for pid in "${SNAP_PIDS[@]}"; do wait "$pid"; done
 
 # ==============================================================================
 # PHASE 2: DISCOVER live state per region and build state file
@@ -398,7 +403,9 @@ fi
 # ==============================================================================
 confirm_execute
 
+TEAR_PIDS=()
 for REGION in "${TARGET_REGIONS[@]}"; do
+  (
   log ""
   log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   log "  REGION: ${REGION}"
@@ -475,7 +482,10 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     warn "  NOTE: 0.0.0.0/0 route in $(echo "$R" | jq -r '.private_route_table') will blackhole until wake.sh"
     warn "  NOTE: retained EIP costs ~\$3.65/mo while detached (intentional — stable address for wake)"
   fi
+  ) &
+  TEAR_PIDS+=($!)
 done
+for pid in "${TEAR_PIDS[@]}"; do wait "$pid"; done
 
 # ==============================================================================
 echo ""
