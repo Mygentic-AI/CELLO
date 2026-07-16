@@ -9,6 +9,32 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 📋 DOD-REGISTRY-1 — type registry published + ALB routing (2026-07-16)
+
+**Registry signer key:** Secrets Manager `cello/dev/registry/signer-key` (us-east-1).
+Pubkey: `d4f9a531205a3aca23dede0ad5f4fb6cd42260c8bbae5f33d2866c39e870d586`
+Enrolled in `authorized_issuers` (role `registry`) in all 3 regions.
+
+**Registry document v1 published** to all 3 regions (6 types: webauthn_passkey, github_account,
+track_record, totp_authenticator, email_verified, phone_verified). Stored in `type_registry` table.
+
+**ALB `/registry` rule (priority 7)** → BootstrapTargetGroup (port 9090) — created MANUALLY via CLI
+in all 3 regions (CFN drift from hibernate/wake prevents `deploy.sh` / `update-stack`):
+- us-east-1: rule `25fc40be7abedf5b`
+- eu-central-1: rule `9b13380d112a7807`
+- ap-northeast-1: rule `b69285cb5e46ddf7`
+
+**⚠️ CFN drift:** The ALB physical IDs in `cello-ecs-directory-dev` stack do not match the live ALBs
+(recreated during hibernate/wake). `deploy.sh` / `update-stack` will fail until reconciled. The manually
+created rules work fine but are NOT tracked by CFN.
+
+**Pipeline:** `cello-directory-pipeline` triggered (commit `75c13cc8`) — deploying the GET /registry
+handler on port 9090. Once live, `GET /registry` on the ALB returns the signed document.
+
+**Client half:** daemon 0.0.64 / connect 0.0.77 on latest — pinned registry pubkey, poller wired.
+
+---
+
 ## 🔻 M10-D18 arm-retirement directory deploy — M8 `trust_signal_*` arms GONE, all 3 regions (2026-07-15)
 
 **Pushed `ee02dde3` (base `a9f7370e`) → `cello-directory-pipeline`.** The DESTRUCTIVE half of the M8-retirement
