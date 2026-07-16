@@ -246,11 +246,8 @@ describe("J-CANARY — DOD-ZEROBUMP-CANARY-1: a type the system has never seen, 
       trust_signals?: Array<{ type: string; issuer: string; claim: unknown }>;
     };
     expect(inbound.type).toBe("new_session");
-    // Diagnostic: dump A's daemon log for presentation events
-    const a2Lines = daemonA2.output.split("\n").filter(l =>
-      l.includes("signal.presentation") || l.includes("trust_signal") || l.includes("session_request")
-    );
-    console.log("[CANARY-DIAG] daemonA2 signal/session lines:", a2Lines.join("\n"));
+    // Diagnostic: dump ALL of A's daemon log
+    console.log("[CANARY-DIAG] daemonA2 FULL output:\n", daemonA2.output);
     expect(inbound.trust_signals, "B must see the canary signal").toBeDefined();
     expect(inbound.trust_signals!.length).toBe(1);
 
