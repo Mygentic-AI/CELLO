@@ -2556,7 +2556,15 @@ binaries (directory + relay + daemon processes on localhost):
    `evaluateSignalPolicy(DEFAULT_UNKNOWN_POLICY, [])` returns `pass: false` — the floor rejects
    a stranger with zero portal-attested signals.
 
-**Commit:** 022802ed
+**Commit (journal entry):** 022802ed
+**Final fix commits (required for GREEN):**
+- `ffe9f5e7` — encoder: `encodeSessionAssignment` adds `trust_signals` to whitelist
+- `e7e0f685` — decoder: `decodeInboundSignalingFrame` carries `trust_signals` through inbound session_request
+- `82b41fce` — test: seed `signal_records` for phone+email so directory dumb check passes
+
+**Both spine tests GREEN as of 82b41fce** (tree clean, gate passing):
+- `j-canary.spine.test.ts` (DOD-ZEROBUMP-CANARY-1) ✅
+- `j-trust-journey.spine.test.ts` (DOD-T2-JOURNEY-1) ✅
 
 ---
 

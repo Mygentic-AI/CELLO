@@ -335,7 +335,11 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   cello-client AND trustless-cello for the entire exercise** (no rebuild, no republish, no
   redeploy; the running binaries predate the type). Then the canary type is registry-retired to
   prove retirement is also data-only. The generic machinery is only proven generic by a type it
-  has never seen. — ❌
+  has never seen. —
+  ✅ (2026-07-16 — j-canary.spine.test.ts GREEN: canary_test envelope composed, submitted to
+  signal_records, sealed to A's pickup, A stores, A presents to KNOWN-tier B, B receives with
+  correct INV-FRAMING + claim content, floor passes with DEFAULT_UNKNOWN_POLICY, registry
+  revokes, `git status --porcelain` clean in BOTH repos start-to-finish. → Journal Entry 46.)
 
 ## Tier 3 — The directory-computed path (Class 3 track record)
 
