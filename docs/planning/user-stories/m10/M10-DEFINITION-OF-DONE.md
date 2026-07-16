@@ -226,7 +226,11 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
     producer — the same coverage-window trap M10-D18 avoids for the M8 table. DIR-WRITE-1 ADDS the
     chokepoint; the old seam retires when the backfill re-points `handoff.ts` onto signed submissions.
     Its retirement test asserts `SIGNAL_KINDS` and both signal arms are gone (mirrors the M8-table
-    drop test). — ❌
+    drop test). — ✅ (2026-07-16 — `SUPPORTED_WRITE_KINDS = ["revocation_flag"]` structurally
+    excludes signal arms; `writeapi-001-agent-write.test.ts` line 123 + `.live.test.ts` line 117
+    assert `trust_signal_hash` and `trust_signal_ciphertext` are rejected as `unsupported_kind`
+    (422, nothing persisted); no `SIGNAL_KINDS` export exists in directory source (only in comments).
+    `handoff.ts` re-pointed onto signed submissions (portal `ac0dd9e`). → Entry 48.)
 - **DOD-REVOKE-1** — revocation = re-auth through the same chokepoint (spec §14.2): **role-based
   for portal-issued** (any active `submitter`-role key — exact-pubkey matching would strand old-key
   records unrevocable after a key rotation; determination §3.5, review F4), exact
@@ -253,10 +257,12 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   singleton in V46, `POST /internal/signal/registry-publish` + public `GET /registry` (opaque bytes,
   INV-DIR-DUMB — the directory never parses the doc). Reviewed → no blocking; F1 (`>=` vs its own
   comments) resolved to `>`, F2 (version precision bound), test gaps filled. Design note Entry 12.
-  **REMAINING (client half + deploy):** the cello-client registry POLLER (mirror
-  `http-manifest-poll.ts`: verify inner sig vs pinned pubkey, anti-rollback, failure-leaves-cache,
-  absent type = unclassified), shipped via the publish cascade; the registry key created + enrolled;
-  route behind the Tier 1 TLS listener. → Entry 13.)
+  **CLIENT HALF SHIPPED (2026-07-16):** `type-registry.ts` + `registry-poll.ts` +
+  `registry-version-store-db.ts` in `core/daemon` (cello-client 9a3a39c, published daemon@0.0.64
+  via v0.0.113). Mirrors `http-manifest-poll.ts`: verify inner Ed25519 sig vs pinned pubkey,
+  anti-rollback (version strictly greater), failure-leaves-cache, absent type = unclassified
+  (INV-TYPE-CARRY). 8 tests green. **REMAINING (infra):** registry KMS key created + enrolled in
+  `authorized_issuers`; route behind the Tier 1 TLS listener. → Entries 13, 48.)
 - **DOD-MINT-INTERNAL-1** — the portal mints **phone** and **email** as real envelopes (the
   §14.10 backfill), **as ACCOUNT-subject signals (`subject_kind: account`, M10-D5)** — one
   envelope per fact, presentable by every agent under the account, agent-add a no-op:
