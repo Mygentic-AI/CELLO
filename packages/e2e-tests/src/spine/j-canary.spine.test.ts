@@ -229,9 +229,7 @@ describe("J-CANARY — DOD-ZEROBUMP-CANARY-1: a type the system has never seen, 
     expect(((await connA.call("cello_use_agent", { name: "canaryA" })) as { ok?: boolean }).ok).toBe(true);
     // Diagnostic: verify tier + wallet state before initiation
     const contacts = await connA.call("cello_contacts", {});
-    const wallet = await connA.call("cello_status", {});
     console.log("[CANARY-DIAG] contacts:", JSON.stringify(contacts));
-    console.log("[CANARY-DIAG] status:", JSON.stringify(wallet));
 
     const connB = await connectMcp(dirB, "canary-B");
     mcpConns.push(connB);
@@ -248,6 +246,11 @@ describe("J-CANARY — DOD-ZEROBUMP-CANARY-1: a type the system has never seen, 
       trust_signals?: Array<{ type: string; issuer: string; claim: unknown }>;
     };
     expect(inbound.type).toBe("new_session");
+    // Diagnostic: dump A's daemon log for presentation events
+    const a2Lines = daemonA2.output.split("\n").filter(l =>
+      l.includes("signal.presentation") || l.includes("trust_signal") || l.includes("session_request")
+    );
+    console.log("[CANARY-DIAG] daemonA2 signal/session lines:", a2Lines.join("\n"));
     expect(inbound.trust_signals, "B must see the canary signal").toBeDefined();
     expect(inbound.trust_signals!.length).toBe(1);
 
