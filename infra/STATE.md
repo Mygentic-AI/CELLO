@@ -9,6 +9,19 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🌐 Portal deploy — fix GitHub OAuth `?github=error` (2026-07-16)
+
+**Task definition `cello-portal-dev:20`** — registered manually (CFN drift). Image `e9d4381` (same).
+ECS service updated directly via `aws ecs update-service`. Deployment: PRIMARY 1/1 COMPLETED.
+
+**What changed (rev 19 → 20):**
+- Added `PORTAL_KMS_KEY_ID=17d95b3b-3ff8-436d-8729-02e19aee471a` env var
+- This was missing, causing `getSubmissionSigner('dev')` to throw "requires PORTAL_KMS_KEY_ID"
+  on every GitHub OAuth callback → `?github=error` redirect
+- Task role `cello-portal-task-role-dev` already had `portal-kms-sign` policy (kms:Sign + kms:GetPublicKey)
+
+---
+
 ## 🌐 Portal deploy — github_anon + github_id split LIVE (2026-07-16)
 
 **Task definition `cello-portal-dev:19`** — registered manually (CFN drift). Image `e9d4381`.

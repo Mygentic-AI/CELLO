@@ -56,6 +56,13 @@ Parameters:
     Description: >
       Secrets Manager ARN for cello/{env}/portal/github-oauth — JSON with client_id and
       client_secret for the GitHub OAuth App (DOD-OAUTH-1 trust signal generation).
+  SubmissionSignerKmsKeyId:
+    Type: String
+    Default: ""
+    Description: >
+      KMS key ID or ARN for the Ed25519 submission signer (cello-dev-submission-signer).
+      Required for all non-local envs — without it GitHub OAuth and WebAuthn minting fail.
+      Use the key ID (not the alias) so the value is stable across alias renames.
   Cpu:
     Type: String
     Default: "512"
@@ -69,6 +76,7 @@ Parameters:
 
 Conditions:
   HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, ""]]
+  HasKmsKeyId: !Not [!Equals [!Ref SubmissionSignerKmsKeyId, ""]]
 
 Resources:
   LogGroup:
@@ -197,6 +205,11 @@ Resources:
               Value: !Ref PortalHostname
             - Name: WEBAUTHN_ORIGIN
               Value: !Sub "https://${PortalHostname}"
+            - !If
+              - HasKmsKeyId
+              - Name: PORTAL_KMS_KEY_ID
+                Value: !Ref SubmissionSignerKmsKeyId
+              - !Ref AWS::NoValue
           Secrets:
             - Name: PORTAL_DATABASE_URL
               ValueFrom: !Ref DatabaseUrlSecretArn

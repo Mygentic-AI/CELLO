@@ -72,6 +72,11 @@ GITHUB_OAUTH_ARN="$(aws secretsmanager describe-secret --secret-id "cello/${ENV}
   --region "$REGION" --query 'ARN' --output text 2>/dev/null || true)"
 [ -n "$GITHUB_OAUTH_ARN" ] || { echo "WARN: cello/${ENV}/portal/github-oauth not found — GitHub OAuth will be unavailable"; }
 
+# Submission signer KMS key ID — required for all non-local envs (getSubmissionSigner fails closed).
+SUBMISSION_KMS_KEY_ID="$(aws kms describe-key --key-id "alias/cello-${ENV}-submission-signer" \
+  --region "$REGION" --query 'KeyMetadata.KeyId' --output text 2>/dev/null || true)"
+[ -n "$SUBMISSION_KMS_KEY_ID" ] || { echo "WARN: alias/cello-${ENV}-submission-signer not found — GitHub OAuth and WebAuthn minting will fail"; }
+
 # ── 5. app stack (ALB/HTTPS + Route53 + ECS + alarm) ──────────────────────────
 say "5/6 app stack (ALB + ECS + Route53 + alarm), image=${SHORT}"
 aws cloudformation deploy \
@@ -84,6 +89,7 @@ aws cloudformation deploy \
     "KmsMasterKeySecretArn=${KMS_ARN}" \
     "SubmissionSeedSecretArn=${SEED_ARN}" \
     "GitHubOAuthSecretArn=${GITHUB_OAUTH_ARN}" \
+    "SubmissionSignerKmsKeyId=${SUBMISSION_KMS_KEY_ID}" \
     "AlarmTopicArn=${ALARM_TOPIC_ARN}" \
   --capabilities CAPABILITY_NAMED_IAM --region "$REGION"
 
