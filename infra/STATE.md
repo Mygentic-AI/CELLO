@@ -9,6 +9,28 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🌐 Portal deploy — GitHub OAuth LIVE (2026-07-16)
+
+**Task definition `cello-portal-dev:14`** — registered manually (CFN drift blocks `deploy.sh` and
+`cloudformation deploy`). The ECS service was updated directly via `aws ecs update-service`.
+
+**What changed (rev 10 → 14):**
+- Added `GITHUB_CLIENT_ID` (ValueFrom `cello/dev/portal/github-oauth-Dw0Yk1:client_id::`)
+- Added `GITHUB_CLIENT_SECRET` (ValueFrom `cello/dev/portal/github-oauth-Dw0Yk1:client_secret::`)
+- Execution role inline policy `portal-secrets-read` updated to include the GitHub OAuth secret ARN
+
+**Verified:** `GET https://portal.cello.mygentic.ai/sign-in` → 200. Task started clean
+(`portal.backend.started`). GitHub OAuth flow now has credentials available.
+
+**⚠️ CFN drift (portal):** The `cello-portal-dev` stack is in `UPDATE_ROLLBACK_COMPLETE`. The ALB
+physical resource referenced by CFN no longer exists (recreated during hibernate/wake). Any
+`cloudformation deploy` against this stack fails with "One or more load balancers not found." The live
+ALB (`cello-portal-dev/fdd51a5b5e19cfde`) and target group (`cello-Targe-ZRFN2F5UL4AG/2d8de3697b3d3c71`)
+work correctly — the drift is only in CFN's resource mappings. To fix: delete and recreate the stack,
+or import the live ALB into the stack's resources.
+
+---
+
 ## 📋 DOD-REGISTRY-1 — type registry published + ALB routing (2026-07-16)
 
 **Registry signer key:** Secrets Manager `cello/dev/registry/signer-key` (us-east-1).
@@ -75,8 +97,8 @@ via `aws cloudformation deploy`. Service 1/1 COMPLETED; `GET https://portal.cell
 - `fetchTrackRecord` discriminated-union fix (failures now visible, not silent)
 - GitHub OAuth flow (`/api/auth/github`, `/api/auth/github/callback`) + `composeGitHub`
 
-**GitHub OAuth not yet operational:** needs `GITHUB_CLIENT_ID` + `GITHUB_CLIENT_SECRET` env vars in the
-task definition (a registered GitHub OAuth App). Without them the flow fails closed in non-local envs.
+**GitHub OAuth NOW OPERATIONAL (2026-07-16):** `GITHUB_CLIENT_ID` + `GITHUB_CLIENT_SECRET` wired into
+task def rev 14 via Secrets Manager `cello/dev/portal/github-oauth`. See portal deploy entry above.
 
 ---
 
