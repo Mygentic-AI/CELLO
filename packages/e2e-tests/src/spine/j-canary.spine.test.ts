@@ -227,6 +227,11 @@ describe("J-CANARY — DOD-ZEROBUMP-CANARY-1: a type the system has never seen, 
     // ── PRESENT: A adds B as KNOWN, initiates session → signals presented ──
     expect(((await connA.call("cello_contact_add", { pubkey: pubB })) as { ok?: boolean }).ok).toBe(true);
     expect(((await connA.call("cello_use_agent", { name: "canaryA" })) as { ok?: boolean }).ok).toBe(true);
+    // Diagnostic: verify tier + wallet state before initiation
+    const contacts = await connA.call("cello_contacts", {});
+    const wallet = await connA.call("cello_status", {});
+    console.log("[CANARY-DIAG] contacts:", JSON.stringify(contacts));
+    console.log("[CANARY-DIAG] status:", JSON.stringify(wallet));
 
     const connB = await connectMcp(dirB, "canary-B");
     mcpConns.push(connB);
