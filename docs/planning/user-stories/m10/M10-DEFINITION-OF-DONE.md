@@ -170,20 +170,16 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   subject, issuer_pubkey, issuer_kind, type-as-opaque-string, status, superseded_by, revoked_at,
   accepting_node, scanner_version) + replication of records AND status changes over the existing
   replication path (spec §14.1). Flyway migration + `OpsAgentExpectedMigrationVersion` bump. —
-  🟡 (2026-07-14 — BUILT + REVIEWED, **16/16 green** against real Postgres. `V46`: `signal_records`
+  ✅ (2026-07-16 — BUILT + REVIEWED + REPLICATION PROVEN. `V46`: `signal_records`
   (opaque `type` — no CHECK/enum/type-predicated index; exact-allowlist column test for INV-DIR-DUMB;
   append-and-amend, no DELETE grant) **+ `authorized_issuers`** (seeded EMPTY — an unseeded directory
   notarizes nothing rather than falling open). Reviewed → **2 blocking findings, both fixed**: the
   lone `signal_hash` PK **would have wedged federation for all 20 tables on an ordinary timeout**
   (M10-D20 — composite PK + derived status), and `authorized_issuers` was missing entirely.
-  **Still OWED before ✅ (deploy-time, not code):** the replication clause is *inert* until
-  `./infra/setup-replication.sh` is re-run per environment — editing `PUBLICATION_TABLES` changes
-  nothing in a live DB, and nothing detects the omission (review F4: no error, no alarm, and all 16
-  tests still pass, because they run against ONE local Postgres with no replication at all). Verify
-  with `SELECT 1 FROM pg_publication_tables WHERE pubname='cello_pub' AND tablename IN
-  ('signal_records','authorized_issuers')` **on each node**, and put the live SSM
-  `expected-migration-version` at 46 (infra/STATE.md records a prior template-vs-live drift).
-  → Entries 8, 10.)
+  **Replication PROVEN (2026-07-16):** `pg_publication_tables` confirms both `signal_records` and
+  `authorized_issuers` in `cello_pub` on all 3 nodes (us-east-1, eu-central-1, ap-northeast-1).
+  Live data: 5 `signal_records` (accepting_node=us-east-1) replicated identically to all 3 regions.
+  SSM `expected-migration-version` = 47 in us-east-1 (ops-agent region). → Entries 8, 10.)
 
 ## Tier 1 — The write path + internal signals (phone, email)
 
@@ -237,7 +233,7 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   `issuer_pubkey` match for `issuer_kind: agent` (post-v1); status change replicates; the subject
   cannot revoke (selective disclosure is their lever); expiry is automatic via `expires_at`, not a
   write. —
-  🟡 (2026-07-14 — BUILT + RUN GREEN, review in flight. `revokeSignal` shares the chokepoint's
+  ✅ (2026-07-16 — BUILT + RUN GREEN + REPLICATION PROVEN. `revokeSignal` shares the chokepoint's
   `verifySignedRequest` (role-based `submitter` auth — a DIFFERENT active key revokes A's record,
   proving key-rotation survival; registry key refused, distinctly named). Out-of-order revoke writes
   a **tombstone** (STORE-DIR F3, closed at source) — carried by an `is_tombstone` flag added to V46,
@@ -246,23 +242,24 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   submit/revoke green on real Postgres. **Known property, journaled:** a compromised `submitter` key
   can pre-emptively tombstone a not-yet-minted hash (revoked is monotonic) — within the
   compromised-submitter model, not a new unprivileged vector; defense is revoking the key in
-  `authorized_issuers`. **Owed:** replication proof (three-node, batches with STORE-DIR-1). → Entry 11.)
+  `authorized_issuers`. **Replication proof (2026-07-16):** batched with STORE-DIR-1 — `signal_records`
+  (including revoke tombstones) in `cello_pub` on all 3 nodes; 5 rows replicated identically. → Entry 11.)
 - **DOD-REGISTRY-1** — the type registry as served signed data (spec §15.2.5, amended §14.8):
   a portal-signed document (type → class, lifecycle, default TTL, display label) the directory
   serves as opaque bytes; client fetches + caches with TTL; absent type =
   valid-but-unclassified (INV-TYPE-CARRY); registry update requires NO release anywhere.
   Design note first (format + signing key). —
-  🟠 (2026-07-14 — DIRECTORY HALF built + reviewed, 11/11 on real Postgres. `publishRegistry`
-  (role `registry`, strictly-greater anti-rollback), `getRegistryDocument`, `registry_documents`
-  singleton in V46, `POST /internal/signal/registry-publish` + public `GET /registry` (opaque bytes,
-  INV-DIR-DUMB — the directory never parses the doc). Reviewed → no blocking; F1 (`>=` vs its own
-  comments) resolved to `>`, F2 (version precision bound), test gaps filled. Design note Entry 12.
-  **CLIENT HALF SHIPPED (2026-07-16):** `type-registry.ts` + `registry-poll.ts` +
-  `registry-version-store-db.ts` in `core/daemon` (cello-client 9a3a39c, published daemon@0.0.64
-  via v0.0.113). Mirrors `http-manifest-poll.ts`: verify inner Ed25519 sig vs pinned pubkey,
-  anti-rollback (version strictly greater), failure-leaves-cache, absent type = unclassified
-  (INV-TYPE-CARRY). 8 tests green. **REMAINING (infra):** registry KMS key created + enrolled in
-  `authorized_issuers`; route behind the Tier 1 TLS listener. → Entries 13, 48.)
+  ✅ (2026-07-16 — FULLY DEPLOYED END-TO-END. Directory half: `publishRegistry` (role `registry`,
+  strictly-greater anti-rollback), `getRegistryDocument`, `registry_documents` singleton in V46,
+  `POST /internal/signal/registry-publish` + public `GET /registry` (opaque bytes, INV-DIR-DUMB).
+  Reviewed → no blocking. Client half: `type-registry.ts` + `registry-poll.ts` +
+  `registry-version-store-db.ts` in `core/daemon` (published daemon@0.0.65 via v0.0.114). Mirrors
+  `http-manifest-poll.ts`: verify inner Ed25519 sig vs pinned pubkey, anti-rollback, absent type =
+  unclassified (INV-TYPE-CARRY). 8 tests green. **Infra DONE (2026-07-16):** registry signer key
+  created (Secrets Manager `cello/dev/registry/signer-key`), enrolled in `authorized_issuers`
+  (role `registry`) all 3 regions, ALB `/registry` rule priority 7 → BootstrapTargetGroup (port 9090)
+  live in all 3 regions (manual — CFN drift), registry document v1 published (6 types), daemon
+  `registry.poll.success` confirmed (`oldVersion:null → newVersion:1`). → Entries 12, 13, 48.)
 - **DOD-MINT-INTERNAL-1** — the portal mints **phone** and **email** as real envelopes (the
   §14.10 backfill), **as ACCOUNT-subject signals (`subject_kind: account`, M10-D5)** — one
   envelope per fact, presentable by every agent under the account, agent-add a no-op:
@@ -307,16 +304,20 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   justification deserves the test); (c) **custody** — assert the ECS task definition carries no
   signing key material and `authorized_issuers`' pubkey equals KMS `GetPublicKey` output (the
   file-signer-in-prod bypass is otherwise invisible to every enforcer). —
-  🟠 (2026-07-15 — cases (a)+(b) PROVEN; case (c) owed (prod/KMS). **Core pipe LIVE:** portal
-  `runLoginMint` → notarize phone+email in `signal_records` → sealed deliver to 4 agents → daemon
-  `daemon.trust_signal.received` ×8, all `verified:true` → `wallet_trust_signals` 2 rows (phone + email).
-  **Case (a) supersession:** second login produced new hashes; daemon holds 4 rows (2 generations), both
-  `active`. **Case (b) failover (M10-D11):** `FailoverDirectoryClient` built + 7 unit tests (including
-  `writeAgent` advance revert-test added per reviewer MEDIUM) + deployed live (portal `dd6692f`, task def
-  rev 9, `DIRECTORY_API_URLS` = us1,eu1,ap1). Reviewer (Opus): SPEC FAITHFUL, no HIGH, MEDIUM fixed
-  (writeAgent test gap), LOWs accepted (integration wiring test = low-alpha-risk, zero-overhead sanity test
-  = cosmetic). Unit evidence suffices for alpha per reviewer. Custody case (c) stays a prod/KMS gate per
-  M10-D24. → Entries 30–34.)
+  ✅ (2026-07-16 — ALL THREE CASES PROVEN. Cases (a)+(b) proven 2026-07-15 (see below). **Case (c)
+  custody PROVEN 2026-07-16:** KMS key `17d95b3b-3ff8-436d-8729-02e19aee471a` (ECC_NIST_EDWARDS25519)
+  created, `KmsSigner` implementation wired (`submission-signer.ts`), IAM `kms:Sign`+`kms:GetPublicKey`
+  granted to task role, KMS pubkey `3d83d958...` enrolled in `authorized_issuers` (role `submitter`) in
+  all 3 regions, portal deployed on task def rev 15 (image `d27201d`). **Assertions pass:**
+  (1) task def carries NO `PORTAL_SUBMISSION_SEED` — no signing key material;
+  (2) `PORTAL_KMS_KEY_ID` is a public identifier (not secret);
+  (3) `kms:GetPublicKey` output == enrolled pubkey in directory.
+  **Cases (a)+(b) evidence (2026-07-15):** Core pipe LIVE: portal `runLoginMint` → notarize phone+email
+  in `signal_records` → sealed deliver to 4 agents → daemon `daemon.trust_signal.received` ×8, all
+  `verified:true` → `wallet_trust_signals` 2 rows. Case (a) supersession: second login produced new
+  hashes; daemon holds 4 rows (2 generations), both `active`. Case (b) failover: `FailoverDirectoryClient`
+  built + 7 unit tests + deployed live (portal `dd6692f`, task def rev 9, `DIRECTORY_API_URLS` = 3 nodes).
+  → Entries 30–34, 49.)
 
 ## Tier 2 — Presentation + consumption (the generic client pipeline) — closes with the canary
 
