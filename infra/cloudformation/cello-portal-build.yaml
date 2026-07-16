@@ -103,12 +103,19 @@ Resources:
                   - ecr:BatchGetImage
                   - ecr:GetDownloadUrlForLayer
                 Resource: !GetAtt PortalRepository.Arn
-              - Sid: SourceBucket
+              - Sid: SourceBucketObjects
                 Effect: Allow
                 Action:
                   - s3:GetObject
                   - s3:GetObjectVersion
                 Resource: !Sub "${BuildSourceBucket.Arn}/*"
+              - Sid: SourceBucketList
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                  - s3:GetBucketVersioning
+                Resource: !GetAtt BuildSourceBucket.Arn
 
   # ─── CodeBuild project ────────────────────────────────────────────────────────
   PortalBuildProject:
