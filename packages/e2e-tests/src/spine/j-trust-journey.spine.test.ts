@@ -26,7 +26,8 @@ import {
   psqlSpine,
   CELLO_CLIENT_ROOT,
   AUTH_DIRECTORY_NODE_KEY_HEX,
-  trustedDirectoryNode,
+  AUTH_DIRECTORY_NODE_ID,
+  AUTH_DIRECTORY_NODE_PUBKEY,
   writeConsortiumManifest,
   type SpineCluster,
   type Proc,
@@ -85,7 +86,13 @@ const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
   cluster = await startSpineCluster({ directoryNodeKeyHex: AUTH_DIRECTORY_NODE_KEY_HEX });
-  manifestEnv = writeConsortiumManifest(cluster.tmpDir, "journey", [trustedDirectoryNode()]);
+  manifestEnv = writeConsortiumManifest(cluster.tmpDir, "journey", [{
+    nodeId: AUTH_DIRECTORY_NODE_ID,
+    pubkey: AUTH_DIRECTORY_NODE_PUBKEY,
+    region: "local",
+    provider: "aws",
+    endpoint: cluster.directoryUrl,
+  }]);
 }, 180_000);
 
 afterAll(async () => {
