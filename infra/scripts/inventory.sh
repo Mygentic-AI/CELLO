@@ -238,7 +238,8 @@ capture_listener_rules() {
   # Resolve TG ARN → port for stable comparison (port is stable; ARN changes after ALB recreate)
   # Write Python to a temp file to avoid the stdin conflict (heredoc vs pipe both claim stdin)
   local py_tmp
-  py_tmp=$(mktemp /tmp/resolve_tg_XXXXXX.py)
+  py_tmp=$(mktemp)
+  trap "rm -f '$py_tmp'" RETURN
   cat > "$py_tmp" << 'PYEOF'
 import json, sys, subprocess
 
