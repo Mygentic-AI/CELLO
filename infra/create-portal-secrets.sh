@@ -19,7 +19,8 @@
 set -euo pipefail
 
 ENV="${1:-dev}"
-REGION="${AWS_REGION:-us-east-1}"
+# Never read AWS_REGION — Bedrock injects it as us-west-1. Use CELLO_REGION.
+REGION="${CELLO_REGION:-us-east-1}"
 STACK="cello-portal-data-${ENV}"
 
 get_out() {
