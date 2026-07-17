@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
 import { drainPickupForAgent, ackPickupDelete, sweepUndeliverablePickups } from "../pickup-repository.js";
-import { enqueuePickup, upsertIdentityHash } from "../agent-write-repository.js";
+import { enqueuePickup } from "../agent-write-repository.js";
 
 const DB_URL = process.env.DATABASE_URL ?? "postgresql://postgres:dev@localhost:5433/cello_spine";
 const AGENT = "trust-pickup-live-agent";
@@ -27,9 +27,12 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
     pool = new pg.Pool({ connectionString: DB_URL });
     await pool.query(`DELETE FROM pickup_queue WHERE agent_id = ANY($1)`, [[AGENT, OTHER_AGENT]]);
     await pool.query(`DELETE FROM identity_tree_entries WHERE agent_id = ANY($1)`, [[AGENT, OTHER_AGENT]]);
-    // Two authoritative anchors — one per signal kind (the one-anchor-per-(agent,kind) model).
-    await upsertIdentityHash(pool, { agentId: AGENT, signalKind: "webauthn", signalHash: HASH_WEBAUTHN });
-    await upsertIdentityHash(pool, { agentId: AGENT, signalKind: "phone", signalHash: HASH_PHONE });
+    await pool.query(
+      `INSERT INTO identity_tree_entries (agent_id, signal_kind, signal_hash, updated_at)
+       VALUES ($1, $2, $3, now()), ($1, $4, $5, now())
+       ON CONFLICT (agent_id, signal_kind) DO UPDATE SET signal_hash = EXCLUDED.signal_hash, updated_at = now()`,
+      [AGENT, "webauthn", HASH_WEBAUTHN, "phone", HASH_PHONE],
+    );
   });
 
   afterAll(async () => {

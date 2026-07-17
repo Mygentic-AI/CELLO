@@ -79,24 +79,11 @@ export async function applyRevocationFlag(
   return "applied";
 }
 
-/** TRUST-001 trust-signal HASH — one current hash per (agent, signal kind). Hash only, never plaintext. */
-export async function upsertIdentityHash(
-  pool: Queryable,
-  args: { agentId: string; signalKind: string; signalHash: string },
-): Promise<void> {
-  await pool.query(
-    `INSERT INTO identity_tree_entries (agent_id, signal_kind, signal_hash, updated_at)
-     VALUES ($1, $2, $3, now())
-     ON CONFLICT (agent_id, signal_kind) DO UPDATE
-       SET signal_hash = EXCLUDED.signal_hash, updated_at = now()`,
-    [args.agentId, args.signalKind, args.signalHash],
-  );
-}
 
 /** TRUST-001 sealed ciphertext — the agent's daemon pulls + ACKs it. signal_kind lets the drain JOIN
  *  the authoritative identity-tree hash for verification (AC-001).
  *
- *  SUPERSEDE semantics (matches the one-anchor-per-(agent,kind) model that upsertIdentityHash enforces):
+ *  SUPERSEDE semantics (one-anchor-per-(agent,kind) model):
  *  a new ciphertext for an (agent, signal_kind) REPLACES any prior UNDELIVERED one for that same kind.
  *  Without this, a re-enrolled signal leaves the prior sealed value in the queue; once the anchor moves
  *  to the new hash, that stale ciphertext hashes to the SUPERSEDED anchor on every drain → a permanent

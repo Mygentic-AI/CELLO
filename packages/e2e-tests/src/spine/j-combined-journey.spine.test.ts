@@ -127,10 +127,9 @@ describe("J-COMBINED-JOURNEY — DOD-T4-JOURNEY-1: all signal classes, v1 close"
 
     const createA = JSON.parse(cello(["create-agent", "alice"], { CELLO_DIR: dirA }).stdout) as { pubkey: string };
     const createB = JSON.parse(cello(["create-agent", "bob"], { CELLO_DIR: dirB }).stdout) as { pubkey: string };
-    const createC = JSON.parse(cello(["create-agent", "carol"], { CELLO_DIR: dirC }).stdout) as { pubkey: string };
+    cello(["create-agent", "carol"], { CELLO_DIR: dirC });
     const pubA = createA.pubkey;
     const pubB = createB.pubkey;
-    const pubC = createC.pubkey;
 
     await waitConnected(dirA, "A");
     await waitConnected(dirB, "B");

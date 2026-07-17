@@ -133,10 +133,9 @@ describe("J-TRUST-JOURNEY — DOD-T2-JOURNEY-1: live signal presentation→consu
 
     const createA = JSON.parse(cello(["create-agent", "alice"], { CELLO_DIR: dirA }).stdout) as { pubkey: string };
     const createB = JSON.parse(cello(["create-agent", "bob"], { CELLO_DIR: dirB }).stdout) as { pubkey: string };
-    const createC = JSON.parse(cello(["create-agent", "carol"], { CELLO_DIR: dirC }).stdout) as { pubkey: string };
+    cello(["create-agent", "carol"], { CELLO_DIR: dirC });
     const pubA = createA.pubkey;
     const pubB = createB.pubkey;
-    const pubC = createC.pubkey;
 
     await waitConnected(dirA, "A");
     await waitConnected(dirB, "B");
@@ -152,7 +151,7 @@ describe("J-TRUST-JOURNEY — DOD-T2-JOURNEY-1: live signal presentation→consu
     expect(agentIdA).toMatch(/\S/);
 
     // ── Seed A's wallet with phone + email envelopes (same pickup pattern as j-trust) ──
-    const { sealToRecipient, hash } = await loadSealer();
+    const { sealToRecipient } = await loadSealer();
     const { encodeTrustSignalEnvelope, hashTrustSignalEnvelope, encodeCbor } = await loadCodec();
 
     const phoneEnvelope: Envelope = {
