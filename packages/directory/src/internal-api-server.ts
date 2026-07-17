@@ -749,6 +749,60 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
       return;
     }
 
+    // ── DOD-PORTAL-SIGNAL-READ-1: active signals for a given account ───────────────────────────
+    // GET /internal/active-signals/<accountId>
+    // Returns all non-revoked, non-superseded signal types from signal_records_effective for an
+    // account. The portal uses this to display real signal status derived from the directory's
+    // notary ledger — revocations and supersessions are reflected on the next page load without
+    // any sync logic. Auth: same bearer key as all internal routes (SI-001).
+    const activeSignalsPrefix = "/internal/active-signals/";
+    if (req.method === "GET" && req.url?.startsWith(activeSignalsPrefix)) {
+      const providedKey = req.headers["x-cello-internal-api-key"];
+      if (!providedKey || providedKey !== internalApiKey) {
+        logger.warn("active_signals.auth.failed", { remoteAddr, correlationId });
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+
+      const accountId = req.url.slice(activeSignalsPrefix.length);
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(accountId)) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid account_id — expected a UUID" }));
+        return;
+      }
+
+      try {
+        const { rows } = await pool.query<{
+          type: string;
+          signal_hash: string;
+          first_notarized_at: string | null;
+          issuer_kind: string | null;
+        }>(
+          `SELECT type, signal_hash, first_notarized_at::text, issuer_kind
+           FROM signal_records_effective
+           WHERE subject_kind = 'account' AND subject = $1
+             AND effective_status = 'active'
+           ORDER BY first_notarized_at DESC NULLS LAST`,
+          [accountId],
+        );
+
+        logger.info("active_signals.query.ok", { accountId, count: rows.length, correlationId });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ signals: rows }));
+      } catch (err: unknown) {
+        const pgErr = err as { code?: string };
+        const isDbError = typeof pgErr.code === "string" && /^\d{5}$/.test(pgErr.code);
+        const reason = isDbError
+          ? `database_error:${pgErr.code}`
+          : err instanceof Error ? err.message : String(err);
+        logger.error("active_signals.query.failed", { reason, correlationId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "active signals query failed" }));
+      }
+      return;
+    }
+
     // All other paths → 404
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "not found" }));
