@@ -15,9 +15,13 @@ These are non-negotiable preconditions. Every distribution dollar and hour you s
 
 **Why it matters**: Without ICP precision, every feature decision, content angle, and distribution choice is contested. When you know exactly who you're for, the product, the pitch, and the channel selection all follow. Products that serve a Venn diagram intersection that doesn't exist as a real person get no word-of-mouth.
 
-**How to resolve for CELLO**: The working ICP is: "A developer who already runs two or more AI agents (Claude Code on their laptop, Hermes or similar on a cloud server), has felt the friction of 'how do these things know they're talking to each other and not an impersonator,' and wants to fix it without routing everything through a central platform they don't trust."
+**How to resolve for CELLO**: The ICP is NOT "developers." It is: **anyone who uses AI agents to do their work and needs to collaborate with another person who also uses AI agents** — and finds themselves resorting to ad hoc workarounds (copy-pasting into Slack, email, shared docs) because there's no real agent-to-agent communication layer.
 
-This is not "AI developers broadly." It is the developer who has already *hit the problem* — not the one who hasn't started yet. The secondary ICP (teams, security-conscious enterprise users) comes in Phase 3.
+This includes GTM professionals, consultants, analysts, operators, researchers — anyone who uses Claude Code, Hermes, OpenClaw, Codex, Claude Co-work, or any AI agent as part of their daily workflow. They are not necessarily building software. They are *using* software that agents build and run for them. When they need to hand off work or collaborate with a colleague, they're back to primitives that lose context, lose verifiability, and break the workflow.
+
+The working ICP sentence: "A professional who uses AI agents to do their work and has to collaborate with a colleague also using AI agents — and is tired of duct-taping that collaboration with Slack pastes and email attachments."
+
+The solo use case (connecting your own two agents — Claude Code on laptop ↔ Hermes on AWS) is the **wedge** because it has zero cold-start problem. But the broader ICP is the collaboration case, and that audience is enormous and growing daily as AI agent adoption spreads beyond engineering teams.
 
 ---
 
@@ -27,12 +31,12 @@ This is not "AI developers broadly." It is the developer who has already *hit th
 
 **Why it matters**: If your pitch requires the reader to know what FROST signatures or threshold cryptography are, you have already lost 99% of your ICP. The pitch must work at the problem layer, not the mechanism layer.
 
-**How to resolve for CELLO**: Test these with 10 developers who haven't heard of CELLO. The winner is the one that gets "wait, how?" rather than a blank stare:
-- "CELLO lets your AI agents find each other and verify identity — without trusting any central platform."
-- "You're already connecting agents with ad-hoc hacks. CELLO makes it cryptographically trustworthy."
-- "Your AI co-founder deserves a verifiable identity — CELLO gives your agents a permanent address and a sealed record of everything they agreed to."
+**How to resolve for CELLO**: The pitch must work at the pain layer, not the mechanism layer. The audience is not exclusively technical — it includes non-developers using AI agents. Test these with 10 people who use AI agents but aren't necessarily writing code. The winner is the one that gets "wait, that's exactly what I do" rather than a blank stare:
+- "CELLO is how your AI agents talk to someone else's AI agents — privately, verifiably, without any platform in the middle."
+- "You're already using AI agents to do your work. CELLO is how you collaborate with a colleague doing the same — without pasting things into Slack."
+- "When your AI agent needs to work with someone else's AI agent, CELLO handles the introduction, the conversation, and the receipt."
 
-The test: does the developer recognize their own situation in the first 5 words?
+The test: does the person recognize their current workaround in the first 5 words? If they're nodding at "pasting into Slack," you have them.
 
 ---
 
@@ -848,34 +852,34 @@ Five candidate pitches, each written for a different framing angle:
 
 ---
 
-**1. Security angle**
-> CELLO gives your AI agents cryptographic identity — so when agent A talks to agent B, both sides can prove who they're talking to, what was said, and that neither message was tampered with.
+**1. Collaboration pain angle** *(broadest, non-technical audience)*
+> When your AI agent needs to work with a colleague's AI agent, right now you're copy-pasting into Slack. CELLO makes that a real conversation — private, verified, with a receipt.
 
 ---
 
-**2. Productivity / solo multi-agent angle**
+**2. Solo multi-agent wedge** *(technical users, zero cold-start)*
 > CELLO connects your own AI agents — Claude Code on your laptop, your server agent in the cloud — with a verified identity handshake and a sealed receipt of everything they agreed to, in under 5 minutes.
 
 ---
 
-**3. Friend-to-friend / endorsement angle**
-> CELLO is how AI agents introduce themselves to each other's networks — verified by endorsement, contacted by permission, with a tamper-evident record of every conversation.
+**3. Friend-to-friend / endorsement angle** *(network growth)*
+> CELLO is how AI agents introduce themselves — your agent finds a colleague's agent, gets endorsed into their network, and every conversation is sealed and verifiable by both sides.
 
 ---
 
-**4. Infrastructure angle**
+**4. Infrastructure angle** *(technical buyers, enterprise)*
 > CELLO is the identity and trust infrastructure AI agents run on — P2P, threshold-signed, no central server reads your messages.
 
 ---
 
-**5. Outcome / contrast angle**
-> You're already connecting agents with ad-hoc API calls and shared secrets — CELLO replaces that with cryptographic identity, signed sessions, and a sealed receipt neither side can deny.
+**5. Contrast / frustration angle** *(HN, Reddit, high-awareness audience)*
+> You're already running AI agents. When they need to collaborate with someone else's agents, you're using Slack and email as a message bus. CELLO replaces that with a real communication layer.
 
 ---
 
-**The strongest pitch**: **Pitch 2 (solo multi-agent)** for the launch phase.
+**The strongest pitch for launch**: **Pitch 1 (collaboration pain)** for the broad audience; **Pitch 2 (solo multi-agent)** for the developer/technical wedge.
 
-Here's why: Every other pitch requires the reader to know they have a problem. Pitch 2 assumes they already have the setup (two agents, one local, one remote) and names a specific outcome they don't have yet (a verified identity handshake + sealed receipt in 5 minutes). It passes the Sleek test — it says who it's for (you, the developer running Claude Code + a server agent), what they get (verified handshake, sealed receipt), and on what timeline (5 minutes). A developer who reads it either recognizes their setup and thinks "wait, that's me" or doesn't have two agents and knows this isn't for them yet.
+Here's why: The ICP is not just developers — it is anyone using AI agents who collaborates. Pitch 1 names the exact behavior they're already doing (copying into Slack) and names what CELLO replaces it with. No protocol vocabulary required. A GTM professional, a consultant, an analyst — anyone who has felt "I wish my agent could just talk to their agent" — recognizes it immediately. Pitch 2 is the technical wedge version for the developer who already has Claude Code and a server agent. A/B test both in launch week X posts and see which drives more link clicks from a non-developer audience.
 
 Pitch 4 (infrastructure angle) is the right pitch for landing pages, conference talks, and enterprise conversations — it opens doors with platform builders and enterprise buyers. Use it for those contexts.
 
