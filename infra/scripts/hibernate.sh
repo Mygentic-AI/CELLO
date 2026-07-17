@@ -300,10 +300,13 @@ for REGION in "${TARGET_REGIONS[@]}"; do
   nat_tags=$(echo "${nat_tags}"               | jq -c .)
   dir_alb_config=$(echo "${dir_alb_config}"   | jq -c .)
   relay_alb_config=$(echo "${relay_alb_config}" | jq -c .)
+  [[ -z "$dir_rules"   || "$dir_rules"   == "null" ]] && dir_rules='[]'
+  [[ -z "$relay_rules" || "$relay_rules" == "null" ]] && relay_rules='[]'
   dir_rules=$(echo "${dir_rules}"             | jq -c .)
   relay_rules=$(echo "${relay_rules}"         | jq -c .)
   [[ -z "$ep_config" || "$ep_config" == "null" ]] && ep_config='{}'
   ep_config=$(echo "$ep_config" | jq -c .)
+  [[ -z "$portal_alb_config" || "$portal_alb_config" == "null" ]] && portal_alb_config='{}'
   portal_alb_config=$(echo "${portal_alb_config}" | jq -c .)
 
   # Assemble per-region state
