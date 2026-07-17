@@ -13,7 +13,9 @@
 set -euo pipefail
 
 ENV="${1:-dev}"
-REGION="${AWS_REGION:-us-east-1}"
+# Never read AWS_REGION — it is a reserved env var that Bedrock injects with an unexpected
+# value (us-west-1). Use an explicit override var CELLO_REGION, defaulting to us-east-1.
+REGION="${CELLO_REGION:-us-east-1}"
 PORTAL_DIR="${PORTAL_DIR:-/Users/andrep/Documents/code/cello-portal}"
 
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"

@@ -16,12 +16,13 @@
 # NOT need to be in the directory VPC for directory access, only for its own RDS.
 #
 # Usage:  infra/deploy-portal.sh [dev|staging|production]
-#   env:  AWS_REGION (default us-east-1), PORTAL_DIR (default ../cello-portal),
+#   env:  CELLO_REGION (default us-east-1), PORTAL_DIR (default ../cello-portal),
 #         ALARM_TOPIC_ARN (optional SNS topic for the delivery-failure alarm)
 set -euo pipefail
 
 ENV="${1:-dev}"
-REGION="${AWS_REGION:-us-east-1}"
+# Never read AWS_REGION — Bedrock injects it as us-west-1. Use CELLO_REGION.
+REGION="${CELLO_REGION:-us-east-1}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CFN="$HERE/cloudformation"
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"

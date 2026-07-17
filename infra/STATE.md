@@ -9,6 +9,18 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🌐 Portal deploy — fix migration 0006 FK crash-loop (2026-07-17)
+
+**Task definition `cello-portal-dev:22`** — registered manually (CFN drift). Image `7078504`.
+ECS service updated via `aws ecs update-service --force-new-deployment`. Deployment: PRIMARY 1/1 COMPLETED.
+`portal.backend.started` confirmed with `migrationVersion: 0006_github_connections`. Portal live at https://portal.cello.mygentic.ai.
+
+**Root cause:** Image `e237493` (task def :21) contained migration 0006 with `REFERENCES account(id)` — the `account` table PK is `account_id`. Migration failed on startup → crash-loop. Fix committed in `4695ec2`, image `7078504` built via CodeBuild.
+
+**Note:** `build-portal.sh` has a latent `AWS_REGION` bug — Bedrock sets this to `us-west-1`, causing the script to target the wrong region. Worked around by calling CodeBuild API directly with `--region us-east-1`. Script needs fixing.
+
+---
+
 ## 🌐 Portal deploy — fix GitHub OAuth `?github=error` (2026-07-16)
 
 **Task definition `cello-portal-dev:20`** — registered manually (CFN drift). Image `e9d4381` (same).
