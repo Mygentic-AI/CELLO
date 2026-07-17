@@ -690,6 +690,13 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   designs are not foreclosed. Do not code any of it this milestone.
 
 ## Post-v1 — explicitly deferred, tracked so nothing falls between milestones
+- **DOD-PORTAL-SIGNAL-READ-1** — portal trust-signals page derives active-signal status by querying
+  the directory, not shadow portal DB records. Requires: (a) extend `/internal/signal/query` with a
+  new `query: "active-signals"` operation that returns non-revoked, non-superseded signal kinds for
+  a given `account_id` from `notarized_signals`; (b) add `DirectoryClient.queryActiveSignals()`
+  in the portal; (c) replace per-table DB reads on the trust-signals page with that single call.
+  Consequence: revocations made via the daemon CLI (or any path) are reflected on the portal on next
+  page load with no sync logic. Needs a directory deploy.
 - **Endorsement intake (Endorsement Mother)** — the `issuer_kind: agent` creation path: intake
   role, deterministic scanner (versioned, byte-identical), submitter-accountability flags,
   delivery to subject. Portal-routed at launch per spec §7 amendment; per-node is the
