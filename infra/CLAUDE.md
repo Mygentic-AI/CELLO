@@ -316,6 +316,12 @@ Skipping step 3 means the new pipeline will never be triggered by GitHub pushes.
 
 ---
 
+## Hibernation — No Infrastructure Changes While Down
+
+**Never make AWS changes when the environment is hibernated.** Missing ALBs, ECS services at 0, or stopped RDS instances during hibernate are intentional — not failures to fix. The hibernate/wake scripts maintain an exact inventory; any manual change made while infra is down corrupts that inventory and causes the wake script to fail or create duplicate resources. If infra looks broken and you're not sure whether the environment is live, ask before touching anything.
+
+---
+
 ## deploy.sh Is the Only Deployment Mechanism
 
 **All CFN stack changes go through `deploy.sh`.** The CI/CD pipelines only swap Docker images — they do NOT deploy CloudFormation templates. Any change to task definitions (env vars, secrets, ports, IAM), ALBs, security groups, or any other CFN-managed resource requires running `deploy.sh`.
