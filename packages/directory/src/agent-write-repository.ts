@@ -103,9 +103,7 @@ export async function enqueuePickup(
   args: { agentId: string; signalKind: string; ciphertext: Buffer; owningNodeId: string; signalHash?: string },
 ): Promise<void> {
   // M10-D22: an M10 wallet-signal delivery carries its OWN signal_hash on the row (its anchor is
-  // signal_records, not identity_tree_entries, so the drain has nothing to JOIN). M8 callers omit it
-  // (NULL) and the drain resolves the hash via the identity-tree JOIN — both paths share this one upsert
-  // and its supersede semantics (one pending per (agent, kind); a re-mint replaces the prior pending row,
+  // signal_records). One pending per (agent, kind); a re-mint replaces the prior pending row,
   // INCLUDING its signal_hash, so a superseding delivery cannot leave the old hash behind).
   await pool.query(
     `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, owning_node_id, signal_hash) VALUES ($1, $2, $3, $4, $5)

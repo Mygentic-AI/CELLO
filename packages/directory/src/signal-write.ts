@@ -404,7 +404,7 @@ export interface DeliverResult {
  * M10-D22). The mirror of the M8 `trust_signal_ciphertext` agent-write arm it REPLACES: same pickup
  * transport, but authenticated by the SAME signer/role as `submit` (not a bearer key), the ciphertext
  * carries a CBOR envelope (not a canonical-JSON record), and the pickup row carries the signal_hash
- * itself (its anchor is `signal_records`, not `identity_tree_entries`).
+ * itself (its anchor is `signal_records`).
  *
  * PRECONDITION — the hash must already be genuinely NOTARIZED here (a real submission, NOT a revoke
  * tombstone). Deliver never notarizes; it refuses to queue a ciphertext unless a NON-TOMBSTONE
