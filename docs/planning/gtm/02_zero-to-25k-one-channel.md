@@ -1,3 +1,12 @@
+---
+founder: unknown (names not stated in transcript)
+company: Sleek (AI-powered mobile app design tool)
+stage: $25K MRR (~6 months post-launch)
+date: unknown
+---
+
+The Sleek founders — two or three engineers with no marketing background — built a visual editor for Next.js called Reweb, watched it get outflanked by AI-native design tools like Lovable, ran out of money in Bali, and gave themselves one last shot. They pivoted to Sleek, an AI tool that generates polished mobile app designs for non-technical founders, hit $10K MRR in four weeks and $25K MRR in six months, and did it almost entirely through X. Their story is worth reading because it is a clean example of what happens when a team locks in a specific ICP, engineers a content system around X's algorithm rather than just posting, and enforces a hard distribution-first rule after launch — and because the tactics they used (comment-trigger posts, trend vocabulary hooks, the fake beta mechanic, GEO reverse-engineering via Perplexity) are directly portable to a developer tool with a technical audience.
+
 # GTM Tactics: "Zero to $25K/Month With One Marketing Channel"
 Source: https://youtu.be/cFmmGoO3sZE
 Channel: Florian Darroman (@asyncr0ne)

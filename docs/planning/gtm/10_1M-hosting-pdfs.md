@@ -1,3 +1,12 @@
+---
+founder: Elston
+company: Tiny Host
+stage: $1M ARR
+date: unknown
+---
+
+Elston is a software engineer who built Tiny Host — a drag-and-drop file hosting tool for non-technical people — as a deliberate marketing exercise, not a technical challenge. He launched it in 2019 as a side project while working full-time at a bank, picked the two-"i" domain ("Tiiiny") because it was $30 versus $300 for the one-"i" version, and spent 2.5 years building it evenings and weekends before quitting at ~$8K MRR. By the time of this interview he had crossed $1M ARR with a team of under five people, zero external funding, and 2M+ registered users — driven almost entirely by SEO and YouTube tutorials that compounded for years before the vibe-coding wave (people hosting Claude-generated HTML) became his biggest growth driver. His story is worth reading because it is a precise case study in boring, compounding distribution: slow steady growth, user-driven product decisions, and a simple product held deliberately simple while a new non-technical market formed around it.
+
 # GTM Tactics: "I Make $1M/Year Hosting PDFs on the Internet"
 Source: https://youtu.be/CQkspNWlJDM
 Channel: Florian Darroman (@asyncr0ne)

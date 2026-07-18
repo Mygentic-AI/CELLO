@@ -1,3 +1,12 @@
+---
+founder: Mickey
+company: Zeno (originally getlate.dev) — social media API aggregator
+stage: $1M ARR (~$83K MRR) reached in 10 months
+date: unknown
+---
+
+Mickey is a 25-year-old founder based in Barcelona who previously built Ucademy, a VC-backed edtech company in Spain with ~100 employees that he eventually left because he no longer felt like an owner. After a year of smaller bootstrapped experiments (each topping out at 5-8K MRR), he started Zeno — a social media API that lets SaaS companies add Meta, TikTok, YouTube, and other platform integrations without handling developer programs, compliance, or scaling infrastructure themselves. He shipped V1 in a weekend with a landing page, a beta API, and a Stripe account, then ran Google Ads from day one before the product was polished or the LTV/CAC made sense. Zeno reached 10K MRR in the first three months, doubled monthly from there, and hit $1M ARR in under 10 months with a five-person team, near-zero enterprise churn (because ripping out Zeno means disconnecting all your users' social accounts), and two channels — Google Ads and SEO — doing all the work.
+
 # GTM Tactics: "I make $1M/year selling access to APIs I don't own"
 Source: https://youtu.be/fkdsvPVejh8
 Channel: Florian Darroman (@asyncr0ne)

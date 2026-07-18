@@ -1,3 +1,12 @@
+---
+founder: Youssef
+company: Scalelist (B2B SaaS) / Scale Lab (agency, sold)
+stage: $22.5K MRR at time of LinkedIn cease-and-desist; post-pivot and post-Tiny Seed raise at time of recording
+date: unknown
+---
+
+Youssef is the CEO and co-founder of Scalelist, a B2B SaaS that provides contact data (emails, phone numbers) and an MCP server for AI-native access to that data. He and his co-founder Arnaud built Scale Lab, a cold outbound lead-generation agency, to roughly $750–800K/year in revenue before productizing the internal tooling they had built to run the agency into Scalelist. Both founders are non-technical — they found a technical co-founder through an Indie Hackers post and later raised from Tiny Seed in January 2025. Four months after raising, LinkedIn issued a cease-and-desist that threatened 100% of their revenue overnight at $22.5K MRR, forcing a full pivot away from LinkedIn data extraction toward being a broader email/phone data API and MCP provider. This interview covers the agency-to-SaaS transition playbook, how YouTube became 50% of their customer acquisition, and how they survived a platform-risk wipeout mid-growth.
+
 # GTM Tactics: "I Sold My $800K/Year Agency to Go All-In on My SaaS"
 Source: https://youtu.be/_IXeM651Jj8
 Channel: Florian Darroman (@asyncr0ne)

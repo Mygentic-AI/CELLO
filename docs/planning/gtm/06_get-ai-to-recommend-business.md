@@ -1,3 +1,12 @@
+---
+founder: Tanya (rankingonai.com)
+company: rankingonai.com — SEO and AI visibility agency for SaaS
+stage: unknown
+date: unknown
+---
+
+Tanya is a founder who built and sold a bootstrapped SaaS for six figures before starting rankingonai.com, an agency that does SEO and AI visibility exclusively for SaaS companies — clients include cal.com, Suno, Asana, and several YC-backed companies. She appears on Florian Darroman's channel to walk through a six-step playbook for getting a SaaS product cited by ChatGPT and other LLMs. The episode is densely tactical: keyword discovery from landing page copy, CMS setup, bottom-of-funnel content strategy, backlink exchange mechanics, affiliate outreach, and YouTube as a fast AI citation channel. A standout case study — tripling daily signups for a client from 30 to 98 in two months purely through SEO — grounds the tactics in real outcomes. For CELLO, this is the most actionable single episode in the GTM vault: it maps directly to content strategy, distribution channel prioritization, and the foundational infrastructure needed before any GEO work compounds.
+
 # GTM Tactics: "How to Get AI to Recommend Your Business"
 Source: https://youtu.be/SeIk6owE5LM
 Channel: Florian Darroman (@asyncr0ne)

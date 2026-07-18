@@ -1,3 +1,12 @@
+---
+founder: Roman
+company: GojiBerry
+stage: $300k MRR (~$3.5M/year ARR) at time of recording
+date: unknown
+---
+
+Roman is the founder of GojiBerry, a LinkedIn AI agent tool for outbound lead generation. At the time of this recording, GojiBerry had just hit $300k MRR (approximately $3.5M ARR) roughly one year after founding — up from $50k MRR when Roman appeared on the same podcast six months earlier. He grew through a deliberate channel-sequencing strategy, adding one channel at a time only after mastering the prior one: outbound (0–6k MRR), Reddit (10–25k), content plus blueprints (25–75k), then X, B2B influencers, sponsored newsletters, and a lifetime affiliate program (75–300k). He went through Y Combinator during this phase and retained approximately 85% equity after raising. This episode is worth reading because it documents, with explicit MRR breakpoints, exactly when each GTM channel contributed, when to cut versus keep, and how to use the AI-angle framing to expand TAM and distribution reach.
+
 # GTM Tactics: "I make $3.5M/year with a LinkedIn AI Agent"
 Source: https://youtu.be/4oi0Iks0Ats
 Channel: Florian Darroman (@asyncr0ne)

@@ -1,3 +1,12 @@
+---
+founder: Loïc
+company: Drop Magic (previously Minea)
+stage: $83K MRR (~$1M ARR, reached in 7 months)
+date: unknown
+---
+
+Loïc is a French serial entrepreneur who spent five years building products no one used before finding PMF. He co-founded Minea — an ad-intelligence SaaS for e-commerce dropshippers — with French YouTube star Yomi Denzel, scaling it 100% bootstrapped to $750K MRR. After stepping down as CEO, he applied the exact same playbook to Drop Magic, an AI-powered e-commerce store builder, and reached $83K MRR in seven months with creator Batista on the founding cap table. This interview covers how he broke every growth plateau from $0 to $750K, why a creator co-founder is a structural cheat code (distribution, product feedback, and unit economics in one hire), and what he would do if starting today from zero.
+
 # GTM Tactics: "I Built a SaaS From 0 to $83K MRR in 7 Months"
 Source: https://youtu.be/lrcGX3-8URk
 Channel: Florian Darroman (@asyncr0ne)

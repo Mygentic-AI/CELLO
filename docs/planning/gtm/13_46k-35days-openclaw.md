@@ -1,3 +1,12 @@
+---
+founder: Nevo
+company: Post This (postis.io)
+stage: $66K MRR at time of recording (grew from $20K to $66K in 35 days)
+date: unknown
+---
+
+Nevo is a serial founder and self-described growth hacker who built Post This, an open-source social media scheduling tool with 6 million Docker downloads. He grew the product from zero to $20K MRR over 18 months through trend-riding tactics — N8N template partnerships, an MCP launch, and consistent Reddit and Product Hunt presence — then tripled revenue to $66K MRR in 35 days by positioning Post This as a required node in OpenClaw agent workflows. The inflection point was an organic X Article written by a 200-follower user named Oliver that hit 7 million views and triggered 700 trials in a single week. Nevo's story is the clearest documented example of how a bootstrapped SaaS can ride the agentic wave by becoming infrastructure inside other people's skills rather than competing for direct user attention. His 28 tactics span Product Hunt mechanics, X Article algorithm exploitation, CLI-over-MCP context efficiency, and blue ocean positioning in the developer/agentic segment that incumbents like Buffer have ignored.
+
 # GTM Tactics: "I made $46K in 35 days with OpenClaw"
 Source: https://youtu.be/Bf7N80zpR3k
 Channel: Florian Darroman (@asyncr0ne)

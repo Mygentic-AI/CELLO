@@ -1,3 +1,12 @@
+---
+founder: Nick
+company: SideShift
+stage: $8M ARR
+date: unknown
+---
+
+Nick and his co-founders built SideShift starting in their senior year at the University of Wisconsin Madison in 2023, initially as a local job marketplace connecting Gen Z students with bars and restaurants on campus. After six months of door-to-door hustling, breaking into dorms to pass out flyers, and scaling across Big 10 and SEC schools, they realized the math would take seven years to reach $1M ARR. Tech Twitter unexpectedly pivoted the product for them — users started hiring college students for UGC creation — and the founders followed the signal, re-engineering student profiles into creator profiles. They went from zero to $2.4M ARR in 12 months after the pivot, reaching $8M ARR as a seedstrapped operation with 80% inbound revenue driven entirely by referrals, personalized customer relationships, and a volume-first UGC content engine.
+
 # GTM Tactics: "How we built a SaaS to $8M a year (at 24yo)"
 Source: https://youtu.be/rG4X7vQuWWs
 Channel: Florian Darroman (@asyncr0ne)

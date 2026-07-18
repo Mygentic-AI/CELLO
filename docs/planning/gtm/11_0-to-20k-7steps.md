@@ -1,3 +1,12 @@
+---
+founder: Florian Darroman (@asyncr0ne)
+company: Distrib
+stage: $12K MRR at time of recording; grew to $20K MRR in ~30 days
+date: unknown
+---
+
+Florian Darroman is a serial SaaS founder who previously built a website to $500K/month before selling it, then systematically interviewed SaaS founders doing $100K–$10M/year to extract their distribution playbooks. He applied those learnings to his own product, Distrib (a content distribution SaaS), taking it from $12K to $20K MRR in approximately 30 days. This episode distills that synthesis into a 7-step sequenced framework — covering the three marketing buckets (viral, boring, scary), GEO (AI search optimization) as the fastest-returning boring tactic, and the exact order in which to pursue each channel. It is worth reading because the sequencing logic — validate first, build long-term compounders in parallel with short-term spikes, defer paid spend until a channel is proven — is a complete, opinionated anti-confusion guide for a pre-revenue founder deciding where to spend the next 90 days.
+
 # GTM Tactics: "How I Grew a SaaS From $0 to $20K MRR (7-Step Plan)"
 Source: https://youtu.be/4eVEbbzVtTk
 Channel: Florian Darroman (@asyncr0ne)

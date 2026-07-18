@@ -1,3 +1,12 @@
+---
+founder: Florian Darroman (his own vlog, @asyncr0ne)
+company: Bootstrapped SaaS + creator community business (product name not stated in episode)
+stage: $11K MRR at time of recording
+date: unknown
+---
+
+Florian Darroman is a French founder who rebuilt his entire creator business from scratch in English after abandoning a working French-language audience — a transition his peers and advisors told him was a mistake. This episode, filmed during a first-ever trip to Hong Kong, pairs a travel vlog with an interview of Youssef, a B2B SaaS founder running a ~7,000-user product with co-founder Arnaud. Florian reveals he just crossed $11K MRR and runs three revenue streams in parallel: a paid community, a SaaS product, and sponsorships. The episode is lighter on concrete tactics than his others — it is primarily a mindset and sustainability document — but delivers strong material on deliberate community targeting (the English SaaS founder community on X, named specifically), multi-revenue-stream architecture, and the 1.5-year ramp he endured before any of it worked. Worth reading for the content sustainability filter ("love the process or quit") and the market-selection discipline, both of which translate directly to pre-launch GTM decisions.
+
 # GTM Tactics: "Day 77 building a $100K/month SaaS in Hong Kong"
 Source: https://youtu.be/TnNSduLkkus
 Channel: Florian Darroman (@asyncr0ne)

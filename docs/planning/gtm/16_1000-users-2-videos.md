@@ -1,3 +1,12 @@
+---
+founder: Marcus
+company: Valur (YouTube research SaaS)
+stage: 1,000 paying users (bootstrapped, ~60 days post-launch)
+date: unknown
+---
+
+Marcus built the second-largest YouTube education channel in the world (~500K subscribers) almost entirely alone, using a webcam, a $100 mic, and a $50 Amazon light — while simultaneously founding Valur, a YouTube analytics SaaS that tracks competitor performance and identifies high-demand, low-competition video topics. He went from zero to 1,000 paying customers in roughly two months using only two YouTube videos, both structured as problem-aware content that walked viewers through a methodology and let the product sell itself as the execution layer. His channel success is built on a deliberately narrow set of six fundamentals (frequency, X-factors, serial consistency, retention, packaging, ideation) that he executes better than competitors who chase 20 things at once. The interview is a rare case where the same person teaches the YouTube growth strategy AND demonstrates it live — making it the most directly applicable GTM reference for a bootstrapped founder trying to convert a small audience into early paying users.
+
 # GTM Tactics: "How I got 1,000 paying users for my SaaS with only 2 videos (copy me)"
 Source: https://youtu.be/ncsGdxWToCc
 Channel: Florian Darroman (@asyncr0ne)

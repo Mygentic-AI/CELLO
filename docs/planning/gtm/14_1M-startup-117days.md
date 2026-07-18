@@ -7,6 +7,15 @@ status: active
 description: Tactic extraction from Florian Darroman's interview with Yaser (Chatbase founder, $0→$1M ARR in 117 days, bootstrapped). Applied to CELLO's pre-launch context.
 ---
 
+---
+founder: Yaser
+company: Chatbase
+stage: $1M ARR at day 117; $8M ARR at time of recording
+date: unknown
+---
+
+Yaser is a solo bootstrapped founder who built Chatbase, an AI chatbot builder that lets businesses create custom chatbots trained on their own data. He grew from $0 to $1M ARR in 117 days with no funding and just 16 social media followers at launch, then reached $8M ARR by the time of this interview. Before Chatbase he interned at Tesla and Meta and built Rate My Courses — a side project still pulling 50,000 monthly visitors without any ongoing effort — which taught him the fundamentals of product marketing from scratch. His story is worth reading because it is one of the fastest bootstrapped AI SaaS ramps on record, and his tactics (structured demo post, PLG onboarding, channel partnerships, churn-as-product-quality) are directly extractable rather than retrospective mythology.
+
 # GTM Tactics: "I built a $1M Startup in 117 days (I had 16 followers)"
 Source: https://youtu.be/8ZWHB4GvBKk
 Channel: Florian Darroman (@asyncr0ne)

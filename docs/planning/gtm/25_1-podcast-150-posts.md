@@ -1,3 +1,12 @@
+---
+founder: Cody
+company: multiple ventures (no single company named)
+stage: millions in revenue across 20+ businesses
+date: unknown
+---
+
+Cody is a serial entrepreneur who has built more than 20 profitable businesses generating millions in revenue. He appears on Florian Darroman's YouTube channel to lay out what he calls the highest-leverage distribution channel available to founders in 2026: an industry-specific podcast. The core playbook converts one weekly hour of recording into roughly 150 pieces of content — newsletters, LinkedIn posts, tweets, ebook lead magnets, and short clips — all repurposed from a single transcript using AI tools. The content compounds over 90 days to 12 months, building enough parasocial trust that prospects arrive at a sales call already buyer-ready. Cody's key sequencing caveat is that direct response (cold DMs, cold email) must come first to get early customers; the podcast engine runs in parallel as the long-term trust flywheel, not a replacement for immediate outreach.
+
 # GTM Tactics: "Distribution Cheatcode: 1 Podcast → 150 Posts → Customers on Autopilot"
 Source: https://youtu.be/YqTyl1H6U6k
 Channel: Florian Darroman (@asyncr0ne)

@@ -1,3 +1,12 @@
+---
+founder: Oliver (surname not given on recording)
+company: Snuggly (home interior design app); Larry skill on OpenClaw CrawlHub marketplace; day job at RevenueCat
+stage: Early revenue — affiliate commissions (Posters scheduling tool), a Bags app meme coin, and app subscription conversions; 1,600+ installs of the free Larry skill within the first week; no MRR figure stated
+date: Thursday, 19 February (year not stated; context points to early 2026)
+---
+
+Oliver is a solo founder and RevenueCat employee who built "Larry" — an OpenClaw agent that automates the full TikTok-to-revenue funnel for his home interior design app, Snuggly. He gave the Larry skill away free on the OpenClaw marketplace and co-authored a viral article (7 million X impressions) with the agent itself, turning both into distribution vehicles that drove affiliate income, a meme coin windfall, and app conversions. At the time of recording he had been running OpenClaw for under two weeks and had already seen a user get their first paying customer within 48 hours of installing his skill. The episode is worth reading for its detailed breakdown of full-funnel agent automation (content creation -> analytics -> paywall personalization), a frank security warning about malicious skills and unsecured VPS machines that maps directly to CELLO's value proposition, and Oliver's thesis that the coming "AI side of the internet" will select tools based on API documentation quality rather than marketing copy.
+
 # GTM Tactics: "How I Make Money with OpenClaw (+Free Skill)"
 Source: https://youtu.be/G6sjXjGilLQ
 Channel: Florian Darroman (@asyncr0ne)

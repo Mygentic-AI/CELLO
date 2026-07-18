@@ -1,3 +1,12 @@
+---
+founder: Marie (co-founder, Tally)
+company: Tally (tally.so) — form builder
+stage: $5M ARR (~$400K MRR), 1.8M users, 16K paying, team of 10, bootstrapped
+date: unknown
+---
+
+Marie is the marketing co-founder of Tally (tally.so), a form builder she built with her technical partner Filip entirely bootstrapped from Belgium. They started with the modest goal of replacing two consulting salaries — $10–20K/month — and had two pregnancies and five years of grinding before the flywheel hit: $1M to $5M ARR in a single year. At the time of recording they had 1.8M registered users, 16,000 paying at $29/month (roughly 0.9% conversion), and a team of 10. Their entire growth engine rested on one structural insight: forms are viral by nature, so they made the free tier as frictionless as possible and put a "Created by Tally" badge on every free form — letting the product market itself in the wild.
+
 # GTM Tactics: "I Make $5M/Year Giving My SaaS Away for Free"
 Source: https://youtu.be/S4xz0ztzGsA
 Channel: Florian Darroman (@asyncr0ne)

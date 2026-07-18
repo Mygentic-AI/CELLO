@@ -1,3 +1,12 @@
+---
+founder: Florian Darroman (host/presenter)
+company: SaaS District
+stage: YouTube synthesis video — Florian has already interviewed 20+ founders making $100K–$10M/year
+date: unknown
+---
+
+Florian Darroman synthesizes five recurring patterns from asking 20 active founders (revenue range $100K–$10M/year) the same question: "What's the best way to find a $1M startup idea?" The patterns span the full pre-launch arc: find a paying buyer before writing code (David Park, Nadav), validate that a market exists by checking whether competitors are already making money (Ain, Outrank $200K/month), exploit innate unsolvable human desires for B2C virality (David Atias), wrap emerging tech in accessible form before the official mobile launch (Lots, $500K in exits), and mine niche newsletters to identify pain and reach pre-qualified buyers. The video is pitched at early-stage founders who have not yet committed to an idea, but the tactics — especially trend-riding, newsletter sponsorship, and pre-sell validation — apply directly to a built product still finding its distribution strategy.
+
 # GTM Tactics: "I asked 20 founders: how to find a $1M startup idea"
 Source: https://youtu.be/cs338DY6lrA
 Channel: Florian Darroman (@asyncr0ne)

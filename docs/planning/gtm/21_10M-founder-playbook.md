@@ -1,3 +1,12 @@
+---
+founder: Andrew Gazdecki
+company: Business Apps / Acquire.com
+stage: $10M ARR at exit (Business Apps); $1B+ in closed deals (Acquire.com)
+date: unknown
+---
+
+Andrew Gazdecki built Business Apps — a drag-and-drop mobile app builder for small businesses — from a college side project to $10M ARR, selling it for an eight-figure exit at 29. After a failed crypto exchange (Altcoin.io, shut down over SEC regulatory issues), he founded Acquire.com, now the leading marketplace for startup acquisitions under $50M with over $1 billion in closed deals. Both companies were bootstrapped and built with lean teams; Business Apps hit product-market fit within the first 30 days by riding the iPhone wave. His playbook centers on timing technology shifts, treating distribution as the core competency rather than the product, and scaling through channel partners instead of direct sales. What makes his perspective unusually credible for CELLO is that he now sees patterns across thousands of acquisitions, giving him both a founder's inside view and a market-level view of what actually drives exits.
+
 # GTM Tactics: "$10M/Year Founder Shares His Exact Playbook (He Did It Twice)"
 Source: https://youtu.be/t-jDFgy1U2Y
 Channel: Florian Darroman (@asyncr0ne)

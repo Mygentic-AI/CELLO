@@ -1,3 +1,12 @@
+---
+founder: Florian Darroman
+company: SaaS District / Distribute
+stage: not mentioned
+date: unknown
+---
+
+Florian Darroman (@asyncr0ne) shows his full OpenClaw setup: 13 named AI agents (Mark as COO, plus content, ops, and growth agents) running on a $600 Mac Mini for $200/month in Claude Max. He records one podcast and all content — X posts three times daily, newsletter, video clips, Instagram — is produced and scheduled automatically by the agent team. His daily workflow is a Telegram morning brief covering content pipeline status, guest prospects, community health, and competitor intelligence gathered overnight. He also runs a paid School community for founders using OpenClaw, managed by an agent that tracks churn and top contributors. This video is primary evidence that CELLO's ICP (non-technical multi-agent operators who need cross-agent collaboration) already exists and is active in Florian's audience.
+
 # GTM Tactics: "How OpenClaw Runs My Entire Business (Full Setup)"
 Source: https://youtu.be/HMTxOecbyPg
 Channel: Florian Darroman (@asyncr0ne)

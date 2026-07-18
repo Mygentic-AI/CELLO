@@ -1,3 +1,12 @@
+---
+founder: Florian Darroman
+company: Distribute (formerly Rebel Growth)
+stage: $12,700 MRR (Distribute); ~$24,000/month total revenue across all sources
+date: June 2026 (internal: "2nd of June"; prior video uploaded "in 2025")
+---
+
+Florian Darroman is a French entrepreneur living in Bali who co-founded Distribute, an SEO and GEO SaaS that helps website owners schedule content, manage backlink exchanges, and get recommended by AI assistants like ChatGPT and Claude. He joined as a co-founder when the product was at $7,400 MRR under its old name Rebel Growth, ran a complete product audit with Open Floor, stripped the feature set down to a focused core (removing social media scheduling entirely), and rebranded — reaching $12,700 MRR two months later. Alongside Distribute he runs the Profitable Founder Club, a paid bi-weekly mastermind community, and earns from YouTube content and partnerships, totalling roughly $24K/month after starting the year at near-zero. The story is worth reading as a tight case study in sequencing: audit and cut the product, nail the ICP through customer calls, establish a personal content voice, then run organic distribution — X, YouTube Loom screencasts, Reddit, SEO, and GEO — in that order. The GEO finding is particularly relevant: by the time of recording, AI assistants had surpassed traditional SEO as Distribute's top lead source, and they were already building features to compound that channel.
+
 # GTM Tactics: "Building a $100K/month SaaS in Bali"
 Source: https://youtu.be/MU9WWJK-4WQ
 Channel: Florian Darroman (@asyncr0ne)

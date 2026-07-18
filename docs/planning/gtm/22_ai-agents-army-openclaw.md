@@ -1,3 +1,12 @@
+---
+founder: Bhanu
+company: SideGPT / Mission Control HQ
+stage: SideGPT at 18k MRR; Mission Control HQ at 10k MRR at time of recording
+date: unknown
+---
+
+Bhanu is a serial SaaS builder who previously built and sold Feather for $250k, then grew SideGPT to 18k MRR. At the time of recording he had just launched Mission Control HQ — a dashboard product that emerged from his own pain running a 10+ agent OpenClaw army — and brought it to 10k MRR. His setup involves a lead agent (Jarvis) accessed via Telegram that delegates to specialist sub-agents covering retention, email marketing, keyword research, and conversion optimization, all coordinating through a shared knowledge base. The episode is directly relevant to CELLO because Bhanu independently invented the observability and trust problem that CELLO solves at the protocol level, then monetized the UI-layer workaround; his operator patterns (graduated trust, dedicated agent identities, inter-agent document handoffs) map exactly onto CELLO's contact tiers, sealed receipts, and endorsement system.
+
 # GTM Tactics: "I Built an AI Agents Army with OpenClaw to Run my $28k/mo Startup"
 Source: https://youtu.be/0LnLn2MK62A
 Channel: Florian Darroman (@asyncr0ne)

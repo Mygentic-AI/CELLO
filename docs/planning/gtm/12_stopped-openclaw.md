@@ -1,3 +1,12 @@
+---
+founder: Florian Darroman (@asyncr0ne)
+company: OpenClaw Lab (community/content brand)
+stage: unknown
+date: unknown
+---
+
+Florian Darroman is a solo founder and content creator who had been publicly championing OpenClaw (an AI agent framework) for 1.5 months before migrating to Claude Code. He quit after Anthropic banned subscription-workaround API access: his costs jumped 10x overnight from $200/month to ~$2,000/month, and GPT-5.4 (the only viable fallback model on OpenClaw) failed basic tasks he relied on daily. Before switching, he migrated all agent context to Obsidian as a portable knowledge base (tools.md, user.md, soul.md), then validated Claude Code by running real business tasks (Stripe + analytics analysis), declared it equivalent to OpenClaw, and installed it on his fiancée's machine the same day. He is renaming his community "OpenClaw Lab" to something broader to stay framework-agnostic going forward. The video is valuable CELLO context because it documents the active OpenClaw-to-Claude migration wave, establishes $200/month as the psychological ceiling for AI spend in this segment, reveals how power users structure portable agent memory, and profiles the exact "Florian-tier founder" (vocal, 500–5,000 followers, AI-native) who is CELLO's most actionable early distribution target.
+
 # GTM Tactics: "I stopped using OpenClaw ($2,000 → $200)"
 Source: https://youtu.be/TuOv9Q_YH9Q
 Channel: Florian Darroman (@asyncr0ne)

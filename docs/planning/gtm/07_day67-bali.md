@@ -1,3 +1,12 @@
+---
+founder: Florian Darroman (@asyncr0ne)
+company: Unnamed SaaS (social/API-layer tool, co-built with co-founder Bora; uses Zeno for social media API aggregation)
+stage: ~$10k MRR at time of recording (just crossed 10k MRR the prior month)
+date: unknown (labeled "Day 67" of the 10k→100k MRR journey)
+---
+
+Florian Darroman is a French-speaking entrepreneur based in Bali who runs the "Profitable Founder" podcast and community, and is publicly documenting the journey to grow an unnamed SaaS (co-built with Bora) from $10k to $100k MRR. This vlog episode kicks off his build-in-public format and covers three main threads: launching a paid mastermind (Profitable Founder Mastermind) for SaaS founders at 5k–50k MRR, his daily customer-call practice citing Paul Graham, and takeaways from a just-recorded podcast with Mickey Palat, who built a social media API middleman SaaS from zero to $1M ARR in 10 months using Google Ads and SEO. The episode is worth reading for the middleman positioning framework (insert yourself between large platforms and small buyers), the GEO tactic (get named in "best X" listicles so AI tools cite your product), the "be your own ICP" principle, and the structured mastermind format — all grounded in Florian's live numbers rather than theory.
+
 # GTM Tactics: "Day 67 building a $100K/month SaaS in Bali"
 Source: https://youtu.be/rJd-4dYmkuU
 Channel: Florian Darroman (@asyncr0ne)

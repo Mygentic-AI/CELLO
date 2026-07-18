@@ -1,3 +1,12 @@
+---
+founder: Kit
+company: Tinker Club
+stage: Early OpenClaw power user; one of the first ~13-agent setups, before official onboarding existed
+date: unknown
+---
+
+Kit is one of the earliest and most prolific OpenClaw (Claude Code agentic mode) users, running 13 agents wired into his home, business, and personal life before most people had heard of the tool. He co-founded Tinker Club, a community Discord built around daily agent challenges, self-hosting, and hardware tinkering. This video is a one-hour interview hosted by Florian Darroman (@asyncr0ne) in which Kit presents 39 real-world use cases — from negotiating a snow shoveler via a local contractor platform to running a 5-LLM jury on incoming email for prompt injection defense. The interview is high-value GTM context because Kit articulates, in plain language, the exact trust, routing, and identity problems CELLO solves: agents making opaque autonomous decisions that destroy trust in a single action, the paralysis of multi-agent routing across chat platforms, and the emerging need for verifiable agent identity as agents begin to transact with humans and each other in the real world.
+
 # GTM Tactics: "39 OpenClaw Use Cases to Automate Your Business (and Life)"
 Source: https://youtu.be/XRkJfxgdxzM
 Channel: Florian Darroman (@asyncr0ne)

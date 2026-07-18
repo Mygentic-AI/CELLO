@@ -1,3 +1,12 @@
+---
+founder: Florian Darroman
+company: SaaS District / Distribute (formerly Rebel Growth)
+stage: ~$10K MRR, 76 paid users (at time of recording)
+date: unknown
+---
+
+This is Episode 1 of Florian Darroman's building-in-public video series documenting his journey to $100K/month. Seven months after a six-figure exit from his previous business, Florian accepted a cold DM from Borja Beso, a technical founder who had already validated Distribute.io (formerly Rebel Growth) to ~10K MRR and 76 paid users and needed a distribution co-founder to scale it to 200K MRR by year end. Borja owns product, paid acquisition, and growth engineering; Florian brings SEO, content creation, and an audience built through years of interviewing successful founders on his podcast. The episode introduces both founders in detail, walks through the product (an AI-powered GTM engine that auto-generates daily SEO articles, Reddit citations, backlinks, and social posts for busy founders), and shows the live rebrand from Rebel Growth to Distribute.io executed in a single week. It is most useful for its co-founder search model, the hard division-of-labor between builder and distributor, and the product-led distribution mechanic where every user's activity generates citations for the product itself.
+
 # GTM Tactics: "Day 1 growing my SaaS to $100K/month"
 Source: https://youtu.be/OHRcn5rx85A
 Channel: Florian Darroman (@asyncr0ne)
