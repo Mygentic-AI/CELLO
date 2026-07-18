@@ -732,10 +732,15 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   operator must be prompted for their code on login (magic-link → TOTP step-up before granting
   a session). Without this, TOTP is cosmetic — it mints a signal but provides no actual
   security at the portal boundary.
-- **Logout + session policy** — no logout button exists in the portal. Session expiry policy
-  is unclear to the operator (observed: sessions persist across days without re-auth). Needs:
-  explicit logout, visible session TTL, and (if sessions are long-lived) a session-list with
-  revoke-all on the Account page.
+- **Logout + session policy** — no logout button exists in the portal. Needs:
+  explicit logout button in the nav, and (if sessions are long-lived) the session-list with
+  revoke-all on the Account page (already exists).
+- **DOD-SESSION-DEDUP-1** — a login (passkey or magic-link) on the same device must revoke the
+  prior session from that device. Without this, every passkey tap accumulates a new session row
+  and the "Active sessions" list grows without bound. Multi-device is preserved (different
+  user-agents are untouched). —
+  ✅ (2026-07-18 — portal `1278f95`: `revokeSameDeviceSessions` added to session.ts; called
+  in webauthn/authenticate/verify + magic-link verify. Matches on `user_agent` column.)
 - **DOD-TRACK-TRIGGER-1** — track-record signals must be TRIGGERED in production, not just
   code-complete. Multiple event sources feed one compute+mint function: (1) portal login
   (piggyback on `runLoginMint`, best-effort with deadline), (2) manual "Refresh" button on the
