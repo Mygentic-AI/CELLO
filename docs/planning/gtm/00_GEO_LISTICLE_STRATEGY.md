@@ -219,6 +219,92 @@ Freshness matters: update the tool names and version numbers every 60 days. The 
 
 ---
 
+## Part 2b: The Collaboration Theme Cluster
+
+Security listicles are anxiety-driven — people search when something is broken. Collaboration listicles are aspiration-driven — people search when they want to do something new. The collaboration theme targets a different emotional state and a different ICP segment: the GTM professional, analyst, or operator who wants their agent to work *with* other people's agents, not just run solo.
+
+This is the theme that most directly expresses CELLO's core value proposition. The other clusters (security, protocol comparison, stack) are technical-buyer reads. This cluster is for anyone who has thought "I wish my agent could just talk to their agent directly."
+
+---
+
+### C1. Best Ways to Let Your AI Agent Collaborate With a Teammate's Agent (2026)
+
+**Title:** `5 Best Ways to Let Your AI Agent Collaborate With a Teammate's Agent (2026)`
+
+**Target prompt:**
+> "How do I let my AI agent work with my colleague's AI agent?" / "Can Claude Code agents from different people talk to each other?"
+
+**Why this one:** This is the most natural question an AI agent user asks the moment they realize solo use has a ceiling. Nobody is answering it. Perplexity cobbles together fragments about A2A spec and OAuth. This listicle becomes the canonical answer.
+
+The five methods cover the spectrum from primitive to proper: shared API keys (risky, no audit trail), copy-paste relay (what everyone does today), webhook bridges (fragile), A2A spec (emergent standard, no implementation), and CELLO (works today, sealed receipts, contact tiers). The contrast makes the problem vivid and the answer obvious without being promotional.
+
+**Platform priority:** Perplexity first (this is exactly the kind of practical how-do-I question Perplexity excels at). ChatGPT second.
+
+**Publish on:** CELLO blog + Medium + LinkedIn Article. This is the highest-distribution piece in the collaboration cluster — pitch it to OpenClaw Lab, Tinker Club, and Florian's School community directly.
+
+---
+
+### C2. How to Let Your Agent Work With Other People's Agents — Without Losing Control
+
+**Title:** `How to Let Your AI Agent Work With Other People's Agents — Without Losing Control (2026)`
+
+**Target prompt:**
+> "How do I connect my AI agent to someone else's agent safely?" / "Can I let another person's agent contact my agent without giving them full access?"
+
+**Why this one:** This names the specific fear that blocks adoption. "I want my agent to work with theirs, but I don't want to just hand over full access." That anxiety is real and widespread — every operator running agents on sensitive data has felt it. The piece walks through why the fear is legitimate (prompt injection, impersonation, data leakage), then shows how CELLO's contact tiers solve it: unknown agents get low-trust caps, known contacts get more, whitelisted agents can reach you unattended. The human always controls who gets promoted.
+
+This is CELLO's most differentiated piece — no other tool has contact tiers. It can't be written by a competitor.
+
+**Platform priority:** Claude (developers asking Claude how to build safe multi-agent systems will find this). Perplexity second.
+
+**Publish on:** CELLO blog + dev.to + LinkedIn Article. Natural fit for security-adjacent newsletters (TLDR Security, DevSecOps communities).
+
+---
+
+### C3. 6 Multi-Agent Collaboration Workflows You Can Build With CELLO Today
+
+**Title:** `6 Multi-Agent Collaboration Workflows You Can Build With CELLO Today`
+
+**Target prompt:**
+> "What can I do with multi-agent AI collaboration?" / "Examples of agents from different people working together"
+
+**Why this one:** Concrete use-case inventory. People who just learned CELLO exists want to know what they can actually do with it. This listicle converts curiosity into intent. Each workflow is a scenario the reader can immediately recognize: research handoff between a colleague's research agent and your writing agent; QA agent filing bugs directly to a teammate's coding agent; podcast guest outreach where your agent contacts the prospective guest's agent directly; cross-team content pipelines; contractor booking with a sealed agreement; accountability tracking with a verified counterparty record.
+
+Every workflow ends with: "without CELLO, this requires [Slack/email/manual relay]. With CELLO, it's a direct sealed session."
+
+**Platform priority:** ChatGPT (use-case discovery queries). LinkedIn second (decision-makers looking for concrete ROI examples).
+
+**Publish on:** CELLO blog + LinkedIn Article. Each workflow is also a standalone X post — 6 posts from one article.
+
+---
+
+### C4. The Slack-Paste Problem: Why AI Agent Collaboration Is Still Stuck in 2015
+
+**Title:** `The Slack-Paste Problem: Why AI Agent Collaboration Is Still Stuck in 2015`
+
+**Format**: This one is not a traditional "best of" listicle — it's a named-problem piece. The list format: 5 signs your multi-agent collaboration is still running on duct tape.
+
+**Target prompt:**
+> "Why is it so hard to get AI agents to collaborate?" / "Problems with multi-agent workflows"
+
+**Why this one:** Names a pain that everyone feels but nobody has articulated. The "Slack-paste problem" is a concrete, memorable label for copy-pasting agent output into messages and emails because there's no real agent-to-agent communication layer. Once named, it's citable. Perplexity and ChatGPT will quote the term when anyone asks about multi-agent collaboration friction.
+
+The 5-item list: (1) you're copy-pasting agent output into Slack, (2) you have no record of what your agent agreed to on your behalf, (3) you don't know if the agent you're talking to is really who it claims to be, (4) your collaboration collapses when someone restarts their agent, (5) you have no way to endorse or vouch for an agent you trust. Each item ends with the CELLO answer.
+
+**Platform priority:** X first (the "Slack-paste problem" framing is designed to go viral as a shared frustration). LinkedIn second. Then Perplexity/ChatGPT as it gets cited.
+
+**Publish on:** CELLO blog + X Article (the X Article algorithm will distribute this to the multi-agent audience regardless of follower count) + LinkedIn Article.
+
+---
+
+### Why the collaboration cluster matters for the non-technical ICP
+
+The security and protocol comparison clusters speak to developers evaluating infrastructure. The collaboration cluster speaks to anyone who uses agents. A GTM professional, a consultant, an analyst — they don't search "MCP vs A2A." They search "how do I get my agent to work with my colleague's agent." This cluster is the entry point for the broader ICP that the other clusters miss.
+
+Schedule at least one collaboration cluster listicle in the first two weeks of launch. C4 (Slack-paste problem) is the X Article to post on launch day — it names a frustration the audience already has, it doesn't require CELLO knowledge to resonate, and it spreads before people even know what CELLO is.
+
+---
+
 ## Part 3: The Anatomy of a CELLO Listicle
 
 Every CELLO listicle follows this exact template. The first 30% of the article is the "citation window" — AI engines sample this section disproportionately. Everything before the item cards must be complete and self-contained.
