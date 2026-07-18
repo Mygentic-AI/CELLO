@@ -736,6 +736,33 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   is unclear to the operator (observed: sessions persist across days without re-auth). Needs:
   explicit logout, visible session TTL, and (if sessions are long-lived) a session-list with
   revoke-all on the Account page.
+- **DOD-TRACK-TRIGGER-1** — track-record signals must be TRIGGERED in production, not just
+  code-complete. Multiple event sources feed one compute+mint function: (1) portal login
+  (piggyback on `runLoginMint`, best-effort with deadline), (2) manual "Refresh" button on the
+  trust-signals page (rate-limited to 10-min cooldown per account), (3) session close (daemon
+  event → future: daemon→portal or daemon→directory→portal hook, deferred post-v1 as it needs
+  inter-service connectivity that doesn't exist), (4) `cello login` / agent-online (same
+  deferred path). v1 ships (1)+(2); (3)+(4) are owed. —
+  ✅ (2026-07-18 — portal `7f43d48`: `runLoginMint` calls `mintTrackRecordSignals` after
+  account signals, 5s deadline; `POST /api/trust/refresh-track-record` with DB-backed 10-min
+  cooldown; `TrackRecordSection` component with Refresh button + cooldown UI.)
+- **DOD-TOTP-REVOKE-1** — removing the TOTP authenticator must revoke the `totp` trust signal
+  at the directory. Without this, unenrollment is cosmetic — the signal stays `active` in
+  `signal_records` and counterparties still see it. The revocation uses the same chokepoint
+  path as DOD-REVOKE-1 (role-based, any active submitter key). Best-effort — a directory hiccup
+  must not prevent local unenrollment. —
+  ✅ (2026-07-18 — portal `f7db2e0`: `removeTotp` queries active signals, finds the `totp`
+  hash, calls `postSignedRevocation` with failover. `postSignedRevocation` added to
+  `directory-submit.ts`.)
+- **DOD-SIGNAL-CLAIM-FIDELITY-1** — the portal's "What counterparties see" expanded text must
+  match the REAL claim string in the CBOR envelope character-for-character. Paraphrased
+  versions are wrong — operators need to see exactly what an LLM will consume. —
+  ✅ (2026-07-18 — portal `3f1eecb`: all claim strings match `mint.ts` verbatim.)
+- **DOD-TOTP-QR-1** — TOTP enrollment must show a scannable QR barcode as the primary
+  enrollment method. The manual text key is secondary, with a one-click copy button. Issuer
+  name in the authenticator app = "CELLO Portal". —
+  ✅ (2026-07-18 — portal `ffff1cf` + `1ca00cc`: `qrcode` lib, `QRCode.toDataURL`, copy
+  icon, issuer "CELLO Portal".)
 
 ---
 
