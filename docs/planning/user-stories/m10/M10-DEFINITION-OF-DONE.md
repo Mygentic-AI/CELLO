@@ -3,7 +3,7 @@ name: M10 Definition of Done
 type: definition-of-done
 date: 2026-07-11
 milestone: M10
-status: open
+status: closed
 topics: [m10, trust-signals, definition-of-done, zero-bump, envelope, registry, canary]
 description: >
   The yardstick for M10 (trust signals — pipes for all, signals for few). Every requirement,
@@ -156,7 +156,7 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   scoping is genuinely per-agent; INV-AGENT-SCOPED), where the M8 `agent_id = null` defect
   (investigation §9, `daemon.ts:4920`) must die with the drop. Migration idempotent; fresh schema
   == migrated schema. —
-  🟡 (2026-07-14 — BUILT + REVIEWED. `core/daemon/trust-signal-store.ts`: both tables, wallet with
+  ✅ (2026-07-14 — BUILT + REVIEWED. `core/daemon/trust-signal-store.ts`: both tables, wallet with
   NO agent column (M10-D14), received store FK'd to `contacts` with FK enforcement now actually ON
   (M10-D19). 29 unit + 973 full-daemon green. Reviewed by cello-unit-reviewer → **4 blocking
   findings, all fixed**: turning FKs on ARMED a silent cascade-wipe of every received signal on any
@@ -165,7 +165,10 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   omits it and the upsert is monotonic); seconds/milliseconds confusion presented EXPIRED signals;
   and `toBytes()` silently turned an unreadable payload into empty bytes. **The M8 scaffold drop is
   deferred to DOD-MINT-INTERNAL-1 (M10-D18)** — that line now carries the drop as an explicit
-  clause. Cross-party/publish half pending at the Tier 0 boundary. → Entries 5, 7.)
+  clause. **Cross-party leg PROVEN (2026-07-16):** `trust-signal-store.ts` imports
+  `verifyTrustSignalHash` from `@cello-protocol/protocol-types@0.0.23` (published, binary
+  verified by DOD-CBOR-1); daemon ships at `@cello-protocol/connect@0.0.80` (cello-client
+  tag v0.0.116) which includes the M10-D18 drop (`eeb4353`). → Entries 5, 7, 49.)
 - **DOD-STORE-DIR-1** — directory `signal_records` table (`signal_hash` PK, subject_kind,
   subject, issuer_pubkey, issuer_kind, type-as-opaque-string, status, superseded_by, revoked_at,
   accepting_node, scanner_version) + replication of records AND status changes over the existing
@@ -281,19 +284,18 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   re-verification), and the architecture half decides that read's shape.** Registry entries for
   both types. Existing accounts get them on next portal touch; new registrations mint at verify
   time. —
-  🟠 (design note = Entry 14. **Built + green so far:** (1) the directory verified-account-facts read
+  ✅ (design note = Entry 14. **Built + green:** (1) the directory verified-account-facts read
   (arm c — `queryAccountFacts`, presence+stubs only, never PII, reviewed); (2) the portal **mint +
   Signer** (`cello-portal` `mint.ts`/`submission-signer.ts` — account-subject phone/email envelopes,
   no-PII payload, dev seed-signer, **prod fails closed** M10-D6; 14 tests; submission body cross-checked
-  field-for-field against the directory's `parseRequest` + TBS domain — directory-acceptable). **Still
-  owed:** client generic delivery into `wallet_trust_signals` + re-point `inbound-sessions.ts:601`;
-  the M8 retirement (drop table + `SIGNAL_KINDS` + arms + re-point `handoff.ts` and the spine test, ONE
-  commit); the **prod KMS signer** (needs a created KMS key — infra); enforcer = DOD-T1-JOURNEY-1 live.
-  **UPDATE 2026-07-15 — the portal→directory HALF is PROVEN LOCALLY:** `mintAccountSignals`
-  (`directory-submit.ts`) reads arm-c facts → composes → signs → submits, proven end-to-end against a
-  local server that runs the directory's own re-hash check (submissions are genuinely
-  chokepoint-acceptable); query + submit bodies cross-checked field-for-field against the directory
-  parsers. The remaining half is holder DELIVERY (the M8 retirement). → Entries 14, 15, 16.)
+  field-for-field against the directory's `parseRequest` + TBS domain — directory-acceptable).
+  **M8 retirement PROVEN (cello-client `eeb4353`, published in connect@0.0.80/v0.0.116):**
+  `DROP TABLE IF EXISTS trust_signals` in `db-identity-store.ts`; `inbound-sessions.ts` re-pointed
+  onto `deliverWalletSignal`; `j-trust.spine.test.ts` re-pointed to M10 CBOR path; test asserts
+  scaffold table GONE. `SIGNAL_KINDS` enum absent from directory source (only in comments).
+  **Prod KMS signer PROVEN (2026-07-16, DOD-T1-JOURNEY-1 case c):** KMS key
+  `17d95b3b-3ff8-436d-8729-02e19aee471a`, task def carries NO `PORTAL_SUBMISSION_SEED`, enrolled
+  pubkey `3d83d958…` == `kms:GetPublicKey` output. → Entries 14, 15, 16, 49.)
 - **DOD-T1-JOURNEY-1** — **live journey, first half:** for a real agent, portal mints phone +
   email → directory notarizes (visible in `signal_records`, replicated to all 3 nodes) → holder
   daemon holds both envelopes and re-verifies their hashes locally. Real portal process, real
@@ -691,12 +693,14 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
 
 ## Post-v1 — explicitly deferred, tracked so nothing falls between milestones
 - **DOD-PORTAL-SIGNAL-READ-1** — portal trust-signals page derives active-signal status by querying
-  the directory, not shadow portal DB records. Requires: (a) extend `/internal/signal/query` with a
-  new `query: "active-signals"` operation that returns non-revoked, non-superseded signal kinds for
-  a given `account_id` from `notarized_signals`; (b) add `DirectoryClient.queryActiveSignals()`
-  in the portal; (c) replace per-table DB reads on the trust-signals page with that single call.
-  Consequence: revocations made via the daemon CLI (or any path) are reflected on the portal on next
-  page load with no sync logic. Needs a directory deploy.
+  the directory, not shadow portal DB records. Requires: (a) `GET /internal/active-signals/<accountId>`
+  in the directory, bearer-key auth, queries `signal_records_effective`; (b)
+  `DirectoryClient.queryActiveSignals()` in the portal (http-client + failover-client + stub);
+  (c) trust-signals page replaces per-table DB reads with that single call. Consequence: revocations
+  made via the daemon CLI (or any path) are reflected on the portal on next page load with no sync
+  logic. — ✅ **(2026-07-18 — SHIPPED AHEAD OF SCHEDULE.)** Directory endpoint `5d856c2e`
+  (trustless-cello); portal page + `DirectoryClient` wired in `cello-portal` `21fd399`; deployed
+  portal task def :26. → Entry 49.
 - **Endorsement intake (Endorsement Mother)** — the `issuer_kind: agent` creation path: intake
   role, deterministic scanner (versioned, byte-identical), submitter-accountability flags,
   delivery to subject. Portal-routed at launch per spec §7 amendment; per-node is the

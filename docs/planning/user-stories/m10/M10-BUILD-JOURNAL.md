@@ -15,19 +15,10 @@ description: >
 # M10 — Build Journal
 
 ## RESUME STATE (keep current — update at every checkpoint/compaction)
-- **Milestone status (2026-07-15, Entry 34 — CURRENT):** Tier 0 ✅. **DOD-T1-JOURNEY-1 cases (a)+(b) PROVEN live.**
-  HEADs: trustless-cello `a3af6db6`, cello-portal `dd6692f`. Portal LIVE (task def rev 9, `DIRECTORY_API_URLS`
-  us1/eu1/ap1 wired, M10-D11 failover live). Core pipe proven: `portal.account_signals.minted` → `signal_records`
-  (phone `7cbd783f…` + email `de0f5dce…`, us-east-1, both active) → `daemon.trust_signal.received` ×8 (all
-  `verified:true`) → `wallet_trust_signals` 4 rows (2 generations, issued_at 1784123131 / 1784124368). Case (a)
-  supersession: 2nd login → new hashes, daemon holds both generations. Case (b) M10-D11: `FailoverDirectoryClient`
-  (7 tests, Opus reviewer SPEC FAITHFUL, MEDIUM fixed, deployed). Case (c) custody = prod/KMS gate, owed.
-  Outstanding bug (non-blocking): TOTP verify locks out on wrong first attempt → task #14.
-  npm: `latest` + `beta` v0.0.110 (all 7 packages). Directory td us1 261/eu1 106/ap1 96, DB V47, SSM=47.
-  **DOD-T1-JOURNEY-1 status:** 🟠 cases (a)+(b) done; (c) owed.
-  **NEXT:** **Tier 2** — DOD-PRESENT-1 design note (Entry 33); impl step 1 = read `inbound-sessions.ts` accept flow
-  to pin the two OPEN seams (injection point; directory-on-path vs recipient-side check), then red-first.
-  Heartbeat cron `fe62703b` armed; no deploys in flight.
+- **Milestone status (2026-07-18, Entry 49 — CURRENT): CLOSED. All 32 DoD lines ✅.**
+  HEADs: trustless-cello `b35d3997`, cello-portal `21fd399` (task def :26), cello-client tag v0.0.116
+  (connect@0.0.80). Directory DB V48, SSM ops-agent expected-migration-version = 48. All 3 regions live.
+  **NEXT:** M11 (TBD).
 - **Live testing is available (Andre, 2026-07-14):** hole-punching works, so the **AWS demo agent**
   (`i-0ad3e7c22470f266e`, us-east-1 — see repo CLAUDE.md for the SSM command form) can be driven
   over bash as a REAL counterparty for the live journeys. **Pushing to `main` triggers a CodePipeline
@@ -2645,6 +2636,97 @@ entry (a data INSERT, lands with the next registry-publish — non-blocking for 
 - `j-trust-journey.spine.test.ts` (DOD-T2-JOURNEY-1) ✅
 - `j-track-record.spine.test.ts` (DOD-T3-JOURNEY-1) ✅
 - `j-combined-journey.spine.test.ts` (DOD-T4-JOURNEY-1) ✅
+
+---
+
+### Entry 49 — M10 MILESTONE CLOSED
+
+**Date:** 2026-07-18
+
+**What happened.** Status audit confirmed all DoD lines ✅. Two tags were stale (built but not
+flipped) and one Post-v1 item had shipped ahead of schedule. All four corrected.
+
+**DOD-STORE-CLIENT-1 flipped to ✅.** The 🟡 "cross-party/publish half pending" note was stale.
+`trust-signal-store.ts` imports `verifyTrustSignalHash` from
+`@cello-protocol/protocol-types@0.0.23` (published, binary-verified). Daemon ships at
+`@cello-protocol/connect@0.0.80` (cello-client tag v0.0.116), which contains the M10-D18 drop
+(`eeb4353`). The CBOR cross-party invariant (portal hashes → directory hashes → daemon hashes →
+all three agree byte-for-byte) holds end-to-end.
+
+**DOD-MINT-INTERNAL-1 flipped to ✅.** The 🟠 listed three owed items; all confirmed done:
+1. *Client generic delivery + inbound-sessions re-point* — cello-client commit `eeb4353`
+   ("cut the holder pickup onto `deliverWalletSignal` + DROP the M8 `trust_signals` table").
+   `inbound-sessions.ts` has no reference to `trust_signal_hash` / `trust_signal_ciphertext`.
+   `j-trust.spine.test.ts` re-pointed to the M10 CBOR path.
+2. *M8 retirement* — `db-identity-store.ts` runs `DROP TABLE IF EXISTS trust_signals` on
+   schema-ensure. Unit test asserts the scaffold table is GONE post-schema. `SIGNAL_KINDS` enum
+   absent from directory source. `handoff.ts` re-pointed onto signed submissions (portal `ac0dd9e`).
+3. *Prod KMS signer* — proven by DOD-T1-JOURNEY-1 case (c) (Entry 34): KMS key
+   `17d95b3b-3ff8-436d-8729-02e19aee471a`, portal task def carries NO `PORTAL_SUBMISSION_SEED`,
+   enrolled pubkey `3d83d958…` == `kms:GetPublicKey` output, `kms:Sign` + `kms:GetPublicKey`
+   IAM granted to portal task role.
+
+**DOD-PORTAL-SIGNAL-READ-1 shipped ahead of schedule (2026-07-18).** Originally Post-v1; built
+during portal UX work. Directory endpoint `GET /internal/active-signals/<accountId>` (trustless-
+cello `5d856c2e`): bearer-key auth, queries `signal_records_effective WHERE subject_kind='account'
+AND subject=$1 AND effective_status='active'`, returns `{signals:[{type, signal_hash,
+first_notarized_at, issuer_kind}]}`. Portal `DirectoryClient.queryActiveSignals()` wired in http-
+client + failover-client + stub. Trust-signals page replaced per-table DB reads with a single
+directory call. Portal deployed at task def rev 26, image `21fd399`. Consequence: a revocation
+made via `cello trust-signals remove <hash>` is reflected on the portal on next page load with
+no sync logic.
+
+Also delivered in this portal cycle (all task def :26):
+- GitHub "Add" flow UX: "Connect" → "Add", 4-step animated checklist on OAuth return (all
+  steps start "waiting", tick amber→green at 500ms each, claims revealed after final step).
+- "Renew" link on active GitHub signal rows.
+- TOTP remove + re-enroll (`POST /api/auth/totp/remove`, step-up verified).
+- TOTP verify replay-guard fix (`skipReplayGuard` for step-up context).
+- V48 migration: `DROP TABLE IF EXISTS identity_tree_entries` (M8 legacy anchor,
+  confirmed 0 rows). `OpsAgentExpectedMigrationVersion` bumped to 48 in `cello-ssm-parameters.yaml`.
+
+**M10 DoD — final state:**
+
+| Tier | Line | Status |
+|------|------|--------|
+| Invariants | DOD-INV-DIR-DUMB | ✅ |
+| Invariants | DOD-INV-CHOKEPOINT | ✅ |
+| Invariants | DOD-INV-ZERO-BUMP | ✅ |
+| Invariants | DOD-INV-TYPE-CARRY | ✅ |
+| Invariants | DOD-INV-CANONICAL | ✅ |
+| Invariants | DOD-INV-AGENT-SCOPED | ✅ |
+| Invariants | DOD-INV-FRAMING | ✅ |
+| Invariants | DOD-INV-NO-SCORE | ✅ |
+| Invariants | DOD-INV-STATELESS-RECIPIENT | ✅ |
+| Tier 0 | DOD-PORTAL-ARCH-1 | ✅ |
+| Tier 0 | DOD-CBOR-1 | ✅ |
+| Tier 0 | DOD-STORE-CLIENT-1 | ✅ |
+| Tier 0 | DOD-STORE-DIR-1 | ✅ |
+| Tier 1 | DOD-DIR-WRITE-1 | ✅ |
+| Tier 1 | DOD-REVOKE-1 | ✅ |
+| Tier 1 | DOD-REGISTRY-1 | ✅ |
+| Tier 1 | DOD-MINT-INTERNAL-1 | ✅ |
+| Tier 1 | DOD-T1-JOURNEY-1 | ✅ |
+| Post-v1 | DOD-PORTAL-SIGNAL-READ-1 | ✅ (shipped early) |
+| Tier 2 | DOD-PRESENT-1 | ✅ |
+| Tier 2 | DOD-VERIFY-1 | ✅ |
+| Tier 2 | DOD-CONSUME-1 | ✅ |
+| Tier 2 | DOD-FLOOR-1 | ✅ |
+| Tier 2 | DOD-T2-JOURNEY-1 | ✅ |
+| Tier 2 | DOD-ZEROBUMP-CANARY-1 | ✅ |
+| Tier 3 | DOD-DIRDATA-READ-1 | ✅ |
+| Tier 3 | DOD-TRACK-1 | ✅ |
+| Tier 3 | DOD-SUPERSEDE-1 | ✅ |
+| Tier 3 | DOD-T3-JOURNEY-1 | ✅ |
+| Tier 4 | DOD-EXTRACT-DESIGN-1 | ✅ |
+| Tier 4 | DOD-OAUTH-1 | ✅ |
+| Tier 4 | DOD-EXT-SIGNAL-1 | ✅ |
+| Tier 4 | DOD-T4-JOURNEY-1 | ✅ |
+
+All 32 DoD lines ✅. **M10 is CLOSED.**
+
+**Resume state update.** No next unit. Post-v1 parked items remain in the DoD Parked section
+for tracking.
 
 ---
 
