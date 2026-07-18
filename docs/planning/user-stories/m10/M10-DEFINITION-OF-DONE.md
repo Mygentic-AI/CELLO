@@ -763,6 +763,22 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   name in the authenticator app = "CELLO Portal". —
   ✅ (2026-07-18 — portal `ffff1cf` + `1ca00cc`: `qrcode` lib, `QRCode.toDataURL`, copy
   icon, issuer "CELLO Portal".)
+- **DOD-SIGNAL-PAGE-STRUCTURE-1** — trust-signals page sections must be: (1) Foundational
+  Identity (email, phone), (2) Security (passkey, TOTP), (3) Social (GitHub, LinkedIn),
+  (4) Track Record. TOTP has an "Add" button linking to /account when inactive. —
+  ✅ (2026-07-18 — portal `4f29da4`: four `SignalSection` components in correct order,
+  TOTP `actionHref="/account"` when inactive.)
+- **DOD-SIGNAL-EXPAND-UX-1** — each active signal row is expandable to show the claim text.
+  Expand/collapse by clicking ANYWHERE in the row (not just the label). The expand indicator
+  is a downward-pointing chevron at the RIGHT end of the row (not the left — that looks like
+  a bullet). —
+  ✅ (2026-07-18 — portal `d6defca`: `SignalRow`, `GitHubSignalRow`, `TrackRecordSection`
+  all use full-row click + right-side ▼ chevron + `stopPropagation` on action buttons.)
+- **DOD-GITHUB-SINGLE-ROW-1** — GitHub is ONE row (not two), showing the username, with a
+  visible "Renew" button (not invisible gray text). Expanding shows both signal variants
+  (anonymous + identity). —
+  ✅ (2026-07-18 — portal `4f29da4` + `d6defca`: single `<li>` with expand detail showing
+  both anonymous and identity claim text.)
 
 ---
 
