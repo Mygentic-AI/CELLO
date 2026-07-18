@@ -4,6 +4,20 @@ How to seed X Articles through 100-500 follower builders in the AI agent ecosyst
 
 ---
 
+## Relationship to Tactic 4 (X Article Strategy) and Launch Timing
+
+**This tactic cannot run at launch. It runs after the product is live and Wave 1 users have had their first win.**
+
+Micro-influencer creators need to write from real experience — they have to have actually connected their agents via CELLO. Asking someone to write an article before they've used the product produces inauthentic content that performs poorly and damages trust.
+
+**Tactic 4 comes first**: Andre writes his own X Article at launch — a first-person founder story that doesn't require other users. That Article becomes both distribution and the creative brief for this tactic. When approaching micro-influencers, the opener is: "Here's what I wrote about my own experience — would you write about yours?"
+
+**Minimum timeline**: Wave 1 users admitted → first wins (week 1-2 post-launch) → identify vocal Wave 1 users on X → begin this outreach (week 3+).
+
+**The dependency is an advantage**: creators who write from real experience produce content that converts. A 200-follower developer writing "I connected my actual Claude Code agent to my actual Hermes instance and here's the sealed transcript" is more credible than any paid review. The wait is worth it.
+
+---
+
 ## Part 1: Why This Works for CELLO (and Why Now)
 
 ### The Nevo/Oliver Proof of Concept
