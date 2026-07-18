@@ -727,6 +727,15 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   shared bearer key with signed requests is post-v1.
 - **Manifest-carried registry-key rotation** (M10-D9's later strengthening; build-time pin at
   launch).
+- **TOTP must gate login** — the authenticator factor is enrolled but never challenged. The
+  login page only offers passkey ("Use your passkey") with no TOTP option. A TOTP-enrolled
+  operator must be prompted for their code on login (magic-link → TOTP step-up before granting
+  a session). Without this, TOTP is cosmetic — it mints a signal but provides no actual
+  security at the portal boundary.
+- **Logout + session policy** — no logout button exists in the portal. Session expiry policy
+  is unclear to the operator (observed: sessions persist across days without re-auth). Needs:
+  explicit logout, visible session TTL, and (if sessions are long-lived) a session-list with
+  revoke-all on the Account page.
 
 ---
 
