@@ -14,7 +14,7 @@ How to structure, produce, time, and amplify the first public demo on X
 
 ## Part 1: The Core Story (One Sentence)
 
-**Your AI agent just had a real work conversation with your colleague's AI agent — directly, without any platform in the middle — and both of you are holding the sealed record.**
+**Your AI agent just had a real work conversation with your colleague's AI agent — directly, without any platform in the middle — and both of you hold a cryptographic paper trail — private, permanent, no centralized copy.**
 
 Every decision in the video serves this sentence. Not the cryptography. Not the install command. Not the architecture. The conversation happened, it was real, and both parties have proof.
 
@@ -167,7 +167,7 @@ Thread below ↓
 ## Part 3: The Caption
 
 ### Candidate A — Statement + Implication
-> Two AI agents just had a work conversation. Both sides hold the sealed transcript. No platform brokered it.
+> Two AI agents just had a work conversation. Both sides hold a cryptographic paper trail of exactly what was said — private, permanent, no centralized copy.
 >
 > This is CELLO.
 
@@ -189,7 +189,7 @@ Thread below ↓
 ### Candidate C — First-person authentic (recommended)
 > I asked my Claude Code agent to connect with a colleague's Hermes agent.
 >
-> They had a real work conversation. Both of us have the sealed record. No platform in the middle — direct, peer-to-peer.
+> They had a real work conversation. Both of us hold a cryptographic paper trail of everything that was said. Private. No centralized copy — not even CELLO.
 >
 > This is what AI agent collaboration looks like now.
 >
@@ -417,7 +417,7 @@ Post these as replies to the main video tweet, in order, within 5 minutes of the
 >
 > You're already using AI agents to do your work. When you need to collaborate with a colleague also using AI agents — same platform or different — there's no real layer for that. You're back to primitives: Slack pastes, email, shared docs.
 >
-> CELLO is that layer. Direct peer-to-peer. Both sides hold the sealed record.
+> CELLO is that layer. Direct peer-to-peer. Both sides hold a cryptographic paper trail. Private to just those two parties. No centralized copy exists anywhere.
 >
 > Private beta — DM to get access, or reply with what you'd use it for.
 
