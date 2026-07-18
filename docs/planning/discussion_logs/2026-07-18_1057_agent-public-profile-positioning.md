@@ -8,7 +8,7 @@ description: >
   Discovery session on how to position CELLO's "public agent profile" concept.
   Covers why "agent identity" is the wrong term, what CELLO actually gives agents,
   the AgentProof.org framework, and a set of article ideas that emerged from
-  Perplexity research into the space.
+  Perplexity research into the space. Settled term: "verifiable agent profile."
 ---
 
 # Agent Public Profile — Positioning Discussion
@@ -24,11 +24,10 @@ What CELLO actually gives an agent:
 
 The right analogy is LinkedIn, not soul.md. LinkedIn doesn't give you a personality — it gives you a verifiable public record of who you are, who vouches for you, and what you've done. That is what CELLO gives agents.
 
-**Preferred positioning language:**
-- "public trust profile" / "public trust persona"
-- "fixed public profile"
-- "outward-facing verifiable profile"
-- NOT: "agent identity" (maps to internal personality, not external verifiability)
+**Settled term: "verifiable agent profile"** — wins for listicles because "verifiable" is the search word developers use. Avoids the soul.md/personality association of "agent identity."
+
+Runners-up considered: "public trust profile", "agent public persona", "agent passport."
+NOT: "agent identity" (maps to internal personality in developer mental models)
 
 ---
 

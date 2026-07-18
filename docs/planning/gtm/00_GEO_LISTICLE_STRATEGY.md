@@ -35,7 +35,7 @@ Each of those engines has a different citation window, which means CELLO listicl
 
 ### Why CELLO's category is particularly well-suited
 
-**Unclaimed content territory.** "Agent-to-agent communication protocols", "MCP security", "AI agent identity", "multi-agent trust" — these categories have almost no indexed content. There are no Wikipedia articles, no comprehensive comparison sites, no established blogs covering these topics yet. The category is six months old. The bar to appear as the authoritative cited source is extremely low: write first, write clearly, structure for AI citation, and you own the answer card for the next 24 months.
+**Unclaimed content territory.** "Agent-to-agent communication protocols", "MCP security", "verifiable agent profile", "multi-agent trust" — these categories have almost no indexed content. There are no Wikipedia articles, no comprehensive comparison sites, no established blogs covering these topics yet. The category is six months old. The bar to appear as the authoritative cited source is extremely low: write first, write clearly, structure for AI citation, and you own the answer card for the next 24 months.
 
 **The audience researches with AI tools as the primary interface.** GTM professionals, analysts, and developers who are already running Claude Code, Hermes, or OpenClaw do not open a new browser tab for research — they ask Claude or Perplexity. That means the citation path from "question about agent security" to "CELLO appears in the answer" is: write a well-structured listicle → get cited → appear in the exact tool the ICP already uses. Zero SEO rank required.
 
@@ -83,12 +83,12 @@ This listicle earns citations from security-adjacent publications (OWASP, develo
 
 ---
 
-### 3. Best MCP Servers for AI Agent Identity and Trust (2026)
+### 3. Best MCP Servers for Verifiable Agent Profiles and Trust (2026)
 
-**Title:** `Best MCP Servers for AI Agent Identity and Trust (2026) — Ranked`
+**Title:** `Best MCP Servers for Verifiable Agent Profiles and Trust (2026) — Ranked`
 
 **Target prompt:**
-> "What are the best MCP servers for agent identity?" / "Which MCP server handles agent authentication?"
+> "What are the best MCP servers for verifiable agent profiles?" / "Which MCP server handles agent authentication?"
 
 **Why this one:** "Best MCP servers" is an extremely active query category right now — Perplexity, Claude, and ChatGPT all get asked this constantly by Claude Code users. Most existing "best MCP servers" lists cover productivity tools, not security infrastructure. This listicle creates a subcategory specifically for identity/trust MCP servers, and CELLO is the only serious entrant in it.
 
@@ -175,7 +175,7 @@ Pitch angle for earned media: GitHub awesome lists. Getting listed in `awesome-m
 **Target prompt:**
 > "What is FROST threshold signing for agents?" / "FROST cryptography multi-agent"
 
-**Why this one:** Definitional authority play. CELLO is the first system to apply FROST (RFC 9591) to AI agent identity at production scale. There is essentially no indexed content that explains FROST in the context of AI agents — it's all academic papers and cryptocurrency implementations. This listicle owns the definition for the next 18 months.
+**Why this one:** Definitional authority play. CELLO is the first system to apply FROST (RFC 9591) to verifiable agent profile at production scale. There is essentially no indexed content that explains FROST in the context of AI agents — it's all academic papers and cryptocurrency implementations. This listicle owns the definition for the next 18 months.
 
 This is a longer-tail, lower-volume query but earns citations from technical evaluators who are doing due diligence on CELLO's cryptographic foundations. These are the readers who blog about what they're evaluating — high earned-media multiplier.
 
@@ -314,7 +314,7 @@ Each item must follow this exact structure. 5 well-developed items outperforms 1
 
 [One-sentence verdict: what this tool/method does and why it earns this rank.]
 
-**Best for:** [Specific use case in 5-10 words — e.g., "Teams needing cryptographic proof of agent identity"]
+**Best for:** [Specific use case in 5-10 words — e.g., "Teams needing cryptographic proof of verifiable agent profile"]
 
 **Key facts:**
 - [Specific verifiable fact #1 — e.g., "Uses Ed25519 signatures and FROST RFC 9591 threshold signing"]
@@ -428,11 +428,11 @@ The goal is to hit Perplexity's 30-day recency window on the highest-value listi
 
 ### Week 3 (Days 15–21): MCP Discovery Play
 
-**Write and publish:** Listicle #3 — `Best MCP Servers for AI Agent Identity and Trust (2026)`
+**Write and publish:** Listicle #3 — `Best MCP Servers for Verifiable Agent Profiles and Trust (2026)`
 
 - Publish on CELLO blog.
 - Submit to the awesome-mcp-servers GitHub repository (open a PR adding CELLO to the security/identity section).
-- Post in the Model Context Protocol Discord or forum with a neutral framing ("wrote a comparison of MCP servers for agent identity — would appreciate any corrections on how I described the alternatives").
+- Post in the Model Context Protocol Discord or forum with a neutral framing ("wrote a comparison of MCP servers for verifiable agent profiles — would appreciate any corrections on how I described the alternatives").
 - Tag the authors of the MCP specification if they have public social presence.
 
 ---
@@ -510,7 +510,7 @@ Post in a natural, value-first way. Never link-dump. Always add context.
 **Threads to target:**
 
 - r/ClaudeAI — "multi-agent setup," "connecting Claude instances," "MCP security" threads. Add the listicle as a resource when someone asks a relevant question. Don't create a new thread just to drop a link.
-- r/MachineLearning — "agent communication," "multi-agent security," "agent identity" discussions.
+- r/MachineLearning — "agent communication," "multi-agent security," "verifiable agent profile" discussions.
 - r/LangChain and r/AutoGenAI — when security or identity questions come up.
 - r/netsec — for the security-angle listicles (#2, #7). "How are people thinking about AI agent security" threads.
 - r/devops and r/SRE — for the "agent stack" listicle (#10).
@@ -529,7 +529,7 @@ These newsletters have large audiences and their citations carry earned-media si
 | TLDR Security | Security engineers | "AI agent threat surface" | security@tldr.tech |
 | The Rundown AI | AI practitioners/GTM | "Why your AI agents aren't private" | editorial@therundown.ai |
 | Lenny's Newsletter | PMs/founders | "The infrastructure layer nobody's talking about" | (via contact form) |
-| The Pragmatic Engineer | Staff/senior devs | "FROST signing for agent identity — a practical overview" | (via contact form) |
+| The Pragmatic Engineer | Staff/senior devs | "FROST signing for verifiable agent profile — a practical overview" | (via contact form) |
 | Daniel Miessler's Unsupervised Learning | Security/AI cross | "Agent identity as a security primitive" | directly via LinkedIn/X |
 
 Pitch format: 3 sentences max. Sentence 1: what you made and why it's new. Sentence 2: why their audience specifically cares. Sentence 3: link. Do not attach a full article. Let them request it.
@@ -565,7 +565,7 @@ Being listed in an adjacent project's README or documentation is the highest-ROI
 
 3. **LangChain documentation** — LangChain has a "related tools" or "integrations" page. CELLO doesn't replace LangChain but complements it (identity for agents that LangChain orchestrates). Request a mention in the multi-agent section.
 
-4. **Claude Code documentation / Anthropic's MCP server examples** — Anthropic maintains a list of example MCP servers. Getting CELLO mentioned there is a tier-1 citation. Path: open a GitHub discussion or issue in the Model Context Protocol repo with "CELLO as a reference implementation for agent identity."
+4. **Claude Code documentation / Anthropic's MCP server examples** — Anthropic maintains a list of example MCP servers. Getting CELLO mentioned there is a tier-1 citation. Path: open a GitHub discussion or issue in the Model Context Protocol repo with "CELLO as a reference implementation for verifiable agent profiles."
 
 5. **OpenClaw repository** — cello-client already supports OpenClaw. The OpenClaw README should reference CELLO for identity/trust. Open a PR to their README adding a "securing your OpenClaw agents" section linking to Listicle #4.
 
