@@ -785,12 +785,6 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
            FROM signal_records_effective
            WHERE subject_kind = 'account' AND subject = $1
              AND effective_status = 'active'
-           UNION ALL
-           SELECT sr.type, sr.signal_hash, sr.first_notarized_at::text, sr.issuer_kind, sr.subject, sr.subject_kind
-           FROM signal_records_effective sr
-           JOIN agent_profiles ap ON ap.k_local_pubkey = sr.subject
-           WHERE sr.subject_kind = 'agent' AND ap.account_id = $1
-             AND sr.effective_status = 'active'
            ORDER BY first_notarized_at DESC NULLS LAST`,
           [accountId],
         );
