@@ -156,44 +156,43 @@ Timing: post Tuesday or Wednesday morning US time, when HN engagement peaks.
 
 ---
 
-## Tactic 7: The Florian-Tier Founder as Launch Catalyst
+## Tactic 7: The Early User Flywheel (Feedback → Content → Growth)
 
-**Who**: Florian Darroman (himself), video 12 (stopped-openclaw)
+**Priority**: Post-launch only. Runs after Wave 1 users have had their first win.
 
-**What they did**: Florian built 1.5 months of credibility recommending OpenClaw, then publicly pivoted to Claude Code and explained why — with specific cost numbers ($60/day → $200/month). "I was a lot on X and on other platforms to share that I should try Claude." His community followed his recommendation in both directions.
+**What this replaces**: The original tactics 7 and 8 in this playbook described trend-riding off specific ecosystem events (the OpenClaw-to-Claude migration, "Florian-tier" founder pivots). Those were time-sensitive moments that have passed, and the underlying pattern — reacting to someone else's news — is high-effort and unpredictable. This tactic is the sustainable, product-driven replacement: instead of borrowing energy from external events, generate it from real user stories.
 
-**Why it worked**: The "Florian-tier founder" — solo or small-team, 500-5,000 engaged followers on X/YouTube, actively building with AI agents, vocal about their stack — has disproportionate influence over a specific audience. When they change their stack publicly and explain why, their audience updates their own stack. This is the "trusted peer" dynamic that outperforms cold advertising.
+**The flywheel:**
 
-**CELLO application**: Identify 3-5 people in this tier who:
-- Have active multi-agent setups (Claude Code + something else)
-- Post publicly about their workflows
-- Have experienced the copy-paste collaboration friction
+1. **Identify high-activity users** — users who hit ≥5 sealed sessions or ≥1 cross-operator session within 14 days. This is observable from session telemetry without reading message content.
 
-NOT influencers. NOT people with 100K+ followers. People like: someone building an OpenClaw + Claude Code combo, a consultant who manages multiple AI tools for clients, a developer who's posted "I wish my agents could talk to each other."
+2. **Reach out via CELLO_FEEDBACK agent + email** — the outreach itself dogfoods the product. Message: "We noticed you've been using CELLO actively. We'd love 20 minutes to hear what's working and what isn't. Your feedback directly shapes what we build next."
 
-The approach: personal conversation, not a pitch. "I saw your post about connecting X and Y. I built something specifically for that problem. Would you try it and tell me if it solves it?"
+3. **Grant premium invites as reward:**
+   - No response after 5 days → auto-grant 2 premium invites (acknowledges their activity)
+   - Completed feedback call → grant 4 premium invites (replaces the 2 if already issued)
 
-Get them a working setup specific to their stack. Let them post about it organically. Their 3,000 followers are worth more than any influencer's 300,000 because they're the exact people who have the same problem.
+4. **Feedback calls produce raw material** — real use cases, real workflows, real friction points. Each call yields: candidate testimonials, candidate case studies, and identification of users who might write their own X Article (feeding Tactic 5).
+
+5. **Raw material becomes public content** — staff-written articles, user-written articles (via Tactic 5 mechanics), X posts, landing page social proof.
+
+6. **Content attracts new users** → they join the waitlist → become active users → generate new raw material.
+
+**Why this beats trend-riding**: Ecosystem events are unpredictable and time-limited. A library of real user stories is permanent and self-replenishing. When relevant ecosystem news does happen — a new Claude model ships, a security incident in the agent space gets attention — you have specific, attributable stories to surface in response rather than manufacturing content from scratch.
+
+**The feedback call format (20-30 minutes):**
+- What were you trying to do when you used CELLO?
+- What worked as expected?
+- What was harder than it should have been?
+- Is there a workflow you'd be willing to let us write about?
+
+**Note on trend-riding**: Being responsive to ecosystem news (new model releases, framework launches, security incidents) is worth doing as an ongoing background practice — it just doesn't need a dedicated tactic. When CELLO has a library of user stories, surfacing the relevant one in response to a trend takes minutes, not days.
+
+Full mechanics in the waitlist plan: §5c.
 
 ---
 
-## Tactic 8: Intercepting the OpenClaw-to-Claude Migration Wave
-
-**Who**: Florian Darroman, video 12 (stopped-openclaw); Kit, video 20 (39-openclaw-use-cases)
-
-**What they did**: There is an active, identifiable migration event: OpenClaw power users rebuilding their stacks around Claude Code after Anthropic's Max plan changes. Florian says he installed Claude on his fiancée's machine the same day he switched. These users are maximally receptive to add-ons: "You're rebuilding your agent stack anyway."
-
-**Why it worked**: People who are already reconfiguring their agent setup have their attention on "what else do I need?" They're the best possible audience for a new agent infrastructure layer because the activation cost ("I have to change my setup") has already been paid.
-
-**CELLO application**: The OpenClaw Lab community (whatever Florian renames it) is the highest-density concentration of CELLO's ICP. These are solo founders and knowledge workers running multi-agent setups, using Telegram as their interface, already thinking in terms of agent teams.
-
-Concrete action: post in that community with: "You're rebuilding around Claude Code anyway. CELLO is the one thing to add from Day 1 — gives your agents cryptographic identity so when they talk to each other (or to a collaborator's agents), there's a verifiable record. 5-minute install."
-
-Also post specific integration content: "If you're migrating from OpenClaw to Claude Code, here's how CELLO connects your agents during the transition so you don't lose session continuity."
-
----
-
-## Tactic 9: Security Fear as Pre-Existing Tailwind
+## Tactic 8: Security Fear as Pre-Existing Tailwind
 
 **Who**: Oliver, video 19 (make-money-openclaw); Kit, video 20 (39-openclaw-use-cases)
 
@@ -213,7 +212,7 @@ Write one specific post: "My agent just got a session request from an unknown ag
 
 ---
 
-## Tactic 10: OpenClaw Skill File as Distribution Vector
+## Tactic 9: OpenClaw Skill File as Distribution Vector
 
 **Who**: Nevo (Post This), video 13; Oliver, video 19
 
@@ -234,7 +233,7 @@ This is 2-4 hours of work. Every OpenClaw user who installs the skill becomes a 
 
 ---
 
-## Tactic 11: GEO Reverse-Engineering via Perplexity
+## Tactic 10: GEO Reverse-Engineering via Perplexity
 
 **Who**: Sleek founders, video 2
 
@@ -259,7 +258,7 @@ This is systematic, not speculative. The list of sources IS the action plan.
 
 ---
 
-## Tactic 12: Build-in-Public With Specific Numbers
+## Tactic 11: Build-in-Public With Specific Numbers
 
 **Who**: Sleek founders, video 2; Florian/Distribute, video 15; Tally (Marie), video 9
 
@@ -279,7 +278,7 @@ Do not sanitize. Do not wait for big numbers. "3 operators" is more credible tha
 
 ---
 
-## Tactic 13: Direct DM to Seed First 20-50 Users
+## Tactic 12: Direct DM to Seed First 20-50 Users
 
 **Who**: Tally (Marie), video 9; Florian 7-step, video 11
 
@@ -299,7 +298,7 @@ Target: 50 DMs in Week 1. Even a 10% response rate is 5 early users who provide 
 
 ---
 
-## Tactic 14: Riding Platform Release Cycles
+## Tactic 13: Riding Platform Release Cycles
 
 **Who**: Nevo (Post This), video 13; Lots, video 24
 
@@ -319,7 +318,7 @@ Keep draft templates ready. Speed matters more than polish for trend-riding. A r
 
 ---
 
-## Tactic 15: The Reddit Honest Launch Post
+## Tactic 14: The Reddit Honest Launch Post
 
 **Who**: Elston (Tiny Host), video 10
 
@@ -337,7 +336,7 @@ Timing: post separately in each relevant subreddit with community-specific frami
 
 ---
 
-## Tactic 16: Product Hunt for the Newsletter Pipeline
+## Tactic 15: Product Hunt for the Newsletter Pipeline
 
 **Who**: Nevo (Post This), video 13
 
@@ -361,7 +360,7 @@ One newsletter placement can reach 50K+ developers who cannot otherwise be reach
 
 ---
 
-## Tactic 17: The "Full Setup" Reveal Video
+## Tactic 16: The "Full Setup" Reveal Video
 
 **Who**: Florian Darroman, video 18 (openclaw-runs-business)
 
@@ -383,7 +382,7 @@ Total: 8-10 minutes. Raw screen recording with Andre's voice. No editing needed.
 
 ---
 
-## Tactic 18: Pre-Launch Newsletter Seeding
+## Tactic 17: Pre-Launch Newsletter Seeding
 
 **Who**: Florian Darroman (newsletter mining), video 24; Cody, video 25
 
@@ -401,7 +400,7 @@ Cody: "Podcast-to-eBook lead magnet. You offer this as a digital download. 'I sa
 
 ---
 
-## Tactic 19: Tinker Club / Early Community Seeding
+## Tactic 18: Tinker Club / Early Community Seeding
 
 **Who**: Kit (Tinker Club), video 20
 
@@ -419,7 +418,7 @@ Also propose a Tinker Club challenge: "CELLO challenge: connect your two agents,
 
 ---
 
-## Tactic 20: Riding AI Agent Trend Vocabulary
+## Tactic 19: Riding AI Agent Trend Vocabulary
 
 **Who**: Sleek founders, video 2; Nevo, video 13
 
