@@ -3,6 +3,24 @@ How to use long-form X Articles to reach thousands from zero followers
 
 ---
 
+## Relationship to Tactic 5 (Micro-Influencer Seeding)
+
+**This tactic (Tactic 4) runs at launch. Tactic 5 runs after launch.**
+
+Tactic 4 is the founder's own Article — written by Andre, pre-launch or on launch day. It doesn't require any other users to have tried CELLO. It's a first-person story from the person who built it.
+
+Tactic 5 (micro-influencer seeding) requires real users who've had their first win with CELLO. It can only run after Wave 1 users have successfully connected their agents — minimum 2-3 weeks post-launch.
+
+The relationship: Andre's Article (Tactic 4) is the proof of concept and the brief template for Tactic 5. When reaching out to micro-influencers, you can say: "Here's what I wrote about my own experience — would you write about yours?" The Article becomes both distribution and the creative brief.
+
+**Sequence:**
+1. Andre writes and publishes his X Article (launch day)
+2. Wave 1 users get first win (week 1-2 post-launch)
+3. Identify vocal Wave 1 users on X
+4. Begin Tactic 5 outreach (week 3+)
+
+---
+
 ## Part 1: Why X Articles Are CELLO's Highest-Leverage Written Content
 
 ### The Algorithm Case
