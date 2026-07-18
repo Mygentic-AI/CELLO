@@ -11,32 +11,29 @@ These are non-negotiable preconditions. Every distribution dollar and hour you s
 
 ### 1. ICP Locked to One Sentence
 
-**What it is**: A single sentence naming one specific person, one specific problem, and one specific outcome. Not "AI developers."
+**What it is**: A single sentence naming one specific person, one specific problem, and one specific outcome.
 
-**Why it matters**: Without ICP precision, every feature decision, content angle, and distribution choice is contested. When you know exactly who you're for, the product, the pitch, and the channel selection all follow. Products that serve a Venn diagram intersection that doesn't exist as a real person get no word-of-mouth.
+**Why it matters**: Without ICP precision, every feature decision, content angle, and distribution choice is contested. When you know exactly who you're for, the product, the pitch, and the channel selection all follow.
 
-**How to resolve for CELLO**: The ICP is NOT "developers." It is: **anyone who uses AI agents to do their work and needs to collaborate with another person who also uses AI agents** — and finds themselves resorting to ad hoc workarounds (copy-pasting into Slack, email, shared docs) because there's no real agent-to-agent communication layer.
+**How to resolve for CELLO**: 
+"Anyone who runs AI agents as a core part of their daily work — developers, GTM professionals, consultants, analysts, operators, researchers — and finds themselves pasting agent output into emails, Slack, and shared docs to collaborate with someone else who also runs AI agents. The pain is the same regardless of technical background: there's no real agent-to-agent communication layer, so they're stitching it together manually."
 
-This includes GTM professionals, consultants, analysts, operators, researchers — anyone who uses Claude Code, Hermes, OpenClaw, Codex, Claude Co-work, or any AI agent as part of their daily workflow. They are not necessarily building software. They are *using* software that agents build and run for them. When they need to hand off work or collaborate with a colleague, they're back to primitives that lose context, lose verifiability, and break the workflow.
-
-The working ICP sentence: "A professional who uses AI agents to do their work and has to collaborate with a colleague also using AI agents — and is tired of duct-taping that collaboration with Slack pastes and email attachments."
-
-The solo use case (connecting your own two agents — Claude Code on laptop ↔ Hermes on AWS) is the **wedge** because it has zero cold-start problem. But the broader ICP is the collaboration case, and that audience is enormous and growing daily as AI agent adoption spreads beyond engineering teams.
+The wedge is still the solo case: you already run two or more of your own agents and want them to coordinate without you as the relay. Zero cold-start, immediate value, no counterparty needed to get started.
 
 ---
 
 ### 2. One-Sentence Pitch That Implies the Pain Without Protocol Vocabulary
 
-**What it is**: A sentence that tells a developer immediately whether they are the customer, what problem it solves, and what makes CELLO different.
+**What it is**: A sentence that tells a user immediately whether they are the customer, what problem it solves, and what makes CELLO different.
 
 **Why it matters**: If your pitch requires the reader to know what FROST signatures or threshold cryptography are, you have already lost 99% of your ICP. The pitch must work at the problem layer, not the mechanism layer.
 
-**How to resolve for CELLO**: The pitch must work at the pain layer, not the mechanism layer. The audience is not exclusively technical — it includes non-developers using AI agents. Test these with 10 people who use AI agents but aren't necessarily writing code. The winner is the one that gets "wait, that's exactly what I do" rather than a blank stare:
-- "CELLO is how your AI agents talk to someone else's AI agents — privately, verifiably, without any platform in the middle."
-- "You're already using AI agents to do your work. CELLO is how you collaborate with a colleague doing the same — without pasting things into Slack."
-- "When your AI agent needs to work with someone else's AI agent, CELLO handles the introduction, the conversation, and the receipt."
+**How to resolve for CELLO**: The pitch must work at the pain layer, not the mechanism layer. The audience spans both technical and non-technical agent users. 
 
-The test: does the person recognize their current workaround in the first 5 words? If they're nodding at "pasting into Slack," you have them.
+**Winning 1-Line Pitch:**
+"You're pasting your agent's work into emails, Slack, and shared docs to collaborate. CELLO gives your agents a direct line — private, verified, and a paper trail only you and the other person hold."
+
+The test: does the person recognize their current workaround in the first 5 words? If they're nodding at "pasting your agent's work," you have them.
 
 ---
 
