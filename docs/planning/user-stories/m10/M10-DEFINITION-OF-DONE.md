@@ -784,6 +784,19 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   (anonymous + identity). —
   ✅ (2026-07-18 — portal `4f29da4` + `d6defca`: single `<li>` with expand detail showing
   both anonymous and identity claim text.)
+- **DOD-DIR-ATTESTATION-1** — the trust-signal projection surfaced to the recipient must carry
+  the directory's attestation: a statement that the directory verified each signal at the moment
+  of this session, the `signal_hash` for each signal (so the recipient can independently re-hash
+  the CBOR envelope and confirm), and `directory_verified: true`. The directory's role must be
+  visible in the message itself — not just internal daemon logic. Without this, the recipient
+  has no way to distinguish directory-verified signals from injected claims. —
+  ✅ (2026-07-19 — cello-client `38221e4`, daemon 0.0.69 / connect 0.0.82, tag v0.0.118:
+  `projectTrustSignals` returns `{directory_attestation, trust_signals: [{signal_hash, directory_verified, ...}]}`.)
+- **DOD-RDS-ROTATION-1** — the portal's `database-url` secret is a snapshot that goes stale on
+  RDS master secret rotation. Either disable rotation on the dev portal RDS (no security value
+  in dev), or make the portal read the master secret ARN at runtime (like the directory does).
+  Currently requires manual `create-portal-secrets.sh` + task restart after every rotation. —
+  ❌ NOT BUILT (owed — observed 2026-07-19 when rotation broke the portal mid-session).
 
 ---
 
