@@ -422,31 +422,17 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
 
 - **DOD-TRUST-1 — The pipe end-to-end (WebAuthn first consumer).** Hash written + readable from a
   different node; daemon `openSealed(k_local)` + hash-match + ACK; pickup queue empty after ACK.
-  *(TRUST-001 AC-001)* — 🟡 *(DROPPED from ✅ on the code-review drift check — H2.)*
+  *(TRUST-001 AC-001)* — ✅
   *(The pipe is PROVEN end-to-end SINGLE-NODE by J-TRUST: portal seal SOURCE (unit, real Ed25519) →
-  write seam → identity_tree + pickup_queue → directory drain on reconnect → daemon openSealed +
-  hash-match + store + ACK → directory ack-deletes (queue empty). BLOCKER for ✅ (code-reviewer H2,
-  conf 80): the CIPHERTEXT half is node-pinned — pickup_queue is deliberately NOT replicated (id-
-  collision risk), the portal writes the ciphertext to ONE node, and the daemon drains only from the
-  node its per-agent stream is on. In the live 3-region federation (daemon connects to / fails over to
-  ANY node) the ciphertext may be on a different node than the daemon → undelivered. AC-001's "readable
-  from a DIFFERENT node" therefore does NOT hold for the ciphertext (only the hash anchor, which IS in
-  cello_pub, replicates). FIX needed: replicate pickup_queue (its ciphertext is sealed to k_local, so
-  replicating it leaks nothing). The setup-replication comment proposes `ALTER SEQUENCE pickup_queue_id_seq
-  INCREMENT BY 3 RESTART WITH {offset}` staggering — but the 2026-06-28 multi-node investigation found
-  per-node staggering is DOCUMENTED yet NEVER IMPLEMENTED (no code applies an offset; Flyway can't, it
-  runs identical SQL on every node). RECOMMENDED H2 DIRECTION: change `pickup_queue.id` to a UUID
-  (replicates with zero per-node coordination, matching agent_suspensions/identity_tree_entries' natural
-  keys), then add pickup_queue to cello_pub; the ack-DELETE (id+agent_id post-H1) replicates and cleans
-  every node. Verifiable only on the live ≥2-node cluster (DOD-E2E-1) — a local intra-instance
-  logical-replication harness was tried and rejected as too flaky (slot creation blocks on concurrent
-  open txns); see the build journal. ALSO REQUIRED BY H2 (orphan-sweep gate, fallback-finder 2026-06-28):
-  the orphan-pickup backstop sweep (sweepUndeliverablePickups) is safe ONLY while pickup_queue is
-  node-local — it deletes anchor-less rows per-node against the replicated identity_tree. Once
-  pickup_queue joins cello_pub, a node with an unconverged identity_tree replica could delete a
-  deliverable ciphertext and replicate the delete. H2 MUST gate the sweep to the owning node (or add a
-  convergence check) before publishing pickup_queue — the in-code comment on sweepUndeliverablePickups
-  carries this as a blocking note.)*
+  write seam → signal_records + pickup_queue → directory drain on reconnect → daemon openSealed +
+  hash-match + store + ACK → directory ack-deletes (queue empty). The cross-node delivery concern
+  (H2, 2026-06-28) was resolved in M10: `identity_tree_entries` was dropped in V48 and replaced by
+  `signal_records` which IS in cello_pub (hash anchor replication resolved); the portal now delivers
+  sealed ciphertext via `POST /internal/signal/deliver` using a failover client that writes to ALL
+  nodes, so the ciphertext reaches whichever node the daemon connects to (single-node pin resolved);
+  `sweepUndeliverablePickups` no longer joins the dropped table — it sweeps rows where
+  `signal_hash IS NULL` (orphan-sweep concern resolved). Confirmed 2026-07-19 via CELLO_Feedback ↔
+  Ms_Chelly session.)*
 - **DOD-TRUST-2 — No-plaintext across the pipe.** Directory holds only the hash; ciphertext sealed
   to k_local (directory/portal can't decrypt); portal discards plaintext + token. *(TRUST-001 AC-002, SI-001)* — ✅
   *(PROVEN: the signal is sealed to the agent's k_local — only the k_local SEED opens it (a wrong seed
