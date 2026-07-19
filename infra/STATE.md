@@ -872,7 +872,7 @@ verified.** Remaining cross-node DoD flips are gated on other work, not on the c
 | cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
 | cello-route53-dev | UPDATE_COMPLETE (CFN DRIFT) | 2026-06-07 | A record deleted by purge_stale_dns_record() bug during M6B-014 deploy. Recreated manually 2026-06-07. deploy.sh fixed (commit 6d17b30) — drift resolves on next deploy.sh run. |
 | cello-route53-relay-dev | UPDATE_COMPLETE (CFN DRIFT) | 2026-06-07 | A record deleted by purge_stale_dns_record() bug. Recreated manually 2026-06-07. Drift resolves on next deploy.sh run. |
-| cello-cicd-dev | UPDATE_COMPLETE | 2026-06-06 | Deployed r12 |
+| cello-cicd-dev | UPDATE_IN_PROGRESS | 2026-07-19 | deploy.sh dev us-east-1 running to fix StagingDirectoryUrl (stale ALB 85618485 → current 1341968405). Every pipeline run since 2026-07-15 failed smoke test with "fetch failed" because old ALB was deleted during rogue-agent cleanup. |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
 | Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-06-06 | REPOSPLIT-002: removed 4 dead pipelines (crypto/protocol-types/transport/client); now 5 pipelines only |
 | ECR Replication (account-level) | CONFIGURED | 2026-05-24 | us-east-1 → eu-central-1 + ap-northeast-1; filter: prefix "cello-" |
@@ -939,7 +939,7 @@ All six secrets imported via CFN resource import changeset `import-transport-key
 | Relay Manifest Bucket | cello-relay-manifest-dev-us-east-1 |
 | RDS Endpoint | cello-dev.c9iokw02w3f8.us-east-1.rds.amazonaws.com |
 | RDS Port | 5432 |
-| Directory ALB | cello-dir-dev-85618485.us-east-1.elb.amazonaws.com |
+| Directory ALB | cello-dir-dev-1341968405.us-east-1.elb.amazonaws.com | **UPDATED 2026-07-19** — ALB changed from cello-dir-dev-85618485 during post-rogue-agent cleanup (2026-07-17). deploy.sh dev us-east-1 IN PROGRESS to update cello-cicd-dev StagingDirectoryUrl parameter (was still pointing to old ALB, causing smoke test "fetch failed" since 2026-07-15). |
 | Relay ALB | cello-relay-dev-913894764.us-east-1.elb.amazonaws.com |
 | ALB Hosted Zone ID | Z35SXDOTRQ7X7K |
 | Route 53 Record | directory-us1.cello.mygentic.ai |
