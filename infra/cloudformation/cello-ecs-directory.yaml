@@ -316,6 +316,8 @@ Resources:
 
   HttpListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LoadBalancerArn: !Ref Alb
       Port: 80
