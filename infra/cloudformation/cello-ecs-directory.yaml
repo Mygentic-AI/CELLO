@@ -464,17 +464,21 @@ Outputs:
     Export:
       Name: !Sub "cello-${Environment}-directory-service-arn"
 
+  # ALB outputs hardcoded to live values (2026-07-19) — the Alb resource's physical ID points
+  # to a deleted ALB (9f3cee2f6df31fc9, rogue-agent drift). !GetAtt/!Ref resolve against the
+  # dead resource and fail. Hardcoded to the LIVE ALB until the drift is resolved via stack
+  # rebuild. Values from: aws elbv2 describe-load-balancers --query cello-dir-dev.
   AlbDnsName:
-    Value: !GetAtt Alb.DNSName
+    Value: "cello-dir-dev-1341968405.us-east-1.elb.amazonaws.com"
     Export:
       Name: !Sub "cello-${Environment}-alb-dns-name"
 
   AlbHostedZoneId:
-    Value: !GetAtt Alb.CanonicalHostedZoneID
+    Value: "Z35SXDOTRQ7X7K"
     Export:
       Name: !Sub "cello-${Environment}-alb-hosted-zone-id"
 
   AlbArn:
-    Value: !Ref Alb
+    Value: "arn:aws:elasticloadbalancing:us-east-1:257394457473:loadbalancer/app/cello-dir-dev/61ee3093c761981a"
     Export:
       Name: !Sub "cello-${Environment}-alb-arn"
