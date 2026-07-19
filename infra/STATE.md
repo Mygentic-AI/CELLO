@@ -636,8 +636,8 @@ ALB DNS names are always query-AWS — the snapshots below are point-in-time, no
 seal legibility + the M6B-014 stale-IaC-test fix; relay image unchanged, force-new-deployed for
 re-registration. Prior directory image `04d95ad`; STATE tables (below) say `d5d0424` — both stale.)
 
-Per-region current state (taskdef rev / running relay private IP / ALB DNS) — as of 2026-07-02 ~21:10 UTC:
-- **us-east-1** — directory `:215` / `cello-dir-dev-85618485`; relay `:82` / `10.0.23.246` / `cello-relay-dev-913894764`.
+Per-region current state (taskdef rev / running relay private IP / ALB DNS) — as of 2026-07-19:
+- **us-east-1** — directory `:267` (image `50c7748`) / `cello-dir-dev-1341968405`; relay unchanged. **2026-07-19 incident:** failed deploy.sh attempts rolled back the ECS service from :267 to :225 (old image `642bb7a`). Fixed by `aws ecs update-service --task-definition cello-directory-dev:267 --force-new-deployment`. Full incident log: `docs/planning/discussion_logs/2026-07-19_0600_smoke-test-fix-and-alb-drift.md`. CFN stack `cello-ecs-directory-dev` is in `UPDATE_ROLLBACK_COMPLETE` with ALB drift (physical resources point to dead ALB `9f3cee2f6df31fc9`, live ALB is `61ee3093c761981a`). deploy.sh CANNOT update this stack until drift is resolved. CI/CD pipeline deploys work fine (they don't touch CFN).
 - **eu-central-1** — directory `:82` / `cello-dir-dev-114927676`; relay `:35` / `10.1.75.110` / `cello-relay-dev-1538955378`.
 - **ap-northeast-1** — directory `:73` / `cello-dir-dev-1500332624`; relay `:30` / `10.2.30.214` / `cello-relay-dev-1984262345`.
 - All 3 relays force-new-deployed this session (re-register after directory redeploy); **S3 relay
