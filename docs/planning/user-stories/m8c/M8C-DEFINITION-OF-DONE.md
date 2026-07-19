@@ -534,9 +534,8 @@ description: >
   different machine. Two different identities, two machines, real relay/off-device transport (not
   loopback): a full connect → talk loop across devices, with only one side (the CC agent) under the
   operator's direct control. This is the real launch proof — and installing it there is what
-  **unblocks the cross-machine tests below**. — ❌ (bridge not yet installed on AWS Hermes; gated on
-  the publish cascade so `cello install hermes` is available on that box. NOT blocked on any missing
-  protocol work — the mechanism is proven; only the deployment + a live off-device run remain.)
+  **unblocks the cross-machine tests below**. — ✅ DONE AND TESTED (2026-07-19 — bridge installed on
+  AWS Hermes instance; off-device connect → talk loop proven live.)
 
 > **Newly unblocked once DOD-HERMES-2 lands** (these previously had no runnable path for lack of a
 > second, independent, non-loopback peer — now they have one):
