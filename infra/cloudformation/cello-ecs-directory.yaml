@@ -376,23 +376,11 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref BootstrapTargetGroup
 
-  # DOD-REGISTRY-1: /registry path rule — routes to BootstrapTargetGroup (port 9090),
-  # same as /manifest. The daemon polls the signed type registry over unauthenticated
-  # HTTP; the document is self-authenticating (clients verify the inner Ed25519
-  # signature against their pinned registry pubkey).
-  RegistryPathRule:
-    Type: AWS::ElasticLoadBalancingV2::ListenerRule
-    DependsOn: HttpListener
-    Properties:
-      ListenerArn: !Ref HttpListener
-      Priority: 7
-      Conditions:
-        - Field: path-pattern
-          Values:
-            - "/registry"
-      Actions:
-        - Type: forward
-          TargetGroupArn: !Ref BootstrapTargetGroup
+  # DOD-REGISTRY-1: /registry path rule — REMOVED FROM TEMPLATE (2026-07-19).
+  # The rule exists live on the ALB (created manually during M10, priority 7, /registry → 9090).
+  # CFN cannot manage it because the stack's HttpListener physical ID points to a deleted ALB
+  # (cello-dir-dev/9f3cee2f6df31fc9 — destroyed during rogue-agent cleanup). Adding it back
+  # requires resolving the ALB drift first (import the live ALB 61ee3093c761981a into the stack).
 
   # AC-009d (OPS-AGENT-005A): /internal/* path protection.
   # The directory /internal/pre-authorize endpoint is authenticated by x-cello-internal-api-key
