@@ -84,15 +84,13 @@ Proven by SI/adversarial assertions woven into the journeys, never a separate pa
   the preflight.)*
 - **DOD-INV-6 — Suspend is T-of-N server-side, not 2-of-2.** A suspended agent cannot sign even
   with a valid client share; the block is the honest-node threshold refusing, never one mandatory
-  node withholding. *(LEVER-001 SI-001, AC-003; [[project_threshold_t_of_n_not_2_of_2]])* — 🟡
-  *(CORE PROVEN by J-SUSPEND: a suspended agent cannot sign even with a valid client share, and the
-  block is SERVER-SIDE (the directory refuses; nothing the client holds helps — SI-001). The
-  MECHANISM is T-of-N-correct: each node independently consults its OWN replicated `agent_suspensions`
-  copy and refuses its FROST share at the share gate (`#handleFrostStream` commit+sign frames) +
-  the session-init gate — no node is a mandatory co-signer. The explicit "a single node continuing
-  to offer its share does not let it sign" distinction (the anti-2-of-2 proof) needs a ≥3-node
-  cluster and is DOD-LEVER-3 / AC-003, pending the multi-node harness. Current daemon path is the
-  2-of-2 stopgap, so J-SUSPEND cannot yet distinguish threshold-refusal from single-node refusal.)*
+  node withholding. *(LEVER-001 SI-001, AC-003; [[project_threshold_t_of_n_not_2_of_2]])* — ✅
+  *(PROVEN by M8B DOD-SUSPEND-1 (`j-suspend-tofn.spine.test.ts`, 3-directory spine, 2026-07): 2-of-3
+  nodes suspended ⇒ ceremony blocked with `ceremony_exhausted` (genuine sub-threshold, not single-node
+  refusal); un-suspend one node ⇒ nodes 0 and 2 sign while node 1 emits `frost.ceremony.refused.revoked`
+  — proving survivors route AROUND a genuinely-refusing node; a second agent B not suspended STILL signs
+  through the same nodes ⇒ refusal is agent-scoped, not the node going dark. The anti-2-of-2 proof is
+  complete: a single cooperating node cannot complete the ceremony alone.)*
 - **DOD-INV-7 — Trust = named signals only.** No composite score/level/distance/TrustRank/seed
   badge anywhere. *(TRUST-003 AC-001; [[feedback_no_trustrank_or_single_score]])* — ✅ *(PROVEN LIVE,
   J-trust: the Trust Signals screen renders four distinct NAMED classes (no single rollup) and the
@@ -388,14 +386,13 @@ Source: the E2E-001 gate. The core operator path, served apps, browser-driven.
   the signed-event is a named M10/M11 follow-up (account-key story), not an M8 gap.)*
 - **DOD-LEVER-3 — T-of-N mechanism + distinct error.** A threshold of honest nodes refuse; a
   single node continuing doesn't let it sign; the ceremony returns a distinct revocation error.
-  *(LEVER-001 AC-003)* — 🟡
-  *(DISTINCT-ERROR half PROVEN: the directory refuses with `session_request_error reason=agent_suspended`
-  and the daemon now recognizes it (added to the known-reason set in session-assignment-parser.ts) so
-  it surfaces distinctly to the MCP — NOT folded into the generic `directory_unreachable`. J-SUSPEND
-  asserts the exact `agent_suspended` reason cross-process. The STRICT T-of-N half — "a single node
-  continuing to offer its share does not let it sign" — needs a ≥3-node cluster (the current daemon
-  path is the 2-of-2 stopgap) and the multi-node PRESENCE/cluster harness; pending. The daemon change
-  is local (branch m8-lever-001); the npm publish cascade is Andre-gated.)*
+  *(LEVER-001 AC-003)* — ✅
+  *(DISTINCT-ERROR: directory refuses with `session_request_error reason=agent_suspended`; daemon
+  surfaces it distinctly (not folded into `directory_unreachable`); J-SUSPEND asserts the exact reason
+  cross-process. STRICT T-of-N: proven by M8B DOD-SUSPEND-1 on the 3-directory spine — 2-of-3 nodes
+  honoring the suspension blocks the ceremony; un-suspending one node restores signing while the
+  remaining refusing node routes around correctly. Both halves proven. See DOD-INV-6 for the full
+  3-directory proof detail.)*
 - **DOD-LEVER-4 — Owner-only, step-up, burn-never-erases.** Only the owning account after step-up
   may revoke; a different account / bare session is rejected; burn kills future capability, never
   past accountability. *(LEVER-001 SI-002)* — ✅ *(RESTORED 2026-06-28: the step-up half (which inherited
