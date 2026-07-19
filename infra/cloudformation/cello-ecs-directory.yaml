@@ -316,8 +316,6 @@ Resources:
 
   HttpListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       LoadBalancerArn: !Ref Alb
       Port: 80
@@ -376,11 +374,23 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref BootstrapTargetGroup
 
-  # DOD-REGISTRY-1: /registry path rule — REMOVED FROM TEMPLATE (2026-07-19).
-  # The rule exists live on the ALB (created manually during M10, priority 7, /registry → 9090).
-  # CFN cannot manage it because the stack's HttpListener physical ID points to a deleted ALB
-  # (cello-dir-dev/9f3cee2f6df31fc9 — destroyed during rogue-agent cleanup). Adding it back
-  # requires resolving the ALB drift first (import the live ALB 61ee3093c761981a into the stack).
+  # DOD-REGISTRY-1: /registry path rule — routes to BootstrapTargetGroup (port 9090),
+  # same as /manifest. The daemon polls the signed type registry over unauthenticated
+  # HTTP; the document is self-authenticating (clients verify the inner Ed25519
+  # signature against their pinned registry pubkey).
+  RegistryPathRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    DependsOn: HttpListener
+    Properties:
+      ListenerArn: !Ref HttpListener
+      Priority: 7
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - "/registry"
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BootstrapTargetGroup
 
   # AC-009d (OPS-AGENT-005A): /internal/* path protection.
   # The directory /internal/pre-authorize endpoint is authenticated by x-cello-internal-api-key
@@ -464,21 +474,17 @@ Outputs:
     Export:
       Name: !Sub "cello-${Environment}-directory-service-arn"
 
-  # ALB outputs hardcoded to live values (2026-07-19) — the Alb resource's physical ID points
-  # to a deleted ALB (9f3cee2f6df31fc9, rogue-agent drift). !GetAtt/!Ref resolve against the
-  # dead resource and fail. Hardcoded to the LIVE ALB until the drift is resolved via stack
-  # rebuild. Values from: aws elbv2 describe-load-balancers --query cello-dir-dev.
   AlbDnsName:
-    Value: "cello-dir-dev-1341968405.us-east-1.elb.amazonaws.com"
+    Value: !GetAtt Alb.DNSName
     Export:
       Name: !Sub "cello-${Environment}-alb-dns-name"
 
   AlbHostedZoneId:
-    Value: "Z35SXDOTRQ7X7K"
+    Value: !GetAtt Alb.CanonicalHostedZoneID
     Export:
       Name: !Sub "cello-${Environment}-alb-hosted-zone-id"
 
   AlbArn:
-    Value: "arn:aws:elasticloadbalancing:us-east-1:257394457473:loadbalancer/app/cello-dir-dev/61ee3093c761981a"
+    Value: !Ref Alb
     Export:
       Name: !Sub "cello-${Environment}-alb-arn"
