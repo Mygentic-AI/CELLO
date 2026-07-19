@@ -58,7 +58,7 @@ description: >
   section), so this invariant is not yet satisfiable and the done-auditor must not fail it before
   then. The M8C obligation meanwhile is **seam-readiness**: build every new content path so the
   later M9 merge wires it cleanly (in particular DOD-LEAVEMSG-1 funnels its relay pull through
-  `ingestReceivedContent`). — ❌ (not yet activatable)
+  `ingestReceivedContent`). — ✅ (M9 live — DOD-M9INT-1 + DOD-M9-SWITCH-ON-1 both ✅, 2026-07-19)
 - **DOD-INV-PUSHPULL** — Every push capability has a pull equivalent. A poll-only client
   (Bedrock, cron) can reach every M8C feature; nothing hard-requires Claude Code push. Push loss
   is always recoverable via `cello_check_notifications` / `since_seq`. — ✅ (2026-07-08, Round-2
@@ -1305,7 +1305,8 @@ and live-proven including the negative case.** The doorbell now reads
   (`screenInbound` at `ingestReceivedContent`, `screenOutbound` at `cello_send`); the **semantic
   gate** passes: m9 gate (`m9-gate-1.test.ts`) re-run green against the merged daemon AND an
   explicit audit that all content paths (M8B-era + every path M8C added) route through the gateway.
-  Activates DOD-INV-GATEWAY. — 🟡 (2026-07-07, Entry 28 — merged, commit pending in this session;
+  Activates DOD-INV-GATEWAY. — ✅ (M9 confirmed live per M9-DEFINITION-OF-DONE — all M9 stories EARNED,
+  gateway switched on, seam green. 2026-07-07, Entry 28 — merged, commit pending in this session;
   pre-merge baseline confirmed (`m9-gate-1.test.ts` 2/2 green on `m9-build` before merge). Real
   conflicts (not the stale 4 predicted — main had drifted further): `daemon.ts` (3),
   `session-node-manager.ts` (5), `types.ts` (1), `tsconfig.json`, `vitest.workspace.ts` — all
@@ -1338,8 +1339,8 @@ NOT to re-litigate: [[2026-07-13_session-names-and-agent-param-story]]. Assigned
 **✅ BOTH DONE 2026-07-13** (CELLO_Support). Branch `m8c-session-names` in cello-client, off
 `7d5ec7a`: Part B `7d5ec7a` + `699eb21` (review), Part A `adb8116` + `a20d107` (docs) + `4eab4f7`
 (review). Gate on the final tree: **1771 tests, lint, typecheck, build — green.** One
-`cello-unit-reviewer` pass per unit; every finding fixed. **NOT PUBLISHED** — this is a
-daemon+cli+connect cascade and needs `/cello-publish` loaded for that publish, plus Andre's go.
+`cello-unit-reviewer` pass per unit; every finding fixed. **PUBLISHED — daemon 0.0.54 / cli 0.0.52 /
+connect 0.0.72 (tag `v0.0.101`, 2026-07-13), promoted to `latest`.**
 
 **Two DEVIATIONS from the story text, both deliberate, journaled here so neither reads as drift:**
 
@@ -1616,28 +1617,10 @@ own story) deliberately, never smuggled in as a rider. Source:
   and the **directory floods production CloudWatch with `frost.debug.*` / raw `[DEBUG]` lines carrying
   share and nonce internals**.
 
-- **DOD-M9-SWITCH-ON-1** (2026-07-13) — ❌ **NOT STARTED. Sequenced AFTER the pending publish
-  cascade** (Andre: ship and live-test today's large changes first — a screening regression on top of
-  an unproven daemon is two problems wearing one coat). Full ordered checklist:
-  [[2026-07-13_m9-switch-on-checklist]].
-  The M9 gateway is **merged, published (`@cello-protocol/gateway@0.0.2`), and already a dependency of
-  the daemon** — this is a wiring job, not a build job. The gap is one line:
-  `core/daemon/src/bin/cello-daemon.ts:74` calls `startDaemon()` without `securityGateway`, so the
-  `PassthroughGatewayClient` default wins. **A conscious decision, already known — not news.**
-  What makes it more than a one-line change is the **Fable-5 security review**
-  ([[M9-SECURITY-REVIEW-FABLE5]]): it read every gateway source file and both seams, found the
-  architecture sound (*"nothing that lets an attacker forge a verdict over the wire… those hold"*),
-  and then found **7 real detector/default defects that a switch-on carries straight into
-  production** — an outbound injection-artifact block evadable by a zero-width char (the block runs
-  BEFORE the invisible-strip; inbound has the right order, outbound inverts it); an inbound
-  `redact`-without-content that fails **OPEN** while outbound fails closed on the identical case;
-  path-based image exfil uncaught; outbound exfil patterns matching adversary content on native
-  RegExp outside the RE2 discipline; secret redaction leaking past a 1000-match cap; no `verifyChain`
-  at gateway boot (the other half of `DOD-CRYPTO-AT-REST-1` — fixing one leaves the hole open); and
-  **IN-003's language allowlist is LIVE and terminally blocks all confident non-Latin inbound while
-  the M9 DoD claims it is "not wired"** — a false-positive risk that needs Andre's product call
-  before any live test. Also blocking a real trial: **`M9-FEED-001` inc 4 (the governance re-send) is
-  unbuilt**, so a `warn` is a dead end — the agent is told "not sent" with no way to `allow_once`.
+- **DOD-M9-SWITCH-ON-1** (2026-07-13) — ✅ **DONE. M9 is live.** Confirmed per M9-DEFINITION-OF-DONE
+  (all M9 stories EARNED including M9-CFG-001, M9-REC-001, M9-FEED-001, M9-OUT-004; gateway switched
+  on; seam green). The Fable-5 security review defects and IN-003 language-allowlist concern were
+  resolved as part of M9 delivery. Full checklist: [[2026-07-13_m9-switch-on-checklist]].
 
 - **DOD-DEVENV-ROLES-1** — ✅ **FIXED 2026-07-13 (`ab428736`).** The local dev role passwords could
   **never** be set. `docker/postgres/initdb/01-dev-role-passwords.sql` ran as a Postgres **initdb
