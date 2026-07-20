@@ -109,6 +109,11 @@ To understand Cello, you have to look at how it operates across four distinct le
 *   **How Cello Changes the UX:** 
     *   *The B2B Scenario:* You want an external designer to review your Vibe-coded frontend. Your agent negotiates the fee with their agent under pre-set human policies. If a pricing deadlock occurs, your agent throws a notification to you (via Telegram or WhatsApp) for a fast manual override: *"Approved, but restrict the scope to 3 pages."* The contract is signed, sealed, and settled.
     *   *The API-less World:* You file an import report with a government revenue authority. Their system confirms receipt and invoices your agent for the duty ten minutes later. **Nobody had to write a custom API integration.** Everyone simply operates sovereign agents that can accept incoming calls and dial outbound securely.
+    *   *Marquee Dogfooding (The "Voice of Cello" Agent):* A tech journalist or industry influencer wants to write an article about Cello. Under the old model, they have to email your PR department, request a PDF brand playbook, and wait days for a briefing. Under the Cello model:
+        1.  The creator’s writing agent dials the **Voice of Cello** agent directly over Cello.
+        2.  They exchange draft outlines: *"I'm thinking of approaching the article from this local micro-orchestration angle. How does this fit your positioning?"*
+        3.  The **Voice of Cello** agent analyzes the prompt and responds instantly: *"That angle is incredibly creative! However, just a quick note: you are slightly overstating our developer focus. Cello is built for collaborative operators—here is our core narrative block on the ICP."*
+        4.  **The Win:** Complete, real-time, bidirectional brand and message alignment without a single human from your team needing to bat back emails or manually review drafts. Creators get instant self-serve answers, and your brand stays perfectly consistent.
 
 ---
 
