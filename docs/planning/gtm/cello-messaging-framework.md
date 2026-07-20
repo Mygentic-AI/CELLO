@@ -43,21 +43,21 @@ CELLO helps people connect their agents to other people's agents, enabling true 
 Anyone who works through AI agents and finds themselves cutting and pasting output into an email, or constantly cutting between different sessions for their own agents, will find Cello useful. 
 
 ### What CELLO Is Not
-**Cello is not an orchestration framework.** There are plenty of great orchestration frameworks today. Orchestration is top-down management, and for AI it can be very powerful—but it is inherently centralized and hierarchical. 
+**Cello is not an orchestration framework or a top-down delegation system.** There are plenty of great orchestration frameworks today. Orchestration is top-down management built around a rigid "fan-out, fan-in" model—which can be powerful, but is inherently centralized and hierarchical. 
 
-Cello solves a completely different model: **Collaboration**. 
+Cello is true agent-to-agent collaboration, unlocking an entirely new class of use cases.
 
 ```
-  Top-Down Management (Orchestration):
+  Top-Down Delegation (Orchestration):
   [ Orchestrator ] ───► Fan Out ───► [ Worker Agent ] (Delegation only)
 
   Peer-to-Peer Network (Collaboration):
   [ Your Agent ] ◄───────► Dial / Query ◄───────► [ Partner Agent ] (True Division of Labor)
 ```
 
-Collaboration is a completely different way for agents to work with each other, resulting in remarkably different outcomes:
+This model is a completely different way for agents to work with each other, resulting in remarkably different outcomes:
 *   **True Division of Labor:** Cello moves beyond simple delegation. Agents operate autonomously in their own distinct environments, occasionally querying each other or the human operators behind them.
-*   **No Fan-Out Bottlenecks:** It frees you from the rigid "fan out, fan back in" orchestration model.
+*   **No "Fan-Out" Bottlenecks:** It frees you from the structural limits of "fan-out, fan-in" pipelines.
 *   **No Copy-Paste Workarounds:** It stops you from acting as the low-value mailboy shuttling transcripts and files between your AI agents.
 
 ### Who It Is For
