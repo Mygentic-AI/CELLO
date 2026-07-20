@@ -45,6 +45,12 @@ description: >
 
 - **DOD-INV-NO-INFLATION** — queue positions and wave estimates are always computed from real data. No fabricated counts, padded queue sizes, or manufactured social proof exist anywhere in the system. A queue position of #84 means there are exactly 83 higher-ranked users. Any hardcoded queue size or fake wave assignment is a blocking finding. — ❌
 
+- **DOD-INV-NO-DIRECTORY-RELAY** — M11 never modifies directory node or relay node code. The only trustless-cello touches are Lambda code (Telegram gate, first-win detection, feedback detection) and docs. Any change to `packages/directory/`, `packages/relay/`, or their CloudFormation stacks is out of scope and a blocking finding. No directory deploy is triggered by M11 work. — ❌
+
+- **DOD-INV-SINGLE-DB** — all M11 database work targets the portal's existing RDS instance. No new database is provisioned. Waitlist tables are additive schema in the portal DB. No M11 migration, query, or connection touches the CELLO directory databases (one per region). An import or connection string pointing at a directory DB is a blocking finding. — ❌
+
+- **DOD-INV-EMAIL-SEGMENTS** — two email segments exist and are never conflated: the **base list** (all verified signups, receives E1/E2/E3/E-inv/E-win/E-re) and the **content alert list** (`content_alerts = true`, receives E-alert only). An E-alert query that omits the `content_alerts = true` filter is a blocking finding. An E3 send that filters on `content_alerts` is also wrong — E3 goes to the base list unconditionally. — ❌
+
 ---
 
 ## P0 — Capture (blocks everything)
@@ -167,14 +173,19 @@ description: >
 
 - **DOD-E-RE-1** — re-engagement email (E-re): scheduled 60 days after `created_at` for users still `status = 'waiting'` with no activity in 30 days. Body: brief update + explicit "no hard feelings" unsubscribe path (one click, permanent, sets `status = 'unsubscribed'`). — ❌
 
-- **DOD-OPS-DASHBOARD-1** — ops dashboard live at `operations.cello.mygentic.ai`. New repo (cello-portal clone — copy the repo as the starting point). **Borrow from cello-portal verbatim:** `src/server/magic-link.ts`, `src/server/session-cookie.ts`, `src/server/session.ts`, `src/server/session-request.ts`, `src/server/email.ts`, `src/server/db.ts`, `src/server/config.ts`, `src/server/logger.ts`, the full `src/app/api/auth/magic-link/` route tree, `migrations/0001_init.sql` (accounts + sessions) and `migrations/0002_magic_link_requests.sql`. Strip: WebAuthn, TOTP, trust signals, directory client, agents — none of that belongs here. **Auth change from portal:** instead of directory-gated entry (resolves email against CELLO directory), the ops dashboard resolves against a static allowlist from AWS Secrets Manager key `cello/ops/allowed-emails` (JSON array). Magic link to an unknown email → silent rejection (same no-enumeration shape). Pages:
-  - **Post review queue:** list of pending URLs with Approve/Reject buttons. Approve → inserts +15 to `points_ledger` (cap enforced).
-  - **Wave management:** queue view (position, email, points, status); "Open wave" form (capacity integer → runs DOD-WAVE-ASSEMBLY-1 logic).
-  - **Feedback pipeline:** list of `feedback_eligible = true` users; "Mark call complete" button.
-  - **Content alert trigger:** article URL + one-sentence description → enqueues E-alert to all `content_alerts = true` users.
-  - **Telegram accounts:** add a `telegram_id` with `source = ops_override` (staff bypass); view existing linked accounts.
-  - **UTM link generator:** outputs a fully tagged URL.
-  Verified: log in with an allowed email, confirm magic link arrives, confirm each page loads and its primary action completes successfully. — ❌
+- **DOD-OPS-SHELL-1** — ops dashboard repo created and deployed at `operations.cello.mygentic.ai`. New repo (cello-portal clone — copy the repo as the starting point). **Borrow from cello-portal verbatim:** `src/server/magic-link.ts`, `src/server/session-cookie.ts`, `src/server/session.ts`, `src/server/session-request.ts`, `src/server/email.ts`, `src/server/db.ts`, `src/server/config.ts`, `src/server/logger.ts`, the full `src/app/api/auth/magic-link/` route tree, `migrations/0001_init.sql` (accounts + sessions) and `migrations/0002_magic_link_requests.sql`. Strip: WebAuthn, TOTP, trust signals, directory client, agents — none of that belongs here. **Auth change from portal:** instead of directory-gated entry (resolves email against CELLO directory), the ops dashboard resolves against a static allowlist from AWS Secrets Manager key `cello/ops/allowed-emails` (JSON array). Magic link to an unknown email → silent rejection (same no-enumeration shape). Verified: log in with an allowed email, confirm magic link arrives, land on an empty dashboard shell. — ❌
+
+- **DOD-OPS-POST-REVIEW-1** — ops dashboard post review page. List of pending URLs from `post_review_queue` with Approve/Reject buttons. Approve → inserts +15 to `points_ledger` (cap enforced). Verified: submit a post URL from the status page; confirm it appears in the ops queue; approve it; confirm points credited. — ❌
+
+- **DOD-OPS-WAVE-MGMT-1** — ops dashboard wave management page. Queue view (position, email, points, status). "Open wave" form: takes a capacity integer, runs DOD-WAVE-ASSEMBLY-1 logic, marks users as admitted, mints tokens, enqueues E-inv emails. Verified: seed users; open a wave for capacity 3; confirm the right users are admitted with tokens. — ❌
+
+- **DOD-OPS-FEEDBACK-1** — ops dashboard feedback pipeline page. List of `feedback_eligible = true` users. "Mark call complete" button → grants 4 premium invite codes (if 2 already issued from Day 6 auto-grant, grants 2 more to reach 4 total). Verified: mark a test user's call complete; confirm invite codes issued. — ❌
+
+- **DOD-OPS-CONTENT-ALERT-1** — ops dashboard content alert trigger page. Article URL + one-sentence description → enqueues E-alert to all `content_alerts = true` users. Hard limit: blocks a second send within the same calendar day (UTC). Verified: trigger an alert; confirm email enqueued; attempt a second same-day trigger; confirm it's blocked. — ❌
+
+- **DOD-OPS-TELEGRAM-1** — ops dashboard Telegram accounts page. Add a `telegram_id` with `source = ops_override` (staff bypass); view existing linked accounts. Verified: add a telegram_id; confirm row appears in `telegram_accounts` with `source = 'ops_override'` and `waitlist_user_id = NULL`. — ❌
+
+- **DOD-OPS-UTM-1** — ops dashboard UTM link generator page. Inputs: base URL, channel, campaign slug, optional creator `ref`. Output: fully tagged URL with `utm_source`, `utm_medium`, `utm_campaign`, `utm_content` (optional), `ref`. Verified: generate a link; confirm all params present in output. — ❌
 
 - **DOD-E-ALERT-1** — content alert email (E-alert): sent only to `content_alerts = true` users. Triggered from ops dashboard. One sentence + link. Under 100 words. Hard limit: the ops dashboard blocks a second E-alert send within the same calendar day (UTC). — ❌
 
@@ -221,7 +232,7 @@ These are not DoD lines — they are the real-world checks that determine whethe
 
 - **M11-D1 (2026-07-20, Andre) — No paid SaaS. Everything self-hosted on AWS/GCP/open-source.** No credit card available. Any tactic that implies a SaaS subscription is out of scope. Reverse: if runway situation changes, revisit specific high-ROI tools (e.g. Resend for email, Posthog for analytics) but the default is self-built.
 
-- **M11-D2 (2026-07-20, Andre) — All CELLO URLs are `*.cello.mygentic.ai`.** No other domain exists or is proposed. Gallery is `gallery.cello.mygentic.ai`. Ops dashboard is `operations.cello.mygentic.ai`. Blog is `blog.cello.mygentic.ai`. The receipt verifier is at `gallery.cello.mygentic.ai/receipt/[hash]`. This is final. Reverse: only if a domain acquisition changes the asset picture.
+- **M11-D2 (2026-07-20, Andre) — All CELLO URLs are `*.cello.mygentic.ai`.** No other domain exists or is proposed. Gallery is `gallery.cello.mygentic.ai`. Ops dashboard is `operations.cello.mygentic.ai`. The receipt verifier is at `gallery.cello.mygentic.ai/receipt/[hash]`. The blog is a path (`cello.mygentic.ai/blog`), not a subdomain — it's an existing Next.js route in corp-cello-site. This is final. Reverse: only if a domain acquisition changes the asset picture.
 
 - **M11-D3 (2026-07-20) — Wave admission is operator-triggered, not automated.** Wave assembly is a function called by an authenticated ops dashboard action. No cron, no automatic threshold, no calendar date triggers admission. Reverse: automate after Wave 3, once the infrastructure-checkpoint pattern is understood.
 

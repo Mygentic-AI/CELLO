@@ -26,7 +26,7 @@ Phases are ordered by dependency. P0 unblocks everything. P1 unblocks Wave 1. P2
 - SES domain verification + production-access (submit early — AWS review lag)
 - Personal share code generated at signup
 - `localStorage` tracking script deployed on corp site
-- Waitlist status site (cello-portal clone, corp-site branding): `/auth` page + P0 stub `/status` page (queue position + referral link only)
+- Waitlist status pages (new routes in corp-cello-site, borrowing auth patterns from cello-portal): `/auth` page + P0 stub `/status` page (queue position + referral link only)
 
 **P1 — Priority Engine (needs P0):**
 - Survey page + scoring logic
@@ -48,7 +48,7 @@ Phases are ordered by dependency. P0 unblocks everything. P1 unblocks Wave 1. P2
 
 **P3 — Gallery & GEO Infrastructure (can run in parallel with P1/P2):**
 - Gallery (gallery.cello.mygentic.ai) in corp-cello-site repo
-- Ghost blog at blog.cello.mygentic.ai connected to Google Search Console + GA4
+- Blog SEO infrastructure (existing Next.js `/blog` route in corp-cello-site) connected to Google Search Console + GA4
 - GEO listicle content calendar (10 listicles, 60-day schedule — see §7)
 
 ---
@@ -160,11 +160,11 @@ The waitlist uses a **two-door model**: the slow door (sign up, earn points, cli
 ## 3. Session & Authentication (Waitlist Status Site)
 
 **The Why:**
-Users need a way to return to their waitlist status page after initial signup to take priority actions, check their position, connect social accounts, and claim invites. A session that lives for 30 days requires no repeated magic-link friction. The status site reuses cello-portal's Next.js framework and magic-link auth infrastructure, restyled to match the corp site brand — not the portal's product UI.
+Users need a way to return to their waitlist status page after initial signup to take priority actions, check their position, connect social accounts, and claim invites. A session that lives for 30 days requires no repeated magic-link friction. The status pages are new routes in corp-cello-site, borrowing auth patterns (magic-link, session cookie) from cello-portal's server code. Same repo, same design system, same deployment — no separate app.
 
 **The What:**
 
-*   **Waitlist status site:** A standalone app, cloned from `cello-portal`. Strips all portal product pages. Retains: Next.js framework, magic-link auth flow, SES email sending, Postgres connection. **Styling matches the corp site** (colors, fonts, nav pattern) — not the portal's product chrome.
+*   **Waitlist status pages:** New routes in corp-cello-site (`/auth`, `/status`). Auth patterns (magic-link flow, session cookie, SES sending) are borrowed from cello-portal's `src/server/` but adapted in-repo. All pages use the corp site's existing design system — same colors, fonts, nav. No separate deployment.
 
 *   **`auth_tokens` table:** `token` (UUID PK), `waitlist_user_id` (FK), `created_at`, `expires_at` (15 minutes — single-use link), `used_at` (nullable). Distinct from `waitlist_tokens` (which are wave admission tokens). An auth token is a short-lived magic link credential; a waitlist token is a wave admission grant.
 
@@ -290,12 +290,12 @@ Specific tactics require technical assets deployed in the wild to capture search
 
 *   **MCP registry listings:** Submit `@cello-protocol/connect` to mcp.so, Smithery, Glama, awesome-mcp-servers. Description optimized for BOFU queries.
 
-*   **GEO/SEO infrastructure (blog.cello.mygentic.ai):**
-    - Ghost instance connected to Google Search Console and GA4.
+*   **GEO/SEO infrastructure (`cello.mygentic.ai/blog`):**
+    - Existing Next.js `/blog` route in corp-cello-site connected to Google Search Console and GA4.
     - Every article published with: FAQPage JSON-LD schema, ItemList schema (listicles), Article schema with `datePublished` + `dateModified`, year in URL slug, visible "Last updated" line below H1.
     - **10-listicle content calendar (60-day schedule):** Full spec in `00_GEO_LISTICLE_STRATEGY.md`. The calendar, distribution windows (Perplexity 30 days / ChatGPT 60 days / Google 90 days), and freshness maintenance schedule are defined there. This infrastructure enables all of it — the blog setup is P3, the content execution is ongoing from launch week.
 
-*   **Receipt verifier page:** Lives at `gallery.cello.mygentic.ai/receipt/[hash]` — see §8 (Gallery).
+*   **Receipt verifier page:** Lives at `gallery.cello.mygentic.ai/receipt/[hash]` — see §9 (Gallery).
 
 ---
 
