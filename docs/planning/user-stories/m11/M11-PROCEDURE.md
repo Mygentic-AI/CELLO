@@ -1,17 +1,17 @@
 ---
 name: M11 Procedure — How to Work the Milestone
 type: procedure
-date: 2026-07-11
+date: 2026-07-20
 milestone: M11
 status: open
-topics: [m11, trust-signals, procedure, runbook, zero-bump, portal, three-repo]
+topics: [m11, prelaunch, waitlist, gtm, email, gallery, ops-dashboard, procedure, runbook]
 description: >
-  The operating runbook for M11 (trust signals — pipes for all, signals for few). SELF-CONTAINED
-  — no other milestone's procedure needs to be read. Read FIRST, then M11-DEFINITION-OF-DONE.
-  Three-repo milestone with the center of gravity in cello-portal. No separate SPEC or DECISIONS
-  docs: the two M11 design docs are the spec-of-record, and decisions live in the DoD's
-  Decisions section. Includes the design-note template (§6); the worked example is
-  BUILD-JOURNAL Entry 1.
+  The operating runbook for M11 (pre-launch infrastructure — waitlist, GTM tracking, email
+  automation, Telegram gate, gallery, ops dashboard). SELF-CONTAINED — no other milestone's
+  procedure needs to be read. Read FIRST, then M11-DEFINITION-OF-DONE. Two primary repos:
+  corp-cello-site (landing, blog, gallery, status site) and a new ops-dashboard repo (portal
+  clone). No separate SPEC or DECISIONS docs: M11-PRELAUNCH-REQUIREMENTS is the spec-of-record,
+  and decisions live in the DoD's Decisions section.
 ---
 
 # M11 Procedure — How to Work the Milestone
@@ -22,48 +22,48 @@ One user: Andre, also the only developer. CELLO is **alpha — no production, no
 - **Do not invent decisions for Andre.** "Should I do this code work?" is always yes.
 - **DO pause for a GENUINE design fork** (materially different architectures) — but in autonomous
   mode you PARK it (DoD "Parked" section + journal), never block.
-- **AWS + publish actions are AUTHORIZED** (beta npm publish via the cascade, dev deploys, ECS,
-  SSM, migrations). Discipline is SEQUENCING + BATCHING only: prove locally first; batch
-  directory pushes (~25-30 min deploy each); publish via /cello-publish, never from memory.
+- **AWS + publish actions are AUTHORIZED** (dev deploys, ECS, SSM, Lambda, SES, migrations, Flyway).
+  Discipline is SEQUENCING + BATCHING only.
 
 ## THE MILESTONE IN ONE PARAGRAPH
-Build the **generic trust-signal machinery end-to-end** (envelope, dumb directory, registry,
-presentation, LLM consumption, policy floor) and prove it with a **deliberately small set of
-signals** — the two internal ones everyone already has (phone, email), one or two
-directory-computed track-record signals, and ONE external-validator signal (GitHub first) —
-then prove the machinery is generic with the **zero-bump canary** (a new type added with empty
-diffs in cello-client and trustless-cello). We are NOT doing every signal; we are building the
-pipes so every future signal is a portal-only playbook run ([[M11-TYPE-PLAYBOOK]]).
+Ship the full **waitlist and pre-launch GTM infrastructure**: a landing page that captures signups
+with UTM attribution, a points/referral engine that ranks the queue, an email automation pipeline
+(SES + EventBridge + Lambda), a session-gated status site where waitlisted users check their
+position and earn points, an ops dashboard where Andre triggers wave admission and manages the
+post-review queue, a Telegram gate that burns waitlist tokens at DKG time, a gallery for published
+sealed receipts, and a blog platform for GEO content. The deliverable is the full loop: someone
+discovers the landing page → signs up → earns points → gets admitted in a wave → burns their
+token → reaches first win → gets invite codes to share.
 
 ## 0a. Severity triage (spend effort top-down, never invert)
-1. **CORE JOB.** A signal is minted at the portal, notarized by the directory, held by the
-   subject, presented at introduction, verified by the recipient, and consumed by its LLM with
-   `issuer_kind` framing — live, across real processes. If broken/missing → top priority.
-2. **SILENTLY-BROKEN CORE / SECURITY HOLE.** Looks done but the kernel is missing — a hash that
-   enters the directory outside the signed chokepoint (INV-CHOKEPOINT collapse); a payload
-   delivered to the LLM without issuer_kind framing; per-type code creeping into client or
-   directory (a type enum, a `switch(type)` — the zero-bump goal dying silently); an agent-issued
-   blob framed with portal authority; a signal readable across co-resident agents
-   (INV-AGENT-SCOPED bleed). **Most dangerous category. Treat as critical.**
-3. **Real non-core gaps.** 4. **Hardening / polish.**
-Informed-skeptic test before calling anything done: would someone who deeply understands this
-say it works — or that the kernel is missing?
+1. **CORE CAPTURE LOOP.** Signup → E1 → email verified → queue position visible → referral link
+   working. If broken → top priority. Nothing ships without this.
+2. **ADMISSION INTEGRITY.** Wave assembly produces the right set; tokens are single-use and
+   expire; the Telegram gate enforces the token gate; first-win fires exactly once per human.
+   These are the security-load-bearing lines. Any silent bypass is critical.
+3. **Real non-core gaps.** Points engine, OAuth social profiles, drip emails, gallery.
+4. **Hardening / polish.**
+
+Informed-skeptic test: would someone trying to game the queue be able to fabricate their position,
+re-use a token, or skip the gate? If yes, it's not done.
 
 ## 0. Read order (every session)
-1. This procedure. 2. [[M11-DEFINITION-OF-DONE]] — lowest non-✅ line = next unit; Decisions +
-Parked sections. 3. [[M11-BUILD-JOURNAL]] — last entries. 4. **Spec-of-record** (verified design —
-do NOT re-derive): [[M11-TRUST-SIGNAL-STORAGE-AND-CREATION]] (HOW: envelope, dumb directory,
-scan-before-hash, supersession, §15 zero-bump) and [[M11-TRUST-SIGNAL-TAXONOMY]] (WHAT: the four
-classes, the type list). Then start the loop (§2).
+1. This procedure.
+2. [[M11-DEFINITION-OF-DONE]] — lowest non-✅ line = next unit; Decisions + Parked sections.
+3. [[M11-BUILD-JOURNAL]] — last entries.
+4. **Spec-of-record**: [[M11-PRELAUNCH-REQUIREMENTS]] — the full data schema, business intent,
+   and acceptance criteria for every section. Read the relevant section before implementing its
+   DoD line.
+Then start the loop (§2).
 
 ## 1. The artifacts
 | Artifact | Role |
 |---|---|
 | **M11-DEFINITION-OF-DONE** | The **yardstick + sole status authority** — ordered, status-tagged, carries Decisions + Parked. Flip tags in place; one line of evidence + `→ Entry N`, never an essay. |
 | **M11-BUILD-JOURNAL** | The **audit trail + evidence home** — append-only. Full proofs, bug forensics, run output live HERE, pointed to from the DoD. Never edit a prior entry. New file per tier (`M11-BUILD-JOURNAL-T{n}.md`) seeded with a 10-line resume block. |
-| **M11-TYPE-PLAYBOOK** | The **per-type runbook** — the repeating unit after the pipes exist. A new signal type = one playbook run = one journal entry, not a story. |
-| **The e2e fixture harness** | **Enforcer, daemon/directory layer** — extend `packages/e2e-tests/src/session-fixture.ts` / the spine harness with non-breaking `opts`; a from-scratch fixture is a BLOCKING review finding. |
-| **The live signal journey** | **Enforcer, end-to-end layer** — portal mints → directory notarizes → holder stores → presents at introduction → recipient verifies → LLM consumes, real processes. Lines ending in an LLM's context are ✅ only after the live journey. |
+| **The schema enforcer** | Fresh schema == migrated schema (idempotent). A migration that fails on a DB with prior data is not ✅. |
+| **The email enforcer** | SES sandbox send to a verified address, open confirmed in AWS console. |
+| **The live end-to-end enforcer** | Real signup → points accrual → wave admission → token burn → Telegram gate → DKG proceeds. Telegram/admission lines are ✅ only after this journey passes. |
 
 ## 2. The core loop (one unit = one DoD line)
 1. **Find the red** — lowest non-✅ DoD line. Don't skip ahead.
@@ -72,98 +72,94 @@ classes, the type list). Then start the loop (§2).
    reviewer receives (§2b).
 3. **Falsify first** (CLAUDE.md Debugging Discipline) — call site has the method on the
    INTERFACE? Responsibility lives here? Redundancy? What else breaks? Only then code.
-4. **Red-first** — assertion in the fixture harness (+ a focused in-process test). Red for the
-   right reason. For live-journey lines, script the journey steps in the journal before building.
-5. **Implement** — minimum change to green; nothing speculative. SPARC order for
-   design-significant units (§6).
-6. **Floor holds** — per repo: `pnpm run test` → `lint` → `typecheck` → `build` (portal: `pnpm
-   test` → `pnpm lint` → `pnpm typecheck` → `pnpm build`; its Postgres tests need `pnpm db:up` +
-   `pnpm migrate`). Vitest ONE worker, foreground, timeout, filtered.
+4. **Red-first** — write the test, confirm it fails for the right reason, then implement.
+5. **Implement** — minimum change to green; nothing speculative.
+6. **Floor holds** — `pnpm run test` → `lint` → `typecheck` → `build` (or npm equivalents per
+   repo). For corp-cello-site: `npm run lint` + `npm run build`. Postgres-dependent tests
+   need the DB up.
 7. **Commit** (constantly — §3).
-8. **Review — ONE read-only reviewer on the unit's diff: `cello-unit-reviewer`, model
-   `fable`.** One pass, four lenses: code review, spec fidelity (per-clause verdicts), failure
-   integrity (buried errors, silent fallbacks), test teeth. Dispatch per §2b. Fix EVERY finding;
-   commit fixes. At tier boundaries, `cello-done-auditor` audits every ✅ flip.
+8. **Review — ONE read-only reviewer on the unit's diff: `cello-unit-reviewer`, no model
+   override.** One pass: code review, spec fidelity (per-clause verdicts), failure integrity
+   (buried errors, silent fallbacks), test teeth. Dispatch per §2b. Fix EVERY finding; commit
+   fixes. At tier boundaries, `cello-done-auditor` audits every ✅ flip.
 9. **Update docs** — flip the DoD tag (+ one-line evidence + journal pointer), journal entry.
 10. Back to 1.
 
-## 2a. Three repos — where work lands (the M11-specific discipline)
-**Center of gravity: cello-portal.** Under INV-ZERO-BUMP, all per-type work is portal code;
-client and directory get one-time GENERIC infrastructure only.
+## 2a. Repos — where work lands
+**Two primary repos for M11:**
 
-- **cello-portal** (`/Users/andrep/Documents/code/cello-portal`) — Next.js 16 (**read
-  `node_modules/next/dist/docs/` before writing Next code** — its AGENTS.md warns the APIs drift
-  from training data). Postgres via `pnpm db:up`, numbered SQL migrations via `pnpm migrate`
-  (next: 0006). Existing surfaces to build on: `src/app/(app)/trust-signals/page.tsx` (the M8
-  scaffold UI), `src/server/directory/` (the directory HTTP client), `src/server/trust/`.
-  Already depends on `@cello-protocol/crypto`. E2E vs a real directory:
-  `pnpm test:e2e:real-dir`. **The portal IS deployed — LIVE on ECS Fargate, single-region us-east-1,
-  at https://portal.cello.mygentic.ai** (`infra/deploy-portal.sh`, image built in AWS by CodeBuild;
-  `infra/STATE.md` §"M8 operator portal"). Corrected 2026-07-11 — the earlier "no deploy pipeline,
-  local/dev only" claim was false; see [[M11-PORTAL-ARCH-INVESTIGATION]] §4.1. Portal deploys join
-  the batching discipline. Signing keys for submissions/registry are new surfaces: where the portal
-  key lives is a design-note decision (§6), never an env-var default — and the deployment shape it
-  must be answered for is **Fargate + IAM task role + Secrets Manager + KMS** (KMS supports Ed25519
-  natively: `ECC_NIST_EDWARDS25519`), not a laptop.
-- **trustless-cello** (directory) — the generic write API, revocation re-auth, registry serving,
-  signal-record replication, the Class-3 read path. **Batch into as few deploys as possible —
-  target ONE deploy for the Tier 0/1 surface, ONE for Tier 3** (each is ~25-30 min × 3 regions).
-  Any new Flyway migration updates `OpsAgentExpectedMigrationVersion` (infra/CLAUDE.md).
-  Read `infra/STATE.md` before, update after, any AWS-touching session.
-- **cello-client** (holder + recipient) — generic envelope store, presentation, verification,
-  LLM projection/framing, policy floor. Publish cascade applies (§2c). All new tables key on
-  `agent_id` (never `agent_name`), SQLCipher only (`node:sqlite` VERBOTEN), opaque payload —
-  hoisting a payload field into a column is BLOCKING (spec §3 guardrail).
+- **corp-cello-site** (`/Users/andrep/Documents/code/corp-cello-site`) — Next.js 14, Tailwind,
+  Radix UI. This is where the landing page, blog, gallery, `/auth`, and `/status` live. The
+  existing `/waitlist` and `/confirm` pages are the starting point for the signup + E1 flows —
+  do NOT rebuild them, extend them. Build tool: `npm` (not pnpm). No database in this repo
+  itself; all DB calls go through API routes that connect to the waitlist Postgres DB.
+  Deployed as a container (Dockerfile present). Read the repo structure before adding routes.
 
-A unit that touches two repos states so in its journal checklist up front; never assume a change
-is confined to one repo until you have read both sides.
+- **ops-dashboard** (new repo, clone of cello-portal) — Next.js, magic-link auth only, connects
+  to the same waitlist Postgres DB via a restricted IAM role. Allowed emails from Secrets Manager
+  `cello/ops/allowed-emails`. **Borrow from cello-portal verbatim:** `src/server/magic-link.ts`,
+  `src/server/session-cookie.ts`, `src/server/session.ts`, `src/server/session-request.ts`,
+  `src/server/email.ts`, `src/server/db.ts`, `src/server/config.ts`, `src/server/logger.ts`,
+  `src/app/api/auth/magic-link/`, `migrations/0001_init.sql`, `migrations/0002_magic_link_requests.sql`.
+  Strip: WebAuthn, TOTP, trust signals, directory client, agents. Auth difference: resolve email
+  against Secrets Manager allowlist, not the CELLO directory.
+
+- **trustless-cello** (`/Users/andrep/Documents/code/trustless-cello`) — only two M11 touch
+  points: (a) the Telegram gate update (DOD-TELEGRAM-GATE-1) and (b) the first-win detection
+  Lambda (DOD-FIRST-WIN-1, DOD-FEEDBACK-DETECTION-1). Any Flyway migration here must update
+  `OpsAgentExpectedMigrationVersion` in `cello-ssm-parameters.yaml`. Read `infra/STATE.md`
+  before and update after any AWS-touching session.
+
+**Read-only reference** — cello-portal (`/Users/andrep/Documents/code/cello-portal`) for
+magic-link, session, and SES patterns. Do not modify it for M11.
+
+A unit that touches two repos states so in its journal checklist up front.
 
 ## 2b. Reviewer dispatch — what the unit reviewer is TOLD
-One `cello-unit-reviewer` dispatch per unit (model `fable`). The DISPATCH supplies: the DoD line
-text VERBATIM (all clauses), the coder's clause checklist, the diff (commit range or files), and
+One `cello-unit-reviewer` dispatch per unit (no model override). Supply: the DoD line text
+VERBATIM (all clauses), the coder's clause checklist, the diff (commit range or files), and
 the repo(s). Standing M11-specific instructions to include:
-- **Zero-bump lens:** flag ANY per-type construct in cello-client or trustless-cello diffs —
-  type enums/unions used for gating, `switch(type)`, per-type columns, per-type validation or
-  rendering, a `CHECK` on `type`. BLOCKING even if tests pass.
-- **Spec fidelity** against the spec-of-record section the DoD line cites (per-clause verdicts;
-  silent simplification is BLOCKING; deviations legal only when pointing at a DoD Decisions entry).
-- **Error fidelity** — every new/modified `catch`; trace one error path end-to-end and QUOTE the
-  operator-visible message.
-- **Framing integrity** — any path that hands signal content to an LLM must carry `issuer_kind`
-  framing; agent-issued content is always quoted-untrusted.
 
-- **Removal & refactor integrity (Lens 5) — DISPATCH IT EXPLICITLY on any diff that DELETES or
-  MOVES code.** Lenses 1-4 all assume a diff that ADDS something (a DoD clause to check, a new
-  `catch` to inspect, a new test to bypass). A diff that removes 24,000 lines, or moves 6,000
-  between files, gives them nothing to bite on and sails through. Tell the reviewer the diff is a
-  removal/refactor so it applies: deadness PROVEN (both repos + `exports` map + red build, never a
-  grep); every DELETED test triaged by SUBJECT (a live subject behind a dead driver must be
-  re-pointed, not deleted); absence asserted on the BUILT artifact; and — for a refactor —
-  behavior preservation as the spec (anything that moved is a finding unless journaled).
-- **Error substitution (Lens 3a2).** Not just swallowed errors — RENAMED ones. An exit-point label
-  (`relay_unavailable`, `directory_unreachable`, `threshold_not_met`) standing in for the real cause
-  sends the operator to the wrong subsystem for days. The upstream reason must survive in the payload.
+- **Admission integrity lens:** flag any path where a token could be consumed more than once,
+  where `used_at IS NULL` is not checked atomically (use `FOR UPDATE SKIP LOCKED` — same pattern
+  as portal's `magic-link.ts`), or where wave assembly could be triggered without an
+  authenticated ops dashboard action. BLOCKING.
+- **No-inflation lens:** flag any hardcoded queue position, wave assignment, or signup count.
+  `DOD-INV-NO-INFLATION` — any fabricated number is BLOCKING.
+- **Spec fidelity** against the M11-PRELAUNCH-REQUIREMENTS section the DoD line cites
+  (per-clause verdicts; silent simplification is BLOCKING).
+- **Error fidelity** — every new/modified `catch`; trace one error path end-to-end and QUOTE
+  the operator-visible message.
+- **Removal & refactor integrity (Lens 5)** — dispatch explicitly on any diff that DELETES or
+  MOVES code. Proven deadness (grep both repos + red build), deleted-test triage by subject,
+  behavior preservation as the spec.
+- **Error substitution (Lens 3a2).** An exit-point label standing in for the real cause sends
+  the operator to the wrong subsystem. The upstream reason must survive in the payload.
 - **The revert test (Lens 4).** For every new test: would it still pass if the fix were reverted?
 
-## 2c. Publish + deploy sequencing
-**Load `/cello-publish` for THIS publish — every publish, never from memory.** Batch publishes
-per tier, not per unit; a line needing a published artifact is not ✅ until the published
-artifact works. After publish: verify the BINARY (`npm view ... dependencies` — real versions,
-never `workspace:*`); pin the local install and VERIFY the pin (`claude mcp get cello`).
-trustless-cello references to cello-client packages stay pinned semver.
-**Two human-only steps** (everything else is yours to run, no permission-asking):
-`latest` promotion (always Andre's go — prepare + `--dry-run` + hand over) and `/mcp` reconnect.
-When a unit needs BOTH a directory deploy AND a client publish: start the deploy first (slower),
-run the cascade while it's in flight, arm the Cron 1 watchdog (§3b).
+## 2c. Deploy sequencing
+**No directory deploys for the waitlist schema or email pipeline** — the waitlist Postgres DB is
+separate from the CELLO directory. Flyway migrations run against the waitlist DB only.
+
+**corp-cello-site deploys:** container build + push via CI. No local Docker pushes (CLAUDE.md).
+
+**ops-dashboard deploys:** same pattern as corp-cello-site once the repo exists.
+
+**trustless-cello directory deploys** (only for DOD-TELEGRAM-GATE-1 / DOD-FIRST-WIN-1): ~25–30
+min × 3 regions. Batch ALL directory changes into one push. Never trigger a directory deploy
+for a single small fix — wait and batch.
+
+**Lambda deploys** (email pipeline, first-win, feedback detection): fast, independent of the
+directory deploy cycle.
 
 ## 3. Cadence
 - **Commit constantly** — never >~15 min without one. CELLO docs commit straight to main.
+- **Push after every commit** — each push is one focused change; do not batch pushes.
 - **Review every unit** on its diff, right after green. Never batch reviews.
-- **Fixture harness at start + end of every unit.**
+- **Schema enforcer on every migration** — `pnpm migrate` clean + fresh schema == migrated schema.
 - **Checkpoint at every tier boundary:** `cello-done-auditor` on every ✅ flipped since the last
   checkpoint; only EARNED stays ✅. Journal summary, commit, START A NEW JOURNAL FILE for the next
-  tier (10-line resume block at top). Keep the RESUME STATE block at the top of the current
-  journal file up to date — it is an obligation, not a habit.
+  tier (10-line resume block at top).
 
 ## 3a. Autonomous-mode rules (if running overnight)
 NEVER `AskUserQuestion`, never end a turn waiting. **Decision rubric: pick the common best
@@ -174,267 +170,128 @@ crons at kickoff; re-arm after every restart/compaction.
 
 ## 3b. Watchdog crons — arm both (self-contained; no other doc needed)
 Cron jobs in this environment are **session-only**: gone on restart or compaction, and they fire
-ONLY while the session is idle (not mid-query) — which is exactly what makes the heartbeat able
-to un-stick a stalled session: a fired cron prompt is enqueued like any new instruction, so it
-resumes a session that stopped. **Re-arm BOTH crons immediately after every compaction and every
-session restart** — this is the single point of failure for the whole mechanism; forget it and
-the session goes silent with nothing to wake it. Recurring jobs auto-expire after 7 days — at
-every tier-boundary checkpoint (§3), `CronList` and recreate anything missing.
+ONLY while the session is idle (not mid-query). **Re-arm BOTH crons immediately after every
+compaction and every session restart.**
 
 **Cron 1 — Deploy/pipeline watchdog (armed ONLY while a deploy is in flight).** Arm the moment
-you run `infra/deploy.sh` or push something that triggers a CodePipeline run (directory deploys:
-~25–30 min, all 3 regions in parallel). Cadence `*/4 * * * *` (an active wait, not idle sleep).
-The fired prompt must check REAL health, not top-level status alone:
-- **CodePipeline:** `aws codepipeline get-pipeline-state` — per-STAGE status. A stage can read
-  `InProgress` while its ECS deployment is crash-looping underneath (task starts, fails health
-  check, stops, restarts, forever) — "in progress" is not evidence of health.
-- **ECS:** `aws ecs describe-services` → `deployments[].rolloutState`, plus task stop reasons /
-  restart counts (`describe-tasks` / CloudWatch) for the crash-loop signature (same task
-  definition revision repeatedly stopping and restarting).
-- Genuine failure or crash-loop → STOP waiting, surface it now, diagnose per CLAUDE.md Debugging
-  Discipline (producer/consumer, not the error string). Healthy and progressing → log one line,
-  keep polling. Terminal (success or confirmed failure) → the prompt calls `CronDelete` on
-  itself. (Separate from the tight 30s foreground poll for a single already-triggered ECS
-  rollout, per repo CLAUDE.md M5 rule 9 — that stays; this cron covers the outer 25–30 min wait.)
+you push something that triggers a CodePipeline run or a Lambda deploy. Cadence `*/4 * * * *`.
+The fired prompt must check REAL health:
+- **CodePipeline:** `aws codepipeline get-pipeline-state` — per-STAGE status. "InProgress" is
+  not evidence of health — an ECS task can be crash-looping underneath.
+- **ECS:** `aws ecs describe-services` → `deployments[].rolloutState` + task stop reasons for
+  the crash-loop signature.
+- Genuine failure → STOP waiting, surface it, diagnose per CLAUDE.md Debugging Discipline.
+  Healthy → log one line, keep polling. Terminal → `CronDelete` on itself.
 
 **Cron 2 — 30-min heartbeat / anti-stall nudge (armed for the WHOLE milestone).** Cadence every
 ~30 min at an off-minute, e.g. `12,42 * * * *` (never `0,30`). Recurring.
 
-> **The cron is a DEFIBRILLATOR, not a metronome (Andre, 2026-07-14 — a colossal-violation-level
-> rule).** Its ONLY job is to restart a session that somehow stalled. It is never a checkpoint,
-> never a reason to pause, and never something to wait for. Output of the shape *"waiting for the
-> next cron tick"* is itself the bug it exists to prevent, and it defeats the entire purpose of
-> running autonomously. If you are working, a fired cron changes nothing: keep working.
-> **And never call `AskUserQuestion` — it is a hard blocker that stops the session dead.**
+> **The cron is a DEFIBRILLATOR, not a metronome.** Its ONLY job is to restart a session that
+> somehow stalled. It is never a checkpoint, never a reason to pause, and never something to wait
+> for. If you are working, a fired cron changes nothing: keep working.
+> **Never call `AskUserQuestion` — it is a hard blocker that stops the session dead.**
 
 The fired prompt is the self-audit (this list IS the cron script — re-arm from it verbatim):
 1. Are M11-PROCEDURE / M11-DEFINITION-OF-DONE (+ the latest journal entry) actually in context
    right now? If compaction dropped them, re-read before doing anything else — **and RE-ARM BOTH
    CRONS if they are gone.**
 2. Stalled on a decision? Resolve per §3a: verifiable from a source → verify, never escalate what
-   you can check; has a best practice → take it, log an M11-D* entry, proceed (redo > block);
-   genuinely undecidable → PARK it and pull the next unit.
-3. Waiting for confirmation on something already authorized (code, AWS/dev deploys, pushes to
-   main, beta publishes per the REALITY CHECK)? Unwanted — continue now. **Only TWO human-only
-   steps exist** (§2c): the `latest` dist-tag promotion and the `/mcp` reconnect. Blocked on one of
-   those → say so plainly and work a DIFFERENT DoD line meanwhile. Never idle.
-4. **Publishing? Load `/cello-publish` for THIS publish — every publish, no exceptions.** Loading
-   it earlier in the session does NOT count; "I loaded it once, then did the next one from memory"
-   is the known failure mode and it has burned npm versions and shipped `workspace:*` cross-pins.
-   Hook-enforced. Publish to **beta**; pin the local install to the exact version and VERIFY the
-   pin (`claude mcp get cello`); verify the published BINARY (`npm view … dependencies`).
-   **Never run the `latest` promotion** — prepare + `--dry-run` + hand to Andre.
-5. **Deploying? Start the slow thing FIRST and keep coding while it is in flight** — a push to
-   `main` triggers CodePipeline, and a directory deploy is ~25–30 min across 3 regions. Never idle
-   on a deploy. Arm Cron 1 while one is in flight; batch directory pushes (§2a).
-6. >15 min since the last commit? Commit now — **detailed message** (the why, the forensics, the
-   decision; Andre relies heavily on commit messages, so never scrimp on them).
-7. Did the last unit go green without a `cello-unit-reviewer` dispatch? Dispatch it now.
-8. State one line of current status (DoD line, red/green) so a human skimming later can see the
-   session was alive and unstuck at this timestamp.
+   you can check; has a best practice → take it, log an M11-D* entry, proceed; genuinely
+   undecidable → PARK it and pull the next unit.
+3. Waiting for confirmation on something already authorized? Continue now. **Only TWO human-only
+   steps exist:** the `latest` npm dist-tag promotion and the `/mcp` reconnect. Blocked on one →
+   work a DIFFERENT DoD line. Never idle.
+4. >15 min since the last commit? Commit now — detailed message (the why, not the what).
+5. Did the last unit go green without a `cello-unit-reviewer` dispatch? Dispatch it now.
+6. State one line of current status (DoD line, red/green) so a human skimming later can see the
+   session was alive at this timestamp.
 
-**SELF-TERMINATE (mandatory — the cron must clean itself up).** When M11 v1 closes
-(DOD-T4-JOURNEY-1 ✅), or the work is otherwise finished, abandoned, or handed back, the fired
-prompt calls `CronDelete` on its own job ID. A heartbeat left armed after the work is done wakes
-the session forever. This clause belongs IN the cron prompt, not only here.
+**SELF-TERMINATE.** When M11 closes (all P0/P1/P2/P3 DoD lines ✅), the fired prompt calls
+`CronDelete` on its own job ID.
 
-## 4. First actions (order matters)
-1. **DOD-PORTAL-ARCH-1** — investigate the current portal as it actually is, then determine and
-   record the M11 portal architecture (where per-type verification modules live, the background-
-   job runner, key custody, the submission client, the registry publisher). It gates all portal
-   code and shapes DOD-CBOR-1's where-does-the-component-live decision.
-2. **DOD-CBOR-1** — the canonical-envelope component + cross-party hash agreement is the
-   load-bearing foundation (spec §5: retrofitting a canonical form breaks every existing hash).
-   Its design note is already written as the worked example — journal Entry 1.
-3. **Design notes owed before their tiers** (§6): registry document format + portal key custody
-   (before Tier 1); browser-extraction infrastructure (before Tier 4).
-4. Then the loop, tier order strict.
+## 4. First actions (P0 order — strictly)
+The P0 lines are a dependency chain. Do not skip ahead.
+
+1. **DOD-SCHEMA-P0-1** — the foundation. All P0 tables must exist before any endpoint or UI
+   can be wired. Run the Flyway migration, verify idempotency (`pnpm migrate` on a fresh DB
+   produces the same schema as migrated-then-migrated-again).
+2. **DOD-TRACKING-1** — the localStorage tracking script. Must land before the signup form is
+   rewired, so touchpoints are captured from day one.
+3. **DOD-LANDING-1** — rewire the existing `/waitlist` form to the new Postgres endpoint + include
+   `anon_id` and `touchpoints[]` from localStorage.
+4. **DOD-EMAIL-INFRA-1** — confirm SES prod access; wire `email_jobs` → SQS → Lambda → SES.
+5. **DOD-SIGNUP-1** — the signup endpoint itself (inserts DB rows, enqueues E1).
+6. **DOD-QUEUE-VIEW-1** — the computed `queue_position` SQL view (needed by E1 and /status).
+7. **DOD-E1-1** — updated E1 template with queue position + referral link.
+8. **DOD-AUTH-1** — E1 link upgrades to issue a session; `/auth` magic-link page.
+9. **DOD-STATUS-STUB-1** — P0 stub `/status` page behind the session gate.
+10. **DOD-SES-PROD-1** — bounce/complaint handling.
+
+Only after all P0 lines are ✅ does P1 begin.
 
 ## 5. Hard rules (non-negotiable)
 
-### 5a. The recurring defect classes (M8C reduction work, 2026-07-13 — earned, not theoretical)
+### 5a. The recurring defect classes
 
-- **ABSENT IS NOT FINE.** When a guard's input is missing, unreadable, or an unrecognized shape,
-  the answer is **REFUSE**. A default that lets the caller proceed is a security defect even when
-  it is currently unreachable — unreachable is a property of today's SQL, not of the code. Five
-  instances of ONE bug were found in a single pass: a `SELECT` with no row returning 0 (unblocking
-  a send), a missing verifier skipping directory auth entirely, a missing relay witness falling
-  back to arrival order, an unrecognized response shape returning `[]` through a `length > 1`
-  guard, and a missing selection guessing an agent (the write landed on the wrong one). An attacker
-  never has to DEFEAT these — they omit the thing that triggers the check.
-  **Exception, and it is real:** if refusing would break the redundancy invariant (a node being
-  unreachable must not make CELLO unusable — refusing to read mail because the relay is down makes
-  the relay a precondition for the inbox), you may proceed — but the degraded path is **ANNOUNCED**
-  (distinct log event / flag on the response) and the trade is journaled. **Never silent.**
-  Corollary: **a signal that fires on the normal case is not a signal** — a warning that fires on a
-  designed benign state buries the one occurrence that matters.
+- **ABSENT IS NOT FINE.** When a guard's input is missing or unrecognized, the answer is
+  **REFUSE**. A default that lets the caller proceed is a security defect. Specific to M11:
+  a missing `used_at` check on a token must hard-reject, not soft-proceed. An unknown `template`
+  enum in `email_jobs` must fail loudly, not silently skip. The only exception: if refusing would
+  break the redundancy invariant (a node being unreachable must not make CELLO unusable) — then
+  proceed, but ANNOUNCE the degraded path and journal the trade-off. **Never silent.**
 
-- **ERRORS NAME THEIR CAUSE, NOT THEIR EXIT POINT.** Do not SWALLOW an error (that is obvious) and
-  do not **SUBSTITUTE** one (that is the expensive one). `relay_unavailable`,
-  `directory_unreachable`, `transport_unavailable`, `threshold_not_met`, `ceremony_exhausted` are
-  **labels on the exit point**, not causes. Real case: the surfaced error was
-  `directory_unreachable`; the actual cause was `session_request_missing_peer_id` — a version-pinned
-  client that never sent a required field. The name pointed at the network; the bug was in the
-  payload. Days lost. Whenever a mapper collapses many upstream conditions into one terminal string,
-  the upstream reason **must survive in the payload** (`cause` / `detail` / `upstream_reason`). Test:
-  *would this message send a competent operator to the RIGHT subsystem?*
+- **ERRORS NAME THEIR CAUSE, NOT THEIR EXIT POINT.** `token_expired`, `token_already_used`,
+  `email_not_found` are causes. `auth_failed` is an exit-point label. The upstream reason must
+  survive in the payload. Test: *would this message send a competent operator to the right
+  subsystem?*
 
-- **NO CONSUMER, NO SHIP.** A new return field, response flag, log event, or config knob needs a
-  NAMED CONSUMER in the same unit. A field nobody reads is dead weight born dead, and it lies — a
-  reader assumes something acts on it.
+- **NO CONSUMER, NO SHIP.** A new return field, response flag, log event, or config knob needs
+  a NAMED CONSUMER in the same unit.
 
-- **NO ARCHAEOLOGY COMMENTS.** A comment states a constraint the CURRENT code cannot show. It never
-  narrates what the code used to do, who caught what in review, or which story renamed a thing — git
-  holds that. But **rewrite, do not delete**: the constraint under a "previously…" comment is usually
-  load-bearing, and deleting it invites the bug back. Present tense, imperative.
+- **NO ARCHAEOLOGY COMMENTS.** A comment states a constraint the CURRENT code cannot show.
+  Never narrate what the code used to do. Present tense, imperative.
 
-### 5b. Deletion & refactor discipline (a refactor IS a code review)
-
-> **A refactor is a code review.** The finds come from having to read code closely enough to move it.
-> Every anomaly surfaced during a refactor is a FINDING to log — never noise to normalise away.
-> Corollary: for a refactor, **behavior preservation IS the spec**. There is no DoD clause, but there
-> is an implicit one: *nothing changes.* Anything that moved is a finding unless journaled.
-
-- **DEADNESS IS PROVEN BY DELETION, NOT BY GREP.** A grep is a hypothesis; a red build is proof.
-  Before deleting or moving ANY file or export, all three:
-  1. **Grep BOTH repos.** Separate workspaces — "unused" in one is routinely consumed by the other.
-  2. **Read the `exports` map.** `package.json`'s `exports`/`main` **IS a consumer**. A file with no
-     in-repo importer can still be a published entry point. (`crypto/frost/stubs.ts` had no
-     in-package caller, was moved to `__tests__/`, and broke the directory — which imported
-     `@cello-protocol/crypto/frost/stubs.js` by subpath, in five files.)
-  3. **Remove it and run BOTH repos' gates.** An empty grep is suspect, not conclusive: a re-export
-     with no in-package caller looks exactly like dead code (`ed25519_FROST` had zero callers in
-     `core/crypto` and drove the entire client-side DKG from the daemon).
-  **Never inherit a deadness claim** from a report, an analyst, a prior session, or a comment. The
-  regression above came from trusting the sentence "only used by frost.test.ts."
-
-- **TRIAGE TESTS BY SUBJECT-UNDER-TEST, NEVER BY FILE.** A test may use dead code as a *driver* while
-  its subject is alive. Delete by file and live coverage vanishes with no gate noticing. 12,538 lines
-  of green tests were one bad decision from deletion. If the subject is live, RE-POINT the test.
-
-- **`dist/` ORPHANS — and the ORDER matters.** `tsc --build` never removes orphaned outputs, and
-  `tsc --build --clean` does not either (the source is gone, so it is not tracked). A warm tree keeps
-  compiling and PACKING files whose source you deleted. Assert absence on the **BUILT ARTIFACT**,
-  never on source. **The order is: `rm -rf core/*/dist core/*/*.tsbuildinfo` → BUILD → TEST.** NOT
-  clear-then-test: several tests spawn the REAL BUILT DAEMON BINARY out of `dist/`, so clearing it
-  before the test run fails ~1,000 tests for a reason that has nothing to do with your change (this
-  was gotten wrong while merging the very unit that introduced the rule). This trap has bitten four
-  times now.
-
-- **ENCODER / WIRE-FORMAT CHANGES: is any signature or hash over these bytes?** Mechanical, not a
-  judgment call. Classify what the change alters and whether any of it is signed, hashed, or kept
-  byte-identical by another implementation. (Changing the CBOR encoder altered OBJECT encoding but
-  not ARRAY encoding — and every signed TBS encodes an array, so no signature was affected. Three
-  commands answered what was being hedged for an hour.)
+### 5b. Deletion & refactor discipline
+- **DEADNESS IS PROVEN BY DELETION, NOT BY GREP.** Before deleting any file or export: grep
+  both repos, read the `exports` map, remove it and run both repos' gates.
+- **TRIAGE TESTS BY SUBJECT-UNDER-TEST, NEVER BY FILE.**
+- **`dist/` ORPHANS.** `tsc --build --clean` does not remove orphaned outputs. Assert absence on
+  the BUILT ARTIFACT. Order: `rm -rf core/*/dist core/*/*.tsbuildinfo` → BUILD → TEST.
 
 ### 5c. Verification, not assertion
-
-- **DO NOT ESCALATE WHAT YOU CAN VERIFY.** Before putting a question to Andre, check the authoritative
-  source: the type definition, the RFC, the other repo's code, the actual bytes. Escalation spends his
-  scarcest resource. *"The code cannot tell you"* is a claim that must ITSELF be checked. (A "one of
-  these two is wrong — a human must decide" was escalated; the libp2p type definition answered it in
-  one line: `close()` is a half-close, both patterns were correct.)
-
-- **RED FOR THE RIGHT REASON — APPLY THE REVERT TEST.** *"Would this test still pass if the fix were
-  reverted?"* If yes, it is not coverage, whatever its name says. Two ways it fails: the test lands on
-  a NEIGHBOURING branch (exercising the already-correct guard beside the one you changed), or it passes
-  for the WRONG REASON (an error fires before the code under test runs — a test with its arguments in
-  the wrong ORDER still "passed" because a pre-check refused before either was read). If the changed
-  line is genuinely unreachable, say so **in the test name and the commit**, not in a comment.
-
-- **MEASURE BEFORE QUOTING A NUMBER.** A figure in a journal or DoD is measured, or it is labelled an
-  estimate and the miss is recorded when it lands. (An archaeology estimate of "1,500–3,000 lines"
-  came in at 354 — extrapolated from keyword counts. Coverage had never been measured at all: it is
-  75%, and `daemon.ts` is 66% with 1,434 uncovered lines.) `--coverage` runs in the gate.
+- **DO NOT ESCALATE WHAT YOU CAN VERIFY.** Check the authoritative source first.
+- **RED FOR THE RIGHT REASON — APPLY THE REVERT TEST.** Would this test still pass if the fix
+  were reverted? If yes, it is not coverage.
+- **MEASURE BEFORE QUOTING A NUMBER.** A figure in a journal or DoD is measured, or it is
+  labelled an estimate.
 
 ### 5d. Process
 - **One thread. One coder (the main loop). NO parallel implementation agents.** Read-only
   subagents only (unit-reviewer / done-auditor / explorer).
-- **Work directly on `main` in all three repos.** Commit often; batch directory pushes;
-  portal + client + e2e pushes are free (respect §2c publish batching).
-- **Zero-bump is enforced per-unit, not just at the canary.** Every client/directory diff is
-  read through the "is anything here per-type?" lens (§2b). The canary (DOD-ZEROBUMP-CANARY-1)
-  is the final proof, not the first check.
-- **The scope is the pipes, not the catalog.** Signals beyond phone/email/track-record/GitHub
-  are OUT of v1 — adding one because it looks cheap is scope creep; it becomes a playbook run
-  after the canary proves the pipes. (LinkedIn/X/etc. are post-v1 playbook runs by design.)
-- **No mocks for crypto; no from-scratch fixtures; no `console.log`** in implementation
-  (injected logger, `domain.noun.verb` events, correlationId threading; observability ACs are
-  first-class on every line).
-- **Join on `agent_id`, never `agent_name`.** Opaque payload — never a payload field as a
-  column, a floor predicate, or SQL. Type strings are data everywhere outside the portal.
-- **Endorsements / PSI / bonds are OUT of v1** — the write path stays seam-ready for
-  `issuer_kind: agent` but the intake role (Endorsement Mother) is post-v1. Do not build it
-  early; do not let its absence rot the seam (the write API's authorized-issuer model must not
-  hardcode "portal is the only issuer_kind that will ever submit").
+- **Work directly on `main` in all repos.** Commit often; batch directory pushes; corp-cello-site
+  and ops-dashboard pushes are free.
+- **`node:sqlite` is VERBOTEN.** SQLCipher only, everywhere in the CELLO protocol layer.
+  (The waitlist Postgres DB is separate and uses standard pg — that is fine.)
+- **No mocks for crypto; no `console.log`** in implementation (injected logger,
+  `domain.noun.verb` events, correlationId threading).
+- **Join on `agent_id`, never `agent_name`.** New waitlist tables join on `waitlist_id` (UUID).
+  Never on `email`.
+- **No paid SaaS.** Every service is self-hosted on AWS/GCP/open-source (DOD-INV-NO-SAAS).
+- **All URLs are `*.cello.mygentic.ai`.** Never invent other domains (DOD-INV-DOMAIN).
 - **Vitest: one worker, foreground, timeout, filtered.** Never background a test process.
 - **Deferrals get a home** — DoD Parked + journal. No silent deferral.
 
-## 6. Design-significant units — design note in the journal FIRST, then the loop
-
-These units are NOT mechanical; each gets a **design note in the journal before any code**:
-- **PORTAL-ARCH-1** — the portal investigation + architecture determination (its OUTPUT is the
-  architecture section the whole milestone builds against — see the DoD line).
-- **REGISTRY-1** — the registry document format, its signing key, its serve/cache/TTL path
-  (spec §15.2.5; the manifest-over-HTTP precedent).
-- **DIR-WRITE-1** — the authorized-issuer key set + submission signature format (spec §14.5:
-  the capability format is the open piece), and portal key custody.
-- **EXTRACT-1** — the browser-extraction infrastructure: a SEPARATE, security-hardened instance
-  running browser-harness; credential isolation; what it may and may not touch. This is new
-  infrastructure, not a code unit — it gets a full design log, and infra/STATE.md discipline.
-- **FLOOR-1** — the `SignalRequirementPolicy` v1 field set (spec §14.4 defers it to here).
-- **TRACK-1** — the Class-3 read path (what directory data the portal job may read, and how).
-
-### The design-note template (use this structure; the worked example is journal Entry 1 — CBOR-1)
-
-```markdown
-### YYYY-MM-DD — Entry N: DESIGN NOTE — DOD-<UNIT> (written before any code)
-
-**Target behavior (one sentence).** What an observer sees when this unit works.
-
-**Spec anchors.** The exact spec-of-record sections this unit implements (cite §), plus any
-RFC for crypto (Ed25519 → RFC 8032, CBOR → RFC 8949, SHA-256 → FIPS 180-4). A clause the spec
-does NOT pin gets called out as a decision this note is making.
-
-**Producer/consumer chain.** For each thing this unit creates or checks: who produces it,
-who consumes it, what breaks at each hop if it's wrong. This is the map reviewers verify
-against.
-
-**The seam.** Exactly where this unit's code meets existing code (files/interfaces), and which
-repo(s). What the interface must expose; what it must NOT know about (e.g. payload contents,
-signal types).
-
-**Invariants at stake.** Which DoD Tier-I invariants this unit can violate, and the specific
-design property that prevents each.
-
-**Approach + rejected alternative.** The chosen shape in 3–6 sentences, then at least ONE
-alternative considered and WHY it lost. (A design note with no rejected alternative hasn't
-looked hard enough.)
-
-**Falsification pass.** Before writing code: does the call site have the method on the
-INTERFACE? Does the fix location match where responsibility lives? What redundancy would this
-create? What else breaks? State what you checked.
-
-**Decisions this note makes.** Numbered; anything material graduates to the DoD Decisions
-section. Anything undecidable → PARK.
-
-**Test plan sketch.** The red-first assertions (fixture harness + focused), and which enforcer
-proves the unit (harness / live journey / CBOR cross-party / canary).
-```
-
-## 7. What a checkpoint/handoff entry contains
-Which DoD lines are green WITH the enforcer-run output (not a claim); the exact next red + its
-one-sentence target; HEAD commits (all three repos) + whether reviewers ran to HEAD; published
-package versions if a cascade shipped; anything parked; anything that changes the DoD.
+## 6. What a checkpoint/handoff entry contains
+Which DoD lines are ✅ WITH the enforcer-run output (not a claim); the exact next red + its
+one-sentence target; HEAD commits (all active repos); anything parked; anything that changes
+the DoD. Keep the RESUME STATE block at the top of the current journal file up to date.
 
 ---
 
 ## Related Documents
 
 - [[M11-DEFINITION-OF-DONE]] — the yardstick + sole status authority (Decisions + Parked live there)
+- [[M11-PRELAUNCH-REQUIREMENTS]] — the spec-of-record: full schema, business intent, ACs per section
 - [[M11-BUILD-JOURNAL]] — audit trail + evidence home
-- [[M11-TYPE-PLAYBOOK]] — the per-type runbook (the repeating unit after v1)
-- [[M11-TRUST-SIGNAL-STORAGE-AND-CREATION]] — spec-of-record: HOW signals are stored/created/verified
-- [[M11-TRUST-SIGNAL-TAXONOMY]] — spec-of-record: WHAT the signals are
-- [[M8C-PROCEDURE]] — provenance only (this document is self-contained; nothing requires reading it)
-- [[2026-05-16_0800_trust-signal-verification-architecture|Trust Signal Verification Architecture]] — the OAuth/extraction design Tier 4 implements
+- [[2026-07-12_0622_waitlist-launch-plan]] — primary source for waitlist design decisions
+- [[00_WAITLIST_ANALYTICS_ARCHITECTURE]] — AWS-native architecture reference (Perplexity-sourced)
