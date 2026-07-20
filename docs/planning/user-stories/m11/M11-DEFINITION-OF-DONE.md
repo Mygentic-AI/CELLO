@@ -250,6 +250,22 @@ These are not DoD lines — they are the real-world checks that determine whethe
 
 - **M11-D8 (2026-07-20) — Gallery is in corp-cello-site, not a standalone repo.** The gallery shares the corp site's header, footer, and design system. Adding it to the corp site is a new Next.js route, not a new service. Reverse: extract to a standalone Next.js app if gallery rendering needs differ substantially from the corp site (e.g. heavy SSG, separate CDN config).
 
+- **M11-D11 (2026-07-20, Andre) — `waitlist_users.status` is lifecycle only; email suppression is a separate field.** Lifecycle: `waiting` / `admitted` / `active` / `left` / `banned`. Transition: waiting → admitted (wave), admitted → active (first-win), active → left (voluntary account deletion), any → banned (ops action). A new `email_status` column (`active` / `unsubscribed` / `complained` / `bounced`) tracks email deliverability independently. Email pipeline checks both: correct segment AND `email_status = 'active'`. Reverse: none foreseen — these are orthogonal concerns.
+
+- **M11-D12 (2026-07-20, Andre) — Premium invites are bearer codes consumed at signup via localStorage, not email-bound.** Flow: `/invite/CODE` landing page stores the code in localStorage, redirects to `/waitlist`. Signup form reads localStorage and includes the code silently. Backend validates + burns on successful signup; marks the user as premium-referred. If the link is mangled and the user signs up without it, the code is NOT burned — the inviter can resend. A `type` column on `referral_codes` distinguishes `share` (regular referral, earns points) from `premium` (golden ticket, skips queue). Reverse: none — bearer model is strictly more flexible than email-bound.
+
+- **M11-D13 (2026-07-20, Andre) — `/auth` page uses non-enumeration pattern.** Always shows "Check your inbox" regardless of whether the email was found. Below the message: "If you don't receive an email, you may not be on the waitlist — [sign up here]." No redirect, no confirmation of email existence. Matches cello-portal's magic-link.ts pattern. Reverse: none — enumeration prevention is a security requirement.
+
+- **M11-D14 (2026-07-20, Andre) — Signup form keeps a `display_name` field (nullable).** Casual moniker — not structured first/last. Column added to `waitlist_users` as `display_name TEXT NULL`. Reverse: none.
+
+- **M11-D15 (2026-07-20, Andre) — Survey points restructured: +20 structured, +10 free-form, +30 interview commit.** Structured questions: (1) What would you use CELLO for? (multi-choice), (2) How many agents do you run? (0 / 1-2 / 3-9 / 10+), (3) What platforms? (multi-select: Claude Code, Claude Coworker, Claude.ai, Codex, Hermes, OpenClaw, Kimi, Gemini agent, ChatGPT, Other with free text). Free-form: "How do you imagine using this?" (+10). Interview commit checkbox: +30 (highest single action — feedback calls are the most valuable input). Total possible from survey page: 60. Reverse: adjust point values based on observed conversion data post-Wave 1.
+
+- **M11-D16 (2026-07-20, Andre) — Dynamic wave estimator killed. Replaced by queue position + qualitative band.** Status page shows: real-time queue position, a qualitative band ("top 10%", "top 25%", "top half"), and a short explanation that waves are sized dynamically based on how the previous wave performed. No predicted wave number, no estimated date. DOD-DYNAMIC-ESTIMATOR-1 is redefined to match. Reverse: add a predicted wave number if wave sizes stabilize into a predictable pattern post-Wave 3.
+
+- **M11-D17 (2026-07-20, Andre) — `waves` table is a history record, not a forward plan.** Schema: `wave_number`, `capacity`, `priority_pct`, `zero_pct`, `opened_at`, `opened_by`. Plus `wave_number` column on `waitlist_users` set at admission time. The "Open wave" form in the ops dashboard takes all inputs at trigger time (capacity, priority/zero split percentages) — nothing is pre-stored. Reverse: add a planned-waves table if wave scheduling becomes predictable.
+
+- **M11-D18 (2026-07-20, Andre) — `CELLO_FEEDBACK` agent is an operational provisioning task within M11.** The identity already exists in the directory. Remaining work: small EC2 instance, Hermes installed, CELLO installed, governance configured (no sensitive outbound), inbound reachability confirmed (NAT/networking). The Lambda trigger for feedback outreach is "initiate a session to this known pubkey" — standard protocol, no new code. A new DoD line covers: agent reachable inbound, responds to a test session initiation. Reverse: none.
+
 ---
 
 ## Parked
