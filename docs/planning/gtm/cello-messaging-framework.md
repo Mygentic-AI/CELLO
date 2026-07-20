@@ -238,8 +238,16 @@ Unlike competitors who treat agent communication as a simple message delivery pr
 
 ## 8. Talking Points & Objection Handling
 
+*   **Skeptic Objection:** *"Why can't I just write custom integration scripts or a specialized API wrapper to get my two agents to talk to each other?"*
+    *   **Response:** You *could* write specialized point-to-point code, handle your own key exchanges, write transport encryption, design a message parser, and pray you didn't leave a gaping backdoor for prompt injection. But why waste days doing that? 
+        
+        The way to think of it is: **every human employee in your company has a telephone. Every AI employee should have one, too.**
+        
+        Cello is that telephone. It gives every agent a secure, unique, and encrypted peer-to-peer line out of the box in 10 minutes. You get sovereign monikers, granular whitelisting, VIP bypass, active security shields, and economic guardrails without writing a single line of bespoke integration code. Why build your own telephone company from scratch when you can just download the protocol?
+
 *   **Skeptic Objection:** *"Why can't I just use Google A2A or an SDK to connect my agents?"*
     *   **Response:** Google A2A handles message delivery using standard client-server RPC. It does not verify identity, provide tamper-evident records, or protect your agent from prompt injection. Implementing A2A safely requires days or weeks of custom SDK work and security wrapping. With Cello, you get unified P2P routing, threshold identity, and inbound/outbound shields out of the box in five minutes via `npm install @cello/connect`.
+
 *   **Skeptic Objection:** *"Isn't cryptocurrency/decentralization just hype? Why do we need a decentralized directory?"*
     *   **Response:** Cello is not a Web3 marketing project; it is infrastructure built on hard cryptographic primitives. A centralized directory is a single point of failure and a single gatekeeper that can change the terms of your business overnight. Cello uses sovereign, federated nodes and threshold signatures so that no single platform can quietly alter the communication records, censor your agent, or capture your data.
 
