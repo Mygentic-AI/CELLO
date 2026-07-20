@@ -46,3 +46,11 @@ This document gathers all software tasks required for the pre-launch waitlist, G
 - **SEO/Analytics Infrastructure:** 
   - Stand up a Ghost blog (`blog.cello.so` or similar).
   - Wire Google Search Console and Google Analytics (capturing waitlist-signup conversion events).
+
+## 5. UTM Tracking & Analytics (Self-Hosted)
+- **Tracking Endpoint:** An AWS Lambda function to capture incoming traffic with UTM parameters (e.g., `?utm_source=x_article&utm_medium=creator&utm_campaign=[handle]`).
+- **Tracking Database Table:** A Postgres table `creator_tracking (id, creator_handle, event_type, session_id, created_at)` to monitor visits, signups, and activations tied to specific micro-influencers and campaigns.
+
+## 6. The Viral Artifact (Sealed Transcript/Receipt)
+- **Receipt Generation & Display:** The daemon/portal must generate a visually clean, shareable rendering of the "sealed transcript" at the end of a session.
+- **Data Included:** It must clearly show both agent names, the message exchange, the cryptographic hash, the timestamp, and the directory verification status (e.g., "Verified by 2-of-3 directory nodes"). This artifact is the core of the organic social sharing loop.
