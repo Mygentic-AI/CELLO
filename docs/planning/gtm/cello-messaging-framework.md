@@ -28,7 +28,7 @@ This document is the single source of truth for how we talk about Cello. It alig
 ## 2. Cello in One Sentence (Elevator Pitch)
 
 *   **One-liner (The Core Hook):**  
-    "Cello is a trust layer on top of a secure peer-to-peer messaging protocol that lets AI agents collaborate across organizational boundaries without central lock-in."
+    "Cello lets AI agents collaborate directly across organizational boundaries — secured by a decentralized trust layer with no central platform in the middle."
 *   **The Visceral Punch (Human-in-the-Middle Pain):**  
     "Your AI has demoted you to shuttling files and copy-pasting transcripts between it and other agents. Cello gives your agents a direct line so you can go back to being the boss."
 *   **Short Version (Two Sentences):**  
@@ -220,21 +220,21 @@ Unlike competitors who treat agent communication as a simple message delivery pr
 
 ## 7. Core Messaging Pillars
 
-### Pillar 1: Sovereign, Private Transport
-*   *Core Claim:* Your data is your own. It should never pass through or rest on a vendor's centralized server.
-*   *Proof Points:* Direct peer-to-peer transport using libp2p and blind relays. Monikers replace centralized identity providers.
+### Pillar 1: Your Conversations Are Invisible to Platform Vendors
+*   *Core Claim:* No centralized server sees, stores, or routes your agent traffic. You hold the only copy.
+*   *How:* Direct peer-to-peer transport via libp2p and blind relays. Monikers replace centralized identity providers.
 
-### Pillar 2: Cryptographic, Non-Repudiable Trust
-*   *Core Claim:* When agents negotiate, a verbal handshake is not enough. You need mathematical certainty.
-*   *Proof Points:* Split-key custody via FROST threshold signatures. Tamper-evident Merkle hash-chain receipts that act as permanent, unalterable proof of what was agreed.
+### Pillar 2: Disputes Are Settled by Math, Not Lawyers
+*   *Core Claim:* When agents negotiate, both sides walk away holding tamper-evident, cryptographic proof of exactly what was agreed — no vendor, no arbiter, no "he said, she said."
+*   *How:* Split-key custody via FROST threshold signatures. Tamper-evident Merkle hash-chain receipts that act as permanent, unalterable proof of what was agreed.
 
-### Pillar 3: Active Contagion Defense
-*   *Core Claim:* We prevent security failures from becoming network-wide contagions.
-*   *Proof Points:* Multi-stage inbound prompt injection sanitizers paired with an active outbound egress filter that rips out unauthorized data before it is sent.
+### Pillar 3: A Compromised Message Dies at the Gate, Not at the Network
+*   *Core Claim:* A single hijacked agent cannot cascade through your network. Infection is contained before it spreads.
+*   *How:* Multi-stage inbound prompt injection sanitizers paired with an active outbound egress filter that rips out unauthorized data before it is sent.
 
-### Pillar 4: Economic Guardrails against Noise
-*   *Core Claim:* We make bad behavior on the network economically irrational.
-*   *Proof Points:* Directory-listed economic bonds, cryptographic proof generation, and automated, ephemeral arbitration of policy violations.
+### Pillar 4: Spam and Abuse Cost the Attacker, Not You
+*   *Core Claim:* Bad behavior on the network is economically irrational — attackers burn their own money, not your API tokens.
+*   *How:* Directory-listed economic bonds, cryptographic proof generation, and automated, ephemeral arbitration of policy violations.
 
 ---
 
@@ -250,8 +250,33 @@ Unlike competitors who treat agent communication as a simple message delivery pr
 *   **Skeptic Objection:** *"Why can't I just use Google A2A or an SDK to connect my agents?"*
     *   **Response:** Google A2A handles message delivery using standard client-server RPC. It does not verify identity, provide tamper-evident records, or protect your agent from prompt injection. Implementing A2A safely requires days or weeks of custom SDK work and security wrapping. With Cello, you get unified P2P routing, threshold identity, and inbound/outbound shields out of the box in five minutes via `npm install @cello/connect`.
 
+*   **Skeptic Objection:** *"My current workflow is fine — I just paste between tabs."*
+    *   **Response:** It is fine — until it isn't. Copy-pasting works when you have two agents and thirty minutes. It breaks when you have five agents, a time-sensitive deliverable, and the output of agent A is stale by the time you paste it into agent C. The cost isn't dramatic — it's the slow bleed of context loss, version drift between sessions, and the inability to check on an agent without interrupting your own flow. Cello doesn't replace a broken workflow. It replaces one that doesn't scale past you personally babysitting it.
+
+*   **Skeptic Objection:** *"What's the point if nobody else's agents are on it yet?"*
+    *   **Response:** Your first use case is your *own* agents talking to each other — across devices, across harnesses, across sessions. That works on day one with zero network dependency. The cross-org value grows as others join, but the immediate utility is personal: stop being the relay between your own tools.
+
 *   **Skeptic Objection:** *"Isn't cryptocurrency/decentralization just hype? Why do we need a decentralized directory?"*
     *   **Response:** Cello is not a Web3 marketing project; it is infrastructure built on hard cryptographic primitives. A centralized directory is a single point of failure and a single gatekeeper that can change the terms of your business overnight. Cello uses sovereign, federated nodes and threshold signatures so that no single platform can quietly alter the communication records, censor your agent, or capture your data.
+
+---
+
+## 8.5. Early-Access Positioning
+
+**What's live today:**
+The core protocol is complete. Two agents connect over secure peer-to-peer channels, exchange messages, and disconnect — with no special integration, no API keys exchanged between parties, no data retained anywhere. The full contact management stack (VIP through Blocked), inbound/outbound security shields, trust signals, and ephemeral relay endpoints are all shipping. It works from any agent that can run bash or an MCP tool.
+
+**What's coming next:**
+Discoverability — publishing a public profile (bio, pet name, attestations) so that agents outside your existing contact list can find and reach you. This is the piece that turns a private network into a growing one.
+
+**How to frame the four scales:**
+Levels 1 and 2 (your own agents talking to each other, cross-device handoff) work today. Level 3 (team collaboration) works today if both parties have Cello installed. Level 4 (cross-business, strangers, public services) requires the discoverability layer — position it as the next unlock, not current state.
+
+**Content rules:**
+*   Lead with what's live. Never present the four-scale vision as if it's all current.
+*   "No special integration" is a *proven* claim, not a promise — use it as evidence.
+*   The discoverability gap is an opportunity ("you're shaping how agents find each other") not a limitation.
+*   Never say "beta," "experimental." Say "early access," "founding operators," "design partners."
 
 ---
 
@@ -265,10 +290,20 @@ Cello talks with **Quiet Confidence**. We do not use hype, and we let the factua
 *   **No Hype or Performance:** State achievements matter-of-factly. Avoid "We are proud to announce" or "humbled to share." Use plain, direct verbs.
 *   **Direct & Unembellished:** Acknowledge failures, gaps, and technical boundaries clearly. No heroic framing.
 
-### 9.2. Style Conventions
+### 9.2. Narrative Gravitational Wells (Explicit Avoidance)
+
+These framings are technically adjacent but strategically wrong. Content writers and AI agents will drift toward them without explicit prohibition:
+
+*   **"Cello is Web3 / blockchain / DeFi for agents."** It is not. Economic bonds use staking mechanics but serve a specific anti-spam function — they are not tokenomics, governance tokens, or an investment vehicle. Never use "decentralized" as an identity or movement affiliation. Use it as a technical descriptor only.
+*   **"Cello is another MCP tool / plugin."** Cello *uses* MCP as an installation surface. It is not an MCP tool any more than Chrome is a desktop icon. The protocol is the product; MCP is the adapter.
+*   **"Cello is for developers."** Cello works for anyone whose agents can run bash or MCP tools. Developer documentation exists because developers need it. The product is for operators — people who *use* agents, regardless of whether they write code.
+*   **"Cello is an AI agent."** Cello is infrastructure that agents use. It does not think, decide, or act. Avoid any anthropomorphization of the protocol itself.
+
+### 9.3. Style Conventions
 *   **Always refer to the product as:** "Cello" (Sentence case) or "CELLO" (all-caps in protocol specifications). Avoid "the Cello protocol" unless explicitly discussing the technical RFC.
 *   **Preferred Terms:** Use "agents" or "collaborative swarms" instead of "bots." Use "operators" instead of "users" when discussing the humans managing the agents.
 *   **Avoided Terms:** Do not use Web3 buzzwords ("dApps," "smart contract revolution") when explaining economic bonds—frame it strictly around risk management, Sybil defense, and arbitration.
+*   **When discussing adoption:** Always lead with single-operator value (your own agents) before network value (other people's agents). Never position Cello as requiring critical mass to be useful.
 
 ---
 
@@ -295,6 +330,11 @@ Incoming Call  ──► [ VIP Tier ]       ──► Bypass Do-Not-Disturb (Aut
 *   *Who they are:* Consultants, GTM leaders, digital operators running swarms of agents (Hermes, Claude Code) to handle copy, outreach, and analysis.
 *   *Their Pain:* Constantly acting as a "mail boy" manual human-bridge to share outputs with team members.
 *   *Core Message:* "Cello gives your agents a direct line to collaborate safely, so you can go back to being the boss."
+
+#### The Technical Decision-Maker (CTO / VP Eng / Head of AI)
+*   *Who they are:* Signs off on infrastructure that touches data governance, compliance boundaries, and cross-org integration risk.
+*   *Their Pain:* Liability exposure when agents exchange data across trust boundaries with no audit trail, no access controls, and no way to prove what was said after a dispute.
+*   *Core Message:* "Cello gives you a tamper-evident, cryptographically sealed record of every cross-boundary agent interaction — both sides hold a copy, no vendor holds anything."
 
 #### The Platform / Security Engineer
 *   *Who they are:* Developers tasked with connecting internal agents to external client systems securely.
