@@ -17,8 +17,10 @@ description: >
 
 This document is the single source of truth for how we talk about Cello. It aligns our product capabilities, GTM strategy, content engines, and developer relations under a single cohesive narrative.
 
-*   **Who uses it:** Anyone writing about Cello—developers, GTM operators, copywriters, and community managers.
-*   **How to use it:** Use the copy blocks in Section 11 verbatim for websites, social, or press. Use the structural arguments in Sections 4, 6, and 8 to guide technical articles, blog posts, and developer docs.
+*   **Who uses it:** Human copywriters, developers, GTM operators, and—crucially—**AI agents writing content on our behalf.**
+*   **How to use it:** 
+    *   *For Humans:* Copy/paste blocks verbatim from Section 11, or use the structural arguments in Sections 3.5, 4, and 6 to guide technical articles and blog posts.
+    *   *For AI Agents:* Inject this document directly into the agent's system prompt or context window. It "arms" content-generation agents with precise narrative angles (from micro local sessions to macro global B2B trades), vocabulary constraints, and structural mental models to write aligned copy autonomously.
 *   **A Living Guide:** This is not a static marketing sheet. It is updated alongside our technical milestones and shifts in the competitive landscape.
 
 ---
