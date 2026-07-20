@@ -16,6 +16,7 @@ This week marks the official, fully certified closure of **Milestone M10** ("Pip
 ---
 
 ## 1. Milestone M10: Core Protocol & Trust-Signals
+* **Incredible Velocity:** Kickstarted implementation on Tuesday, July 14, and completed the full end-to-end, multi-repo close by Saturday, July 18. The entire core protocol development spanned just **4 active coding days**.
 * **Zero-Bump Canary (j-canary GREEN):** Proved the directory's capability to ingest, notarize, and present entirely new, unrecognized signal types without a single line of directory code changes.
 * **Complete Trust-Signals Journey:** Tied portal-minting, directory-notarizing, and client-presenting directly into the final LLM context in `cello_await_session`.
 * **State Preservation:** Cleaned up project tracking across the board, marking historic multi-milestone open items (AWS Hermes, T-of-N signatures, and session/agent publish-cascades) officially done.
@@ -42,3 +43,13 @@ This week marks the official, fully certified closure of **Milestone M10** ("Pip
 * **Master Playbook Integration:** Synthesized competitor and creator-launch case studies into a unified master GTM strategy.
 * **Cello One-Liners:** Standardized on four distinct 1-line pitches (The Winner, The Mail Boy, Secure P2P, and Compliance Receipts).
 * **Micro-Influencer Playbook (`6c7d9dac`):** Created the full X seeding playbook to sequence launch-day and post-launch waitlist demand.
+
+---
+
+## 5. M11 / Post-v1 Pipeline (What's Next)
+Now that the core zero-bump architecture is fully locked down and verified by the canary, the immediate roadmap items queued for M11 include:
+* **The Social Playbook (LinkedIn & X):** Deploying the mature OAuth integrations and the security-hardened browser-extraction scraping infrastructure.
+* **Endorsement Intake ("Endorsement Mother"):** Building out the first-class `issuer_kind: agent` peer-to-peer endorsement scanner and counterparty routing paths.
+* **Portal Auth Hardening:** Gating portal logins behind enrolled TOTP challenge checks (resolving cosmetic gaps) and shipping explicit logout policies.
+* **Security & Infrastructure:** Replacing shared plaintext legacy HTTP bearer keys on `/internal/*` routes with fully signed, TLS-wrapped requests.
+
