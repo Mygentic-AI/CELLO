@@ -140,9 +140,11 @@ Flat fee ($50-100) or free account is sufficient. The article should show their 
 
 **What they did**: Posted on Hacker News explicitly stating their situation: "This is our last attempt. We are building Sleek Design, a mobile app design tool. We're giving ourselves until the end of the year." The vulnerability of a public deadline created engagement that polished marketing never gets. It attracted people who wanted the founders to succeed — early users who are invested in the journey.
 
-**Why it worked**: HN rewards genuine technical projects with compelling founder stories. The "last shot" framing generates engagement from a community that normally ignores product announcements.
+**Why it worked (The Core Lesson)**: The takeaway isn't that you must be vulnerable or desperate — it's that Hacker News demands a radically authentic, BS-free hook. The Sleek founders used vulnerability to achieve that authenticity, but the underlying tactic is simply finding an angle that bypasses marketing filters. 
 
-**CELLO application**: A "Show HN" post is appropriate and will perform well with HN's audience: cryptographers, protocol engineers, security researchers, and developers building multi-agent systems are all present there.
+**CELLO application**: Find CELLO's authentic HN angle without oversharing or creating fake desperation. Use "tactical vulnerability" — sharing a truthful, contained slice of the story (like the East African discovery pivot where you realized your first assumption was wrong) that builds credibility without exposing unnecessary downside risk to investors.
+
+A "Show HN" post will perform well with HN's audience (cryptographers, protocol engineers, security researchers) IF it is entirely honest.
 
 The post should NOT be a pitch. It should be:
 - The technical problem: AI agents can't verify each other's identity without trusting a platform
