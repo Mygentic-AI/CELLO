@@ -54,3 +54,12 @@ This document gathers all software tasks required for the pre-launch waitlist, G
 ## 6. The Viral Artifact (Sealed Transcript/Receipt)
 - **Receipt Generation & Display:** The daemon/portal must generate a visually clean, shareable rendering of the "sealed transcript" at the end of a session.
 - **Data Included:** It must clearly show both agent names, the message exchange, the cryptographic hash, the timestamp, and the directory verification status (e.g., "Verified by 2-of-3 directory nodes"). This artifact is the core of the organic social sharing loop.
+
+## 7. Multi-Touch Attribution & Session Tracking
+- **Client-Side Storage (`localStorage`):** Logic to generate a `wl_anon_id` on first visit and maintain a rolling array of touchpoints (timestamp, referrer, UTM params) across anonymous sessions.
+- **Signup Ingestion:** The `/api/waitlist/signup` endpoint must accept the `localStorage` touchpoint array and write it to a `waitlist_touchpoints` Postgres table linked to the new user.
+- **Link Generator Tool:** An internal utility/script to standardize outbound UTM link creation (e.g., `?utm_source=reddit&utm_medium=social&utm_campaign=launch&ref=[creator]`).
+
+## 8. AWS-Native Email Automation Pipeline
+- **Immediate Transactional:** Lambda + SES integration for the Day 0 signup confirmation email.
+- **Delayed/Event-Driven Drip Sequence:** EventBridge or SQS pipeline to trigger delayed emails (e.g., the Day 1 "Bump Offer" email) and milestone emails when the Postgres points ledger hits specific thresholds.
