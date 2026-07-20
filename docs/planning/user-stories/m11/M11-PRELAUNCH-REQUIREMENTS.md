@@ -21,11 +21,12 @@ Phases are ordered by dependency. P0 unblocks everything. P1 unblocks Wave 1. P2
 
 **P0 — Capture (blocks everything):**
 - Landing page (corp-cello-site repo)
-- One-field signup form + E1 confirmation email
-- `waitlist_users` table, `waitlist_touchpoints` table, `referral_codes` table
+- One-field signup form + E1 confirmation email (verify + login combined)
+- `waitlist_users` table, `waitlist_touchpoints` table, `referral_codes` table, `auth_tokens` table
 - SES domain verification + production-access (submit early — AWS review lag)
 - Personal share code generated at signup
 - `localStorage` tracking script deployed on corp site
+- Waitlist status site (cello-portal clone, corp-site branding): `/auth` page + P0 stub `/status` page (queue position + referral link only)
 
 **P1 — Priority Engine (needs P0):**
 - Survey page + scoring logic
@@ -134,6 +135,14 @@ The waitlist uses a **two-door model**: the slow door (sign up, earn points, cli
 
 *   **Dynamic wave estimator:** Returns estimated wave number based on current planned capacity — never a hardcoded assignment. Recalculates on every status page load.
 
+*   **Wave 1 vs later waves (important distinction):**
+    - **Wave 1 (10–20 hand-picked design partners):** Mandatory 30-minute onboarding call. E-inv for Wave 1 includes a calendar link for scheduling. First win happens *during the call* with Andre present. Each Wave-1 user who reaches first win earns 3 premium invites and a testimonial ask.
+    - **Wave 2+ (self-serve):** No mandatory call. E-inv includes a quickstart link, not a calendar link. Onboarding is self-directed via `CELLO_ONBOARDING` agent. Optional feedback call offer remains (§11).
+
+*   **Mutual-connection reward (premium invite path):** When an invitee accepts a premium invite and reaches first win, both the inviter and the invitee receive an automatic mutual CELLO connection — each party is added to the other's address book. This is the core double-sided reward of the fast door and is a portal/client coordination item, not purely waitlist plumbing.
+
+*   **No count inflation:** Queue positions and wave estimates are always computed from real data. No fabricated counts, no padded queue sizes, no false social proof. The mechanic works because the story is real.
+
 *   **Action endpoints:**
     - `POST /waitlist/survey` → +30 points
     - `POST /waitlist/readiness` → +20 points
@@ -148,7 +157,32 @@ The waitlist uses a **two-door model**: the slow door (sign up, earn points, cli
 
 ---
 
-## 3. Identity Linking & Telegram Gate
+## 3. Session & Authentication (Waitlist Status Site)
+
+**The Why:**
+Users need a way to return to their waitlist status page after initial signup to take priority actions, check their position, connect social accounts, and claim invites. A session that lives for 30 days requires no repeated magic-link friction. The status site reuses cello-portal's Next.js framework and magic-link auth infrastructure, restyled to match the corp site brand — not the portal's product UI.
+
+**The What:**
+
+*   **Waitlist status site:** A standalone app, cloned from `cello-portal`. Strips all portal product pages. Retains: Next.js framework, magic-link auth flow, SES email sending, Postgres connection. **Styling matches the corp site** (colors, fonts, nav pattern) — not the portal's product chrome.
+
+*   **`auth_tokens` table:** `token` (UUID PK), `waitlist_user_id` (FK), `created_at`, `expires_at` (15 minutes — single-use link), `used_at` (nullable). Distinct from `waitlist_tokens` (which are wave admission tokens). An auth token is a short-lived magic link credential; a waitlist token is a wave admission grant.
+
+*   **Session cookie:** On auth token use: set an HttpOnly session cookie with a 30-day expiry. All status page requests require a valid session. Sessions do not time out on activity — they expire 30 days from issue regardless. On expiry, the user is redirected to the `/auth` page.
+
+*   **`/auth` page (magic link entry):**
+    1. User enters email.
+    2. If email is **not in `waitlist_users`**: redirect to landing page with message: *"We don't have this email on the waitlist. Sign up below."*
+    3. If email **is in `waitlist_users`**: silently send a magic link email (`auth_tokens` row inserted, `expires_at = NOW() + 15 minutes`). Show: *"Check your inbox — we've sent you a link."* No indication whether the email was found or not (prevents email enumeration).
+    4. User clicks magic link → sets `used_at = NOW()` on auth token, creates 30-day session cookie, redirects to `/status`.
+
+*   **Email verification at signup:** E1 confirmation email includes a combined verify + login link. Clicking it both sets `email_verified = true` on `waitlist_users` AND creates a session (same auth token mechanism, one-time use). User lands directly on `/status`.
+
+*   **Post-verification P0 stub page:** At P0 (before the full P1 status page is built), `/status` shows a minimal page: confirmation they're on the list, their queue position (live), their personal referral link. No survey link, no OAuth buttons, no points breakdown — those are P1.
+
+---
+
+## 4. Identity Linking & Telegram Gate
 
 **The Why:**
 Wave admission on the web must translate to permission to join the network. The Telegram Operations Agent orchestrates DKG — it must be gated on a valid, unburned waitlist token.
@@ -171,7 +205,7 @@ Wave admission on the web must translate to permission to join the network. The 
 
 ---
 
-## 4. The "Day 1" Client Experience (Onboarding & Artifacts)
+## 5. The "Day 1" Client Experience (Onboarding & Artifacts)
 
 **The Why:**
 The first win — two agents connecting and sealing a session — is the core virality trigger. Both parties get a live CELLO connection as the reward. The sealed transcript is the shareable artifact that generates organic discovery.
@@ -199,7 +233,7 @@ The first win — two agents connecting and sealing a session — is the core vi
 
 ---
 
-## 5. Client-Side Tracking & Link Generation
+## 6. Client-Side Tracking & Link Generation
 
 **The Why:**
 Pre-signup attribution requires persisting the anonymous journey client-side. Every outbound link needs standardized UTM parameters so channel and creator performance is queryable.
@@ -219,7 +253,7 @@ Pre-signup attribution requires persisting the anonymous journey client-side. Ev
 
 ---
 
-## 6. AWS-Native Email Automation
+## 7. AWS-Native Email Automation
 
 **The Why:**
 Two distinct email segments: the **base list** (all verified signups) and the **content alert list** (explicit opt-in, unchecked by default). These must never be conflated.
@@ -245,7 +279,7 @@ Two distinct email segments: the **base list** (all verified signups) and the **
 
 ---
 
-## 7. GTM Distribution Tech Assets
+## 8. GTM Distribution Tech Assets
 
 **The Why:**
 Specific tactics require technical assets deployed in the wild to capture search intent, developer ecosystems, and AI engine citations.
@@ -265,7 +299,7 @@ Specific tactics require technical assets deployed in the wild to capture search
 
 ---
 
-## 8. Gallery (gallery.cello.mygentic.ai)
+## 9. Gallery (gallery.cello.mygentic.ai)
 
 **The Why:**
 Every shared sealed transcript is an organic CELLO discovery event. The gallery is the public-facing surface where receipts live — no auth required, fully bot-indexable, designed to be shared and cited by AI engines.
@@ -291,7 +325,7 @@ Every shared sealed transcript is an organic CELLO discovery event. The gallery 
 
 ---
 
-## 9. Ops Dashboard (operations.cello.mygentic.ai)
+## 10. Ops Dashboard (operations.cello.mygentic.ai)
 
 **The Why:**
 Several manual review and control functions are required for waitlist operations — post URL spot-checks, wave admission, feedback call confirmation, content alert triggers, Telegram account management. These need a lightweight authenticated interface that doesn't require building a full admin system from scratch.
@@ -318,7 +352,7 @@ Several manual review and control functions are required for waitlist operations
 
 ---
 
-## 10. §5c High-Activity User Detection
+## 11. §5c High-Activity User Detection
 
 **The Why:**
 The feedback flywheel — active users → 20-minute call → content raw material → articles → new users — is the sustainable demand generation engine. Requires automated detection and a triggered outreach sequence that dogfoods the product.
@@ -346,7 +380,7 @@ The feedback flywheel — active users → 20-minute call → content raw materi
 
 ---
 
-## 11. Source Documents
+## 12. Source Documents
 
 - `docs/planning/discussion_logs_drafts/Product rollout/2-waitlist-induction/2026-07-12_0622_waitlist-launch-plan.md`
 - `docs/planning/gtm/00_MASTER_PLAYBOOK.md`

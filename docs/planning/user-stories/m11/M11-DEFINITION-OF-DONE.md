@@ -41,7 +41,9 @@ description: >
 - **DOD-INV-HANDLE-UNIQUE** — one social handle maps to exactly one waitlist entry. `(platform, handle)` UNIQUE constraint on `waitlist_social_profiles`. A duplicate attempt at the DB layer is a hard reject. — ❌
 - **DOD-INV-TOKEN-SINGLE-USE** — a waitlist token, once burned (`used_at` set), can never be re-used. A second attempt to burn the same token returns a clear error. No mechanism exists to un-burn a token. — ❌
 - **DOD-INV-NO-PII-DIRECTORY** — the CELLO directory stores no PII. Waitlist-related data (email, social handles, queue position) lives in the waitlist Postgres DB only. `waitlist_agent_links` stores only `agent_pubkey` and `waitlist_user_id` — never email. — ❌
-- **DOD-INV-STABLE-PK** — every new table keys on a stable UUID PK. No join, foreign key, or WHERE-match uses `email`, `agent_name`, or any other mutable attribute as an identity anchor. — ❌
+- **DOD-INV-STABLE-PK** — every new table keys on a stable UUID PK. No join, foreign key, or WHERE-match uses `email`, `agent_name`, or any other mutable attribute as an identity anchor. Looking up a user by email to *retrieve* their `waitlist_id` is correct; storing email as a FK in another table is not. — ❌
+
+- **DOD-INV-NO-INFLATION** — queue positions and wave estimates are always computed from real data. No fabricated counts, padded queue sizes, or manufactured social proof exist anywhere in the system. A queue position of #84 means there are exactly 83 higher-ranked users. Any hardcoded queue size or fake wave assignment is a blocking finding. — ❌
 
 ---
 
@@ -55,6 +57,7 @@ description: >
   - `referral_codes`: `code` (unique), `owner_waitlist_user_id` (FK), `active` (bool).
   - `referrals`: `id` (UUID PK), `referrer_user_id` (FK), `referred_user_id` (FK, UNIQUE), `referral_code`.
   - `email_jobs`: `id` (UUID PK), `user_id` (FK), `template` (enum), `scheduled_at`, `sent_at` (nullable), `status` (pending/sent/skipped).
+  - `auth_tokens`: `token` (UUID PK), `waitlist_user_id` (FK), `created_at`, `expires_at` (15 minutes), `used_at` (nullable). Single-use magic-link credential — distinct from `waitlist_tokens` (wave admission grants).
   Fresh schema == migrated schema. — ❌
 
 - **DOD-TRACKING-1** — localStorage tracking script deployed on every page of corp-cello-site:
@@ -64,6 +67,14 @@ description: >
   Verified: open the landing page in an incognito window, check localStorage for `wl_anon_id` and `wl_touchpoints`. Visit again with `?utm_source=test` — a new touchpoint is appended. Visit again immediately with the same params — no duplicate. — ❌
 
 - **DOD-SIGNUP-1** — signup endpoint accepts `{email, anon_id, touchpoints[]}`. Inserts `waitlist_users`, bulk-inserts `waitlist_touchpoints`, derives first/last touch, generates `referral_code` in `referral_codes`, enqueues E1 email within 60 seconds. If a `ref=CODE` touchpoint exists and the code is valid + active, inserts a row in `referrals` and enqueues a +10 point job for the referrer (cap enforced). Duplicate email returns a clear error (not a server 500). — ❌
+
+- **DOD-AUTH-1** — waitlist status site live (cello-portal clone, corp-site branding). Two flows:
+  1. **E1 verify-and-login:** clicking the E1 link sets `email_verified = true`, burns the auth token, creates a 30-day HttpOnly session cookie, redirects to `/status`.
+  2. **Magic link re-access:** `/auth` page accepts an email. If email not in `waitlist_users` → redirect to landing page with message "We don't have this email on the waitlist." If found → send magic link (auth token, 15-min expiry), show "Check your inbox." Clicking the link creates a 30-day session and redirects to `/status`. Sessions expire after 30 days regardless of activity; expiry redirects to `/auth`.
+  No indication on the `/auth` page of whether an email was found (prevents enumeration).
+  Verified: (a) click E1 link → land on `/status` with session; (b) visit `/auth` with unknown email → landing page redirect; (c) visit `/auth` with known email → magic link arrives, clicking creates session; (d) re-use the same magic link → rejected (`used_at` already set). — ❌
+
+- **DOD-STATUS-STUB-1** — P0 stub `/status` page (authenticated, session-gated). Shows: confirmation they're on the waitlist, their queue position (live computed), their personal referral link with a copy button. No survey, no OAuth buttons, no points breakdown — those are P1 (DOD-STATUS-PAGE-1 replaces this stub). Corp site branding. — ❌
 
 - **DOD-EMAIL-INFRA-1** — SES domain verification for `cello.mygentic.ai` complete. DKIM and DMARC records set. SES production access requested (note: AWS review takes days — submit early). Transactional Lambda + SQS pipeline wired: `email_jobs` enqueue → SQS → Lambda → SES. Test: insert an E1 job directly into `email_jobs` for a verified address, confirm delivery within 60 seconds. — ❌
 
@@ -124,7 +135,7 @@ description: >
   - Enqueues E-inv email for each admitted user.
   Verified: seed 10 users with varying points; run assembly for capacity 4; confirm the right 4 are admitted and each has a token. — ❌
 
-- **DOD-E-INV-1** — E-inv (wave admission) email: sent within 60 seconds of wave assembly. Body: install command, the user's single-use token, 14-day claim window. Nothing else. Under 200 words. Verified: trigger wave assembly for one user; confirm E-inv arrives within 60 seconds containing the correct token. — ❌
+- **DOD-E-INV-1** — E-inv (wave admission) email: sent within 60 seconds of wave assembly. Body: install command, the user's single-use waitlist token, 14-day claim window. **Wave 1 variant** includes a calendar link for scheduling the mandatory 30-minute onboarding call. **Wave 2+ variant** includes a quickstart link instead. The wave number is passed to the email template and determines which variant renders. Under 200 words. Verified: trigger wave assembly for one user; confirm E-inv arrives within 60 seconds containing the correct token and the correct variant content. — ❌
 
 - **DOD-TELEGRAM-GATE-1** — Telegram bot gate logic updated:
   1. Is `telegram_id` in `telegram_accounts`? Yes → proceed as normal.
@@ -139,6 +150,7 @@ description: >
   - Set `first_win_at = NOW()` on `waitlist_users`.
   - Enqueue E-win email.
   Idempotent: a second sealed session for the same user changes nothing. Verified: simulate two seal events for the same user; confirm 3 invite codes exist, `first_win_at` is set once, and only one E-win email is enqueued. — ❌
+  **Note:** The mutual-connection reward (inviter + invitee auto-added to each other's address book when an invitee reaches first win) is a portal/client coordination item, not purely waitlist plumbing. It is tracked as a dependency here but designed and implemented in the portal/client work stream.
 
 - **DOD-E-WIN-1** — E-win email template: subject, body. Contains: the 3 invite codes, a testimonial ask, a "share your first session" prompt (link to gallery if the session is shareable). Under 300 words. — ❌
 
@@ -220,6 +232,10 @@ These are not DoD lines — they are the real-world checks that determine whethe
 - **M11-D6 (2026-07-20) — The first-win trigger uses `waitlist_agent_links` as the bridge.** The session seal event carries `agent_pubkey`. The waitlist DB has no `agent_pubkey` column. `waitlist_agent_links` is written at token-burn time (the one moment both identities are simultaneously present) and is the join key for `first_win_at` detection. Reverse: if a future onboarding path bypasses the Telegram gate, a second linking mechanism will be needed.
 
 - **M11-D7 (2026-07-20) — Ops dashboard is a separate repo, cloned from cello-portal.** Does not share a deployment with the portal. Shares the same Postgres DB via a restricted IAM role. Separate repo enables independent deploy, separate allowlist management, and no risk of cello-portal's auth surface being accidentally widened. Reverse: merge back if maintenance of two Next.js deployments becomes a real burden.
+
+- **M11-D9 (2026-07-20) — Waitlist status site is a cello-portal clone with corp-site branding.** The status site (`/auth`, `/status`) reuses cello-portal's Next.js framework and magic-link auth infrastructure. It does not share a deployment with the portal or the ops dashboard. Styled to match the corp site (not the portal's product UI). Session cookie: 30-day HttpOnly, regardless of activity. Magic link expiry: 15 minutes, single-use. `/auth` silently rejects unknown emails (no enumeration). Reverse: merge into corp-cello-site as an authenticated route if the separate-site maintenance cost is too high.
+
+- **M11-D10 (2026-07-20) — Wave 1 is categorically different from later waves.** Wave 1 is 10–20 hand-picked design partners. Onboarding call is mandatory. E-inv includes a calendar link. First win happens during the call. Later waves are self-serve: E-inv includes a quickstart link, no mandatory call. The E-inv template takes a wave number and renders the correct variant. Reverse: make all waves self-serve if Wave 1 logistics prove unscalable.
 
 - **M11-D8 (2026-07-20) — Gallery is in corp-cello-site, not a standalone repo.** The gallery shares the corp site's header, footer, and design system. Adding it to the corp site is a new Next.js route, not a new service. Reverse: extract to a standalone Next.js app if gallery rendering needs differ substantially from the corp site (e.g. heavy SSG, separate CDN config).
 
