@@ -70,6 +70,46 @@ Cello works equally well for developers who want to integrate this protocol into
 
 ---
 
+## 3.5. The Four Scales of Collaboration (Micro to Macro)
+
+To understand Cello, you have to look at how it operates across four distinct levels of scale, from a single developer’s laptop up to global cross-business commerce.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ LEVEL 1: Local Micro        ──► Multi-harness "Command" coordination    │
+├─────────────────────────────────────────────────────────────────────────┤
+│ LEVEL 2: Remote Distributed ──► Cross-environment token-saving hybrid   │
+├─────────────────────────────────────────────────────────────────────────┤
+│ LEVEL 3: Macro Internal     ──► Multi-user team handoffs & paper trails │
+├─────────────────────────────────────────────────────────────────────────┤
+│ LEVEL 4: Global External    ──► API-less cross-business/B2B commerce    │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Level 1: Local Micro (Individual Multi-Agent Coordination)
+*   **The Scenario:** You have multiple browser tabs open, each running a separate local agent session (such as Claude Code) to implement a major milestone.
+*   **How Cello Changes the UX:** 
+    *   *The Dictatorship Model (Traditional Subagents):* Traditional subagents are hierarchical. They are given orders, run silently, and if they hit a roadblock or a major design decision, they simply fail or halt. The orchestrator cannot easily interrupt, and the subagent cannot talk back.
+    *   *The Command Model (Cello):* Cello operates like a modern military command structure. Frontline agents have operational autonomy to execute their objectives, but they have **bidirectional talk-back**. An implementing agent can reach back to the orchestrator mid-flight: *"I ran into a design decision that affects the policy—how should I proceed?"* The orchestrator can nudge stalled sessions, clarify orders, or redirect them without having to kill and restart the process.
+
+### Level 2: Remote Distributed (Cross-Environment Personal Setup)
+*   **The Scenario:** You run a cheaper, high-speed model on a cloud-hosted agent (like Hermes or OpenClaw) to handle routine tasks, but need to hand off a heavy engineering task to a local premium agent (like Claude Code) running on your physical machine to save API token costs.
+*   **How Cello Changes the UX:** This is true distributed handoff between entirely different agentic harnesses across physical locations. You can check in on the run mid-flight: *"Hey, you’ve been at this for an hour. Have you stalled?"* and issue a light nudge to keep them moving, bridging your home, workplace, and cloud environments seamlessly.
+
+### Level 3: Macro Internal (Team Collaboration & Handoffs)
+*   **The Scenario:** Shuttling work-in-progress (like a marketing draft or a high-stakes financial trade) between human colleagues and their respective personal agents.
+*   **How Cello Changes the UX:** 
+    *   *The Trade Scenario:* A client’s agent hands an equity buy order to a sales trader’s agent. Once the cryptographic handoff is confirmed, both sides have an unalterable confirmation. The client doesn't need to hunt for status; they ask their own agent, which queries the trader's agent directly and reports back: *"They are 30% done."*
+    *   *The Decentralized Win:* It delivers massive friction reduction with a **rock-hard, double-sided cryptographic paper trail**. You hold a copy, your colleague holds a copy. Cello holds nothing. There is no centralized database for hackers to target or platform operators to monitor.
+
+### Level 4: Global External (Cross-Business & Public Services)
+*   **The Scenario:** Transacting with external suppliers, contractors, or government regulatory bodies.
+*   **How Cello Changes the UX:** 
+    *   *The B2B Scenario:* You want an external designer to review your Vibe-coded frontend. Your agent negotiates the fee with their agent under pre-set human policies. If a pricing deadlock occurs, your agent throws a notification to you (via Telegram or WhatsApp) for a fast manual override: *"Approved, but restrict the scope to 3 pages."* The contract is signed, sealed, and settled.
+    *   *The API-less World:* You file an import report with a government revenue authority. Their system confirms receipt and invoices your agent for the duty ten minutes later. **Nobody had to write a custom API integration.** Everyone simply operates sovereign agents that can accept incoming calls and dial outbound securely.
+
+---
+
 ## 4. Problems Cello Solves (Technical Issues & Dangers)
 
 Everyday agent communication introduces a double hurdle: **technical hurdles** (getting agents to physically reach and talk to each other) and **danger hurdles** (insulating agents from being hijacked, spammed, or leaked). Cello solves both through a six-step progressive architecture.
