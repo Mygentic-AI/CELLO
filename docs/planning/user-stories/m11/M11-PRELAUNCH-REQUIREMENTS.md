@@ -76,7 +76,7 @@ To run a referral-driven waitlist without paid SaaS, we need to own the data. We
 
 **The What:**
 
-*   **`waitlist_users` table:** Primary key is `waitlist_id` (UUID). Join on this — never on email. Columns: `email` (unique), `anon_id`, `points_total`, `status` (waiting/admitted/banned), `email_verified` (bool), `content_alerts` (bool, default false), `feedback_eligible` (bool, default false), `feedback_eligible_date` (timestamptz nullable), `first_touch_source`, `first_touch_ref`, `last_touch_source`, `last_touch_ref`, `touchpoints_json` (JSONB), `created_at`, `admitted_at`.
+*   **`waitlist_users` table:** Primary key is `waitlist_id` (UUID). Join on this — never on email. Columns: `email` (unique), `display_name` (TEXT nullable — casual moniker, not structured first/last), `anon_id`, `points_total`, `status` (enum: `waiting` / `admitted` / `active` / `left` / `banned`), `email_status` (enum: `active` / `unsubscribed` / `complained` / `bounced`, default `active`), `email_verified` (bool), `content_alerts` (bool, default false), `feedback_eligible` (bool, default false), `feedback_eligible_date` (timestamptz nullable), `first_touch_source`, `first_touch_ref`, `last_touch_source`, `last_touch_ref`, `touchpoints_json` (JSONB), `created_at`, `admitted_at`, `first_win_at` (nullable), `wave_number` (integer nullable — set at admission time).
 
 *   **`waitlist_touchpoints` table:** `waitlist_user_id`, `anon_id`, `ts`, `url`, `referrer`, `utm_source`, `utm_medium`, `utm_campaign`, `utm_content`, `utm_term`, `ref`. Inserted in bulk at signup from the `localStorage` array.
 
@@ -86,13 +86,16 @@ To run a referral-driven waitlist without paid SaaS, we need to own the data. We
 
     | Action | Points | Cap |
     |---|---|---|
-    | Staged survey completion | +30 | none |
+    | Survey completion (structured questions) | +20 | none |
+    | Survey free-form text ("How do you imagine using this?") | +10 | none |
+    | Interview commit (checkbox — highest single action) | +30 | none |
     | Technical readiness (runs agents + repo star) | +20 | none |
     | Share link (each signup through personal link) | +10 | +30 total |
     | Public post URL (X/Reddit/LinkedIn, verified via OAuth) | +15 | +45 total (3 platforms max) |
-    | Interview commit (checkbox) | +15 | none |
 
-*   **`referral_codes` table:** `code` (unique), `owner_waitlist_user_id`, `active` (bool).
+    **Survey structured questions:** (1) What would you use CELLO for? (multi-choice), (2) How many agents do you run? (0 / 1-2 / 3-9 / 10+), (3) What platforms? (multi-select: Claude Code, Claude Coworker, Claude.ai, Codex, Hermes, OpenClaw, Kimi, Gemini agent, ChatGPT, Other with free text).
+
+*   **`referral_codes` table:** `code` (unique), `owner_waitlist_user_id`, `type` (enum: `share` / `premium`), `active` (bool). `share` codes are generated at signup (regular referral, earns the owner +10 points per conversion). `premium` codes are generated at first-win (golden ticket — referred user is marked as premium-referred and fills the front of the next wave). Premium codes are bearer tokens — not email-bound; first person to complete signup with it burns it.
 
 *   **`referrals` table:** `referrer_user_id`, `referred_user_id`, `referral_code`. UNIQUE on `referred_user_id` — one person can only be referred once. On insert, award +10 to referrer (respecting +30 cap).
 
@@ -103,6 +106,8 @@ To run a referral-driven waitlist without paid SaaS, we need to own the data. We
 *   **`telegram_accounts` table:** `telegram_id`, `waitlist_user_id` (nullable — null for staff overrides), `source` (enum: `waitlist_token`, `ops_override`), `linked_at`. UNIQUE on `telegram_id`.
 
 *   **`email_jobs` table:** `user_id`, `template` (enum: `e1_confirm`, `e2_bump`, `e3_nurture`, `e_alert`, `e_inv`, `e_win`, `e_re`), `scheduled_at`, `sent_at`, `status` (pending/sent/skipped).
+
+*   **`waves` table:** `wave_number` (integer PK), `capacity`, `priority_pct`, `zero_pct`, `opened_at`, `opened_by`. History record of each wave — all inputs are provided at trigger time via the ops dashboard, nothing pre-stored. Used for post-hoc analysis and to populate `wave_number` on `waitlist_users` at admission time.
 
 *   **`creator_tracking` table:** For Tactic 5 micro-influencer ROI. `creator_handle`, `event_type` (visit/signup/activation), `session_id`, `created_at`.
 
@@ -133,7 +138,7 @@ The waitlist uses a **two-door model**: the slow door (sign up, earn points, cli
     2. ~75% of remaining capacity → highest `points_total` (tie-broken by `created_at` ASC).
     3. ~25% of remaining capacity → `points_total = 0` users by `created_at` ASC.
 
-*   **Dynamic wave estimator:** Returns estimated wave number based on current planned capacity — never a hardcoded assignment. Recalculates on every status page load.
+*   **Queue position + qualitative band (replaces wave estimator):** Status page shows real-time queue position, a qualitative band ("top 10%", "top 25%", "top half"), and a short explanation that waves are sized dynamically based on how the previous wave performed. No predicted wave number, no estimated date — wave sizes are determined at trigger time by the operator and cannot be forecast.
 
 *   **Wave 1 vs later waves (important distinction):**
     - **Wave 1 (10–20 hand-picked design partners):** Mandatory 30-minute onboarding call. E-inv for Wave 1 includes a calendar link for scheduling. First win happens *during the call* with Andre present. Each Wave-1 user who reaches first win earns 3 premium invites and a testimonial ask.
@@ -143,11 +148,13 @@ The waitlist uses a **two-door model**: the slow door (sign up, earn points, cli
 
 *   **No count inflation:** Queue positions and wave estimates are always computed from real data. No fabricated counts, no padded queue sizes, no false social proof. The mechanic works because the story is real.
 
+*   **Premium invite route (`/invite/CODE`):** A landing page that does exactly two things: stores `CODE` in localStorage under a known key, then redirects to `/waitlist`. The signup form reads the stored code and includes it silently in the POST body. Backend: validates the code exists in `referral_codes` with `type = 'premium'` and `active = true` and no prior burn, then burns it (`active = false`) and marks the new user as premium-referred. If the link is mangled and the user reaches `/waitlist` without the localStorage value, the code is NOT burned — the inviter can share it again.
+
 *   **Action endpoints:**
-    - `POST /waitlist/survey` → +30 points
+    - `POST /waitlist/survey` → +20 points (structured) + optionally +10 (free-form text)
     - `POST /waitlist/readiness` → +20 points
     - `POST /waitlist/post-url` → writes to `post_review_queue` (credit pending manual review)
-    - `POST /waitlist/interview-commit` → +15 points
+    - `POST /waitlist/interview-commit` → +30 points
     - Share link conversion webhook → +10 (cap enforced)
 
 *   **Social OAuth endpoints (§2a — required before public post credit is possible):**
@@ -170,11 +177,12 @@ Users need a way to return to their waitlist status page after initial signup to
 
 *   **Session cookie:** On auth token use: set an HttpOnly session cookie with a 30-day expiry. All status page requests require a valid session. Sessions do not time out on activity — they expire 30 days from issue regardless. On expiry, the user is redirected to the `/auth` page.
 
-*   **`/auth` page (magic link entry):**
+*   **`/auth` page (magic link entry — non-enumeration pattern):**
     1. User enters email.
-    2. If email is **not in `waitlist_users`**: redirect to landing page with message: *"We don't have this email on the waitlist. Sign up below."*
-    3. If email **is in `waitlist_users`**: silently send a magic link email (`auth_tokens` row inserted, `expires_at = NOW() + 15 minutes`). Show: *"Check your inbox — we've sent you a link."* No indication whether the email was found or not (prevents email enumeration).
-    4. User clicks magic link → sets `used_at = NOW()` on auth token, creates 30-day session cookie, redirects to `/status`.
+    2. Regardless of whether the email exists in `waitlist_users`, always show the same response: *"Check your inbox — we've sent you a link."* No redirect, no difference in message, no timing difference between known and unknown emails.
+    3. Below the message: *"If you don't receive an email, you may not be on the waitlist — [sign up here]."* (links to `/waitlist`).
+    4. If email IS in `waitlist_users`: silently send a magic link email (`auth_tokens` row inserted, `expires_at = NOW() + 15 minutes`). If NOT: do nothing (no email sent, no error surfaced).
+    5. User clicks magic link → sets `used_at = NOW()` on auth token, creates 30-day session cookie, redirects to `/status`.
 
 *   **Email verification at signup:** E1 confirmation email includes a combined verify + login link. Clicking it both sets `email_verified = true` on `waitlist_users` AND creates a session (same auth token mechanism, one-time use). User lands directly on `/status`.
 
@@ -256,7 +264,7 @@ Pre-signup attribution requires persisting the anonymous journey client-side. Ev
 ## 7. AWS-Native Email Automation
 
 **The Why:**
-Two distinct email segments: the **base list** (all verified signups) and the **content alert list** (explicit opt-in, unchecked by default). These must never be conflated.
+Two distinct email segments: the **base list** (all verified signups) and the **content alert list** (explicit opt-in, unchecked by default). These must never be conflated. Additionally, every send must check `email_status = 'active'` — a suppressed address (`bounced` / `complained` / `unsubscribed`) receives zero emails regardless of segment membership.
 
 **The What:**
 
@@ -366,8 +374,10 @@ The feedback flywheel — active users → 20-minute call → content raw materi
 
 *   **Detection:** Lambda on daily EventBridge schedule. Writes `feedback_eligible = true` + `feedback_eligible_date = NOW()` to `waitlist_users`. Idempotent.
 
+*   **`CELLO_FEEDBACK` agent provisioning:** The identity already exists in the CELLO directory. Remaining M11 work: small EC2 instance, Hermes installed, CELLO installed (`@cello-protocol/connect`), governance configured (no sensitive outbound), inbound reachability confirmed (NAT/networking so other agents can initiate sessions to it). The feedback Lambda triggers outreach by initiating a session to this agent's known pubkey — standard protocol, no new code required. Verification: agent is reachable inbound and responds to a test session initiation.
+
 *   **Outreach sequence:**
-    1. **Day 1:** `CELLO_FEEDBACK` agent initiates a CELLO session with the user.
+    1. **Day 1:** `CELLO_FEEDBACK` agent initiates a CELLO session with the user (via their pubkey from `waitlist_agent_links`).
     2. **Day 1 (same day):** SES email follow-up, under 150 words, calendar link.
     3. **Day 6, no response:** Auto-grant 2 premium invite codes. Status page note added.
     4. **Call completed (ops dashboard confirm):** Grant 4 premium invites (replaces the 2 if already issued).

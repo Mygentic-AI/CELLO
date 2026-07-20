@@ -51,6 +51,12 @@ description: >
 
 - **DOD-INV-EMAIL-SEGMENTS** — two email segments exist and are never conflated: the **base list** (all verified signups, receives E1/E2/E3/E-inv/E-win/E-re) and the **content alert list** (`content_alerts = true`, receives E-alert only). An E-alert query that omits the `content_alerts = true` filter is a blocking finding. An E3 send that filters on `content_alerts` is also wrong — E3 goes to the base list unconditionally. — ❌
 
+- **DOD-INV-EMAIL-SUPPRESS** — the email pipeline must check `email_status = 'active'` before every send. A send to a suppressed address (`bounced` / `complained` / `unsubscribed`) is a blocking finding. Suppression is independent of waitlist lifecycle status — an `admitted` user with `email_status = 'bounced'` receives zero emails. — ❌
+
+- **DOD-INV-PREMIUM-BEARER** — premium invite codes are bearer tokens burned on first successful signup. They are never email-bound. The `/invite/CODE` route stores the code in localStorage; the signup form reads and submits it silently. A code that burns without a completed signup (e.g. on a failed validation) is a defect. An unburned code remains live for the inviter to share with someone else. — ❌
+
+- **DOD-INV-NO-ENUMERATION** — `/auth` must never reveal whether an email exists in the system. The response ("Check your inbox") is identical for known and unknown emails. Any observable difference — redirect, message text, HTTP status, or response timing — between the two cases is a blocking finding. — ❌
+
 ---
 
 ## P0 — Capture (blocks everything)
