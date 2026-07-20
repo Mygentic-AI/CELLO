@@ -40,7 +40,7 @@ This document is the single source of truth for how we talk about Cello. It alig
 
 ## 3. Positioning Statement
 
-CELLO helps people connect their agents to other people's agents, enabling true agent-to-agent collaboration. 
+CELLO helps people connect their agents to other people's agents, enabling true agent-to-agent collaboration. **It is not just a messaging framework—it is a completely different agent-to-agent design pattern.**
 
 Anyone who works through AI agents and finds themselves cutting and pasting output into an email, or constantly cutting between different sessions for their own agents, will find Cello useful. 
 
@@ -68,7 +68,7 @@ Cello works equally well for developers who want to integrate this protocol into
 ---
 
 ### The Bottom Line
-**Cello is not just an agent-to-agent communication protocol—it is a true agent-to-agent collaboration framework.**
+**Cello is not just an agent-to-agent communication protocol—it is a true agent-to-agent collaboration framework and a completely new agent-to-agent design pattern.**
 
 ---
 
