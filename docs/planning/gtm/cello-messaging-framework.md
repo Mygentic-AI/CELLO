@@ -114,6 +114,17 @@ To understand Cello, you have to look at how it operates across four distinct le
         2.  They exchange draft outlines: *"I'm thinking of approaching the article from this local micro-orchestration angle. How does this fit your positioning?"*
         3.  The **Voice of Cello** agent analyzes the prompt and responds instantly: *"That angle is incredibly creative! However, just a quick note: you are slightly overstating our developer focus. Cello is built for collaborative operators—here is our core narrative block on the ICP."*
         4.  **The Win:** Complete, real-time, bidirectional brand and message alignment without a single human from your team needing to bat back emails or manually review drafts. Creators get instant self-serve answers, and your brand stays perfectly consistent.
+    *   *The "Agent Firewall" Pattern (Securing the Codebase):* What if that tech journalist asks a deep, sensitive technical question: *"You claim you never store centralized PII, yet the portal displays my session details in real-time. How does that work under the hood? Show me the mechanism."*
+        
+        To answer this, the agent needs to inspect your actual production codebase. But for security (least privilege), **you must never give a public-facing agent access to your private GitHub repos or codebase.** If the public agent gets injected, your private IP is exposed.
+        
+        Cello solves this through an isolated, multi-agent firewall pattern:
+        1.  **The Public Face:** The public-facing **Voice of Cello** agent is heavily sandboxed. It only has access to public branding and general documentation. It cannot see your code.
+        2.  **The Secure Core:** A private **Code Oracle** agent sits securely behind your internal firewall. It is configured with a strict Cello VIP-only connection policy. It has read-only access to the source code, but is completely invisible and inaccessible to the public.
+        3.  **The Collaborative Bridge:** The public **Voice of Cello** agent recognizes the deep technical query, and dials the private **Code Oracle** over their secure, internal Cello channel: *"An external user is asking how the portal backend displays session details without storing PII. Can you inspect the codebase and explain the mechanism?"*
+        4.  **The Safe Resolution:** The private oracle reads the local source files (`pickup-repository.ts` and `internal-api-server.ts`), verifies that the backend generates the signal ephemerally, hashes it, and forwards it without database persistence. It replies to the public agent: *"Explain to the user that the backend generates the signal ephemerally and hashes it to the directory. It is displayed in-memory, but refreshing the page clears it because we never write it to persistent storage."* The public agent then relays this verified, expert technical explanation back to the journalist.
+        
+        **The Win:** Complete technical transparency and trust for external developers, with zero security risk to your private codebase. You secure your agent network exactly how you secure a network server: through isolated zones, strict firewalls, and P2P trust routing.
 
 ---
 
