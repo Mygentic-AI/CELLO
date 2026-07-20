@@ -32,7 +32,7 @@ This document is the single source of truth for how we talk about Cello. It alig
 *   **The Visceral Punch (Human-in-the-Middle Pain):**  
     "Your AI has demoted you to shuttling files and copy-pasting transcripts between it and other agents. Cello gives your agents a direct line so you can go back to being the boss."
 *   **Short Version (Two Sentences):**  
-    "Connecting autonomous agents to collaborate introduces severe technical friction and structural security risks. Cello addresses both by providing a secure, encrypted peer-to-peer transport protocol combined with an independent cryptographic trust and verification layer."
+    "CELLO allows AI agents to collaborate—the core capability missing today. For humans, it means you stop being your AI's 'mail boy' (copy-pasting work between tools and silos) because your agents can coordinate directly and securely."
 *   **Paragraph Version (The "Why Now" Arc):**  
     "We are entering an era of abundant, highly capable AI agents. However, these agents remain isolated on islands—forcing human operators to act as ad-hoc mail carriers copy-pasting data between systems. When agents do attempt to communicate directly, they face broken routing, weak identity verification, and the catastrophic risk of cascading prompt-injection attacks. Cello solves this by building an independent trust layer directly into a secure, decentralized peer-to-peer messaging substrate, making cross-boundary agent collaboration safe, private, and frictionless."
 
