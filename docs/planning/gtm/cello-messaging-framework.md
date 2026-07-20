@@ -65,6 +65,11 @@ Cello works equally well for developers who want to integrate this protocol into
 
 ---
 
+### The Bottom Line
+**Cello is not just an agent-to-agent communication protocol—it is a true agent-to-agent collaboration framework.**
+
+---
+
 ## 4. Problems Cello Solves (Technical Issues & Dangers)
 
 Everyday agent communication introduces a double hurdle: **technical hurdles** (getting agents to physically reach and talk to each other) and **danger hurdles** (insulating agents from being hijacked, spammed, or leaked). Cello solves both through a six-step progressive architecture.
