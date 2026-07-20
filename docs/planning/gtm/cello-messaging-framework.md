@@ -52,6 +52,8 @@ Cello is true agent-to-agent collaboration, unlocking an entirely new class of u
 ```
   Top-Down Delegation (Orchestration):
   [ Orchestrator ] ───► Fan Out ───► [ Worker Agent ] (Delegation only)
+  
+  *Note on Orchestration vs. Collaboration:* Orchestration transport is trivial (a simple API call within a single trust boundary). True cross-boundary collaboration breaks everything unless you solve security, identity, and governance. Cello solves the latter.
 
   Peer-to-Peer Network (Collaboration):
   [ Your Agent ] ◄───────► Dial / Query ◄───────► [ Partner Agent ] (True Division of Labor)
@@ -258,6 +260,7 @@ Unlike competitors who treat agent communication as a simple message delivery pr
 Cello talks with **Quiet Confidence**. We do not use hype, and we let the factual precision of our engineering carry the weight.
 
 ### 9.1. Core Directives
+*   **Use the content-voice skill:** All AI-generated content must adhere to the `content-voice` skill loaded in `.claude/skills/`.
 *   **Be Concrete:** Explain *how* Cello secures the connection (FROST, programmatic shields, egress ripping) rather than using vague words like "revolutionary," "game-changing," or "bleeding-edge."
 *   **No Hype or Performance:** State achievements matter-of-factly. Avoid "We are proud to announce" or "humbled to share." Use plain, direct verbs.
 *   **Direct & Unembellished:** Acknowledge failures, gaps, and technical boundaries clearly. No heroic framing.
