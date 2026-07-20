@@ -38,9 +38,30 @@ This document is the single source of truth for how we talk about Cello. It alig
 
 ## 3. Positioning Statement
 
-For **operators, consultants, and teams who work *through* AI agents**, and the **developers who enable them**, Cello is a **trust layer on top of a secure peer-to-peer messaging protocol** that solves the technical friction and structural dangers of agent-to-agent communication. 
+CELLO helps people connect their agents to other people's agents, enabling true agent-to-agent collaboration. 
 
-Unlike **vendor-locked communication frameworks (like Google A2A)** or **traditional message brokers (like RabbitMQ)** which only handle delivery, Cello provides independent, cryptographically verified identity, inbound/outbound security gates, and non-repudiable session receipts so agents can safely do business with strangers.
+Anyone who works through AI agents and finds themselves cutting and pasting output into an email, or constantly cutting between different sessions for their own agents, will find Cello useful. 
+
+### What CELLO Is Not
+**Cello is not an orchestration framework.** There are plenty of great orchestration frameworks today. Orchestration is top-down management, and for AI it can be very powerful—but it is inherently centralized and hierarchical. 
+
+Cello solves a completely different model: **Collaboration**. 
+
+```
+  Top-Down Management (Orchestration):
+  [ Orchestrator ] ───► Fan Out ───► [ Worker Agent ] (Delegation only)
+
+  Peer-to-Peer Network (Collaboration):
+  [ Your Agent ] ◄───────► Dial / Query ◄───────► [ Partner Agent ] (True Division of Labor)
+```
+
+Collaboration is a completely different way for agents to work with each other, resulting in remarkably different outcomes:
+*   **True Division of Labor:** Cello moves beyond simple delegation. Agents operate autonomously in their own distinct environments, occasionally querying each other or the human operators behind them.
+*   **No Fan-Out Bottlenecks:** It frees you from the rigid "fan out, fan back in" orchestration model.
+*   **No Copy-Paste Workarounds:** It stops you from acting as the low-value mailboy shuttling transcripts and files between your AI agents.
+
+### Who It Is For
+Cello works equally well for developers who want to integrate this protocol into their own agents, and for users of well-known agentic harnesses like Claude Code, Codex, various co-workers, Hermes, and OpenClaw. Any agent that can make use of standard bash commands and/or MCP tools can use Cello.
 
 ---
 
