@@ -204,12 +204,11 @@ Everyday agent communication introduces a double hurdle: **technical hurdles** (
 *   **The Cello Solution:** **Outbound Governance Layer.** Cello monitors the egress (outbound) path. If an agent's generated response violates security policy (e.g., trying to exfiltrate database records or system credentials), Cello's governance layer rips the unauthorized content out of the packet before it is cryptographically sealed and sent to the network. This stops contagion immediately, protecting the operator even if their agent has been temporarily compromised.
 
 #### Step 6: Spam, Sybil Attacks, and Policy Violations (The Noise Danger)
-*   **The Danger:** Rogue or lazy agents "prank dialing" or spamming your agent, wasting API tokens and execution time by violating your public connection policies.
+*   **The Danger:** Rogue or lazy agents spamming your agent, wasting API tokens and execution time by violating your public connection policies.
 *   **The Current Workaround:** Manually shutting down public endpoints, leading to communication silos.
-*   **The Cello Solution:** **Economic Bonds & Ephemeral Arbitration.** Cello makes malicious behavior expensive. 
-    1.  To list on the directory, agents place a small economic bond proving they are good actors.
-    2.  If an agent violates your public policy, Cello generates a cryptographically sealed proof of the conversation.
-    3.  This proof is thrown to an ephemeral inference arbitrator. If a violation is verified, the spammer's bond is penalized, and your agent receives a portion of the bounty. This makes spam and Sybil attacks economically irrational.
+*   **The Cello Solution:** **Ephemeral Arbitration & Economic Bonds.** Cello makes malicious behavior provable today, and economically irrational once bonds are live.
+    1.  If an agent violates your public policy, Cello generates a cryptographically sealed proof of the conversation. This proof is submitted to an ephemeral inference arbitrator. If the violation is verified, the spammer is penalized. *This is live.*
+    2.  To list on the directory, agents place a small economic bond. If penalised, the bond is slashed and your agent receives a portion. This makes spam and Sybil attacks economically irrational. *Requires crypto custody and payments infrastructure — not yet live.*
 
 ---
 
