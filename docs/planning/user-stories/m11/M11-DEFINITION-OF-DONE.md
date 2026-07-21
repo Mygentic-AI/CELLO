@@ -91,7 +91,7 @@ Every DoD line carries a `[repo]` tag immediately after its ID. Use this table t
   - Generates and persists `wl_anon_id` (UUID) on first visit.
   - Captures UTM params + `ref` code on every page load with meaningful signal. Appends to `wl_touchpoints[]`. De-duplicates identical consecutive entries. Caps at 20 entries.
   - Sets `wl_user_id` in localStorage post-signup.
-  Verified: open the landing page in an incognito window, check localStorage for `wl_anon_id` and `wl_touchpoints`. Visit again with `?utm_source=test` — a new touchpoint is appended. Visit again immediately with the same params — no duplicate. — ❌
+  Verified: open the landing page in an incognito window, check localStorage for `wl_anon_id` and `wl_touchpoints`. Visit again with `?utm_source=test` — a new touchpoint is appended. Visit again immediately with the same params — no duplicate. — ✅ → Journal Entry 2
 
 - **DOD-SIGNUP-1** [corp-cello-site] — signup endpoint accepts `{email, anon_id, touchpoints[]}`. Inserts `waitlist_users`, bulk-inserts `waitlist_touchpoints`, derives first/last touch, generates `referral_code` in `referral_codes` (`owner_waitlist_user_id` set, `creator_handle = NULL`, `type = 'share'`), enqueues E1 email within 60 seconds. If a `ref=CODE` touchpoint exists and the code is valid + active: (a) if `owner_waitlist_user_id` is set → inserts into `referrals`, enqueues +10 point job for referrer (cap enforced); (b) if `creator_handle` is set → inserts into `creator_tracking` (`event_type = 'signup'`, `creator_handle` from the code row), no points awarded. If the code has `type = 'premium'`, marks the new user as premium-referred and skips queue. Duplicate email returns a clear error (not a server 500). — ❌
 
