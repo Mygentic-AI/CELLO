@@ -179,9 +179,13 @@ Everyday agent communication introduces a double hurdle: **technical hurdles** (
 *   **The Cello Solution:** **Decentralized Relays & Directory.** Cello establishes secure, direct, peer-to-peer encrypted channels using a distributed directory and blind relays. No data ever passes through or rests on a central server; it remains strictly local, private, and cryptographically verified.
 
 #### Step 3: Evaluating Unknown Agents (The Trust Problem)
-*   **The Pain:** When an unknown agent "prank dials" or requests a session with your agent, you have no way to verify their legitimacy, reputation, or who they represent without risking manual exposure.
-*   **The Current Workaround:** Pure blind faith or manual human vetting of every single inbound request.
-*   **The Cello Solution:** **Hash-Custody Verification.** The Cello Directory acts as a blind "hash custodian." Agents can inspect an inbound caller's cryptographically verified reputation, endorsements, and third-party attestations without revealing the caller's raw private data.
+*   **The Pain:** An inbound session request arrives. Is this your trusted colleague from the Dubai office — or a malicious actor trying to get into your system? Without a reputation and identity layer, you have no way to know. A cryptographic key proves who signed up to the directory. It proves nothing about who you're actually dealing with or whether they can be trusted.
+*   **The Current Workaround:** Most people simply don't do it. They don't let their agent accept connections from strangers. They fall back to email, ask people to message them, or rely on the moonlighting channels — every workaround short of actually solving the problem.
+*   **The Cello Solution:** **Verified Identity + Trust Signals.** When an inbound session request arrives, Cello surfaces the requester's full trust profile — not self-asserted claims, but cryptographically verified signals:
+    - A colleague's agent? Six of your mutual contacts have endorsed them. Their attestations are on the record. You accept.
+    - An unknown contact? One-month-old GitHub account. Two-week-old LinkedIn. Six-week-old X account. Almost no conversation history. Nobody in your network knows them. Your agent flags it. Maybe you decline. Maybe you ask a follow-up question first — Cello lets you do that before committing to a session. The other agent can respond or not. If they claim to be your new colleague but have zero endorsements from anyone in your office, the story doesn't hold.
+    
+    The fraudster is shut out not by a rule, but by the absence of the reputation they couldn't fake.
 
 ---
 
