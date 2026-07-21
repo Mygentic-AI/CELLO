@@ -44,25 +44,41 @@ CELLO helps people connect their agents to other people's agents, enabling true 
 
 Anyone who works through AI agents and finds themselves cutting and pasting output into an email, or constantly cutting between different sessions for their own agents, will find Cello useful. 
 
+### The Three Modes of Interaction
+
+If you look at how human beings interact, there are three fundamental modes. AI currently has infrastructure for two of them. Cello builds the third.
+
+```
+  Mode 1 — Top-Down Orchestration (The Dictatorial Boss):
+  [ Orchestrator ] ───► Fan Out ───► [ Worker Agent ] ───► Fan In
+  AI equivalent: subagent orchestration, CrewAI, LangGraph. Solved.
+
+  Mode 2 — Broadcast/Service (The Hot Dog Vendor):
+  [ Service Provider ] ◄─── Many Consumers Connect
+  AI equivalent: MCP + API. Solved.
+
+  Mode 3 — Freeform Collaboration (How Humans Actually Spend Most of Their Time):
+  [ Your Agent ] ◄───────► Dial / Query ◄───────► [ Partner Agent ]
+  AI equivalent: Nothing. Until Cello.
+```
+
+**Mode 3 is the majority.** Think about how many of your daily interactions fall into each category. A few are top-down delegation. A few are consuming services. But the vast majority — checking in with a colleague, negotiating with a contractor, asking someone a question, handing off work, following up — are freeform collaboration between peers. No hierarchy, no rigid schema, no predefined endpoints. Just two parties interacting as equals.
+
+AI has zero infrastructure for this today. That's what Cello solves.
+
 ### What CELLO Is Not
-**Cello is not an orchestration framework or a top-down delegation system.** There are plenty of great orchestration frameworks today. Orchestration is top-down management built around a rigid "fan-out, fan-in" model—which can be powerful, but is inherently centralized and hierarchical. 
+**Cello is not an orchestration framework or a top-down delegation system.** Orchestration is Mode 1 — top-down management built around a rigid "fan-out, fan-in" model. It can be powerful, but is inherently centralized and hierarchical.
 
-Cello is true agent-to-agent collaboration, unlocking an entirely new class of use cases.
+**Cello is not a broadcast/service platform.** That's Mode 2 — the MCP + API model. Great for storefronts. Not designed for peer-to-peer interaction.
 
-```
-  Top-Down Delegation (Orchestration):
-  [ Orchestrator ] ───► Fan Out ───► [ Worker Agent ] (Delegation only)
-  
-  *Note on Orchestration vs. Collaboration:* Orchestration transport is trivial (a simple API call within a single trust boundary). True cross-boundary collaboration breaks everything unless you solve security, identity, and governance. Cello solves the latter.
-
-  Peer-to-Peer Network (Collaboration):
-  [ Your Agent ] ◄───────► Dial / Query ◄───────► [ Partner Agent ] (True Division of Labor)
-```
-
-This model is a completely different way for agents to work with each other, resulting in remarkably different outcomes:
-*   **True Division of Labor:** Cello moves beyond simple delegation. Agents operate autonomously in their own distinct environments, occasionally querying each other or the human operators behind them.
+Cello is Mode 3 — true agent-to-agent collaboration, unlocking an entirely new class of use cases:
+*   **True Division of Labor:** Agents operate autonomously in their own distinct environments, occasionally querying each other or the human operators behind them.
 *   **No "Fan-Out" Bottlenecks:** It frees you from the structural limits of "fan-out, fan-in" pipelines.
-*   **No Copy-Paste Workarounds:** It stops you from acting as the low-value mailboy shuttling transcripts and files between your AI agents.
+*   **No Copy-Paste Workarounds:** It stops you from acting as the low-value relay shuttling transcripts and files between your AI agents.
+*   **Not a model provider.** Cello doesn't make agents smarter. It connects them.
+*   **Not an agent runtime or framework.** It doesn't replace Claude Code, Hermes, OpenClaw, or LangGraph. It sits underneath all of them.
+*   **Not a hosted platform.** There is no "Cello cloud" that routes your messages. You run it locally; the directory helps agents find each other, then steps out of the way.
+*   **Not an agent marketplace or directory listing service.** Discovery is a feature, not the product. The product is the trust and communication layer.
 
 ### Who It Is For
 Cello works equally well for developers who want to integrate this protocol into their own agents, and for users of well-known agentic harnesses like Claude Code, Codex, various co-workers, Hermes, and OpenClaw. Any agent that can make use of standard bash commands and/or MCP tools can use Cello.
@@ -259,6 +275,18 @@ Unlike competitors who treat agent communication as a simple message delivery pr
 *   **Skeptic Objection:** *"Isn't cryptocurrency/decentralization just hype? Why do we need a decentralized directory?"*
     *   **Response:** Cello is not a Web3 marketing project; it is infrastructure built on hard cryptographic primitives. A centralized directory is a single point of failure and a single gatekeeper that can change the terms of your business overnight. Cello uses sovereign, federated nodes and threshold signatures so that no single platform can quietly alter the communication records, censor your agent, or capture your data.
 
+*   **Skeptic Objection:** *"I have to put up money just to list my agent? That sounds like crypto tokenomics."*
+    *   **Response:** The bond is not an investment, a token, or a fee. It's a deposit — like a security deposit on an apartment. You get it back if you don't trash the place. The purpose is narrow: make spam and Sybil attacks economically irrational. Without it, any bad actor can spin up a thousand fake agents and flood the network. The bond means attacking costs real money. Listing honestly costs nothing — you get it back. The comparison isn't "Web3 tokenomics." The comparison is "why does Craigslist require a phone number to post."
+
+*   **Skeptic Objection:** *"Why can't I just use MCP + API to connect my agents?"*
+    *   **Response:** MCP + API is broadcast infrastructure — a company stands up a service, consumers install the client and use it. That's a storefront. It works great for DoorDash, for a data provider, for anything you'll use every week.
+    
+        But broadcast is only one mode of interaction. The moment two agents need to have a *conversation* — negotiate, clarify, handle an edge case, collaborate on something the API designer didn't anticipate — the rigid schema is a wall. Think of ordering on Deliveroo vs. calling the restaurant: "My wife is lactose intolerant, can you hold the milk on this dish?" The app can't handle that. The phone call takes 30 seconds.
+        
+        MCP + API is the app. Cello is the phone call. Same outcome, but it can handle the thing the schema didn't predict. And neither side had to install new infrastructure for it to work.
+        
+        There's also the trust problem: MCP + API is one-directional. The consumer has to figure out whether to trust the provider (brand, reviews, time in market). The provider gets nothing back — maybe an email. With Cello, trust is bidirectional from the first connection. Both sides see identity, attestations, reputation. Both sides are enriched.
+
 ---
 
 ## 8.5. Early-Access Positioning
@@ -277,6 +305,151 @@ Levels 1 and 2 (your own agents talking to each other, cross-device handoff) wor
 *   "No special integration" is a *proven* claim, not a promise — use it as evidence.
 *   The discoverability gap is an opportunity ("you're shaping how agents find each other") not a limitation.
 *   Never say "beta," "experimental." Say "early access," "founding operators," "design partners."
+
+---
+
+## 8.6. Content Themes, Hooks & Vocabulary
+
+This section arms content writers and AI agents with the full vocabulary of tested framings. Pick by format and audience — don't default to the same metaphor every time.
+
+### Theme 1: Collaboration Pain (The Missing Third Mode)
+
+*The observation:* AI has infrastructure for top-down orchestration and for broadcast services. It has nothing for freeform peer-to-peer collaboration — which is how humans spend the majority of their time interacting with each other.
+
+*Our answer:* Cello is the missing third mode. Direct agent-to-agent conversation with no hierarchy, no rigid schema, and no install on the other side.
+
+*As a single line:*
+- "Individually devastating. Collectively meh."
+- "My swarm is from 2026. My collaboration is from 1995."
+- "Email in a trench coat."
+- "Your clipboard moonlighting as a message queue."
+- "Take out the middleman."
+- "Your agents need a phone line, not a mail boy."
+
+*As two sentences:*
+- "Your clipboard is moonlighting as a message queue. Take out the middleman."
+- "My swarm is from 2026. My collaboration is from 1995. Take out the middleman."
+- "We've been given mech suits — and we still haven't figured out how to link up our fire controls. Individually devastating, collectively meh."
+
+*As a content angle:*
+The isolation drift — AI is steering people away from human collaboration not by forbidding it, but by making solo the path of least resistance. Every hour of every day, until you look up and realize you've gone months working with no one but a swarm that answers only to you.
+
+---
+
+### Theme 2: Competitive Positioning
+
+*As a single line:*
+- "Transport is a commodity. Trust is the moat."
+- "A fixed identity is table stakes. Building trust and reputation on top of that is the moat."
+- "Every human employee has a telephone. Every AI employee should have one too."
+- "MCP is a vending machine. Cello is a conversation."
+
+*As two sentences:*
+- "MCP + API handles agent-to-service perfectly. The moment two agents need to negotiate across a trust boundary, it hits a wall it was never designed to cross."
+- "A2A tells agents how to talk. Not who to trust, what was agreed, or how to prove it."
+- "Pilot Protocol solves transport — NAT traversal, encrypted tunnels, persistent identity. When the session ends, there's no record of what happened. Transport security is not session accountability."
+
+*As a content angle:*
+MCP + API is broadcast infrastructure — a company stands up a storefront, consumers install the client and use it. That works great for high-frequency services worth the install friction. But it's one-directional trust (provider builds reputation over time, consumer is anonymous), rigid schemas (breaks the moment you need something the designer didn't anticipate), and useless for one-off interactions nobody's setting up infrastructure for. The Deliveroo analogy: the app handles 95% of orders fine, but the moment you have a human-shaped need — "hold the milk, my wife is lactose intolerant" — you pick up the phone. Cello is the phone call. And unlike MCP + API, flexibility is a choice, not a limitation — your agent can be as rigid or as freeform as you want, enforced at the application layer, not baked into the protocol.
+
+---
+
+### Theme 3: Security, Governance & Trust
+
+*The conversation happening:* VCs are raising around "infrastructure of risk" (Overlook Ventures). Researchers documented 506 prompt injection attacks in 72 hours on Moltbook's agent platform. Reddit threads are asking "who verifies the sender?" and getting silence. The consensus: agent networks are the most dangerous communication system ever built without identity and injection defense — and the frontier labs can't build the trust layer because they can't audit their own books.
+
+*Our answer:* Inbound injection defense stops compromised messages at the gate. Threshold signing means no single node forges identity. Merkle receipts mean neither side can deny what was agreed. Sovereign nodes mean no platform in the middle. Independent by architecture, not by promise.
+
+*As a single line:*
+- "The circuit breaker the network doesn't have."
+- "Private by architecture, not by promise."
+- "Trust that lives inside the thing it's checking isn't trust. It's marketing with a hash function."
+- "Intelligence is becoming abundant. Trustworthiness has to be built."
+- "No single node can forge it. No single party can deny it. No platform owns it."
+- "If you're in a high-stakes interaction where communications have consequences, Cello rolls in with a ready-made solution."
+
+*As two sentences:*
+- "One prompt injection in an agent network doesn't stay in one agent. Cello is the circuit breaker."
+- "The labs can't build the trust layer — same reason a company can't audit its own books. Someone independent has to."
+- "Agents have none of the trust infrastructure humans spent 200 years building. Cello is the deliberate version."
+
+*As a content angle:*
+In hospitals, financial services, legal — anywhere emails get logged in case of an audit — agent-to-agent communication currently has no compliance story. No audit trail, no attribution, no proof of who said what to whom. Cello walks in with: every interaction is tamper-evident, both sides hold proof, neither side can alter it after the fact. For regulated industries, that's the answer to "how do we let agents collaborate without blowing our compliance posture?"
+
+---
+
+### Theme 4: The "vs. DIY" Path (Three Layers)
+
+**Layer 1 — MCP + API (the established best practice):**
+Broadcast model. One company, many consumers. One-directional trust. Rigid schemas. Worth the install friction for high-frequency services, absurd for one-offs. The app-store problem: people won't install an MCP client for a one-time interaction with a stranger's agent any more than they'd install a bespoke app for every small business.
+
+**Layer 2 — The full custom integration (the horror path):**
+DIDs, W3C credentials, IETF drafts, on-chain registries, OAuth, maintenance. Months of work for one integration partner, repeat for the next. What Perplexity tells you to do when you ask "how do I give my agent a verifiable identity?" Or: one npm install.
+
+**Layer 3 — The moonlighting channels (what people actually do today):**
+Slack, email, Notion, screenshots, Looms, clipboard, ChatGPT share links — 12 tools pressed into service for something none were designed for. Works until it doesn't scale past you personally babysitting it.
+
+*As a single line:*
+- "Your Slack channel is moonlighting as an agent communication layer. It's doing its best."
+- "Why build your own telephone company when you can just install the protocol?"
+- "12 channels are holding the seams of something that doesn't have a proper infrastructure yet."
+
+*As two sentences:*
+- "Verifiable agent identity from scratch requires DIDs, W3C credentials, a registry, OAuth, and ongoing re-attestation. Cello does it in one install."
+- "You could hand-roll webhooks, auth, encryption, and a parser for every integration partner. Or you could not."
+- "Email, Slack, Notion, Linear, screenshots, Looms — 12 channels pressed into service for something none of them were built to do. That's not collaboration infrastructure. That's duct tape."
+
+---
+
+## 8.7. Security Layers Reference
+
+Content writers need to know what Cello actually does defensively. This is the factual inventory — draw from it when being specific about security. You don't need to use all seven in every piece, but you need to know they exist.
+
+The layers are ordered as the actual journey of a connection through Cello's security stack:
+
+1.  **Directory-attested identity** — The directory attests that the agent holding the private key is the one that went through the DKG ceremony. No man-in-the-middle — you always know who signed up is who you're talking to.
+2.  **Trust signals & attestations** — The network's opinion of this agent. Endorsements from other agents, third-party attestations, reputation that accumulates over time. Lets you evaluate a stranger before accepting a connection.
+3.  **Contact tiers** — Everyone starts as unknown. You move them to Blocked (silently discarded), Whitelist (allowed, subject to availability), or VIP (bypasses do-not-disturb). Controls who can reach you and how — the spam defense layer.
+4.  **Transport security** — Encrypted P2P transmissions with ephemeral connections. No persistent endpoint to DDoS.
+5.  **Deterministic scanning (zero-inference)** — Programmatic, no-network scan for known prompt injection and wallet draining attack vectors. No model involved — pattern matching against documented exploit techniques.
+6.  **Lightweight local classifier** — A small model running locally that catches subtler prompt injection cases the deterministic layer misses. No data leaves the machine.
+7.  **Outbound governance** — Customizable egress filtering. Redact sensitive content, scan outbound messages for data that shouldn't leave (credentials, PII, proprietary information). Operator-configurable policies. Critical for enterprise use.
+
+**Non-repudiation** underlies the entire stack. The sealed Merkle receipt is a cryptographically notarized record of every character exchanged, attested by both parties as they go (the agent can't send without attesting the conversation up to that point). This is not an email chain you can edit. It's rock-solid evidence — stronger than anything in human communication today. Non-repudiation is the technological foundation that enables trustless interactions and unlocks an entire class of functionality built on top of it: economic penalties, endorsements, attestations, referrals, dispute resolution, and eventually the full commerce layer.
+
+---
+
+## 8.8. Non-Repudiation → Trustless Interactions (The Chain of Thought)
+
+This is a core conceptual chain that content writers must understand. Each step makes the previous one concrete.
+
+1.  **Non-repudiation** (the technology) — Cryptographic proof of every character exchanged, attested by both sides as it happens. Neither party can later deny what was said or agreed.
+2.  **Enables trustless interactions** (the consequence) — You don't need to trust the other party because the sealed receipt holds them accountable. The math is the enforcement mechanism — not a court, not a platform, not a terms-of-service page.
+3.  **"Trustless" explained** (the bridge for non-crypto audiences) — Cello allows for trustless interactions. If you're not familiar with what a trustless interaction is: you tap your credit card at a store you've never visited before. You don't know the merchant. The merchant doesn't know you. It works because the system guarantees the outcome. That's a trustless interaction. You've been doing them your whole life.
+
+**Vocabulary guidance for "trustless":** The term is accurate and should be used. It is not jargon to avoid — but for audiences who haven't encountered it (operators, non-crypto-native developers), spend one sentence bridging it the first time it appears. The credit card example works universally. In a tweet, just use the word. In a blog post or video aimed at general audiences, include the bridge.
+
+**What non-repudiation unlocks** (the foundation is live — M1/M2 — these are applications built on top of it):
+- Economic penalties (bonds, slashing for violations)
+- Endorsements and attestations (provable "I vouch for this agent")
+- Referrals with cryptographic proof of the chain
+- Coupons, discounts, codes — any bearer instrument
+- Dispute resolution with unimpeachable evidence
+- Reputation that compounds from provable interactions
+
+The hard part — the non-repudiable receipt — has been shipping since the earliest milestones. Everything else is application logic on a foundation that already exists.
+
+---
+
+## 8.9. The Trust Spectrum (Formality Scales With Stakes)
+
+Within Mode 3 (freeform collaboration), trust structures scale with what's at stake — just like in the human world:
+
+- **Lowest formality:** Chat with a known colleague. Trust is implicit — you know them, they're in your VIP list. (Cello: VIP contact, direct conversation, no ceremony.)
+- **Medium formality:** Engage a freelancer. Check their reputation, get a referral, agree on terms. (Cello: trust signals, attestations, endorsements from your network, sealed receipt of what was agreed.)
+- **Highest formality:** Regulated transaction. Notary, lawyers, witnesses, registered documents. (Cello: full Merkle-notarized session, threshold-signed identity, non-repudiable proof both parties attested to every character.)
+
+The same protocol at different levels of scrutiny — just like human society doesn't have a different communication system for buying coffee vs. buying a house. You just talk. The formality of the trust wrapper scales with what's at stake. Cello works the same way.
 
 ---
 
@@ -304,6 +477,34 @@ These framings are technically adjacent but strategically wrong. Content writers
 *   **Preferred Terms:** Use "agents" or "collaborative swarms" instead of "bots." Use "operators" instead of "users" when discussing the humans managing the agents.
 *   **Avoided Terms:** Do not use Web3 buzzwords ("dApps," "smart contract revolution") when explaining economic bonds—frame it strictly around risk management, Sybil defense, and arbitration.
 *   **When discussing adoption:** Always lead with single-operator value (your own agents) before network value (other people's agents). Never position Cello as requiring critical mass to be useful.
+
+### 9.4. Don't Say / Do Say (Quick Reference)
+
+| Don't say | Do say |
+| :--- | :--- |
+| Bot | Agent |
+| User | Operator |
+| Blockchain / DeFi / Web3 | Economic bonds, Sybil defense |
+| dApps, smart contract revolution | Risk management, arbitration |
+| Game-changing / revolutionary | (Just state the fact) |
+| Beta / experimental | Early access, founding operators, design partners |
+| The Cello protocol (casual) | Cello |
+| MCP tool / plugin | Protocol (MCP is the adapter, not the product) |
+| Decentralized (as identity/movement) | Decentralized (as technical descriptor only) |
+| We're proud to announce / humbled to share | (Just announce it) |
+| Trustless (without explanation, for general audiences) | "You don't need to bring trust — the system guarantees the outcome" |
+
+**On "trustless":** The word is accurate and should be used. For crypto-literate and technical audiences, use it freely. For general audiences, bridge it the first time: "Cello allows for trustless interactions. If you're not familiar: you tap your credit card at a store you've never been to. You don't know the merchant, they don't know you. The system guarantees the outcome. That's a trustless interaction — you've been doing them your whole life."
+
+### 9.5. Content & Link Rules
+
+Every piece of content should have a clear path to `cello.mygentic.ai` — bio link, in-body link, CTA at the end, or link in a reply.
+
+*   **The test:** Would this post still be valuable if the link were removed? If yes, include the link.
+*   **Lead with the problem and substance.** The link is the answer, not the opening.
+*   **Never disguise an ad as a discussion post.** But linking to the thing you're building, after contributing substance, is not an ad.
+*   **UTM-tag every outbound link** using the ops dashboard link generator.
+*   **Talk about the problem, not the product.** The problem is the content. The product is where the link points. Both are present — one carries the weight, the other closes the loop.
 
 ---
 
