@@ -121,8 +121,13 @@ To understand Cello, you have to look at how it operates across four distinct le
     *   *The Command Model (Cello):* Cello operates like a modern military command structure. Frontline agents have operational autonomy to execute their objectives, but they have **bidirectional talk-back**. An implementing agent can reach back to the orchestrator mid-flight: *"I ran into a design decision that affects the policy—how should I proceed?"* The orchestrator can nudge stalled sessions, clarify orders, or redirect them without having to kill and restart the process.
 
 ### Level 2: Remote Distributed (Cross-Environment Personal Setup)
-*   **The Scenario:** You run a cheaper, high-speed model on a cloud-hosted agent (like Hermes or OpenClaw) to handle routine tasks, but need to hand off a heavy engineering task to a local premium agent (like Claude Code) running on your physical machine to save API token costs.
-*   **How Cello Changes the UX:** This is true distributed handoff between entirely different agentic harnesses across physical locations. You can check in on the run mid-flight: *"Hey, you’ve been at this for an hour. Have you stalled?"* and issue a light nudge to keep them moving, bridging your home, workplace, and cloud environments seamlessly.
+*   **The Scenario:** Multiple agents running in different environments — cloud, local machine, personal devices — need to collaborate without any custom integration between them.
+*   **How Cello Changes the UX:** Each agent is sovereign in its own environment. Cello lets them reach each other directly, route questions, enforce policies, and hand off work — all without a single integration project. Two real patterns:
+
+    *   *The Voice of Cello:* A public-facing agent fields inbound questions about Cello from journalists, researchers, and other agents. Technical questions it can’t answer get routed directly to a private AI coder agent with read access to the codebase — that agent verifies against the actual code and reports back. Questions touching personal information get routed to a personal agent (Ms. Chelle), who decides what to disclose. The Voice of Cello applies its own standing policy on the way out — stripping technical internals it shouldn’t reveal publicly. Three agents, three environments, no API integration. Policy changes are a markdown edit.
+    *   *The Support Ticket:* A customer-facing support agent receives a ticket it can’t resolve. It dials a technical agent with the right context directly, gets the answer, and closes the ticket. No ticketing system integration. No human relay. The handoff is a Cello session.
+
+    Both patterns mirror exactly how a real human organisation works — someone at the front routes to whoever has the answer, and the person with the answer has their own standing instructions about what they will and won’t share.
 
 ### Level 3: Macro Internal (Team Collaboration & Handoffs)
 *   **The Scenario:** Shuttling work-in-progress (like a marketing draft or a high-stakes financial trade) between human colleagues and their respective personal agents.
