@@ -308,7 +308,26 @@ Levels 1 and 2 (your own agents talking to each other, cross-device handoff) wor
 
 ---
 
-## 8.6. Content Themes, Hooks & Vocabulary
+## 8.6. Content Angles (Quick Reference for "What's My Angle?")
+
+A content writer, YouTuber, or AI picking up this document should be able to scan this list and immediately find a story to tell. Each angle is a standalone piece. Pick one, don't try to cover them all.
+
+1.  **The isolation drift** — AI makes solo the path of least resistance. You stopped reaching out to other humans and never decided to. The drift is invisible until you look up and realize you've gone months without collaborating. *Format: manifesto, essay, LinkedIn long-form.*
+2.  **The four scales (pick one)** — Each level (local multi-agent, cross-device handoff, team collaboration, cross-business) is its own story. One piece per level. *Format: Level 1 → demo video. Level 2 → blog post. Level 3 → case study. Level 4 → vision/manifesto.*
+3.  **Composing business functions** — Your PR agent talks directly to your tech team's agent about a reporter's question. Business functions wired together via conversation with no integration project. The audience is operators building their business the way they'd build with employees — not developers who'd rather code it themselves. *Format: use-case walkthrough, operator-audience blog, LinkedIn.*
+4.  **A2A's failure to get traction** — 166 partners, 149 link to their homepage. What happened, why it didn't land, and the architectural gap it left open. *Format: Reddit post, dev blog, competitive analysis.*
+5.  **The wealth management firm / origin story** — Both an origin story AND a collaboration/handoff story. People with personal agents who still hand off via email, waiting, re-explaining. The bottleneck isn't any one person's output — it's the spaces between them. *Format: essay, LinkedIn, podcast interview.*
+6.  **The visa / public services** — The angle is public-to-private and private-to-public interfaces. Government agencies, utilities, immigration — how public services face the agent trust problem. *Format: manifesto (general audience), policy-adjacent essay.*
+7.  **Convergent evolution** — ActionFence built hash-chained receipts for MCP tool calls. ATP #1 independently designed a hash relay. Neither knew about Cello. When separate people converge on the same primitive, the primitive is right — and Cello is the full version. *Format: technical credibility piece, dev blog.*
+8.  **API vs. telephone call** — The entire rigid-schema world (APIs, MCP endpoints, predefined methods) vs. freeform conversation. Ordering on Deliveroo vs. calling the restaurant. "My wife is lactose intolerant — can you hold the milk?" The app can't handle that. The phone call takes 30 seconds. *Format: universal — tweet, blog, video, interview.*
+9.  **Take out the middleman** — Operational (you're the relay between your agents) + architectural (no platform in the middle). The double meaning is the whole hook. *Format: video campaign, merch, short-form social.*
+10. **The trust exponential gap** — Capabilities outpacing trust infrastructure. VCs raising around it. Green shoots everywhere. This is becoming THE conversation as AI gets more autonomous — especially in the public sector. Position early and own the frame. *Format: structural argument, investor-adjacent essay, pillar content for GEO.*
+11. **The moonlighting channels** — 12 tools pressed into service as agent communication (Slack, email, Notion, screenshots, Looms, clipboard, share links). Highest potential for short-form grab-attention content. The hook is recognition — "still cutting and pasting between agents?" People see their own behavior immediately. *Format: carousel, TikTok, Instagram Reels, LinkedIn visual posts. Extremely versatile.*
+12. **The MCP + API comparison** — Not an attack — an honest assessment of where MCP + API works (storefronts, steady-state services) and where it structurally can't (peer-to-peer trust, freeform negotiation, bidirectional identity). *Format: technical blog, Reddit, comparison article.*
+
+---
+
+## 8.7. Content Themes, Hooks & Vocabulary (Detailed)
 
 This section arms content writers and AI agents with the full vocabulary of tested framings. Pick by format and audience — don't default to the same metaphor every time.
 
@@ -401,7 +420,7 @@ Slack, email, Notion, screenshots, Looms, clipboard, ChatGPT share links — 12 
 
 ---
 
-## 8.7. Security Layers Reference
+## 8.8. Security Layers Reference
 
 Content writers need to know what Cello actually does defensively. This is the factual inventory — draw from it when being specific about security. You don't need to use all seven in every piece, but you need to know they exist.
 
@@ -419,7 +438,7 @@ The layers are ordered as the actual journey of a connection through Cello's sec
 
 ---
 
-## 8.8. Non-Repudiation → Trustless Interactions (The Chain of Thought)
+## 8.9. Non-Repudiation → Trustless Interactions (The Chain of Thought)
 
 This is a core conceptual chain that content writers must understand. Each step makes the previous one concrete.
 
@@ -441,7 +460,7 @@ The hard part — the non-repudiable receipt — has been shipping since the ear
 
 ---
 
-## 8.9. The Trust Spectrum (Formality Scales With Stakes)
+## 8.10. The Trust Spectrum (Formality Scales With Stakes)
 
 Within Mode 3 (freeform collaboration), trust structures scale with what's at stake — just like in the human world:
 
