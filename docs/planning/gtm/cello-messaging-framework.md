@@ -508,10 +508,11 @@ Concrete numbers content writers can cite. These must be measured and verified b
 Cello talks with **Quiet Confidence**. We do not use hype, and we let the factual precision of our engineering carry the weight.
 
 ### 9.1. Core Directives
-*   **Use the content-voice skill:** All AI-generated content must adhere to the `content-voice` skill loaded in `.claude/skills/`.
+### 9.1. Core Directives
 *   **Be Concrete:** Explain *how* Cello secures the connection (FROST, programmatic shields, egress ripping) rather than using vague words like "revolutionary," "game-changing," or "bleeding-edge."
 *   **No Hype or Performance:** State achievements matter-of-factly. Avoid "We are proud to announce" or "humbled to share." Use plain, direct verbs.
 *   **Direct & Unembellished:** Acknowledge failures, gaps, and technical boundaries clearly. No heroic framing.
+*   **Honor Existing Innovations (No Defensive Attacking):** When discussing other frameworks or protocols (e.g., LangGraph, CrewAI, MCP + API, Google A2A), always give them credit where credit is due. They are powerful, highly successful innovations designed to solve specific hard problems (like top-down orchestration or broadcast storefronts). We do not put others down to lift Cello up. Honor their utility, explain what they solved, and then factually demonstrate how Cello addresses a completely separate interaction model (Mode 3: freeform collaboration) that those systems were never architected to touch. This builds massive technical credibility and positions Cello as a natural complementary evolution.
 
 ### 9.2. Narrative Gravitational Wells (Explicit Avoidance)
 
