@@ -31,6 +31,8 @@ This document is the single source of truth for how we talk about Cello. It alig
     "Cello lets AI agents collaborate directly across organizational boundaries — secured by a decentralized trust layer with no central platform in the middle."
 *   **The Visceral Punch (Human-in-the-Middle Pain):**  
     "Your AI has demoted you to shuttling files and copy-pasting transcripts between it and other agents. Cello gives your agents a direct line so you can go back to being the boss."
+*   **The Telephone Frame:**  
+    "Every human employee in your company has a telephone. Every AI employee should have one too. Cello is that telephone — a secure, unique, encrypted peer-to-peer line that any agent can pick up in ten minutes. You wouldn't build your own telephone company from scratch. You'd just get a phone line."
 *   **Short Version (Two Sentences):**  
     "CELLO allows AI agents to collaborate—the core capability missing today. For humans, it means you stop being your AI's 'mail boy' (copy-pasting work between tools and silos) because your agents can coordinate directly and securely."
 *   **Paragraph Version (The "Why Now" Arc):**  
@@ -80,6 +82,12 @@ Cello is Mode 3 — true agent-to-agent collaboration, unlocking an entirely new
 *   **Not a hosted platform.** There is no "Cello cloud" that routes your messages. You run it locally; the directory helps agents find each other, then steps out of the way.
 *   **Not an agent marketplace or directory listing service.** Discovery is a feature, not the product. The product is the trust and communication layer.
 
+### The Telephone Frame (Why This Analogy Works)
+
+Every human employee in your company has a telephone. It wasn't custom-built for your org — you just got a line. Cello is the telephone for AI agents: a secure, encrypted, peer-to-peer line any agent can pick up in ten minutes. You wouldn't build your own telephone company to let two employees talk. You wouldn't hand-roll a PBX for every new hire. You'd just get them a phone line.
+
+This is the simplest frame for what Cello does: it gives agents a phone line so they can talk to each other directly, securely, and without you in the middle relaying messages.
+
 ### Who It Is For
 Cello works equally well for developers who want to integrate this protocol into their own agents, and for users of well-known agentic harnesses like Claude Code, Codex, various co-workers, Hermes, and OpenClaw. Any agent that can make use of standard bash commands and/or MCP tools can use Cello.
 
@@ -122,7 +130,7 @@ To understand Cello, you have to look at how it operates across four distinct le
     *   *The Trade Scenario:* A client’s agent hands an equity buy order to a sales trader’s agent. Once the cryptographic handoff is confirmed, both sides have an unalterable confirmation. The client doesn't need to hunt for status; they ask their own agent, which queries the trader's agent directly and reports back: *"They are 30% done."*
     *   *The Decentralized Win:* It delivers massive friction reduction with a **rock-hard, double-sided cryptographic paper trail**. You hold a copy, your colleague holds a copy. Cello holds nothing. There is no centralized database for hackers to target or platform operators to monitor.
 
-### Level 4: Global External (Cross-Business & Public Services)
+### Level 4: Global External (Cross-Business & Public Services) `[REQUIRES DISCOVERABILITY — NOT YET LIVE]`
 *   **The Scenario:** Transacting with external suppliers, contractors, or government regulatory bodies.
 *   **How Cello Changes the UX:** 
     *   *The B2B Scenario:* You want an external designer to review your Vibe-coded frontend. Your agent negotiates the fee with their agent under pre-set human policies. If a pricing deadlock occurs, your agent throws a notification to you (via Telegram or WhatsApp) for a fast manual override: *"Approved, but restrict the scope to 3 pages."* The contract is signed, sealed, and settled.
@@ -469,6 +477,29 @@ Within Mode 3 (freeform collaboration), trust structures scale with what's at st
 - **Highest formality:** Regulated transaction. Notary, lawyers, witnesses, registered documents. (Cello: full Merkle-notarized session, threshold-signed identity, non-repudiable proof both parties attested to every character.)
 
 The same protocol at different levels of scrutiny — just like human society doesn't have a different communication system for buying coffee vs. buying a house. You just talk. The formality of the trust wrapper scales with what's at stake. Cello works the same way.
+
+---
+
+## 8.11. Proof Points `[MEASURE BEFORE PUBLISHING]`
+
+Concrete numbers content writers can cite. These must be measured and verified before any content uses them as claims.
+
+| Metric | Value | Status |
+| :--- | :--- | :--- |
+| Install to first message sent | ___ seconds | `[MEASURE]` — known to be fast, exact number needed |
+| Lines of integration code required | 0 | Verified — MCP install, no custom code |
+| Message latency (P2P, same region) | ___ ms | `[MEASURE]` — has been benchmarked, find the number |
+| Message latency (P2P, cross-region) | ___ ms | `[MEASURE]` |
+| Harnesses confirmed working | Claude Code, Hermes, OpenClaw | Verified |
+| Supported install methods | MCP (npx), bash CLI | Verified |
+| Security layers active on every message | 7 | Verified (see Section 8.8) |
+| Data stored on central servers | 0 bytes of message content | Verified — P2P, nothing retained |
+
+**Rules for using these:**
+- Never publish a number marked `[MEASURE]` without filling it in first.
+- "Zero lines of integration code" is the strongest proof point — lead with it.
+- Latency claims must specify conditions (region, network type).
+- Update this table as new benchmarks are run.
 
 ---
 
