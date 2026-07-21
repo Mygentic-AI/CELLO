@@ -85,7 +85,7 @@ Every DoD line carries a `[repo]` tag immediately after its ID. Use this table t
   - `referrals`: `id` (UUID PK), `referrer_user_id` (FK), `referred_user_id` (FK, UNIQUE), `referral_code`.
   - `email_jobs`: `id` (UUID PK), `user_id` (FK), `template` (enum), `scheduled_at`, `sent_at` (nullable), `status` (pending/sent/skipped).
   - `auth_tokens`: `token` (UUID PK), `waitlist_user_id` (FK), `created_at`, `expires_at` (15 minutes), `used_at` (nullable). Single-use magic-link credential — distinct from `waitlist_tokens` (wave admission grants).
-  Fresh schema == migrated schema. — ❌
+  Fresh schema == migrated schema. — ✅ → Journal Entry 1
 
 - **DOD-TRACKING-1** [corp-cello-site] — localStorage tracking script deployed on every page of corp-cello-site:
   - Generates and persists `wl_anon_id` (UUID) on first visit.
