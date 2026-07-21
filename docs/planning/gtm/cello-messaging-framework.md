@@ -508,11 +508,10 @@ Concrete numbers content writers can cite. These must be measured and verified b
 Cello talks with **Quiet Confidence**. We do not use hype, and we let the factual precision of our engineering carry the weight.
 
 ### 9.1. Core Directives
-### 9.1. Core Directives
 *   **Be Concrete:** Explain *how* Cello secures the connection (FROST, programmatic shields, egress ripping) rather than using vague words like "revolutionary," "game-changing," or "bleeding-edge."
 *   **No Hype or Performance:** State achievements matter-of-factly. Avoid "We are proud to announce" or "humbled to share." Use plain, direct verbs.
 *   **Direct & Unembellished:** Acknowledge failures, gaps, and technical boundaries clearly. No heroic framing.
-*   **Honor Existing Innovations (No Defensive Attacking):** When discussing other frameworks or protocols (e.g., LangGraph, MCP + API, Google A2A), always give them credit where credit is due. They are powerful, highly successful innovations designed to solve specific hard problems (like top-down orchestration or broadcast storefronts). We do not put others down to lift Cello up. Honor their utility, explain what they solved, and then factually demonstrate how Cello addresses a completely separate interaction model (Mode 3: freeform collaboration) that those systems were never architected to touch. This builds massive technical credibility and positions Cello as a natural complementary evolution.
+*   **Honor Existing Innovations (The Canyon Technique):** When discussing other frameworks or protocols (e.g., LangGraph, MCP + API, Google A2A), give them full credit for what they solved. They are powerful innovations that nailed specific hard problems — top-down orchestration, broadcast storefronts, tool integration. Acknowledge this genuinely, not as a courtesy but as a rhetorical strategy: the moment you say "yes, Mode 1 is solved, yes, Mode 2 is solved," the reader looks at Mode 3 and sees a canyon with nothing in it. The credit *creates* the gap. You don't need to attack — you just need to show what's there and what isn't. The empty space does all the work. This builds massive technical credibility because you're clearly not threatened, and it positions Cello as a natural complement rather than a replacement.
 
 ### 9.2. Narrative Gravitational Wells (Explicit Avoidance)
 
