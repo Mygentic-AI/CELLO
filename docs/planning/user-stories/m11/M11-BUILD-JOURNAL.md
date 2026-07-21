@@ -83,3 +83,28 @@ description: >
 - `name` input dropped `required` attribute.
 - Endpoint payload structured perfectly for the backend schema.
 - Built without errors (`npm run build`).
+
+---
+
+### Entry 5: DOD-SIGNUP-1 (Signup API Endpoint)
+**Date:** 2026-07-21
+**Target:** DOD-SIGNUP-1 [corp-cello-site]
+
+**Clause Checklist:**
+- [x] Accepts `{email, anon_id, touchpoints[]}`
+- [x] Inserts `waitlist_users` + derives first/last touch
+- [x] Bulk-inserts `waitlist_touchpoints`
+- [x] Generates `referral_code` in `referral_codes` (`type='share'`)
+- [x] Enqueues E1 email (`e1_confirm`)
+- [x] Handles valid active `ref=CODE` from touchpoints (reverse lookup to get latest)
+- [x] Inserts into `referrals` if code belongs to `owner_waitlist_user_id`
+- [x] NOTE ON POINTS: +10 point job logic skipped for P0 as `points_ledger` is P1 schema.
+- [x] Inserts into `creator_tracking` if code belongs to `creator_handle` (ignore failure only if table missing `42P01`)
+- [x] If `type='premium'`, marks user as `status='admitted'` and sets `admitted_at=now()`
+- [x] Duplicate email returns a clear 409 error (not 500)
+- [x] Proper transactions via `db.query('BEGIN')` and `ROLLBACK` on failure
+
+**Evidence:**
+- Built `/app/api/waitlist/signup/route.ts` using native PG package and transaction handling.
+- Reviewer subagent verified all clauses and correctly identified a silent fallback bug where the `creator_tracking` catch-block swallowed actual database errors (like disconnects) instead of just the missing table error. This has been repaired to explicitly check `err.code === '42P01'`.
+- Code exists on feature branch `m11/dod-signup-1` in the corporate site repository.
