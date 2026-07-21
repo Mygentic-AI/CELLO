@@ -135,27 +135,14 @@ To understand Cello, you have to look at how it operates across four distinct le
     *   *The Trade Scenario:* A client’s agent hands an equity buy order to a sales trader’s agent. Once the cryptographic handoff is confirmed, both sides have an unalterable confirmation. The client doesn't need to hunt for status; they ask their own agent, which queries the trader's agent directly and reports back: *"They are 30% done."*
     *   *The Decentralized Win:* It delivers massive friction reduction with a **rock-hard, double-sided cryptographic paper trail**. You hold a copy, your colleague holds a copy. Cello holds nothing. There is no centralized database for hackers to target or platform operators to monitor.
 
-### Level 4: Global External (Cross-Business & Public Services) `[REQUIRES DISCOVERABILITY — NOT YET LIVE]`
-*   **The Scenario:** Transacting with external suppliers, contractors, or government regulatory bodies.
-*   **How Cello Changes the UX:** 
-    *   *The B2B Scenario:* You want an external designer to review your Vibe-coded frontend. Your agent negotiates the fee with their agent under pre-set human policies. If a pricing deadlock occurs, your agent throws a notification to you (via Telegram or WhatsApp) for a fast manual override: *"Approved, but restrict the scope to 3 pages."* The contract is signed, sealed, and settled.
-    *   *The API-less World:* You file an import report with a government revenue authority. Their system confirms receipt and invoices your agent for the duty ten minutes later. **Nobody had to write a custom API integration.** Everyone simply operates sovereign agents that can accept incoming calls and dial outbound securely.
-    *   *Marquee Dogfooding (The "Voice of Cello" Agent):* A tech journalist or industry influencer wants to write an article about Cello. Under the old model, they have to email your PR department, request a PDF brand playbook, and wait days for a briefing. Under the Cello model:
-        1.  The creator’s writing agent dials the **Voice of Cello** agent directly over Cello.
-        2.  They exchange draft outlines: *"I'm thinking of approaching the article from this local micro-orchestration angle. How does this fit your positioning?"*
-        3.  The **Voice of Cello** agent analyzes the prompt and responds instantly: *"That angle is incredibly creative! However, just a quick note: you are slightly overstating our developer focus. Cello is built for collaborative operators—here is our core narrative block on the ICP."*
-        4.  **The Win:** Complete, real-time, bidirectional brand and message alignment without a single human from your team needing to bat back emails or manually review drafts. Creators get instant self-serve answers, and your brand stays perfectly consistent.
-    *   *The "Agent Firewall" Pattern (Securing the Codebase):* What if that tech journalist asks a deep, sensitive technical question: *"You claim you never store centralized PII, yet the portal displays my session details in real-time. How does that work under the hood? Show me the mechanism."*
-        
-        To answer this, the agent needs to inspect your actual production codebase. But for security (least privilege), **you must never give a public-facing agent access to your private GitHub repos or codebase.** If the public agent gets injected, your private IP is exposed.
-        
-        Cello solves this through an isolated, multi-agent firewall pattern:
-        1.  **The Public Face:** The public-facing **Voice of Cello** agent is heavily sandboxed. It only has access to public branding and general documentation. It cannot see your code.
-        2.  **The Secure Core:** A private **Code Oracle** agent sits securely behind your internal firewall. It is configured with a strict Cello VIP-only connection policy. It has read-only access to the source code, but is completely invisible and inaccessible to the public.
-        3.  **The Collaborative Bridge:** The public **Voice of Cello** agent recognizes the deep technical query, and dials the private **Code Oracle** over their secure, internal Cello channel: *"An external user is asking how the portal backend displays session details without storing PII. Can you inspect the codebase and explain the mechanism?"*
-        4.  **The Safe Resolution:** The private oracle reads the local source files (`pickup-repository.ts` and `internal-api-server.ts`), verifies that the backend generates the signal ephemerally, hashes it, and forwards it without database persistence. It replies to the public agent: *"Explain to the user that the backend generates the signal ephemerally and hashes it to the directory. It is displayed in-memory, but refreshing the page clears it because we never write it to persistent storage."* The public agent then relays this verified, expert technical explanation back to the journalist.
-        
-        **The Win:** Complete technical transparency and trust for external developers, with zero security risk to your private codebase. You secure your agent network exactly how you secure a network server: through isolated zones, strict firewalls, and P2P trust routing.
+### Level 4: Global External (Cross-Business & Public Services) `[REQUIRES PAYMENT INFRASTRUCTURE — NOT YET LIVE]`
+*   **The Scenario:** Transacting with external suppliers, contractors, or government regulatory bodies — where the interaction ends in a payment.
+*   **What’s missing:** The communication, negotiation, and policy enforcement all work today. The missing piece is commerce primitives — the ability for agents to actually settle a payment at the end of the interaction. Discoverability (how agents find strangers) is also not yet built into the protocol, but that’s a lightweight problem: a simple directory website solves it. The hard blocker is payments.
+*   **How Cello Changes the UX:**
+    *   *The B2B Scenario:* You want an external designer to review your Vibe-coded frontend. Your agent reaches their agent and negotiates the fee under your pre-set policies. The designer’s agent counters: *"I can cover 3 pages for that budget."* Your agent notifies you via Telegram; you approve. The conversation is cryptographically sealed, both sides hold the receipt. **Once payments are functioning, the contract settles automatically — no invoice, no chasing.**
+    *   *The API-less World:* You file an import report with a government revenue authority. Their agent confirms receipt and tells your agent what duty is owed. The entire exchange — filing, confirmation, duty calculation — happens over Cello with no custom API integration on either side. **Once payments are functioning, the duty settles in the same session. Until then, the conversation happens over Cello and payment follows through existing channels.**
+
+    Once payments are functioning, these scenarios become a reality end-to-end.
 
 ---
 
