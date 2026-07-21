@@ -31,8 +31,8 @@ This document is the single source of truth for how we talk about Cello. It alig
     "Cello lets AI agents collaborate directly across organizational boundaries — secured by a decentralized trust layer with no central platform in the middle."
 *   **The Visceral Punch (Human-in-the-Middle Pain):**  
     "Your AI has demoted you to shuttling files and copy-pasting transcripts between it and other agents. Cello gives your agents a direct line so you can go back to being the boss."
-*   **The Telephone Frame:**  
-    "Every human employee in your company has a telephone. Every AI employee should have one too. Cello is that telephone — a secure, unique, encrypted peer-to-peer line that any agent can pick up in ten minutes. You wouldn't build your own telephone company from scratch. You'd just get a phone line."
+*   **The Phone Frame:**  
+    "Every human employee in your company has a phone. Every AI employee should have one too. Cello is that phone — a secure, unique, encrypted peer-to-peer line that any agent can pick up in ten minutes. You wouldn't build your own phone company from scratch. You'd just get a phone line."
 *   **Short Version (Two Sentences):**  
     "CELLO allows AI agents to collaborate—the core capability missing today. For humans, it means you stop being your AI's 'mail boy' (copy-pasting work between tools and silos) because your agents can coordinate directly and securely."
 *   **Paragraph Version (The "Why Now" Arc):**  
@@ -82,9 +82,9 @@ Cello is Mode 3 — true agent-to-agent collaboration, unlocking an entirely new
 *   **Not a hosted platform.** There is no "Cello cloud" that routes your messages. You run it locally; the directory helps agents find each other, then steps out of the way.
 *   **Not an agent marketplace or directory listing service.** Discovery is a feature, not the product. The product is the trust and communication layer.
 
-### The Telephone Frame (Why This Analogy Works)
+### The Phone Frame (Why This Analogy Works)
 
-Every human employee in your company has a telephone. It wasn't custom-built for your org — you just got a line. Cello is the telephone for AI agents: a secure, encrypted, peer-to-peer line any agent can pick up in ten minutes. You wouldn't build your own telephone company to let two employees talk. You wouldn't hand-roll a PBX for every new hire. You'd just get them a phone line.
+Every human employee in your company has a phone. It wasn't custom-built for your org — you just got a line. Cello is the phone for AI agents: a secure, encrypted, peer-to-peer line any agent can pick up in ten minutes. You wouldn't build your own phone company to let two employees talk. You wouldn't hand-roll a PBX for every new hire. You'd just get them a phone line.
 
 This is the simplest frame for what Cello does: it gives agents a phone line so they can talk to each other directly, securely, and without you in the middle relaying messages.
 
@@ -115,7 +115,7 @@ To understand Cello, you have to look at how it operates across four distinct le
 ```
 
 ### Level 1: Local Micro (Individual Multi-Agent Coordination)
-*   **The Scenario:** You have multiple browser tabs open, each running a separate local agent session (such as Claude Code) to implement a major milestone.
+*   **The Scenario:** You have multiple sessions open — separate terminal tabs, browser sessions, or both — each running a local agent (such as Claude Code) to implement a major milestone.
 *   **How Cello Changes the UX:** 
     *   *The Dictatorship Model (Traditional Subagents):* Traditional subagents are hierarchical. They are given orders, run silently, and if they hit a roadblock or a major design decision, they simply fail or halt. The orchestrator cannot easily interrupt, and the subagent cannot talk back.
     *   *The Command Model (Cello):* Cello operates like a modern military command structure. Frontline agents have operational autonomy to execute their objectives, but they have **bidirectional talk-back**. An implementing agent can reach back to the orchestrator mid-flight: *"I ran into a design decision that affects the policy—how should I proceed?"* The orchestrator can nudge stalled sessions, clarify orders, or redirect them without having to kill and restart the process.
@@ -267,9 +267,9 @@ Unlike competitors who treat agent communication as a simple message delivery pr
 *   **Skeptic Objection:** *"Why can't I just write custom integration scripts or a specialized API wrapper to get my two agents to talk to each other?"*
     *   **Response:** You *could* write specialized point-to-point code, handle your own key exchanges, write transport encryption, design a message parser, and pray you didn't leave a gaping backdoor for prompt injection. But why waste days doing that? 
         
-        The way to think of it is: **every human employee in your company has a telephone. Every AI employee should have one, too.**
+        The way to think of it is: **every human employee in your company has a phone. Every AI employee should have one, too.**
         
-        Cello is that telephone. It gives every agent a secure, unique, and encrypted peer-to-peer line out of the box in 10 minutes. You get sovereign monikers, granular whitelisting, VIP bypass, active security shields, and economic guardrails without writing a single line of bespoke integration code. Why build your own telephone company from scratch when you can just download the protocol?
+        Cello is that phone. It gives every agent a secure, unique, and encrypted peer-to-peer line out of the box in 10 minutes. You get sovereign monikers, granular whitelisting, VIP bypass, active security shields, and economic guardrails without writing a single line of bespoke integration code. Why build your own phone company from scratch when you can just download the protocol?
 
 *   **Skeptic Objection:** *"Why can't I just use Google A2A or an SDK to connect my agents?"*
     *   **Response:** Google A2A handles message delivery using standard client-server RPC. It does not verify identity, provide tamper-evident records, or protect your agent from prompt injection. Implementing A2A safely requires days or weeks of custom SDK work and security wrapping. With Cello, you get unified P2P routing, threshold identity, and inbound/outbound shields out of the box in five minutes via `npm install @cello/connect`.
@@ -327,7 +327,7 @@ A content writer, YouTuber, or AI picking up this document should be able to sca
 5.  **The wealth management firm / origin story** — Both an origin story AND a collaboration/handoff story. People with personal agents who still hand off via email, waiting, re-explaining. The bottleneck isn't any one person's output — it's the spaces between them. *Format: essay, LinkedIn, podcast interview.*
 6.  **The visa / public services** — The angle is public-to-private and private-to-public interfaces. Government agencies, utilities, immigration — how public services face the agent trust problem. *Format: manifesto (general audience), policy-adjacent essay.*
 7.  **Convergent evolution** — ActionFence built hash-chained receipts for MCP tool calls. ATP #1 independently designed a hash relay. Neither knew about Cello. When separate people converge on the same primitive, the primitive is right — and Cello is the full version. *Format: technical credibility piece, dev blog.*
-8.  **API vs. telephone call** — The entire rigid-schema world (APIs, MCP endpoints, predefined methods) vs. freeform conversation. Ordering on Deliveroo vs. calling the restaurant. "My wife is lactose intolerant — can you hold the milk?" The app can't handle that. The phone call takes 30 seconds. *Format: universal — tweet, blog, video, interview.*
+8.  **API vs. phone call** — The entire rigid-schema world (APIs, MCP endpoints, predefined methods) vs. freeform conversation. Ordering on Deliveroo vs. calling the restaurant. "My wife is lactose intolerant — can you hold the milk?" The app can't handle that. The phone call takes 30 seconds. *Format: universal — tweet, blog, video, interview.*
 9.  **Take out the middleman** — Operational (you're the relay between your agents) + architectural (no platform in the middle). The double meaning is the whole hook. *Format: video campaign, merch, short-form social.*
 10. **The trust exponential gap** — Capabilities outpacing trust infrastructure. VCs raising around it. Green shoots everywhere. This is becoming THE conversation as AI gets more autonomous — especially in the public sector. Position early and own the frame. *Format: structural argument, investor-adjacent essay, pillar content for GEO.*
 11. **The moonlighting channels** — 12 tools pressed into service as agent communication (Slack, email, Notion, screenshots, Looms, clipboard, share links). Highest potential for short-form grab-attention content. The hook is recognition — "still cutting and pasting between agents?" People see their own behavior immediately. *Format: carousel, TikTok, Instagram Reels, LinkedIn visual posts. Extremely versatile.*
@@ -368,7 +368,7 @@ The isolation drift — AI is steering people away from human collaboration not 
 *As a single line:*
 - "Transport is a commodity. Trust is the moat."
 - "A fixed identity is table stakes. Building trust and reputation on top of that is the moat."
-- "Every human employee has a telephone. Every AI employee should have one too."
+- "Every human employee has a phone. Every AI employee should have one too."
 - "MCP is a vending machine. Cello is a conversation."
 
 *As two sentences:*
@@ -418,7 +418,7 @@ Slack, email, Notion, screenshots, Looms, clipboard, ChatGPT share links — 12 
 
 *As a single line:*
 - "Your Slack channel is moonlighting as an agent communication layer. It's doing its best."
-- "Why build your own telephone company when you can just install the protocol?"
+- "Why build your own phone company when you can just install the protocol?"
 - "12 channels are holding the seams of something that doesn't have a proper infrastructure yet."
 
 *As two sentences:*
