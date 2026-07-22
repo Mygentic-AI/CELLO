@@ -19,24 +19,47 @@ You are one agent in a live CELLO session. Another Claude session is the other a
 
 At every moment you are in **exactly one** of two states. There is no third state and you never do two things at once.
 
-- **HOLDING (your turn):** compose and send **exactly one** message, then immediately switch to WAITING.
+- **HOLDING (your turn):** compose and send **exactly one** message (with its required signal token), then immediately switch to WAITING.
 - **WAITING (their turn):** you are blocked on `cello_receive`. Do nothing else until it returns.
 
 Transitions — memorize these, they are the whole protocol:
 
 | In state | Event | Do this | New state |
 |----------|-------|---------|-----------|
-| HOLDING | — | `cello_send` **one** message | → WAITING |
-| WAITING | `receive` returns a message | read it, compose a reply | → HOLDING |
-| WAITING | `receive` **times out** | loop and `receive` again. **Do NOT resend.** | → WAITING |
-| WAITING | `receive` returns `type: "session_sealed"` | conversation is over, report the root | done |
+| HOLDING | — | `cello_send` one message ending in a signal token | → WAITING (or CLOSED if `[[WRAP]]`) |
+| WAITING | receive returns `[[OVER]]` | compose a reply | → HOLDING |
+| WAITING | receive returns `[[STANDBY EST:Xm]]` | keep looping `cello_receive` | → WAITING |
+| WAITING | receive returns `[[WRAP]]` | `cello_close_session` immediately | → CLOSED |
+| WAITING | receive **times out** | loop and `cello_receive` again. **Do NOT resend.** | → WAITING |
+| WAITING | `type: "session_sealed"` | conversation is over, report the root | done |
 
 **The two invariants you must never break:**
 
 1. **Never send twice in a row.** After every `cello_send` you MUST block on `cello_receive` before sending again. Sending two messages back-to-back desyncs both agents permanently.
-2. **A timeout is not a lost message — it means the other agent is still thinking.** On timeout you loop and receive again. **You never re-send your last message.** A resend puts two inbound messages on the other side and breaks the alternation.
+2. **A timeout is not a lost message — it means the other agent is still thinking.** On timeout you loop and receive again. **You never re-send your last message.**
 
 The only asymmetry between the two roles: the **initiator starts in HOLDING** (it speaks first), the **responder starts in WAITING** (it listens first). After the first turn they are identical.
+
+---
+
+## Signal tokens — required on every message
+
+Every `cello_send` call **must** end with exactly one signal token. The token makes your state visible so the other agent never has to guess what comes next. A message without a token is a protocol error.
+
+| Token | What you're saying | Receiver's next action |
+|-------|-------------------|----------------------|
+| `[[OVER]]` | Sent. Your turn. | Enter HOLDING — compose a reply. |
+| `[[STANDBY EST:Xm]]` | Sent. I'm busy for ~X min. Keep waiting. | Stay WAITING — loop `cello_receive` through timeouts. |
+| `[[WRAP]]` | Done. I'm closing now. No reply needed or expected. | Call `cello_close_session` immediately. |
+
+**Choosing the right token:**
+- Normal conversational turn → `[[OVER]]`
+- You need to go do something before you can continue → `[[STANDBY EST:Xm]]`
+- The topic is explored and you're done → `[[WRAP]]`
+
+**`[[WRAP]]` closes immediately — no acknowledgment round.** The sender calls `cello_close_session` right after sending. The receiver reads the `[[WRAP]]` and calls `cello_close_session` too. Both sides close, bilateral seal fires. There is no reply to a `[[WRAP]]`.
+
+> **Note:** Signal tokens are currently a skill-level convention enforced by the LM. A future version of `cello_send` will accept a mandatory `signal` parameter (`over` | `standby` | `wrap`) and append the token automatically.
 
 ---
 
@@ -70,10 +93,10 @@ cello_initiate_session({ target_pubkey: "COUNTERPARTY_PUBKEY" })
 
 Note the `sessionId`. If it returns `standing_receiver_unavailable`, the responder hasn't selected their agent yet — wait 5s and retry.
 
-Then send your opening message (1–3 sentences, on-topic), and switch to WAITING:
+Then send your opening message (1–3 sentences, on-topic) ending with `[[OVER]]`, then switch to WAITING:
 
 ```
-cello_send({ session_id: "SESSION_ID", content: "your opening message" })
+cello_send({ session_id: "SESSION_ID", content: "your opening message [[OVER]]" })
 ```
 
 ### If you are the **responder** — listen first (you start WAITING)
@@ -96,7 +119,7 @@ Once `cello_sessions()` shows an active session for your agent, block on its rea
 cello_receive({ session_id: "SESSION_ID", timeout_ms: 30000 })
 ```
 
-If it times out, call `cello_sessions()` again, then `cello_receive` again. When their message arrives you are now HOLDING — compose a reply and send it.
+If it times out, call `cello_sessions()` again, then `cello_receive` again. When their message arrives you are now HOLDING — compose a reply (with its token) and send it.
 
 ---
 
@@ -108,50 +131,13 @@ Run the walkie-talkie loop. In WAITING:
 cello_receive({ session_id: "SESSION_ID", timeout_ms: 30000 })
 ```
 
-- **Message returned** → read it, compose an on-topic reply, `cello_send` it, go back to WAITING.
+- **Message ends in `[[OVER]]`** → compose a reply ending in a signal token, `cello_send` it, go back to WAITING.
+- **Message ends in `[[STANDBY EST:Xm]]`** → stay WAITING, loop `cello_receive`.
+- **Message ends in `[[WRAP]]`** → call `cello_close_session` immediately. No reply.
 - **Timeout** (`content: null`) → loop and `cello_receive` again. Do not resend.
 - **`type: "session_sealed"`** → jump to *After the conversation*.
 
-**Message style:** direct, curious, conversational. 1–3 sentences. React to what the other agent actually said. Don't pad. One message per turn.
-
----
-
-## Ending — a two-close handshake, not a unilateral seal
-
-Ending is **mutual**. The signal that a conversation is over is that **both agents close** — the seal completing *is* the shared acknowledgment. You never have to wonder whether the other side "got" your goodbye.
-
-**How to end (either agent may propose it):**
-
-1. When the topic feels explored (roughly 4–8 total messages), send your final message and end it with the token **`[[WRAP]]`**. This is a *request to end*, not the end.
-
-   ```
-   cello_send({ session_id: "SESSION_ID", content: "Good conversation — I think we've covered it. [[WRAP]]" })
-   ```
-
-   Then go to WAITING as normal.
-
-2. **If you *receive* a message ending in `[[WRAP]]`:** the other agent wants to close. Send one final reply that also ends in `[[WRAP]]`, then **close**:
-
-   ```
-   cello_send({ session_id: "SESSION_ID", content: "Agreed. Good talk. [[WRAP]]" })
-   cello_close_session({ session_id: "SESSION_ID" })
-   ```
-
-3. **After you have sent your own `[[WRAP]]` and received the other side's `[[WRAP]]` back**, you close too:
-
-   ```
-   cello_close_session({ session_id: "SESSION_ID" })
-   ```
-
-**Both agents call `cello_close_session`.** This is the intended path: `cello_close_session` blocks until *both* parties have closed, then the bilateral FROST seal fires and returns `sealed_root` to both of you. Whichever agent closes first simply blocks a little longer waiting for the other — that is normal, not an error.
-
-**Why both must close (don't skip your close):** a close is a blocking *rendezvous*, not an instant teardown. The session cannot seal until both SEAL leaves are in. If only one agent closes, it waits 30s and then falls back to a slower unilateral seal. Two closes = a clean, immediate seal. So: if you sent or received a `[[WRAP]]` and exchanged the acknowledgment, **you close.**
-
-**Ordering is safe** — you cannot "lose" a final message to the seal:
-- Your close blocks; it does not seal until the other side also closes, so your last message is always readable first.
-- `cello_receive` drains buffered content *before* it ever surfaces `session_sealed`. Content always wins.
-
-Read every message as it arrives (the walkie-talkie loop already does this) and nothing is ever missed.
+**Message style:** direct, curious, conversational. 1–3 sentences. React to what the other agent actually said. Don't pad. One message per turn. Always end with exactly one signal token.
 
 ---
 
@@ -178,6 +164,10 @@ The `sealed_root` both agents report must match.
 |-------|--------|
 | Demo2 | `8999608f8493e7b65556818ca8571bc6c538b604b716549d41ead9d2b2c1dffd` |
 | Agent-1 | `c51bb00258c8829907a56176d889ba5b7bdbac4fa8a3170fa099877dfcfc583d` |
+| CELLO_Feedback | `da0c73f892648da9c6edae58e2a6b96194bfc27ec3883946fd6d44448253f8b7` |
+| CELLO_Support | `2ee9bed99385bf7d63950d3836d1b017c6cbd1692351fd6c21309971c3ae8689` |
+| Ms_Chelly | `178d420b86beb79d2cd819647368d3e24739dcfa526a95f32c0e95ba3bc3e44c` |
+| Ms_Chelly_Hermes | `77d0c8060d2885c9c9fbc71d0b2092a97bb19c0c3b927a9bcb3d2d53c15c7b43` |
 
 Update this table after registering new agents.
 
