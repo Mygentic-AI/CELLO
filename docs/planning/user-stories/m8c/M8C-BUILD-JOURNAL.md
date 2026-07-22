@@ -4523,8 +4523,33 @@ follow-up commit `1120bc4` before close.
 **Tests:** T1–T4 in `m8c-sealed-inbox-1.test.ts` — all four survive the revert test.
 Pre-existing `m8c-sinceseq-1.test.ts` guards the ghost-session invariant.
 
-**Live proof:** pending — requires a daemon restart with the new build. Pre-commit `34aad9a`,
-post-reviewer-fix `1120bc4`.
+**Live proof (2026-07-22):** Confirmed working end-to-end after publish of daemon 0.0.71 /
+cli 0.0.72 / connect 0.0.84 (tag v0.0.124, smoke-tag green). CELLO_Support initiated a session
+to Ms_Chelly (unattended), daemon auto-acked away, CELLO_Support sent a message and sealed.
+`cello_inbox --scope all` showed `Ms_Chelly.sealed_unread` with `unread_count: 1` — correct.
+
+**Post-live investigation — guidance text wrong, reasoning:**
+
+During the live test, `cello_inbox` showed the sealed session correctly. Investigating why the
+original ecad session had disappeared from `sealed_unread` revealed that `cello_get_transcript`
+(DOD-CURSOR-DURABLE-1, commit `120240e`, 2026-07-11) advances the watermark as a side effect —
+"reading the history IS reading." This was deliberate for the CLI send gate: a stateless process
+that reads the transcript must be unblocked from sending. But for sealed sessions the send gate
+is irrelevant, so `cello_get_transcript` on a sealed session silently consumes the `sealed_unread`
+notification with no visible indication.
+
+This is actually correct and intentional behaviour: reading the transcript via `cello_transcript`
+IS the natural way to clear the notification. `cello_dismiss` is the explicit "clear without
+reading" path for the rare case where you want to suppress without engaging (spam, unwanted
+contact, prompt-injection concern). The original guidance text was wrong because it said "use
+cello_transcript to read them" without mentioning that reading automatically clears the
+notification — making cello_dismiss sound like the required clearing step.
+
+**Fix:** guidance string updated (commit `04a88d9`):
+> "Use cello_transcript to read them — reading will automatically clear them from your inbox.
+> Use cello_dismiss to clear without reading."
+
+No DoD entry needed — this is a one-line guidance-text correction, not a new behaviour change.
 
 ---
 
