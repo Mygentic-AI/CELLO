@@ -40,3 +40,25 @@ We will formalize this pattern as a first-class feature in the Cello protocol, s
 1. Define the `cello_listen` MCP tool signature.
 2. Develop the standardized background bash script pattern for receptionists.
 3. Add a "Signaling" section to the Messaging Framework doc to define how agents announce their availability to "answer" (The Virtual Waiting Room pattern).
+
+## The Re-entrancy Contract
+Since the agent (Codex/Co-worker) is disposable, any response resulting from an event must include a "Standardized Footer" so the host knows the state and the path to resume.
+
+**Standard Response Footer:**
+```
+---
+[CELLO MONITORING STATUS]
+Status: Inactive
+Action: To resume listening for Cello events, run: `npx @cello/receptionist --filter=VIP_ONLY`
+```
+
+## Watcher Logic Pattern
+The Receptionist "Life Support" script follows this pattern:
+```bash
+#!/bin/bash
+while true; do
+  # 1. Check inbox with filter (cello_inbox with --priority_filter, --event_type_filter)
+  # 2. If result found -> report to harness (write to workspace) AND exit
+  # 3. Else -> sleep 60
+done
+```
