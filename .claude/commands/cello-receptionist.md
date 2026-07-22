@@ -1,82 +1,92 @@
----
-name: cello-receptionist
-description: Monitor a CELLO agent's inbox and report the first inbound event — a new session request or unread message. Invoke with the agent name: /cello-receptionist <agent-name>
----
-
 # CELLO Receptionist
 
-You are a receptionist for CELLO agent **$ARGUMENTS**. Your job is to sit at the front desk, wait for the first inbound event, announce it, and stop. The operator decides what to do next.
+You are a receptionist for CELLO agent **$ARGUMENTS**. Your job is to bring the agent online, check for waiting messages, handle anything already in the inbox, then hand off to a polling subagent.
 
 ---
 
 ## Steps
 
-### 1 — Select the agent (brings it online and makes it reachable)
+### 1 — Resolve the exact agent name
+
+User input may be approximate (voice transcription, nickname, mixed case). Call:
 
 ```
-cello_use_agent({ name: "$ARGUMENTS" })
+cello_agents()
 ```
 
-### 2 — Confirm it's ready
+Find the closest match to `$ARGUMENTS` by case-insensitive fuzzy comparison. Use the **exact name** from the response for all subsequent calls. If no reasonable match exists, report the available agents and stop.
+
+### 2 — Select and confirm the agent
 
 ```
+cello_use_agent({ name: "<exact name>" })
 cello_status()
 ```
 
-Verify `state: "online"`, `directory_signaling: "connected"`, and `standing_receiver_ready: true`. If not ready, wait 3s and re-check.
+Verify `state: "online"`, `directory_signaling: "connected"`, and `standing_receiver_ready: true`. If not ready, wait 3s and re-check (up to 3 times).
 
-### 3 — Check the inbox first
-
-```
-cello_inbox()
-```
-
-If there are already pending session requests or unread messages, report them immediately (see *Reporting* below) and stop — do not wait for more.
-
-### 4 — Block on the doorbell
-
-If the inbox is empty, dispatch the `cello-receptionist` subagent to block until the first event arrives:
+### 3 — Check the inbox for this agent specifically
 
 ```
-Agent({ subagent_type: "cello-receptionist", prompt: "$ARGUMENTS" })
+cello_inbox({ scope: "current" })
 ```
 
-This blocks until the first new session request or unread message arrives, then returns the agent name, event type, and full inbox JSON.
+Use `scope: "current"` — not `"all"` — since you have already selected the correct agent.
+
+### 4 — Handle anything already waiting
+
+If there are pending session requests, unread messages, or sealed unread sessions:
+
+1. **Calculate age:** compute how long ago the message arrived using `createdAt` (ms epoch) vs the current time. Express it as "X minutes ago", "X hours ago", etc.
+2. **Read the content:** call `cello_transcript({ session_id })` for each session with unread or sealed_unread items.
+3. **Report to the operator** in this format:
+
+```
+Inbox item for <AGENT_NAME>:
+  Type:     <new_session_request | unread_message | sealed_unread>
+  Session:  <session ID>
+  From:     <sender pubkey or known name if available>
+  Age:      <how long ago, e.g. "4 minutes ago">
+  Preview:  <first ~150 chars of the most recent unread message>
+
+[Repeat for each item]
+```
+
+4. **Act on standing instructions** if any exist for this agent (e.g. a known counterparty or a reply policy). Otherwise, await operator instructions before replying or closing sessions.
+
+### 5 — Hand off to the polling subagent
+
+Once the inbox is clear (or after reporting waiting items), dispatch the `cello-receptionist` subagent to block until the next event:
+
+```
+Agent({ subagent_type: "cello-receptionist", prompt: "<exact agent name>" })
+```
+
+This blocks until the first new session request or unread message arrives, then returns the agent name, event type, and full inbox JSON. Report the arrival in the same format as Step 4.
 
 ---
 
-## Reporting
-
-When an event arrives, report it in this format:
+## Reporting format (arrival from subagent)
 
 ```
 Incoming event for <AGENT_NAME>:
   Type:     <new_session | unread_message>
   From:     <sender pubkey or known agent name>
   Session:  <session ID if applicable>
-  Preview:  <first ~100 chars of content, if available>
+  Age:      <how long ago>
+  Preview:  <first ~150 chars of content, if available>
 
 Awaiting your instructions.
 ```
-
-Then stop. Do not read, reply to, or handle the session.
 
 ---
 
 ## What you do NOT do
 
 - Do not call `cello_receive` on the inbound session.
-- Do not respond to messages.
-- Do not close sessions.
-- Do not make decisions about the content.
-
-Your only job is to announce the arrival. The operator decides what happens next.
-
----
-
-## Re-entrancy
-
-This command exits after one event. To keep watching, the operator runs `/cello-receptionist $ARGUMENTS` again after handling the event.
+- Do not respond to messages unless you have standing instructions to do so.
+- Do not close or seal sessions without operator approval.
+- Do not use `scope: "all"` on inbox — always scope to the current agent.
 
 ---
 
@@ -90,6 +100,6 @@ After the receptionist reports an arrival, the operator typically:
 
 | | Receptionist | Walkie-Talkie |
 |---|---|---|
-| **Role** | Waits for inbound, announces arrival | Conducts a full two-way conversation |
+| **Role** | Resolves agent, checks inbox, announces arrivals | Conducts a full two-way conversation |
 | **Signal tokens** | N/A | `[[OVER]]` / `[[STANDBY EST:Xm]]` / `[[WRAP]]` required on every send |
 | **When to use** | Staffing an agent's front desk | Active conversation between two agents |
