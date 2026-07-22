@@ -53,12 +53,32 @@ Action: To resume listening for Cello events, run: `npx @cello/receptionist --fi
 ```
 
 ## Watcher Logic Pattern
-The Receptionist "Life Support" script follows this pattern:
+
+The Receptionist runs as a **subagent**. The main agent spawns it with instructions to run this script. When an event arrives, the subagent exits the loop and returns the result directly — no file, no workspace injection. The main agent handles the event and immediately spawns a fresh subagent to resume monitoring.
+
+`cello inbox --scope all` JSON shape (empty inbox):
+```json
+{"ok":true,"scope":"all","agents":[{"agent":"AgentName","pending_session_requests":[],"unread":[],"total_unread":0,...}]}
+```
+
+An event is pending when any agent has `total_unread > 0` or a non-empty `pending_session_requests` array.
+
+**Receptionist script:**
 ```bash
 #!/bin/bash
 while true; do
-  # 1. Check inbox with filter (cello_inbox with --priority_filter, --event_type_filter)
-  # 2. If result found -> report to harness (write to workspace) AND exit
-  # 3. Else -> sleep 60
+  RESULT=$(cello inbox --scope all 2>/dev/null)
+  PENDING=$(echo "$RESULT" | jq '[.agents[] | select(.total_unread > 0 or (.pending_session_requests | length) > 0)] | length')
+  if [ "$PENDING" -gt 0 ] 2>/dev/null; then
+    echo "$RESULT"
+    exit 0
+  fi
+  sleep 30
 done
 ```
+
+**Main agent loop (conceptual):**
+1. Spawn subagent: "Run the receptionist script. When it exits, return its stdout."
+2. Subagent blocks until an event arrives, then returns.
+3. Main agent handles the event.
+4. Go to step 1 — spawn a fresh subagent to resume monitoring.
