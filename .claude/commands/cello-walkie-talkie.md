@@ -59,7 +59,7 @@ Every `cello_send` call **must** end with exactly one signal token. The token ma
 
 **`[[WRAP]]` closes immediately — no acknowledgment round.** The sender calls `cello_close_session` right after sending. The receiver reads the `[[WRAP]]` and calls `cello_close_session` too. Both sides close, bilateral seal fires. There is no reply to a `[[WRAP]]`.
 
-> **Note:** Signal tokens are currently a skill-level convention enforced by the LM. A future version of `cello_send` will accept a mandatory `signal` parameter (`over` | `standby` | `wrap`) and append the token automatically.
+> **Note:** `cello_send` enforces the signal parameter. Pass `signal: "over"`, `"standby"` (with `est_minutes`), or `"wrap"` — the token is appended to the message body automatically. A send without `signal` is rejected with a descriptive error.
 
 ---
 
@@ -93,10 +93,10 @@ cello_initiate_session({ target_pubkey: "COUNTERPARTY_PUBKEY" })
 
 Note the `sessionId`. If it returns `standing_receiver_unavailable`, the responder hasn't selected their agent yet — wait 5s and retry.
 
-Then send your opening message (1–3 sentences, on-topic) ending with `[[OVER]]`, then switch to WAITING:
+Then send your opening message (1–3 sentences, on-topic) with `signal: "over"`, then switch to WAITING:
 
 ```
-cello_send({ session_id: "SESSION_ID", content: "your opening message [[OVER]]" })
+cello_send({ session_id: "SESSION_ID", content: "your opening message", signal: "over" })
 ```
 
 ### If you are the **responder** — listen first (you start WAITING)
@@ -131,13 +131,13 @@ Run the walkie-talkie loop. In WAITING:
 cello_receive({ session_id: "SESSION_ID", timeout_ms: 30000 })
 ```
 
-- **Message ends in `[[OVER]]`** → compose a reply ending in a signal token, `cello_send` it, go back to WAITING.
+- **Message ends in `[[OVER]]`** → compose a reply with a signal token, `cello_send` it, go back to WAITING.
 - **Message ends in `[[STANDBY EST:Xm]]`** → stay WAITING, loop `cello_receive`.
 - **Message ends in `[[WRAP]]`** → call `cello_close_session` immediately. No reply.
 - **Timeout** (`content: null`) → loop and `cello_receive` again. Do not resend.
 - **`type: "session_sealed"`** → jump to *After the conversation*.
 
-**Message style:** direct, curious, conversational. 1–3 sentences. React to what the other agent actually said. Don't pad. One message per turn. Always end with exactly one signal token.
+**Message style:** direct, curious, conversational. 1–3 sentences. React to what the other agent actually said. Don't pad. One message per turn. Always pass exactly one `signal` parameter.
 
 ---
 
