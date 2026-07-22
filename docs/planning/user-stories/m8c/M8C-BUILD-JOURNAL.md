@@ -4425,6 +4425,64 @@ session you most want to identify later.
 
 ---
 
+## 2026-07-22 — `DOD-STALE-INBOX-1` + `DOD-SIGNAL-TOKEN-1` — stale-inbox reap for terminal sessions; enforced signal tokens on `cello_send`
+
+**Both DONE, reviewed, published, and promoted.** connect 0.0.83 / cli 0.0.71 / daemon 0.0.70,
+tag `v0.0.123`, promoted to `latest` by Andre.
+
+### DOD-STALE-INBOX-1 — terminal-status entries survive the TTL reaper
+
+**Root cause:** `reapExpiredInboundSessions` (triggered on every `cello_inbox` read) checked only
+the TTL timestamp. An inbound session request whose underlying session was already terminal
+(`sealed`, `abandoned`, `seal_interrupted_pending`, `interrupted`) was never reaped until it
+expired — permanently polluting the pending queue.
+
+**Fix:** before the TTL gate, look up the DB session record. A terminal status → silently drop
+the queue entry + log `session.request.reaped_terminal`. DB errors / missing rows skip silently
+so the path stays infallible.
+
+**Tests:** T5 added to `core/daemon/src/__tests__/m8c-ttl-1.test.ts` — 4 variants via `it.each`
+covering all four terminal statuses. A `__test_insert_session_row` IPC handler (CELLO_ENV=test
+guard) was added to `daemon.ts` to inject a sessions row at any status for the test.
+
+**Live proof:** `cello_inbox { scope: "all" }` after the sealed test session (Ms_Chelly →
+CELLO_Feedback) shows zero pending session requests. The fix is confirmed operational.
+
+### DOD-SIGNAL-TOKEN-1 — enforced signal tokens on `cello_send`
+
+The walkie-talkie skill had enforced `[[OVER]]`/`[[STANDBY EST:Xm]]`/`[[WRAP]]` as a convention
+the LM was expected to append manually. This made the tokens fragile — omission was silent.
+
+**Design (axis test):** a token is justified if the machine needs to parse it and act differently.
+`[[OVER]]` triggers a blocking read; `[[WRAP]]` triggers `cello_close_session`; `[[STANDBY]]`
+suppresses an immediate reply. All three are protocol state signals — they survive the axis test.
+Tokens appear in the message body (not metadata) so they become idioms in transcripts, conditioning
+future models organically. Full design log: `docs/planning/discussion_logs/2026-07-22_1530_walkie-talkie-signal-tokens-design.md`.
+
+**Implementation:**
+- `core/adapter-claude-code/src/bin/cello-mcp.ts` — `signal: z.enum(["over","standby","wrap"]).optional()` + `est_minutes: z.number().optional()` on `cello_send`; handler validates presence, builds token, appends `contentWithToken`; missing signal returns rich `SIGNAL_ERROR` with full option descriptions.
+- `core/cli/src/registry.ts` — `--over`, `--standby <min>`, `--wrap` exclusive flags; `signal` count validation; proper `CliOutput` error shape.
+- `core/cli/src/parity-commands.ts` — `signal`/`estMinutes` forwarded, token appended before send.
+- `.claude/commands/cello-walkie-talkie.md` — updated to use `signal` param instead of manual token text.
+
+**Tests:** source-inspection tests in `mcp-001-proxy.test.ts` assert the three token literals,
+`contentWithToken` append semantics, `reason: "missing_signal"`, and `reason: "missing_est_minutes"`.
+`dispatch-parity.test.ts` covers `--over`, `--standby 5`, `--wrap`, and missing-signal / missing-est_minutes error paths.
+
+**One non-obvious fix during implementation:** `takeValueFlag` removes the flag token from the
+`rest` array whether or not a value follows. Checking `rest.includes("--standby")` AFTER the call
+was always false — the flag was already consumed. Fix: check presence BEFORE calling `takeValueFlag`.
+
+**Live proof:** Ms_Chelly → CELLO_Feedback session; Ms_Chelly sent with `signal: "over"`;
+CELLO_Feedback received `[[OVER]]` appended automatically; CELLO_Feedback replied with `signal: "wrap"`;
+bilateral seal: `sealed_root 37e71b67983792e19a0cd87eaafbeda725eb87dc54f0b9552a5eecabe837e857`.
+
+**Deferred:** `[[PROPOSAL]]`/`[[AGREEMENT]]`/`[[DISAGREEMENT]]` commerce/commitment layer — passes
+the axis test (non-repudiation via the FROST-notarized hash chain) but needs a concrete use-case
+schema design before implementation. Documented in the design log above.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

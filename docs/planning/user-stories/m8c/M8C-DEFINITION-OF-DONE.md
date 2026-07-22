@@ -1804,6 +1804,39 @@ own story) deliberately, never smuggled in as a rider. Source:
     the auth-foundation level. Related: SEC-1 (the relay-park bare-content auth gap) is a different,
     narrower pre-existing gap, still open; SEC-2 (the signing path itself) is CLOSED.
 
+## Post-channel additions (2026-07-22)
+
+- **DOD-STALE-INBOX-1** — `reapExpiredInboundSessions` (the TTL reaper that fires on every
+  `cello_inbox` / `cello_check_notifications` call) dropped non-expired entries only on strict
+  TTL expiry. An inbound session request whose session row already had a **terminal DB status**
+  (`sealed`, `abandoned`, `seal_interrupted_pending`, `interrupted`) was retained in the pending
+  queue forever — permanently visible as an open request even though the underlying session was
+  closed. The fix: before the TTL check, do a `getSessionRecord` lookup; if the row is terminal,
+  silently drop the queue entry (logs `session.request.reaped_terminal`). Infallible: a DB error
+  or missing row skips silently (the TTL path still cleans it up when it expires). — ✅ PROVEN
+  (2026-07-22, Build Journal Entry `[next]`): T5 (4 variants via `it.each`) added to
+  `m8c-ttl-1.test.ts`; daemon 0.0.70 / tag `v0.0.123` published + promoted to `latest`;
+  live `cello_inbox --scope all` shows zero pending session requests after the sealed test session.
+
+- **DOD-SIGNAL-TOKEN-1** — `cello_send` (MCP) and `cello send` (CLI) enforce a `signal` parameter
+  on every outbound message. The signal declares the sender's next action and causes the protocol
+  token to be appended to the message body automatically:
+  - `signal: "over"` → `[[OVER]]` appended (turn complete, entering read mode)
+  - `signal: "standby"` + `est_minutes` → `[[STANDBY EST:Xm]]` appended (follow-up coming)
+  - `signal: "wrap"` → `[[WRAP]]` appended (final message, close after send)
+  A missing `signal` returns a rich structured error (`reason: "missing_signal"`) with full
+  descriptions of all three options — not a generic validation failure. A missing `est_minutes`
+  when `signal: "standby"` returns `reason: "missing_est_minutes"`. CLI flags: `--over`,
+  `--standby <min>`, `--wrap`. **Design rationale:** tokens appear in the message body (not as
+  metadata) so they become idioms in transcripts — the same way `RE:` and `FWD:` propagated
+  through email without a spec. — ✅ PROVEN LIVE (2026-07-22, Build Journal Entry `[next]`):
+  live two-agent session Ms_Chelly → CELLO_Feedback; Ms_Chelly sent with `signal: "over"`;
+  CELLO_Feedback received the message with `[[OVER]]` appended in the body automatically;
+  CELLO_Feedback replied with `signal: "wrap"`; bilateral seal completed
+  (`sealed_root 37e71b67983792e19a0cd87eaafbeda725eb87dc54f0b9552a5eecabe837e857`).
+  connect 0.0.83 / cli 0.0.71 / daemon 0.0.70, tag `v0.0.123`, promoted to `latest`.
+  Design discussion log: [[walkie-talkie-signal-tokens-design]].
+
 ## Parked decisions
 *(Genuine undecidable forks get parked here + journal + DECISIONS — never silently dropped.)*
 
