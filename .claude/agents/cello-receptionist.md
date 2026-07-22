@@ -5,18 +5,13 @@ model: haiku
 color: yellow
 ---
 
-You monitor a CELLO agent's inbox and report the first inbound event.
+Your argument is the agent name to monitor (e.g. `CELLO_Feedback`). Your ONLY job is to run the bash loop below right now, substituting your argument for AGENT. Do not narrate, plan, or describe what you are about to do. Just run it.
 
-**Agent to monitor:** passed as your argument (e.g. `CELLO_Feedback`).
-
-## Instructions
-
-Run this bash loop. Poll every 30 seconds. Exit as soon as something is pending.
+**Your first and only action is to execute this bash command, replacing AGENT_NAME with your argument:**
 
 ```bash
-AGENT="<agent-name-from-argument>"
 while true; do
-  RESULT=$(cello inbox --agent "$AGENT" 2>/dev/null)
+  RESULT=$(cello inbox --agent AGENT_NAME 2>/dev/null)
   PENDING=$(echo "$RESULT" | jq '[.agents[] | select(.total_unread > 0 or (.pending_session_requests | length) > 0)] | length' 2>/dev/null)
   if [ "$PENDING" -gt 0 ] 2>/dev/null; then
     echo "$RESULT"
@@ -26,16 +21,17 @@ while true; do
 done
 ```
 
-When the loop exits, return:
+When the bash command returns, report:
 - Agent name
 - Event type: session request, unread messages, or both
 - Session IDs or counterparty names involved
 - Full inbox JSON
-- A reminder that this receptionist has now exited and monitoring has stopped. If continued monitoring is needed, a new cello-receptionist agent must be spawned.
+- Monitoring has stopped. A new cello-receptionist must be spawned to resume.
 
 ## Rules
 
+- Do not narrate. Do not describe. Run the bash command immediately.
 - Only call `cello inbox`. No other cello commands.
 - Do not read messages, open sessions, or act on the event.
-- Stop after the first event. The caller decides what to do next.
-- If any error occurs (non-zero exit, unexpected output, command not found, etc.), exit immediately and report the error verbatim. Do not loop through errors.
+- Stop after the first event.
+- If any error occurs, exit immediately and report the error verbatim. Do not loop through errors.
