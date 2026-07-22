@@ -4483,6 +4483,51 @@ schema design before implementation. Documented in the design log above.
 
 ---
 
+### DOD-SEALED-INBOX-1 — sealed sessions with unread no longer pollute `cello_inbox`
+
+Discovered during a live receptionist test (2026-07-22): `cello_inbox` surfaced a sealed session
+as unread indefinitely. Root cause: `getUnreadSummary` queried `transcript` with no join to
+`sessions`, so terminal sessions (sealed, abandoned, etc.) with messages above the watermark
+appeared as unread forever. `cello_receive` correctly refuses to run on a sealed session, so
+the watermark could never advance — the entry was permanently stuck.
+
+**Why it only affects a narrow case:** the bug fires only when a message arrives after the
+operator's last `cello_receive` but before the seal completes — e.g. the away-mode
+answering-machine exchange where the daemon auto-acks on behalf of an unattended agent. In a
+normal attended conversation the watermark is current at close, so nothing lingers.
+
+**Design decisions:**
+- `read_at INTEGER` column on `sessions` — local-only, never propagated, never in the hash chain.
+  Distinct from the watermark: this records "operator dismissed", not "operator received via
+  `cello_receive`". Marking it via the watermark would imply formal receipt to the counterparty
+  (non-repudiation risk); `read_at` is housekeeping only.
+- `cello_dismiss` — explicit operator action. `cello_transcript` stays pure read-only with no
+  side effects. Auto-setting on transcript read was rejected: you might call transcript for
+  debugging, not because you've "dealt with" the message.
+- Inbox response grouped into five named sections: `pending_session_requests`,
+  `expired_session_requests`, `unread` (active/interrupted only), `sealed_unread` (terminal
+  with unread, not yet dismissed), `rename_notices`. Non-empty `sealed_unread` carries guidance.
+
+**Implementation:**
+- `getUnreadSummary` now LEFT JOINs `sessions` and excludes terminal statuses. LEFT JOIN
+  preserves the ghost-session invariant (transcript rows with no sessions row still appear in
+  `unread` — the DOD-UNREAD-1/sinceseq path relies on this).
+- `getSealedUnread` new method: same query but restricted to terminal+`read_at IS NULL`.
+- `dismissSession` new method: validates terminal status, sets `read_at = now`.
+- `cello_dismiss` IPC handler + MCP tool + CLI command (`cello dismiss <session_id>`).
+- Vocabulary entry added; CLI `KNOWN_COMMANDS` and help cluster updated.
+
+**Reviewer finding fixed:** `session.dismissed` log was missing `unreadCount` (AC6). Fixed in
+follow-up commit `1120bc4` before close.
+
+**Tests:** T1–T4 in `m8c-sealed-inbox-1.test.ts` — all four survive the revert test.
+Pre-existing `m8c-sinceseq-1.test.ts` guards the ghost-session invariant.
+
+**Live proof:** pending — requires a daemon restart with the new build. Pre-commit `34aad9a`,
+post-reviewer-fix `1120bc4`.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

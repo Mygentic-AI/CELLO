@@ -1837,6 +1837,41 @@ own story) deliberately, never smuggled in as a rider. Source:
   connect 0.0.83 / cli 0.0.71 / daemon 0.0.70, tag `v0.0.123`, promoted to `latest`.
   Design discussion log: [[walkie-talkie-signal-tokens-design]].
 
+- **DOD-SEALED-INBOX-1** ✅ — sealed sessions with unread messages no longer pollute `cello_inbox`
+  indefinitely, and operators have a way to clear them.
+
+  **Problem:** `getUnreadSummary` queries the `transcript` table with no join to `sessions` — it
+  surfaces unread received messages regardless of session status. A sealed session where the
+  counterparty's final message arrived after the operator's last `cello_receive` (e.g. an
+  away-mode answering-machine exchange) shows as unread forever with no way to clear it.
+  `cello_receive` correctly refuses to run on a sealed session, so the watermark can never advance.
+
+  **Design:** a `read_at` nullable timestamp column on the `sessions` table — local-only operator
+  housekeeping, never propagated, never part of the seal ceremony or hash chain. A new
+  `cello_dismiss({ session_id })` MCP tool (and `cello dismiss <session_id>` CLI command) sets
+  `read_at = now`. `getUnreadSummary` excludes sessions where status is terminal AND
+  `read_at IS NOT NULL`. `cello_inbox` groups its response into labelled sections:
+  pending session invites, expired session invites, unread messages (active/interrupted sessions),
+  sealed-unread (terminal sessions with unread), and rename notices. The sealed-unread section
+  includes guidance: "Use `cello_transcript` to read, `cello_dismiss` to clear from inbox."
+
+  **ACs:**
+  1. `sessions` table gains a `read_at INTEGER` column (nullable, epoch ms). Migration is
+     non-breaking (ADD COLUMN with no default).
+  2. `cello_dismiss { session_id }` MCP tool: sets `read_at` on the named session for the current
+     agent. Returns `{ ok: true }`. Errors: `session_not_found`, `session_not_terminal` (only
+     sealed/abandoned/seal_interrupted_pending/interrupted sessions can be dismissed).
+  3. `cello dismiss <session_id>` CLI command: same semantics, same errors.
+  4. `getUnreadSummary` excludes sessions where status is terminal AND `read_at IS NOT NULL`.
+  5. `cello_inbox` response groups results into five named arrays: `pending_session_requests`,
+     `expired_session_requests`, `unread` (active/interrupted only), `sealed_unread` (terminal
+     with unread and `read_at IS NULL`), `rename_notices`. `total_unread` counts only
+     active/interrupted unread. A non-empty `sealed_unread` section includes a `guidance` field.
+  6. `cello_dismiss` logs `session.dismissed { agentName, sessionId, status, unreadCount }`.
+  7. Tests: (a) sealed session with unread does NOT appear in `unread`, appears in `sealed_unread`;
+     (b) after `cello_dismiss`, session no longer appears in either section; (c) `cello_dismiss`
+     on an active session returns `session_not_terminal`.
+
 ## Parked decisions
 *(Genuine undecidable forks get parked here + journal + DECISIONS — never silently dropped.)*
 
