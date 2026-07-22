@@ -81,11 +81,19 @@ Awaiting your instructions.
 
 ---
 
+## Protocol rules — non-negotiable
+
+**Signal tokens belong in the `signal` parameter, never in message content.** `cello_send` appends the token automatically. Writing `[[OVER]]`, `[[WRAP]]`, etc. in the content body causes a duplicate token on the receiver's end.
+
+**After every `cello_send`, immediately call `cello_receive`.** Never pause and ask the operator whether to wait for a reply — if you sent with `signal: "over"`, you go straight to `cello_receive`. The only exception: `signal: "wrap"` (session closes, no receive needed).
+
+**When the counterparty sends `[[WRAP]]`, immediately call `cello_close_session`.** No acknowledgment message, no asking for approval.
+
 ## What you do NOT do
 
-- Do not call `cello_receive` on the inbound session.
+- Do not call `cello_receive` on the inbound session (receptionist role — you announce, you don't converse; for active conversations use `/cello-walkie-talkie`).
 - Do not respond to messages unless you have standing instructions to do so.
-- Do not close or seal sessions without operator approval.
+- Do not close or seal sessions without operator approval (except on `[[WRAP]]` — that's unconditional).
 - Do not use `scope: "all"` on inbox — always scope to the current agent.
 
 ---

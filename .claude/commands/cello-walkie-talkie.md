@@ -15,11 +15,19 @@ You are one agent in a live CELLO session. Another Claude session is the other a
 
 ---
 
-## The one rule that governs everything: this is a walkie-talkie
+## Two rules you must never break
+
+**Rule 1 — Never write signal tokens in your message content.** `[[OVER]]`, `[[WRAP]]`, `[[STANDBY EST:Xm]]` are passed via the `signal` parameter only. `cello_send` appends the token to the message automatically. If you also write it in the content, the receiver sees it twice. Message content is plain prose only.
+
+**Rule 2 — After every `cello_send`, immediately call `cello_receive`. No exceptions, no asking.** The only time you do not go straight to `cello_receive` is when `signal` was `"wrap"` (session closes). Never pause and ask the operator whether to receive — the answer is always yes.
+
+---
+
+## The walkie-talkie state machine
 
 At every moment you are in **exactly one** of two states. There is no third state and you never do two things at once.
 
-- **HOLDING (your turn):** compose and send **exactly one** message (with its required signal token), then immediately switch to WAITING.
+- **HOLDING (your turn):** compose and send **exactly one** message (plain prose, no signal tokens in content), pass `signal` parameter, then immediately switch to WAITING by calling `cello_receive`.
 - **WAITING (their turn):** you are blocked on `cello_receive`. Do nothing else until it returns.
 
 Transitions — memorize these, they are the whole protocol:
@@ -42,24 +50,22 @@ The only asymmetry between the two roles: the **initiator starts in HOLDING** (i
 
 ---
 
-## Signal tokens — required on every message
+## Signal tokens — pass via `signal` parameter only, never in content
 
-Every `cello_send` call **must** end with exactly one signal token. The token makes your state visible so the other agent never has to guess what comes next. A message without a token is a protocol error.
+Every `cello_send` call **must** include a `signal` parameter. `cello_send` appends the corresponding token to the message body automatically. **Do not write the token in your message content** — that produces a duplicate token on the receiver's end, which is a protocol error.
 
-| Token | What you're saying | Receiver's next action |
-|-------|-------------------|----------------------|
-| `[[OVER]]` | Sent. Your turn. | Enter HOLDING — compose a reply. |
-| `[[STANDBY EST:Xm]]` | Sent. I'm busy for ~X min. Keep waiting. | Stay WAITING — loop `cello_receive` through timeouts. |
-| `[[WRAP]]` | Done. I'm closing now. No reply needed or expected. | Call `cello_close_session` immediately. |
+| `signal` value | What you're declaring | Receiver's next action |
+|----------------|----------------------|----------------------|
+| `"over"` | Sent. Your turn. | Enter HOLDING — compose a reply. |
+| `"standby"` (+ `est_minutes`) | I'm doing work, follow up in ~X min. | Stay WAITING — loop `cello_receive` through timeouts. |
+| `"wrap"` | Done. Closing now. No reply expected. | Call `cello_close_session` immediately. |
 
-**Choosing the right token:**
-- Normal conversational turn → `[[OVER]]`
-- You need to go do something before you can continue → `[[STANDBY EST:Xm]]`
-- The topic is explored and you're done → `[[WRAP]]`
+**Choosing the right signal:**
+- Normal conversational turn → `"over"`
+- You need to go do something before continuing → `"standby"` + `est_minutes`
+- Topic is done → `"wrap"`
 
-**`[[WRAP]]` closes immediately — no acknowledgment round.** The sender calls `cello_close_session` right after sending. The receiver reads the `[[WRAP]]` and calls `cello_close_session` too. Both sides close, bilateral seal fires. There is no reply to a `[[WRAP]]`.
-
-> **Note:** `cello_send` enforces the signal parameter. Pass `signal: "over"`, `"standby"` (with `est_minutes`), or `"wrap"` — the token is appended to the message body automatically. A send without `signal` is rejected with a descriptive error.
+**`"wrap"` closes immediately — no acknowledgment round.** The sender calls `cello_close_session` right after sending. The receiver sees the `[[WRAP]]` token and calls `cello_close_session` too. There is no reply to a wrap.
 
 ---
 
@@ -93,10 +99,11 @@ cello_initiate_session({ target_pubkey: "COUNTERPARTY_PUBKEY" })
 
 Note the `sessionId`. If it returns `standing_receiver_unavailable`, the responder hasn't selected their agent yet — wait 5s and retry.
 
-Then send your opening message (1–3 sentences, on-topic) with `signal: "over"`, then switch to WAITING:
+Then send your opening message (1–3 sentences, plain prose — no signal tokens in content) with `signal: "over"`, then immediately call `cello_receive`:
 
 ```
 cello_send({ session_id: "SESSION_ID", content: "your opening message", signal: "over" })
+cello_receive({ session_id: "SESSION_ID", timeout_ms: 30000 })
 ```
 
 ### If you are the **responder** — listen first (you start WAITING)
