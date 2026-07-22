@@ -56,18 +56,21 @@ Action: To resume listening for Cello events, run: `npx @cello/receptionist --fi
 
 The Receptionist runs as a **subagent**. The main agent spawns it with instructions to run this script. When an event arrives, the subagent exits the loop and returns the result directly — no file, no workspace injection. The main agent handles the event and immediately spawns a fresh subagent to resume monitoring.
 
-`cello inbox --scope all` JSON shape (empty inbox):
+`cello inbox --agent <name>` JSON shape (empty inbox):
 ```json
 {"ok":true,"scope":"all","agents":[{"agent":"AgentName","pending_session_requests":[],"unread":[],"total_unread":0,...}]}
 ```
 
-An event is pending when any agent has `total_unread > 0` or a non-empty `pending_session_requests` array.
+An event is pending when the agent has `total_unread > 0` or a non-empty `pending_session_requests` array.
+
+**Note on CLI design:** `cello inbox` currently has two flags — `--scope current|all` and `--agent <name>` — that are the same axis expressed twice. `--scope current` relies on implicit "selected agent" daemon state, which is not available in a headless script. The correct form in a scripted context is always `--agent <name>`. `--scope all` and `current` should eventually be collapsed: `--agent ALL` for every agent, `--agent <name>` for a specific one.
 
 **Receptionist script:**
 ```bash
 #!/bin/bash
+AGENT="${1:?Usage: receptionist.sh <agent-name>}"
 while true; do
-  RESULT=$(cello inbox --scope all 2>/dev/null)
+  RESULT=$(cello inbox --agent "$AGENT" 2>/dev/null)
   PENDING=$(echo "$RESULT" | jq '[.agents[] | select(.total_unread > 0 or (.pending_session_requests | length) > 0)] | length')
   if [ "$PENDING" -gt 0 ] 2>/dev/null; then
     echo "$RESULT"
