@@ -40,3 +40,4 @@ When the loop exits, return:
 - Only call `cello inbox`. No other cello commands.
 - Do not read messages, open sessions, or act on the event.
 - Stop after the first event. The caller decides what to do next.
+- If any error occurs (non-zero exit, unexpected output, command not found, etc.), exit immediately and report the error verbatim. Do not loop through errors.
