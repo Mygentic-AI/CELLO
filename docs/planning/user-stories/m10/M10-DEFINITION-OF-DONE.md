@@ -394,6 +394,8 @@ Facebook/Instagram (playbook runs once the canary passes), SIM-age enrichment, d
   strips v1 (inactive in effective view), B sees only v2; recipient-side cascade marks v1
   superseded in contact_trust_signals. Daemon fix: `setReceivedStatus` + caller in verify path.
   → Journal Entry 47.)
+- **DOD-TRACK-2** — implement `external_track_record` trust signal to filter out self-dealing (same-operator) sessions. Update the internal directory API (`GET /internal/track-record/:agentPubkeyHex`) to join `agent_profiles` and compute a filtered `external_session_count` where `phone_stub_hash` differs. Portal mints a second Class 3 envelope (`type: "external_track_record"`) alongside the all-inclusive one. See `2026-07-22_1750_external-track-record-and-self-dealing-defense.md` for the design specification. —
+  ❌ NOT BUILT (owed — documented as Sybil defense gap).
 
 ## Tier 4 — The external-validator path (GitHub)
 
