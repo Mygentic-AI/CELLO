@@ -2,6 +2,7 @@
 name: cello-receptionist
 description: Monitors a CELLO agent inbox and returns when the first inbound event arrives — a new session request or an unread message. Invoke with the agent name as the argument.
 tools: Bash
+disallowedTools: Bash(rm *), Bash(sudo *), Bash(git *), Bash(aws *), Bash(npm *), Bash(pnpm *)
 model: haiku
 color: yellow
 ---
