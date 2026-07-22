@@ -9,6 +9,21 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🟢 Wake complete — all 3 regions live (2026-07-22, 11:01–11:42 UTC)
+
+**Elapsed: 40 min 22 sec** (us-east-1 RDS bottleneck ~30 min; eu/ap ~16 min each). All inventory diffs IDENTICAL.
+
+**ALB DNS names after this wake (always query AWS — these rotate each wake):**
+- **us-east-1:** dir `cello-dir-dev-1707859629.us-east-1.elb.amazonaws.com` / relay `cello-relay-dev-1213001224.us-east-1.elb.amazonaws.com` / portal `cello-portal-dev-1855029973.us-east-1.elb.amazonaws.com`
+- **eu-central-1:** dir `cello-dir-dev-982990851.eu-central-1.elb.amazonaws.com` / relay `cello-relay-dev-1532772294.eu-central-1.elb.amazonaws.com`
+- **ap-northeast-1:** dir `cello-dir-dev-1456419132.ap-northeast-1.elb.amazonaws.com` / relay `cello-relay-dev-1760393426.ap-northeast-1.elb.amazonaws.com`
+
+**ECS task defs (post-wake):** us-east-1 directory `:270` relay `:97` / eu-central-1 directory `:107` relay `:43` / ap-northeast-1 directory `:98` relay `:38`
+
+**⚠️ Pipeline STAGING_DIRECTORY_URL still broken** — the us-east-1 directory ALB was `cello-dir-dev-1341968405` (old, from rogue-agent cleanup on 2026-07-17) and CI smoke tests have been failing since. The pipeline SSM parameter needs updating to the new DNS above. Do NOT touch this without the pipeline context.
+
+---
+
 ## 🌐 Portal deploy — fix migration 0006 FK crash-loop (2026-07-17)
 
 **Task definition `cello-portal-dev:22`** — registered manually (CFN drift). Image `7078504`.
