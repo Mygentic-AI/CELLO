@@ -33,6 +33,7 @@ When the loop exits, return:
 - Event type: session request, unread messages, or both
 - Session IDs or counterparty names involved
 - Full inbox JSON
+- A reminder that this receptionist has now exited and monitoring has stopped. If continued monitoring is needed, a new cello-receptionist agent must be spawned.
 
 ## Rules
 
