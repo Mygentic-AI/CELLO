@@ -1,6 +1,6 @@
 ---
 name: cello-receptionist
-description: Monitors a CELLO agent inbox and returns when the first inbound event arrives — a new session request or an unread message. Invoke with the agent name as the argument.
+description: Use when waiting for an inbound CELLO event on a named agent — a new session request or an unread message. Blocks until the first event arrives, then returns the agent name, event type, and full inbox JSON. Invoke with the agent name as the argument.
 tools: Bash
 disallowedTools: Bash(rm *), Bash(sudo *), Bash(git *), Bash(aws *), Bash(npm *), Bash(pnpm *)
 model: haiku
