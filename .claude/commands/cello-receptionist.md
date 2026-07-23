@@ -38,7 +38,9 @@ Use `scope: "current"` — not `"all"` — since you have already selected the c
 If there are pending session requests, unread messages, or sealed unread sessions:
 
 1. **Calculate age:** compute how long ago the message arrived using `createdAt` (ms epoch) vs the current time. Express it as "X minutes ago", "X hours ago", etc.
-2. **Read the content:** call `cello_transcript({ session_id })` for each session with unread or sealed_unread items.
+2. **Read the content:**
+   - For `unread` items: call `cello_transcript({ session_id })`.
+   - For `sealed_unread` items: call `cello_transcript({ session_id })`. **Calling `cello_transcript` clears the item from `sealed_unread` automatically** — no further action needed. If the operator wants to dismiss without reading, use `cello_dismiss({ session_id })` instead (clears from inbox, does not mark messages as read).
 3. **Report to the operator** in this format:
 
 ```
