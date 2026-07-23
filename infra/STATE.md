@@ -9,6 +9,12 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🔴 Hibernate complete — all 3 regions down (2026-07-23, 19:42–19:46 UTC)
+
+ECS services scaled to 0, RDS stopped, ALBs deleted, NAT Gateways deleted, ssmmessages endpoints deleted. EIPs retained. State written to `hibernation-state.json`.
+
+---
+
 ## 🟢 Wake complete — all 3 regions live (2026-07-22, 11:01–11:42 UTC)
 
 **Elapsed: 40 min 22 sec** (us-east-1 RDS bottleneck ~30 min; eu/ap ~16 min each). All inventory diffs IDENTICAL.
