@@ -1872,6 +1872,27 @@ own story) deliberately, never smuggled in as a rider. Source:
      (b) after `cello_dismiss`, session no longer appears in either section; (c) `cello_dismiss`
      on an active session returns `session_not_terminal`.
 
+- **DOD-AWAY-WRAP-1** ❌ OPEN — Away autoresponder must not fire on a `[[WRAP]]`-signalled message; it must close the session silently instead.
+
+  **Observed behavior (live test 2026-07-23):** When CELLO_Feedback initiated a session with Ms_Chelly (away), the daemon fired the away autoresponse immediately at session open — before the caller had sent any content. This forced CELLO_Feedback to read the away notice before it could send anything (`session_not_current` / unread block). After reading, CELLO_Feedback sent its actual message with `signal: "wrap"`. The daemon fired the away autoresponse a *second* time, producing a spurious extra message in the transcript (seq 2 in both live tests). The session then sealed, leaving Ms_Chelly with a `sealed_unread` item containing the original caller message — but also a confusing duplicate away echo.
+
+  **Two distinct bugs:**
+
+  1. **Wrong message at session open.** The away text reads "your message was received and will be read when the operator returns" — but no message has been sent yet. At session-open time the caller has left no message. The correct behavior is to greet with instructions: "Ms_Chelly is currently away. Leave a message (send with `--wrap` to close after) and it will be read when she returns."
+
+  2. **Away handler fires on `[[WRAP]]` messages.** A `[[WRAP]]`-signalled inbound message means the counterparty is done — they are closing the session. The away autoresponder must detect the `wrap` signal and skip the away reply entirely, then let the seal ceremony complete normally. Sending an away response to a `[[WRAP]]` message is meaningless (the caller has already declared they are done and will not read it) and adds noise to the sealed transcript.
+
+  **Correct flow after fix:**
+  1. Caller initiates session with an away agent → receives one clear away greeting with leave-a-message instructions.
+  2. Caller sends message + `signal: "wrap"` → daemon detects `wrap`, skips the away autoresponse, closes and seals the session.
+  3. Ms_Chelly's `cello_inbox` shows one `sealed_unread` entry containing only the caller's actual message — no spurious away echoes.
+
+  **ACs:**
+  1. The away autoresponse sent at session-open uses the text "X is currently away. Leave a message (send with `--wrap` to close) and it will be read when they return." (or the operator's configured away text, if set).
+  2. The away handler checks the inbound message's signal flag before responding. If `signal = "wrap"`, it skips the away reply entirely and allows the seal ceremony to proceed.
+  3. A sealed transcript for an away-mode exchange contains exactly: (a) the away greeting (seq 0, sent by Ms_Chelly), (b) the caller's actual message with `[[WRAP]]` (seq 1, received), and nothing else — no second away response at seq 2.
+  4. Tests: (a) session-open away reply uses the new greeting text; (b) a `[[WRAP]]`-signalled message to an away agent does NOT trigger an away reply; (c) a non-wrap message to an away agent still triggers an away reply.
+
 ## Parked decisions
 *(Genuine undecidable forks get parked here + journal + DECISIONS — never silently dropped.)*
 
