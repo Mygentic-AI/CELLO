@@ -4553,6 +4553,66 @@ No DoD entry needed — this is a one-line guidance-text correction, not a new b
 
 ---
 
+## 2026-07-23 — `DOD-INBOX-ONESHOT-1` seal path fix — relay-mediated close replaces broken signaling path
+
+**Bug fixed, not a new feature.** The rejection-and-seal behaviour of DOD-INBOX-ONESHOT-1 was already
+built. This entry records a correctness fix to the seal initiation path.
+
+### The bug: `leaf_count_mismatch` zombie session
+
+When Ms_Chelly (unattended) received a second `[[OVER]]` message from CELLO_Support, the daemon
+correctly sent the `[[WRAP]]`-bearing rejection and then called `handleActiveSealFlow`. That call
+went through the **signaling-only bilateral path** (`seal_interrupted_request` →
+`seal_interrupted_ack`), which requires both sides to agree on leaf count at the moment the seal
+request is sent.
+
+The race: `handleActiveSealFlow` reads Ms_Chelly's tree size (5, including the just-sent rejection)
+and sends a `seal_interrupted_request` over the **signaling channel**. Meanwhile, the rejection
+content travels over a separate **P2P content stream**. The signaling message arrived at CELLO_Support
+before the P2P delivery completed, so CELLO_Support's tree still had 4 leaves when it compared
+against the initiator's claimed `leafCount=5`. Result: `leaf_count_mismatch` rejection, no retry, no
+escalation — the session stayed active permanently (zombie).
+
+This is not a transient timing race that a short delay would fix. Even after the content delivery
+completes (2 ms later), the trees diverge by exactly 1 — confirmed by the log sequence:
+- `08:29:08.267` — Ms_Chelly tree appended `leafIndex=4` (size 5)
+- `08:29:08.268` — `session.seal.initiated` (claims leafCount=5)
+- `08:29:08.270` — CELLO_Support tree appended `leafIndex=3` (size 4)
+- `08:29:09.987` — `session.interrupted.request.rejected reason=leaf_count_mismatch`
+
+At the point of rejection CELLO_Support already had the rejection leaf (size 4), but the structural
+gap is permanent: Ms_Chelly has 5 leaves, CELLO_Support has 4. No retry on the signaling path
+resolves it.
+
+### Why the comment said "660 s" but the code fired the wrong path
+
+The comment at `daemon.ts:882` read: *"Initiate seal fire-and-forget — the bilateral wait
+(DOD-SEAL-BILATERAL-TIMEOUT-1: 660 s) gives the counterparty time to co-close before the daemon
+escalates to unilateral."* This describes the **relay-mediated path** in `close-session-handler.ts`,
+not `handleActiveSealFlow`. The intent and the implementation were mismatched from the beginning of
+DOD-INBOX-ONESHOT-1.
+
+### The fix: route through the relay-mediated path
+
+Replaced the `handleActiveSealFlow` call with an inline fire-and-forget IIFE that mirrors the
+relay-mediated active-session seal from `close-session-handler.ts`:
+
+1. Register a `pendingSealWaiters` promise for this `(agentName, sessionId)` key.
+2. Call `sessionNodeManager.submitSealLeaf` — posts Ms_Chelly's SEAL ctrl leaf (kind `0x02`) to the relay. No leaf-count comparison happens here. No message is sent to CELLO_Support.
+3. Wait up to 660 s (`CELLO_SEAL_BILATERAL_TIMEOUT_MS`) for `session_sealed`. When CELLO_Support later calls `cello_close_session` (or its auto-ack fires on receiving Ms_Chelly's SEAL ctrl leaf), it posts its own SEAL leaf. The relay sees two SEAL leaves → triggers `#maybeProcessSeal` → directory FROST notarization → `session_sealed` pushed to both parties → `pendingSealWaiters` resolves.
+4. If the 660 s bilateral timeout expires (counterparty never co-sealed), escalate to `seal_unilateral` exactly as `close-session-handler.ts` does.
+5. Falls back to `handleActiveSealFlow` only when `submit.reason === "relay_unavailable"` (no relay attached to the session) — the known-broken path is preserved as a fallback for the relay-free case.
+
+The relay-mediated path bypasses the `leaf_count_mismatch` gate entirely because `inbound-seal-request.ts` is never invoked. Each party independently posts a SEAL leaf to a shared third party; the relay accumulates both without any bilateral comparison.
+
+**Commit:** `12338c3` on cello-client `main`.
+
+**Tests:** all 2001 existing tests pass (no new tests — the existing DOD-INBOX-ONESHOT-1 tests exercise the rejection send and seal-initiation fire; the relay-mediated seal path is covered by the existing relay-seal tests in `seal-unilateral-retry.test.ts` et al.). A dedicated test for the cross-path interaction (same-daemon two-agent oneshot + relay) would require a new fixture variant — tracked as future hardening.
+
+**Status after this entry:** DOD-INBOX-ONESHOT-1 → 🟡 BUILT / UNVERIFIED-LIVE. DOD-SEAL-BILATERAL-TIMEOUT-1 → 🟡 BUILT (the 660 s timeout was already in `close-session-handler.ts`; this fix makes it effective for the oneshot path).
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design

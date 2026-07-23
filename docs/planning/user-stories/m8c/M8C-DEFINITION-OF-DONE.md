@@ -1893,24 +1893,26 @@ own story) deliberately, never smuggled in as a rider. Source:
   3. A sealed transcript for an away-mode exchange contains exactly: (a) the away greeting (seq 0, sent by Ms_Chelly), (b) the caller's actual message with `[[WRAP]]` (seq 1, received), and nothing else — no second away response at seq 2.
   4. Tests: (a) session-open away reply uses the new greeting text; (b) a `[[WRAP]]`-signalled message to an away agent does NOT trigger an away reply; (c) a non-wrap message to an away agent still triggers an away reply.
 
-- **DOD-INBOX-ONESHOT-1** ❌ OPEN — Inbox (away-mode) sessions are one-shot: a second inbound message while the agent is unattended triggers a rejection reply and an immediate close.
+- **DOD-INBOX-ONESHOT-1** 🟡 BUILT / UNVERIFIED-LIVE — Inbox (away-mode) sessions are one-shot: a second inbound message while the agent is unattended triggers a rejection reply and an immediate close.
 
   **Motivation:** without a message-count cap, an abusive or looping caller can flood an unattended inbox with repeated `[[OVER]]` messages. The A4 dedup guard prevents duplicate away replies but does not prevent the transcript from growing unboundedly, forcing the operator's LLM to drain arbitrarily many `cello_receive` calls on the next attend.
 
   **Rule:** once the away greeting has been sent (the first message has been received and auto-acked), any further inbound message on an unattended session is treated as an abuse attempt. The daemon:
   1. Sends a single rejection reply: `"[[WRAP]] This inbox only accepts one message. Closing."` (or similar — the `[[WRAP]]` token signals to the caller's LLM that the session is closing).
-  2. Initiates `handleActiveSealFlow` for that session immediately.
+  2. Initiates the seal via the relay-mediated path (`submitSealLeaf` → 660 s bilateral wait → unilateral escalation).
 
   **Only fires when unattended.** If the operator becomes attended between message 1 and message 2, `isAttended()` returns true, the away path never runs, and the session continues normally.
 
   **ACs:**
-  1. A second inbound message on an unattended session that has already received an away ack causes the daemon to send a `[[WRAP]]`-bearing rejection reply and initiate `handleActiveSealFlow`.
+  1. A second inbound message on an unattended session that has already received an away ack causes the daemon to send a `[[WRAP]]`-bearing rejection reply and initiate the relay-mediated seal. *(Note: AC1 originally specified `handleActiveSealFlow`; the implementation uses the relay-mediated path instead — see BUILD-JOURNAL 2026-07-23. This is a superset: the signaling-only path was the wrong choice for this flow.)*
   2. The rejection message text contains `[[WRAP]]` so the caller's LLM sees the session is closing.
   3. No further away acks are sent after the rejection — the session closes.
   4. If the agent is attended when the second message arrives, NO rejection fires.
   5. Tests: (a) second message while unattended → rejection sent + seal initiated; (b) attended → no rejection; (c) `[[WRAP]]` as the second message does NOT trigger the rejection (it is already handled by DOD-AWAY-WRAP-1 and closes cleanly).
 
-- **DOD-SEAL-BILATERAL-TIMEOUT-1** ❌ OPEN — Raise the bilateral seal timeout default from 30 s to 660 s so `seal_unilateral_too_early` is structurally unreachable.
+  **Built 2026-07-23** (commit `12338c3`, cello-client `main`). Seal path bug fixed: original implementation routed through `handleActiveSealFlow` (signaling-only bilateral) which raced with the P2P content delivery — CELLO_Support's tree was always one leaf behind at seal-request time, causing a permanent `leaf_count_mismatch` rejection and a zombie session. Rerouted to the relay-mediated path, which has no bilateral leaf-count comparison. Falls back to the signaling path only when `relay_unavailable`. Needs live proof (both-sides-local same-daemon scenario) before ✅.
+
+- **DOD-SEAL-BILATERAL-TIMEOUT-1** 🟡 BUILT / UNVERIFIED-LIVE — Raise the bilateral seal timeout default from 30 s to 660 s so `seal_unilateral_too_early` is structurally unreachable.
 
   **Root cause:** the directory's delivery-grace window is 600 s (10 min). The client's bilateral wait is 30 s. The client times out 570 s before the directory allows a unilateral seal, so every close on an unresponsive counterparty returns `seal_unilateral_too_early` and the operator must wait and retry manually. In a daemon-initiated close (e.g. DOD-INBOX-ONESHOT-1), there is no operator LLM to read the retry guidance — the session sits in `seal_interrupted_pending` indefinitely.
 
@@ -1920,6 +1922,8 @@ own story) deliberately, never smuggled in as a rider. Source:
   1. The default value of `CELLO_SEAL_BILATERAL_TIMEOUT_MS` (the `|| fallback` in `close-session-handler.ts`) is `660_000`.
   2. The existing `CELLO_SEAL_BILATERAL_TIMEOUT_MS` env-var override remains functional for tests and operators who need a shorter window.
   3. Comment at the constant explains the relationship to `deliveryGraceSeconds`.
+
+  **Built** in prior M8C work (660 s default in `close-session-handler.ts`). The 2026-07-23 seal-path fix (DOD-INBOX-ONESHOT-1) made this timeout effective for the oneshot inbox path: the original `handleActiveSealFlow` call bypassed `close-session-handler.ts` entirely, so the 660 s timeout never applied. The relay-mediated path now reads `CELLO_SEAL_BILATERAL_TIMEOUT_MS` directly and routes through unilateral escalation on timeout, completing the full intent of this line.
 
 ## Parked decisions
 *(Genuine undecidable forks get parked here + journal + DECISIONS — never silently dropped.)*
