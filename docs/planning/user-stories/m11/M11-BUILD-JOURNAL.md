@@ -175,3 +175,49 @@ mistake the live-looking cluster for permission to deploy.
 
 **Next red:** `DOD-EMAIL-INFRA-1` per §4's dependency order (`DOD-AUTH-1` and `DOD-E1-1` both depend on
 email actually sending), with the signup logic ported to Lambda alongside it.
+
+---
+
+### Entry 7: DOD-SCHEMA-P0-1 — schema enforcer written and PASSING on real Postgres
+**Date:** 2026-07-24
+**Target:** DOD-SCHEMA-P0-1 (local half) [corp-cello-site]
+
+**Target in one sentence:** the P0 migration applies cleanly to an empty database, applies again to a
+database that already has it *and holds rows*, and produces a byte-identical schema both ways.
+
+**Clause checklist:** all six tables and their columns were already verified present by Entry 1's review
+and re-confirmed by reading `migrations/0001_m11_waitlist_p0.sql`. The clause that had never been tested
+is the last one — *"Fresh schema == migrated schema."* That is what this entry closes.
+
+**What was built:** `corp-cello-site/scripts/verify-schema.sh` (commit `d4a4fb2`, branch
+`m11/review-fixes`). It creates two databases, migrates one from empty, migrates the other and then seeds
+a row into every P0 table (`waitlist_users`, `waitlist_touchpoints`, `referral_codes`, `email_jobs`,
+`auth_tokens`) before migrating it a second time, then diffs `pg_dump --schema-only` output.
+
+Seeding is the point. `CREATE TABLE IF NOT EXISTS` makes a second run *succeed* trivially on an empty
+database; it proves nothing about a database with prior data, which is the case the DoD actually calls
+out ("a migration that fails on a DB with prior data is not ✅"). The enforcer also asserts the seeded
+row survives the re-migration.
+
+**Run output (Postgres 16.14 in Docker, container `m11pg`):**
+```
+==> [fresh] migrating once from empty          → All migrations applied.
+==> [repeat] migrating once                    → All migrations applied.
+==> [repeat] inserting rows                    → INSERT 0 1 ×5
+==> [repeat] migrating a SECOND time, over existing data → All migrations applied.
+==> [repeat] confirming the data survived      → (1 row, ok)
+==> Comparing schema dumps
+PASS: fresh schema == migrated schema, migration is idempotent over existing data.
+```
+
+**One wrong turn, recorded because the failure mode is reusable:** the first run reported FAIL with a
+one-line diff. It was not schema drift — `pg_dump` ≥ 16.10 emits a random per-run nonce on its
+`\restrict` / `\unrestrict` meta-commands, so two dumps of an identical schema never match byte-for-byte.
+Fixed by filtering exactly those two lines and nothing else, so real drift still fails the diff. Worth
+noting because the naive fix (normalise the dump harder, or diff only `CREATE TABLE` lines) would have
+blinded the enforcer to the drift it exists to catch.
+
+**Status:** 🟡, not ✅. The local half is genuinely proven; the line also requires the migration to be
+*deployed*, and the portal RDS (`cello-portal-dev`, us-east-1) is `PubliclyAccessible: false` — no route
+to it from a dev machine without ECS exec, which is an AWS mutation and out of bounds tonight (M11-D22).
+Owed: apply to the portal RDS and re-run the enforcer against it.

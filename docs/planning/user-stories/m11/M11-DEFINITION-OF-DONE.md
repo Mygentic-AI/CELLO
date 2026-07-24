@@ -85,7 +85,7 @@ Every DoD line carries a `[repo]` tag immediately after its ID. Use this table t
   - `referrals`: `id` (UUID PK), `referrer_user_id` (FK), `referred_user_id` (FK, UNIQUE), `referral_code`.
   - `email_jobs`: `id` (UUID PK), `user_id` (FK), `template` (enum), `scheduled_at`, `sent_at` (nullable), `status` (pending/sent/skipped).
   - `auth_tokens`: `token` (UUID PK), `waitlist_user_id` (FK), `created_at`, `expires_at` (15 minutes), `used_at` (nullable). Single-use magic-link credential — distinct from `waitlist_tokens` (wave admission grants).
-  Fresh schema == migrated schema. — 🟡 SQL written and complete, but no database has ever been touched; the fresh-vs-migrated comparison was never run (schema enforcer owed) → Journal Entry 6
+  Fresh schema == migrated schema. — 🟡 schema enforcer PASSES on real Postgres 16 (`scripts/verify-schema.sh`): fresh == migrated, idempotent over seeded data. Owed: application to the portal RDS, which is unreachable from a dev machine (M11-D22) → Journal Entry 7
 
 - **DOD-TRACKING-1** [corp-cello-site] — localStorage tracking script deployed on every page of corp-cello-site:
   - Generates and persists `wl_anon_id` (UUID) on first visit.
