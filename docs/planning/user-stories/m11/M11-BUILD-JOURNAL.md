@@ -477,3 +477,72 @@ properties with `0004` applied.
 
 **Status:** `DOD-QUEUE-VIEW-1` ❌ → 🟡 · `DOD-INV-POINTS-CAPS` ❌ → 🟡 · `DOD-INV-NO-INFLATION` ❌ → 🟡.
 All three owe only the portal RDS.
+
+---
+
+### Entry 12: DOD-EMAIL-INFRA-1 + DOD-E1-1 — the consumer for the E1 enqueue
+**Date:** 2026-07-25
+**Target:** DOD-EMAIL-INFRA-1, DOD-E1-1 [trustless-cello, corp-cello-site]
+
+**Why this before the rest of P0.** `DOD-SIGNUP-1` queues an `e1_confirm` row and the success screen
+says "check your inbox". Nothing drained the table, so the promise was empty. Under the launch-triage
+lens that is the line between forgivable and ruinous: a signup that promises an email and never sends one
+reads as a broken product, not a rough edge.
+
+**Built:** `infra/lambda/waitlist-email/` (`handler.py`, `templates.py`) — Python 3.12, same convention as
+the signup function and `rds-rotation`. EventBridge-driven batch drain of `email_jobs`.
+
+**The two invariants it exists to enforce, both tested in both directions:**
+- `DOD-INV-EMAIL-SUPPRESS` — `email_status = 'active'` checked before every send. Parametrised over
+  bounced / complained / unsubscribed, plus an explicit test that suppression beats lifecycle status (an
+  `admitted` user with a bounced address receives nothing). Suppression is a property of the ADDRESS.
+- `DOD-INV-EMAIL-SEGMENTS` — `e_alert` only to `content_alerts = true`; everything else base-list
+  unconditionally. Tested both ways, because filtering E1 *on* `content_alerts` is the same defect
+  mirrored, and the DoD calls out both.
+
+**Delivery semantics.** Claiming is `FOR UPDATE ... SKIP LOCKED`: two concurrent invocations must never
+send the same job twice — a late email is tolerable, a duplicate cannot be recalled. A job already `sent`
+is not re-sent on the next tick (tested). A future `scheduled_at` is not sent early (tested).
+
+**An unknown template FAILS LOUDLY.** `render()` raises for a template with no renderer; the job stays
+`pending` and retries. A silent skip would mark it done with nothing sent and no signal that a template
+was never wired up — `ABSENT IS NOT FINE` applied to the template registry. Only implemented templates
+are in `TEMPLATES`; `e1_confirm` is the only one so far.
+
+**Per-job SAVEPOINT** so one unwired template or one rejected address does not roll back every other
+job's result in the batch (tested: one failing job, the other still `sent`).
+
+**E1 content (`DOD-E1-1`).** Real computed queue position from `waitlist_queue` via LEFT JOIN, the
+personal referral link, and one sentence on how waves work. The position is **omitted entirely** when
+absent rather than filled with a placeholder — an admitted user has no queue row, and inventing a number
+there is precisely `DOD-INV-NO-INFLATION`. Tested: an admitted user's E1 contains no `#` at all.
+
+**`0005` — kind-aware token windows.** `DOD-E1-1` wants a 24-hour verify link; M11-D9 wants 15-minute
+magic links; `0002`'s flat CHECK bounded everything at 15 minutes, so E1 could not be sent at all. One
+table with a `kind` column and a kind-aware CHECK, rather than a second table with a second burn path to
+keep correct. The 15-minute bound still holds for `magic_link` (tested: inserting a 24h magic_link raises
+`CheckViolation`). The token is minted at SEND time, not enqueue time, so it is not burning down its
+window while the job waits.
+
+**Two test-harness defects found and fixed — both were silently testing the wrong code.**
+1. Every Lambda dir contains a `handler.py`. `import handler` returned whichever landed in `sys.modules`
+   first, so the email suite was exercising the *signup* function. Handlers now load by explicit path
+   under unique module names (`load_lambda`), keeping production filenames conventional.
+2. `infra/conftest.py` already exists and owns the `conftest` module name, so `from conftest import PGURL`
+   resolved to it. Shared fixtures moved to `waitlist_testdb.py`; `conftest.py` re-exports them for
+   pytest discovery. Test module basenames also had to be unique (`test_signup_handler.py`,
+   `test_email_handler.py`) for pytest's prepend import mode.
+
+Worth recording because both failures were *collection errors* — loud. The dangerous version of the same
+bug is the one that collects fine and asserts against the wrong module.
+
+**Runs:** 69 tests green across the three Lambda suites (`pytest -q`, `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`).
+Schema enforcer still green on all five properties with `0005` applied. corp-cello-site 10 tests green.
+
+**Status:** `DOD-E1-1` 🟠 → 🟡 · `DOD-EMAIL-INFRA-1` stays 🟠 (Lambda built; CFN wiring, SES prod-access
+confirmation and the bounce/complaint SNS handler all still owed) · `DOD-INV-EMAIL-SUPPRESS` and
+`DOD-INV-EMAIL-SEGMENTS` ❌ → 🟡. All owe the email enforcer, which needs AWS.
+
+**Note on the bounce handler:** `DOD-INV-EMAIL-SUPPRESS` is enforced on the READ side here, but nothing
+yet WRITES `email_status = 'bounced'`. That is `DOD-SES-PROD-1` (SNS → Lambda). Until it exists the
+suppression check is correct but has no producer — flagged rather than left implicit.
