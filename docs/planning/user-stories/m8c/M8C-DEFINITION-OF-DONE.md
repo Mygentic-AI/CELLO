@@ -1893,7 +1893,25 @@ own story) deliberately, never smuggled in as a rider. Source:
   3. A sealed transcript for an away-mode exchange contains exactly: (a) the away greeting (seq 0, sent by Ms_Chelly), (b) the caller's actual message with `[[WRAP]]` (seq 1, received), and nothing else — no second away response at seq 2.
   4. Tests: (a) session-open away reply uses the new greeting text; (b) a `[[WRAP]]`-signalled message to an away agent does NOT trigger an away reply; (c) a non-wrap message to an away agent still triggers an away reply.
 
-- **DOD-INBOX-ONESHOT-1** 🟡 BUILT / UNVERIFIED-LIVE — Inbox (away-mode) sessions are one-shot: a second inbound message while the agent is unattended triggers a rejection reply and an immediate close.
+- **DOD-INBOX-ONESHOT-1** ✅ LIVE-PROVEN (2026-07-24) — Inbox (away-mode) sessions are one-shot: a second inbound message while the agent is unattended triggers a rejection reply and an immediate close.
+
+  **Live proof (2026-07-24, session `9d6f56d7b25bb9fe494414d2650ed6bf`, CELLO_Support → CELLO_Feedback, same daemon):**
+  greeting (seq 0) → caller msg 1 + away ack (seq 1–2) → clean second caller msg (seq 4) →
+  `oneshot.rejected` (seq 5, 17:33:10.238) → `oneshot.seal_initiated path=relay` (+340 ms) →
+  `oneshot.sealed root=2ad8a000…` (+4.2 s, bilateral — the counterparty auto-co-sealed on
+  receiving the SEAL ctrl leaf; no voluntary `cello_close_session`, no 660 s wait). A further
+  send was refused `session_not_active`. CELLO_Feedback's inbox showed the session in
+  `sealed_unread` (3 unread). The feared "11 minutes of open ingestion" does not exist for
+  honest clients: the exposure window is seconds; 660 s unilateral escalation remains the
+  backstop for an adversarial client that refuses to co-seal.
+
+  **Two defects found by the same live test (fixes tracked below):**
+  1. `DOD-WRAP-SUBSTRING-1` — wrap detection is `text.includes("[[WRAP]]")` on the BODY: a
+     message that merely *mentions* the token (sent `signal: "over"`) was classified as a
+     close signal → away reply AND oneshot rejection skipped, session silently left open.
+  2. `DOD-AWAY-ACK-ONESHOT-TEXT-1` — the message-1 ack ("your message has been received…")
+     never says the inbox is one-shot, so a well-behaved caller LLM naturally sends a
+     follow-up and gets rejected. The ack should state the one-message rule.
 
   **Motivation:** without a message-count cap, an abusive or looping caller can flood an unattended inbox with repeated `[[OVER]]` messages. The A4 dedup guard prevents duplicate away replies but does not prevent the transcript from growing unboundedly, forcing the operator's LLM to drain arbitrarily many `cello_receive` calls on the next attend.
 
@@ -1912,7 +1930,7 @@ own story) deliberately, never smuggled in as a rider. Source:
 
   **Built 2026-07-23** (commit `12338c3`, cello-client `main`). Seal path bug fixed: original implementation routed through `handleActiveSealFlow` (signaling-only bilateral) which raced with the P2P content delivery — CELLO_Support's tree was always one leaf behind at seal-request time, causing a permanent `leaf_count_mismatch` rejection and a zombie session. Rerouted to the relay-mediated path, which has no bilateral leaf-count comparison. Falls back to the signaling path only when `relay_unavailable`. Needs live proof (both-sides-local same-daemon scenario) before ✅.
 
-- **DOD-SEAL-BILATERAL-TIMEOUT-1** 🟡 BUILT / UNVERIFIED-LIVE — Raise the bilateral seal timeout default from 30 s to 660 s so `seal_unilateral_too_early` is structurally unreachable.
+- **DOD-SEAL-BILATERAL-TIMEOUT-1** ✅ (2026-07-24) — Raise the bilateral seal timeout default from 30 s to 660 s so `seal_unilateral_too_early` is structurally unreachable. *(Live status: the oneshot relay-path seal completed bilaterally in 4.2 s — the 660 s window is the untriggered backstop, exactly as designed. The ACs are code-level and built; the daemon-initiated close completing without operator intervention is the intent, and that is live-proven.)*
 
   **Root cause:** the directory's delivery-grace window is 600 s (10 min). The client's bilateral wait is 30 s. The client times out 570 s before the directory allows a unilateral seal, so every close on an unresponsive counterparty returns `seal_unilateral_too_early` and the operator must wait and retry manually. In a daemon-initiated close (e.g. DOD-INBOX-ONESHOT-1), there is no operator LLM to read the retry guidance — the session sits in `seal_interrupted_pending` indefinitely.
 
@@ -1924,6 +1942,30 @@ own story) deliberately, never smuggled in as a rider. Source:
   3. Comment at the constant explains the relationship to `deliveryGraceSeconds`.
 
   **Built** in prior M8C work (660 s default in `close-session-handler.ts`). The 2026-07-23 seal-path fix (DOD-INBOX-ONESHOT-1) made this timeout effective for the oneshot inbox path: the original `handleActiveSealFlow` call bypassed `close-session-handler.ts` entirely, so the 660 s timeout never applied. The relay-mediated path now reads `CELLO_SEAL_BILATERAL_TIMEOUT_MS` directly and routes through unilateral escalation on timeout, completing the full intent of this line.
+
+- **DOD-WRAP-SUBSTRING-1** 🔴 OPEN — Wrap-signal detection must match the APPENDED token, not any substring of the body.
+
+  **Found live 2026-07-24** (session `9d6f56d7…`): `sendAwayResponse` checks
+  `text.includes("[[WRAP]]")` (daemon.ts, DOD-AWAY-WRAP-1 AC2). A caller message sent with
+  `signal: "over"` whose body merely *mentioned* `[[WRAP]]` was classified as a close signal:
+  the away reply was skipped, the oneshot rejection was skipped, and the session stayed open
+  silently. DOD-SIGNAL-TOKEN-1 always appends the real token at the END of the body — the
+  detection must anchor there (`text.trimEnd().endsWith("[[WRAP]]")` or equivalent), matching
+  the producer's contract instead of matching mentions.
+
+  **ACs:** (1) detection anchors to the end-of-body token; (2) a `signal:"over"` message whose
+  body mentions `[[WRAP]]` mid-text triggers the normal away/oneshot path; (3) a genuine
+  `signal:"wrap"` message still skips the away reply; (4) tests for both, red-first.
+
+- **DOD-AWAY-ACK-ONESHOT-TEXT-1** 🔴 OPEN — The away ack must state the one-shot rule.
+
+  **Found live 2026-07-24:** after the caller's first message the ack reads "Agent is currently
+  away. Your message has been received and will be read when the operator returns." — no
+  mention that the inbox accepts exactly one message. A cooperative caller LLM reading that has
+  no reason to stop, sends a follow-up, and eats the rejection: the design manufactures the
+  case it punishes. Fix: append "This inbox accepts one message per visit; the session will
+  now close." (or send `signal: wrap` semantics on the ack itself). AC: ack text names the
+  one-shot rule; test updated.
 
 ## Parked decisions
 *(Genuine undecidable forks get parked here + journal + DECISIONS — never silently dropped.)*
