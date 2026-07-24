@@ -858,3 +858,39 @@ holds a `waitlist_id` under a name that means something else, with no FK; F17 th
 where the sibling `rds-rotation` uses `logging`, so the level is a string in the body and no metric filter
 can route on it; F18 the referral-code entropy comment overstates by ~9 bits because `.upper()` collapses
 the alphabet after generation; F19 `/auth` leaves earlier unused magic links live rather than burning them.
+
+---
+
+### Entry 19: the statically-checkable invariants, checked
+**Date:** 2026-07-25
+**Target:** DOD-INV-NO-SAAS, DOD-INV-DOMAIN, DOD-INV-STABLE-PK, DOD-INV-NO-DIRECTORY-RELAY,
+DOD-INV-SINGLE-DB, DOD-INV-NO-PII-DIRECTORY
+
+Six Tier-I invariants are properties of the *source*, not of a running system. They were sitting at ❌ not
+because they were violated but because nothing had looked. `infra/scripts/verify-m11-invariants.sh` makes
+them re-checkable on every change instead of eyeballed once and assumed.
+
+**Every check is a denylist, deliberately.** An allowlist of approved domains or approved packages goes
+stale silently the moment someone adds a legitimate new one — and a check that passes because it stopped
+looking is worse than no check at all.
+
+Which is exactly what my first version did, twice, in opposite directions:
+1. It read the phrase *"CREATE TABLE IF NOT EXISTS skips the table wholesale"* out of my own migration
+   comments as a table named `skips`, and reported a violation that did not exist.
+2. Over-corrected, the escaping broke and it matched **zero** tables — and printed PASS.
+
+The second is the dangerous one and it is the script's own stated failure mode. It now anchors on real
+DDL and **fails if it finds no tables at all**, because a parser that finds nothing must say so rather
+than report success. Currently: all 12 M11 tables found, all declare a primary key.
+
+`STABLE-PK` deliberately does not flag `email` in a `WHERE` clause. Looking a user up *by* email to
+retrieve their `waitlist_id` is correct and the DoD says so explicitly; only a structural use — FOREIGN
+KEY, PRIMARY KEY, or a JOIN predicate — is an identity anchor. That distinction is what keeps the check
+from being disabled the first time it cries wolf.
+
+`0012` also moves `creator_tracking` attribution off an unconstrained TEXT `session_id` that was being
+handed a `waitlist_id`, onto a real FK, with a CHECK that signup and activation events must carry a user
+while a `visit` (which genuinely predates any user) need not.
+
+**Status:** six invariants ❌ → 🟡. The script proves the static half; the runtime halves live in the
+Lambda suites and, for the rest, in the live enforcers that need AWS.
