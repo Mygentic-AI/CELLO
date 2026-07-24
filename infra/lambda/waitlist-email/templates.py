@@ -22,10 +22,12 @@ SITE = "https://cello.mygentic.ai"
 # tokens against DynamoDB — a Postgres auth_tokens UUID is never in that table,
 # so a link there 404s and renders "Invalid link." while email_verified stays
 # false forever.
-API = os.environ.get(
-    "WAITLIST_API_BASE",
-    "https://h8dh7rbhb1.execute-api.us-east-1.amazonaws.com/waitlist",
-)
+# api.cello.mygentic.ai, not the raw execute-api host — DOD-INV-DOMAIN applies to
+# what a user sees, and this URL is the most visible one in the product: it is
+# the button in the confirmation email. It is also same-site with the web app,
+# which is what keeps the SameSite=Lax session cookie attached when the verify
+# redirect lands on /status.
+API = os.environ.get("WAITLIST_API_BASE", "https://api.cello.mygentic.ai/waitlist")
 
 
 def esc(value):

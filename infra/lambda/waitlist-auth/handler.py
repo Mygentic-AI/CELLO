@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 import psycopg2
 import psycopg2.extras
 
+from _session import cookie_from, read_session, revoke_all_for_user
 from _sqlstate import classify
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -129,30 +130,6 @@ def session_cookie(raw_token):
     )
 
 
-def read_session(cur, raw_token):
-    if not raw_token:
-        return None
-    cur.execute(
-        """
-        SELECT s.waitlist_user_id, u.email, u.display_name, u.email_verified, u.status
-        FROM waitlist_sessions s
-        JOIN waitlist_users u ON u.waitlist_id = s.waitlist_user_id
-        WHERE s.token_hash = %s
-          AND s.revoked_at IS NULL
-          AND s.expires_at > now()
-        """,
-        (hash_token(raw_token),),
-    )
-    return cur.fetchone()
-
-
-def cookie_from(headers):
-    raw = headers.get("cookie") or headers.get("Cookie") or ""
-    for part in raw.split(";"):
-        name, _, value = part.strip().partition("=")
-        if name == COOKIE_NAME:
-            return value
-    return None
 
 
 # ── POST /waitlist/auth/request ───────────────────────────────────────────────
@@ -251,6 +228,18 @@ def handle_request_link(body, origin, correlation_id):
     elapsed_ms = (time.monotonic() - started) * 1000
     if elapsed_ms < RESPONSE_FLOOR_MS:
         time.sleep((RESPONSE_FLOOR_MS - elapsed_ms) / 1000)
+    else:
+        # The work outran the floor, so there is nothing left to flatten and the
+        # guard is simply not guarding. Silence here means the first anyone
+        # learns of it is an enumerated list; alarm on this event.
+        log(
+            "waitlist.auth.floor.exceeded",
+            correlation_id,
+            level="WARN",
+            elapsedMs=round(elapsed_ms, 1),
+            floorMs=RESPONSE_FLOOR_MS,
+            detail="request outran the response floor; the timing guard did not apply",
+        )
 
     return resp(200, OPAQUE_RESPONSE, origin)
 
@@ -378,6 +367,53 @@ def handle_session(headers, origin, correlation_id):
     )
 
 
+# ── POST /waitlist/auth/logout ────────────────────────────────────────────────
+
+
+def handle_logout(headers, origin, correlation_id):
+    """Ends every live session for this user, not just the one presenting.
+
+    `revoked_at` had readers and no writer: a leaked cookie was live for thirty
+    days with nothing able to end it. Killing ALL of them rather than just the
+    current one is the point — someone logging out because they think their
+    session is compromised does not know which cookie is the problem.
+
+    Idempotent, and it never reveals whether the cookie was valid: 204 either
+    way, so this cannot be used to test whether a stolen token is still live.
+    """
+    token = cookie_from(headers)
+    cleared = 0
+
+    if token:
+        conn = connect()
+        try:
+            conn.autocommit = False
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                session = read_session(cur, token)
+                if session:
+                    cleared = revoke_all_for_user(cur, session["waitlist_user_id"], "logout")
+                    log(
+                        "waitlist.auth.logged_out",
+                        correlation_id,
+                        waitlistId=str(session["waitlist_user_id"]),
+                        sessionsRevoked=cleared,
+                    )
+            conn.commit()
+        finally:
+            conn.close()
+
+    return {
+        "statusCode": 204,
+        "headers": {
+            **cors_headers(origin),
+            # Max-Age=0 so the browser drops it even if the server-side revoke
+            # somehow did not land.
+            "Set-Cookie": f"{COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax",
+        },
+        "body": "",
+    }
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
@@ -405,6 +441,9 @@ def lambda_handler(event, context):
 
         if method == "GET" and path.endswith("/auth/session"):
             return handle_session(headers, origin, correlation_id)
+
+        if method == "POST" and path.endswith("/auth/logout"):
+            return handle_logout(headers, origin, correlation_id)
 
         return resp(404, {"error": "not_found", "message": f"No route for {method} {path}."}, origin)
 

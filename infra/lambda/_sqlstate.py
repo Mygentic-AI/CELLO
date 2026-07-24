@@ -22,14 +22,36 @@ def classify(err):
             "The waitlist database could not be reached. Please try again.",
         )
 
-    if cls == "42":
-        # An undefined table or column means the code is ahead of the schema.
-        # Retrying cannot fix it and an operator sent to the network will not
+    if sqlstate == "42501":
+        # insufficient_privilege. Class 42 as a whole reads as "the code is ahead
+        # of the schema", but this one is a missing GRANT — a live risk every
+        # time a migration adds objects the Lambda role was never granted. An
+        # operator told to run a migration will re-run Flyway, see it clean, and
+        # be stuck.
+        return (
+            500,
+            "database_permission_denied",
+            "This function is not permitted to perform that operation on the waitlist database.",
+        )
+
+    if sqlstate in ("42P01", "42703", "42P02"):
+        # Undefined table / column / parameter: the code IS ahead of the schema.
+        # Retrying cannot fix it, and an operator sent to the network will not
         # find it.
         return (
             500,
             "schema_out_of_date",
             "This function requires a database migration that has not been applied.",
+        )
+
+    if cls == "42":
+        # The rest of class 42 — syntax errors, undefined functions, wrong
+        # argument types. A code defect, not a deployment state. Naming it as a
+        # migration problem would send the operator somewhere clean.
+        return (
+            500,
+            "database_query_rejected",
+            "The waitlist database rejected the query as malformed.",
         )
 
     if cls == "23":

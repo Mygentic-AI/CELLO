@@ -16,7 +16,6 @@ race: two concurrent submits both read zero and both insert, which is precisely
 the double-award each DoD line names.
 """
 
-import hashlib
 import json
 import os
 import uuid
@@ -26,6 +25,7 @@ from urllib.parse import urlparse
 import psycopg2
 import psycopg2.extras
 
+from _session import cookie_from, may_act, read_session
 from _sqlstate import classify
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -92,35 +92,22 @@ def resp(status, body, origin):
     return {"statusCode": status, "headers": cors_headers(origin), "body": json.dumps(body)}
 
 
-def hash_token(token):
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def cookie_from(headers):
-    raw = headers.get("cookie") or headers.get("Cookie") or ""
-    for part in raw.split(";"):
-        name, _, value = part.strip().partition("=")
-        if name == COOKIE_NAME:
-            return value
-    return None
-
-
 def require_session(cur, headers):
-    token = cookie_from(headers)
-    if not token:
+    session = read_session(cur, cookie_from(headers))
+    if session is None:
         raise ActionError(401, "no_active_session", "Sign in to take this action.")
 
-    cur.execute(
-        """
-        SELECT waitlist_user_id FROM waitlist_sessions
-        WHERE token_hash = %s AND revoked_at IS NULL AND expires_at > now()
-        """,
-        (hash_token(token),),
-    )
-    row = cur.fetchone()
-    if row is None:
-        raise ActionError(401, "no_active_session", "Your session has expired. Sign in again.")
-    return row["waitlist_user_id"]
+    if not may_act(session):
+        # A live cookie is not a live entitlement. Without this a banned user
+        # kept awarding themselves points, because the previous query never
+        # joined waitlist_users at all.
+        raise ActionError(
+            403,
+            f"account_{session['status']}",
+            "This account cannot take waitlist actions.",
+        )
+
+    return session["waitlist_user_id"]
 
 
 def award(cur, user_id, points, reason, meta, correlation_id):
@@ -232,33 +219,52 @@ def handle_post_url(cur, user_id, body, correlation_id):
             f"Posts are accepted from X, Reddit and LinkedIn. {parsed.hostname or 'that host'} is not one of them.",
         )
 
-    # The submitter must have proved they own a handle on that platform —
-    # otherwise anyone can submit anyone's post and collect the credit.
+    # Handle ownership is the only thing tying a post to a person, so whether the
+    # submitter proved it MATTERS — but it is recorded, not required.
+    #
+    # Requiring it would refuse every submission, because DOD-OAUTH-SOCIAL-1 is
+    # parked on external app registration and nothing can create a profile row
+    # yet. Refusing is right for an input that is missing or hostile; it is wrong
+    # for one that is not there YET, because it makes a parked integration a hard
+    # precondition for an unrelated path.
+    #
+    # M11-D4 already puts a human in the loop for every submission. This hands
+    # them the fact rather than deciding on their behalf.
     cur.execute(
         "SELECT 1 FROM waitlist_social_profiles WHERE waitlist_user_id = %s AND platform = %s",
         (user_id, platform),
     )
-    if cur.fetchone() is None:
-        raise ActionError(
-            403,
-            "platform_not_connected",
-            f"Connect your {platform} account before submitting a {platform} post.",
-        )
+    handle_verified = cur.fetchone() is not None
 
     cur.execute("SAVEPOINT submit")
     try:
         cur.execute(
-            "INSERT INTO post_review_queue (waitlist_user_id, platform, post_url) VALUES (%s, %s, %s)",
-            (user_id, platform, url),
+            "INSERT INTO post_review_queue (waitlist_user_id, platform, post_url, handle_verified) "
+            "VALUES (%s, %s, %s, %s)",
+            (user_id, platform, url, handle_verified),
         )
         cur.execute("RELEASE SAVEPOINT submit")
     except psycopg2.errors.UniqueViolation:
         cur.execute("ROLLBACK TO SAVEPOINT submit")
         raise ActionError(409, "already_submitted", "You have already submitted that post.")
 
-    log("waitlist.post.submitted", correlation_id, waitlistId=str(user_id), platform=platform)
+    log(
+        "waitlist.post.submitted",
+        correlation_id,
+        waitlistId=str(user_id),
+        platform=platform,
+        handleVerified=handle_verified,
+    )
     # No points here. M11-D4: credit is applied on ops approval only.
-    return {"submitted": True, "platform": platform, "awarded": 0}
+    return {
+        "submitted": True,
+        "platform": platform,
+        "awarded": 0,
+        # Returned so the UI can tell the submitter their post needs manual
+        # authorship confirmation, rather than letting them assume it is queued
+        # on equal footing with a verified one.
+        "handle_verified": handle_verified,
+    }
 
 
 ROUTES = {

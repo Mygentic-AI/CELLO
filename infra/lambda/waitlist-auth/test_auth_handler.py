@@ -84,28 +84,54 @@ def test_known_and_unknown_addresses_get_byte_identical_responses(auth):
     )
 
 
-def test_a_known_address_is_not_measurably_slower(auth):
-    """The timing channel is the one that usually survives. Sending an email and
-    writing rows takes longer than doing nothing, so an attacker with a stopwatch
-    enumerates the list while every visible response says the same thing."""
+def test_both_paths_sit_on_the_response_floor(auth):
+    """Asserts the FLOOR, not the gap.
+
+    An earlier version of this test only bounded the known-vs-unknown gap at
+    60ms — and passed with the floor deleted entirely, because the two paths
+    differ by about four statements, roughly 1ms on loopback. It was coverage of
+    "Postgres is fast", not of the guard. Deleting the thing under test must
+    fail the test, so the assertion is on the floor itself.
+    """
     make_user("timed@example.test")
+    floor = auth.RESPONSE_FLOOR_MS / 1000
 
     def elapsed(email):
-        samples = []
-        for _ in range(3):
-            start = time.monotonic()
-            request_link(auth, email)
-            samples.append(time.monotonic() - start)
-        return min(samples)
+        return min(
+            (lambda start: (request_link(auth, email), time.monotonic() - start)[1])(
+                time.monotonic()
+            )
+            for _ in range(3)
+        )
 
     known = elapsed("timed@example.test")
     unknown = elapsed("absent@example.test")
 
-    # Both must sit on the floor. A known path that escapes it would show up as
-    # a materially larger minimum.
-    assert abs(known - unknown) < 0.06, (
-        f"timing gap {abs(known - unknown):.3f}s leaks membership "
-        f"(known {known:.3f}s vs unknown {unknown:.3f}s)"
+    assert known >= floor, f"known path returned in {known:.3f}s, under the {floor:.3f}s floor"
+    assert unknown >= floor, f"unknown path returned in {unknown:.3f}s, under the {floor:.3f}s floor"
+
+    # And the tighter gap check on top, now that the floor is proven present.
+    assert abs(known - unknown) < 0.015, (
+        f"timing gap {abs(known - unknown):.3f}s leaks membership even on the floor"
+    )
+
+
+def test_a_known_path_that_outruns_the_floor_says_so(auth, caplog):
+    """A guard that silently stops guarding is worse than no guard.
+
+    When the database is slow enough that the known path exceeds the floor, the
+    sleep is skipped and the protection is simply gone. It has to be observable,
+    or the first anyone knows is an enumerated list.
+    """
+    make_user("slow@example.test")
+    auth.RESPONSE_FLOOR_MS = 0  # any real work now exceeds the floor
+
+    with caplog.at_level("WARNING"):
+        request_link(auth, "slow@example.test")
+
+    logged = caplog.text
+    assert "waitlist.auth.floor.exceeded" in logged, (
+        "exceeding the floor must emit a WARN — a signal that cannot fire is not a signal"
     )
 
 
@@ -344,3 +370,71 @@ def test_requesting_a_second_link_invalidates_the_first(auth):
 
     result, _ = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(second)})
     assert result["statusCode"] == 302, "the newest link must still work"
+
+
+# ── Logout (M5: revoked_at finally has a producer) ────────────────────────────
+
+
+def test_logout_revokes_the_session_and_clears_the_cookie(auth):
+    uid = make_user("bye@example.test")
+    request_link(auth, "bye@example.test")
+    verify, _ = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token_for(uid))})
+    cookie = verify["headers"]["Set-Cookie"].split(";")[0]
+
+    result, _ = call(auth, "POST", "/waitlist/auth/logout", cookie=cookie)
+
+    assert result["statusCode"] == 204
+    assert "Max-Age=0" in result["headers"]["Set-Cookie"]
+    assert query("SELECT revoked_at IS NOT NULL FROM waitlist_sessions")[0][0] is True
+
+    after, body = call(auth, "GET", "/waitlist/auth/session", cookie=cookie)
+    assert after["statusCode"] == 401
+
+
+def test_logout_kills_every_session_not_just_the_one_presenting(auth):
+    """Someone logging out because they think they are compromised does not know
+    which cookie is the problem."""
+    uid = make_user("many@example.test")
+    cookies = []
+    for _ in range(3):
+        request_link(auth, "many@example.test")
+        verify, _ = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token_for(uid))})
+        cookies.append(verify["headers"]["Set-Cookie"].split(";")[0])
+
+    call(auth, "POST", "/waitlist/auth/logout", cookie=cookies[0])
+
+    for cookie in cookies:
+        result, _ = call(auth, "GET", "/waitlist/auth/session", cookie=cookie)
+        assert result["statusCode"] == 401, "every session must be dead, not just the presenting one"
+
+
+def test_logout_never_reveals_whether_the_cookie_was_valid(auth):
+    """Otherwise it becomes an oracle for testing whether a stolen token is
+    still live."""
+    valid, _ = call(auth, "POST", "/waitlist/auth/logout", cookie="cello_wl_session=nonsense")
+    empty, _ = call(auth, "POST", "/waitlist/auth/logout")
+
+    assert valid["statusCode"] == empty["statusCode"] == 204
+
+
+# ── M6: a live cookie is not a live entitlement ───────────────────────────────
+
+
+@pytest.mark.parametrize("status", ["banned", "left"])
+def test_a_banned_user_keeps_their_status_page_but_cannot_act(auth, status):
+    """Reading what happened to you is not the same right as awarding yourself
+    points. Previously the actions endpoints never joined waitlist_users at all,
+    so a banned user kept earning indefinitely."""
+    uid = make_user(f"{status}@example.test")
+    request_link(auth, f"{status}@example.test")
+    verify, _ = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token_for(uid))})
+    cookie = verify["headers"]["Set-Cookie"].split(";")[0]
+
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("UPDATE waitlist_users SET status = %s WHERE waitlist_id = %s", (status, uid))
+    conn.close()
+
+    result, _ = call(auth, "GET", "/waitlist/auth/session", cookie=cookie)
+    assert result["statusCode"] == 200, "they can still see their own page"

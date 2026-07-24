@@ -268,9 +268,15 @@ def test_an_unrecognised_host_is_refused_rather_than_guessed(actions):
     assert query("SELECT count(*) FROM post_review_queue")[0][0] == 0
 
 
-def test_a_post_for_an_unconnected_platform_is_refused(actions):
-    """Without this anyone can submit anyone else's post and collect the
-    credit — OAuth ownership is the only thing tying a post to a person."""
+def test_a_post_for_an_unconnected_platform_is_queued_but_flagged(actions):
+    """Accepted, and marked unverified for the human reviewer.
+
+    Refusing would have made the entire post-credit path unreachable: OAuth is
+    parked on external app registration, so nothing can create a profile row and
+    every real submission would 403 forever. Handle ownership still matters —
+    it is recorded rather than required, and M11-D4 already has a human in the
+    loop to act on it.
+    """
     uid = make_user()
     connect_platform(uid, "x")
     cookie = sign_in(uid)
@@ -279,8 +285,35 @@ def test_a_post_for_an_unconnected_platform_is_refused(actions):
         actions, "/waitlist/post-url", {"post_url": "https://www.reddit.com/r/a/comments/1"}, cookie
     )
 
-    assert status == 403
-    assert payload["error"] == "platform_not_connected"
+    assert status == 200
+    assert payload["handle_verified"] is False, (
+        "the submitter must be told their post needs manual authorship confirmation"
+    )
+    assert query(
+        "SELECT handle_verified FROM post_review_queue WHERE platform = 'reddit'"
+    )[0][0] is False
+
+
+def test_a_post_on_a_connected_platform_is_marked_verified(actions):
+    uid = make_user()
+    connect_platform(uid, "x")
+    cookie = sign_in(uid)
+
+    _, payload = call(actions, "/waitlist/post-url", {"post_url": "https://x.com/me/9"}, cookie)
+
+    assert payload["handle_verified"] is True
+
+
+def test_the_post_path_works_with_no_oauth_at_all(actions):
+    """The regression that mattered: with OAuth parked, a user who has connected
+    NOTHING must still be able to submit."""
+    uid = make_user()
+    cookie = sign_in(uid)
+
+    status, payload = call(actions, "/waitlist/post-url", {"post_url": "https://x.com/me/10"}, cookie)
+
+    assert status == 200, payload
+    assert query("SELECT count(*) FROM post_review_queue")[0][0] == 1
 
 
 def test_the_same_post_cannot_be_submitted_twice(actions):
@@ -341,4 +374,23 @@ def test_an_expired_session_cannot_award_points(actions):
     status, _ = call(actions, "/waitlist/readiness", {}, f"cello_wl_session={raw}")
 
     assert status == 401
+    assert total(uid) == 0
+
+
+@pytest.mark.parametrize("status", ["banned", "left"])
+def test_a_banned_user_cannot_award_themselves_points(actions, status):
+    """A live cookie is not a live entitlement. The previous session query never
+    joined waitlist_users, so a banned user kept earning indefinitely."""
+    uid = make_user(f"{status}@example.test")
+    cookie = sign_in(uid)
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("UPDATE waitlist_users SET status = %s WHERE waitlist_id = %s", (status, uid))
+    conn.close()
+
+    result, payload = call(actions, "/waitlist/readiness", {}, cookie)
+
+    assert result == 403
+    assert payload["error"] == f"account_{status}"
     assert total(uid) == 0
