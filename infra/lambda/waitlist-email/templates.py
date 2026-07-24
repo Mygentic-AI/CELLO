@@ -11,8 +11,32 @@ Every message carries a plain-text alternative. HTML-only mail is a
 deliverability penalty and unreadable in a text client.
 """
 
+import html
+import os
+
 BRAND = "#E0147A"
 SITE = "https://cello.mygentic.ai"
+
+# Links that must be RESOLVED by a Lambda point at the API Gateway, not at the
+# site. /confirm on the site is served by the pre-M11 form handler and resolves
+# tokens against DynamoDB — a Postgres auth_tokens UUID is never in that table,
+# so a link there 404s and renders "Invalid link." while email_verified stays
+# false forever.
+API = os.environ.get(
+    "WAITLIST_API_BASE",
+    "https://h8dh7rbhb1.execute-api.us-east-1.amazonaws.com/waitlist",
+)
+
+
+def esc(value):
+    """Escape anything user-controlled before it reaches an HTML body.
+
+    display_name is attacker-chosen. Splitting on whitespace does not sanitise
+    it — HTML5 accepts `/` as an attribute separator, so `<a/href="...">` needs
+    no space to become a live anchor that swallows the rest of the message,
+    including the real confirm button, inside a DKIM-signed CELLO email.
+    """
+    return html.escape(str(value or ""), quote=True)
 
 
 def _shell(content):
@@ -45,7 +69,8 @@ def _shell(content):
 
 def _greeting(job):
     name = (job.get("display_name") or "").strip()
-    return name.split()[0] if name else "there"
+    first = name.split()[0] if name else "there"
+    return esc(first)
 
 
 def _position_line(job):
@@ -73,9 +98,9 @@ def e1_confirm(job):
     """
     name = _greeting(job)
     token = job.get("auth_token")
-    confirm_url = f"{SITE}/confirm?token={token}" if token else f"{SITE}/auth"
+    confirm_url = f"{API}/auth/verify?token={token}" if token else f"{SITE}/auth"
     code = job.get("referral_code")
-    referral_url = f"{SITE}/?ref={code}" if code else None
+    referral_url = f"{SITE}/?ref={esc(code)}" if code else None
     position = _position_line(job)
 
     waves = (
@@ -137,7 +162,7 @@ def e_magic_link(job):
     """
     name = _greeting(job)
     token = job.get("auth_token")
-    url = f"{SITE}/auth/verify?token={token}" if token else f"{SITE}/auth"
+    url = f"{API}/auth/verify?token={token}" if token else f"{SITE}/auth"
 
     content = (
         f'<h1 style="margin:0 0 8px;font-size:28px;font-weight:700;color:#111;letter-spacing:-0.5px;">Sign in, {name}.</h1>'

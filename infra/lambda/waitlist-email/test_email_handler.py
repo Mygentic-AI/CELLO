@@ -86,13 +86,29 @@ def job_status(job_id):
 @pytest.mark.parametrize("bad_status", ["bounced", "complained", "unsubscribed"])
 def test_a_suppressed_address_receives_nothing(mailer, bad_status):
     uid = make_user(f"{bad_status}@example.test", email_status=bad_status)
-    jid = enqueue(uid)
+    enqueue(uid)
 
     counts = mailer.lambda_handler({}, None)
 
     assert mailer.fake.sent == [], f"{bad_status} address must receive zero emails"
-    assert counts == {"sent": 0, "skipped": 1, "failed": 0}
-    assert job_status(jid) == "skipped"
+    assert counts["sent"] == 0 and counts["skipped"] == 1
+
+
+@pytest.mark.parametrize(
+    "status,expected_state",
+    [("bounced", "skipped"), ("complained", "skipped"), ("unsubscribed", "pending")],
+)
+def test_only_a_permanent_suppression_retires_the_job(mailer, status, expected_state):
+    """An unsubscribed user can resubscribe. Retiring their job means the
+    confirmation they are waiting for never arrives after they opt back in —
+    a silent, permanent consequence of a reversible action."""
+    uid = make_user(f"rev-{status}@example.test", email_status=status)
+    jid = enqueue(uid)
+
+    mailer.lambda_handler({}, None)
+
+    assert job_status(jid) == expected_state
+    assert query("SELECT skip_reason FROM email_jobs WHERE id = %s", (jid,))[0][0] == f"email_status_{status}"
 
 
 def test_suppression_beats_lifecycle_status(mailer):
@@ -110,7 +126,22 @@ def test_suppression_beats_lifecycle_status(mailer):
 # ── DOD-INV-EMAIL-SEGMENTS ────────────────────────────────────────────────────
 
 
-def test_content_alerts_go_only_to_opted_in_users(mailer):
+def test_content_alerts_go_only_to_opted_in_users(mailer, monkeypatch):
+    """Asserts BOTH directions.
+
+    An earlier version of this test only asserted the negative, and passed for
+    the wrong reason: e_alert has no renderer, so the opted-IN job died with a
+    KeyError before the segment filter ever ran and `recipients` was empty. An
+    empty list satisfies "not in" trivially — deleting the filter entirely left
+    it green. Registering a stub renderer makes the positive assertion possible,
+    and the positive assertion is what gives the negative one meaning.
+    """
+    import templates
+
+    monkeypatch.setitem(
+        templates.TEMPLATES, "e_alert", lambda job: ("Alert", "<p>x</p>", "x")
+    )
+
     opted = make_user("opted@example.test", content_alerts=True)
     not_opted = make_user("notopted@example.test", content_alerts=False)
     enqueue(opted, "e_alert")
@@ -119,9 +150,9 @@ def test_content_alerts_go_only_to_opted_in_users(mailer):
     mailer.lambda_handler({}, None)
 
     recipients = [m["Destination"]["ToAddresses"][0] for m in mailer.fake.sent]
-    assert "notopted@example.test" not in recipients, (
-        "an e_alert to a user who never opted in is the segment conflation "
-        "DOD-INV-EMAIL-SEGMENTS forbids"
+    assert recipients == ["opted@example.test"], (
+        "the opted-in user must RECEIVE it and the other must not — "
+        f"DOD-INV-EMAIL-SEGMENTS, both directions. Got {recipients}"
     )
 
 
@@ -191,6 +222,53 @@ def test_an_unknown_template_fails_loudly_and_stays_pending(mailer):
     assert counts["failed"] == 1
     assert job_status(jid) == "pending", "a failed job retries; it is not silently consumed"
     assert mailer.fake.sent == []
+
+
+def test_a_permanently_failing_job_retires_instead_of_starving_the_queue(mailer):
+    """Claiming is oldest-first. Without a terminal state, a permanently
+    failing job returns to the front forever and every job behind it stops
+    being delivered — silently, while the batch summary reports a number."""
+    uid = make_user("poison@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO email_jobs (user_id, template, scheduled_at) "
+            "VALUES (%s, 'e3_update', now()) RETURNING id",
+            (uid,),
+        )
+        jid = cur.fetchone()[0]
+    conn.close()
+
+    for _ in range(mailer.MAX_ATTEMPTS):
+        mailer.lambda_handler({}, None)
+
+    assert job_status(jid) == "failed", "a job that cannot succeed must become terminal"
+    err = query("SELECT last_error FROM email_jobs WHERE id = %s", (jid,))[0][0]
+    assert "No renderer" in err, f"the terminal state must record WHY: {err}"
+
+
+def test_a_retired_job_stops_blocking_the_ones_behind_it(mailer):
+    """The starvation property itself, not just the retirement."""
+    poison = make_user("blocker@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO email_jobs (user_id, template, scheduled_at) "
+            "VALUES (%s, 'e3_update', now() - interval '1 hour')",
+            (poison,),
+        )
+    conn.close()
+
+    good = make_user("behind@example.test")
+    enqueue(good)
+
+    for _ in range(mailer.MAX_ATTEMPTS + 1):
+        mailer.lambda_handler({}, None)
+
+    recipients = [m["Destination"]["ToAddresses"][0] for m in mailer.fake.sent]
+    assert "behind@example.test" in recipients, "the healthy job must still be delivered"
 
 
 def test_one_failing_job_does_not_sink_the_rest_of_the_batch(mailer):
