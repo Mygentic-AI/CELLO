@@ -981,3 +981,47 @@ see "nobody matched" rather than an error they will go hunting for a cause behin
 
 **Status:** `DOD-SCHEMA-P2-1` ❌ → 🟡 · `DOD-WAVE-ASSEMBLY-1` ❌ → 🟡 · `DOD-INV-WAVE-GATE` ❌ → 🟠 ·
 `DOD-INV-TOKEN-SINGLE-USE` ❌ → 🟠 (the burn belongs to the Telegram gate, still unbuilt).
+
+---
+
+### Entry 22: the four remaining email templates
+**Date:** 2026-07-25
+**Target:** DOD-E-INV-1, DOD-E-WIN-1, DOD-E-RE-1, DOD-E-ALERT-1 [trustless-cello]
+
+Also closes the poison-job path Entry 18 flagged: `0007` widened the template enum to seven values while
+two had renderers, so five were permanently-failing jobs waiting to be enqueued.
+
+**Every template carrying a credential refuses to render without it.** E-inv with no grant, E-win with no
+invites, E-alert with no URL — each raises. A mail that arrives without its payload is worse than one that
+never arrives: the recipient cannot tell whether the fault is theirs, so they wait rather than ask. With
+the retry cap from `0011` in place, a refusal now surfaces as a retired job with the cause recorded rather
+than a silent nothing.
+
+**E-inv renders two variants off `wave_number`,** because M11-D10 makes Wave 1 a different onboarding
+*contract* — mandatory 30-minute call, calendar link — not different copy. Rendering the wrong variant
+either drops a mandatory call or invents one, and both are wrong in a way the recipient would act on.
+
+**E-re puts the unsubscribe in the body, not the footer.** Someone who has waited two months without
+moving has earned a clean exit. A re-engagement mail that hides the door is exactly why people mark mail
+as spam instead of unsubscribing — and a spam complaint costs the sending reputation of every other
+message, including the E1s that are the core capture loop.
+
+**E-alert's unsubscribe is scoped to the alert list and says so.** Dropping someone from their waitlist
+mail because they muted blog posts is `DOD-INV-EMAIL-SEGMENTS` violated from the user's side, which is the
+direction nobody writes a test for.
+
+**The dispatcher reads the token and the invite codes rather than carrying them in the job.** `0014` adds
+a `payload` column for operator-supplied context (e_alert's title/URL/summary, which exist nowhere else),
+but credentials deliberately stay out of it: a copy in a job row is a second source of truth that can
+disagree with the first, and the disagreement looks like a mail delivering a grant that has since been
+burned.
+
+Word counts are asserted for all four because the DoD states them and prose grows. Escaping is
+parametrised across every template that interpolates a display name.
+
+**Runs:** 193 tests green across seven Lambda suites.
+
+**Status:** `DOD-E-INV-1` and `DOD-E-WIN-1` ❌ → 🟡 (owe the email enforcer). `DOD-E-RE-1` and
+`DOD-E-ALERT-1` ❌ → 🟠 — each still owes a *trigger*: the 60-day scheduler and the `/unsubscribe`
+endpoint for one, the ops-dashboard send with its same-day block for the other. Scored 🟠 rather than 🟡
+because a template nothing sends is half a feature, and calling it built would hide which half.
