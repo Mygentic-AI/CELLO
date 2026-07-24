@@ -186,16 +186,44 @@ def test_the_public_post_cap_is_forty_five(database):
 
 
 @pytest.mark.parametrize("reason,points", [("survey", 20), ("interview_commit", 30), ("technical_readiness", 20)])
-def test_uncapped_reasons_are_not_accidentally_capped(database, reason, points):
-    """The cap list is an allowlist of CAPPED reasons. A bug that capped
-    everything would be invisible until someone hit a ceiling that should not
-    exist."""
+def test_a_once_only_reason_can_be_earned_exactly_once(database, reason, points):
+    """These three have "cap: none" in the requirements table, which reads as
+    "no ceiling" — but each action's DoD line also says a second submit is a
+    no-op. Both are true: there is no ceiling on the AMOUNT because the action
+    happens once by nature. 0009 enforces that at the database, so idempotency
+    does not depend on the endpoint remembering to check.
+    """
     uid = make_user(f"{reason}@example.test")
-    for _ in range(4):
+    execute(
+        "INSERT INTO points_ledger (waitlist_user_id, points, reason) VALUES (%s, %s, %s)",
+        (uid, points, reason),
+    )
+
+    with pytest.raises(psycopg2.errors.UniqueViolation):
         execute(
             "INSERT INTO points_ledger (waitlist_user_id, points, reason) VALUES (%s, %s, %s)",
             (uid, points, reason),
         )
 
-    total = query("SELECT points_total FROM waitlist_users WHERE waitlist_id = %s", (uid,))[0][0]
-    assert total == points * 4
+    assert query("SELECT points_total FROM waitlist_users WHERE waitlist_id = %s", (uid,))[0][0] == points
+
+
+@pytest.mark.parametrize("reason,points,cap", [("share_conversion", 10, 30), ("public_post", 15, 45)])
+def test_a_repeatable_reason_accrues_up_to_its_cap(database, reason, points, cap):
+    """The mirror image: these two are earned many times, so they must NOT be
+    once-per-user — only bounded. A bug that put them in the once-only index
+    would silently stop the referral engine after a single conversion."""
+    uid = make_user(f"{reason}@example.test")
+    for _ in range(cap // points):
+        execute(
+            "INSERT INTO points_ledger (waitlist_user_id, points, reason) VALUES (%s, %s, %s)",
+            (uid, points, reason),
+        )
+
+    assert query("SELECT points_total FROM waitlist_users WHERE waitlist_id = %s", (uid,))[0][0] == cap
+
+    with pytest.raises(psycopg2.errors.CheckViolation):
+        execute(
+            "INSERT INTO points_ledger (waitlist_user_id, points, reason) VALUES (%s, %s, %s)",
+            (uid, points, reason),
+        )
