@@ -1521,3 +1521,35 @@ A published receipt is served `immutable`, which is safe *precisely because* the
 
 **Status:** `DOD-GALLERY-PRIVACY-1` ❌ → 🟡. The other three ❌ → 🟠 — the API serves everything the pages
 need; the pages, the `gallery.` subdomain, the robots entry and the cello-client footer are owed.
+
+---
+
+### Entry 33: the gallery pages
+**Date:** 2026-07-25
+**Target:** DOD-GALLERY-1, DOD-GALLERY-RECEIPT-1, DOD-GALLERY-INDEX-1 [corp-cello-site]
+
+`/gallery` and `/gallery/receipt`, on the corp site's header, footer and design system, with the Gallery
+nav item the DoD names. `robots.txt` already allows every crawler on everything, so the indexability
+clause needed no change — checked rather than assumed.
+
+**The receipt page does not distinguish "never existed" from "exists but is private."** Both get the same
+page. Telling someone which would confirm that a private session took place, and that is precisely what
+opt-in publishing exists to protect — a 404 that leaks the existence of what it is hiding is not a 404.
+
+**Verification renders as "verified by 2 of 3 nodes", never a bare "verified".** Those are different
+claims about how much of the consortium attested, and collapsing them is exactly the rounding that turns
+a trust badge into decoration. The API carries the numbers for the same reason.
+
+**An empty gallery says it is empty.** No sample cards, no placeholder receipts. Inventing them would be
+manufacturing the social proof `DOD-INV-NO-INFLATION` rules out — on the one page in the product whose
+entire job is being checkable by a stranger.
+
+**Runtime hashes and a static export, again.** Receipts are published while the site is running, so there
+is no file per hash and enumerating them at build time would mean rebuilding on every publish. The hash
+travels as `?h=` with an nginx rewrite for `/gallery/receipt/HASH` — the same shape as `/invite`, and both
+forms work.
+
+**Gates:** typecheck clean · lint clean · 10 vitest · both pages present in `out/`.
+
+**Status:** all three lines 🟠 → 🟡. Owed: the `gallery.` subdomain (DNS + nginx), the cello-client
+sealed-receipt footer, and a live run.
