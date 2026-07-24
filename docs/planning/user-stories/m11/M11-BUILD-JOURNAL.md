@@ -1553,3 +1553,37 @@ forms work.
 
 **Status:** all three lines 🟠 → 🟡. Owed: the `gallery.` subdomain (DNS + nginx), the cello-client
 sealed-receipt footer, and a live run.
+
+---
+
+### Entry 34: the OpenClaw skill, and parking the registry submissions
+**Date:** 2026-07-25
+**Target:** DOD-OPENCLAW-SKILL-1, DOD-MCP-REGISTRY-1 [openclaw]
+
+`openclaw/skills/cello/SKILL.md`, matching the house frontmatter (`name`, `description`, the
+`metadata.openclaw` block with emoji, `requires` and `install`) taken from the existing `github` skill
+rather than invented.
+
+**Four worked scenarios rather than a tool reference,** because the two mistakes agents actually make with
+CELLO are procedural rather than API-shaped: skipping `cello_start_agent` (after which later calls fail in
+ways that read as network problems), and polling `cello_receive` in a loop when it already blocks. A table
+of tool signatures would not prevent either.
+
+It leads with what the thing is *for* — two agents whose operators share no account — rather than with the
+cryptography. An agent reading this needs to know when to reach for it; FROST is not the deciding factor
+and putting it first buries the answer.
+
+It also names the failure modes that look like bugs and are not: `target_offline` is a fact about the
+counterparty rather than something to retry, and a stale tool connection after a daemon restart needs a
+restart rather than a retry loop.
+
+Covers the six tools the DoD names, plus `cello_close_session` — the others are useless without it, since
+an unsealed session produces no receipt and the receipt is the point.
+
+**`DOD-MCP-REGISTRY-1` parked.** Four external submissions (mcp.so, Smithery, Glama, awesome-mcp-servers),
+each needing an account and a submission flow that only Andre can complete. Nothing local produces a
+listing. The description text is worth drafting alongside the GEO content rather than at submission time,
+and that is noted in the Parked entry.
+
+**Status:** `DOD-OPENCLAW-SKILL-1` ❌ → 🟠 (written; the directory submission is outward) ·
+`DOD-MCP-REGISTRY-1` ❌ → 🅿️.
