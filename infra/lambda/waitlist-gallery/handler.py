@@ -59,13 +59,25 @@ def connect():
     return conn
 
 
-def cors_headers():
-    # Reads are public by design, so a wildcard is correct here rather than
-    # sloppy — anyone may fetch a published receipt from anywhere. The write
-    # route is not reachable cross-origin because it requires a portal session.
+def cors_headers(public_read=True):
+    # READS are public by design — anyone may fetch a published receipt from
+    # anywhere, which is the whole point.
+    #
+    # The write route is NOT advertised cross-origin. An earlier version claimed
+    # here that publish "requires a portal session" while no session check
+    # existed anywhere in the module, and advertised POST with a wildcard origin
+    # at the same time. That comment was false in both halves.
+    if not public_read:
+        return {
+            "Access-Control-Allow-Origin": "https://portal.cello.mygentic.ai",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Content-Type": "application/json",
+        }
     return {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
         "Content-Type": "application/json",
         # A published receipt never changes, so it can be cached hard. The index
@@ -156,7 +168,23 @@ def get_receipt(receipt_hash, correlation_id):
     return resp(200, serialise(row), cache="public, max-age=86400, immutable")
 
 
-def publish(body, correlation_id):
+def publish(body, headers, correlation_id):
+    """Publishing writes a permanent, irrevocable, indexed page asserting that a
+    session happened and that N of M directory nodes attested to it.
+
+    So the caller must prove two things, and an earlier version proved neither:
+
+      1. WHO they are — a valid session, read from the cookie, never from a
+         body field. `published_by_waitlist_user_id` taken from the request was
+         an attacker-controlled attribution on a page that cannot be deleted.
+
+      2. That the receipt is THEIRS — the agent that sealed it must be linked to
+         them. Without this, anyone with a session could publish a page claiming
+         "Ada ↔ Grace — verified by 3 of 3 nodes" for a session that never
+         happened, and the schema deliberately has no delete path.
+    """
+    from _session import cookie_from, read_session
+
     receipt_hash = (body.get("receipt_hash") or "").strip()
     if not HASH_RE.match(receipt_hash or ""):
         raise GalleryError(400, "invalid_receipt_hash", "A valid receipt hash is required.")
@@ -191,9 +219,39 @@ def publish(body, correlation_id):
             f"verified_by ({verified_by}) cannot exceed node_count ({node_count}).",
         )
 
+    agent_pubkey = (body.get("agent_pubkey") or "").strip()
+    if not agent_pubkey:
+        raise GalleryError(
+            400,
+            "missing_agent_pubkey",
+            "The publishing agent must be identified so ownership can be checked.",
+        )
+
     conn = connect()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            session = read_session(cur, cookie_from(headers))
+            if session is None:
+                raise GalleryError(
+                    401,
+                    "no_active_session",
+                    "Sign in to publish a receipt.",
+                )
+
+            # The agent must belong to the caller. A session alone would let any
+            # signed-in user publish a page about somebody else's conversation.
+            cur.execute(
+                "SELECT 1 FROM waitlist_agent_links "
+                "WHERE agent_pubkey = %s AND waitlist_user_id = %s",
+                (agent_pubkey, session["waitlist_user_id"]),
+            )
+            if cur.fetchone() is None:
+                raise GalleryError(
+                    403,
+                    "receipt_not_yours",
+                    "That agent is not linked to your account, so this receipt is not yours to publish.",
+                )
+
             # Publishing the same receipt twice is a no-op, not an error: the
             # portal button may be double-clicked, and the second press has the
             # same intent as the first. But it must NOT overwrite — a published
@@ -217,7 +275,8 @@ def publish(body, correlation_id):
                     message_count,
                     verified_by,
                     node_count,
-                    body.get("published_by_waitlist_user_id"),
+                    # From the SESSION, never the body.
+                    session["waitlist_user_id"],
                 ),
             )
             created = cur.fetchone() is not None
@@ -250,7 +309,11 @@ def lambda_handler(event, context):
     path = http.get("path", "")
 
     if method == "OPTIONS":
-        return {"statusCode": 204, "headers": cors_headers(), "body": ""}
+        return {
+            "statusCode": 204,
+            "headers": cors_headers(public_read="/gallery/publish" not in path),
+            "body": "",
+        }
 
     try:
         if method == "GET" and "/gallery/receipts/" in path:
@@ -264,7 +327,7 @@ def lambda_handler(event, context):
                 body = json.loads(event.get("body") or "{}")
             except (json.JSONDecodeError, TypeError) as err:
                 raise GalleryError(400, "invalid_json", f"Request body is not valid JSON: {err}")
-            return publish(body, correlation_id)
+            return publish(body, event.get("headers") or {}, correlation_id)
 
         raise GalleryError(404, "not_found", f"No route for {method} {path}.")
 

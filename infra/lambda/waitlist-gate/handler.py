@@ -171,17 +171,7 @@ def burn(cur, token, telegram_id, agent_pubkey, correlation_id):
         )
 
     if agent_pubkey:
-        # The bridge (M11-D6). Written here because this is the one moment both
-        # identities are present at once — the protocol pubkey and the waitlist
-        # record. Missing it means first-win detection can never find this user.
-        cur.execute(
-            """
-            INSERT INTO waitlist_agent_links (agent_pubkey, waitlist_user_id)
-            VALUES (%s, %s)
-            ON CONFLICT (agent_pubkey) DO NOTHING
-            """,
-            (agent_pubkey, user_id),
-        )
+        link_agent(cur, agent_pubkey, user_id)
 
     log(
         "waitlist.gate.token.burned",
@@ -189,12 +179,49 @@ def burn(cur, token, telegram_id, agent_pubkey, correlation_id):
         waitlistId=str(user_id),
         waveNumber=row["wave_number"],
         telegramLinked=True,
+        # Both are outcomes rather than intentions now: each insert either
+        # returned a row or raised, so reaching this line means both happened.
         agentLinked=bool(agent_pubkey),
-        # Both are now outcomes rather than intentions: the link above refuses
-        # rather than swallowing its conflict, so reaching this line means it
-        # happened.
     )
     return user_id
+
+
+def link_agent(cur, agent_pubkey, user_id):
+    """Bind a protocol identity to a waitlist record (M11-D6).
+
+    The conflict is NOT swallowed. A pubkey already bound to somebody else —
+    a shared machine, a restored key, a re-used test key — silently no-opped,
+    and the consequence lands much later and on the wrong person: every future
+    first win from that agent mints THREE premium invites for whoever owns the
+    link and stamps THEIR first_win_at. The person who actually sealed the
+    session gets nothing and nothing anywhere says so.
+    """
+    cur.execute(
+        """
+        INSERT INTO waitlist_agent_links (agent_pubkey, waitlist_user_id)
+        VALUES (%s, %s)
+        ON CONFLICT (agent_pubkey) DO NOTHING
+        RETURNING agent_pubkey
+        """,
+        (agent_pubkey, user_id),
+    )
+    if cur.fetchone() is not None:
+        return True
+
+    cur.execute(
+        "SELECT waitlist_user_id FROM waitlist_agent_links WHERE agent_pubkey = %s",
+        (agent_pubkey,),
+    )
+    existing = cur.fetchone()
+    if existing and existing["waitlist_user_id"] == user_id:
+        # Already ours. Ordinary — a second device check-in, or a retry.
+        return True
+
+    raise GateError(
+        "agent_pubkey_bound_to_another_account",
+        "That agent identity is already registered to a different CELLO account. "
+        "Your access token has not been used — use a fresh agent, or contact support.",
+    )
 
 
 def check(body, correlation_id):
@@ -211,13 +238,7 @@ def check(body, correlation_id):
                 # normal thing to do, and without the link its first win would
                 # never be attributed.
                 if agent_pubkey and existing["waitlist_user_id"]:
-                    cur.execute(
-                        """
-                        INSERT INTO waitlist_agent_links (agent_pubkey, waitlist_user_id)
-                        VALUES (%s, %s) ON CONFLICT (agent_pubkey) DO NOTHING
-                        """,
-                        (agent_pubkey, existing["waitlist_user_id"]),
-                    )
+                    link_agent(cur, agent_pubkey, existing["waitlist_user_id"])
                 conn.commit()
                 log(
                     "waitlist.gate.already_linked",

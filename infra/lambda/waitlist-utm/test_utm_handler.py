@@ -151,3 +151,17 @@ def test_a_generated_creator_link_actually_attributes_a_signup(utm):
     assert result["statusCode"] == 200, result["body"]
     tracked = query("SELECT creator_handle, event_type FROM creator_tracking")
     assert tracked == [("endtoend", "signup")]
+
+
+def test_the_same_creator_in_different_case_is_the_same_creator(utm):
+    """The code is derived from the lowercased handle, so a case-sensitive
+    comparison reported a hash collision for a capitalisation difference — and
+    the remedy it printed ("use a different handle") would have minted a second
+    code for one creator, which is the attribution split this module exists to
+    prevent."""
+    status_a, first = gen(utm, creator_handle="techjournalist")
+    status_b, second = gen(utm, creator_handle="TechJournalist")
+
+    assert (status_a, status_b) == (200, 200)
+    assert first["ref"] == second["ref"]
+    assert query("SELECT count(*) FROM referral_codes")[0][0] == 1

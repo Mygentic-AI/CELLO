@@ -124,10 +124,18 @@ def generate(body, correlation_id):
                     ON CONFLICT (code) DO UPDATE SET active = true
                     RETURNING code, creator_handle
                     """,
-                    (code, handle),
+                    # Stored lowercased, because the CODE is derived from the
+                    # lowercased handle. Storing the raw form made the check
+                    # below case-SENSITIVE against a case-INSENSITIVE key, so
+                    # "TechJournalist" reported a hash collision with
+                    # "techjournalist" — and told the operator to use a
+                    # different handle, which would mint a second code for one
+                    # creator: precisely the attribution split this module
+                    # exists to prevent.
+                    (code, handle.lower()),
                 )
                 row = cur.fetchone()
-                if row["creator_handle"] != handle:
+                if row["creator_handle"] != handle.lower():
                     # A collision between two different handles on one code.
                     # Silently attributing one creator's traffic to another is
                     # worse than refusing to generate the link.

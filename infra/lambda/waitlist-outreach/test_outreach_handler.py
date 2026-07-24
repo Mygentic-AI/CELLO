@@ -236,3 +236,58 @@ def test_a_database_fault_is_not_reported_as_a_quiet_sweep(outreach, monkeypatch
 
     assert result["statusCode"] == 503
     assert "day_six_granted" not in json.loads(result["body"])
+
+
+def test_day_six_grants_two_even_to_someone_who_already_has_first_win_invites(outreach):
+    """The defect: the ceiling counted ALL premium codes, so a first-win user
+    holding 3 needed 0, got ZERO, and was stamped as granted so they could never
+    be picked up again. Eligibility is measured in sealed sessions, so almost
+    everyone who reaches Day 6 has already reached first win — this was the
+    common case, not the edge."""
+    uid = make_eligible(days_ago=7)
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        for i in range(3):
+            cur.execute(
+                "INSERT INTO referral_codes (code, owner_waitlist_user_id, type) "
+                "VALUES (%s, %s, 'premium')",
+                (f"FIRSTWIN{i}", uid),
+            )
+    conn.close()
+
+    body = sweep(outreach)
+
+    assert body["invites_issued"] == 2, "the Day-6 grant is unconditional"
+    assert invites(uid) == 5, "three from first win plus two from outreach"
+
+
+def test_the_sweep_reports_invites_issued_not_just_rows_claimed(outreach):
+    """It said day_six_granted: 1 while issuing nothing at all."""
+    uid = make_eligible(days_ago=7)
+
+    body = sweep(outreach)
+
+    assert body["day_six_granted"] == 1
+    assert body["invites_issued"] == 2
+
+
+def test_the_call_ceiling_still_counts_everything(outreach):
+    """M11-D28 stands: the 4 is a cap on what one person hands out, so first-win
+    invites count toward it. Only the Day-6 GRANT is scoped."""
+    uid = make_eligible(days_ago=1)
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        for i in range(3):
+            cur.execute(
+                "INSERT INTO referral_codes (code, owner_waitlist_user_id, type) "
+                "VALUES (%s, %s, 'premium')",
+                (f"FW{i}", uid),
+            )
+    conn.close()
+
+    _, body = complete(outreach, uid)
+
+    assert body["granted"] == 1
+    assert invites(uid) == 4

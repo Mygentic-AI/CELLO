@@ -64,12 +64,29 @@ def sweep(correlation_id):
                 WITH activity AS (
                     SELECT
                         l.waitlist_user_id,
-                        count(*) FILTER (WHERE s.sealed_at IS NOT NULL) AS sealed,
-                        count(DISTINCT s.counterparty_operator)
+                        -- DISTINCT on the session, not a row count. A session
+                        -- between somebody's own laptop and phone writes ONE
+                        -- ROW PER AGENT (0017's UNIQUE is (agent_pubkey,
+                        -- session_ref)), so counting rows counted it twice and
+                        -- the "5 sessions" bar fired at 3. Straight at
+                        -- DOD-INV-NO-INFLATION, in the direction that flatters.
+                        count(DISTINCT s.session_ref)
+                            FILTER (WHERE s.sealed_at IS NOT NULL) AS sealed,
+                        -- IS DISTINCT FROM, not <>. `operator` is nullable and
+                        -- has no producer yet; if the daemon writes only the
+                        -- counterparty fingerprint — the natural shape, since
+                        -- an agent knows who it talked to and knows it is
+                        -- itself — then NULL <> 'op-b' is NULL, the filter
+                        -- drops it, and the cross-operator threshold never
+                        -- fires for anyone. That threshold is set five times
+                        -- lower on purpose because it is the signal that
+                        -- matters most, so silently never firing is the worst
+                        -- available failure.
+                        count(DISTINCT s.session_ref)
                             FILTER (
                                 WHERE s.sealed_at IS NOT NULL
                                   AND s.counterparty_operator IS NOT NULL
-                                  AND s.counterparty_operator <> s.operator
+                                  AND s.counterparty_operator IS DISTINCT FROM s.operator
                             ) AS cross_operator
                     FROM waitlist_agent_links l
                     JOIN waitlist_users u ON u.waitlist_id = l.waitlist_user_id

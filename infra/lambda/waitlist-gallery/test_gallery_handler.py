@@ -16,6 +16,11 @@ import pytest
 from waitlist_testdb import PGURL, query, load_lambda
 
 
+@pytest.fixture(autouse=True)
+def _reset_owner():
+    _owner_cookie["value"] = None
+
+
 @pytest.fixture()
 def gallery(database):
     return load_lambda(Path(__file__).parent, "gallery_handler")
@@ -44,8 +49,18 @@ def receipt(**overrides):
     }
 
 
+_owner_cookie = {"value": None}
+
+
 def publish(gallery, **overrides):
-    return call(gallery, "POST", "/gallery/publish", body=receipt(**overrides))
+    """Publishes as a signed-in owner of `pk-owner`, since publishing now
+    requires proving both who you are and that the receipt is yours."""
+    if _owner_cookie["value"] is None:
+        _owner_cookie["value"] = _sign_in("galleryowner@example.test", "pk-owner")[0]
+    return call_with_cookie(
+        gallery, "/gallery/publish", receipt(agent_pubkey="pk-owner", **overrides),
+        _owner_cookie["value"],
+    )
 
 
 # ── DOD-GALLERY-PRIVACY-1 ─────────────────────────────────────────────────────
@@ -85,11 +100,16 @@ def test_republishing_does_not_overwrite(gallery):
     publish rewriting the monikers or the verification count would make the
     permanence meaningless."""
     _, first = publish(gallery, initiator_moniker="Ada")
-    result, second = call(
+    result, second = call_with_cookie(
         gallery,
-        "POST",
         "/gallery/publish",
-        body=receipt(receipt_hash=first["receipt_hash"], initiator_moniker="Rewritten", verified_by=3),
+        receipt(
+            receipt_hash=first["receipt_hash"],
+            initiator_moniker="Rewritten",
+            verified_by=3,
+            agent_pubkey="pk-owner",
+        ),
+        _owner_cookie["value"],
     )
 
     assert result["statusCode"] == 200
@@ -212,3 +232,98 @@ def test_a_published_receipt_is_cached_immutably(gallery):
     result, _ = call(gallery, "GET", f"/gallery/receipts/{published['receipt_hash']}")
 
     assert "immutable" in result["headers"]["Cache-Control"]
+
+
+# ── Publishing requires proof, not a body field (DOD-GALLERY-PRIVACY-1) ───────
+
+
+def _sign_in(user_email="owner@example.test", pubkey="pk-owner"):
+    """Returns (cookie, waitlist_user_id) for a user who owns `pubkey`."""
+    import hashlib
+    import secrets
+
+    raw = secrets.token_urlsafe(32)
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO waitlist_users (email, anon_id) VALUES (%s, %s) RETURNING waitlist_id",
+            (user_email, str(uuid.uuid4())),
+        )
+        uid = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO waitlist_sessions (waitlist_user_id, token_hash, expires_at) "
+            "VALUES (%s, %s, now() + interval '30 days')",
+            (uid, hashlib.sha256(raw.encode()).hexdigest()),
+        )
+        cur.execute(
+            "INSERT INTO waitlist_agent_links (agent_pubkey, waitlist_user_id) VALUES (%s, %s)",
+            (pubkey, uid),
+        )
+    conn.close()
+    return f"cello_wl_session={raw}", uid
+
+
+def call_with_cookie(gallery, path, body, cookie=None):
+    event = {
+        "headers": {"cookie": cookie} if cookie else {},
+        "requestContext": {"http": {"method": "POST", "path": path}},
+        "body": json.dumps(body),
+    }
+    result = gallery.lambda_handler(event, None)
+    return result, json.loads(result["body"])
+
+
+def test_publishing_without_a_session_is_refused(gallery):
+    """A published page is permanent, irrevocable and indexed, asserting that a
+    session happened and that N of M directory nodes attested to it. Anyone able
+    to POST could mint a forged cryptographic claim that can never be deleted."""
+    result, body = call_with_cookie(
+        gallery, "/gallery/publish", receipt(agent_pubkey="pk-anything")
+    )
+
+    assert result["statusCode"] == 401
+    assert body["error"] == "no_active_session"
+    assert query("SELECT count(*) FROM published_receipts")[0][0] == 0
+
+
+def test_publishing_a_receipt_that_is_not_yours_is_refused(gallery):
+    """A session alone would let any signed-in user publish a page about
+    somebody else's conversation."""
+    cookie, _ = _sign_in("owner@example.test", "pk-mine")
+
+    result, body = call_with_cookie(
+        gallery, "/gallery/publish", receipt(agent_pubkey="pk-somebody-elses"), cookie
+    )
+
+    assert result["statusCode"] == 403
+    assert body["error"] == "receipt_not_yours"
+    assert query("SELECT count(*) FROM published_receipts")[0][0] == 0
+
+
+def test_the_publisher_is_taken_from_the_session_not_the_body(gallery):
+    """An attacker-controlled attribution on a page that cannot be deleted."""
+    cookie, real_uid = _sign_in("owner@example.test", "pk-mine")
+    other = uuid.uuid4()
+
+    result, _ = call_with_cookie(
+        gallery,
+        "/gallery/publish",
+        receipt(agent_pubkey="pk-mine", published_by_waitlist_user_id=str(other)),
+        cookie,
+    )
+
+    assert result["statusCode"] == 200
+    stored = query("SELECT published_by_waitlist_user_id FROM published_receipts")[0][0]
+    assert stored == real_uid, "attribution must come from the session"
+
+
+def test_the_owner_can_publish_their_own_receipt(gallery):
+    cookie, _ = _sign_in("owner@example.test", "pk-mine")
+
+    result, body = call_with_cookie(
+        gallery, "/gallery/publish", receipt(agent_pubkey="pk-mine"), cookie
+    )
+
+    assert result["statusCode"] == 200
+    assert body["newly_published"] is True

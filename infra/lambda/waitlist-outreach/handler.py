@@ -69,19 +69,27 @@ def generate_code(cur):
     )
 
 
-def grant_invites_up_to(cur, user_id, target, correlation_id, reason):
-    """Top up to `target` premium invites. Returns how many were newly issued.
+def grant_invites_up_to(cur, user_id, target, correlation_id, reason, scope="outreach"):
+    """Top up to `target` premium invites from THIS SEQUENCE. Returns how many
+    were newly issued.
 
-    Counts what the user ALREADY holds rather than adding blindly. The Day 6
-    grant and the call-completed grant both run against the same person, and
-    adding would give someone who took six days to reply more invites than
-    someone who answered immediately — inverting the incentive the sequence
-    exists to create.
+    `scope` is the fix for a real defect: the ceiling was counted against ALL of
+    a user's premium codes, including the three from first-win. So anyone who
+    had reached first win — which is most people who become feedback-eligible,
+    since eligibility is measured in sealed sessions — held 3, needed 0, got
+    ZERO invites at Day 6, and had `feedback_day6_granted_at` stamped anyway so
+    they could never be picked up again. The DoD clause is unconditional:
+    "Day 6, no response: auto-grant 2 premium invite codes."
+    
+    The call-completed ceiling of 4 deliberately DOES count everything (M11-D28)
+    — that number is a cap on what one person can hand out. The Day-6 grant is
+    not a cap; it is a grant. Different questions, so different scopes.
     """
     cur.execute(
         "SELECT count(*) AS n FROM referral_codes "
-        "WHERE owner_waitlist_user_id = %s AND type = 'premium'",
-        (user_id,),
+        "WHERE owner_waitlist_user_id = %s AND type = 'premium' "
+        "  AND (%s = 'all' OR meta->>'source' = 'outreach')",
+        (user_id, scope),
     )
     held = cur.fetchone()["n"]
     needed = max(0, target - held)
@@ -99,9 +107,9 @@ def grant_invites_up_to(cur, user_id, target, correlation_id, reason):
     codes = [generate_code(cur) for _ in range(needed)]
     psycopg2.extras.execute_values(
         cur,
-        "INSERT INTO referral_codes (code, owner_waitlist_user_id, creator_handle, type) VALUES %s",
+        "INSERT INTO referral_codes (code, owner_waitlist_user_id, creator_handle, type, meta) VALUES %s",
         [(code, user_id) for code in codes],
-        template="(%s, %s, NULL, 'premium')",
+        template="(%s, %s, NULL, 'premium', '{\"source\": \"outreach\"}'::jsonb)",
     )
     log(
         "waitlist.outreach.invites.granted",
@@ -140,15 +148,23 @@ def sweep_day_six(correlation_id):
                 (NO_RESPONSE_DAYS,),
             )
             claimed = cur.fetchall()
+            issued = 0
 
             for row in claimed:
-                grant_invites_up_to(
+                issued += grant_invites_up_to(
                     cur, row["waitlist_id"], DAY_SIX_INVITES, correlation_id, "day_six_no_response"
                 )
 
         conn.commit()
-        log("waitlist.outreach.day_six.complete", correlation_id, granted=len(claimed))
-        return {"day_six_granted": len(claimed)}
+        # Users claimed AND invites issued. Reporting only the row count said
+        # "day_six_granted: 1" while issuing nothing at all.
+        log(
+            "waitlist.outreach.day_six.complete",
+            correlation_id,
+            usersClaimed=len(claimed),
+            invitesIssued=issued,
+        )
+        return {"day_six_granted": len(claimed), "invites_issued": issued}
 
     except Exception:
         conn.rollback()
@@ -198,8 +214,15 @@ def complete_call(body, correlation_id):
                 log("waitlist.outreach.call.already_completed", correlation_id, waitlistId=user_id)
                 return {"granted": 0, "reason": "already_completed"}
 
+            # scope="all": the 4 is a CEILING on what one person can hand out
+            # (M11-D28), so first-win invites count toward it.
             issued = grant_invites_up_to(
-                cur, user_id, CALL_COMPLETED_TOTAL, correlation_id, f"call_completed_by:{completed_by}"
+                cur,
+                user_id,
+                CALL_COMPLETED_TOTAL,
+                correlation_id,
+                f"call_completed_by:{completed_by}",
+                scope="all",
             )
 
         conn.commit()

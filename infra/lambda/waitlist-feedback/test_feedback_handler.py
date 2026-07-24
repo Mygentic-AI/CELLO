@@ -263,3 +263,54 @@ def test_a_failed_sweep_is_visibly_failed(feedback, monkeypatch):
 
     assert result["statusCode"] == 503
     assert "newly_eligible" not in json.loads(result["body"])
+
+
+def test_one_session_between_two_of_your_own_agents_counts_once(feedback):
+    """0017 writes one row PER AGENT per session, so counting rows counted a
+    self-session twice and the five-session bar fired at three. Inflation in the
+    direction that flatters, which is the direction nobody checks."""
+    uid = make_user("selfpair@example.test", pubkey="pk-a")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO waitlist_agent_links (agent_pubkey, waitlist_user_id) VALUES ('pk-b', %s)",
+            (uid,),
+        )
+        # Three real sessions, each recorded by both participating agents.
+        for i in range(3):
+            for pk in ("pk-a", "pk-b"):
+                cur.execute(
+                    "INSERT INTO session_telemetry "
+                    "(agent_pubkey, session_ref, operator, counterparty_operator, sealed_at) "
+                    "VALUES (%s, %s, 'op-me', 'op-me', %s)",
+                    (pk, f"shared-session-{i}", ADMITTED + timedelta(days=1)),
+                )
+    conn.close()
+
+    assert run(feedback)["newly_eligible"] == 0, (
+        "three real sessions must not trip a five-session threshold"
+    )
+    assert eligible(uid) is False
+
+
+def test_a_cross_operator_session_is_detected_when_operator_is_unknown(feedback):
+    """`operator` is nullable and has no producer yet. If the daemon writes only
+    the counterparty fingerprint — the natural shape — then NULL <> 'op-b' is
+    NULL and the cross-operator threshold never fires for anybody, silently."""
+    uid = make_user("nulloperator@example.test", pubkey="pk-null")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO session_telemetry "
+            "(agent_pubkey, session_ref, operator, counterparty_operator, sealed_at) "
+            "VALUES ('pk-null', 'x', NULL, 'op-somebody-else', %s)",
+            (ADMITTED + timedelta(days=1),),
+        )
+    conn.close()
+
+    assert run(feedback)["newly_eligible"] == 1, (
+        "an unknown local operator must not silently disable the strongest signal"
+    )
+    assert eligible(uid) is True

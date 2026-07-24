@@ -329,3 +329,45 @@ def test_two_tokens_racing_for_one_telegram_account_burn_only_one(gate):
         "a burned grant with no link is gone forever"
     )
     assert query("SELECT count(*) FROM telegram_accounts")[0][0] == 1
+
+
+def test_an_agent_bound_to_someone_else_refuses_rather_than_no_opping(gate):
+    """The round-4 fix gave the TELEGRAM insert a RETURNING and left the agent
+    link swallowing its conflict — under a comment claiming both were fixed.
+
+    The consequence lands later and on the wrong person: every future first win
+    from that agent mints THREE premium invites for whoever owns the link and
+    stamps THEIR first_win_at. The person who actually sealed the session gets
+    nothing, and nothing anywhere says so."""
+    alice, _ = make_admitted_user("alice@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO waitlist_agent_links (agent_pubkey, waitlist_user_id) VALUES ('pk-shared', %s)",
+            (alice,),
+        )
+    conn.close()
+    _, bob_token = make_admitted_user("bob@example.test")
+
+    result = gate.lambda_handler(
+        {"telegram_id": "tg-bob", "token": bob_token, "agent_pubkey": "pk-shared"}, None
+    )
+    body = json.loads(result["body"])
+
+    assert body["allowed"] is False
+    assert body["error"] == "agent_pubkey_bound_to_another_account"
+    assert query("SELECT used_at IS NULL FROM waitlist_tokens WHERE token = %s", (bob_token,))[0][0], (
+        "Bob's grant must NOT be burned for a link that could not be made"
+    )
+    assert query("SELECT waitlist_user_id FROM waitlist_agent_links WHERE agent_pubkey = 'pk-shared'")[0][0] == alice
+
+
+def test_re_presenting_your_own_agent_is_fine(gate):
+    """A second device check-in, or a retry. Ordinary."""
+    uid, token = make_admitted_user()
+    call(gate, token=token, agent_pubkey="pk-mine")
+
+    _, body = call(gate, agent_pubkey="pk-mine")
+
+    assert body["allowed"] is True
