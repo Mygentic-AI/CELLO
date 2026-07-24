@@ -1479,3 +1479,45 @@ them assumed.
 
 **Status:** `DOD-UTM-TOOL-1` ❌ → 🟡. Owed: the ops-dashboard UI (`DOD-OPS-UTM-1`), which is a form over
 this endpoint.
+
+---
+
+### Entry 32: the gallery API — no route can express unpublishing
+**Date:** 2026-07-25
+**Target:** DOD-GALLERY-1, DOD-GALLERY-RECEIPT-1, DOD-GALLERY-PRIVACY-1, DOD-GALLERY-INDEX-1
+
+`0019` + `infra/lambda/waitlist-gallery/`. Two public reads and one portal-triggered write.
+
+**Opt-in is structural, not a flag.** An unpublished receipt has **no row in this database at all**.
+There is no receipts table with a `published` boolean that could default wrong, be flipped by a careless
+UPDATE, or leak through a query that forgot the filter. The data was never sent. That is the strongest
+form the privacy guarantee can take, and it is worth more than any amount of care around a flag.
+
+**Irrevocability is enforced by the API's shape.** There is no delete route, and the test asserts that
+`DELETE /receipts/{hash}`, `POST /unpublish` and `POST /receipts/{hash}/delete` all 404. Adding one would
+be a lie: a URL that has been shared, screenshotted and indexed cannot be recalled, and a delete button
+tells the user it can.
+
+**Republishing is a no-op, not an error — and not an overwrite.** A double-clicked portal button has the
+same intent as one click, so failing would be unhelpful. But a *later* publish rewriting the monikers or
+the verification count would make the permanence meaningless, so `ON CONFLICT DO NOTHING` and the original
+stands.
+
+**Verification travels as two numbers, never a sentence.** "Verified" loses whether it was 2-of-3 or
+3-of-3, and those are different claims about how much of the consortium attested. Publishing "verified by
+5 of 3" is refused outright — that would put a claim on a public page that the directory could not have
+made.
+
+**Monikers are the only caller-controlled string on a public, SSR, bot-indexed page,** so markup in one is
+refused at the write rather than escaped at every read.
+
+**The index total is the real count.** A gallery that padded it would be inventing exactly the social
+proof `DOD-INV-NO-INFLATION` forbids — and it is the one number a visitor can check against the cards in
+front of them.
+
+A published receipt is served `immutable`, which is safe *precisely because* there is no update path.
+
+**Runs:** 336 tests green across thirteen Lambda suites.
+
+**Status:** `DOD-GALLERY-PRIVACY-1` ❌ → 🟡. The other three ❌ → 🟠 — the API serves everything the pages
+need; the pages, the `gallery.` subdomain, the robots entry and the cello-client footer are owed.
