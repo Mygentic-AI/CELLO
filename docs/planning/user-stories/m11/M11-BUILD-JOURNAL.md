@@ -1587,3 +1587,44 @@ and that is noted in the Parked entry.
 
 **Status:** `DOD-OPENCLAW-SKILL-1` ❌ → 🟠 (written; the directory submission is outward) ·
 `DOD-MCP-REGISTRY-1` ❌ → 🅿️.
+
+---
+
+### Entry 35: the gallery is invisible to the crawlers it exists for
+**Date:** 2026-07-25
+**Target:** DOD-GALLERY-1 — finding, parked
+
+Recorded before a reviewer raises it, because I built it and the gap is mine.
+
+`DOD-GALLERY-1` says **"SSR-rendered (bot-indexable)"**, and §9 of the requirements states the value in
+plain terms: *"the gallery becomes a corpus of real agent-to-agent sessions that AI engines index when
+answering 'what does a CELLO session look like?' This is compounding organic distribution that requires no
+ongoing content effort."*
+
+What I built is a static export that fetches receipts **client-side**. GPTBot, PerplexityBot and most AI
+crawlers do not execute JavaScript, so they see an empty shell. The pages render correctly for a human,
+the API is correct, the privacy model is correct — and **the single reason the gallery is in this
+milestone is not delivered.**
+
+This traces straight to M11-D20. Keeping the static export was right for `/status`, `/auth` and `/survey`:
+those are session-gated and must never be indexed, and a client-side fetch is exactly correct there. The
+gallery is the one surface in M11 whose entire purpose is the opposite, and the decision was applied to it
+by default rather than by choice.
+
+**Three resolutions, none free:**
+- **(a) Build-time generation.** `generateStaticParams` over `published_receipts`, so every receipt is a
+  real HTML file. Genuinely indexable. Costs: CI needs access to a `PubliclyAccessible: false` RDS, and
+  the gallery only refreshes on deploy. The staleness is more acceptable here than it sounds — a published
+  receipt is *immutable by design*, so a stale page is not a wrong page, only a short page.
+- **(b) A small server-rendered app** on `gallery.cello.mygentic.ai`. This is M11-D20's Option A scoped to
+  the one surface that actually needs it, rather than applied to the whole site.
+- **(c) Accept bot-invisibility** and drop the GEO justification, keeping the gallery as a share target for
+  links people send each other — still worth having, just not compounding.
+
+Parked rather than decided: each has a real cost, the choice changes what P3 is *for*, and it is not a
+"pick the common best practice" call. **Not blocking** — the API, schema, privacy model and pages all
+stand unchanged under any of the three.
+
+Worth noting the shape of the mistake, since it is not a coding error: a decision made correctly for one
+surface propagated silently to a surface with the opposite requirement. Nothing failed, no test went red,
+and the gap is only visible by asking what the feature is *for*.
