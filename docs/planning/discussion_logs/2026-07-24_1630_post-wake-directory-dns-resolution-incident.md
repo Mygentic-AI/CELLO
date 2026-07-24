@@ -485,5 +485,132 @@ at all. It also means reproduction attempts must control for the network path.
 
 ---
 
+## 13. ROOT CAUSE ESTABLISHED — observed self-heal closes the loop (2026-07-24, 17:07 UTC)
+
+### 13.1 The decisive observation
+
+A read-only watch (getaddrinfo probe every 2 min, started 16:48:32Z) captured the exact heal:
+
+```
+17:05:12Z FAIL
+17:07:12Z RESOLVED 98.94.216.140   ← directory-us1 self-healed
+```
+
+Within seconds of us1 healing, **the daemon reconnected on its own**: `cello_status` flipped to
+`directory_signaling: "connected"` with no daemon restart, no flush, no intervention of any
+kind. At that moment eu1/ap1 were **still poisoned** (staggered heal — their entries were
+minted seconds later; a second watch is timestamping their expiries). One healthy directory
+sufficed: the failover design worked exactly as intended once DNS let a single node through.
+
+Second watch: eu1 and ap1 both healed by **17:09:12Z** (first sample of a 1-min watch started
+17:08:12Z) — total stagger across the three names under ~4 min, consistent with entries minted
+seconds-to-minutes apart by the daemon's post-wake retry cycle. All three `/bootstrap`
+endpoints returned HTTP 200 by hostname at 17:09. **Full client-side recovery, zero
+intervention: nothing was ever flushed.**
+
+### 13.2 Mint-time arithmetic — the poisoning happened AFTER the wake
+
+- us1 entry expired between 17:05:12 and 17:07:12 Z.
+- Original TTL (established §12.3): 2819 s.
+- Therefore minted between **16:18:13 and 16:20:13 Z** — i.e. **30 s to 2.5 min AFTER the wake
+  completed at 16:17:44 Z**, when Route53 authoritatively had the records again.
+
+So the NXDOMAIN that poisoned the Mac was NOT served by Route53. It was served by the
+**carrier/hotspot resolver chain's own stale negative cache** — still echoing the overnight
+answer for a few minutes post-wake — and stamped with that chain's rewritten TTL of 2819 s.
+
+### 13.3 The complete causal chain (each step evidenced)
+
+1. Hibernate (2026-07-23 19:42Z) deletes the directory ALBs **and Route53 records**; the three
+   `directory-*` names become NXDOMAIN. (`hibernate.sh`, by design.)
+2. The local daemon keeps retrying signaling every 30 s all night, querying ONLY the
+   `directory-*` names by DNS (relay endpoints come from the manifest; portal is never
+   queried). → §6.2's selectivity: only these three names ever had negative answers to cache.
+3. The overnight NXDOMAINs populate negative caches at TWO layers: the carrier/hotspot
+   resolver chain (this Mac was on an iPhone Personal Hotspot, resolver 172.20.10.1 — §12.1)
+   and the Mac's mDNSResponder.
+4. Wake (16:01–16:17:44Z) recreates ALBs + records. Server side fully healthy (§4).
+5. **≈16:18–16:20Z — the fatal mint:** the daemon's next retry asks upstream (the Mac-side
+   entry from step 3 had expired or was refreshed); the carrier chain still serves its stale
+   NXDOMAIN and stamps it TTL 2819 s; mDNSResponder caches it. The carrier chain's own staleness
+   clears within minutes — but the Mac now holds the poison for ~47 minutes.
+6. 16:18→17:07Z: mDNSResponder answers `No Such Record` from cache in 0 ms, never consulting
+   the now-correct upstream (§12.2). Every client on this machine sees all three sovereign
+   directories down at once. Wake log says COMPLETE; AWS dashboards green.
+7. 17:07:12Z: the 2819 s TTL expires; the next query reaches the now-correct upstream; heal is
+   instantaneous and automatic; daemon reconnects within one 30 s retry cycle.
+
+**Root cause, one sentence:** hibernation makes the directory hostnames NXDOMAIN for ~20 hours
+while the client daemon polls them every 30 s, seeding negative caches at every resolver layer
+between daemon and Route53; on wake, whichever stale layer answers first re-poisons the layers
+below it with an arbitrary (here TTL-rewritten, 47-minute) negative entry — producing a total,
+silent, self-expiring client-side outage that no server-side check can see.
+
+### 13.4 What this incident is NOT
+
+- NOT a server/AWS defect — §4 stands; everything was healthy throughout.
+- NOT a client code defect in failover — the daemon reconnected within seconds of the first
+  name healing. (The `catch { return null }` observability gap of §5 remains real but did not
+  cause the outage.)
+- NOT specific to macOS/mDNSResponder in essence — the mechanism (client polls a
+  deliberately-NXDOMAIN name; negative caches fill; wake races stale caches) applies to any
+  OS/resolver stack; macOS + a TTL-mangling hotspot chain made it long and visible.
+- NOT permanent — self-heals at negative-TTL expiry. The damage is bounded outage
+  (here ~50 min) per wake, per affected client machine, with wildly variable duration
+  depending on the client's resolver chain.
+
+### 13.5 Answers to §10's open questions
+
+1. Cache contents: negative entries confirmed via `dns-sd -G` behavior + observed expiry
+   (SIGINFO is deprecated on this macOS; `dns-sd -O -stdout` is the current dump, root-only —
+   ultimately not needed, the expiry watch answered the question).
+2. `scutil --dns`: no split/scoped resolver; single hotspot resolver 172.20.10.1.
+3. Entry did NOT survive expiry, and did NOT re-poison (upstream was correct again by then;
+   zero A-record NXDOMAINs in a 10-min mDNSResponder log window pre-heal).
+4. `relay-*`/`portal` escaped because nothing queries them by DNS during hibernation (only the
+   directory names are polled by the daemon's reconnect loop).
+5. The 2026-07-22 wake showed the identical `/manifest HTTP 000` warnings — now explained as
+   the same mechanism, which self-healed unnoticed within the negative TTL.
+6. YES — wake.sh should verify through the OS resolver / real client path (remediation R2).
+7. YES — `fetchBootstrapMultiaddr` should distinguish DNS failure from connect failure
+   (remediation R3).
+
+---
+
+## 14. Proposed remediations — NOT YET IMPLEMENTED, pending operator approval
+
+**R1 — Stop making the names NXDOMAIN at all (root fix, kills the entire class).**
+`hibernate.sh` currently deletes the Route53 alias records with the ALBs. Instead, during
+hibernation REPLACE each directory (and relay) alias with a plain A record pointing at a
+blackhole address (e.g. `198.51.100.1`, TEST-NET-2, guaranteed unroutable). The name then
+resolves NOERROR throughout hibernation — connections fail fast at TCP with zero DNS caching
+consequences, because only NXDOMAIN/NODATA answers are negatively cached. On wake, the alias
+is restored; positive TTLs are short (60 s) and rewriting an existing record races no negative
+cache anywhere. This fixes every client on every network, requires no client release, and
+costs nothing (Route53 records are already paid for; the change is in hibernate/wake scripts
+only).
+
+**R2 — Make wake.sh tell the truth (detection).** Verification step 7/7 must resolve via the
+OS resolver (e.g. plain `curl` by hostname, no `dig @8.8.8.8`) and treat failure as FAILURE —
+poll until healthy or exit non-zero with a loud banner, never `WAKE COMPLETE` over a failing
+real-path check. (§2's blind spot.)
+
+**R3 — Client observability (diagnosis).** `fetchBootstrapMultiaddr`'s `catch { return null }`
+collapses DNS failure / refused / timeout / bad JSON into one `unresolved` warning. Split the
+event context by failure class (at minimum: `dns_error` vs `connect_error` vs `timeout` vs
+`bad_response`), so `directory.consortium.node.unresolved reason:dns_error` on all nodes
+immediately suggests local resolution, not server outage. An end user cannot run this
+investigation; the log must do it for them.
+
+**R4 — Runbook line (documentation).** Post-wake checklist: on any client that was running
+during hibernation, directory DNS may stay negative-cached for the resolver chain's negative
+TTL (~minutes to ~1 h on TTL-mangling networks like phone hotspots). Verify from the CLIENT
+path before debugging the server. (Largely moot if R1 ships, but cheap.)
+
+Priority: R1 is the fix; R2/R3 are the safety net that would have turned a multi-hour
+investigation into a one-line log read; R4 is paper. None applied yet.
+
+---
+
 *This document is intentionally unfinished. Append findings as the investigation proceeds;
 do not rewrite the record above — add new dated sections beneath it.*
