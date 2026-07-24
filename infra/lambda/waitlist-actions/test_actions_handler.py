@@ -394,3 +394,82 @@ def test_a_banned_user_cannot_award_themselves_points(actions, status):
     assert result == 403
     assert payload["error"] == f"account_{status}"
     assert total(uid) == 0
+
+
+def test_a_late_freeform_answer_is_still_paid_and_still_stored(actions):
+    """The half-filled case: structured answers first, free-form on a later
+    visit. Previously the second call returned awarded=0, the 10 points were
+    forfeited, and the written answer — the entire reason the bonus exists — was
+    never stored at all."""
+    uid = make_user()
+    cookie = sign_in(uid)
+
+    call(actions, "/waitlist/survey", {"answers": {"use": "agents"}}, cookie)
+    _, payload = call(
+        actions,
+        "/waitlist/survey",
+        {"answers": {"use": "agents"}, "freeform": "Connecting my own agents across machines."},
+        cookie,
+    )
+
+    assert payload["awarded"] == 10, "the late free-form must still pay"
+    assert total(uid) == 30
+
+    meta = query(
+        "SELECT meta FROM points_ledger WHERE waitlist_user_id = %s AND reason = 'survey'", (uid,)
+    )[0][0]
+    assert meta["freeform"] == "Connecting my own agents across machines.", (
+        "the answer must be stored — points for text nobody kept is a number with no evidence"
+    )
+
+
+def test_the_freeform_bonus_is_paid_only_once(actions):
+    uid = make_user()
+    cookie = sign_in(uid)
+    body = {"answers": {"a": 1}, "freeform": "words"}
+
+    call(actions, "/waitlist/survey", body, cookie)
+    _, second = call(actions, "/waitlist/survey", body, cookie)
+
+    assert second["awarded"] == 0
+    assert total(uid) == 30
+
+
+def test_an_update_past_a_cap_fails_like_an_insert(database):
+    """0003 calls the ledger append-only and caps it with INSERT-only triggers.
+    Production code now UPDATEs it, so an UPDATE past a cap has to fail too —
+    otherwise the invariant is literally true and practically incomplete."""
+    uid = make_user("capupdate@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO points_ledger (waitlist_user_id, points, reason) "
+            "VALUES (%s, 10, 'share_conversion')",
+            (uid,),
+        )
+        with pytest.raises(psycopg2.errors.CheckViolation):
+            cur.execute(
+                "UPDATE points_ledger SET points = 999 WHERE waitlist_user_id = %s", (uid,)
+            )
+    conn.close()
+
+    assert total(uid) == 10
+
+
+def test_deleting_a_ledger_row_re_syncs_the_total(database):
+    """Otherwise points_total overstates the ledger — the same drift as a cap
+    breach, from the other direction."""
+    uid = make_user("deleter@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO points_ledger (waitlist_user_id, points, reason) VALUES (%s, 20, 'survey')",
+            (uid,),
+        )
+        assert total(uid) == 20
+        cur.execute("DELETE FROM points_ledger WHERE waitlist_user_id = %s", (uid,))
+    conn.close()
+
+    assert total(uid) == 0

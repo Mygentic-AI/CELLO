@@ -438,3 +438,23 @@ def test_a_banned_user_keeps_their_status_page_but_cannot_act(auth, status):
 
     result, _ = call(auth, "GET", "/waitlist/auth/session", cookie=cookie)
     assert result["statusCode"] == 200, "they can still see their own page"
+
+
+def test_a_database_fault_on_a_known_address_still_looks_identical(auth, monkeypatch):
+    """The categorical oracle, which is worse than the timing one.
+
+    If a psycopg2 error escapes, a known address returns 503 while an unknown
+    address returns the opaque 200 — an attacker distinguishes them on status
+    alone, no stopwatch needed."""
+    make_user("faulty@example.test")
+
+    def boom(*_args, **_kwargs):
+        raise psycopg2.OperationalError("server closed the connection unexpectedly")
+
+    monkeypatch.setattr(auth, "_issue_link_if_eligible", boom)
+
+    known_result, known_body = request_link(auth, "faulty@example.test")
+    unknown_result, unknown_body = request_link(auth, "absent@example.test")
+
+    assert known_result["statusCode"] == unknown_result["statusCode"] == 200
+    assert known_body == unknown_body == auth.OPAQUE_RESPONSE

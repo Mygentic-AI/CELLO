@@ -156,72 +156,22 @@ def handle_request_link(body, origin, correlation_id):
     # error for "not-an-email" but the opaque one for "real@example.com" is a
     # weaker oracle, but it is still an oracle.
     if email:
-        conn = connect()
         try:
-            conn.autocommit = False
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                # Count PRIOR requests, then record this one. Inserting first
-                # makes the current request count against itself, so a limit of
-                # N issues only N-1 links.
-                throttled = rate_limited(cur, email)
-                cur.execute(
-                    "INSERT INTO auth_link_requests (email_requested) VALUES (%s)", (email,)
-                )
-
-                cur.execute(
-                    "SELECT waitlist_id, email_status FROM waitlist_users WHERE lower(email) = %s",
-                    (email,),
-                )
-                user = cur.fetchone()
-
-                if user and not throttled and user["email_status"] == "active":
-                    # Burn any earlier unused link first. Otherwise N requests
-                    # leave N-1 live credentials for the same person, and the
-                    # single-use guarantee only covers each token in isolation
-                    # rather than the account.
-                    cur.execute(
-                        "UPDATE auth_tokens SET used_at = now() "
-                        "WHERE waitlist_user_id = %s AND kind = 'magic_link' "
-                        "AND used_at IS NULL",
-                        (user["waitlist_id"],),
-                    )
-                    cur.execute(
-                        """
-                        INSERT INTO auth_tokens (waitlist_user_id, kind, expires_at)
-                        VALUES (%s, 'magic_link', now() + interval '15 minutes')
-                        RETURNING token
-                        """,
-                        (user["waitlist_id"],),
-                    )
-                    token = cur.fetchone()["token"]
-                    cur.execute(
-                        """
-                        INSERT INTO email_jobs (user_id, template, scheduled_at)
-                        VALUES (%s, 'e_magic_link', now())
-                        """,
-                        (user["waitlist_id"],),
-                    )
-                    log(
-                        "waitlist.auth.link.issued",
-                        correlation_id,
-                        waitlistId=str(user["waitlist_id"]),
-                        tokenId=str(token),
-                    )
-                else:
-                    # Logged, never surfaced. The operator can see what happened;
-                    # the caller cannot.
-                    log(
-                        "waitlist.auth.link.withheld",
-                        correlation_id,
-                        reason=(
-                            "rate_limited" if throttled
-                            else "unknown_address" if not user
-                            else f"email_status_{user['email_status']}"
-                        ),
-                    )
-            conn.commit()
-        finally:
-            conn.close()
+            _issue_link_if_eligible(email, correlation_id)
+        except psycopg2.Error as err:
+            # Swallowed DELIBERATELY, and this is the one place in M11 where that
+            # is right. Letting it escape means a database fault on a KNOWN
+            # address returns 503 while an unknown address returns the opaque
+            # 200 — a categorical oracle, strictly worse than the timing channel
+            # this endpoint exists to close. The operator still gets the full
+            # cause in the log; the caller learns nothing either way.
+            log(
+                "waitlist.auth.link.failed",
+                correlation_id,
+                level="ERROR",
+                pgcode=err.pgcode,
+                detail=str(err).strip(),
+            )
 
     # The timing floor. Without it the known path is measurably slower than the
     # unknown one and the identical body means nothing.
@@ -242,6 +192,79 @@ def handle_request_link(body, origin, correlation_id):
         )
 
     return resp(200, OPAQUE_RESPONSE, origin)
+
+
+def _issue_link_if_eligible(email, correlation_id):
+    """The whole known-address path, isolated so its failures cannot change the
+    response shape."""
+    conn = connect()
+    try:
+        conn.autocommit = False
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Count PRIOR requests, then record this one. Inserting first
+            # makes the current request count against itself, so a limit of
+            # N issues only N-1 links.
+            throttled = rate_limited(cur, email)
+            cur.execute(
+                "INSERT INTO auth_link_requests (email_requested) VALUES (%s)", (email,)
+            )
+
+            cur.execute(
+                "SELECT waitlist_id, email_status FROM waitlist_users WHERE lower(email) = %s",
+                (email,),
+            )
+            user = cur.fetchone()
+
+            if user and not throttled and user["email_status"] == "active":
+                # Burn any earlier unused link first. Otherwise N requests
+                # leave N-1 live credentials for the same person, and the
+                # single-use guarantee only covers each token in isolation
+                # rather than the account.
+                cur.execute(
+                    "UPDATE auth_tokens SET used_at = now() "
+                    "WHERE waitlist_user_id = %s AND kind = 'magic_link' "
+                    "AND used_at IS NULL",
+                    (user["waitlist_id"],),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO auth_tokens (waitlist_user_id, kind, expires_at)
+                    VALUES (%s, 'magic_link', now() + interval '15 minutes')
+                    RETURNING token
+                    """,
+                    (user["waitlist_id"],),
+                )
+                token = cur.fetchone()["token"]
+                cur.execute(
+                    """
+                    INSERT INTO email_jobs (user_id, template, scheduled_at)
+                    VALUES (%s, 'e_magic_link', now())
+                    """,
+                    (user["waitlist_id"],),
+                )
+                log(
+                    "waitlist.auth.link.issued",
+                    correlation_id,
+                    waitlistId=str(user["waitlist_id"]),
+                    tokenId=str(token),
+                )
+            else:
+                # Logged, never surfaced. The operator can see what happened;
+                # the caller cannot.
+                log(
+                    "waitlist.auth.link.withheld",
+                    correlation_id,
+                    reason=(
+                        "rate_limited" if throttled
+                        else "unknown_address" if not user
+                        else f"email_status_{user['email_status']}"
+                    ),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 
 
 # ── GET /waitlist/auth/verify ─────────────────────────────────────────────────

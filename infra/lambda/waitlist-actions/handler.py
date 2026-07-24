@@ -162,19 +162,33 @@ def handle_survey(cur, user_id, body, correlation_id):
     # reason, because 'survey' is the only reason the enum has for it. Awarding
     # it separately would need a reason the schema does not define, and adding
     # one silently would make the enum mean something different per caller.
-    if freeform and awarded:
+    #
+    # Gated on the bonus not already being present, NOT on the structured award
+    # having just happened. The earlier version used `if freeform and awarded:`,
+    # so someone who submitted the structured answers first and came back to
+    # finish the free-form got `awarded: 0`, forfeited the 10 points, and — worse
+    # — their written answer was never stored at all. That answer is the entire
+    # reason the +10 exists. "Completes in one submit" makes the half-filled case
+    # reachable by anyone who gets distracted.
+    #
+    # UPDATE ... WHERE NOT (meta ? 'freeform') is idempotent on its own terms: a
+    # repeat matches nothing. points_total is re-derived by the trigger (0016),
+    # which also applies the cap to UPDATEs.
+    if freeform:
         cur.execute(
             "UPDATE points_ledger SET points = points + %s, meta = meta || %s "
-            "WHERE waitlist_user_id = %s AND reason = 'survey'",
+            "WHERE waitlist_user_id = %s AND reason = 'survey' AND NOT (meta ? 'freeform')",
             (SURVEY_FREEFORM_POINTS, psycopg2.extras.Json({"freeform": freeform}), user_id),
         )
-        awarded += SURVEY_FREEFORM_POINTS
-        cur.execute(
-            "UPDATE waitlist_users SET points_total = "
-            "(SELECT COALESCE(sum(points),0) FROM points_ledger WHERE waitlist_user_id = %s) "
-            "WHERE waitlist_id = %s",
-            (user_id, user_id),
-        )
+        if cur.rowcount:
+            awarded += SURVEY_FREEFORM_POINTS
+            log(
+                "waitlist.points.awarded",
+                correlation_id,
+                waitlistId=str(user_id),
+                reason="survey_freeform",
+                points=SURVEY_FREEFORM_POINTS,
+            )
 
     return {"awarded": awarded, "points_total": points_total(cur, user_id)}
 
