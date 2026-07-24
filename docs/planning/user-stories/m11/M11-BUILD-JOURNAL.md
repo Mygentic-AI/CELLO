@@ -1441,3 +1441,41 @@ could query at will, with none of the timing defences `/auth` needed.
 
 **Status:** `DOD-CONTENT-ALERTS-1` 🟠 → 🟡 · `DOD-E-RE-1` stays 🟠, now owing only the 60-day scheduler
 that enqueues it.
+
+---
+
+### Entry 31: DOD-UTM-TOOL-1 — the link and the code are one operation
+**Date:** 2026-07-25
+**Target:** DOD-UTM-TOOL-1 [trustless-cello]
+
+**Why this is a service and not a spreadsheet formula.** A creator link is worth nothing unless
+`ref=CODE` resolves, and that means a row in `referral_codes`. Generate the URL in one place and mint the
+code in another and they *will* drift — somebody pastes a link whose ref resolves to nothing, the campaign
+looks perfectly healthy, and the attribution is lost silently. That is the worst shape a measurement bug
+can take, so the two are the same call.
+
+**The code is derived from the handle, not random.** Regenerating a link for the same creator yields the
+same code; two codes for one creator splits their attribution across two rows and neither number is their
+real total. Regeneration also reactivates a deactivated code, which is plainly what an operator making a
+fresh link intends.
+
+**Channel and campaign are slug-validated rather than passed through.** They become query parameters and
+then a `GROUP BY`: "Launch Week!" and "launch-week" are two campaigns in the data, and the totals are
+wrong in a way nobody notices because both look plausible. Case is normalised rather than rejected —
+refusing `REDDIT` would be pedantry, not validation.
+
+**Base URLs are restricted to our own hosts.** A generator that will tag any URL is one that eventually
+tags a URL we do not own. `DOD-INV-DOMAIN` again, from the outbound side.
+
+**A handle colliding onto an existing code refuses** rather than overwriting. Silently attributing one
+creator's traffic to another is worse than failing to generate the link.
+
+**The last test is the one worth having:** it takes a *generated* link and runs it through the **real**
+signup handler, asserting `creator_tracking` gains the row. M11-D19 has two halves — the generator writes
+the code, the signup endpoint routes on it — and testing each in isolation would leave the join between
+them assumed.
+
+**Runs:** 319 tests green across twelve Lambda suites.
+
+**Status:** `DOD-UTM-TOOL-1` ❌ → 🟡. Owed: the ops-dashboard UI (`DOD-OPS-UTM-1`), which is a form over
+this endpoint.
