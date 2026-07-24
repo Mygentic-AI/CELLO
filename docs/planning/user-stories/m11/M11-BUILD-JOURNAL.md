@@ -587,3 +587,63 @@ each assumed correct.
 **Status:** `DOD-SES-PROD-1` ❌ → 🟠. Handler built and locally proven. Owed: SES production-access
 confirmation (a console fact, needs AWS), the SNS topic + subscription in CloudFormation, and the
 simulator run the DoD names as its verification. All three need infra awake.
+
+---
+
+### Entry 14: DOD-AUTH-1 — magic link, sessions, and the timing half of non-enumeration
+**Date:** 2026-07-25
+**Target:** DOD-AUTH-1, DOD-INV-NO-ENUMERATION [trustless-cello, corp-cello-site]
+
+`infra/lambda/waitlist-auth/` — `POST /auth/request`, `GET /auth/verify`, `GET /auth/session`. The pages
+stay static (M11-D20); this is the server half they call.
+
+**The enumeration guard, and the part that is usually missed.** Body, status and headers are trivially
+made identical, and the tests assert all three. The channel that survives that is **timing**: sending an
+email and writing two rows takes measurably longer than doing nothing, so an attacker with a stopwatch
+enumerates the entire list while every visible response says the same sentence. Both paths now return no
+earlier than a fixed floor (`RESPONSE_FLOOR_MS`), and a test samples both repeatedly and requires the gap
+to stay under 60ms.
+
+The rate limiter is part of the same guard rather than a separate concern. Throttling only *real*
+addresses leaks membership through the 429 threshold — the identical body undone by a differing limit.
+`auth_link_requests` therefore keys on the address **requested**, existent or not.
+
+A suppressed address is also indistinguishable from an unknown one: `bounced` gets no link, no token, no
+job, and the same opaque response.
+
+**Off-by-one caught by the tests.** The request row was inserted *before* the count, so the current
+request counted against itself and a limit of 5 issued only 4 links. Now counts prior requests, then
+records.
+
+**Token burn is atomic.** `UPDATE auth_tokens SET used_at = now() WHERE token = %s AND used_at IS NULL
+AND expires_at > now() RETURNING ...` — one operation, so two clicks of the same link cannot both mint a
+session. Tested.
+
+**Errors name their cause here, deliberately.** `token_not_found` / `token_already_used` /
+`token_expired` are distinguished for the *user*, who needs to know whether to click again or request a
+new link. That is not a leak: possession of the token is already assumed by the time this runs, so
+vagueness protects nothing and only strands the person holding a link.
+
+**Only the E1 link sets `email_verified`.** A magic link proves control of the address just as well, but
+`email_verified` is documented as what E1 sets; widening it silently would make the flag mean something
+other than its name. Tested in both directions.
+
+**Sessions (`0006`).** Token stored as SHA-256 — a database dump must not hand out live sessions. SHA-256
+rather than a bcrypt-class function because the input is 32 bytes of CSPRNG output: no dictionary, no
+work factor needed. 30 days from ISSUE enforced by CHECK, not convention; sliding expiry was rejected
+because it means a stolen cookie stays valid indefinitely as long as it keeps being used. `HttpOnly`,
+`Secure`, `SameSite=Lax`. Revoked and expired sessions both rejected, tested.
+
+**`0007`** widens the `email_jobs` template CHECK for `e_magic_link`. Without it the INSERT violates the
+constraint, and because `/auth` must reveal nothing the failure would be indistinguishable from an unknown
+address — loud in the log, silent to the user, and nobody gets a link. Worth recording as a shape of bug:
+a constraint omission that a security requirement converts into a silent one.
+
+The dispatcher reuses the token `/auth` already minted rather than minting a second, so a retried job does
+not leave a trail of live credentials; if it expired while queued the job fails loudly rather than sending
+a link that cannot work.
+
+**Runs:** 98 tests green across five Lambda suites. Schema enforcer green with `0006`/`0007`.
+
+**Status:** `DOD-AUTH-1` 🟠 → 🟡 · `DOD-INV-NO-ENUMERATION` ❌ → 🟡. Owed: the static `/auth` and
+`/status` pages that call these routes, and a live run.

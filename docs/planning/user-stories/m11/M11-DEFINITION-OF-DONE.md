@@ -70,7 +70,7 @@ Every DoD line carries a `[repo]` tag immediately after its ID. Use this table t
 
 - **DOD-INV-PREMIUM-BEARER** [corp-cello-site] — premium invite codes are bearer tokens burned on first successful signup. They are never email-bound. The `/invite/CODE` route stores the code in localStorage; the signup form reads and submits it silently. A code that burns without a completed signup (e.g. on a failed validation) is a defect. An unburned code remains live for the inviter to share with someone else. — ❌
 
-- **DOD-INV-NO-ENUMERATION** [corp-cello-site] — `/auth` must never reveal whether an email exists in the system. The response ("Check your inbox") is identical for known and unknown emails. Any observable difference — redirect, message text, HTTP status, or response timing — between the two cases is a blocking finding. — ❌
+- **DOD-INV-NO-ENUMERATION** [corp-cello-site] — `/auth` must never reveal whether an email exists in the system. The response ("Check your inbox") is identical for known and unknown emails. Any observable difference — redirect, message text, HTTP status, or response timing — between the two cases is a blocking finding. — 🟡 identical body/status/headers asserted, plus a fixed response floor with a test bounding the known-vs-unknown timing gap under 60ms; rate limiting counts requested addresses regardless of existence → Journal Entry 14
 
 ---
 
@@ -99,7 +99,7 @@ Every DoD line carries a `[repo]` tag immediately after its ID. Use this table t
   1. **E1 upgrade:** update `/confirm` to also set `email_verified = true` in the new Postgres DB, issue a 30-day HttpOnly session cookie, and redirect to `/status` on success.
   2. **`/auth` page (new):** email input. If email not in `waitlist_users` → redirect to `/waitlist` with message "We don't have this email on the waitlist." If found → send magic link (new `auth_tokens` row, 15-min expiry, single-use), show "Check your inbox." No indication of whether the email was found (prevents enumeration).
   3. **Session guard:** unauthenticated visits to `/status` redirect to `/auth`. Sessions expire after 30 days of issue; expiry redirects to `/auth`.
-  Verified: (a) click E1 link → land on `/status` with session; (b) visit `/auth` with unknown email → `/waitlist` redirect; (c) visit `/auth` with known email → magic link arrives, clicking creates session; (d) re-use the same magic link → rejected. — 🟠
+  Verified: (a) click E1 link → land on `/status` with session; (b) visit `/auth` with unknown email → `/waitlist` redirect; (c) visit `/auth` with known email → magic link arrives, clicking creates session; (d) re-use the same magic link → rejected. — 🟡 auth Lambda built (`infra/lambda/waitlist-auth/`): request/verify/session routes, hashed 30-day sessions, 15-min single-use magic links, atomic burn. 21 tests green. Owed: the static `/auth` + `/status` pages that call it, and a live run → Journal Entry 14
 
 - **DOD-STATUS-STUB-1** [corp-cello-site] — P0 stub `/status` page (authenticated, session-gated). Shows: confirmation they're on the waitlist, their queue position (live computed), their personal referral link with a copy button. No survey, no OAuth buttons, no points breakdown — those are P1 (DOD-STATUS-PAGE-1 replaces this stub). Corp site branding. — ❌
 
