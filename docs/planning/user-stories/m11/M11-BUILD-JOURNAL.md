@@ -1365,3 +1365,46 @@ email is the fallback for someone whose agent is not running. Only the email hal
 why this line is 🟠 and not 🟡.
 
 **Runs:** 285 tests green across eleven Lambda suites.
+
+---
+
+### Entry 29: the status page, the survey, and the alert opt-in
+**Date:** 2026-07-25
+**Target:** DOD-STATUS-PAGE-1, DOD-SURVEY-1 (frontend), DOD-CONTENT-ALERTS-1, DOD-DYNAMIC-ESTIMATOR-1
+
+One page and one form close four lines, because they are the same surface.
+
+**The band is a division, not an estimate.** M11-D16 killed the predicted wave number: wave sizes are
+decided by the operator at trigger time and cannot be forecast, so a date or a wave assignment would be
+*invented*. `qualitative_band(position, size)` returns "top 10%" / "top 25%" / "top half" or **None** —
+and None is the interesting case. A user with no queue row is not in the bottom half; they are not in the
+queue at all, and telling an admitted user "top half" is false rather than approximate. The page renders
+the band only when the server produced one.
+
+**Caps come from the server.** The points breakdown carries, per reason, the ceiling the *database*
+enforces. A number written into the frontend drifts from the trigger that applies it, and the drift is
+invisible until someone hits a limit that does not match what they were shown. Uncapped reasons carry
+`null` rather than a figure.
+
+**The alert opt-in is an explicit boolean, never a toggle.** A toggle sent from a stale page flips the
+user to the opposite of what they clicked, and this is a subscription rather than a preference. The
+checkbox is reconciled with what the server actually stored, so a failed write does not leave the box
+showing a subscription that does not exist. The endpoint touches `content_alerts` and nothing else, with
+a test that opting out leaves `email_status` alone — `DOD-INV-EMAIL-SEGMENTS` from the user's side, which
+is the direction nobody writes a test for.
+
+**The survey submits once, and the free-form is deliberately not required to be in that submit.** Someone
+who answers the structured questions and returns later to write the long answer still earns the bonus
+(Entry 23, M2). The interview commitment is a **separate call**, because it is a separate ledger reason
+with its own idempotency — bundling them would let a failure in one silently discard the other.
+
+**The completion screen shows what was actually awarded, not the maximum.** A repeat submission awards
+zero, and printing "+60" there would be a plain lie told to somebody with no way to check.
+
+**Gates:** typecheck clean · lint clean · 10 vitest · build emits `/status` and `/survey` · 289 Lambda
+tests green.
+
+**Status:** `DOD-STATUS-PAGE-1` ❌ → 🟡 (OAuth buttons and the post field are blocked on the parked OAuth
+line) · `DOD-SURVEY-1` 🟡 with its page · `DOD-DYNAMIC-ESTIMATOR-1` ❌ → 🟡 ·
+`DOD-CONTENT-ALERTS-1` ❌ → 🟠, owing the one-click unsubscribe endpoint that the E-alert link already
+points at.
