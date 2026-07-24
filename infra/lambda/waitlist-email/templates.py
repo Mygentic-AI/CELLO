@@ -128,9 +128,42 @@ def e1_confirm(job):
     )
 
 
+def e_magic_link(job):
+    """The /auth sign-in link. 15 minutes, single use.
+
+    Deliberately says nothing about queue position or referrals — this mail is
+    sent in response to someone typing an address into a box, and an address
+    that is not theirs must learn nothing from what arrives.
+    """
+    name = _greeting(job)
+    token = job.get("auth_token")
+    url = f"{SITE}/auth/verify?token={token}" if token else f"{SITE}/auth"
+
+    content = (
+        f'<h1 style="margin:0 0 8px;font-size:28px;font-weight:700;color:#111;letter-spacing:-0.5px;">Sign in, {name}.</h1>'
+        f'<p style="margin:0 0 28px;font-size:16px;color:#666;line-height:1.6;">'
+        f'This link signs you in to your waitlist status page. It works once and expires in 15 minutes.</p>'
+        f'<a href="{url}" style="display:inline-block;padding:16px 32px;background:{BRAND};color:#fff;'
+        f'text-decoration:none;border-radius:100px;font-size:16px;font-weight:600;">Sign in →</a>'
+        f'<p style="margin:28px 0 0;font-size:13px;color:#aaa;line-height:1.6;">'
+        f"If you didn't ask for this, you can ignore it — nothing has changed.</p>"
+    )
+
+    text = (
+        f"Hi {name},\n\n"
+        f"Sign in to your CELLO waitlist status page:\n{url}\n\n"
+        f"This link works once and expires in 15 minutes.\n"
+        f"If you didn't ask for it, ignore this email — nothing has changed.\n\n"
+        f"— The CELLO team\n{SITE}"
+    )
+
+    return "Your CELLO sign-in link", _shell(content), text
+
+
 # Only implemented templates belong here. A missing entry is a loud failure in
 # the dispatcher, which is the correct outcome for a job referencing a template
 # nobody has written yet.
 TEMPLATES = {
     "e1_confirm": e1_confirm,
+    "e_magic_link": e_magic_link,
 }

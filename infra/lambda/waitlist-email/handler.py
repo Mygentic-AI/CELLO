@@ -109,6 +109,32 @@ def claim_jobs(cur, limit):
     return cur.fetchall()
 
 
+def latest_unused_magic_link(cur, user_id):
+    """The token /auth minted for this request.
+
+    Minting a fresh one here would mean every retry of a stuck job issues
+    another live credential for the same person.
+    """
+    cur.execute(
+        """
+        SELECT token FROM auth_tokens
+        WHERE waitlist_user_id = %s AND kind = 'magic_link'
+          AND used_at IS NULL AND expires_at > now()
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (user_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        # The token expired while the job waited. Sending a link that cannot
+        # work is worse than failing the job and retrying.
+        raise RuntimeError(
+            f"No unused magic-link token for {user_id}; it expired before the job was dispatched."
+        )
+    return row["token"]
+
+
 def mint_verify_token(cur, user_id):
     """A single-use 24-hour credential for the E1 confirm link.
 
@@ -181,6 +207,11 @@ def process(cur, job, correlation_id):
     job = dict(job)
     if job["template"] == "e1_confirm":
         job["auth_token"] = mint_verify_token(cur, job["user_id"])
+    elif job["template"] == "e_magic_link":
+        # /auth already minted one when the link was requested; the dispatcher
+        # picks up the newest unused one rather than minting a second, so a
+        # retried send does not leave a trail of live credentials.
+        job["auth_token"] = latest_unused_magic_link(cur, job["user_id"])
 
     subject, html, text = render(job)
 
