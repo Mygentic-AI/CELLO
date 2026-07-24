@@ -484,6 +484,92 @@ def handle_logout(headers, origin, correlation_id):
     }
 
 
+# ── GET /waitlist/unsubscribe ─────────────────────────────────────────────────
+
+
+def handle_unsubscribe(params, origin, correlation_id):
+    """One click, permanent, no login (DOD-E-RE-1, DOD-CONTENT-ALERTS-1).
+
+    A GET that changes state, deliberately. Requiring a session would mean
+    someone who cannot get back into their account cannot leave, and a person
+    who wants out and cannot find the door marks the message as spam instead —
+    which costs the sending reputation of every other email, including the E1s
+    that are the core capture loop. The worst case here is that somebody
+    unsubscribes a person who wanted to stay; the worst case of the alternative
+    is losing the domain.
+
+    `list=content_alerts` scopes it to the alert segment. Without that parameter
+    it is the base list, which is permanent and sets email_status.
+    """
+    user_id = (params or {}).get("u")
+    scope = (params or {}).get("list")
+
+    if not user_id:
+        raise AuthError(400, "missing_user", "This unsubscribe link is incomplete.")
+    try:
+        uuid.UUID(user_id)
+    except (ValueError, AttributeError, TypeError):
+        raise AuthError(400, "invalid_user", "This unsubscribe link is not valid.")
+
+    conn = connect()
+    try:
+        conn.autocommit = False
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            if scope == "content_alerts":
+                cur.execute(
+                    "UPDATE waitlist_users SET content_alerts = false "
+                    "WHERE waitlist_id = %s RETURNING email",
+                    (user_id,),
+                )
+            else:
+                # Base list. Suppression is one-way: this never reactivates an
+                # address that already bounced or complained.
+                cur.execute(
+                    "UPDATE waitlist_users SET email_status = 'unsubscribed' "
+                    "WHERE waitlist_id = %s AND email_status = 'active' RETURNING email",
+                    (user_id,),
+                )
+            row = cur.fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+
+    # 200 whether or not anything changed, and no indication either way. An
+    # unknown id must not be distinguishable from a known one — otherwise this
+    # link is a membership oracle that needs no login at all.
+    log(
+        "waitlist.unsubscribe.processed",
+        correlation_id,
+        scope=scope or "base_list",
+        matched=row is not None,
+    )
+    return {
+        "statusCode": 200,
+        "headers": {**cors_headers(origin), "Content-Type": "text/html; charset=utf-8"},
+        "body": _unsubscribed_page(scope),
+    }
+
+
+def _unsubscribed_page(scope):
+    what = (
+        "You won't get content alerts any more. Your waitlist emails are unaffected."
+        if scope == "content_alerts"
+        else "You've been unsubscribed. We won't email you again."
+    )
+    return (
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>Unsubscribed | CELLO</title></head>"
+        "<body style=\"margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;"
+        "background:#f5f5f5;display:flex;align-items:center;justify-content:center;min-height:100vh;\">"
+        "<div style=\"background:#fff;border-radius:16px;padding:48px 40px;max-width:460px;text-align:center;\">"
+        "<h1 style=\"margin:0 0 12px;font-size:24px;color:#111;\">Done.</h1>"
+        f"<p style=\"margin:0 0 24px;font-size:16px;color:#666;line-height:1.6;\">{what}</p>"
+        f"<a href=\"{SITE}\" style=\"color:#E0147A;text-decoration:none;font-size:14px;\">"
+        "cello.mygentic.ai</a></div></body></html>"
+    )
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
@@ -514,6 +600,11 @@ def lambda_handler(event, context):
 
         if method == "POST" and path.endswith("/auth/logout"):
             return handle_logout(headers, origin, correlation_id)
+
+        if method == "GET" and path.endswith("/unsubscribe"):
+            return handle_unsubscribe(
+                event.get("queryStringParameters"), origin, correlation_id
+            )
 
         return resp(404, {"error": "not_found", "message": f"No route for {method} {path}."}, origin)
 

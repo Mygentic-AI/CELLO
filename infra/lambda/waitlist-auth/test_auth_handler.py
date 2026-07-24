@@ -52,7 +52,12 @@ def call(auth, method, path, *, body=None, params=None, cookie=None):
         "queryStringParameters": params,
     }
     result = auth.lambda_handler(event, None)
-    parsed = json.loads(result["body"]) if result["body"] else {}
+    # The unsubscribe route answers in HTML — it is a page a person lands on,
+    # not an API call — so parsing is conditional on what came back.
+    try:
+        parsed = json.loads(result["body"]) if result["body"] else {}
+    except (json.JSONDecodeError, TypeError):
+        parsed = {"html": result["body"]}
     return result, parsed
 
 
@@ -516,3 +521,80 @@ def test_the_session_carries_a_points_breakdown_with_real_caps(auth):
     assert reasons["survey"]["cap"] is None, "survey is uncapped; showing a ceiling would invent one"
     assert reasons["share_conversion"]["cap"] == 30, "the cap shown must be the cap the DB enforces"
     assert body["points_total"] == 30
+
+
+# ── One-click unsubscribe (DOD-E-RE-1, DOD-CONTENT-ALERTS-1) ──────────────────
+
+
+def unsubscribe(auth, user_id, scope=None):
+    params = {"u": str(user_id)}
+    if scope:
+        params["list"] = scope
+    return call(auth, "GET", "/waitlist/unsubscribe", params=params)
+
+
+def test_the_base_list_unsubscribe_is_one_click_and_needs_no_login(auth):
+    """Requiring a session would mean someone who cannot get back into their
+    account cannot leave — and a person who wants out and cannot find the door
+    marks the mail as spam, which costs the sending reputation of every other
+    message including the E1s."""
+    uid = make_user("leaving@example.test")
+
+    result, _ = unsubscribe(auth, uid)
+
+    assert result["statusCode"] == 200
+    assert query("SELECT email_status FROM waitlist_users WHERE waitlist_id = %s", (uid,))[0][0] == "unsubscribed"
+
+
+def test_the_alert_unsubscribe_is_scoped_and_leaves_waitlist_mail_alone(auth):
+    uid = make_user("alerts@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("UPDATE waitlist_users SET content_alerts = true WHERE waitlist_id = %s", (uid,))
+    conn.close()
+
+    unsubscribe(auth, uid, scope="content_alerts")
+
+    row = query(
+        "SELECT content_alerts, email_status FROM waitlist_users WHERE waitlist_id = %s", (uid,)
+    )[0]
+    assert row == (False, "active"), "muting blog posts must not unsubscribe them from everything"
+
+
+def test_unsubscribing_never_reactivates_a_bounced_address(auth):
+    """Suppression is one-way. A bounced address that 'unsubscribes' must not
+    come back as merely unsubscribed and start receiving again if someone later
+    reverses that."""
+    uid = make_user("bounced@example.test", email_status="bounced")
+
+    unsubscribe(auth, uid)
+
+    assert query("SELECT email_status FROM waitlist_users WHERE waitlist_id = %s", (uid,))[0][0] == "bounced"
+
+
+def test_an_unknown_id_is_indistinguishable_from_a_known_one(auth):
+    """This link needs no login, so a different response for an unknown id would
+    make it a membership oracle anyone could query."""
+    uid = make_user("known@example.test")
+
+    known, _ = unsubscribe(auth, uid)
+    unknown, _ = unsubscribe(auth, uuid.uuid4())
+
+    assert known["statusCode"] == unknown["statusCode"] == 200
+    assert known["body"] == unknown["body"]
+
+
+def test_unsubscribing_twice_is_harmless(auth):
+    uid = make_user("twice@example.test")
+    unsubscribe(auth, uid)
+    result, _ = unsubscribe(auth, uid)
+
+    assert result["statusCode"] == 200
+
+
+def test_a_malformed_unsubscribe_link_says_so(auth):
+    result, body = call(auth, "GET", "/waitlist/unsubscribe", params={"u": "not-a-uuid"})
+
+    assert result["statusCode"] == 400
+    assert body["error"] == "invalid_user"
