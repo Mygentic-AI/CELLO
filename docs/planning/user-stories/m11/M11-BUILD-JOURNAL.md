@@ -429,3 +429,51 @@ security group, and NAT or VPC endpoints for its SES calls.
 
 **Next:** repoint `WaitlistContent.tsx` at the API Gateway so H3 is not merged, and send `first_touch`
 explicitly so M13's front-truncation stops silently recording a mid-funnel touch as the origin.
+
+---
+
+### Entry 11: DOD-QUEUE-VIEW-1 + the H3 regression closed
+**Date:** 2026-07-24
+**Target:** DOD-QUEUE-VIEW-1, DOD-LANDING-1 (H3), DOD-TRACKING-1 (M13, L19)
+
+**Queue view (`0004`).** `waitlist_queue` — `RANK() OVER (ORDER BY points_total DESC, created_at ASC)`
+over `status = 'waiting'` rows only, plus `queue_size` from the same scan. Computed, never stored: a
+stored column goes stale the moment anyone else earns points, and a stale position is indistinguishable
+from a fabricated one to the person reading it.
+
+Excluding non-`waiting` rows matters more than it looks. An admitted user left in the ranking pushes
+everyone behind them down a slot — inflation in the pessimistic direction, but still a number that does
+not mean what `DOD-INV-NO-INFLATION` says it means.
+
+`queue_size` ships in the same view because the qualitative band ("top 10%") in
+`DOD-DYNAMIC-ESTIMATOR-1` cannot be derived from a position alone, and computing it from a second
+round-trip invites the two numbers to disagree with each other.
+
+7 tests, real Postgres. The load-bearing one asserts that a `points_ledger` INSERT *alone* moves a user
+from position 2 to 1 — nothing recalculates, nothing backfills, which is what "computed" has to mean
+operationally. Another asserts `queue_position` does not exist as a column on `waitlist_users` at all, so
+the DoD's prohibition is checked rather than trusted.
+
+**H3 closed — the branch no longer ships a form that posts into a 404.** `WaitlistContent.tsx` points at
+the API Gateway (`NEXT_PUBLIC_WAITLIST_API` overrides for local work). `app/api/waitlist/signup/route.ts`
+deleted, deadness proven not assumed: no reference anywhere in the tree, and it was already absent from
+`out/`. Deleting it surfaced a stale `.next/types/app/api/waitlist/signup/route.ts` still importing the
+removed module — the generated-artifact orphan pattern. Fixed in the documented order: clean → build →
+test, not by patching the type.
+
+**M13 — first touch is now immutable.** `wl_first_touch` is a separate write-once localStorage key, sent
+as its own field. The touchpoints array is capped by discarding from the *front*, so its first element
+stops being the first touch after 20 hits; attribution was silently recording a mid-funnel touch as the
+origin, and doing it worst for exactly the visitors with the richest journeys. Server prefers the explicit
+field and falls back to `touchpoints[0]`, which is correct for anyone under the cap.
+
+**L19 — `anon_id` is stable within a page load when storage throws.** Previously it minted a fresh UUID
+per *call*, so under Safari Private Browsing the tracking component and the signup form reported different
+anonymous users and the touchpoints silently failed to join the signup. A per-call id is worse than no id.
+
+**Gates:** corp-cello-site `npm test` 10 passed · `lint` clean · `typecheck` clean · `build` OK, and
+`find out -path "*api*"` empty. Lambda suite 28 passed. Schema enforcer still green on all five
+properties with `0004` applied.
+
+**Status:** `DOD-QUEUE-VIEW-1` ❌ → 🟡 · `DOD-INV-POINTS-CAPS` ❌ → 🟡 · `DOD-INV-NO-INFLATION` ❌ → 🟡.
+All three owe only the portal RDS.
