@@ -303,3 +303,73 @@ touch, and a green test pins that behaviour in place.
 `schema_migrations` ledger in `migrate.js`; (3) enforcer replays history instead of re-running HEAD;
 (4) the Lambda port carrying the H1/H2/H7/H8/M11/M12/M14 fixes, so they are fixed once rather than twice;
 (5) repoint `WaitlistContent.tsx` so H3 is not merged.
+
+---
+
+### Entry 9: H6 + H5 fixed — a test runner exists, and edited-applied-migrations now fail loudly
+**Date:** 2026-07-24
+**Target:** DOD-SCHEMA-P0-1 (H5), DOD-TRACKING-1 (H6) [corp-cello-site]
+**Commits:** `cbc300b` (runner), `0397e60` (ledger + 0002 + enforcer)
+
+**H6 — test runner.** Added `vitest` + `jsdom`, a `test` script, and a `typecheck` script. jsdom because
+the tracking module reads `localStorage` and `window.location` directly. `globals: true` plus
+`"vitest/globals"` in tsconfig `types`, because the existing spec file imports neither `describe` nor
+`expect` — that single gap was why 28 `tsc` errors sat in the tree while `npm run build` exited 0.
+
+Result: **7 tests execute** (they never had before) and `tsc --noEmit` is clean. The tests themselves are
+still weak — the reviewer showed all three touched by this branch survive reverting the fix they claim to
+cover — but they can now be *run*, which is the precondition for giving them teeth. Corrects Entry 6's
+description of the tracking script as "unit-tested": the file existed, it had never executed.
+
+**H5 — the migration defect, fixed at the class level rather than the instance.**
+
+Three parts:
+1. `scripts/migrate.js` gains a `schema_migrations(version, checksum, applied_at)` ledger. Each file runs
+   exactly once, inside its own transaction, with the ledger row committing alongside the DDL it
+   describes. A file whose checksum no longer matches what was applied is a **hard failure** naming the
+   file and the remedy, rather than a silent skip.
+2. `0001` restored byte-for-byte to its as-first-applied form (`44d1586`) and treated as immutable. Its
+   two post-hoc edits moved to `0002`: the `auth_tokens` CHECK and the redundant-index drop. The CHECK is
+   tightened from 16 minutes to the 15 the DoD specifies — the extra minute was slack for a race that does
+   not exist. Verified before narrowing it: `now()` is the transaction timestamp, so `created_at` and
+   `expires_at` defaults resolve to the same instant, the window is exactly `00:15:00`, and an explicit
+   24-hour token is still rejected.
+3. `verify-schema.sh` gains the properties whose absence let its first version pass on a broken schema.
+
+**Why `0002` rather than consolidating into `0001`.** `0001` has never been applied to a real database, so
+editing it is harmless *today* — but the enforcer's historic replay reads git history and would fail
+forever, and the rule exists precisely because "it was never applied anywhere" stops being true silently.
+Immutable-from-first-commit is the cheaper invariant. It also means `0002` contains an `ALTER TABLE`,
+which is not idempotent — so the ledger is load-bearing from this commit onward, not a theoretical
+nicety.
+
+**The enforcer's own defect, and why Entry 7 passed on a broken schema.** The first version migrated two
+*fresh* databases with the *current* files. That proves "the same file applied twice is idempotent" —
+strictly weaker than what the DoD asks. It now also:
+- replays the migration set as it stood at the commit that introduced it, then migrates forward, and
+  diffs against a fresh database (**fresh == historic**);
+- applies a set, appends a byte to an applied file, re-runs, and requires a failure carrying the named
+  `contents have changed` error (**tamper detected**);
+- asserts the second run reports `nothing to apply` (**ledger honoured**);
+- attempts a 24-hour `auth_tokens` insert and requires the CHECK to reject it (**bounds enforced**).
+
+**Reproduced before fixed.** Run against the unfixed tree, the strengthened enforcer failed with exactly
+the reviewer's finding — `0001 … was already applied but its contents have changed (recorded 91535dbcf6aa…,
+now ab5c130d1b02…)`. After the split, all five properties pass:
+
+```
+==> [fresh] Applied 2 migration(s).
+==> [repeat] … already applied, skipping. / Schema up to date; nothing to apply.
+==> [historic] (original set from 44d1586) → 0001 skipped, 0002 applied forward
+==> [tamper] correctly rejected: 0001_m11_waitlist_p0.sql was already applied but its contents have changed
+==> [constraints] correctly rejected a 24-hour auth token.
+PASS: idempotent, safe over data, fresh == historic, tampering detected, bounds enforced.
+```
+
+**Status:** `DOD-SCHEMA-P0-1` 🟠 → 🟡. Local half proven under the stronger property. Still owed: applying
+to the portal RDS, unreachable from a dev machine (M11-D22).
+
+**Next:** the Lambda port, carrying H1 (savepoint / real table), H2 (`FOR UPDATE` + burn), H4 (+10 points),
+H7 (fail on missing `DATABASE_URL`, add SSL), H8 (server-side validation and caps), H9 (premium-referred
+distinct from admitted), M11/M12 (400 for client errors, causes not exit labels), M14 (CORS/OPTIONS) —
+fixed once in the port rather than twice.
