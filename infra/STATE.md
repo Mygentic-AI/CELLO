@@ -9,6 +9,17 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🟢 Wake complete — all 3 regions live (2026-07-24, 16:01–16:17 UTC)
+
+**Elapsed: ~16 min 18 sec** (all 3 regions in parallel — no RDS bottleneck this cycle). All inventory diffs IDENTICAL.
+
+**ALB DNS names after this wake (always query AWS — these rotate each wake):**
+- **us-east-1:** dir `cello-dir-dev-122037600.us-east-1.elb.amazonaws.com` / relay `cello-relay-dev-1952460772.us-east-1.elb.amazonaws.com` / portal `cello-portal-dev-1669316295.us-east-1.elb.amazonaws.com`
+- **eu-central-1:** dir `cello-dir-dev-1689370715.eu-central-1.elb.amazonaws.com` / relay `cello-relay-dev-1937702647.eu-central-1.elb.amazonaws.com`
+- **ap-northeast-1:** dir `cello-dir-dev-1360605312.ap-northeast-1.elb.amazonaws.com` / relay `cello-relay-dev-1105113187.ap-northeast-1.elb.amazonaws.com`
+
+---
+
 ## 🔴 Hibernate complete — all 3 regions down (2026-07-23, 19:42–19:46 UTC)
 
 ECS services scaled to 0, RDS stopped, ALBs deleted, NAT Gateways deleted, ssmmessages endpoints deleted. EIPs retained. State written to `hibernation-state.json`.
