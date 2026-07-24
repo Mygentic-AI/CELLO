@@ -325,3 +325,22 @@ def test_a_session_cannot_outlive_thirty_days(auth):
                 (uid, "x" * 64),
             )
     conn.close()
+
+
+def test_requesting_a_second_link_invalidates_the_first(auth):
+    """N requests must not leave N-1 live credentials. Single-use has to hold
+    for the ACCOUNT, not merely for each token considered alone."""
+    uid = make_user("reissue@example.test")
+    request_link(auth, "reissue@example.test")
+    first = token_for(uid)
+    request_link(auth, "reissue@example.test")
+    second = token_for(uid)
+
+    assert first != second
+
+    result, body = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(first)})
+    assert result["statusCode"] == 410
+    assert body["error"] == "token_already_used"
+
+    result, _ = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(second)})
+    assert result["statusCode"] == 302, "the newest link must still work"

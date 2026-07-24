@@ -84,18 +84,7 @@ class SignupError(Exception):
 # ── Logging ───────────────────────────────────────────────────────────────────
 
 
-def log(event, correlation_id, level="INFO", **fields):
-    print(
-        json.dumps(
-            {
-                "event": event,
-                "level": level,
-                "correlationId": correlation_id,
-                "ts": datetime.now(timezone.utc).isoformat(),
-                **fields,
-            }
-        )
-    )
+from _logging import emit as log  # noqa: E402 — see _logging.py
 
 
 # ── HTTP plumbing ─────────────────────────────────────────────────────────────
@@ -198,15 +187,23 @@ def parse_ts(raw):
 # ── Referral code generation ──────────────────────────────────────────────────
 
 
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no I/O/0/1 — these get read aloud
+CODE_LENGTH = 12
+
+
 def generate_code(cur, correlation_id):
-    """8 bytes of entropy, not 4.
+    """A 12-character code over a 32-symbol alphabet: 5 bits each, 60 bits total.
 
     A share code is a public identifier, but a premium code minted by the same
-    generator is a bearer capability that skips the queue. 2**32 is guessable at
-    the rate an unthrottled public endpoint allows; 2**64 is not.
+    generator is a bearer capability that skips the queue, so the number matters.
+
+    Generated from the target alphabet rather than by upper-casing a
+    token_urlsafe: .upper() collapses 52 letters onto 26 AFTER generation, so the
+    realised space is well under what the pre-collapse byte count suggests. The
+    comment and the code now describe the same quantity.
     """
     for _ in range(MAX_CODE_ATTEMPTS):
-        code = secrets.token_urlsafe(8)[:11].upper()
+        code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
         cur.execute("SELECT 1 FROM referral_codes WHERE code = %s", (code,))
         if cur.fetchone() is None:
             return code
@@ -262,12 +259,16 @@ def apply_referral(cur, code, new_user_id, correlation_id):
 
     # ── Creator code: attribution only, no points, no admission ──
     if row["creator_handle"]:
+        # waitlist_user_id, not session_id. The value was always the stable PK;
+        # storing it under a name that means "anonymous session" left nothing
+        # enforcing it and no reader able to tell what it held. session_id stays
+        # for the pre-signup visit case, which genuinely has no user yet.
         cur.execute(
             """
-            INSERT INTO creator_tracking (creator_handle, event_type, session_id)
+            INSERT INTO creator_tracking (creator_handle, event_type, waitlist_user_id)
             VALUES (%s, 'signup', %s)
             """,
-            (row["creator_handle"], str(new_user_id)),
+            (row["creator_handle"], new_user_id),
         )
         cur.execute(
             "UPDATE waitlist_users SET referred_by_code = %s WHERE waitlist_id = %s",

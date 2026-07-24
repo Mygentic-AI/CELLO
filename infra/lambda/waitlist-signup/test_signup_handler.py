@@ -146,8 +146,14 @@ def test_creator_referral_records_attribution_and_still_creates_the_user(handler
     assert status == 200, body
     assert query("SELECT count(*) FROM waitlist_users WHERE email = 'reader@example.test'")[0][0] == 1
     assert query("SELECT count(*) FROM email_jobs WHERE template = 'e1_confirm'")[0][0] == 1
-    tracked = query("SELECT creator_handle, event_type FROM creator_tracking")
-    assert tracked == [("techjournalist", "signup")]
+    tracked = query(
+        "SELECT ct.creator_handle, ct.event_type, u.email "
+        "FROM creator_tracking ct JOIN waitlist_users u ON u.waitlist_id = ct.waitlist_user_id"
+    )
+    assert tracked == [("techjournalist", "signup", "reader@example.test")], (
+        "the attribution must join on the stable PK, not on a TEXT column named "
+        "session_id that happens to hold one"
+    )
 
 
 # ── H4: the referrer's +10, and the cap ───────────────────────────────────────

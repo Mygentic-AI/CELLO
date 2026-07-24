@@ -39,18 +39,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 PERMANENT = "Permanent"
 
 
-def log(event, correlation_id, level="INFO", **fields):
-    print(
-        json.dumps(
-            {
-                "event": event,
-                "level": level,
-                "correlationId": correlation_id,
-                "ts": datetime.now(timezone.utc).isoformat(),
-                **fields,
-            }
-        )
-    )
+from _logging import emit as log  # noqa: E402 — see _logging.py
 
 
 def connect():

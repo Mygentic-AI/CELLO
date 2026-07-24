@@ -66,18 +66,7 @@ class AuthError(Exception):
         self.message = message
 
 
-def log(event, correlation_id, level="INFO", **fields):
-    print(
-        json.dumps(
-            {
-                "event": event,
-                "level": level,
-                "correlationId": correlation_id,
-                "ts": datetime.now(timezone.utc).isoformat(),
-                **fields,
-            }
-        )
-    )
+from _logging import emit as log  # noqa: E402 — see _logging.py
 
 
 def connect():
@@ -209,6 +198,16 @@ def handle_request_link(body, origin, correlation_id):
                 user = cur.fetchone()
 
                 if user and not throttled and user["email_status"] == "active":
+                    # Burn any earlier unused link first. Otherwise N requests
+                    # leave N-1 live credentials for the same person, and the
+                    # single-use guarantee only covers each token in isolation
+                    # rather than the account.
+                    cur.execute(
+                        "UPDATE auth_tokens SET used_at = now() "
+                        "WHERE waitlist_user_id = %s AND kind = 'magic_link' "
+                        "AND used_at IS NULL",
+                        (user["waitlist_id"],),
+                    )
                     cur.execute(
                         """
                         INSERT INTO auth_tokens (waitlist_user_id, kind, expires_at)
