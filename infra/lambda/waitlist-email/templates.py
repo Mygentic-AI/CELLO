@@ -185,10 +185,222 @@ def e_magic_link(job):
     return "Your CELLO sign-in link", _shell(content), text
 
 
+def e_inv_admission(job):
+    """E-inv — you're in. Sent within 60s of wave assembly.
+
+    Wave 1 is categorically different (M11-D10): 10-20 hand-picked design
+    partners, mandatory 30-minute onboarding call, so the mail carries a calendar
+    link. Wave 2+ is self-serve and carries a quickstart link instead. The wave
+    number selects the variant — it is not a copy tweak, it is a different
+    onboarding contract.
+
+    Under 200 words, and the token is the payload. Everything else is scaffolding
+    around it.
+    """
+    name = _greeting(job)
+    token = job.get("waitlist_token")
+    wave = job.get("wave_number")
+
+    if not token:
+        # The whole message is the grant. Sending it without one hands someone
+        # an admission they cannot claim, and they have no way to tell whether
+        # the fault is theirs.
+        raise ValueError(
+            f"e_inv_admission for user {job.get('user_id')} has no waitlist token; "
+            "refusing to send an invitation nobody can redeem."
+        )
+
+    is_wave_one = wave == 1
+    next_step = (
+        (
+            '<a href="https://cello.mygentic.ai/onboarding-call" '
+            f'style="display:inline-block;padding:16px 32px;background:{BRAND};color:#fff;'
+            'text-decoration:none;border-radius:100px;font-size:16px;font-weight:600;">'
+            "Book your setup call →</a>"
+        )
+        if is_wave_one
+        else (
+            '<a href="https://cello.mygentic.ai/quickstart" '
+            f'style="display:inline-block;padding:16px 32px;background:{BRAND};color:#fff;'
+            'text-decoration:none;border-radius:100px;font-size:16px;font-weight:600;">'
+            "Read the quickstart →</a>"
+        )
+    )
+
+    intro = (
+        "You're in. Wave 1 is a small group and we set everyone up personally — "
+        "book a 30 minute call and we'll get your first connection working together."
+        if is_wave_one
+        else "You're in. The quickstart takes about ten minutes end to end."
+    )
+
+    content = (
+        f'<h1 style="margin:0 0 8px;font-size:28px;font-weight:700;color:#111;letter-spacing:-0.5px;">'
+        f"You're in, {name}.</h1>"
+        f'<p style="margin:0 0 24px;font-size:16px;color:#666;line-height:1.6;">{intro}</p>'
+        f'<p style="margin:0 0 8px;font-size:14px;font-weight:600;color:#111;">Your access token</p>'
+        f'<p style="margin:0 0 4px;padding:14px 18px;background:#f7f7f7;border-radius:10px;'
+        f'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;color:#111;'
+        f'word-break:break-all;">{esc(token)}</p>'
+        f'<p style="margin:0 0 28px;font-size:13px;color:#999;">'
+        "Single use, and it expires in 14 days. Unclaimed access returns to the pool.</p>"
+        f"{next_step}"
+    )
+
+    text = (
+        f"Hi {name},\n\n{intro}\n\n"
+        f"Your access token (single use, expires in 14 days):\n{token}\n\n"
+        + (
+            f"Book your setup call: {SITE}/onboarding-call\n\n"
+            if is_wave_one
+            else f"Quickstart: {SITE}/quickstart\n\n"
+        )
+        + f"— The CELLO team\n{SITE}"
+    )
+
+    return "You're in — your CELLO access token", _shell(content), text
+
+
+def e_win_invites(job):
+    """E-win — first sealed session. Carries the 3 premium invites.
+
+    Under 300 words. The invites are the point: this is the moment someone has
+    proof the thing works, which is the only moment a recommendation from them
+    means anything.
+    """
+    name = _greeting(job)
+    codes = job.get("invite_codes") or []
+
+    if not codes:
+        raise ValueError(
+            f"e_win_invites for user {job.get('user_id')} has no invite codes; "
+            "the mail exists to deliver them."
+        )
+
+    code_rows = "".join(
+        f'<p style="margin:0 0 8px;padding:12px 16px;background:#f7f7f7;border-radius:10px;'
+        f'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;color:#111;">'
+        f"{SITE}/invite/{esc(code)}</p>"
+        for code in codes
+    )
+
+    content = (
+        f'<h1 style="margin:0 0 8px;font-size:28px;font-weight:700;color:#111;letter-spacing:-0.5px;">'
+        f"That was your first sealed session, {name}.</h1>"
+        f'<p style="margin:0 0 24px;font-size:16px;color:#666;line-height:1.6;">'
+        "Two agents just proved who they were to each other and left a receipt neither of them "
+        "can alter. That is the whole idea, and you now have it working.</p>"
+        f'<p style="margin:0 0 8px;font-size:14px;font-weight:600;color:#111;">'
+        f"{len(codes)} invites to give away</p>"
+        f'<p style="margin:0 0 12px;font-size:14px;color:#666;line-height:1.6;">'
+        "These skip the queue entirely. Whoever uses one gets in on their next signup — and when they "
+        "reach their own first session, the two of you are connected automatically.</p>"
+        f"{code_rows}"
+        f'<p style="margin:24px 0 0;font-size:14px;color:#666;line-height:1.6;">'
+        "If it is worth two minutes: what did you build it for? Replies come straight to us.</p>"
+    )
+
+    text = (
+        f"Hi {name},\n\n"
+        "That was your first sealed session — two agents proved who they were to each other and left a "
+        "receipt neither can alter.\n\n"
+        f"{len(codes)} invites to give away. These skip the queue:\n"
+        + "\n".join(f"{SITE}/invite/{c}" for c in codes)
+        + "\n\nWhen someone you invite reaches their own first session, the two of you are connected "
+        "automatically.\n\nIf it is worth two minutes: what did you build it for?\n\n"
+        f"— The CELLO team\n{SITE}"
+    )
+
+    return "Your first CELLO session — and 3 invites", _shell(content), text
+
+
+def e_re_engage(job):
+    """E-re — 60 days waiting, no activity. Honest, and easy to leave.
+
+    The unsubscribe is deliberately prominent rather than buried in the footer.
+    Someone who has waited two months without moving has earned a clean exit,
+    and a re-engagement mail that hides the door is the reason people mark mail
+    as spam instead of unsubscribing — which costs the sending reputation of
+    every other message.
+    """
+    name = _greeting(job)
+    position = _position_line(job)
+    unsubscribe = f"{API}/unsubscribe?u={job.get('user_id')}"
+
+    content = (
+        f'<h1 style="margin:0 0 8px;font-size:28px;font-weight:700;color:#111;letter-spacing:-0.5px;">'
+        f"Still building, {name}.</h1>"
+        f'<p style="margin:0 0 20px;font-size:16px;color:#666;line-height:1.6;">'
+        "You joined the CELLO waitlist a couple of months ago and we have not opened a wave to you yet. "
+        "That is on us, not on you.</p>"
+        + (
+            f'<p style="margin:0 0 20px;font-size:15px;color:#111;">{position}</p>'
+            if position
+            else ""
+        )
+        + f'<p style="margin:0 0 24px;font-size:14px;color:#666;line-height:1.6;">'
+        "If it is no longer interesting, no hard feelings — one click below and we will stop.</p>"
+        f'<a href="{unsubscribe}" style="display:inline-block;padding:14px 28px;border:1px solid #ddd;'
+        'color:#666;text-decoration:none;border-radius:100px;font-size:14px;">Unsubscribe →</a>'
+    )
+
+    text = (
+        f"Hi {name},\n\n"
+        "You joined the CELLO waitlist a couple of months ago and we have not opened a wave to you yet. "
+        "That is on us.\n\n"
+        + (f"{position}\n\n" if position else "")
+        + f"No longer interesting? One click and we stop:\n{unsubscribe}\n\n"
+        f"— The CELLO team\n{SITE}"
+    )
+
+    return "Still on the CELLO waitlist?", _shell(content), text
+
+
+def e_alert(job):
+    """E-alert — new content. Opt-in only (DOD-INV-EMAIL-SEGMENTS).
+
+    Under 100 words. One sentence and a link, because this list explicitly
+    accepted up to twice a day and the only way that stays tolerable is if each
+    one is genuinely small.
+    """
+    title = job.get("alert_title") or "Something new"
+    url = job.get("alert_url")
+    summary = job.get("alert_summary") or ""
+
+    if not url:
+        raise ValueError(
+            "e_alert has no alert_url; a content alert with no link is an "
+            "interruption with nothing behind it."
+        )
+
+    unsubscribe = f"{API}/unsubscribe?u={job.get('user_id')}&list=content_alerts"
+
+    content = (
+        f'<h1 style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111;">{esc(title)}</h1>'
+        f'<p style="margin:0 0 20px;font-size:16px;color:#666;line-height:1.6;">{esc(summary)}</p>'
+        f'<a href="{esc(url)}" style="display:inline-block;padding:14px 28px;background:{BRAND};'
+        'color:#fff;text-decoration:none;border-radius:100px;font-size:15px;font-weight:600;">Read it →</a>'
+        f'<p style="margin:24px 0 0;font-size:12px;color:#aaa;">'
+        f'<a href="{unsubscribe}" style="color:#aaa;">Stop these alerts</a> '
+        "— this does not affect your waitlist emails.</p>"
+    )
+
+    text = (
+        f"{title}\n\n{summary}\n\n{url}\n\n"
+        f"Stop these alerts (waitlist emails are unaffected): {unsubscribe}\n"
+    )
+
+    return title, _shell(content), text
+
+
 # Only implemented templates belong here. A missing entry is a loud failure in
 # the dispatcher, which is the correct outcome for a job referencing a template
 # nobody has written yet.
 TEMPLATES = {
     "e1_confirm": e1_confirm,
     "e_magic_link": e_magic_link,
+    "e_inv_admission": e_inv_admission,
+    "e_win_invites": e_win_invites,
+    "e_re_engage": e_re_engage,
+    "e_alert": e_alert,
 }

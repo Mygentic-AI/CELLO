@@ -141,9 +141,9 @@ def claim_jobs(conn, limit, correlation_id):
         # from being wrong again.
         cur.execute(
             """
-            SELECT j.id, j.user_id, j.template, j.attempts,
+            SELECT j.id, j.user_id, j.template, j.attempts, j.payload,
                    u.email, u.display_name, u.email_status, u.content_alerts,
-                   u.status AS user_status,
+                   u.status AS user_status, u.wave_number,
                    q.queue_position, q.queue_size,
                    rc.code AS referral_code
             FROM email_jobs j
@@ -161,13 +161,22 @@ def claim_jobs(conn, limit, correlation_id):
         )
         jobs = cur.fetchall()
 
-        # Mint tokens inside the claim transaction so they are durable before
-        # the mail that carries them leaves.
+        # Resolve everything a template needs inside the claim transaction, so
+        # it is durable before the mail that carries it leaves.
         for job in jobs:
+            # Operator-supplied context (e_alert) is flattened in first so a
+            # template reads one dict rather than reaching into a nested one.
+            if job.get("payload"):
+                job.update(job["payload"])
+
             if job["template"] == "e1_confirm":
                 job["auth_token"] = mint_verify_token(cur, job["user_id"])
             elif job["template"] == "e_magic_link":
                 job["auth_token"] = latest_unused_magic_link(cur, job["user_id"])
+            elif job["template"] == "e_inv_admission":
+                job["waitlist_token"] = live_grant(cur, job["user_id"])
+            elif job["template"] == "e_win_invites":
+                job["invite_codes"] = premium_codes(cur, job["user_id"])
 
     conn.commit()
     log("waitlist.email.batch.claimed", correlation_id, claimed=len(jobs))
@@ -196,6 +205,50 @@ def latest_unused_magic_link(cur, user_id):
             f"No unused magic-link token for {user_id}; it expired before dispatch."
         )
     return row["token"]
+
+
+def live_grant(cur, user_id):
+    """The unburned wave grant for this user.
+
+    Read rather than minted: wave assembly already created exactly one, and
+    minting here would give a retried job a second live admission for the same
+    person.
+    """
+    cur.execute(
+        """
+        SELECT token FROM waitlist_tokens
+        WHERE waitlist_user_id = %s AND used_at IS NULL AND expires_at > now()
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (user_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        # Refuse rather than send an admission nobody can redeem — the recipient
+        # would have no way to tell whether the fault was theirs.
+        raise RuntimeError(
+            f"No live waitlist grant for {user_id}; refusing to send an invitation "
+            "that cannot be claimed."
+        )
+    return row["token"]
+
+
+def premium_codes(cur, user_id):
+    """The user's unspent premium invites."""
+    cur.execute(
+        """
+        SELECT code FROM referral_codes
+        WHERE owner_waitlist_user_id = %s AND type = 'premium' AND active
+        ORDER BY code
+        """,
+        (user_id,),
+    )
+    codes = [r["code"] for r in cur.fetchall()]
+    if not codes:
+        raise RuntimeError(
+            f"No unspent premium invites for {user_id}; the mail exists to deliver them."
+        )
+    return codes
 
 
 def mint_verify_token(cur, user_id):
