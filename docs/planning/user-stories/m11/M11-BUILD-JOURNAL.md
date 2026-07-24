@@ -647,3 +647,43 @@ a link that cannot work.
 
 **Status:** `DOD-AUTH-1` 🟠 → 🟡 · `DOD-INV-NO-ENUMERATION` ❌ → 🟡. Owed: the static `/auth` and
 `/status` pages that call these routes, and a live run.
+
+---
+
+### Entry 15: DOD-STATUS-STUB-1 — the last P0 line that could be built tonight
+**Date:** 2026-07-25
+**Target:** DOD-STATUS-STUB-1, DOD-AUTH-1 (client half) [corp-cello-site]
+
+`/auth` and `/status` as static pages calling the auth Lambda, plus
+`src/lib/waitlistApi.ts` as the single place that knows where the API lives. Both pages emit to `out/`
+and ship with the rest of the site — verified against the built artifact, not the route table, since a
+green build listing a route is exactly what hid the original static-export defect (Entry 6).
+
+**The `/status` gate is client-side, and that is acceptable here.** M11-D20 accepted this consequence
+when the static export was kept. It holds up because the page shell carries no personal data: every value
+on it arrives from `/auth/session`, which requires a valid session cookie. A visitor who blocks the
+redirect sees an empty shell, not someone else's queue position. The gate is a convenience; the API is
+the access control.
+
+**Queue position renders only when the server returned one.** An admitted user has no queue row, and
+filling that space with a placeholder or a dash-that-looks-like-a-number is the fabrication
+`DOD-INV-NO-INFLATION` rules out. The whole block is omitted instead.
+
+**`/auth` has exactly one success state, deliberately.** The Lambda already makes known and unknown
+addresses identical down to response timing (Entry 14); a UI that rendered anything different for a fast
+response would hand back the oracle the server just closed. The only error path on this screen is a
+transport or server failure, because an unknown address is a 200 by design.
+
+`waitlistApi.ts` surfaces the server's *named* cause rather than collapsing failures into one string —
+`database_unavailable` and `no_active_session` call for completely different reactions from whoever reads
+them, and only one of them should redirect.
+
+**Gates:** typecheck clean · lint clean · 10 tests · build emits `/auth` and `/status`, both present in
+`out/`.
+
+**Status:** `DOD-STATUS-STUB-1` ❌ → 🟡. Owed: a live run against the deployed API.
+
+**P0 position now:** every P0 line is at 🟡 or better except `DOD-EMAIL-INFRA-1` (🟠 — CFN wiring owed)
+and `DOD-SES-PROD-1` (🟠 — SES production access and the SNS topic owed). Nothing further on P0 can be
+proven from this laptop; what remains is CloudFormation and AWS, both of which need infra awake.
+Next: P1, starting with `DOD-SCHEMA-P1-1`.
