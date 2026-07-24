@@ -15,71 +15,14 @@ Run: PGURL=postgres://m11:m11@localhost:55432/m11_test python3 -m pytest -q
 
 import json
 import os
-import subprocess
 import sys
 import uuid
-from pathlib import Path
 
 import psycopg2
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent))
 
-PGURL = os.environ.get("PGURL", "postgres://m11:m11@localhost:55432/m11_test")
-ADMIN_URL = PGURL.rsplit("/", 1)[0] + "/postgres"
-DB_NAME = PGURL.rsplit("/", 1)[1]
-MIGRATIONS = (
-    Path(__file__).resolve().parents[3].parent / "corp-cello-site" / "migrations"
-)
-
-
-def _apply_migrations():
-    conn = psycopg2.connect(ADMIN_URL)
-    conn.autocommit = True
-    with conn.cursor() as cur:
-        cur.execute(f"DROP DATABASE IF EXISTS {DB_NAME}")
-        cur.execute(f"CREATE DATABASE {DB_NAME}")
-    conn.close()
-
-    conn = psycopg2.connect(PGURL)
-    conn.autocommit = True
-    with conn.cursor() as cur:
-        for path in sorted(MIGRATIONS.glob("*.sql")):
-            cur.execute(path.read_text())
-    conn.close()
-
-
-@pytest.fixture(scope="session", autouse=True)
-def database():
-    if not MIGRATIONS.is_dir():
-        pytest.skip(f"migrations not found at {MIGRATIONS}")
-    try:
-        _apply_migrations()
-    except psycopg2.OperationalError as err:
-        pytest.skip(f"local Postgres unavailable: {err}")
-    os.environ["DATABASE_URL"] = PGURL
-    os.environ["PGSSLMODE"] = "disable"  # local container speaks plaintext
-
-
-@pytest.fixture()
-def handler(database):
-    os.environ["DATABASE_URL"] = PGURL
-    import handler as mod
-
-    mod.DATABASE_URL = PGURL
-    return mod
-
-
-@pytest.fixture(autouse=True)
-def clean_tables(database):
-    conn = psycopg2.connect(PGURL)
-    conn.autocommit = True
-    with conn.cursor() as cur:
-        cur.execute(
-            "TRUNCATE waitlist_users, referral_codes, creator_tracking, "
-            "points_ledger, email_jobs, waitlist_touchpoints, referrals CASCADE"
-        )
-    conn.close()
+from conftest import PGURL, query  # fixtures are auto-discovered from conftest
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -94,15 +37,6 @@ def invoke(handler, body, method="POST", path="/waitlist/signup", origin="https:
     result = handler.lambda_handler(event, None)
     parsed = json.loads(result["body"]) if result["body"] else {}
     return result["statusCode"], parsed
-
-
-def query(sql, params=()):
-    conn = psycopg2.connect(PGURL)
-    with conn.cursor() as cur:
-        cur.execute(sql, params)
-        rows = cur.fetchall() if cur.description else []
-    conn.close()
-    return rows
 
 
 def seed_code(code, *, kind="share", owner_email=None, creator=None, active=True):
