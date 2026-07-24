@@ -395,6 +395,43 @@ def e_alert(job):
     return title, _shell(content), text
 
 
+def e_feedback_invite(job):
+    """The §5c outreach mail. Under 150 words, and it asks for one thing.
+
+    Sent the same day eligibility is detected, because someone who has just got
+    value out of something is the one moment they will talk about it in detail.
+    A month later they remember that it worked and nothing about why.
+    """
+    name = _greeting(job)
+    calendar = f"{SITE}/feedback-call"
+
+    content = (
+        f'<h1 style="margin:0 0 8px;font-size:26px;font-weight:700;color:#111;letter-spacing:-0.5px;">'
+        f"You've been using it properly, {name}.</h1>"
+        f'<p style="margin:0 0 20px;font-size:16px;color:#666;line-height:1.6;">'
+        "Which makes you one of a small number of people who can tell us something we cannot work out "
+        "from the logs: what you were actually trying to do.</p>"
+        f'<p style="margin:0 0 24px;font-size:16px;color:#666;line-height:1.6;">'
+        "Twenty minutes, whenever suits. No script.</p>"
+        f'<a href="{calendar}" style="display:inline-block;padding:16px 32px;background:{BRAND};'
+        'color:#fff;text-decoration:none;border-radius:100px;font-size:16px;font-weight:600;">'
+        "Pick a time →</a>"
+        f'<p style="margin:24px 0 0;font-size:13px;color:#999;line-height:1.6;">'
+        "Not interested? Ignoring this is a complete answer — nothing changes either way.</p>"
+    )
+
+    text = (
+        f"Hi {name},\n\n"
+        "You've been using CELLO properly, which makes you one of a small number of people who can tell "
+        "us something we cannot work out from the logs: what you were actually trying to do.\n\n"
+        f"Twenty minutes, whenever suits. No script.\n{calendar}\n\n"
+        "Not interested? Ignoring this is a complete answer.\n\n"
+        f"— The CELLO team\n{SITE}"
+    )
+
+    return "Twenty minutes?", _shell(content), text
+
+
 # Only implemented templates belong here. A missing entry is a loud failure in
 # the dispatcher, which is the correct outcome for a job referencing a template
 # nobody has written yet.
@@ -405,4 +442,5 @@ TEMPLATES = {
     "e_win_invites": e_win_invites,
     "e_re_engage": e_re_engage,
     "e_alert": e_alert,
+    "e_feedback_invite": e_feedback_invite,
 }
