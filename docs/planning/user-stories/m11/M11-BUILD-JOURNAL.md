@@ -1200,3 +1200,45 @@ keeps it: a banned user who somehow seals a session is not promoted by it.
 **Status:** `DOD-FIRST-WIN-1` ❌ → 🟡. Owed: the seal-event call site in the daemon, and the live
 end-to-end enforcer. The mutual-connection reward noted on that DoD line remains a portal/client item and
 is not part of this Lambda.
+
+---
+
+### Entry 26: DOD-FEEDBACK-DETECTION-1 — one cross-operator session beats five solo
+**Date:** 2026-07-25
+**Target:** DOD-FEEDBACK-DETECTION-1 [trustless-cello, corp-cello-site]
+
+`infra/lambda/waitlist-feedback/` plus `session_telemetry` in `0017` — the DoD verifies by "seeding
+session telemetry" and no migration had ever created a table for it to live in.
+
+**The threshold asymmetry is the design, not a tuning choice.** Five sealed sessions OR one
+cross-operator session. Sealing five with your own agents proves the software runs; sealing **one** with
+somebody else's proves the claim CELLO actually makes — that two parties who do not share an operator can
+establish trust. One of those is worth five of the other per event, which is why the bar is five times
+lower. A bug treating them as equivalent would fill the interview pipeline with solo testers, so there is
+a test that three sessions between one person's own two agents does *not* trip the lower bar.
+
+**Metadata only, and that is a product constraint rather than a schema preference.** Both thresholds are
+answerable from counts. `session_telemetry` records operator *fingerprints* — enough to distinguish
+same-operator from different-operator and nothing more. A job whose entire purpose is finding people worth
+interviewing would, if it read conversations, be a worse violation of the product's premise than any
+feature it could enable.
+
+**One statement, not select-then-update.** This is a daily job that can overlap itself if a run is slow,
+and the read-then-write version re-enqueues outreach for someone already contacted. `NOT
+feedback_eligible` in the WHERE is what makes it idempotent, and there is a test that
+`feedback_eligible_date` still records when they *became* eligible rather than the last sweep.
+
+**Redelivery cannot inflate a count.** `UNIQUE (agent_pubkey, session_ref)` — four real sessions plus a
+replay of one is four. Without it the replay reads as five and trips a threshold nobody met.
+
+**Sessions across two agents of one person add up.** Three on the laptop and two on the phone is five
+sessions by one human, which is precisely what the threshold asks about.
+
+**A failed sweep returns 5xx.** It runs unattended, so a `200` with zero is indistinguishable from a quiet
+week — nobody would notice it had stopped working until the flywheel had been dry for a month.
+
+**Runs:** 252 tests green across ten Lambda suites.
+
+**Status:** `DOD-FEEDBACK-DETECTION-1` ❌ → 🟡. Owed: the EventBridge daily schedule, and the daemon
+actually writing `session_telemetry` rows — the table exists and nothing produces into it yet, which is
+flagged here rather than left implicit.

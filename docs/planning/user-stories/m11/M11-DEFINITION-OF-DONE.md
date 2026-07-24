@@ -186,7 +186,7 @@ Every DoD line carries a `[repo]` tag immediately after its ID. Use this table t
 - **DOD-FEEDBACK-DETECTION-1** [trustless-cello] — §5c high-activity detection Lambda on EventBridge daily schedule:
   - Thresholds: `≥5 sealed sessions within 14 days of admitted_at`, OR `≥1 cross-operator session within 14 days`.
   - Writes `feedback_eligible = true`, `feedback_eligible_date = NOW()` where not already set. Idempotent.
-  - Verified: seed session telemetry crossing the threshold; run Lambda manually; confirm `feedback_eligible = true` and `feedback_eligible_date` set. Idempotency: run again; no change to existing rows. — ❌
+  - Verified: seed session telemetry crossing the threshold; run Lambda manually; confirm `feedback_eligible = true` and `feedback_eligible_date` set. Idempotency: run again; no change to existing rows. — 🟡 `infra/lambda/waitlist-feedback/` + `session_telemetry` in `0017` (metadata only); 17 tests incl. both thresholds, the 14-day window, redelivery, and multi-agent aggregation. Owed: the EventBridge schedule and the daemon writing telemetry → Journal Entry 26
 
 - **DOD-FEEDBACK-OUTREACH-1** [trustless-cello, ops-dashboard] — outreach sequence automation:
   - Day 0 (same day `feedback_eligible` is set): enqueue a `CELLO_FEEDBACK` session initiation event AND an SES email (under 150 words, calendar link). `email_jobs` with `scheduled_at = NOW()`. Lambda in trustless-cello.
