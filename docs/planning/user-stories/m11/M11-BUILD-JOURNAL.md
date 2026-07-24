@@ -1025,3 +1025,86 @@ parametrised across every template that interpolates a display name.
 `DOD-E-ALERT-1` ❌ → 🟠 — each still owes a *trigger*: the 60-day scheduler and the `/unsubscribe`
 endpoint for one, the ops-dashboard send with its same-day block for the other. Scored 🟠 rather than 🟡
 because a template nothing sends is half a feature, and calling it built would hide which half.
+
+---
+
+### Entry 23: review round 3 — two launch-stoppers no gate could see
+**Date:** 2026-07-25
+**Target:** review of waitlist-auth, waitlist-actions, the round-2 fixes, and 0009–0014
+
+All suites were green when this review started — 149 Lambda, 10 vitest, schema enforcer PASS, 9/9
+invariants PASS. **That green was the problem.** Five findings sat in the gaps between those checks, and
+two of them would have stopped launch.
+
+**H1 — nobody could have stayed signed in.** The session cookie is set by
+`execute-api.us-east-1.amazonaws.com` and read from `cello.mygentic.ai`. Those are different *sites*, and
+a `SameSite=Lax` cookie is never attached to a cross-site `fetch`. So: click the E1 link → land on
+`/status` → `fetchSession()` sends no cookie → 401 → redirect to `/auth` → request a link → click it →
+`/status` → 401 → `/auth`. An infinite loop, for every user, on day one.
+
+No test could see it. Every auth and actions test hands `lambda_handler` a cookie header directly; there
+is no browser anywhere in M11, so the one thing that decides whether a cookie travels was never exercised.
+Fixed by addressing the API through `api.cello.mygentic.ai`, which is same-site with the app.
+`SameSite=None` would also work today and be blocked by Safari ITP and Chrome's third-party cookie removal
+tomorrow. Needs an API Gateway custom domain; until it exists the endpoint does not resolve, which is a
+loud failure rather than a silent auth loop.
+
+That also fixed the most-clicked URL in the product — the E1 confirmation button pointed at a raw AWS
+hostname no recipient would recognise. The invariant checker had not looked for that, because its
+denylist only knew about invented *cello* domains. It does now, and it immediately found a second one in
+the legacy `/confirm` page.
+
+**H2 — `0012` would have failed on the first database holding real data.** It adds
+`creator_tracking.waitlist_user_id` and a CHECK requiring it for signup rows *in the same file*, so every
+pre-existing row was NULL and violated it. And because `migrate.js` is one transaction per file, that
+rollback halts `0013` and everything after. Now backfills from the old TEXT `session_id` first, and demotes
+genuinely unattributable rows to `visit` rather than deleting them — a visit that cannot be tied to a
+signup is still a real visit, and dropping it understates a creator's traffic.
+
+**H3 — and my enforcer could not have caught H2.** Its historic seed populated four tables, all created in
+`0001`, then applied `0002..N` over them. So it ran `0012` against an **empty** `creator_tracking`. This
+is the third time this script has passed vacuously, in a third way: first inventing a table from a
+comment, then matching zero tables, now seeding only the tables that happen to exist at the start. The
+replay is now **staged** — migrations apply in order and each table is seeded immediately after the
+migration that creates it, so every later migration meets real data in every table it can touch. It also
+asserts the legacy attribution was **recovered**, not merely tolerated: a migration that satisfies its own
+constraint by discarding the data it exists to preserve has not worked. Revert-tested — removing the
+backfill fails the enforcer.
+
+**H4 — the timing-floor test was hollow, proven by execution.** With `RESPONSE_FLOOR_MS = 0` the
+known/unknown gap was 1.14ms, comfortably under the 60ms threshold, so the test passed with the guard
+deleted. It was coverage of "Postgres is fast." It now asserts the floor itself and is revert-tested.
+Worse, when the DB is slow enough that the known path *exceeds* the floor, the guard silently stops
+guarding — that now emits a WARN, because a signal that cannot fire is not a signal and the first anyone
+would otherwise learn of it is an enumerated list.
+
+**H5 — `/waitlist/post-url` was dead on arrival.** It refused any platform the user had not connected via
+OAuth, and `DOD-OAUTH-SOCIAL-1` is parked on external app registration, so nothing in M11 can create that
+row. Every real submission would have 403'd forever, and a test was pinning the refusal as correct.
+The reasoning behind the guard was right — handle ownership is the only thing tying a post to a person —
+but **it shipped ahead of its producer**. Refusing is right for an input that is missing or hostile; it is
+wrong for one that is not there *yet*, because that makes a parked integration a hard precondition for an
+unrelated path. Submissions are now accepted carrying `handle_verified`, which hands the fact to the human
+reviewer M11-D4 already puts in the loop.
+
+**Also fixed:** M1 a database fault on a known address returned 503 while an unknown returned the opaque
+200 — a *categorical* oracle, worse than the timing one, now isolated and swallowed deliberately; M2 the
+free-form +10 and the written answer were permanently lost if submitted on a second visit; M3 SQLSTATE
+class 42 collapsed a missing GRANT into "run a migration", sending an operator to Flyway to find it clean;
+M4 the ledger's cap and cache did not survive an UPDATE, so `DOD-INV-POINTS-CAPS` was literally true and
+practically incomplete; M5 `revoked_at` had readers and no producer, so a leaked cookie was live for 30
+days with no kill switch — `POST /auth/logout` now revokes *every* session for the user, because someone
+logging out due to suspicion does not know which cookie is the problem; M6 `require_session` never joined
+`waitlist_users`, so a banned user kept awarding themselves points; M7 the invariant checker skipped
+`app/invite` and `app/confirm` and treated a missing directory as a pass; L1 nginx `add_header` does not
+accumulate, so every JS and CSS file shipped without `nosniff` while the HTML referencing them was
+protected.
+
+**The reviewer also cleared four things I had flagged as suspicious** — the `%`-formatted interval is not
+an injection vector (`SESSION_DAYS` is a module literal), the client-side `/status` gate leaks nothing,
+the nginx `/invite/` rewrite has no traversal, and the `handle_survey` hand-sync did not race (0010's
+trigger already held the row lock). Recorded so nobody re-investigates them.
+
+**Runs after the fixes:** 208 tests green across seven Lambda suites · schema enforcer green on all five
+properties with the staged replay · invariant checker 9/9 · corp-cello-site typecheck, lint, 10 tests,
+build clean.
