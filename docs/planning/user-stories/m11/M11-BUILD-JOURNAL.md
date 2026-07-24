@@ -932,3 +932,52 @@ symptom points at source that is already correct.
 
 **Status:** `DOD-INV-PREMIUM-BEARER` ❌ → 🟡 · `DOD-INV-TWO-DOOR` ❌ → 🟡 (fast door complete; the slow
 door's wave assembly is P2).
+
+---
+
+### Entry 21: DOD-WAVE-ASSEMBLY-1 — and a wave of one that admitted nobody
+**Date:** 2026-07-25
+**Target:** DOD-SCHEMA-P2-1, DOD-WAVE-ASSEMBLY-1, DOD-INV-WAVE-GATE, DOD-INV-TOKEN-SINGLE-USE
+
+`0013` (five P2 tables) + `infra/lambda/waitlist-waves/`. Written as a Lambda rather than inside the ops
+dashboard, per M11-D20's shape: the dashboard becomes a caller, so the assembly logic is testable now
+instead of waiting on a repo that does not exist.
+
+**The bug worth recording, because my own tests found it and the failure mode is invisible.** The
+percentage split uses integer division. At capacity 1 with the default 75/25, `1 * 75 // 100` is 0 and
+`1 * 25 // 100` is 0 — so a wave of one selected **nobody**, wrote no wave row, and returned a cheerful
+`admitted: 0`. Wave 1 is 10–20 hand-picked design partners (M11-D10), so small capacities are the normal
+case for the only wave that has ever been planned.
+
+The first fix — give the remainder to the priority cohort — was still wrong, and the next test caught
+that too: on day one **nobody has points**, so the priority cohort is empty and its 75% share goes
+unfilled while people wait. Two different routes to the same silent underfill.
+
+Resolved with a backfill that takes the shortfall by the queue's own ordering (points, then age). The DoD
+says "~75%" and "~25%" — the *shares* are approximate; the capacity is not. A seat lost to rounding is a
+person who did not get in, and nothing in the output would have said so. Now covered by a parametrised
+test asserting every capacity from 1 to 7 admits exactly that many from a queue of ten.
+
+**`DOD-INV-WAVE-GATE`, honestly scored 🟠 rather than 🟡.** Two halves hold: there is no schedule (and the
+docstring says there must never be one), and `opened_by` is required and recorded, so a wave always names
+its operator — `ABSENT IS NOT FINE` applied to accountability rather than to a guard. But the line says
+the function "cannot be invoked except by an authenticated ops dashboard action", and until that dashboard
+exists nothing but IAM restricts who invokes it. Claiming 🟡 would be claiming a control that is not there.
+
+**Concurrency:** all three cohort queries hold `FOR UPDATE`, so two operators opening a wave simultaneously
+cannot select the same people and mint two grants each. There is also a post-UPDATE count assertion — if
+the number of rows actually flipped differs from the number selected, the whole wave is refused rather
+than half-applied, because guessing which half is correct is worse than refusing.
+
+**Schema constraints the DoD does not name but the invariants imply:** `priority_pct + zero_pct <= 100`
+(75/75 would quietly admit more than the capacity typed); one live grant per user (a second unburned grant
+is a second admission for the same human — `DOD-INV-TOKEN-SINGLE-USE` is about the person); and
+telegram source consistency, so "who let this account in?" stays answerable.
+
+**An empty queue is a 200 reporting zero, not a failure**, and writes no wave row. An operator needs to
+see "nobody matched" rather than an error they will go hunting for a cause behind.
+
+**Runs:** 176 tests green across seven Lambda suites; schema enforcer green with `0013`.
+
+**Status:** `DOD-SCHEMA-P2-1` ❌ → 🟡 · `DOD-WAVE-ASSEMBLY-1` ❌ → 🟡 · `DOD-INV-WAVE-GATE` ❌ → 🟠 ·
+`DOD-INV-TOKEN-SINGLE-USE` ❌ → 🟠 (the burn belongs to the Telegram gate, still unbuilt).
