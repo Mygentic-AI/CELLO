@@ -9,6 +9,20 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🔴 Hibernate complete — all 3 regions down (2026-07-24, 19:27–19:32 UTC)
+
+ECS services scaled to 0 (directory + relay ×3, plus portal and ops-agent in us-east-1), all 4 RDS
+instances stopped (`cello-dev` ×3 + `cello-portal-dev`), demo agent EC2 `i-0ad3e7c22470f266e`
+stopped, 7 ALBs deleted, 3 NAT Gateways deleted (EIPs retained), 3 ssmmessages VPC endpoints
+deleted. All 7 Route53 names (`directory-*`, `relay-*`, `portal`) UPSERTed to blackhole A
+`198.51.100.1` TTL 60 — prevents the NXDOMAIN negative-cache poisoning from the 2026-07-24 incident.
+State written to `hibernation-state.json`; before-snapshots at `hibernation-snapshots/*-20260724T192732Z.json`.
+
+**ECS Exec is unavailable while hibernated** (ssmmessages endpoint gone). Do not make any AWS change
+until `wake.sh --execute` has run — see "Hibernation — No Infrastructure Changes While Down" in `infra/CLAUDE.md`.
+
+---
+
 ## 🟢 Wake complete — all 3 regions live (2026-07-24, 16:01–16:17 UTC)
 
 **Elapsed: ~16 min 18 sec** (all 3 regions in parallel — no RDS bottleneck this cycle). All inventory diffs IDENTICAL.
