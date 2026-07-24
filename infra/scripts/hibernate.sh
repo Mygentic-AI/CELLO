@@ -18,7 +18,16 @@
 # What is KEPT untouched (cheap/stateless or too costly to recreate):
 #   Target groups, security groups, VPC/subnets/routes, IAM, ECR, S3, Route53
 #   ACM certs, Secrets Manager, SSM parameters, KMS keys, CloudWatch, WAF
-#   Route53 A records (updated by wake.sh to point at new ALB DNS)
+#
+# Route53 A records are NOT left dangling: after ALB deletion each dir/relay
+# (+ portal) name is UPSERTed to a plain A record at a blackhole IP (TEST-NET-2,
+# TTL 60). A dangling alias answers NXDOMAIN, and clients polling the names all
+# night seed negative DNS caches at every resolver layer between them and
+# Route53 — on wake, a stale layer re-poisons the layers below it and the wake
+# looks broken from the client for up to ~1 h. A name that resolves (to a dead
+# IP) is never negatively cached; connections just fail fast at TCP.
+# wake.sh UPSERTs the records back to the new ALB aliases.
+# Incident: docs/planning/discussion_logs/2026-07-24_1630_post-wake-directory-dns-resolution-incident.md
 #
 # Usage:
 #   ./hibernate.sh                                 # DRY-RUN all 3 regions
@@ -464,6 +473,42 @@ for REGION in "${TARGET_REGIONS[@]}"; do
       ok "  Deleted ALB: ${alb_arn}"
     fi
   done
+
+  # -- 3c2. Blackhole DNS — prevent NXDOMAIN negative-cache poisoning ----------
+  # The ALBs are gone, so the alias records above now answer NXDOMAIN. Clients
+  # (the local daemon retries directory signaling every 30 s) would cache that
+  # negative answer at every resolver layer for the whole down-window, and a
+  # stale layer re-poisons the layers below it on wake (2026-07-24 incident:
+  # ~50 min post-wake client outage from a carrier-rewritten 2819 s negative
+  # TTL). UPSERT each name to a plain A record at a blackhole IP instead:
+  # the name keeps resolving (NOERROR — never negatively cached), connections
+  # fail fast at TCP, and wake.sh's alias UPSERT overwrites this cleanly.
+  step "  [${REGION}] Blackholing DNS records (prevents negative-cache poisoning)"
+  BLACKHOLE_IP="198.51.100.1"   # TEST-NET-2 (RFC 5737) — guaranteed unroutable
+  blackhole_r53() {
+    local subdomain="$1"
+    if [[ "${DRY_RUN}" == "1" ]]; then
+      echo "${C_YELLOW}  [dry-run] ${C_RESET}UPSERT ${subdomain}.${DOMAIN} → A ${BLACKHOLE_IP} (TTL 60)"
+      return 0
+    fi
+    aws route53 change-resource-record-sets \
+      --hosted-zone-id "${HOSTED_ZONE_ID}" \
+      --change-batch "$(jq -n \
+        --arg sub "${subdomain}.${DOMAIN}" \
+        --arg ip "${BLACKHOLE_IP}" \
+        '{Changes:[{
+          Action:"UPSERT",
+          ResourceRecordSet:{
+            Name:$sub, Type:"A", TTL:60,
+            ResourceRecords:[{Value:$ip}]
+          }
+        }]}')" \
+      --no-cli-pager >/dev/null
+    ok "  ${subdomain}.${DOMAIN} → A ${BLACKHOLE_IP} (blackhole, TTL 60)"
+  }
+  blackhole_r53 "$(dir_subdomain "${REGION}")"
+  blackhole_r53 "$(relay_subdomain "${REGION}")"
+  [[ "${REGION}" == "us-east-1" ]] && blackhole_r53 "portal"
 
   # -- 3d. Delete ssmmessages VPC endpoint -------------------------------------
   ep_id=$(echo "$R" | jq -r '.ssmmessages_endpoint.id')
