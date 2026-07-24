@@ -12,7 +12,8 @@
 #   4. ALBs (dir + relay) → recreate with saved config → wire listener rules
 #   5. Route53            → update A alias records to new ALB DNS names
 #   6. ECS services       → restore desiredCount → wait stable
-#   7. VERIFY             → DNS + HTTP health check + inventory diff vs before-snapshot
+#   7. VERIFY             → client-path (OS resolver) DNS + HTTP checks, HARD-FAIL
+#                            on failure + inventory diff vs before-snapshot
 #
 # Usage:
 #   ./wake.sh                                  # DRY-RUN all regions in state file
@@ -516,21 +517,66 @@ for REGION in "${TARGET_REGIONS[@]}"; do
   # ── STEP 7: VERIFY ───────────────────────────────────────────────────────────
   step "  [${REGION}] 7/7  Verification"
 
+  VERIFY_FAILED=0
   if [[ "${DRY_RUN}" == "1" ]]; then
     warn "  [dry-run] would verify DNS, HTTP health, and inventory diff"
   else
-    # DNS check
-    dir_ip=$(dig @8.8.8.8 +short "${DIR_SUB}.${DOMAIN}" 2>/dev/null | head -1 || echo "")
-    relay_ip=$(dig @8.8.8.8 +short "${RELAY_SUB}.${DOMAIN}" 2>/dev/null | head -1 || echo "")
-    [[ -n "$dir_ip"   ]] && ok "  DNS ${DIR_SUB}: ${dir_ip}"   || warn "  DNS ${DIR_SUB}: NOT RESOLVING (may take 60s)"
-    [[ -n "$relay_ip" ]] && ok "  DNS ${RELAY_SUB}: ${relay_ip}" || warn "  DNS ${RELAY_SUB}: NOT RESOLVING (may take 60s)"
+    # ── Verification runs through the OS RESOLVER — the path real clients use.
+    # dig @8.8.8.8 bypasses the local resolver stack entirely and reported
+    # success on 2026-07-24 while every real client on this machine failed for
+    # ~50 min (negative-cache poisoning; see the incident log). curl resolves
+    # via getaddrinfo, exactly like the daemon's fetch. A failure here is a
+    # FAILURE — never demote it to a soft warning.
+    # Incident: docs/planning/discussion_logs/2026-07-24_1630_post-wake-directory-dns-resolution-incident.md
+    verify_dir_http() {
+      # Poll /manifest by hostname for up to 5 min (positive TTL 60 s means a
+      # freshly-overwritten blackhole/alias record clears within ~1 min).
+      local host="${DIR_SUB}.${DOMAIN}" code i
+      for i in $(seq 1 20); do
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+          "http://${host}/manifest" 2>/dev/null || echo "000")
+        if [[ "${code}" =~ ^(200|301|302)$ ]]; then
+          ok "  /manifest HTTP ${code} via OS resolver (attempt ${i})"
+          return 0
+        fi
+        log "  /manifest HTTP ${code} via OS resolver — retrying (${i}/20, 15s)..."
+        sleep 15
+      done
+      return 1
+    }
+    verify_relay_dns() {
+      # Relay serves libp2p/ws, so only prove the NAME RESOLVES on the client
+      # path: curl exit code 6 = could not resolve host. Any HTTP outcome or
+      # connect-level failure means DNS worked.
+      local host="${RELAY_SUB}.${DOMAIN}" i
+      for i in $(seq 1 20); do
+        curl -s -o /dev/null --max-time 10 "http://${host}/" 2>/dev/null
+        if [[ $? -ne 6 ]]; then
+          ok "  ${host} resolves via OS resolver (attempt ${i})"
+          return 0
+        fi
+        log "  ${host} not resolving via OS resolver — retrying (${i}/20, 15s)..."
+        sleep 15
+      done
+      return 1
+    }
 
-    # HTTP health check on /manifest (public, no auth)
-    manifest_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
-      "http://${DIR_SUB}.${DOMAIN}/manifest" 2>/dev/null || echo "000")
-    [[ "${manifest_code}" =~ ^(200|301|302)$ ]] \
-      && ok "  /manifest HTTP ${manifest_code}" \
-      || warn "  /manifest returned HTTP ${manifest_code} — directory may still be starting"
+    if ! verify_dir_http; then
+      err "  ════════════════════════════════════════════════════════════════"
+      err "  VERIFICATION FAILED: ${DIR_SUB}.${DOMAIN}/manifest unreachable"
+      err "  via the OS resolver after 5 min. The AWS side may be healthy —"
+      err "  real clients on THIS machine still cannot reach the directory."
+      err "  Likely: stale negative DNS cache (hibernation NXDOMAIN poisoning)."
+      err "  Diagnose (read-only): dig +short ${DIR_SUB}.${DOMAIN}  vs"
+      err "    dscacheutil -q host -a name ${DIR_SUB}.${DOMAIN}"
+      err "  See: docs/planning/discussion_logs/2026-07-24_1630_post-wake-directory-dns-resolution-incident.md"
+      err "  ════════════════════════════════════════════════════════════════"
+      VERIFY_FAILED=1
+    fi
+    if ! verify_relay_dns; then
+      err "  VERIFICATION FAILED: ${RELAY_SUB}.${DOMAIN} does not resolve via the OS resolver."
+      VERIFY_FAILED=1
+    fi
 
     # After-snapshot + diff
     log "  Taking after-snapshot and comparing with before..."
@@ -549,6 +595,12 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     fi
   fi
 
+  # Client-path verification failure marks this region failed — the final
+  # banner must never print a clean WAKE COMPLETE over an unreachable client path.
+  if [[ "${VERIFY_FAILED}" -eq 1 ]]; then
+    exit 1
+  fi
+
   ) &
   PIDS+=($!)
 done  # end per-region loop
@@ -564,7 +616,12 @@ if [[ "${DRY_RUN}" == "1" ]]; then
   banner "DRY-RUN COMPLETE — no changes made." "${REGIONS_STR}"
   echo "Re-run with ${C_BOLD}--execute${C_RESET} to apply."
 elif [[ "$FAILED" -gt 0 ]]; then
-  banner "WAKE COMPLETE (${FAILED} region(s) had errors — check output above)" "${REGIONS_STR}"
+  banner "WAKE FAILED VERIFICATION (${FAILED} region(s) — see errors above)" "${REGIONS_STR}"
+  echo ""
+  echo "${C_RED}${C_BOLD}Do NOT treat this environment as live until the failed checks pass.${C_RESET}"
+  echo "If AWS-side checks look green but the client path fails, suspect stale"
+  echo "negative DNS cache on this machine (see the 2026-07-24 incident log)."
+  exit 1
 else
   banner "WAKE COMPLETE" "${REGIONS_STR}"
   echo ""
@@ -572,4 +629,8 @@ else
   echo "  1. Verify /manifest endpoints serve a current manifest"
   echo "  2. Relay manifests auto-re-signed when relay re-registered (check CloudWatch logs)"
   echo "  3. ECS Exec available again (ssmmessages endpoint restored)"
+  echo "  4. Any client that ran DURING hibernation may hold negative DNS cache for the"
+  echo "     resolver chain's negative TTL (minutes → ~1 h on TTL-mangling networks like"
+  echo "     phone hotspots). Verify from the CLIENT path before debugging the server."
+  echo "     (Blackhole records during hibernate prevent this going forward.)"
 fi
