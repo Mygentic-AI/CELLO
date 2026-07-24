@@ -1790,3 +1790,44 @@ picked up two pre-existing suites (`pipeline-filter`, `webhook-receiver`) that h
 **Still owed and not closed here:** the Day-6 "status-page note" clause has no implementation anywhere,
 and is now the only part of `DOD-FEEDBACK-OUTREACH-1` besides the `CELLO_FEEDBACK` session initiation that
 is neither built nor journaled as owed. Recorded so the next pass does not have to rediscover it.
+
+---
+
+### Entry 39: DOD-EMAIL-DRIP-1 — the last red line
+**Date:** 2026-07-25
+**Target:** DOD-EMAIL-DRIP-1 [trustless-cello, corp-cello-site]
+
+E1 now, E2 at +1 day, the first E3 at +14 days — all three enqueued in one statement at signup.
+
+**Enqueued, not swept.** The schedule is a property of *this signup*, so a sweep would have to reconstruct
+"who is due for E2?" from `created_at` on every tick and get the boundaries right, which is a harder
+question than the one being answered. Nothing needs cancelling either: the dispatcher re-checks suppression
+and lifecycle status at send time, so someone who bounces or is admitted tomorrow simply never receives
+them.
+
+**E3 recurs by chaining rather than sweeping**, for the same reason — a chain only has to answer "did this
+one send?", which it already knows. The status check on that insert is the load-bearing half: a nurture
+drip still arriving after somebody has been admitted says plainly that nobody is watching. The chain ends
+on admission, on departure, and on suppression, each tested.
+
+One nuance worth recording: an **unsubscribed** user's pending E3 is *not* deleted. Entry 23 made that
+suppression reversible, so the job stays queued in case they come back — what must not happen is the chain
+growing a *new* link for somebody receiving nothing, and that is what the test asserts.
+
+**Copy decisions, since they are the product here.** E2 asks three things ordered by what they cost the
+reader — survey (two minutes), share link (one paste), readiness (ten). It goes at +1 day rather than
+immediately because E1 already asked for a click, and asking twice within an hour reads as a sequence
+rather than a conversation. E3 carries the two facts a waiting person actually wants: where they are now,
+and that the thing is still being built. No manufactured urgency, no fake scarcity — the queue is real,
+and saying so plainly is the entire credibility of it.
+
+**A test-quality note.** Two existing tests used `e3_update` as their "unwired template", and every enum
+value now has a renderer, so they were passing for a reason that had quietly evaporated. They now delete a
+renderer via monkeypatch — which is closer to the real scenario anyway: a migration widens the enum and
+the renderer lands in a later commit, or never does.
+
+**Runs:** 377 tests green across fourteen suites.
+
+**Status:** `DOD-EMAIL-DRIP-1` ❌ → 🟡. **No DoD line is ❌ any more.** What remains is the AWS half —
+CloudFormation for every Lambda, the EventBridge schedules, the API Gateway custom domain, SES production
+access — plus the parked forks and the outward actions only Andre can take.
