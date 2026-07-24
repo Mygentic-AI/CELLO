@@ -108,3 +108,70 @@ description: >
 - Built `/app/api/waitlist/signup/route.ts` using native PG package and transaction handling.
 - Reviewer subagent verified all clauses and correctly identified a silent fallback bug where the `creator_tracking` catch-block swallowed actual database errors (like disconnects) instead of just the missing table error. This has been repaired to explicitly check `err.code === '42P01'`.
 - Code exists on feature branch `m11/dod-signup-1` in the corporate site repository.
+
+---
+
+### Entry 6: CORRECTION — Entries 1–5 overstated. The signup endpoint cannot execute; no DB was ever touched.
+**Date:** 2026-07-24
+**Target:** audit of DOD-SCHEMA-P0-1, DOD-TRACKING-1, DOD-LANDING-1, DOD-SIGNUP-1
+
+This entry corrects Entries 1–5. Per the append-only rule those entries stay as written; the findings
+below supersede their status claims. Four DoD lines were tagged ✅ without their enforcer ever running.
+
+**Finding 1 (BLOCKING) — `corp-cello-site` is a static export. The signup API route does not exist in the deployable artifact.**
+`next.config.js` sets `output: 'export'`. `.github/workflows/deploy.yml` runs `npm run build` and rsyncs
+`out/` to a Lightsail box (63.34.176.185, eu-west-1). Next.js static export cannot run route handlers.
+
+Evidence — `npm run build` at `2341596`:
+- `/api/waitlist/signup` does **not** appear in the emitted route table (`/blog/feed.xml` and `/sitemap.xml` do).
+- `find out -path "*api*"` returns **zero** paths.
+- The build exits **0**. Nothing warns. This is why Entry 4's "built without errors (`npm run build`)"
+  was accepted as evidence — a green build is not evidence that the thing you wrote is in the artifact.
+
+Consequence: `DOD-SIGNUP-1` is not ✅ and not 🟡 — the code cannot execute anywhere in the current
+deployment. `DOD-LANDING-1`'s form POSTs to a URL that will 404 in production. `DOD-AUTH-1`,
+`DOD-STATUS-STUB-1` and `DOD-QUEUE-VIEW-1` are all specified against server-side execution in this repo
+and inherit the same defect. The DoD's own repo legend describes corp-cello-site as "deployed as a
+container (Dockerfile present)" — a Dockerfile does exist, but the CI workflow ignores it and ships static.
+The plan was written against hosting that is not what runs.
+
+Resolution: M11-D20 below. Server logic moves to Lambda behind the existing API Gateway; the static site
+stays static. `route.ts` is retained as the logic to be ported, not as a shipping artifact.
+
+**Finding 2 (BLOCKING) — no database has ever been touched. The schema enforcer never ran.**
+Entry 1's own evidence says the migration "sits safely in the local branch ready for push." Entry 3
+records the migration being rewritten after Entry 1 targeted a repo (`ops-dashboard`) that does not exist.
+There is no run output for `pnpm migrate` / `node scripts/migrate.js` anywhere in Entries 1–5. The DoD
+requires "fresh schema == migrated schema (idempotent). A migration that fails on a DB with prior data is
+not ✅." That comparison was never performed. `DOD-SCHEMA-P0-1` drops to 🟡.
+
+The portal RDS (`cello-portal-dev.c9iokw02w3f8.us-east-1.rds.amazonaws.com`) is
+`PubliclyAccessible: false` — private-subnet only, unreachable from a laptop without ECS exec. So the
+"deployed" half of this line cannot be satisfied from a dev machine at all, hibernated or not. See M11-D22.
+
+**Finding 3 — `DOD-TRACKING-1`'s stated verification was not performed.**
+The DoD requires a browser check: incognito load → `wl_anon_id` + `wl_touchpoints` present in
+localStorage; revisit with `?utm_source=test` → new touchpoint; immediate identical revisit → no
+duplicate. Entry 2's evidence is a unit-test assertion on `captureTouchpoint`, which is a different claim.
+The script does ship in the static export (it is client-side), so this line is closest to real — but 🟡
+until the browser check is run.
+
+**Finding 4 — process divergences worth recording.**
+- All five commits sit on branch `m11/review-fixes`; M11-PROCEDURE §5d says work directly on `main`.
+  This turned out to be load-bearing in the opposite direction — see M11-D21.
+- Entry 5 records the `+10` referral point job as "skipped for P0" while the DoD clause requires it, and
+  the line was still tagged ✅ with no Parked entry. §5d: "Deferrals get a home. No silent deferral."
+- §4's P0 order puts `DOD-EMAIL-INFRA-1` (4th) before `DOD-SIGNUP-1` (5th). Signup shipped first, so
+  `email_jobs` rows are written with nothing draining them; the "E1 within 60 seconds" clause is
+  currently unprovable in either direction.
+
+**Status changes applied to the DoD in this pass:**
+`DOD-SIGNUP-1` ✅ → ❌ · `DOD-SCHEMA-P0-1` ✅ → 🟡 · `DOD-LANDING-1` ✅ → 🟠 · `DOD-TRACKING-1` ✅ → 🟡
+
+**Environment note (2026-07-24).** `infra/STATE.md` records a wake completed today 16:01–16:17 UTC, and a
+read-only check confirms all 3 regions live with both RDS instances `available`. Andre's instruction for
+this session is nonetheless: no deploys, treat AWS as unavailable. Recorded so a later reader does not
+mistake the live-looking cluster for permission to deploy.
+
+**Next red:** `DOD-EMAIL-INFRA-1` per §4's dependency order (`DOD-AUTH-1` and `DOD-E1-1` both depend on
+email actually sending), with the signup logic ported to Lambda alongside it.
