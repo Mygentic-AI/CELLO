@@ -178,3 +178,40 @@ def test_e_win_is_still_under_three_hundred_words_with_the_gallery_prompt(databa
 def test_e_inv_is_still_under_two_hundred_words_with_the_install_command(database=None):
     _, _, text = templates.e_inv_admission(job(wave_number=1, waitlist_token="T"))
     assert len(text.split()) < 200, f"got {len(text.split())}"
+
+
+def test_every_send_carries_rfc8058_unsubscribe_headers(database=None):
+    """Gmail requires one-click unsubscribe from bulk senders. More immediately:
+    it gives the mail client a POST path it uses INSTEAD of following the body
+    link, which is what takes the bare GET off the prefetch path."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    import handler
+
+    headers = handler.unsubscribe_headers(
+        {"template": "e1_confirm", "user_id": "abc-123"}
+    )
+    names = {h["Name"] for h in headers}
+
+    assert names == {"List-Unsubscribe", "List-Unsubscribe-Post"}
+    assert any(h["Value"] == "List-Unsubscribe=One-Click" for h in headers)
+    assert any("u=abc-123" in h["Value"] for h in headers)
+
+
+def test_a_content_alert_unsubscribe_header_is_scoped_to_that_list(database=None):
+    """Sending the base-list URL on an e_alert would let somebody muting blog
+    posts drop off their waitlist mail entirely — and this is the one place a
+    user is most likely to click."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    import handler
+
+    alert = handler.unsubscribe_headers({"template": "e_alert", "user_id": "abc-123"})
+    base = handler.unsubscribe_headers({"template": "e1_confirm", "user_id": "abc-123"})
+
+    assert any("list=content_alerts" in h["Value"] for h in alert)
+    assert not any("list=content_alerts" in h["Value"] for h in base)

@@ -527,6 +527,23 @@ def test_the_session_carries_a_points_breakdown_with_real_caps(auth):
 
 
 def unsubscribe(auth, user_id, scope=None):
+    """POST — the action. A GET now only renders a confirmation."""
+    body = f"u={user_id}" + (f"&list={scope}" if scope else "")
+    event = {
+        "headers": {"origin": "https://cello.mygentic.ai"},
+        "requestContext": {"http": {"method": "POST", "path": "/waitlist/unsubscribe"}},
+        "body": body,
+        "queryStringParameters": None,
+    }
+    result = auth.lambda_handler(event, None)
+    try:
+        parsed = json.loads(result["body"]) if result["body"] else {}
+    except (json.JSONDecodeError, TypeError):
+        parsed = {"html": result["body"]}
+    return result, parsed
+
+
+def unsubscribe_get(auth, user_id, scope=None):
     params = {"u": str(user_id)}
     if scope:
         params["list"] = scope
@@ -598,3 +615,36 @@ def test_a_malformed_unsubscribe_link_says_so(auth):
 
     assert result["statusCode"] == 400
     assert body["error"] == "invalid_user"
+
+
+def test_a_get_does_not_unsubscribe_anyone(auth):
+    """Gmail's link proxy, Outlook Safe Links and corporate scanners all fetch
+    body links. Each fetch would permanently unsubscribe an engaged user, logged
+    identically to a real click — so the loss would be invisible."""
+    uid = make_user("scanned@example.test")
+
+    result, body = unsubscribe_get(auth, uid)
+
+    assert result["statusCode"] == 200
+    assert "Unsubscribe?" in body["html"], "a GET renders a confirmation, not an action"
+    assert query("SELECT email_status FROM waitlist_users WHERE waitlist_id = %s", (uid,))[0][0] == "active"
+
+
+def test_the_confirm_page_posts_back(auth):
+    uid = make_user("confirm@example.test")
+
+    _, body = unsubscribe_get(auth, uid)
+
+    assert 'method="POST"' in body["html"]
+    assert f'value="{uid}"' in body["html"]
+
+
+def test_the_alert_confirm_page_carries_its_scope(auth):
+    """Otherwise confirming from a content alert would unsubscribe them from
+    everything."""
+    uid = make_user("scoped@example.test")
+
+    _, body = unsubscribe_get(auth, uid, scope="content_alerts")
+
+    assert 'name="list" value="content_alerts"' in body["html"]
+    assert "waitlist emails are unaffected" in body["html"].lower()

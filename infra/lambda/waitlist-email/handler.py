@@ -61,6 +61,7 @@ MAX_ATTEMPTS = int(os.environ.get("EMAIL_MAX_ATTEMPTS", "5"))
 RECLAIM_AFTER_MINUTES = int(os.environ.get("EMAIL_RECLAIM_AFTER_MINUTES", "15"))
 
 SENDABLE_EMAIL_STATUS = "active"
+API_BASE = os.environ.get("WAITLIST_API_BASE", "https://api.cello.mygentic.ai/waitlist")
 CONTENT_ALERT_TEMPLATES = frozenset({"e_alert"})
 
 _ses = None
@@ -277,6 +278,23 @@ def mint_verify_token(cur, user_id):
 # ── Decisions ─────────────────────────────────────────────────────────────────
 
 
+def unsubscribe_headers(job):
+    """RFC 8058 one-click unsubscribe, scoped to the right list.
+
+    A content alert unsubscribes from content alerts; anything else unsubscribes
+    from the base list. Sending the base-list URL on an e_alert would let
+    somebody muting blog posts drop off their waitlist mail entirely —
+    DOD-INV-EMAIL-SEGMENTS from the user's side, in the place a user is most
+    likely to click.
+    """
+    scope = "&list=content_alerts" if job["template"] in CONTENT_ALERT_TEMPLATES else ""
+    url = f"{API_BASE}/unsubscribe?u={job['user_id']}{scope}"
+    return [
+        {"Name": "List-Unsubscribe", "Value": f"<{url}>"},
+        {"Name": "List-Unsubscribe-Post", "Value": "List-Unsubscribe=One-Click"},
+    ]
+
+
 def should_send(job):
     """Returns (send: bool, skip_reason: str|None, terminal: bool).
 
@@ -424,6 +442,21 @@ def lambda_handler(event, context):
                             "Text": {"Data": body_text, "Charset": "UTF-8"},
                         },
                     },
+                    # RFC 8058. Two reasons, and the second is the urgent one.
+                    #
+                    # Gmail requires one-click unsubscribe from bulk senders, so
+                    # without it deliverability degrades.
+                    #
+                    # More immediately: the in-body unsubscribe is a bare GET,
+                    # and Gmail's link proxy, Outlook Safe Links and corporate
+                    # scanners all fetch body links. Every one of those fetches
+                    # permanently unsubscribes an engaged user, and the log
+                    # records `matched: true` identically for a scanner and a
+                    # human — so the loss is invisible. A List-Unsubscribe-Post
+                    # header gives the mail client a POST path it uses INSTEAD
+                    # of following the link, which is what takes the bare GET
+                    # off the prefetch path for the clients that matter.
+                    Headers=unsubscribe_headers(job),
                 )
             except Exception as err:  # noqa: BLE001 — one bad job must not sink the batch
                 conn.rollback()

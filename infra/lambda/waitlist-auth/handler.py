@@ -34,6 +34,7 @@ from _sqlstate import classify
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SITE = os.environ.get("WAITLIST_SITE", "https://cello.mygentic.ai")
+SITE_API = os.environ.get("WAITLIST_API_BASE", "https://api.cello.mygentic.ai/waitlist")
 SESSION_DAYS = 30
 
 # Every /auth response waits until this many milliseconds have elapsed. It must
@@ -487,7 +488,7 @@ def handle_logout(headers, origin, correlation_id):
 # ── GET /waitlist/unsubscribe ─────────────────────────────────────────────────
 
 
-def handle_unsubscribe(params, origin, correlation_id):
+def handle_unsubscribe(params, origin, correlation_id, method="GET"):
     """One click, permanent, no login (DOD-E-RE-1, DOD-CONTENT-ALERTS-1).
 
     A GET that changes state, deliberately. Requiring a session would mean
@@ -510,6 +511,21 @@ def handle_unsubscribe(params, origin, correlation_id):
         uuid.UUID(user_id)
     except (ValueError, AttributeError, TypeError):
         raise AuthError(400, "invalid_user", "This unsubscribe link is not valid.")
+
+    if method == "GET":
+        # A GET must not change state. Gmail's link proxy, Outlook Safe Links
+        # and corporate scanners all fetch body links, and each fetch would
+        # permanently unsubscribe an engaged user — logged identically to a real
+        # click, so the loss is invisible. The confirm page is one button, which
+        # is still "one click" for the person and unreachable for a scanner.
+        #
+        # RFC 8058 clients POST here directly and never see this page, so the
+        # genuinely one-click path is preserved for the clients that support it.
+        return {
+            "statusCode": 200,
+            "headers": {**cors_headers(origin), "Content-Type": "text/html; charset=utf-8"},
+            "body": _confirm_page(user_id, scope),
+        }
 
     conn = connect()
     try:
@@ -548,6 +564,37 @@ def handle_unsubscribe(params, origin, correlation_id):
         "headers": {**cors_headers(origin), "Content-Type": "text/html; charset=utf-8"},
         "body": _unsubscribed_page(scope),
     }
+
+
+def _confirm_page(user_id, scope):
+    what = (
+        "stop sending you content alerts. Your waitlist emails are unaffected."
+        if scope == "content_alerts"
+        else "stop emailing you altogether."
+    )
+    action = f"{SITE_API}/unsubscribe"
+    hidden_scope = (
+        f'<input type="hidden" name="list" value="content_alerts">' if scope == "content_alerts" else ""
+    )
+    return (
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>Unsubscribe | CELLO</title></head>"
+        "<body style=\"margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;"
+        "background:#f5f5f5;display:flex;align-items:center;justify-content:center;min-height:100vh;\">"
+        "<div style=\"background:#fff;border-radius:16px;padding:48px 40px;max-width:460px;text-align:center;\">"
+        "<h1 style=\"margin:0 0 12px;font-size:24px;color:#111;\">Unsubscribe?</h1>"
+        f"<p style=\"margin:0 0 28px;font-size:16px;color:#666;line-height:1.6;\">We'll {what}</p>"
+        f"<form method=\"POST\" action=\"{action}\">"
+        f'<input type="hidden" name="u" value="{esc_attr(user_id)}">{hidden_scope}'
+        "<button type=\"submit\" style=\"padding:14px 32px;background:#E0147A;color:#fff;border:0;"
+        "border-radius:100px;font-size:15px;font-weight:600;cursor:pointer;\">Yes, unsubscribe</button>"
+        "</form></div></body></html>"
+    )
+
+
+def esc_attr(value):
+    return str(value).replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
 
 
 def _unsubscribed_page(scope):
@@ -601,10 +648,16 @@ def lambda_handler(event, context):
         if method == "POST" and path.endswith("/auth/logout"):
             return handle_logout(headers, origin, correlation_id)
 
-        if method == "GET" and path.endswith("/unsubscribe"):
-            return handle_unsubscribe(
-                event.get("queryStringParameters"), origin, correlation_id
-            )
+        if path.endswith("/unsubscribe") and method in ("GET", "POST"):
+            params = event.get("queryStringParameters") or {}
+            if method == "POST":
+                # RFC 8058 clients post form-encoded; our confirm page does too.
+                from urllib.parse import parse_qs
+
+                raw = event.get("body") or ""
+                form = {k: v[0] for k, v in parse_qs(raw).items()}
+                params = {**params, **form}
+            return handle_unsubscribe(params, origin, correlation_id, method)
 
         return resp(404, {"error": "not_found", "message": f"No route for {method} {path}."}, origin)
 
