@@ -339,6 +339,34 @@ def handle_verify(params, origin, correlation_id):
     }
 
 
+# Caps as the DB enforces them, so the page shows a ceiling that is real rather
+# than a number copied into the frontend and left to drift.
+POINT_CAPS = {"share_conversion": 30, "public_post": 45}
+
+
+def qualitative_band(position, size):
+    """"top 10%" / "top 25%" / "top half", or None.
+
+    M11-D16 killed the predicted wave number: wave sizes are decided by the
+    operator at trigger time and cannot be forecast, so any date or wave estimate
+    would be invented. A band is derived entirely from two real numbers.
+
+    Returns None rather than a default when there is no position — a user with
+    no queue row is not in the bottom half, they are not in the queue at all,
+    and saying "top half" to an admitted user is simply false.
+    """
+    if not position or not size:
+        return None
+    ratio = position / size
+    if ratio <= 0.10:
+        return "top 10%"
+    if ratio <= 0.25:
+        return "top 25%"
+    if ratio <= 0.50:
+        return "top half"
+    return None
+
+
 # ── GET /waitlist/auth/session ────────────────────────────────────────────────
 
 
@@ -365,6 +393,21 @@ def handle_session(headers, origin, correlation_id):
                 (session["waitlist_user_id"],),
             )
             code = cur.fetchone()
+
+            # Points broken down by reason, so the page can show what was earned
+            # for what rather than a single number nobody can audit.
+            cur.execute(
+                "SELECT reason, sum(points) AS points, count(*) AS entries "
+                "FROM points_ledger WHERE waitlist_user_id = %s GROUP BY reason ORDER BY reason",
+                (session["waitlist_user_id"],),
+            )
+            breakdown = cur.fetchall()
+
+            cur.execute(
+                "SELECT content_alerts, points_total FROM waitlist_users WHERE waitlist_id = %s",
+                (session["waitlist_user_id"],),
+            )
+            prefs = cur.fetchone()
     finally:
         conn.close()
 
@@ -378,7 +421,17 @@ def handle_session(headers, origin, correlation_id):
             # Absent rather than fabricated when there is no queue row.
             "queue_position": queue["queue_position"] if queue else None,
             "queue_size": queue["queue_size"] if queue else None,
+            "band": qualitative_band(
+                queue["queue_position"] if queue else None,
+                queue["queue_size"] if queue else None,
+            ),
             "referral_code": code["code"] if code else None,
+            "points_total": prefs["points_total"],
+            "points_breakdown": [
+                {"reason": r["reason"], "points": r["points"], "entries": r["entries"], "cap": POINT_CAPS.get(r["reason"])}
+                for r in breakdown
+            ],
+            "content_alerts": prefs["content_alerts"],
         },
         origin,
     )

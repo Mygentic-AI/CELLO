@@ -458,3 +458,61 @@ def test_a_database_fault_on_a_known_address_still_looks_identical(auth, monkeyp
 
     assert known_result["statusCode"] == unknown_result["statusCode"] == 200
     assert known_body == unknown_body == auth.OPAQUE_RESPONSE
+
+
+# ── DOD-STATUS-PAGE-1 / DOD-DYNAMIC-ESTIMATOR-1 ───────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "position,size,expected",
+    [
+        (1, 100, "top 10%"),
+        (10, 100, "top 10%"),
+        (11, 100, "top 25%"),
+        (25, 100, "top 25%"),
+        (26, 100, "top half"),
+        (50, 100, "top half"),
+        (51, 100, None),
+        (99, 100, None),
+    ],
+)
+def test_the_qualitative_band_is_derived_from_real_numbers(auth, position, size, expected):
+    """M11-D16 killed the predicted wave number — wave sizes are decided at
+    trigger time and cannot be forecast, so any date estimate would be invented.
+    A band is two real numbers and a division."""
+    assert auth.qualitative_band(position, size) == expected
+
+
+def test_no_position_means_no_band_rather_than_a_default(auth):
+    """A user with no queue row is not in the bottom half — they are not in the
+    queue at all, and telling an admitted user "top half" is simply false."""
+    assert auth.qualitative_band(None, None) is None
+    assert auth.qualitative_band(None, 100) is None
+
+
+def test_the_session_carries_a_points_breakdown_with_real_caps(auth):
+    uid = make_user("points@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO points_ledger (waitlist_user_id, points, reason) VALUES (%s, 20, 'survey')",
+            (uid,),
+        )
+        cur.execute(
+            "INSERT INTO points_ledger (waitlist_user_id, points, reason) "
+            "VALUES (%s, 10, 'share_conversion')",
+            (uid,),
+        )
+    conn.close()
+    request_link(auth, "points@example.test")
+    verify, _ = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token_for(uid))})
+    cookie = verify["headers"]["Set-Cookie"].split(";")[0]
+
+    _, body = call(auth, "GET", "/waitlist/auth/session", cookie=cookie)
+
+    reasons = {b["reason"]: b for b in body["points_breakdown"]}
+    assert reasons["survey"]["points"] == 20
+    assert reasons["survey"]["cap"] is None, "survey is uncapped; showing a ceiling would invent one"
+    assert reasons["share_conversion"]["cap"] == 30, "the cap shown must be the cap the DB enforces"
+    assert body["points_total"] == 30

@@ -473,3 +473,49 @@ def test_deleting_a_ledger_row_re_syncs_the_total(database):
     conn.close()
 
     assert total(uid) == 0
+
+
+# ── DOD-CONTENT-ALERTS-1 ──────────────────────────────────────────────────────
+
+
+def test_content_alerts_opt_in_and_out(actions):
+    uid = make_user()
+    cookie = sign_in(uid)
+
+    _, on = call(actions, "/waitlist/content-alerts", {"enabled": True}, cookie)
+    assert on["content_alerts"] is True
+
+    _, off = call(actions, "/waitlist/content-alerts", {"enabled": False}, cookie)
+    assert off["content_alerts"] is False
+
+
+def test_the_default_is_off(actions):
+    """Unchecked by default — DOD-CONTENT-ALERTS-1 is explicit, and a list that
+    accepts up to twice a day must be asked for."""
+    uid = make_user()
+
+    assert query("SELECT content_alerts FROM waitlist_users WHERE waitlist_id = %s", (uid,))[0][0] is False
+
+
+def test_it_is_explicit_not_a_toggle(actions):
+    """A toggle read from a stale page flips the user to the opposite of what
+    they clicked."""
+    uid = make_user()
+    cookie = sign_in(uid)
+
+    status, payload = call(actions, "/waitlist/content-alerts", {}, cookie)
+
+    assert status == 400
+    assert payload["error"] == "missing_enabled"
+
+
+def test_opting_out_of_alerts_does_not_touch_the_waitlist_subscription(actions):
+    """DOD-INV-EMAIL-SEGMENTS from the user's side: muting blog posts must not
+    silently unsubscribe someone from the mail they actually signed up for."""
+    uid = make_user()
+    cookie = sign_in(uid)
+    call(actions, "/waitlist/content-alerts", {"enabled": True}, cookie)
+
+    call(actions, "/waitlist/content-alerts", {"enabled": False}, cookie)
+
+    assert query("SELECT email_status FROM waitlist_users WHERE waitlist_id = %s", (uid,))[0][0] == "active"

@@ -280,7 +280,35 @@ def handle_post_url(cur, user_id, body, correlation_id):
     }
 
 
+def handle_content_alerts(cur, user_id, body, correlation_id):
+    """DOD-CONTENT-ALERTS-1. Opt in or out of the content-alert segment.
+
+    Explicitly boolean, not a toggle: a toggle read of a stale page flips the
+    user to the opposite of what they clicked. And this touches ONLY
+    content_alerts — unsubscribing from blog posts must never drop someone from
+    their waitlist mail, which is DOD-INV-EMAIL-SEGMENTS from the user's side.
+    """
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        raise ActionError(
+            400, "missing_enabled", "enabled must be true or false — a toggle would guess."
+        )
+
+    cur.execute(
+        "UPDATE waitlist_users SET content_alerts = %s WHERE waitlist_id = %s RETURNING content_alerts",
+        (enabled, user_id),
+    )
+    log(
+        "waitlist.content_alerts.set",
+        correlation_id,
+        waitlistId=str(user_id),
+        enabled=enabled,
+    )
+    return {"content_alerts": cur.fetchone()["content_alerts"]}
+
+
 ROUTES = {
+    "/waitlist/content-alerts": handle_content_alerts,
     "/waitlist/survey": handle_survey,
     "/waitlist/readiness": handle_readiness,
     "/waitlist/interview-commit": handle_interview_commit,
