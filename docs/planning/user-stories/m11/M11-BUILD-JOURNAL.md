@@ -1328,3 +1328,40 @@ next to the defect rather than on it. That is the more expensive shape, because 
 
 **Runs after the fixes:** 285 tests green across eleven Lambda suites · schema enforcer green with seeder
 coverage asserted · invariant checker 9/9 over 17 tables and every waitlist Lambda.
+
+---
+
+### Entry 28: DOD-FEEDBACK-OUTREACH-1 — grant TO four, never PLUS four
+**Date:** 2026-07-25
+**Target:** DOD-FEEDBACK-OUTREACH-1 [trustless-cello, ops-dashboard]
+
+`infra/lambda/waitlist-outreach/` + `0018`. Day 6 with no response grants 2 premium invites; a completed
+call brings the total to 4.
+
+**TO, not PLUS — that is the whole arithmetic.** Adding would leave someone who took six days to reply
+holding six invites while someone who answered immediately holds four, inverting the incentive the
+sequence exists to create. `grant_invites_up_to` counts what the user already holds, so the three
+first-win invites count toward the total as well: the number is a **ceiling on what one person can hand
+out**, not a running tally of rewards earned.
+
+**Day 6 is deliberately not a chaser email.** Someone who ignored the first one has answered. Sending
+another says we were not listening; invites are worth more than a reminder and cost the recipient nothing.
+
+**The idempotency key is "has it been granted", not a date window.** `feedback_eligible_date` says when
+someone *became* eligible, not whether anything has been done about it — so a date comparison alone would
+either skip anyone the job missed while it was down, or grant them twice. `0018` adds
+`feedback_day6_granted_at` and `feedback_call_completed_at` for exactly that, and there is a test that a
+user eligible 60 days ago is still picked up.
+
+A completed call suppresses the Day-6 grant: sending the no-response consolation to somebody who did
+respond says we were not paying attention.
+
+Every grant names the operator who made it, same reasoning as wave assembly. A suppressed address is not
+swept at all — the grant exists to accompany a message we cannot send.
+
+**Owed, and named rather than implied:** the **Day-0 `CELLO_FEEDBACK` session initiation**. §5c makes that
+the point of the sequence — reaching the user *through the product* is the thing being dogfooded, and the
+email is the fallback for someone whose agent is not running. Only the email half exists today, which is
+why this line is 🟠 and not 🟡.
+
+**Runs:** 285 tests green across eleven Lambda suites.
