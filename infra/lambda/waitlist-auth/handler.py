@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 import psycopg2
 import psycopg2.extras
 
+from _sqlstate import classify
+
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SITE = os.environ.get("WAITLIST_SITE", "https://cello.mygentic.ai")
 COOKIE_NAME = "cello_wl_session"
@@ -425,12 +427,5 @@ def lambda_handler(event, context):
             pgcode=err.pgcode,
             detail=str(err).strip(),
         )
-        return resp(
-            503,
-            {
-                "error": "database_unavailable",
-                "message": "Could not reach the waitlist database. Please try again.",
-                "pgcode": err.pgcode,
-            },
-            origin,
-        )
+        status, code, message = classify(err)
+        return resp(status, {"error": code, "message": message}, origin)

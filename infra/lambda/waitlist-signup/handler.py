@@ -29,6 +29,8 @@ from datetime import datetime, timezone
 import psycopg2
 import psycopg2.extras
 
+from _sqlstate import classify
+
 # ── Configuration ─────────────────────────────────────────────────────────────
 # ABSENT IS NOT FINE. A missing DATABASE_URL must stop the function, not fall
 # through to libpq's defaults — which would silently connect to *something else*
@@ -573,16 +575,8 @@ def lambda_handler(event, context):
             pgcode=err.pgcode,
             detail=str(err).strip(),
         )
-        return resp(
-            503,
-            {
-                "error": "database_unavailable",
-                "message": "The waitlist database could not be reached. Please try again.",
-                "pgcode": err.pgcode,
-            },
-            origin,
-            correlation_id,
-        )
+        status, code, message = classify(err)
+        return resp(status, {"error": code, "message": message}, origin)
 
     except Exception as err:  # noqa: BLE001 — the boundary must not leak a stack trace
         log(

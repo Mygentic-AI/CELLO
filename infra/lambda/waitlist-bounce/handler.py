@@ -151,10 +151,16 @@ def lambda_handler(event, context):
         conn.autocommit = False
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             for record in records:
+                # Per-record SAVEPOINT. Without it one malformed record aborts
+                # the transaction and every suppression already applied in this
+                # batch is rolled back — the addresses stay active and nothing
+                # says so.
+                cur.execute("SAVEPOINT record")
                 raw = ((record.get("Sns") or {}).get("Message")) or "{}"
                 try:
                     notification = json.loads(raw)
                 except (json.JSONDecodeError, TypeError) as err:
+                    cur.execute("ROLLBACK TO SAVEPOINT record")
                     counts["unrecognised"] += 1
                     log(
                         "waitlist.email.notification.unparseable",
@@ -176,6 +182,7 @@ def lambda_handler(event, context):
                         level="ERROR",
                         notificationType=notification.get("notificationType"),
                     )
+                    cur.execute("ROLLBACK TO SAVEPOINT record")
                     continue
 
                 for email, status, reason in actions:
@@ -194,6 +201,7 @@ def lambda_handler(event, context):
                         counts["suppressed"] += 1
                     else:
                         counts["ignored"] += 1
+                cur.execute("RELEASE SAVEPOINT record")
 
         conn.commit()
     finally:
