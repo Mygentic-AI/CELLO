@@ -1683,3 +1683,74 @@ Two details worth recording because they are judgement rather than plumbing:
 
 **Status:** all seven ops lines ❌ → 🟠. Each owes its page; the shell, the auth and every action behind
 them are written. `DOD-OPS-SHELL-1` additionally owes the remote repo and a deploy.
+
+---
+
+### Entry 37: review round 5 — the gallery published crypto claims with no caller check
+**Date:** 2026-07-25
+**Target:** review of firstwin, feedback, outreach, utm, gallery, and the round-4 fixes
+
+All gates green when this started — 336 Lambda tests, 10 vitest, schema enforcer PASS, invariants 9/9. Five
+HIGH findings, four reproduced with executable probes. **Two of them were code describing itself
+falsely**, which is now the recurring shape in this milestone and worth naming as such.
+
+**H1 — the gallery published cryptographic assertions with no authentication at all.** `publish` took
+`published_by_waitlist_user_id` straight from the request body, behind a comment stating it *"requires a
+portal session"* — while `cors_headers()` advertised `POST` with `Access-Control-Allow-Origin: *`. Both
+halves of that comment were false. Anyone reaching the endpoint could mint a **permanent, irrevocable,
+indexed** page asserting "Ada ↔ Grace — verified by 3 of 3 nodes" for a session that never happened,
+attributed to any user id they typed, on a schema that deliberately has no delete path. The structural
+privacy model I was pleased with in Entry 32 was guarding the front door while the back one stood open.
+
+Now: session read from the cookie, publisher derived from it, and a check that the publishing agent is
+linked to that user — a session alone would let any signed-in user publish a page about somebody else's
+conversation.
+
+**H5 — a round-4 regression, complete with a comment claiming otherwise.** That fix gave the *telegram*
+insert a `RETURNING` and a refusal, left the agent-link insert three lines below swallowing its conflict,
+and added a comment saying *"Both are now outcomes rather than intentions."* One was. A pubkey already
+bound to somebody else silently no-opped, and the damage landed much later and on the wrong person: every
+future first win from that agent minted three premium invites for whoever owned the link and stamped
+**their** `first_win_at`. The person who actually sealed the session got nothing, and nothing said so.
+
+**H2 — session counting inflated by design of the join.** `count(*)` over
+`waitlist_agent_links ⋈ session_telemetry`, which writes one row *per participating agent*, so a session
+between somebody's own laptop and phone counted twice and the five-session bar fired at **three**.
+`DOD-INV-NO-INFLATION` in the direction that flatters, which is the direction nobody checks.
+
+**H3 — the strongest signal could never fire.** `counterparty_operator <> operator` is NULL-blind, and
+`operator` is nullable with no producer yet. If the daemon writes only the counterparty fingerprint — the
+natural shape, since an agent knows who it talked to and knows it is itself — then `NULL <> 'op-b'` is
+NULL, the filter drops it, and the cross-operator threshold never fires for anyone. That threshold is set
+**five times lower** on purpose because it is the one signal that proves what CELLO claims.
+
+**H4 — Day 6 granted zero to almost everyone who reached it.** The ceiling counted *all* premium codes, so
+a first-win user held 3, needed 0, received nothing, and had `feedback_day6_granted_at` stamped anyway so
+they could never be picked up again. Eligibility is measured in sealed sessions, so having reached first
+win is the *common* case among the eligible. Entry 28 recorded the call-completed ceiling reading
+correctly and never noticed it nullified the Day-6 grant.
+
+**H6 — every share button posted a dead link.** The publish response and the receipt page both build
+`gallery.cello.mygentic.ai/receipt/{hash}`; that host had no server block, and the only rewrite lived at
+`/gallery/receipt/` on the main site — wrong by a segment even once the subdomain landed. The receipt link
+is the entire distribution surface of P3.
+
+**M1 — an error message that prescribed the harm it existed to prevent.** The UTM collision branch fired
+on *capitalisation*: the code derives from the lowercased handle while the row stored the raw one. It
+reported a hash collision and told the operator to "use a different handle" — which would mint a second
+code for one creator, precisely the attribution split the module's own docstring says it exists to stop.
+
+**M4 — my seeder-coverage check verified half of what its message demanded.** It asserted the function
+existed, not that it was dispatched, while the failure text said *"and wire it into the case above"*.
+Define `seed_after_0020`, forget the arm, and it printed PASS while the table replayed empty — the defect
+it was added to catch, one step removed. That script has now been wrong in **four** distinct ways.
+
+**Runs after the fixes:** 348 tests green across fourteen Lambda suites · schema enforcer green with both
+halves of the seeder check · corp-cello-site typecheck, lint, 10 tests, build clean, `/gallery` in the
+sitemap.
+
+**Still owed from this review, recorded rather than lost:** `List-Unsubscribe` headers (M2 — email
+scanners issue GET on body links, and the unsubscribe is a bare GET, so a corporate scanner can
+permanently unsubscribe an engaged user invisibly); `pytest.ini`'s `testpaths` is still a hand-maintained
+list, the same shape the round-4 fix globbed away in the invariant checker (L3); and the Day-6
+"status-page note" clause has no implementation anywhere.
