@@ -221,3 +221,85 @@ blinded the enforcer to the drift it exists to catch.
 *deployed*, and the portal RDS (`cello-portal-dev`, us-east-1) is `PubliclyAccessible: false` — no route
 to it from a dev machine without ECS exec, which is an AWS mutation and out of bounds tonight (M11-D22).
 Owed: apply to the portal RDS and re-run the enforcer against it.
+
+> **Superseded by Entry 8 within the hour.** The PASS above is real but proves a WEAKER property than the
+> DoD requires. See Entry 8, finding H5. Status corrected 🟡 → 🟠.
+
+---
+
+### Entry 8: `cello-unit-reviewer` on the five P0 commits — 20 findings, 6 blocking
+**Date:** 2026-07-24
+**Target:** review of DOD-SCHEMA-P0-1, DOD-TRACKING-1, DOD-LANDING-1, DOD-SIGNUP-1 (diff `main..m11/review-fixes`)
+
+One read-only `cello-unit-reviewer` dispatch, no model override, per M11-PROCEDURE §2b. It was given the
+four DoD lines verbatim, the coder's clause checklists from Entries 1–5, and the diff. It ran a throwaway
+`postgres:16` and executed the route's exact statement sequences, so findings below marked **[PROVEN]**
+are empirical rather than reasoned.
+
+**Verdicts:** SPEC — DEVIATIONS FOUND (blocking) · SILENT FALLBACKS — FOUND (blocking) · ERROR
+SUBSTITUTION — FOUND (blocking) · ADMISSION INTEGRITY — **FAILED** (blocking) · HOLLOW TESTS — FOUND
+(blocking) · NO-INFLATION — PASS · STABLE PK — PASS (one note).
+
+**The blocking six:**
+
+- **H1 [PROVEN] — the `creator_tracking` "fix" destroys the whole signup, silently.** Entry 5 recorded
+  this as repaired via `if (err.code !== '42P01') throw err`. It is not repaired. In Postgres, *any* error
+  inside a transaction aborts the session; every later statement fails `25P02` until ROLLBACK. Swallowing
+  the code client-side changes nothing server-side. Proven: a `?ref=CREATORCODE` signup ends with
+  `waitlist_users` = 0 rows, `email_jobs` = 0 rows, HTTP 500. Every creator-sourced signup is lost. Worse,
+  the discarded `42P01` was the *only* copy of the real cause — the operator is sent to the transaction
+  subsystem for a missing-table bug. Fix: SAVEPOINT, or create the table and delete the try/catch.
+- **H2 [PROVEN] — premium codes are never burned; admission is unlimited.** There is no
+  `UPDATE referral_codes` statement anywhere in the repo; the lookup is a bare `SELECT` with no
+  `FOR UPDATE`. Proven: the same code admitted two users and remained `active = true`. Direct violation of
+  `DOD-INV-TOKEN-SINGLE-USE`, `DOD-INV-PREMIUM-BEARER` and M11-D12.
+- **H3 [PROVEN] — merging this branch is a live regression on `/waitlist`.** The diff replaced the working
+  API Gateway URL with the route that is absent from `out/`; nginx `try_files … =404` returns HTML; the
+  client renders **"Submission failed"**. The deploy smoke test only checks `GET /` → 200, so it ships green.
+- **H4 — `DOD-SIGNUP-1`'s "+10 point job for referrer (cap enforced)" is unimplemented**, deferred by a
+  code comment with no journal or Decisions entry. The comment's stated recovery ("back-fill from the
+  referrals table") does not work: `referrals` has no timestamp column, so *when* points were earned —
+  precisely what a priority queue needs — cannot be reconstructed.
+- **H5 [PROVEN] — an applied migration was edited, and `fresh ≠ migrated`. This supersedes Entry 7.**
+  Commit `2341596` added `CONSTRAINT auth_tokens_expires_at_max` to the already-shipped `0001`.
+  `CREATE TABLE IF NOT EXISTS` skips the table wholesale — it does not reconcile columns or constraints —
+  so on a DB migrated before that commit the constraint never lands: `NOTICE: relation "auth_tokens"
+  already exists, skipping`, and `pg_constraint` returns **0 rows**. The same commit deleted
+  `waitlist_users_email_idx`, which stays forever on an already-migrated DB. This is the M5 rule ("never
+  modify an applied migration") broken inside M11.
+
+  **Why Entry 7's enforcer missed it — my own defect, recorded so it is not repeated.** `verify-schema.sh`
+  migrates two *fresh* databases using the *current* file, so it proves "the same file applied twice is
+  idempotent." The DoD asks for something stronger: a database carrying *migration history* must end up
+  identical to a fresh one. The enforcer must replay the historical sequence (0001-as-shipped → 0002),
+  not re-run HEAD twice. Entry 7's PASS was true and insufficient. Compounding it, `scripts/migrate.js`
+  has **no `schema_migrations` ledger** at all — it re-executes every `.sql` file on every invocation, so
+  the first `ALTER TABLE` or seed `INSERT` anyone writes breaks the second run permanently.
+- **H6 — there is no test runner in this repo; `tracking.spec.ts` has never executed.** No `test` script,
+  no vitest/jest/mocha anywhere, and `npx tsc --noEmit` reports 28 errors, all in the spec file
+  (`Cannot find name 'describe'` …). `npm run build` exits 0 regardless. All three tests touched by the
+  diff also fail THE REVERT TEST — notably the `wl_user_id` test claims to verify the `WaitlistContent`
+  wiring while never importing it, so deleting that call site leaves the test green. Zero tests exist for
+  the migration or the signup route — the two units where every finding above lives.
+
+  This also corrects Entry 6, which called the tracking script "unit-tested." The file exists; it has
+  never run.
+
+**Non-blocking but load-bearing for the port:** H7 `db.ts` treats a missing `DATABASE_URL` as "use libpq
+defaults" and connects to *something else* rather than failing (ABSENT IS NOT FINE), and sets no `ssl`
+option, which RDS `force_ssl` will reject as a generic 500. H8 `touchpoints[]` is unbounded and
+unvalidated on a public endpoint — 5,958 entries exceed Postgres's 65,535 bind-parameter limit, and
+`touchpoints: "abc"` is a one-line 500. H9 premium admission sets `status='admitted'` with `wave_number`
+NULL and queues no admission email, conflating "premium-referred" with "admitted" — two different facts,
+collapsed, losing the attribution permanently. M14 no CORS/`OPTIONS` handler, which will break **100% of
+submissions** on day one of the Lambda port. M13 the client caps touchpoints by truncating from the
+*front*, so `tps[0]` is not the first touch — `first_touch_*` is silently populated with a mid-funnel
+touch, and a green test pins that behaviour in place.
+
+**Status changes:** `DOD-SCHEMA-P0-1` 🟡 → 🟠 (H5) · `DOD-LANDING-1` stays 🟠, now with H3 named ·
+`DOD-SIGNUP-1` stays ❌, now with H1/H2/H4/H9 named · `DOD-TRACKING-1` stays 🟡, now with H6 named.
+
+**Work order adopted:** (1) test runner — nothing below can be *proven* without it; (2) `0002` migration +
+`schema_migrations` ledger in `migrate.js`; (3) enforcer replays history instead of re-running HEAD;
+(4) the Lambda port carrying the H1/H2/H7/H8/M11/M12/M14 fixes, so they are fixed once rather than twice;
+(5) repoint `WaitlistContent.tsx` so H3 is not merged.
