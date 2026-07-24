@@ -1408,3 +1408,36 @@ tests green.
 line) · `DOD-SURVEY-1` 🟡 with its page · `DOD-DYNAMIC-ESTIMATOR-1` ❌ → 🟡 ·
 `DOD-CONTENT-ALERTS-1` ❌ → 🟠, owing the one-click unsubscribe endpoint that the E-alert link already
 points at.
+
+---
+
+### Entry 30: the unsubscribe endpoint three shipped emails already pointed at
+**Date:** 2026-07-25
+**Target:** DOD-E-RE-1, DOD-CONTENT-ALERTS-1, DOD-E-ALERT-1
+
+Round 4 flagged the inconsistency and it is worth stating plainly: `e_inv_admission` **refuses to render**
+without its token, on the reasoning that handing someone something they cannot use is worse than sending
+nothing — while `e_re_engage` happily rendered a dead `{API}/unsubscribe` link on the same page as the
+words *"one click and we will stop."* Same failure, opposite treatment.
+
+**A GET that changes state, deliberately.** Requiring a session would mean somebody who cannot get back
+into their account cannot leave. A person who wants out and cannot find the door marks the message as
+spam, and a spam complaint costs the sending reputation of **every other email** — including the E1s that
+are the core capture loop. The worst case of this design is unsubscribing someone who wanted to stay; the
+worst case of the alternative is losing the domain.
+
+`list=content_alerts` scopes it and the confirmation page says so. Without the parameter it is the base
+list and sets `email_status` permanently.
+
+**Suppression stays one-way.** The base-list update is guarded on `email_status = 'active'`, so a bounced
+address cannot come back as *merely* unsubscribed — which would matter if anyone ever reversed an
+unsubscribe.
+
+**An unknown id is indistinguishable from a known one** — same status, byte-identical page. This link
+needs no login by design, so any difference in the response would make it a membership oracle that anyone
+could query at will, with none of the timing defences `/auth` needed.
+
+**Runs:** 305 tests green across eleven Lambda suites.
+
+**Status:** `DOD-CONTENT-ALERTS-1` 🟠 → 🟡 · `DOD-E-RE-1` stays 🟠, now owing only the 60-day scheduler
+that enqueues it.
