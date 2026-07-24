@@ -612,5 +612,21 @@ investigation into a one-line log read; R4 is paper. None applied yet.
 
 ---
 
+## 15. Remediations implemented (2026-07-24, ~17:30 UTC) — all four, operator-approved
+
+| # | Change | Where | Commit |
+|---|---|---|---|
+| R1 | `hibernate.sh` UPSERTs dir/relay/portal records to blackhole A (`198.51.100.1` TEST-NET-2, TTL 60) after ALB deletion — names never go NXDOMAIN during hibernation, so nothing is ever negatively cached. Takes effect at the NEXT hibernate; no AWS change was made now. Verified by dry-run. | trustless-cello `infra/scripts/hibernate.sh` | `469c9dfb` |
+| R2 | `wake.sh` step 7 verifies via the OS resolver (plain curl by hostname, `/manifest` polled up to 5 min; relay name via curl exit-code-6 semantics), prints a loud diagnostic banner naming the negative-cache failure mode on failure, marks the region failed, and the final banner becomes `WAKE FAILED VERIFICATION` + exit 1. `dig @8.8.8.8` no longer used for verification. | trustless-cello `infra/scripts/wake.sh` | `588cf8de` |
+| R3 | `fetchBootstrapResult` classifies probe failures (`dns_error`/`connect_error`/`timeout`/`http_error`/`bad_response` via undici cause-chain walk; ENOTFOUND/EAI_AGAIN → `dns_error`); `directory.consortium.node.unresolved` and `directory.bootstrap.unavailable` now carry `reason`+`detail`. TDD: 10 new tests red→green; full gates (2012 tests/lint/typecheck/build). Not yet published — rides the next version cascade. | cello-client `core/daemon/src/directory-bootstrap.ts` | `01a3f13` |
+| R4 | Runbook `infra/runbooks/post-wake-dns.md` (1-minute diagnosis + prefer-waiting remediation + defenses list); wake.sh post-wake checklist gained the client-path DNS line (in R2's commit). | trustless-cello | this commit |
+
+Residual risk after R1: a client that hibernated through a **pre-R1** window can still hold
+a stale negative entry once more (the caches seeded before R1 shipped); R2's hard-fail and
+R3's `dns_error` reason make that case loud and diagnosable in one log line. After the next
+hibernate/wake cycle runs with R1, the class is closed.
+
+---
+
 *This document is intentionally unfinished. Append findings as the investigation proceeds;
 do not rewrite the record above — add new dated sections beneath it.*
