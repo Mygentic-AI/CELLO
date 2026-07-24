@@ -1628,3 +1628,58 @@ stand unchanged under any of the three.
 Worth noting the shape of the mistake, since it is not a coding error: a decision made correctly for one
 surface propagated silently to a surface with the opposite requirement. Nothing failed, no test went red,
 and the gap is only visible by asking what the feature is *for*.
+
+---
+
+### Entry 36: the ops dashboard shell
+**Date:** 2026-07-25
+**Target:** DOD-OPS-SHELL-1 and the six action lines [ops-dashboard]
+
+Scaffolded at `/Users/andrep/Documents/code/ops-dashboard`. **The GitHub remote does not exist** —
+creating it is an outward action. Nothing is deployed. Recorded plainly because a local commit in a repo
+with no remote is exactly what Entry 6 caught the previous agent misrepresenting as done.
+
+**The dashboard holds no waitlist logic.** Wave assembly, invite granting, UTM minting and outreach stay
+in the Lambdas, and `src/server/lambda.ts` is the only path from the UI to any of them. The rules deciding
+who gets admitted to the network should not live in a page that renders a button, and they have to be
+testable without a browser. A dashboard that reimplemented any of it would be a second implementation
+drifting from the first in exactly the places nobody looks.
+
+**The allowlist fails closed five ways** — unreachable secret, malformed JSON, a JSON object instead of an
+array, an empty list, and an empty input — with a test for each. This is the only access control the
+dashboard has (M11 §10), and the people on it can admit strangers to the network and hand out
+queue-skipping invites. A dashboard that admits *everyone* when it cannot read its allowlist is worse than
+one that admits nobody: the second is obvious within a minute, the first is invisible.
+
+It deliberately does **not** fall back to a stale cache. The reason a secret stops being readable may be
+that somebody locked it down on purpose, and serving the last good copy would defeat exactly that.
+
+The local `OPS_ALLOWED_EMAILS` override is gated on `CELLO_ENV=local`, or it would be a backdoor that a
+stray task definition could open in a deployed environment.
+
+**Sessions are 8 hours, not the portal's 30 days,** bounded by a CHECK so no code path can mint longer. A
+portal session belongs to someone managing their own agent; this one can admit strangers. A laptop left
+open in a cafe should not still be able to open a wave tomorrow. The allowlist is re-checked on **every
+request** rather than at sign-in only — otherwise removing someone is advisory for eight hours.
+
+**Operator magic links live in their own table.** Sharing `auth_tokens` with waitlist users is one bad
+WHERE clause away from a user redeeming an operator link, and the two credentials have very different
+consequences.
+
+**Every action names its operator**, the same reasoning as `DOD-INV-WAVE-GATE`. Errors preserve the
+Lambdas' named causes rather than flattening them to "failed" one layer from the operator's eyes — those
+Lambdas went to real trouble producing them.
+
+Two details worth recording because they are judgement rather than plumbing:
+- `reviewPost` claims the review atomically (`WHERE reviewed_at IS NULL RETURNING`), so two operators with
+  the queue open cannot double-credit. An approval that hits the points cap **keeps the review** and logs
+  that no points were awarded — reversing the review would discard a human judgement that was correctly
+  made.
+- `triggerContentAlert` enforces the same-day block by **counting what was actually enqueued** rather than
+  trusting a flag somebody could forget to set, and does it in UTC so "today" means one thing regardless
+  of where the operator is sitting.
+
+**Runs:** 11 tests green, all on the allowlist, all about what happens when it cannot be read.
+
+**Status:** all seven ops lines ❌ → 🟠. Each owes its page; the shell, the auth and every action behind
+them are written. `DOD-OPS-SHELL-1` additionally owes the remote repo and a deploy.
