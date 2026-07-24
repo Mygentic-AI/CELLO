@@ -1108,3 +1108,52 @@ trigger already held the row lock). Recorded so nobody re-investigates them.
 **Runs after the fixes:** 208 tests green across seven Lambda suites · schema enforcer green on all five
 properties with the staged replay · invariant checker 9/9 · corp-cello-site typecheck, lint, 10 tests,
 build clean.
+
+---
+
+### Entry 24: DOD-TELEGRAM-GATE-1 — the burn
+**Date:** 2026-07-25
+**Target:** DOD-TELEGRAM-GATE-1, DOD-INV-TOKEN-SINGLE-USE [trustless-cello]
+
+`infra/lambda/waitlist-gate/`. The point where a waitlist admission becomes network access, which makes
+the burn the security boundary of the whole milestone: **access a DKG has already used cannot be
+withdrawn.** Everything else in the function is bookkeeping.
+
+The burn is therefore one statement — `UPDATE waitlist_tokens SET used_at = now() WHERE token = %s AND
+used_at IS NULL AND expires_at > now() RETURNING …`. A read-then-write would pass every sequential test in
+the file, so there is a two-thread test asserting that of two simultaneous redemptions exactly one wins,
+exactly one Telegram account is linked, and exactly one token shows `used_at`.
+
+**Four named refusals, and the naming is load-bearing here.** `token_expired`, `token_already_used`,
+`token_not_found` and `token_malformed` imply four different next actions for the person holding the
+token: wait, ask the inviter for another, re-check which email it came in, or retype it. "Access denied"
+leaves them guessing at all four. Possession is already assumed by the time this code runs, so vagueness
+protects nothing and only strands someone.
+
+A malformed token is refused **before** the database, because Postgres rejecting a bad UUID reaches the
+operator as a database error rather than "check the code you typed".
+
+**The two directions of the answer/fault distinction, both tested.** A refusal is a `200` with
+`allowed: false`: the caller is the ops agent, and a 4xx lands in its error path and surfaces as "the gate
+is broken" rather than "your token has expired". The inverse matters as much — a database outage must
+**not** return `allowed: false`, or the operator goes looking at their invitation instead of at the
+service.
+
+**Writing that second test found a real defect elsewhere.** A dropped connection carries **no** SQLSTATE
+at all, so the classifier's `cls == "08"` branch never fired and the single most common transient database
+fault fell through to a permanent `500 database_error` — telling the caller not to retry at exactly the
+moment retrying was correct. `psycopg2.OperationalError` now supplies what the SQLSTATE cannot. Worth
+noting the shape: the classifier was written from a table of SQLSTATE classes, and the case with no
+SQLSTATE was invisible to that framing.
+
+**A second agent on an already-linked account is still bridged.** A second device is a normal thing to do,
+and without the link its first win would never be attributed to the person.
+
+`waitlist_agent_links` is asserted by test to hold exactly `agent_pubkey`, `waitlist_user_id`, `linked_at`.
+That table replicates to sovereign nodes in three jurisdictions, so `DOD-INV-NO-PII-DIRECTORY` is a
+data-residency constraint rather than a preference.
+
+**Runs:** 222 tests green across eight Lambda suites.
+
+**Status:** `DOD-TELEGRAM-GATE-1` ❌ → 🟡 · `DOD-INV-TOKEN-SINGLE-USE` 🟠 → 🟡. Both owe the live
+end-to-end enforcer, and the gate owes its call site in the operations agent.
