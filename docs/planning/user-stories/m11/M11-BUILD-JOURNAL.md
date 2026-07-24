@@ -766,3 +766,95 @@ reviewer-fatigue problem as much as a points one.
 **Runs:** 140 tests green across six Lambda suites; schema enforcer green with `0009`.
 
 **Status:** all four lines ❌ → 🟡. Each owes only a live run against the deployed API.
+
+---
+
+### Entry 18: `cello-unit-reviewer` round 2 — 20 findings, 6 blocking, two of them falsifying my own comments
+**Date:** 2026-07-25
+**Target:** review of the Lambdas + migrations 0001–0009, and the fixes
+
+One read-only dispatch over both repos. It ran a throwaway `postgres:16` and reproduced findings against
+it rather than reasoning about them, which is why several of these are stated as fact below.
+
+**The two that matter most both falsify a claim the code makes in writing.** Those are worth naming first,
+because a wrong comment is worse than no comment — it stops the next reader from checking.
+
+- **F4 — `DOD-INV-POINTS-CAPS` was never enforced.** `0003`'s trigger reads `sum(points)` with no lock, so
+  at READ COMMITTED two concurrent inserts each see the pre-state and both commit. Proven from two
+  sessions: cap 30, ledger 40. `0003`'s own comment says the trigger makes the invariant true where
+  application code cannot. It did not. The signup path survived only because `apply_referral`'s
+  `FOR UPDATE` on the *code row* happened to serialise same-code awards — luck that ends the moment
+  `public_post` lands or a second share code exists.
+
+  The second-order damage was worse than the breach. `points_total` is synced by a second trigger reading
+  the same unlocked sum, so it settles at 30 while the ledger says 40 — and `waitlist_queue` ranks on
+  `points_total`. The queue position then disagrees with the ledger it summarises: `DOD-INV-NO-INFLATION`
+  failing quietly, from the direction nobody watches. Fixed in `0010` with a per-user row lock taken
+  before the sum, which serialises both triggers together.
+
+- **F7 — my own schema enforcer printed PASS while a real forward migration failed.** Entry 9 recorded
+  strengthening it. It was still wrong: the seeded database (`m11_repeat`) is seeded *after* it is already
+  at head, so its second run applies zero migrations — asserting that a no-op preserves rows. The only
+  database that actually applies `0002..N`, `m11_historic`, was **never seeded**. So "safe over data" was
+  never tested. Proven: a database at `0001` holding a legal-at-`0001` row fails on `0002`, and the script
+  printed PASS anyway. Now seeds before migrating forward, and separately pins the real boundary —
+  `0002`'s CHECK validates existing rows, so a database holding an out-of-bounds token cannot pass it.
+  That boundary is asserted rather than assumed.
+
+**The other four blocking findings:**
+
+- **F1 — every E1 confirmation link was dead on arrival.** The template pointed at
+  `cello.mygentic.ai/confirm`, which is served by the *pre-M11* form handler and resolves tokens against
+  **DynamoDB**. A Postgres `auth_tokens` UUID is never in that table. The user saw "Invalid link",
+  `email_verified` stayed false forever, and Entry 12 scored `DOD-E1-1` clause (d) 🟡 on a URL that could
+  not work. This is the same shape as the original static-export defect: a thing that looks present and
+  is not.
+- **F2 — a batch commit failure re-sent every email in the batch.** The claim, the token mint and all 25
+  SES calls were one transaction committing at the end. Proven: three users each received E1 twice, and
+  the *first* copy carried a token that had been rolled back. Restructured to one transaction per phase —
+  claim + mint COMMIT, then SES, then mark-sent COMMIT. Deliberately at-least-once with a valid token
+  over at-most-once with a dead one: a duplicate is an annoyance, a confirmation link that cannot work is
+  a lost signup.
+- **F3 — a permanently-failing job starved the queue forever.** Failures returned to `pending` with no
+  attempt count, and claiming is oldest-first, so 25 poison jobs mean no email is ever sent again —
+  silently, while the batch summary reports a number that reads like weather rather than a wall. Live
+  today: `0007` widened the template enum to seven values and two have renderers. `0011` adds attempts +
+  a terminal `failed` state, and there is now a test that a healthy job *behind* a poison one still gets
+  delivered.
+- **F5 — one job, N emails.** `claim_jobs` LEFT JOINed `referral_codes`, so a user with two share codes
+  multiplied the job row: two emails, two live 24-hour tokens. Nothing in the schema forbade the second
+  code. Fixed twice over — a unique index in `0010`, and `LATERAL … LIMIT 1` in the query, because a join
+  that is only correct because of a constraint elsewhere is one schema change from being wrong again.
+
+**Three hollow tests, each proven by deleting the code it claimed to cover.**
+- Removing `FOR UPDATE` from the premium lookup: 54/54 still green. Worse, the reviewer showed the
+  behaviour it protects is the *M11-D24 decision itself* — without the lock the losing claimant is
+  refused outright with no waitlist row, which is exactly what D24 decided against.
+- Removing `FOR UPDATE ... SKIP LOCKED` from the email claim: 54/54 still green.
+- The `DOD-INV-EMAIL-SEGMENTS` test passed **for the wrong reason**: `e_alert` has no renderer, so the
+  opted-IN job died with a `KeyError` before the segment filter ran, and the empty recipient list
+  satisfied a `not in` assertion. Deleting the filter entirely left it green.
+
+All three fixed. The two locks now have two-thread tests asserting the *joint* outcome, and both are
+revert-tested — deleting either lock fails. The segment test registers a stub renderer and asserts both
+directions, because a negative assertion over an empty list proves nothing.
+
+**Also fixed:** F8 HTML injection into the E1 body via `display_name` (`<a/href="…">` needs no space —
+HTML5 accepts `/` as an attribute separator, so the anchor swallowed the rest of a DKIM-signed message);
+F6 every database fault collapsing to `database_unavailable` with a retryable status, now branched on
+SQLSTATE class; F14 `pgcode` returned to unauthenticated callers as a free schema oracle; F9 `getTouchpoints`
+reading `localStorage` outside its guard, blanking the page for exactly the referral traffic the programme
+depends on; F12 `referral_code` returned with no reader under a comment claiming otherwise; F15 the UI
+discarding the server's sentence and rendering its machine code; F16 `skipped` being terminal for
+`unsubscribed`, so a user who resubscribed never got the mail they were waiting for; F20 the bounce
+handler lacking a per-record SAVEPOINT.
+
+**Runs after the fixes:** 148 tests green across six Lambda suites · schema enforcer green on all five
+properties including the new seeded-historic and boundary checks · corp-cello-site typecheck, lint, 10
+tests, build all clean.
+
+**Still owed from this review (not blocking, recorded so they are not lost):** F13 `creator_tracking.session_id`
+holds a `waitlist_id` under a name that means something else, with no FK; F17 the Lambdas use `print()`
+where the sibling `rds-rotation` uses `logging`, so the level is a string in the body and no metric filter
+can route on it; F18 the referral-code entropy comment overstates by ~9 bits because `.upper()` collapses
+the alphabet after generation; F19 `/auth` leaves earlier unused magic links live rather than burning them.
