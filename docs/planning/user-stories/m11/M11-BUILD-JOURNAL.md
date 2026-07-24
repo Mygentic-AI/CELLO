@@ -1157,3 +1157,46 @@ data-residency constraint rather than a preference.
 
 **Status:** `DOD-TELEGRAM-GATE-1` ❌ → 🟡 · `DOD-INV-TOKEN-SINGLE-USE` 🟠 → 🟡. Both owe the live
 end-to-end enforcer, and the gate owes its call site in the operations agent.
+
+---
+
+### Entry 25: DOD-FIRST-WIN-1 — three golden tickets, exactly once
+**Date:** 2026-07-25
+**Target:** DOD-FIRST-WIN-1 [trustless-cello]
+
+`infra/lambda/waitlist-firstwin/`. The seal event carries an `agent_pubkey`; `waitlist_agent_links` —
+written by the gate at token-burn time (M11-D6) — turns it into a `waitlist_user_id`, and
+`first_win_at IS NULL` decides whether this is the first.
+
+**Idempotency is the design here, not a property added to it.** This consumes an event stream, so
+redelivery is the *normal* case rather than an edge, and the consequence of getting it wrong is minting
+three more queue-skipping invites every replay. The claim is a conditional UPDATE —
+`SET first_win_at = now() WHERE first_win_at IS NULL RETURNING` — and every downstream effect belongs only
+to whoever won it.
+
+**Revert-tested against the obvious wrong version.** Swapped in check-then-act (`if
+linked["first_win_at"] is None:` then UPDATE) and ran the suite: two simultaneous seal events *both*
+logged `invitesIssued: 3`, leaving one user with six premium codes. Every sequential test still passed in
+that state — ten replays, second-agent, already-recorded — which is exactly why the two-thread test is
+mandatory rather than thorough.
+
+**Globally, not per agent.** The DoD says once per human. A second laptop is the most ordinary thing
+someone does, so there is a test that two linked pubkeys for the same user produce one first win.
+
+**An unlinked agent is not an error.** Staff overrides, test agents and anyone who joined before the
+waitlist existed all seal perfectly valid sessions; they simply have no waitlist record to credit.
+Refusing would make the waitlist a precondition for using the protocol, which is backwards — the protocol
+is the product and the waitlist is a queue in front of it.
+
+**A fault must not read as "no first win".** There is no second first win to retry against, so if an
+outage returns `first_win: false` the caller moves on and the moment is gone permanently. Faults are 5xx,
+outcomes are 200 — the same distinction as the gate, and for a sharper reason.
+
+`admitted → active` happens here and nowhere else, closing M11-D11's lifecycle. A user in any other state
+keeps it: a banned user who somehow seals a session is not promoted by it.
+
+**Runs:** 235 tests green across nine Lambda suites.
+
+**Status:** `DOD-FIRST-WIN-1` ❌ → 🟡. Owed: the seal-event call site in the daemon, and the live
+end-to-end enforcer. The mutual-connection reward noted on that DoD line remains a portal/client item and
+is not part of this Lambda.

@@ -178,7 +178,7 @@ Every DoD line carries a `[repo]` tag immediately after its ID. Use this table t
   - Issue 3 premium invite codes (new rows in `referral_codes` with `owner_waitlist_user_id` set, `type = 'premium'`, `active = true`).
   - Set `first_win_at = NOW()` on `waitlist_users`.
   - Enqueue E-win email.
-  Idempotent: a second sealed session for the same user changes nothing. Verified: simulate two seal events for the same user; confirm 3 invite codes exist, `first_win_at` is set once, and only one E-win email is enqueued. — ❌
+  Idempotent: a second sealed session for the same user changes nothing. Verified: simulate two seal events for the same user; confirm 3 invite codes exist, `first_win_at` is set once, and only one E-win email is enqueued. — 🟡 `infra/lambda/waitlist-firstwin/`; atomic conditional claim, 13 tests incl. a two-thread race and ten replays, revert-tested against check-then-act (which mints six codes). Owed: the seal-event call site in the daemon, and the live enforcer → Journal Entry 25
   **Note:** The mutual-connection reward (inviter + invitee auto-added to each other's address book when an invitee reaches first win) is a portal/client coordination item, not purely waitlist plumbing. It is tracked as a dependency here but designed and implemented in the portal/client work stream.
 
 - **DOD-E-WIN-1** [trustless-cello] — E-win email template: subject, body. Contains: the 3 invite codes, a testimonial ask, a "share your first session" prompt (link to gallery if the session is shareable). Under 300 words. — 🟡 every code rendered as a usable `/invite/CODE` link; refuses to render with none; word count asserted. Owed: the email enforcer → Journal Entry 22
