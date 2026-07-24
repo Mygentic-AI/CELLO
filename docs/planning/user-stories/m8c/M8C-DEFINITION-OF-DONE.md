@@ -1943,7 +1943,7 @@ own story) deliberately, never smuggled in as a rider. Source:
 
   **Built** in prior M8C work (660 s default in `close-session-handler.ts`). The 2026-07-23 seal-path fix (DOD-INBOX-ONESHOT-1) made this timeout effective for the oneshot inbox path: the original `handleActiveSealFlow` call bypassed `close-session-handler.ts` entirely, so the 660 s timeout never applied. The relay-mediated path now reads `CELLO_SEAL_BILATERAL_TIMEOUT_MS` directly and routes through unilateral escalation on timeout, completing the full intent of this line.
 
-- **DOD-WRAP-SUBSTRING-1** 🔴 OPEN — Wrap-signal detection must match the APPENDED token, not any substring of the body.
+- **DOD-WRAP-SUBSTRING-1** ✅ DONE (2026-07-24, cello-client `d3d2afb`, reviewed) — Wrap-signal detection must match the APPENDED token, not any substring of the body. Fixed: `text.trimEnd().endsWith("[[WRAP]]")`; 3 red-first tests. Reviewer (cello-unit-reviewer: spec FAITHFUL, tests have teeth) added two consistency fixes, landed in the same commit: the request greeting now instructs `signal: wrap` instead of the literal token (a pasted mid-body token is invisible to the end-anchored detector), and the oneshot rejection moved its `[[WRAP]]` to the END so the daemon's own output honors the append-at-end contract.
 
   **Found live 2026-07-24** (session `9d6f56d7…`): `sendAwayResponse` checks
   `text.includes("[[WRAP]]")` (daemon.ts, DOD-AWAY-WRAP-1 AC2). A caller message sent with
@@ -1957,7 +1957,7 @@ own story) deliberately, never smuggled in as a rider. Source:
   body mentions `[[WRAP]]` mid-text triggers the normal away/oneshot path; (3) a genuine
   `signal:"wrap"` message still skips the away reply; (4) tests for both, red-first.
 
-- **DOD-AWAY-ACK-ONESHOT-TEXT-1** 🔴 OPEN — The away ack must state the one-shot rule.
+- **DOD-AWAY-ACK-ONESHOT-TEXT-1** ✅ DONE (2026-07-24, cello-client `d3d2afb`, reviewed) — The away ack must state the one-shot rule. Fixed: ack now ends "This inbox accepts one message per visit — please close the session now (send with signal: wrap) instead of sending more."; red-first test asserts the phrase via the real ingest→away path.
 
   **Found live 2026-07-24:** after the caller's first message the ack reads "Agent is currently
   away. Your message has been received and will be read when the operator returns." — no
