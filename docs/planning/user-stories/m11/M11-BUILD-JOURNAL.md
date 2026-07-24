@@ -1754,3 +1754,39 @@ scanners issue GET on body links, and the unsubscribe is a bare GET, so a corpor
 permanently unsubscribe an engaged user invisibly); `pytest.ini`'s `testpaths` is still a hand-maintained
 list, the same shape the round-4 fix globbed away in the invariant checker (L3); and the Day-6
 "status-page note" clause has no implementation anywhere.
+
+---
+
+### Entry 38: closing what round 5 left owed
+**Date:** 2026-07-25
+**Target:** DOD-E-RE-1, DOD-CONTENT-ALERTS-1, test discovery
+
+**An email scanner could silently unsubscribe engaged users.** The in-body unsubscribe was a bare GET that
+changed state, and Gmail's link proxy, Outlook Safe Links and corporate scanners all fetch body links.
+Every fetch permanently unsubscribed a real person, and `waitlist.unsubscribe.processed` logged
+`matched: true` identically for a scanner and a human — so the loss was **invisible**, and it only ever
+moves away from `active`.
+
+A GET now renders a one-button confirmation; only a POST acts. Still one click for a person, unreachable
+for a prefetch. Entry 30's reasoning about *not* requiring a login stands untouched — the gap was
+prefetch-safety, not authentication, and conflating the two would have broken the thing that entry got
+right.
+
+Every send now carries RFC 8058 `List-Unsubscribe` and `List-Unsubscribe-Post`. Two reasons: Gmail
+requires one-click unsubscribe from bulk senders, and more immediately it gives the mail client a POST
+path it uses **instead of** following the body link. Clients that support it never see the confirm page,
+so genuine one-click survives exactly where it exists. The header is scoped to the right list — sending
+the base-list URL on an `e_alert` would let somebody muting blog posts drop off their waitlist mail, in
+the one place a user is most likely to click.
+
+**`pytest.ini`'s `testpaths` was a hand-maintained list.** A new Lambda nobody remembered to append was
+silently untested while the run still said green. This is the *same shape* the round-4 commit globbed away
+in `verify-m11-invariants.sh`, and I applied the lesson to one file and not the other — a fix that did not
+generalise because I treated it as a bug rather than as a pattern. Discovery now globs, which immediately
+picked up two pre-existing suites (`pipeline-filter`, `webhook-receiver`) that had **never been running**.
+
+**Runs:** 372 tests green.
+
+**Still owed and not closed here:** the Day-6 "status-page note" clause has no implementation anywhere,
+and is now the only part of `DOD-FEEDBACK-OUTREACH-1` besides the `CELLO_FEEDBACK` session initiation that
+is neither built nor journaled as owed. Recorded so the next pass does not have to rediscover it.
