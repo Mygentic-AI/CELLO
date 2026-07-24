@@ -470,12 +470,27 @@ def handle_signup(body, origin, correlation_id):
             if inbound:
                 referral = apply_referral(cur, inbound.upper(), user_id, correlation_id)
 
-            cur.execute(
-                """
-                INSERT INTO email_jobs (user_id, template, scheduled_at)
-                VALUES (%s, 'e1_confirm', now())
-                """,
-                (user_id,),
+            # The whole drip, enqueued at signup. E1 now, E2 tomorrow, the
+            # first E3 in two weeks; each E3 queues the next one as it sends.
+            #
+            # Enqueued here rather than discovered by a sweep because the
+            # schedule is a property of THIS signup — a sweep would have to
+            # reconstruct "who is due for E2?" from created_at on every tick and
+            # get the boundaries right, which is a harder question than the one
+            # being answered.
+            #
+            # The dispatcher re-checks suppression and status at send time, so a
+            # user who bounces or gets admitted tomorrow simply never receives
+            # these; nothing has to be cancelled.
+            psycopg2.extras.execute_values(
+                cur,
+                "INSERT INTO email_jobs (user_id, template, scheduled_at) VALUES %s",
+                [
+                    (user_id, "e1_confirm", 0),
+                    (user_id, "e2_survey", 1),
+                    (user_id, "e3_update", 14),
+                ],
+                template="(%s, %s, now() + make_interval(days => %s))",
             )
 
         conn.commit()

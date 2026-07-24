@@ -464,6 +464,114 @@ def e_feedback_invite(job):
     return "Twenty minutes?", _shell(content), text
 
 
+def e2_survey(job):
+    """E2 — one day after signup. The single highest-leverage moment.
+
+    Sent at +1 day rather than immediately because E1 already asked for a click,
+    and asking twice in an hour reads as a sequence rather than a conversation.
+    A day later the person has either forgotten or is still interested, and both
+    are useful to learn.
+
+    Three asks, ordered by what they cost the reader: the survey (two minutes),
+    the share link (one paste), the readiness check (ten minutes). Anyone who
+    does none of them has still told us something.
+    """
+    name = _greeting(job)
+    code = job.get("referral_code")
+    referral_url = f"{SITE}/?ref={esc(code)}" if code else None
+    position = _position_line(job)
+
+    parts = [
+        f'<h1 style="margin:0 0 8px;font-size:26px;font-weight:700;color:#111;letter-spacing:-0.5px;">'
+        f"Three ways to move up, {name}.</h1>",
+    ]
+    if position:
+        parts.append(
+            f'<p style="margin:0 0 20px;font-size:16px;color:#111;font-weight:600;">{position}</p>'
+        )
+    parts.append(
+        f'<p style="margin:0 0 24px;font-size:16px;color:#666;line-height:1.6;">'
+        "Waves are ordered by points, so anything here moves you forward.</p>"
+        f'<p style="margin:0 0 12px;font-size:15px;color:#444;line-height:1.6;">'
+        f'<strong>Tell us what you\'d use it for</strong> — two minutes, +20, and it genuinely '
+        f'changes what we build. <a href="{SITE}/survey" style="color:{BRAND};">Take the survey</a></p>'
+    )
+    if referral_url:
+        parts.append(
+            f'<p style="margin:0 0 12px;font-size:15px;color:#444;line-height:1.6;">'
+            f"<strong>Share your link</strong> — +10 for each person who joins through it.<br>"
+            f'<a href="{referral_url}" style="color:{BRAND};word-break:break-all;">{referral_url}</a></p>'
+        )
+    parts.append(
+        f'<p style="margin:0;font-size:15px;color:#444;line-height:1.6;">'
+        f"<strong>Get set up now</strong> — star the repo and run "
+        f"<code>{esc(INSTALL_COMMAND)}</code> once. +20, and it means your first "
+        f'session works the moment you\'re in. '
+        f'<a href="{SITE}/status" style="color:{BRAND};">Mark it done</a></p>'
+    )
+
+    text_lines = [f"Hi {name},", ""]
+    if position:
+        text_lines += [position, ""]
+    text_lines += [
+        "Waves are ordered by points, so anything here moves you forward.",
+        "",
+        f"Tell us what you'd use it for — two minutes, +20: {SITE}/survey",
+    ]
+    if referral_url:
+        text_lines.append(f"Share your link — +10 per signup: {referral_url}")
+    text_lines += [
+        f"Get set up now — +20: {INSTALL_COMMAND}",
+        "",
+        f"— The CELLO team\n{SITE}",
+    ]
+
+    return "Three ways to move up the CELLO waitlist", _shell("".join(parts)), "\n".join(text_lines)
+
+
+def e3_update(job):
+    """E3 — every two weeks while still waiting. Base list, unconditionally.
+
+    A nurture email that says nothing is worse than no email, so this one carries
+    the two facts a waiting person actually wants: where they are now, and that
+    the thing is still being built. No manufactured urgency and no fake scarcity
+    — the queue is real and saying so is the whole credibility of it.
+    """
+    name = _greeting(job)
+    position = _position_line(job)
+
+    parts = [
+        f'<h1 style="margin:0 0 8px;font-size:26px;font-weight:700;color:#111;letter-spacing:-0.5px;">'
+        f"Still building, {name}.</h1>",
+    ]
+    if position:
+        parts.append(
+            f'<p style="margin:0 0 20px;font-size:16px;color:#111;font-weight:600;">{position}</p>'
+        )
+    parts.append(
+        f'<p style="margin:0 0 24px;font-size:16px;color:#666;line-height:1.6;">'
+        "Waves open when the infrastructure is ready for the next group, not on a schedule. "
+        "When yours opens you\'ll get a token and install instructions in one email.</p>"
+        f'<a href="{SITE}/status" style="display:inline-block;padding:14px 28px;background:{BRAND};'
+        'color:#fff;text-decoration:none;border-radius:100px;font-size:15px;font-weight:600;">'
+        "Check your position →</a>"
+    )
+
+    text_lines = [f"Hi {name},", ""]
+    if position:
+        text_lines += [position, ""]
+    text_lines += [
+        "Waves open when the infrastructure is ready for the next group, not on a schedule. "
+        "When yours opens you'll get a token and install instructions in one email.",
+        "",
+        f"Check your position: {SITE}/status",
+        "",
+        f"— The CELLO team\n{SITE}",
+    ]
+
+    return "Where you are on the CELLO waitlist", _shell("".join(parts)), "\n".join(text_lines)
+
+
 # Only implemented templates belong here. A missing entry is a loud failure in
 # the dispatcher, which is the correct outcome for a job referencing a template
 # nobody has written yet.
@@ -475,4 +583,6 @@ TEMPLATES = {
     "e_re_engage": e_re_engage,
     "e_alert": e_alert,
     "e_feedback_invite": e_feedback_invite,
+    "e2_survey": e2_survey,
+    "e3_update": e3_update,
 }

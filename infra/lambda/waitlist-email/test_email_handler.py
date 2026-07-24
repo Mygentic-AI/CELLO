@@ -215,15 +215,21 @@ def test_a_future_scheduled_job_is_not_sent_early(mailer):
     assert mailer.fake.sent == []
 
 
-def test_an_unknown_template_fails_loudly_and_stays_pending(mailer):
+def test_an_unknown_template_fails_loudly_and_stays_pending(mailer, monkeypatch):
     """A silent skip would mark the job done with nothing sent and no signal
-    that a template was never wired up."""
+    that a template was never wired up.
+
+    Every enum value has a renderer today, so this removes one — which is
+    exactly the real scenario: a migration widens the enum and the renderer
+    lands in a later commit, or does not.
+    """
+    import templates
+
+    monkeypatch.delitem(templates.TEMPLATES, "e3_update")
     uid = make_user("unwired@example.test")
     conn = psycopg2.connect(PGURL)
     conn.autocommit = True
     with conn.cursor() as cur:
-        # Bypass the app to simulate a template the enum allows but no renderer
-        # implements yet.
         cur.execute(
             "INSERT INTO email_jobs (user_id, template, scheduled_at) "
             "VALUES (%s, 'e3_update', now()) RETURNING id",
@@ -239,10 +245,13 @@ def test_an_unknown_template_fails_loudly_and_stays_pending(mailer):
     assert mailer.fake.sent == []
 
 
-def test_a_permanently_failing_job_retires_instead_of_starving_the_queue(mailer):
+def test_a_permanently_failing_job_retires_instead_of_starving_the_queue(mailer, monkeypatch):
     """Claiming is oldest-first. Without a terminal state, a permanently
     failing job returns to the front forever and every job behind it stops
     being delivered — silently, while the batch summary reports a number."""
+    import templates
+
+    monkeypatch.delitem(templates.TEMPLATES, "e3_update")
     uid = make_user("poison@example.test")
     conn = psycopg2.connect(PGURL)
     conn.autocommit = True
@@ -263,8 +272,11 @@ def test_a_permanently_failing_job_retires_instead_of_starving_the_queue(mailer)
     assert "No renderer" in err, f"the terminal state must record WHY: {err}"
 
 
-def test_a_retired_job_stops_blocking_the_ones_behind_it(mailer):
+def test_a_retired_job_stops_blocking_the_ones_behind_it(mailer, monkeypatch):
     """The starvation property itself, not just the retirement."""
+    import templates
+
+    monkeypatch.delitem(templates.TEMPLATES, "e3_update")
     poison = make_user("blocker@example.test")
     conn = psycopg2.connect(PGURL)
     conn.autocommit = True
@@ -449,3 +461,98 @@ def test_operator_supplied_alert_content_still_reaches_the_template(mailer, monk
 
     assert captured["alert_title"] == "New post"
     assert captured["alert_url"] == "https://cello.mygentic.ai/blog/x"
+
+
+# ── DOD-EMAIL-DRIP-1 ─────────────────────────────────────────────────────────
+
+
+def test_signup_enqueues_the_whole_drip_at_once(mailer):
+    """E1 now, E2 tomorrow, the first E3 in two weeks. Enqueued at signup rather
+    than discovered by a sweep, because the schedule is a property of THIS
+    signup and a sweep would have to reconstruct it on every tick."""
+    from pathlib import Path
+
+    signup = load_lambda(
+        Path(__file__).resolve().parents[1] / "waitlist-signup", "signup_for_drip"
+    )
+    event = {
+        "headers": {"origin": "https://cello.mygentic.ai"},
+        "requestContext": {"http": {"method": "POST", "path": "/waitlist/signup"}},
+        "body": json.dumps(
+            {"email": "drip@example.test", "anon_id": str(uuid.uuid4()), "touchpoints": []}
+        ),
+    }
+    assert signup.lambda_handler(event, None)["statusCode"] == 200
+
+    scheduled = query(
+        "SELECT template, (scheduled_at::date - now()::date) AS days_out "
+        "FROM email_jobs ORDER BY scheduled_at"
+    )
+    assert scheduled == [("e1_confirm", 0), ("e2_survey", 1), ("e3_update", 14)]
+
+
+def test_sending_an_e3_queues_the_next_one(mailer):
+    """Self-perpetuating rather than swept: a chain only has to answer "did this
+    one send?", which it already knows."""
+    uid = make_user("nurture@example.test")
+    enqueue(uid, "e3_update")
+
+    mailer.lambda_handler({}, None)
+
+    pending = query(
+        "SELECT count(*) FROM email_jobs WHERE template = 'e3_update' AND status = 'pending'"
+    )[0][0]
+    assert pending == 1, "the next nurture must be queued"
+    days = query(
+        "SELECT (scheduled_at::date - now()::date) FROM email_jobs "
+        "WHERE template = 'e3_update' AND status = 'pending'"
+    )[0][0]
+    assert days == 14
+
+
+def test_the_nurture_chain_ends_when_someone_is_admitted(mailer):
+    """A drip that keeps arriving after admission says plainly that nobody is
+    watching."""
+    uid = make_user("admitted@example.test", status="admitted")
+    enqueue(uid, "e3_update")
+
+    mailer.lambda_handler({}, None)
+
+    assert query(
+        "SELECT count(*) FROM email_jobs WHERE template = 'e3_update' AND status = 'pending'"
+    )[0][0] == 0
+
+
+def test_the_nurture_chain_does_not_extend_for_a_suppressed_address(mailer):
+    """The existing job stays pending — an unsubscribe is reversible and their
+    E3 should reach them if they come back. What must NOT happen is the chain
+    growing a new link for somebody who is not receiving anything."""
+    uid = make_user("gone@example.test", email_status="unsubscribed")
+    enqueue(uid, "e3_update")
+
+    mailer.lambda_handler({}, None)
+
+    assert query("SELECT count(*) FROM email_jobs WHERE template = 'e3_update'")[0][0] == 1, (
+        "nothing was sent, so nothing should have been chained"
+    )
+    assert mailer.fake.sent == []
+
+
+def test_a_future_e2_is_not_sent_today(mailer):
+    """The drip is enqueued at signup with future dates; the dispatcher must
+    respect them or everyone gets three emails in one minute."""
+    uid = make_user("tomorrow@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO email_jobs (user_id, template, scheduled_at) "
+            "VALUES (%s, 'e2_survey', now() + interval '1 day')",
+            (uid,),
+        )
+    conn.close()
+
+    counts = mailer.lambda_handler({}, None)
+
+    assert counts["sent"] == 0
+    assert mailer.fake.sent == []

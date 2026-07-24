@@ -358,6 +358,49 @@ def finish(conn, job_id, status, correlation_id, **fields):
     conn.commit()
 
 
+NURTURE_INTERVAL_DAYS = int(os.environ.get("EMAIL_NURTURE_INTERVAL_DAYS", "14"))
+
+
+def schedule_next_nurture(conn, job, correlation_id):
+    """After an E3 goes out, queue the next one — but only while still waiting.
+
+    Self-perpetuating rather than swept, because a sweep has to answer "who is
+    due?" on every tick and gets that wrong at the boundaries; a chain only has
+    to answer "did this one send?", which it already knows.
+
+    The status check is the important half. A nurture drip that keeps arriving
+    after somebody has been admitted — or has left — is worse than no drip: it
+    says plainly that nobody is watching.
+    """
+    if job["template"] != "e3_update":
+        return
+
+    with cursor(conn) as cur:
+        cur.execute(
+            """
+            INSERT INTO email_jobs (user_id, template, scheduled_at)
+            SELECT waitlist_id, 'e3_update', now() + make_interval(days => %s)
+            FROM waitlist_users
+            WHERE waitlist_id = %s AND status = 'waiting' AND email_status = 'active'
+            RETURNING id
+            """,
+            (NURTURE_INTERVAL_DAYS, job["user_id"]),
+        )
+        queued = cur.fetchone()
+    conn.commit()
+
+    if queued:
+        log(
+            "waitlist.email.nurture.rescheduled",
+            correlation_id,
+            waitlistId=str(job["user_id"]),
+            days=NURTURE_INTERVAL_DAYS,
+        )
+    else:
+        # Admitted, left, or suppressed — the chain ends here by design.
+        log("waitlist.email.nurture.chain_ended", correlation_id, waitlistId=str(job["user_id"]))
+
+
 def release_for_retry(conn, job, err, correlation_id):
     """Return a job to the queue, or retire it if it has run out of attempts.
 
@@ -464,6 +507,7 @@ def lambda_handler(event, context):
                 continue
 
             finish(conn, job["id"], "sent", correlation_id)
+            schedule_next_nurture(conn, job, correlation_id)
             counts["sent"] += 1
             log(
                 "waitlist.email.sent",
