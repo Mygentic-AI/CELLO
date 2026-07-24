@@ -373,3 +373,59 @@ to the portal RDS, unreachable from a dev machine (M11-D22).
 H7 (fail on missing `DATABASE_URL`, add SSL), H8 (server-side validation and caps), H9 (premium-referred
 distinct from admitted), M11/M12 (400 for client errors, causes not exit labels), M14 (CORS/OPTIONS) —
 fixed once in the port rather than twice.
+
+---
+
+### Entry 10: DOD-SIGNUP-1 ported to Lambda with every reviewer fix; 21 tests on real Postgres
+**Date:** 2026-07-24
+**Target:** DOD-SIGNUP-1 [trustless-cello, corp-cello-site]
+**Commits:** `0003` migration (corp-cello-site), `infra/lambda/waitlist-signup/` (trustless-cello)
+
+**Runtime settled by precedent, not preference.** M11-D20's refinement left Python-vs-TypeScript open.
+`infra/lambda/` is Python 3.12 throughout, and `rds-rotation` is already a Python Lambda that connects to
+Postgres — `deploy-lambdas.sh` even stages `psycopg2-binary` for `linux/amd64` via Docker for it. Matching
+that is the low-surprise choice and reuses a packaging path that already works. New **separate** function,
+so the live `cello-web-form-handler` is never at risk from waitlist work.
+
+**Schema the endpoint actually needs (`0003`).** `DOD-SIGNUP-1` is a P0 line that writes to
+`creator_tracking` (DoD says P2) and `points_ledger` (DoD says P1). The phase assignment contradicts the
+line, and the contradiction was live: writing to a missing `creator_tracking` aborted the transaction and
+rolled every creator-referred signup back to zero rows. Both created at P0 — the alternative is an
+endpoint that writes to tables which do not exist.
+
+Cap enforcement is a `BEFORE INSERT` trigger, because `DOD-INV-POINTS-CAPS` says *"A direct SQL insert
+past the cap must fail"* — which application code cannot make true, only true-for-callers-who-remember.
+Proven by direct SQL: three +10 `share_conversion` rows reach the 30 cap; the fourth raises
+`points_cap_exceeded` naming the user, cap and reason. `points_total` is an AFTER-INSERT cache of the
+ledger sum, so it cannot drift from the rows it summarises.
+
+**Fixes carried into the port** (fixed once, in the port, rather than twice): H1 savepoint + real table,
+H2 `FOR UPDATE` + burn, H4 the +10 actually awarded, H7 fail-loud on missing `DATABASE_URL` + `sslmode`,
+H8 server-side caps, H9 `premium_referred` split from `admitted`, M11 400-not-500, M12 causes not exit
+labels (psycopg2 errors keep their SQLSTATE), M14 CORS/OPTIONS, M15 8-byte codes.
+
+**Tests: 21, against real Postgres, no mocks.** Every defect above is invisible against a mock — an
+aborted transaction, a cap trigger, a bind-parameter limit and a row lock are all database behaviours.
+
+**Revert test applied.** Removing the burn `UPDATE` →
+`FAILED test_premium_code_burns_on_first_signup_and_rejects_the_second — assert 200 == 409`. Restored →
+21 passed. The test fails for the right reason.
+
+**One behaviour settled by a test that contradicted itself.** I had asserted 409 for a code spent during
+the run but 200 for an already-inactive one — the same state (`active = false`) reached two ways, which
+the handler cannot and should not distinguish. Resolved toward **succeed-and-say-so**: the signup
+completes as a normal `waiting` user and the response carries
+`referral: {applied: false, reason: "code_already_used"}`. Refusing would lose a genuinely interested
+person because somebody else was faster; the thing that must not happen is a *silent* downgrade, and
+returning the outcome is what prevents it. Logged as M11-D24.
+
+**Environment note:** a globally-installed `logfire` pytest plugin is broken in this Python env
+(`ImportError: cannot import name 'LogData'`) and blocks pytest before collection. Unrelated to CELLO.
+Run with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`.
+
+**Status:** 🟡. Logic proven locally; owed is the VPC-attached deploy plus the API Gateway route, which
+needs infra awake — the handler must reach a `PubliclyAccessible: false` RDS, so it needs subnets, a
+security group, and NAT or VPC endpoints for its SES calls.
+
+**Next:** repoint `WaitlistContent.tsx` at the API Gateway so H3 is not merged, and send `first_touch`
+explicitly so M13's front-truncation stops silently recording a mid-funnel touch as the origin.
