@@ -13,7 +13,17 @@ Example: if your prompt is `[agent_name]`, line 1 must be `AGENT_NAME="[agent_na
 
 ```bash
 AGENT_NAME="[agent_name]"
-cello use-agent "$AGENT_NAME" 2>/dev/null
+# Guard: an empty or unsubstituted name must FAIL LOUD. Without this, `cello use-agent` errors
+# silently and the loop polls whichever desk was already selected — announcing another agent's
+# callers as if they were this one's, with nothing to reveal the mix-up.
+if [ -z "$AGENT_NAME" ] || [ "$AGENT_NAME" = "[agent_name]" ]; then
+  echo "ERROR: no agent name supplied — cannot staff a desk. Invoke with the exact agent name." >&2
+  exit 1
+fi
+if ! cello use-agent "$AGENT_NAME"; then
+  echo "ERROR: cello use-agent '$AGENT_NAME' failed — not staffing an unconfirmed desk." >&2
+  exit 1
+fi
 while true; do
   RESULT=$(cello inbox --scope current 2>/dev/null)
   if [ -z "$RESULT" ]; then
