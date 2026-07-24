@@ -28,6 +28,8 @@ class FakeError(Exception):
         ("42883", "database_query_rejected", False),
         ("23505", "constraint_violation", False),
         ("40001", "transaction_conflict", True),
+        ("53300", "database_overloaded", True),
+        ("57P03", "database_starting", True),
         ("XX000", "database_error", False),
     ],
 )
@@ -87,3 +89,24 @@ def test_a_non_connection_error_with_no_sqlstate_still_refuses_to_guess():
 
     assert code == "database_error"
     assert status == 500, "only a connection failure may claim to be retryable"
+
+
+@pytest.mark.parametrize("sqlstate", ["53300", "57P03"])
+def test_the_two_classic_lambda_rds_transients_are_retryable(sqlstate):
+    """A Lambda scaling out against an RDS connection cap, and a database still
+    starting. Both resolve on their own, and both were being reported as
+    permanent — telling the caller not to back off at exactly the moment
+    backing off is the fix."""
+    status, _, _ = classify(FakeError(sqlstate))
+    assert status == 503
+
+
+def test_an_interface_error_is_also_a_connection_failure():
+    """psycopg2.InterfaceError is not an OperationalError, so a dead connection
+    fell through to the generic permanent branch."""
+    import psycopg2
+
+    status, code, _ = classify(psycopg2.InterfaceError("connection already closed"))
+
+    assert status == 503
+    assert code == "database_unreachable"

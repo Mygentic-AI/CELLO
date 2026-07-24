@@ -40,11 +40,30 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 
 
 class GateError(Exception):
-    """A refusal that names its own cause.
+    """A REFUSAL that names its own cause — this person may not enter.
 
     The operator on the other end of Telegram gets this text. "Access denied"
     would leave someone holding a valid-looking token with no idea whether to
     wait, re-check the email, or ask for help — three different actions.
+
+    Refusals are answers, so they leave as 200 with allowed:false. Nothing that
+    is not an answer may be raised as one.
+    """
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+class GateUnavailable(Exception):
+    """The gate could not decide. NOT a refusal.
+
+    Separate class because sharing one with GateError is how a permanent
+    misconfiguration came to be reported as a routine expired-token refusal: the
+    ops agent branches on `allowed`, so every user was turned away forever while
+    the response said 200 and the log said WARN, next to every ordinary refusal,
+    with no 5xx for an alarm to fire on.
     """
 
     def __init__(self, code, message):
@@ -55,7 +74,9 @@ class GateError(Exception):
 
 def connect():
     if not DATABASE_URL:
-        raise GateError("database_url_not_configured", "DATABASE_URL is not set on this function.")
+        raise GateUnavailable(
+            "database_url_not_configured", "DATABASE_URL is not set on this function."
+        )
     conn = psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE", "require"))
     conn.autocommit = False
     return conn
@@ -126,14 +147,28 @@ def burn(cur, token, telegram_id, agent_pubkey, correlation_id):
 
     user_id = row["waitlist_user_id"]
 
+    # F3: the burn is atomic but the LINK was not. Two requests presenting
+    # different valid tokens for the same telegram_id both burned, one lost its
+    # grant with nothing linked, and both were told allowed:true — a permanent,
+    # irreversible loss of an admission, reported as success.
+    #
+    # RETURNING turns the swallowed conflict into a decision. The burn is in this
+    # same transaction, so refusing here rolls it back and the grant stays live.
     cur.execute(
         """
         INSERT INTO telegram_accounts (telegram_id, waitlist_user_id, source)
         VALUES (%s, %s, 'waitlist_token')
         ON CONFLICT (telegram_id) DO NOTHING
+        RETURNING telegram_id
         """,
         (telegram_id, user_id),
     )
+    if cur.fetchone() is None:
+        raise GateError(
+            "telegram_account_already_linked",
+            "That Telegram account was linked to CELLO a moment ago. "
+            "Your access token has not been used — try again.",
+        )
 
     if agent_pubkey:
         # The bridge (M11-D6). Written here because this is the one moment both
@@ -155,6 +190,9 @@ def burn(cur, token, telegram_id, agent_pubkey, correlation_id):
         waveNumber=row["wave_number"],
         telegramLinked=True,
         agentLinked=bool(agent_pubkey),
+        # Both are now outcomes rather than intentions: the link above refuses
+        # rather than swallowing its conflict, so reaching this line means it
+        # happened.
     )
     return user_id
 
@@ -213,9 +251,19 @@ def lambda_handler(event, context):
     correlation_id = getattr(context, "aws_request_id", None) or str(uuid.uuid4())
 
     try:
-        body = event if isinstance(event, dict) and "telegram_id" in event else json.loads(
-            event.get("body") or "{}"
-        )
+        try:
+            body = (
+                event
+                if isinstance(event, dict) and "telegram_id" in event
+                else json.loads((event or {}).get("body") or "{}")
+            )
+            if not isinstance(body, dict):
+                raise ValueError("body is not a JSON object")
+        except (json.JSONDecodeError, TypeError, ValueError, AttributeError) as err:
+            # Every other input path here produces a named code. An unhandled
+            # traceback would be the one exception.
+            raise GateError("invalid_request", f"Could not read the request: {err}")
+
         return {"statusCode": 200, "body": json.dumps(check(body, correlation_id))}
 
     except GateError as err:
@@ -228,6 +276,12 @@ def lambda_handler(event, context):
             "statusCode": 200,
             "body": json.dumps({"allowed": False, "error": err.code, "message": err.message}),
         }
+
+    except GateUnavailable as err:
+        # 503 and no `allowed` key at all. The ops agent must not be able to
+        # read a broken gate as a decision about this person.
+        log("waitlist.gate.unavailable", correlation_id, level="ERROR", code=err.code)
+        return {"statusCode": 503, "body": json.dumps({"error": err.code, "message": err.message})}
 
     except psycopg2.Error as err:
         log("waitlist.gate.failed", correlation_id, level="ERROR", pgcode=err.pgcode, detail=str(err).strip())

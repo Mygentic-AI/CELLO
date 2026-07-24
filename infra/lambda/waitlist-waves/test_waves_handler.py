@@ -290,3 +290,57 @@ def test_a_wave_admits_up_to_its_capacity_at_every_size(waves, capacity):
     assert body["admitted"] == capacity, (
         f"capacity {capacity} admitted {body['admitted']} from a queue of 10"
     )
+
+
+def test_a_user_holding_an_unburned_grant_does_not_abort_the_whole_wave(waves):
+    """One stale grant used to roll the entire wave back with
+    `constraint_violation` — "That conflicts with data already stored" — naming
+    neither the user nor the reason. Four innocent people lost their wave.
+
+    The precondition is ordinary: E-inv says "unclaimed access returns to the
+    pool", there is no reaper, so an operator returns an admitted user to
+    'waiting' by hand and the next wave dies."""
+    stale = make_user("stale@example.test", points=99)
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO waitlist_tokens (waitlist_user_id, expires_at) "
+            "VALUES (%s, now() + interval '14 days')",
+            (stale,),
+        )
+    conn.close()
+    for i in range(4):
+        make_user(f"healthy{i}@example.test", points=10 + i)
+
+    status, body = open_wave(waves, capacity=5)
+
+    assert status == 200, body
+    assert body["admitted"] == 4, "the four healthy users must still get their wave"
+    assert "stale@example.test" not in admitted_emails()
+
+
+def test_the_breakdown_reports_backfilled_users_in_their_real_cohort(waves):
+    """The old comment claimed exactly this while the code did the opposite —
+    every backfilled user was reported as a points admission, so the one number
+    an operator would use to check the split was the number that lied."""
+    make_user("scorer@example.test", points=90)
+    make_user("zeropoints@example.test", points=0)
+
+    _, body = open_wave(waves, capacity=2, priority_pct=50, zero_pct=50)
+
+    assert body["admitted"] == 2
+    assert body["breakdown"]["priority"] == 1
+    assert body["breakdown"]["zero"] == 1, f"a zero-point admission reported as priority: {body}"
+
+
+def test_an_explicit_zero_pct_of_zero_is_honoured(waves):
+    """"~75%" is approximate. A typed 0 is an instruction, and backfilling over
+    it gave the operator the opposite of what they asked for."""
+    make_user("scorer@example.test", points=90)
+    make_user("zeropoints@example.test", points=0)
+
+    _, body = open_wave(waves, capacity=2, priority_pct=100, zero_pct=0)
+
+    assert body["admitted"] == 1, f"only the scorer qualifies when zero_pct is 0: {body}"
+    assert admitted_emails() == ["scorer@example.test"]

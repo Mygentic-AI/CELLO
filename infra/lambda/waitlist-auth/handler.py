@@ -19,7 +19,6 @@ Handled by doing the work behind a fixed floor: both paths return no earlier
 than RESPONSE_FLOOR_MS after the request began.
 """
 
-import hashlib
 import json
 import os
 import secrets
@@ -30,12 +29,11 @@ from datetime import datetime, timezone
 import psycopg2
 import psycopg2.extras
 
-from _session import cookie_from, read_session, revoke_all_for_user
+from _session import COOKIE_NAME, cookie_from, hash_token, read_session, revoke_all_for_user
 from _sqlstate import classify
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SITE = os.environ.get("WAITLIST_SITE", "https://cello.mygentic.ai")
-COOKIE_NAME = "cello_wl_session"
 SESSION_DAYS = 30
 
 # Every /auth response waits until this many milliseconds have elapsed. It must
@@ -74,10 +72,6 @@ def connect():
     if not DATABASE_URL:
         raise AuthError(500, "database_url_not_configured", "DATABASE_URL is not set.")
     return psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE", "require"))
-
-
-def hash_token(token):
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def cors_headers(origin):

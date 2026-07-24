@@ -16,6 +16,10 @@ import os
 
 BRAND = "#E0147A"
 SITE = "https://cello.mygentic.ai"
+GALLERY = "https://gallery.cello.mygentic.ai"
+
+# The one command that gets someone from an invitation to a running node.
+INSTALL_COMMAND = "npx --yes @cello-protocol/connect"
 
 # Links that must be RESOLVED by a Lambda point at the API Gateway, not at the
 # site. /confirm on the site is served by the pre-M11 form handler and resolves
@@ -244,14 +248,23 @@ def e_inv_admission(job):
         f'<p style="margin:0 0 4px;padding:14px 18px;background:#f7f7f7;border-radius:10px;'
         f'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;color:#111;'
         f'word-break:break-all;">{esc(token)}</p>'
-        f'<p style="margin:0 0 28px;font-size:13px;color:#999;">'
+        f'<p style="margin:0 0 24px;font-size:13px;color:#999;">'
         "Single use, and it expires in 14 days. Unclaimed access returns to the pool.</p>"
+        # The install command. Required by DOD-E-INV-1 and by the requirements
+        # doc ("install command + 14-day claim window. Nothing else") and it was
+        # missing — an admission email that does not say how to install is a
+        # token with no instructions attached.
+        f'<p style="margin:0 0 8px;font-size:14px;font-weight:600;color:#111;">Install</p>'
+        f'<p style="margin:0 0 28px;padding:14px 18px;background:#111;border-radius:10px;'
+        f'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#f7f7f7;'
+        f'word-break:break-all;">{esc(INSTALL_COMMAND)}</p>'
         f"{next_step}"
     )
 
     text = (
         f"Hi {name},\n\n{intro}\n\n"
         f"Your access token (single use, expires in 14 days):\n{token}\n\n"
+        f"Install:\n{INSTALL_COMMAND}\n\n"
         + (
             f"Book your setup call: {SITE}/onboarding-call\n\n"
             if is_wave_one
@@ -298,8 +311,15 @@ def e_win_invites(job):
         "These skip the queue entirely. Whoever uses one gets in on their next signup — and when they "
         "reach their own first session, the two of you are connected automatically.</p>"
         f"{code_rows}"
-        f'<p style="margin:24px 0 0;font-size:14px;color:#666;line-height:1.6;">'
-        "If it is worth two minutes: what did you build it for? Replies come straight to us.</p>"
+        f'<p style="margin:24px 0 8px;font-size:14px;font-weight:600;color:#111;">'
+        "Show someone what it looks like</p>"
+        f'<p style="margin:0 0 20px;font-size:14px;color:#666;line-height:1.6;">'
+        "Your sealed receipt is private by default. If this one is worth showing, you can publish it "
+        f'from the portal — it gets a permanent page at <a href="{GALLERY}" '
+        f'style="color:{BRAND};text-decoration:none;">{GALLERY.replace("https://", "")}</a> that '
+        "anyone can verify without an account.</p>"
+        f'<p style="margin:0;font-size:14px;color:#666;line-height:1.6;">'
+        "And if it is worth two minutes: what did you build it for? Replies come straight to us.</p>"
     )
 
     text = (
@@ -309,7 +329,10 @@ def e_win_invites(job):
         f"{len(codes)} invites to give away. These skip the queue:\n"
         + "\n".join(f"{SITE}/invite/{c}" for c in codes)
         + "\n\nWhen someone you invite reaches their own first session, the two of you are connected "
-        "automatically.\n\nIf it is worth two minutes: what did you build it for?\n\n"
+        "automatically.\n\n"
+        "Your sealed receipt is private by default. If this one is worth showing, publish it from the "
+        f"portal and it gets a permanent, verifiable page at {GALLERY}\n\n"
+        "And if it is worth two minutes: what did you build it for?\n\n"
         f"— The CELLO team\n{SITE}"
     )
 
@@ -358,6 +381,15 @@ def e_re_engage(job):
     return "Still on the CELLO waitlist?", _shell(content), text
 
 
+def _ctx(job, key, default=None):
+    """Operator-supplied context, read from its own namespace.
+
+    Never merged into the job dict: a payload key that collides with a column
+    name silently overrides the row the dispatcher already authorised.
+    """
+    return (job.get("ctx") or {}).get(key, default)
+
+
 def e_alert(job):
     """E-alert — new content. Opt-in only (DOD-INV-EMAIL-SEGMENTS).
 
@@ -365,9 +397,9 @@ def e_alert(job):
     accepted up to twice a day and the only way that stays tolerable is if each
     one is genuinely small.
     """
-    title = job.get("alert_title") or "Something new"
-    url = job.get("alert_url")
-    summary = job.get("alert_summary") or ""
+    title = _ctx(job, "alert_title") or "Something new"
+    url = _ctx(job, "alert_url")
+    summary = _ctx(job, "alert_summary") or ""
 
     if not url:
         raise ValueError(

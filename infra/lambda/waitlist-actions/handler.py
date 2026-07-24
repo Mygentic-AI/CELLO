@@ -25,11 +25,10 @@ from urllib.parse import urlparse
 import psycopg2
 import psycopg2.extras
 
-from _session import cookie_from, may_act, read_session
+from _session import COOKIE_NAME, cookie_from, hash_token, may_act, read_session
 from _sqlstate import classify
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
-COOKIE_NAME = "cello_wl_session"
 
 ALLOWED_ORIGINS = frozenset(
     {"https://cello.mygentic.ai", "https://www.cello.mygentic.ai", "http://localhost:3000"}

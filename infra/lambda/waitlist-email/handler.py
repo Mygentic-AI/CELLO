@@ -164,10 +164,20 @@ def claim_jobs(conn, limit, correlation_id):
         # Resolve everything a template needs inside the claim transaction, so
         # it is durable before the mail that carries it leaves.
         for job in jobs:
-            # Operator-supplied context (e_alert) is flattened in first so a
-            # template reads one dict rather than reaching into a nested one.
-            if job.get("payload"):
-                job.update(job["payload"])
+            # Operator-supplied context is namespaced, NOT merged. Merging let a
+            # payload key shadow a real column: `email` redirected a
+            # DKIM-signed CELLO message anywhere, `email_status` defeated
+            # suppression, `content_alerts` and `template` each defeated the
+            # segment split (should_send read the SHADOWED template, so an
+            # e_alert escaped the alert list entirely), and `user_id` put
+            # another user's live admission grant in the body — which the
+            # recipient could then burn at the gate.
+            #
+            # Nothing writes payload yet; 0014 exists so the ops dashboard can.
+            # The consumer shipped ahead of its producer with no guard, which is
+            # the moment to fix it rather than after.
+            payload = job.get("payload") or {}
+            job["ctx"] = {k: v for k, v in payload.items() if k.startswith("alert_")}
 
             if job["template"] == "e1_confirm":
                 job["auth_token"] = mint_verify_token(cur, job["user_id"])

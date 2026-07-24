@@ -261,3 +261,71 @@ def test_a_second_agent_on_a_known_account_is_still_bridged(gate):
 
     linked = {r[0] for r in query("SELECT agent_pubkey FROM waitlist_agent_links")}
     assert linked == {"pk-first", "pk-second"}
+
+
+# ── A fault is not a decision (F1) ────────────────────────────────────────────
+
+
+def test_a_missing_database_url_is_not_reported_as_a_refusal(gate, monkeypatch):
+    """The ops agent branches on `allowed`. A permanent misconfiguration
+    returning 200 allowed:false turns every user away forever while the response
+    reads as a routine expired-token refusal and no 5xx alarm ever fires."""
+    monkeypatch.setattr(gate, "DATABASE_URL", None)
+
+    result = gate.lambda_handler({"telegram_id": "tg-1", "token": str(uuid.uuid4())}, None)
+    body = json.loads(result["body"])
+
+    assert result["statusCode"] == 503, "a broken gate must not answer about this person"
+    assert "allowed" not in body
+    assert body["error"] == "database_url_not_configured"
+
+
+def test_a_malformed_event_gets_a_named_code_not_a_traceback(gate):
+    result = gate.lambda_handler({"body": "{not json"}, None)
+    body = json.loads(result["body"])
+
+    assert body["allowed"] is False
+    assert body["error"] == "invalid_request"
+
+
+# ── One telegram account, two tokens (F3) ─────────────────────────────────────
+
+
+def test_two_tokens_racing_for_one_telegram_account_burn_only_one(gate):
+    """The burn was atomic; the LINK was not. Two requests presenting DIFFERENT
+    valid tokens for the same telegram_id both burned, one lost its grant with
+    nothing linked, and both were told allowed:true — permanent, irreversible
+    loss of an admission reported as success."""
+    _, token_a = make_admitted_user("alice@example.test")
+    _, token_b = make_admitted_user("bob@example.test")
+    barrier = threading.Barrier(2)
+    results = {}
+
+    def attempt(name, token):
+        def inner():
+            mod = load_lambda(Path(__file__).parent, f"gate_race_{name}")
+            barrier.wait()
+            results[name] = json.loads(
+                mod.lambda_handler({"telegram_id": "tg-shared", "token": token}, None)["body"]
+            )
+
+        return inner
+
+    threads = [
+        threading.Thread(target=attempt("a", token_a)),
+        threading.Thread(target=attempt("b", token_b)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    allowed = [r for r in results.values() if r.get("allowed")]
+    burned = query("SELECT count(*) FROM waitlist_tokens WHERE used_at IS NOT NULL")[0][0]
+
+    assert len(allowed) == 1, f"one telegram account, one admission: {results}"
+    assert burned == 1, (
+        f"{burned} grants were consumed for {len(allowed)} admission(s) — "
+        "a burned grant with no link is gone forever"
+    )
+    assert query("SELECT count(*) FROM telegram_accounts")[0][0] == 1

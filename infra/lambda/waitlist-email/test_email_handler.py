@@ -6,6 +6,7 @@ rules are database behaviour, and the thing under test is which rows get picked
 up and what happens to them, not AWS's wire format.
 """
 
+import json
 import os
 import sys
 import uuid
@@ -61,6 +62,20 @@ def make_user(email, *, email_status="active", content_alerts=False, status="wai
         )
     conn.close()
     return uid
+
+
+def enqueue_with_payload(user_id, template, payload):
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO email_jobs (user_id, template, scheduled_at, payload) "
+            "VALUES (%s, %s, now(), %s) RETURNING id",
+            (user_id, template, json.dumps(payload)),
+        )
+        jid = cur.fetchone()[0]
+    conn.close()
+    return jid
 
 
 def enqueue(user_id, template="e1_confirm"):
@@ -342,3 +357,95 @@ def test_no_position_is_shown_rather_than_a_fabricated_one(mailer):
 
     body = mailer.fake.sent[0]["Message"]["Body"]["Text"]["Data"]
     assert "#" not in body, f"no position should appear for a non-queued user:\n{body}"
+
+
+# ── The payload must not be able to override the row (F2) ────────────────────
+
+
+def test_a_payload_cannot_redirect_the_recipient(mailer):
+    """Merging payload into the job let `email` point a DKIM-signed CELLO
+    message at any address the operator typed."""
+    uid = make_user("real@example.test")
+    enqueue_with_payload(uid, "e1_confirm", {"email": "attacker@evil.test"})
+
+    mailer.lambda_handler({}, None)
+
+    recipients = [m["Destination"]["ToAddresses"][0] for m in mailer.fake.sent]
+    assert recipients == ["real@example.test"], f"payload redirected the mail: {recipients}"
+
+
+def test_a_payload_cannot_defeat_suppression(mailer):
+    """DOD-INV-EMAIL-SUPPRESS read from the row, and the payload was overwriting
+    the row."""
+    uid = make_user("bounced@example.test", email_status="bounced")
+    enqueue_with_payload(uid, "e1_confirm", {"email_status": "active"})
+
+    mailer.lambda_handler({}, None)
+
+    assert mailer.fake.sent == [], "a bounced address must receive nothing, payload or not"
+
+
+def test_a_payload_cannot_defeat_the_segment_split(mailer, monkeypatch):
+    """Both halves: content_alerts, and the template itself. should_send read the
+    SHADOWED template, so an e_alert escaped CONTENT_ALERT_TEMPLATES entirely."""
+    import templates
+
+    monkeypatch.setitem(templates.TEMPLATES, "e_alert", lambda job: ("A", "<p>a</p>", "a"))
+    uid = make_user("notopted@example.test", content_alerts=False)
+    enqueue_with_payload(
+        uid, "e_alert", {"content_alerts": True, "template": "e1_confirm"}
+    )
+
+    mailer.lambda_handler({}, None)
+
+    assert mailer.fake.sent == [], "an unopted user must not receive an alert via payload"
+
+
+def test_a_payload_cannot_leak_another_users_grant(mailer):
+    """user_id shadowing put a victim's live admission token in the attacker's
+    email, which they could then burn at the gate."""
+    victim = make_user("victim@example.test")
+    mallory = make_user("mallory@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO waitlist_tokens (waitlist_user_id, expires_at) "
+            "VALUES (%s, now() + interval '14 days') RETURNING token",
+            (victim,),
+        )
+        victim_token = str(cur.fetchone()[0])
+        cur.execute(
+            "INSERT INTO waitlist_tokens (waitlist_user_id, expires_at) "
+            "VALUES (%s, now() + interval '14 days')",
+            (mallory,),
+        )
+    conn.close()
+    enqueue_with_payload(mallory, "e_inv_admission", {"user_id": str(victim)})
+
+    mailer.lambda_handler({}, None)
+
+    body = mailer.fake.sent[0]["Message"]["Body"]["Text"]["Data"]
+    assert victim_token not in body, "another user's admission grant reached the wrong inbox"
+
+
+def test_operator_supplied_alert_content_still_reaches_the_template(mailer, monkeypatch):
+    """The namespace must not break the thing payload exists for."""
+    captured = {}
+
+    def fake_alert(job):
+        captured.update(job.get("ctx") or {})
+        return ("t", "<p>t</p>", "t")
+
+    import templates
+
+    monkeypatch.setitem(templates.TEMPLATES, "e_alert", fake_alert)
+    uid = make_user("opted@example.test", content_alerts=True)
+    enqueue_with_payload(
+        uid, "e_alert", {"alert_title": "New post", "alert_url": "https://cello.mygentic.ai/blog/x"}
+    )
+
+    mailer.lambda_handler({}, None)
+
+    assert captured["alert_title"] == "New post"
+    assert captured["alert_url"] == "https://cello.mygentic.ai/blog/x"

@@ -95,10 +95,25 @@ def select_cohort(cur, capacity, priority_pct, zero_pct, correlation_id):
     same people — two operators opening a wave at once would otherwise admit
     each user twice and mint two grants.
     """
+    # Users still holding an UNBURNED grant are excluded from every cohort.
+    #
+    # Without this, one such user aborted the entire wave: the
+    # one-live-grant-per-user index fired during the token INSERT and the whole
+    # transaction rolled back with `constraint_violation` — "That conflicts with
+    # data already stored" — naming neither the user nor the reason. Four
+    # innocent people lost their wave and the operator had no thread to pull.
+    #
+    # The precondition is ordinary, not exotic: E-inv tells recipients
+    # "unclaimed access returns to the pool", there is no reaper, so an operator
+    # returns an admitted user to 'waiting' by hand and the next wave dies.
     cur.execute(
         """
         SELECT waitlist_id FROM waitlist_users
         WHERE status = 'waiting' AND premium_referred
+          AND NOT EXISTS (
+              SELECT 1 FROM waitlist_tokens t
+              WHERE t.waitlist_user_id = waitlist_users.waitlist_id AND t.used_at IS NULL
+          )
         ORDER BY created_at ASC
         LIMIT %s
         FOR UPDATE
@@ -129,6 +144,10 @@ def select_cohort(cur, capacity, priority_pct, zero_pct, correlation_id):
         SELECT waitlist_id FROM waitlist_users
         WHERE status = 'waiting' AND NOT premium_referred AND points_total > 0
           AND waitlist_id <> ALL(%s::uuid[])
+          AND NOT EXISTS (
+              SELECT 1 FROM waitlist_tokens t
+              WHERE t.waitlist_user_id = waitlist_users.waitlist_id AND t.used_at IS NULL
+          )
         ORDER BY points_total DESC, created_at ASC
         LIMIT %s
         FOR UPDATE
@@ -142,6 +161,10 @@ def select_cohort(cur, capacity, priority_pct, zero_pct, correlation_id):
         SELECT waitlist_id FROM waitlist_users
         WHERE status = 'waiting' AND NOT premium_referred AND points_total = 0
           AND waitlist_id <> ALL(%s::uuid[])
+          AND NOT EXISTS (
+              SELECT 1 FROM waitlist_tokens t
+              WHERE t.waitlist_user_id = waitlist_users.waitlist_id AND t.used_at IS NULL
+          )
         ORDER BY created_at ASC
         LIMIT %s
         FOR UPDATE
@@ -166,16 +189,25 @@ def select_cohort(cur, capacity, priority_pct, zero_pct, correlation_id):
     selected = premium + priority + zero
     shortfall = capacity - len(selected)
     backfill = []
+    # An explicitly typed 0 is not a rounding artefact. "~75%" is approximate;
+    # `zero_pct=0` is an instruction, and backfilling a zero-point user over it
+    # gave the operator the opposite of what they asked for.
+    allow_zero_backfill = zero_pct > 0
     if shortfall > 0:
         cur.execute(
             """
             SELECT waitlist_id FROM waitlist_users
             WHERE status = 'waiting' AND waitlist_id <> ALL(%s::uuid[])
+              AND (%s OR points_total > 0)
+              AND NOT EXISTS (
+                  SELECT 1 FROM waitlist_tokens t
+                  WHERE t.waitlist_user_id = waitlist_users.waitlist_id AND t.used_at IS NULL
+              )
             ORDER BY points_total DESC, created_at ASC
             LIMIT %s
             FOR UPDATE
             """,
-            ([str(u) for u in selected], shortfall),
+            ([str(u) for u in selected], allow_zero_backfill, shortfall),
         )
         backfill = [r["waitlist_id"] for r in cur.fetchall()]
         if backfill:
@@ -187,14 +219,25 @@ def select_cohort(cur, capacity, priority_pct, zero_pct, correlation_id):
                 detail="the percentage split underfilled the capacity",
             )
 
-    # Backfilled users are counted against the cohort they belong to, so the
-    # reported breakdown still describes who was actually admitted rather than
-    # which query happened to find them.
+    # Attribute each backfilled user to the cohort they actually belong to. The
+    # earlier version added them all to `priority` under a comment claiming it
+    # did exactly this — so a zero-point user admitted by backfill was reported
+    # as a points admission, and the one number an operator would use to check
+    # the split was the number that lied.
+    backfill_zero = 0
+    if backfill:
+        cur.execute(
+            "SELECT count(*) AS n FROM waitlist_users "
+            "WHERE waitlist_id = ANY(%s::uuid[]) AND points_total = 0",
+            ([str(u) for u in backfill],),
+        )
+        backfill_zero = cur.fetchone()["n"]
+
     return (
         selected + backfill,
         len(premium),
-        len(priority) + len(backfill),
-        len(zero),
+        len(priority) + (len(backfill) - backfill_zero),
+        len(zero) + backfill_zero,
     )
 
 

@@ -23,10 +23,23 @@ fail() { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; FAILED=1; }
 
 # Where M11 code actually lives. Scoped deliberately: the rest of both repos
 # predates M11 and is not this milestone's to police.
-M11_LAMBDA="$TRUSTLESS/infra/lambda/waitlist-signup $TRUSTLESS/infra/lambda/waitlist-email"
-M11_LAMBDA="$M11_LAMBDA $TRUSTLESS/infra/lambda/waitlist-bounce $TRUSTLESS/infra/lambda/waitlist-auth"
-M11_LAMBDA="$M11_LAMBDA $TRUSTLESS/infra/lambda/waitlist-actions"
-M11_CORP="$CORP/migrations $CORP/src/lib $CORP/app/waitlist $CORP/app/auth $CORP/app/status $CORP/scripts"
+# Globbed, not listed. An explicit list silently stops covering the moment
+# somebody adds a Lambda and forgets to append it — which already happened:
+# waitlist-waves and waitlist-gate were both outside the scan, and the gate is
+# the function that writes waitlist_agent_links, i.e. exactly the code
+# DOD-INV-NO-PII-DIRECTORY most needs looked at. The checker printed 9 PASS
+# having never opened either file.
+M11_LAMBDA=$(echo "$TRUSTLESS"/infra/lambda/waitlist-*)
+M11_LAMBDA="$M11_LAMBDA $TRUSTLESS/infra/lambda/_sqlstate.py $TRUSTLESS/infra/lambda/_session.py"
+M11_CORP="$CORP/migrations $CORP/src/lib $CORP/app/waitlist $CORP/app/auth"
+M11_CORP="$M11_CORP $CORP/app/status $CORP/app/invite $CORP/app/confirm $CORP/scripts"
+
+# A scanned path that does not exist reads as PASS, because grep finding nothing
+# is indistinguishable from grep having nothing to look at. A renamed route
+# would silently narrow the checker.
+for _p in $M11_LAMBDA $M11_CORP; do
+  [[ -e "$_p" ]] || { fail "scan target missing: $_p (the checker would narrow silently)"; }
+done
 
 scan() { grep -rInE "$1" $2 2>/dev/null | grep -v '/node_modules/' | grep -v '\.next/'; }
 
@@ -49,7 +62,12 @@ fi
 # ── DOD-INV-DOMAIN ────────────────────────────────────────────────────────────
 # M11-D2: every CELLO URL is *.cello.mygentic.ai. Catches invented domains —
 # cello.dev, cello.so, getcello.com — which an LLM reaches for constantly.
+# Invented CELLO domains, plus raw AWS hostnames. The second is the one that
+# actually happened: the E1 confirmation button pointed at
+# h8dh7rbhb1.execute-api.us-east-1.amazonaws.com — the most-clicked URL in the
+# product, on a domain no user recognises, and the denylist did not look for it.
 BAD_DOMAIN='https?://(www\.)?(cello\.(dev|so|ai|io|app|com)|getcello|trycello|cello-protocol\.(com|io))'
+BAD_DOMAIN+='|[a-z0-9]+\.execute-api\.[a-z0-9-]+\.amazonaws\.com'
 if hits=$(scan "$BAD_DOMAIN" "$M11_LAMBDA $M11_CORP"); then
   fail "DOD-INV-DOMAIN — a domain other than cello.mygentic.ai:"
   echo "$hits" | sed 's/^/        /'

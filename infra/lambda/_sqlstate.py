@@ -26,7 +26,7 @@ def classify(err):
         # the type carries the information the SQLSTATE does not.
         import psycopg2
 
-        if isinstance(err, psycopg2.OperationalError):
+        if isinstance(err, (psycopg2.OperationalError, psycopg2.InterfaceError)):
             return (
                 503,
                 "database_unreachable",
@@ -77,6 +77,27 @@ def classify(err):
             409,
             "constraint_violation",
             "That conflicts with data already stored.",
+        )
+
+    if cls == "53":
+        # Insufficient resources — 53300 too_many_connections above all. A Lambda
+        # scaling out against an RDS connection cap is the single most likely
+        # transient failure this stack has, and calling it permanent tells the
+        # caller not to back off at exactly the moment backing off is the fix.
+        return (
+            503,
+            "database_overloaded",
+            "The waitlist database is at capacity. Please try again shortly.",
+        )
+
+    if cls == "57":
+        # Operator intervention — 57P03 cannot_connect_now, i.e. the database is
+        # still starting. Transient by definition; it resolves without anybody
+        # doing anything.
+        return (
+            503,
+            "database_starting",
+            "The waitlist database is not accepting connections yet. Please try again shortly.",
         )
 
     if cls == "40":

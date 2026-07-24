@@ -101,13 +101,13 @@ def test_e_re_shows_a_real_position_or_none_at_all():
 def test_e_alert_refuses_to_render_without_a_link():
     """A content alert with no link is an interruption with nothing behind it."""
     with pytest.raises(ValueError, match="no alert_url"):
-        templates.e_alert(job(alert_title="Something"))
+        templates.e_alert(job(ctx={"alert_title": "Something"}))
 
 
 def test_e_alert_stays_under_a_hundred_words():
     _, _, text = templates.e_alert(
-        job(alert_title="A new post", alert_url="https://cello.mygentic.ai/blog/x",
-            alert_summary="Why agent identity needs a fixed address.")
+        job(ctx={"alert_title": "A new post", "alert_url": "https://cello.mygentic.ai/blog/x",
+                 "alert_summary": "Why agent identity needs a fixed address."})
     )
     assert len(text.split()) < 100, f"DOD-E-ALERT-1 caps this at 100 words, got {len(text.split())}"
 
@@ -116,7 +116,7 @@ def test_e_alert_unsubscribe_is_scoped_to_the_alert_list():
     """Unsubscribing from content alerts must not silently drop someone from
     their waitlist mail — DOD-INV-EMAIL-SEGMENTS, from the user's side."""
     _, html, text = templates.e_alert(
-        job(alert_title="X", alert_url="https://cello.mygentic.ai/blog/x")
+        job(ctx={"alert_title": "X", "alert_url": "https://cello.mygentic.ai/blog/x"})
     )
 
     assert "list=content_alerts" in html
@@ -147,3 +147,34 @@ def test_no_template_lets_a_display_name_open_a_tag(render):
     _, html, _ = render()
     assert '<a/href="https://evil.test"' not in html
     assert "evil.test" not in html or "&lt;a/href" in html
+
+
+def test_e_inv_carries_the_install_command(database=None):
+    """DOD-E-INV-1 and the requirements doc both name it — "install command +
+    14-day claim window. Nothing else." An admission email without it is a token
+    with no instructions attached."""
+    _, html, text = templates.e_inv_admission(job(wave_number=2, waitlist_token="T"))
+
+    assert "npx" in text and "@cello-protocol/connect" in text
+    assert "@cello-protocol/connect" in html
+
+
+def test_e_win_points_at_the_gallery_and_says_it_is_opt_in(database=None):
+    """DOD-E-WIN-1 asks for a "share your first session" prompt with a gallery
+    link. DOD-GALLERY-PRIVACY-1 makes publishing opt-in, so the prompt has to say
+    so — otherwise it reads as though the receipt is already public."""
+    _, html, text = templates.e_win_invites(job(invite_codes=["A", "B", "C"]))
+
+    assert "gallery.cello.mygentic.ai" in text
+    assert "gallery.cello.mygentic.ai" in html
+    assert "private by default" in text.lower()
+
+
+def test_e_win_is_still_under_three_hundred_words_with_the_gallery_prompt(database=None):
+    _, _, text = templates.e_win_invites(job(invite_codes=["A", "B", "C"]))
+    assert len(text.split()) < 300, f"got {len(text.split())}"
+
+
+def test_e_inv_is_still_under_two_hundred_words_with_the_install_command(database=None):
+    _, _, text = templates.e_inv_admission(job(wave_number=1, waitlist_token="T"))
+    assert len(text.split()) < 200, f"got {len(text.split())}"
