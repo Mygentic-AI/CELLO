@@ -687,3 +687,39 @@ them, and only one of them should redirect.
 and `DOD-SES-PROD-1` (🟠 — SES production access and the SNS topic owed). Nothing further on P0 can be
 proven from this laptop; what remains is CloudFormation and AWS, both of which need infra awake.
 Next: P1, starting with `DOD-SCHEMA-P1-1`.
+
+---
+
+### Entry 16: DOD-SCHEMA-P1-1 — P1 tables, and the mirrored half of the handle invariant
+**Date:** 2026-07-25
+**Target:** DOD-SCHEMA-P1-1, DOD-INV-HANDLE-UNIQUE [corp-cello-site]
+
+`0008`: `waitlist_social_profiles` and `post_review_queue`. `points_ledger` and its cap trigger already
+shipped in `0003` because `DOD-SIGNUP-1` — a P0 line — writes to it (M11-D23).
+
+**`DOD-INV-HANDLE-UNIQUE` is enforced in two directions, and only one is written down.**
+- `(platform, handle)` UNIQUE — the clause the DoD states. Stops one X account being farmed for
+  public-post points across many signups.
+- `(waitlist_user_id, platform)` UNIQUE — the same hole mirrored, and unstated. Without it one user
+  connects two X accounts and doubles their own public-post ceiling. The requirements doc mentions "one
+  waitlist entry has at most one handle per platform" in passing; the DoD line does not. Added, because
+  the invariant is worthless if only one direction holds.
+
+Both constraints live in the database rather than the application, since their entire value is holding
+against a caller who forgot to check. Tests drive them through SQL for the same reason — an
+application-layer test proves only that today's application remembers.
+
+**`post_review_queue` gets two constraints the DoD does not name:**
+- Outcome consistency: a reviewed row has an outcome and an outcome-bearing row is reviewed. Either half
+  alone renders as "handled" in the ops list view while meaning nothing.
+- `(waitlist_user_id, post_url)` UNIQUE: re-submitting an already-approved post is the simplest way to
+  claim its points a second time (M11-D4 makes credit manual, which makes duplicate submissions a
+  reviewer-fatigue attack as much as a points one).
+
+**One test worth naming:** uncapped reasons are asserted *not* to be capped. The cap list is an allowlist
+of capped reasons; a bug that capped everything would be invisible until a user hit a ceiling that should
+not exist, and by then the ledger would be wrong rather than merely blocked.
+
+**Runs:** 109 tests green across five Lambda suites; schema enforcer green with `0008`.
+
+**Status:** `DOD-SCHEMA-P1-1` ❌ → 🟡 · `DOD-INV-HANDLE-UNIQUE` ❌ → 🟡. Both owe only the portal RDS.
