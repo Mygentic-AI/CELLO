@@ -36,7 +36,7 @@ TABLES = (
     "waitlist_users, referral_codes, creator_tracking, points_ledger, "
     "email_jobs, waitlist_touchpoints, referrals, auth_tokens, "
     "waitlist_sessions, auth_link_requests, waitlist_social_profiles, "
-    "post_review_queue, session_telemetry, waves, waitlist_tokens, telegram_accounts, waitlist_agent_links"
+    "post_review_queue, published_receipts, session_telemetry, waves, waitlist_tokens, telegram_accounts, waitlist_agent_links"
 )
 
 
