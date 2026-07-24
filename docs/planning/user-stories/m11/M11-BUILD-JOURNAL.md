@@ -894,3 +894,41 @@ while a `visit` (which genuinely predates any user) need not.
 
 **Status:** six invariants ❌ → 🟡. The script proves the static half; the runtime halves live in the
 Lambda suites and, for the rest, in the live enforcers that need AWS.
+
+---
+
+### Entry 20: the fast door is reachable — `/invite`
+**Date:** 2026-07-25
+**Target:** DOD-INV-PREMIUM-BEARER, DOD-INV-TWO-DOOR [corp-cello-site]
+
+`DOD-INV-PREMIUM-BEARER` had the burn half — server-side, under `FOR UPDATE`, with a two-thread test —
+but nothing that got a code into the browser. The fast door was unreachable.
+
+**The page does two things and refuses to do a third.**
+- It does **not validate** the code. Validating needs an endpoint that answers whether a code is live,
+  which is a free oracle for guessing bearer codes: an "invalid invite" screen tells an attacker exactly
+  when they have found a good one. The only validation is the burn attempt at signup, behind a rate-limited
+  endpoint.
+- It does **not burn** on arrival. That would consume the code for a visitor who never completes signup,
+  and the inviter would have spent an invite on nobody. M11-D12 says a mangled link leaves the code live
+  to re-share; burning on arrival makes that impossible.
+
+**The form now reads it.** Storing without reading would have left the entire mechanic a no-op — the kind
+of half-wiring that looks complete in a diff because both ends exist separately. Cleared only after a
+response, so a network failure does not swallow the invite.
+
+**Shape deviates from M11-D12's literal `/invite/CODE`, and the reason is structural.** A static export
+cannot serve an arbitrary path parameter; codes are minted at runtime so they cannot be enumerated at
+build time; and enumerating them would publish every live invite into the built artifact. Both forms work
+regardless — `?code=` natively, and an nginx rewrite in `deploy/cello-site.conf` maps `/invite/CODE` onto
+the same page, which reads the segment client-side. Recorded rather than silently changed.
+
+Page is `noindex`. An invite URL is a bearer credential and must never enter an index.
+
+**The `.next/types` orphan bit again.** Deleting the abandoned `[code]` route left a generated type
+importing the removed module, and `typecheck` failed on it while the source was clean. Same fix as
+Entry 11: clean → build → typecheck, never patch the generated file. Worth noting twice because the
+symptom points at source that is already correct.
+
+**Status:** `DOD-INV-PREMIUM-BEARER` ❌ → 🟡 · `DOD-INV-TWO-DOOR` ❌ → 🟡 (fast door complete; the slow
+door's wave assembly is P2).
