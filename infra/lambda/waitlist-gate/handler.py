@@ -1,0 +1,238 @@
+"""
+CELLO Telegram admission gate (M11, DOD-TELEGRAM-GATE-1).
+
+The one place a waitlist admission becomes network access. Called by the
+operations agent before it starts a DKG.
+
+Gate logic, in order (M11 §4):
+  1. Is this telegram_id already in telegram_accounts? → proceed.
+  2. No → a waitlist token is required.
+  3. Validate: exists AND used_at IS NULL AND expires_at > now(). Any one of
+     those failing is a named refusal, not a generic one.
+  4. On success: burn the token, link the Telegram account, and write the
+     agent_pubkey → waitlist_user_id bridge. Then proceed to DKG.
+
+M11-D5 makes step 1 a single lookup for both token holders and staff overrides,
+which is why there is no second table and no flag on users.
+
+THE BURN IS THE WHOLE SECURITY BOUNDARY. Everything else here is bookkeeping.
+`UPDATE ... WHERE used_at IS NULL RETURNING` is one atomic operation: a
+read-then-write would let two simultaneous redemptions of the same token both
+succeed, and a waitlist token is a grant of network access that cannot be
+withdrawn once a DKG has run.
+
+DOD-INV-NO-PII-DIRECTORY: waitlist_agent_links stores a pubkey and an id. No
+email, no handle, nothing that identifies a person, because the directory side
+of this bridge is replicated across sovereign nodes in three jurisdictions.
+"""
+
+import json
+import os
+import uuid
+
+import psycopg2
+import psycopg2.extras
+
+from _logging import emit as log
+from _sqlstate import classify
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+
+class GateError(Exception):
+    """A refusal that names its own cause.
+
+    The operator on the other end of Telegram gets this text. "Access denied"
+    would leave someone holding a valid-looking token with no idea whether to
+    wait, re-check the email, or ask for help — three different actions.
+    """
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def connect():
+    if not DATABASE_URL:
+        raise GateError("database_url_not_configured", "DATABASE_URL is not set on this function.")
+    conn = psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE", "require"))
+    conn.autocommit = False
+    return conn
+
+
+def validate(body):
+    telegram_id = str(body.get("telegram_id") or "").strip()
+    if not telegram_id:
+        raise GateError("missing_telegram_id", "No Telegram account was supplied.")
+
+    agent_pubkey = (body.get("agent_pubkey") or "").strip()
+    token = (body.get("token") or "").strip()
+    return telegram_id, agent_pubkey, token
+
+
+def already_admitted(cur, telegram_id):
+    cur.execute(
+        "SELECT waitlist_user_id, source FROM telegram_accounts WHERE telegram_id = %s",
+        (telegram_id,),
+    )
+    return cur.fetchone()
+
+
+def burn(cur, token, telegram_id, agent_pubkey, correlation_id):
+    """Redeem a grant. Atomic, single-use, and it names every way it can fail."""
+    try:
+        uuid.UUID(token)
+    except (ValueError, AttributeError, TypeError):
+        # Refuse before touching the database. A malformed token is not a
+        # near-miss worth a lookup, and `invalid uuid` from Postgres would reach
+        # the operator as a database error rather than as "check the code".
+        raise GateError("token_malformed", "That does not look like a CELLO access token.")
+
+    # The security boundary. One statement: the check and the burn cannot be
+    # separated, so two simultaneous redemptions cannot both win.
+    cur.execute(
+        """
+        UPDATE waitlist_tokens
+        SET used_at = now()
+        WHERE token = %s AND used_at IS NULL AND expires_at > now()
+        RETURNING waitlist_user_id, wave_number
+        """,
+        (token,),
+    )
+    row = cur.fetchone()
+
+    if row is None:
+        # Distinguish the causes. Possession of the token is already assumed by
+        # the time we are here, so there is nothing left to protect by being
+        # vague — and each cause implies a different next step for the person
+        # holding it.
+        cur.execute(
+            "SELECT used_at, expires_at < now() AS expired FROM waitlist_tokens WHERE token = %s",
+            (token,),
+        )
+        existing = cur.fetchone()
+        if existing is None:
+            raise GateError("token_not_found", "That access token is not recognised.")
+        if existing["used_at"] is not None:
+            raise GateError(
+                "token_already_used",
+                "That access token has already been used. Each one works once.",
+            )
+        raise GateError(
+            "token_expired",
+            "That access token has expired. Access is released back to the pool after 14 days.",
+        )
+
+    user_id = row["waitlist_user_id"]
+
+    cur.execute(
+        """
+        INSERT INTO telegram_accounts (telegram_id, waitlist_user_id, source)
+        VALUES (%s, %s, 'waitlist_token')
+        ON CONFLICT (telegram_id) DO NOTHING
+        """,
+        (telegram_id, user_id),
+    )
+
+    if agent_pubkey:
+        # The bridge (M11-D6). Written here because this is the one moment both
+        # identities are present at once — the protocol pubkey and the waitlist
+        # record. Missing it means first-win detection can never find this user.
+        cur.execute(
+            """
+            INSERT INTO waitlist_agent_links (agent_pubkey, waitlist_user_id)
+            VALUES (%s, %s)
+            ON CONFLICT (agent_pubkey) DO NOTHING
+            """,
+            (agent_pubkey, user_id),
+        )
+
+    log(
+        "waitlist.gate.token.burned",
+        correlation_id,
+        waitlistId=str(user_id),
+        waveNumber=row["wave_number"],
+        telegramLinked=True,
+        agentLinked=bool(agent_pubkey),
+    )
+    return user_id
+
+
+def check(body, correlation_id):
+    telegram_id, agent_pubkey, token = validate(body)
+
+    conn = connect()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            existing = already_admitted(cur, telegram_id)
+
+            if existing:
+                # Already through the gate. Still record the agent link if this
+                # is a new agent for a known account — a second device is a
+                # normal thing to do, and without the link its first win would
+                # never be attributed.
+                if agent_pubkey and existing["waitlist_user_id"]:
+                    cur.execute(
+                        """
+                        INSERT INTO waitlist_agent_links (agent_pubkey, waitlist_user_id)
+                        VALUES (%s, %s) ON CONFLICT (agent_pubkey) DO NOTHING
+                        """,
+                        (agent_pubkey, existing["waitlist_user_id"]),
+                    )
+                conn.commit()
+                log(
+                    "waitlist.gate.already_linked",
+                    correlation_id,
+                    source=existing["source"],
+                    agentLinked=bool(agent_pubkey),
+                )
+                return {"allowed": True, "reason": "already_linked", "source": existing["source"]}
+
+            if not token:
+                # ABSENT IS NOT FINE. An unknown Telegram account with no token
+                # is refused, and told exactly what is missing.
+                raise GateError(
+                    "token_required",
+                    "This Telegram account is not linked to CELLO yet. "
+                    "Send the access token from your invitation email to continue.",
+                )
+
+            user_id = burn(cur, token, telegram_id, agent_pubkey, correlation_id)
+        conn.commit()
+        return {"allowed": True, "reason": "token_burned", "waitlist_user_id": str(user_id)}
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def lambda_handler(event, context):
+    correlation_id = getattr(context, "aws_request_id", None) or str(uuid.uuid4())
+
+    try:
+        body = event if isinstance(event, dict) and "telegram_id" in event else json.loads(
+            event.get("body") or "{}"
+        )
+        return {"statusCode": 200, "body": json.dumps(check(body, correlation_id))}
+
+    except GateError as err:
+        log("waitlist.gate.refused", correlation_id, level="WARN", code=err.code)
+        # 200 with allowed:false, not an HTTP error: the caller is the ops agent
+        # and this is an ANSWER, not a fault. A 4xx here would land in its error
+        # path and surface to the operator as "the gate is broken" rather than
+        # "your token has expired".
+        return {
+            "statusCode": 200,
+            "body": json.dumps({"allowed": False, "error": err.code, "message": err.message}),
+        }
+
+    except psycopg2.Error as err:
+        log("waitlist.gate.failed", correlation_id, level="ERROR", pgcode=err.pgcode, detail=str(err).strip())
+        status, code, message = classify(err)
+        # A database fault is NOT a refusal. Returning allowed:false here would
+        # let an outage read as "your token is invalid", and the operator would
+        # go looking at their invitation instead of at the service.
+        return {"statusCode": status, "body": json.dumps({"error": code, "message": message})}

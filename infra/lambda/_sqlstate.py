@@ -15,6 +15,24 @@ def classify(err):
     sqlstate = getattr(err, "pgcode", None) or ""
     cls = sqlstate[:2]
 
+    if not sqlstate:
+        # A failure the SERVER never got to answer has no SQLSTATE — the
+        # connection dropped, the handshake failed, a timeout fired. These are
+        # the most common transient database faults there are, and falling
+        # through to the generic branch called them permanent, so the caller was
+        # told not to retry exactly when retrying was the right move.
+        #
+        # psycopg2.OperationalError is the connection/operational category, so
+        # the type carries the information the SQLSTATE does not.
+        import psycopg2
+
+        if isinstance(err, psycopg2.OperationalError):
+            return (
+                503,
+                "database_unreachable",
+                "The waitlist database could not be reached. Please try again.",
+            )
+
     if cls == "08":
         return (
             503,

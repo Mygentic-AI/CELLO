@@ -63,3 +63,27 @@ def test_an_unknown_sqlstate_does_not_claim_to_know():
     assert code == "database_error"
     assert "migration" not in message.lower()
     assert "reach" not in message.lower(), "guessing 'unreachable' is how the original bug started"
+
+
+def test_a_connection_failure_with_no_sqlstate_is_retryable():
+    """The most common transient fault there is — the server never answered, so
+    there is no SQLSTATE to read. Falling through to the generic branch called
+    it permanent and told the caller not to retry precisely when retrying was
+    the right move."""
+    import psycopg2
+
+    status, code, _ = classify(
+        psycopg2.OperationalError("server closed the connection unexpectedly")
+    )
+
+    assert status == 503
+    assert code == "database_unreachable"
+
+
+def test_a_non_connection_error_with_no_sqlstate_still_refuses_to_guess():
+    import psycopg2
+
+    status, code, message = classify(psycopg2.ProgrammingError("something odd"))
+
+    assert code == "database_error"
+    assert status == 500, "only a connection failure may claim to be retryable"
