@@ -546,3 +546,44 @@ confirmation and the bounce/complaint SNS handler all still owed) · `DOD-INV-EM
 **Note on the bounce handler:** `DOD-INV-EMAIL-SUPPRESS` is enforced on the READ side here, but nothing
 yet WRITES `email_status = 'bounced'`. That is `DOD-SES-PROD-1` (SNS → Lambda). Until it exists the
 suppression check is correct but has no producer — flagged rather than left implicit.
+
+---
+
+### Entry 13: DOD-SES-PROD-1 — the bounce/complaint handler
+**Date:** 2026-07-25
+**Target:** DOD-SES-PROD-1 [trustless-cello]
+
+Entry 12 flagged that `DOD-INV-EMAIL-SUPPRESS` was enforced on the read side with **no producer** —
+the dispatcher checked `email_status` before every send, but nothing ever wrote a non-`active` value.
+This closes that. `infra/lambda/waitlist-bounce/` consumes the SES SNS topic and writes
+`waitlist_users.email_status`.
+
+**The distinction the tests exist to protect: transient vs permanent.** A `Permanent` bounce means the
+mailbox does not exist; retrying can only damage sending reputation, so it suppresses. A `Transient`
+bounce — a full mailbox, a server having a bad afternoon — is **not** a dead address. Suppressing on it
+silently and irreversibly removes a real user who did nothing wrong, and that failure is invisible from
+both sides: they simply stop hearing from us with no way to notice. Parametrised over `Transient` and
+`Undetermined`.
+
+**Unrecognised notification types suppress nobody** and log at ERROR. If SES changes its payload shape,
+the safe failure is doing nothing loudly, not starting to suppress live users — `ABSENT IS NOT FINE`
+resolved toward refuse-to-act rather than refuse-to-serve, because here the "service" is deletion.
+
+**Suppression is one-way.** The UPDATE is guarded on `email_status = 'active'`, so nothing in this
+function can walk a `complained` address back to `active`, nor downgrade a complaint to a bounce.
+Un-suppressing is a deliberate operator action. Tested.
+
+Also: case-insensitive matching (SES echoes whatever the remote server used, not what we stored); every
+recipient in a multi-recipient notification processed; one unparseable SNS record does not sink the batch;
+an unknown address is a logged no-op, not an error, and the log distinguishes *unknown address* from
+*already suppressed*.
+
+**The end-to-end test is the point of the unit:** bounce the address, then run the dispatcher and assert
+zero sends and one skip. That is the producer/consumer pair proven in one test rather than two halves
+each assumed correct.
+
+**Runs:** 81 tests green across four Lambda suites.
+
+**Status:** `DOD-SES-PROD-1` ❌ → 🟠. Handler built and locally proven. Owed: SES production-access
+confirmation (a console fact, needs AWS), the SNS topic + subscription in CloudFormation, and the
+simulator run the DoD names as its verification. All three need infra awake.
