@@ -723,3 +723,46 @@ not exist, and by then the ledger would be wrong rather than merely blocked.
 **Runs:** 109 tests green across five Lambda suites; schema enforcer green with `0008`.
 
 **Status:** `DOD-SCHEMA-P1-1` ❌ → 🟡 · `DOD-INV-HANDLE-UNIQUE` ❌ → 🟡. Both owe only the portal RDS.
+
+---
+
+### Entry 17: P1 action endpoints — and a contradiction in the spec, resolved
+**Date:** 2026-07-25
+**Target:** DOD-SURVEY-1, DOD-READINESS-1, DOD-INTERVIEW-COMMIT-1, DOD-POST-CREDIT-1 [trustless-cello]
+
+`infra/lambda/waitlist-actions/` — four routes in one function. They share a session guard, a ledger
+write and an idempotency story; splitting them would be four copies of the same three things.
+
+**The spec contradicts itself, and both halves are right.** The requirements table lists **cap: none** for
+survey / technical_readiness / interview_commit, which reads as "no ceiling". Each action's DoD line also
+says a second submit is a no-op and verifies "call twice; points increase by exactly N, not 2N". Those
+look incompatible. They are not: there is no ceiling on the *amount* because the action happens **once by
+nature**. A test I wrote in Entry 16 had encoded the wrong half — asserting these reasons could be earned
+four times — and the new index made it fail. The test was wrong, not the index; corrected to assert
+once-only for these three and accrual-up-to-cap for `share_conversion` / `public_post`.
+
+**Idempotency is a database constraint (`0009`), not an application check.** The 0003 cap trigger cannot
+deliver it — these reasons are uncapped, so nothing stops a second insert. And an application-level
+"have they already?" is a read-then-write race: two concurrent submits both read zero and both insert,
+which is precisely the double award the DoD names. A partial unique index on
+`(waitlist_user_id, reason) WHERE reason IN (...)` makes the second insert fail no matter how the
+endpoint is called or how many at once. `share_conversion` and `public_post` are deliberately excluded —
+including them would silently stop the referral engine after one conversion.
+
+**Points go to the session's user, never to an id in the body.** Tested by passing someone else's
+`waitlist_user_id` and asserting nothing moves. Accepting one would let anyone award points to anyone.
+
+**A repeat is a 200, not an error.** The user already has the points; failing would show a problem for a
+state that is entirely correct. The response carries `awarded: 0` so the UI does not animate a second
+increase — succeed-and-say-so, the same shape as M11-D24.
+
+**Post submissions refuse rather than guess.** An unrecognised host is a 400, not a row with a guessed
+platform: an unattributable row reaches a human reviewer looking exactly as checked as a real one. A post
+for a platform the user has not connected via OAuth is a 403 — handle ownership is the only thing tying
+a post to a person, so without that check anyone can submit anyone's post and collect the credit. Neither
+refusal is in the DoD line; both follow from M11-D4 making credit manual, which makes junk submissions a
+reviewer-fatigue problem as much as a points one.
+
+**Runs:** 140 tests green across six Lambda suites; schema enforcer green with `0009`.
+
+**Status:** all four lines ❌ → 🟡. Each owes only a live run against the deployed API.
