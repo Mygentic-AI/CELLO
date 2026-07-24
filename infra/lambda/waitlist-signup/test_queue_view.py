@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 import psycopg2
 import pytest
 
-from conftest import PGURL, query  # fixtures are auto-discovered from conftest
+from waitlist_testdb import PGURL, query  # fixtures come from conftest.py alongside it
 
 
 def insert_user(email, points, created_at, status="waiting"):

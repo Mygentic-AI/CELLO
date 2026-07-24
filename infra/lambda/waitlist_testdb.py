@@ -1,5 +1,10 @@
 """
-Shared pytest fixtures for the waitlist Lambda tests.
+Shared Postgres fixtures for the waitlist Lambda tests.
+
+Deliberately NOT named conftest.py: infra/conftest.py already exists, and an
+explicit `from conftest import ...` resolves by sys.path to whichever module
+claims the name first — which was the wrong one. conftest.py next to this file
+re-exports the fixtures so pytest still discovers them.
 
 A real Postgres, applied from corp-cello-site's migrations — not a mock. Every
 defect these tests cover is a database behaviour: an aborted transaction, a cap
@@ -21,12 +26,11 @@ from pathlib import Path
 import psycopg2
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent))
 
 PGURL = os.environ.get("PGURL", "postgres://m11:m11@localhost:55432/m11_test")
 ADMIN_URL = PGURL.rsplit("/", 1)[0] + "/postgres"
 DB_NAME = PGURL.rsplit("/", 1)[1]
-MIGRATIONS = Path(__file__).resolve().parents[3].parent / "corp-cello-site" / "migrations"
+MIGRATIONS = Path(__file__).resolve().parents[2].parent / "corp-cello-site" / "migrations"
 
 TABLES = (
     "waitlist_users, referral_codes, creator_tracking, points_ledger, "
@@ -63,15 +67,6 @@ def database():
     return PGURL
 
 
-@pytest.fixture()
-def handler(database):
-    os.environ["DATABASE_URL"] = PGURL
-    import handler as mod
-
-    mod.DATABASE_URL = PGURL
-    return mod
-
-
 @pytest.fixture(autouse=True)
 def clean_tables(database):
     conn = psycopg2.connect(PGURL)
@@ -88,3 +83,23 @@ def query(sql, params=()):
         rows = cur.fetchall() if cur.description else []
     conn.close()
     return rows
+
+
+def load_lambda(directory, name):
+    """Import a Lambda's handler.py by PATH, not by module name.
+
+    Every Lambda dir here contains a file called handler.py. A plain
+    `import handler` resolves to whichever one landed in sys.modules first, so
+    the second suite silently tests the first suite's function. Loading by path
+    under a unique module name keeps the production filenames conventional.
+    """
+    import importlib.util
+
+    path = Path(directory) / "handler.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    sys.path.insert(0, str(Path(directory)))  # so the module's own imports resolve
+    spec.loader.exec_module(mod)
+    mod.DATABASE_URL = PGURL
+    return mod

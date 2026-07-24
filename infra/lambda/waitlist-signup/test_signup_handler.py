@@ -17,12 +17,20 @@ import json
 import os
 import sys
 import uuid
+from pathlib import Path
 
 import psycopg2
 import pytest
 
 
-from conftest import PGURL, query  # fixtures are auto-discovered from conftest
+from waitlist_testdb import PGURL, query, load_lambda  # fixtures come from conftest.py alongside it
+
+
+@pytest.fixture()
+def handler(database):
+    """Imported here, not in conftest: every Lambda dir has its own handler.py."""
+    os.environ["DATABASE_URL"] = PGURL
+    return load_lambda(Path(__file__).parent, "signup_handler")
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
