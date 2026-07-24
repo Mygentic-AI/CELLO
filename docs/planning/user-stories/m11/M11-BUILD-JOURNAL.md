@@ -1242,3 +1242,89 @@ week — nobody would notice it had stopped working until the flywheel had been 
 **Status:** `DOD-FEEDBACK-DETECTION-1` ❌ → 🟡. Owed: the EventBridge daily schedule, and the daemon
 actually writing `session_telemetry` rows — the table exists and nothing produces into it yet, which is
 flagged here rather than left implicit.
+
+---
+
+### Entry 27: review round 4 — eleven findings, four proven by probe
+**Date:** 2026-07-25
+**Target:** review of waves, gate, the four new templates, `_session`/`_sqlstate`, migrations 0012–0016,
+and both enforcers
+
+Everything was green when this started: 222 Lambda tests, schema enforcer PASS, invariant checker 9/9,
+`npm test` 10. **Two of the findings are the exact inverse of what the code's own comments promise**, which
+is the shape worth naming — a wrong comment is worse than no comment, because it tells the next reader not
+to check.
+
+**F1 — a broken gate answered *about the user*.** `connect()` raised `GateError`, which is the **refusal**
+class, so a missing `DATABASE_URL` returned `200 allowed:false`. The ops agent branches on `allowed`, so
+every user with a perfectly valid token would be turned away *forever*, logged at WARN beside ordinary
+expired-token refusals, with no 5xx for any alarm to fire on. Three lines below, the psycopg2 handler's
+comment says *"A database fault is NOT a refusal."* They got the transient path right and left the
+permanent one wrong. `GateUnavailable` is now a distinct class returning 503 with **no `allowed` key at
+all** — the gate cannot express a decision it did not make.
+
+**F2 — one `dict.update` let an operator-supplied payload rewrite the row.** The dispatcher merged
+`job["payload"]` into the job dict. Proven, four ways from one line: `email` redirected a DKIM-signed
+CELLO message to an arbitrary address; `email_status` defeated `DOD-INV-EMAIL-SUPPRESS`; `content_alerts`
+**and** `template` each defeated `DOD-INV-EMAIL-SEGMENTS`, because `should_send` read the *shadowed*
+template and an `e_alert` escaped `CONTENT_ALERT_TEMPLATES` entirely; and `user_id` put another user's
+live admission grant into the body, which the recipient could then burn at the gate. Nothing writes
+`payload` today — `0014` exists precisely so the ops dashboard can, so the consumer had shipped ahead of
+its producer with no guard. Payload is now namespaced under `ctx`. Revert-tested: restoring the merge
+fails all four new tests.
+
+**F3 — the burn was atomic; the link was not.** Two requests presenting *different* valid tokens for the
+same `telegram_id` both burned, one lost its grant with nothing linked, and both were told
+`allowed: true`. Permanent, irreversible loss of an admission, reported as success — and
+`test_nothing_can_un_burn_a_token` guarantees it stays lost. The insert now `RETURNING`s and refuses,
+which rolls the burn back.
+
+**F4 — one stale grant killed an entire wave, and said nothing useful.** A user still holding an unburned
+grant tripped the one-live-grant index during token minting, rolling back the whole transaction with
+`constraint_violation` / *"That conflicts with data already stored"* — naming neither the user nor the
+reason. Four innocent users lost their wave and the operator had no thread to pull. The precondition is
+ordinary rather than exotic: E-inv tells recipients *"unclaimed access returns to the pool"*, there is no
+reaper, so an operator returns someone to `waiting` by hand and the next wave dies. Such users are now
+excluded from every cohort.
+
+**F5 — the wave breakdown lied, under a comment claiming it did not.** Backfilled users were all counted
+into `priority` regardless of points, while the comment above asserted *"backfilled users are counted
+against the cohort they belong to."* So a zero-point admission was reported as a points admission, and
+the single number an operator would use to sanity-check the split was the one that was wrong. Also: an
+explicitly typed `zero_pct=0` was being overridden by the backfill. `~75%` is approximate; a typed `0` is
+an instruction.
+
+**F6 — my staged replay stopped covering at `0008`, for the third time in three different ways.** The
+seeder list was maintained by hand, so it silently stopped covering the moment a table was added and the
+seeder forgotten — which had already happened for **every table in `0013`** (the whole admission
+subsystem) and for `0017`. The catcher reproducing its own stated defect, again. Coverage is now
+*asserted*: any migration containing a `CREATE TABLE` must have a matching `seed_after_NNNN` or the run
+fails naming it. It immediately found `0006` as well.
+
+**F7 — the invariant checker had never opened `waitlist-waves` or `waitlist-gate`.** The gate writes
+`waitlist_agent_links`, which is precisely the code `DOD-INV-NO-PII-DIRECTORY` exists to police, and the
+checker printed 9 PASS without reading it. The Lambda list is globbed now, so a new function is covered on
+creation rather than on remembering.
+
+**F8 — SQLSTATE 53 and 57 were classified permanent.** `53300 too_many_connections` (a Lambda scaling out
+against an RDS connection cap) and `57P03 cannot_connect_now` (a database still starting) are the two
+classic transients of exactly this architecture, and both were being reported as "do not retry" at the
+moment backing off is the fix. Same defect the module was written to correct, one class over.
+`InterfaceError` joins `OperationalError` too.
+
+**Two spec clauses were missing and not declared owed:** E-inv had no **install command** (required by the
+DoD *and* the requirements doc — "install command + 14-day claim window. Nothing else"), and E-win had no
+**"share your first session" gallery prompt**. Both added, both still inside their word limits. The
+gallery prompt says the receipt is private by default, or it would read as though it were already public.
+
+**And the `_session` consolidation was incomplete** — `hash_token` and `COOKIE_NAME` were still duplicated
+in both handlers, which is the precise drift that module was written to end. The *write* path used the
+local copy and the *read* path the shared one; changing the shared one would have made every existing
+session silently unreadable, with `read_session` returning `None` and users quietly signed out.
+
+**The reviewer's own verdict on test quality is worth recording:** no new test was hollow in the
+"asserts a stub" sense. All four failures were the *neighbouring-branch* kind — well-written tests landing
+next to the defect rather than on it. That is the more expensive shape, because the green reads as proof.
+
+**Runs after the fixes:** 285 tests green across eleven Lambda suites · schema enforcer green with seeder
+coverage asserted · invariant checker 9/9 over 17 tables and every waitlist Lambda.
