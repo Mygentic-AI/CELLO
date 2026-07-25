@@ -223,3 +223,60 @@ describe("re-registration is gated too — clause 1 applies every time", () => {
     ).rejects.toThrow(/unreachable/);
   });
 });
+
+describe("an unreachable gate — clause 6, the failure the user can see", () => {
+  // Failing closed is correct. Failing closed SILENTLY is not: the client
+  // throws on transport failure, the engine catches and logs, `onError` is
+  // undefined in production (grep: it is wired in exactly one integration
+  // test), and nothing is ever sent. The user messages the bot and receives
+  // absolutely nothing — no error, no "try again", no record either, since the
+  // throw happens before the insert. From their side the bot is simply dead,
+  // and they have no way to tell that from being ignored.
+  const UNREACHABLE = {
+    check: vi.fn(async () => {
+      throw new Error("The waitlist gate could not be reached (check).");
+    }),
+    redeem: vi.fn(async () => {
+      throw new Error("The waitlist gate could not be reached (redeem).");
+    }),
+  };
+
+  beforeEach(() => {
+    UNREACHABLE.check.mockClear();
+    UNREACHABLE.redeem.mockClear();
+  });
+
+  it("tells the user something went wrong, and still refuses", async () => {
+    const { deps, channel, repository } = makeDeps({ waitlistGate: UNREACHABLE });
+
+    await expect(
+      new RegistrationStateMachine(deps).handleNewUser("tg-1", "telegram", "hash"),
+    ).rejects.toThrow(/could not be reached/);
+
+    // Still throws — the engine must still log it, and no record may be
+    // created. Telling the user is ADDED to failing closed, not traded for it.
+    expect(repository.insert).not.toHaveBeenCalled();
+
+    const said = channel.send.mock.calls.map((c) => String(c[1])).join(" ");
+    expect(said).not.toBe("");
+    // And it must not be the refusal wording. "You are not invited" for what is
+    // actually our outage is the same error substitution F2 fixed one layer
+    // down — it sends the user to find a token that would not have helped.
+    expect(said.toLowerCase()).not.toContain("token");
+    expect(said.toLowerCase()).toContain("try again");
+  });
+
+  it("tells the user when redemption itself cannot reach the gate", async () => {
+    const { deps, channel } = makeDeps({ waitlistGate: UNREACHABLE });
+
+    await expect(
+      new RegistrationStateMachine(deps).handleMessage(gated(), "SOME-TOKEN", "tg-1"),
+    ).rejects.toThrow(/could not be reached/);
+
+    const said = channel.send.mock.calls.map((c) => String(c[1])).join(" ");
+    expect(said.toLowerCase()).toContain("try again");
+    // Their token is untouched — worth saying, because a user told only "error"
+    // reasonably assumes they have just burned their one token.
+    expect(said.toLowerCase()).toContain("not been used");
+  });
+});

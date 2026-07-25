@@ -214,13 +214,25 @@ export class RegistrationStateMachine {
     // store; this is about what we ask for.
     //
     // A gate that cannot be reached REFUSES. The client throws on every failure
-    // path, and that throw is deliberately not caught here: an exception
-    // propagating is the fail-closed outcome, whereas a catch that logged and
-    // continued would admit on "could not check".
+    // path, and that throw still propagates — an exception reaching the engine
+    // IS the fail-closed outcome, and a catch that logged and continued would
+    // admit on "could not check".
+    //
+    // What it does NOT have to be is silent. The earlier version said catching
+    // here "would be the fail-open path wearing a helpful face", which is a
+    // false dichotomy the code then obeyed: catch, tell the user, rethrow.
+    // Failing closed and saying so are independent. Without the telling, the
+    // engine logs, `onError` is undefined in production, and the user gets
+    // nothing at all — no message, and no record either, since the throw
+    // precedes the insert. From their side the bot is dead.
     let gateAllowed = true;
     let gateMessage = "Access is currently invitation-only.";
     if (waitlistGate) {
-      const decision = await waitlistGate.check(channelUserId);
+      const decision = await this.#askGate(
+        () => waitlistGate.check(channelUserId),
+        channelUserId,
+        "check",
+      );
       gateAllowed = decision.allowed;
       if (!decision.allowed) {
         gateMessage = decision.message;
@@ -324,7 +336,11 @@ export class RegistrationStateMachine {
     // back in without ever asking. A kill switch that a user can walk around by
     // messaging the bot again is not a kill switch.
     if (waitlistGate) {
-      const decision = await waitlistGate.check(channelUserId);
+      const decision = await this.#askGate(
+        () => waitlistGate.check(channelUserId),
+        channelUserId,
+        "check",
+      );
       if (!decision.allowed) {
         logger.info("registration.gate.reregistration_refused", {
           channel,
@@ -417,6 +433,38 @@ export class RegistrationStateMachine {
    * registration: mistyping a token is the common case, and a terminal failure
    * would force them to start over for a typo.
    */
+  /**
+   * Run a gate call; if it throws, tell the user before letting it propagate.
+   *
+   * The throw is preserved deliberately — it is what makes the gate fail
+   * closed, and the engine's logger is what alerts the operator. This adds the
+   * third audience nobody was serving: the person waiting on their phone.
+   *
+   * The wording avoids the refusal vocabulary on purpose. Telling someone to
+   * find an invitation token when the real fault is our Lambda being
+   * unreachable is the same error substitution the client fixed one layer
+   * down — it sends them hunting for something that would not have helped.
+   */
+  async #askGate<T>(call: () => Promise<T>, from: string, kind: "check" | "redeem"): Promise<T> {
+    try {
+      return await call();
+    } catch (error) {
+      const note =
+        kind === "redeem"
+          ? "Something went wrong on our side and we could not process that. " +
+            "Your token has NOT been used — please try again in a few minutes."
+          : "Something went wrong on our side and we could not check your access. " +
+            "Please try again in a few minutes.";
+      try {
+        await this.#deps.channel.send(from, note);
+      } catch {
+        // The channel is down too. Nothing further to attempt, and swallowing
+        // this is correct: the gate error below is the one worth propagating.
+      }
+      throw error;
+    }
+  }
+
   async #handleAwaitingWaitlistToken(
     record: RegistrationRecord,
     message: string,
@@ -443,10 +491,12 @@ export class RegistrationStateMachine {
       return record;
     }
 
-    // Not caught: a gate that cannot be reached must refuse, and an exception
-    // propagating is that refusal. Catching here to send a friendly message
-    // would be the fail-open path wearing a helpful face.
-    const result = await waitlistGate.redeem(from, token);
+    // A gate that cannot be reached must refuse, and the exception propagating
+    // is that refusal — but the user is told first, and told specifically that
+    // their token was NOT consumed. Somebody who sends their one invitation
+    // token and receives an unexplained error has every reason to assume they
+    // have just burned it.
+    const result = await this.#askGate(() => waitlistGate.redeem(from, token), from, "redeem");
 
     if (!result.redeemed) {
       logger.info("registration.gate.token_refused", {
