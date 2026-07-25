@@ -34,6 +34,11 @@
  *
  * States:
  *   INITIAL              — record created, /start or first message received
+ *   AWAITING_WAITLIST_TOKEN — the account is not admitted; waiting for a waitlist
+ *                          token (DOD-TELEGRAM-GATE-1). Comes BEFORE contact so
+ *                          an unadmitted account is never asked for a phone
+ *                          number it has no reason to give — the gate refuses
+ *                          before any PII is requested.
  *   AWAITING_CONTACT     — request_contact button sent; waiting for user to share phone
  *   PHONE_CONFIRMED      — phone number verified via Telegram contact.user_id
  *   AWAITING_EMAIL       — bot prompted for email address; waiting for input
@@ -45,6 +50,7 @@
  */
 export type RegistrationState =
   | { state: "INITIAL" }
+  | { state: "AWAITING_WAITLIST_TOKEN" }
   | { state: "AWAITING_CONTACT" }
   | { state: "PHONE_CONFIRMED" }
   | { state: "AWAITING_EMAIL" }

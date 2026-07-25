@@ -40,6 +40,7 @@
 
 import { randomUUID, createHash } from "node:crypto";
 import type {
+  WaitlistGateClient,
   RegistrationRecord,
   MessagingChannel,
   OtpDeliveryProvider,
@@ -127,6 +128,14 @@ export type StateMachineDeps = {
   channel: MessagingChannel;
   otpDelivery: OtpDeliveryProvider;
   preAuth: PreAuthorizationClient;
+  /**
+   * DOD-TELEGRAM-GATE-1. Optional so an environment without a waitlist (a bare
+   * dev box, the CLI adapter) still constructs — but when it is ABSENT the gate
+   * is not enforced, so `server.ts` supplies it in every environment that is not
+   * CELLO_ENV=local, and absence is logged loudly on the path that would have
+   * used it. Absent must never look like "admitted".
+   */
+  waitlistGate?: WaitlistGateClient;
   logger: Logger;
 };
 
@@ -151,6 +160,9 @@ export class RegistrationStateMachine {
     const correlationId = randomUUID();
 
     switch (record.state) {
+      case "AWAITING_WAITLIST_TOKEN":
+        return this.#handleAwaitingWaitlistToken(record, message, from, correlationId);
+
       case "AWAITING_CONTACT":
         return this.#handleAwaitingContact(record, message, from, correlationId);
 
@@ -189,12 +201,48 @@ export class RegistrationStateMachine {
     channel: "telegram" | "whatsapp" | "cli",
     phoneStubHash: string,
   ): Promise<RegistrationRecord> {
-    const { repository, logger } = this.#deps;
+    const { repository, logger, waitlistGate } = this.#deps;
     const correlationId = randomUUID();
     const now = new Date();
     const expiresAt = new Date(now.getTime() + REGISTRATION_TTL_MS);
 
-    // Create in INITIAL state, then immediately transition to AWAITING_CONTACT
+    // THE GATE COMES FIRST — before the record, and before the phone prompt.
+    //
+    // Ordering is the point. Asking an unadmitted stranger for their phone
+    // number and only then refusing them collects PII from somebody who was
+    // never going to be admitted. DOD-INV-NO-PII-DIRECTORY is about what we
+    // store; this is about what we ask for.
+    //
+    // A gate that cannot be reached REFUSES. The client throws on every failure
+    // path, and that throw is deliberately not caught here: an exception
+    // propagating is the fail-closed outcome, whereas a catch that logged and
+    // continued would admit on "could not check".
+    let gateAllowed = true;
+    if (waitlistGate) {
+      const decision = await waitlistGate.check(channelUserId);
+      gateAllowed = decision.allowed;
+      if (!decision.allowed) {
+        logger.info("registration.gate.token_required", {
+          channel,
+          correlationId,
+          reason: decision.error,
+        });
+      }
+    } else {
+      // ABSENT IS NOT FINE, and this is the one place it cannot be made fatal:
+      // the CLI adapter and local dev legitimately run without a gate. So it is
+      // recorded at WARN on the exact path that would have enforced it, rather
+      // than being a silent `true`.
+      logger.warn("registration.gate.NOT_ENFORCED", {
+        channel,
+        correlationId,
+        detail:
+          "No waitlist gate is configured; this registration was not checked against the waitlist. " +
+          "Expected only under CELLO_ENV=local.",
+      });
+    }
+
+    // Create in INITIAL state, then transition to whichever door applies
     const record = await repository.insert({
       phoneStubHash,
       channel,
@@ -209,6 +257,18 @@ export class RegistrationStateMachine {
       channel,
       correlationId,
     });
+
+    if (!gateAllowed) {
+      const gated = await repository.transition(record.id, "AWAITING_WAITLIST_TOKEN");
+      await this.#deps.channel.send(
+        channelUserId,
+        "Welcome to CELLO! Access is currently invitation-only.\n\n" +
+          "If you have a waitlist invitation token, send it now and I'll get you set up. " +
+          "If you don't, you can join the waitlist at https://cello.mygentic.ai — " +
+          "we open access in waves.",
+      );
+      return gated;
+    }
 
     const awaitingRecord = await repository.transition(record.id, "AWAITING_CONTACT");
 
@@ -292,6 +352,76 @@ export class RegistrationStateMachine {
   }
 
   // ─── Private state handlers ────────────────────────────────────────────────
+
+  /**
+   * The user sent something while gated. Treat it as a waitlist token.
+   *
+   * The redemption is ATOMIC IN THE GATE — it burns the token, links the
+   * account and writes the agent bridge in one transaction. This handler does
+   * not validate-then-burn, because splitting those across a network boundary
+   * is exactly what lets one token be redeemed twice.
+   *
+   * A refusal keeps the user in AWAITING_WAITLIST_TOKEN so they can try again
+   * with the right token. It does NOT advance and it does not fail the
+   * registration: mistyping a token is the common case, and a terminal failure
+   * would force them to start over for a typo.
+   */
+  async #handleAwaitingWaitlistToken(
+    record: RegistrationRecord,
+    message: string,
+    from: string,
+    correlationId: string,
+  ): Promise<RegistrationRecord> {
+    const { repository, channel, logger, waitlistGate } = this.#deps;
+    const token = message.trim();
+
+    if (!waitlistGate) {
+      // Unreachable in practice — a record only enters this state when a gate
+      // said no — but a missing gate here must not become an admission.
+      logger.error("registration.gate.MISSING_AT_REDEEM", {
+        registrationId: record.id,
+        correlationId,
+        detail: "A gated registration reached token redemption with no gate configured.",
+      });
+      await channel.send(from, "Something is misconfigured on our side; your token was not used. Please try again later.");
+      return record;
+    }
+
+    if (!token) {
+      await channel.send(from, "Please send your waitlist invitation token.");
+      return record;
+    }
+
+    // Not caught: a gate that cannot be reached must refuse, and an exception
+    // propagating is that refusal. Catching here to send a friendly message
+    // would be the fail-open path wearing a helpful face.
+    const result = await waitlistGate.redeem(from, token);
+
+    if (!result.redeemed) {
+      logger.info("registration.gate.token_refused", {
+        registrationId: record.id,
+        correlationId,
+        reason: result.error,
+      });
+      // The gate's own wording — it distinguishes already-used from expired
+      // from unknown, and the user needs to know which.
+      await channel.send(from, `${result.message}\n\nSend a different token, or join the waitlist at https://cello.mygentic.ai`);
+      return record;
+    }
+
+    logger.info("registration.gate.token_redeemed", {
+      registrationId: record.id,
+      correlationId,
+    });
+
+    const admitted = await repository.transition(record.id, "AWAITING_CONTACT");
+    await channel.send(
+      from,
+      `${CONTACT_PROMPT_PREFIX}You're in — welcome to CELLO! To set up your agent, share your phone ` +
+        `number using the button below.\n\n${PHONE_PRIVACY_NOTE}`,
+    );
+    return admitted;
+  }
 
   async #handleAwaitingContact(
     record: RegistrationRecord,
