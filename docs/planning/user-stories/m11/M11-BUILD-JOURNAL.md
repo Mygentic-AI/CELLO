@@ -2193,3 +2193,29 @@ body at all. Revert test: pointing signup back at its own env var and the old ex
 first two red.
 
 **Runs:** 15 tests green, `tsc` clean, `next build` clean.
+
+---
+
+### Entry 46: the page and its own structured data disagreed
+**Date:** 2026-07-25
+**Target:** DOD-BLOG-INFRA-1 [corp-cello-site]
+
+Three of this line's five clauses turned out to be satisfied already and simply never recorded —
+`datePublished` and `dateModified` in the Article schema, `FAQPage` JSON-LD on articles that have FAQ
+sections and only those, and a `robots.txt` with no `Disallow` at all. Checking beat assuming: the line
+had sat 🟠 on work that was done.
+
+One clause genuinely was not met, and it is the interesting one. The DoD asks for a visible last-updated
+line on **every** article; the page gated it on `kind === "pillar"`. So a cluster article that had been
+genuinely revised rendered only its original publish date — while `dateModified` in that same page's
+Article schema reported the revision. **The page and the JSON-LD describing the page stated different
+things about the same fact**, which is the machine-readable version of a comment that lies: a crawler
+believes one, a reader believes the other, and neither is checking the other.
+
+Fixed by keying on whether the post was actually updated rather than on what type it is. The inverse is
+why it is not simply shown everywhere: printing "Last updated" on something untouched since publication
+asserts to a reader, and to Google, that an update happened when none did — the same inflation rule that
+governs queue positions, applied to a date.
+
+**Status:** 🟠 → 🟡. What remains is (a) Google Search Console property verification and (b) the GA4
+script — both outward actions.
