@@ -338,6 +338,37 @@ These are not DoD lines — they are the real-world checks that determine whethe
 ## Parked
 *(Genuine undecidable forks. Never silently dropped.)*
 
+- **The legacy confirmation link is BROKEN IN PRODUCTION, and fixing it is a product call
+  (2026-07-25).** Found while auditing the built corp-site artifact before the merge.
+
+  The chain: `/beta/apply` and `/agent/interest` POST to the form API and get a confirmation email
+  linking to `cello.mygentic.ai/confirm?token=…`. That page fetches
+  `api.cello.mygentic.ai/confirm`. **That route does not exist there** — the custom domain maps
+  wholly (`ApiMappingKey: ""`) to `kbok0guwee` (the waitlist API), while `GET /confirm` lives on
+  `h8dh7rbhb1` (`cello-form-api`), reachable only at its `execute-api` host. Verified live: the URL
+  returns `404 {"message":"Not Found"}`. The page treats any non-410 as `invalid`, so **a user who
+  clicks a perfectly valid confirmation link is told it is invalid**, while the database row sits
+  unconfirmed. The submit half works only because those two pages skip the custom domain and call
+  the raw host directly — which is itself a `DOD-INV-DOMAIN` violation (see below).
+
+  **The fork.** Two defensible answers, different work for different reasons, and choosing wrongly
+  wastes the other:
+  1. **Retire the legacy funnel.** The M11 waitlist supersedes it, and two competing signup paths on
+     one site is its own problem. Cheapest, deletes code, and removes both invariant violations.
+  2. **Route it under the custom domain** — add `POST /submit` + `GET /confirm` to the waitlist API
+     pointing at the form Lambda, so one API owns `api.cello.mygentic.ai`. Requires a
+     `cello-waitlist.yaml` change and a stack deploy, and keeps a second funnel alive on purpose.
+
+  Whether `/beta/apply` is still a live funnel post-waitlist is a product question, not an
+  engineering one, so it is not an agent's to answer overnight.
+
+  **What was done rather than left:** `DOD-INV-DOMAIN`'s scan said *"the directories M11 happened to
+  touch"* while the clause says *"all repos"* — so it passed for weeks with two live public pages
+  pointing at a raw `execute-api` host, the exact failure its denylist was written for, sitting one
+  directory outside the allowlist. The scan now covers the corp site entire (proved non-vacuous with
+  a planted violation in a previously-unscanned path), with those two files in ONE visible
+  quarantine that anything new cannot join. **Unparked by:** choosing 1 or 2.
+
 - **ONE FORK, THREE FACES: nothing carries an agent-side event to AWS (2026-07-25).**
 
   Three DoD lines are open, they look unrelated, and they are the same missing thing:

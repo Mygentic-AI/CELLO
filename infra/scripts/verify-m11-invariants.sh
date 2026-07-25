@@ -74,7 +74,33 @@ BAD_DOMAIN+='|[a-z0-9]+\.execute-api\.[a-z0-9-]+\.amazonaws\.com'
 # SINGLE-DB already had to fix for deploy.sh.
 M11_CONFIG="$TRUSTLESS/infra/cloudformation/cello-waitlist.yaml"
 [[ -e "$M11_CONFIG" ]] || fail "scan target missing: $M11_CONFIG"
-if hits=$(scan "$BAD_DOMAIN" "$M11_LAMBDA $M11_CORP $M11_CONFIG"); then
+
+# THE CLAUSE SAYS "all repos". THE SCAN SAID "the directories M11 happened to touch".
+#
+# $M11_CORP is an allowlist of M11 routes, and this check passed for weeks while
+# TWO LIVE PAGES on the public site pointed at a raw execute-api host — the exact
+# failure the denylist above was written for, sitting one directory outside where
+# anyone was looking. An allowlist is right for the M11-specific checks; it is
+# wrong for a whole-repo invariant, because a page added tomorrow is not in it.
+#
+# So this one clause scans the corp site entire. Found by chasing a different
+# bug: the /confirm page fetches api.cello.mygentic.ai/confirm, that domain maps
+# wholly to the waitlist API, and the route lives on the OTHER API — so a user
+# who clicks a perfectly valid confirmation link is told it is invalid.
+CORP_ALL="$CORP/app $CORP/src $CORP/scripts $CORP/migrations"
+for _p in $CORP_ALL; do
+  [[ -e "$_p" ]] || fail "scan target missing: $_p (the checker would narrow silently)"
+done
+
+# Quarantine, in ONE visible place, never grown. These two are real violations of
+# a live invariant on live pages. They are not waived — they are recorded, because
+# the fix is a product decision that is not an agent's to make: the legacy
+# beta-application / agent-interest funnel either gets retired (the M11 waitlist
+# supersedes it) or gets routed under the custom domain, and those are different
+# amounts of work for different reasons. Parked in the DoD with the evidence.
+# Unparked by: making that call. Anything NEW that matches must fail.
+DOMAIN_QUARANTINE='app/(beta/apply/BetaApplyContent|agent/interest/AgentInterestContent)\.tsx'
+if hits=$(scan "$BAD_DOMAIN" "$M11_LAMBDA $CORP_ALL $M11_CONFIG" | grep -vE "$DOMAIN_QUARANTINE"); then
   fail "DOD-INV-DOMAIN — a domain other than cello.mygentic.ai:"
   echo "$hits" | sed 's/^/        /'
 else
