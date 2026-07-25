@@ -3141,3 +3141,46 @@ then not acted on — which is the right order.
 
 **Blocked, hard:** every `git push` now fails with *"You must verify your email address"* —
 account-wide, both repos. Work continues and commits queue locally.
+
+---
+
+## 2026-07-25 — the smoke gate was a hostname, and the gate hides 199 tests
+
+**The smoke fix is proven from the compiled artifact, not the source.** Ran
+`node packages/e2e-tests/dist/smoke/run-smoke-tests.js` with no `STAGING_DIRECTORY_URL`: it resolved
+`cello-dir-dev-1389700310` — the live ALB — and **all 8 scenarios passed, exit 0**, including
+`two_sessions_established`, the exact scenario CI reports as failing.
+
+That settles the bigger question at the same time. The pipeline failure was never a protocol
+regression. It was a hostname, and for weeks it has been presenting as a flaky FROST/session test
+while quietly meaning *"eu-central-1 and ap-northeast-1 cannot receive a directory deploy."*
+
+**Then a second thing fell out of it.** The three suites I anchored to `import.meta.url` were
+reported as "now green" in that commit. The reviewer's F8 was right to push back: they were
+**skipping**, not passing. So I started the local Postgres and ran them for real —
+**23 tests, all passing** — which is what actually proves the anchoring works, rather than proving
+collection stopped throwing.
+
+**And running the gate with `CELLO_ENV=local` runs 199 MORE TESTS than the gate does.** 1121 vs 922.
+Seven of them fail:
+
+| suite | failing |
+|---|---|
+| `persist-002-docker` | `directory exits 1 with migration.out.of.date when no migrations applied` |
+| `persist-001-composition-root` | same assertion, composition-root path |
+| `m6b-009` pool | `totalCount never exceeds poolMax under 50 concurrent queries` |
+| `account-001` | `verifyChain('user_accounts')` returns valid — twice |
+| `trust-001` | pickup drain/ACK, and the orphaned-pickup TTL sweep |
+
+**None are in files I touched** — my diff was three directory *test* files, dist-freshness and the
+smoke runner, and none of those appear above. At least two look environmental rather than broken (a
+test asserting an UNMIGRATED database, run against one Flyway has just migrated), and the rest I
+have not diagnosed.
+
+I am not fixing them tonight and I am not pretending they are fine. They are directory internals,
+not M11, and the launch-intent question — can two agents connect and communicate — is answered green
+by the 8/8 live smoke run. **What matters is that they are stated**: the committed gate sequence
+(`pnpm run test` with no `CELLO_ENV`) silently skips a fifth of the suite, so "922 passed, 0 failed"
+is a smaller claim than it looks, and anyone reading it as full coverage is reading it wrong. That is
+the same class as everything else found today — a green signal standing in front of something nobody
+ran.
