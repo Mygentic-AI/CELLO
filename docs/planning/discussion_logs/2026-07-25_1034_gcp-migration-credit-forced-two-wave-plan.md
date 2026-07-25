@@ -340,12 +340,87 @@ maps cleanly onto: **scale relays freely, keep directories few and odd.** Relays
 DKG, and no shares (§5) — they scale horizontally without touching the threshold at all. That is
 where "quite a few nodes" belongs.
 
-### So at launch: three or five directories
+### T−1 is also the kill switch's strength — the factor that decides the policy
 
-You are right that seven was over-shot; it came from threshold aesthetics ("odd is better") rather
-than from need. **Recommendation: five directories** — two per seal, tolerates three down, a real
-improvement on today at modest cost. **Three is entirely defensible** if you want minimum change,
-and it is what is proven today. Avoid four.
+Asked for a final recommendation on T, I went looking for what actually constrains it, and it is
+not availability. It is the **kill switch**, which CLAUDE.md names as launch value ("*a kill switch
+is in place*").
+
+`directory-node.ts:1176` — the pause/revocation mechanism is: *"each honest node consults the
+REPLICATED suspension state and refuses its FROST share for a PAUSED agent, so no threshold
+forms."* It fails **closed**. But the code also names the gap outright: *"single-node honoring
+means a genuinely-paused agent can still reach threshold by **routing around** the one honoring
+node."*
+
+So revocation is arithmetic, and it is the **same** arithmetic as sealing, read from the other
+side. An agent keeps signing while `willing directories ≥ T−1`. Therefore a pause only bites when
+`honoring ≥ N − T + 2`:
+
+| N | T | Dirs to seal (T−1) | Dirs that must honor a pause for it to work |
+|---|---|---|---|
+| **3** | 2 | 1 | **3 of 3 — unanimity** |
+| 4 | 3 | 2 | 3 of 4 |
+| **5** | 3 | 2 | **4 of 5** |
+| 7 | 4 | 3 | 5 of 7 |
+| 10 | 6 | 5 | 6 of 10 |
+| *10 (if T were 3)* | *3* | *2* | *3 of 10* ← |
+
+**`T−1` is one knob serving two opposed masters.** It is simultaneously *how few directories must
+cooperate to seal* (availability — smaller is better) and *how many must be subverted or stale to
+defeat a revocation* (safety — larger is better). Every threshold argument is really about where to
+sit on that one axis.
+
+Two honest qualifications, so this is not overstated:
+
+- **A node that is *down* does not defeat a pause** — it cannot sign either. The kill switch is
+  defeated only by a node that is up, reachable, holding the share, and carrying stale or missing
+  suspension state. `agent_profiles` and `agent_suspensions` are both replicated
+  (`setup-replication.sh:169`) and current lag is ~1 KB (§5), so all-nodes-honoring is the normal
+  case, not a lucky one.
+- **N=3's unanimity requirement is therefore a thin margin rather than a live defect.** But it is a
+  margin of exactly zero: one up-but-stale directory and a paused agent still signs.
+
+### Final recommendation on T
+
+**Keep `T = majority(N)`. Do not decouple T from N.** Three reasons, in order of weight:
+
+1. **It is the only rule where kill-switch strength grows with the consortium.** Under majority,
+   `T−1` rises as N rises, so more nodes must be subverted to route around a revocation. Under a
+   fixed small T, adding directories actively *weakens* the kill switch — more nodes, each less
+   necessary.
+2. **It is the minimum threshold with no two disjoint signing quorums** (§4).
+3. It is implemented, settled in writing (2026-07-04), and exercised in production. Changing it is
+   a security change with migration consequences, not a config edit.
+
+**On N=10 with T=3–5 specifically: recommend against.** The bottom row above is the reason — at
+N=10/T=3, just **3 of 10** nodes with stale state keep a paused agent signing, and 3 colluding
+operators could forge. For a trust product that is the wrong direction on the one axis that
+matters. Note also that it *reduces* the honoring requirement below what N=3 gives today.
+
+**The strategy that satisfies the goal behind that idea:** *directories stay few and odd; relays
+scale freely.* Relays have no FROST, no DKG, and no shares — they are where "quite a few nodes"
+belongs, and adding them costs nothing on the threshold axis. Wanting many nodes is right; wanting
+many *directories* is what carries the cost.
+
+### Recommended N by stage
+
+| Stage | N | T | Dirs to seal | Dirs that can be down | Must honor a pause | AWS dirs for the outage claim |
+|---|---|---|---|---|---|---|
+| **Launch** | **3** | 2 | 1 | 2 | 3 of 3 | **1** |
+| Post-enrollment | **5** | 3 | 2 | 3 | 4 of 5 | 2 |
+| Scale | **7** | 4 | 3 | 4 | 5 of 7 | 3 |
+| Large | 9 | 5 | 4 | 5 | 6 of 9 | 4 |
+
+**Never even N** — it costs a node and a signature for no gain in tolerance (§4).
+
+**N=3 at launch**, because it is the only shape where one AWS directory backs the GCP-outage claim
+(§5), it is what runs in production today, and the credit pressure is the binding constraint. Its
+one real weakness is the zero-margin kill switch — worth accepting for launch given healthy
+replication, and worth fixing by moving to **N=5 as the first post-launch step**, once enrollment
+(§4) makes growing N benefit existing agents. N=5 buys a kill switch that survives one stale node
+and sealing that survives three outages, for one more AWS directory.
+
+(You were right that seven was over-shot — it came from threshold aesthetics rather than need.)
 
 ---
 
