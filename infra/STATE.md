@@ -780,6 +780,15 @@ one build script (all in `infra/`):
     to the database: the site is a static export that cannot run them, and the portal RDS is
     `PubliclyAccessible:false` in a VPC with no peering a laptop can reach.
     Invoke `{"dry_run": true}` first — it lists what WOULD be applied and touches nothing.
+  - **ALL 22 M11 MIGRATIONS APPLIED to `cello_portal` on 2026-07-25.** `schema_migrations` now holds 29
+    rows: the portal's own 7 (`0001_init` … `0007_track_record_refresh_log`, applied by the portal
+    container at boot) plus M11's 22 (`0001_m11_waitlist_p0` … `0022_retire_lapsed_tokens`). Both sets
+    share one ledger table and do not collide, because the version key is the file STEM and the two
+    naming schemes differ. Idempotency verified in production: a second invocation applied 0.
+    NOTE for anyone adding a migration to ANY repo that targets this database — the ledger is shared, so
+    a stem that already exists is silently treated as applied. `ops-dashboard/migrations` had exactly
+    that collision (`0002_magic_link_requests`, same stem as the portal's) and was renamed before it
+    could ever be applied.
 
 - **`cello-portal-data.yaml`** → stack `cello-portal-data-dev` **[UPDATE_COMPLETE, 2026-07-25]**. SGs (portal-alb
   `sg-0640c459d8887e2b6` / portal-task `sg-00c0f6e65386bf534` / portal-db **`sg-07ba031fda87adb88`**), RDS Postgres
