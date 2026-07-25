@@ -402,6 +402,82 @@ scale freely.* Relays have no FROST, no DKG, and no shares — they are where "q
 belongs, and adding them costs nothing on the threshold axis. Wanting many nodes is right; wanting
 many *directories* is what carries the cost.
 
+### Is redundancy double-edged? Not on the security axis — and that is the point of majority
+
+Andre's question: doesn't wanting many directories come from wanting redundancy *and* security, and
+isn't that a double-edged sword for FROST ceremonies?
+
+**Under `T = majority(N)`, no — and this is exactly why the rule is right.** Every security property
+improves together as N grows:
+
+| N | T | Seal needs (T−1) | Dirs that can be down | Stale nodes a pause tolerates (T−2) | Operators needed to forge (T) |
+|---|---|---|---|---|---|
+| 3 | 2 | 1 | 2 | **0** | 2 |
+| 5 | 3 | 2 | 3 | **1** | 3 |
+| 7 | 4 | 3 | 4 | **2** | 4 |
+| 9 | 5 | 4 | 5 | **3** | 5 |
+
+Availability rises, kill-switch margin rises, collusion resistance rises. Majority is the rule that
+makes redundancy *not* a trade — because T scales with N, adding a node buys more failure tolerance
+**and** more forgery resistance at the same time.
+
+**The double-edge only exists if you decouple T from N** — precisely what N=10/T=3 would do. Then
+you are buying availability by selling security. So the tension is real, but it is one the operator
+*creates* by fixing T; it is not inherent to redundancy.
+
+### What actually bounds directory count — and it is not the threshold
+
+The real cost of more directories is not security. It is two things, and the first is a hard wall I
+verified on the running database rather than inferred:
+
+**1. Replication is O(N²) and hits a live ceiling at N=5.** The mesh is full — every node subscribes
+to every other — so each node runs **N−1 apply workers** and each publisher holds **N−1 slots**.
+Actual settings on the live us-east-1 instance:
+
+```
+max_logical_replication_workers = 4     ← the binding constraint
+max_replication_slots           = 10
+max_wal_senders                 = 25
+max_worker_processes            = 8
+max_connections                 = 191
+```
+
+- **N=5 sits exactly at the cap** (4 subscriptions → 4 apply workers).
+- **N=6 exceeds it** — a subscription that cannot get an apply worker simply does not replicate.
+- `max_replication_slots = 10` independently caps the consortium at **N ≤ 11**.
+- Total slots across the consortium = N(N−1): **6** at N=3, **20** at N=5, **42** at N=7, **90** at
+  N=10.
+
+All three are *static* parameters requiring a reboot, and raising
+`max_logical_replication_workers` also means raising `max_worker_processes` (currently 8, shared
+with autovacuum and parallel query). **The failure mode is silent** — no error at the threshold
+layer, just a node that quietly stops converging. STATE.md records a prior wedge on
+ap-northeast-1 that produced thousands of apply-errors, so this class of failure has bitten once
+already.
+
+**This is the actual ceiling on directory count, and it is far lower than the threshold math
+implies.** Anyone reasoning only from `majority(N)` would conclude N=9 or N=11 is fine; the
+database says N=5 without a parameter-group change and a reboot.
+
+**2. The enrollment debt.** Adding a directory gives *existing* agents exactly zero extra
+redundancy until enrollment ships (§4) — shares are never replicated, so a new node holds nothing
+for them. "More directories = more redundancy" is currently true **only for newly-registered
+agents**. And the M8B design doc notes that at large N enrollment becomes *"the normal path, not an
+edge case"* — so growing N makes unbuilt machinery load-bearing.
+
+### Why this strengthens "few directories, many relays"
+
+The conclusion is unchanged but the reasoning is much better than threshold aesthetics:
+
+- **Directories are bounded by replication topology** (quadratic, wall at N=5 today), not by the
+  threshold rule.
+- **Relays have no database, therefore no mesh** — the O(N²) term does not exist for them. They
+  scale linearly and cleanly.
+
+So the instinct "we want more nodes for redundancy" is right; it just belongs on the relay tier,
+where redundancy is cheap, rather than the directory tier, where each addition costs N−1
+subscriptions on every existing node.
+
 ### Recommended N by stage
 
 | Stage | N | T | Dirs to seal | Dirs that can be down | Must honor a pause | AWS dirs for the outage claim |
@@ -412,6 +488,12 @@ many *directories* is what carries the cost.
 | Large | 9 | 5 | 4 | 5 | 6 of 9 | 4 |
 
 **Never even N** — it costs a node and a signature for no gain in tolerance (§4).
+
+**And note the replication ceiling cuts across this table.** N=5 is the largest consortium the
+current Postgres parameters support; N=7 and N=9 require raising
+`max_logical_replication_workers` and `max_worker_processes` with a reboot on every node, and the
+subscription count grows quadratically (42 slots at N=7, 72 at N=9). Treat the N=7 and N=9 rows as
+"possible after a parameter change", not as drop-in options.
 
 **N=3 at launch**, because it is the only shape where one AWS directory backs the GCP-outage claim
 (§5), it is what runs in production today, and the credit pressure is the binding constraint. Its
