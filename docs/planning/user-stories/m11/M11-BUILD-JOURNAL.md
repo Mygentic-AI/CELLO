@@ -2053,3 +2053,47 @@ raw token fails the at-rest test.
 
 **Status:** DOD-OPS-SHELL-1 stays 🟡 — the browser walkthrough and the deploy are still owed, and
 neither is runnable tonight.
+
+---
+
+### Entry 43: E-re — the last email nothing ever enqueued
+**Date:** 2026-07-25
+**Target:** DOD-E-RE-1 [trustless-cello]
+
+The template existed. The prefetch-safe unsubscribe endpoint existed. Nothing anywhere put an
+`e_re_engage` row in `email_jobs`, so the whole line was a message that could be rendered and never sent.
+
+**A sweep, not a chain, and the distinction is the design rather than a preference.** The E3 nurture
+drip three functions away chains — after one sends, it queues the next — because its trigger is *"did
+the last one send?"*, which the sender already knows at the moment it matters. E-re's trigger is *"has
+this person done nothing for thirty days?"*, which is not knowable when any prior email went out and
+which becomes true long afterwards. Chaining it would mean deciding today whether somebody will be quiet
+in two months.
+
+**"No activity" needed a definition, because the schema has none.** There is no `last_activity_at`
+column, and adding one would have been a denormalised field that goes stale exactly when it is trusted.
+So activity is derived from three things the **user** did: earned points (`points_ledger`), arrived on
+the site (`waitlist_touchpoints`), signed in to their status page (`waitlist_sessions`). Deliberately
+*not* "we sent them an email" — that is our activity, not theirs, and counting it would keep somebody
+looking permanently engaged while they ignore every message we send, which inverts the entire purpose.
+
+**Once, ever.** The guard is the absence of any `e_re_engage` row for the user, so a sweep replayed
+after a partial failure enqueues nothing the second time — and somebody who returns, goes quiet again
+and re-crosses the boundary does not get a second copy. That is right for a message whose whole content
+is "we noticed you have not been back": sending it twice says nobody is reading the replies.
+
+**Its own daily rule and its own permission.** The rule targets the same function as the per-minute
+drain but carries an `Input` selecting the action, because a sweep folded into the drain would run 1440
+times a day to answer a question that can only change once. And it needs a *second*
+`AWS::Lambda::Permission`: Lambda scopes each one to a single `SourceArn`, so reusing the drain rule's
+grant would have failed at the EventBridge layer — where nothing in the function's own logs would show
+it, which is the worst place for an authorization failure to live.
+
+**Three revert tests.** Dropping the correlation on any `NOT EXISTS` makes it satisfiable by *any* row
+in the table, so the sweep would silently enqueue nobody forever — green tests, zero emails, no signal.
+Dropping `status = 'waiting'` mails "you have not been back" to people admitted six weeks ago. Dropping
+the once-ever guard queues a copy every single day. All three turn the named test red.
+
+**Runs:** 403 tests green. Template validates at 63 resources, no dangling refs, and every schedule rule
+now has a matching invoke permission — checked mechanically, since that was the class of gap that let
+the bounce topic ship with no publisher.
