@@ -350,6 +350,15 @@ each line.
   `send_raw_email` through the configuration set.
 - **no-enumeration** — `/waitlist/auth/request` is byte-identical for a real address and an invented
   one.
+- **ops dashboard auth (run for the first time)** — the container, against a real Postgres:
+  `/sign-in` 200; `/` without a session 307s rather than leaking; a magic-link request for an
+  ALLOWED and a NOT-allowed address return byte-identical `202 {"status":"sent_if_allowed"}`, while
+  the database tells them apart — **both** recorded in `ops_magic_link_requests` (the throttle fires
+  before the allowlist, which is what stops 429-vs-202 becoming an oracle), and **only** the allowed
+  address minted a row in `ops_magic_links`. Tokens are stored as 64-hex SHA-256, never raw. A
+  separate run with the database unreachable still returned the same 202 and logged
+  `ops.magic_link.request_failed` at ERROR — the caller learns nothing, the operator learns
+  everything.
 - **wave gate** — `capacity` alone is refused `invalid_capacity`; with a capacity but no operator,
   refused `missing_opened_by` ("every wave names the operator who opened it"); with both, it declines
   to open a wave at all: `{admitted:0, reason:'all_unverified', waiting_total:8,
