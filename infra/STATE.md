@@ -25,9 +25,27 @@ UPSERTs Route53 to the **new** aliases. So every hibernate/wake cycle mints a ne
 this baked CodeBuild value goes stale again. It is not one-off drift from the 2026-07-17 rogue-agent
 incident — that incident produced the first instance; hibernation reproduces it every cycle.
 
-Three generations are currently recorded in three places, which is the signature:
-`cello-dir-dev-85618485` (cicd stack parameter) · `cello-dir-dev-1341968405` (CodeBuild project) ·
-`cello-dir-dev-1389700310` (**the live ALB**).
+Three generations existed across three places, which is the signature:
+`cello-dir-dev-85618485` (cicd stack parameter) · `cello-dir-dev-1341968405` (CodeBuild project,
+set by the 2026-07-19 manual repair) · `cello-dir-dev-1389700310` (**the live ALB**).
+
+**CORRECTION — MY FAILED DEPLOY MADE IT WORSE.** The CodeBuild project now reads
+`cello-dir-dev-85618485`, the OLDEST value. When my `cello-cicd-dev` update rolled back,
+CloudFormation restored that environment variable from the stack's stored parameter, **overwriting
+the manual repair from 2026-07-19**. CI is therefore further from working than before I started, and
+this is exactly the failure mode that log documents — a rollback silently reverting live config.
+
+**THE FIX AND THE ROOT FIX COLLAPSE INTO ONE COMMAND**, if it points at the hostname rather than the
+ALB — no stack deploy needed, and it survives every future hibernate:
+
+```bash
+aws codebuild update-project --name cello-smoke-test-build --region us-east-1 \
+  --environment '{"type":"LINUX_CONTAINER","image":"aws/codebuild/standard:7.0","computeType":"BUILD_GENERAL1_SMALL","environmentVariables":[{"name":"STAGING_DIRECTORY_URL","value":"directory-us1.cello.mygentic.ai","type":"PLAINTEXT"}]}'
+```
+
+The committed `deploy.sh` / template changes now set that same hostname, so a later stack deploy
+reinforces it instead of clobbering it — which is what was missing when the 2026-07-19 repair was
+undone.
 
 **I repeated the mistake the 2026-07-19 log exists to prevent.** It records an agent responding to
 this with CFN template edits and repeated `deploy.sh` runs, one of whose rollbacks reverted the
