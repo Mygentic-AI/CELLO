@@ -2542,3 +2542,37 @@ real inbox: the E1 body's queue position and referral link, the session cookie s
 redirect, the survey and readiness and post-url actions (all session-gated), a wave admitting an actual
 person, and first-win. The SES simulator accepts and discards, so it proves the *send* and nothing after
 it. That is a genuine boundary, not an omission — recorded so nobody re-derives it.
+
+---
+
+### Entry 54: both suppression paths, and two false alarms resolved
+**Date:** 2026-07-25
+**Target:** DOD-SES-PROD-1, DOD-INV-EMAIL-SUPPRESS
+
+`DOD-SES-PROD-1` was flipped ✅ on the bounce path alone. Complaint had not been exercised — a partial
+pass wearing a full tag, which is precisely the failure this milestone has produced four times. Closed
+now, on real infrastructure:
+
+| probe | result | when |
+|---|---|---|
+| `bounce@simulator.amazonses.com` | `email_status='bounced'`, reason `bounce_permanent` | 06:20 |
+| `complaint@simulator.amazonses.com` | `email_status='complained'`, reason `complaint` | 07:33 |
+
+Each logged against the exact `waitlist_id` that signed up, so the whole chain is attributable end to
+end: signup → `email_jobs` → dispatcher → SES → configuration set → SNS → bounce Lambda → the right row.
+That chain had **no publisher at all** until Entry 40 and could not send a single message until Entry 52.
+
+**Two things that look like failures and are not**, both found while chasing this and both now written
+into the next-steps appendix so nobody re-investigates them:
+
+**`get-account` reports `SentLast24Hours: 0.0` after successful sends.** It lags and does not move
+promptly for simulator traffic. The reliable evidence is `get-send-statistics`, whose 15-minute
+datapoints did show `Bounces: 1` matching the test — and, conclusively, the bounce Lambda firing against
+the right row, which is impossible unless SES really sent. A reviewer stalled mid-investigation on
+exactly this and would have concluded the sends were fake.
+
+**The MIME structure, checked empirically rather than assumed.** `multipart/alternative` at the top,
+`text/plain` before `text/html` — the order clients rely on to pick HTML where they can render it — and
+an attacker-chosen non-ASCII display name or subject is RFC 2047 encoded so the bytes on the wire stay
+pure ASCII. This was the one thing about Entry 52's fix that a passing test could not settle, since the
+tests parse the message the handler just built rather than what SMTP would carry.
