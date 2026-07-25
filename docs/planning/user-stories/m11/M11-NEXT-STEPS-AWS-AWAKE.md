@@ -9,6 +9,19 @@ description: The ordered list of AWS-dependent steps that convert M11's 🟡 lin
 
 # M11 — what to run now that infra is awake
 
+> **STATUS 2026-07-25 07:40 UTC — §0 through §4 are DONE.** SES production access confirmed, the stack
+> deployed, all 12 function bodies plus a 13th (migrate) shipped, all 22 migrations applied, a real
+> signup and a real send completed, and the bounce path proven end to end. What remains is §5 (ops
+> dashboard deploy), §6 (gallery subdomain, then the receipt footer), §7 (live end-to-end), and
+> everything past the confirmation click — all of which need either an outward action or a real inbox.
+> The detail below is left intact because the reasoning still applies to staging and production.
+>
+> **One blocker found on the way:** `deploy.sh` cannot complete — it exits on `cello-ecs-directory-dev`,
+> which has failed identically since at least 2026-07-16 (ALB drift across hibernate/wake). The waitlist
+> stack was deployed directly with the parameters STEP 15 computes. Anything else ordered after directory
+> in `deploy.sh` is currently unshippable in dev. See
+> [[2026-07-25_0545_directory-stack-undeployable-alb-drift]].
+
 Every M11 DoD line is built. 56 of them sit at 🟡 BUILT/UNVERIFIED-LIVE, which means the code exists and
 its enforcer needs AWS. This is that list, in dependency order, with the reason each step comes where it
 does.
@@ -151,3 +164,18 @@ credentials. The function is deployed with **no invoker** and its CFN Descriptio
   reversal condition is a second IAM principal *or* the first observed rotation — whichever comes first.
 - **`status_notes` has two `kind` values with no producer** (`wave_admitted`, `first_win`) and no
   `dismissed_at` writer. The reader handles all of it; the producers are simply not written yet.
+
+
+---
+
+## Appendix — two things that will look like failures and are not
+
+**`aws sesv2 get-account` reports `SentLast24Hours: 0.0` after successful sends.** It lags and does not
+move promptly for simulator traffic. Do not read it as "nothing was sent". The reliable evidence is
+`aws ses get-send-statistics`, whose 15-minute datapoints did show `Bounces: 1` matching the simulator
+test — and, more conclusively, the bounce Lambda logging `waitlist.email.suppressed` against the exact
+`waitlist_id` that signed up. That chain is impossible unless SES really sent.
+
+**The dispatcher can return `{"sent": 0, "failed": 0}` while a job appears to be waiting.** A job that
+failed earlier goes back with `attempts` incremented and is not re-claimed immediately. Enqueue a fresh
+one (sign up again) rather than concluding the drain is broken.
