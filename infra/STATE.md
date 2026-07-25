@@ -9,6 +9,34 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🔴 DIRECTORY CI HAS BEEN UNABLE TO REACH eu-central-1 / ap-northeast-1 (found 2026-07-25)
+
+**Not a new break — found today, weeks old, still live. Nothing was mutated to fix it.**
+
+`cello-smoke-test-build` (CodeBuild) holds `STAGING_DIRECTORY_URL =
+cello-dir-dev-1341968405.us-east-1.elb.amazonaws.com`. **That ALB does not resolve.** The live one
+is `cello-dir-dev-1389700310.us-east-1.elb.amazonaws.com`.
+
+Consequence: every `cello-directory-pipeline` run fails at SmokeTest (`failedScenario:
+two_sessions_established`, `reason: fetch failed`), so **ProductionDeploy never runs and the two
+non-us-east-1 directory regions cannot receive a deploy through CI.** Confirmed on the two most
+recent executions (`985fd257` today, `2fa01b74` at 07:34).
+
+It reads as a flaky protocol test. It is a stage-1 baked value that went stale when the ALB was
+replaced and the cicd stack was not redeployed — the exact lifecycle `infra/CLAUDE.md` documents.
+
+**Fix is written and committed, NOT deployed** (all pushes are blocked on GitHub email
+verification): the smoke runner resolves the ALB from AWS at run time, an empty
+`StagingDirectoryUrl` means exactly that, deploy.sh stops baking it, and `CodeBuildRole` gains
+describe-only permission. **Applying it needs a `cello-cicd-dev` stack deploy** — note
+`infra/CLAUDE.md` records that stack as having been undeployable via deploy.sh
+(`CelloClientWebhookSecret` unwired); verify that first.
+
+**Deliberately NOT done:** patching the CodeBuild env var by hand. It would work and it would put
+the account out of step with IaC I currently cannot push.
+
+---
+
 ## 🟢 ECR repo `cello-ops-dashboard` CREATED (2026-07-25)
 
 `aws cloudformation deploy` on `cello-ecr-dev` — additive, no other resource changed.
