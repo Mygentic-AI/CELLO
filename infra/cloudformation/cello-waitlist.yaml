@@ -742,6 +742,57 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # DDL, applied by hand. NO schedule and no route, deliberately: a migration
+  # that runs on a timer applies itself at 3am to a database nobody is watching.
+  #
+  # This function exists because there was no other path from the SQL to the
+  # database. The migrations live in corp-cello-site, a static export with no
+  # server, so it can never run them the way the portal does at container boot;
+  # and the portal RDS is PubliclyAccessible:false in a VPC with no peering to
+  # anything a laptop can reach. DOD-SCHEMA-1 said "application to the portal
+  # RDS" was owed without saying how, and this is the how.
+  #
+  # Longer timeout and more memory than its siblings: it applies every migration
+  # in one invocation, and a table rewrite on a populated table is not fast.
+  MigrateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-waitlist-migrate-${Environment}"
+      Description: "Applies corp-cello-site migrations to the portal RDS. MANUAL INVOKE ONLY, never scheduled. Pass {\"dry_run\": true} first."
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt WaitlistLambdaRole.Arn
+      Timeout: 900
+      MemorySize: 512
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-a"
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-b"
+        SecurityGroupIds:
+          - !Ref WaitlistLambdaSecurityGroup
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref WaitlistDatabaseUrl
+      Code:
+        ZipFile: |
+          # Placeholder. The authoritative source is infra/lambda/waitlist-migrate/handler.py
+          # and deploy-lambdas.sh replaces this along with the .sql files it
+          # packages from the corp-cello-site checkout. Raising rather than
+          # returning is deliberate, and doubly so here: a migrate function that
+          # returned an empty result would report "nothing to apply" and look
+          # exactly like a database that is already up to date.
+          def lambda_handler(event, context):
+              raise NotImplementedError(
+                  "Deploy via deploy-lambdas.sh dev waitlist — see infra/lambda/waitlist-migrate/handler.py"
+              )
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
   WavesFunction:
     Type: AWS::Lambda::Function
     Properties:

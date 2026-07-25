@@ -150,7 +150,7 @@ deploy_rds_rotation_to_region() {
 # how a new shared module gets forgotten and the function ImportErrors on its
 # first real invocation — cold, in production, with no test that could have
 # caught it because tests import from the repo where the file does exist.
-WAITLIST_FUNCTIONS=(actions auth bounce email feedback firstwin gallery gate outreach signup utm waves)
+WAITLIST_FUNCTIONS=(actions auth bounce email feedback firstwin gallery gate migrate outreach signup utm waves)
 
 # Built once and reused: psycopg2-binary for linux/amd64, same constraint and
 # same Docker workaround as the rotation Lambda above.
@@ -271,6 +271,27 @@ deploy_waitlist_function() {
   for shared in "${LAMBDA_DIR}"/_*.py; do
     cp "${shared}" "${stage_dir}/"
   done
+
+  # The migrate function carries the SQL it applies. Those files live in
+  # corp-cello-site, a SIBLING REPO — the migrations belong to the site's schema
+  # and duplicating them here would let the two copies drift, which is the one
+  # thing a migration set must never do.
+  #
+  # A missing directory is a hard failure, not a smaller package: applying zero
+  # migrations succeeds and looks exactly like being up to date.
+  if [[ "${name}" == "migrate" ]]; then
+    local migrations_src="${MIGRATIONS_SRC:-${SCRIPT_DIR}/../../corp-cello-site/migrations}"
+    if [[ ! -d "${migrations_src}" ]]; then
+      echo "ERROR: ${migrations_src} not found." >&2
+      echo "       waitlist-migrate packages the .sql files from the corp-cello-site checkout." >&2
+      echo "       Set MIGRATIONS_SRC if that repo lives elsewhere. Refusing to ship a migrate" >&2
+      echo "       function with no migrations — it would report success having applied none." >&2
+      exit 1
+    fi
+    mkdir -p "${stage_dir}/migrations"
+    cp "${migrations_src}"/*.sql "${stage_dir}/migrations/"
+    log "  packaged $(ls -1 "${stage_dir}/migrations" | wc -l | tr -d ' ') migrations from ${migrations_src}"
+  fi
 
   waitlist_assert_imports_resolve "${stage_dir}" "${name}"
 
