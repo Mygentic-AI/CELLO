@@ -1967,6 +1967,18 @@ own story) deliberately, never smuggled in as a rider. Source:
   now close." (or send `signal: wrap` semantics on the ack itself). AC: ack text names the
   one-shot rule; test updated.
 
+- **DOD-RECEIVE-GUIDANCE-1** ✅ DONE (2026-07-25, cello-client) — `cello_receive` must surface next-step guidance on every delivered message, keyed on the counterparty's signal token, so the receiving agent knows its correct next move without consulting external docs.
+
+  **Found live 2026-07-25:** receptionist-check sessions consistently left one sealed-unread per session. Root cause: the successful-delivery return in `session-content-handlers.ts` carried no guidance. Every error path had one; the happy path was skipped. On receiving `[[WRAP]]` with no guidance, the agent replied — creating an orphan message that arrived after the sender had correctly closed.
+
+  **Fix:** detect the end-anchored signal token in the delivered content (reusing the `trimEnd().endsWith` pattern from DOD-WRAP-SUBSTRING-1) and emit a `guidance` field:
+  - `[[WRAP]]` → "Counterparty wrapped. Call `cello_close_session` now — do not reply."
+  - `[[OVER]]` → "Counterparty's turn is done. Counterparty has indicated they are expecting a reply — use `cello_send` to reply."
+  - `[[STANDBY EST:Xm]]` → "Counterparty is working and will follow up when done — no response expected. To block: call `cello_receive` with a longer `timeout_ms`. To check back later: schedule a cron and call `cello_receive` then."
+  - Timeout (`content: null`) guidance extended to add: "do not resend your last message."
+
+  No new tests required — the guidance strings are data, not logic; the token detection reuses the proven end-anchored pattern already covered by DOD-WRAP-SUBSTRING-1's test suite.
+
 ## Parked decisions
 *(Genuine undecidable forks get parked here + journal + DECISIONS — never silently dropped.)*
 
