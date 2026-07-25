@@ -32,53 +32,56 @@ import { SMOKE_SCENARIOS, SMOKE_EVENTS } from "./scenarios.js";
 // ─── Environment validation ──────────────────────────────────────────────────
 
 /**
- * RESOLVED FROM AWS, not read from a baked-in value.
+ * THE STABLE HOSTNAME, not the load balancer's own DNS name.
  *
- * `STAGING_DIRECTORY_URL` was a PLAINTEXT CodeBuild environment variable
- * containing `cello-dir-dev-1341968405...`. That load balancer no longer exists
- * — it was replaced, and the variable was not. So EVERY directory deploy failed
- * at SmokeTest with `fetch failed`, ProductionDeploy never ran, and
- * **eu-central-1 and ap-northeast-1 could not receive a directory deploy at
- * all.** Two of three sovereign regions, unreachable by CI, reported as a
- * scenario failure rather than as a configuration one.
+ * `hibernate.sh` DELETES the directory ALB (its header: "ALBs (dir + relay per
+ * region) ~$150/mo") and `wake.sh` recreates it — and AWS assigns a new DNS name
+ * every time, because an ALB name cannot survive delete/create. So anything
+ * holding the raw name goes stale on EVERY hibernate cycle. It had gone stale
+ * three times over: the cicd stack parameter said `cello-dir-dev-85618485`, the
+ * CodeBuild project said `cello-dir-dev-1341968405`, and the live ALB was
+ * `cello-dir-dev-1389700310`.
  *
- * This is the documented anti-pattern in infra/CLAUDE.md — "ALB DNS Names:
- * always query AWS, never use STATE.md" — in a place nobody thought to apply it,
- * because it was CI configuration rather than a runbook step.
+ * Route53 is the indirection that already solves this, and `wake.sh` re-points
+ * it on every wake — `directory-us1.cello.mygentic.ai` resolved to exactly the
+ * live ALB's addresses when this was written. Using it removes the staleness
+ * entirely rather than refreshing it, and it satisfies DOD-INV-DOMAIN, which
+ * bans raw AWS hostnames for precisely this kind of reason.
  *
- * The env var still wins when set, so a local run or a one-off override needs no
- * AWS call. Absent, it is looked up; and a lookup that fails REFUSES rather than
- * falling back to a guess, because a smoke test pointed at the wrong host is
- * worse than one that did not run.
+ * An earlier version of this fix resolved the ALB from AWS at run time. It
+ * worked, but it was machinery — an SDK dependency and an IAM grant — to solve
+ * a problem a DNS record already solves for free.
+ *
+ * NOTE the scheme: the health probe below uses http, not https. The ALB forwards
+ * :80 to the libp2p listener on :8080, which answers a plain GET with 400 — and
+ * 400 is accepted as proof of life. Over https this host does not answer.
  */
+const REGION_HOSTNAME: Record<string, string> = {
+  "us-east-1": "directory-us1.cello.mygentic.ai",
+  "eu-central-1": "directory-eu1.cello.mygentic.ai",
+  "ap-northeast-1": "directory-ap1.cello.mygentic.ai",
+};
+
 const PIPELINE_EXECUTION_ID = process.env["CODEBUILD_BUILD_ID"] ?? "local";
 
-async function resolveStagingDirectoryUrl(): Promise<string> {
+function stagingDirectoryHost(): string {
   const fromEnv = process.env["STAGING_DIRECTORY_URL"];
   if (fromEnv) return fromEnv;
 
-  const { ElasticLoadBalancingV2Client, DescribeLoadBalancersCommand } = await import(
-    "@aws-sdk/client-elastic-load-balancing-v2"
-  );
   const region = process.env["AWS_REGION"] ?? "us-east-1";
-  const client = new ElasticLoadBalancingV2Client({ region });
-  const out = await client.send(new DescribeLoadBalancersCommand({}));
-  const env = process.env["CELLO_ENV"] ?? "dev";
-  const alb = (out.LoadBalancers ?? []).find((lb) =>
-    (lb.LoadBalancerName ?? "").startsWith(`cello-dir-${env}`),
-  );
-  if (!alb?.DNSName) {
+  const host = REGION_HOSTNAME[region];
+  if (!host) {
     throw new Error(
-      `No load balancer named cello-dir-${env}* in ${region}. Refusing to run: a smoke ` +
-        `test pointed at the wrong host is worse than one that did not run.`,
+      `No directory hostname known for region ${region}. Refusing to run: a smoke test ` +
+        `pointed at the wrong host is worse than one that did not run.`,
     );
   }
-  return alb.DNSName;
+  return host;
 }
 
 let STAGING_DIRECTORY_URL: string;
 try {
-  STAGING_DIRECTORY_URL = await resolveStagingDirectoryUrl();
+  STAGING_DIRECTORY_URL = stagingDirectoryHost();
 } catch (error) {
   emitEvent(SMOKE_EVENTS.failed, {
     pipelineExecutionId: PIPELINE_EXECUTION_ID,

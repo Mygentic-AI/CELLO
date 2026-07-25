@@ -1037,16 +1037,20 @@ if [[ "${REGION}" == "us-east-1" ]]; then
   #
   # Empty means the runner resolves it from AWS at run time, so a stale cicd
   # stack self-heals. Set CELLO_STAGING_DIRECTORY_URL for a deliberate override.
-  # The ALB DNS name as it is RIGHT NOW, which is what this always intended —
-  # deploy.sh reads the directory stack output and passes it. It went stale only
-  # because this stack had not been deployed since the ALB was replaced.
+  # THE STABLE HOSTNAME, never the ALB's own DNS name.
   #
-  # An earlier attempt passed "" here, meaning "let the runner resolve it". That
-  # broke the deploy outright: a CodePipeline variable derived from this
-  # parameter requires a non-empty default, so the stack rolled back. The
-  # runtime resolver in run-smoke-tests.ts stays as the safety net for the next
-  # time this drifts — but the parameter carries a real value.
-  STAGING_DIRECTORY_URL="${CELLO_STAGING_DIRECTORY_URL:-${ALB_DNS_NAME}}"
+  # hibernate.sh deletes the directory ALB and wake.sh recreates it, and AWS
+  # assigns a new DNS name each time — so a baked ALB name goes stale on every
+  # hibernate cycle. That is why this drifted three generations deep and why the
+  # same one-command repair has been needed repeatedly (see the 2026-07-19
+  # discussion log). Route53 already carries the indirection and wake.sh
+  # re-points it, so the hostname simply never goes stale.
+  #
+  # Passed explicitly rather than left empty: a CodePipeline variable derives
+  # from this parameter and CodePipeline rejects an empty default.
+  # Built from the mapping this script already owns (get_directory_subdomain),
+  # rather than a fourth hardcoded copy of the hostname.
+  STAGING_DIRECTORY_URL="${CELLO_STAGING_DIRECTORY_URL:-$(get_directory_subdomain "${REGION}").${DOMAIN_NAME}}"
 
   # Pass STAGING_DIRECTORY_URL from stack output so CodePipeline can inject it into
   # the smoke test CodeBuild action (AC-009: no hardcoded .elb.amazonaws.com strings)

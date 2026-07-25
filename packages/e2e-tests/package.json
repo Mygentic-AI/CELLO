@@ -23,7 +23,6 @@
     "test:spine": "vitest run --config vitest.spine.config.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-elastic-load-balancing-v2": "^3.700.0",
     "@cello-protocol/connect": "^0.0.71",
     "@cello-protocol/crypto": "^0.0.22",
     "@cello-protocol/directory": "workspace:*",
