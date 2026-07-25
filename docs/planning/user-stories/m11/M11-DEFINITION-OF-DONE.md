@@ -413,6 +413,12 @@ each line.
 - **queue position is COMPUTED** — `waitlist_queue` ranks correctly by points then age (80, 50, 50,
   0), and `queue_position` exists on no table, only the view. `DOD-INV-NO-INFLATION` has nowhere to
   store a fabricated number.
+- **UNSUBSCRIBE, prefetch-safe and scoped (first time, 2026-07-25)** — `GET` returns the
+  confirmation page and changes **nothing**, which is the whole point: a mail client's link scanner
+  fetches every URL in a message, and an acting GET would silently unsubscribe engaged users. `POST`
+  with `list=content_alerts` clears only that flag and leaves `email_status` active. `POST` without
+  a scope sets `email_status='unsubscribed'`. Three states, three outcomes, verified against the
+  database rather than the response code.
 - **wave gate** — `capacity` alone is refused `invalid_capacity`; with a capacity but no operator,
   refused `missing_opened_by` ("every wave names the operator who opened it"); with both, it declines
   to open a wave at all: `{admitted:0, reason:'all_unverified', waiting_total:8,
