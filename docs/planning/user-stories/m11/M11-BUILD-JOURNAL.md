@@ -2456,3 +2456,50 @@ verified as `portal_admin@…/cello_portal` — the check worth repeating, becau
 the directory's exports and the failure mode reads as a migration problem.
 
 **Runs:** 423 tests green.
+
+---
+
+### Entry 52: not one email could ever have been sent
+**Date:** 2026-07-25
+**Target:** DOD-EMAIL-INFRA-1, DOD-E1-1 [trustless-cello]
+
+The email enforcer ran for the first time — a real signup through the deployed API, then the dispatcher
+against real SES. It returned `{"sent": 0, "failed": 1}`, and the reason is the most valuable thing this
+milestone has produced:
+
+```
+ParamValidationError: Unknown parameter in input: "Headers", must be one of:
+Source, Destination, Message, ReplyToAddresses, ReturnPath, SourceArn,
+ReturnPathArn, Tags, ConfigurationSetName
+```
+
+**boto3's SES `send_email` has no `Headers` parameter.** The RFC 8058 one-click unsubscribe headers added
+in Entry 38 — carefully scoped per list, tested both ways, written up at length — were being handed to an
+API that cannot carry them. Every send raised. Not one email could ever have left, in any environment,
+for any user.
+
+**Why four hundred green tests missed it.** `FakeSES.send_email` took `**kwargs` and recorded whatever it
+was given. A parameter that does not exist looked exactly like one that does. The fake was *more
+permissive than the thing it stood in for*, and everything downstream of that permissiveness was
+untested by construction.
+
+That is the general shape, and it is worth stating flatly: **a fake at a boundary must be at least as
+strict as the real thing, or it is not a boundary — it is a hole shaped like one.** Every assertion the
+suite made about unsubscribe headers was true about the dictionary passed to the fake and false about
+the message SES would have sent.
+
+**The fix is not a smaller change than it sounds.** Custom headers require a MIME message; SES's
+`send_email` takes subject and bodies as separate fields and offers no way to add headers at all. So the
+dispatcher now builds an `EmailMessage` with both alternatives and the unsubscribe pair set on it, and
+calls `send_raw_email`. The fake now enumerates the real parameter names and raises on anything else, and
+a second test guards *that* — because if the fake goes back to accepting everything, the defect becomes
+invisible again exactly as before. Two sibling test files had their own fakes with the same hole.
+
+**Then it sent.** A fresh signup through `api.cello.mygentic.ai`, dispatcher invoked, `{"sent": 1}`.
+
+**The enforcer is the point.** This defect was unreachable from the laptop: no amount of local testing
+against a fake could find a parameter name that only the real API validates. It is the same category as
+the SameSite cookie and the missing CORS routes — properties of the boundary rather than of the code on
+either side of it — and it is the third one this milestone has produced.
+
+**Runs:** 425 tests green.
