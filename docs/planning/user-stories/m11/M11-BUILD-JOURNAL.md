@@ -3089,3 +3089,55 @@ image that does not exist. Nothing can push one: the repo has no GitHub remote, 
 pipeline, and pushing from a laptop is forbidden outright. Deploying now yields a crash-looping
 service, the circuit breaker firing, and a rollback — noise with a confident-looking cause. The
 order is **repo → pipeline → image → deploy**, and only the first step is Andre's.
+
+---
+
+## 2026-07-25 — the site went live, and the review found the outage that hadn't happened yet
+
+Andre gave the go-ahead mid-session, so **`cello.mygentic.ai` is deployed**: `m11/review-fixes`
+fast-forwarded onto `main` (35 commits, clean), the workflow succeeded, six pages serve 200, and the
+served JS chunk targets `https://api.cello.mygentic.ai/waitlist` — verified on the bundle, not the
+branch. Eleven DoD lines lose their blocker. **None become ✅**: curl does not execute JavaScript, so
+every client-side half — localStorage touchpoints, `ref` extraction, the cookie round-trip — has
+still never run in a browser.
+
+Then the ops-dashboard chain: repo created (`Andre-Mygentic/cello-ops-dashboard`, private), ECR repo
+deployed, GitHub OIDC deployed, and a build workflow that assumes a role pinned to this repo AND
+`refs/heads/main` — no AWS key anywhere.
+
+**The first CI run failed 30 tests, and was right to.** The magic-link suite needs a real Postgres,
+because what it proves — one live link per operator, tokens stored only as hashes, a requester-keyed
+throttle — is enforced by SQL constraints, and a mock would assert the test's own beliefs about
+them. The job now brings up `postgres:16` and applies the same migration files the deployed database
+gets, with `ON_ERROR_STOP=1`.
+
+**The review found the outage before it happened.** `deploy.sh` was passing the dashboard the
+**RDS-managed master secret** — `{"username":…,"password":…}` — as `DATABASE_URL`. The failure mode
+is the worst available: it is PRESENT, so the boot check passed; `/sign-in` is the ALB health check
+path and touches no database, so the target goes healthy and the deploy prints success; and the
+first operator to open `/` gets a generic 500 with the cause a `pg` error deep in CloudWatch. *A
+container that answers is a container ECS and a human both believe is working* — the sentence in the
+dashboard's own FATAL message, reached by a fourth route in one day. Fixed on both sides: deploy.sh
+resolves `cello/{env}/portal/database-url` (which already existed, and which the portal's own task
+definition already uses), and the boot check now validates the SHAPE rather than the presence.
+
+Two more guards that could not fire: the `IMAGE_TAG` check guarded a variable that defaults to
+`"stub"` twenty lines earlier, and `HOSTED_ZONE_ID` falls back to the literal `PLACEHOLDER`. Both
+would have surfaced as exit-point labels — `CannotPullContainerError`, an ACM hang — for "you forgot
+an environment variable".
+
+**And the checker caught me.** Commit `985fd257` repaired three permanently-broken suites by
+anchoring their migration paths to the test file; those files live under `packages/directory/`, and
+`pipeline-mappings.json` maps that prefix wholesale — so a **test-only** edit triggered a
+three-region protocol deploy. `DOD-INV-NO-DIRECTORY-RELAY` went red and stays red on that commit.
+
+I did not revert it (the revert also touches `packages/directory/`, so it buys a second deploy to
+restore three broken suites) and I did not teach the checker to ignore it. **A green checker that has
+been taught to overlook the one violation it found is worth less than a red one that names it.** I
+also did not apply the relay-restart runbook on reflex: the new directory's log shows
+`relay.health.check.passed` every 30s and manifest v79 polling, because the directory learns relays
+from the signed S3 manifest and not only from in-band registration. That path self-healed. Checked,
+then not acted on — which is the right order.
+
+**Blocked, hard:** every `git push` now fails with *"You must verify your email address"* —
+account-wide, both repos. Work continues and commits queue locally.
