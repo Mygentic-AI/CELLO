@@ -419,3 +419,48 @@ def test_a_LIVE_grant_still_excludes_its_holder(waves):
     _, body = open_wave(waves, capacity=4)
 
     assert body["admitted"] == 0
+
+
+def test_an_empty_wave_names_the_unverified_users_rather_than_the_rules(waves):
+    """"No waiting users matched the selection rules" is an exit-point label.
+
+    The operator is looking at an ops-dashboard queue showing N waiting people —
+    `waitlist_queue` does not filter on email_verified — while the Lambda says
+    nobody matched. It points at the selection rules; the cause is that nobody
+    confirmed their address.
+    """
+    make_user("un1@example.test", email_verified=False)
+    make_user("un2@example.test", email_verified=False)
+
+    _, body = open_wave(waves, capacity=4)
+
+    assert body["admitted"] == 0
+    assert body["excluded_unverified"] == 2
+    assert "confirmed their email" in body["detail"]
+    assert "selection rules" not in body["detail"], (
+        "the message must name the cause, not the place the check happened"
+    )
+
+
+def test_an_under_filled_wave_reports_how_short_it_came(waves):
+    """A wave that admits fewer than its capacity must say so. Postgres applies
+    LIMIT before row locks and does not replace rows dropped by the post-lock
+    re-check, so a concurrent second wave comes back short with no signal — and
+    the len(admitted) != len(cohort) guard cannot see it, because those rows
+    never reached the cohort."""
+    make_user("only@example.test")
+
+    _, body = open_wave(waves, capacity=5)
+
+    assert body["admitted"] == 1
+    assert body["capacity"] == 5
+    assert body["short_by"] == 4
+
+
+def test_a_full_wave_reports_short_by_zero(waves):
+    for i in range(3):
+        make_user(f"full{i}@example.test")
+
+    _, body = open_wave(waves, capacity=3)
+
+    assert body["admitted"] == 3 and body["short_by"] == 0

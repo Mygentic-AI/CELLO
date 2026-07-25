@@ -288,12 +288,37 @@ def assemble(body, correlation_id):
                 # Not an error. An empty queue is a legitimate answer and the
                 # operator needs to see it rather than a failure they will go
                 # looking for a cause behind.
+                #
+                # BUT IT MUST NAME THE CAUSE. "No waiting users matched the
+                # selection rules" is an exit-point label: the operator is
+                # looking at an ops-dashboard queue showing N waiting people —
+                # `waitlist_queue` does not filter on email_verified — while
+                # this says nobody matched. It points at the selection rules;
+                # the cause is usually that nobody has confirmed their address.
+                cur.execute(
+                    "SELECT count(*)::int AS n FROM waitlist_users "
+                    "WHERE status = 'waiting' AND NOT email_verified"
+                )
+                unverified = cur.fetchone()["n"]
                 conn.rollback()
-                log("waitlist.wave.empty", correlation_id, level="WARN", capacity=capacity)
+                log(
+                    "waitlist.wave.empty",
+                    correlation_id,
+                    level="WARN",
+                    capacity=capacity,
+                    excludedUnverified=unverified,
+                )
+                detail = "No waiting users were eligible; no wave was opened."
+                if unverified:
+                    detail += (
+                        f" {unverified} waiting user(s) have not confirmed their email address and "
+                        f"cannot be admitted — a wave seat given to an unreachable address is spent."
+                    )
                 return {
                     "admitted": 0,
                     "wave_number": None,
-                    "detail": "No waiting users matched the selection rules; no wave was opened.",
+                    "excluded_unverified": unverified,
+                    "detail": detail,
                 }
 
             cur.execute("SELECT COALESCE(max(wave_number), 0) + 1 AS n FROM waves")
@@ -350,6 +375,14 @@ def assemble(body, correlation_id):
             waveNumber=wave_number,
             openedBy=opened_by,
             admitted=len(admitted),
+            capacity=capacity,
+            # UNDER-FILL IS REPORTED, not inferred by the operator comparing two
+            # numbers. Postgres applies LIMIT before taking row locks, and rows
+            # dropped by the post-lock re-check are NOT replaced — so a second
+            # wave running behind a first sees those users already admitted,
+            # drops them, and comes back short. The len(admitted) != len(cohort)
+            # guard cannot see it, because those rows never reached the cohort.
+            shortBy=max(0, capacity - len(admitted)),
             premium=n_premium,
             priority=n_priority,
             zero=n_zero,
@@ -357,6 +390,8 @@ def assemble(body, correlation_id):
         return {
             "admitted": len(admitted),
             "wave_number": wave_number,
+            "capacity": capacity,
+            "short_by": max(0, capacity - len(admitted)),
             "breakdown": {"premium": n_premium, "priority": n_priority, "zero": n_zero},
         }
     except Exception:
