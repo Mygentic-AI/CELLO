@@ -2576,3 +2576,43 @@ exactly this and would have concluded the sends were fake.
 an attacker-chosen non-ASCII display name or subject is RFC 2047 encoded so the bytes on the wire stay
 pure ASCII. This was the one thing about Entry 52's fix that a passing test could not settle, since the
 tests parse the message the handler just built rather than what SMTP would carry.
+
+---
+
+### Entry 55: the migrator had no tests, and one of its new tests proved nothing
+**Date:** 2026-07-25
+**Target:** DOD-SCHEMA-1
+
+The migration runner writes schema to the one database the portal, the waitlist and the ops dashboard
+all share, and it shipped — and was used against production — with zero test coverage. That is the
+highest-consequence untested code in the milestone, so it now has thirteen tests, each against a scratch
+database it creates and drops. Pointing a schema-mutating runner at a shared fixture would make every
+other suite depend on the order this one ran in.
+
+**Two properties were verified empirically rather than reasoned about**, because both determine whether a
+guard is real or decorative:
+
+- The advisory lock is *session*-scoped and survives the `commit()` that immediately follows it. A
+  transaction-scoped lock would have been released instantly and the guard would have been theatre. Two
+  live connections: the second is refused, and the lock frees when the first disconnects — so a Lambda
+  that times out mid-migration cannot deadlock every future run.
+- The MIME message SES actually receives is `multipart/alternative` with `text/plain` before `text/html`,
+  and an attacker-chosen non-ASCII subject or display name is RFC 2047 encoded so the wire bytes stay
+  pure ASCII.
+
+**And one test caught nothing, twice, in two different ways.**
+
+First: reverting the ledger INSERT into its own transaction left all twelve tests green. The property —
+that a crash between *applying* and *recording* must roll back both — needs a crash between two commits,
+and nothing was producing one. So a test was written that produces one.
+
+Then that test passed on its first run *while firing nothing*. It poisoned the **second** `checksum()`
+call on the theory that the tamper pass calls it once and the ledger write once. But the tamper pass only
+checksums files already in the ledger, and with nothing applied it calls it zero times — so the first
+call *is* the ledger write, and the poison never triggered. A test asserting a rollback that never had to
+happen.
+
+That is the same species it was written to catch, one level up: **a check that passes for a reason other
+than the one in its name.** Corrected, and the revert now goes red.
+
+**Runs:** 438 tests green. The deployed migrator confirms 0 pending / 29 applied through the new lock path.
