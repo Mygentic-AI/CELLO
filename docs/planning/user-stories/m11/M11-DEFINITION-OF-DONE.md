@@ -336,6 +336,35 @@ These are not DoD lines — they are the real-world checks that determine whethe
 ## Parked
 *(Genuine undecidable forks. Never silently dropped.)*
 
+- **How the seal event reaches `waitlist-firstwin` (2026-07-25).** The function is deployed with **no
+  invoker**, and its CFN Description says so. `DOD-FIRST-WIN-1` says the trigger is a "session seal event
+  from the daemon" — but the daemon runs on the operator's laptop and holds **no AWS credentials**, so
+  there is no path today. This is a fork between materially different architectures, so it is parked
+  rather than guessed. The analysis, so the decision is quick:
+
+  **Option 1 — a public, signature-authenticated route.** The daemon POSTs `{agent_pubkey, session_id,
+  sealed_root, signature}` to `api.cello.mygentic.ai/waitlist/first-win`; the Lambda verifies the
+  signature against the pubkey. *This is the only option that needs no new trust relationship*, because
+  `waitlist_agent_links.agent_pubkey` is already the table's primary key — written at token-burn time,
+  the one moment both identities are present (M11-D6). Cost: an Ed25519 verify in the Lambda (a new
+  dependency in a package that currently carries only psycopg2), and a public endpoint that must refuse
+  an unlinked pubkey without revealing whether it is linked.
+
+  **Option 2 — derive it from session telemetry.** `DOD-FEEDBACK-DETECTION-1` already owes "the daemon
+  writing session telemetry", and first win is derivable from it, so this adds no new call site.
+  But it does not actually dodge the problem: telemetry has the *same* credential question, and it makes
+  first win a sweep rather than an event, so invite codes and E-win arrive up to a day late — on the
+  single moment the product most wants to feel immediate.
+
+  **Option 3 — relay it through the portal.** The operator is already authenticated there, so the trust
+  relationship exists. But it puts a protocol event on a web session, meaning first win only fires while
+  somebody has the portal open — and it couples the daemon to the portal, which nothing else does.
+
+  **Leaning:** Option 1, because the pubkey binding already exists and it is the only one that fires at
+  the moment it happens. Not taken unilaterally: it adds a public write endpoint to the waitlist API and
+  a crypto dependency, and "which surface may the daemon call" is Andre's architectural call, not an
+  agent's. Note this also blocks `DOD-E-WIN-1`, which has nothing to send until first win fires.
+
 - **Gallery indexability — the pages are client-rendered, and the gallery exists to be crawled (2026-07-25).** `DOD-GALLERY-1` says *"SSR-rendered (bot-indexable)"* and §9 states the compounding value plainly: *"the gallery becomes a corpus of real agent-to-agent sessions that AI engines index."* What is built is a static export that fetches receipts client-side, so **GPTBot, PerplexityBot and most AI crawlers see an empty shell.** The pages are correct, the API is correct, and the single reason the gallery is in the milestone is not delivered. This traces directly to M11-D20 (keep the static export), which was the right call for `/status` and `/auth` — those are session-gated and should never be indexed — and is the wrong shape here. **Three resolutions, none free:** (a) generate receipt pages at BUILD time via `generateStaticParams` — genuinely indexable, but CI needs access to a `PubliclyAccessible: false` RDS, and the gallery only updates on deploy (acceptable in itself, since a published receipt is immutable by design); (b) run the gallery as a small server-rendered app on its own subdomain, which is Option A from M11-D20 scoped to the one surface that needs it; (c) accept bot-invisibility and drop the GEO justification from the milestone, keeping the gallery as a share target only. This is a genuine fork with a real cost either way, so it is Andre's. **Not blocking the rest of P3** — the API, the schema, the privacy model and the pages all stand under any of the three. Unparked by: choosing (a), (b) or (c).
 
 - **`DOD-MCP-REGISTRY-1` — four outward submissions, not a build (2026-07-25).** Listing `@cello-protocol/connect` on mcp.so, Smithery, Glama and awesome-mcp-servers means creating an account on each and submitting through their own flow. Nothing local produces a listing. **What can be prepared and is not blocked:** the description text optimised for BOFU queries ("agent-to-agent identity", "trust signals", "MCP server for agent communication") — worth drafting alongside the GEO content rather than at submission time. Unparked by: Andre submitting to each platform. Note the awesome-mcp-servers entry is a pull request rather than a form, so that one at least has a reviewable artefact.
