@@ -2097,3 +2097,63 @@ the once-ever guard queues a copy every single day. All three turn the named tes
 **Runs:** 403 tests green. Template validates at 63 resources, no dangling refs, and every schedule rule
 now has a matching invoke permission — checked mechanically, since that was the class of gap that let
 the bounce topic ship with no publisher.
+
+---
+
+### Entry 44: the fix for the lockout was a better lockout
+**Date:** 2026-07-25
+**Target:** DOD-OPS-SHELL-1, second review round [ops-dashboard]
+
+Entry 42 recorded that the missing rate-limit table had left a denial of service open, and closed it.
+A second review round found that the throttle I added **made that attack cheaper**, and that the comment
+I wrote said the opposite.
+
+**Attacker and victim shared one bucket.** The counter was keyed on the address the *requester* supplies.
+Six requests against a known operator address and that operator's own request is the seventh —
+throttled, no link issued, while the sign-in page tells them one is on its way. Sustained cost: 576
+requests a day. Before the throttle they at least received a link that could be raced; after it they
+received nothing and could not win inside the window. I replaced a race with a guarantee.
+
+**Two changes, and only the first is the real one.** Issuing a link no longer kills the operator's
+previous unused links, so a flood cannot invalidate what is already in their inbox. Coexisting links are
+bounded by the address throttle, each expires in fifteen minutes and burns on first use — a far smaller
+exposure than handing out a reliable lockout. Enforcement then moves to a **requester-keyed** bucket, so
+a flood costs the flooder their own access and nobody else's; the address bucket stays, but only to cap
+SES spend, and now logs under its own event name because it firing repeatedly for a real operator is an
+attack in progress rather than a mail problem.
+
+The residual is written into the code rather than left implicit: an attacker with many source addresses
+can still exhaust an address bucket, and an operator who holds no live link waits out the window.
+
+**Migration 0003 deleted every live link on a re-run.** `DELETE FROM ops_magic_links WHERE used_at IS
+NULL`, unguarded, in a repo with **no migration ledger**, where files are applied by hand with `psql
+-f` — precisely the situation where a file gets replayed. And the symptom is invisible by construction:
+a wiped link produces the same `?expired=1` screen the design deliberately made indistinguishable from a
+genuine expiry. Now guarded on the pre-migration shape and wrapped in a transaction, because without one
+a mid-file failure left the table with **no primary key**.
+
+**One character could switch the throttle off.** `Number(process.env.X ?? "5")` with no validation, in
+the file whose header promises the values are validated. `"abc"` → `NaN` → `attempts > NaN` is always
+false → throttle silently off, taking the no-enumeration control that now rests on it. `""` → `0` →
+nobody can ever sign in, which is indistinguishable from the attack above. Both directions silent.
+
+**Two of my own route tests landed next to what they named.** The throttle one passes with the throttle
+deleted — it only asserts the responses are identical, which they were before a throttle existed. And
+the Host-header one tested the *request* route, which never had that bug; the fallback was in the
+**verify** route, which had no test at all. Revert the actual fix and the whole suite stayed green. Both
+renamed to what they check, and the verify route now has two tests of its own.
+
+**The recurring shape, stated once more.** Three rounds now: Entry 40's four miswired resources, Entry
+42's rewritten-instead-of-borrowed module, and this one. Each time the *second* version of a thing was
+wrong in a way the first version was not, and each time a comment asserted the property was handled.
+The comment is the dangerous part — a wrong one tells the next reader not to check, and the next reader
+was me, twice.
+
+**Runs:** 50 tests green (was 45), `tsc` clean, `next build` clean. Four revert tests: restoring
+kill-previous, restoring the origin fallback, and removing the requester branch each turn the named test
+red — the third only after I wrote a second test, because the first one I had did not pin it.
+
+**Also recorded:** two deploy constraints in the dashboard's README, neither checkable while AWS is
+hibernated. Fire-and-forget needs a persistent process — on a serverless runtime the response returns
+and the container can freeze before SES is invoked, so links would silently never send. And config
+validation at module load means `OPS_PUBLIC_URL` is required by `next build`, not only at runtime.
