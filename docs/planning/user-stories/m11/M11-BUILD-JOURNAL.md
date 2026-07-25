@@ -1831,3 +1831,153 @@ the renderer lands in a later commit, or never does.
 **Status:** `DOD-EMAIL-DRIP-1` ❌ → 🟡. **No DoD line is ❌ any more.** What remains is the AWS half —
 CloudFormation for every Lambda, the EventBridge schedules, the API Gateway custom domain, SES production
 access — plus the parked forks and the outward actions only Andre can take.
+
+---
+
+### Entry 40: the waitlist becomes deployable — and four wires went to the wrong thing
+**Date:** 2026-07-25
+**Target:** DOD-EMAIL-INFRA-1, and the AWS half of every 🟡 line [trustless-cello]
+
+Twelve Lambdas with 377 green tests and no way to run any of them in AWS. This entry covers the
+CloudFormation stack, both halves of the deploy path — and the review that found the stack would have
+deployed cleanly and not worked.
+
+**What the review found is the point of this entry.** Four of the five load-bearing wires were connected
+to the wrong thing or to nothing, and in three of the four cases the file's own prose asserted otherwise.
+None of it was reachable by any test.
+
+**The database was the directory's.** `deploy.sh` read `cello-${env}-rds-*` — endpoint, port, master
+secret — and built `postgresql://postgres:…/cello_${env}`. That is the *directory* instance. The waitlist
+schema lives in `cello-${env}-portal-db-*`, user `portal_admin`, database `cello_portal`. The export names
+are one word apart. `DOD-INV-SINGLE-DB` calls that connection string a blocking finding in as many words,
+and the credential it would have copied into twelve internet-facing functions is the directory master
+password that `cello-rotation.yaml` deliberately withholds from every task role — so a SQL injection in
+any one handler became full read/write on `agent_profiles`.
+
+The visible failure would have been `42P01 undefined_table` on `waitlist_users`: an error that sends the
+operator to the migration subsystem, not to *you are connected to the wrong instance*. The worse branch is
+an operator "fixing" it by running the M11 migrations against whatever the Lambdas point at, which lands
+waitlist PII in the directory DB and takes `DOD-INV-NO-PII-DIRECTORY` with it.
+
+**The invariant scanner was green through all of it**, because it scanned Lambda source and the corp site
+— and this commit had just created the one file where the target is actually decided, outside the scan.
+Its own comment said the point was *"there is one place the target is decided rather than a hardcoded host
+somewhere."* It now asserts positively that the waitlist step reads `portal-db-*` and that the template
+opens the portal SG. Reverted to the old wiring both new checks fail; the two original checks stay green
+in both directions, which is the measure of how blind it was.
+
+**SES was unreachable twice over.** Egress was scoped to the VPC CIDR, and `boto3`'s SES client resolves
+`email.<region>.amazonaws.com` — public. The interface endpoint meant to avoid that was `email-smtp`,
+which is SMTP submission, a different service. Every send would have hung to the Lambda timeout, once a
+minute, with jobs cycling `pending → sending → reclaimed` forever and nothing reporting it.
+
+The reasoning behind the endpoints was itself wrong, and worth recording because it *sounded* right:
+hibernate does delete NAT gateways, so an email pipeline depending on one stops overnight. True — and
+irrelevant, because hibernate also **stops RDS**, so during hibernation these functions have no
+`email_jobs` table to read. The endpoints bought the ability to reach SES while the queue they drain is
+unreachable, and would have billed straight through every hibernation since `hibernate.sh` only discovers
+the `ssmmessages` endpoint. M6B-014 stage 2 removed six endpoints per region for exactly this reason; I
+had quietly reversed that decision for the least important service in the stack. Both deleted, 443 opened
+to the NAT that already exists.
+
+**Every browser write failed CORS preflight.** All four API handlers implement `if method == "OPTIONS"`.
+No route sent an OPTIONS request to any of them and there was no `$default`, so API Gateway answered every
+preflight itself with 404 and no `Access-Control-Allow-Origin`. `cello.mygentic.ai` →
+`api.cello.mygentic.ai` is same-**site**, which is what keeps the Lax cookie attached — and still
+cross-**origin**, and a JSON POST is not safelisted, so it always preflights. Signup, survey, readiness,
+interview-commit, post-url, content-alerts, auth, unsubscribe, gallery publish: all dead in a browser,
+with handler-side CORS code that was dead by wiring.
+
+The fix routes each prefix to the handler that owns it rather than one catch-all. A single
+`OPTIONS /waitlist/{proxy+}` pointed at signup would have been *worse than no route*: signup's preflight
+response omits `Access-Control-Allow-Credentials` because signup has no session, and the browser rejects a
+credentialed request whose preflight lacks it — so the catch-all breaks precisely the calls the status
+page depends on, while looking like a CORS fix.
+
+**The certificate did not exist.** `deploy.sh` looked up an ACM cert for `api.*` by domain, with the
+comment *"looked up rather than hardcoded — a recreated certificate gets a new ARN"*. No template in the
+repo creates that certificate. The lookup returned nothing, the stack skipped itself, and the run printed
+`deployment complete` — permanently, every time, in a repo whose discipline is that everything in AWS
+exists in IaC. The stack now creates it, DNS-validated, the same pattern `cello-portal-data.yaml` already
+uses. A resource IaC owns cannot go missing this way.
+
+**The bounce topic had no publisher.** Topic, policy, subscription and Lambda permission all present — a
+complete delivery path with nothing at the top of it — and *"point SES at this"* deferred to a manual step
+nobody wrote down. This one is invisible by construction: SES emits bounce and complaint events only for
+mail sent **with** a configuration set, so without one every message still leaves, nothing errors,
+deliverability looks fine, and `email_status` is never set to `bounced` while the sending domain's
+reputation degrades. Fixed with a configuration set and event destination — and the dispatcher now
+**refuses to run** if `WAITLIST_SES_CONFIG_SET` is unset, checked before any job is claimed so a refusal
+cannot strand rows in `sending`.
+
+**Three smaller ones worth keeping.** `|| echo ""` on four `aws` calls made a denied IAM call
+indistinguishable from a missing resource — one expired credential printed four missing-infrastructure
+lines pointing at RDS and ACM. The skip warning scrolled past hundreds of lines above a green summary that
+never mentioned the waitlist. And the import assertion I was pleased with checked only roots starting with
+`_`, on a stated theory that sibling modules always do — `waitlist-email/templates.py` is a counterexample
+sitting in the tree, imported inside a function body, so a missing `templates.py` passed the check *and*
+survived cold start and would have failed on the first rendered job. Now subtractive: every import root
+minus stdlib minus what is physically staged, with `boto3`/`botocore` named explicitly as runtime-provided.
+
+**A note on my own process.** The commit message for the first version was proud of catching the
+SameSite bug — a property of two hostnames that no handler test could see. Three of these four are the
+identical shape, in the same file, written in the same sitting. Recognising a class of defect once does
+not inoculate the next thing you write against it; only a reader who does not already believe the comments
+does.
+
+**Runs:** 379 tests green (two new in `waitlist-email` covering the configuration-set refusal and that
+every send actually carries it). `bash -n` clean on both scripts. Template validates: 61 resources, 20
+routes, 12 functions, no dangling refs.
+
+**Status:** unchanged at 🟡 for every AWS-dependent line, which is exactly what it is for — all four
+findings were things only a live deploy would have surfaced.
+
+---
+
+### Entry 41: the ops dashboard grows pages, and a sign-in that survives a prefetching mail client
+**Date:** 2026-07-25
+**Target:** DOD-OPS-SHELL-1, DOD-OPS-POST-REVIEW-1, DOD-OPS-WAVE-MGMT-1, DOD-OPS-FEEDBACK-1 [ops-dashboard]
+
+Four DoD lines sat at *"the action is written, the page is owed"*. This closes the owed half: the magic-link
+route tree, the sign-in flow, and five pages.
+
+**The burn is one statement.** `UPDATE … SET used_at = now() WHERE token = $1 AND used_at IS NULL AND
+expires_at > now() RETURNING operator_email` — expiry and single-use collapsed deliberately, because
+splitting them into a SELECT that validates and an UPDATE that burns reintroduces exactly the window the
+conditional UPDATE closes. The test fires twelve concurrent redemptions of one token. Reverted to
+check-then-act it mints **nine sessions from a single link**, which is not a theoretical failure: these
+links arrive in email, and mail clients prefetch.
+
+**No enumeration, and the response is the thing.** Requesting a link for an address not on the allowlist
+does what requesting one for a real operator does — same return, same redirect, same page. A different
+message turns the endpoint into an oracle for who operates the waitlist, which is the shortlist you would
+want before phishing anybody. The sign-in confirmation is static text for the same reason: rendered from a
+response, it is one refactor away from rendering the difference.
+
+**The origin comes from config, never the Host header.** A Host header is attacker-controlled, and
+reflecting it into a sign-in link mails a real operator a credential pointing at someone else's host.
+Unset, the route refuses rather than guessing — a link built against the wrong origin is a credential
+mailed to the wrong place.
+
+**Sign-out revokes the row.** Clearing the cookie removes only this browser's copy while the token stays
+valid for the rest of its eight hours anywhere it was captured — cosmetic, on the one dashboard that can
+admit strangers to the network. POST only; a GET sign-out is triggerable from any page an operator visits.
+
+**Every column was checked against the real schema before the page was written**, which caught three that
+would otherwise have failed on an operator's screen: `email_jobs` has no `failed_at` (it carries a status
+enum, and folding `failed` into a backlog figure would hide a queue that never drains), and
+`waitlist_queue` exposes neither `status` nor `email_verified`. The queue joins `waitlist_users` on
+`waitlist_id` — the stable key — never on email or display name. Then every page's SQL was executed
+against a seeded Postgres, so a wrong column name fails here rather than there.
+
+**Two interface decisions that are really integrity decisions.** Opening a wave asks for the capacity to
+be typed twice: it admits strangers, cannot be undone from the dashboard, and is the control an operator
+reaches for at 1am. And the post-review list shows only unreviewed rows — `reviewPost` refuses a second
+review atomically, but an interface that offers an action it will then refuse teaches the operator to
+ignore its refusals.
+
+**Runs:** 24 tests green, `tsc --noEmit` clean, `next build` clean with all ten routes server-rendered on
+demand — a statically exported queue would be a build-time snapshot with no auth at all.
+
+**Status:** the four lines stay 🟡. Owed on each: a browser has never loaded these pages, and the GitHub
+remote and deploy are outward actions.
