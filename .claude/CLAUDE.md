@@ -338,38 +338,8 @@ Format the proof as a numbered flow. Include:
 
 **NEVER run `npm publish`.** Use `pnpm publish` via CI only. `npm publish` ships raw `workspace:*` specifiers → broken package → version burned forever.
 
-**How to publish — full version bump procedure:**
-
-When changing code in any `core/*` package, bump ALL affected packages AND update dependency versions:
-
-1. Identify which packages have changed (e.g. `core/crypto`, `core/client`, `core/adapter-claude-code`)
-2. Bump the version in each changed package's `package.json`
-3. Update the dependency version in every package that depends on the changed ones:
-   - `core/client` depends on `core/crypto` — update `@cello-protocol/crypto` version in client's deps
-   - `core/adapter-claude-code` depends on `core/client` and `core/crypto` — update both
-4. Run `pnpm install` to update `pnpm-lock.yaml`
-5. Commit all changes
-6. `git tag v{connect-version}` then `git push origin v{connect-version}`
-7. CI handles: build → typecheck → lint → test → tarball checks → `pnpm publish`
-
-**Example:** changing `core/crypto` and `core/client`:
-- crypto: 0.0.4 → 0.0.5
-- client: 0.0.8 → 0.0.9, and update `"@cello-protocol/crypto": "0.0.5"` in client's dependencies
-- connect: 0.0.16 → 0.0.17, and update both `"@cello-protocol/client": "0.0.9"` and `"@cello-protocol/crypto": "0.0.5"` in connect's dependencies
-
-**Dist-tags:** CI publishes everything to `beta`. Promotion to `latest` is manual: `npm dist-tag add @cello-protocol/connect@X.Y.Z latest`. Only do this after explicit user approval.
-
-**After every publish, verify:**
-```bash
-npm view @cello-protocol/connect@beta dependencies --json
-# Must show real versions (0.0.X), NEVER "workspace:*"
-```
-
-**To update a local install**, pin the exact version:
-```
-claude mcp remove cello
-claude mcp add cello -- npx --yes @cello-protocol/connect@0.0.11
-```
+**The version cascade, dist-tags, and the post-publish verification live in `/cello-publish`** — load
+the skill, do not reconstruct them from memory here.
 
 **Never tell users to run `npx clear-npx-cache`.** It wipes every npx-installed tool. Pinning a new version is sufficient.
 

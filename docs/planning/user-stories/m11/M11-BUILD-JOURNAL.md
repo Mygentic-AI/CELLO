@@ -2305,3 +2305,43 @@ along with every URL after it — so it cheerfully reported that the legacy file
 legacy. A checker whose first finding is itself is a checker nobody keeps.
 
 **Runs:** 410 Lambda tests, 18 site tests, `tsc` clean, `next build` clean.
+
+---
+
+### Entry 49: the base list was never checked for being a base list
+**Date:** 2026-07-25
+**Target:** DOD-INV-EMAIL-SEGMENTS, DOD-E1-1 [trustless-cello]
+
+`DOD-INV-EMAIL-SEGMENTS` defines the base list as *"all **verified** signups, receives
+E1/E2/E3/E-inv/E-win/E-re"*. Nothing enforced the word "verified".
+
+Before last night, `email_verified` appeared **zero** times in the email pipeline. It appeared once
+after Entry 43 — in the re-engagement sweep, where I put it because the invariant said so — and that is
+what made the absence visible everywhere else. The dispatcher re-checks lifecycle status and suppression
+on every single send, and never checked verification.
+
+`e2_survey` and `e3_update` are enqueued **at signup**, before verification, by construction (Entry 39
+decided that deliberately: enqueue rather than sweep, because the schedule is a property of this
+signup). So every unconfirmed address received the survey nudge a day later and a queue update two weeks
+after that — from a list it was never on. Somebody who typed a stranger's address into the form got two
+emails about a queue position that stranger never asked for.
+
+Found by a reviewer looking at a different line entirely, and fixed here rather than filed.
+
+**The skip had to be reversible.** Confirming is precisely the thing that makes these sendable; a
+terminal skip means somebody who confirms on day three never receives the survey meant for day two — a
+permanent consequence of being slow, which is the same defect class as the unsubscribe-vs-bounce
+distinction in Entry 23.
+
+**And the exception list has to stay exactly two.** `e1_confirm` IS the confirmation and `e_magic_link`
+is how somebody who never confirmed signs in to fix it. Gate either and the account becomes
+unrecoverable — a check that locks the door it is guarding. Both directions are pinned: removing the
+gate fails six tests, adding `e1_confirm` to it fails two.
+
+**One fixture change worth naming.** `make_user` now creates verified users by default. Before, every
+test in the file was accidentally unverified, and the new gate turned seven of them red — not because
+they were testing verification, but because none of them had ever had to think about it. Making the
+default correct means the unverified case is now a *stated condition* of the tests that are about it,
+rather than the silent background state of tests that are about something else.
+
+**Runs:** 417 tests green; all statically-checkable M11 invariants hold.
