@@ -21,6 +21,7 @@ export type { OtpDeliveryProvider } from "./otp-delivery-provider.js";
 export type { TokenValidator, TokenValidationResult } from "./token-validator.js";
 export type { NonceBinder, NonceBindResult } from "./nonce-binder.js";
 export type { PreAuthorizationClient, PreAuthorizationToken, PreAuthorizationTokenRow } from "./pre-authorization-client.js";
+export type { WaitlistGateClient, WaitlistGateDecision, WaitlistTokenRedemption } from "./waitlist-gate-client.js";
 export type { SecurityAlertProvider, SecurityAlert } from "./security-alert-provider.js";
 export type { RegistrationState, RegistrationRecord } from "./registration-state.js";
 

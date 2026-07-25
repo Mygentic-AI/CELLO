@@ -15,6 +15,7 @@
     "lint": "eslint src"
   },
   "dependencies": {
+    "@aws-sdk/client-lambda": "^3.0.0",
     "@aws-sdk/client-ses": "^3.0.0",
     "@cello-protocol/interfaces": "workspace:*",
     "pg": "8.18.0"

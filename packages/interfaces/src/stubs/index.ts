@@ -12,6 +12,7 @@ export { LocalCloudStorageProvider } from "./local-cloud-storage-provider.js";
 export { InMemoryNotificationQueue } from "./in-memory-notification-queue.js";
 export { InMemoryCheckpointTransport } from "./in-memory-checkpoint-transport.js";
 export { CliAdapter } from "./cli-adapter.js";
+export { LocalWaitlistGateClient } from "./local-waitlist-gate-client.js";
 export { ConsoleOtpDeliveryProvider } from "./console-otp-delivery-provider.js";
 export { DevTokenValidator } from "./dev-token-validator.js";
 export { DevNonceBinder } from "./dev-nonce-binder.js";
