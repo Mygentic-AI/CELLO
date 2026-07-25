@@ -9,6 +9,23 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🟢 Wake complete — all 3 regions live (2026-07-25, 04:40:24–04:58:08 UTC)
+
+**Elapsed: 17 min 44 sec** (all 3 regions in parallel; RDS cleared in ~11 min — no us-east-1 stall this
+cycle). All 3 inventory diffs IDENTICAL vs the before-snapshots.
+
+**ALB DNS names after this wake (always query AWS — these rotate each wake):**
+- **us-east-1:** dir `cello-dir-dev-1389700310.us-east-1.elb.amazonaws.com` / relay `cello-relay-dev-92196857.us-east-1.elb.amazonaws.com` / portal `cello-portal-dev-1930699881.us-east-1.elb.amazonaws.com`
+- **eu-central-1:** dir `cello-dir-dev-881776890.eu-central-1.elb.amazonaws.com` / relay `cello-relay-dev-568589413.eu-central-1.elb.amazonaws.com`
+- **ap-northeast-1:** dir `cello-dir-dev-2037645818.ap-northeast-1.elb.amazonaws.com` / relay `cello-relay-dev-1209579083.ap-northeast-1.elb.amazonaws.com`
+
+**Verified independently of the script:** all 7 Route53 names resolve to real ALB addresses (no
+`198.51.100.1` blackhole left over), 7 ALBs `active`, all 8 ECS services 1/1 `COMPLETED` (directory +
+relay ×3, portal, ops-agent), 4 RDS `available`, demo agent EC2 `i-0ad3e7c22470f266e` `running`.
+ECS Exec is available again (ssmmessages endpoints restored).
+
+---
+
 ## 🔴 Hibernate complete — all 3 regions down (2026-07-24, 19:27–19:32 UTC)
 
 ECS services scaled to 0 (directory + relay ×3, plus portal and ops-agent in us-east-1), all 4 RDS
