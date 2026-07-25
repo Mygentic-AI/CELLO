@@ -245,16 +245,29 @@ def test_an_unknown_token_is_distinguishable_from_an_expired_one(auth):
     assert body["error"] == "token_not_found"
 
 
-def test_only_the_e1_link_sets_email_verified(auth):
-    """A magic link proves control of the address just as well, but email_verified
-    is documented as what E1 sets. Widening it silently would make the flag mean
-    something different from what it says."""
-    uid = make_user("verify@example.test")
-    request_link(auth, "verify@example.test")
+def test_either_link_kind_verifies_the_address(auth):
+    """Deliberately INVERTED from the original rule, which said only E1 counts.
+
+    What email_verified attests is control of the address, and a magic link
+    proves that identically — you must already read the mailbox to redeem one.
+    The old rule left a ONE-WAY DOOR: e1_confirm is enqueued exactly once, at
+    signup, its token lasts 24 hours, and there is no resend path. So anyone who
+    missed that window was permanently unverified — and once the dispatcher
+    started gating base-list mail on the flag, permanently unverified meant
+    permanently silent, with nothing told to them or to us.
+    """
+    uid = make_user("viamagic@example.test")
+    request_link(auth, "viamagic@example.test")
     call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token_for(uid))})
 
-    assert query("SELECT email_verified FROM waitlist_users WHERE waitlist_id = %s", (uid,))[0][0] is False
+    assert query("SELECT email_verified FROM waitlist_users WHERE waitlist_id = %s", (uid,))[0][0] is True, (
+        "a magic-link sign-in must verify — otherwise there is no route back "
+        "from unverified and the flag gates mail forever"
+    )
 
+
+def test_the_e1_link_still_verifies(auth):
+    uid = make_user("viae1@example.test")
     conn = psycopg2.connect(PGURL)
     conn.autocommit = True
     with conn.cursor() as cur:

@@ -307,15 +307,37 @@ def handle_verify(params, origin, correlation_id):
 
             user_id = row["waitlist_user_id"]
 
-            # The E1 link is also the verification. A magic link is not — it
-            # proves control of the address just as well, but E1 is the one the
-            # DoD ties email_verified to, and widening that silently would make
-            # the flag mean something different from what it is documented to.
-            if row["kind"] == "email_verify":
+            # BOTH kinds verify, and this is a deliberate widening from the
+            # earlier "only E1 counts" rule.
+            #
+            # What email_verified attests is control of the address, and a magic
+            # link proves that identically — the earlier comment here said so
+            # and then declined to act on it, on the grounds that widening the
+            # flag would make it mean something other than documented.
+            #
+            # What that left was a ONE-WAY DOOR. e1_confirm is enqueued exactly
+            # once, at signup, and its token lasts 24 hours; there is no resend
+            # path. So anyone who missed that window was permanently unverified
+            # — and once the dispatcher started gating base-list mail on the
+            # flag, permanently unverified meant permanently silent, with
+            # nothing told to them or to us. A flag that can only ever go one
+            # way needs a route back before anything is allowed to depend on it.
+            #
+            # The counterfactual is weaker than it sounds: to redeem a magic
+            # link you must already read the mailbox, which is the whole claim.
+            if row["kind"] in ("email_verify", "magic_link"):
                 cur.execute(
-                    "UPDATE waitlist_users SET email_verified = true WHERE waitlist_id = %s",
+                    "UPDATE waitlist_users SET email_verified = true "
+                    "WHERE waitlist_id = %s AND NOT email_verified",
                     (user_id,),
                 )
+                if cur.rowcount:
+                    log(
+                        "waitlist.auth.email.verified",
+                        correlation_id,
+                        waitlistId=str(user_id),
+                        via=row["kind"],
+                    )
 
             raw, expires_at = mint_session(cur, user_id)
             log(

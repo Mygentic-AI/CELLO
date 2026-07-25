@@ -106,13 +106,43 @@ def select_cohort(cur, capacity, priority_pct, zero_pct, correlation_id):
     # The precondition is ordinary, not exotic: E-inv tells recipients
     # "unclaimed access returns to the pool", there is no reaper, so an operator
     # returns an admitted user to 'waiting' by hand and the next wave dies.
+    # TWO FILTERS ADDED AFTER REVIEW, both of which were silently wrong:
+    #
+    # email_verified — a wave seat is scarce, and giving one to an address that
+    # never confirmed spends it on somebody who cannot be reached. Worse since
+    # the dispatcher began gating base-list mail on the flag: the admission
+    # email would be skipped, so the user is marked 'admitted', holds a 14-day
+    # grant, and is never told. The zero-points cohort orders by created_at ASC,
+    # which favours exactly the oldest unconfirmed signups.
+    #
+    # t.retired_at IS NULL — the exclusion was "holds an unused grant", with no
+    # expiry notion, so once a grant lapsed unused its holder was excluded from
+    # every future cohort permanently. A token that can no longer be redeemed
+    # must not keep occupying its holder's place in the queue.
+    #
+    # Retirement is a RECORDED FACT (0022), not `expires_at > now()` evaluated
+    # here. It has to be: the matching unique index cannot use now() in a
+    # partial predicate, so an expiry test in this query alone would let the
+    # cohort admit somebody the index then refuses a token to — which is
+    # precisely the 23505 this fix first produced.
+    # Reap first, in the same transaction, so "outstanding" is true at the moment
+    # every query below reads it. Doing this on a schedule instead would leave a
+    # window where the cohort and the index disagree again.
+    cur.execute(
+        """
+        UPDATE waitlist_tokens SET retired_at = now()
+        WHERE used_at IS NULL AND retired_at IS NULL AND expires_at <= now()
+        """
+    )
+
     cur.execute(
         """
         SELECT waitlist_id FROM waitlist_users
-        WHERE status = 'waiting' AND premium_referred
+        WHERE status = 'waiting' AND email_verified AND premium_referred
           AND NOT EXISTS (
               SELECT 1 FROM waitlist_tokens t
-              WHERE t.waitlist_user_id = waitlist_users.waitlist_id AND t.used_at IS NULL
+              WHERE t.waitlist_user_id = waitlist_users.waitlist_id
+                AND t.used_at IS NULL AND t.retired_at IS NULL
           )
         ORDER BY created_at ASC
         LIMIT %s
@@ -142,11 +172,12 @@ def select_cohort(cur, capacity, priority_pct, zero_pct, correlation_id):
     cur.execute(
         """
         SELECT waitlist_id FROM waitlist_users
-        WHERE status = 'waiting' AND NOT premium_referred AND points_total > 0
+        WHERE status = 'waiting' AND email_verified AND NOT premium_referred AND points_total > 0
           AND waitlist_id <> ALL(%s::uuid[])
           AND NOT EXISTS (
               SELECT 1 FROM waitlist_tokens t
-              WHERE t.waitlist_user_id = waitlist_users.waitlist_id AND t.used_at IS NULL
+              WHERE t.waitlist_user_id = waitlist_users.waitlist_id
+                AND t.used_at IS NULL AND t.retired_at IS NULL
           )
         ORDER BY points_total DESC, created_at ASC
         LIMIT %s
@@ -159,11 +190,12 @@ def select_cohort(cur, capacity, priority_pct, zero_pct, correlation_id):
     cur.execute(
         """
         SELECT waitlist_id FROM waitlist_users
-        WHERE status = 'waiting' AND NOT premium_referred AND points_total = 0
+        WHERE status = 'waiting' AND email_verified AND NOT premium_referred AND points_total = 0
           AND waitlist_id <> ALL(%s::uuid[])
           AND NOT EXISTS (
               SELECT 1 FROM waitlist_tokens t
-              WHERE t.waitlist_user_id = waitlist_users.waitlist_id AND t.used_at IS NULL
+              WHERE t.waitlist_user_id = waitlist_users.waitlist_id
+                AND t.used_at IS NULL AND t.retired_at IS NULL
           )
         ORDER BY created_at ASC
         LIMIT %s
@@ -197,11 +229,12 @@ def select_cohort(cur, capacity, priority_pct, zero_pct, correlation_id):
         cur.execute(
             """
             SELECT waitlist_id FROM waitlist_users
-            WHERE status = 'waiting' AND waitlist_id <> ALL(%s::uuid[])
+            WHERE status = 'waiting' AND email_verified AND waitlist_id <> ALL(%s::uuid[])
               AND (%s OR points_total > 0)
               AND NOT EXISTS (
                   SELECT 1 FROM waitlist_tokens t
-                  WHERE t.waitlist_user_id = waitlist_users.waitlist_id AND t.used_at IS NULL
+                  WHERE t.waitlist_user_id = waitlist_users.waitlist_id
+                AND t.used_at IS NULL AND t.retired_at IS NULL
               )
             ORDER BY points_total DESC, created_at ASC
             LIMIT %s

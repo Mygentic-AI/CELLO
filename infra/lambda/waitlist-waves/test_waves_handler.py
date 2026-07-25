@@ -24,14 +24,21 @@ def waves(database):
     return load_lambda(__file__.rsplit("/", 1)[0], "waves_handler")
 
 
-def make_user(email, *, points=0, premium=False, created=BASE, status="waiting"):
+def make_user(
+    email, *, points=0, premium=False, created=BASE, status="waiting", email_verified=True
+):
+    """Verified by DEFAULT. A wave seat is scarce and no longer goes to an
+    address that never confirmed, so leaving every test's user unverified would
+    make the whole file test an empty cohort. The unverified case has its own
+    tests rather than being the silent background state of all of them."""
     conn = psycopg2.connect(PGURL)
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO waitlist_users (email, anon_id, points_total, premium_referred, created_at, status) "
-            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING waitlist_id",
-            (email, str(uuid.uuid4()), points, premium, created, status),
+            "INSERT INTO waitlist_users "
+            "(email, anon_id, points_total, premium_referred, created_at, status, email_verified) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING waitlist_id",
+            (email, str(uuid.uuid4()), points, premium, created, status, email_verified),
         )
         uid = cur.fetchone()[0]
     conn.close()
@@ -344,3 +351,71 @@ def test_an_explicit_zero_pct_of_zero_is_honoured(waves):
 
     assert body["admitted"] == 1, f"only the scorer qualifies when zero_pct is 0: {body}"
     assert admitted_emails() == ["scorer@example.test"]
+
+
+# ── Cohort eligibility (added after review) ──────────────────────────────────
+
+
+def test_a_wave_seat_never_goes_to_an_unconfirmed_address(waves):
+    """A seat is scarce, and one given to an address that never confirmed is
+    spent on somebody who cannot be reached — more so now that the dispatcher
+    gates base-list mail on the flag, so the admission email itself would be
+    skipped. They would sit 'admitted', holding a 14-day grant, never told.
+
+    The zero-points cohort orders by created_at ASC, which favours exactly the
+    oldest unconfirmed signups, so this is the common case rather than the edge.
+    """
+    make_user("unconfirmed@example.test", email_verified=False)
+    confirmed = make_user("confirmed@example.test")
+
+    _, body = open_wave(waves, capacity=4)
+
+    admitted = query(
+        "SELECT u.email FROM waitlist_tokens t JOIN waitlist_users u "
+        "ON u.waitlist_id = t.waitlist_user_id WHERE t.wave_number = %s",
+        (body["wave_number"],),
+    )
+    assert [r[0] for r in admitted] == ["confirmed@example.test"]
+    assert query(
+        "SELECT status FROM waitlist_users WHERE email = 'unconfirmed@example.test'"
+    )[0][0] == "waiting", "an unconfirmed user must stay in the queue, not be silently admitted"
+
+
+def test_a_LAPSED_grant_stops_excluding_its_holder_from_future_waves(waves):
+    """The exclusion was 'holds an unused grant', with no expiry check. So once
+    a grant lapsed unused, its holder was excluded from every future cohort
+    permanently — a token that can no longer be redeemed kept occupying its
+    holder's place in the queue forever."""
+    uid = make_user("lapsed@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO waitlist_tokens (waitlist_user_id, expires_at) "
+            "VALUES (%s, now() - interval '1 day')",
+            (uid,),
+        )
+    conn.close()
+
+    _, body = open_wave(waves, capacity=4)
+
+    assert body["admitted"] == 1, "an expired grant must not exclude its holder"
+
+
+def test_a_LIVE_grant_still_excludes_its_holder(waves):
+    """The inverse, so the expiry check cannot be widened into 'ignore grants'.
+    Somebody already holding a redeemable invitation must not get a second."""
+    uid = make_user("holding@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO waitlist_tokens (waitlist_user_id, expires_at) "
+            "VALUES (%s, now() + interval '14 days')",
+            (uid,),
+        )
+    conn.close()
+
+    _, body = open_wave(waves, capacity=4)
+
+    assert body["admitted"] == 0

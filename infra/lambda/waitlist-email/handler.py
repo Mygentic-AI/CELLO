@@ -370,7 +370,18 @@ def finish(conn, job_id, status, correlation_id, **fields):
                 sent_at = CASE WHEN %s = 'sent' THEN now() ELSE sent_at END,
                 skipped_at = CASE WHEN %s = 'skipped' THEN now() ELSE skipped_at END,
                 skip_reason = COALESCE(%s, skip_reason),
-                last_error = COALESCE(%s, last_error)
+                last_error = COALESCE(%s, last_error),
+                -- A REVERSIBLE SKIP MUST NOT SPEND THE RETRY BUDGET. claim_jobs
+                -- refuses anything at attempts >= MAX_ATTEMPTS, and the drain
+                -- runs every minute, so without this an unverified user's job
+                -- burned all five attempts in five minutes and became
+                -- permanently unclaimable — while sitting in status 'pending',
+                -- which reads as healthy. The comment above should_send's
+                -- verified gate promised "somebody who confirms on day three
+                -- still receives the survey"; measured, they received nothing,
+                -- ever. The retry budget exists to bound FAILURES, and waiting
+                -- for a user to confirm is not a failure.
+                attempts = CASE WHEN %s THEN 0 ELSE attempts END
             WHERE id = %s
             """,
             (
@@ -379,6 +390,7 @@ def finish(conn, job_id, status, correlation_id, **fields):
                 status,
                 fields.get("skip_reason"),
                 fields.get("last_error"),
+                bool(fields.get("reset_attempts")),
                 job_id,
             ),
         )
@@ -614,6 +626,9 @@ def lambda_handler(event, context):
                     "skipped" if terminal else "pending",
                     correlation_id,
                     skip_reason=skip_reason,
+                    # Only the reversible branch. A terminal skip is done and
+                    # its attempt count is history.
+                    reset_attempts=not terminal,
                 )
                 counts["skipped"] += 1
                 log(

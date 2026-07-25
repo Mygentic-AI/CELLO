@@ -958,3 +958,54 @@ def test_the_exception_list_is_exactly_the_two_that_enable_verification(mailer, 
     # And the inverse, so the list cannot quietly grow.
     gated = dict(job, template="e2_survey")
     assert mailer.should_send(gated) == (False, "email_not_verified", False)
+
+
+def test_a_reversible_skip_does_not_spend_the_retry_budget(mailer):
+    """THE test the previous one stopped one tick short of.
+
+    `claim_jobs` refuses anything at attempts >= MAX_ATTEMPTS and the drain runs
+    every minute, so a skip that returns the job to 'pending' WITHOUT resetting
+    attempts burns all five in five minutes and the job becomes permanently
+    unclaimable — while sitting in status 'pending', which reads as healthy.
+
+    The earlier version of this test flipped the flag after ONE tick, so it
+    proved reversibility at attempt 1 and asserted it for "day three", which is
+    4,320 ticks. This one runs past the cap first.
+    """
+    uid = make_user("dayThree@example.test", email_verified=False)
+    jid = enqueue(uid, "e2_survey")
+
+    for _ in range(mailer.MAX_ATTEMPTS + 3):
+        mailer.lambda_handler({}, None)
+
+    assert mailer.fake.sent == []
+    attempts = query("SELECT attempts FROM email_jobs WHERE id = %s", (jid,))[0][0]
+    assert attempts < mailer.MAX_ATTEMPTS, (
+        f"a reversible skip must not consume the retry budget; attempts={attempts} "
+        f"means the job can never be claimed again"
+    )
+
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("UPDATE waitlist_users SET email_verified = true WHERE waitlist_id = %s", (uid,))
+    conn.close()
+
+    mailer.lambda_handler({}, None)
+
+    assert [m["Destination"]["ToAddresses"][0] for m in mailer.fake.sent] == ["dayThree@example.test"]
+
+
+def test_a_permanent_failure_still_exhausts_its_retries(mailer):
+    """The inverse, so the reset cannot be widened into 'never give up'. A job
+    that genuinely fails must still retire rather than retrying forever."""
+    uid = make_user("broken@example.test")
+    jid = enqueue(uid)
+    mailer.fake.fail_on = {"broken@example.test"}
+
+    for _ in range(mailer.MAX_ATTEMPTS + 2):
+        mailer.lambda_handler({}, None)
+
+    assert job_status(jid) in ("failed", "retired"), (
+        "a real failure must still exhaust its budget and retire"
+    )
