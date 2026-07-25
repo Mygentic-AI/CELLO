@@ -38,6 +38,7 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
+from email.message import EmailMessage
 
 import boto3
 import psycopg2
@@ -646,34 +647,39 @@ def lambda_handler(event, context):
                 # Outside any transaction. The claim is already committed, so a
                 # crash here leaves a 'sending' row that is reclaimed later
                 # rather than a job that looks untouched and is sent twice.
-                ses().send_email(
+                # send_raw_email, NOT send_email — and this is the whole reason
+                # the RFC 8058 headers exist at all.
+                #
+                # boto3's SES send_email has NO `Headers` parameter. It accepts
+                # Source, Destination, Message, ReplyToAddresses, ReturnPath,
+                # SourceArn, ReturnPathArn, Tags, ConfigurationSetName and
+                # nothing else. Passing `Headers=` raised ParamValidationError on
+                # EVERY send, so not one email could ever leave.
+                #
+                # The unit tests could not catch it: FakeSES.send_email took
+                # **kwargs and recorded whatever it was given, so a parameter
+                # that does not exist looked identical to one that does. It took
+                # a real SES call to find, which is exactly what the email
+                # enforcer is for.
+                #
+                # Custom headers require a MIME message, so the message is built
+                # here rather than handed to SES as separate subject/body fields.
+                message = EmailMessage()
+                message["Subject"] = subject
+                message["From"] = FROM_EMAIL
+                message["To"] = job["email"]
+                for header in unsubscribe_headers(job):
+                    message[header["Name"]] = header["Value"]
+                message.set_content(body_text)
+                message.add_alternative(body_html, subtype="html")
+
+                ses().send_raw_email(
                     Source=FROM_EMAIL,
+                    Destinations=[job["email"]],
                     # Without this, SES emits no bounce or complaint events and
                     # suppression silently stops working. See SES_CONFIG_SET.
                     ConfigurationSetName=SES_CONFIG_SET,
-                    Destination={"ToAddresses": [job["email"]]},
-                    Message={
-                        "Subject": {"Data": subject, "Charset": "UTF-8"},
-                        "Body": {
-                            "Html": {"Data": body_html, "Charset": "UTF-8"},
-                            "Text": {"Data": body_text, "Charset": "UTF-8"},
-                        },
-                    },
-                    # RFC 8058. Two reasons, and the second is the urgent one.
-                    #
-                    # Gmail requires one-click unsubscribe from bulk senders, so
-                    # without it deliverability degrades.
-                    #
-                    # More immediately: the in-body unsubscribe is a bare GET,
-                    # and Gmail's link proxy, Outlook Safe Links and corporate
-                    # scanners all fetch body links. Every one of those fetches
-                    # permanently unsubscribes an engaged user, and the log
-                    # records `matched: true` identically for a scanner and a
-                    # human — so the loss is invisible. A List-Unsubscribe-Post
-                    # header gives the mail client a POST path it uses INSTEAD
-                    # of following the link, which is what takes the bare GET
-                    # off the prefetch path for the clients that matter.
-                    Headers=unsubscribe_headers(job),
+                    RawMessage={"Data": message.as_bytes()},
                 )
             except Exception as err:  # noqa: BLE001 — one bad job must not sink the batch
                 conn.rollback()

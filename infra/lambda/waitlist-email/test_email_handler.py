@@ -8,6 +8,7 @@ up and what happens to them, not AWS's wire format.
 
 import json
 import os
+from email import message_from_bytes, policy
 import sys
 import uuid
 from pathlib import Path
@@ -18,19 +19,66 @@ import pytest
 from waitlist_testdb import PGURL, query, load_lambda
 
 
+# The REAL parameter names boto3's SES accepts. Enumerated here because the fake
+# accepting **kwargs is what let a nonexistent parameter ship: the handler passed
+# `Headers=` to send_email, which has no such parameter, so every send raised
+# ParamValidationError in production while every test passed.
+#
+# A fake at a boundary must be at least as strict as the thing it stands in for,
+# or it is not a boundary — it is a hole shaped like one.
+SEND_RAW_PARAMS = {
+    "Source",
+    "Destinations",
+    "RawMessage",
+    "FromArn",
+    "SourceArn",
+    "ReturnPathArn",
+    "Tags",
+    "ConfigurationSetName",
+}
+
+
 class FakeSES:
-    """Records sends instead of performing them."""
+    """Records sends instead of performing them, and REFUSES anything the real
+    API would refuse."""
 
     def __init__(self, fail_on=None):
         self.sent = []
         self.fail_on = fail_on or set()
 
-    def send_email(self, **kwargs):
-        to = kwargs["Destination"]["ToAddresses"][0]
+    def send_raw_email(self, **kwargs):
+        unknown = set(kwargs) - SEND_RAW_PARAMS
+        if unknown:
+            raise TypeError(
+                f"Unknown parameter in input: {sorted(unknown)}, must be one of: "
+                f"{sorted(SEND_RAW_PARAMS)}"
+            )
+        raw = kwargs["RawMessage"]["Data"]
+        # policy=default, or message_from_bytes returns the LEGACY Message class
+        # which has no get_content() and decodes nothing.
+        parsed = message_from_bytes(
+            raw if isinstance(raw, bytes) else raw.encode(), policy=policy.default
+        )
+        to = kwargs["Destinations"][0]
         if to in self.fail_on:
             raise RuntimeError(f"SES rejected {to}")
-        self.sent.append(kwargs)
+        # Kept in the shape the assertions already use, plus the parsed message
+        # so tests can check headers and both body parts.
+        self.sent.append(
+            {
+                "Destination": {"ToAddresses": kwargs["Destinations"]},
+                "Source": kwargs["Source"],
+                "ConfigurationSetName": kwargs.get("ConfigurationSetName"),
+                "Message": parsed,
+                "Subject": parsed["Subject"],
+            }
+        )
         return {"MessageId": str(uuid.uuid4())}
+
+    def send_email(self, **kwargs):  # pragma: no cover - must never be called
+        raise AssertionError(
+            "send_email cannot carry List-Unsubscribe headers — use send_raw_email"
+        )
 
 
 @pytest.fixture()
@@ -47,6 +95,27 @@ def mailer(database, monkeypatch):
     monkeypatch.setattr(mod, "ses", lambda: fake)
     mod.fake = fake
     return mod
+
+
+def text_part(sent):
+    """The plain-text alternative out of the MIME message.
+
+    Was `sent["Message"]["Body"]["Text"]["Data"]` when the handler passed
+    subject and bodies to SES as separate fields. It now builds a MIME message,
+    because custom headers — the RFC 8058 unsubscribe pair — cannot be set any
+    other way through SES.
+    """
+    for part in sent["Message"].walk():
+        if part.get_content_type() == "text/plain":
+            return part.get_content()
+    raise AssertionError("no text/plain part — every message must carry one")
+
+
+def html_part(sent):
+    for part in sent["Message"].walk():
+        if part.get_content_type() == "text/html":
+            return part.get_content()
+    raise AssertionError("no text/html part")
 
 
 def make_user(
@@ -339,7 +408,7 @@ def test_e1_carries_a_real_queue_position_a_referral_link_and_a_verify_token(mai
 
     mailer.lambda_handler({}, None)
 
-    body = mailer.fake.sent[0]["Message"]["Body"]["Text"]["Data"]
+    body = text_part(mailer.fake.sent[0])
     assert "#2 of 2 on the list" in body, f"real computed position expected, got:\n{body}"
     assert "/?ref=C" in body, "personal referral link missing"
     assert "waves" in body.lower(), "the how-waves-work sentence is a DOD-E1-1 clause"
@@ -385,7 +454,7 @@ def test_no_position_is_shown_rather_than_a_fabricated_one(mailer):
 
     mailer.lambda_handler({}, None)
 
-    body = mailer.fake.sent[0]["Message"]["Body"]["Text"]["Data"]
+    body = text_part(mailer.fake.sent[0])
     assert "#" not in body, f"no position should appear for a non-queued user:\n{body}"
 
 
@@ -455,7 +524,7 @@ def test_a_payload_cannot_leak_another_users_grant(mailer):
 
     mailer.lambda_handler({}, None)
 
-    body = mailer.fake.sent[0]["Message"]["Body"]["Text"]["Data"]
+    body = text_part(mailer.fake.sent[0])
     assert victim_token not in body, "another user's admission grant reached the wrong inbox"
 
 
@@ -1009,3 +1078,41 @@ def test_a_permanent_failure_still_exhausts_its_retries(mailer):
     assert job_status(jid) in ("failed", "retired"), (
         "a real failure must still exhaust its budget and retire"
     )
+
+
+def test_every_message_carries_both_parts_and_the_unsubscribe_headers(mailer):
+    """The regression for a defect no unit test could see.
+
+    The handler passed `Headers=` to SES send_email, which has no such
+    parameter, so ParamValidationError was raised on EVERY send and not one
+    email could leave. The fake took **kwargs and recorded whatever it was
+    given, so a parameter that does not exist looked exactly like one that does.
+    It took a real SES call to find.
+
+    The fake now refuses unknown parameters, and this asserts the message is
+    actually well-formed: both alternatives present, and the RFC 8058 pair on
+    the message rather than passed beside it.
+    """
+    uid = make_user("mime@example.test")
+    enqueue(uid, "e1_confirm")
+
+    mailer.lambda_handler({}, None)
+
+    sent = mailer.fake.sent[0]
+    assert text_part(sent), "a text alternative is required — HTML-only is a deliverability penalty"
+    assert "<" in html_part(sent)
+    assert sent["Message"]["Subject"]
+    assert sent["Message"]["List-Unsubscribe"], "RFC 8058 header must be ON the message"
+    assert sent["Message"]["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
+
+
+def test_the_fake_refuses_a_parameter_the_real_api_would_refuse(mailer):
+    """Guards the guard. If the fake goes back to accepting anything, the defect
+    above becomes invisible again."""
+    with pytest.raises(TypeError, match="Unknown parameter"):
+        mailer.fake.send_raw_email(
+            Source="a@b.test",
+            Destinations=["c@d.test"],
+            RawMessage={"Data": b"x"},
+            Headers=[{"Name": "X", "Value": "y"}],
+        )

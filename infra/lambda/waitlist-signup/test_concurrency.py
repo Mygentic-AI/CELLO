@@ -215,10 +215,20 @@ def test_two_simultaneous_dispatcher_runs_send_each_email_once(database):
             mod = load_lambda(email_dir, module_name)
 
             class Recorder:
-                def send_email(self, **kwargs):
+                # send_raw_email, matching the handler. The dispatcher had to
+                # move off send_email because that API has no `Headers`
+                # parameter and cannot carry the RFC 8058 unsubscribe pair — it
+                # raised ParamValidationError on every real send while every
+                # fake happily accepted it.
+                def send_raw_email(self, **kwargs):
                     with sent_lock:
-                        all_sent.append(kwargs["Destination"]["ToAddresses"][0])
+                        all_sent.append(kwargs["Destinations"][0])
                     return {"MessageId": "x"}
+
+                def send_email(self, **kwargs):
+                    raise AssertionError(
+                        "send_email cannot carry List-Unsubscribe headers — use send_raw_email"
+                    )
 
             recorder = Recorder()
             mod.ses = lambda: recorder
