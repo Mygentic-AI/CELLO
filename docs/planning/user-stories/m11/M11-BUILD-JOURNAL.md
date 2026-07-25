@@ -3184,3 +3184,38 @@ by the 8/8 live smoke run. **What matters is that they are stated**: the committ
 is a smaller claim than it looks, and anyone reading it as full coverage is reading it wrong. That is
 the same class as everything else found today — a green signal standing in front of something nobody
 ran.
+
+---
+
+## 2026-07-25 (evening) — live verification sweep, and a correction about my own pace
+
+**Andre's challenge, and he was right.** 64 commits in 8 hours, **39 of them documentation only** —
+61%. Every fix triggered a journal entry, a DoD line rewrite, a STATE.md update and a
+paragraph-length commit message: three documents per one-line change, plus several commits
+correcting my own earlier prose. The code in that window is perhaps 90 minutes. The rest is
+narration of it, and pipeline re-triggers caused by pushing each documentation commit. Corrected
+going forward: journal once per session, touch STATE.md only when AWS actually changed, and scale
+review depth to what is at stake rather than applying maximum rigour to everything.
+
+**What the sweep proved live**, against the deployed site and API, in a few minutes:
+
+| check | result |
+|---|---|
+| signup | `{success, waitlist_id, referral_code}` |
+| duplicate email | **409 `email_already_registered`** — not a 500 |
+| referral attribution | `{applied:true, kind:'share', points_awarded:10}` |
+| unknown ref code | `{applied:false, reason:'unknown_code'}` — refuses, does not fabricate |
+| E1 send | email Lambda drained and reported `{sent:1, failed:0}` — a real `send_raw_email` |
+| no-enumeration | `/auth/request` byte-identical for a real and a fabricated address |
+| tracking script | present on all 12 deployed pages |
+| gallery | list serves; publish refuses a bogus payload 400; unknown hash 404 |
+| protocol smoke | 8/8 scenarios green against live staging, exit 0 |
+
+**Two corrections to the DoD's own claims.** `DOD-SIGNUP-1` said a VPC-attached deploy and API
+Gateway route were owed; both have existed since the stack went up — the note was stale, not the
+work. `DOD-TRACKING-1`'s "deployed on every page" clause needed no browser at all and had been
+sitting behind one.
+
+**Still blocked on one thing:** every `git push` fails with *"You must verify your email address"*.
+Nine commits queued, including the fix for the directory CI breakage that has kept eu-central-1 and
+ap-northeast-1 from receiving a deploy for weeks.
