@@ -68,7 +68,13 @@ fi
 # product, on a domain no user recognises, and the denylist did not look for it.
 BAD_DOMAIN='https?://(www\.)?(cello\.(dev|so|ai|io|app|com)|getcello|trycello|cello-protocol\.(com|io))'
 BAD_DOMAIN+='|[a-z0-9]+\.execute-api\.[a-z0-9-]+\.amazonaws\.com'
-if hits=$(scan "$BAD_DOMAIN" "$M11_LAMBDA $M11_CORP"); then
+# The clause says "code, copy, or CONFIGURATION". The CloudFormation template is
+# configuration, and it is where the API host and WAITLIST_SITE are decided — 12
+# occurrences of a domain, none of them previously scanned. This is the same miss
+# SINGLE-DB already had to fix for deploy.sh.
+M11_CONFIG="$TRUSTLESS/infra/cloudformation/cello-waitlist.yaml"
+[[ -e "$M11_CONFIG" ]] || fail "scan target missing: $M11_CONFIG"
+if hits=$(scan "$BAD_DOMAIN" "$M11_LAMBDA $M11_CORP $M11_CONFIG"); then
   fail "DOD-INV-DOMAIN — a domain other than cello.mygentic.ai:"
   echo "$hits" | sed 's/^/        /'
 else
@@ -80,12 +86,17 @@ fi
 # a user up BY email to retrieve their id is correct and must not be flagged, so
 # this looks only for email in a structural position: a FOREIGN KEY, a PRIMARY
 # KEY, or a JOIN predicate.
-STRUCTURAL_EMAIL='(FOREIGN KEY[^;]*email|PRIMARY KEY[^)]*\bemail\b|JOIN[^;]*\bON\b[^;]*\bemail\b)'
+# The clause names `email`, `agent_name`, "or any other mutable attribute". Only
+# email was searched. agent_name is the one CLAUDE.md calls out by name as the
+# repo's existing STABLE-PK defect, so leaving it unsearched here meant the check
+# could not see the very mistake it was written after.
+_MUT='(email|agent_name|display_name|creator_handle|telegram_id)'
+STRUCTURAL_EMAIL="(FOREIGN KEY[^;]*${_MUT}|PRIMARY KEY[^)]*\\b${_MUT}\\b|JOIN[^;]*\\bON\\b[^;]*\\b${_MUT}\\b)"
 if hits=$(grep -rInE "$STRUCTURAL_EMAIL" "$CORP/migrations" 2>/dev/null); then
-  fail "DOD-INV-STABLE-PK — email used as an identity anchor:"
+  fail "DOD-INV-STABLE-PK — a mutable attribute used as an identity anchor:"
   echo "$hits" | sed 's/^/        /'
 else
-  pass "DOD-INV-STABLE-PK — no FK, PK or JOIN anchored on email"
+  pass "DOD-INV-STABLE-PK — no FK, PK or JOIN anchored on a mutable attribute"
 fi
 
 # Positive half: every M11 table must actually have a UUID primary key. A
@@ -237,6 +248,15 @@ elif ! grep -q 'cello-\${Environment}-portal-db-sg' "$TRUSTLESS/infra/cloudforma
   fail "DOD-INV-SINGLE-DB — cello-waitlist.yaml does not open the portal DB security group"
 else
   pass "DOD-INV-SINGLE-DB — cello-waitlist.yaml opens the portal DB security group only"
+fi
+
+# "No new database is provisioned" — a clause nobody checked. M11 owning an
+# AWS::RDS::DBInstance would be the whole invariant inverted, and it would be
+# invisible to every other check here.
+if grep -qE '^\s*Type:\s*AWS::RDS::(DBInstance|DBCluster)' "$TRUSTLESS/infra/cloudformation/cello-waitlist.yaml" 2>/dev/null; then
+  fail "DOD-INV-SINGLE-DB — cello-waitlist.yaml provisions its own database"
+else
+  pass "DOD-INV-SINGLE-DB — no new database provisioned by M11's stack"
 fi
 
 # ── DOD-INV-NO-PII-DIRECTORY ──────────────────────────────────────────────────
