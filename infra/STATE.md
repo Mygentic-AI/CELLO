@@ -235,6 +235,17 @@ user, which needs DB visibility, which needs the ops dashboard — blocked on An
 
 ---
 
+## 🔴 Hibernate complete — all 3 regions down (2026-07-25, 20:04–20:11 UTC)
+
+Uptime this cycle: ~15 h (woken 04:58 UTC). ECS→0 (directory + relay ×3, portal, ops-agent), 4 RDS
+stopped, demo EC2 `i-0ad3e7c22470f266e` stopped, 7 ALBs + 3 NAT Gateways (EIPs retained) + 3
+ssmmessages endpoints deleted, all 7 Route53 names blackholed to `198.51.100.1` TTL 60.
+State written to `hibernation-state.json`.
+
+**ECS Exec unavailable while hibernated.** No AWS changes until `wake.sh --execute` has run.
+
+---
+
 ## 🟢 Wake complete — all 3 regions live (2026-07-25, 04:40:24–04:58:08 UTC)
 
 **Elapsed: 17 min 44 sec** (all 3 regions in parallel; RDS cleared in ~11 min — no us-east-1 stall this
