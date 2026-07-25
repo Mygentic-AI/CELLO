@@ -60,6 +60,26 @@ flaky FROST/session test for weeks.
 
 ---
 
+## 🔑 Operator allowlist secret RENAMED to be environment-scoped (2026-07-25)
+
+`cello/ops/allowed-emails` → **`cello/dev/ops/allowed-emails`**, created by `cello-secrets.yaml`
+and populated out-of-band with Andre's two addresses.
+
+**Why:** it was the ONE access-control secret in the system and the only one of thirteen without an
+environment segment. A second environment in this region would either fail to create it or, if that
+were "fixed" by pointing at the existing one, hand the dev operator list to production.
+`OPS_ALLOWLIST_SECRET_ID` is now required in the app with no default, so a task definition missing it
+refuses at boot rather than reaching for a shared list.
+
+**Verified after the switch:** the live task definition carries the scoped name, and a magic-link
+request for an allowed address returns 202 with no `ops.allowlist.unavailable` — Andre confirmed a
+successful sign-in on the deployed dashboard.
+
+The old unscoped secret is scheduled for deletion with a **30-day recovery window** (it was
+`Retain`, so CloudFormation abandoned rather than removed it). Recoverable until then.
+
+---
+
 ## 🟢 OPS DASHBOARD IS LIVE — operations.cello.mygentic.ai (2026-07-25)
 
 `cello-ops-dashboard-dev` CREATE_COMPLETE; ECS service 1/1; DNS resolves; `/sign-in` 200 over HTTPS.
