@@ -2697,3 +2697,48 @@ minute and spending an hour on the wrong subsystem — which is the whole conten
 this project keeps re-learning.
 
 **Runs:** 445 tests green; both reverts turn their named test red; redeployed and confirmed on live data.
+
+---
+
+### Entry 58: the checker built to catch vacuous guarantees was one
+**Date:** 2026-07-25
+**Target:** DOD-INV-NO-DIRECTORY-RELAY, and six other invariants
+
+`verify-m11-invariants.sh` derived its base commit with
+`git log --format=%H --grep='M11' --reverse -1`. **Git applies `-1` before `--reverse`**, so that
+returns the most *recent* commit mentioning M11, not the first. `DOD-INV-NO-DIRECTORY-RELAY` has
+therefore been diffing from roughly an hour ago to `HEAD` on every single run of this milestone. Green
+every time, covering essentially nothing.
+
+Proven rather than argued, which matters because the failure is invisible by construction:
+
+| base | changed files it sees under `infra/cloudformation/` |
+|---|---|
+| old (`--grep --reverse -1`, resolves to ~1h ago) | **0** |
+| corrected (parent of the commit that created the DoD) | **3** — the three M11 actually touched |
+
+Anchored on the DoD's creation commit now. That is semantic — M11 began when its Definition of Done was
+written — and unlike a commit-message grep it cannot drift as more commits mention M11.
+
+**And the clause had a second half nobody checked.** It reads "*any change to `packages/directory/`,
+`packages/relay/`, **or their CloudFormation stacks***". The scan covered source only. A change to
+`cello-ecs-directory.yaml` — which is where the directory's task definition, environment, secrets and
+ALB wiring live — would have passed silently, and that is the half with teeth: M11 has no business
+redefining how the directory runs. Now asserted explicitly, and still green, because those two templates
+genuinely were not touched.
+
+I went looking for this because I had edited `cello-iam.yaml` and `cello-portal-data.yaml` tonight and
+wanted to know whether that violated the invariant before flipping it. It does not — the ops-agent's IAM
+statement and a portal export are neither directory code nor a directory ECS stack — but asking the
+question is what surfaced that the check could not have answered it.
+
+**Seven invariants flipped ✅ off the back of this**, five static and two proven live tonight
+(EMAIL-SUPPRESS via both simulator paths, NO-ENUMERATION across all four observables the clause names).
+Two deliberately did not: TOKEN-SINGLE-USE still owes a real burn through the Telegram gate, and
+POINTS-CAPS a direct insert past the cap against the portal RDS. Both need a verified user, which needs
+database access this laptop does not have — the sanctioned read path is the ops dashboard, and it is not
+deployed.
+
+**The pattern, for the third time this milestone:** a guard that reads as protective and cannot fire.
+First the `waitlist_touchpoints` activity clause, then a test that poisoned the wrong call, now the
+invariant checker itself. In every case the code was green and the comment was confident.
