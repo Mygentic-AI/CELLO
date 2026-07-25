@@ -24,6 +24,7 @@ import * as lp from "it-length-prefixed";
 import pg from "pg";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { generateKeypair, CONTEXT_PRIMARY_RELEASE } from "@cello-protocol/crypto";
 import { FrostThresholdSigner } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
 import { bootstrapKeyShares, clearTestShares } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
@@ -47,8 +48,21 @@ const AUTH_DOMAIN = "CELLO-DIR-AUTH-v1";
 const describeLive = process.env.CELLO_ENV === "local" ? describe : describe.skip;
 
 const DB_URL = process.env.DATABASE_URL ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
-const V44_SQL = readFileSync(path.join(process.cwd(), "db/migrations/V44__primary_holder.sql"), "utf8");
-const V45_SQL = readFileSync(path.join(process.cwd(), "db/migrations/V45__primary_transfer_nonce_bindings.sql"), "utf8");
+// Anchored to THIS FILE, not to process.cwd().
+//
+// `path.join(process.cwd(), "db/migrations/...")` resolved only when vitest was
+// launched from packages/directory. The root `pnpm run test` — the gate every
+// commit is supposed to pass — runs from the repo root, where that path does
+// not exist, so readFileSync threw at collection and this suite counted as a
+// FAILED SUITE with zero failed tests. Three suites did this, which is how a
+// green-looking gate reported "4 failed" for long enough that people read past it.
+const MIGRATIONS_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../db/migrations",
+);
+
+const V44_SQL = readFileSync(path.join(MIGRATIONS_DIR, "V44__primary_holder.sql"), "utf8");
+const V45_SQL = readFileSync(path.join(MIGRATIONS_DIR, "V45__primary_transfer_nonce_bindings.sql"), "utf8");
 
 class StreamReader {
   readonly #iter: AsyncIterator<Uint8Array>;
