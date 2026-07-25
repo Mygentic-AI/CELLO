@@ -2247,3 +2247,61 @@ does not get it in front of anyone sooner.
 **Correct order:** DNS record → site deploy → confirm the gallery serves a real receipt → then the
 footer, then a client publish. Recorded as a sequencing dependency rather than parked, because nothing
 about it is undecided.
+
+---
+
+### Entry 48: a write with no reader, and a guard that could never fire
+**Date:** 2026-07-25
+**Target:** DOD-FEEDBACK-OUTREACH-1, DOD-E-RE-1, DOD-LANDING-1 [all three repos]
+
+Review of Entries 43–45. Three defects, and all three are the same species: **something that exists,
+looks correct, is tested, and is not connected to anything.**
+
+**The Day-6 status note was written and never read.** Entry 42 added `status_notes`, the sweep writes
+one, five tests cover it, and I marked the DoD clause landed. Nothing read the table — not the session
+endpoint, not the status page, not the ops dashboard. So the user is granted two premium invite codes
+with nothing anywhere telling them the codes exist, which is the failure `0021_status_notes.sql` opens
+by describing in its own header. The migration's first line was a false statement about the shipped
+system, and my DoD edit ("Day-6 status-page note added") overstated: stored, never shown.
+
+This is the **second** write-with-no-reader in this milestone, and the shape is worth naming: a green
+suite is structurally unable to catch it, because every test exercises the writer and the writer is
+correct. The only thing that finds it is asking "who consumes this?" — which is a question, not a test.
+
+**The touchpoints activity guard could never fire.** E-re's "no activity in 30 days" checked three
+sources, and the third was inert. The only writer of `waitlist_touchpoints` is the signup handler,
+inserting the visitor's pre-signup localStorage trail once; nothing records a touchpoint afterwards. So
+for anyone older than sixty days every row predates the thirty-day window and `t.ts > now() - 30 days`
+was unsatisfiable, always. The docstring said it covered "arrived on the site". It covered nothing.
+
+Removed rather than left in, because a guard that reads as protective and cannot fire is worse than no
+guard: it stops the next person looking for the real one. The consequence is now stated where the sweep
+is defined — somebody who visits daily but never signs in and never earns a point will get this email —
+and the test that used to "cover" that clause now asserts current behaviour and says which way it should
+flip when a pageview writer exists.
+
+**The sweep could starve the signup path.** Every enqueued row got `scheduled_at = now()` with no limit,
+and `claim_jobs` orders by `scheduled_at` — so the entire dormant backlog would sit *ahead of* every
+confirmation email enqueued afterwards. At 25 jobs a minute a 100k backlog is ~67 hours during which a
+brand-new signup's confirmation waits behind re-engagement mail while the page says "check your inbox".
+The P0 path, degraded by a P3 feature. Bounded at 500 per run; daily and idempotent, so it self-drains.
+
+**Two of my own tests were hollow in the same way**: each pinned only the far side of a boundary.
+Activity 120 days ago does not protect — but nothing asserted that activity 29 days ago *does*, so the
+quiet window could collapse to one day and the sweep would mail people who were on the site yesterday.
+Same for the 60-day age threshold, which could have become 31. Both mutations passed the entire suite;
+both now fail by name.
+
+**And the signup fix passed its revert test at the wrong altitude.** The defect was in
+`WaitlistContent.tsx`; the fix moved the call into `waitlistApi.ts` and all five new tests were written
+against `waitlistApi.ts`. Restore the inline fetch in the component and every one stays green, because
+`signup()` still exists and is still correct — merely unused. Replaced with a source-level boundary
+assertion, which also catches the next occurrence rather than this one.
+
+That checker's own first two findings were itself, which is worth recording because it is funny and
+because it is the same class again: stripping only block comments made a comment *mentioning*
+`/waitlist/auth/verify` read as a violation, and then stripping `//` naively ate the `//` in `https://`
+along with every URL after it — so it cheerfully reported that the legacy files had stopped being
+legacy. A checker whose first finding is itself is a checker nobody keeps.
+
+**Runs:** 410 Lambda tests, 18 site tests, `tsc` clean, `next build` clean.
