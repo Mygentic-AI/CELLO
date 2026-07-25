@@ -9,6 +9,37 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🔒 Telegram waitlist gate — Lambda verified live, ops-agent redeploying (2026-07-25, ~14:20 CEST)
+
+**`cello-waitlist-gate-dev` (us-east-1) verified live by direct invoke — read-only, no mutation.**
+Three refusal paths, each returning a well-formed decision (`statusCode: 200` + boolean `allowed`),
+which is exactly the contract the client now requires:
+
+| payload | response |
+|---|---|
+| `{"telegram_id":"999000111"}` | `allowed:false, token_required` |
+| `{}` | `allowed:false, missing_telegram_id` |
+| `{"telegram_id":"…","token":"ZZZZZZZZZZZZ"}` | `allowed:false, token_malformed` |
+
+That third one corrected a wrong belief in the code: the gate takes
+`waitlist_tokens.token`, a `gen_random_uuid()`. The 12-character 32-symbol code is
+`referral_codes.code` — a different token on a different path.
+
+**IAM confirmed live, not just in IaC:** `cello-dev-ops-agent-task-role` → `OpsAgentPermissions` →
+`InvokeWaitlistGate` grants `lambda:InvokeFunction` on
+`arn:aws:lambda:us-east-1:257394457473:function:cello-waitlist-gate-dev` and nothing else.
+
+**No CFN change needed for the ops-agent side.** The gate function name is derived in `server.ts`
+from `env` (`cello-waitlist-gate-${env}`, region pinned to us-east-1 because the waitlist is a
+single global service, M11-D26) — so there is no new task-definition env var, and an image swap is
+sufficient.
+
+**`cello-operations-agent-pipeline` triggered by the pushes to `main`** (path filter on
+`packages/operations-agent/`). Until it reaches ProductionDeploy the gate is **not enforced live** —
+the deployed image predates it.
+
+---
+
 ## 🟢 Wake complete — all 3 regions live (2026-07-25, 04:40:24–04:58:08 UTC)
 
 **Elapsed: 17 min 44 sec** (all 3 regions in parallel; RDS cleared in ~11 min — no us-east-1 stall this
