@@ -338,6 +338,37 @@ These are not DoD lines — they are the real-world checks that determine whethe
 ## Parked
 *(Genuine undecidable forks. Never silently dropped.)*
 
+- **I VIOLATED `DOD-INV-NO-DIRECTORY-RELAY` AND IT COST A 3-REGION DIRECTORY DEPLOY (2026-07-25).**
+  Recorded rather than quietly excluded from the checker, because the checker caught me and
+  loosening it to accommodate my own commit is the worst available response.
+
+  Commit `985fd257` repaired three permanently-broken test suites by anchoring their migration paths
+  to the test file instead of `process.cwd()`. The files live under `packages/directory/src/__tests__/`.
+  `infra/pipeline-mappings.json` maps the prefix `packages/directory/` — **including `__tests__`** —
+  to `cello-directory-pipeline`, so a test-only edit that cannot change a single byte of deployed
+  behaviour triggered a 25–30 minute three-region protocol deploy.
+
+  **The damage, checked rather than assumed.** us-east-1's directory task restarted (16:07 CEST);
+  eu-central-1 and ap-northeast-1 were untouched at that point. `infra/CLAUDE.md` says a relay must be
+  restarted after every directory redeploy because it registers once and has no reconnect — so I
+  checked the new directory's log before applying that runbook, and it is health-checking the relay
+  every 30s (`relay.health.check.passed`, latency 3–5ms) and polling manifest v79. The directory
+  learns relays from the signed S3 manifest, not only from in-band registration, so this path
+  self-healed. **No relay restart was needed and none was performed.**
+
+  **Not reverted, deliberately.** The revert also touches `packages/directory/`, so it would trigger a
+  SECOND three-region deploy in order to restore three broken test suites. Paying the cost twice to
+  reinstate a defect is not a fix.
+
+  **The real defect is the mapping, and it is nobody's fault but the prefix.** Any test-only change
+  under `packages/directory/` or `packages/relay/` buys a full protocol deploy. Whether the filter
+  Lambda's mapping schema can express an exclusion is unverified. **Unparked by:** either teaching
+  `pipeline-mappings.json` to exclude `**/__tests__/**` (and redeploying the filter Lambda, per
+  infra/CLAUDE.md), or accepting that directory test edits are batched like directory code edits.
+
+  The invariant check stays RED on this commit on purpose. A green checker that has been taught to
+  ignore the one violation it found is worth less than a red one that names it.
+
 - **The legacy confirmation link is BROKEN IN PRODUCTION, and fixing it is a product call
   (2026-07-25).** Found while auditing the built corp-site artifact before the merge.
 

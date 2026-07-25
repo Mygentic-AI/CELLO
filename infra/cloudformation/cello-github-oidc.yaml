@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  GitHub Actions → AWS via OIDC. Lets a named repository's workflows assume a role
+  and push to ECR without a long-lived access key living in GitHub secrets.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, production]
+
+  GitHubOwner:
+    Type: String
+    Default: Andre-Mygentic
+
+  # ONE REPOSITORY, AND THE TRUST POLICY SAYS SO.
+  #
+  # The tempting shape is `repo:owner/*:*`, which trusts every repository the
+  # owner has or will ever have — including a fork someone opens a PR from. The
+  # condition below pins the repo AND the ref, so a workflow on a branch of a
+  # different repo cannot assume this role even though it presents a token from
+  # the same issuer.
+  GitHubRepo:
+    Type: String
+    Default: cello-ops-dashboard
+
+Resources:
+  # Created here rather than assumed to exist. The account had NO GitHub OIDC
+  # provider (only accounts.google.com) when this was written — checked, not
+  # guessed.
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      # GitHub's root CA thumbprint. IAM no longer verifies this for the GitHub
+      # issuer, but the field is still required; the value is the documented one.
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+      Tags:
+        - Key: Project
+          Value: cello
+
+  EcrPushRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "cello-${Environment}-github-${GitHubRepo}-ecr-push"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                # main only. A push to any other branch, and any pull_request
+                # from a fork, gets no credentials — which is the point of
+                # pinning the ref rather than only the repo.
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOwner}/${GitHubRepo}:ref:refs/heads/main"
+      Policies:
+        - PolicyName: PushToOwnRepository
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # The auth token is account-wide by API design and cannot be
+              # resource-scoped. Every action that CAN be scoped, is — this role
+              # can push to exactly one repository and read nothing else.
+              - Sid: GetAuthToken
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: PushToOneRepo
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:CompleteLayerUpload
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${GitHubRepo}"
+
+Outputs:
+  EcrPushRoleArn:
+    Value: !GetAtt EcrPushRole.Arn
+    Description: Pass to aws-actions/configure-aws-credentials as role-to-assume.

@@ -1226,19 +1226,48 @@ if [[ "${DEPLOY_OPS_DASHBOARD:-0}" == "1" && "${REGION}" == "us-east-1" ]]; then
   OPS_ALB_ZONE=$(echo "${OPS_ALB_JSON}" | cut -f3)
   OPS_LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn "${OPS_ALB_ARN}" \
     --region "${REGION}" --query 'Listeners[?Port==`443`].ListenerArn' --output text 2>/dev/null || true)
-  OPS_DB_SECRET_ARN=$(aws cloudformation list-exports --region "${REGION}" \
-    --query "Exports[?Name=='cello-${ENVIRONMENT}-portal-db-master-secret-arn'].Value" \
-    --output text 2>/dev/null || true)
+  # THE URL SECRET, NOT THE RDS MASTER SECRET.
+  #
+  # `cello-${env}-portal-db-master-secret-arn` is the RDS-MANAGED credential and
+  # its value is `{"username":…,"password":…}` — a JSON blob, not a connection
+  # string. Handing it to the container as DATABASE_URL fails in the worst way
+  # available: it is PRESENT, so the boot check passed; `/sign-in` is the ALB
+  # health check path and touches no database, so the target went healthy and
+  # this script printed success; and the first operator to open `/` got a generic
+  # 500. The portal's own task definition uses `cello/{env}/portal/database-url`,
+  # which already exists — both neighbours knew, and this block did not.
+  OPS_DB_SECRET_ARN=$(aws secretsmanager describe-secret \
+    --secret-id "cello/${ENVIRONMENT}/portal/database-url" --region "${REGION}" \
+    --query 'ARN' --output text 2>/dev/null || true)
 
+  # CELLO_IMAGE_TAG, not IMAGE_TAG. IMAGE_TAG defaults to "stub" near the top of
+  # this script, so guarding on it was dead code — and with it the entire reason
+  # DEPLOY_OPS_DASHBOARD exists. An operator who set the flag and forgot the tag
+  # deployed `cello-ops-dashboard:stub`, got CannotPullContainerError, the
+  # circuit breaker and a rollback: a container-runtime label standing in for
+  # "you forgot an environment variable", and the refusal written for it never
+  # printed. HOSTED_ZONE_ID is here too — it falls back to the literal
+  # PLACEHOLDER, which reaches ACM and hangs the stack in CREATE_IN_PROGRESS
+  # until timeout rather than saying the zone did not resolve.
   for _pair in "portal ALB:${OPS_ALB_ARN}" "ALB DNS:${OPS_ALB_DNS}" \
                "ALB zone:${OPS_ALB_ZONE}" "HTTPS listener:${OPS_LISTENER_ARN}" \
-               "portal DB secret:${OPS_DB_SECRET_ARN}" "image tag:${IMAGE_TAG:-}"; do
-    if [[ -z "${_pair#*:}" ]]; then
+               "portal DB secret:${OPS_DB_SECRET_ARN}" \
+               "hosted zone:${HOSTED_ZONE_ID}" "image tag:${CELLO_IMAGE_TAG:-}"; do
+    if [[ -z "${_pair#*:}" || "${_pair#*:}" == "PLACEHOLDER" ]]; then
       echo "ERROR: could not resolve ${_pair%%:*} for the ops dashboard. Refusing to deploy." >&2
-      echo "       The portal stack must exist first, and IMAGE_TAG must name an image in ECR." >&2
+      echo "       The portal stack must exist first, and CELLO_IMAGE_TAG must name an image in ECR." >&2
       exit 1
     fi
   done
+
+  # The image must EXIST, not merely be named. Checking here turns a fifteen-
+  # minute crash-loop-and-rollback into one line before anything is created.
+  if ! aws ecr describe-images --repository-name cello-ops-dashboard \
+       --image-ids imageTag="${CELLO_IMAGE_TAG}" --region "${REGION}" >/dev/null 2>&1; then
+    echo "ERROR: cello-ops-dashboard:${CELLO_IMAGE_TAG} is not in ECR. Refusing to deploy." >&2
+    echo "       Push it from the ops-dashboard repo's Build and push image workflow first." >&2
+    exit 1
+  fi
 
   deploy_stack "cello-ops-dashboard-${ENVIRONMENT}" "cello-ops-dashboard.yaml" \
     "Environment=${ENVIRONMENT}" \

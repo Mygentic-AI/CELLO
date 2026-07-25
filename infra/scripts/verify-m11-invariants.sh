@@ -92,14 +92,28 @@ for _p in $CORP_ALL; do
   [[ -e "$_p" ]] || fail "scan target missing: $_p (the checker would narrow silently)"
 done
 
-# Quarantine, in ONE visible place, never grown. These two are real violations of
-# a live invariant on live pages. They are not waived — they are recorded, because
-# the fix is a product decision that is not an agent's to make: the legacy
-# beta-application / agent-interest funnel either gets retired (the M11 waitlist
-# supersedes it) or gets routed under the custom domain, and those are different
-# amounts of work for different reasons. Parked in the DoD with the evidence.
-# Unparked by: making that call. Anything NEW that matches must fail.
-DOMAIN_QUARANTINE='app/(beta/apply/BetaApplyContent|agent/interest/AgentInterestContent)\.tsx'
+# Quarantine the VIOLATION, not the FILE — and pin the count.
+#
+# The first version excluded two paths wholesale, under a comment claiming
+# "anything NEW that matches must fail". That was true of new files and false of
+# new violations: everything those two files would ever contain was exempt
+# forever, so a third execute-api host or a cello.dev link added to
+# BetaApplyContent.tsx kept the checker green. Excluding by whole line had a
+# second edge too — any line ANYWHERE that merely mentioned one of those paths
+# and also carried a bad domain was dropped with them.
+#
+# So: exempt exactly the known host, in exactly those two files, and require
+# EXACTLY two of them. More fails, and so does FEWER — which makes the
+# quarantine self-expiring. When the product call is made and the lines are
+# fixed, this check tells you to delete the quarantine rather than quietly
+# carrying it for the rest of the milestone.
+DOMAIN_QUARANTINE='app/(beta/apply/BetaApplyContent|agent/interest/AgentInterestContent)\.tsx:[0-9]+:.*h8dh7rbhb1\.execute-api\.us-east-1\.amazonaws\.com'
+DOMAIN_QUARANTINE_COUNT=2
+_quarantined=$(scan "$BAD_DOMAIN" "$CORP_ALL" | grep -cE "$DOMAIN_QUARANTINE" || true)
+if [[ "$_quarantined" != "$DOMAIN_QUARANTINE_COUNT" ]]; then
+  fail "DOD-INV-DOMAIN — the quarantine expected ${DOMAIN_QUARANTINE_COUNT} known violations, found ${_quarantined}."
+  echo "        More means a new one joined it; FEWER means they were fixed and this block should be DELETED." | sed 's/^/  /'
+fi
 if hits=$(scan "$BAD_DOMAIN" "$M11_LAMBDA $CORP_ALL $M11_CONFIG" | grep -vE "$DOMAIN_QUARANTINE"); then
   fail "DOD-INV-DOMAIN — a domain other than cello.mygentic.ai:"
   echo "$hits" | sed 's/^/        /'
