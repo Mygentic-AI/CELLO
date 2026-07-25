@@ -9,6 +9,42 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## ⚠️ SMOKE-TEST ALB DRIFT IS RECURRING BY DESIGN — and I re-made a documented mistake (2026-07-25)
+
+**The fix is ONE command**, already written down in
+`docs/planning/discussion_logs/2026-07-19_0600_smoke-test-fix-and-alb-drift.md`:
+
+```bash
+aws codebuild update-project --name cello-smoke-test-build --region us-east-1 \
+  --environment '{"type":"LINUX_CONTAINER","image":"aws/codebuild/standard:7.0","computeType":"BUILD_GENERAL1_SMALL","environmentVariables":[{"name":"STAGING_DIRECTORY_URL","value":"<CURRENT dir ALB DNS>","type":"PLAINTEXT"}]}'
+```
+
+**Why it keeps coming back, which that log does not say:** `hibernate.sh` DELETES the dir and relay
+ALBs (its own header: *"ALBs (dir + relay per region) ~$150/mo"*), and `wake.sh` recreates them and
+UPSERTs Route53 to the **new** aliases. So every hibernate/wake cycle mints a new ALB DNS name and
+this baked CodeBuild value goes stale again. It is not one-off drift from the 2026-07-17 rogue-agent
+incident — that incident produced the first instance; hibernation reproduces it every cycle.
+
+Three generations are currently recorded in three places, which is the signature:
+`cello-dir-dev-85618485` (cicd stack parameter) · `cello-dir-dev-1341968405` (CodeBuild project) ·
+`cello-dir-dev-1389700310` (**the live ALB**).
+
+**I repeated the mistake the 2026-07-19 log exists to prevent.** It records an agent responding to
+this with CFN template edits and repeated `deploy.sh` runs, one of whose rollbacks reverted the
+directory ECS service to an old image. I did the same class of thing: changed the template so an
+empty `StagingDirectoryUrl` would mean "resolve at run time", deployed `cello-cicd-dev`, and it
+**failed and rolled back** — a CodePipeline variable derived from that parameter rejects an empty
+default (`pipeline.variables.1.member.defaultValue`). Stack is back at `UPDATE_ROLLBACK_COMPLETE`;
+blast radius was CI resources only, no ECS service touched. `deploy.sh` has since been changed to
+pass the live ALB name rather than an empty string.
+
+**Structural fix that IS worth keeping** (already committed, proven 8/8 against live staging):
+`packages/e2e-tests/src/smoke/run-smoke-tests.ts` resolves the ALB from AWS when
+`STAGING_DIRECTORY_URL` is unset, so the next hibernate cycle self-heals. It reaches CI only when the
+cicd stack is next deployed — which should happen deliberately, not as a reflex to drift.
+
+---
+
 ## 🔴 DIRECTORY CI HAS BEEN UNABLE TO REACH eu-central-1 / ap-northeast-1 (found 2026-07-25)
 
 **Not a new break — found today, weeks old, still live. Nothing was mutated to fix it.**

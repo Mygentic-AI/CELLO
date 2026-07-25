@@ -1037,7 +1037,16 @@ if [[ "${REGION}" == "us-east-1" ]]; then
   #
   # Empty means the runner resolves it from AWS at run time, so a stale cicd
   # stack self-heals. Set CELLO_STAGING_DIRECTORY_URL for a deliberate override.
-  STAGING_DIRECTORY_URL="${CELLO_STAGING_DIRECTORY_URL:-}"
+  # The ALB DNS name as it is RIGHT NOW, which is what this always intended —
+  # deploy.sh reads the directory stack output and passes it. It went stale only
+  # because this stack had not been deployed since the ALB was replaced.
+  #
+  # An earlier attempt passed "" here, meaning "let the runner resolve it". That
+  # broke the deploy outright: a CodePipeline variable derived from this
+  # parameter requires a non-empty default, so the stack rolled back. The
+  # runtime resolver in run-smoke-tests.ts stays as the safety net for the next
+  # time this drifts — but the parameter carries a real value.
+  STAGING_DIRECTORY_URL="${CELLO_STAGING_DIRECTORY_URL:-${ALB_DNS_NAME}}"
 
   # Pass STAGING_DIRECTORY_URL from stack output so CodePipeline can inject it into
   # the smoke test CodeBuild action (AC-009: no hardcoded .elb.amazonaws.com strings)
