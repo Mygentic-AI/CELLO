@@ -2157,3 +2157,39 @@ red — the third only after I wrote a second test, because the first one I had 
 hibernated. Fire-and-forget needs a persistent process — on a serverless runtime the response returns
 and the container can freeze before SES is invoked, so links would silently never send. And config
 validation at module load means `OPS_PUBLIC_URL` is required by `next build`, not only at runtime.
+
+---
+
+### Entry 45: signup was the one call that did not go through the single place
+**Date:** 2026-07-25
+**Target:** DOD-LANDING-1 [corp-cello-site]
+
+The DoD said this line was blocked on a form that POSTs to `/api/waitlist/signup` and 404s in a static
+export. That was fixed some entries ago and the note went stale — worth recording, because a stale
+**blocker** is more expensive than a stale completion: it hides work that is actually available by
+making it look already-diagnosed.
+
+What was still wrong is subtler. `src/lib/waitlistApi.ts` opens with *"single place that knows where the
+waitlist API lives"*, and it was not: the signup form assembled its own URL from a **second** env var,
+`NEXT_PUBLIC_WAITLIST_API`, while every other call read `NEXT_PUBLIC_WAITLIST_API_BASE`.
+
+**The failure that buys is the quiet kind.** Point the site at a staging API and every call moves except
+the one that creates the user. The status page, the survey, the gallery and auth all talk to staging;
+signups land in the production database. Every page looks correct. Nothing in the suite would have
+noticed, because nothing asserted where signup pointed — the file's own claim was the only statement of
+the property, and a claim is not a check.
+
+**Moving the call changed an error shape**, which is the part worth watching in any consolidation like
+this. The 409 was handled by an `if (response.status === 409)` branch *above* the error handling;
+pulling the fetch into the module turned it into a throw, and a throw falls into the generic
+`catch (err) → setError`. A returning user would have seen a red failure for the crime of having signed
+up before. `SignupConflict` keeps it the separate outcome the page already renders.
+
+**Five tests, none of which existed.** The URL; that the host is same-site with the app (a Lax cookie is
+never attached to a cross-**site** fetch, so an execute-api host makes `/status` unable to authenticate
+forever — the same property that made the custom domain load-bearing in Entry 40); 409 as a distinct
+type; the server's sentence preferred over its machine code; and a loud failure when the server sends no
+body at all. Revert test: pointing signup back at its own env var and the old execute-api host turns the
+first two red.
+
+**Runs:** 15 tests green, `tsc` clean, `next build` clean.
