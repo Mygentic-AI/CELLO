@@ -189,19 +189,24 @@ The backend is deployed and proven. Almost everything still 🟡 is waiting on o
 **outward actions only Andre can take** — not on further work. Written down because several DoD
 lines named the wrong blocker, which made them look like agent work when they were not.
 
-## A. Waiting on ONE thing: the corp-cello-site deploy
+## A. ~~Waiting on the corp-cello-site deploy~~ — DONE (2026-07-25)
 
-`main` is ~35 commits behind `m11/review-fixes`, and merging auto-deploys the live public site, so
-it is deliberately not an agent action. Every line below is code-complete and API-proven; each
-needs the page it lives on to actually be the deployed page:
+Andre gave the go-ahead mid-session. `m11/review-fixes` fast-forwarded onto `main` (clean, 35
+commits, no divergence), the Deploy Corp Site workflow succeeded, and the Lightsail rsync landed.
+
+Verified on the live site, not on the branch: `/waitlist`, `/status`, `/survey`, `/invite`,
+`/confirm` and `/gallery` all serve 200, and the served JS chunk contains
+`https://api.cello.mygentic.ai/waitlist` — so the deployed page targets the deployed API rather than
+a stale host.
 
 `DOD-LANDING-1` · `DOD-TRACKING-1` · `DOD-SIGNUP-1` · `DOD-AUTH-1` · `DOD-STATUS-PAGE-1` ·
 `DOD-SURVEY-1` · `DOD-READINESS-1` · `DOD-CONTENT-ALERTS-1` · `DOD-DYNAMIC-ESTIMATOR-1` ·
-`DOD-STATUS-STUB-1` · `DOD-GALLERY-INDEX-1`
+`DOD-STATUS-STUB-1` · `DOD-GALLERY-INDEX-1` are no longer blocked on a deploy.
 
-The API half of these IS verified live: signup with `anon_id`/`touchpoints`/`ref` returns an
-attributed user, `/auth/request` is byte-identical for known and unknown addresses, `/auth/session`
-401s without a cookie, `/gallery/receipts` serves.
+**What each still owes is a BROWSER run**, which is a different thing and must not be waved through:
+the API half is proven with curl, but curl does not execute JavaScript, so the client-side halves —
+localStorage touchpoints, the `ref` extraction, the session cookie round-trip, the copy buttons —
+have never once run in a browser. Do not mark these ✅ on the strength of a 200.
 
 ## B. Waiting on the ops-dashboard existing somewhere
 
