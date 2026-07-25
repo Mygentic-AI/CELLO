@@ -354,3 +354,72 @@ describe("redemption attempts are bounded — clause 7", () => {
     expect(OK.redeem).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("our outage must not spend the user's allowance", () => {
+  // The limiter records the attempt BEFORE the call, which is right for
+  // concurrency — a burst of messages cannot all pass the check while the
+  // first gate call is still in flight. But it means a gate that THROWS also
+  // consumes an attempt, and a throw is our fault, not theirs. Five outages
+  // and a user with a perfectly good token is locked out for an hour, having
+  // done nothing but retry exactly as our own message told them to.
+  const BROKEN = {
+    check: vi.fn(async () => ({ allowed: false, error: "token_required", message: "Token needed." })),
+    redeem: vi.fn(async () => {
+      throw new Error("The waitlist gate could not be reached (redeem).");
+    }),
+  };
+
+  beforeEach(() => {
+    BROKEN.check.mockClear();
+    BROKEN.redeem.mockClear();
+  });
+
+  it("refunds the attempt when the gate throws", async () => {
+    const { deps } = makeDeps({ waitlistGate: BROKEN });
+    const sm = new RegistrationStateMachine(deps);
+
+    // Eight outages — more than the five-attempt ceiling.
+    for (let i = 0; i < 8; i++) {
+      await expect(sm.handleMessage(gated(), `TOKEN-${i}`, "tg-unlucky")).rejects.toThrow();
+    }
+
+    // Every one reached the gate. Without the refund the sixth onward would
+    // have been refused locally and the count would stop at five.
+    expect(BROKEN.redeem).toHaveBeenCalledTimes(8);
+  });
+
+  it("gives back exactly one attempt, not the whole record", async () => {
+    // Wiping the user's history on a throw would pass the test above and
+    // quietly destroy the ceiling: alternate one outage with one guess and the
+    // count never reaches five. Verified as a mutation — replacing the refund
+    // with `rest = []` left every other test in this file green.
+    let throwNext = false;
+    const FLAKY = {
+      check: vi.fn(async () => ({ allowed: true, alreadyLinked: false })),
+      redeem: vi.fn(async () => {
+        if (throwNext) throw new Error("The waitlist gate could not be reached (redeem).");
+        return { redeemed: false, error: "unknown_token", message: "Unknown token." };
+      }),
+    };
+    const { deps } = makeDeps({ waitlistGate: FLAKY });
+    const sm = new RegistrationStateMachine(deps);
+
+    // Three real refusals — three attempts spent.
+    for (let i = 0; i < 3; i++) await sm.handleMessage(gated(), `A-${i}`, "tg-mix");
+
+    // One outage in the middle, refunded.
+    throwNext = true;
+    await expect(sm.handleMessage(gated(), "OUTAGE", "tg-mix")).rejects.toThrow();
+    throwNext = false;
+
+    // Two more refusals take them to exactly five.
+    for (let i = 0; i < 2; i++) await sm.handleMessage(gated(), `B-${i}`, "tg-mix");
+    const spent = FLAKY.redeem.mock.calls.length;
+
+    // The sixth must be refused locally. Had the refund cleared the whole
+    // record, the count would have restarted at the outage and this would
+    // reach the gate again.
+    await sm.handleMessage(gated(), "SIXTH", "tg-mix");
+    expect(FLAKY.redeem.mock.calls.length).toBe(spent);
+  });
+});

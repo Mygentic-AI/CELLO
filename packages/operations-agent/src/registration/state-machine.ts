@@ -494,6 +494,27 @@ export class RegistrationStateMachine {
   }
 
   /**
+   * Give an attempt back, for a call that never produced an answer.
+   *
+   * The attempt is recorded BEFORE the gate call, which is right for
+   * concurrency — a burst of messages cannot all clear the check while the
+   * first call is still in flight. The cost is that a gate which THROWS also
+   * spends one, and a throw is our fault. Five outages would lock out a user
+   * holding a perfectly good token, for doing exactly what our own error
+   * message told them to do.
+   *
+   * Refunding only on throw keeps both properties: refusals still count (that
+   * is the case the ceiling exists for), and our failures do not.
+   */
+  #refundTokenAttempt(from: string): void {
+    const mine = this.#tokenAttempts.get(from);
+    if (!mine?.length) return;
+    const rest = mine.slice(0, -1);
+    if (rest.length === 0) this.#tokenAttempts.delete(from);
+    else this.#tokenAttempts.set(from, rest);
+  }
+
+  /**
    * Run a gate call; if it throws, tell the user before letting it propagate.
    *
    * The throw is preserved deliberately — it is what makes the gate fail
@@ -571,7 +592,13 @@ export class RegistrationStateMachine {
     // their token was NOT consumed. Somebody who sends their one invitation
     // token and receives an unexplained error has every reason to assume they
     // have just burned it.
-    const result = await this.#askGate(() => waitlistGate.redeem(from, token), from, "redeem");
+    let result;
+    try {
+      result = await this.#askGate(() => waitlistGate.redeem(from, token), from, "redeem");
+    } catch (error) {
+      this.#refundTokenAttempt(from);
+      throw error;
+    }
 
     if (!result.redeemed) {
       logger.info("registration.gate.token_refused", {
