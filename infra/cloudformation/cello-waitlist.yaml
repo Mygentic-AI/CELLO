@@ -1084,6 +1084,25 @@ Resources:
         - Id: sweep
           Arn: !GetAtt OutreachFunction.Arn
 
+  # DAILY, and pointed at the same function as the per-minute drain but with an
+  # Input that selects a different action. The sweep scans every waiting user
+  # against three NOT EXISTS subqueries to answer a question whose answer can
+  # only change once a day; running that 1440 times a day to enqueue the same
+  # zero rows is work nobody asked for.
+  ReEngageSweepSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "cello-waitlist-re-engage-${Environment}"
+      Description: E-re 60-day re-engagement sweep. Daily, before the feedback sweeps.
+      ScheduleExpression: "cron(23 6 * * ? *)"
+      State: ENABLED
+      Targets:
+        - Id: sweep
+          Arn: !GetAtt EmailFunction.Arn
+          # Without this the daily rule would just drain the queue a second
+          # time, and E-re would never be enqueued by anything.
+          Input: '{"action": "sweep_re_engagement"}'
+
   EmailSchedulePermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -1091,6 +1110,18 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt EmailDispatchSchedule.Arn
+
+  # A SECOND permission, not a reuse of the one above. Lambda scopes each
+  # permission to a single SourceArn, so the drain rule's grant does not let the
+  # sweep rule invoke anything — the sweep would fail with AccessDenied at the
+  # EventBridge layer, where nothing in the function's own logs would show it.
+  ReEngageSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt EmailFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ReEngageSweepSchedule.Arn
 
   FeedbackSchedulePermission:
     Type: AWS::Lambda::Permission

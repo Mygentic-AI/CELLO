@@ -615,3 +615,195 @@ def test_every_send_carries_the_configuration_set(mailer):
 
     assert len(mailer.fake.sent) == 1
     assert mailer.fake.sent[0]["ConfigurationSetName"] == "cello-waitlist-test"
+
+
+# ── DOD-E-RE-1: the 60-day re-engagement sweep ────────────────────────────────
+
+
+def age_user(uid, days):
+    """Backdate created_at. now() - interval is used by the sweep, so the row has
+    to be genuinely old rather than the clock moved."""
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE waitlist_users SET created_at = now() - make_interval(days => %s) "
+            "WHERE waitlist_id = %s",
+            (days, uid),
+        )
+    conn.close()
+
+
+def verified(uid, value=True):
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE waitlist_users SET email_verified = %s WHERE waitlist_id = %s", (value, uid)
+        )
+    conn.close()
+
+
+def dormant_user(email, *, age_days=61, **kw):
+    uid = make_user(email, **kw)
+    age_user(uid, age_days)
+    verified(uid)
+    return uid
+
+
+def re_engage_jobs(uid=None):
+    if uid:
+        return query(
+            "SELECT id FROM email_jobs WHERE template = 'e_re_engage' AND user_id = %s", (uid,)
+        )
+    return query("SELECT user_id FROM email_jobs WHERE template = 'e_re_engage'")
+
+
+def sweep_re(mailer):
+    return mailer.lambda_handler({"action": "sweep_re_engagement"}, None)
+
+
+def test_a_dormant_waiting_user_is_enqueued_once(mailer):
+    uid = dormant_user("dormant@example.test")
+
+    assert sweep_re(mailer)["re_engage_enqueued"] == 1
+    assert len(re_engage_jobs(uid)) == 1
+
+
+def test_the_sweep_is_idempotent(mailer):
+    """It runs daily. A second run must not queue a second copy — and unlike the
+    nurture chain there is no 'did the last one send' to lean on, so the guard
+    is the absence of any e_re_engage row for this user."""
+    uid = dormant_user("twice@example.test")
+
+    sweep_re(mailer)
+    assert sweep_re(mailer)["re_engage_enqueued"] == 0
+    assert len(re_engage_jobs(uid)) == 1
+
+
+def test_a_recent_signup_is_not_swept(mailer):
+    dormant_user("fresh@example.test", age_days=30)
+
+    assert sweep_re(mailer)["re_engage_enqueued"] == 0
+
+
+@pytest.mark.parametrize("status", ["admitted", "active", "left", "banned"])
+def test_only_users_still_waiting_are_swept(mailer, status):
+    """'We noticed you have not been back' sent to somebody who was admitted six
+    weeks ago says plainly that nobody is watching."""
+    dormant_user(f"{status}@example.test", status=status)
+
+    assert sweep_re(mailer)["re_engage_enqueued"] == 0
+
+
+@pytest.mark.parametrize("bad", ["unsubscribed", "bounced", "complained"])
+def test_a_suppressed_address_is_never_swept(mailer, bad):
+    dormant_user(f"supp-{bad}@example.test", email_status=bad)
+
+    assert sweep_re(mailer)["re_engage_enqueued"] == 0
+
+
+def test_an_unconfirmed_address_is_not_swept(mailer):
+    """Never confirmed in 60 days is not dormancy — it is an address that may
+    not be theirs, and DOD-E-RE-1's message assumes a real relationship."""
+    uid = make_user("neverconfirmed@example.test")
+    age_user(uid, 61)
+    verified(uid, False)
+
+    assert sweep_re(mailer)["re_engage_enqueued"] == 0
+
+
+def test_recent_points_count_as_activity(mailer):
+    """Earning points is the user acting. Mailing 'you have not been back' to
+    somebody who filled in the survey last week is the failure this guard
+    exists to prevent."""
+    uid = dormant_user("earner@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO points_ledger (waitlist_user_id, points, reason) VALUES (%s, 20, 'survey')",
+            (uid,),
+        )
+    conn.close()
+
+    assert sweep_re(mailer)["re_engage_enqueued"] == 0
+
+
+def test_a_recent_visit_counts_as_activity(mailer):
+    uid = dormant_user("visitor@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO waitlist_touchpoints (waitlist_user_id, anon_id, url) "
+            "SELECT waitlist_id, anon_id, 'https://cello.mygentic.ai/' FROM waitlist_users "
+            "WHERE waitlist_id = %s",
+            (uid,),
+        )
+    conn.close()
+
+    assert sweep_re(mailer)["re_engage_enqueued"] == 0
+
+
+def test_a_recent_sign_in_counts_as_activity(mailer):
+    uid = dormant_user("signedin@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO waitlist_sessions (waitlist_user_id, token_hash, expires_at) "
+            "VALUES (%s, %s, now() + interval '30 days')",
+            (uid, "s" * 64),
+        )
+    conn.close()
+
+    assert sweep_re(mailer)["re_engage_enqueued"] == 0
+
+
+def test_activity_older_than_the_quiet_window_does_not_protect(mailer):
+    """The window is 30 days, not 'ever'. Activity from four months ago is
+    exactly the case this email is for."""
+    uid = dormant_user("longago@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO points_ledger (waitlist_user_id, points, reason, created_at) "
+            "VALUES (%s, 20, 'survey', now() - interval '120 days')",
+            (uid,),
+        )
+    conn.close()
+
+    assert sweep_re(mailer)["re_engage_enqueued"] == 1
+
+
+def test_another_users_activity_does_not_protect_this_one(mailer):
+    """The NOT EXISTS subqueries must correlate on waitlist_user_id. Without the
+    correlation every one of them is satisfied by any row in the table, and the
+    sweep silently enqueues nobody, forever."""
+    quiet = dormant_user("quiet@example.test")
+    busy = dormant_user("busy@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO points_ledger (waitlist_user_id, points, reason) VALUES (%s, 20, 'survey')",
+            (busy,),
+        )
+    conn.close()
+
+    assert sweep_re(mailer)["re_engage_enqueued"] == 1
+    assert len(re_engage_jobs(quiet)) == 1
+    assert len(re_engage_jobs(busy)) == 0
+
+
+def test_the_sweep_does_not_drain_the_queue(mailer):
+    """Two different jobs on two different schedules. A sweep that also sent
+    would make a daily rule send mail, and a per-minute rule sweep."""
+    dormant_user("sweeponly@example.test")
+
+    result = sweep_re(mailer)
+
+    assert "sent" not in result
+    assert mailer.fake.sent == []

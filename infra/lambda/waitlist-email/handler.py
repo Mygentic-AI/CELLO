@@ -409,6 +409,91 @@ def schedule_next_nurture(conn, job, correlation_id):
         log("waitlist.email.nurture.chain_ended", correlation_id, waitlistId=str(job["user_id"]))
 
 
+# ── E-re: the 60-day re-engagement sweep (DOD-E-RE-1) ────────────────────────
+
+RE_ENGAGE_AFTER_DAYS = int(os.environ.get("EMAIL_RE_ENGAGE_AFTER_DAYS", "60"))
+RE_ENGAGE_QUIET_DAYS = int(os.environ.get("EMAIL_RE_ENGAGE_QUIET_DAYS", "30"))
+
+
+def sweep_re_engagement(correlation_id):
+    """Enqueue E-re once, for people who signed up two months ago and went quiet.
+
+    A SWEEP, not a chain — unlike the E3 nurture drip next door, and for the
+    opposite reason. The drip chains because its trigger is "did the last one
+    send?", which the sender already knows. This one's trigger is "has this
+    person done nothing for thirty days?", which is not knowable at the moment
+    any prior email went out, and which can become true long afterwards.
+
+    WHAT COUNTS AS ACTIVITY, since the DoD says "no activity" and the schema has
+    no last_activity_at column. Three things the user themselves did:
+      - earned points (survey, share conversion, a post)  → points_ledger
+      - arrived on the site                               → waitlist_touchpoints
+      - signed in to their status page                    → waitlist_sessions
+    Deliberately NOT "we sent them an email", which is our activity, not theirs
+    — counting it would mean the drip keeps somebody looking permanently active
+    while they ignore every message.
+
+    ONCE, EVER. The guard is "no e_re_engage row exists for this user", so a
+    sweep that runs twice a day, or is replayed after a partial failure, enqueues
+    nothing the second time. That also means somebody who returns, goes quiet
+    again and crosses the boundary a second time does not get a second one —
+    correct for a message whose whole content is "we noticed you have not been
+    back".
+    """
+    conn = connect()
+    try:
+        with cursor(conn) as cur:
+            cur.execute(
+                """
+                INSERT INTO email_jobs (user_id, template, scheduled_at)
+                SELECT u.waitlist_id, 'e_re_engage', now()
+                FROM waitlist_users u
+                WHERE u.status = 'waiting'
+                  AND u.email_status = 'active'
+                  AND u.email_verified
+                  AND u.created_at < now() - make_interval(days => %(after)s)
+                  AND NOT EXISTS (
+                        SELECT 1 FROM email_jobs j
+                        WHERE j.user_id = u.waitlist_id AND j.template = 'e_re_engage'
+                  )
+                  AND NOT EXISTS (
+                        SELECT 1 FROM points_ledger l
+                        WHERE l.waitlist_user_id = u.waitlist_id
+                          AND l.created_at > now() - make_interval(days => %(quiet)s)
+                  )
+                  AND NOT EXISTS (
+                        SELECT 1 FROM waitlist_touchpoints t
+                        WHERE t.waitlist_user_id = u.waitlist_id
+                          AND t.ts > now() - make_interval(days => %(quiet)s)
+                  )
+                  AND NOT EXISTS (
+                        SELECT 1 FROM waitlist_sessions s
+                        WHERE s.waitlist_user_id = u.waitlist_id
+                          AND s.created_at > now() - make_interval(days => %(quiet)s)
+                  )
+                RETURNING user_id
+                """,
+                {"after": RE_ENGAGE_AFTER_DAYS, "quiet": RE_ENGAGE_QUIET_DAYS},
+            )
+            enqueued = cur.fetchall()
+        conn.commit()
+
+        log(
+            "waitlist.email.re_engage.swept",
+            correlation_id,
+            enqueued=len(enqueued),
+            afterDays=RE_ENGAGE_AFTER_DAYS,
+            quietDays=RE_ENGAGE_QUIET_DAYS,
+        )
+        return {"re_engage_enqueued": len(enqueued)}
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def release_for_retry(conn, job, err, correlation_id):
     """Return a job to the queue, or retire it if it has run out of attempts.
 
@@ -443,6 +528,15 @@ def release_for_retry(conn, job, err, correlation_id):
 
 def lambda_handler(event, context):
     correlation_id = getattr(context, "aws_request_id", None) or str(uuid.uuid4())
+
+    # A SEPARATE ACTION, on its own daily schedule, rather than folded into the
+    # per-minute drain. The sweep scans every waiting user against three
+    # NOT EXISTS subqueries; running it 1440 times a day to enqueue the same
+    # zero rows is work nobody asked for, and a boundary that can only be
+    # crossed once a day does not need checking every minute.
+    if (event or {}).get("action") == "sweep_re_engagement":
+        return sweep_re_engagement(correlation_id)
+
     limit = int((event or {}).get("batch_size") or BATCH_SIZE)
 
     # Checked BEFORE any job is claimed. Refusing after a claim would leave rows
