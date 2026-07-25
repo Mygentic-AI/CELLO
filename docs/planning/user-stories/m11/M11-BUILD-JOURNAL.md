@@ -2742,3 +2742,58 @@ deployed.
 **The pattern, for the third time this milestone:** a guard that reads as protective and cannot fire.
 First the `waitlist_touchpoints` activity clause, then a test that poisoned the wrong call, now the
 invariant checker itself. In every case the code was green and the comment was confident.
+
+---
+
+### Entry 59: the fix for the vacuous checker was itself vacuous
+**Date:** 2026-07-25
+**Target:** DOD-INV-NO-DIRECTORY-RELAY, DOD-INV-DOMAIN, DOD-INV-STABLE-PK, DOD-INV-SINGLE-DB,
+DOD-WAVE-ASSEMBLY-1
+
+Entry 58 fixed a checker that had been diffing from an hour ago. A review found the fix **introduced a
+new way to be vacuous in the same commit**, confirmed by execution rather than argument:
+
+`git rev-parse <bad>^` prints its *argument* to stdout and exits non-zero. So `|| echo "$BASE"` appended
+a second line instead of substituting. `BASE` became two lines, `git diff` died with `bad revision`,
+`2>/dev/null` swallowed it, and empty output read as "nothing changed" — **PASS, from one bad env var.**
+
+Replaced with a pinned SHA verified through `rev-parse --verify`, which fails loud when it does not
+resolve. A fixed commit also cannot be narrowed by a DoD rename (`git log` without `--follow` stops at a
+rename) or by a shallow clone. Three further holes closed alongside: a dirty working tree now fails,
+because the scan sees commits only; the scan uses `git log` rather than `git diff`, since a two-endpoint
+diff cannot see a commit that touched the directory and a later one that reverted it — and that push is
+exactly what triggers the pipeline the clause is about; and the pathspecs are asserted to exist, because
+one that matches nothing passes silently. All three proven to fire.
+
+**And my ✅ flips were audited against their own clauses.** Each line had one nobody had checked:
+`DOD-INV-DOMAIN` says "code, copy, or **configuration**" and the CloudFormation template — where the API
+host is decided — was never scanned. `DOD-INV-STABLE-PK` names "`agent_name`, or any other mutable
+attribute" and only `email` was searched, which is pointed: `agent_name` is the defect CLAUDE.md calls
+out by name, so the check could not see the mistake it was written after. `DOD-INV-SINGLE-DB` says "no
+new database is provisioned" — unchecked, and M11 owning an RDS instance would be the invariant inverted.
+
+**One ✅ was genuinely unearned and the line was amended, not the tag defended.**
+`DOD-INV-NO-DIRECTORY-RELAY` claims "the only trustless-cello touches are Lambda code and docs". False:
+M11 touched `infra/cloudformation`, `deploy.sh`, `deploy-lambdas.sh`, `infra/scripts`, `infra/tests`,
+`STATE.md`, `.claude/`. The *intent* held — zero commits touched the directory, relay, or either ECS
+stack — so the clause was corrected to match what M11 legitimately owns (M11-D30), and `cello-iam.yaml`
+(which defines the directory and relay task roles, and which M11 did modify) is now a standing NOTE
+rather than a silent allowance.
+
+**Separately, the wave diagnostic could name a cause that was not the cause.** It counted only unverified
+users, so with `zero_pct = 0` and a queue of *verified* zero-point users plus one unverified one it
+reported "1 user has not confirmed their email" — and confirming them would have changed nothing. A
+number derived from real data, pointing at the wrong subsystem, is worse than no message: the number
+lends it authority. Now all four cohort exclusions are counted, with a machine-readable `reason` enum
+beside the prose, and the `zero_pct` case says outright that confirming emails will not help.
+
+`short_by` had the mirror problem — it fires on the ordinary small-queue case Wave 1 will be, so an
+operator learns to ignore it. `eligible_remaining` is the datum that separates "the queue ran out" from
+"the wave lost rows it had counted".
+
+**Runs:** 449 tests green; every fix revert-tested; redeployed and confirmed live
+(`reason: all_unverified`, 5 waiting / 5 unverified / 0 holding / 0 zero-points).
+
+**The count so far this milestone: four guards that could not fire.** The touchpoints activity clause, a
+test that poisoned the wrong call, the invariant checker's base, and the invariant checker's *replacement*
+base. Every one was green, and every one had a confident comment above it.
