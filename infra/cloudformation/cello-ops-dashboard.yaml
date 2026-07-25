@@ -1,0 +1,348 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO Ops Dashboard (DOD-OPS-SHELL-1) — the operator surface for the M11 waitlist:
+  post review, wave assembly, feedback outreach. Server-rendered Next on ECS Fargate,
+  attached as a HOST RULE on the existing portal ALB rather than behind an ALB of its own.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, production]
+
+  OpsHostname:
+    Type: String
+    Default: operations.cello.mygentic.ai
+    Description: The only hostname this dashboard answers on (DOD-INV-DOMAIN).
+
+  HostedZoneId:
+    Type: String
+    Description: Route53 zone for cello.mygentic.ai.
+
+  ImageTag:
+    Type: String
+    Description: ECR image tag (a commit SHA). Never "latest" — an untraceable rollback is not one.
+
+  # THE SHARED ALB, AND WHY.
+  #
+  # A dedicated ALB is ~$16/month for a dashboard one person opens a few times a
+  # day, on a project explicitly short of runway. The portal ALB already sits in
+  # the right subnets with the right security group, so this stack adds a host
+  # rule and a second certificate to its HTTPS listener instead.
+  #
+  # The cost is a cross-stack dependency that CloudFormation will NOT protect
+  # you from: these resources live here, the listener lives in
+  # cello-portal-app.yaml, and deleting that stack breaks this one. That is a
+  # real trade and it is taken deliberately. deploy.sh resolves the ARNs at
+  # deploy time rather than importing them, so the portal stack does not have to
+  # be modified to add exports — one less reason to redeploy the portal.
+  PortalAlbListenerArn:
+    Type: String
+    Description: HTTPS listener ARN of the portal ALB. Resolved by deploy.sh, not imported.
+
+  PortalAlbDnsName:
+    Type: String
+    Description: DNS name of the portal ALB, for the alias record.
+
+  PortalAlbHostedZoneId:
+    Type: String
+    Description: Canonical hosted zone ID of the portal ALB, for the alias record.
+
+  DatabaseUrlSecretArn:
+    Type: String
+    Description: >
+      Secrets Manager ARN for the PORTAL database URL. The dashboard shares the portal's
+      database (DOD-INV-SINGLE-DB) and must never be pointed at the directory's.
+
+  Cpu:
+    Type: String
+    Default: "256"
+
+  Memory:
+    Type: String
+    Default: "512"
+
+Resources:
+  # ── Image registry ──────────────────────────────────────────────────────────
+  EcrRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "cello-ops-dashboard"
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep the 20 most recent images; a dashboard does not need a year of tags.",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 20
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  # ── Certificate for the ops hostname ────────────────────────────────────────
+  # Created in-stack and DNS-validated, the same shape the waitlist API cert
+  # uses. A looked-up certificate is a deploy that fails in a fresh region.
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref OpsHostname
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref OpsHostname
+          HostedZoneId: !Ref HostedZoneId
+
+  # Attaches the cert to the PORTAL's listener. Additive: it does not replace the
+  # portal's own certificate, and the listener serves whichever matches SNI.
+  ListenerCertificate:
+    Type: AWS::ElasticLoadBalancingV2::ListenerCertificate
+    Properties:
+      ListenerArn: !Ref PortalAlbListenerArn
+      Certificates:
+        - CertificateArn: !Ref Certificate
+
+  # ── Network ─────────────────────────────────────────────────────────────────
+  # Its OWN security group rather than reusing cello-{env}-portal-task-sg.
+  # Sharing one would couple two services that only happen to sit behind the
+  # same load balancer: a rule added for the portal would silently widen the
+  # dashboard, and the blast radius of an operator surface is the whole waitlist.
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: cello ops dashboard tasks
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !ImportValue
+            Fn::Sub: "cello-${Environment}-portal-alb-sg"
+          Description: Portal ALB (shared listener)
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: >
+            Postgres, SES, Secrets Manager and Lambda over the NAT. Scoped egress
+            was tried on the waitlist stack and broke SES, because boto3 resolves
+            a public host and the VPC CIDR does not contain it.
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-${Environment}-ops-dashboard-sg"
+
+  # The dashboard reads and writes the PORTAL database (DOD-INV-SINGLE-DB), so
+  # that database's security group needs to admit it. Same shape as
+  # PortalDbIngressFromWaitlist in cello-waitlist.yaml.
+  PortalDbIngressFromOpsDashboard:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !ImportValue
+        Fn::Sub: "cello-${Environment}-portal-db-sg"
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref TaskSecurityGroup
+      Description: Ops dashboard
+
+  # ── Logs ────────────────────────────────────────────────────────────────────
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/cello-ops-dashboard-${Environment}"
+      RetentionInDays: 30
+
+  # ── Roles ───────────────────────────────────────────────────────────────────
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "cello-${Environment}-ops-dashboard-execution-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ReadStartupSecrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref DatabaseUrlSecretArn
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "cello-${Environment}-ops-dashboard-task-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: OpsDashboardPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # The allowlist. This one secret decides who may sign in, so it is
+              # named exactly rather than granted by prefix.
+              - Sid: ReadAllowlist
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/ops/allowed-emails-*"
+
+              # Operator sign-in mail. Deliberately NOT routed through the
+              # waitlist email pipeline: that pipeline enforces marketing
+              # suppression, and a suppression list must never be able to block
+              # a credential.
+              - Sid: SendOperatorMail
+                Effect: Allow
+                Action: [ses:SendEmail, ses:SendRawEmail]
+                Resource: "*"
+
+              # The waitlist Lambdas the dashboard drives. Scoped to the
+              # waitlist prefix — the dashboard has no business invoking
+              # anything else in the account.
+              - Sid: InvokeWaitlistFunctions
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cello-waitlist-*"
+
+  # ── Task ────────────────────────────────────────────────────────────────────
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "cello-ops-dashboard-${Environment}"
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: ops-dashboard
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cello-ops-dashboard:${ImageTag}"
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+              Protocol: tcp
+          Environment:
+            - Name: CELLO_ENV
+              Value: !Ref Environment
+            - Name: OPS_PUBLIC_URL
+              Value: !Sub "https://${OpsHostname}"
+            - Name: OPS_AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: OPS_ALLOWLIST_SECRET_ID
+              Value: cello/ops/allowed-emails
+            - Name: OPS_LAMBDA_PREFIX
+              Value: cello-waitlist
+            - Name: PORT
+              Value: "3000"
+            - Name: HOSTNAME
+              Value: 0.0.0.0
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom: !Ref DatabaseUrlSecretArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ops-dashboard
+
+  # ── Routing ─────────────────────────────────────────────────────────────────
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 3000
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      # /sign-in, not /. The root redirects when unauthenticated, and a health
+      # check that accepts a redirect cannot tell "serving" from "bounced".
+      HealthCheckPath: /sign-in
+      HealthCheckProtocol: HTTP
+      Matcher:
+        HttpCode: "200"
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+
+  ListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref PortalAlbListenerArn
+      Priority: 100
+      Conditions:
+        - Field: host-header
+          HostHeaderConfig:
+            Values: [!Ref OpsHostname]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: [ListenerRule, ListenerCertificate]
+    Properties:
+      ServiceName: !Sub "cello-ops-dashboard-${Environment}"
+      Cluster: !Sub "cello-${Environment}"
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref TaskDefinition
+      DeploymentConfiguration:
+        # Without the circuit breaker a crash-looping task makes CloudFormation
+        # wait until the CodeBuild timeout rather than fail in minutes.
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !ImportValue
+              Fn::Sub: "cello-${Environment}-private-subnet-a"
+            - !ImportValue
+              Fn::Sub: "cello-${Environment}-private-subnet-b"
+          SecurityGroups:
+            - !Ref TaskSecurityGroup
+      LoadBalancers:
+        - ContainerName: ops-dashboard
+          ContainerPort: 3000
+          TargetGroupArn: !Ref TargetGroup
+
+  DnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref OpsHostname
+      Type: A
+      AliasTarget:
+        DNSName: !Ref PortalAlbDnsName
+        HostedZoneId: !Ref PortalAlbHostedZoneId
+        EvaluateTargetHealth: true
+
+Outputs:
+  OpsUrl:
+    Value: !Sub "https://${OpsHostname}"
+  EcrRepositoryUri:
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cello-ops-dashboard"

@@ -1194,6 +1194,63 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# OPS DASHBOARD (DOD-OPS-SHELL-1) — OPT-IN, us-east-1 only
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# BEHIND A FLAG, DELIBERATELY, AND THE REASON IS AN ORDERING CONSTRAINT rather
+# than caution: this stack creates an ECS service whose image must already exist
+# in ECR. Nothing pushes that image yet — the ops-dashboard repo has no GitHub
+# remote, so no pipeline, and "NEVER push Docker images from local" is absolute.
+# Deploying it before an image exists produces a crash-looping service, the
+# circuit breaker firing, and a rollback: noise with a confident-looking cause.
+#
+# The order is: create the repo → add a pipeline → let CodeBuild push an image →
+# then DEPLOY_OPS_DASHBOARD=1 ./infra/deploy.sh dev, with IMAGE_TAG set to that
+# image's tag.
+#
+# The ALB parameters are RESOLVED here rather than imported, so that adding the
+# dashboard does not require modifying and redeploying the portal stack to add
+# exports. If any of them cannot be resolved this refuses rather than deploying
+# a half-wired stack — an empty ALB ARN would otherwise reach CloudFormation as
+# a confusing validation error about a listener.
+if [[ "${DEPLOY_OPS_DASHBOARD:-0}" == "1" && "${REGION}" == "us-east-1" ]]; then
+  echo ""
+  echo "── Deploying cello-ops-dashboard (opt-in) ──"
+
+  OPS_ALB_JSON=$(aws elbv2 describe-load-balancers --names "cello-portal-${ENVIRONMENT}" \
+    --region "${REGION}" \
+    --query 'LoadBalancers[0].[LoadBalancerArn,DNSName,CanonicalHostedZoneId]' \
+    --output text 2>/dev/null || true)
+  OPS_ALB_ARN=$(echo "${OPS_ALB_JSON}" | cut -f1)
+  OPS_ALB_DNS=$(echo "${OPS_ALB_JSON}" | cut -f2)
+  OPS_ALB_ZONE=$(echo "${OPS_ALB_JSON}" | cut -f3)
+  OPS_LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn "${OPS_ALB_ARN}" \
+    --region "${REGION}" --query 'Listeners[?Port==`443`].ListenerArn' --output text 2>/dev/null || true)
+  OPS_DB_SECRET_ARN=$(aws cloudformation list-exports --region "${REGION}" \
+    --query "Exports[?Name=='cello-${ENVIRONMENT}-portal-db-master-secret-arn'].Value" \
+    --output text 2>/dev/null || true)
+
+  for _pair in "portal ALB:${OPS_ALB_ARN}" "ALB DNS:${OPS_ALB_DNS}" \
+               "ALB zone:${OPS_ALB_ZONE}" "HTTPS listener:${OPS_LISTENER_ARN}" \
+               "portal DB secret:${OPS_DB_SECRET_ARN}" "image tag:${IMAGE_TAG:-}"; do
+    if [[ -z "${_pair#*:}" ]]; then
+      echo "ERROR: could not resolve ${_pair%%:*} for the ops dashboard. Refusing to deploy." >&2
+      echo "       The portal stack must exist first, and IMAGE_TAG must name an image in ECR." >&2
+      exit 1
+    fi
+  done
+
+  deploy_stack "cello-ops-dashboard-${ENVIRONMENT}" "cello-ops-dashboard.yaml" \
+    "Environment=${ENVIRONMENT}" \
+    "HostedZoneId=${HOSTED_ZONE_ID}" \
+    "ImageTag=${IMAGE_TAG}" \
+    "PortalAlbListenerArn=${OPS_LISTENER_ARN}" \
+    "PortalAlbDnsName=${OPS_ALB_DNS}" \
+    "PortalAlbHostedZoneId=${OPS_ALB_ZONE}" \
+    "DatabaseUrlSecretArn=${OPS_DB_SECRET_ARN}"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # DEPLOYMENT COMPLETE — print summary
 # ═══════════════════════════════════════════════════════════════════════════════
 
