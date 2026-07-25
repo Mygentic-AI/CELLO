@@ -162,3 +162,42 @@ describe("resolveAdapters selects a gate for every environment", () => {
     expect(adapters.waitlistGate).toBeInstanceOf(LocalWaitlistGateClient);
   });
 });
+
+
+describe("re-registration is gated too — clause 1 applies every time", () => {
+  /**
+   * The bypass this closes: `handleExistingUser` is the path for a user who
+   * already completed a registration and comes back. It never consulted the
+   * gate.
+   *
+   * For a legitimate returning user that changes nothing — they are still in
+   * telegram_accounts, so the gate says yes. It matters when an account has been
+   * REVOKED, which is what banning somebody means: removing them from
+   * telegram_accounts. A kill switch a user can walk around by messaging the bot
+   * again is not a kill switch.
+   */
+  it("a revoked account cannot re-register", async () => {
+    const { deps, repository, channel } = makeDeps({ waitlistGate: REFUSED });
+    const out = await new RegistrationStateMachine(deps).handleExistingUser("tg-1", "telegram", "hash", null);
+
+    expect(out.state).toBe("AWAITING_WAITLIST_TOKEN");
+    expect(repository.transition).not.toHaveBeenCalledWith("reg-1", "AWAITING_CONTACT");
+    expect(channel.send.mock.calls[0][1]).toContain("no longer able to register");
+  });
+
+  it("a still-linked returning user is unaffected", async () => {
+    const { deps } = makeDeps({ waitlistGate: ADMITTED });
+    const out = await new RegistrationStateMachine(deps).handleExistingUser("tg-1", "telegram", "hash", null);
+
+    expect(out.state).not.toBe("AWAITING_WAITLIST_TOKEN");
+  });
+
+  it("REFUSES rather than re-admits when the gate is unreachable", async () => {
+    const gate = { check: vi.fn().mockRejectedValue(new Error("gate unreachable")), redeem: vi.fn() };
+    const { deps } = makeDeps({ waitlistGate: gate });
+
+    await expect(
+      new RegistrationStateMachine(deps).handleExistingUser("tg-1", "telegram", "hash", null),
+    ).rejects.toThrow(/unreachable/);
+  });
+});

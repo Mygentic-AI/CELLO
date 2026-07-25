@@ -298,10 +298,50 @@ export class RegistrationStateMachine {
     phoneStubHash: string,
     expectedEmailStubHash: string | null,
   ): Promise<RegistrationRecord> {
-    const { repository, logger } = this.#deps;
+    const { repository, logger, waitlistGate } = this.#deps;
     const correlationId = randomUUID();
     const now = new Date();
     const expiresAt = new Date(now.getTime() + REGISTRATION_TTL_MS);
+
+    // THE GATE APPLIES TO RE-REGISTRATION TOO, and this was a real bypass.
+    //
+    // Clause 1 of DOD-TELEGRAM-GATE-1 asks "is telegram_id in telegram_accounts?"
+    // on every registration, not only a first one. A returning user is normally
+    // still linked, so this changes nothing for them — but if an account has
+    // been REVOKED (removed from telegram_accounts, which is what banning
+    // somebody means), the re-registration path would have let them straight
+    // back in without ever asking. A kill switch that a user can walk around by
+    // messaging the bot again is not a kill switch.
+    if (waitlistGate) {
+      const decision = await waitlistGate.check(channelUserId);
+      if (!decision.allowed) {
+        logger.info("registration.gate.reregistration_refused", {
+          channel,
+          correlationId,
+          reason: decision.error,
+        });
+        const gatedRecord = await repository.insert({
+          phoneStubHash,
+          channel,
+          channelUserId,
+          state: "INITIAL",
+          expiresAt,
+        });
+        const gated = await repository.transition(gatedRecord.id, "AWAITING_WAITLIST_TOKEN");
+        await this.#deps.channel.send(
+          channelUserId,
+          "This account is no longer able to register. If you have a waitlist invitation token, " +
+            "send it now. Otherwise see https://cello.mygentic.ai",
+        );
+        return gated;
+      }
+    } else {
+      logger.warn("registration.gate.NOT_ENFORCED", {
+        channel,
+        correlationId,
+        detail: "Re-registration was not checked against the waitlist; no gate is configured.",
+      });
+    }
 
     // Create in INITIAL state, then immediately transition to AWAITING_CONTACT
     const record = await repository.insert({
